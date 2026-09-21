@@ -202,7 +202,24 @@ def test_every_stage_id_maps_to_a_module_that_defines_its_functions() -> None:
             assert inspect.isfunction(getattr(module, function_name))
 
 
-@pytest.mark.parametrize("module_name", sorted(set(STAGE_MODULE_MAP.values())))
+# Stage modules that now carry real implementations. A module moves into this set
+# deliberately, when its milestone lands, so neither half of the pair below can go
+# stale: a stubbed module must still raise, and an implemented one must not.
+IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
+    {
+        "engine.stages.prepare",  # M3: prepare, replay, split_dataset
+        "engine.stages.actions",  # M4: assign_bands, apply_actions, suppression_rules
+        "engine.stages.export",  # M4: write_scores, summarise
+    }
+)
+STUBBED_STAGE_MODULES: frozenset[str] = frozenset(STAGE_MODULE_MAP.values()) - IMPLEMENTED_STAGE_MODULES
+
+
+def test_implemented_modules_are_real_stage_modules() -> None:
+    assert set(STAGE_MODULE_MAP.values()) >= IMPLEMENTED_STAGE_MODULES
+
+
+@pytest.mark.parametrize("module_name", sorted(STUBBED_STAGE_MODULES))
 def test_every_public_stage_function_is_a_milestone_stub(module_name: str) -> None:
     module = importlib.import_module(module_name)
     names = public_functions(module)
@@ -210,6 +227,24 @@ def test_every_public_stage_function_is_a_milestone_stub(module_name: str) -> No
     for name in names:
         with pytest.raises(NotImplementedError, match=r"^M[0-9]$"):
             call_with_placeholders(getattr(module, name))
+
+
+@pytest.mark.parametrize("module_name", sorted(IMPLEMENTED_STAGE_MODULES))
+def test_implemented_stage_modules_no_longer_raise_not_implemented(module_name: str) -> None:
+    # The mirror of the test above: once a module is listed as implemented, at least one
+    # public function must actually do something, so the set cannot quietly over-claim.
+    module = importlib.import_module(module_name)
+    names = public_functions(module)
+    assert names, f"{module_name} defines no public function"
+    still_stubbed = []
+    for name in names:
+        try:
+            call_with_placeholders(getattr(module, name))
+        except NotImplementedError:  # pragma: no cover - only on a regression
+            still_stubbed.append(name)
+        except Exception:  # any other failure means it ran real code
+            pass
+    assert still_stubbed != names, f"{module_name} is listed as implemented but every function is a stub"
 
 
 def test_the_stages_package_is_empty() -> None:

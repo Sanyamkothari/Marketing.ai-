@@ -472,7 +472,7 @@ Rows removed by one prepare rule.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
-| `reason` | "duplicate" \| "consent_false" \| "missing_target" \| "outlier" | yes | Why these rows were removed. |
+| `reason` | "duplicate" \| "consent_false" \| "missing_target" \| "outlier" \| "missing_values" | yes | Why these rows were removed. |
 | `rows` | integer | yes | Number of rows removed for this reason. |
 
 #### Transform

@@ -445,7 +445,7 @@ class DroppedColumn(Artefact):
 class RowRemoval(Artefact):
     """Rows removed by one prepare rule."""
 
-    reason: Literal["duplicate", "consent_false", "missing_target", "outlier"] = Field(
+    reason: Literal["duplicate", "consent_false", "missing_target", "outlier", "missing_values"] = Field(
         description="Why these rows were removed."
     )
     rows: int = Field(description="Number of rows removed for this reason.")
