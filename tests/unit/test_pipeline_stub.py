@@ -214,6 +214,7 @@ IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
         "engine.stages.actions",  # M4: assign_bands, apply_actions, suppression_rules
         "engine.stages.export",  # M4: write_scores, summarise
         "engine.stages.register",  # M3: build_model_version, feature_schema, drift_baseline
+        "engine.stages.train",  # M3: train, fit_scorer, autogluon_fit_kwargs
         "engine.stages.score",  # M4: compute_drift (predict is still an M4 stub)
     }
 )
