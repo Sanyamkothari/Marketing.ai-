@@ -1,0 +1,7 @@
+# Unknown key at the top level of a use-case file.
+id: broken-extra-top-level
+name: Broken Extra Top Level
+lifecycle_stage: Awareness
+target:
+  column: converted_30d
+nonsense_top_level: 1

@@ -1,0 +1,6 @@
+asset_id,snapshot_date,error_rate_24h,latency_p95_1h,firmware_age_days,tickets_90d,device_model,marketing_opt_in,last_contacted_at,fault_next_72h
+A-2210,2026-08-01,48.0,410.0,120,4,ONT-220,true,2026-07-22,1
+A-2245,2026-08-01,12.5,260.0,45,1,ONT-220,true,,0
+A-2289,2026-08-02,3.1,95.0,410,2,RTR-900,true,2026-06-18,0
+A-2301,2026-08-02,0.4,70.0,30,0,RTR-900,false,,0
+A-2334,2026-08-03,27.0,340.0,260,3,ONT-410,true,2026-07-30,1

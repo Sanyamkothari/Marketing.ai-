@@ -1,0 +1,10 @@
+# INDUSTRY_PLANNED_NEEDS_NAME: a `planned` entry without its own name/description.
+schema_version: 1
+id: telecom
+name: Telecom
+stages:
+  - id: onboarding
+    name: Onboarding
+    ai_type: generative
+    use_cases:
+      - {id: ai-onboarding-assistant, status: planned}

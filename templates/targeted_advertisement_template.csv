@@ -1,0 +1,6 @@
+customer_id,snapshot_date,visits_last_7d,ad_ctr_90d,plan_tier,tenure_months,region,marketing_opt_in,last_contacted_at,converted_30d
+C-10482,2026-08-01,12,0.041,premium,36,south,true,2026-07-20,1
+C-22917,2026-08-01,3,0.012,basic,4,north,true,2026-06-02,0
+C-31055,2026-08-01,0,0.000,basic,11,west,false,,0
+C-40219,2026-08-08,7,0.028,standard,62,south,true,2026-07-29,1
+C-51884,2026-08-08,1,0.005,premium,19,east,true,2026-05-14,0

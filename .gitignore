@@ -1,0 +1,23 @@
+# local artefact store (plan §3)
+data/
+
+# virtualenv
+.venv/
+
+# SQLite metadata store
+*.db
+
+# python bytecode
+__pycache__/
+*.pyc
+
+# tool caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+
+# build output
+dist/
+build/
+*.egg-info/

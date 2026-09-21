@@ -1,0 +1,5 @@
+# Unknown key inside `catalog`; copied over engine.yaml by the test.
+schema_version: 1
+catalog:
+  nonsense_catalog: 1
+defaults: {}

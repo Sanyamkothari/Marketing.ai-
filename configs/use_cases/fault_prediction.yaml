@@ -1,0 +1,54 @@
+id: fault-prediction
+name: Fault Prediction
+description: Uses telemetry and service history to predict which assets will fail in the next 72 hours, so service happens before the fault.
+lifecycle_stage: Service / Payments
+entity: asset
+
+target:
+  column: fault_next_72h
+  positive_label: 1
+  definition: Fault ticket or outage within 72 hours
+  label_source: Service tickets + NOC alarms
+
+primary_key_hints: [asset_id, device_id, id]
+
+split:
+  type: time_based
+  time_column: snapshot_date
+
+model_search:
+  metric: pr_auc                                   # prototype metrics[0] for this use case
+  metric_choices: [pr_auc, recall, roc_auc, f1]
+  candidate_pool: [XGBoost, LightGBM, RandomForest] # prototype list ∩ supported families + LightGBM (DEC-009)
+  candidates: [XGBoost, LightGBM, RandomForest]
+
+actions:
+  score_field: fault_prob_72h
+  bands:
+    - {name: High,   min_score: 0.80, action: "Schedule visit"}
+    - {name: Medium, min_score: 0.50, action: "Remote reset"}
+    - {name: Low,    min_score: 0.00, action: "Monitor"}
+
+output:
+  kpi:
+    label: "Predicted faults (72h)"
+    formula: 'count_where_band_in(["High"])'
+
+ui:
+  pages:
+    data: "Network telemetry + service tickets"
+    model: "Fault Prediction Model"
+    output: "Predicted Faults / Preventive Service"
+
+template:
+  columns:
+    - {name: asset_id,          role: primary_key, type: string,  description: "Unique network asset identifier. Never used as a feature.",             examples: ["A-2210","A-2245","A-2289","A-2301","A-2334"]}
+    - {name: snapshot_date,     role: time,        type: date,    description: "Date the telemetry window ends; used for the time-based split",          examples: ["2026-08-01","2026-08-01","2026-08-02","2026-08-02","2026-08-03"]}
+    - {name: error_rate_24h,    role: feature,     type: float,   description: "Errors per hour, 24h window",                                            examples: ["48.0","12.5","3.1","0.4","27.0"]}
+    - {name: latency_p95_1h,    role: feature,     type: float,   description: "95th percentile latency in milliseconds, 1h window",                     examples: ["410.0","260.0","95.0","70.0","340.0"]}
+    - {name: firmware_age_days, role: feature,     type: integer, description: "Days since last firmware update",                                        examples: ["120","45","410","30","260"]}
+    - {name: tickets_90d,       role: feature,     type: integer, description: "Service tickets in last 90 days",                                        examples: ["4","1","2","0","3"]}
+    - {name: device_model,      role: feature,     type: string,  description: "Hardware model",                                                         examples: ["ONT-220","ONT-220","RTR-900","RTR-900","ONT-410"]}
+    - {name: marketing_opt_in,  role: consent,     type: boolean, description: "Account agreed to proactive service contact. Rows that are false are suppressed.", examples: ["true","true","true","false","true"]}
+    - {name: last_contacted_at, role: contact,     type: date,    description: "Date of the last proactive service contact for this asset (blank if never)", examples: ["2026-07-22","","2026-06-18","","2026-07-30"]}
+    - {name: fault_next_72h,    role: target,      type: integer, description: "Target: 1 if a fault occurred within 72 hours, else 0. Leave blank when scoring.", examples: ["1","0","0","0","1"]}

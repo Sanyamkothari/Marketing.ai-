@@ -1,0 +1,10 @@
+# INDUSTRY_STAGE_MISMATCH: the stage name is not the use case's lifecycle_stage.
+schema_version: 1
+id: telecom
+name: Telecom
+stages:
+  - id: churn
+    name: Churn
+    ai_type: predictive
+    use_cases:
+      - {id: targeted-advertisement, status: available}

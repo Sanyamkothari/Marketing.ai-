@@ -1,0 +1,9 @@
+# A use case that offers the optional NeuralNet family (DEC-011).
+id: neural-demo
+name: Neural Demo
+lifecycle_stage: Awareness
+target:
+  column: converted_30d
+model_search:
+  candidate_pool: [XGBoost, LightGBM, NeuralNet]
+  candidates: [XGBoost, LightGBM]

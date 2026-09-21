@@ -1,0 +1,13 @@
+# INDUSTRY_PLANNED_BUT_PRESENT: a `planned` entry that does have a use-case file.
+schema_version: 1
+id: telecom
+name: Telecom
+stages:
+  - id: awareness
+    name: Awareness
+    ai_type: predictive
+    use_cases:
+      - id: targeted-advertisement
+        status: planned
+        name: Targeted Advertisement
+        description: Marked planned even though its YAML is shipped.

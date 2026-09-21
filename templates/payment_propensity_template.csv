@@ -1,0 +1,6 @@
+account_id,snapshot_date,late_payments_6m,autopay_enabled,bill_change_pct,tenure_months,plan_type,marketing_opt_in,last_contacted_at,late_or_missed_payment
+AC-6101,2026-08-01,3,false,12.0,14,postpaid,true,2026-07-11,1
+AC-6134,2026-08-01,1,false,35.0,27,postpaid,true,,1
+AC-6170,2026-08-01,0,true,-4.0,58,prepaid,true,2026-06-30,0
+AC-6192,2026-08-15,0,true,0.5,73,postpaid,false,2026-07-25,0
+AC-6205,2026-08-15,2,false,21.0,9,prepaid,true,,1

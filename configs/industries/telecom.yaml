@@ -1,0 +1,36 @@
+schema_version: 1
+id: telecom
+name: Telecom
+journey_label: Customer Lifecycle          # str; overview subtitle and breadcrumb root (prototype)
+
+stages:                                    # ordered; the overview renders them left to right
+  - id: awareness
+    name: Awareness                        # str; must equal lifecycle_stage of every available use case below it
+    ai_type: predictive                    # enum -> catalog.ai_types marker "P", stars "★"
+    use_cases:
+      - {id: targeted-advertisement, status: available}     # status: available | planned
+  - id: onboarding
+    name: Onboarding
+    ai_type: generative                    # -> "G"
+    use_cases:
+      - id: ai-onboarding-assistant
+        status: planned                    # Phase 3; no use-case YAML in M1
+        name: AI Onboarding Assistant
+        description: A chat assistant grounded in product documentation that guides new customers through setup and answers their questions.
+  - id: service_payments
+    name: Service / Payments
+    ai_type: predictive                    # -> "P"
+    use_cases:
+      - {id: order-fulfillment,  status: available}
+      - {id: fault-prediction,   status: available}
+      - {id: payment-propensity, status: available}
+  - id: churn
+    name: Churn
+    ai_type: hybrid                        # -> "H"
+    use_cases:
+      - {id: rca, status: available}
+  - id: win_back
+    name: Win-back
+    ai_type: hybrid                        # -> "H"
+    use_cases:
+      - {id: win-back-campaign, status: available}

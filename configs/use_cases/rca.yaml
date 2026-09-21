@@ -1,0 +1,49 @@
+id: rca
+name: RCA (Root Cause Analysis)
+description: Flags customers likely to churn and uses an LLM to summarise the root cause behind each one, with a recommended retention action.
+lifecycle_stage: Churn
+ai_type: hybrid                                    # predictive half trains in Phase 1; the LLM summary is Phase 3 (DEC-012)
+
+target:
+  column: churn_next_60d
+  positive_label: 1
+  definition: Disconnected within 60 days
+  label_source: Churn events
+
+split:
+  type: time_based
+  time_column: snapshot_date
+
+model_search:
+  metric_choices: [roc_auc, recall, pr_auc, f1]
+
+actions:
+  score_field: churn_prob
+  bands:
+    - {name: High,   min_score: 0.80, action: "Tech callback"}
+    - {name: Medium, min_score: 0.50, action: "Loyalty discount"}
+    - {name: Low,    min_score: 0.00, action: "Usage tips"}
+
+output:
+  kpi:
+    label: "Customers at risk"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Usage + complaints + churn signals"
+    model: "Churn Model + LLM Root Cause Summary"
+    output: "Churn Drivers / Retention Actions"
+
+template:
+  columns:
+    - {name: customer_id,          role: primary_key, type: string,  description: "Unique customer identifier. Never used as a feature.",               examples: ["C-71204","C-71233","C-71268","C-71290","C-71315"]}
+    - {name: snapshot_date,        role: time,        type: date,    description: "Date the features describe the customer as of; used for the time-based split", examples: ["2026-08-01","2026-08-01","2026-08-01","2026-08-08","2026-08-08"]}
+    - {name: usage_drop_30d,       role: feature,     type: float,   description: "Usage change vs previous 30 days, in percent (negative = drop)",     examples: ["-45.0","-8.0","-30.0","-2.0","-12.0"]}
+    - {name: outages_90d,          role: feature,     type: integer, description: "Outages experienced, last 90 days",                                  examples: ["3","0","1","0","2"]}
+    - {name: billing_disputes_90d, role: feature,     type: integer, description: "Billing disputes, last 90 days",                                     examples: ["0","2","0","0","1"]}
+    - {name: price_change_flag,    role: feature,     type: boolean, description: "Recent price increase",                                              examples: ["false","false","true","false","true"]}
+    - {name: complaint_text,       role: feature,     type: text,    description: "Latest complaint notes, PII-redacted. Ignored by the Phase 1 model; used by the Phase 3 summary.", examples: ["Line down again since Monday","Charged 1200 extra","Bill went up 20 percent","",""]}
+    - {name: marketing_opt_in,     role: consent,     type: boolean, description: "Customer agreed to retention contact. Rows that are false are suppressed.", examples: ["true","true","true","false","true"]}
+    - {name: last_contacted_at,    role: contact,     type: date,    description: "Date of the last retention contact (blank if never)",                examples: ["2026-07-02","","2026-07-19","","2026-06-28"]}
+    - {name: churn_next_60d,       role: target,      type: integer, description: "Target: 1 if the customer disconnected within 60 days, else 0. Leave blank when scoring.", examples: ["1","1","0","0","1"]}

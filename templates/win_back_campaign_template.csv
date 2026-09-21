@@ -1,0 +1,6 @@
+customer_id,snapshot_date,churn_reason,months_since_churn,avg_monthly_spend,offers_accepted,preferred_channel,marketing_opt_in,last_contacted_at,reactivated_90d
+C-90112,2026-08-01,price,2,899.0,2,email,true,2026-06-15,1
+C-90147,2026-08-01,network,5,1499.0,0,sms,true,2026-07-05,0
+C-90183,2026-08-01,moved,11,499.0,1,email,false,,0
+C-90210,2026-08-15,competitor_offer,1,2199.0,3,call,true,2026-07-27,1
+C-90244,2026-08-15,service,8,749.0,0,sms,true,,0

@@ -1,0 +1,15 @@
+# INDUSTRY_DUPLICATE_USE_CASE: the same id under two stages.
+schema_version: 1
+id: telecom
+name: Telecom
+stages:
+  - id: awareness
+    name: Awareness
+    ai_type: predictive
+    use_cases:
+      - {id: targeted-advertisement, status: available}
+  - id: churn
+    name: Churn
+    ai_type: hybrid
+    use_cases:
+      - {id: targeted-advertisement, status: available}

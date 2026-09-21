@@ -1,0 +1,14 @@
+# Unknown key inside `template.columns[0]`.
+id: broken-extra-template-column
+name: Broken Extra Template Column
+lifecycle_stage: Awareness
+target:
+  column: converted_30d
+template:
+  columns:
+    - name: customer_id
+      role: primary_key
+      type: string
+      description: "Unique customer identifier."
+      examples: ["C-1","C-2","C-3","C-4","C-5"]
+      nonsense_column: 1

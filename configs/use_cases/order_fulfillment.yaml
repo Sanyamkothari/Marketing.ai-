@@ -1,0 +1,53 @@
+id: order-fulfillment
+name: Order Fulfillment
+description: Predicts which orders are at risk of missing their delivery date, so teams can fix them before the customer notices.
+lifecycle_stage: Service / Payments
+entity: order
+
+target:
+  column: delayed_beyond_sla
+  positive_label: 1
+  definition: Delivered after the promised SLA date
+  label_source: Shipment tracking
+
+primary_key_hints: [order_id, id]
+
+split:
+  type: time_based
+  time_column: snapshot_date
+
+model_search:
+  metric_choices: [roc_auc, recall, pr_auc, f1, precision]
+  candidate_pool: [LightGBM, XGBoost, RandomForest, LogisticRegression]
+  candidates: [LightGBM, XGBoost, RandomForest, LogisticRegression]
+
+actions:
+  score_field: delay_prob
+  bands:
+    - {name: High,   min_score: 0.80, action: "Reroute or switch carrier"}
+    - {name: Medium, min_score: 0.50, action: "Notify customer"}
+    - {name: Low,    min_score: 0.00, action: "No action"}
+
+output:
+  kpi:
+    label: "At-risk orders"
+    formula: 'count_where_band_in(["High"])'
+
+ui:
+  pages:
+    data: "Order + inventory + logistics data"
+    model: "Delivery Delay Prediction Model"
+    output: "At-risk Orders / Proactive Alerts"
+
+template:
+  columns:
+    - {name: order_id,           role: primary_key, type: string,  description: "Unique order identifier. Never used as a feature.",                  examples: ["O-78120","O-78134","O-78159","O-78201","O-78233"]}
+    - {name: snapshot_date,      role: time,        type: date,    description: "Date the order was placed; used for the time-based split",           examples: ["2026-08-01","2026-08-01","2026-08-02","2026-08-02","2026-08-03"]}
+    - {name: carrier_ontime_30d, role: feature,     type: float,   description: "Carrier on-time rate, last 30 days (0 to 1)",                        examples: ["0.71","0.94","0.88","0.96","0.62"]}
+    - {name: stock_cover_days,   role: feature,     type: float,   description: "Days of stock left for ordered items",                               examples: ["0.5","6.0","2.5","14.0","1.0"]}
+    - {name: distance_km,        role: feature,     type: float,   description: "Warehouse → customer distance in kilometres",                        examples: ["1240.0","85.0","430.0","22.0","910.0"]}
+    - {name: orders_same_day,    role: feature,     type: integer, description: "Order volume on the same day",                                       examples: ["8400","2100","5200","1800","9600"]}
+    - {name: weather_alert,      role: feature,     type: boolean, description: "Severe weather on delivery route",                                   examples: ["true","false","false","false","true"]}
+    - {name: marketing_opt_in,   role: consent,     type: boolean, description: "Customer agreed to proactive notifications. Rows that are false are suppressed.", examples: ["true","true","false","true","true"]}
+    - {name: last_contacted_at,  role: contact,     type: date,    description: "Date of the last proactive notification (blank if never)",           examples: ["","2026-07-28","","2026-07-30",""]}
+    - {name: delayed_beyond_sla, role: target,      type: integer, description: "Target: 1 if delivered after the promised SLA date, else 0. Leave blank when scoring.", examples: ["1","0","0","0","1"]}

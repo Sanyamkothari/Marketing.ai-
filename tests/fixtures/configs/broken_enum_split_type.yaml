@@ -1,0 +1,8 @@
+# Unknown enum value for `split.type`.
+id: broken-enum-split-type
+name: Broken Enum Split Type
+lifecycle_stage: Awareness
+target:
+  column: converted_30d
+split:
+  type: weekly

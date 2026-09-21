@@ -1,0 +1,2398 @@
+"""Configuration schema, loading, merging and the advanced-settings schema. Single source of truth."""
+
+from __future__ import annotations
+
+import ast
+import copy
+import difflib
+import importlib.util
+import os
+import re
+from collections.abc import Iterator, Mapping, Sequence
+from datetime import UTC, datetime
+from enum import StrEnum
+from pathlib import Path
+from typing import Annotated, Any, Final, Literal, Self
+
+import yaml
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    RootModel,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
+
+
+class ConfigError(Exception):
+    """Every config problem. `code` is machine-readable, `message` is for humans, `path` is the dotted path or file."""
+
+    def __init__(self, code: str, message: str, *, path: str | None = None) -> None:
+        super().__init__(f"{code}: {message}" if path is None else f"{code}: {message} (at {path})")
+        self.code = code
+        self.message = message
+        self.path = path
+
+
+class _Base(BaseModel):
+    model_config = ConfigDict(
+        extra="forbid",
+        frozen=True,
+        validate_default=True,
+        use_enum_values=False,
+        str_strip_whitespace=True,
+        populate_by_name=True,
+        protected_namespaces=(),
+    )
+
+
+# Public alias: engine.contracts and api.schemas inherit from it so there is one definition.
+StrictBase = _Base
+
+
+# ---------------------------------------------------------------------------
+# 4.1 Enums
+# ---------------------------------------------------------------------------
+class AiType(StrEnum):
+    PREDICTIVE = "predictive"
+    GENERATIVE = "generative"
+    HYBRID = "hybrid"
+
+
+class ProblemType(StrEnum):
+    BINARY_CLASSIFICATION = "binary_classification"
+    REGRESSION = "regression"
+    FORECASTING = "forecasting"
+    CLUSTERING = "clustering"
+
+
+class MissingValues(StrEnum):
+    AUTO = "auto"
+    FILL = "fill"
+    DROP_ROWS = "drop_rows"
+
+
+class Outliers(StrEnum):
+    CLIP = "clip"
+    REMOVE_ROWS = "remove_rows"
+    KEEP = "keep"
+
+
+class PiiHandling(StrEnum):
+    REDACT = "redact"
+    DROP_COLUMNS = "drop_columns"
+    KEEP = "keep"
+
+
+class SplitType(StrEnum):
+    RANDOM_STRATIFIED = "random_stratified"
+    TIME_BASED = "time_based"
+
+
+class CategoricalEncoding(StrEnum):
+    AUTO = "auto"
+    ONE_HOT = "one_hot"
+    TARGET = "target"
+    ORDINAL = "ordinal"
+
+
+class NumericScaling(StrEnum):
+    AUTO = "auto"
+    STANDARD = "standard"
+    MIN_MAX = "min_max"
+    NONE = "none"
+
+
+class TextHandling(StrEnum):
+    IGNORE = "ignore"
+    TFIDF = "tfidf"
+    EMBEDDINGS = "embeddings"
+
+
+class FeatureSelection(StrEnum):
+    IMPORTANCE = "importance"
+    CORRELATION_FILTER = "correlation_filter"
+    PCA = "pca"
+    NONE = "none"
+
+
+class Strategy(StrEnum):
+    FAST = "fast"
+    BALANCED = "balanced"
+    EXHAUSTIVE = "exhaustive"
+
+
+class Imbalance(StrEnum):
+    AUTO = "auto"
+    CLASS_WEIGHTS = "class_weights"
+    OVERSAMPLING = "oversampling"
+    NONE = "none"
+
+
+class Metric(StrEnum):
+    ROC_AUC = "roc_auc"
+    PR_AUC = "pr_auc"
+    F1 = "f1"
+    RECALL = "recall"
+    PRECISION = "precision"
+    RMSE = "rmse"
+    MAE = "mae"
+
+
+class Calibration(StrEnum):
+    ISOTONIC = "isotonic"
+    PLATT = "platt"
+    NONE = "none"
+
+
+class ThresholdMode(StrEnum):
+    AUTO = "auto"
+    FIXED = "fixed"
+    MANUAL = "manual"
+
+
+class Retraining(StrEnum):
+    MANUAL = "manual"
+    ON_DRIFT = "on_drift"
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+
+
+class ModelFamily(StrEnum):
+    XGBOOST = "XGBoost"
+    LIGHTGBM = "LightGBM"
+    RANDOM_FOREST = "RandomForest"
+    LOGISTIC_REGRESSION = "LogisticRegression"
+    CATBOOST = "CatBoost"
+    NEURAL_NET = "NeuralNet"
+
+
+class ColumnRole(StrEnum):
+    PRIMARY_KEY = "primary_key"
+    TIME = "time"
+    FEATURE = "feature"
+    TARGET = "target"
+    CONSENT = "consent"
+    CONTACT = "contact"
+
+
+class ColumnType(StrEnum):
+    STRING = "string"
+    INTEGER = "integer"
+    FLOAT = "float"
+    BOOLEAN = "boolean"
+    DATE = "date"
+    DATETIME = "datetime"
+    TEXT = "text"
+
+
+class UseCaseStatus(StrEnum):
+    AVAILABLE = "available"
+    PLANNED = "planned"
+
+
+class RunMode(StrEnum):
+    TRAIN = "train"
+    SCORE = "score"
+
+
+class Widget(StrEnum):
+    SELECT = "select"
+    NUMBER = "number"
+    CHECKBOX = "checkbox"
+    COLUMN_SELECT = "column-select"
+    COLUMN_MULTI_SELECT = "column-multi-select"
+    MULTI_SELECT = "multi-select"
+
+
+class ColumnSource(StrEnum):
+    ALL = "all"
+    FEATURES = "features"
+    TIME_LIKE = "time_like"
+
+
+class FieldType(StrEnum):
+    STRING = "string"
+    INTEGER = "integer"
+    NUMBER = "number"
+    BOOLEAN = "boolean"
+    ARRAY = "array"
+
+
+# ---------------------------------------------------------------------------
+# Labels. Labels never come from config values (DEC-010).
+# ---------------------------------------------------------------------------
+def _member_key(member: StrEnum) -> tuple[str, str]:
+    return (type(member).__name__, str(member))
+
+
+class _ChoiceLabelMap(Mapping[StrEnum, str]):
+    """Enum member -> verbatim UI label.
+
+    Members of different `StrEnum` classes that share a value compare and hash equal
+    (`ThresholdMode.MANUAL == Retraining.MANUAL`), so the backing store is keyed by
+    (enum class name, value) and a lookup resolves against the member's own class.
+    """
+
+    def __init__(self, pairs: Sequence[tuple[StrEnum, str]]) -> None:
+        self._labels: dict[tuple[str, str], str] = {_member_key(m): label for m, label in pairs}
+        self._members: tuple[StrEnum, ...] = tuple(m for m, _ in pairs)
+
+    def __getitem__(self, key: StrEnum) -> str:
+        try:
+            return self._labels[_member_key(key)]
+        except KeyError:
+            raise KeyError(key) from None
+
+    def __iter__(self) -> Iterator[StrEnum]:
+        return iter(self._members)
+
+    def __len__(self) -> int:
+        return len(self._members)
+
+    def __repr__(self) -> str:
+        return f"_ChoiceLabelMap({len(self._members)} members)"
+
+
+CHOICE_LABELS: Final[Mapping[StrEnum, str]] = _ChoiceLabelMap(
+    (
+        (MissingValues.AUTO, "Auto"),
+        (MissingValues.FILL, "Fill (median / mode)"),
+        (MissingValues.DROP_ROWS, "Drop rows"),
+        (Outliers.CLIP, "Clip (1st–99th pct)"),
+        (Outliers.REMOVE_ROWS, "Remove rows"),
+        (Outliers.KEEP, "Keep"),
+        (PiiHandling.REDACT, "Redact"),
+        (PiiHandling.DROP_COLUMNS, "Drop columns"),
+        (PiiHandling.KEEP, "Keep"),
+        (SplitType.RANDOM_STRATIFIED, "Random (stratified)"),
+        (SplitType.TIME_BASED, "Time-based"),
+        (CategoricalEncoding.AUTO, "Auto"),
+        (CategoricalEncoding.ONE_HOT, "One-hot"),
+        (CategoricalEncoding.TARGET, "Target encoding"),
+        (CategoricalEncoding.ORDINAL, "Ordinal"),
+        (NumericScaling.AUTO, "Auto"),
+        (NumericScaling.STANDARD, "Standard"),
+        (NumericScaling.MIN_MAX, "Min-max"),
+        (NumericScaling.NONE, "None"),
+        (TextHandling.IGNORE, "Ignore"),
+        (TextHandling.TFIDF, "TF-IDF"),
+        (TextHandling.EMBEDDINGS, "Embeddings"),
+        (FeatureSelection.IMPORTANCE, "Importance-based"),
+        (FeatureSelection.CORRELATION_FILTER, "Correlation filter"),
+        (FeatureSelection.PCA, "PCA (reduces explainability)"),
+        (FeatureSelection.NONE, "None"),
+        (Strategy.FAST, "Fast"),
+        (Strategy.BALANCED, "Balanced"),
+        (Strategy.EXHAUSTIVE, "Exhaustive"),
+        (Imbalance.AUTO, "Auto"),
+        (Imbalance.CLASS_WEIGHTS, "Class weights"),
+        (Imbalance.OVERSAMPLING, "Oversampling (SMOTE)"),
+        (Imbalance.NONE, "None"),
+        (Calibration.ISOTONIC, "Isotonic"),
+        (Calibration.PLATT, "Platt"),
+        (Calibration.NONE, "None"),
+        (ThresholdMode.AUTO, "Auto"),
+        (ThresholdMode.FIXED, "0.5"),
+        (ThresholdMode.MANUAL, "Manual (below)"),
+        (Retraining.MANUAL, "Manual"),
+        (Retraining.ON_DRIFT, "On drift"),
+        (Retraining.WEEKLY, "Weekly"),
+        (Retraining.MONTHLY, "Monthly"),
+    )
+)
+
+STAGE_MODULE_MAP: Final[Mapping[str, str]] = {
+    "ingest": "engine.stages.ingest",
+    "validate": "engine.stages.validate",
+    "prepare": "engine.stages.prepare",
+    "split": "engine.stages.prepare",
+    "train": "engine.stages.train",
+    "evaluate": "engine.stages.evaluate",
+    "explain": "engine.stages.explain",
+    "register": "engine.stages.register",
+    "validate_against_schema": "engine.stages.validate",
+    "predict": "engine.stages.score",
+    "explain_rows": "engine.stages.explain",
+    "actions": "engine.stages.actions",
+    "export": "engine.stages.export",
+}
+
+TIME_LIKE_PATTERN: Final[str] = r"date|time|month|week|day|_ts$|_at$"
+
+SCHEMA_VERSION: Final[int] = 1
+
+
+# ---------------------------------------------------------------------------
+# 4.2 Catalog models
+# ---------------------------------------------------------------------------
+def dependency_available(module: str) -> bool:
+    """`importlib.util.find_spec(module) is not None`. Module-level so tests monkeypatch it."""
+    try:
+        return importlib.util.find_spec(module) is not None
+    except (ImportError, ValueError):
+        return False
+
+
+class ModelFamilySpec(_Base):
+    autogluon_key: Literal["XGB", "GBM", "RF", "LR", "CAT", "NN_TORCH"]
+    label: str
+    requires: tuple[str, ...] = ()
+
+
+class MetricSpec(_Base):
+    label: str
+    autogluon_name: str
+    problem_types: tuple[ProblemType, ...]
+    greater_is_better: bool
+
+
+class ProblemTypeSpec(_Base):
+    label: str
+    enabled: bool
+
+
+class AiTypeSpec(_Base):
+    marker: Literal["P", "G", "H"]
+    stars: str
+    label: str
+
+
+class AutomlChoice(_Base):
+    value: str
+    label: str
+
+
+class ColumnNamePatterns(_Base):
+    time_like: str
+    leakage: str
+
+    @field_validator("time_like", "leakage")
+    @classmethod
+    def _compiles(cls, v: str) -> str:
+        try:
+            re.compile(v, re.IGNORECASE)
+        except re.error as exc:
+            raise ConfigError("CATALOG_BAD_REGEX", f"Not a valid regular expression: {exc}.") from exc
+        return v
+
+
+class Catalog(_Base):
+    model_families: dict[ModelFamily, ModelFamilySpec]
+    strategy_presets: dict[Strategy, str]
+    metrics: dict[Metric, MetricSpec]
+    problem_types: dict[ProblemType, ProblemTypeSpec]
+    ai_types: dict[AiType, AiTypeSpec]
+    automl_choice: AutomlChoice
+    column_name_patterns: ColumnNamePatterns
+
+    @model_validator(mode="after")
+    def _complete(self) -> Self:
+        for block, members in (
+            ("model_families", tuple(ModelFamily)),
+            ("strategy_presets", tuple(Strategy)),
+            ("metrics", tuple(Metric)),
+            ("problem_types", tuple(ProblemType)),
+            ("ai_types", tuple(AiType)),
+        ):
+            present = getattr(self, block)
+            for member in members:
+                if member not in present:
+                    raise ConfigError(
+                        "CATALOG_INCOMPLETE",
+                        f"catalog.{block} is missing an entry for {member.value!r}.",
+                        path=f"catalog.{block}",
+                    )
+        return self
+
+    def metrics_for(self, problem_type: ProblemType) -> tuple[Metric, ...]:
+        return tuple(m for m, spec in self.metrics.items() if problem_type in spec.problem_types)
+
+    def autogluon_hyperparameter_keys(self, families: Sequence[ModelFamily]) -> tuple[str, ...]:
+        return tuple(self.model_families[f].autogluon_key for f in families)
+
+    def family_label(self, family: ModelFamily) -> str:
+        return self.model_families[family].label
+
+    def metric_label(self, metric: Metric) -> str:
+        return self.metrics[metric].label
+
+    def missing_requirements(self, families: Sequence[ModelFamily]) -> dict[ModelFamily, tuple[str, ...]]:
+        """Families whose `requires` modules are not importable (uses dependency_available)."""
+        missing: dict[ModelFamily, tuple[str, ...]] = {}
+        for family in families:
+            absent = tuple(m for m in self.model_families[family].requires if not dependency_available(m))
+            if absent:
+                missing[family] = absent
+        return missing
+
+
+# ---------------------------------------------------------------------------
+# 4.3 Config section models
+# ---------------------------------------------------------------------------
+class TargetConfig(_Base):
+    column: str | None = None
+    positive_label: str | int | bool | None = None
+    definition: str = ""
+    label_source: str = ""
+
+
+class ValidationConfig(_Base):
+    min_rows: Annotated[int, Field(ge=1)] = 1000
+    min_positive: Annotated[int, Field(ge=1)] = 200
+    max_file_size_mb: Annotated[int, Field(ge=1)] = 2048
+    imbalance_warn_min_rate: Annotated[float, Field(ge=0.0, le=1.0)] = 0.01
+    imbalance_warn_max_rate: Annotated[float, Field(ge=0.0, le=1.0)] = 0.99
+    high_null_column_rate: Annotated[float, Field(ge=0.0, le=1.0)] = 0.60
+    leakage_check: bool = True
+    leakage_auc_threshold: Annotated[float, Field(ge=0.5, le=1.0)] = 0.98
+    acknowledged: tuple[str, ...] = ()
+
+    @model_validator(mode="after")
+    def _rates_ordered(self) -> Self:
+        if self.imbalance_warn_min_rate >= self.imbalance_warn_max_rate:
+            raise ConfigError(
+                "VALIDATION_RATES_INVERTED",
+                f"imbalance_warn_min_rate ({self.imbalance_warn_min_rate}) must be below "
+                f"imbalance_warn_max_rate ({self.imbalance_warn_max_rate}).",
+                path="validation.imbalance_warn_min_rate",
+            )
+        return self
+
+    @field_validator("acknowledged")
+    @classmethod
+    def _ack_format(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        seen: set[str] = set()
+        for entry in v:
+            if not re.fullmatch(r"^[A-Z_]+(:[^:]+)?$", entry):
+                raise ConfigError(
+                    "VALIDATION_ACK_MALFORMED",
+                    f"{entry!r} is not a valid acknowledgement. Use CODE or CODE:column.",
+                    path="validation.acknowledged",
+                )
+            if entry in seen:
+                raise ConfigError(
+                    "VALIDATION_ACK_DUPLICATE",
+                    f"{entry!r} is acknowledged twice.",
+                    path="validation.acknowledged",
+                )
+            seen.add(entry)
+        return v
+
+
+class PrepareConfig(_Base):
+    missing_values: MissingValues = MissingValues.AUTO
+    outliers: Outliers = Outliers.CLIP
+    pii_handling: PiiHandling = PiiHandling.REDACT
+    deduplicate: bool = True
+    exclude_columns: tuple[str, ...] = ()
+
+    @field_validator("exclude_columns")
+    @classmethod
+    def _unique_nonempty(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        seen: set[str] = set()
+        for name in v:
+            if not name:
+                raise ConfigError(
+                    "PREPARE_EXCLUDE_EMPTY",
+                    "prepare.exclude_columns contains an empty column name.",
+                    path="prepare.exclude_columns",
+                )
+            if name in seen:
+                raise ConfigError(
+                    "PREPARE_EXCLUDE_DUPLICATE",
+                    f"prepare.exclude_columns lists {name!r} twice.",
+                    path="prepare.exclude_columns",
+                )
+            seen.add(name)
+        return v
+
+
+class SplitConfig(_Base):
+    type: SplitType = SplitType.RANDOM_STRATIFIED
+    validation_fraction: Annotated[float, Field(ge=0.05, le=0.40)] = 0.15
+    test_fraction: Annotated[float, Field(ge=0.05, le=0.40)] = 0.15
+    time_column: str | None = None
+    group_column: str | None = None
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if self.validation_fraction + self.test_fraction > 0.60:
+            raise ConfigError(
+                "SPLIT_FRACTIONS_TOO_LARGE",
+                f"validation ({self.validation_fraction}) plus test ({self.test_fraction}) "
+                "must leave at least 40% of the rows for training.",
+                path="split.test_fraction",
+            )
+        if self.group_column is not None and self.group_column == self.time_column:
+            raise ConfigError(
+                "SPLIT_GROUP_EQUALS_TIME",
+                f"{self.group_column!r} cannot be both the group column and the time column.",
+                path="split.group_column",
+            )
+        return self
+
+
+class FeaturesConfig(_Base):
+    auto_feature_engineering: bool = True
+    categorical_encoding: CategoricalEncoding = CategoricalEncoding.AUTO
+    numeric_scaling: NumericScaling = NumericScaling.AUTO
+    text_columns: TextHandling = TextHandling.IGNORE
+    selection: FeatureSelection = FeatureSelection.IMPORTANCE
+    max_features: Annotated[int, Field(ge=10, le=500)] = 100
+
+
+class ModelSearchConfig(_Base):
+    metric: Metric = Metric.ROC_AUC
+    metric_choices: tuple[Metric, ...] = (
+        Metric.ROC_AUC,
+        Metric.PR_AUC,
+        Metric.F1,
+        Metric.RECALL,
+        Metric.PRECISION,
+    )
+    strategy: Strategy = Strategy.BALANCED
+    candidate_pool: tuple[ModelFamily, ...] = (
+        ModelFamily.XGBOOST,
+        ModelFamily.LIGHTGBM,
+        ModelFamily.RANDOM_FOREST,
+        ModelFamily.LOGISTIC_REGRESSION,
+    )
+    candidates: tuple[ModelFamily, ...] = (
+        ModelFamily.XGBOOST,
+        ModelFamily.LIGHTGBM,
+        ModelFamily.RANDOM_FOREST,
+        ModelFamily.LOGISTIC_REGRESSION,
+    )
+    ensemble: bool = True
+    tuning_trials: Annotated[int, Field(ge=5, le=500)] = 50
+    time_limit_minutes: Annotated[int, Field(ge=5, le=240)] = 30
+    cv_folds: Annotated[int, Field(ge=2, le=10)] = 5
+    imbalance: Imbalance = Imbalance.AUTO
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        if not self.candidate_pool:
+            raise ConfigError(
+                "MODEL_SEARCH_POOL_EMPTY",
+                "model_search.candidate_pool must offer at least one model family.",
+                path="model_search.candidate_pool",
+            )
+        if not self.candidates:
+            raise ConfigError(
+                "MODEL_SEARCH_NO_CANDIDATES",
+                "model_search.candidates must select at least one model family.",
+                path="model_search.candidates",
+            )
+        for field_name in ("candidate_pool", "candidates"):
+            families: tuple[ModelFamily, ...] = getattr(self, field_name)
+            if len(set(families)) != len(families):
+                raise ConfigError(
+                    "MODEL_SEARCH_DUPLICATE",
+                    f"model_search.{field_name} lists the same model family twice.",
+                    path=f"model_search.{field_name}",
+                )
+        outside = [f.value for f in self.candidates if f not in self.candidate_pool]
+        if outside:
+            raise ConfigError(
+                "MODEL_SEARCH_NOT_IN_POOL",
+                f"model_search.candidates must be chosen from candidate_pool; {', '.join(outside)} is not in it.",
+                path="model_search.candidates",
+            )
+        if not self.metric_choices:
+            raise ConfigError(
+                "METRIC_CHOICES_EMPTY",
+                "model_search.metric_choices must offer at least one metric.",
+                path="model_search.metric_choices",
+            )
+        if len(set(self.metric_choices)) != len(self.metric_choices):
+            raise ConfigError(
+                "METRIC_CHOICES_DUPLICATE",
+                "model_search.metric_choices lists the same metric twice.",
+                path="model_search.metric_choices",
+            )
+        if self.metric not in self.metric_choices:
+            raise ConfigError(
+                "METRIC_NOT_IN_CHOICES",
+                f"model_search.metric {self.metric.value!r} is not one of metric_choices.",
+                path="model_search.metric",
+            )
+        return self
+
+
+class ThresholdConfig(_Base):
+    mode: ThresholdMode = ThresholdMode.AUTO
+    value: Annotated[float, Field(ge=0.01, le=0.99)] = 0.50
+
+    @model_validator(mode="after")
+    def _fixed_is_half(self) -> Self:
+        if self.mode is ThresholdMode.FIXED and self.value != 0.50:
+            raise ConfigError(
+                "THRESHOLD_FIXED_NOT_HALF",
+                f"A fixed decision threshold is 0.5; {self.value} was given. Use mode 'manual' for another number.",
+                path="evaluation.threshold.value",
+            )
+        return self
+
+
+class EvaluationConfig(_Base):
+    calibration: Calibration = Calibration.ISOTONIC
+    threshold: ThresholdConfig = ThresholdConfig()
+    shap: bool = True
+    reasons_per_row: Annotated[int, Field(ge=1, le=5)] = 3
+    fairness_column: str | None = None
+    champion_min_improvement_pct: Annotated[float, Field(ge=0.0, le=20.0)] = 1.0
+
+
+class Band(_Base):
+    name: Annotated[str, Field(min_length=1, max_length=40)]
+    min_score: Annotated[float, Field(ge=0.0, le=1.0)]
+    action: Annotated[str, Field(min_length=1, max_length=80)]
+
+
+class SuppressionConfig(_Base):
+    suppress_opted_out: bool = True
+    opt_out_column: str | None = "marketing_opt_in"
+    suppress_recently_contacted: bool = True
+    recently_contacted_column: str | None = "last_contacted_at"
+    recently_contacted_days: Annotated[int, Field(ge=1, le=90)] = 14
+
+
+class ActionsConfig(_Base):
+    score_field: Annotated[str, Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")] = "propensity"
+    bands: tuple[Band, ...] = (
+        Band(name="High", min_score=0.80, action="Act now"),
+        Band(name="Medium", min_score=0.50, action="Monitor"),
+        Band(name="Low", min_score=0.00, action="No action"),
+    )
+    suppression: SuppressionConfig = SuppressionConfig()
+    control_group_fraction: Annotated[float, Field(ge=0.0, le=0.50)] = 0.10
+
+    @field_validator("bands")
+    @classmethod
+    def _bands(cls, v: tuple[Band, ...]) -> tuple[Band, ...]:
+        if len(v) < 2:
+            raise ConfigError(
+                "BANDS_TOO_FEW",
+                "actions.bands needs at least two bands so every score lands in one.",
+                path="actions.bands",
+            )
+        for index in range(1, len(v)):
+            previous, current = v[index - 1], v[index]
+            if current.min_score >= previous.min_score:
+                raise ConfigError(
+                    "BANDS_NOT_DESCENDING",
+                    f"{current.name}-risk score ({current.min_score:.2f}) must be below "
+                    f"{previous.name}-risk score ({previous.min_score:.2f}).",
+                    path=f"actions.bands[{index}].min_score",
+                )
+        if v[-1].min_score != 0.0:
+            raise ConfigError(
+                "BANDS_LAST_NOT_ZERO",
+                f"The last band ({v[-1].name}) must start at 0.0 so every score lands in a band.",
+                path=f"actions.bands[{len(v) - 1}].min_score",
+            )
+        names = [band.name for band in v]
+        if len(set(names)) != len(names):
+            raise ConfigError(
+                "BANDS_DUPLICATE_NAME",
+                "actions.bands uses the same band name twice.",
+                path="actions.bands",
+            )
+        return v
+
+    def band_for(self, score: float) -> Band:
+        """The first band whose `min_score` the score reaches (pure; M4 uses it)."""
+        for band in self.bands:
+            if score >= band.min_score:
+                return band
+        return self.bands[-1]
+
+
+class MonitoringConfig(_Base):
+    drift_psi_threshold: Annotated[float, Field(ge=0.05, le=1.0)] = 0.20
+    retraining: Retraining = Retraining.ON_DRIFT
+    performance_alert_drop_pct: Annotated[int, Field(ge=1, le=50)] = 5
+
+
+class GovernanceConfig(_Base):
+    retention_days: Annotated[int, Field(ge=0, le=730)] = 90
+    consent_column: str | None = None
+    approval_required: bool = True
+
+
+# ---------------------------------------------------------------------------
+# 4.6 KPI formula grammar (DEC-007)
+# ---------------------------------------------------------------------------
+_KPI_COUNT_ROWS: Final[re.Pattern[str]] = re.compile(r"^count_rows\(\s*\)$")
+_KPI_COUNT_BANDS: Final[re.Pattern[str]] = re.compile(r"^count_where_band_in\(\s*(\[.*\])\s*\)$", re.DOTALL)
+_KPI_SUM_BANDS: Final[re.Pattern[str]] = re.compile(
+    r"^sum_where_band_in\(\s*(\"[^\"]*\"|'[^']*')\s*,\s*(\[.*\])\s*\)$", re.DOTALL
+)
+
+
+def _kpi_band_list(raw: str, formula: str) -> tuple[str, ...]:
+    try:
+        parsed = ast.literal_eval(raw)
+    except (SyntaxError, ValueError) as exc:
+        raise ConfigError(
+            "KPI_FORMULA_UNPARSEABLE",
+            f"{formula!r} does not contain a valid list of band names.",
+            path="output.kpi.formula",
+        ) from exc
+    if not isinstance(parsed, list) or not parsed or not all(isinstance(b, str) and b for b in parsed):
+        raise ConfigError(
+            "KPI_FORMULA_UNPARSEABLE",
+            f'{formula!r} must name at least one band, e.g. count_where_band_in(["High"]).',
+            path="output.kpi.formula",
+        )
+    bands: list[str] = [str(b) for b in parsed]
+    return tuple(bands)
+
+
+class KpiFormula(_Base):
+    fn: Literal["count_rows", "count_where_band_in", "sum_where_band_in"]
+    column: str | None = None
+    bands: tuple[str, ...] = ()
+
+    @classmethod
+    def parse(cls, text: str) -> KpiFormula:
+        formula = text.strip()
+        if _KPI_COUNT_ROWS.match(formula):
+            return cls(fn="count_rows")
+        match = _KPI_COUNT_BANDS.match(formula)
+        if match:
+            return cls(fn="count_where_band_in", bands=_kpi_band_list(match.group(1), formula))
+        match = _KPI_SUM_BANDS.match(formula)
+        if match:
+            return cls(
+                fn="sum_where_band_in",
+                column=str(ast.literal_eval(match.group(1))),
+                bands=_kpi_band_list(match.group(2), formula),
+            )
+        raise ConfigError(
+            "KPI_FORMULA_UNPARSEABLE",
+            f"{text!r} is not a KPI formula. Use count_rows(), count_where_band_in([...]) "
+            'or sum_where_band_in("column", [...]).',
+            path="output.kpi.formula",
+        )
+
+
+class KpiConfig(_Base):
+    label: Annotated[str, Field(min_length=1)]
+    formula: Annotated[str, Field(min_length=1)]
+
+    @field_validator("formula")
+    @classmethod
+    def _parses(cls, v: str) -> str:
+        KpiFormula.parse(v)
+        return v
+
+    @property
+    def parsed(self) -> KpiFormula:
+        return KpiFormula.parse(self.formula)
+
+
+class OutputConfig(_Base):
+    kpi: KpiConfig
+
+
+class ModeCopy(_Base):
+    train: Annotated[str, Field(min_length=1)]
+    score: Annotated[str, Field(min_length=1)]
+
+
+class PageTitles(_Base):
+    data: Annotated[str, Field(min_length=1)]
+    model: Annotated[str, Field(min_length=1)]
+    output: Annotated[str, Field(min_length=1)]
+
+
+class UiConfig(_Base):
+    target_label: str = "Target column"
+    mode_labels: ModeCopy
+    mode_help: ModeCopy
+    dataset_hint: ModeCopy
+    columns_hint: ModeCopy
+    run_button: ModeCopy
+    pages: PageTitles
+
+
+class TemplateColumn(_Base):
+    name: Annotated[str, Field(min_length=1, pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]
+    role: ColumnRole
+    type: ColumnType
+    description: Annotated[str, Field(min_length=1)]
+    examples: tuple[str, str, str, str, str]
+
+
+class TemplateConfig(_Base):
+    columns: tuple[TemplateColumn, ...] = ()
+
+    @field_validator("columns")
+    @classmethod
+    def _roles(cls, v: tuple[TemplateColumn, ...]) -> tuple[TemplateColumn, ...]:
+        names = [column.name for column in v]
+        if len(set(names)) != len(names):
+            raise ConfigError(
+                "TEMPLATE_DUPLICATE_COLUMN",
+                "template.columns lists the same column name twice.",
+                path="template.columns",
+            )
+        if not v:
+            return v
+        keys = [column for column in v if column.role is ColumnRole.PRIMARY_KEY]
+        if not keys:
+            raise ConfigError(
+                "TEMPLATE_NO_PRIMARY_KEY",
+                "template.columns needs exactly one column with role 'primary_key'.",
+                path="template.columns",
+            )
+        if len(keys) > 1:
+            raise ConfigError(
+                "TEMPLATE_MANY_PRIMARY_KEYS",
+                f"template.columns has {len(keys)} primary_key columns; exactly one is allowed.",
+                path="template.columns",
+            )
+        targets = [column for column in v if column.role is ColumnRole.TARGET]
+        if len(targets) > 1:
+            raise ConfigError(
+                "TEMPLATE_MANY_TARGETS",
+                f"template.columns has {len(targets)} target columns; at most one is allowed.",
+                path="template.columns",
+            )
+        return v
+
+    @property
+    def column_names(self) -> tuple[str, ...]:
+        return tuple(column.name for column in self.columns)
+
+    def by_role(self, role: ColumnRole) -> tuple[TemplateColumn, ...]:
+        return tuple(column for column in self.columns if column.role is role)
+
+    @property
+    def primary_key(self) -> TemplateColumn | None:
+        keys = self.by_role(ColumnRole.PRIMARY_KEY)
+        return keys[0] if keys else None
+
+
+# ---------------------------------------------------------------------------
+# 4.4 The top-level documents
+# ---------------------------------------------------------------------------
+class UseCaseConfig(_Base):
+    """A fully merged, validated use case. This is what the whole engine consumes."""
+
+    id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$")]
+    name: Annotated[str, Field(min_length=1)]
+    description: str = ""
+    lifecycle_stage: Annotated[str, Field(min_length=1)]
+    ai_type: AiType = AiType.PREDICTIVE
+    problem_type: ProblemType = ProblemType.BINARY_CLASSIFICATION
+    entity: Annotated[str, Field(min_length=1)] = "customer"
+    target: TargetConfig = TargetConfig()
+    primary_key_hints: tuple[str, ...] = ()
+    time_column_hints: tuple[str, ...] = ()
+    validation: ValidationConfig = ValidationConfig()
+    prepare: PrepareConfig = PrepareConfig()
+    split: SplitConfig = SplitConfig()
+    features: FeaturesConfig = FeaturesConfig()
+    model_search: ModelSearchConfig = ModelSearchConfig()
+    evaluation: EvaluationConfig = EvaluationConfig()
+    actions: ActionsConfig = ActionsConfig()
+    monitoring: MonitoringConfig = MonitoringConfig()
+    governance: GovernanceConfig = GovernanceConfig()
+    output: OutputConfig
+    ui: UiConfig
+    template: TemplateConfig = TemplateConfig()
+
+    @model_validator(mode="after")
+    def _cross_field(self) -> Self:
+        if self.ai_type is not AiType.GENERATIVE and self.target.column is None:
+            raise ConfigError(
+                "TARGET_COLUMN_REQUIRED",
+                f"{self.name} predicts something, so target.column must name the outcome column.",
+                path="target.column",
+            )
+        catalog = get_catalog()
+        allowed_metrics = catalog.metrics_for(self.problem_type)
+        if allowed_metrics:
+            wrong = [m.value for m in self.model_search.metric_choices if m not in allowed_metrics]
+            if wrong:
+                raise ConfigError(
+                    "METRIC_NOT_FOR_PROBLEM",
+                    f"{', '.join(wrong)} cannot score a {self.problem_type.value} problem.",
+                    path="model_search.metric_choices",
+                )
+        self._check_template()
+        used = self._reserved_columns()
+        for name in self.prepare.exclude_columns:
+            if name in used:
+                raise ConfigError(
+                    "COLUMN_EXCLUDED_AND_USED",
+                    f"{name!r} is excluded from the features but is also used as {used[name]}.",
+                    path="prepare.exclude_columns",
+                )
+        kpi = self.output.kpi.parsed
+        band_names = {band.name for band in self.actions.bands}
+        unknown_bands = [b for b in kpi.bands if b not in band_names]
+        if unknown_bands:
+            raise ConfigError(
+                "KPI_UNKNOWN_BAND",
+                f"output.kpi.formula names band(s) {', '.join(unknown_bands)} that actions.bands does not define.",
+                path="output.kpi.formula",
+            )
+        if kpi.column is not None and self.template.columns and kpi.column not in self.template.column_names:
+            raise ConfigError(
+                "KPI_UNKNOWN_COLUMN",
+                f"output.kpi.formula sums {kpi.column!r}, which is not a template column.",
+                path="output.kpi.formula",
+            )
+        return self
+
+    def _check_template(self) -> None:
+        if not self.template.columns:
+            return
+        targets = self.template.by_role(ColumnRole.TARGET)
+        target_name = targets[0].name if targets else None
+        if target_name != self.target.column:
+            raise ConfigError(
+                "TEMPLATE_TARGET_MISMATCH",
+                f"The template's target column ({target_name or 'none'}) is not "
+                f"target.column ({self.target.column or 'none'}).",
+                path="template.columns",
+            )
+        if self.split.type is SplitType.TIME_BASED and self.split.time_column is not None:
+            time_names = {column.name for column in self.template.by_role(ColumnRole.TIME)}
+            if self.split.time_column not in time_names:
+                raise ConfigError(
+                    "TEMPLATE_TIME_MISSING",
+                    f"split.time_column {self.split.time_column!r} is not a template column with role 'time'.",
+                    path="split.time_column",
+                )
+        if (
+            self.governance.consent_column is not None
+            and self.governance.consent_column not in self.template.column_names
+        ):
+            raise ConfigError(
+                "TEMPLATE_CONSENT_MISSING",
+                f"governance.consent_column {self.governance.consent_column!r} is not a template column.",
+                path="governance.consent_column",
+            )
+
+    def _reserved_columns(self) -> dict[str, str]:
+        reserved: dict[str, str] = {}
+        for column, role in (
+            (self.target.column, "the target column"),
+            (self.split.time_column, "the time column"),
+            (self.split.group_column, "the group column"),
+            (self.evaluation.fairness_column, "the fairness column"),
+            (self.governance.consent_column, "the consent column"),
+            (self.actions.suppression.opt_out_column, "the opt-out column"),
+            (self.actions.suppression.recently_contacted_column, "the recent-contact column"),
+        ):
+            if column is not None and column not in reserved:
+                reserved[column] = role
+        return reserved
+
+    @property
+    def trainable_in_phase_1(self) -> bool:
+        return (
+            self.ai_type is not AiType.GENERATIVE and get_catalog().problem_types[self.problem_type].enabled
+        )
+
+    @property
+    def marker(self) -> Literal["P", "G", "H"]:
+        return get_catalog().ai_types[self.ai_type].marker
+
+    @property
+    def template_stem(self) -> str:
+        return self.id.replace("-", "_")
+
+
+class IndustryUseCaseRef(_Base):
+    id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9-]*$")]
+    status: UseCaseStatus = UseCaseStatus.AVAILABLE
+    name: str | None = None
+    description: str | None = None
+
+
+class IndustryStage(_Base):
+    id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$")]
+    name: Annotated[str, Field(min_length=1)]
+    ai_type: AiType
+    use_cases: tuple[IndustryUseCaseRef, ...]
+
+
+class IndustryConfig(_Base):
+    schema_version: Literal[1]
+    id: Annotated[str, Field(pattern=r"^[a-z][a-z0-9_]*$")]
+    name: Annotated[str, Field(min_length=1)]
+    journey_label: str = "Customer Lifecycle"
+    stages: tuple[IndustryStage, ...]
+
+    @model_validator(mode="after")
+    def _unique(self) -> Self:
+        stage_ids: set[str] = set()
+        use_case_ids: set[str] = set()
+        for stage in self.stages:
+            if stage.id in stage_ids:
+                raise ConfigError(
+                    "INDUSTRY_DUPLICATE_STAGE",
+                    f"Stage {stage.id!r} appears twice.",
+                    path="stages",
+                )
+            stage_ids.add(stage.id)
+            for ref in stage.use_cases:
+                if ref.id in use_case_ids:
+                    raise ConfigError(
+                        "INDUSTRY_DUPLICATE_USE_CASE",
+                        f"Use case {ref.id!r} appears under more than one stage.",
+                        path=f"stages.{stage.id}.use_cases",
+                    )
+                use_case_ids.add(ref.id)
+                if ref.status is UseCaseStatus.PLANNED and not (ref.name and ref.description):
+                    raise ConfigError(
+                        "INDUSTRY_PLANNED_NEEDS_NAME",
+                        f"Planned use case {ref.id!r} must carry its own name and description.",
+                        path=f"stages.{stage.id}.use_cases.{ref.id}",
+                    )
+                if ref.status is UseCaseStatus.AVAILABLE and (ref.name or ref.description):
+                    raise ConfigError(
+                        "INDUSTRY_NAME_ON_AVAILABLE",
+                        f"Use case {ref.id!r} is available, so its name and description come from its own file.",
+                        path=f"stages.{stage.id}.use_cases.{ref.id}",
+                    )
+        return self
+
+    def all_refs(self) -> tuple[tuple[IndustryStage, IndustryUseCaseRef], ...]:
+        return tuple((stage, ref) for stage in self.stages for ref in stage.use_cases)
+
+
+class EngineConfig(_Base):
+    schema_version: Literal[1]
+    catalog: Catalog
+    defaults: dict[str, Any]
+
+
+# ---------------------------------------------------------------------------
+# 4.5 Loaders, merge and overrides
+# ---------------------------------------------------------------------------
+DEFAULT_CONFIG_ROOT: Final[Path] = Path(__file__).resolve().parent.parent / "configs"
+CONFIG_DIR_ENV_VAR: Final[str] = "MARKETING_AI_CONFIG_DIR"
+
+_ENGINE_CACHE: dict[Path, EngineConfig] = {}
+
+
+def config_root(root: Path | None = None) -> Path:
+    """`root` argument, else env `MARKETING_AI_CONFIG_DIR`, else `DEFAULT_CONFIG_ROOT`."""
+    if root is not None:
+        return Path(root).resolve()
+    from_env = os.environ.get(CONFIG_DIR_ENV_VAR)
+    if from_env:
+        return Path(from_env).resolve()
+    return DEFAULT_CONFIG_ROOT
+
+
+def load_yaml(path: Path) -> dict[str, Any]:
+    """`yaml.safe_load` with the three file-level `ConfigError` codes."""
+    if not path.is_file():
+        raise ConfigError("CONFIG_NOT_FOUND", f"No configuration file at {path}.", path=str(path))
+    try:
+        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigError("CONFIG_YAML_ERROR", f"{path} is not valid YAML: {exc}.", path=str(path)) from exc
+    if not isinstance(loaded, dict):
+        raise ConfigError(
+            "CONFIG_NOT_A_MAPPING",
+            f"{path} must contain a mapping of settings, not {type(loaded).__name__}.",
+            path=str(path),
+        )
+    document: dict[str, Any] = loaded
+    return document
+
+
+def load_engine_config(root: Path | None = None) -> EngineConfig:
+    """`configs/engine.yaml`, cached per root."""
+    base = config_root(root)
+    cached = _ENGINE_CACHE.get(base)
+    if cached is not None:
+        return cached
+    document = load_yaml(base / "engine.yaml")
+    version = document.get("schema_version")
+    if version != SCHEMA_VERSION:
+        raise ConfigError(
+            "ENGINE_SCHEMA_VERSION",
+            f"engine.yaml declares schema_version {version!r}; this engine reads {SCHEMA_VERSION}.",
+            path="schema_version",
+        )
+    try:
+        engine_config = EngineConfig.model_validate(document)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        dotted = _dotted_loc(first["loc"])
+        raise ConfigError("CONFIG_INVALID", f"{dotted}: {first['msg']}.", path=dotted) from exc
+    _ENGINE_CACHE[base] = engine_config
+    return engine_config
+
+
+def get_catalog(root: Path | None = None) -> Catalog:
+    return load_engine_config(root).catalog
+
+
+def list_industries(root: Path | None = None) -> tuple[str, ...]:
+    base = config_root(root) / "industries"
+    if not base.is_dir():
+        return ()
+    return tuple(sorted(path.stem for path in base.glob("*.yaml")))
+
+
+def list_use_case_ids(root: Path | None = None) -> tuple[str, ...]:
+    base = config_root(root) / "use_cases"
+    if not base.is_dir():
+        return ()
+    ids: list[str] = []
+    for path in sorted(base.glob("*.yaml")):
+        document = load_yaml(path)
+        declared = document.get("id")
+        if declared != path.stem.replace("_", "-"):
+            raise ConfigError(
+                "USE_CASE_ID_MISMATCH",
+                f"{path.name} declares id {declared!r}; the file name says {path.stem.replace('_', '-')!r}.",
+                path=str(path),
+            )
+        ids.append(str(declared))
+    return tuple(sorted(ids))
+
+
+def use_case_path(use_case_id: str, root: Path | None = None) -> Path:
+    return config_root(root) / "use_cases" / f"{use_case_id.replace('-', '_')}.yaml"
+
+
+def load_use_case_document(use_case_id: str, root: Path | None = None) -> dict[str, Any]:
+    """`deep_merge(engine.defaults, use-case file)` as a raw dict."""
+    path = use_case_path(use_case_id, root)
+    if not path.is_file():
+        raise ConfigError(
+            "USE_CASE_NOT_FOUND",
+            f"No use case {use_case_id!r} in {path.parent}.",
+            path=str(path),
+        )
+    defaults = load_engine_config(root).defaults
+    return deep_merge(defaults, load_yaml(path))
+
+
+def load_use_case(use_case_id: str, root: Path | None = None) -> UseCaseConfig:
+    document = load_use_case_document(use_case_id, root)
+    config = _validate_use_case(document)
+    check_dependencies(config)
+    return config
+
+
+def _validate_use_case(document: Mapping[str, Any]) -> UseCaseConfig:
+    try:
+        return UseCaseConfig.model_validate(dict(document))
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        dotted = _dotted_loc(first["loc"])
+        raise ConfigError("CONFIG_INVALID", f"{dotted}: {first['msg']}.", path=dotted) from exc
+
+
+def _dotted_loc(loc: Sequence[str | int]) -> str:
+    rendered = ""
+    for part in loc:
+        if isinstance(part, int):
+            rendered += f"[{part}]"
+        else:
+            rendered = f"{rendered}.{part}" if rendered else str(part)
+    return rendered
+
+
+def load_all_use_cases(root: Path | None = None) -> dict[str, UseCaseConfig]:
+    return {use_case_id: load_use_case(use_case_id, root) for use_case_id in list_use_case_ids(root)}
+
+
+def load_industry(industry_id: str = "telecom", root: Path | None = None) -> IndustryConfig:
+    """Validates the file AND the cross-file rules of the industry document."""
+    base = config_root(root)
+    path = base / "industries" / f"{industry_id}.yaml"
+    industry = IndustryConfig.model_validate(load_yaml(path))
+    available_ids = set(list_use_case_ids(root))
+    for stage, ref in industry.all_refs():
+        if ref.status is UseCaseStatus.AVAILABLE:
+            if ref.id not in available_ids:
+                raise ConfigError(
+                    "INDUSTRY_USE_CASE_MISSING",
+                    f"{industry_id}.yaml lists {ref.id!r} as available but there is no use-case file for it.",
+                    path=str(path),
+                )
+            config = load_use_case(ref.id, root)
+            if config.lifecycle_stage != stage.name:
+                raise ConfigError(
+                    "INDUSTRY_STAGE_MISMATCH",
+                    f"{ref.id!r} has lifecycle_stage {config.lifecycle_stage!r} "
+                    f"but sits under stage {stage.name!r}.",
+                    path=str(path),
+                )
+        elif use_case_path(ref.id, root).is_file():
+            raise ConfigError(
+                "INDUSTRY_PLANNED_BUT_PRESENT",
+                f"{ref.id!r} is marked planned but a use-case file exists; mark it available.",
+                path=str(path),
+            )
+    return industry
+
+
+def check_dependencies(config: UseCaseConfig) -> None:
+    """Raise `MODEL_FAMILY_UNAVAILABLE` when a selected model family needs a module that is not installed."""
+    catalog = get_catalog()
+    missing = catalog.missing_requirements(config.model_search.candidates)
+    for family in config.model_search.candidates:
+        if family in missing:
+            raise ConfigError(
+                "MODEL_FAMILY_UNAVAILABLE",
+                f"The {catalog.family_label(family)} model needs the optional 'nn' extra. "
+                "Run `make setup EXTRAS=nn`, or deselect it.",
+                path="model_search.candidates",
+            )
+
+
+def deep_merge(base: Mapping[str, Any], overlay: Mapping[str, Any]) -> dict[str, Any]:
+    """Deep for mappings, replace for everything else; neither argument is mutated (DEC-002)."""
+    merged: dict[str, Any] = {}
+    for key, value in base.items():
+        if key in overlay:
+            other = overlay[key]
+            if isinstance(value, Mapping) and isinstance(other, Mapping):
+                merged[key] = deep_merge(value, other)
+            else:
+                merged[key] = copy.deepcopy(other)
+        else:
+            merged[key] = copy.deepcopy(value)
+    for key, value in overlay.items():
+        if key not in base:
+            merged[key] = copy.deepcopy(value)
+    return merged
+
+
+_PATH_KEY: Final[re.Pattern[str]] = re.compile(r"^[a-z_][a-z0-9_]*(\[\d+\])?(\.[a-z_][a-z0-9_]*(\[\d+\])?)*$")
+_SEGMENT: Final[re.Pattern[str]] = re.compile(r"^([a-z_][a-z0-9_]*)(?:\[(\d+)\])?$")
+
+PathToken = str | int
+
+
+def _key_tokens(key: str | int) -> tuple[PathToken, ...]:
+    if isinstance(key, int):
+        return (key,)
+    if key.isdigit():
+        return (int(key),)
+    if not _PATH_KEY.match(key):
+        raise ConfigError("OVERRIDE_BAD_PATH", f"{key!r} is not a valid settings path.", path=str(key))
+    tokens: list[PathToken] = []
+    for segment in key.split("."):
+        match = _SEGMENT.match(segment)
+        if match is None:  # pragma: no cover - guarded by _PATH_KEY
+            raise ConfigError("OVERRIDE_BAD_PATH", f"{key!r} is not a valid settings path.", path=str(key))
+        tokens.append(match.group(1))
+        if match.group(2) is not None:
+            tokens.append(int(match.group(2)))
+    return tuple(tokens)
+
+
+def _render_tokens(tokens: Sequence[PathToken]) -> str:
+    rendered = ""
+    for token in tokens:
+        if isinstance(token, int):
+            rendered += f"[{token}]"
+        else:
+            rendered = f"{rendered}.{token}" if rendered else token
+    return rendered
+
+
+def _collect_override_leaves(
+    node: Mapping[Any, Any], prefix: tuple[PathToken, ...], out: list[tuple[tuple[PathToken, ...], Any]]
+) -> None:
+    for key, value in node.items():
+        tokens = prefix + _key_tokens(key)
+        if isinstance(value, Mapping) and value:
+            _collect_override_leaves(value, tokens, out)
+        else:
+            out.append((tokens, value))
+
+
+def expand_paths(patch: Mapping[str, Any]) -> dict[str, Any]:
+    """Normalise dotted keys, nested mappings and index patches into one nested document."""
+    leaves: list[tuple[tuple[PathToken, ...], Any]] = []
+    _collect_override_leaves(patch, (), leaves)
+    seen: dict[tuple[PathToken, ...], None] = {}
+    for tokens, _ in leaves:
+        if tokens in seen:
+            raise ConfigError(
+                "OVERRIDE_CONFLICTING_PATHS",
+                f"{_render_tokens(tokens)!r} is set twice in one request.",
+                path=_render_tokens(tokens),
+            )
+        seen[tokens] = None
+    ordered = list(seen)
+    for outer in ordered:
+        for inner in ordered:
+            if outer is not inner and len(outer) < len(inner) and inner[: len(outer)] == outer:
+                raise ConfigError(
+                    "OVERRIDE_PREFIX_COLLISION",
+                    f"{_render_tokens(outer)!r} and {_render_tokens(inner)!r} cannot both be set; "
+                    "one contains the other.",
+                    path=_render_tokens(outer),
+                )
+    expanded: dict[str, Any] = {}
+    for tokens, value in leaves:
+        cursor: dict[Any, Any] = expanded
+        for token in tokens[:-1]:
+            nxt = cursor.get(token)
+            if not isinstance(nxt, dict):
+                nxt = {}
+                cursor[token] = nxt
+            cursor = nxt
+        cursor[tokens[-1]] = copy.deepcopy(value)
+    return expanded
+
+
+def _walk_leaves(value: Any, prefix: str, out: list[str]) -> None:
+    if isinstance(value, Mapping):
+        if not value:
+            if prefix:
+                out.append(prefix)
+            return
+        for key, item in value.items():
+            child = (
+                f"{prefix}[{key}]" if isinstance(key, int) else (f"{prefix}.{key}" if prefix else str(key))
+            )
+            _walk_leaves(item, child, out)
+        return
+    if isinstance(value, (list, tuple)) and value and all(isinstance(item, Mapping) for item in value):
+        for index, item in enumerate(value):
+            _walk_leaves(item, f"{prefix}[{index}]", out)
+        return
+    if prefix:
+        out.append(prefix)
+
+
+def leaf_paths(document: Mapping[str, Any]) -> tuple[str, ...]:
+    """Dotted leaves of a nested or expanded document, with `[i]` for list indices."""
+    out: list[str] = []
+    _walk_leaves(document, "", out)
+    return tuple(out)
+
+
+IMMUTABLE_PATHS: Final[frozenset[str]] = frozenset(
+    {"id", "name", "description", "lifecycle_stage", "ai_type", "entity", "template", "ui", "output"}
+)
+EXTRA_OVERRIDABLE_PATHS: Final[frozenset[str]] = frozenset(
+    {
+        "problem_type",
+        "target.column",
+        "target.positive_label",
+        "split.time_column",
+        "prepare.exclude_columns",
+        "validation.acknowledged",
+        "model_search.candidates",
+    }
+)
+_EMPTY_STRING_IS_NONE: Final[frozenset[str]] = frozenset(
+    {
+        "split.time_column",
+        "split.group_column",
+        "evaluation.fairness_column",
+        "governance.consent_column",
+        "target.positive_label",
+    }
+)
+
+
+def overridable_paths(config: UseCaseConfig) -> frozenset[str]:
+    """Every path `advanced_settings_schema(config)` emits, plus `EXTRA_OVERRIDABLE_PATHS`."""
+    schema = advanced_settings_schema(config)
+    return frozenset(
+        {field.path for stage in schema.stages for field in stage.fields} | EXTRA_OVERRIDABLE_PATHS
+    )
+
+
+def _coerce_optional_strings(node: Mapping[Any, Any], prefix: str) -> dict[Any, Any]:
+    coerced: dict[Any, Any] = {}
+    for key, value in node.items():
+        child = f"{prefix}[{key}]" if isinstance(key, int) else (f"{prefix}.{key}" if prefix else str(key))
+        if isinstance(value, Mapping):
+            coerced[key] = _coerce_optional_strings(value, child)
+        elif value == "" and child in _EMPTY_STRING_IS_NONE:
+            coerced[key] = None
+        else:
+            coerced[key] = value
+    return coerced
+
+
+def _is_index_patch(value: Any) -> bool:
+    return isinstance(value, Mapping) and bool(value) and all(isinstance(key, int) for key in value)
+
+
+def _patch_list(base: Any, patch: Mapping[int, Any], path: str) -> list[Any]:
+    if not isinstance(base, (list, tuple)):
+        raise ConfigError(
+            "OVERRIDE_INDEX_OUT_OF_RANGE",
+            f"{path} is not a list, so it cannot be patched by index.",
+            path=path,
+        )
+    items: list[Any] = [copy.deepcopy(item) for item in base]
+    for index, value in patch.items():
+        if index < 0 or index >= len(items):
+            raise ConfigError(
+                "OVERRIDE_INDEX_OUT_OF_RANGE",
+                f"{path} has {len(items)} entries, so [{index}] cannot be set.",
+                path=f"{path}[{index}]",
+            )
+        current = items[index]
+        if isinstance(current, Mapping) and isinstance(value, Mapping):
+            items[index] = _merge_overrides(current, value, f"{path}[{index}]")
+        else:
+            items[index] = copy.deepcopy(value)
+    return items
+
+
+def _merge_overrides(base: Mapping[str, Any], overlay: Mapping[Any, Any], prefix: str) -> dict[str, Any]:
+    merged: dict[str, Any] = {}
+    for key, value in base.items():
+        if key in overlay:
+            other = overlay[key]
+            child = f"{prefix}.{key}" if prefix else str(key)
+            if _is_index_patch(other):
+                merged[key] = _patch_list(value, other, child)
+            elif isinstance(value, Mapping) and isinstance(other, Mapping):
+                merged[key] = _merge_overrides(value, other, child)
+            else:
+                merged[key] = copy.deepcopy(other)
+        else:
+            merged[key] = copy.deepcopy(value)
+    for key, value in overlay.items():
+        if key not in base:
+            child = f"{prefix}.{key}" if prefix else str(key)
+            if _is_index_patch(value):
+                raise ConfigError(
+                    "OVERRIDE_INDEX_OUT_OF_RANGE",
+                    f"{child} does not exist, so it cannot be patched by index.",
+                    path=child,
+                )
+            merged[str(key)] = copy.deepcopy(value)
+    return merged
+
+
+def apply_overrides(
+    base: Mapping[str, Any], overrides: Mapping[str, Any], *, allowed: frozenset[str]
+) -> dict[str, Any]:
+    """Expand, authorise and merge run overrides into a raw config document (config units only)."""
+    expanded = expand_paths(overrides)
+    for leaf in leaf_paths(expanded):
+        root = leaf.split(".")[0].split("[")[0]
+        if root in IMMUTABLE_PATHS:
+            raise ConfigError(
+                "OVERRIDE_IMMUTABLE_FIELD",
+                f"{leaf!r} belongs to the use case, not to a run, and cannot be overridden.",
+                path=leaf,
+            )
+        if leaf not in allowed:
+            near = difflib.get_close_matches(leaf, sorted(allowed), n=3, cutoff=0.0)
+            raise ConfigError(
+                "OVERRIDE_UNKNOWN_PATH",
+                f"{leaf!r} is not a setting that can be changed per run. Nearest: {', '.join(near)}.",
+                path=leaf,
+            )
+    coerced = _coerce_optional_strings(expanded, "")
+    return _merge_overrides(base, coerced, "")
+
+
+class RunOverrides(RootModel[dict[str, Any]]):
+    """The raw `overrides` object of `POST /runs`, in either wire shape."""
+
+    def expanded(self) -> dict[str, Any]:
+        return expand_paths(self.root)
+
+    def touched_paths(self) -> tuple[str, ...]:
+        return tuple(sorted(leaf_paths(self.expanded())))
+
+
+class ResolvedConfig(_Base):
+    """Serialised verbatim as `run_config.json` (plan section 5)."""
+
+    schema_version: int
+    use_case_id: str
+    resolved_at: datetime
+    config: UseCaseConfig
+    overrides_applied: dict[str, Any]
+    sources: dict[str, Literal["engine", "use_case", "override"]]
+    warnings: tuple[str, ...] = ()
+
+
+def resolve_config(
+    use_case_id: str,
+    overrides: RunOverrides | Mapping[str, Any] | None = None,
+    *,
+    root: Path | None = None,
+    now: datetime | None = None,
+) -> ResolvedConfig:
+    """Engine defaults + use-case file + run overrides -> the one document every run is reproducible from."""
+    raw = load_use_case_document(use_case_id, root)
+    base = _validate_use_case(raw)
+    patch: Mapping[str, Any] = overrides.root if isinstance(overrides, RunOverrides) else (overrides or {})
+    expanded = expand_paths(patch)
+    merged = apply_overrides(raw, patch, allowed=overridable_paths(base)) if patch else raw
+    final = _validate_use_case(merged)
+    check_dependencies(final)
+    warnings: list[str] = []
+    if final.split.type is SplitType.TIME_BASED and final.split.time_column is None:
+        warnings.append("split.type is time_based and no time column is set yet")
+    return ResolvedConfig(
+        schema_version=SCHEMA_VERSION,
+        use_case_id=final.id,
+        resolved_at=now or datetime.now(UTC),
+        config=final,
+        overrides_applied=expanded,
+        sources=_sources(final, root, expanded),
+        warnings=tuple(warnings),
+    )
+
+
+def _sources(
+    final: UseCaseConfig, root: Path | None, expanded: Mapping[str, Any]
+) -> dict[str, Literal["engine", "use_case", "override"]]:
+    engine_leaves = set(leaf_paths(load_engine_config(root).defaults))
+    use_case_leaves = set(leaf_paths(load_yaml(use_case_path(final.id, root))))
+    override_leaves = set(leaf_paths(expanded))
+    sources: dict[str, Literal["engine", "use_case", "override"]] = {}
+    for leaf in leaf_paths(final.model_dump(mode="json")):
+        if leaf in override_leaves:
+            sources[leaf] = "override"
+        elif leaf in use_case_leaves or _list_parent(leaf) in use_case_leaves:
+            sources[leaf] = "use_case"
+        elif leaf in engine_leaves or _list_parent(leaf) in engine_leaves:
+            sources[leaf] = "engine"
+        else:
+            sources[leaf] = "engine"
+    return sources
+
+
+def _list_parent(leaf: str) -> str:
+    """`actions.bands[0].name` -> `actions.bands`, so a whole-list layer claims its elements."""
+    head, bracket, _ = leaf.partition("[")
+    return head if bracket else leaf
+
+
+# ---------------------------------------------------------------------------
+# 4.7 advanced_settings_schema()
+# ---------------------------------------------------------------------------
+class FieldChoice(_Base):
+    value: str | int | float | bool
+    label: str
+    enabled: bool = True
+    help: str | None = None
+
+
+class VisibleWhen(_Base):
+    path: str
+    equals: str | int | float | bool
+
+
+class FieldSpec(_Base):
+    path: str
+    label: str
+    type: FieldType
+    widget: Widget
+    value: Any = None
+    default: Any = None
+    choices: tuple[FieldChoice, ...] | None = None
+    column_source: ColumnSource | None = None
+    empty_label: str | None = None
+    min: float | None = None
+    max: float | None = None
+    step: float | None = None
+    scale: int | None = None
+    min_selected: int | None = None
+    max_visible: int | None = None
+    help: str = ""
+    required: bool = True
+    visible_when: VisibleWhen | None = None
+    order: int
+
+
+class StageSpec(_Base):
+    number: int
+    id: str
+    title: str
+    summary: str = ""
+    summary_template: str
+    fields: tuple[FieldSpec, ...]
+
+
+class AdvancedSettingsSchema(_Base):
+    schema_version: int
+    use_case_id: str
+    ai_type: AiType
+    stages: tuple[StageSpec, ...]
+
+
+_ENUM_FOR_PATH: Final[Mapping[str, type[StrEnum]]] = {
+    "prepare.missing_values": MissingValues,
+    "prepare.outliers": Outliers,
+    "prepare.pii_handling": PiiHandling,
+    "split.type": SplitType,
+    "features.categorical_encoding": CategoricalEncoding,
+    "features.numeric_scaling": NumericScaling,
+    "features.text_columns": TextHandling,
+    "features.selection": FeatureSelection,
+    "model_search.strategy": Strategy,
+    "model_search.imbalance": Imbalance,
+    "evaluation.calibration": Calibration,
+    "evaluation.threshold.mode": ThresholdMode,
+    "monitoring.retraining": Retraining,
+}
+
+_SUMMARY_TEMPLATES: Final[Mapping[str, str]] = {
+    "data_preparation": (
+        "Missing: {prepare.missing_values} · outliers: {prepare.outliers}"
+        "{?validation.leakage_check: · leakage check} · PII: {prepare.pii_handling}"
+        "{?prepare.exclude_columns: · {prepare.exclude_columns|count} excluded}"
+    ),
+    "data_split": (
+        "{split.type} · {split.validation_fraction|pct}% val · {split.test_fraction|pct}% test"
+        "{?split.type=time_based:{?split.time_column: · by {split.time_column}}}"
+        "{?split.group_column: · grouped by {split.group_column}}"
+    ),
+    "feature_engineering": (
+        "{?features.auto_feature_engineering:Auto features on}"
+        "{?!features.auto_feature_engineering:Auto features off}"
+        " · encoding {features.categorical_encoding} · text: {features.text_columns}"
+        " · selection: {features.selection} · max {features.max_features}"
+    ),
+    "model_search": (
+        "{model_search.strategy} · {model_search.candidates|count} of "
+        "{model_search.candidate_pool|count} algorithms{?model_search.ensemble: · ensembling}"
+        " · {model_search.tuning_trials} trials · {model_search.time_limit_minutes} min"
+        " · {model_search.cv_folds}-fold CV"
+    ),
+    "evaluation": (
+        "{model_search.metric} · calibration {evaluation.calibration}"
+        " · threshold {evaluation.threshold.mode}"
+        "{?evaluation.shap: · top {evaluation.reasons_per_row} SHAP reasons}"
+        "{?evaluation.fairness_column: · fairness by {evaluation.fairness_column}}"
+        " · champion if +{evaluation.champion_min_improvement_pct}%"
+    ),
+    "monitoring": (
+        "Drift alert PSI > {monitoring.drift_psi_threshold} · retrain: {monitoring.retraining}"
+        " · alert if score drops {monitoring.performance_alert_drop_pct}%"
+    ),
+    "governance": (
+        "Keep uploads {governance.retention_days} days"
+        "{?governance.consent_column: · consent: {governance.consent_column}}"
+        "{?governance.approval_required: · approval before champion}"
+    ),
+}
+
+_ACTIONS_SUMMARY_TAIL: Final[str] = (
+    "{?actions.suppression.suppress_opted_out: · skip opted-out}"
+    "{?actions.suppression.suppress_recently_contacted:"
+    " · skip contacted <{actions.suppression.recently_contacted_days}d}"
+    " · {actions.control_group_fraction|pct}% control group"
+)
+
+
+def _actions_summary_template(bands: Sequence[Band]) -> str:
+    head = " · ".join(f"{band.name} ≥ {{actions.bands[{i}].min_score}}" for i, band in enumerate(bands[:-1]))
+    return f"{head}{_ACTIONS_SUMMARY_TAIL}"
+
+
+def _band_fields(bands: Sequence[Band]) -> tuple[FieldSpec, ...]:
+    return tuple(
+        FieldSpec(
+            path=f"actions.bands[{index}].min_score",
+            label=f"{band.name}-risk score ≥",
+            type=FieldType.NUMBER,
+            widget=Widget.NUMBER,
+            min=0.0,
+            max=1.0,
+            step=0.05,
+            order=index + 1,
+        )
+        for index, band in enumerate(bands[:-1])
+    )
+
+
+def _numbered(fields: Sequence[FieldSpec], start: int = 1) -> tuple[FieldSpec, ...]:
+    return tuple(field.model_copy(update={"order": start + index}) for index, field in enumerate(fields))
+
+
+def _stage_specs(bands: Sequence[Band]) -> tuple[StageSpec, ...]:
+    """The static table of section 2, with one band field per non-floor band of `bands`."""
+    stage_1 = (
+        FieldSpec(
+            path="prepare.missing_values",
+            label="Missing values",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=1,
+        ),
+        FieldSpec(
+            path="prepare.outliers", label="Outliers", type=FieldType.STRING, widget=Widget.SELECT, order=2
+        ),
+        FieldSpec(
+            path="prepare.pii_handling",
+            label="PII handling",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=3,
+        ),
+        FieldSpec(
+            path="validation.min_positive",
+            label="Min positive examples",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=50,
+            max=100000,
+            step=50,
+            order=4,
+        ),
+        FieldSpec(
+            path="prepare.deduplicate",
+            label="Remove duplicate rows",
+            type=FieldType.BOOLEAN,
+            widget=Widget.CHECKBOX,
+            order=5,
+        ),
+        FieldSpec(
+            path="validation.leakage_check",
+            label="Check for target leakage",
+            type=FieldType.BOOLEAN,
+            widget=Widget.CHECKBOX,
+            order=6,
+        ),
+        FieldSpec(
+            path="prepare.exclude_columns",
+            label="Exclude columns from features",
+            type=FieldType.ARRAY,
+            widget=Widget.COLUMN_MULTI_SELECT,
+            column_source=ColumnSource.FEATURES,
+            max_visible=14,
+            required=False,
+            order=7,
+        ),
+    )
+    stage_2 = (
+        FieldSpec(
+            path="split.type", label="Split type", type=FieldType.STRING, widget=Widget.SELECT, order=1
+        ),
+        FieldSpec(
+            path="split.validation_fraction",
+            label="Validation (%)",
+            type=FieldType.NUMBER,
+            widget=Widget.NUMBER,
+            min=0.05,
+            max=0.40,
+            step=0.05,
+            scale=100,
+            order=2,
+        ),
+        FieldSpec(
+            path="split.test_fraction",
+            label="Test (%)",
+            type=FieldType.NUMBER,
+            widget=Widget.NUMBER,
+            min=0.05,
+            max=0.40,
+            step=0.05,
+            scale=100,
+            order=3,
+        ),
+        FieldSpec(
+            path="split.time_column",
+            label="Time column",
+            type=FieldType.STRING,
+            widget=Widget.COLUMN_SELECT,
+            column_source=ColumnSource.TIME_LIKE,
+            empty_label="Select…",
+            required=False,
+            visible_when=VisibleWhen(path="split.type", equals=SplitType.TIME_BASED.value),
+            order=4,
+        ),
+        FieldSpec(
+            path="split.group_column",
+            label="Group column (keep together)",
+            type=FieldType.STRING,
+            widget=Widget.COLUMN_SELECT,
+            column_source=ColumnSource.FEATURES,
+            empty_label="None",
+            required=False,
+            order=5,
+        ),
+    )
+    stage_3 = (
+        FieldSpec(
+            path="features.auto_feature_engineering",
+            label="Automatic feature engineering (dates, ratios, aggregates)",
+            type=FieldType.BOOLEAN,
+            widget=Widget.CHECKBOX,
+            order=1,
+        ),
+        FieldSpec(
+            path="features.categorical_encoding",
+            label="Categorical encoding",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=2,
+        ),
+        FieldSpec(
+            path="features.numeric_scaling",
+            label="Numeric scaling",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=3,
+        ),
+        FieldSpec(
+            path="features.text_columns",
+            label="Text columns",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=4,
+        ),
+        FieldSpec(
+            path="features.selection",
+            label="Feature selection",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=5,
+        ),
+        FieldSpec(
+            path="features.max_features",
+            label="Max features",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=10,
+            max=500,
+            step=10,
+            order=6,
+        ),
+    )
+    stage_4 = (
+        FieldSpec(
+            path="model_search.candidates",
+            label="",
+            type=FieldType.ARRAY,
+            widget=Widget.MULTI_SELECT,
+            min_selected=1,
+            visible_when=VisibleWhen(path="__ui.model", equals="__automl__"),
+            order=1,
+        ),
+        FieldSpec(
+            path="model_search.strategy",
+            label="Search strategy",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=2,
+        ),
+        FieldSpec(
+            path="model_search.tuning_trials",
+            label="Tuning trials",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=5,
+            max=500,
+            step=10,
+            order=3,
+        ),
+        FieldSpec(
+            path="model_search.time_limit_minutes",
+            label="Time limit (min)",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=5,
+            max=240,
+            step=5,
+            order=4,
+        ),
+        FieldSpec(
+            path="model_search.cv_folds",
+            label="CV folds",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=2,
+            max=10,
+            step=1,
+            order=5,
+        ),
+        FieldSpec(
+            path="model_search.imbalance",
+            label="Class imbalance",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=6,
+        ),
+        FieldSpec(
+            path="model_search.ensemble",
+            label="Ensemble / stack the best models",
+            type=FieldType.BOOLEAN,
+            widget=Widget.CHECKBOX,
+            order=7,
+        ),
+    )
+    stage_5 = (
+        FieldSpec(
+            path="model_search.metric",
+            label="Optimise for",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=1,
+        ),
+        FieldSpec(
+            path="evaluation.calibration",
+            label="Probability calibration",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=2,
+        ),
+        FieldSpec(
+            path="evaluation.threshold.mode",
+            label="Decision threshold",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=3,
+        ),
+        FieldSpec(
+            path="evaluation.threshold.value",
+            label="Threshold value",
+            type=FieldType.NUMBER,
+            widget=Widget.NUMBER,
+            min=0.01,
+            max=0.99,
+            step=0.01,
+            visible_when=VisibleWhen(path="evaluation.threshold.mode", equals=ThresholdMode.MANUAL.value),
+            order=4,
+        ),
+        FieldSpec(
+            path="evaluation.reasons_per_row",
+            label="Reasons per row",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=1,
+            max=5,
+            step=1,
+            order=5,
+        ),
+        FieldSpec(
+            path="evaluation.fairness_column",
+            label="Fairness check (sensitive column)",
+            type=FieldType.STRING,
+            widget=Widget.COLUMN_SELECT,
+            column_source=ColumnSource.FEATURES,
+            empty_label="None",
+            required=False,
+            order=6,
+        ),
+        FieldSpec(
+            path="evaluation.champion_min_improvement_pct",
+            label="Replace champion if better by (%)",
+            type=FieldType.NUMBER,
+            widget=Widget.NUMBER,
+            min=0,
+            max=20,
+            step=0.5,
+            order=7,
+        ),
+        FieldSpec(
+            path="evaluation.shap",
+            label="Generate SHAP explanations per row",
+            type=FieldType.BOOLEAN,
+            widget=Widget.CHECKBOX,
+            order=8,
+        ),
+    )
+    stage_6 = (
+        *_band_fields(bands),
+        FieldSpec(
+            path="actions.control_group_fraction",
+            label="Control group holdout (%)",
+            type=FieldType.NUMBER,
+            widget=Widget.NUMBER,
+            min=0,
+            max=0.50,
+            step=0.01,
+            scale=100,
+            order=0,
+        ),
+        FieldSpec(
+            path="actions.suppression.recently_contacted_days",
+            label="Recently contacted (days)",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=1,
+            max=90,
+            step=1,
+            order=0,
+        ),
+        FieldSpec(
+            path="actions.suppression.suppress_opted_out",
+            label="Suppress opted-out customers",
+            type=FieldType.BOOLEAN,
+            widget=Widget.CHECKBOX,
+            order=0,
+        ),
+        FieldSpec(
+            path="actions.suppression.suppress_recently_contacted",
+            label="Suppress recently contacted",
+            type=FieldType.BOOLEAN,
+            widget=Widget.CHECKBOX,
+            order=0,
+        ),
+    )
+    stage_7 = (
+        FieldSpec(
+            path="monitoring.drift_psi_threshold",
+            label="Drift alert (PSI above)",
+            type=FieldType.NUMBER,
+            widget=Widget.NUMBER,
+            min=0.05,
+            max=1.00,
+            step=0.05,
+            order=1,
+        ),
+        FieldSpec(
+            path="monitoring.retraining",
+            label="Retraining",
+            type=FieldType.STRING,
+            widget=Widget.SELECT,
+            order=2,
+        ),
+        FieldSpec(
+            path="monitoring.performance_alert_drop_pct",
+            label="Performance alert (% drop)",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=1,
+            max=50,
+            step=1,
+            order=3,
+        ),
+    )
+    stage_8 = (
+        FieldSpec(
+            path="governance.retention_days",
+            label="Data retention (days)",
+            type=FieldType.INTEGER,
+            widget=Widget.NUMBER,
+            min=0,
+            max=730,
+            step=30,
+            order=1,
+        ),
+        FieldSpec(
+            path="governance.consent_column",
+            label="Consent column (use rows where true)",
+            type=FieldType.STRING,
+            widget=Widget.COLUMN_SELECT,
+            column_source=ColumnSource.FEATURES,
+            empty_label="None",
+            required=False,
+            order=2,
+        ),
+        FieldSpec(
+            path="governance.approval_required",
+            label="Require approval before a model becomes champion",
+            type=FieldType.BOOLEAN,
+            widget=Widget.CHECKBOX,
+            order=3,
+        ),
+    )
+    blocks: tuple[tuple[str, str, tuple[FieldSpec, ...]], ...] = (
+        ("data_preparation", "Data preparation", stage_1),
+        ("data_split", "Data split", stage_2),
+        ("feature_engineering", "Feature engineering", stage_3),
+        ("model_search", "Model search", stage_4),
+        ("evaluation", "Evaluation & explainability", stage_5),
+        ("actions", "Actions & output", stage_6),
+        ("monitoring", "Monitoring & retraining", stage_7),
+        ("governance", "Governance & privacy", stage_8),
+    )
+    return tuple(
+        StageSpec(
+            number=number,
+            id=stage_id,
+            title=title,
+            summary_template=(
+                _actions_summary_template(bands) if stage_id == "actions" else _SUMMARY_TEMPLATES[stage_id]
+            ),
+            fields=_numbered(fields),
+        )
+        for number, (stage_id, title, fields) in enumerate(blocks, start=1)
+    )
+
+
+FIELD_TABLE: Final[tuple[StageSpec, ...]] = _stage_specs(ActionsConfig().bands)
+
+
+def _resolve_config_path(config: UseCaseConfig, path: str, code: str) -> Any:
+    current: Any = config
+    try:
+        tokens = _key_tokens(path)
+    except ConfigError as exc:
+        raise ConfigError(code, f"{path!r} is not a settings path.", path=path) from exc
+    for token in tokens:
+        try:
+            current = current[token] if isinstance(token, int) else getattr(current, token)
+        except (AttributeError, IndexError, KeyError, TypeError) as exc:
+            raise ConfigError(code, f"{path!r} is not a setting of this configuration.", path=path) from exc
+        if current is None and token != tokens[-1]:
+            raise ConfigError(code, f"{path!r} is not a setting of this configuration.", path=path)
+    return current
+
+
+def _jsonify(value: Any) -> Any:
+    if isinstance(value, StrEnum):
+        return value.value
+    if isinstance(value, tuple):
+        return [_jsonify(item) for item in value]
+    if isinstance(value, _Base):
+        return value.model_dump(mode="json")
+    return value
+
+
+def _format_number(value: float) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    return str(int(value)) if float(value).is_integer() else repr(float(value))
+
+
+def _label_for(value: StrEnum) -> str:
+    try:
+        return CHOICE_LABELS[value]
+    except KeyError:
+        pass
+    if isinstance(value, Metric):
+        return get_catalog().metric_label(value)
+    if isinstance(value, ModelFamily):
+        return get_catalog().family_label(value)
+    return value.value
+
+
+def _display(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, StrEnum):
+        return _label_for(value)
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return _format_number(value)
+    if isinstance(value, (tuple, list)):
+        return " · ".join(_display(item) for item in value)
+    return str(value)
+
+
+def _raw_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, StrEnum):
+        return value.value
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return _format_number(value)
+    return str(value)
+
+
+def _truthy(value: Any) -> bool:
+    if value is None:
+        return False
+    if isinstance(value, (str, tuple, list, dict)):
+        return len(value) > 0
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    return True
+
+
+def _matching_brace(text: str, start: int) -> int:
+    depth = 0
+    for index in range(start, len(text)):
+        if text[index] == "{":
+            depth += 1
+        elif text[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return index
+    raise ConfigError("SUMMARY_TEMPLATE_UNBALANCED", f"Unbalanced braces in {text!r}.")
+
+
+def _split_condition(body: str) -> tuple[str, str]:
+    depth = 0
+    for index, char in enumerate(body):
+        if char == "{":
+            depth += 1
+        elif char == "}":
+            depth -= 1
+        elif char == ":" and depth == 0:
+            return body[:index], body[index + 1 :]
+    raise ConfigError("SUMMARY_TEMPLATE_UNBALANCED", f"Conditional {body!r} has no ':' separator.")
+
+
+def _apply_filter(value: Any, filter_name: str) -> str:
+    if filter_name == "":
+        return _display(value)
+    if filter_name == "value":
+        return _raw_text(value)
+    if filter_name == "count":
+        return str(len(value)) if isinstance(value, (tuple, list, str, dict)) else "0"
+    if filter_name == "pct":
+        return str(round(float(value) * 100))
+    if filter_name == "lower":
+        return _display(value).lower()
+    raise ConfigError("SUMMARY_UNKNOWN_FILTER", f"{filter_name!r} is not a summary filter.")
+
+
+def _render_expression(expression: str, config: UseCaseConfig) -> str:
+    if expression.startswith("?"):
+        condition, body = _split_condition(expression[1:])
+        if condition.startswith("!"):
+            value = _resolve_config_path(config, condition[1:], "SUMMARY_UNKNOWN_PATH")
+            return render_stage_summary(body, config) if not _truthy(value) else ""
+        path, equals, literal = condition.partition("=")
+        value = _resolve_config_path(config, path, "SUMMARY_UNKNOWN_PATH")
+        if equals:
+            return render_stage_summary(body, config) if _raw_text(value) == literal else ""
+        return render_stage_summary(body, config) if _truthy(value) else ""
+    path, _, filter_name = expression.partition("|")
+    value = _resolve_config_path(config, path, "SUMMARY_UNKNOWN_PATH")
+    return _apply_filter(value, filter_name)
+
+
+def render_stage_summary(template: str, config: UseCaseConfig) -> str:
+    """Render one `summary_template` against a config (the grammar of section 4.7)."""
+    parts: list[str] = []
+    index = 0
+    while index < len(template):
+        char = template[index]
+        if char == "{":
+            end = _matching_brace(template, index)
+            parts.append(_render_expression(template[index + 1 : end], config))
+            index = end + 1
+        else:
+            parts.append(char)
+            index += 1
+    return "".join(parts)
+
+
+def _family_available(family: ModelFamily, catalog: Catalog, torch_available: bool | None) -> bool:
+    for module in catalog.model_families[family].requires:
+        available = torch_available if (module == "torch" and torch_available is not None) else None
+        if available is None:
+            available = dependency_available(module)
+        if not available:
+            return False
+    return True
+
+
+def _column_choices(
+    field: FieldSpec,
+    columns: Sequence[str] | None,
+    primary_key: str | None,
+    target: str | None,
+    catalog: Catalog,
+) -> tuple[FieldChoice, ...] | None:
+    if columns is None:
+        return None
+    if field.column_source is ColumnSource.FEATURES:
+        reserved = {primary_key, target}
+        offered = [column for column in columns if column not in reserved]
+    elif field.column_source is ColumnSource.TIME_LIKE:
+        pattern = re.compile(catalog.column_name_patterns.time_like, re.IGNORECASE)
+        offered = [column for column in columns if pattern.search(column)] or list(columns)
+    else:
+        offered = list(columns)
+    return tuple(FieldChoice(value=column, label=column) for column in offered)
+
+
+def _choices_for(
+    field: FieldSpec,
+    config: UseCaseConfig,
+    catalog: Catalog,
+    columns: Sequence[str] | None,
+    primary_key: str | None,
+    target: str | None,
+    torch_available: bool | None,
+) -> tuple[FieldChoice, ...] | None:
+    if field.path == "model_search.metric":
+        return tuple(
+            FieldChoice(value=metric.value, label=catalog.metric_label(metric))
+            for metric in config.model_search.metric_choices
+        )
+    if field.path == "model_search.candidates":
+        choices: list[FieldChoice] = []
+        for family in config.model_search.candidate_pool:
+            available = _family_available(family, catalog, torch_available)
+            choices.append(
+                FieldChoice(
+                    value=family.value,
+                    label=catalog.family_label(family),
+                    enabled=available,
+                    help=None if available else "Requires the optional 'nn' extra",
+                )
+            )
+        return tuple(choices)
+    if field.widget in (Widget.COLUMN_SELECT, Widget.COLUMN_MULTI_SELECT):
+        return _column_choices(field, columns, primary_key, target, catalog)
+    enum_type = _ENUM_FOR_PATH.get(field.path)
+    if enum_type is None:
+        return None
+    return tuple(FieldChoice(value=member.value, label=CHOICE_LABELS[member]) for member in enum_type)
+
+
+def advanced_settings_schema(
+    config: UseCaseConfig,
+    *,
+    columns: Sequence[str] | None = None,
+    primary_key: str | None = None,
+    target: str | None = None,
+    torch_available: bool | None = None,
+) -> AdvancedSettingsSchema:
+    """Projection of `FIELD_TABLE` onto a resolved config. No branch inspects the use-case id."""
+    if config.ai_type is AiType.GENERATIVE:
+        return AdvancedSettingsSchema(
+            schema_version=SCHEMA_VERSION, use_case_id=config.id, ai_type=config.ai_type, stages=()
+        )
+    catalog = get_catalog()
+    stages: list[StageSpec] = []
+    for static_stage in _stage_specs(config.actions.bands):
+        fields: list[FieldSpec] = []
+        for field in static_stage.fields:
+            value = _jsonify(_resolve_config_path(config, field.path, "SCHEMA_UNKNOWN_PATH"))
+            fields.append(
+                field.model_copy(
+                    update={
+                        "value": value,
+                        "default": value,
+                        "choices": _choices_for(
+                            field, config, catalog, columns, primary_key, target, torch_available
+                        ),
+                    }
+                )
+            )
+        stages.append(
+            static_stage.model_copy(
+                update={
+                    "fields": tuple(fields),
+                    "summary": render_stage_summary(static_stage.summary_template, config),
+                }
+            )
+        )
+    return AdvancedSettingsSchema(
+        schema_version=SCHEMA_VERSION,
+        use_case_id=config.id,
+        ai_type=config.ai_type,
+        stages=tuple(stages),
+    )

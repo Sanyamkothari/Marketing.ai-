@@ -1,0 +1,12 @@
+# INDUSTRY_NAME_ON_AVAILABLE: an available entry may not restate name/description.
+schema_version: 1
+id: telecom
+name: Telecom
+stages:
+  - id: awareness
+    name: Awareness
+    ai_type: predictive
+    use_cases:
+      - id: targeted-advertisement
+        status: available
+        name: Targeted Advertisement

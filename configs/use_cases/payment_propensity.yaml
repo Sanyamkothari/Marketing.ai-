@@ -1,0 +1,44 @@
+id: payment-propensity
+name: Payment Propensity
+description: Predicts which customers are likely to pay late, so reminders and payment plans reach them before the due date.
+lifecycle_stage: Service / Payments
+entity: account
+
+target:
+  column: late_or_missed_payment
+  positive_label: 1
+  definition: Paid after the due date, or not paid
+  label_source: Payment transactions
+
+primary_key_hints: [account_id, customer_id, id]
+
+actions:
+  score_field: late_prob
+  bands:
+    - {name: High,   min_score: 0.80, action: "Call + payment plan"}
+    - {name: Medium, min_score: 0.50, action: "SMS reminder"}
+    - {name: Low,    min_score: 0.00, action: "Email reminder"}
+
+output:
+  kpi:
+    label: "At-risk accounts"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Billing + payment history"
+    model: "Payment Propensity Model"
+    output: "Payment Risk Score / Smart Reminders"
+
+template:
+  columns:
+    - {name: account_id,             role: primary_key, type: string,  description: "Unique billing account identifier. Never used as a feature.",     examples: ["AC-6101","AC-6134","AC-6170","AC-6192","AC-6205"]}
+    - {name: snapshot_date,          role: time,        type: date,    description: "Date the features describe the account as of (before the due date)", examples: ["2026-08-01","2026-08-01","2026-08-01","2026-08-15","2026-08-15"]}
+    - {name: late_payments_6m,       role: feature,     type: integer, description: "Late payments in last 6 months",                                  examples: ["3","1","0","0","2"]}
+    - {name: autopay_enabled,        role: feature,     type: boolean, description: "Autopay is active",                                               examples: ["false","false","true","true","false"]}
+    - {name: bill_change_pct,        role: feature,     type: float,   description: "Bill change vs 3-month average, in percent",                      examples: ["12.0","35.0","-4.0","0.5","21.0"]}
+    - {name: tenure_months,          role: feature,     type: integer, description: "Months as a customer",                                            examples: ["14","27","58","73","9"]}
+    - {name: plan_type,              role: feature,     type: string,  description: "Prepaid / postpaid plan",                                         examples: ["postpaid","postpaid","prepaid","postpaid","prepaid"]}
+    - {name: marketing_opt_in,       role: consent,     type: boolean, description: "Customer agreed to marketing contact. Rows that are false are suppressed.", examples: ["true","true","true","false","true"]}
+    - {name: last_contacted_at,      role: contact,     type: date,    description: "Date of the last reminder sent (blank if never)",                 examples: ["2026-07-11","","2026-06-30","2026-07-25",""]}
+    - {name: late_or_missed_payment, role: target,      type: integer, description: "Target: 1 if the invoice was paid late or not paid, else 0. Leave blank when scoring.", examples: ["1","1","0","0","1"]}

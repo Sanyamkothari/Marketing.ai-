@@ -1,0 +1,180 @@
+# configs/engine.yaml
+# Global defaults for every use case. A use-case file overrides only what differs.
+# Merge order: engine.yaml:defaults -> configs/use_cases/<id>.yaml -> run overrides -> run_config.json
+# `catalog` is read by engine/config.py for labels, mappings and validation; it is not part of the merge.
+
+schema_version: 1                       # int; bumped on any breaking change of this document's shape
+
+# ---------------------------------------------------------------------------
+# catalog: engine-level constants. NOT merged into use cases, NOT overridable.
+# ---------------------------------------------------------------------------
+catalog:
+
+  model_families:                       # id -> {autogluon_key, label, requires}; candidates/pools must be subsets
+    XGBoost:            {autogluon_key: XGB,      label: "XGBoost",             requires: []}
+    LightGBM:           {autogluon_key: GBM,      label: "LightGBM",            requires: []}
+    RandomForest:       {autogluon_key: RF,       label: "Random Forest",       requires: []}
+    LogisticRegression: {autogluon_key: LR,       label: "Logistic Regression", requires: []}
+    CatBoost:           {autogluon_key: CAT,      label: "CatBoost",            requires: []}
+    NeuralNet:          {autogluon_key: NN_TORCH, label: "Neural network",      requires: [torch]}   # optional "nn" extra (DEC-011)
+
+  strategy_presets:                     # model_search.strategy -> AutoGluon presets (plan §6.3 train)
+    fast:       medium_quality          # str
+    balanced:   good_quality            # str
+    exhaustive: best_quality            # str
+
+  metrics:                              # id -> {label, autogluon_name, problem_types, greater_is_better}
+    roc_auc:   {label: "ROC-AUC",   autogluon_name: roc_auc,                 problem_types: [binary_classification], greater_is_better: true}
+    pr_auc:    {label: "PR-AUC",    autogluon_name: average_precision,       problem_types: [binary_classification], greater_is_better: true}
+    f1:        {label: "F1 score",  autogluon_name: f1,                      problem_types: [binary_classification], greater_is_better: true}
+    recall:    {label: "Recall",    autogluon_name: recall,                  problem_types: [binary_classification], greater_is_better: true}
+    precision: {label: "Precision", autogluon_name: precision,               problem_types: [binary_classification], greater_is_better: true}
+    rmse:      {label: "RMSE",      autogluon_name: root_mean_squared_error, problem_types: [regression],            greater_is_better: false}
+    mae:       {label: "MAE",       autogluon_name: mean_absolute_error,     problem_types: [regression],            greater_is_better: false}
+
+  problem_types:                        # id -> {label (prototype PTYPES verbatim), enabled in Phase 1}
+    binary_classification: {label: "Classification (yes / no)",          enabled: true}
+    regression:            {label: "Regression (a number)",              enabled: true}
+    forecasting:           {label: "Forecasting (a number over time)",   enabled: false}   # plan §12: later
+    clustering:            {label: "Clustering (no target)",             enabled: false}   # plan §12: later
+
+  ai_types:                             # id -> {marker on the overview, stars, label} (prototype TYPES verbatim)
+    predictive: {marker: "P", stars: "★",      label: "Predictive AI"}
+    generative: {marker: "G", stars: "★★",     label: "Generative AI"}
+    hybrid:     {marker: "H", stars: "★ + ★★", label: "Hybrid"}
+
+  automl_choice:                        # the step-3 first option; value is a sentinel, never a display string
+    value: "__automl__"                 # str
+    label: "AutoML (recommended)"       # str (prototype AUTO)
+
+  column_name_patterns:                 # case-insensitive regexes used by ingest/profile detection (M2)
+    time_like: "date|time|month|week|day|_ts$|_at$"                  # plan §4.2 verbatim
+    leakage:   "^(churn|converted|outcome|label|target)|_after$"     # plan §6.3 LEAKAGE_SUSPECTED name patterns
+
+# ---------------------------------------------------------------------------
+# defaults: merged UNDER every use-case file. Same shape as a use-case file
+# minus the identity fields (id, name, description, lifecycle_stage).
+# ---------------------------------------------------------------------------
+defaults:
+
+  ai_type: predictive                   # enum: predictive | generative | hybrid
+  problem_type: binary_classification   # enum: catalog.problem_types ids; forecasting/clustering load but are not trainable
+  entity: customer                      # str; noun in copy and messages ("one row per {entity}")
+
+  target:                               # non-UI (plan §5)
+    column: null                        # str | null; REQUIRED (non-null) when ai_type != generative
+    positive_label: null                # str | int | bool | null; auto-detected when null
+    definition: ""                      # str; Data page "Definition"
+    label_source: ""                    # str; Data page "Label source"
+
+  primary_key_hints: [customer_id, cust_id, account_id, id]        # list[str]; profile PK detection order (M2)
+  time_column_hints: [snapshot_date, as_of_date, event_date, date] # list[str]; time-column detection order (M2)
+
+  validation:                           # data limits + validation switches (plan §4.1, §6.3)
+    min_rows: 1000                      # int >= 1; ROWS_TOO_FEW below this (plan §4.1)
+    min_positive: 200                   # int >= 1; TARGET_TOO_FEW_POSITIVES below this. Plan §4.1 wins over prototype 500 (DEC-004)  [UI 1]
+    max_file_size_mb: 2048              # int >= 1; plan §4.1 "Max 2 GB"
+    imbalance_warn_min_rate: 0.01       # float 0..1; TARGET_IMBALANCE_SEVERE below this
+    imbalance_warn_max_rate: 0.99       # float 0..1; TARGET_IMBALANCE_SEVERE above this
+    high_null_column_rate: 0.60         # float 0..1; HIGH_NULL_COLUMN above this
+    leakage_check: true                 # bool; run LEAKAGE_SUSPECTED  [UI 1 "Check for target leakage"]
+    leakage_auc_threshold: 0.98         # float 0.5..1; single-feature AUC that triggers LEAKAGE_SUSPECTED
+    acknowledged: []                    # list[str]; run-only, e.g. ["LEAKAGE_SUSPECTED:converted_flag"] (plan §8)
+
+  prepare:                              # [UI 1] Data preparation
+    missing_values: auto                # enum: auto | fill | drop_rows
+    outliers: clip                      # enum: clip | remove_rows | keep   (clip = 1st-99th percentile)
+    pii_handling: redact                # enum: redact | drop_columns | keep
+    deduplicate: true                   # bool; drop exact-duplicate rows
+    exclude_columns: []                 # list[str]; user-excluded feature columns (also plan §8 override path)
+
+  split:                                # [UI 2] Data split
+    type: random_stratified             # enum: random_stratified | time_based
+    validation_fraction: 0.15           # float 0.05..0.40 step 0.05; UI shows *100 as "%" (DEC-005)
+    test_fraction: 0.15                 # float 0.05..0.40 step 0.05; UI shows *100 as "%" (DEC-005)
+    time_column: null                   # str | null; needed when type == time_based, may be picked at run time (DEC-023)
+    group_column: null                  # str | null; GroupShuffleSplit key
+
+  features:                             # [UI 3] Feature engineering
+    auto_feature_engineering: true      # bool
+    categorical_encoding: auto          # enum: auto | one_hot | target | ordinal
+    numeric_scaling: auto               # enum: auto | standard | min_max | none
+    text_columns: ignore                # enum: ignore | tfidf | embeddings
+    selection: importance               # enum: importance | correlation_filter | pca | none
+    max_features: 100                   # int 10..500 step 10
+
+  model_search:                         # [UI 4] Model search ("metric" renders in UI 5 as "Optimise for")
+    metric: roc_auc                     # enum: catalog.metrics ids; must be in metric_choices
+    metric_choices: [roc_auc, pr_auc, f1, recall, precision]   # list[enum]; ordered choices of "Optimise for" (DEC-019)
+    strategy: balanced                  # enum: fast | balanced | exhaustive
+    candidate_pool: [XGBoost, LightGBM, RandomForest, LogisticRegression]  # list[enum catalog.model_families]; offered in the grid, in this order
+    candidates: [XGBoost, LightGBM, RandomForest, LogisticRegression]      # list[enum]; ticked by default; non-empty subset of candidate_pool
+    ensemble: true                      # bool; false -> num_bag_folds=0, num_stack_levels=0, fit_weighted_ensemble=False
+    tuning_trials: 50                   # int 5..500 step 10
+    time_limit_minutes: 30              # int 5..240 step 5
+    cv_folds: 5                         # int 2..10 step 1  -> AutoGluon num_bag_folds
+    imbalance: auto                     # enum: auto | class_weights | oversampling | none
+
+  evaluation:                           # [UI 5] Evaluation & explainability
+    calibration: isotonic               # enum: isotonic | platt | none
+    threshold:                          # DEC-006
+      mode: auto                        # enum: auto | fixed | manual  (auto = maximise F1 on validation; fixed = 0.5)
+      value: 0.50                       # float 0.01..0.99 step 0.01; used only when mode == manual; must be 0.50 when mode == fixed
+    shap: true                          # bool; per-row SHAP reasons
+    reasons_per_row: 3                  # int 1..5 step 1
+    fairness_column: null               # str | null; report-only, never blocks
+    champion_min_improvement_pct: 1.0   # float 0..20 step 0.5; test-score gain (same metric) needed to replace the champion
+
+  actions:                              # [UI 6] Actions & output
+    score_field: propensity             # str; score column name in scores.csv
+    bands:                              # list[Band]; strictly descending min_score, last must be 0.0, unique names (DEC-008)
+      - {name: High,   min_score: 0.80, action: "Act now"}    # name: str, min_score: float 0..1, action: str
+      - {name: Medium, min_score: 0.50, action: "Monitor"}
+      - {name: Low,    min_score: 0.00, action: "No action"}
+    suppression:
+      suppress_opted_out: true          # bool
+      opt_out_column: marketing_opt_in  # str | null; rows where falsey are suppressed (config-only)
+      suppress_recently_contacted: true # bool
+      recently_contacted_column: last_contacted_at   # str | null (config-only)
+      recently_contacted_days: 14       # int 1..90 step 1
+    control_group_fraction: 0.10        # float 0..0.50 step 0.01; UI shows *100 as "%" (DEC-005); seeded by run_id
+
+  monitoring:                           # [UI 7] Monitoring & retraining
+    drift_psi_threshold: 0.20           # float 0.05..1.00 step 0.05
+    retraining: on_drift                # enum: manual | on_drift | weekly | monthly
+    performance_alert_drop_pct: 5       # int 1..50 step 1
+
+  governance:                           # [UI 8] Governance & privacy
+    retention_days: 90                  # int 0..730 step 30; 0 = delete uploads right after the run
+    consent_column: null                # str | null; keep only rows where truthy
+    approval_required: true             # bool; champion waits for POST /models/{id}/approve
+
+  output:                               # non-UI (plan §5)
+    kpi:
+      label: "Rows scored"              # str; headline KPI tile on the Output page
+      formula: "count_rows()"           # str; mini-grammar, §4.6 (DEC-007)
+
+  ui:                                   # Setup-screen copy (prototype verbatim); {entity} is substituted (DEC-022)
+    target_label: "Target column"       # str; step-2 label (generative: "Reference answer column")
+    mode_labels:
+      train: "Train a model"            # str
+      score: "Score new data"           # str
+    mode_help:
+      train: "Upload historical data where the outcome is already known. The best model is trained and saved."
+      score: "Upload new records without the outcome. The saved model scores every row and recommends an action."
+    dataset_hint:
+      train: "One row per {entity}, including the outcome column. CSV or Parquet."
+      score: "One row per {entity}. CSV or Parquet."
+    columns_hint:
+      train: "The primary key identifies each row and is never used as a feature. The target is what the model learns to predict."
+      score: "The primary key identifies each row so scores can be joined back to your systems."
+    run_button:
+      train: "Run training"             # str
+      score: "Score data"               # str
+    pages:                              # H1 titles of the Data / Model / Output pages (prototype UC d/m/o)
+      data: "Input data"                # str
+      model: "Model"                    # str
+      output: "Output"                  # str
+
+  template:                             # plan §4.3; every use case supplies the full column list
+    columns: []                         # list[TemplateColumn] {name, role, type, description, examples[5]}; §3

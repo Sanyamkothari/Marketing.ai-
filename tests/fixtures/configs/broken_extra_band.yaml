@@ -1,0 +1,11 @@
+# Unknown key inside `actions.bands[0]`.
+id: broken-extra-band
+name: Broken Extra Band
+lifecycle_stage: Awareness
+target:
+  column: converted_30d
+actions:
+  bands:
+    - {name: High,   min_score: 0.80, action: "Act now", nonsense_band: 1}
+    - {name: Medium, min_score: 0.50, action: "Monitor"}
+    - {name: Low,    min_score: 0.00, action: "No action"}

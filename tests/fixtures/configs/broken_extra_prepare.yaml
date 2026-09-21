@@ -1,0 +1,8 @@
+# Unknown key inside `prepare`.
+id: broken-extra-prepare
+name: Broken Extra Prepare
+lifecycle_stage: Awareness
+target:
+  column: converted_30d
+prepare:
+  nonsense_prepare: true

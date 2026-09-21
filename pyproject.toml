@@ -1,0 +1,91 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "marketing-ai"
+version = "0.1.0"
+description = "A reusable marketing AI engine: one engine, many use cases, all configuration."
+readme = "README.md"
+requires-python = ">=3.11,<3.12"
+dependencies = [
+  "autogluon.tabular[lightgbm,xgboost,catboost]==1.6.3",
+  "shap==0.51.0",
+  "pandas==2.3.3",
+  "pyarrow==24.0.0",
+  "scikit-learn==1.9.1",
+  "imbalanced-learn==0.14.2",
+  "fastapi==0.141.1",
+  "uvicorn==0.53.0",
+  "python-multipart==0.0.32",
+  "sqlmodel==0.0.42",
+  "pydantic==2.13.5",
+  "PyYAML==6.0.3",
+]
+
+[project.optional-dependencies]
+nn = ["torch>=2.10,<2.14"]              # enables the NeuralNet family (NN_TORCH); multi-GB; off by default (DEC-011)
+dev = [
+  "pytest==9.1.1",
+  "hypothesis==6.168.0",
+  "httpx==0.28.1",
+  "ruff==0.16.8",
+  "black==26.5.1",
+  "mypy==2.3.1",
+  "pandas-stubs==3.0.5.260914",
+  "types-PyYAML==6.0.12.20260906",
+]
+
+[project.scripts]
+marketing-ai-templates = "scripts.gen_templates:main"
+marketing-ai-apidocs   = "scripts.gen_api_docs:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["engine", "api", "scripts"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py311"
+src = ["engine", "api", "scripts", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "A", "C4", "SIM", "PTH", "RET", "ARG", "ANN", "TID", "RUF"]
+ignore = [
+  "ANN401",                             # dict[str, Any] is unavoidable at the YAML/JSON boundary
+  "E501",                               # verbatim prototype help strings are longer than the line limit
+  "E203",                               # conflicts with black's slice formatting
+  "RUF001",                             # verbatim prototype copy contains en dashes, middle dots and arrows
+  "RUF002",                             # the same characters appear inside docstrings
+  "RUF003",                             # the same characters appear inside comments
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["ANN", "ARG"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["engine", "api", "scripts"]
+
+[tool.black]
+line-length = 110
+target-version = ["py311"]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true                           # engine, api AND scripts (plan §13.6 minimum is engine/; DEC-013)
+files = ["engine", "api", "scripts"]    # tests are not type-checked; no per-module `strict` anywhere (it is not a per-module option)
+warn_unreachable = true
+warn_unused_configs = true
+show_error_codes = true
+
+[[tool.mypy.overrides]]                 # the ONLY override: ENV_FACTS measured these as the sole strict-mode failures
+module = ["autogluon.*", "shap.*", "sklearn.*", "imblearn.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]                      # import engine/api/scripts from the checkout, with or without an editable install
+addopts = "-q --strict-markers"
+markers = [
+  "slow: takes more than a few seconds (AutoGluon training); excluded from `make test`",
+  "integration: exercises several modules, the filesystem or the API together",
+]
