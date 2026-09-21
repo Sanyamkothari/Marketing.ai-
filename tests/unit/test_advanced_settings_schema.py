@@ -60,7 +60,7 @@ PATHS: tuple[str, ...] = (
     "model_search.strategy",
     "model_search.tuning_trials",
     "model_search.time_limit_minutes",
-    "model_search.cv_folds",
+    "model_search.folds",
     "model_search.imbalance",
     "model_search.ensemble",
     "model_search.metric",
@@ -85,15 +85,17 @@ PATHS: tuple[str, ...] = (
     "governance.approval_required",
 )
 
-# path -> (min, max, step, scale), config units, verbatim from design section 2.
+# path -> (min, max, step, scale), config units, verbatim from design section 2, except that
+# `model_search.time_limit_minutes` starts at 1 in steps of 1 so plan §10's `time_limit_minutes: 1`
+# integration override is a valid value (DEC-036).
 BOUNDS: dict[str, tuple[float, float, float, int | None]] = {
     "validation.min_positive": (50, 100000, 50, None),
     "split.validation_fraction": (0.05, 0.40, 0.05, 100),
     "split.test_fraction": (0.05, 0.40, 0.05, 100),
     "features.max_features": (10, 500, 10, None),
     "model_search.tuning_trials": (5, 500, 10, None),
-    "model_search.time_limit_minutes": (5, 240, 5, None),
-    "model_search.cv_folds": (2, 10, 1, None),
+    "model_search.time_limit_minutes": (1, 240, 1, None),
+    "model_search.folds": (2, 10, 1, None),
     "evaluation.threshold.value": (0.01, 0.99, 0.01, None),
     "evaluation.reasons_per_row": (1, 5, 1, None),
     "evaluation.champion_min_improvement_pct": (0, 20, 0.5, None),
@@ -129,7 +131,7 @@ LABELS: dict[str, str] = {
     "model_search.strategy": "Search strategy",
     "model_search.tuning_trials": "Tuning trials",
     "model_search.time_limit_minutes": "Time limit (min)",
-    "model_search.cv_folds": "CV folds",
+    "model_search.folds": "CV folds",
     "model_search.imbalance": "Class imbalance",
     "model_search.ensemble": "Ensemble / stack the best models",
     "model_search.metric": "Optimise for",

@@ -49,7 +49,7 @@ PROTOTYPE_DEFAULTS: dict[str, tuple[str, Any]] = {
     "strategy": ("model_search.strategy", "balanced"),
     "trials": ("model_search.tuning_trials", 50),
     "limit": ("model_search.time_limit_minutes", 30),
-    "folds": ("model_search.cv_folds", 5),
+    "folds": ("model_search.folds", 5),
     "imbalance": ("model_search.imbalance", "auto"),
     "ensemble": ("model_search.ensemble", True),
     "metric": ("model_search.metric", "roc_auc"),

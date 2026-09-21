@@ -110,7 +110,7 @@ Serialised verbatim as `run_config.json` (plan section 5).
 | `resolved_at` | datetime (ISO-8601, with timezone) | yes |  |
 | `config` | UseCaseConfig | yes | A fully merged, validated use case. This is what the whole engine consumes. |
 | `overrides_applied` | object | yes |  |
-| `sources` | object of string -> "engine" \| "use_case" \| "override" | yes |  |
+| `sources` | object of string -> "engine" \| "use_case" \| "override" \| "derived" | yes |  |
 | `warnings` | list[string] | no |  |
 
 #### UseCaseConfig
@@ -208,7 +208,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `ensemble` | boolean | no |  |
 | `tuning_trials` | integer | no |  |
 | `time_limit_minutes` | integer | no |  |
-| `cv_folds` | integer | no |  |
+| `folds` | integer | no |  |
 | `imbalance` | Imbalance ("auto" \| "class_weights" \| "oversampling" \| "none") | no |  |
 
 #### EvaluationConfig
@@ -1102,8 +1102,8 @@ config units: fractions stay fractions, and `scale` is the factor the UI multipl
 | `model_search.candidates` |  | multi-select | XGBoost, LightGBM, RandomForest, LogisticRegression | - | - | - | - |
 | `model_search.strategy` | Search strategy | select | balanced | - | - | - | - |
 | `model_search.tuning_trials` | Tuning trials | number | 50 | 5 | 500 | 10 | - |
-| `model_search.time_limit_minutes` | Time limit (min) | number | 30 | 5 | 240 | 5 | - |
-| `model_search.cv_folds` | CV folds | number | 5 | 2 | 10 | 1 | - |
+| `model_search.time_limit_minutes` | Time limit (min) | number | 30 | 1 | 240 | 1 | - |
+| `model_search.folds` | CV folds | number | 5 | 2 | 10 | 1 | - |
 | `model_search.imbalance` | Class imbalance | select | auto | - | - | - | - |
 | `model_search.ensemble` | Ensemble / stack the best models | checkbox | true | - | - | - | - |
 
@@ -1155,7 +1155,7 @@ Keys of the default document that no advanced-settings field renders, with their
 |---|---|
 | `schema_version` | int; bumped on any breaking change of this document's shape |
 | `ai_type` | enum: predictive \| generative \| hybrid |
-| `problem_type` | enum: catalog.problem_types ids; forecasting/clustering load but are not trainable |
+| `problem_type` | enum: catalog.problem_types ids; forecasting/clustering load but are not trainable; a run override re-derives model_search.metric_choices (DEC-039) |
 | `entity` | str; noun in copy and messages ("one row per {entity}") |
 | `target` | non-UI (plan §5) |
 | `target.column` | str \| null; REQUIRED (non-null) when ai_type != generative |
@@ -1225,7 +1225,8 @@ Engine constants. The catalog is never merged into a use case and never overrida
 | `catalog.automl_choice.label` | str (prototype AUTO) |
 | `catalog.column_name_patterns` | case-insensitive regexes used by ingest/profile detection (M2) |
 | `catalog.column_name_patterns.time_like` | plan §4.2 verbatim |
-| `catalog.column_name_patterns.leakage` | plan §6.3 LEAKAGE_SUSPECTED name patterns |
+| `catalog.column_name_patterns.leakage` | plan §6.3 LEAKAGE_SUSPECTED name patterns churn*, converted*, outcome*, checked on every column |
+| `catalog.column_name_patterns.leakage_after_target` | plan §6.3 "*_date after target": checked only on columns placed after the target column in the header (DEC-037) |
 
 ## Merge and override rules
 

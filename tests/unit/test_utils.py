@@ -141,15 +141,20 @@ def test_parse_iso_treats_a_missing_offset_as_utc() -> None:
         (1, "1"),
         (999, "999"),
         (1_000, "1K"),
+        (1_500, "2K"),  # Math.round(1.5) = 2, not Python's round-half-even 2
+        (2_500, "3K"),  # Math.round(2.5) = 3, not Python's round-half-even 2
         (184_000, "184K"),
         (999_000, "999K"),
+        (999_500, "1000K"),  # fmtN rounds before it changes unit, as the prototype does
         (1_000_000, "1.0M"),
+        (1_250_000, "1.3M"),  # (1.25).toFixed(1) = "1.3": an exact half rounds up
         (2_400_000, "2.4M"),
-        (1_500_000_000, "1.5B"),
+        (1_500_000_000, "1.5B"),  # beyond the prototype (DEC-040)
         (-184_000, "-184K"),
     ],
 )
 def test_humanise_count_matches_the_prototype_format(count: int, expected: str) -> None:
+    """The prototype's `fmtN`, JavaScript rounding included (DEC-040)."""
     assert humanise_count(count) == expected
 
 
@@ -158,15 +163,18 @@ def test_humanise_count_matches_the_prototype_format(count: int, expected: str) 
     [
         (0, "0 B"),
         (512, "512 B"),
-        (1024, "1 KB"),
-        (1536, "2 KB"),
+        (1024, "1.0 KB"),  # fmtSize: (b/1024).toFixed(1) KB
+        (1536, "1.5 KB"),
+        (2560, "2.5 KB"),
         (1024 * 1024, "1.0 MB"),
+        (1_310_720, "1.3 MB"),  # exactly 1.25 MB: toFixed(1) rounds the half up
         (2_400_000, "2.3 MB"),
-        (1024 * 1024 * 1024, "1.0 GB"),
+        (1024 * 1024 * 1024, "1.0 GB"),  # beyond the prototype (DEC-040)
         (2 * 1024 * 1024 * 1024, "2.0 GB"),
     ],
 )
 def test_humanise_bytes_matches_the_prototype_format(size: int, expected: str) -> None:
+    """The prototype's `fmtSize`, JavaScript rounding included (DEC-040)."""
     assert humanise_bytes(size) == expected
 
 

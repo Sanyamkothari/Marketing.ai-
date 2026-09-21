@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 
@@ -11,7 +12,7 @@ from fastapi.testclient import TestClient
 from api.main import create_app
 from api.schemas import IndustriesResponse, UseCaseResponse
 from engine import __version__
-from engine.config import UseCaseConfig, list_use_case_ids
+from engine.config import DEFAULT_CONFIG_ROOT, UseCaseConfig, get_catalog, list_use_case_ids
 from engine.templates import template_filenames
 
 pytestmark = pytest.mark.integration
@@ -235,3 +236,47 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/use-cases/{use_case_id}/template.csv",
         "/use-cases/{use_case_id}/template_README.md",
     }
+
+
+def _root_where_rmse_scores_classification(tmp_path: Path) -> Path:
+    """A copy of `configs/` whose catalog also lets `rmse` (relabelled) score a classification problem,
+    with a targeted-advertisement file that is only valid under that catalog."""
+    root = tmp_path / "configs"
+    shutil.copytree(DEFAULT_CONFIG_ROOT, root)
+    engine_yaml = root / "engine.yaml"
+    text = engine_yaml.read_text(encoding="utf-8")
+    rmse_line = next(line for line in text.splitlines() if line.strip().startswith("rmse:"))
+    patched = rmse_line.replace(
+        "problem_types: [regression]", "problem_types: [regression, binary_classification]"
+    ).replace('label: "RMSE"', 'label: "Root MSE"')
+    engine_yaml.write_text(text.replace(rmse_line, patched, 1), encoding="utf-8")
+    use_case = root / "use_cases" / "targeted_advertisement.yaml"
+    use_case.write_text(
+        use_case.read_text(encoding="utf-8")
+        + "\nmodel_search:\n  metric: rmse\n  metric_choices: [rmse, roc_auc]\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_the_app_validates_and_labels_against_the_catalog_of_its_own_config_root(tmp_path: Path) -> None:
+    """`create_app(config_root=…)` points the whole app at that tree, its catalog included (DEC-038)."""
+    root = _root_where_rmse_scores_classification(tmp_path)
+    with TestClient(create_app(config_root=root)) as client:
+        industries = client.get("/industries")
+        assert industries.status_code == 200, industries.json()
+        response = client.get(f"/use-cases/{DEMO_ID}")
+        assert response.status_code == 200, response.json()
+    # The body is only valid under that root's catalog, so it is re-validated with it as context.
+    body = UseCaseResponse.model_validate(response.json(), context={"catalog": get_catalog(root)})
+    assert body.config.model_search.metric == "rmse"
+    assert body.config.catalog is get_catalog(root)
+    metric_field = next(
+        field
+        for stage in body.advanced_settings.stages
+        for field in stage.fields
+        if field.path == "model_search.metric"
+    )
+    assert metric_field.choices is not None
+    assert [choice.label for choice in metric_field.choices] == ["Root MSE", "ROC-AUC"]
+    assert body.advanced_settings.stages[4].summary.startswith("Root MSE · ")

@@ -19,7 +19,9 @@ from engine.config import (
     ModelFamily,
     ProblemType,
     Strategy,
+    UseCaseConfig,
     UseCaseStatus,
+    advanced_settings_schema,
     config_root,
     get_catalog,
     list_industries,
@@ -28,7 +30,10 @@ from engine.config import (
     load_engine_config,
     load_industry,
     load_use_case,
+    load_use_case_document,
     load_yaml,
+    overridable_paths,
+    resolve_config,
     use_case_path,
 )
 
@@ -169,3 +174,85 @@ def test_use_case_id_must_match_its_file_name(tmp_path: Path) -> None:
     with pytest.raises(ConfigError) as mismatch:
         list_use_case_ids(root)
     assert mismatch.value.code == "USE_CASE_ID_MISMATCH"
+
+
+def _root_where_rmse_scores_classification(tmp_path: Path) -> Path:
+    """A copy of `configs/` whose catalog also lets `rmse` (relabelled) score a classification problem,
+    with a targeted-advertisement file that is only valid under that catalog."""
+    root = tmp_path / "configs"
+    shutil.copytree(DEFAULT_CONFIG_ROOT, root)
+    engine_yaml = root / "engine.yaml"
+    text = engine_yaml.read_text(encoding="utf-8")
+    rmse_line = next(line for line in text.splitlines() if line.strip().startswith("rmse:"))
+    assert "problem_types: [regression]" in rmse_line and 'label: "RMSE"' in rmse_line
+    patched = rmse_line.replace(
+        "problem_types: [regression]", "problem_types: [regression, binary_classification]"
+    ).replace('label: "RMSE"', 'label: "Root MSE"')
+    engine_yaml.write_text(text.replace(rmse_line, patched, 1), encoding="utf-8")
+    use_case = root / "use_cases" / "targeted_advertisement.yaml"
+    use_case.write_text(
+        use_case.read_text(encoding="utf-8")
+        + "\nmodel_search:\n  metric: rmse\n  metric_choices: [rmse, roc_auc]\n",
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_an_explicit_root_is_validated_and_labelled_against_its_own_catalog(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEC-038: the loaders read the catalog of the root they were given, not the checkout's."""
+    monkeypatch.delenv(CONFIG_DIR_ENV_VAR, raising=False)
+    root = _root_where_rmse_scores_classification(tmp_path)
+    assert get_catalog(root).metrics[Metric.RMSE].problem_types == (
+        ProblemType.REGRESSION,
+        ProblemType.BINARY_CLASSIFICATION,
+    )
+    assert get_catalog().metrics[Metric.RMSE].problem_types == (ProblemType.REGRESSION,)
+
+    config = load_use_case("targeted-advertisement", root)
+    assert config.catalog is get_catalog(root)
+    assert config.model_search.metric is Metric.RMSE
+    assert config.trainable_in_phase_1 is True
+    assert config.marker == "P"
+
+    # The same document is invalid under the checkout's catalog, which a root-less validation uses.
+    with pytest.raises(ConfigError) as error:
+        UseCaseConfig.model_validate(load_use_case_document("targeted-advertisement", root))
+    assert error.value.code == "METRIC_NOT_FOR_PROBLEM"
+
+    resolved = resolve_config("targeted-advertisement", {"model_search.metric": "roc_auc"}, root=root)
+    assert resolved.config.model_search.metric is Metric.ROC_AUC
+    assert resolved.config.catalog is get_catalog(root)
+
+    schema = advanced_settings_schema(config)
+    metric_field = next(
+        field for stage in schema.stages for field in stage.fields if field.path == "model_search.metric"
+    )
+    assert metric_field.choices is not None
+    assert [choice.label for choice in metric_field.choices] == ["Root MSE", "ROC-AUC"]
+    assert schema.stages[4].summary.startswith("Root MSE · ")
+    assert "model_search.metric" in overridable_paths(config)
+    assert load_industry("telecom", root).id == "telecom"
+
+
+def test_loading_from_an_explicit_root_never_touches_the_default_root(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no usable default root, an explicit one must still load, validate and label (DEC-038)."""
+    monkeypatch.delenv(CONFIG_DIR_ENV_VAR, raising=False)
+    root = tmp_path / "configs"
+    shutil.copytree(DEFAULT_CONFIG_ROOT, root)
+    monkeypatch.setattr("engine.config.DEFAULT_CONFIG_ROOT", tmp_path / "nonexistent" / "configs")
+    with pytest.raises(ConfigError) as unusable:
+        get_catalog()
+    assert unusable.value.code == "CONFIG_NOT_FOUND"
+
+    config = load_use_case("payment-propensity", root)
+    assert config.trainable_in_phase_1 is True
+    assert config.marker == "P"
+    resolved = resolve_config("payment-propensity", {"problem_type": "regression"}, root=root)
+    assert resolved.config.model_search.metric is Metric.RMSE
+    schema = advanced_settings_schema(resolved.config, columns=["customer_id", "snapshot_date", "x"])
+    assert schema.stages[4].summary.startswith("RMSE · ")
+    assert load_industry("telecom", root).id == "telecom"

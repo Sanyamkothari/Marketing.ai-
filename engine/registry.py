@@ -91,8 +91,9 @@ def should_promote(
     delta = candidate.test_score - champion.test_score
     signed_delta = delta if greater_is_better else -delta
     if champion.test_score == 0.0:
-        # A relative improvement over zero is undefined; any strict gain counts as beating it.
-        return signed_delta > 0.0 or min_improvement_pct <= 0.0
+        # A relative improvement over zero is undefined (DEC-035): any strict gain beats it, an equal
+        # score does only when the rule is 0 %, and a worse candidate never does.
+        return signed_delta > 0.0 or (signed_delta == 0.0 and min_improvement_pct <= 0.0)
     improvement_pct = signed_delta / abs(champion.test_score) * 100.0
     return improvement_pct >= min_improvement_pct
 

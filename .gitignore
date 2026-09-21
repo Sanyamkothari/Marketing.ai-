@@ -21,3 +21,6 @@ __pycache__/
 dist/
 build/
 *.egg-info/
+
+# Claude Code agent worktrees (transient, never committed)
+.claude/worktrees/

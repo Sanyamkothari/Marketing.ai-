@@ -12,6 +12,7 @@ from engine.config import (
     EXTRA_OVERRIDABLE_PATHS,
     IMMUTABLE_PATHS,
     ConfigError,
+    Metric,
     ProblemType,
     RunOverrides,
     apply_overrides,
@@ -217,3 +218,55 @@ def test_run_overrides_round_trips_both_wire_shapes() -> None:
     from_json = RunOverrides.model_validate({"actions": {"bands": {"0": {"min_score": 0.85}}}})
     assert from_json.expanded() == {"actions": {"bands": {0: {"min_score": 0.85}}}}
     assert resolve_config(USE_CASE, from_json).config.actions.bands[0].min_score == 0.85
+
+
+def test_switching_the_problem_type_switches_the_metrics_to_the_catalog_defaults() -> None:
+    """Plan §6.3 "offer switch to regression"; the prototype promises the metrics switch too (DEC-039)."""
+    resolved = resolve_config(USE_CASE, {"problem_type": "regression"})
+    config = resolved.config
+    assert config.problem_type is ProblemType.REGRESSION
+    assert config.trainable_in_phase_1 is True
+    assert [metric.value for metric in config.model_search.metric_choices] == ["rmse", "mae"]
+    assert config.model_search.metric is Metric.RMSE
+    assert resolved.overrides_applied == {"problem_type": "regression"}
+    assert resolved.sources["problem_type"] == "override"
+    assert resolved.sources["model_search.metric_choices"] == "derived"
+    assert resolved.sources["model_search.metric"] == "derived"
+    assert resolved.warnings == (
+        "problem_type is regression, so model_search.metric_choices switched to the regression defaults "
+        "(rmse, mae) and model_search.metric to rmse",
+    )
+
+
+def test_an_explicit_metric_that_fits_the_new_problem_type_is_kept() -> None:
+    resolved = resolve_config(USE_CASE, {"problem_type": "regression", "model_search.metric": "mae"})
+    assert resolved.config.model_search.metric is Metric.MAE
+    assert [metric.value for metric in resolved.config.model_search.metric_choices] == ["rmse", "mae"]
+    assert resolved.sources["model_search.metric"] == "override"
+    assert resolved.sources["model_search.metric_choices"] == "derived"
+    assert resolved.warnings == (
+        "problem_type is regression, so model_search.metric_choices switched to the regression defaults "
+        "(rmse, mae)",
+    )
+
+
+def test_an_explicit_metric_that_does_not_fit_the_new_problem_type_is_rejected() -> None:
+    with pytest.raises(ConfigError) as error:
+        resolve_config(USE_CASE, {"problem_type": "regression", "model_search.metric": "roc_auc"})
+    assert error.value.code == "METRIC_NOT_IN_CHOICES"
+
+
+def test_the_metrics_are_left_alone_while_the_problem_type_fits_them() -> None:
+    resolved = resolve_config(
+        USE_CASE, {"model_search.metric": "f1", "problem_type": "binary_classification"}
+    )
+    assert resolved.config.model_search.metric is Metric.F1
+    assert [metric.value for metric in resolved.config.model_search.metric_choices] == [
+        "roc_auc",
+        "pr_auc",
+        "f1",
+        "recall",
+        "precision",
+    ]
+    assert "derived" not in resolved.sources.values()
+    assert resolved.warnings == ()

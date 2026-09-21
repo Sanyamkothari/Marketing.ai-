@@ -19,9 +19,10 @@ model, and every prediction comes with a reason and a recommended action.
 marketing-ai/
 ├── README.md
 ├── pyproject.toml
-├── Makefile                      # make setup / test / run / lint
+├── requirements-freeze.txt       # resolver output; the pin test reads it (DEC-018)
+├── Makefile                      # make setup / test / lint / run / generate
 ├── configs/
-│   ├── engine.yaml               # global defaults (advanced settings defaults)
+│   ├── engine.yaml               # catalog (engine constants) + defaults (advanced-settings defaults)
 │   ├── industries/
 │   │   └── telecom.yaml          # lifecycle stages + which use cases appear
 │   └── use_cases/
@@ -31,48 +32,43 @@ marketing-ai/
 │       ├── fault_prediction.yaml
 │       ├── rca.yaml
 │       └── win_back_campaign.yaml
-├── templates/                    # downloadable CSV templates per use case
-│   └── targeted_advertisement_template.csv
+├── templates/                    # generated and committed (DEC-014): <use_case>_template.csv and
+│   └── ...                       #   <use_case>_template_README.md for each of the six use cases
 ├── engine/
-│   ├── __init__.py
-│   ├── config.py                 # pydantic models for YAML configs + advanced settings
+│   ├── __init__.py               # __version__
+│   ├── config.py                 # pydantic models for YAML configs, merge, overrides, advanced settings
 │   ├── contracts.py              # pydantic models for every artefact JSON
+│   ├── templates.py              # renders the CSV/README templates from a use-case config
 │   ├── storage.py                # Storage protocol + LocalStorage
-│   ├── registry.py               # ModelRegistry protocol + local implementation
+│   ├── registry.py               # ModelRegistry protocol + SQLite implementation + champion rule
 │   ├── jobs.py                   # JobRunner protocol + ThreadJobRunner
-│   ├── pipeline.py               # orchestrates stages for train and score
-│   ├── stages/
-│   │   ├── ingest.py             # read CSV/Parquet, infer schema, profile
-│   │   ├── validate.py           # all validation checks
-│   │   ├── prepare.py            # cleaning, exclusions, PII, split
-│   │   ├── train.py              # AutoGluon training + leaderboard
-│   │   ├── evaluate.py           # metrics, confusion matrix, calibration, decile lift, fairness
-│   │   ├── explain.py            # feature importance + per-row SHAP reasons
-│   │   ├── score.py              # batch scoring with champion model
-│   │   └── actions.py            # risk bands, suppression, control group, action mapping
-│   └── utils/
+│   ├── pipeline.py               # orchestrates stages for train and score (stub until M2)
+│   ├── stages/                   # typed stubs until M2: ingest, validate, prepare (+ split), train,
+│   │                             #   evaluate, explain, register, score, actions, export (DEC-021)
+│   └── utils/                    # ids, time, text, logging
 ├── api/
-│   ├── main.py                   # FastAPI app
-│   ├── routes/                   # use_cases, uploads, runs, models, artefacts
-│   └── schemas.py
-├── ui/
-│   ├── index.html                # adapted prototype
-│   └── static/
-├── data/                         # local artefact store (gitignored)
-│   └── runs/<run_id>/...
+│   ├── main.py                   # FastAPI app factory (create_app) and the module-level app
+│   ├── deps.py                   # config root, storage, registry and job-runner dependencies
+│   ├── routes/                   # industries, use_cases (M1); uploads, runs, models, artefacts (M2–M4)
+│   └── schemas.py                # response models
+├── scripts/
+│   ├── gen_templates.py          # regenerates templates/ (make generate; --check in make lint)
+│   └── gen_api_docs.py           # regenerates docs/API.md (make generate; --check in make lint)
 ├── tests/
 │   ├── unit/
 │   ├── integration/
-│   └── fixtures/                 # small synthetic CSVs incl. deliberately broken ones
-└── docs/
-    ├── DECISIONS.md              # architecture decision log
-    ├── DATA_CONTRACT.md
-    ├── API.md
-    └── AWS_DEPLOYMENT.md         # Phase 4 notes
+│   └── fixtures/configs/         # deliberately broken YAMLs (the synthetic CSVs arrive in M2)
+├── docs/
+│   ├── DECISIONS.md              # architecture decision log
+│   ├── DATA_CONTRACT.md
+│   ├── API.md                    # generated from the contracts, routes and configs
+│   └── AWS_DEPLOYMENT.md         # Phase 4 notes
+├── ui/                           # M5: the adapted prototype (index.html, static/)
+└── data/                         # M2+: local artefact store, gitignored (runs/<run_id>/...)
 ```
 
-Milestone 1 creates the skeleton: `configs/`, `engine/`, `api/`, `scripts/`, `tests/` and `docs/`.
-`ui/` and `data/` arrive with later milestones.
+Milestone 1 creates the skeleton: `configs/`, `templates/`, `engine/`, `api/`, `scripts/`, `tests/` and
+`docs/`. `ui/` (M5) and `data/` (M2) arrive with later milestones.
 
 ---
 
@@ -148,6 +144,6 @@ product until the run is real.
 ## Decisions
 
 Every choice that `plan.md` does not make is recorded in [`docs/DECISIONS.md`](docs/DECISIONS.md) as a
-`DEC-` entry with its context, decision and consequences. M1 opens the log with DEC-001 … DEC-030; later
+`DEC-` entry with its context, decision and consequences. M1 opens the log with DEC-001 … DEC-040; later
 milestones append. See also [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md) for the shape of the upload
 and [`docs/AWS_DEPLOYMENT.md`](docs/AWS_DEPLOYMENT.md) for the Phase 4 notes.

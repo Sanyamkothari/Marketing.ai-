@@ -19,8 +19,10 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    PrivateAttr,
     RootModel,
     ValidationError,
+    ValidationInfo,
     field_validator,
     model_validator,
 )
@@ -368,8 +370,9 @@ class AutomlChoice(_Base):
 class ColumnNamePatterns(_Base):
     time_like: str
     leakage: str
+    leakage_after_target: str
 
-    @field_validator("time_like", "leakage")
+    @field_validator("time_like", "leakage", "leakage_after_target")
     @classmethod
     def _compiles(cls, v: str) -> str:
         try:
@@ -568,8 +571,8 @@ class ModelSearchConfig(_Base):
     )
     ensemble: bool = True
     tuning_trials: Annotated[int, Field(ge=5, le=500)] = 50
-    time_limit_minutes: Annotated[int, Field(ge=5, le=240)] = 30
-    cv_folds: Annotated[int, Field(ge=2, le=10)] = 5
+    time_limit_minutes: Annotated[int, Field(ge=1, le=240)] = 30  # 1 for plan §10's smoke run (DEC-036)
+    folds: Annotated[int, Field(ge=2, le=10)] = 5  # plan §6.3 `folds` -> AutoGluon num_bag_folds
     imbalance: Imbalance = Imbalance.AUTO
 
     @model_validator(mode="after")
@@ -881,6 +884,16 @@ class TemplateConfig(_Base):
 # ---------------------------------------------------------------------------
 # 4.4 The top-level documents
 # ---------------------------------------------------------------------------
+def _catalog_from_context(info: ValidationInfo) -> Catalog | None:
+    """The catalog a loader passed as validation context, if it passed one (DEC-038)."""
+    context = info.context
+    if isinstance(context, Mapping):
+        catalog = context.get("catalog")
+        if isinstance(catalog, Catalog):
+            return catalog
+    return None
+
+
 class UseCaseConfig(_Base):
     """A fully merged, validated use case. This is what the whole engine consumes."""
 
@@ -907,15 +920,36 @@ class UseCaseConfig(_Base):
     ui: UiConfig
     template: TemplateConfig = TemplateConfig()
 
+    _catalog: Catalog | None = PrivateAttr(default=None)
+
+    @property
+    def catalog(self) -> Catalog:
+        """The catalog this document was validated against (DEC-038).
+
+        The loaders validate against the `engine.yaml` of the root they read, so labels, dependency
+        checks and the properties below agree with the file that was loaded. A document validated
+        without a root (a `UseCaseConfig(...)` literal, or `run_config.json` read back) carries the
+        default root's catalog.
+        """
+        return self._catalog if self._catalog is not None else get_catalog()
+
     @model_validator(mode="after")
-    def _cross_field(self) -> Self:
+    def _cross_field(self, info: ValidationInfo) -> Self:
+        # pydantic runs an after-validator again whenever an existing instance is nested into another
+        # model (ResolvedConfig, the API bodies), then with that call's context; a catalog is taken
+        # from the context when one is given and kept from the first validation otherwise.
+        context_catalog = _catalog_from_context(info)
+        if context_catalog is not None:
+            self._catalog = context_catalog
+        elif self._catalog is None:
+            self._catalog = get_catalog()
         if self.ai_type is not AiType.GENERATIVE and self.target.column is None:
             raise ConfigError(
                 "TARGET_COLUMN_REQUIRED",
                 f"{self.name} predicts something, so target.column must name the outcome column.",
                 path="target.column",
             )
-        catalog = get_catalog()
+        catalog = self.catalog
         allowed_metrics = catalog.metrics_for(self.problem_type)
         if allowed_metrics:
             wrong = [m.value for m in self.model_search.metric_choices if m not in allowed_metrics]
@@ -998,13 +1032,11 @@ class UseCaseConfig(_Base):
 
     @property
     def trainable_in_phase_1(self) -> bool:
-        return (
-            self.ai_type is not AiType.GENERATIVE and get_catalog().problem_types[self.problem_type].enabled
-        )
+        return self.ai_type is not AiType.GENERATIVE and self.catalog.problem_types[self.problem_type].enabled
 
     @property
     def marker(self) -> Literal["P", "G", "H"]:
-        return get_catalog().ai_types[self.ai_type].marker
+        return self.catalog.ai_types[self.ai_type].marker
 
     @property
     def template_stem(self) -> str:
@@ -1184,15 +1216,17 @@ def load_use_case_document(use_case_id: str, root: Path | None = None) -> dict[s
 
 
 def load_use_case(use_case_id: str, root: Path | None = None) -> UseCaseConfig:
+    """The merged, validated use case of `root`, checked against that root's own catalog (DEC-038)."""
     document = load_use_case_document(use_case_id, root)
-    config = _validate_use_case(document)
+    config = _validate_use_case(document, catalog=get_catalog(root))
     check_dependencies(config)
     return config
 
 
-def _validate_use_case(document: Mapping[str, Any]) -> UseCaseConfig:
+def _validate_use_case(document: Mapping[str, Any], *, catalog: Catalog) -> UseCaseConfig:
+    """`UseCaseConfig` validated against `catalog`; pydantic's first error becomes `CONFIG_INVALID`."""
     try:
-        return UseCaseConfig.model_validate(dict(document))
+        return UseCaseConfig.model_validate(dict(document), context={"catalog": catalog})
     except ValidationError as exc:
         first = exc.errors()[0]
         dotted = _dotted_loc(first["loc"])
@@ -1246,7 +1280,7 @@ def load_industry(industry_id: str = "telecom", root: Path | None = None) -> Ind
 
 def check_dependencies(config: UseCaseConfig) -> None:
     """Raise `MODEL_FAMILY_UNAVAILABLE` when a selected model family needs a module that is not installed."""
-    catalog = get_catalog()
+    catalog = config.catalog
     missing = catalog.missing_requirements(config.model_search.candidates)
     for family in config.model_search.candidates:
         if family in missing:
@@ -1518,15 +1552,23 @@ class RunOverrides(RootModel[dict[str, Any]]):
         return tuple(sorted(leaf_paths(self.expanded())))
 
 
+Source = Literal["engine", "use_case", "override", "derived"]
+"""Where a leaf of a resolved config came from: a layer of the merge, or the engine itself (DEC-039)."""
+
+
 class ResolvedConfig(_Base):
-    """Serialised verbatim as `run_config.json` (plan section 5)."""
+    """Serialised verbatim as `run_config.json` (plan section 5).
+
+    `sources` maps every dotted leaf of `config` to the layer that set it; `"derived"` marks a value the
+    engine chose after an override, such as the metric choices of a switched problem type (DEC-039).
+    """
 
     schema_version: int
     use_case_id: str
     resolved_at: datetime
     config: UseCaseConfig
     overrides_applied: dict[str, Any]
-    sources: dict[str, Literal["engine", "use_case", "override"]]
+    sources: dict[str, Source]
     warnings: tuple[str, ...] = ()
 
 
@@ -1537,15 +1579,24 @@ def resolve_config(
     root: Path | None = None,
     now: datetime | None = None,
 ) -> ResolvedConfig:
-    """Engine defaults + use-case file + run overrides -> the one document every run is reproducible from."""
+    """Engine defaults + use-case file + run overrides -> the one document every run is reproducible from.
+
+    Every validation runs against the catalog of `root` (DEC-038). A `problem_type` override that leaves
+    the use case's metric choices unfit for the new type has them re-derived from that catalog before the
+    merged document is validated (DEC-039); the touched leaves are `"derived"` in `sources`.
+    """
+    catalog = get_catalog(root)
     raw = load_use_case_document(use_case_id, root)
-    base = _validate_use_case(raw)
+    base = _validate_use_case(raw, catalog=catalog)
     patch: Mapping[str, Any] = overrides.root if isinstance(overrides, RunOverrides) else (overrides or {})
     expanded = expand_paths(patch)
     merged = apply_overrides(raw, patch, allowed=overridable_paths(base)) if patch else raw
-    final = _validate_use_case(merged)
-    check_dependencies(final)
     warnings: list[str] = []
+    document, derived, switch_note = _switch_metrics_for_problem_type(merged, leaf_paths(expanded), catalog)
+    if switch_note is not None:
+        warnings.append(switch_note)
+    final = _validate_use_case(document, catalog=catalog)
+    check_dependencies(final)
     if final.split.type is SplitType.TIME_BASED and final.split.time_column is None:
         warnings.append("split.type is time_based and no time column is set yet")
     return ResolvedConfig(
@@ -1554,20 +1605,68 @@ def resolve_config(
         resolved_at=now or datetime.now(UTC),
         config=final,
         overrides_applied=expanded,
-        sources=_sources(final, root, expanded),
+        sources=_sources(final, root, expanded, derived),
         warnings=tuple(warnings),
     )
 
 
+def _switch_metrics_for_problem_type(
+    document: Mapping[str, Any], override_leaves: Sequence[str], catalog: Catalog
+) -> tuple[Mapping[str, Any], tuple[str, ...], str | None]:
+    """Re-derive `model_search.metric_choices` (and `metric`) after a run switches the problem type.
+
+    A use case's metric list is written for its own problem type, so once a run overrides
+    `problem_type` (plan §6.3 "offer switch to regression", prototype "Metrics and models will switch
+    to regression defaults") the list is replaced by the catalog's metrics for the new type, in catalog
+    order, and `metric` by the first of them unless the run set `model_search.metric` itself; an
+    explicit metric that does not fit is left for validation to reject (DEC-039). Returns the document
+    to validate, the dotted paths that were derived and a warning line, or the document untouched.
+    """
+    raw_problem_type = document.get("problem_type")
+    if not isinstance(raw_problem_type, str):
+        return document, (), None  # not a problem type at all: validation reports it
+    try:
+        problem_type = ProblemType(raw_problem_type)
+    except ValueError:
+        return document, (), None
+    allowed = catalog.metrics_for(problem_type)
+    search = document.get("model_search")
+    if not allowed or not isinstance(search, Mapping):
+        return document, (), None
+    choices = search.get("metric_choices")
+    if not isinstance(choices, (list, tuple)):
+        return document, (), None
+    try:
+        current = tuple(Metric(choice) for choice in choices)
+    except ValueError:
+        return document, (), None  # not metrics at all: validation reports it
+    if all(metric in allowed for metric in current):
+        return document, (), None
+    switched: dict[str, Any] = {"metric_choices": [metric.value for metric in allowed]}
+    derived = ["model_search.metric_choices"]
+    note = (
+        f"problem_type is {problem_type.value}, so model_search.metric_choices switched to the "
+        f"{problem_type.value} defaults ({', '.join(switched['metric_choices'])})"
+    )
+    if "model_search.metric" not in override_leaves:
+        switched["metric"] = allowed[0].value
+        derived.append("model_search.metric")
+        note += f" and model_search.metric to {allowed[0].value}"
+    return deep_merge(document, {"model_search": switched}), tuple(derived), note
+
+
 def _sources(
-    final: UseCaseConfig, root: Path | None, expanded: Mapping[str, Any]
-) -> dict[str, Literal["engine", "use_case", "override"]]:
+    final: UseCaseConfig, root: Path | None, expanded: Mapping[str, Any], derived: Sequence[str] = ()
+) -> dict[str, Source]:
     engine_leaves = set(leaf_paths(load_engine_config(root).defaults))
     use_case_leaves = set(leaf_paths(load_yaml(use_case_path(final.id, root))))
     override_leaves = set(leaf_paths(expanded))
-    sources: dict[str, Literal["engine", "use_case", "override"]] = {}
+    derived_leaves = set(derived)
+    sources: dict[str, Source] = {}
     for leaf in leaf_paths(final.model_dump(mode="json")):
-        if leaf in override_leaves:
+        if leaf in derived_leaves:
+            sources[leaf] = "derived"
+        elif leaf in override_leaves:
             sources[leaf] = "override"
         elif leaf in use_case_leaves or _list_parent(leaf) in use_case_leaves:
             sources[leaf] = "use_case"
@@ -1674,7 +1773,7 @@ _SUMMARY_TEMPLATES: Final[Mapping[str, str]] = {
         "{model_search.strategy} · {model_search.candidates|count} of "
         "{model_search.candidate_pool|count} algorithms{?model_search.ensemble: · ensembling}"
         " · {model_search.tuning_trials} trials · {model_search.time_limit_minutes} min"
-        " · {model_search.cv_folds}-fold CV"
+        " · {model_search.folds}-fold CV"
     ),
     "evaluation": (
         "{model_search.metric} · calibration {evaluation.calibration}"
@@ -1909,13 +2008,13 @@ def _stage_specs(bands: Sequence[Band]) -> tuple[StageSpec, ...]:
             label="Time limit (min)",
             type=FieldType.INTEGER,
             widget=Widget.NUMBER,
-            min=5,
+            min=1,
             max=240,
-            step=5,
+            step=1,
             order=4,
         ),
         FieldSpec(
-            path="model_search.cv_folds",
+            path="model_search.folds",
             label="CV folds",
             type=FieldType.INTEGER,
             widget=Widget.NUMBER,
@@ -2167,29 +2266,29 @@ def _format_number(value: float) -> str:
     return str(int(value)) if float(value).is_integer() else repr(float(value))
 
 
-def _label_for(value: StrEnum) -> str:
+def _label_for(value: StrEnum, catalog: Catalog) -> str:
     try:
         return CHOICE_LABELS[value]
     except KeyError:
         pass
     if isinstance(value, Metric):
-        return get_catalog().metric_label(value)
+        return catalog.metric_label(value)
     if isinstance(value, ModelFamily):
-        return get_catalog().family_label(value)
+        return catalog.family_label(value)
     return value.value
 
 
-def _display(value: Any) -> str:
+def _display(value: Any, catalog: Catalog) -> str:
     if value is None:
         return ""
     if isinstance(value, StrEnum):
-        return _label_for(value)
+        return _label_for(value, catalog)
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return _format_number(value)
     if isinstance(value, (tuple, list)):
-        return " · ".join(_display(item) for item in value)
+        return " · ".join(_display(item, catalog) for item in value)
     return str(value)
 
 
@@ -2241,9 +2340,9 @@ def _split_condition(body: str) -> tuple[str, str]:
     raise ConfigError("SUMMARY_TEMPLATE_UNBALANCED", f"Conditional {body!r} has no ':' separator.")
 
 
-def _apply_filter(value: Any, filter_name: str) -> str:
+def _apply_filter(value: Any, filter_name: str, catalog: Catalog) -> str:
     if filter_name == "":
-        return _display(value)
+        return _display(value, catalog)
     if filter_name == "value":
         return _raw_text(value)
     if filter_name == "count":
@@ -2251,7 +2350,7 @@ def _apply_filter(value: Any, filter_name: str) -> str:
     if filter_name == "pct":
         return str(round(float(value) * 100))
     if filter_name == "lower":
-        return _display(value).lower()
+        return _display(value, catalog).lower()
     raise ConfigError("SUMMARY_UNKNOWN_FILTER", f"{filter_name!r} is not a summary filter.")
 
 
@@ -2268,7 +2367,7 @@ def _render_expression(expression: str, config: UseCaseConfig) -> str:
         return render_stage_summary(body, config) if _truthy(value) else ""
     path, _, filter_name = expression.partition("|")
     value = _resolve_config_path(config, path, "SUMMARY_UNKNOWN_PATH")
-    return _apply_filter(value, filter_name)
+    return _apply_filter(value, filter_name, config.catalog)
 
 
 def render_stage_summary(template: str, config: UseCaseConfig) -> str:
@@ -2365,7 +2464,7 @@ def advanced_settings_schema(
         return AdvancedSettingsSchema(
             schema_version=SCHEMA_VERSION, use_case_id=config.id, ai_type=config.ai_type, stages=()
         )
-    catalog = get_catalog()
+    catalog = config.catalog
     stages: list[StageSpec] = []
     for static_stage in _stage_specs(config.actions.bands):
         fields: list[FieldSpec] = []

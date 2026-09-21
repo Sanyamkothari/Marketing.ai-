@@ -235,3 +235,24 @@ def test_should_promote_refuses_to_compare_two_metrics() -> None:
     with pytest.raises(RegistryError) as excinfo:
         should_promote(candidate, champion, 1.0, greater_is_better=True)
     assert excinfo.value.code == "METRIC_MISMATCH"
+
+
+@pytest.mark.parametrize("greater_is_better", [True, False])
+@pytest.mark.parametrize(
+    ("gain", "rule", "expected"),
+    [
+        (0.1, 0.0, True),
+        (0.1, 1.0, True),
+        (0.0, 0.0, True),
+        (0.0, 1.0, False),
+        (-0.1, 0.0, False),
+        (-0.1, 1.0, False),
+    ],
+)
+def test_should_promote_over_a_zero_champion_needs_a_strict_gain_unless_the_rule_is_zero(
+    gain: float, rule: float, expected: bool, greater_is_better: bool
+) -> None:
+    """A 0.0 champion (DEC-035): a better candidate wins, an equal one only at 0 %, a worse one never."""
+    champion = make_version("m_champ", 1, status=ModelStatus.CHAMPION, test_score=0.0)
+    candidate = make_version("m_cand", 2, test_score=gain if greater_is_better else -gain)
+    assert should_promote(candidate, champion, rule, greater_is_better=greater_is_better) is expected

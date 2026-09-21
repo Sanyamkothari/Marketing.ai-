@@ -8,9 +8,9 @@ from engine.config import deep_merge, leaf_paths, load_engine_config, load_use_c
 
 
 def test_mappings_are_merged_recursively() -> None:
-    base = {"model_search": {"strategy": "balanced", "cv_folds": 5}}
-    overlay = {"model_search": {"cv_folds": 3}}
-    assert deep_merge(base, overlay) == {"model_search": {"strategy": "balanced", "cv_folds": 3}}
+    base = {"model_search": {"strategy": "balanced", "folds": 5}}
+    overlay = {"model_search": {"folds": 3}}
+    assert deep_merge(base, overlay) == {"model_search": {"strategy": "balanced", "folds": 3}}
 
 
 def test_a_list_in_the_overlay_replaces_the_base_list() -> None:
