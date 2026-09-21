@@ -380,11 +380,48 @@ def test_a_feature_with_no_training_distribution_has_nothing_to_compare(config: 
     assert drift.null_rate_current == 0.0
 
 
-def test_an_empty_file_drifts_rather_than_passing_silently(config: UseCaseConfig) -> None:
+def test_an_empty_file_is_not_measured_rather_than_reported_as_drifted(
+    config: UseCaseConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A file with no rows is not a comparison, so it gets no verdict at all.
+
+    An empty file puts no mass in any bin, so every baseline bin reads as fully emptied and PSI
+    comes out at its maximum: the report used to call an empty upload heavily drifted, which is a
+    statement about data that is not there rather than about the data. The same baseline still
+    measures a file that does have rows, so this is about the rows and not about the baseline.
+    """
     baseline = baseline_of(train_frame(), config)
-    report = compute_drift(baseline, train_frame().iloc[:0], config, run_id=SCORE_RUN)
-    assert report.status is DriftStatus.DRIFTED
-    assert "ad_ctr_90d" in report.drifted_features
+
+    with caplog.at_level("WARNING", logger="engine.stages.score"):
+        assert compute_drift(baseline, train_frame().iloc[:0], config, run_id=SCORE_RUN) is None
+    assert "drift=unavailable" in caplog.text and "reason=no_rows_to_compare" in caplog.text
+
+    populated = compute_drift(baseline, train_frame(), config, run_id=SCORE_RUN)
+    assert populated is not None and populated.status is DriftStatus.STABLE
+
+
+def test_a_baseline_with_no_features_is_not_measured_rather_than_reported_as_stable(
+    config: UseCaseConfig, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A baseline that named no feature has nothing to compare, and says so.
+
+    The per-feature sum over no features is zero, so such a baseline used to report "PSI 0.00,
+    stable" - a clean bill of health for a comparison that never happened, which is the one thing
+    a monitoring signal must never say.
+    """
+    empty = DriftBaseline(
+        run_id=TRAIN_RUN,
+        model_version_id=MODEL_ID,
+        rows=0,
+        bin_count=NUMERIC_BIN_COUNT,
+        features=(),
+        created_at=utc_now(),
+    )
+
+    with caplog.at_level("WARNING", logger="engine.stages.score"):
+        assert compute_drift(empty, train_frame(), config, run_id=SCORE_RUN) is None
+    assert "drift=unavailable" in caplog.text and "reason=baseline_has_no_features" in caplog.text
+    assert MODEL_ID in caplog.text, "the log names the model version that stored the baseline"
 
 
 def test_null_rates_are_reported_on_both_sides(config: UseCaseConfig) -> None:

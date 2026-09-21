@@ -10,6 +10,14 @@ else in the engine (design section 6, plan section 6.3).
 > of the test frame and re-scores it, and the number that comes back is reported, not acted on. No
 > feature is dropped, no model is re-ranked and no threshold moves because of anything in this file.
 
+**How many rows get a reason is the caller's choice, never this module's.** Every entry point
+takes `max_rows`: :const:`EXPLAIN_MAX_ROWS` for a training run, which explains a sample because the
+artefact is a chart, and `None` for a scoring run, because plan section 6.3 wants a reason on every
+exported row and a sampled scoring file would reach `scores.csv` with most reason cells empty.
+:func:`reason_columns` is the one adapter between this stage and `engine.stages.export`: it joins
+the explanations onto the scored frame **by primary key**, never by row position, and refuses a
+frame it cannot cover rather than leaving a row unexplained.
+
 **The three tiers, in order (plan section 6.3).** TreeSHAP on the best single tree model; else
 KernelSHAP on a sample of about a thousand rows; else a permutation-based local importance that
 needs no `shap` at all and therefore always works. A tier that raises is logged at WARNING and the
@@ -68,6 +76,7 @@ __all__ = [
     "IMPORTANCE_UNAVAILABLE_CAPTION",
     "KERNEL_SHAP_MAX_ROWS",
     "MISSING_VALUE",
+    "REASON_COLUMN_PREFIX",
     "ROW_EXPLANATIONS_FILENAME",
     "TOP_FEATURES",
     "ReasonMethod",
@@ -79,12 +88,15 @@ __all__ = [
     "format_value",
     "global_importance",
     "read_row_explanations",
+    "reason_column_names",
+    "reason_columns",
     "reason_text",
     "reasons_for",
     "reasons_for_row",
     "row_explanation_schema",
     "row_reasons",
     "unavailable_importance",
+    "with_reason_columns",
     "write_row_explanations",
 ]
 
@@ -94,10 +106,24 @@ TOP_FEATURES: Final[int] = 20
 """Features the global chart keeps, most important first (plan section 6.3)."""
 
 EXPLAIN_MAX_ROWS: Final[int] = 5000
-"""Rows any tier explains. Above this a seeded sample is drawn, in the frame's own row order."""
+"""The **train** flow's row budget: above it a seeded sample is drawn, in the frame's own row order.
+
+It is a default, not a rule. `max_rows` is a per-call argument everywhere in this module because the
+two flows want opposite answers: a training run explains a sample to draw a chart, while a scoring
+run must put a reason on every row it exports (plan section 6.3) and so passes `max_rows=None`.
+"""
 
 KERNEL_SHAP_MAX_ROWS: Final[int] = 1000
-"""Rows the KernelSHAP tier explains - plan section 6.3's "KernelSHAP on a 1,000-row sample"."""
+"""Rows the KernelSHAP tier explains - plan section 6.3's "KernelSHAP on a 1,000-row sample".
+
+This tier is the one whose cost is genuinely per row: every row costs about `2048 + 2 * features`
+model evaluations over the background sample, measured at roughly a fifth of a second per row for a
+twenty-feature model, so a hundred thousand rows would take hours rather than minutes. When a caller
+has asked for every row the tier therefore **declines above this cap** instead of sampling behind the
+caller's back, and the permutation tier - one batched prediction per feature, tens of microseconds a
+row - explains all of them. `RowReasons.method` names whichever tier ran, so the Running screen and
+the detail line say so.
+"""
 
 KERNEL_BACKGROUND_ROWS: Final[int] = 50
 """Background rows KernelSHAP integrates over. More is slower without being more informative."""
@@ -106,6 +132,9 @@ PERMUTATION_FEATURES: Final[int] = 10
 """Features the permutation tier perturbs: the top ones by global importance, `K + 1` predictions."""
 
 ROW_EXPLANATIONS_FILENAME: Final[str] = "row_explanations.parquet"
+
+REASON_COLUMN_PREFIX: Final[str] = "reason_"
+"""Reason slots are `reason_1 .. reason_n`, exactly as `engine.contracts.scores_csv_columns` names."""
 
 MISSING_VALUE: Final[str] = "missing"
 """How a null reads in `Reason.value`, and the word `reason_text` uses for an absent value."""
@@ -377,8 +406,14 @@ def row_reasons(
     *,
     primary_key: str,
     storage: Storage,
+    max_rows: int | None,
 ) -> tuple[RowExplanation, ...]:
     """The top `reasons_per_row` reasons for each row of `frame`, from the best tier available.
+
+    `max_rows` has no default on purpose. This is the entry point both flows call, and the answer
+    differs between them: the train flow passes :const:`EXPLAIN_MAX_ROWS` and explains a sample,
+    while the score flow passes `None` and explains every row, because every row it exports needs a
+    reason. A default here would silently make one of the two wrong.
 
     The seed comes from `predictor_key`, which carries the run id, so the sample a run draws is the
     same in every process and on every machine. A caller that already holds the scorer - the train
@@ -386,7 +421,9 @@ def row_reasons(
     """
     scorer = load_scorer(predictor_key, storage)
     seed = seed_from(predictor_key)
-    return reasons_for(scorer, frame, config, primary_key=primary_key, seed=seed).explanations
+    return reasons_for(
+        scorer, frame, config, primary_key=primary_key, seed=seed, max_rows=max_rows
+    ).explanations
 
 
 def reasons_for(
@@ -397,8 +434,16 @@ def reasons_for(
     primary_key: str,
     seed: int,
     importance: FeatureImportance | None = None,
+    max_rows: int | None = EXPLAIN_MAX_ROWS,
+    kernel_max_rows: int | None = KERNEL_SHAP_MAX_ROWS,
 ) -> RowReasons:
     """Run the tiers in order and turn the first one that works into `RowExplanation`s.
+
+    `max_rows` is how many rows the caller wants explained: `None` means every one of them, which is
+    what the score flow asks for. `kernel_max_rows` is the same choice for the KernelSHAP tier
+    alone, which is the only expensive-per-row tier; `None` there lifts its cap too. The default
+    pair is the train flow's: a five-thousand-row sample, of which KernelSHAP would explain a
+    thousand.
 
     `importance` is the global chart, when one was computed: it settles the tie-break between two
     equally strong contributions and chooses which features the permutation tier perturbs. It
@@ -409,10 +454,11 @@ def reasons_for(
     rank = _importance_rank(importance)
     if len(frame) == 0:
         return RowReasons(explanations=(), method="permutation")
-    sample = _sample_rows(frame, EXPLAIN_MAX_ROWS, seed)
+    sample = _sample_rows(frame, max_rows, seed)
     found = _tree_shap(scorer, sample, features)
     if found is None:
-        found = _kernel_shap(scorer, _sample_rows(sample, KERNEL_SHAP_MAX_ROWS, seed), features, seed)
+        kernel_rows = _kernel_rows(sample, kernel_max_rows, seed, every_row=max_rows is None)
+        found = None if kernel_rows is None else _kernel_shap(scorer, kernel_rows, features, seed)
     if found is None:
         found = _permutation_contributions(scorer, sample, features, rank)
     scores = [float(value) for value in scorer.score(found.rows).tolist()]
@@ -443,14 +489,39 @@ def _importance_rank(importance: FeatureImportance | None) -> dict[str, int]:
     return {item.feature: item.rank for item in importance.items}
 
 
-def _sample_rows(frame: pd.DataFrame, limit: int, seed: int) -> pd.DataFrame:
-    """At most `limit` rows, seeded and kept in the frame's own row order."""
+def _sample_rows(frame: pd.DataFrame, limit: int | None, seed: int) -> pd.DataFrame:
+    """At most `limit` rows, seeded and kept in the frame's own row order; `None` keeps every row."""
     import numpy as np
 
-    if len(frame) <= limit:
+    if limit is None or len(frame) <= limit:
         return frame
     picks = np.sort(np.random.default_rng(seed).choice(len(frame), size=limit, replace=False))
     return frame.iloc[picks]
+
+
+def _kernel_rows(
+    sample: pd.DataFrame, kernel_max_rows: int | None, seed: int, *, every_row: bool
+) -> pd.DataFrame | None:
+    """The rows tier 2 would explain, or `None` when the tier must be skipped altogether.
+
+    KernelSHAP costs about a fifth of a second per row for a twenty-feature model - every row is
+    `2048 + 2 * features` model evaluations over the background sample - so a scoring file of a
+    hundred thousand rows would take hours. A caller that asked for every row cannot be handed a
+    sample instead, because the rows left out would reach `scores.csv` with empty reason cells. The
+    tier therefore declines, and the permutation tier explains all of them at tens of microseconds
+    a row. A caller who does want KernelSHAP over everything passes `kernel_max_rows=None`.
+    """
+    if kernel_max_rows is None or len(sample) <= kernel_max_rows:
+        return sample
+    if every_row:
+        _LOGGER.warning(
+            "explain: KernelSHAP is capped at %d rows and all %d rows must be explained; using the "
+            "permutation tier, which explains every row, rather than leaving rows without a reason",
+            kernel_max_rows,
+            len(sample),
+        )
+        return None
+    return _sample_rows(sample, kernel_max_rows, seed)
 
 
 def _tree_shap(scorer: RowScorer, rows: pd.DataFrame, features: Sequence[str]) -> _Contributions | None:
@@ -781,6 +852,98 @@ def _is_missing(value: object) -> bool:
 def _is_numeric(value: object) -> bool:
     """Whether a reason's value renders with an arrow rather than with an equals sign."""
     return _number(value) is not None
+
+
+# ---------------------------------------------------------------------------
+# Explanations -> the reason columns the export stage reads
+# ---------------------------------------------------------------------------
+def reason_column_names(config: UseCaseConfig) -> tuple[str, ...]:
+    """`("reason_1", .., "reason_n")`, the slots `engine.contracts.scores_csv_columns` also names."""
+    return tuple(f"{REASON_COLUMN_PREFIX}{slot}" for slot in range(1, config.evaluation.reasons_per_row + 1))
+
+
+def reason_columns(
+    explanations: Sequence[RowExplanation],
+    frame: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    primary_key: str,
+) -> pd.DataFrame:
+    """The `reason_1 .. reason_n` columns for `frame`, **joined on the primary key**.
+
+    This is the one place the explain stage and the export stage meet. `engine.stages.export` reads
+    a `Reason` (or a mapping that validates as one) or a null per cell and refuses anything else, so
+    that is exactly what this builds: whole `Reason` objects, never their text, because
+    `ScoringSummary.sample_rows` needs the object and half a reason is worse than none.
+
+    The join is by key and never by position: `frame` is the scored frame, whose rows may have been
+    reordered by banding or by anything else between the two stages, while `explanations` are in the
+    order the tier produced them. A row with fewer reasons than there are slots gets nulls in the
+    rest; a row with more keeps the strongest `n`, which is what the header has room for.
+
+    An empty `explanations` means the stage did not run, and every cell is null - export documents
+    that as "no reason is invented". Anything in between is a bug in the producing flow: a scoring
+    run that explained a *sample* would put most of `scores.csv` in that state, so it is refused
+    here, naming the call that fixes it, rather than exported with empty cells.
+    """
+    import pandas as pd
+
+    names = reason_column_names(config)
+    if primary_key not in frame.columns:
+        raise ValueError(
+            f"The scored frame carries no {primary_key!r} column, so reasons cannot be joined onto it "
+            f"by key."
+        )
+    by_key: dict[str, tuple[Reason, ...]] = {}
+    for explanation in explanations:
+        if explanation.primary_key in by_key:
+            raise ValueError(
+                f"Two explanations carry the primary key {explanation.primary_key!r}; a join by key "
+                f"needs one explanation per row."
+            )
+        by_key[explanation.primary_key] = explanation.reasons
+    keys = [str(value) for value in frame[primary_key].tolist()]
+    _require_full_coverage(keys, by_key)
+    columns = {
+        name: pd.Series(
+            [_reason_slot(by_key.get(key, ()), slot) for key in keys], index=frame.index, dtype="object"
+        )
+        for slot, name in enumerate(names)
+    }
+    return pd.DataFrame(columns, index=frame.index, columns=list(names))
+
+
+def with_reason_columns(
+    explanations: Sequence[RowExplanation],
+    frame: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    primary_key: str,
+) -> pd.DataFrame:
+    """`frame` with the reason columns attached, which is what `engine.stages.export` consumes."""
+    columns = reason_columns(explanations, frame, config, primary_key=primary_key)
+    merged = frame.copy()
+    for name in columns.columns:
+        merged[name] = columns[name]
+    return merged
+
+
+def _require_full_coverage(keys: Sequence[str], by_key: Mapping[str, tuple[Reason, ...]]) -> None:
+    """Every scored row is explained, or none is; a partly explained frame is a wiring mistake."""
+    if not by_key:
+        return
+    missing = [key for key in keys if key not in by_key]
+    if missing:
+        raise ValueError(
+            f"{len(missing)} of {len(keys)} scored rows have no explanation, the first being "
+            f"{missing[0]!r}; every exported row needs a reason (plan section 6.3). Explain the "
+            f"scoring frame with max_rows=None rather than the train flow's sample."
+        )
+
+
+def _reason_slot(reasons: tuple[Reason, ...], slot: int) -> Reason | None:
+    """The reason for one slot, or `None` when this row had fewer reasons than the header has slots."""
+    return reasons[slot] if slot < len(reasons) else None
 
 
 # ---------------------------------------------------------------------------

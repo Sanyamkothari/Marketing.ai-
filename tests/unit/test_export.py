@@ -102,6 +102,7 @@ def summary_of(
     *,
     files: dict[str, str] | None = None,
     drift: DriftReport | None = None,
+    kpi_source: pd.DataFrame | None = None,
 ) -> ScoringSummary:
     return summarise(
         frame,
@@ -112,6 +113,7 @@ def summary_of(
         primary_key="customer_id",
         drift=drift,
         files={} if files is None else files,
+        kpi_source=kpi_source,
         scored_at=NOW,
     )
 
@@ -233,6 +235,42 @@ def test_a_reason_cell_that_is_neither_a_reason_nor_a_null_is_refused(config, st
     frame["reason_1"] = ["just a sentence"] * len(frame)
     with pytest.raises(ValueError, match="reason column holds Reason objects"):
         export(config, storage, acted(config, frame))
+
+
+def test_the_explain_stage_fills_the_columns_this_stage_reads(config, storage) -> None:
+    # Blocker 2: nothing used to produce reason_1..reason_n. The adapter in `explain` is the one
+    # producer, and the whole join runs here - explanations in one order, scored rows in another.
+    from engine.contracts import RowExplanation
+    from engine.stages.explain import with_reason_columns
+
+    scored = acted(config, scored_frame(rows=6, reasons=False))
+    keys = list(scored["customer_id"])
+    explanations = [
+        RowExplanation(
+            primary_key=key,
+            score=0.5,
+            reasons=(
+                Reason(
+                    feature="visits_last_7d",
+                    value="12",
+                    contribution=0.4,
+                    direction=Direction.UP,
+                    text=f"visits_last_7d up ({position})",
+                ),
+            ),
+        )
+        for position, key in reversed(list(enumerate(keys)))
+    ]
+    merged = with_reason_columns(explanations, scored, config, primary_key="customer_id")
+
+    files = export(config, storage, merged)
+    back = pd.read_csv(storage.local_path(files[SCORES_CSV]))
+    assert list(back["reason_1"]) == [f"visits_last_7d up ({position})" for position in range(6)]
+    assert back["reason_2"].isna().all(), "a row with one reason leaves the other slots empty"
+
+    summary = summary_of(config, merged, files=files)
+    assert summary.sample_rows[0].reasons[0].text == "visits_last_7d up (0)"
+    assert summary.sample_rows[0].reasons[0].feature == "visits_last_7d"
 
 
 def test_the_number_of_reason_columns_follows_the_configuration(storage) -> None:
@@ -453,8 +491,9 @@ def test_a_kpi_naming_a_band_with_no_rows_is_zero_not_missing() -> None:
 
 def test_sum_where_band_in_totals_the_named_column() -> None:
     config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High","Medium"])')
-    result = acted(config)
-    summary = summary_of(config, result)
+    uploaded = scored_frame()
+    result = acted(config, uploaded.copy())
+    summary = summary_of(config, result, kpi_source=uploaded)
     expected = float(result.loc[result[BAND_COLUMN].isin(["High", "Medium"]), "tenure_months"].sum())
     assert summary.kpi.value == round(expected, 2)
 
@@ -463,7 +502,7 @@ def test_sum_where_band_in_humanises_a_large_total() -> None:
     config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High","Medium","Low"])')
     frame = scored_frame(rows=4)
     frame["tenure_months"] = [100_000.0, 42_000.0, 42_000.0, 0.0]
-    summary = summary_of(config, acted(config, frame))
+    summary = summary_of(config, acted(config, frame.copy()), kpi_source=frame)
     assert summary.kpi.value == 184000.0
     assert summary.kpi.display == "184K"
 
@@ -472,7 +511,7 @@ def test_sum_where_band_in_keeps_two_decimals_below_a_thousand() -> None:
     config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High","Medium","Low"])')
     frame = scored_frame(rows=2)
     frame["tenure_months"] = [12.25, 0.5]
-    summary = summary_of(config, acted(config, frame))
+    summary = summary_of(config, acted(config, frame.copy()), kpi_source=frame)
     assert summary.kpi.value == 12.75
     assert summary.kpi.display == "12.75"
 
@@ -481,15 +520,111 @@ def test_sum_where_band_in_ignores_values_that_are_not_numbers() -> None:
     config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High","Medium","Low"])')
     frame = scored_frame(rows=3)
     frame["tenure_months"] = [10.0, None, "not a number"]
-    summary = summary_of(config, acted(config, frame))
+    summary = summary_of(config, acted(config, frame.copy()), kpi_source=frame)
     assert summary.kpi.value == 10.0
 
 
 def test_a_kpi_that_sums_a_column_the_file_does_not_have_is_refused() -> None:
     config = use_case(output__kpi__formula='sum_where_band_in("revenue_ltv", ["High"])')
     frame = scored_frame(rows=3)
-    with pytest.raises(ValueError, match="which the scored frame does not carry"):
+    with pytest.raises(ValueError, match=re.escape("carry no 'revenue_ltv'")):
+        summary_of(config, acted(config, frame.copy()), kpi_source=frame)
+
+
+# ---------------------------------------------------------------------------
+# A total is of the uploaded values, never of the replayed ones (finding 10)
+# ---------------------------------------------------------------------------
+def prepared(frame: pd.DataFrame, **replacements: list[object]) -> pd.DataFrame:
+    """The frame as prepare left it: some columns clipped, some dropped altogether."""
+    replayed = frame.copy()
+    for column, values in replacements.items():
+        if values:
+            replayed[column] = values
+        else:
+            replayed = replayed.drop(columns=[column])
+    return replayed
+
+
+def test_a_total_over_a_clipped_feature_is_of_the_real_values() -> None:
+    # tenure_months is a model feature, so prepare clipped it to the training percentiles. The
+    # tile says "months of tenure", not "months of tenure after clipping", so the real ones count.
+    config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High","Medium","Low"])')
+    uploaded = scored_frame(rows=3)
+    uploaded["tenure_months"] = [10.0, 20.0, 900.0]
+    replayed = prepared(uploaded, tenure_months=[10.0, 20.0, 99.0])  # clipped at the 99th percentile
+    summary = summary_of(config, acted(config, replayed), kpi_source=uploaded)
+    assert summary.kpi.value == 930.0
+    assert summary.kpi.value != 129.0, "the clipped total would be 129.0"
+
+
+def test_a_total_over_a_column_prepare_dropped_still_has_an_answer() -> None:
+    # The KPI column need not be a feature at all: a dropped one is gone from the scored frame,
+    # which used to end the run in a ValueError at the very last stage.
+    config = use_case(output__kpi__formula='sum_where_band_in("revenue_ltv", ["High","Medium","Low"])')
+    uploaded = scored_frame(rows=3)
+    uploaded["revenue_ltv"] = [1000.0, 250.5, 49.5]
+    replayed = prepared(uploaded, revenue_ltv=[])
+    assert "revenue_ltv" not in replayed.columns
+    summary = summary_of(config, acted(config, replayed), kpi_source=uploaded)
+    assert summary.kpi.value == 1300.0
+    assert summary.kpi.display == "1K"
+
+
+def test_a_total_joins_the_uploaded_rows_by_key_and_not_by_position() -> None:
+    config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High"])')
+    uploaded = scored_frame(rows=6)
+    uploaded["tenure_months"] = [float(index) for index in range(6)]
+    uploaded["propensity"] = [0.99, 0.1, 0.1, 0.1, 0.1, 0.1]  # only the first row bands High
+    replayed = prepared(uploaded, tenure_months=[0.0] * 6)
+    shuffled = uploaded.iloc[[3, 5, 0, 4, 1, 2]]
+    summary = summary_of(config, acted(config, replayed), kpi_source=shuffled)
+    assert summary.bands[0].rows == 1
+    assert summary.kpi.value == 0.0, "row C-00000 carries tenure 0.0 whatever order the rows arrive in"
+
+    uploaded["tenure_months"] = [7.0, 1.0, 2.0, 3.0, 4.0, 5.0]
+    summary = summary_of(config, acted(config, replayed), kpi_source=uploaded.iloc[::-1])
+    assert summary.kpi.value == 7.0
+
+
+def test_a_total_without_the_uploaded_rows_is_refused_rather_than_guessed() -> None:
+    config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High","Medium"])')
+    frame = scored_frame(rows=3)
+    with pytest.raises(ValueError, match="kpi_source"):
         summary_of(config, acted(config, frame))
+
+
+def test_the_counting_kpis_need_no_uploaded_rows() -> None:
+    for formula in ("count_rows()", 'count_where_band_in(["High","Medium"])'):
+        config = use_case(output__kpi__formula=formula)
+        summary = summary_of(config, acted(config, scored_frame(rows=5)))
+        assert summary.kpi.formula == formula
+
+
+def test_a_scored_row_the_uploaded_rows_do_not_have_is_refused() -> None:
+    # A short total is a wrong headline number; the run says which row it could not find.
+    config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High","Medium","Low"])')
+    uploaded = scored_frame(rows=4)
+    with pytest.raises(ValueError, match="not in the uploaded rows"):
+        summary_of(config, acted(config, uploaded.copy()), kpi_source=uploaded.head(2))
+
+
+def test_uploaded_rows_with_the_same_key_twice_are_refused() -> None:
+    config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High","Medium","Low"])')
+    uploaded = scored_frame(rows=3)
+    doubled = pd.concat([uploaded, uploaded.head(1)], ignore_index=True)
+    with pytest.raises(ValueError, match="more than once"):
+        summary_of(config, acted(config, uploaded.copy()), kpi_source=doubled)
+
+
+def test_a_row_outside_the_counted_bands_need_not_be_in_the_uploaded_rows() -> None:
+    # Only the rows the formula totals have to be found, so a KPI over one band does not fail
+    # because of a row it never counts.
+    config = use_case(output__kpi__formula='sum_where_band_in("tenure_months", ["High"])')
+    uploaded = scored_frame(rows=3)
+    uploaded["propensity"] = [0.99, 0.01, 0.01]
+    uploaded["tenure_months"] = [25.0, 1.0, 2.0]
+    summary = summary_of(config, acted(config, uploaded.copy()), kpi_source=uploaded.head(1))
+    assert summary.kpi.value == 25.0
 
 
 def test_the_kpi_evaluator_does_not_execute_the_formula() -> None:

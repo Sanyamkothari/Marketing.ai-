@@ -49,7 +49,16 @@ from engine.registry import LocalModelRegistry
 from engine.stages.actions import assign_bands
 from engine.stages.prepare import fit_transforms, prepare_rows, split_dataset
 from engine.stages.register import drift_baseline
-from engine.stages.score import PREPARE_REPORT_FILENAME, PredictResult, ScoreError, predict
+from engine.stages.score import (
+    PREPARE_REPORT_FILENAME,
+    SCORE_ERRORS,
+    PredictResult,
+    ScoreError,
+    compute_drift,
+    predict,
+    score_error,
+)
+from engine.stages.score import _running_autogluon_version as running_autogluon_version
 from engine.stages.scorer import (
     SCORER_FILENAME,
     AutoGluonScorer,
@@ -209,6 +218,7 @@ def register_champion(
     run_id: str = TRAIN_RUN,
     version_number: int = 1,
     drift_baseline_key: str | None = None,
+    autogluon_version: str = "1.6.3",
     promote: bool = True,
 ) -> ModelVersion:
     """Register a model version the way the register stage does, and promote it to champion."""
@@ -229,7 +239,7 @@ def register_champion(
         predictor_key=predictor_key,
         drift_baseline_key=drift_baseline_key,
         engine_version="0.1.0",
-        autogluon_version="1.6.3",
+        autogluon_version=autogluon_version,
     )
     registry.register(version)
     if not promote:
@@ -438,6 +448,63 @@ def test_a_training_run_without_a_prepare_report_is_refused(
 
     assert raised.value.code == "PREPARE_REPORT_NOT_SAVED"
     assert predictor.seen == [], "nothing was scored"
+
+
+def test_a_predictor_that_will_not_load_is_a_business_error_naming_both_versions(
+    storage: LocalStorage,
+    registry: LocalModelRegistry,
+    config: UseCaseConfig,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An AutoGluon version mismatch is a coded refusal, not an exception nobody catches.
+
+    `load_scorer` raises `TrainError` only for the two cases it checks itself. AutoGluon's own
+    `require_version_match=True` raises something else entirely, and so does a half-copied
+    predictor directory; the stage used to let those through uncoded, so the run reported
+    "training failed unexpectedly" instead of naming the versions that do not match.
+    """
+    import engine.stages.scorer as scorer_module
+
+    mismatch = AssertionError("predictor was fit with AutoGluon 0.9.9, current version is 1.6.3")
+
+    def refuse(predictor_key: str, storage_: LocalStorage) -> AutoGluonScorer:
+        raise mismatch
+
+    monkeypatch.setattr(scorer_module, "load_scorer", refuse)
+    write_prepare_report(storage, prepare_report())
+    register_champion(registry, predictor_key=store_model(storage), autogluon_version="0.9.9")
+
+    with pytest.raises(ScoreError) as raised:
+        score(scoring_frame(), config, storage, registry)
+
+    assert raised.value.code == "SCORER_UNREADABLE"
+    assert raised.value.__cause__ is mismatch, "the original failure is chained, not swallowed"
+    assert "0.9.9" in raised.value.message, "the version the model was stored with"
+    assert running_autogluon_version() in raised.value.message, "the version this engine runs"
+    assert MODEL_ID in raised.value.message
+    assert raised.value.suggestion, "a coded error carries its suggestion (plan §13.4)"
+
+
+def test_every_score_error_code_is_registered_with_a_message_and_a_suggestion() -> None:
+    """The codes are written down, so the API envelope and the generated docs can name them.
+
+    `SCORE_ERRORS` is the table, in the shape `engine.errors.ENGINE_ERRORS` already uses, and
+    `score_error` is the only way this module raises - so a code that is not in the table cannot
+    reach a user.
+    """
+    import engine.stages.score as score_module
+
+    declared = {
+        value for name, value in vars(score_module).items() if isinstance(value, str) and name == value
+    }
+    assert declared == set(SCORE_ERRORS), "every declared code is in the table, and vice versa"
+    for code, (message, suggestion) in SCORE_ERRORS.items():
+        assert message.strip() and suggestion.strip(), code
+        assert code not in message, f"{code} reads as business language, not as its own code"
+
+    error = score_error("CHAMPION_NOT_FOUND", use_case="Targeted advertisement")
+    assert (error.code, error.suggestion) == ("CHAMPION_NOT_FOUND", SCORE_ERRORS[error.code][1])
+    assert "Targeted advertisement" in error.message
 
 
 # ---------------------------------------------------------------------------
@@ -660,13 +727,63 @@ def test_drift_is_measured_on_the_replayed_frame(
 
     result = score(scoring_frame(), config, storage, registry)
 
-    from engine.stages.score import compute_drift
-
     replayed = compute_drift(baseline, result.prepared, config, run_id=SCORE_RUN)
     raw = compute_drift(baseline, scoring_frame(), config, run_id=SCORE_RUN)
-    assert result.drift is not None
+    assert result.drift is not None and replayed is not None and raw is not None
     assert result.drift.max_psi == replayed.max_psi
     assert replayed.max_psi != raw.max_psi, "the fixture's transforms really move the distribution"
+
+
+def test_a_file_with_no_rows_reports_drift_not_measured_rather_than_drifted(
+    storage: LocalStorage,
+    registry: LocalModelRegistry,
+    config: UseCaseConfig,
+    predictor: RecordingPredictor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Nothing to compare is "not measured", the same as no baseline at all.
+
+    A file with no rows puts no mass in any baseline bin, so every bin reads as emptied and PSI
+    comes out at its maximum: the old report called an empty upload heavily drifted against a
+    baseline it could not possibly have matched. The same baseline still produces a real verdict
+    for a file that does have rows, which is what makes this about the rows and not the baseline.
+    """
+    write_prepare_report(storage, prepare_report())
+    patch_loader(monkeypatch, predictor)
+    register_champion(
+        registry, predictor_key=store_model(storage), drift_baseline_key=store_baseline(storage, config)
+    )
+
+    empty = score(scoring_frame().iloc[0:0], config, storage, registry)
+    populated = score(scoring_frame(), config, storage, registry)
+
+    assert empty.drift is None
+    assert empty.detail == "0 rows scored · LightGBM (v1) · drift not measured"
+    assert len(empty.scores) == 0, "an empty file still scores, exactly as it did before"
+    assert populated.drift is not None, "the same baseline measures a file that has rows"
+
+
+def test_the_prepare_report_of_the_training_run_comes_back_with_the_result(
+    champion: ModelVersion, config: UseCaseConfig, storage: LocalStorage, registry: LocalModelRegistry
+) -> None:
+    """The stage reads `prepare.json` to score at all, so the scoring run can write one of its own.
+
+    It used to be loaded, used and dropped, which left a scoring run with no `prepare.json` and the
+    Data page with nothing to render for it. The report that comes back is the *training* run's,
+    unchanged - the transforms these rows were really prepared with.
+    """
+    stored = storage.read_model(run_key(TRAIN_RUN, PREPARE_REPORT_FILENAME), PrepareReport)
+
+    result = score(scoring_frame(), config, storage, registry)
+
+    assert result.prepare_report == stored
+    assert result.prepare_report.run_id == TRAIN_RUN == champion.run_id
+    assert [transform.kind for transform in result.prepare_report.transforms] == [
+        "clip_percentile",
+        "fill_median",
+    ]
+    assert result.prepare_report.transforms[0].parameters["upper"] == TRAIN_CLIP_UPPER
+    assert list(result.prepared["visits_last_7d"]) == [TRAIN_CLIP_UPPER, TRAIN_CLIP_UPPER, 5.0]
 
 
 def test_a_model_without_a_stored_baseline_still_scores(
@@ -842,5 +959,13 @@ def test_a_real_scoring_frame_missing_a_feature_is_refused(scored: Scored) -> No
 def test_predict_result_is_frozen() -> None:
     """The stage hands the pipeline a record, not a mutable scratchpad."""
     fields: dict[str, Any] = PredictResult.__dataclass_fields__
-    assert set(fields) == {"model_version", "scorer", "scores", "prepared", "drift", "detail"}
+    assert set(fields) == {
+        "model_version",
+        "scorer",
+        "scores",
+        "prepared",
+        "prepare_report",
+        "drift",
+        "detail",
+    }
     assert PredictResult.__dataclass_params__.frozen is True

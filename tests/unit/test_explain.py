@@ -15,6 +15,7 @@ is the only way to find out whether the AutoGluon calls in this module are spell
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 from decimal import Decimal
 from typing import Any
@@ -24,7 +25,13 @@ import pandas as pd
 import pytest
 
 from engine.config import Strategy, load_use_case, recipe_from_config
-from engine.contracts import Direction, FeatureImportance, Reason, RowExplanation
+from engine.contracts import (
+    Direction,
+    FeatureImportance,
+    Reason,
+    RowExplanation,
+    scores_csv_columns,
+)
 from engine.stages.explain import (
     EXPLAIN_MAX_ROWS,
     IMPORTANCE_CAPTION,
@@ -39,12 +46,15 @@ from engine.stages.explain import (
     format_value,
     global_importance,
     read_row_explanations,
+    reason_column_names,
+    reason_columns,
     reason_text,
     reasons_for,
     reasons_for_row,
     row_explanation_schema,
     row_reasons,
     unavailable_importance,
+    with_reason_columns,
     write_row_explanations,
 )
 from engine.stages.export import _reason_column
@@ -555,13 +565,10 @@ def test_the_reason_count_is_respected_by_the_tiers(config) -> None:
     assert all(len(explanation.reasons) <= 1 for explanation in result.explanations)
 
 
-def test_more_rows_than_the_cap_are_sampled_in_frame_order(config, monkeypatch) -> None:
-    import engine.stages.explain as explain
-
-    monkeypatch.setattr(explain, "EXPLAIN_MAX_ROWS", 10)
+def test_more_rows_than_the_cap_are_sampled_in_frame_order(config) -> None:
     frame = make_frame(40)
-    result = explain.reasons_for(
-        FakeScorer(predictor=object()), frame, config, primary_key=PRIMARY_KEY, seed=3
+    result = reasons_for(
+        FakeScorer(predictor=object()), frame, config, primary_key=PRIMARY_KEY, seed=3, max_rows=10
     )
     keys = [explanation.primary_key for explanation in result.explanations]
     assert len(keys) == 10
@@ -572,6 +579,273 @@ def test_more_rows_than_the_cap_are_sampled_in_frame_order(config, monkeypatch) 
 def test_the_kernel_tier_explains_at_most_a_thousand_rows() -> None:
     assert KERNEL_SHAP_MAX_ROWS == 1000
     assert EXPLAIN_MAX_ROWS == 5000
+
+
+# ---------------------------------------------------------------------------
+# How many rows get explained is the caller's choice, not the module's
+# ---------------------------------------------------------------------------
+def test_a_scoring_shaped_call_puts_a_reason_on_every_row(config) -> None:
+    # Plan section 6.3 wants a reason for every scored row, so the score flow asks for every row -
+    # a file above the train flow's cap must come back fully explained, not sampled.
+    frame = make_frame(EXPLAIN_MAX_ROWS + 200)
+    result = reasons_for(
+        FakeScorer(predictor=object()),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=2,
+        max_rows=None,
+    )
+    assert len(result.explanations) == len(frame)
+    assert [explanation.primary_key for explanation in result.explanations] == list(frame[PRIMARY_KEY])
+    assert any(explanation.reasons for explanation in result.explanations)
+
+
+def test_the_same_frame_is_sampled_when_the_train_budget_is_asked_for(config) -> None:
+    frame = make_frame(EXPLAIN_MAX_ROWS + 200)
+    result = reasons_for(
+        FakeScorer(predictor=object()),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=2,
+        max_rows=EXPLAIN_MAX_ROWS,
+    )
+    assert len(result.explanations) == EXPLAIN_MAX_ROWS
+
+
+def test_the_train_flows_call_keeps_sampling_by_default(config) -> None:
+    # The pipeline's existing call passes no budget, so the default has to stay the train sample.
+    import inspect
+
+    assert inspect.signature(reasons_for).parameters["max_rows"].default == EXPLAIN_MAX_ROWS
+    assert inspect.signature(reasons_for).parameters["kernel_max_rows"].default == KERNEL_SHAP_MAX_ROWS
+    # The stage entry point has no default at all: both flows call it and want opposite answers.
+    assert inspect.signature(row_reasons).parameters["max_rows"].default is inspect.Parameter.empty
+
+
+def test_the_row_budget_is_a_per_call_argument(config) -> None:
+    frame = make_frame(40)
+    counted = {
+        limit: len(
+            reasons_for(
+                FakeScorer(predictor=object()),
+                frame,
+                config,
+                primary_key=PRIMARY_KEY,
+                seed=3,
+                max_rows=limit,
+            ).explanations
+        )
+        for limit in (5, 25, 40, 100, None)
+    }
+    assert counted == {5: 5, 25: 25, 40: 40, 100: 40, None: 40}
+
+
+def test_the_kernel_tier_declines_rather_than_sample_when_every_row_was_asked_for(config) -> None:
+    # KernelSHAP costs about a fifth of a second a row, so it cannot explain a whole scoring file;
+    # but it may not quietly explain a tenth of one either. It steps aside and tier 3 covers all.
+    frame = make_frame(30)
+    result = reasons_for(
+        FakeScorer(predictor=LinearOnlyPredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        max_rows=None,
+        kernel_max_rows=10,
+    )
+    assert result.method == "permutation"
+    assert len(result.explanations) == len(frame)
+
+
+def test_the_kernel_tier_still_samples_when_the_caller_asked_for_a_sample(config) -> None:
+    frame = make_frame(30)
+    result = reasons_for(
+        FakeScorer(predictor=LinearOnlyPredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        max_rows=30,
+        kernel_max_rows=10,
+    )
+    assert result.method == "KernelSHAP"
+    assert len(result.explanations) == 10
+
+
+def test_a_caller_may_lift_the_kernel_cap_and_pay_for_it(config) -> None:
+    frame = make_frame(30)
+    result = reasons_for(
+        FakeScorer(predictor=LinearOnlyPredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        max_rows=None,
+        kernel_max_rows=None,
+    )
+    assert result.method == "KernelSHAP"
+    assert len(result.explanations) == len(frame)
+
+
+# ---------------------------------------------------------------------------
+# The adapter: explanations -> the reason columns export reads
+# ---------------------------------------------------------------------------
+def explanation(key: str, count: int = 2, *, score: float = 0.5) -> RowExplanation:
+    """One explanation whose reason text names its own row, so a wrong join is visible."""
+    return RowExplanation(
+        primary_key=key,
+        score=score,
+        reasons=tuple(
+            Reason(
+                feature=f"feature_{slot}",
+                value="12",
+                contribution=round(0.5 - slot / 10, 6),
+                direction=Direction.UP,
+                text=f"slot {slot} of {key}",
+            )
+            for slot in range(count)
+        ),
+    )
+
+
+def test_the_adapter_produces_the_columns_the_csv_header_names(config) -> None:
+    frame = make_frame(3)
+    columns = reason_columns(
+        [explanation(key) for key in frame[PRIMARY_KEY]], frame, config, primary_key=PRIMARY_KEY
+    )
+    names = reason_column_names(config)
+    assert list(columns.columns) == list(names)
+    assert len(names) == config.evaluation.reasons_per_row
+    assert set(names) <= set(scores_csv_columns(config, PRIMARY_KEY))
+
+
+def test_the_adapter_joins_on_the_primary_key_and_not_on_row_position(config) -> None:
+    frame = make_frame(6)
+    explanations = [explanation(key) for key in frame[PRIMARY_KEY]]
+    shuffled = frame.iloc[[4, 0, 5, 1, 3, 2]]
+    assert list(shuffled[PRIMARY_KEY]) != [item.primary_key for item in explanations]
+
+    columns = reason_columns(explanations, shuffled, config, primary_key=PRIMARY_KEY)
+
+    assert list(columns.index) == list(shuffled.index), "the columns line up with the frame's own rows"
+    for position, key in enumerate(shuffled[PRIMARY_KEY]):
+        assert columns["reason_1"].iloc[position].text == f"slot 0 of {key}"
+        assert columns["reason_2"].iloc[position].text == f"slot 1 of {key}"
+
+
+def test_a_row_with_fewer_reasons_than_slots_gets_nulls_in_the_rest(config) -> None:
+    frame = make_frame(3)
+    explanations = [explanation(key, count) for key, count in zip(frame[PRIMARY_KEY], (0, 1, 2), strict=True)]
+    columns = reason_columns(explanations, frame, config, primary_key=PRIMARY_KEY)
+    assert [cell is None for cell in columns["reason_1"]] == [True, False, False]
+    assert [cell is None for cell in columns["reason_2"]] == [True, True, False]
+    assert all(cell is None for cell in columns["reason_3"])
+
+
+def test_reasons_beyond_the_configured_slots_are_left_out(config) -> None:
+    frame = make_frame(1)
+    narrow = with_reasons(config, 2)
+    columns = reason_columns([explanation("c000", 4)], frame, narrow, primary_key=PRIMARY_KEY)
+    assert list(columns.columns) == ["reason_1", "reason_2"]
+    assert columns["reason_2"].iloc[0].text == "slot 1 of c000"
+
+
+def test_every_cell_is_a_whole_reason_never_its_text(config) -> None:
+    # export refuses a bare string, because a sentence can fill the CSV but never `sample_rows`.
+    frame = make_frame(4)
+    columns = reason_columns(
+        [explanation(key) for key in frame[PRIMARY_KEY]], frame, config, primary_key=PRIMARY_KEY
+    )
+    cells = [cell for name in columns.columns for cell in columns[name]]
+    assert cells, "the adapter produced no cells at all"
+    assert all(cell is None or isinstance(cell, Reason) for cell in cells)
+    assert not any(isinstance(cell, str) for cell in cells)
+    # And the export stage reads exactly these back.
+    assert _reason_column(columns, "reason_1") == list(columns["reason_1"])
+
+
+def test_export_refuses_the_text_of_a_reason_in_place_of_the_reason(config) -> None:
+    frame = make_frame(2)
+    columns = reason_columns(
+        [explanation(key) for key in frame[PRIMARY_KEY]], frame, config, primary_key=PRIMARY_KEY
+    )
+    flattened = columns.copy()
+    flattened["reason_1"] = [cell.text for cell in columns["reason_1"]]
+    with pytest.raises(ValueError, match="reason column holds Reason objects"):
+        _reason_column(flattened, "reason_1")
+
+
+def test_a_frame_the_explanations_do_not_cover_is_refused_with_the_fix(config) -> None:
+    # This is the scoring file that was explained with the train flow's sample: most of scores.csv
+    # would have empty reason cells, so the run says so instead of shipping them.
+    frame = make_frame(10)
+    sampled = [explanation(key) for key in frame[PRIMARY_KEY][:4]]
+    with pytest.raises(ValueError, match="max_rows=None"):
+        reason_columns(sampled, frame, config, primary_key=PRIMARY_KEY)
+
+
+def test_explanations_that_were_never_computed_leave_empty_cells_not_an_error(config) -> None:
+    # `evaluation.shap: false`, or a stage that did not run: export documents empty cells for it.
+    frame = make_frame(5)
+    columns = reason_columns((), frame, config, primary_key=PRIMARY_KEY)
+    assert list(columns.columns) == list(reason_column_names(config))
+    assert all(cell is None for name in columns.columns for cell in columns[name])
+
+
+def test_two_explanations_for_one_key_are_refused(config) -> None:
+    frame = make_frame(2)
+    doubled = [explanation("c000"), explanation("c000"), explanation("c001")]
+    with pytest.raises(ValueError, match="one explanation per row"):
+        reason_columns(doubled, frame, config, primary_key=PRIMARY_KEY)
+
+
+def test_a_frame_without_the_primary_key_cannot_be_joined(config) -> None:
+    frame = make_frame(2).drop(columns=[PRIMARY_KEY])
+    with pytest.raises(ValueError, match=re.escape(f"carries no {PRIMARY_KEY!r} column")):
+        reason_columns([explanation("c000")], frame, config, primary_key=PRIMARY_KEY)
+
+
+def test_a_key_that_is_not_a_string_joins_the_way_the_explanations_stored_it(config) -> None:
+    # `RowExplanation.primary_key` is a string; an integer key column must still find its row.
+    frame = pd.DataFrame({PRIMARY_KEY: [101, 102], "visits_last_7d": [1.0, 2.0]})
+    columns = reason_columns([explanation("102"), explanation("101")], frame, config, primary_key=PRIMARY_KEY)
+    assert [cell.text for cell in columns["reason_1"]] == ["slot 0 of 101", "slot 0 of 102"]
+
+
+def test_the_columns_can_be_attached_to_the_frame_without_disturbing_it(config) -> None:
+    frame = make_frame(4)
+    before = frame.copy()
+    merged = with_reason_columns(
+        [explanation(key) for key in frame[PRIMARY_KEY]], frame, config, primary_key=PRIMARY_KEY
+    )
+    assert list(merged.columns) == [*frame.columns, *reason_column_names(config)]
+    assert merged[list(frame.columns)].equals(frame)
+    assert list(merged.index) == list(frame.index)
+    assert frame.equals(before), "the caller's frame is left alone"
+    assert [cell.text for cell in merged["reason_1"]] == [f"slot 0 of {key}" for key in frame[PRIMARY_KEY]]
+
+
+def test_the_reasons_a_scoring_run_produces_reach_every_row_of_the_frame(config) -> None:
+    # The whole path in one: explain every row, join by key, and find a reason on each row.
+    frame = make_frame(60)
+    result = reasons_for(
+        FakeScorer(predictor=TreePredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=4,
+        max_rows=None,
+    )
+    scored = frame.iloc[::-1]  # the scored frame need not be in the order the tier produced
+    merged = with_reason_columns(result.explanations, scored, config, primary_key=PRIMARY_KEY)
+    explained = {item.primary_key: item for item in result.explanations}
+    for position, key in enumerate(merged[PRIMARY_KEY]):
+        expected = explained[key].reasons
+        for slot, name in enumerate(reason_column_names(config)):
+            cell = merged[name].iloc[position]
+            assert cell == (expected[slot] if slot < len(expected) else None)
 
 
 # ---------------------------------------------------------------------------
@@ -774,12 +1048,17 @@ def test_the_reasons_of_a_real_model_come_out_the_same_way_twice(trained) -> Non
 @pytest.mark.slow
 @pytest.mark.integration
 def test_the_stage_entry_point_loads_the_model_it_is_pointed_at(trained) -> None:
+    rows = trained.parts["test"].head(20)
     explanations = row_reasons(
         trained.result.predictor_key,
-        trained.parts["test"].head(20),
+        rows,
         trained.config,
         primary_key=PRIMARY_KEY,
         storage=trained.storage,
+        max_rows=None,
     )
     assert len(explanations) == 20
+    assert [explanation.primary_key for explanation in explanations] == [
+        str(key) for key in rows[PRIMARY_KEY]
+    ]
     assert all(isinstance(explanation, RowExplanation) for explanation in explanations)

@@ -45,6 +45,7 @@ REGISTRY_STATUS: Final[dict[str, int]] = {
     "MODEL_NOT_FOUND": 404,
     "INVALID_TRANSITION": 409,
     "METRIC_MISMATCH": 409,
+    "CHAMPION_CHANGED": 409,
 }
 """`RegistryError.code` -> HTTP status. An unlisted code is a 500, not a guessed 4xx (`registry_http`)."""
 
@@ -80,8 +81,16 @@ def list_models(registry: RegistryDep, use_case: UseCaseQuery = None) -> ModelLi
 def approve_model(model_id: str, body: ModelApproveRequest, registry: RegistryDep) -> ModelVersionResponse:
     """`pending_approval` -> `champion`; any other status is a `409 INVALID_TRANSITION`.
 
+    A pending version whose promotion decision was measured against a champion that no longer
+    holds the title is refused by the registry with `CHAMPION_CHANGED`, which is a `409` here: the
+    request is well formed and the version exists, but the comparison behind it is stale, and
+    approval may not re-decide the championship on a head-to-head with a model that is no longer
+    the incumbent (DEC-047, and design rule 3 of this milestone). The user retrains or re-scores,
+    or overrides deliberately through `promote`.
+
     `body.approved_by` is caller-supplied and unverified (plan §1.3 leaves Phase 1 without
-    authentication); the registry stores it verbatim so the row names whoever claimed the decision.
+    authentication); the registry stores it verbatim so the row names whoever claimed the decision
+    (DEC-055).
     """
     try:
         version = registry.approve(model_id, by=body.approved_by)

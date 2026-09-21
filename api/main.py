@@ -12,6 +12,7 @@ from typing import Final
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 from api.routes import ALL_ROUTERS
 from api.schemas import ErrorBody, ErrorResponse, HealthResponse
@@ -22,6 +23,9 @@ NOT_FOUND_CODES: Final[frozenset[str]] = frozenset(
     {"USE_CASE_NOT_FOUND", "USE_CASE_PLANNED", "INDUSTRY_NOT_FOUND"}
 )
 """`ConfigError` codes that mean "no such thing" rather than "your document is wrong"."""
+
+UI_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "ui"
+"""The prototype screens, wired to this same app and served from `/ui` (plan §9)."""
 
 
 async def config_error_handler(_request: Request, exc: Exception) -> JSONResponse:
@@ -56,6 +60,10 @@ def create_app(*, config_root: Path | None = None, data_dir: Path | None = None)
     app.add_exception_handler(ConfigError, config_error_handler)
     for router in ALL_ROUTERS:
         app.include_router(router)
+    if UI_DIR.is_dir():
+        # The UI is plain HTML and ES modules: a module cannot be fetched over `file://`, so the
+        # same process that answers the API also serves them (DEC-024 keeps CORS open regardless).
+        app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
 
     @app.get("/healthz", response_model=HealthResponse, tags=["health"], summary="Liveness probe")
     def healthz() -> HealthResponse:

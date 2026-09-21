@@ -36,6 +36,7 @@ def make_version(
     status: ModelStatus = ModelStatus.CANDIDATE,
     test_score: float = 0.80,
     minutes: int = 0,
+    measured_against_champion_id: str | None = None,
 ) -> ModelVersion:
     """A complete `ModelVersion`; only the fields a test asserts on carry meaning."""
     return ModelVersion(
@@ -54,6 +55,7 @@ def make_version(
         run_config_key=f"models/{model_id}/run_config.json",
         predictor_key=f"models/{model_id}/model",
         artefact_keys={"run.json": f"runs/r_{model_id}/run.json"},
+        measured_against_champion_id=measured_against_champion_id,
         engine_version="0.1.0",
         autogluon_version="1.6.3",
     )
@@ -155,6 +157,38 @@ def test_approving_an_already_crowned_champion_is_a_409(client: TestClient, regi
     response = client.post("/models/m_1/approve", json={"approved_by": "priya"})
     assert response.status_code == 409
     assert detail(response)["code"] == "INVALID_TRANSITION"
+
+
+def test_approving_against_a_champion_that_has_changed_is_a_409_not_a_500(
+    client: TestClient, registry
+) -> None:
+    """The registry refuses a stale approval (DEC-047), and this router answers it as a refusal.
+
+    An unmapped `RegistryError.code` is deliberately a 500 here - this router does not guess a 4xx
+    for a condition nobody taught it - so a code the registry gains and the table does not learn
+    turns a business refusal into a server fault. `CHAMPION_CHANGED` is that code: the request is
+    well formed and the version exists, but the head-to-head behind it was measured against a
+    model that is no longer the champion, which is a conflict and nothing else.
+    """
+    registry.register(make_version("m_1", 1, status=ModelStatus.CHAMPION))
+    registry.register(
+        make_version(
+            "m_2",
+            2,
+            status=ModelStatus.PENDING_APPROVAL,
+            minutes=1,
+            measured_against_champion_id="m_0",
+        )
+    )
+
+    response = client.post("/models/m_2/approve", json={"approved_by": "priya@minfy.example"})
+
+    assert response.status_code == 409, response.json()
+    body = detail(response)
+    assert body["code"] == "CHAMPION_CHANGED"
+    assert "m_0" in body["message"] and "m_1" in body["message"], "both champions are named"
+    assert registry.get("m_2").status is ModelStatus.PENDING_APPROVAL, "nothing was crowned"
+    assert registry.get("m_1").status is ModelStatus.CHAMPION
 
 
 def test_approving_an_unknown_id_is_a_404(client: TestClient) -> None:

@@ -37,8 +37,16 @@ three parsed forms with plain pandas and no `eval`, `exec` or `getattr` dispatch
 * `count_where_band_in([...])` - rows whose band is one of the named bands. A band with no rows
   contributes nothing and the KPI is `0`; that is a real answer, not a missing one.
 * `sum_where_band_in("col", [...])` - the total of `col` over those rows. Values that are not
-  numbers contribute nothing. `col` must be in the scored frame; its absence raises `ValueError`,
-  because a headline KPI cannot be guessed.
+  numbers contribute nothing.
+
+A total is read from `kpi_source`, **the rows as they were uploaded**, joined to the scored rows on
+the primary key - never from the scored frame itself. The scored frame holds *prepared* values: a
+column that is also a model feature has been clipped to the training percentiles and filled with
+training statistics, and a column prepare dropped is not there at all. Totalling clipped revenue and
+printing it as revenue would be an invented number (plan section 13.3), and a KPI over a dropped
+column would end an otherwise good run in a crash. So a sum KPI needs the uploaded rows, and
+`summarise` refuses the formula rather than guess when they were not passed; the two counting forms
+need nothing but the scored frame and are unaffected.
 
 `KpiValue.display` is what the tile prints: `engine.utils.text.humanise_count` for the two counting
 forms, and for a total the same humanised form from a thousand upwards and two decimals below it.
@@ -151,6 +159,7 @@ def summarise(
     primary_key: str,
     drift: DriftReport | None,
     files: Mapping[str, str],
+    kpi_source: pd.DataFrame | None = None,
     scored_at: datetime | None = None,
 ) -> ScoringSummary:
     """Counts per band, per action and per suppression reason, plus the configured KPI.
@@ -158,7 +167,11 @@ def summarise(
     `primary_key`, `model_display_name` and `files` are values only the caller knows - the chosen
     key column, the registry record and the map :func:`write_scores` returned - and none of them may
     be invented here, so all three are required (see the report on this stage's signatures).
-    `scored_at` defaults to the current UTC time.
+
+    `kpi_source` is the uploaded rows, before prepare replayed its transforms: a `sum_where_band_in`
+    KPI is totalled from them, joined on `primary_key`, so the tile prints the real values rather
+    than clipped ones and a column prepare dropped is still available. A configuration whose KPI
+    counts rather than totals needs no source. `scored_at` defaults to the current UTC time.
     """
     import pandas as pd
 
@@ -179,7 +192,7 @@ def summarise(
         actions=_action_counts(frame),
         suppressed=_suppression_counts(frame, config),
         control_group_rows=int(frame[CONTROL_GROUP_COLUMN].astype(bool).sum()),
-        kpi=_evaluate_kpi(frame, config),
+        kpi=_evaluate_kpi(frame, config, kpi_source=kpi_source, primary_key=primary_key),
         drift_status=None if drift is None else drift.status,
         drift_max_psi=None if drift is None else drift.max_psi,
         drift_summary=None if drift is None else drift.summary,
@@ -351,10 +364,14 @@ def _median(scores: pd.Series) -> float:
 # ---------------------------------------------------------------------------
 # The KPI
 # ---------------------------------------------------------------------------
-def _evaluate_kpi(frame: pd.DataFrame, config: UseCaseConfig) -> KpiValue:
+def _evaluate_kpi(
+    frame: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    kpi_source: pd.DataFrame | None = None,
+    primary_key: str,
+) -> KpiValue:
     """Evaluate the parsed `output.kpi.formula` over the banded frame. No `eval`, no `exec`."""
-    import pandas as pd
-
     kpi = config.output.kpi
     parsed = kpi.parsed
     if parsed.fn == "count_rows":
@@ -372,15 +389,69 @@ def _evaluate_kpi(frame: pd.DataFrame, config: UseCaseConfig) -> KpiValue:
         )
 
     column = parsed.column
-    if column is None or column not in frame.columns:
-        raise ValueError(f"The KPI {kpi.formula!r} sums {column!r}, which the scored frame does not carry.")
-    total = float(pd.to_numeric(frame.loc[selected, column], errors="coerce").sum())
+    if column is None:
+        raise ValueError(f"The KPI {kpi.formula!r} names no column to sum.")
+    values = _uploaded_values(
+        frame, kpi_source, column=column, primary_key=primary_key, formula=kpi.formula, selected=selected
+    )
+    total = float(values[selected].sum())
     return KpiValue(
         label=kpi.label,
         formula=kpi.formula,
         value=round(total, _AMOUNT_DECIMALS),
         display=_format_amount(total),
     )
+
+
+def _uploaded_values(
+    frame: pd.DataFrame,
+    kpi_source: pd.DataFrame | None,
+    *,
+    column: str,
+    primary_key: str,
+    formula: str,
+    selected: pd.Series,
+) -> pd.Series:
+    """One KPI column as it was uploaded, joined onto the scored rows by primary key.
+
+    The scored frame is not consulted for a total, even when it carries the column: its values are
+    the replayed ones, which prepare may have clipped or filled for the model. Rows whose uploaded
+    value is not a number contribute nothing, as the module docstring says; rows the uploaded frame
+    does not have at all are refused, because a headline total silently missing rows is worse than a
+    run that says what is wrong.
+    """
+    import pandas as pd
+
+    if kpi_source is None:
+        raise ValueError(
+            f"The KPI {formula!r} totals {column!r}, so it needs the rows as uploaded: pass "
+            f"kpi_source to summarise(). The scored frame carries the prepared values, which prepare "
+            f"may have clipped or filled, and a total of those is not the total the tile claims."
+        )
+    missing = [name for name in (primary_key, column) if name not in kpi_source.columns]
+    if missing:
+        raise ValueError(
+            f"The KPI {formula!r} totals {column!r} over the uploaded rows, which carry no "
+            f"{', '.join(repr(name) for name in missing)}."
+        )
+    numbers = pd.to_numeric(kpi_source[column], errors="coerce").tolist()
+    lookup: dict[str, float] = {}
+    for key, value in zip(kpi_source[primary_key].tolist(), numbers, strict=True):
+        text = str(key)
+        if text in lookup:
+            raise ValueError(
+                f"The uploaded rows carry the primary key {text!r} more than once, so the KPI "
+                f"{formula!r} cannot be joined onto the scored rows by key."
+            )
+        lookup[text] = float(value)
+    keys = [str(value) for value in frame[primary_key].tolist()]
+    unmatched = [key for key, keep in zip(keys, selected.tolist(), strict=True) if keep and key not in lookup]
+    if unmatched:
+        raise ValueError(
+            f"{len(unmatched)} of the rows the KPI {formula!r} totals are not in the uploaded rows, "
+            f"the first being {unmatched[0]!r}; the total would be short by them."
+        )
+    return pd.Series([lookup.get(key, float("nan")) for key in keys], index=frame.index, dtype="float64")
 
 
 def _format_amount(value: float) -> str:
