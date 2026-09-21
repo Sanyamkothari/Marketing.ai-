@@ -1,9 +1,71 @@
-"""Prepare and split stages (M3): cleaning, exclusions, PII handling and the train/validation/test split.
+"""Prepare and split stages (M3): row-level cleaning, a train-only statistical fit, and the split.
+
+Two phases with one seam
+------------------------
+"Fit all transforms on train only" (plan §6.3, *fit-on-train-only for anything statistical*) cannot
+be honoured by a stage that runs before the split and sees every row: a median or a 99th percentile
+measured over the whole uploaded file carries the validation and test partitions into the numbers
+used for training, and inflates the very hold-out figures the champion decision rests on. Prepare is
+therefore two functions with an explicit seam between them, and the split runs in the seam:
+
+* :func:`prepare_rows` - the **row-level phase**. Column exclusions, PII handling, the time-column
+  cast, the consent filter, dropping rows with no target, deduplication and (when
+  `missing_values: drop_rows`) dropping rows with a missing feature. None of these needs a statistic
+  fitted on the data, and every one of them changes *which rows exist*, so all of them must run
+  **before** the split: splitting first would put a duplicate in one partition and its twin in
+  another, or let a row the customer never consented to decide where a boundary falls.
+* :func:`fit_transforms` - the **statistical phase**. Fill values and clip bounds are **fitted only
+  on the rows named by `fit_index`** - the training partition - and then applied to every row of
+  every partition. These are the transforms recorded in `PrepareReport.transforms`, and
+  :func:`replay` still reproduces them from the recorded parameters alone.
+
+`prepare` keeps its old signature and behaviour: the two phases back to back with *every* surviving
+row used as a fit row. That is the right answer only when the frame really is all training data (or
+when there is no split at all), and it is the wrong answer for a training file, so the train pipeline
+calls the two phases instead. Nothing was removed; `prepare`, `replay` and `split_dataset` are
+imported by `engine.pipeline` and the M3 design under those names.
+
+Why `fit_index` and not two frames
+----------------------------------
+The seam names *rows*, not frames. `fit_index` is the index of the training rows inside the
+row-prepared frame, so a row operation is applied to the whole frame exactly once and a statistic
+reads a labelled subset of it - the asymmetry the user asked for, in one parameter. The alternatives
+are worse: handing `fit_transforms` a dict of partitions would make it concatenate and re-split them
+to fill one column, and letting it call `split_dataset` itself would silently disagree with the split
+stage whenever the statistical phase removes rows (`outliers: remove_rows`), because a second split
+of a shorter frame is a different split. `fit_index=None` means "every row is a fit row" and is what
+the single-frame convenience uses; the number of rows each statistic saw is recorded on the transform
+itself (`fit_rows`), so `prepare.json` says what a parameter was fitted on rather than leaving it to
+be assumed.
+
+How the pipeline must sequence this
+-----------------------------------
+Plan §6.1 orders the train flow `ingest -> validate -> prepare -> split -> train`, which is exactly
+the order that makes fit-on-train-only impossible. The user's instruction wins and the stage list
+stays as the plan writes it: the PREPARE stage is executed in two parts, around SPLIT (DEC-046).
+
+```python
+rows, plan = prepare_rows(df, config, primary_key=pk, target=target)          # PREPARE, phase 1
+parts, split_report = split_dataset(rows, config, run_id=run_id, target=target)   # SPLIT
+prepared, prepare_report = fit_transforms(                                    # PREPARE, phase 2
+    rows, config, plan, run_id=run_id, fit_index=parts["train"].index
+)
+train = prepared.loc[prepared.index.intersection(parts["train"].index)]       # partitions, re-sliced
+```
+
+`prepare_rows` resets the index, so the labels the split hands back are positions in the row-prepared
+frame; `fit_transforms` keeps those labels (it never reorders and only ever removes rows), so each
+partition is recovered by intersecting its index with the fitted frame. `prepare.json` is written
+once, when phase 2 finishes, and `split.json` when the split does; the Running screen is unchanged,
+because plan §6.1's prepare and split stages already share one group label ("Preparing features").
+
+Score time is untouched: a scoring file is never split, and :func:`replay` re-applies the recorded
+parameters without measuring anything.
 
 Order of operations
 -------------------
 Plan §6.3 lists what `prepare` does but not the order, and the order changes the answer, so it is
-fixed here and never varies:
+fixed here and never varies. Phase 1, before the split:
 
 1. **Drop columns** - user-excluded, then PII (when the setting drops or redacts), then id-like,
    constant and high-null. Columns go first because every later step is fitted on what is left: a
@@ -14,7 +76,9 @@ fixed here and never varies:
    heuristics get a chance to swallow it, because "we dropped your email column because it looked
    like an identifier" hides a governance decision behind a statistical one. Reserved columns (the
    primary key, target, time, group, consent, fairness and suppression columns) are never dropped by
-   a heuristic; they are named in the configuration and the engine needs them downstream.
+   a heuristic; they are named in the configuration and the engine needs them downstream. These
+   decisions read the whole file on purpose: they are *structural*, they put no value into any row,
+   and a column has to be present or absent identically in every partition and in `schema.json`.
 2. **Redact PII** (when `pii_handling: redact`), so no PII value reaches a statistic fitted below.
 3. **Cast the time column** to timezone-aware UTC, so the split has one comparable ordering.
 4. **Consent filter**, before anything statistical. A row the customer did not consent to may not
@@ -25,15 +89,22 @@ fixed here and never varies:
    only in which value was missing become identical once both are filled with the same median - so
    deduplicating after filling deletes records that were never duplicates in the file the customer
    uploaded.
-7. **Outliers**, fitted on the observed (non-null) values of the rows that survived steps 4-6.
-   Clipping runs before filling so the percentiles come from real values only, never from values the
-   engine itself inserted.
-8. **Missing values**: `auto` leaves them to AutoGluon, `fill` uses the median (numeric) or the most
-   frequent value (everything else), `drop_rows` drops rows with a missing *feature* value.
+7. **Drop rows with a missing feature** when `missing_values: drop_rows`. It is a per-row rule with
+   no fitted parameter, so it belongs in phase 1, where it also lets the split apply the configured
+   fractions to the rows that actually survive.
 
-Everything statistical is fitted here, on the training file only, and recorded in the returned
-`PrepareReport`; :func:`replay` re-applies those recorded numbers to a scoring file and never
-recomputes one.
+Phase 2, after the split, fitted on `fit_index` and applied to every partition:
+
+8. **Outliers**, fitted on the observed (non-null) *training* values. Clipping runs before filling so
+   the percentiles come from real values only, never from values the engine itself inserted. Under
+   `remove_rows` the training bounds decide which rows go from every partition, so all three parts
+   keep coming from one population; `replay` still never drops a row from a scoring file.
+9. **Missing values**: `auto` leaves them to AutoGluon, `fill` uses the training median (numeric) or
+   the training mode (everything else). A column with nothing to measure *in the training rows* is
+   recorded as not applied rather than filled from a value only the hold-out has seen.
+
+Everything statistical is fitted on the training rows and recorded in the returned `PrepareReport`;
+:func:`replay` re-applies those recorded numbers to a scoring file and never recomputes one.
 
 `replay` deliberately does not repeat the row-level rules (deduplication, the consent filter, row
 drops). Scoring must return one row per uploaded row, so prepare-time row removal would silently
@@ -53,6 +124,7 @@ split refuses with a `ValueError` instead of leaking a future row into training.
 from __future__ import annotations
 
 import re
+from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, Literal
@@ -71,7 +143,7 @@ if TYPE_CHECKING:
 
     from engine.config import UseCaseConfig
 
-__all__ = ["prepare", "replay", "split_dataset"]
+__all__ = ["RowPlan", "fit_transforms", "prepare", "prepare_rows", "replay", "split_dataset"]
 
 _LOG = get_logger(__name__)
 
@@ -107,17 +179,51 @@ _ValueKind = Literal["number", "text", "boolean", "datetime"]
 
 
 # ---------------------------------------------------------------------------
-# prepare
+# the seam: what the row-level phase decided, handed to the statistical phase
 # ---------------------------------------------------------------------------
-def prepare(
+@dataclass(frozen=True)
+class RowPlan:
+    """The row-level phase's verdict: what it changed, and what the statistical phase still needs.
+
+    Everything here is already decided and already applied to the frame `prepare_rows` returned. It
+    travels to :func:`fit_transforms` so that one `PrepareReport` describes both phases, with the
+    split sitting between them and no statistic fitted before it.
+    """
+
+    rows_in: int
+    columns_in: int
+    feature_columns: tuple[str, ...]
+    dropped_columns: tuple[DroppedColumn, ...]
+    row_removals: tuple[RowRemoval, ...]
+    transforms: tuple[Transform, ...]
+    pii_columns: tuple[str, ...]
+    consent_column: str | None
+    consent_rows_removed: int
+    missing_rows_dropped: int
+
+    @property
+    def last_order(self) -> int:
+        """The highest transform order used so far, so phase 2 keeps the numbering dense."""
+        return max((transform.order for transform in self.transforms), default=0)
+
+
+# ---------------------------------------------------------------------------
+# prepare: phase 1 (row level), phase 2 (fitted on train), and the two together
+# ---------------------------------------------------------------------------
+def prepare_rows(
     df: pd.DataFrame,
     config: UseCaseConfig,
     *,
-    run_id: str,
     primary_key: str,
     target: str | None,
-) -> tuple[pd.DataFrame, PrepareReport]:
-    """Clean the table as the config asks and record every transform, drop and removal."""
+) -> tuple[pd.DataFrame, RowPlan]:
+    """Apply every rule that needs no fitted statistic, so the split sees the final set of rows.
+
+    Steps 1-7 of the order above: column drops, redaction, the time cast, the consent filter, the
+    missing-target drop, deduplication and the `drop_rows` missing-value rule. The returned frame has
+    a reset index, and the returned `RowPlan` carries the decisions on to :func:`fit_transforms`.
+    Nothing here reads the split, and nothing here is fitted: run it, split its output, then fit.
+    """
     import pandas as pd
 
     started = perf_counter()
@@ -221,31 +327,17 @@ def prepare(
         column for column in frame.columns if column not in reserved and column not in redacted
     )
 
-    order, inside_bounds = _apply_outliers(
-        frame, config, features=feature_columns, order=order, out=transforms
-    )
-    if inside_bounds is not None:
-        removed = int((~inside_bounds).sum())
-        frame = frame.loc[inside_bounds].copy()
-        if removed:
-            removals.append(RowRemoval(reason="outlier", rows=removed))
-
-    order, missing_rows_dropped = _apply_missing_values(
-        frame, config, features=feature_columns, order=order, out=transforms
-    )
-    rows_dropped_for_missing = 0
-    if missing_rows_dropped is not None:
-        rows_dropped_for_missing = int((~missing_rows_dropped).sum())
-        frame = frame.loc[missing_rows_dropped].copy()
+    missing_rows_dropped = 0
+    if config.prepare.missing_values is MissingValues.DROP_ROWS:
+        complete = _complete_rows(frame, features=feature_columns)
+        if complete is not None:
+            missing_rows_dropped = int((~complete).sum())
+            frame = frame.loc[complete].copy()
 
     frame = frame.reset_index(drop=True)
-    rows_out = len(frame)
-    report = PrepareReport(
-        run_id=run_id,
+    plan = RowPlan(
         rows_in=rows_in,
-        rows_out=rows_out,
         columns_in=columns_in,
-        columns_out=len(frame.columns),
         feature_columns=feature_columns,
         dropped_columns=tuple(dropped),
         row_removals=tuple(removals),
@@ -253,24 +345,147 @@ def prepare(
         pii_columns=tuple(pii_found),
         consent_column=consent_column,
         consent_rows_removed=consent_removed,
+        missing_rows_dropped=missing_rows_dropped,
+    )
+    _LOG.info(
+        "stage=prepare phase=rows rows_in=%d rows_out=%d columns_in=%d columns_out=%d seconds=%.3f",
+        rows_in,
+        len(frame),
+        columns_in,
+        len(frame.columns),
+        perf_counter() - started,
+    )
+    return frame, plan
+
+
+def fit_transforms(
+    df: pd.DataFrame,
+    config: UseCaseConfig,
+    plan: RowPlan,
+    *,
+    run_id: str,
+    fit_index: pd.Index | None = None,
+) -> tuple[pd.DataFrame, PrepareReport]:
+    """Fit the statistical transforms on `fit_index` only, apply them everywhere, write the report.
+
+    `df` is the frame :func:`prepare_rows` returned and `plan` is the `RowPlan` that came with it.
+    `fit_index` names the training rows inside that frame - `parts["train"].index` from
+    :func:`split_dataset`; `None` means every row is a fit row, which is only correct when the frame
+    holds nothing but training data.
+
+    The frame's index is preserved (rows are only ever removed, never reordered or renumbered) so the
+    caller can recover each partition from the fitted frame by intersecting indexes.
+    """
+    started = perf_counter()
+    frame = df.copy()
+    fit = _fit_mask(frame, fit_index)
+    fit_rows = int(fit.sum())
+
+    transforms = list(plan.transforms)
+    removals = list(plan.row_removals)
+    order = plan.last_order
+    features = tuple(column for column in plan.feature_columns if column in frame.columns)
+
+    order, inside_bounds = _apply_outliers(
+        frame, config, features=features, order=order, out=transforms, fit=fit
+    )
+    if inside_bounds is not None:
+        removed = int((~inside_bounds).sum())
+        frame = frame.loc[inside_bounds].copy()
+        fit = fit.loc[frame.index]
+        if removed:
+            removals.append(RowRemoval(reason="outlier", rows=removed))
+
+    order = _apply_missing_values(frame, config, features=features, order=order, out=transforms, fit=fit)
+
+    rows_out = len(frame)
+    report = PrepareReport(
+        run_id=run_id,
+        rows_in=plan.rows_in,
+        rows_out=rows_out,
+        columns_in=plan.columns_in,
+        columns_out=len(frame.columns),
+        feature_columns=plan.feature_columns,
+        dropped_columns=plan.dropped_columns,
+        row_removals=tuple(removals),
+        transforms=tuple(transforms),
+        pii_columns=plan.pii_columns,
+        consent_column=plan.consent_column,
+        consent_rows_removed=plan.consent_rows_removed,
         detail=_prepare_detail(
             rows_out=rows_out,
-            features=len(feature_columns),
-            dropped=len(dropped),
+            features=len(plan.feature_columns),
+            dropped=len(plan.dropped_columns),
             removals=removals,
-            missing_rows=rows_dropped_for_missing,
+            missing_rows=plan.missing_rows_dropped,
         ),
         prepared_at=utc_now(),
     )
     _LOG.info(
-        "stage=prepare rows_in=%d rows_out=%d columns_in=%d columns_out=%d seconds=%.3f",
-        rows_in,
+        "stage=prepare phase=fit rows=%d fit_rows=%d fit_scope=%s transforms=%d seconds=%.3f",
         rows_out,
-        columns_in,
+        fit_rows,
+        "all_rows" if fit_index is None else "train",
+        len(transforms),
+        perf_counter() - started,
+    )
+    return frame, report
+
+
+def prepare(
+    df: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    run_id: str,
+    primary_key: str,
+    target: str | None,
+) -> tuple[pd.DataFrame, PrepareReport]:
+    """Clean the table as the config asks and record every transform, drop and removal.
+
+    The single-frame convenience: :func:`prepare_rows` followed by :func:`fit_transforms` with every
+    surviving row used as a fit row. Correct when `df` is training data and nothing else - a frame
+    that has already been split, or one that is never split. **The train pipeline must not call it**,
+    because a statistic fitted over a whole uploaded file sees the validation and test rows; it calls
+    the two phases around `split_dataset` instead (see the module docstring and DEC-046).
+    """
+    started = perf_counter()
+    rows, plan = prepare_rows(df, config, primary_key=primary_key, target=target)
+    frame, report = fit_transforms(rows, config, plan, run_id=run_id)
+    frame = frame.reset_index(drop=True)
+    _LOG.info(
+        "stage=prepare rows_in=%d rows_out=%d columns_in=%d columns_out=%d seconds=%.3f",
+        report.rows_in,
+        report.rows_out,
+        report.columns_in,
         report.columns_out,
         perf_counter() - started,
     )
     return frame, report
+
+
+def _fit_mask(frame: pd.DataFrame, fit_index: pd.Index | None) -> pd.Series[bool]:
+    """The rows every statistic is fitted on, as a mask aligned to `frame`.
+
+    A label that is not in the frame is a wiring mistake between the split and this stage, and a
+    training part with no rows would silently turn every fitted transform into a no-op, so both are
+    refused here rather than quietly shrinking what the statistics see.
+    """
+    import pandas as pd
+
+    if fit_index is None:
+        return pd.Series(True, index=frame.index, dtype=bool)
+    unknown = fit_index.difference(frame.index)
+    if len(unknown):
+        raise ValueError(
+            f"fit_index names {len(unknown)} rows that are not in this frame; it must index the frame "
+            f"prepare_rows returned, which is the frame that was split."
+        )
+    if len(frame) and not len(fit_index):
+        raise ValueError(
+            "fit_index selects no rows: a fill value or a clip bound cannot be fitted on an empty "
+            "training part."
+        )
+    return pd.Series(frame.index.isin(fit_index), index=frame.index, dtype=bool)
 
 
 def _reserved_columns(config: UseCaseConfig, *, primary_key: str, target: str | None) -> tuple[str, ...]:
@@ -302,6 +517,10 @@ def _detect_pii(frame: pd.DataFrame, reserved: Sequence[str]) -> dict[str, str]:
     only in a column that says so, and treating every long number as PII would redact real features.
     Reserved columns are never matched - the primary key is meant to identify a customer, and
     redacting it would make the scores unusable.
+
+    Like every other column decision this reads the whole file, before the split: a column is
+    personal data or it is not, whichever partition a row lands in, and the answer has to be the same
+    for all three (see step 1 of the order above).
     """
     found: dict[str, str] = {}
     for column in frame.columns:
@@ -428,6 +647,14 @@ def _truthy(frame: pd.DataFrame, column: str) -> pd.Series[bool]:
     return text.isin(_TRUTHY_TEXT).fillna(value=False).astype(bool)
 
 
+def _complete_rows(frame: pd.DataFrame, *, features: Sequence[str]) -> pd.Series[bool] | None:
+    """Rows with a value in every feature column, or None when there is no feature to check."""
+    present = [column for column in features if column in frame.columns]
+    if not present:
+        return None
+    return frame[present].notna().all(axis=1)
+
+
 def _apply_outliers(
     frame: pd.DataFrame,
     config: UseCaseConfig,
@@ -435,22 +662,26 @@ def _apply_outliers(
     features: Sequence[str],
     order: int,
     out: list[Transform],
+    fit: pd.Series[bool],
 ) -> tuple[int, pd.Series[bool] | None]:
     """Clip or flag numeric outliers; returns the next transform order and the rows to keep.
 
-    The percentiles come from the observed values of numeric feature columns only: a flag has no
-    meaningful first percentile, and a missing value is not an extreme one. `remove_rows` records a
-    `RowRemoval` rather than a `Transform`, because a row dropped here is a training decision and
-    `replay` never drops a row from a scoring file.
+    The percentiles come from the observed values of numeric feature columns **in the fit rows**: a
+    flag has no meaningful first percentile, a missing value is not an extreme one, and a hold-out
+    row may not decide where the training data is clipped. The bounds are then applied to every row,
+    so all three partitions are on the same scale. `remove_rows` records a `RowRemoval` rather than a
+    `Transform`, because a row dropped here is a training decision and `replay` never drops a row
+    from a scoring file.
     """
     if config.prepare.outliers is Outliers.KEEP:
         return order, None
+    fit_rows = float(int(fit.sum()))
     keep: pd.Series[bool] | None = None
     for column in features:
         if not _is_numeric_feature(frame, column):
             continue
         series = frame[column]
-        observed = series.dropna()
+        observed = series[fit].dropna()
         if observed.empty:
             if config.prepare.outliers is Outliers.CLIP:
                 order += 1
@@ -459,7 +690,11 @@ def _apply_outliers(
                         order=order,
                         kind="clip_percentile",
                         columns=(column,),
-                        parameters={"applied": False, "reason": "no_observed_values"},
+                        parameters={
+                            "applied": False,
+                            "reason": "no_observed_values",
+                            "fit_rows": fit_rows,
+                        },
                     )
                 )
             continue
@@ -478,6 +713,7 @@ def _apply_outliers(
                         "upper": upper,
                         "lower_quantile": _LOWER_QUANTILE,
                         "upper_quantile": _UPPER_QUANTILE,
+                        "fit_rows": fit_rows,
                         "applied": True,
                     },
                 )
@@ -497,24 +733,25 @@ def _apply_missing_values(
     features: Sequence[str],
     order: int,
     out: list[Transform],
-) -> tuple[int, pd.Series[bool] | None]:
-    """Fill or drop missing feature values; returns the next transform order and the rows to keep.
+    fit: pd.Series[bool],
+) -> int:
+    """Fill missing feature values from the fit rows; returns the next transform order.
 
     Under `fill`, a value is fitted and recorded for **every** feature column, not only the ones with
     a gap in the training file: a column that happens to be complete here may well have gaps in a
     scoring file, and `replay` may not measure a replacement on that file. A column with nothing to
-    measure is recorded as not applied rather than filled with an invented value.
+    measure *in the fit rows* is recorded as not applied rather than filled with a value borrowed
+    from the hold-out. `drop_rows` has already run in :func:`prepare_rows`, where it belongs: it
+    needs no fitted parameter and the split has to see the rows that survive it.
     """
-    if config.prepare.missing_values is MissingValues.AUTO:
-        return order, None
-    if config.prepare.missing_values is MissingValues.DROP_ROWS:
-        present = [column for column in features if column in frame.columns]
-        if not present:
-            return order, None
-        return order, frame[present].notna().all(axis=1)
+    if config.prepare.missing_values is not MissingValues.FILL:
+        return order
+    fit_rows = float(int(fit.sum()))
     for column in features:
+        if column not in frame.columns:
+            continue
         series = frame[column]
-        kind, value, value_kind = _fill_plan(frame, column)
+        kind, value, value_kind = _fill_plan(frame, column, fit=fit)
         order += 1
         if value is None:
             out.append(
@@ -522,7 +759,11 @@ def _apply_missing_values(
                     order=order,
                     kind=kind,
                     columns=(column,),
-                    parameters={"applied": False, "reason": "all_values_missing"},
+                    parameters={
+                        "applied": False,
+                        "reason": "all_values_missing",
+                        "fit_rows": fit_rows,
+                    },
                 )
             )
             continue
@@ -532,24 +773,30 @@ def _apply_missing_values(
                 order=order,
                 kind=kind,
                 columns=(column,),
-                parameters={"value": value, "value_kind": value_kind, "applied": True},
+                parameters={
+                    "value": value,
+                    "value_kind": value_kind,
+                    "fit_rows": fit_rows,
+                    "applied": True,
+                },
             )
         )
-    return order, None
+    return order
 
 
 def _fill_plan(
-    frame: pd.DataFrame, column: str
+    frame: pd.DataFrame, column: str, *, fit: pd.Series[bool]
 ) -> tuple[Literal["fill_median", "fill_mode"], float | str | bool | None, _ValueKind]:
     """The fill this column gets: median for numbers, most frequent value for everything else.
 
-    The value is returned in a form the `Transform.parameters` union can hold, so the recorded number
-    or string is exactly what :func:`replay` will use - no statistic is ever recomputed at score time.
+    Both statistics are measured on the fit rows alone. The value is returned in a form the
+    `Transform.parameters` union can hold, so the recorded number or string is exactly what
+    :func:`replay` will use - no statistic is ever recomputed at score time.
     """
     import pandas as pd
 
     series = frame[column]
-    observed = series.dropna()
+    observed = series[fit].dropna()
     if pd.api.types.is_bool_dtype(series.dtype):
         modes = observed.mode()
         return "fill_mode", (None if modes.empty else bool(modes.iloc[0])), "boolean"

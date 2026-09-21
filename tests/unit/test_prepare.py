@@ -1,7 +1,13 @@
-"""`engine.stages.prepare.prepare` and `.replay`: exclusions, PII, missing values, outliers, consent."""
+"""`engine.stages.prepare`: the row phase, the train-only statistical fit, replay and the seam.
+
+Exclusions, PII, missing values, outliers and consent, plus the sequence the train pipeline must
+use - `prepare_rows`, `split_dataset`, `fit_transforms(fit_index=...)` - and the proof that no
+fitted parameter has seen a validation or test row (DEC-046).
+"""
 
 from __future__ import annotations
 
+import inspect
 from typing import Any
 
 import pandas as pd
@@ -9,7 +15,14 @@ import pytest
 
 from engine.config import UseCaseConfig, load_use_case_document
 from engine.contracts import PrepareReport
-from engine.stages.prepare import REDACTION, prepare, replay
+from engine.stages.prepare import (
+    REDACTION,
+    fit_transforms,
+    prepare,
+    prepare_rows,
+    replay,
+    split_dataset,
+)
 
 RUN_ID = "r_20260901_abcdef01"
 
@@ -506,3 +519,249 @@ def test_replay_does_not_touch_the_caller_frame() -> None:
     replay(frame, report)
 
     pd.testing.assert_frame_equal(frame, before)
+
+
+# ---------------------------------------------------------------------------
+# the seam: row phase, then the split, then a fit that sees training rows only
+# ---------------------------------------------------------------------------
+SKEW_TRAIN_ROWS = 80  # 200 rows, 30% validation and 30% test, so the hold-out is the majority
+
+
+def skewed_frame(rows: int = 200) -> pd.DataFrame:
+    """A file whose hold-out is a different world: training spends 10-12, everything later 1_000+.
+
+    The validation and test rows are 60% of the file, so any statistic fitted over the whole thing
+    lands on *their* numbers: the whole-file median and 99th percentile are three orders of magnitude
+    away from the training ones, and the whole-file mode is the other category. Rows are handed over
+    out of date order, so nothing can pass by reading the first N rows instead of the split.
+    """
+    spend: list[float | None] = []
+    plan_type: list[str | None] = []
+    for index in range(rows):
+        early = index < SKEW_TRAIN_ROWS
+        spend.append(10.0 + index % 3 if early else 1_000.0 + index)
+        plan_type.append("basic" if early else "premium")
+    spend[SKEW_TRAIN_ROWS + 1] = None  # a gap in validation ...
+    spend[rows - 1] = None  # ... and one in test
+    plan_type[SKEW_TRAIN_ROWS + 2] = None
+    frame = pd.DataFrame(
+        {
+            "customer_id": [f"C{index:04d}" for index in range(rows)],
+            "snapshot_date": pd.to_datetime("2026-01-01") + pd.to_timedelta(range(rows), unit="D"),
+            "spend": spend,
+            "plan_type": plan_type,
+            "converted": [index % 2 for index in range(rows)],
+        }
+    )
+    return frame.iloc[list(range(0, rows, 2)) + list(range(1, rows, 2))].reset_index(drop=True)
+
+
+def skew_config(**prepare_block: Any) -> UseCaseConfig:
+    return config_for(
+        split={
+            "type": "time_based",
+            "time_column": "snapshot_date",
+            "validation_fraction": 0.3,
+            "test_fraction": 0.3,
+        },
+        governance={"consent_column": None},
+        prepare={"deduplicate": False, **prepare_block},
+    )
+
+
+def seam(frame: pd.DataFrame, config: UseCaseConfig) -> tuple[pd.DataFrame, pd.DataFrame, PrepareReport, Any]:
+    """The sequence the train pipeline must use: row phase, split, then fit on the training rows."""
+    rows, plan = prepare_rows(frame, config, primary_key="customer_id", target="converted")
+    parts, _ = split_dataset(rows, config, run_id=RUN_ID, target="converted")
+    prepared, report = fit_transforms(rows, config, plan, run_id=RUN_ID, fit_index=parts["train"].index)
+    return rows, prepared, report, parts
+
+
+def gaps(frame: pd.DataFrame, column: str) -> Any:
+    """A positional mask of the rows whose `column` was missing in the row-prepared frame."""
+    return frame[column].isna().to_numpy()
+
+
+def only(report: PrepareReport, kind: str, column: str) -> Any:
+    matching = [
+        transform
+        for transform in report.transforms
+        if transform.kind == kind and transform.columns == (column,)
+    ]
+    assert len(matching) == 1, f"expected exactly one {kind} for {column}, got {len(matching)}"
+    return matching[0]
+
+
+def test_statistics_are_fitted_on_the_training_rows_alone() -> None:
+    config = skew_config(missing_values="fill", outliers="clip")
+    frame = skewed_frame()
+
+    rows, prepared, report, parts = seam(frame, config)
+
+    train = rows.loc[parts["train"].index]
+    held_out = rows.loc[parts["validation"].index.union(parts["test"].index)]
+    assert len(train) == SKEW_TRAIN_ROWS
+    # The premise: the two populations really are wildly different, and the hold-out is the majority.
+    assert float(train["spend"].median()) == pytest.approx(11.0)
+    assert float(held_out["spend"].median()) > 1_000.0
+    assert float(rows["spend"].median()) > 1_000.0
+    assert float(rows["spend"].quantile(0.99)) > 1_000.0
+
+    fill = only(report, "fill_median", "spend")
+    clip = only(report, "clip_percentile", "spend")
+    mode = only(report, "fill_mode", "plan_type")
+
+    # Fitted on the training rows, to the digit.
+    assert fill.parameters["value"] == pytest.approx(float(train["spend"].median()))
+    assert clip.parameters["lower"] == pytest.approx(float(train["spend"].quantile(0.01)))
+    assert clip.parameters["upper"] == pytest.approx(float(train["spend"].quantile(0.99)))
+    assert mode.parameters["value"] == "basic"
+    assert fill.parameters["fit_rows"] == float(len(train))
+    # ... and nowhere near the numbers the hold-out would have produced.
+    assert float(fill.parameters["value"]) < 20.0
+    assert float(clip.parameters["upper"]) < 20.0
+    assert str(mode.parameters["value"]) != str(held_out["plan_type"].mode().iloc[0])
+
+    # Applying them leaves the hold-out visibly shifted, not centred on itself: every hold-out spend
+    # is pinned to the training ceiling, and the gaps are filled with the training median.
+    ceiling = float(clip.parameters["upper"])
+    fitted_holdout = prepared.loc[held_out.index, "spend"]
+    missing = gaps(held_out, "spend")
+    assert set(fitted_holdout[~missing]) == {ceiling}
+    assert set(fitted_holdout[missing]) == {float(fill.parameters["value"])}
+    assert float(fitted_holdout.median()) < 20.0 < float(held_out["spend"].median())
+    fitted_plans = prepared.loc[held_out.index, "plan_type"]
+    assert set(fitted_plans[gaps(held_out, "plan_type")]) == {"basic"}
+
+
+def test_the_train_only_fit_replaces_the_whole_file_numbers_the_old_prepare_used() -> None:
+    """Before and after, side by side: `prepare` still fits on every row it is given, and leaks."""
+    config = skew_config(missing_values="fill", outliers="clip")
+    frame = skewed_frame()
+
+    _, leaky_report = run(frame, config)  # every row a fit row: the pre-DEC-046 behaviour
+    rows, _, report, parts = seam(frame, config)
+
+    train = rows.loc[parts["train"].index]
+    leaky_fill = float(only(leaky_report, "fill_median", "spend").parameters["value"])
+    leaky_upper = float(only(leaky_report, "clip_percentile", "spend").parameters["upper"])
+    fitted_fill = float(only(report, "fill_median", "spend").parameters["value"])
+    fitted_upper = float(only(report, "clip_percentile", "spend").parameters["upper"])
+
+    assert leaky_fill > 1_000.0 and leaky_upper > 1_000.0
+    assert leaky_fill == pytest.approx(float(rows["spend"].median()))
+    assert fitted_fill == pytest.approx(float(train["spend"].median()))
+    assert fitted_upper == pytest.approx(float(train["spend"].quantile(0.99)))
+    assert leaky_fill / fitted_fill > 50.0  # 1_099.5 against 11.0 on this fixture
+    assert leaky_report.transforms != report.transforms
+    assert only(leaky_report, "fill_median", "spend").parameters["fit_rows"] == float(len(rows))
+
+
+def test_a_column_only_the_hold_out_has_seen_is_not_filled_from_it() -> None:
+    config = skew_config(missing_values="fill", outliers="keep")
+    frame = skewed_frame()
+    # Observed in the hold-out only: `skewed_frame` hands rows over out of order, so the gap is
+    # keyed on the customer id rather than on the row's position in the file.
+    ages = [int(key[1:]) for key in frame["customer_id"]]
+    frame["late_signal"] = [None if age < SKEW_TRAIN_ROWS else 900.0 + age for age in ages]
+
+    rows, prepared, report, parts = seam(frame, config)
+
+    train = rows.loc[parts["train"].index]
+    assert train["late_signal"].isna().all()
+    assert rows["late_signal"].notna().any()
+    late = only(report, "fill_median", "late_signal")
+    assert late.parameters["applied"] is False
+    assert late.parameters["reason"] == "all_values_missing"
+    assert prepared.loc[train.index, "late_signal"].isna().all()
+
+
+def test_the_row_level_phase_is_independent_of_the_split() -> None:
+    frame = pd.concat([base_frame(12), base_frame(12).iloc[:3]], ignore_index=True)
+    frame["consent_flag"] = [True] * 13 + [False, "no"]
+    frame.loc[2, "converted"] = None
+    blocks: dict[str, Any] = {
+        "governance": {"consent_column": "consent_flag"},
+        "prepare": {"deduplicate": True, "missing_values": "fill"},
+    }
+    wide = config_for(split={"validation_fraction": 0.1, "test_fraction": 0.1}, **blocks)
+    narrow = config_for(split={"validation_fraction": 0.3, "test_fraction": 0.2}, **blocks)
+
+    wide_rows, wide_plan = prepare_rows(frame, wide, primary_key="customer_id", target="converted")
+    narrow_rows, narrow_plan = prepare_rows(frame, narrow, primary_key="customer_id", target="converted")
+
+    pd.testing.assert_frame_equal(wide_rows, narrow_rows)
+    assert wide_plan == narrow_plan
+    # Nothing statistical is fitted before the split, and the phase cannot even see the run id.
+    assert {transform.kind for transform in wide_plan.transforms} <= {
+        "redact",
+        "cast",
+        "consent_filter",
+        "dedupe",
+    }
+    parameters = inspect.signature(prepare_rows).parameters
+    assert "run_id" not in parameters
+    assert "fit_index" not in parameters
+
+
+def test_the_row_level_phase_removes_twins_before_anything_can_separate_them() -> None:
+    frame = pd.concat([base_frame(12), base_frame(12).iloc[:4]], ignore_index=True)
+    config = config_for(prepare={"deduplicate": True})
+
+    rows, plan = prepare_rows(frame, config, primary_key="customer_id", target="converted")
+
+    assert frame.duplicated().sum() == 4
+    assert not rows.duplicated().any()
+    assert {removal.reason: removal.rows for removal in plan.row_removals}["duplicate"] == 4
+
+
+def test_prepare_is_the_two_phases_with_every_row_used_as_a_fit_row() -> None:
+    frame = skewed_frame()
+    config = skew_config(missing_values="fill", outliers="clip")
+
+    whole, whole_report = run(frame, config)
+    rows, plan = prepare_rows(frame, config, primary_key="customer_id", target="converted")
+    fitted, report = fit_transforms(rows, config, plan, run_id=RUN_ID)
+
+    pd.testing.assert_frame_equal(whole, fitted.reset_index(drop=True))
+    assert whole_report.model_dump(exclude={"prepared_at"}) == report.model_dump(exclude={"prepared_at"})
+
+
+def test_fit_transforms_refuses_an_index_that_does_not_belong_to_the_frame() -> None:
+    config = skew_config(missing_values="fill")
+    rows, plan = prepare_rows(skewed_frame(), config, primary_key="customer_id", target="converted")
+
+    with pytest.raises(ValueError, match="not in this frame"):
+        fit_transforms(rows, config, plan, run_id=RUN_ID, fit_index=pd.Index([10_000, 10_001]))
+
+
+def test_fit_transforms_refuses_an_empty_training_part() -> None:
+    config = skew_config(missing_values="fill")
+    rows, plan = prepare_rows(skewed_frame(), config, primary_key="customer_id", target="converted")
+
+    with pytest.raises(ValueError, match="empty"):
+        fit_transforms(rows, config, plan, run_id=RUN_ID, fit_index=pd.Index([]))
+
+
+def test_a_train_fitted_report_replays_exactly() -> None:
+    config = skew_config(missing_values="fill", outliers="clip")
+    frame = skewed_frame()
+
+    rows, prepared, report, _ = seam(frame, config)
+    replayed = replay(rows, report)
+
+    pd.testing.assert_frame_equal(replayed, prepared)
+
+
+def test_the_report_of_a_train_fitted_run_still_counts_the_whole_file() -> None:
+    config = skew_config(missing_values="fill", outliers="clip")
+    frame = skewed_frame()
+
+    rows, prepared, report, parts = seam(frame, config)
+
+    assert report.run_id == RUN_ID
+    assert report.rows_in == len(frame)
+    assert report.rows_out == len(prepared) == len(rows)
+    assert report.feature_columns == ("spend", "plan_type")
+    assert [transform.order for transform in report.transforms] == list(range(1, len(report.transforms) + 1))
+    assert sum(len(parts[name]) for name in ("train", "validation", "test")) == len(rows)

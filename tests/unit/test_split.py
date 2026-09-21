@@ -1,4 +1,8 @@
-"""`engine.stages.prepare.split_dataset`: stratified, grouped and time-based splits."""
+"""`engine.stages.prepare.split_dataset`: stratified, grouped and time-based splits, and the seam.
+
+The last section splits a row-prepared frame and hands the training labels to `fit_transforms`,
+which is the order the train pipeline runs prepare and split in (DEC-046).
+"""
 
 from __future__ import annotations
 
@@ -11,7 +15,7 @@ from hypothesis import strategies as st
 
 from engine.config import UseCaseConfig, load_use_case_document
 from engine.contracts import SplitReport
-from engine.stages.prepare import split_dataset
+from engine.stages.prepare import fit_transforms, prepare_rows, split_dataset
 from engine.utils.ids import seed_from
 
 RUN_ID = "r_20260901_abcdef01"
@@ -335,3 +339,63 @@ def test_a_time_based_split_partitions_the_rows_and_never_leaks(
     for earlier, later in (("train", "validation"), ("validation", "test"), ("train", "test")):
         if len(parts[earlier]) and len(parts[later]):
             assert parts[earlier]["snapshot_date"].max() < parts[later]["snapshot_date"].min()
+
+
+# ---------------------------------------------------------------------------
+# the seam: the split runs between prepare's row phase and its statistical fit
+# ---------------------------------------------------------------------------
+def test_the_split_runs_between_the_row_phase_and_the_train_only_fit() -> None:
+    """The sequence `engine.pipeline` must use, end to end (DEC-046)."""
+    frame = dated_frame(120)  # 120 rows, so the split is 84 train / 18 validation / 18 test
+    # The oldest 84 dates are the oldest 84 customer ids; the hold-out is a different world.
+    ages = [int(key[1:]) for key in frame["customer_id"]]
+    frame["spend"] = [10.0 + age % 3 if age < 84 else 5_000.0 for age in ages]
+    config = config_for(
+        split={"type": "time_based", "time_column": "snapshot_date"},
+        governance={"consent_column": None},
+        prepare={"missing_values": "fill", "outliers": "clip", "deduplicate": False},
+    )
+
+    rows, plan = prepare_rows(frame, config, primary_key="customer_id", target="converted")
+    parts, split_report = split_dataset(rows, config, run_id=RUN_ID, target="converted")
+    prepared, prepare_report = fit_transforms(
+        rows, config, plan, run_id=RUN_ID, fit_index=parts["train"].index
+    )
+
+    # The labels the split handed back still address the fitted frame, so each part is recoverable.
+    fitted = {name: prepared.loc[prepared.index.intersection(parts[name].index)] for name in PART_NAMES}
+    assert {name: len(fitted[name]) for name in PART_NAMES} == parts_of(split_report)
+    assert sum(len(fitted[name]) for name in PART_NAMES) == prepare_report.rows_out
+
+    # And the clip bound came from the training part, not from the 5_000s waiting in the hold-out.
+    clip = next(
+        transform
+        for transform in prepare_report.transforms
+        if transform.kind == "clip_percentile" and transform.columns == ("spend",)
+    )
+    assert clip.parameters["upper"] == pytest.approx(float(parts["train"]["spend"].quantile(0.99)))
+    assert float(clip.parameters["upper"]) < 100.0
+    assert clip.parameters["fit_rows"] == float(len(parts["train"]))
+    assert float(fitted["test"]["spend"].max()) == pytest.approx(float(clip.parameters["upper"]))
+
+
+def test_a_duplicate_pair_cannot_straddle_two_parts_because_the_row_phase_ran_first() -> None:
+    frame = pd.concat([labelled_frame(60), labelled_frame(60).iloc[:10]], ignore_index=True)
+    config = config_for(prepare={"deduplicate": True}, governance={"consent_column": None})
+
+    # Split the raw file and the twins land on both sides of a boundary: that is what the row phase
+    # has to happen before the split to prevent.
+    raw_parts, _ = split_dataset(frame, config, run_id=RUN_ID, target="converted")
+    placement: dict[str, set[str]] = {name: set(raw_parts[name]["customer_id"]) for name in PART_NAMES}
+    straddling = {
+        key for key in frame["customer_id"] if sum(1 for name in PART_NAMES if key in placement[name]) > 1
+    }
+    assert straddling
+
+    rows, plan = prepare_rows(frame, config, primary_key="customer_id", target="converted")
+    parts, _ = split_dataset(rows, config, run_id=RUN_ID, target="converted")
+
+    assert {removal.reason: removal.rows for removal in plan.row_removals}["duplicate"] == 10
+    assert not rows.duplicated().any()
+    keys = [key for name in PART_NAMES for key in parts[name]["customer_id"]]
+    assert len(keys) == len(set(keys)) == len(rows)
