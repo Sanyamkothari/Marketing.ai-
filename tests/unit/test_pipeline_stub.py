@@ -208,6 +208,7 @@ def test_every_stage_id_maps_to_a_module_that_defines_its_functions() -> None:
 IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
     {
         "engine.stages.evaluate",  # M3: evaluate, compare_to_baseline
+        "engine.stages.ingest",  # M2: read_upload, profile_dataset, fingerprint
         "engine.stages.prepare",  # M3: prepare, replay, split_dataset
         "engine.stages.actions",  # M4: assign_bands, apply_actions, suppression_rules
         "engine.stages.export",  # M4: write_scores, summarise
