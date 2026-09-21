@@ -5,7 +5,9 @@ from __future__ import annotations
 import ast
 import copy
 import difflib
+import hashlib
 import importlib.util
+import json
 import os
 import re
 from collections.abc import Iterator, Mapping, Sequence
@@ -2494,4 +2496,86 @@ def advanced_settings_schema(
         use_case_id=config.id,
         ai_type=config.ai_type,
         stages=tuple(stages),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Recipe: every training choice, in one object (DEC-042)
+# ---------------------------------------------------------------------------
+class Recipe(_Base):
+    """Every choice that determines a trained model, and nothing else.
+
+    `train(recipe)` is the only entry point to training, so this object is the
+    complete description of a training attempt. The defining property is:
+
+        the same `Recipe` applied to the same `DatasetFingerprint`
+        must produce the same model.
+
+    That is what makes a training run reproducible, and what lets a later layer
+    reason about which recipes work without re-reading the whole configuration.
+
+    Evaluation settings are deliberately ABSENT. How a model is measured is not
+    a training choice, and the evaluate stage takes only the model, the test
+    data and the evaluation config, so that any stored model can be re-scored on
+    demand (DEC-043, DEC-044). Actions, monitoring and governance are absent for
+    the same reason: they shape what happens to predictions, not how the model
+    is fitted.
+    """
+
+    use_case_id: str = Field(description="Use case this recipe belongs to.")
+    problem_type: ProblemType = Field(description="Learning task the model is fitted for.")
+    target: str = Field(description="Column the model learns to predict.")
+    primary_key: str = Field(description="Row identifier; never used as a feature.")
+    feature_columns: tuple[str, ...] = Field(
+        description="Exact ordered feature list handed to training, after exclusions."
+    )
+    prepare: PrepareConfig = Field(description="Cleaning and exclusion choices applied before fitting.")
+    split: SplitConfig = Field(description="How rows are partitioned into train, validation and test.")
+    features: FeaturesConfig = Field(description="Encoding, scaling and feature-selection choices.")
+    model_search: ModelSearchConfig = Field(description="Metric, strategy, candidate families and budget.")
+    seed: int = Field(description="Seed for every stochastic step, derived from the run id.")
+
+    @property
+    def recipe_hash(self) -> str:
+        """Stable identity of this recipe, for deduplication and comparison.
+
+        Canonical JSON with sorted keys, so two recipes that differ only in field
+        order hash alike. Uses sha256 rather than `hash()`, which is salted per
+        process and would not survive a restart.
+        """
+        canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def recipe_from_config(
+    config: UseCaseConfig,
+    *,
+    primary_key: str,
+    feature_columns: Sequence[str],
+    seed: int,
+    target: str | None = None,
+) -> Recipe:
+    """Project a resolved use-case config into the training choices, and only those.
+
+    `target` overrides `config.target.column` for a run whose target was chosen at
+    upload time; it is required when the config carries no target.
+    """
+    resolved_target = target if target is not None else config.target.column
+    if resolved_target is None:
+        raise ConfigError(
+            "RECIPE_TARGET_REQUIRED",
+            "A training recipe needs a target column, but none is configured or supplied.",
+            path="target.column",
+        )
+    return Recipe(
+        use_case_id=config.id,
+        problem_type=config.problem_type,
+        target=resolved_target,
+        primary_key=primary_key,
+        feature_columns=tuple(feature_columns),
+        prepare=config.prepare,
+        split=config.split,
+        features=config.features,
+        model_search=config.model_search,
+        seed=seed,
     )

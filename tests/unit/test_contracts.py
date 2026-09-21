@@ -113,6 +113,12 @@ MINIMAL: dict[str, dict[str, Any]] = {
         "encoding": "utf-8",
         "row_count": 1000,
         "column_count": 1,
+        "fingerprint": {
+            "hash": "9f2c" + "0" * 60,
+            "algorithm": "sha256",
+            "n_rows": 1000,
+            "columns": ["customer_id"],
+        },
         "columns": [
             {
                 "name": "customer_id",

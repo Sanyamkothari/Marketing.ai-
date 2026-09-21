@@ -18,9 +18,9 @@ Contract schema version: 1.
 
 One file per stage in `data/runs/<run_id>/`. Every field below is what the UI renders.
 
-A training run writes: `baseline.json`, `best_model.json`, `confusion_matrix.json`, `decile_lift.json`, `drift_baseline.json`, `evaluation.json`, `fairness.json`, `feature_importance.json`, `leaderboard.json`, `model/`, `prepare.json`, `profile.json`, `row_explanations.parquet`, `run.json`, `run_config.json`, `schema.json`, `split.json`, `status.json`, `validation.json`.
+A training run writes: `baseline.json`, `best_model.json`, `confusion_matrix.json`, `decile_lift.json`, `drift_baseline.json`, `evaluation.json`, `fairness.json`, `feature_importance.json`, `leaderboard.json`, `model/`, `prepare.json`, `profile.json`, `row_explanations.parquet`, `run.json`, `run_config.json`, `run_manifest.json`, `schema.json`, `split.json`, `status.json`, `validation.json`.
 
-A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explanations.parquet`, `run.json`, `run_config.json`, `scores.csv`, `scores.parquet`, `scoring_summary.json`, `status.json`, `validation.json`.
+A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explanations.parquet`, `run.json`, `run_config.json`, `run_manifest.json`, `scores.csv`, `scores.parquet`, `scoring_summary.json`, `status.json`, `validation.json`.
 
 ### `run.json`
 
@@ -349,6 +349,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `target_candidate` | string \| null | yes | Column matching the use case's configured target column. |
 | `preview_rows` | list[list[string]] | yes | First five rows, stringified, for the Setup preview table. |
 | `missing_value_rate_pct` | number | yes | Share of missing cells over the whole table, as a percentage. |
+| `fingerprint` | DatasetFingerprint | yes | Identity of this exact dataset, for comparing runs against each other. |
 | `profiled_at` | datetime (ISO-8601, with timezone) | yes | UTC time the file was profiled. |
 
 #### ColumnProfile
@@ -375,6 +376,18 @@ Everything ingest learned about one column of the uploaded file.
 | `looks_like_id` | boolean | yes | Distinct count is close to the row count and this is not the primary key. |
 | `looks_like_time` | boolean | yes | Name matches the time-like pattern or values parse as dates. |
 | `pii_kinds` | list[string] | no | Names of the PII detectors that matched; never the matched values. |
+
+#### DatasetFingerprint
+
+Identifies the exact dataset a run consumed (DEC-042).  Saved at ingest and carried on every run, so a later reader can tell whether two runs saw the same data. Without it, comparing two runs' metrics is guesswork: a score only means something next to the data that produced it.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `hash` | string | yes | Hex digest of the dataset content and shape. |
+| `algorithm` | string | yes | Digest algorithm, so the scheme can change without ambiguity. |
+| `n_rows` | integer | yes | Number of data rows covered by the digest. |
+| `columns` | list[string] | yes | Column names, in file order, covered by the digest. |
 
 #### CategoryCount
 
@@ -961,6 +974,51 @@ One column of the schema a scoring file must match.
 | `categories` | list[string] | no | Categories seen at fit time, when few enough. |
 | `minimum` | number \| null | no | Smallest value seen at fit time. |
 | `maximum` | number \| null | no | Largest value seen at fit time. |
+
+### `run_manifest.json`
+
+`run_manifest.json` - one flat record per run, written for every run.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `run_id` | string | yes | Run this manifest describes. |
+| `recipe` | Recipe \| null | no | Training choices; null for a scoring run that did not fit a model. |
+| `dataset_fingerprint` | DatasetFingerprint | yes | Identity of the data the run consumed. |
+| `seed` | integer | yes | Seed that made the run reproducible. |
+| `metrics` | object of string -> number | no | Headline numbers, metric id to value; empty when the run produced none. |
+| `leaderboard_path` | string \| null | no | Storage key of leaderboard.json; null when no search was run. |
+| `duration_s` | number | yes | Wall-clock seconds from run start to final state. |
+| `cost_estimate` | CostEstimate | yes | What the run cost to produce. |
+| `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the manifest was written. |
+
+#### Recipe
+
+Every choice that determines a trained model, and nothing else.  `train(recipe)` is the only entry point to training, so this object is the complete description of a training attempt. The defining property is:      the same `Recipe` applied to the same `DatasetFingerprint`     must produce the same model.  That is what makes a training run reproducible, and what lets a later layer reason about which recipes work without re-reading the whole configuration.  Evaluation settings are deliberately ABSENT. How a model is measured is not a training choice, and the evaluate stage takes only the model, the test data and the evaluation config, so that any stored model can be re-scored on demand (DEC-043, DEC-044). Actions, monitoring and governance are absent for the same reason: they shape what happens to predictions, not how the model is fitted.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `use_case_id` | string | yes | Use case this recipe belongs to. |
+| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Learning task the model is fitted for. |
+| `target` | string | yes | Column the model learns to predict. |
+| `primary_key` | string | yes | Row identifier; never used as a feature. |
+| `feature_columns` | list[string] | yes | Exact ordered feature list handed to training, after exclusions. |
+| `prepare` | PrepareConfig | yes | Cleaning and exclusion choices applied before fitting. |
+| `split` | SplitConfig | yes | How rows are partitioned into train, validation and test. |
+| `features` | FeaturesConfig | yes | Encoding, scaling and feature-selection choices. |
+| `model_search` | ModelSearchConfig | yes | Metric, strategy, candidate families and budget. |
+| `seed` | integer | yes | Seed for every stochastic step, derived from the run id. |
+
+#### CostEstimate
+
+What a run cost to produce.  `estimated_usd` is null for a local run rather than zero: nothing was billed, and a fabricated zero would be indistinguishable from a real measurement of free compute (plan section 13.3).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `compute_seconds` | number | yes | Wall-clock seconds of compute the run consumed. |
+| `estimated_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
+| `basis` | string | yes | How the estimate was derived, in plain words. |
 
 ## Tabular artefacts
 

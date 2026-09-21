@@ -50,9 +50,21 @@ def test_plan_section_7_is_twenty_one_names() -> None:
     assert len(PLAN_SECTION_7) == 21
 
 
-def test_registry_covers_exactly_the_plan_artefacts() -> None:
-    # schema.json (plan section 4.4) and run_config.json (plan section 5) are saved with every run too.
-    assert PLAN_SECTION_7 | {"schema.json", "run_config.json"} == KNOWN
+# Artefacts the engine writes that plan section 7 does not list, each with the reason it exists.
+BEYOND_PLAN_SECTION_7 = {
+    "schema.json",  # plan section 4.4: the feature schema saved with every model
+    "run_config.json",  # plan section 5: the merged configuration a run resolved to
+    "run_manifest.json",  # DEC-042: one flat, queryable record per run
+}
+
+
+def test_registry_covers_exactly_the_plan_artefacts_plus_the_recorded_additions() -> None:
+    assert PLAN_SECTION_7 | BEYOND_PLAN_SECTION_7 == KNOWN
+
+
+def test_every_addition_beyond_the_plan_is_deliberate() -> None:
+    # A new artefact must be added here consciously, not absorbed silently.
+    assert KNOWN - PLAN_SECTION_7 == BEYOND_PLAN_SECTION_7
 
 
 def test_run_config_is_the_config_module_s_resolved_config() -> None:
@@ -77,6 +89,7 @@ def test_mode_artefact_sets_are_known_names() -> None:
         "validation.json",
         "prepare.json",
         "row_explanations.parquet",
+        "run_manifest.json",  # DEC-042: every run writes one, train and score alike
     } == TRAIN_ARTEFACTS & SCORE_ARTEFACTS
 
 

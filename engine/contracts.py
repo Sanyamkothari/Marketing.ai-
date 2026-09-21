@@ -24,6 +24,7 @@ from engine.config import (
     Metric,
     ModelFamily,
     ProblemType,
+    Recipe,
     ResolvedConfig,
     RunMode,
     SplitType,
@@ -49,6 +50,8 @@ __all__ = [
     "CategoryCount",
     "ColumnProfile",
     "ConfusionMatrix",
+    "CostEstimate",
+    "DatasetFingerprint",
     "DatasetProfile",
     "DecileBin",
     "DecileLift",
@@ -78,6 +81,7 @@ __all__ = [
     "RowExplanation",
     "RowRemoval",
     "RunError",
+    "RunManifest",
     "RunRecord",
     "RunState",
     "RunStatus",
@@ -305,6 +309,20 @@ class ColumnProfile(Artefact):
     )
 
 
+class DatasetFingerprint(Artefact):
+    """Identifies the exact dataset a run consumed (DEC-042).
+
+    Saved at ingest and carried on every run, so a later reader can tell whether
+    two runs saw the same data. Without it, comparing two runs' metrics is
+    guesswork: a score only means something next to the data that produced it.
+    """
+
+    hash: str = Field(description="Hex digest of the dataset content and shape.")
+    algorithm: str = Field(description="Digest algorithm, so the scheme can change without ambiguity.")
+    n_rows: int = Field(description="Number of data rows covered by the digest.")
+    columns: tuple[str, ...] = Field(description="Column names, in file order, covered by the digest.")
+
+
 class DatasetProfile(Artefact):
     """`profile.json` - the Setup preview and the Data page."""
 
@@ -331,6 +349,9 @@ class DatasetProfile(Artefact):
     )
     missing_value_rate_pct: float = Field(
         description="Share of missing cells over the whole table, as a percentage."
+    )
+    fingerprint: DatasetFingerprint = Field(
+        description="Identity of this exact dataset, for comparing runs against each other."
     )
     profiled_at: AwareDatetime = Field(description="UTC time the file was profiled.")
 
@@ -1010,6 +1031,52 @@ class FeatureSchema(Artefact):
 # ---------------------------------------------------------------------------
 # 5.13 Registry of artefacts
 # ---------------------------------------------------------------------------
+# run_manifest.json: one flat, queryable record per run (DEC-042)
+# ---------------------------------------------------------------------------
+class CostEstimate(Artefact):
+    """What a run cost to produce.
+
+    `estimated_usd` is null for a local run rather than zero: nothing was billed,
+    and a fabricated zero would be indistinguishable from a real measurement of
+    free compute (plan section 13.3).
+    """
+
+    compute_seconds: float = Field(description="Wall-clock seconds of compute the run consumed.")
+    estimated_usd: float | None = Field(
+        default=None, description="Billed cost when the platform reports one; null when nothing was billed."
+    )
+    basis: str = Field(description="How the estimate was derived, in plain words.")
+
+
+class RunManifest(Artefact):
+    """`run_manifest.json` - one flat record per run, written for every run.
+
+    Everything else a run writes is shaped for a screen. This is shaped for a
+    reader asking "which choices, on which data, produced which numbers, at what
+    cost?" and it is written even when a run fails, carrying whatever is known,
+    because a failed attempt is evidence too.
+    """
+
+    run_id: str = Field(description="Run this manifest describes.")
+    recipe: Recipe | None = Field(
+        default=None,
+        description="Training choices; null for a scoring run that did not fit a model.",
+    )
+    dataset_fingerprint: DatasetFingerprint = Field(description="Identity of the data the run consumed.")
+    seed: int = Field(description="Seed that made the run reproducible.")
+    metrics: dict[str, float] = Field(
+        default_factory=dict,
+        description="Headline numbers, metric id to value; empty when the run produced none.",
+    )
+    leaderboard_path: str | None = Field(
+        default=None, description="Storage key of leaderboard.json; null when no search was run."
+    )
+    duration_s: float = Field(description="Wall-clock seconds from run start to final state.")
+    cost_estimate: CostEstimate = Field(description="What the run cost to produce.")
+    created_at: AwareDatetime = Field(description="UTC time the manifest was written.")
+
+
+# ---------------------------------------------------------------------------
 ARTEFACT_REGISTRY: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
     {
         "run.json": RunRecord,
@@ -1031,6 +1098,7 @@ ARTEFACT_REGISTRY: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
         "drift.json": DriftReport,
         "scoring_summary.json": ScoringSummary,
         "schema.json": FeatureSchema,
+        "run_manifest.json": RunManifest,
     }
 )
 """Artefact filename -> the model that validates it. `run_config.json` is `engine.config.ResolvedConfig`."""
@@ -1066,6 +1134,7 @@ TRAIN_ARTEFACTS: Final[frozenset[str]] = frozenset(
         "feature_importance.json",
         "drift_baseline.json",
         "schema.json",
+        "run_manifest.json",
         "row_explanations.parquet",
         MODEL_DIRECTORY,
     }
@@ -1074,6 +1143,7 @@ TRAIN_ARTEFACTS: Final[frozenset[str]] = frozenset(
 
 SCORE_ARTEFACTS: Final[frozenset[str]] = frozenset(
     {
+        "run_manifest.json",
         "run.json",
         "status.json",
         "run_config.json",
