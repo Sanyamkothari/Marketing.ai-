@@ -20,11 +20,17 @@ def forbidden_spellings() -> tuple[str, ...]:
     return tuple(sorted({*ids, *(use_case_id.replace("-", "_") for use_case_id in ids)}))
 
 
-def test_the_six_use_cases_are_the_ones_we_scan_for(repo_root: Path) -> None:
+def test_every_shipped_use_case_is_one_we_scan_for(repo_root: Path) -> None:
+    """The scan covers the whole configuration directory, however many files it grows to.
+
+    A count here would have to be edited every time a use case is added by YAML alone, which is
+    exactly the thing principle 1 promises never happens - so the count comes from the directory.
+    """
     ids = list_use_case_ids()
-    assert len(ids) == 6
     stems = sorted(path.stem for path in (repo_root / "configs" / "use_cases").glob("*.yaml"))
+    assert stems, "configs/use_cases/ is empty; this file would scan for nothing"
     assert stems == sorted(use_case_id.replace("-", "_") for use_case_id in ids)
+    assert len(forbidden_spellings()) >= len(ids)
 
 
 def test_the_engine_package_has_modules_to_scan(repo_root: Path) -> None:

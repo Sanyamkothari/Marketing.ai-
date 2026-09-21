@@ -28,6 +28,7 @@ from engine.contracts import ColumnProfile, DatasetProfile, dump_artefact
 from engine.stages.ingest import (
     CHUNK_ROWS,
     ENCODINGS,
+    NAME_MIN_DISTINCT_RATIO,
     PII_DETECTORS,
     REDACTED,
     SAMPLE_VALUES,
@@ -779,6 +780,23 @@ def test_detect_problem_type(
 # ---------------------------------------------------------------------------
 # PII detection and redaction
 # ---------------------------------------------------------------------------
+#: Invented people, for the columns that must still be caught as names.
+NAMES_GIVEN: tuple[str, ...] = ("Priya", "Arjun", "Rahul", "Ananya", "Vikram", "Meera")
+NAMES_FAMILY: tuple[str, ...] = ("Sharma", "Mehta", "Verma", "Rao", "Iyer", "Nair")
+
+
+def roster(count: int) -> list[str]:
+    """`count` distinct invented full names - an open vocabulary, the way a real roster is."""
+    every = [
+        f"{given} {middle} {family}"
+        for given in NAMES_GIVEN
+        for middle in NAMES_GIVEN
+        for family in NAMES_FAMILY
+    ]
+    assert count <= len(every)
+    return every[:count]
+
+
 @pytest.mark.parametrize(
     ("name", "values", "expected"),
     [
@@ -796,6 +814,9 @@ def test_detect_problem_type(
             ["Priya Sharma", "Arjun Mehta", "Rahul Verma", "Ananya Rao"] * 5,
             ("name",),
         ),
+        # A real roster of people under a column name that says nothing: an open vocabulary is
+        # enough on its own, which is the branch `NAME_MIN_DISTINCT_RATIO` guards.
+        ("billed_to", roster(60), ("name",)),
     ],
 )
 def test_pii_detectors_positive(name: str, values: list[str], expected: tuple[str, ...]) -> None:
@@ -813,11 +834,67 @@ def test_pii_detectors_positive(name: str, values: list[str], expected: tuple[st
         ("ad_ctr_90d", [round(0.01 * i, 3) for i in range(30)]),
         ("tenure_months", list(range(1, 31))),
         ("notes", ["short note"] * 30),
+        # The Telco file's `gender`: two capitalised words, a 100 % full-match rate against the
+        # name pattern, and nothing whatever to do with a person's name.
+        ("gender", ["Female", "Male"] * 250),
+        ("Partner", ["Yes", "No", "No", "No"] * 100),
+        ("Contract", ["Month", "Quarter", "Annual"] * 100),
     ],
 )
 def test_pii_detectors_negative(name: str, values: list[object]) -> None:
     series = pd.Series(values, name=name)
     assert detect_pii(series, name, infer_column_type(series)) == ()
+
+
+def test_a_low_cardinality_category_is_not_a_name_but_a_roster_is() -> None:
+    """One value pattern, two columns, opposite verdicts - the whole of the name rule.
+
+    `[A-Z][a-z]+` full-matches any capitalised word, so a plain category level (`Female`, `Yes`,
+    `Basic`) matches it exactly as well as a surname does. What separates them is vocabulary:
+    a category repeats a small fixed set, a roster of people is open-ended. Redacting the former
+    would silently drop a model input - and `gender` is the very column a fairness report wants.
+    """
+    rows = 200
+    category = pd.Series(["Female", "Male"] * (rows // 2), name="gender", dtype=object)
+    people = pd.Series(roster(rows), name="gender", dtype=object)
+    assert detect_pii(category, "gender", ColumnType.STRING) == ()
+    assert detect_pii(people, "gender", ColumnType.STRING) == ("name",)
+
+    assert category.nunique() / rows < NAME_MIN_DISTINCT_RATIO <= people.nunique() / rows
+
+
+def test_a_column_whose_name_says_name_is_caught_however_few_values_it_repeats() -> None:
+    """The distinct-value guard is on the values-alone branch only.
+
+    A short file listing the same four account holders over and over is still a name column, and
+    its header says so; nothing about the fix may make that one harder to catch.
+    """
+    repeated = pd.Series(["Priya Sharma", "Arjun Mehta"] * 40, name="account_name", dtype=object)
+    assert repeated.nunique() / len(repeated) < NAME_MIN_DISTINCT_RATIO
+    assert detect_pii(repeated, "account_name", ColumnType.STRING) == ("name",)
+    assert detect_pii(repeated, "full_name", ColumnType.STRING) == ("name",)
+    # The same values under a header that claims nothing are read as a category, not as names.
+    assert detect_pii(repeated, "segment", ColumnType.STRING) == ()
+
+
+def test_a_categorical_feature_keeps_its_values_in_the_profile(use_case: UseCaseConfig) -> None:
+    """The consequence of the two tests above, end to end: nothing redacts the category."""
+    rows = 200
+    frame = pd.DataFrame(
+        {
+            "row_key": [f"K-{index}" for index in range(rows)],
+            "gender": ["Female", "Male"] * (rows // 2),
+            "holder_name": roster(rows),
+        }
+    )
+    profile = profile_of(frame, use_case)
+    gender = column(profile, "gender")
+    assert gender.pii_kinds == ()
+    assert set(gender.sample_values) <= {"Female", "Male"}
+    assert REDACTED not in gender.sample_values
+    assert {entry.value for entry in gender.top_categories} == {"Female", "Male"}
+    assert column(profile, "holder_name").pii_kinds == ("name",)
+    assert column(profile, "holder_name").sample_values == (REDACTED,) * SAMPLE_VALUES
 
 
 def test_every_detector_has_a_positive_case() -> None:

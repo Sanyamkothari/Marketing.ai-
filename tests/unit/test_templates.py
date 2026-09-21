@@ -12,7 +12,34 @@ from engine.templates import render_template_csv, render_template_readme, templa
 
 USE_CASE_IDS: tuple[str, ...] = list_use_case_ids()
 
-ALWAYS_PRESENT: tuple[str, ...] = ("snapshot_date", "marketing_opt_in", "last_contacted_at")
+#: The columns the engine's own use-case templates share, by the role each one fills: the snapshot
+#: date a time-based split reads, and the two columns `actions.suppression` names. A use case
+#: mapped onto an outside file carries only the columns that file has, so this is the shape of the
+#: engine's own templates rather than a rule every use case obeys.
+SHARED_COLUMNS: dict[ColumnRole, str] = {
+    ColumnRole.TIME: "snapshot_date",
+    ColumnRole.CONSENT: "marketing_opt_in",
+    ColumnRole.CONTACT: "last_contacted_at",
+}
+
+
+def engine_template_ids() -> tuple[str, ...]:
+    """The use cases built on the engine's own template rather than mapped onto an outside file.
+
+    Read off the config, not listed here: a use case that configures consent and recency
+    suppression is telling the engine it has those governance columns, which is what the shared
+    column set is. One that suppresses on neither (the public Telco Customer Churn file carries no
+    consent or contact history) is not making that claim and is not held to it.
+    """
+    ready: list[str] = []
+    for use_case_id in USE_CASE_IDS:
+        suppression = load_use_case(use_case_id).actions.suppression
+        if suppression.opt_out_column and suppression.recently_contacted_column:
+            ready.append(use_case_id)
+    return tuple(ready)
+
+
+ENGINE_TEMPLATE_IDS: tuple[str, ...] = engine_template_ids()
 
 
 @pytest.fixture(params=USE_CASE_IDS)
@@ -42,9 +69,47 @@ def test_primary_key_is_first_and_target_is_last(config: UseCaseConfig) -> None:
     assert columns[-1].name == config.target.column
 
 
-def test_the_shared_columns_are_present(config: UseCaseConfig) -> None:
-    names = config.template.column_names
-    assert set(ALWAYS_PRESENT) <= set(names)
+@pytest.mark.parametrize("use_case_id", ENGINE_TEMPLATE_IDS)
+def test_the_shared_columns_are_present(use_case_id: str) -> None:
+    """A use case built on the engine's own template carries the whole shared set."""
+    names = set(load_use_case(use_case_id).template.column_names)
+    assert set(SHARED_COLUMNS.values()) <= names
+
+
+def test_the_shared_columns_are_a_shape_something_actually_has() -> None:
+    """Guards the test above against becoming vacuous if every use case stopped qualifying."""
+    assert ENGINE_TEMPLATE_IDS
+
+
+def test_a_shared_role_keeps_its_shared_name(config: UseCaseConfig) -> None:
+    """Whatever a use case carries of the shared set, it spells it the shared way, or not at all.
+
+    This is the half of the rule that holds for every use case, including one mapped onto an
+    outside file: the engine finds those columns by role, and the names stay conventional so a
+    reader moving between two use cases sees the same header twice.
+    """
+    for role, shared_name in SHARED_COLUMNS.items():
+        carried = [column.name for column in config.template.by_role(role)]
+        assert carried in ([], [shared_name]), f"{role.value}: {carried}"
+
+
+def test_every_configured_column_is_in_the_template(config: UseCaseConfig) -> None:
+    """A use case may not point its config at a column its template does not carry.
+
+    This is what makes a narrower template safe: the Telco file has no date column, so its config
+    must not ask for a time-based split or for recency suppression.
+    """
+    names = set(config.template.column_names)
+    suppression = config.actions.suppression
+    configured = {
+        "split.time_column": config.split.time_column,
+        "split.group_column": config.split.group_column,
+        "actions.suppression.opt_out_column": suppression.opt_out_column,
+        "actions.suppression.recently_contacted_column": suppression.recently_contacted_column,
+    }
+    for path, column_name in configured.items():
+        if column_name is not None:
+            assert column_name in names, f"{path} names {column_name!r}, which the template lacks"
 
 
 def test_csv_is_utf8_without_a_bom_and_ends_with_a_newline(config: UseCaseConfig) -> None:
@@ -75,9 +140,12 @@ def test_readme_required_section_names_key_target_and_time_column(config: UseCas
     assert f"`{config.target.column}`" in required
     time_columns = config.template.by_role(ColumnRole.TIME)
     if config.split.type is SplitType.TIME_BASED:
+        assert time_columns, "a time-based split needs a time column to split on"
         assert f"`{time_columns[0].name}`" in required
     else:
-        assert f"`{time_columns[0].name}`" not in required
+        # A random split does not make the date required - and a template that has no date column
+        # at all has nothing for the section to name.
+        assert all(f"`{column.name}`" not in required for column in time_columns)
 
 
 def test_readme_states_the_limits(config: UseCaseConfig) -> None:

@@ -16,9 +16,12 @@ carries**, so a new use case needs no change here.
 
 *Learnable signal.* The target is a genuine logistic function of the feature columns plus a time
 trend plus unobservable noise, with the intercept solved so the realised positive rate matches
-``positive_rate``. A plain logistic regression on the clean targeted-advertisement data clears the
-plan §10 golden check (ROC-AUC > 0.7) by a wide margin; ``tests/fixtures/test_make_data.py``
-asserts it.
+``positive_rate``. The draw is 0/1 internally and is *rendered* through the labels the template
+declares (:func:`target_labels`), so a use case whose file spells the outcome ``Yes``/``No``
+(plan §4.1: a binary target may carry any two values) gets ``Yes``/``No`` with no code that knows
+which use case that is. A plain logistic regression on the clean targeted-advertisement data
+clears the plan §10 golden check (ROC-AUC > 0.7) by a wide margin;
+``tests/fixtures/test_make_data.py`` asserts it.
 
 *Deterministic.* Every draw comes from a :class:`numpy.random.Generator` seeded by a BLAKE2b digest
 of ``(seed, use_case_id, column_name, purpose)``. No global RNG, no dict-ordering dependence and no
@@ -110,6 +113,11 @@ class Variant:
     ``code`` is the single plan §6.3 validation code the variant is built to trigger; ``None`` for
     the two healthy variants. ``rows`` / ``positive_rate``, when set, override the spec because the
     variant is *defined* by that shape (``too_few_rows`` must have too few rows).
+
+    ``requires_roles`` names the template roles the variant needs a column for. A use case mapped
+    onto an outside file need not carry every optional role - the public Telco Customer Churn file
+    has no date column at all - and a variant that breaks a column the template does not have
+    simply does not apply there (:func:`variant_applies`).
     """
 
     name: str
@@ -118,6 +126,7 @@ class Variant:
     description: str
     rows: int | None = None
     positive_rate: float | None = None
+    requires_roles: tuple[ColumnRole, ...] = ()
 
 
 _VARIANT_LIST: Final[tuple[Variant, ...]] = (
@@ -154,13 +163,13 @@ _VARIANT_LIST: Final[tuple[Variant, ...]] = (
         "constant_target",
         "TARGET_CONSTANT",
         True,
-        "Every row is a positive. TARGET_IMBALANCE_SEVERE (warning) is unavoidable alongside it.",
+        "Every row carries the positive label. TARGET_IMBALANCE_SEVERE (warning) comes with it.",
     ),
     Variant(
         "non_binary_target",
         "TARGET_NOT_BINARY",
         True,
-        "A third target level (2) on 120 rows.",
+        "A third target level on 120 rows, spelled the way the template spells the other two.",
     ),
     Variant(
         "constant_column",
@@ -191,6 +200,7 @@ _VARIANT_LIST: Final[tuple[Variant, ...]] = (
         "TIME_COLUMN_UNPARSEABLE",
         True,
         "The time column holds fiscal-week labels such as 'FY26-W32' that no date parser accepts.",
+        requires_roles=(ColumnRole.TIME,),
     ),
     Variant(
         "renamed_column",
@@ -226,6 +236,112 @@ PII_PHONE_COLUMN: Final[str] = "billing_contact_phone"
 ID_LIKE_COLUMN: Final[str] = "external_ref"
 #: What `type_changed_column` writes where a number is missing. Deliberately not a pandas NA token.
 TYPE_CHANGE_SENTINEL: Final[str] = "unknown"
+
+#: The third level `non_binary_target` plants when the target is not numeric. Any value that is
+#: neither label would do; the plan does not name one, so this is a documented choice.
+THIRD_TARGET_LABEL: Final[str] = "Unknown"
+
+#: How a target spells "positive" when `target.positive_label` is null and the engine must guess.
+#: The same tokens `engine.stages.validate.resolve_positive_label` falls back to.
+POSITIVE_TOKENS: Final[frozenset[str]] = frozenset({"1", "true", "yes", "y"})
+
+#: What a target of each type spells "negative" with when the template's examples show one level
+#: only, so no second level can be read off them.
+_NEGATIVE_FALLBACK: Final[Mapping[ColumnType, str]] = MappingProxyType(
+    {ColumnType.INTEGER: "0", ColumnType.FLOAT: "0", ColumnType.BOOLEAN: "false"}
+)
+
+
+def variant_applies(variant: str, config: UseCaseConfig) -> bool:
+    """Whether `variant` has anything to break in this use case's template.
+
+    A use case mapped onto an outside file carries only the columns that file has, so a variant
+    that corrupts an optional column may have no column to corrupt: the public Telco Customer
+    Churn file has no date column, and `unparseable_time` is about a date column. Such a variant
+    is *skipped* - `generate` returns the clean frame rather than raising - and a caller driving a
+    matrix off `VARIANTS` asks this first so it parametrises over the pairs that mean something.
+    """
+    return all(config.template.by_role(role) for role in VARIANT_SPECS[variant].requires_roles)
+
+
+def variants_for(use_case_id: str, config_root: Path | None = None) -> tuple[str, ...]:
+    """The variants that mean something for this use case, in `VARIANTS` order."""
+    config = load_use_case(use_case_id, config_root)
+    return tuple(name for name in VARIANTS if variant_applies(name, config))
+
+
+# ---------------------------------------------------------------------------
+# How the target is spelled (plan §4.1)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class TargetLabels:
+    """The two (and, for `non_binary_target`, three) values a use case's target column carries.
+
+    `positive` / `negative` / `third` are already in the dtype the frame stores, so a caller can
+    compare against them directly. `dtype` is `Int64` for a target whose template type is integer
+    and whose labels are integers, and `object` for a labelled one such as `Yes`/`No`.
+    """
+
+    positive: str | int
+    negative: str | int
+    third: str | int
+    dtype: str
+
+
+def _target_column(config: UseCaseConfig) -> TemplateColumn:
+    targets = config.template.by_role(ColumnRole.TARGET)
+    if not targets:  # pragma: no cover - every predictive template has a target
+        raise ValueError(f"{config.id} has no target column")
+    return targets[0]
+
+
+def _label_text(value: str | int | bool) -> str:
+    """`target.positive_label` as the template would write it: `true`, not `True`."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    return str(value)
+
+
+def _looks_like_an_integer(value: str) -> bool:
+    try:
+        int(value)
+    except ValueError:
+        return False
+    return True
+
+
+def target_labels(config: UseCaseConfig) -> TargetLabels:
+    """How this use case spells its target, from the template and `target.positive_label` alone.
+
+    Plan §4.1 lets a binary target carry any two values. The positive label is the configured one
+    when there is one, otherwise the example level that reads as positive (`1`, `yes`, `true`),
+    otherwise the last example level. The negative label is the *other* level the template's five
+    examples show - `No` for the Telco file, `0` for the engine's own templates - because the
+    examples are the only place a use case says what its second value looks like.
+    """
+    column = _target_column(config)
+    levels = tuple(dict.fromkeys(value.strip() for value in column.examples if value.strip() != ""))
+    configured = config.target.positive_label
+    positive = _label_text(configured) if configured is not None else ""
+    if not positive:
+        positive = next(
+            (level for level in levels if level.lower() in POSITIVE_TOKENS),
+            levels[-1] if levels else "1",
+        )
+    # Prefer the template's own spelling, so `positive_label: "yes"` still writes the file's `Yes`.
+    positive = next((level for level in levels if level.lower() == positive.lower()), positive)
+    negative = next(
+        (level for level in levels if level.lower() != positive.lower()),
+        _NEGATIVE_FALLBACK.get(column.type, "no"),
+    )
+    third = "2" if column.type in (ColumnType.INTEGER, ColumnType.FLOAT) else THIRD_TARGET_LABEL
+    while third.lower() in (positive.lower(), negative.lower()):  # pragma: no cover - no shipped clash
+        third = f"{third}_x"
+    if column.type is ColumnType.INTEGER and all(
+        _looks_like_an_integer(value) for value in (positive, negative, third)
+    ):
+        return TargetLabels(int(positive), int(negative), int(third), "Int64")
+    return TargetLabels(positive, negative, third, "object")
 
 
 # ---------------------------------------------------------------------------
@@ -684,12 +800,19 @@ def _frame(
 ) -> pd.DataFrame:
     data: dict[str, list[str] | npt.NDArray[np.float64]] = {}
     dtypes: dict[str, str] = {}
+    labels = target_labels(config)
     for template_column in config.template.columns:
         if template_column.role is ColumnRole.TARGET:
             if target is None:
                 continue
-            data[template_column.name] = target.astype(np.float64)
-            dtypes[template_column.name] = "Int64"
+            if labels.dtype == "Int64":
+                data[template_column.name] = np.where(
+                    target == 1, float(labels.positive), float(labels.negative)
+                )
+            else:
+                positive, negative = str(labels.positive), str(labels.negative)
+                data[template_column.name] = [positive if flag else negative for flag in target]
+            dtypes[template_column.name] = labels.dtype
             continue
         built = columns[template_column.name]
         data[template_column.name] = built.values
@@ -723,18 +846,18 @@ def _primary_key_name(config: UseCaseConfig) -> str:
 
 
 def _target_name(config: UseCaseConfig) -> str:
-    targets = config.template.by_role(ColumnRole.TARGET)
-    if not targets:  # pragma: no cover - every predictive template has a target
-        raise ValueError(f"{config.id} has no target column")
-    return targets[0].name
+    return _target_column(config).name
 
 
 def _apply_variant(frame: pd.DataFrame, config: UseCaseConfig, spec: GenerationSpec) -> pd.DataFrame:
     variant = spec.variant
     rows = len(frame)
     seed = spec.seed
+    labels = target_labels(config)
     if variant in (CLEAN, SCORING):
         return frame
+    if not variant_applies(variant, config):
+        return frame  # nothing in this template to break; see `variant_applies`
     if variant == "duplicate_keys":
         key = _primary_key_name(config)
         repeated = min(50, max(rows - 1, 0))
@@ -749,18 +872,18 @@ def _apply_variant(frame: pd.DataFrame, config: UseCaseConfig, spec: GenerationS
         return _add_leaky_column(frame, config, seed)
     if variant == "too_few_positives":
         target = _target_name(config)
-        positives = frame.index[frame[target] == 1].tolist()
-        frame.loc[positives[150:], target] = 0
+        positives = frame.index[frame[target] == labels.positive].tolist()
+        frame.loc[positives[150:], target] = labels.negative
         return frame
     if variant == "too_few_rows":
         return frame  # the row count and positive rate are set by the Variant overrides
     if variant == "constant_target":
-        frame[_target_name(config)] = 1
+        frame[_target_name(config)] = labels.positive
         return frame
     if variant == "non_binary_target":
         target = _target_name(config)
-        negatives = frame.index[frame[target] == 0].tolist()
-        frame.loc[negatives[:120], target] = 2
+        negatives = frame.index[frame[target] == labels.negative].tolist()
+        frame.loc[negatives[:120], target] = labels.third
         return frame
     if variant == "constant_column":
         frame[CONSTANT_COLUMN] = "crm_export"
@@ -796,7 +919,8 @@ def _add_leaky_column(frame: pd.DataFrame, config: UseCaseConfig, seed: int) -> 
     also trip HIGH_CARDINALITY_ID_LIKE, and each variant must trigger exactly one code.
     """
     rows = len(frame)
-    target = frame[_target_name(config)].to_numpy(dtype="float64")
+    positive = target_labels(config).positive
+    target = (frame[_target_name(config)] == positive).to_numpy(dtype="float64")
     rng = _rng(seed, config.id, "leak")
     noise = rng.normal(0.0, 0.03, size=rows)
     muddled = rng.random(rows) < 0.015
@@ -821,7 +945,7 @@ def _add_pii_columns(frame: pd.DataFrame, config: UseCaseConfig, seed: int) -> p
 
 def _break_time_column(frame: pd.DataFrame, config: UseCaseConfig) -> pd.DataFrame:
     times = config.template.by_role(ColumnRole.TIME)
-    if not times:  # pragma: no cover - every shipped template has a time column
+    if not times:  # pragma: no cover - `_apply_variant` skips the variant when there is no time column
         raise ValueError(f"{config.id} has no time column to break")
     name = times[0].name
     labels: list[str] = []
@@ -867,7 +991,11 @@ def predictive_use_case_ids(config_root: Path | None = None) -> tuple[str, ...]:
 
 
 def generate(spec: GenerationSpec) -> pd.DataFrame:
-    """Build the synthetic frame this spec describes. Pure: same spec, same frame, every time."""
+    """Build the synthetic frame this spec describes. Pure: same spec, same frame, every time.
+
+    A variant the use case's template has no column for (`variant_applies`) is skipped, and the
+    frame comes back clean, so every use case is generable for every variant.
+    """
     config = load_use_case(spec.use_case_id, spec.config_root)
     rows = spec.effective_rows
     columns = _build_columns(config, rows, spec.seed)
@@ -924,7 +1052,11 @@ def main(argv: Sequence[str] | None = None) -> int:
     variants = tuple(args.variants) if args.variants else tuple(VARIANTS)
     out_dir: Path = args.out_dir if args.out_dir is not None else default_output_dir()
     for use_case_id in use_cases:
+        applicable = variants_for(use_case_id, args.config_root)
         for variant in variants:
+            if variant not in applicable:
+                print(f"{use_case_id}: skipping {variant} (this template has no column to break)")
+                continue
             spec = GenerationSpec(
                 use_case_id=use_case_id,
                 rows=args.rows,

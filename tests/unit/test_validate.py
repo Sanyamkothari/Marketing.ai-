@@ -59,6 +59,7 @@ from tests.fixtures.make_data import (
     GenerationSpec,
     generate,
     predictive_use_case_ids,
+    variants_for,
 )
 
 #: Small enough to keep the matrix quick, large enough that every variant still expresses itself
@@ -70,6 +71,18 @@ SCHEMA_VARIANTS: tuple[str, ...] = ("renamed_column", "missing_column", "type_ch
 
 USE_CASE_IDS: tuple[str, ...] = predictive_use_case_ids()
 BROKEN_VARIANTS: tuple[str, ...] = tuple(name for name, code in VARIANTS.items() if code is not None)
+
+#: Every (use case, broken variant) pair that means something, derived from the templates.
+#: A variant that corrupts a column a template does not carry has nothing to corrupt there - the
+#: public Telco Customer Churn file has no date column, so there is no `unparseable_time` file to
+#: make - and the generator says so rather than the matrix assuming every template is the same
+#: shape. `test_the_broken_matrix_still_covers_every_code` keeps that from hiding a real gap.
+BROKEN_MATRIX: tuple[tuple[str, str], ...] = tuple(
+    (use_case_id, variant)
+    for use_case_id in USE_CASE_IDS
+    for variant in variants_for(use_case_id)
+    if VARIANTS[variant] is not None
+)
 
 UPLOAD_ID: str = "u_0123456789ab"
 FIXED_NOW: datetime = datetime(2026, 9, 21, 12, 0, tzinfo=UTC)
@@ -375,21 +388,28 @@ def test_derive_facts_is_pure() -> None:
 # ---------------------------------------------------------------------------
 # Positive cases: the fifteen broken variants, driven off VARIANTS
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("use_case_id", USE_CASE_IDS)
-@pytest.mark.parametrize("variant", BROKEN_VARIANTS)
+@pytest.mark.parametrize(("use_case_id", "variant"), BROKEN_MATRIX)
 def test_variant_triggers_its_code(use_case_id: str, variant: str) -> None:
-    """Each broken fixture produces the one code it was built for, for every use case."""
+    """Each broken fixture produces the one code it was built for, for every use case it fits."""
     code = VARIANTS[variant]
     if variant in SCHEMA_VARIANTS:
         report = schema_report(use_case_id, variant)
     else:
         overrides: dict[str, object] | None = None
         if variant == "unparseable_time":
-            # TIME_COLUMN_UNPARSEABLE is about the *configured* time column, and three of the six
-            # use cases split randomly and configure none.
+            # TIME_COLUMN_UNPARSEABLE is about the *configured* time column, and several use cases
+            # carry a date column but split randomly, so they configure none.
             overrides = {"split.time_column": time_column_of(config_for(use_case_id))}
         report = fixture_report(use_case_id, variant, overrides=overrides)
     assert code in codes(report), f"{variant} -> {codes(report)}"
+
+
+def test_the_broken_matrix_still_covers_every_code() -> None:
+    """Deriving the matrix must not quietly drop a code or a use case from the sweep."""
+    assert {use_case_id for use_case_id, _ in BROKEN_MATRIX} == set(USE_CASE_IDS)
+    assert {VARIANTS[variant] for _, variant in BROKEN_MATRIX} == {
+        VARIANTS[variant] for variant in BROKEN_VARIANTS
+    }
 
 
 @pytest.mark.parametrize("variant", BROKEN_VARIANTS)
@@ -539,9 +559,9 @@ def test_clean_triggers_no_errors(use_case_id: str) -> None:
 def test_clean_never_flags_the_target(use_case_id: str) -> None:
     """The regression test for DEC-062.
 
-    `targeted-advertisement` (`converted_30d`) and `rca` (`churn_next_60d`) have targets that match
-    the configured leakage pattern, so without the exemption a perfectly clean upload for two of
-    the six shipped use cases would be refused with a 409.
+    Several shipped targets match the configured leakage name pattern - `converted_30d`,
+    `churn_next_60d`, and the Telco file's own `Churn` - so without the exemption a perfectly
+    clean upload for those use cases would be refused with a 409.
     """
     config = config_for(use_case_id)
     report = fixture_report(use_case_id, CLEAN)
@@ -555,11 +575,38 @@ def test_clean_never_flags_the_target(use_case_id: str) -> None:
     ]
 
 
-def test_leakage_pattern_really_does_match_two_shipped_targets() -> None:
-    """Without this the exemption test above could pass for the wrong reason."""
-    pattern = re.compile(config_for("rca").catalog.column_name_patterns.leakage, re.IGNORECASE)
-    matched = [uid for uid in USE_CASE_IDS if pattern.search(target_of(config_for(uid)))]
-    assert set(matched) == {"rca", "targeted-advertisement"}
+def targets_matching_the_leakage_pattern() -> tuple[str, ...]:
+    """The shipped use cases whose own target name trips the configured leakage name pattern."""
+    pattern = re.compile(config_for(USE_CASE_IDS[0]).catalog.column_name_patterns.leakage, re.IGNORECASE)
+    return tuple(uid for uid in USE_CASE_IDS if pattern.search(target_of(config_for(uid))))
+
+
+def test_the_leakage_pattern_really_does_match_shipped_targets() -> None:
+    """Without this the exemption test above could pass for the wrong reason.
+
+    Which targets match is read off the configs rather than counted here. When this was written
+    two did; the Telco Customer Churn file's `Churn` is a third, and a use case added by YAML
+    alone may add a fourth. What must keep holding is the shape of the claim: at least one shipped
+    target trips the pattern, and every one that does really would be flagged if DEC-062's
+    exemption were not there - which is what makes `test_clean_never_flags_the_target` a
+    regression test and not a tautology.
+    """
+    matched = targets_matching_the_leakage_pattern()
+    assert matched, "no shipped target trips the leakage pattern; the exemption test proves nothing"
+    for use_case_id in matched:
+        target = target_of(config_for(use_case_id))
+        frame = fixture_frame(use_case_id)
+        # Judge the file against some *other* target, so the real one is an ordinary candidate.
+        frame["placeholder_target"] = [index % 4 == 0 for index in range(len(frame))]
+        params = params_for(
+            use_case_id,
+            target="placeholder_target",
+            target_aliases=(),
+            leakage_baseline=False,
+        )
+        findings = v.check_leakage_suspected(frame, params).findings
+        reasons = {check.column: check.details["reason"] for check in findings}
+        assert reasons.get(target) == "name_pattern", f"{use_case_id}: {reasons}"
 
 
 EXEMPT_ROLES: tuple[str, ...] = (

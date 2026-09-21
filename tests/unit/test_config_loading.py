@@ -38,14 +38,21 @@ from engine.config import (
 )
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "configs"
-SHIPPED_IDS = (
-    "fault-prediction",
-    "order-fulfillment",
-    "payment-propensity",
-    "rca",
-    "targeted-advertisement",
-    "win-back-campaign",
-)
+
+
+def shipped_use_case_files() -> list[Path]:
+    """Every use-case file in `configs/`, read off the directory rather than listed here.
+
+    Adding a use case is adding a YAML file (plan section 2.1). A test that spelled the ids out
+    would make that a lie, so the ids under test come from the loader and the files they must
+    account for come from the directory.
+    """
+    return sorted((DEFAULT_CONFIG_ROOT / "use_cases").glob("*.yaml"))
+
+
+#: The shipped ids, as the loader sees them. `test_list_use_case_ids_accounts_for_every_shipped_file`
+#: is what pins this to the directory; everything else may parametrise off it.
+SHIPPED_IDS: tuple[str, ...] = list_use_case_ids()
 
 
 def test_engine_yaml_parses_into_engine_config() -> None:
@@ -71,8 +78,14 @@ def test_time_like_pattern_matches_the_catalog() -> None:
     assert get_catalog().column_name_patterns.time_like == TIME_LIKE_PATTERN
 
 
-def test_list_use_case_ids_is_exactly_the_shipped_six() -> None:
-    assert list_use_case_ids() == SHIPPED_IDS
+def test_list_use_case_ids_accounts_for_every_shipped_file() -> None:
+    """The loader sees every file in `configs/use_cases/` and nothing else, sorted and distinct."""
+    ids = list_use_case_ids()
+    files = shipped_use_case_files()
+    assert files, "configs/use_cases/ is empty"
+    assert len(ids) == len(set(ids)) == len(files)
+    assert {use_case_path(use_case_id) for use_case_id in ids} == set(files)
+    assert list(ids) == sorted(ids)
 
 
 @pytest.mark.parametrize("use_case_id", SHIPPED_IDS)
@@ -86,7 +99,9 @@ def test_every_use_case_file_loads_and_its_stem_matches_its_id(use_case_id: str)
 
 
 def test_load_all_use_cases_returns_every_id() -> None:
-    assert sorted(load_all_use_cases()) == list(SHIPPED_IDS)
+    loaded = load_all_use_cases()
+    assert sorted(loaded) == sorted(list_use_case_ids())
+    assert all(use_case_id == config.id for use_case_id, config in loaded.items())
 
 
 def test_industries_list_and_telecom_loads() -> None:
@@ -118,7 +133,7 @@ def test_industry_available_entries_have_files_and_matching_stage_names() -> Non
             available.append(ref.id)
             assert ref.name is None and ref.description is None
             assert load_use_case(ref.id).lifecycle_stage == stage.name
-    assert sorted(available) == list(SHIPPED_IDS)
+    assert sorted(available) == sorted(list_use_case_ids())
 
 
 def test_industry_planned_entries_have_no_file_but_carry_their_own_copy() -> None:

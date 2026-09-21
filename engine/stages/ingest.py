@@ -63,6 +63,7 @@ __all__ = [
     "ENCODINGS",
     "FINGERPRINT_ALGORITHM",
     "FINGERPRINT_PREFIX",
+    "NAME_MIN_DISTINCT_RATIO",
     "PII_DETECTORS",
     "PREVIEW_ROWS",
     "REDACTED",
@@ -740,13 +741,29 @@ def infer_column_type(series: pd.Series[Any]) -> ColumnType:
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True)
 class PiiDetector:
-    """One PII shape: what its values look like, what its column is usually called, and how sure."""
+    """One PII shape: what its values look like, what its column is usually called, and how sure.
+
+    `min_distinct_ratio` guards the *values alone* branch: the share of the sampled values that
+    must be distinct before the value pattern may fire on its own. It stays 0 for a shape no
+    ordinary column wears by accident (an e-mail address, an Aadhaar number) and rises above 0 for
+    a shape that is also the shape of a perfectly innocent category level. It never touches the
+    name-assisted branch, so a column whose *name* says it holds names is judged exactly as before.
+    """
 
     kind: str
     value_pattern: re.Pattern[str] | None
     name_pattern: re.Pattern[str] | None
     min_value_match_rate: float
     name_assisted_rate: float = 0.20
+    min_distinct_ratio: float = 0.0
+
+
+NAME_MIN_DISTINCT_RATIO: Final[float] = 0.40
+"""How much of a sampled column must be distinct before its values alone may be read as names.
+
+Well above any ordinary categorical column (a handful of levels over hundreds of rows) and well
+below a real roster of people (near one distinct value per row, even when a few names repeat).
+"""
 
 
 PII_DETECTORS: Final[tuple[PiiDetector, ...]] = (
@@ -783,12 +800,21 @@ PII_DETECTORS: Final[tuple[PiiDetector, ...]] = (
     ),
     PiiDetector(
         kind="name",
+        # The value pattern is "one to four capitalised words", which is what a personal name looks
+        # like - and also what a great many category levels look like: `Female`/`Male`, `Yes`/`No`,
+        # `Basic`/`Premium` all full-match at a 100 % rate. Redacting such a column would silently
+        # drop a model input, and a column like `gender` is exactly the one a fairness report wants.
+        # What really separates the two is vocabulary size: names are open-ended and near-unique,
+        # a category is a small fixed set repeated over and over. So on values alone the detector
+        # also demands an open vocabulary (`min_distinct_ratio`); a column whose name says `name`
+        # still fires through the name-assisted branch however few distinct values it carries.
         value_pattern=re.compile(r"[A-Z][a-z]+(?:[ '\-][A-Z][a-z]+){0,3}"),
         name_pattern=re.compile(
             r"(?i)(^|_)(name|first_name|last_name|full_name|given_name|surname|"
             r"customer_name|account_name|contact_name|holder_name)($|_)"
         ),
         min_value_match_rate=0.90,
+        min_distinct_ratio=NAME_MIN_DISTINCT_RATIO,
     ),
 )
 
@@ -807,6 +833,7 @@ def detect_pii(series: pd.Series[Any], name: str, inferred: ColumnType) -> tuple
     sample = [str(value).strip() for value in series.dropna().head(PII_SAMPLE_VALUES)]
     if not sample:
         return ()
+    distinct_ratio = len(set(sample)) / len(sample)
     fired: list[str] = []
     for detector in PII_DETECTORS:
         if not textual and detector.kind not in _DIGIT_DETECTOR_KINDS:
@@ -817,7 +844,9 @@ def detect_pii(series: pd.Series[Any], name: str, inferred: ColumnType) -> tuple
         matches = sum(1 for value in sample if pattern.fullmatch(value) is not None)
         rate = matches / len(sample)
         named = detector.name_pattern is not None and detector.name_pattern.search(name) is not None
-        if rate >= detector.min_value_match_rate or (named and rate >= detector.name_assisted_rate):
+        by_values = rate >= detector.min_value_match_rate and distinct_ratio >= detector.min_distinct_ratio
+        by_name = named and rate >= detector.name_assisted_rate
+        if by_values or by_name:
             fired.append(detector.kind)
     return tuple(fired)
 

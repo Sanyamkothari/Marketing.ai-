@@ -14,6 +14,7 @@ from engine.config import (
     IndustryConfig,
     UseCaseStatus,
     load_industry,
+    load_yaml,
 )
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "configs"
@@ -67,19 +68,19 @@ def test_a_missing_industry_file_is_reported() -> None:
 
 
 def test_all_refs_walks_stages_in_order() -> None:
+    """Stage by stage, entry by entry, in the order the file writes them.
+
+    The expected order is read back off the YAML rather than listed here: a use case added to a
+    stage by editing that file alone must not need this test edited too (plan section 2.1).
+    """
+    document = load_yaml(DEFAULT_CONFIG_ROOT / "industries" / "telecom.yaml")
+    written = [str(entry["id"]) for stage in document["stages"] for entry in stage.get("use_cases", ())]
     industry = load_industry("telecom")
     refs = industry.all_refs()
-    assert [ref.id for _, ref in refs] == [
-        "targeted-advertisement",
-        "ai-onboarding-assistant",
-        "order-fulfillment",
-        "fault-prediction",
-        "payment-propensity",
-        "rca",
-        "win-back-campaign",
-    ]
-    stage, planned = refs[1]
+    assert [ref.id for _, ref in refs] == written
+    assert len(written) > len(document["stages"]), "a flat walk, not one entry per stage"
+
+    stage, planned = next((stage, ref) for stage, ref in refs if ref.status is UseCaseStatus.PLANNED)
     assert stage.ai_type is AiType.GENERATIVE
-    assert planned.status is UseCaseStatus.PLANNED
     assert planned.name == "AI Onboarding Assistant"
     assert planned.description and planned.description.endswith(".")
