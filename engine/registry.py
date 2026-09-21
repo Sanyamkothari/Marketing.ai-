@@ -74,10 +74,20 @@ def should_promote(
 ) -> bool:
     """The champion rule of plan §6.3, as a pure function.
 
+    PRECONDITION, and the whole point of DEC-044: `candidate.test_score` and `champion.test_score`
+    must BOTH have been measured on the SAME held-out frame, on the same metric. The caller is
+    responsible for re-scoring the incumbent on the challenger's test split and passing that
+    re-measured number in; `register.build_model_version` does this through `ChampionScore`. Passing
+    the champion's *stored* score, from whatever test split existed when it was trained, compares
+    two numbers that were never comparable: different rows, possibly different preprocessing, and
+    possibly a different population, so a challenger could win or lose for reasons unrelated to
+    model quality. This function cannot detect that misuse, which is why the caller must not commit
+    it.
+
     True when there is no champion yet. Otherwise the candidate must have been scored on the same
-    metric (`RegistryError('METRIC_MISMATCH')` when it was not) and must beat the champion's test
-    score by at least `min_improvement_pct` percent of the champion's score; for metrics where lower
-    is better (rmse, mae) the sign is flipped. Equality is enough when the rule is 0 %.
+    metric (`RegistryError('METRIC_MISMATCH')` when it was not) and must beat the champion's score
+    by at least `min_improvement_pct` percent of it; for metrics where lower is better (rmse, mae)
+    the sign is flipped. Equality is enough when the rule is 0 %.
     """
     if champion is None:
         return True

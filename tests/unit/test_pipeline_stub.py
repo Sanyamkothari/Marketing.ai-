@@ -210,6 +210,8 @@ IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
         "engine.stages.prepare",  # M3: prepare, replay, split_dataset
         "engine.stages.actions",  # M4: assign_bands, apply_actions, suppression_rules
         "engine.stages.export",  # M4: write_scores, summarise
+        "engine.stages.register",  # M3: build_model_version, feature_schema, drift_baseline
+        "engine.stages.score",  # M4: compute_drift (predict is still an M4 stub)
     }
 )
 STUBBED_STAGE_MODULES: frozenset[str] = frozenset(STAGE_MODULE_MAP.values()) - IMPLEMENTED_STAGE_MODULES
