@@ -207,6 +207,7 @@ def test_every_stage_id_maps_to_a_module_that_defines_its_functions() -> None:
 # stale: a stubbed module must still raise, and an implemented one must not.
 IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
     {
+        "engine.stages.evaluate",  # M3: evaluate, compare_to_baseline
         "engine.stages.prepare",  # M3: prepare, replay, split_dataset
         "engine.stages.actions",  # M4: assign_bands, apply_actions, suppression_rules
         "engine.stages.export",  # M4: write_scores, summarise
