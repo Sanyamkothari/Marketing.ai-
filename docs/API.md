@@ -10,6 +10,14 @@ Contract schema version: 1.
 |---|---|---|---|
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/industries` | Every industry journey with its stages and use-case cards | IndustriesResponse |
+| GET | `/runs` | Run history, newest first | RunListResponse |
+| POST | `/runs` | Validate an upload and, when it passes, start a run | RunCreatedResponse |
+| GET | `/runs/{run_id}` | One run: its record and the status the Running screen polls | RunDetailResponse |
+| GET | `/runs/{run_id}/artefacts/{name}` | One artefact of a run, whitelisted against the artefact registry | - |
+| POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
+| GET | `/runs/{run_id}/scores.csv` | The scored rows of a scoring run as CSV | - |
+| POST | `/uploads` | Store a CSV or Parquet file, profile it and return everything the Setup screen renders | UploadResponse |
+| GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
 | GET | `/use-cases/{use_case_id}/template.csv` | The upload template of one use case as CSV | - |
 | GET | `/use-cases/{use_case_id}/template_README.md` | The upload template's README of one use case as Markdown | - |

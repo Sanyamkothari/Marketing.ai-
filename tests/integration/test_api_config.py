@@ -230,11 +230,20 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
     assert response.status_code == 200
     paths = response.json()["paths"]
     assert set(paths) == {
+        # M1: configuration only
         "/healthz",
         "/industries",
         "/use-cases/{use_case_id}",
         "/use-cases/{use_case_id}/template.csv",
         "/use-cases/{use_case_id}/template_README.md",
+        # M2: uploads and runs
+        "/uploads",
+        "/uploads/{upload_id}/profile",
+        "/runs",
+        "/runs/{run_id}",
+        "/runs/{run_id}/artefacts/{name}",
+        "/runs/{run_id}/scores.csv",
+        "/runs/{run_id}/cancel",
     }
 
 

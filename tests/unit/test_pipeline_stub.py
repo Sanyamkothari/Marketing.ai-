@@ -210,6 +210,7 @@ IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
         "engine.stages.evaluate",  # M3: evaluate, compare_to_baseline
         "engine.stages.ingest",  # M2: read_upload, profile_dataset, fingerprint
         "engine.stages.prepare",  # M3: prepare, replay, split_dataset
+        "engine.stages.validate",  # M2: the pure check registry and its composers
         "engine.stages.actions",  # M4: assign_bands, apply_actions, suppression_rules
         "engine.stages.export",  # M4: write_scores, summarise
         "engine.stages.register",  # M3: build_model_version, feature_schema, drift_baseline

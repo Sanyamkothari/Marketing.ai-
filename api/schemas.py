@@ -7,7 +7,9 @@ the engine document: the merged `UseCaseConfig` and the `AdvancedSettingsSchema`
 
 from __future__ import annotations
 
-from typing import Literal
+from typing import Any, Literal
+
+from pydantic import AwareDatetime, Field
 
 from engine.config import (
     AdvancedSettingsSchema,
@@ -19,6 +21,14 @@ from engine.config import (
     StrictBase,
     UseCaseConfig,
     UseCaseStatus,
+)
+from engine.contracts import (
+    Artefact,
+    DatasetProfile,
+    RunRecord,
+    RunState,
+    RunStatus,
+    ValidationReport,
 )
 
 
@@ -178,3 +188,86 @@ class HealthResponse(StrictBase):
 
     status: Literal["ok"]
     version: str
+
+
+# ---------------------------------------------------------------------------
+# M2: uploads and runs (design §4.0)
+# ---------------------------------------------------------------------------
+class UploadRecord(Artefact):
+    """`upload.json` - what `POST /uploads` stored, so a later run needs no request context.
+
+    Design §5.2 gives this record its own module, `engine/uploads.py`, which is not part of this
+    change; it lives here, beside the models of the two routers that read it, until that module
+    lands. It deliberately stays out of `ARTEFACT_REGISTRY`, which documents *run directory*
+    artefacts only (DEC-061).
+    """
+
+    upload_id: str = Field(description="Id of the upload this record describes.")
+    use_case_id: str = Field(description="Use case the file was uploaded for.")
+    mode: RunMode = Field(description="Whether the file was uploaded to train or to score.")
+    file_name: str = Field(description="The user's original file name.")
+    file_format: Literal["csv", "parquet"] = Field(description="Format the file was read as.")
+    file_size_bytes: int = Field(description="Bytes received and stored.")
+    delimiter: str | None = Field(description="Delimiter sniffed for CSV; null for Parquet.")
+    encoding: str = Field(description="Character encoding the file was decoded with.")
+    row_count: int = Field(description="Number of data rows in the file.")
+    column_count: int = Field(description="Number of columns in the file.")
+    source_key: str = Field(description="Storage key of the bytes as received.")
+    profile_key: str = Field(description="Storage key of the stored `profile.json`.")
+    fingerprint_key: str = Field(description="Storage key of the stored `fingerprint.json`.")
+    fingerprint_hash: str = Field(description="Dataset digest, copied out so a run needs no second read.")
+    created_at: AwareDatetime = Field(description="UTC time the upload was stored.")
+
+
+class UploadResponse(StrictBase):
+    """Body of `POST /uploads`: the id to run against and everything the Setup screen renders."""
+
+    upload_id: str
+    profile: DatasetProfile
+
+
+class RunRequest(StrictBase):
+    """Body of `POST /runs` (plan §8, verbatim). `extra="forbid"`, so a typo is a loud 422."""
+
+    use_case: str
+    mode: RunMode = RunMode.TRAIN
+    upload_id: str
+    primary_key: str
+    target: str | None = None
+    model_choice: str | None = None
+    model_version_id: str | None = None
+    overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class RunCreatedResponse(StrictBase):
+    """Body of the `202` from `POST /runs`: the id the Running screen polls."""
+
+    run_id: str
+
+
+class RunDetailResponse(StrictBase):
+    """Body of `GET /runs/{run_id}`: plan §8's "run.json + status.json"."""
+
+    run: RunRecord
+    status: RunStatus
+
+
+class RunListResponse(StrictBase):
+    """Body of `GET /runs`: the Previous runs card, newest first."""
+
+    runs: tuple[RunRecord, ...]
+
+
+class RunCancelResponse(StrictBase):
+    """Body of `POST /runs/{run_id}/cancel`; `cancelled` is false when the run had already finished."""
+
+    run_id: str
+    cancelled: bool
+    state: RunState
+
+
+class ValidationErrorResponse(StrictBase):
+    """The `409` body of `POST /runs`: M1's error envelope plus the whole report (DEC-058)."""
+
+    detail: ErrorBody
+    validation: ValidationReport
