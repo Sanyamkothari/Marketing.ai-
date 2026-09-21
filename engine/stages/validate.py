@@ -148,8 +148,6 @@ DATETIME_PARSE_RATE: Final[float] = 0.95
 NUMERIC_PARSE_RATE: Final[float] = 0.99
 #: Mean character length above which a string column is TEXT rather than STRING.
 TEXT_MEAN_LENGTH: Final[float] = 50.0
-#: Non-null values sampled by the fallback PII detector, in file order.
-PII_SAMPLE_VALUES: Final[int] = 1000
 #: Distinct-count ceiling below which `value_counts_for` counts a column exactly.
 VALUE_COUNTS_MAX_DISTINCT: Final[int] = 10
 
@@ -387,19 +385,25 @@ _DetectPiiFn: TypeAlias = "Callable[[pd.Series, str, ColumnType], tuple[str, ...
 
 
 def _ingest_helpers() -> tuple[_InferFn, _DetectPiiFn]:
-    """`infer_column_type` and `detect_pii` from ingest, or this module's equivalents.
+    """`infer_column_type` and `detect_pii` for `derive_facts`, both from the ingest stage.
 
-    Type inference is one definition used by both stages, not two, so ingest's own functions win
-    whenever they exist. The fallbacks implement M2_DESIGN sections 1.4 and 1.5 unchanged and exist
-    only so `validate` is testable while `ingest` is still a stub in another worktree.
+    PII detection has exactly **one** definition in the engine - `engine.stages.ingest.detect_pii`
+    (M2_DESIGN section 1.5) - and this module calls it rather than keeping a second copy of the
+    detector table. A rule about people's data must have one behaviour: a second table would be
+    dormant while ingest exists and would resurface the moment it did not, with whatever guards
+    the real one has since grown (the distinct-ratio guard that stops an ordinary low-cardinality
+    category such as `gender` being read as a roster of personal names is exactly such a guard).
+    The import is a function-body import of a module that never imports this one, so the engine's
+    import graph stays the DAG `tests/integration/test_engine_imports.py` pins.
+
+    Type inference keeps a local equivalent (:func:`_infer_column_type`, M2_DESIGN section 1.4)
+    for the case where `ingest` is still a stub in another worktree; ingest's own function wins
+    whenever it exists, so the two can never both be live.
     """
     from engine.stages import ingest
 
     infer = cast("_InferFn | None", getattr(ingest, "infer_column_type", None))
-    detect = cast("_DetectPiiFn | None", getattr(ingest, "detect_pii", None))
-    if infer is None or detect is None:
-        return _infer_column_type, _detect_pii
-    return infer, detect
+    return (_infer_column_type if infer is None else infer), ingest.detect_pii
 
 
 def derive_facts(frame: pd.DataFrame) -> FrameFacts:
@@ -439,7 +443,7 @@ def facts_for(frame: pd.DataFrame, params: CheckParams) -> FrameFacts:
 
 
 # ---------------------------------------------------------------------------
-# Fallback type inference and PII detection (M2_DESIGN sections 1.4 and 1.5)
+# Fallback type inference (M2_DESIGN section 1.4)
 # ---------------------------------------------------------------------------
 def _infer_column_type(series: pd.Series) -> ColumnType:
     """M2_DESIGN section 1.4's branch table, first match wins."""
@@ -482,73 +486,6 @@ def _infer_column_type(series: pd.Series) -> ColumnType:
     if float(text.str.len().mean()) > TEXT_MEAN_LENGTH:
         return ColumnType.TEXT
     return ColumnType.STRING
-
-
-@dataclass(frozen=True, slots=True)
-class _PiiDetector:
-    kind: str
-    value_pattern: re.Pattern[str]
-    name_pattern: re.Pattern[str]
-    min_value_match_rate: float
-    name_assisted_rate: float = 0.20
-
-
-_PII_DETECTORS: Final[tuple[_PiiDetector, ...]] = (
-    _PiiDetector(
-        kind="email",
-        value_pattern=re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
-        name_pattern=re.compile(r"(?i)(^|_)(e?mail|email_address)($|_)"),
-        min_value_match_rate=0.60,
-    ),
-    _PiiDetector(
-        kind="phone",
-        value_pattern=re.compile(r"(?:\+|00)?\d{1,3}[ \-]?(?:\(\d{2,4}\)[ \-]?)?\d{3,5}[ \-]?\d{3,5}"),
-        name_pattern=re.compile(r"(?i)(^|_)(phone|mobile|msisdn|contact_number|telephone)($|_)"),
-        min_value_match_rate=0.80,
-    ),
-    _PiiDetector(
-        kind="pan",
-        value_pattern=re.compile(r"(?i)[A-Z]{5}\d{4}[A-Z]"),
-        name_pattern=re.compile(r"(?i)(^|_)pan(_no|_number)?($|_)"),
-        min_value_match_rate=0.60,
-    ),
-    _PiiDetector(
-        kind="aadhaar",
-        value_pattern=re.compile(r"[2-9]\d{3}[ \-]?\d{4}[ \-]?\d{4}"),
-        name_pattern=re.compile(r"(?i)(^|_)aadhaa?r(_no|_number)?($|_)"),
-        min_value_match_rate=0.80,
-    ),
-    _PiiDetector(
-        kind="name",
-        value_pattern=re.compile(r"[A-Z][a-z]+(?:[ '\-][A-Z][a-z]+){0,3}"),
-        name_pattern=re.compile(
-            r"(?i)(^|_)(name|first_name|last_name|full_name|given_name|surname|"
-            r"customer_name|account_name|contact_name|holder_name)($|_)"
-        ),
-        min_value_match_rate=0.90,
-    ),
-)
-
-_INTEGER_PII_KINDS: Final[frozenset[str]] = frozenset({"phone", "pan", "aadhaar"})
-
-
-def _detect_pii(series: pd.Series, name: str, inferred: ColumnType) -> tuple[str, ...]:
-    """Detector kinds that fired, in detector order. Never returns or logs a value."""
-    if inferred not in _TEXTUAL_TYPES and inferred is not ColumnType.INTEGER:
-        return ()
-    sample = [str(value).strip() for value in series.dropna().head(PII_SAMPLE_VALUES).tolist()]
-    if not sample:
-        return ()
-    kinds: list[str] = []
-    for detector in _PII_DETECTORS:
-        if inferred is ColumnType.INTEGER and detector.kind not in _INTEGER_PII_KINDS:
-            continue
-        hits = sum(1 for value in sample if detector.value_pattern.fullmatch(value))
-        rate = hits / len(sample)
-        named = bool(detector.name_pattern.search(name))
-        if rate >= detector.min_value_match_rate or (named and rate >= detector.name_assisted_rate):
-            kinds.append(detector.kind)
-    return tuple(kinds)
 
 
 # ---------------------------------------------------------------------------

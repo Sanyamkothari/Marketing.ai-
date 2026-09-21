@@ -29,6 +29,7 @@ stages:                                    # ordered; the overview renders them 
     ai_type: hybrid                        # -> "H"
     use_cases:
       - {id: rca, status: available}
+      - {id: telco-churn, status: available}     # plan §10 public-dataset smoke test: Kaggle Telco Customer Churn, config only
   - id: win_back
     name: Win-back
     ai_type: hybrid                        # -> "H"

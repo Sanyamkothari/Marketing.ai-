@@ -1,0 +1,65 @@
+id: telco-churn
+name: Telco Customer Churn
+description: Scores every subscriber on how likely they are to leave, so retention offers reach the accounts most at risk.
+lifecycle_stage: Churn
+entity: subscriber                       # the engine's copy says "one row per subscriber"; config, not code
+
+# Plan section 10's public-dataset smoke test: the Kaggle Telco Customer Churn file
+# (https://www.kaggle.com/datasets/blastchar/telco-customer-churn) mapped to this engine by
+# configuration alone. Its column names, its Yes/No target and its missing date column are the
+# real-world schema; nothing below asks the engine for new behaviour.
+
+target:
+  column: Churn
+  positive_label: "Yes"                # the file labels the outcome with strings, not 0/1 (plan section 4.1)
+  definition: The subscriber left within the month after the snapshot
+  label_source: Kaggle Telco Customer Churn (IBM sample), column Churn
+
+primary_key_hints: [customerID, customer_id, id]
+
+# The file carries no date column, so the split stays random_stratified (the engine default).
+
+actions:
+  score_field: churn_prob
+  bands:
+    - {name: High,   min_score: 0.80, action: "Retention call + targeted offer"}
+    - {name: Medium, min_score: 0.50, action: "Contract upgrade offer"}
+    - {name: Low,    min_score: 0.00, action: "No action"}
+  suppression:
+    opt_out_column: null               # the public file carries no consent or contact history
+    recently_contacted_column: null
+
+output:
+  kpi:
+    label: "Subscribers at risk"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Subscription + billing profile"
+    model: "Telco Churn Model"
+    output: "Churn Risk / Retention Offers"
+
+template:
+  columns:
+    - {name: customerID,       role: primary_key, type: string,  description: "Unique subscriber identifier. Never used as a feature.",                 examples: ["1024-KLMNO","2048-PQRST","3072-UVWXY","4096-ABCDE","5120-FGHIJ"]}
+    - {name: gender,           role: feature,     type: string,  description: "Female or Male",                                                          examples: ["Female","Male","Male","Male","Female"]}
+    - {name: SeniorCitizen,    role: feature,     type: integer, description: "1 if the subscriber is a senior citizen, else 0",                          examples: ["0","0","0","1","0"]}
+    - {name: Partner,          role: feature,     type: string,  description: "Has a partner: Yes or No",                                                 examples: ["Yes","No","No","No","No"]}
+    - {name: Dependents,       role: feature,     type: string,  description: "Has dependents: Yes or No",                                                examples: ["No","No","No","No","No"]}
+    - {name: tenure,           role: feature,     type: integer, description: "Months the subscriber has stayed with the company",                        examples: ["1","34","2","45","8"]}
+    - {name: PhoneService,     role: feature,     type: string,  description: "Has phone service: Yes or No",                                             examples: ["No","Yes","Yes","No","Yes"]}
+    - {name: MultipleLines,    role: feature,     type: string,  description: "Yes, No, or No phone service",                                             examples: ["No phone service","No","No","No phone service","Yes"]}
+    - {name: InternetService,  role: feature,     type: string,  description: "DSL, Fiber optic, or No",                                                  examples: ["DSL","DSL","DSL","DSL","Fiber optic"]}
+    - {name: OnlineSecurity,   role: feature,     type: string,  description: "Yes, No, or No internet service",                                          examples: ["No","Yes","Yes","Yes","No"]}
+    - {name: OnlineBackup,     role: feature,     type: string,  description: "Yes, No, or No internet service",                                          examples: ["Yes","No","Yes","No","No"]}
+    - {name: DeviceProtection, role: feature,     type: string,  description: "Yes, No, or No internet service",                                          examples: ["No","Yes","No","Yes","Yes"]}
+    - {name: TechSupport,      role: feature,     type: string,  description: "Yes, No, or No internet service",                                          examples: ["No","No","No","Yes","No"]}
+    - {name: StreamingTV,      role: feature,     type: string,  description: "Yes, No, or No internet service",                                          examples: ["No","No","No","No","Yes"]}
+    - {name: StreamingMovies,  role: feature,     type: string,  description: "Yes, No, or No internet service",                                          examples: ["No","No","No","No","Yes"]}
+    - {name: Contract,         role: feature,     type: string,  description: "Month-to-month, One year, or Two year",                                    examples: ["Month-to-month","One year","Month-to-month","One year","Month-to-month"]}
+    - {name: PaperlessBilling, role: feature,     type: string,  description: "Billed paperlessly: Yes or No",                                            examples: ["Yes","No","Yes","No","Yes"]}
+    - {name: PaymentMethod,    role: feature,     type: string,  description: "Electronic check, Mailed check, Bank transfer (automatic), or Credit card (automatic)", examples: ["Electronic check","Mailed check","Mailed check","Bank transfer (automatic)","Credit card (automatic)"]}
+    - {name: MonthlyCharges,   role: feature,     type: float,   description: "Amount charged to the subscriber this month",                              examples: ["29.85","56.95","53.85","42.30","99.65"]}
+    - {name: TotalCharges,     role: feature,     type: float,   description: "Amount charged to the subscriber in total; blank for a subscriber whose tenure is 0", examples: ["29.85","1889.50","108.15","1840.75","820.50"]}
+    - {name: Churn,            role: target,      type: string,  description: "Target: Yes if the subscriber left within the month, else No. Leave blank when scoring.", examples: ["No","No","Yes","No","Yes"]}

@@ -3,6 +3,14 @@
 `make_data.py` is test infrastructure that every later M2/M3/M4 test leans on, so it gets the same
 treatment as engine code: determinism, the exact template header, row counts, the planted signal,
 and — for each broken variant — proof that the structural property it claims is really there.
+
+Every sweep here is derived from `configs/`, never listed by hand. Use cases do not all have the
+same shape: one mapped onto an outside file carries only the columns that file has, and the public
+Telco Customer Churn file has a `Yes`/`No` target and no date, consent or contact column at all. So
+a test about a snapshot date runs over :data:`TIME_USE_CASE_IDS` rather than over every use case,
+and a test about the target reads the labels the template declares (`make_data.target_labels`)
+rather than assuming `0`/`1`. `test_a_narrowed_sweep_still_covers_something` keeps a narrowed sweep
+from quietly shrinking to nothing, which would look exactly like a passing test.
 """
 
 from __future__ import annotations
@@ -20,7 +28,14 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.metrics import roc_auc_score
 from sklearn.model_selection import train_test_split
 
-from engine.config import ColumnRole, ColumnType, TemplateColumn, UseCaseConfig, load_use_case
+from engine.config import (
+    ColumnRole,
+    ColumnType,
+    TemplateColumn,
+    UseCaseConfig,
+    list_use_case_ids,
+    load_use_case,
+)
 from tests.fixtures.make_data import (
     CLEAN,
     CONSTANT_COLUMN,
@@ -39,6 +54,8 @@ from tests.fixtures.make_data import (
     main,
     maker_for,
     predictive_use_case_ids,
+    target_labels,
+    variants_for,
     write_csv,
 )
 
@@ -62,6 +79,44 @@ def key_name(config: UseCaseConfig) -> str:
     key = config.template.primary_key
     assert key is not None
     return key.name
+
+
+# ---------------------------------------------------------------------------
+# Shape-derived sweeps (plan §4.1, §10)
+# ---------------------------------------------------------------------------
+def ids_with_roles(*roles: ColumnRole) -> tuple[str, ...]:
+    """The use cases whose template carries a column for *every* one of `roles`.
+
+    A test that breaks, reads or times a column can only run where that column exists, and which
+    templates have it is a fact about `configs/`, not something this file should know.
+    """
+    return tuple(
+        use_case_id
+        for use_case_id in USE_CASE_IDS
+        if all(config_of(use_case_id).template.by_role(role) for role in roles)
+    )
+
+
+#: Use cases whose file carries a snapshot date, so a date can be checked or sorted on.
+TIME_USE_CASE_IDS = ids_with_roles(ColumnRole.TIME)
+#: Use cases whose file carries a consent flag.
+CONSENT_USE_CASE_IDS = ids_with_roles(ColumnRole.CONSENT)
+#: Use cases whose file carries a contact date *and* the snapshot date it is compared against.
+CONTACT_USE_CASE_IDS = ids_with_roles(ColumnRole.CONTACT, ColumnRole.TIME)
+#: Use cases the `unparseable_time` variant means something for, as the generator itself decides.
+UNPARSEABLE_TIME_USE_CASE_IDS = tuple(
+    use_case_id for use_case_id in USE_CASE_IDS if "unparseable_time" in variants_for(use_case_id)
+)
+
+#: Every narrowed sweep in this file, so `test_a_narrowed_sweep_still_covers_something` can prove
+#: none of them selects nothing. A sweep parametrised over an empty tuple runs zero cases and
+#: reports no failure, which is indistinguishable from a test that passed.
+NARROWED_SWEEPS: dict[str, tuple[str, ...]] = {
+    "TIME_USE_CASE_IDS": TIME_USE_CASE_IDS,
+    "CONSENT_USE_CASE_IDS": CONSENT_USE_CASE_IDS,
+    "CONTACT_USE_CASE_IDS": CONTACT_USE_CASE_IDS,
+    "UNPARSEABLE_TIME_USE_CASE_IDS": UNPARSEABLE_TIME_USE_CASE_IDS,
+}
 
 
 def feature_matrix(config: UseCaseConfig, frame: pd.DataFrame) -> np.ndarray:
@@ -148,15 +203,33 @@ def test_an_unregistered_role_type_pair_fails_loudly() -> None:
         maker_for(column)
 
 
-def test_the_six_predictive_use_cases_are_covered() -> None:
-    assert USE_CASE_IDS == (
-        "fault-prediction",
-        "order-fulfillment",
-        "payment-propensity",
-        "rca",
-        "targeted-advertisement",
-        "win-back-campaign",
-    )
+def test_every_predictive_use_case_in_the_config_tree_is_covered() -> None:
+    """The sweep is the config tree's answer, not a list kept here.
+
+    A use case is the generator's business when it is trainable in Phase 1 and its template has a
+    target column. Checking that rule against every use case `configs/` offers - rather than
+    pinning the ids - means a use case added as YAML alone (M6's `telco-churn`) joins every sweep
+    in this file by existing, while a non-predictive one still cannot slip in.
+    """
+    covered = set(USE_CASE_IDS)
+    for use_case_id in list_use_case_ids():
+        config = config_of(use_case_id)
+        predictive = bool(config.trainable_in_phase_1 and config.template.by_role(ColumnRole.TARGET))
+        assert (use_case_id in covered) is predictive, use_case_id
+    assert covered, "the generator sweeps no use case at all"
+    assert list(USE_CASE_IDS) == sorted(covered), "the sweep must be ordered and free of duplicates"
+
+
+@pytest.mark.parametrize(("sweep_name", "use_case_ids"), sorted(NARROWED_SWEEPS.items()))
+def test_a_narrowed_sweep_still_covers_something(sweep_name: str, use_case_ids: tuple[str, ...]) -> None:
+    """A sweep narrowed to the templates that have the shape it tests must not narrow to nothing.
+
+    `pytest.mark.parametrize` over an empty sequence collects no cases and reports nothing, so the
+    day the last template carrying a role loses it, the tests about that role would silently stop
+    running. This is the assertion that turns that into a failure.
+    """
+    assert use_case_ids, f"{sweep_name} selects no use case, so its tests would run on nothing"
+    assert set(use_case_ids) <= set(USE_CASE_IDS), sweep_name
 
 
 # ---------------------------------------------------------------------------
@@ -198,16 +271,23 @@ def test_primary_key_is_unique_and_non_null_in_clean_data(use_case_id: str) -> N
 
 
 @pytest.mark.parametrize("use_case_id", USE_CASE_IDS)
-def test_target_is_binary_zero_one(use_case_id: str) -> None:
+def test_target_carries_exactly_the_two_labels_the_template_declares(use_case_id: str) -> None:
+    """Plan §4.1: a binary target may carry any two values, and the template says which two.
+
+    `0`/`1` for the engine's own templates, `Yes`/`No` for the Telco file - the generator renders
+    the draw through `target_labels`, so this test asks the config the same question rather than
+    assuming the numeric spelling.
+    """
     config = config_of(use_case_id)
+    labels = target_labels(config)
     values = set(generate(GenerationSpec(use_case_id, rows=SMALL))[target_name(config)].dropna())
-    assert values == {0, 1}
+    assert values == {labels.positive, labels.negative}
 
 
 # ---------------------------------------------------------------------------
 # Realistic shape
 # ---------------------------------------------------------------------------
-@pytest.mark.parametrize("use_case_id", USE_CASE_IDS)
+@pytest.mark.parametrize("use_case_id", TIME_USE_CASE_IDS)
 def test_snapshot_dates_are_iso_and_spread_out(use_case_id: str) -> None:
     config = config_of(use_case_id)
     time_column = config.template.by_role(ColumnRole.TIME)[0]
@@ -218,19 +298,24 @@ def test_snapshot_dates_are_iso_and_spread_out(use_case_id: str) -> None:
     assert (parsed.max() - parsed.min()).days >= 300
 
 
-@pytest.mark.parametrize("use_case_id", USE_CASE_IDS)
+@pytest.mark.parametrize("use_case_id", TIME_USE_CASE_IDS)
 def test_a_time_ordered_split_sees_a_different_positive_rate(use_case_id: str) -> None:
-    """The planted time trend is what makes an ordered (time-based) split meaningful."""
+    """The planted time trend is what makes an ordered (time-based) split meaningful.
+
+    Only a use case with a date column can be ordered by time, so the sweep is the templates that
+    carry one; the others are split at random and have no trend to show.
+    """
     config = config_of(use_case_id)
     frame = generate(GenerationSpec(use_case_id))
     ordered = frame.sort_values(config.template.by_role(ColumnRole.TIME)[0].name, kind="stable")
-    target = ordered[target_name(config)].astype(float)
+    target = (ordered[target_name(config)] == target_labels(config).positive).astype(float)
     cut = int(len(ordered) * 0.7)
     assert float(target.iloc[cut:].mean()) > float(target.iloc[:cut].mean())
 
 
-@pytest.mark.parametrize("use_case_id", USE_CASE_IDS)
+@pytest.mark.parametrize("use_case_id", CONSENT_USE_CASE_IDS)
 def test_consent_column_is_a_lowercase_boolean_mostly_true(use_case_id: str) -> None:
+    """A file that carries no consent column is a config answer, not a gap (see `telco-churn`)."""
     config = config_of(use_case_id)
     consent = config.template.by_role(ColumnRole.CONSENT)[0]
     values = generate(GenerationSpec(use_case_id, rows=SMALL))[consent.name]
@@ -238,8 +323,9 @@ def test_consent_column_is_a_lowercase_boolean_mostly_true(use_case_id: str) -> 
     assert 0.5 < float((values == "true").mean()) < 0.95
 
 
-@pytest.mark.parametrize("use_case_id", USE_CASE_IDS)
+@pytest.mark.parametrize("use_case_id", CONTACT_USE_CASE_IDS)
 def test_last_contacted_at_is_sometimes_blank_and_never_after_the_snapshot(use_case_id: str) -> None:
+    """Needs both columns: the contact date, and the snapshot date it must not run ahead of."""
     config = config_of(use_case_id)
     contact = config.template.by_role(ColumnRole.CONTACT)[0]
     snapshot = config.template.by_role(ColumnRole.TIME)[0]
@@ -295,7 +381,8 @@ def test_numeric_features_stay_inside_a_range_the_examples_justify(use_case_id: 
 def test_positive_rate_lands_near_the_default(use_case_id: str) -> None:
     config = config_of(use_case_id)
     frame = generate(GenerationSpec(use_case_id))
-    assert float(frame[target_name(config)].astype(float).mean()) == pytest.approx(0.12, abs=0.02)
+    positives = frame[target_name(config)] == target_labels(config).positive
+    assert float(positives.mean()) == pytest.approx(0.12, abs=0.02)
 
 
 @pytest.mark.parametrize("requested", [0.05, 0.25, 0.45])
@@ -371,7 +458,7 @@ def test_logistic_regression_clears_the_golden_roc_auc_bar() -> None:
 def test_every_use_case_carries_a_learnable_signal(use_case_id: str) -> None:
     config = config_of(use_case_id)
     frame = generate(GenerationSpec(use_case_id))
-    labels = frame[target_name(config)].astype(int).to_numpy()
+    labels = (frame[target_name(config)] == target_labels(config).positive).astype(int).to_numpy()
     matrix = feature_matrix(config, frame)
     train_x, test_x, train_y, test_y = train_test_split(
         matrix, labels, test_size=0.25, random_state=0, stratify=labels
@@ -518,8 +605,13 @@ def test_id_like_column_is_distinct_on_every_row_and_is_not_the_key() -> None:
     assert frame[key_name(config)].is_unique
 
 
-@pytest.mark.parametrize("use_case_id", USE_CASE_IDS)
+@pytest.mark.parametrize("use_case_id", UNPARSEABLE_TIME_USE_CASE_IDS)
 def test_unparseable_time_really_does_not_parse(use_case_id: str) -> None:
+    """The variant breaks the time column, so it only means something where there is one.
+
+    The sweep asks the generator (`variants_for`) which use cases that is, rather than deciding
+    again here - `variant_applies` is the same answer the fixture matrices in `tests/unit` use.
+    """
     config = config_of(use_case_id)
     time_name = config.template.by_role(ColumnRole.TIME)[0].name
     frame = generate(GenerationSpec(use_case_id, rows=SMALL, variant="unparseable_time"))
