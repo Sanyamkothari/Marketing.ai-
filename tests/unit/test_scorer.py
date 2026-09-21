@@ -254,9 +254,7 @@ def test_the_stored_isotonic_knots_reproduce_sklearn_exactly() -> None:
     raw, actual = miscalibrated()
     state, refused = fit_calibrator(raw, actual, Calibration.ISOTONIC)
     assert refused is None
-    reference = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0).fit(
-        raw, actual.astype(float)
-    )
+    reference = IsotonicRegression(out_of_bounds="clip", y_min=0.0, y_max=1.0).fit(raw, actual.astype(float))
     probe = np.linspace(-0.5, 1.5, 401)
     assert np.allclose(apply_calibrator(state, probe), reference.predict(probe), atol=1e-12)
 
@@ -464,16 +462,12 @@ def test_the_baseline_is_fitted_on_train_and_thresholded_on_validation(validatio
     train_frame = make_frame(500, seed=3)
     test_frame = make_frame(500, start=9000, seed=99)
 
-    first = fit_baseline_scorer(
-        recipe, evaluation, train=train_frame, validation=validation, classes=(0, 1)
-    )
+    first = fit_baseline_scorer(recipe, evaluation, train=train_frame, validation=validation, classes=(0, 1))
     # Wreck every test row; the baseline never sees them, so nothing about it may move.
     wrecked = test_frame.copy()
     wrecked["signal"] = 0.999
     wrecked[TARGET] = 1
-    second = fit_baseline_scorer(
-        recipe, evaluation, train=train_frame, validation=validation, classes=(0, 1)
-    )
+    second = fit_baseline_scorer(recipe, evaluation, train=train_frame, validation=validation, classes=(0, 1))
     assert first is not None and second is not None
     assert first.state.threshold == second.state.threshold
     assert first.state.calibrator == second.state.calibrator
@@ -496,7 +490,10 @@ def test_a_baseline_that_cannot_be_fitted_is_a_missing_comparison_not_a_failed_r
     validation, evaluation
 ) -> None:
     empty = validation.iloc[:0]
-    assert fit_baseline_scorer(make_recipe(), evaluation, train=empty, validation=validation, classes=(0, 1)) is None
+    assert (
+        fit_baseline_scorer(make_recipe(), evaluation, train=empty, validation=validation, classes=(0, 1))
+        is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -532,9 +529,7 @@ def test_scorer_json_round_trips_and_reproduces_the_same_scores(tmp_path, valida
     if method is Calibration.PLATT:
         assert reloaded.state.calibrator.coef == scorer.state.calibrator.coef
         assert reloaded.state.calibrator.intercept == scorer.state.calibrator.intercept
-    assert np.allclose(
-        reloaded.score(validation).to_numpy(), scorer.score(validation).to_numpy(), atol=1e-12
-    )
+    assert np.allclose(reloaded.score(validation).to_numpy(), scorer.score(validation).to_numpy(), atol=1e-12)
     assert reloaded.threshold == scorer.threshold
 
 

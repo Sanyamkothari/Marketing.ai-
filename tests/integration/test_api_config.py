@@ -244,6 +244,10 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/artefacts/{name}",
         "/runs/{run_id}/scores.csv",
         "/runs/{run_id}/cancel",
+        # M3: the model registry
+        "/models",
+        "/models/{model_id}/approve",
+        "/models/{model_id}/promote",
     }
 
 

@@ -10,6 +10,9 @@ Contract schema version: 1.
 |---|---|---|---|
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/industries` | Every industry journey with its stages and use-case cards | IndustriesResponse |
+| GET | `/models` | Registered model versions, newest first, with the champion flagged | ModelListResponse |
+| POST | `/models/{model_id}/approve` | Approve a version that is waiting for a human, making it champion | ModelVersionResponse |
+| POST | `/models/{model_id}/promote` | Make a version champion by hand, recording who did it and why | ModelVersionResponse |
 | GET | `/runs` | Run history, newest first | RunListResponse |
 | POST | `/runs` | Validate an upload and, when it passes, start a run | RunCreatedResponse |
 | GET | `/runs/{run_id}` | One run: its record and the status the Running screen polls | RunDetailResponse |

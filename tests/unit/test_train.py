@@ -182,7 +182,7 @@ def test_the_reverse_name_map_matches_the_installed_registry() -> None:
         ag_model_registry.key_to_cls(spec.autogluon_key).ag_name: family
         for family, spec in catalog.model_families.items()
     }
-    assert AG_NAME_TO_FAMILY == expected  # D4: `LR` fits a model called LinearModel
+    assert expected == AG_NAME_TO_FAMILY  # D4: `LR` fits a model called LinearModel
     assert set(AG_NAME_TO_FAMILY.values()) == set(ModelFamily)
 
 
@@ -303,9 +303,7 @@ def test_the_hyperparameter_summary_invents_no_number(hyperparameters, expected)
 
 
 def test_an_ensemble_summarises_itself_by_its_membership() -> None:
-    assert hyperparameters_summary({"max_depth": 3}, ensemble_members=4) == (
-        "weighted ensemble of 4 models"
-    )
+    assert hyperparameters_summary({"max_depth": 3}, ensemble_members=4) == ("weighted ensemble of 4 models")
 
 
 @pytest.mark.parametrize(
@@ -483,9 +481,7 @@ def test_the_best_model_reads_the_winner_autogluon_chose_on_validation() -> None
 def test_an_ensemble_names_its_members_families_in_leaderboard_order() -> None:
     raw = raw_leaderboard()
     raw.loc[len(raw)] = ["WeightedEnsemble_L2", 0.89, 0.88, "roc_auc", 0.4, 5.0, 2, True, 5]
-    leaderboard = build_leaderboard(
-        raw, make_recipe(), run_id=RUN_ID, best_model_name="WeightedEnsemble_L2"
-    )
+    leaderboard = build_leaderboard(raw, make_recipe(), run_id=RUN_ID, best_model_name="WeightedEnsemble_L2")
     predictor = FakePredictor(
         info={
             "hyperparameters": {},
@@ -548,7 +544,7 @@ def test_the_detail_line_reports_what_actually_happened() -> None:
 # ---------------------------------------------------------------------------
 # THE TEST SPLIT IS FINAL-DECISION-ONLY
 # ---------------------------------------------------------------------------
-class FitInterrupted(Exception):
+class FitInterruptedError(Exception):
     """Raised by the monkeypatched `fit` once it has recorded what it was given."""
 
 
@@ -561,11 +557,11 @@ def test_the_test_split_is_never_handed_to_a_fit(tmp_path, monkeypatch) -> None:
         seen["train"] = train_data
         seen["tuning"] = tuning_data
         seen["kwargs"] = kwargs
-        raise FitInterrupted
+        raise FitInterruptedError
 
     monkeypatch.setattr(TabularPredictor, "fit", fake_fit)
     parts = make_parts()
-    with pytest.raises(FitInterrupted):
+    with pytest.raises(FitInterruptedError):
         train(
             make_recipe(ensemble=False),
             parts,
@@ -656,9 +652,7 @@ def run_training(tmp_path, *, rows: int, ensemble: bool, run_id: str) -> Fitted:
     frame = generate(GenerationSpec(USE_CASE, rows=rows, variant="clean"))
     rows_frame, plan = prepare_rows(frame, config, primary_key=PRIMARY_KEY, target=TARGET)
     parts, _ = split_dataset(rows_frame, config, run_id=run_id, target=TARGET)
-    prepared, report = fit_transforms(
-        rows_frame, config, plan, run_id=run_id, fit_index=parts["train"].index
-    )
+    prepared, report = fit_transforms(rows_frame, config, plan, run_id=run_id, fit_index=parts["train"].index)
     split_parts = {name: prepared.loc[part.index] for name, part in parts.items()}
     recipe = recipe_from_config(
         config,
@@ -681,9 +675,7 @@ def run_training(tmp_path, *, rows: int, ensemble: bool, run_id: str) -> Fitted:
 
 @pytest.fixture(scope="module")
 def fitted(tmp_path_factory) -> Fitted:
-    return run_training(
-        tmp_path_factory.mktemp("train-flow"), rows=10_000, ensemble=False, run_id=RUN_ID
-    )
+    return run_training(tmp_path_factory.mktemp("train-flow"), rows=10_000, ensemble=False, run_id=RUN_ID)
 
 
 @pytest.mark.slow
@@ -692,9 +684,7 @@ def test_a_real_fit_produces_a_leaderboard_and_a_best_model(fitted) -> None:
     assert isinstance(leaderboard, Leaderboard)
     assert leaderboard.entries, "the search finished without a single model"
     assert leaderboard.models_trained == len(leaderboard.entries)
-    assert [entry.rank for entry in leaderboard.entries] == list(
-        range(1, len(leaderboard.entries) + 1)
-    )
+    assert [entry.rank for entry in leaderboard.entries] == list(range(1, len(leaderboard.entries) + 1))
     scores = [entry.validation_score for entry in leaderboard.entries]
     assert scores == sorted(scores, reverse=True)
     for entry in leaderboard.entries:
@@ -764,15 +754,13 @@ def f1_at(scores: np.ndarray, actual: np.ndarray, threshold: float) -> float:
 
 @pytest.mark.slow
 def test_the_golden_checks_hold_on_the_synthetic_data(fitted) -> None:
-    """Plan section 10: "If this fails, the pipeline is broken, not the data.\""""
+    """Plan section 10: "If this fails, the pipeline is broken, not the data.\" """
     test_frame = fitted.parts["test"]
     model_report, confusion, deciles, _ = evaluate(
         fitted.result.model, test_frame, fitted.evaluation, run_id=RUN_ID
     )
     assert fitted.result.baseline is not None, "the baseline is what the model is judged against"
-    baseline_report, _, _, _ = evaluate(
-        fitted.result.baseline, test_frame, fitted.evaluation, run_id=RUN_ID
-    )
+    baseline_report, _, _, _ = evaluate(fitted.result.baseline, test_frame, fitted.evaluation, run_id=RUN_ID)
     comparison = compare_to_baseline(model_report, baseline_report)
 
     broken = "If this fails, the pipeline is broken, not the data."
@@ -788,7 +776,8 @@ def test_the_golden_checks_hold_on_the_synthetic_data(fitted) -> None:
     assert deciles.bins[0].lift is not None and deciles.bins[-1].lift is not None
     assert deciles.bins[0].lift > deciles.bins[-1].lift
 
-    print(  # noqa: T201 - the measured golden numbers belong in the test log
+    # The measured golden numbers belong in the test log, so a regression is diagnosable.
+    print(
         f"golden: roc_auc={roc_auc_row.model_value} baseline={roc_auc_row.baseline_value} "
         f"models_trained={fitted.result.leaderboard.models_trained} "
         f"best={fitted.result.best.display_name}"
@@ -801,9 +790,9 @@ def test_a_real_fit_never_saw_a_test_row(fitted) -> None:
     predictor = fitted.result.model.predictor
     info = predictor.model_info(fitted.result.best.model_name)
     assert info["num_samples"] <= len(fitted.parts["train"])
-    assert info["num_samples"] + len(fitted.parts["test"]) <= len(
-        fitted.parts["train"]
-    ) + len(fitted.parts["test"])
+    assert info["num_samples"] + len(fitted.parts["test"]) <= len(fitted.parts["train"]) + len(
+        fitted.parts["test"]
+    )
     # AutoGluon's own validation score exists, so a tuning set was used rather than a re-split.
     assert fitted.result.best.validation_score > 0.0
 

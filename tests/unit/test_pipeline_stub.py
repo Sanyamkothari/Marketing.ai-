@@ -166,10 +166,10 @@ def test_cancel_delegates_to_the_job_runner(pipeline: Pipeline) -> None:
     assert pipeline.cancel("r_never_submitted") is False
 
 
-def test_the_two_flows_are_not_implemented_yet(pipeline: Pipeline) -> None:
+def test_run_score_is_not_implemented_yet(pipeline: Pipeline) -> None:
+    # run_train has landed (M3) and is covered by tests/unit/test_run_train.py; run_score is the
+    # last M4 piece. This assertion flips the day it lands, which is the point of keeping it.
     context: StageContext = None  # type: ignore[assignment]
-    with pytest.raises(NotImplementedError, match="M3"):
-        pipeline.run_train(context)
     with pytest.raises(NotImplementedError, match="M4"):
         pipeline.run_score(context)
 
@@ -215,7 +215,8 @@ IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
         "engine.stages.export",  # M4: write_scores, summarise
         "engine.stages.register",  # M3: build_model_version, feature_schema, drift_baseline
         "engine.stages.train",  # M3: train, fit_scorer, autogluon_fit_kwargs
-        "engine.stages.score",  # M4: compute_drift (predict is still an M4 stub)
+        "engine.stages.score",  # M4: predict, compute_drift
+        "engine.stages.explain",  # M3: global importance and per-row reasons
     }
 )
 STUBBED_STAGE_MODULES: frozenset[str] = frozenset(STAGE_MODULE_MAP.values()) - IMPLEMENTED_STAGE_MODULES

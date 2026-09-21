@@ -25,6 +25,7 @@ from engine.config import (
 from engine.contracts import (
     Artefact,
     DatasetProfile,
+    ModelVersion,
     RunRecord,
     RunState,
     RunStatus,
@@ -271,3 +272,59 @@ class ValidationErrorResponse(StrictBase):
 
     detail: ErrorBody
     validation: ValidationReport
+
+
+# ---------------------------------------------------------------------------
+# M3: the model registry (plan §8)
+# ---------------------------------------------------------------------------
+class ModelVersionResponse(StrictBase):
+    """One registry row with the champion flag plan §8 asks the listing to carry.
+
+    `is_champion` is not a second source of truth: it restates `version.status is champion`, which the
+    registry keeps to at most one live row per use case by demoting the incumbent inside the same
+    transaction that crowns the successor. It is spelled out so the Model page never has to know the
+    status vocabulary to draw a badge.
+    """
+
+    version: ModelVersion
+    is_champion: bool
+
+
+class ModelListResponse(StrictBase):
+    """Body of `GET /models`: the versions the registry holds, newest first, the champion flagged."""
+
+    versions: tuple[ModelVersionResponse, ...]
+
+
+class ModelApproveRequest(StrictBase):
+    """Body of `POST /models/{model_id}/approve`: who signed off on a version that was waiting.
+
+    Phase 1 has no authentication (plan §1.3), so `approved_by` is whatever the caller typed. It is
+    **not** verified and must not be read as proof that that person approved anything; it is a label
+    the registry stores so the row is not anonymous. The alternative - the API inventing a name - would
+    put a fabricated identity in the audit trail, which is worse than an unverified one.
+    """
+
+    approved_by: str = Field(
+        min_length=1,
+        description="Caller-supplied name of the approver. Unverified: Phase 1 has no authentication.",
+    )
+
+
+class ModelPromoteRequest(StrictBase):
+    """Body of `POST /models/{model_id}/promote`: the manual override, with who and why.
+
+    `reason` is required, and deliberately so: `promote` bypasses the champion rule, and an override
+    nobody can account for later is worse than no override at all. `promoted_by` carries the same
+    caveat as `ModelApproveRequest.approved_by` - caller-supplied, unverified, stored so the row is not
+    anonymous.
+    """
+
+    promoted_by: str = Field(
+        min_length=1,
+        description="Caller-supplied name of the person overriding. Unverified: Phase 1 has no authentication.",
+    )
+    reason: str = Field(
+        min_length=1,
+        description="Why this version is being made champion by hand; stored as the version's promotion note.",
+    )
