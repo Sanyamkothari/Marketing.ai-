@@ -24,3 +24,6 @@ build/
 
 # Claude Code agent worktrees (transient, never committed)
 .claude/worktrees/
+
+# generated synthetic test data (make_data.py defaults to a temp dir; this covers --out-dir .)
+*_synthetic_*.csv

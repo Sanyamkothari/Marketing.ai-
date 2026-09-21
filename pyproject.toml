@@ -72,7 +72,10 @@ target-version = ["py311"]
 [tool.mypy]
 python_version = "3.11"
 strict = true                           # engine, api AND scripts (plan §13.6 minimum is engine/; DEC-013)
-files = ["engine", "api", "scripts"]    # tests are not type-checked; no per-module `strict` anywhere (it is not a per-module option)
+files = ["engine", "api", "scripts", "tests/fixtures/make_data.py"]  # source dirs, plus the synthetic
+                                        # generator: test infrastructure every later milestone builds on, so it is held to the
+                                        # same bar (DEC-041). Other tests are not type-checked; no per-module `strict` anywhere
+                                        # (it is not a per-module option).
 warn_unreachable = true
 warn_unused_configs = true
 show_error_codes = true

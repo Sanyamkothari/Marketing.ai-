@@ -119,7 +119,7 @@ def test_mypy_is_globally_strict_over_engine_api_and_scripts(pyproject: dict[str
     """DEC-013: one flag, no per-module strictness games."""
     mypy = pyproject["tool"]["mypy"]
     assert mypy["strict"] is True
-    assert mypy["files"] == ["engine", "api", "scripts"]
+    assert mypy["files"] == ["engine", "api", "scripts", "tests/fixtures/make_data.py"]
     assert mypy["python_version"] == "3.11"
 
 
