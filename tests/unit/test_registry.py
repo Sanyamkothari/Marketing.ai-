@@ -9,7 +9,7 @@ from pathlib import Path
 import pytest
 
 from engine.config import Metric
-from engine.contracts import ModelStatus, ModelVersion
+from engine.contracts import NO_CHAMPION_AT_DECISION, ModelStatus, ModelVersion
 from engine.registry import (
     LocalModelRegistry,
     ModelRegistry,
@@ -31,6 +31,7 @@ def make_version(
     test_score: float = 0.80,
     metric: Metric = Metric.ROC_AUC,
     minutes: int = 0,
+    measured_against_champion_id: str | None = None,
 ) -> ModelVersion:
     """A complete `ModelVersion` with no fabricated numbers beyond the ones a test compares."""
     return ModelVersion(
@@ -49,6 +50,7 @@ def make_version(
         run_config_key=f"models/{model_id}/run_config.json",
         predictor_key=f"models/{model_id}/model",
         artefact_keys={"run.json": f"runs/r_{model_id}/run.json"},
+        measured_against_champion_id=measured_against_champion_id,
         engine_version="0.1.0",
         autogluon_version="1.6.3",
     )
@@ -134,6 +136,116 @@ def test_approve_promotes_and_archives_the_previous_champion(registry: LocalMode
     assert registry.get_champion(USE_CASE) == second
 
 
+def test_approving_a_version_whose_champion_has_been_replaced_is_refused(
+    registry: LocalModelRegistry,
+) -> None:
+    """DEC-047, the whole sequence: A and B both beat C, B is approved, A must not be approved over B."""
+    registry.register(
+        make_version(
+            "m_c",
+            1,
+            status=ModelStatus.PENDING_APPROVAL,
+            measured_against_champion_id=NO_CHAMPION_AT_DECISION,
+        )
+    )
+    registry.approve("m_c", by="ops@telco")
+    registry.register(
+        make_version("m_a", 2, status=ModelStatus.PENDING_APPROVAL, measured_against_champion_id="m_c")
+    )
+    registry.register(
+        make_version("m_b", 3, status=ModelStatus.PENDING_APPROVAL, measured_against_champion_id="m_c")
+    )
+
+    approved = registry.approve("m_b", by="ops@telco")
+    assert approved.status is ModelStatus.CHAMPION
+    assert approved.previous_champion_id == "m_c"
+
+    with pytest.raises(RegistryError) as excinfo:
+        registry.approve("m_a", by="ops@telco")
+    assert excinfo.value.code == "CHAMPION_CHANGED"
+    assert excinfo.value.model_id == "m_a"
+    message = excinfo.value.message
+    assert "m_c" in message and "m_b" in message
+    assert "/models/m_a/promote" in message
+
+    assert registry.get("m_a").status is ModelStatus.PENDING_APPROVAL
+    assert registry.get("m_a").approved_by is None
+    champion = registry.get_champion(USE_CASE)
+    assert champion is not None
+    assert champion.model_id == "m_b"
+
+
+def test_approval_goes_through_while_the_compared_champion_still_holds(
+    registry: LocalModelRegistry,
+) -> None:
+    registry.register(make_version("m_c", 1, status=ModelStatus.CHAMPION))
+    registry.register(
+        make_version("m_a", 2, status=ModelStatus.PENDING_APPROVAL, measured_against_champion_id="m_c")
+    )
+    approved = registry.approve("m_a", by="ops@telco")
+    assert approved.status is ModelStatus.CHAMPION
+    assert approved.previous_champion_id == "m_c"
+    assert approved.measured_against_champion_id == "m_c"
+    assert registry.get("m_c").status is ModelStatus.ARCHIVED
+
+
+def test_a_version_decided_against_no_champion_is_approvable_only_while_there_is_none(
+    registry: LocalModelRegistry,
+) -> None:
+    """A first model waiting for approval is just as stale once somebody else has been crowned."""
+    registry.register(
+        make_version(
+            "m_a",
+            1,
+            status=ModelStatus.PENDING_APPROVAL,
+            measured_against_champion_id=NO_CHAMPION_AT_DECISION,
+        )
+    )
+    registry.register(
+        make_version(
+            "m_b",
+            2,
+            status=ModelStatus.PENDING_APPROVAL,
+            measured_against_champion_id=NO_CHAMPION_AT_DECISION,
+        )
+    )
+    assert registry.approve("m_b", by="ops@telco").status is ModelStatus.CHAMPION
+
+    with pytest.raises(RegistryError) as excinfo:
+        registry.approve("m_a", by="ops@telco")
+    assert excinfo.value.code == "CHAMPION_CHANGED"
+    assert "no champion at all" in excinfo.value.message
+    assert registry.get("m_a").status is ModelStatus.PENDING_APPROVAL
+
+
+def test_a_version_registered_before_the_compared_champion_was_recorded_is_still_approvable(
+    registry: LocalModelRegistry,
+) -> None:
+    """A null records nothing about the comparison, so approval behaves as it did before DEC-047."""
+    registry.register(make_version("m_c", 1, status=ModelStatus.CHAMPION))
+    registry.register(make_version("m_a", 2, status=ModelStatus.PENDING_APPROVAL))
+    assert registry.get("m_a").measured_against_champion_id is None
+    approved = registry.approve("m_a", by="ops@telco")
+    assert approved.status is ModelStatus.CHAMPION
+    assert approved.previous_champion_id == "m_c"
+
+
+def test_promote_still_overrides_the_rule_after_the_champion_changed(
+    registry: LocalModelRegistry,
+) -> None:
+    """`CHAMPION_CHANGED` refuses the rubber stamp, not the informed manual override of plan §8."""
+    registry.register(make_version("m_c", 1, status=ModelStatus.CHAMPION))
+    registry.register(
+        make_version("m_a", 2, status=ModelStatus.PENDING_APPROVAL, measured_against_champion_id="m_gone")
+    )
+    with pytest.raises(RegistryError) as excinfo:
+        registry.approve("m_a", by="ops@telco")
+    assert excinfo.value.code == "CHAMPION_CHANGED"
+    promoted = registry.promote("m_a", by="ops@telco", note="Compared both by hand on the newer data.")
+    assert promoted.status is ModelStatus.CHAMPION
+    assert promoted.promotion_note == "Compared both by hand on the newer data."
+
+
 def test_approving_a_candidate_is_an_invalid_transition(registry: LocalModelRegistry) -> None:
     registry.register(make_version("m_1", 1, status=ModelStatus.CANDIDATE))
     with pytest.raises(RegistryError) as excinfo:
@@ -169,6 +281,14 @@ def test_the_row_projection_round_trips(registry: LocalModelRegistry) -> None:
     version = make_version("m_1", 1)
     assert ModelVersionRow.from_contract(version).to_contract() == version
     assert ModelVersionRow.__tablename__ == "model_version"
+
+
+@pytest.mark.parametrize("measured_against", [None, NO_CHAMPION_AT_DECISION, "m_champ"])
+def test_the_row_projection_carries_the_compared_champion(measured_against: str | None) -> None:
+    version = make_version(
+        "m_1", 1, status=ModelStatus.PENDING_APPROVAL, measured_against_champion_id=measured_against
+    )
+    assert ModelVersionRow.from_contract(version).to_contract() == version
 
 
 def test_the_use_case_and_version_pair_is_unique(registry: LocalModelRegistry) -> None:

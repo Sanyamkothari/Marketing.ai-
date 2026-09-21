@@ -20,7 +20,13 @@ from engine.config import (
     RunMode,
     resolve_config,
 )
-from engine.contracts import BestModel, FeatureSchema, ModelStatus, ModelVersion
+from engine.contracts import (
+    NO_CHAMPION_AT_DECISION,
+    BestModel,
+    FeatureSchema,
+    ModelStatus,
+    ModelVersion,
+)
 from engine.jobs import CancelToken
 from engine.pipeline import StageContext
 from engine.registry import LocalModelRegistry, RegistryError, should_promote
@@ -319,6 +325,68 @@ def test_a_champion_that_could_not_be_re_scored_blocks_the_promotion(
     assert challenger.previous_champion_id is None
     assert "promotion=skipped" in caplog.text
     assert registry.get_champion(USE_CASE) == champion  # the incumbent keeps the crown
+
+
+def test_a_pending_version_records_the_champion_its_decision_was_measured_against(
+    tmp_path: Path, resolved: ResolvedConfig
+) -> None:
+    """DEC-047: the pending row names the champion it beat, so approval can check it is still the one."""
+    assert resolved.config.governance.approval_required is True
+    registry = LocalModelRegistry(tmp_path / "registry.db")
+    first = register_version(make_context(tmp_path, resolved, registry=registry), make_best(test_score=0.80))
+    assert first.status is ModelStatus.PENDING_APPROVAL
+    assert first.measured_against_champion_id == NO_CHAMPION_AT_DECISION
+
+    champion = registry.approve(first.model_id, by="ops@telco")
+    ctx = make_context(tmp_path, resolved, run_id="r_20260922_0000beef", registry=registry)
+    challenger = challenge(ctx, make_best(test_score=0.84, run_id=ctx.run_id), rescored(champion, 0.80))
+    assert challenger.status is ModelStatus.PENDING_APPROVAL
+    assert challenger.measured_against_champion_id == champion.model_id
+    assert challenger.improvement_pct == 5.0
+
+
+def test_a_version_the_rule_did_not_promote_names_no_compared_champion(
+    tmp_path: Path, resolved: ResolvedConfig
+) -> None:
+    """Nothing was decided, so there is no comparison to record and no percentage to explain."""
+    registry = LocalModelRegistry(tmp_path / "registry.db")
+    first = register_version(make_context(tmp_path, resolved, registry=registry), make_best(test_score=0.80))
+    champion = registry.approve(first.model_id, by="ops@telco")
+    ctx = make_context(tmp_path, resolved, run_id="r_20260922_0000beef", registry=registry)
+    loser = challenge(ctx, make_best(test_score=0.70, run_id=ctx.run_id), rescored(champion, 0.80))
+    assert loser.status is ModelStatus.CANDIDATE
+    assert loser.measured_against_champion_id is None
+    assert loser.improvement_pct is None
+
+
+def test_a_pending_version_cannot_be_approved_over_a_champion_it_never_met(
+    tmp_path: Path, resolved: ResolvedConfig
+) -> None:
+    """The stale-approval sequence of DEC-047, from the register stage through to the registry."""
+    registry = LocalModelRegistry(tmp_path / "registry.db")
+    first = register_version(make_context(tmp_path, resolved, registry=registry), make_best(test_score=0.80))
+    incumbent = registry.approve(first.model_id, by="ops@telco")
+
+    waiting = register_version(
+        make_context(tmp_path, resolved, run_id="r_20260922_0000beef", registry=registry),
+        make_best(test_score=0.84, run_id="r_20260922_0000beef"),
+        rescored(incumbent, 0.80),
+    )
+    rival = register_version(
+        make_context(tmp_path, resolved, run_id="r_20260923_0000beef", registry=registry),
+        make_best(test_score=0.88, run_id="r_20260923_0000beef"),
+        rescored(incumbent, 0.80),
+    )
+    assert waiting.status is ModelStatus.PENDING_APPROVAL
+    assert registry.approve(rival.model_id, by="ops@telco").status is ModelStatus.CHAMPION
+
+    with pytest.raises(RegistryError) as excinfo:
+        registry.approve(waiting.model_id, by="ops@telco")
+    assert excinfo.value.code == "CHAMPION_CHANGED"
+    assert registry.get(waiting.model_id).status is ModelStatus.PENDING_APPROVAL
+    champion = registry.get_champion(USE_CASE)
+    assert champion is not None
+    assert champion.model_id == rival.model_id
 
 
 def test_a_champion_score_is_either_a_score_or_a_reason() -> None:

@@ -36,6 +36,7 @@ from engine.config import (
 __all__ = [
     "ARTEFACT_REGISTRY",
     "MODEL_DIRECTORY",
+    "NO_CHAMPION_AT_DECISION",
     "SCORE_ARTEFACTS",
     "TABULAR_SCHEMAS",
     "TRAIN_ARTEFACTS",
@@ -961,6 +962,16 @@ def scores_csv_columns(config: UseCaseConfig, primary_key: str) -> tuple[str, ..
 # ---------------------------------------------------------------------------
 # 5.12 Registry record and schema.json
 # ---------------------------------------------------------------------------
+NO_CHAMPION_AT_DECISION: Final[str] = "__none__"
+"""`ModelVersion.measured_against_champion_id` when the use case had no champion to compare with.
+
+A model id is never this string (ids are `m_<use case>_<n>`), so the sentinel keeps "measured
+against no champion" distinguishable from "no champion recorded", which a plain null would not:
+the first is a decision that must be re-taken once a champion exists, the second is a version
+registered before the field did (DEC-047).
+"""
+
+
 class ModelVersion(Artefact):
     """The registry record of one trained model (SQLite, not a run artefact)."""
 
@@ -993,7 +1004,24 @@ class ModelVersion(Artefact):
         default=None, description="Version this one replaced as champion."
     )
     improvement_pct: float | None = Field(
-        default=None, description="Percentage improvement over the previous champion."
+        default=None,
+        description=(
+            "Percentage improvement over the champion named by measured_against_champion_id while "
+            "the version waits for approval, and over previous_champion_id once it is champion; "
+            "never read it without one of those two, which say which champion it is a percentage of."
+        ),
+    )
+    measured_against_champion_id: str | None = Field(
+        default=None,
+        description=(
+            "Champion the promotion decision and improvement_pct of a version waiting for approval "
+            f"were measured against: that champion's model id, {NO_CHAMPION_AT_DECISION!r} when the "
+            "use case had no champion at the time, and null for a version registered before this was "
+            "recorded. Approval is refused (CHAMPION_CHANGED) when the use case's champion is no "
+            "longer the one named here, so no version is ever crowned on a comparison it never had "
+            "with the model it would replace; a null is approved without that check, because such a "
+            "row does not say what its decision was measured against."
+        ),
     )
     engine_version: str = Field(description="Engine version that trained the model.")
     autogluon_version: str = Field(description="AutoGluon version that trained the model.")

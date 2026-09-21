@@ -1120,7 +1120,8 @@ The registry record of one trained model (SQLite, not a run artefact).
 | `promoted_by` | string \| null | no | Who promoted the version. |
 | `promotion_note` | string \| null | no | Why the version was promoted. |
 | `previous_champion_id` | string \| null | no | Version this one replaced as champion. |
-| `improvement_pct` | number \| null | no | Percentage improvement over the previous champion. |
+| `improvement_pct` | number \| null | no | Percentage improvement over the champion named by measured_against_champion_id while the version waits for approval, and over previous_champion_id once it is champion; never read it without one of those two, which say which champion it is a percentage of. |
+| `measured_against_champion_id` | string \| null | no | Champion the promotion decision and improvement_pct of a version waiting for approval were measured against: that champion's model id, '__none__' when the use case had no champion at the time, and null for a version registered before this was recorded. Approval is refused (CHAMPION_CHANGED) when the use case's champion is no longer the one named here, so no version is ever crowned on a comparison it never had with the model it would replace; a null is approved without that check, because such a row does not say what its decision was measured against. |
 | `engine_version` | string | yes | Engine version that trained the model. |
 | `autogluon_version` | string | yes | AutoGluon version that trained the model. |
 

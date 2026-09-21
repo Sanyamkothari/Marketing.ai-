@@ -47,6 +47,7 @@ from typing import TYPE_CHECKING, Final
 from engine.config import ColumnType
 from engine.contracts import (
     MODEL_DIRECTORY,
+    NO_CHAMPION_AT_DECISION,
     CategoryCount,
     DriftBaseline,
     FeatureBaseline,
@@ -189,7 +190,13 @@ def build_model_version(
       guard applies, here too the version stays a `candidate` instead of failing the run;
     - **the rule promotes and `governance.approval_required` is set**: the version is
       `pending_approval` and `POST /models/{id}/approve` crowns it; the registry records the
-      champion it replaces at that moment, so `previous_champion_id` is still empty here;
+      champion it replaces at that moment, so `previous_champion_id` is still empty here. What is
+      recorded here is `measured_against_champion_id`: the champion this decision, and the
+      `improvement_pct` beside it, were measured against - `NO_CHAMPION_AT_DECISION` when there was
+      none. Approval is where the wait makes the decision go stale: another version can be crowned
+      while this one waits, and the registry refuses to approve against a champion that has changed
+      since (`CHAMPION_CHANGED`, DEC-047). It is also what tells a reader of a pending row which
+      champion its percentage is a percentage of;
     - **the rule promotes and approval is off**: the version is the `champion` straight away, and
       records the champion it replaced and by how much it won.
 
@@ -248,7 +255,13 @@ def build_model_version(
         return candidate
     if config.governance.approval_required:
         return candidate.model_copy(
-            update={"status": ModelStatus.PENDING_APPROVAL, "improvement_pct": improvement_pct}
+            update={
+                "status": ModelStatus.PENDING_APPROVAL,
+                "improvement_pct": improvement_pct,
+                "measured_against_champion_id": (
+                    NO_CHAMPION_AT_DECISION if champion is None else champion.model_id
+                ),
+            }
         )
     return candidate.model_copy(
         update={

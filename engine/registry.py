@@ -21,7 +21,7 @@ from sqlmodel import Session, SQLModel, col, create_engine, select
 # `Metric` is `engine.config`'s enum, re-exported by `engine.contracts`; imported from its home
 # module because mypy --strict does not follow implicit re-exports.
 from engine.config import Metric
-from engine.contracts import ModelStatus, ModelVersion
+from engine.contracts import NO_CHAMPION_AT_DECISION, ModelStatus, ModelVersion
 from engine.utils.time import utc_now
 
 DATA_DIR_ENV_VAR: Final[str] = "MARKETING_AI_DATA_DIR"
@@ -34,7 +34,9 @@ _PROMOTABLE: Final[frozenset[ModelStatus]] = frozenset({ModelStatus.CANDIDATE, M
 class RegistryError(Exception):
     """A registry operation failed.
 
-    `code` is one of MODEL_NOT_FOUND | DUPLICATE_MODEL_ID | INVALID_TRANSITION | METRIC_MISMATCH.
+    `code` is one of MODEL_NOT_FOUND | DUPLICATE_MODEL_ID | INVALID_TRANSITION | METRIC_MISMATCH |
+    CHAMPION_CHANGED. The last one is `approve` refusing to crown a version whose promotion decision
+    was measured against a champion that no longer holds the title (DEC-047).
     """
 
     def __init__(self, code: str, message: str, *, model_id: str | None = None) -> None:
@@ -157,6 +159,7 @@ class ModelVersionRow(SQLModel, table=True):
     promotion_note: str | None = None
     previous_champion_id: str | None = None
     improvement_pct: float | None = None
+    measured_against_champion_id: str | None = None
     engine_version: str
     autogluon_version: str
 
@@ -187,6 +190,7 @@ class ModelVersionRow(SQLModel, table=True):
             promotion_note=self.promotion_note,
             previous_champion_id=self.previous_champion_id,
             improvement_pct=self.improvement_pct,
+            measured_against_champion_id=self.measured_against_champion_id,
             engine_version=self.engine_version,
             autogluon_version=self.autogluon_version,
         )
@@ -218,6 +222,7 @@ class ModelVersionRow(SQLModel, table=True):
             promotion_note=v.promotion_note,
             previous_champion_id=v.previous_champion_id,
             improvement_pct=v.improvement_pct,
+            measured_against_champion_id=v.measured_against_champion_id,
             engine_version=v.engine_version,
             autogluon_version=v.autogluon_version,
         )
@@ -228,6 +233,10 @@ class LocalModelRegistry:
 
     The engine is created with `check_same_thread=False` so `ThreadJobRunner` workers can write, and
     `create_all` is idempotent, so pointing two instances at the same file is safe.
+
+    `create_all` creates missing tables, never missing columns, and Phase 1 has no migration tool:
+    a `registry.db` written before a column was added to `ModelVersionRow` has to be recreated. That
+    is a local development file, not client data (plan §1.3), so the cost is one deleted file.
     """
 
     def __init__(self, db_path: Path) -> None:
@@ -298,7 +307,22 @@ class LocalModelRegistry:
             return 1 if row is None else row.version + 1
 
     def approve(self, model_id: str, *, by: str) -> ModelVersion:
-        """Promote a `pending_approval` version to champion (plan §8); other states are rejected."""
+        """Promote a `pending_approval` version to champion (plan §8); other states are rejected.
+
+        Approval signs off a decision the champion rule already took, so it may only be signed off
+        against the champion that decision was taken against (DEC-047). A version records that
+        champion in `measured_against_champion_id` when the register stage marks it
+        `pending_approval`; if the use case has a different champion by the time a human gets to
+        it - another version was approved or promoted meanwhile, or the incumbent was archived -
+        this version's win was never measured against the model it would now replace, and
+        approving it would decide the championship on a stale comparison. That is what plan §6.3's
+        "beats the champion" forbids, so approval is refused with `CHAMPION_CHANGED` and the
+        message says what to do instead. `promote` remains the deliberate, recorded override.
+
+        A version whose `measured_against_champion_id` is null was registered before the field
+        existed and says nothing about what it was compared with; it is approved without the check,
+        exactly as it would have been then.
+        """
         now = utc_now()
         with self._lock, Session(self._engine) as session:
             row = self._require(session, model_id)
@@ -308,6 +332,7 @@ class LocalModelRegistry:
                     f"Model {model_id} is {row.status}; only a model waiting for approval can be approved.",
                     model_id=model_id,
                 )
+            self._require_unchanged_champion(session, row)
             row.approved_by = by
             row.approved_at = now
             self._make_champion(session, row, by=by, note=None, when=now)
@@ -348,6 +373,22 @@ class LocalModelRegistry:
             raise RegistryError("MODEL_NOT_FOUND", f"No model version {model_id!r}.", model_id=model_id)
         return row
 
+    def _require_unchanged_champion(self, session: Session, row: ModelVersionRow) -> None:
+        """Raise `CHAMPION_CHANGED` when `row`'s decision was measured against another champion."""
+        measured_against = row.measured_against_champion_id
+        if measured_against is None:
+            return
+        expected = None if measured_against == NO_CHAMPION_AT_DECISION else measured_against
+        current = self._champion_row(session, row.use_case_id)
+        current_id = None if current is None else current.model_id
+        if current_id == expected:
+            return
+        raise RegistryError(
+            "CHAMPION_CHANGED",
+            _stale_approval_message(row, expected=expected, current_id=current_id),
+            model_id=row.model_id,
+        )
+
     def _champion_row(self, session: Session, use_case_id: str) -> ModelVersionRow | None:
         statement = (
             select(ModelVersionRow)
@@ -378,6 +419,20 @@ class LocalModelRegistry:
         if note is not None:
             row.promotion_note = note
         session.add(row)
+
+
+def _stale_approval_message(row: ModelVersionRow, *, expected: str | None, current_id: str | None) -> str:
+    """Why this approval was refused and what the user can do instead, in business language."""
+    measured = "no champion at all" if expected is None else f"champion {expected}"
+    standing = "there is no champion now" if current_id is None else f"{current_id} is the champion now"
+    return (
+        f"Model {row.model_id} was put forward for approval against {measured}, but {standing}. "
+        f"Approving it would make it the champion of {row.use_case_id} on the strength of a "
+        "comparison it never had with the model it would replace. Train a new version, so it is "
+        "measured against the champion that actually holds the title, and approve that one; or, if "
+        f"you have looked at both models yourself, POST /models/{row.model_id}/promote overrides "
+        "the champion rule and records who decided and why."
+    )
 
 
 def default_registry() -> LocalModelRegistry:

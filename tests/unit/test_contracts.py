@@ -13,6 +13,7 @@ import engine.contracts as contracts
 from engine.config import list_use_case_ids, load_use_case, resolve_config
 from engine.contracts import (
     ARTEFACT_REGISTRY,
+    NO_CHAMPION_AT_DECISION,
     TABULAR_SCHEMAS,
     VALIDATION_CODES,
     Artefact,
@@ -524,3 +525,52 @@ def test_scores_csv_columns_follow_the_configured_header_rule() -> None:
         "suppressed_reason",
         "control_group",
     )
+
+
+# ---------------------------------------------------------------------------
+# ModelVersion: the registry record, round-tripped through its own JSON
+# ---------------------------------------------------------------------------
+def _model_version(**overrides: Any) -> ModelVersion:
+    """A registry record with only the fields a `ModelVersion` cannot do without."""
+    fields: dict[str, Any] = {
+        "model_id": "m_a-use-case_2",
+        "use_case_id": "a-use-case",
+        "version": 2,
+        "run_id": "r_20260301_0000beef",
+        "created_at": DT,
+        "status": contracts.ModelStatus.PENDING_APPROVAL,
+        "metric": "roc_auc",
+        "metric_label": "ROC-AUC",
+        "test_score": 0.84,
+        "model_display_name": "XGBoost",
+        "schema_key": "runs/r_20260301_0000beef/schema.json",
+        "run_config_key": "runs/r_20260301_0000beef/run_config.json",
+        "predictor_key": "runs/r_20260301_0000beef/model",
+        "engine_version": "0.1.0",
+        "autogluon_version": "1.6.3",
+    }
+    return ModelVersion(**{**fields, **overrides})
+
+
+@pytest.mark.parametrize("measured_against", [None, NO_CHAMPION_AT_DECISION, "m_a-use-case_1"])
+def test_model_version_round_trips_the_compared_champion(measured_against: str | None) -> None:
+    version = _model_version(measured_against_champion_id=measured_against, improvement_pct=5.0)
+    payload = version.model_dump_json(indent=2, by_alias=True)
+    assert ModelVersion.model_validate_json(payload) == version
+
+
+def test_a_model_version_names_no_compared_champion_unless_one_was_recorded() -> None:
+    """The honest default: null, which is also every row written before the field existed."""
+    assert _model_version().measured_against_champion_id is None
+    assert NO_CHAMPION_AT_DECISION == "__none__"
+
+
+def test_the_compared_champion_field_explains_what_a_null_and_the_sentinel_mean() -> None:
+    description = ModelVersion.model_fields["measured_against_champion_id"].description or ""
+    assert NO_CHAMPION_AT_DECISION in description
+    assert "null" in description
+    assert "improvement_pct" in description  # finding 15: the percentage names its champion
+    assert "CHAMPION_CHANGED" in description
+    percentage = ModelVersion.model_fields["improvement_pct"].description or ""
+    assert "measured_against_champion_id" in percentage
+    assert "previous_champion_id" in percentage
