@@ -1185,7 +1185,12 @@ SCORE_ARTEFACTS: Final[frozenset[str]] = frozenset(
         "scores.parquet",
     }
 )
-"""Everything a completed scoring run writes."""
+"""Everything a completed scoring run writes.
+
+`drift.json` is the one conditional member: drift is a reported signal, not a gate, and a run with
+no stored baseline, no rows or no comparable features writes no verdict at all rather than an empty
+one (DEC-051). Every other name here is written by every scoring run that reaches `done`.
+"""
 
 
 def _known_artefacts() -> str:

@@ -6,7 +6,7 @@ import importlib
 import inspect
 from pathlib import Path
 from types import ModuleType
-from typing import Any
+from typing import Any, cast
 
 import pytest
 
@@ -102,6 +102,11 @@ def call_with_placeholders(function: Any) -> None:
     function(*args, **kwargs)
 
 
+def _sentinel_context() -> StageContext:
+    """A context the flow driver must pass through untouched, distinguishable from any other."""
+    return cast(StageContext, object())
+
+
 @pytest.fixture
 def pipeline(tmp_path: Path) -> Pipeline:
     return Pipeline(
@@ -166,12 +171,45 @@ def test_cancel_delegates_to_the_job_runner(pipeline: Pipeline) -> None:
     assert pipeline.cancel("r_never_submitted") is False
 
 
-def test_run_score_is_not_implemented_yet(pipeline: Pipeline) -> None:
-    # run_train has landed (M3) and is covered by tests/unit/test_run_train.py; run_score is the
-    # last M4 piece. This assertion flips the day it lands, which is the point of keeping it.
-    context: StageContext = None  # type: ignore[assignment]
-    with pytest.raises(NotImplementedError, match="M4"):
-        pipeline.run_score(context)
+def test_both_flows_are_wired_to_their_own_driver(
+    pipeline: Pipeline, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # The flipped tripwire. Until M3 this read "neither flow is implemented"; once run_train landed
+    # it read "run_score is still a stub, and this flips the day it lands". Both have now landed, so
+    # what belongs here is the successor claim, and it is the stronger one: each entry point hands
+    # its OWN context to its OWN driver and returns exactly what that driver produced. A stub fails
+    # it, and so does the copy-paste slip of pointing run_score at _TrainFlow. The flows' behaviour
+    # is tests/unit/test_run_train.py, tests/unit/test_run_score.py and the integration suites.
+    import engine.pipeline as pipeline_module
+
+    seen: dict[str, tuple[Pipeline, object]] = {}
+    produced: dict[str, object] = {"train": object(), "score": object()}
+
+    def driver(name: str) -> type:
+        class _Recorder:
+            def __init__(self, owner: Pipeline, ctx: object) -> None:
+                seen[name] = (owner, ctx)
+
+            def execute(self) -> object:
+                return produced[name]
+
+        return _Recorder
+
+    monkeypatch.setattr(pipeline_module, "_TrainFlow", driver("train"))
+    monkeypatch.setattr(pipeline_module, "_ScoreFlow", driver("score"))
+
+    train_ctx: StageContext = _sentinel_context()
+    score_ctx: StageContext = _sentinel_context()
+    assert pipeline.run_train(train_ctx) is produced["train"]
+    assert pipeline.run_score(score_ctx) is produced["score"]
+    assert seen == {"train": (pipeline, train_ctx), "score": (pipeline, score_ctx)}
+
+
+def test_neither_flow_entry_point_is_a_stub_any_more() -> None:
+    # The other half of the same tripwire: no NotImplementedError survives in either entry point,
+    # so the dispatch test above cannot be satisfied by a driver that raises one itself.
+    for method in (Pipeline.run_train, Pipeline.run_score):
+        assert "NotImplementedError" not in inspect.getsource(method)
 
 
 def test_stage_context_is_frozen() -> None:

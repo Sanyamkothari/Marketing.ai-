@@ -6,8 +6,12 @@ inline list renders from one response. A run that passes gets its directory and 
 documents written before the job is submitted, so the very first `GET /runs/{id}` the Running screen
 issues - which can land microseconds after the `202` - always finds something true to render.
 
-The M2 job body runs the two stages this milestone owns for real and then fails at `prepare` with a
-named error (DEC-060): no stage on the Running screen ever shows a number nobody measured.
+A **scoring** run is now the real thing: the request resolves the model version through the
+engine's one resolver, validates the upload against *that* version's saved schema, pins the
+resolved id on `run.json`, and submits `Pipeline.run_score`, which owns both documents from then
+on. A **training** run still runs the M2 job body, which executes the two stages that milestone
+owns for real and then fails at `prepare` with a named error (DEC-060): no stage on the Running
+screen ever shows a number nobody measured.
 
 Design §5.3 gives run creation its own module, `engine/runs.py`, which is not part of this change;
 `create_run`, `update_run`, `cancel_run` and `build_m2_job` live here until it lands, and move
@@ -46,12 +50,13 @@ from api.schemas import (
     ValidationErrorResponse,
 )
 from engine import __version__
-from engine.config import Catalog, ResolvedConfig, RunMode, get_catalog, resolve_config
+from engine.config import Catalog, ResolvedConfig, RunMode, UseCaseConfig, get_catalog, resolve_config
 from engine.contracts import (
     ARTEFACT_REGISTRY,
     TABULAR_SCHEMAS,
     DatasetProfile,
     FeatureSchema,
+    ModelVersion,
     RunError,
     RunRecord,
     RunState,
@@ -60,10 +65,17 @@ from engine.contracts import (
     StageStatus,
     ValidationReport,
 )
-from engine.jobs import CancelToken, JobCancelledError, JobFn
-from engine.pipeline import STATUS_FILENAME, Pipeline
-from engine.registry import ModelRegistry, RegistryError
+from engine.jobs import CancelToken, JobCancelledError, JobFn, JobRunner
+from engine.pipeline import STATUS_FILENAME, Pipeline, StageContext
+from engine.registry import ModelRegistry
 from engine.stages import ingest, validate
+from engine.stages.score import (
+    CHAMPION_NOT_FOUND,
+    MODEL_NOT_FOUND,
+    MODEL_USE_CASE_MISMATCH,
+    ScoreError,
+    resolve_model_version,
+)
 from engine.storage import Storage, StorageError, run_key, upload_key
 from engine.utils.ids import new_run_id
 from engine.utils.logging import get_logger
@@ -91,6 +103,24 @@ CREATED_ARTEFACTS: Final[tuple[str, ...]] = (
 
 STAGE_NOT_IMPLEMENTED: Final[str] = "STAGE_NOT_IMPLEMENTED"
 PREPARE_NOT_IMPLEMENTED_MESSAGE: Final[str] = "Preparing features is not built yet."
+
+SCORE_ERROR_STATUS: Final[dict[str, int]] = {
+    CHAMPION_NOT_FOUND: 409,
+    MODEL_NOT_FOUND: 404,
+    MODEL_USE_CASE_MISMATCH: 409,
+}
+"""`ScoreError.code` -> HTTP status, for the codes `resolve_model_version` can raise on this route.
+
+The registry table in `api.routes.models` works the same way, and for the same reason: a code this
+router has not been taught is answered as a server fault rather than a guessed 4xx. `409` is the
+status this endpoint already used for "your file and this use case do not fit together yet", and a
+`model_version_id` naming a version that does not exist is a `404` like every other id in a
+request body. The codes themselves are `engine.stages.score.SCORE_ERRORS`, which is where their
+messages and suggestions live (DEC-052).
+"""
+
+UNMAPPED_STATUS: Final[int] = 500
+"""A code this router has not been taught is a server fault, not the caller's; reported as one."""
 
 ARTEFACT_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-z_]+\.(json|csv|parquet)$")
 """Shape a URL segment must have before it is even looked up in the registry (design §4.6)."""
@@ -148,6 +178,7 @@ def create_run_endpoint(
     config = resolved.config
     catalog = get_catalog(root)
 
+    version: ModelVersion | None = None
     if body.mode is RunMode.TRAIN:
         report = validate.validate_for_training(
             read_frame(storage, upload, profile_row_cap(config)),
@@ -159,10 +190,13 @@ def create_run_endpoint(
             row_count=profile.row_count,
         )
     else:
-        schema = score_schema(storage, registry, use_case=body.use_case, version_id=body.model_version_id)
+        # Resolved once, here, and pinned on the run record below: the file is checked against this
+        # version's columns, so this version is the one that must score it, whatever is promoted
+        # while the job waits in the queue.
+        version = score_version(registry, config=config, version_id=body.model_version_id)
         report = validate.validate_against_schema(
             read_frame(storage, upload, profile_row_cap(config)),
-            schema,
+            storage.read_model(version.schema_key, FeatureSchema),
             primary_key=body.primary_key,
             config=config,
             acknowledged=config.validation.acknowledged,
@@ -186,16 +220,20 @@ def create_run_endpoint(
         primary_key=body.primary_key,
         target=body.target,
         model_choice=body.model_choice or catalog.automl_choice.value,
-        model_version_id=body.model_version_id,
+        model_version_id=body.model_version_id if version is None else version.model_id,
     )
     jobs.submit(
         record.run_id,
-        build_m2_job(
-            storage,
-            run_id=record.run_id,
-            profile=profile,
-            report=report.model_copy(update={"run_id": record.run_id}),
-            mode=body.mode,
+        (
+            build_m2_job(
+                storage,
+                run_id=record.run_id,
+                profile=profile,
+                report=report.model_copy(update={"run_id": record.run_id}),
+                mode=body.mode,
+            )
+            if version is None
+            else build_score_job(storage, registry, jobs, resolved=resolved, record=record, upload=upload)
         ),
     )
     response.headers["Location"] = f"/runs/{record.run_id}"
@@ -424,6 +462,50 @@ def cancel_run(storage: Storage, run_id: str, *, now: datetime | None = None) ->
     return update_run(storage, run_id, state=RunState.CANCELLED, finished_at=moment)
 
 
+def build_score_job(
+    storage: Storage,
+    registry: ModelRegistry,
+    jobs: JobRunner,
+    *,
+    resolved: ResolvedConfig,
+    record: RunRecord,
+    upload: UploadRecord,
+) -> JobFn:
+    """The score flow of plan §6.2, off the request thread: `Pipeline.run_score` and nothing else.
+
+    The pipeline owns both documents from here on. It rewrites `status.json` at every stage
+    transition, records a failure or a cancellation *on the stage it happened at* with the detail
+    line that stage had earned, and writes `run_manifest.json` whatever the outcome - so this body
+    adds nothing to either path. In particular a `JobCancelledError` is left to propagate: the
+    runner reads it as "cancelled", and calling `cancel_run` here as the M2 body does would
+    overwrite the stage the pipeline stopped at with a blanket cancellation.
+
+    The model version is the one the request resolved and pinned on `run.json`
+    (`record.model_version_id`), never "the champion" again. The upload was validated against that
+    version's schema, so that version is the one that must score it.
+    """
+    pipeline = Pipeline(storage, registry, jobs)
+
+    def job(cancel: CancelToken) -> None:
+        pipeline.run_score(
+            StageContext(
+                run_id=record.run_id,
+                mode=RunMode.SCORE,
+                config=resolved.config,
+                resolved=resolved,
+                storage=storage,
+                registry=registry,
+                cancel=cancel,
+                primary_key=record.primary_key,
+                target=record.target,
+                upload_key=upload.source_key,
+                model_version_id=record.model_version_id,
+            )
+        )
+
+    return job
+
+
 def build_m2_job(
     storage: Storage,
     *,
@@ -481,26 +563,34 @@ def read_frame(storage: Storage, upload: UploadRecord, row_cap: int) -> Any:
         raise ingest_http(exc.code, exc.message) from exc
 
 
-def score_schema(
-    storage: Storage, registry: ModelRegistry, *, use_case: str, version_id: str | None
-) -> FeatureSchema:
-    """The feature schema of the named version, or of the champion; `409 NO_CHAMPION_MODEL` if neither.
+def score_version(registry: ModelRegistry, *, config: UseCaseConfig, version_id: str | None) -> ModelVersion:
+    """The version this run would score with, resolved by the engine's rule, as an HTTP refusal.
 
-    In M2 no train flow has landed, so there is never a champion and this always refuses (DEC-059).
+    `engine.stages.score.resolve_model_version` is that rule and the only one (DEC-054): this
+    endpoint asks the predict stage which version a scoring run would use, instead of re-deriving
+    the answer from the registry with a laxer rule of its own. The old local version accepted a
+    `model_version_id` belonging to *another* use case - it only checked that the registry knew the
+    id - so the run was accepted, the file was validated against a foreign model's schema, and the
+    run then failed at the predict stage with `MODEL_USE_CASE_MISMATCH`. Now the refusal happens
+    before a run directory exists, in the stage's own words.
+
+    The codes are the stage's too, which retires this module's `NO_CHAMPION_MODEL`: there is one
+    code for "this use case has no champion", `CHAMPION_NOT_FOUND`, and it is the one the engine
+    raises when the same condition stops a run mid-flight (DEC-054).
+
+    The endpoint keeps the *version*, not only its schema, because the answer is pinned on
+    `run.json` and handed to the job: the file is checked against these columns, so this model is
+    the one that scores it even if the champion changes before the job starts.
     """
-    version = None
-    if version_id is None:
-        version = registry.get_champion(use_case)
-    else:
-        try:
-            version = registry.get(version_id)
-        except RegistryError:
-            version = None
-    if version is None:
-        raise http_error(
-            409, "NO_CHAMPION_MODEL", "No approved model exists for this use case yet. Train one first."
-        )
-    return storage.read_model(version.schema_key, FeatureSchema)
+    try:
+        return resolve_model_version(config, registry=registry, model_version_id=version_id)
+    except ScoreError as exc:
+        raise score_http(exc) from exc
+
+
+def score_http(exc: ScoreError) -> HTTPException:
+    """A `ScoreError` in M1's envelope. An unmapped code is a 500: this router does not guess."""
+    return http_error(SCORE_ERROR_STATUS.get(exc.code, UNMAPPED_STATUS), exc.code, exc.message)
 
 
 def validation_conflict(report: ValidationReport) -> JSONResponse:

@@ -26,6 +26,13 @@ documented:
    flushed in a `finally`, so a failed or cancelled run still records the recipe, the fingerprint,
    the seed, whatever was measured and what the attempt cost. A failure inside that write is
    swallowed: a bookkeeping file must never turn a finished run into a failed one.
+5. **The score flow replays; it never re-derives.** Preparation is not a decision a scoring run
+   gets to make: the transforms are the ones the *training* run fitted and recorded, and
+   `score.predict` reads that record and replays it **once**, as it loads the model that requires
+   it. So the score flow's `prepare` stage reports and does nothing else - replaying a second time
+   would clip to the training percentiles twice and fill with the training medians twice - and
+   `prepare.prepare_rows`, which re-derives the column drops from the frame in front of it, is
+   never called on a scoring batch at all.
 
 `pandas` and the AutoGluon stack stay out of this module's import graph: the stage modules import
 them inside their own function bodies, and this module only passes frames between stages.
@@ -45,6 +52,7 @@ from engine.contracts import (
     MODEL_DIRECTORY,
     CostEstimate,
     DatasetFingerprint,
+    FeatureSchema,
     ModelStatus,
     RunError,
     RunManifest,
@@ -63,7 +71,18 @@ from engine.errors import (
 )
 from engine.jobs import CancelToken, JobCancelledError, JobRunner
 from engine.registry import ModelRegistry
-from engine.stages import evaluate, explain, ingest, prepare, register, train, validate
+from engine.stages import (
+    actions,
+    evaluate,
+    explain,
+    export,
+    ingest,
+    prepare,
+    register,
+    score,
+    train,
+    validate,
+)
 from engine.stages.scorer import AutoGluonScorer, BaselineScorer, load_scorer
 from engine.storage import Storage, StorageError, run_key
 from engine.utils.ids import seed_from
@@ -85,6 +104,7 @@ if TYPE_CHECKING:
         FairnessReport,
         FeatureImportance,
         ModelVersion,
+        ScoringSummary,
         SplitReport,
     )
     from engine.stages.register import ChampionScore
@@ -108,6 +128,11 @@ DECILE_LIFT_FILENAME: Final[str] = "decile_lift.json"
 BASELINE_FILENAME: Final[str] = "baseline.json"
 FAIRNESS_FILENAME: Final[str] = "fairness.json"
 FEATURE_IMPORTANCE_FILENAME: Final[str] = "feature_importance.json"
+DRIFT_FILENAME: Final[str] = "drift.json"
+SCORING_SUMMARY_FILENAME: Final[str] = "scoring_summary.json"
+
+REASONS_OFF_DETAIL: Final[str] = "per-row reasons turned off"
+"""The score flow's explain row when `evaluation.shap` is off; the train flow says the same thing."""
 
 COST_BASIS: Final[str] = "Local ThreadJobRunner; wall-clock seconds of the run's stages. Nothing was billed."
 """Why `CostEstimate.estimated_usd` is null rather than zero: nothing was billed (plan §13.3)."""
@@ -992,6 +1017,420 @@ def _register_detail(config: UseCaseConfig, status: ModelStatus) -> str:
     return f"{reasons}{_PROMOTION_WORDS[status]} · drift baseline stored"
 
 
+# ---------------------------------------------------------------------------
+# The score flow
+# ---------------------------------------------------------------------------
+class _ScoreFlow:
+    """One execution of the score flow: the stage bodies, plus the bookkeeping around them.
+
+    The bookkeeping - the status document, the run record, the manifest, and the cancel-and-fail
+    handling that brackets every stage - is `_TrainFlow`'s, spelled out again here rather than
+    hoisted into a shared base so that the train flow this milestone did not touch keeps executing
+    exactly the code it shipped with. The two drivers are worth folding together once the file has
+    one owner again.
+
+    What differs is the work, and all of it follows from one fact: **a scoring run fits nothing.**
+
+    * Every choice was made at train time. The transforms come from the training run's
+      `prepare.json`, the threshold and the calibrator come from `scorer.json`, and the bands come
+      from the configuration. This flow replays them and measures what it produced.
+    * The model is resolved once, in the validate stage, because that is the stage that needs its
+      schema - and every later stage is handed that same version by id, so a file can never be
+      checked against one model's columns and then scored by another.
+    * The model is *loaded* once, by `predict`, and the explain stage reuses the scorer predict
+      returned rather than opening the stored predictor a second time.
+    * The rows are replayed once, by `predict`. See `_prepare` for why that leaves this flow's
+      prepare stage with nothing to do but report.
+    """
+
+    def __init__(self, pipeline: Pipeline, ctx: StageContext) -> None:
+        self._ctx = ctx
+        self._storage = ctx.storage
+        self._seed = seed_from(ctx.run_id)
+        self._started = perf_counter()
+        self._status = _StatusWriter(ctx.storage, pipeline.initial_status(ctx.run_id, ctx.mode))
+        self._run = _RunWriter(ctx)
+        self._manifest = _ManifestBuilder(run_id=ctx.run_id, seed=self._seed, started=self._started)
+        self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
+        for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
+            self._artefacts.setdefault(name, run_key(ctx.run_id, name))
+        config_key = run_key(ctx.run_id, register.RUN_CONFIG_FILENAME)
+        if ctx.storage.exists(config_key):
+            self._artefacts.setdefault(register.RUN_CONFIG_FILENAME, config_key)
+        # what each stage hands the next one
+        self._frame: pd.DataFrame | None = None
+        self._profile: DatasetProfile | None = None
+        self._version: ModelVersion | None = None
+        self._result: score.PredictResult | None = None
+        self._scored: pd.DataFrame | None = None
+        self._summary: ScoringSummary | None = None
+
+    # -- the driver ---------------------------------------------------------
+    def execute(self) -> RunRecord:
+        """Run every stage in order, then write the finished run record."""
+        try:
+            self._run.update(state=RunState.RUNNING, started_at=utc_now())
+            for key, body in self._bodies():
+                self._run_stage(key, body)
+            return self._complete()
+        finally:
+            self._flush_manifest()
+
+    def _bodies(self) -> tuple[tuple[StageKey, Callable[[], _StageOutcome]], ...]:
+        """The seven stages of plan §6.2, in order, each with the body that runs it."""
+        return (
+            (StageKey.INGEST, self._ingest),
+            (StageKey.VALIDATE_AGAINST_SCHEMA, self._validate_against_schema),
+            (StageKey.PREPARE, self._prepare),
+            (StageKey.PREDICT, self._predict),
+            (StageKey.EXPLAIN_ROWS, self._explain_rows),
+            (StageKey.ACTIONS, self._actions),
+            (StageKey.EXPORT, self._export),
+        )
+
+    def _run_stage(self, key: StageKey, body: Callable[[], _StageOutcome]) -> None:
+        """One stage: cancel, run, cancel, record. Both checkpoints bracket the stage body."""
+        started = perf_counter()
+        try:
+            self._ctx.cancel.raise_if_cancelled()
+            self._status.start(key)
+            outcome = body()
+            self._ctx.cancel.raise_if_cancelled()
+        except JobCancelledError:
+            self._stop(key, RunState.CANCELLED, perf_counter() - started, error=None)
+            raise
+        except Exception as exc:
+            error = run_error(exc, stage=key, title=STAGE_TITLES[key])
+            if error.code == STAGE_FAILED:
+                _LOGGER.exception("stage=%s failed unexpectedly in run %s", key.value, self._ctx.run_id)
+            else:
+                _LOGGER.warning("stage=%s failed: %s %s", key.value, error.code, error.message)
+            self._stop(key, RunState.FAILED, perf_counter() - started, error=error)
+            raise
+        seconds = perf_counter() - started
+        self._status.finish(key, detail=outcome.detail, seconds=seconds)
+        self._manifest.record(key, seconds)
+        log_stage(_LOGGER, key.value, rows=outcome.rows, seconds=seconds)
+
+    def _stop(self, key: StageKey, state: RunState, seconds: float, *, error: RunError | None) -> None:
+        """Write both documents before the exception leaves the pipeline, so the UI's next poll sees why."""
+        self._manifest.record(key, seconds)
+        self._status.stop(key, state, seconds=seconds, error=error)
+        self._run.update(state=state, finished_at=utc_now(), error=error, artefacts=dict(self._artefacts))
+
+    def _complete(self) -> RunRecord:
+        """The finished run record: which model scored the file, and every artefact key.
+
+        `headline_score` stays null. A scoring file carries no target, so nothing about model
+        quality was measured here; the number the Results bar shows for a scoring run comes from
+        `scoring_summary.json`, where every value was counted rather than estimated (plan §13.3).
+        """
+        version = _require(self._version, "the model version")
+        summary = _require(self._summary, "the scoring summary")
+        _LOGGER.info(
+            "score: run=%s rows_scored=%d model=%s (v%d) status=%s",
+            self._ctx.run_id,
+            summary.rows_scored,
+            version.model_id,
+            version.version,
+            version.status.value,
+        )
+        return self._run.update(
+            state=RunState.DONE,
+            finished_at=utc_now(),
+            row_count=_require(self._profile, "the dataset profile").row_count,
+            model_version_id=version.model_id,
+            best_model=version.model_display_name,
+            champion=version.status is ModelStatus.CHAMPION,
+            beat_previous_champion=False,
+            artefacts=dict(self._artefacts),
+            error=None,
+        )
+
+    def _flush_manifest(self) -> None:
+        """Write `run_manifest.json` last, for every outcome; a failure here never fails the run."""
+        try:
+            manifest = self._manifest.build(_file_fingerprint(self._storage, self._ctx.upload_key))
+            self._storage.write_model(run_key(self._ctx.run_id, MANIFEST_FILENAME), manifest)
+            _LOGGER.info(
+                "manifest: run=%s recipe=none fingerprint=%s duration=%.1fs",
+                manifest.run_id,
+                manifest.dataset_fingerprint.hash[:12],
+                manifest.duration_s,
+            )
+        except Exception:
+            _LOGGER.exception("the run manifest could not be written for run %s", self._ctx.run_id)
+
+    def _write(self, filename: str, model: BaseModel) -> str:
+        """Write one artefact into the run directory and remember its key for `run.json`."""
+        key = run_key(self._ctx.run_id, filename)
+        self._storage.write_model(key, model)
+        self._artefacts[filename] = key
+        return key
+
+    # -- the stages ---------------------------------------------------------
+    def _ingest(self) -> _StageOutcome:
+        """Read the upload - every row of it - and profile it.
+
+        EVERY ROW, NOT A SAMPLE. `profile_row_cap` is a *profiling* budget: in train mode, reading
+        a prefix of a very large file costs a little accuracy in `profile.json` and nothing else,
+        but in score mode the rows above the cap are customers who would never appear in
+        `scores.csv` at all. The first pass counts the file exactly even when it keeps only the
+        capped prefix, so a truncated read is repeated at that exact count rather than scored as if
+        the rest of the file did not exist.
+        """
+        ctx = self._ctx
+        read = ingest.read_upload(self._storage, ctx.upload_key, row_cap=ingest.profile_row_cap(ctx.config))
+        if read.truncated:
+            _LOGGER.info(
+                "ingest: the profiling cap kept %d of %d rows; re-reading the scoring file in full",
+                len(read.frame.index),
+                read.row_count,
+            )
+            read = ingest.read_upload(self._storage, ctx.upload_key, row_cap=read.row_count)
+        record = self._run.record
+        profile = ingest.profile_dataset(
+            read.frame,
+            ctx.config,
+            upload_id=record.upload_id,
+            file_name=record.file_name,
+            file_format=read.file_format,
+            file_size_bytes=self._storage.size_bytes(ctx.upload_key),
+            delimiter=read.delimiter,
+            encoding=read.encoding,
+            row_count=read.row_count,
+            fingerprint=read.fingerprint,
+        )
+        self._write(PROFILE_FILENAME, profile)
+        self._frame = read.frame
+        self._profile = profile
+        self._manifest.fingerprint = profile.fingerprint
+        return _StageOutcome(ingest.ingest_detail(profile), len(read.frame.index))
+
+    def _validate_against_schema(self) -> _StageOutcome:
+        """Resolve the model version, then check the file against the schema that model was fitted with.
+
+        THE VERSION IS RESOLVED ONCE, HERE, and every later stage is handed that same version by
+        id. This is the stage that first needs it - a schema check needs a schema, and the schema
+        belongs to a model - and resolving again later would let a champion promoted mid-run leave
+        the file checked against one model's columns and scored by another's.
+
+        The rule is `score.resolve_model_version`, the one `POST /runs` calls before it accepts a
+        scoring run (DEC-054), so a version this stage refuses is refused in the same words on the
+        request. `SCHEMA_MISMATCH` is reported in business language by the validate stage, naming
+        the columns; predict's own feature check is the backstop behind it.
+        """
+        ctx = self._ctx
+        profile = _require(self._profile, "the dataset profile")
+        version = score.resolve_model_version(
+            ctx.config, registry=ctx.registry, model_version_id=ctx.model_version_id
+        )
+        self._version = version
+        schema = self._storage.read_model(version.schema_key, FeatureSchema)
+        report = validate.validate_against_schema(
+            _require(self._frame, "the uploaded rows"),
+            schema,
+            primary_key=ctx.primary_key,
+            config=ctx.config,
+            acknowledged=ctx.config.validation.acknowledged,
+            upload_id=profile.upload_id,
+            run_id=ctx.run_id,
+            row_count=profile.row_count,
+        )
+        self._write(VALIDATION_FILENAME, report)
+        if not report.passed:
+            # `POST /runs` refuses with 409 before a run is created; this is the defensive twin.
+            raise engine_error(RUN_BLOCKED_BY_VALIDATION, stage=StageKey.VALIDATE_AGAINST_SCHEMA)
+        _LOGGER.info(
+            "validate_against_schema: %d columns checked against model %s (v%d)",
+            len(schema.columns),
+            version.model_id,
+            version.version,
+        )
+        return _StageOutcome(validate.validation_detail(report), profile.row_count)
+
+    def _prepare(self) -> _StageOutcome:
+        """Score mode's prepare stage: it reports, and it does nothing else.
+
+        NO SECOND REPLAY. The transforms a scoring file needs are the ones the training run fitted
+        and recorded, and `score.predict` reads that record and replays it once, as it loads the
+        model that requires it. Replaying here as well would clip to the training percentiles twice
+        and fill with the training medians twice - idempotent today only by luck, and silently
+        wrong for every customer the first time a transform stops being.
+
+        `prepare.prepare_rows` is not an option either, and not only because of the double replay:
+        it *re-derives* which columns to drop from the frame in front of it, so a small scoring
+        batch would lose genuine features - the ones that happen to be constant or mostly null in
+        this batch - and `predict` would then refuse the very frame this stage had just prepared.
+
+        So the row the Running screen shows for this stage says which model will prepare the rows
+        and where its transforms come from. `prepare.json` is written one stage later, by the
+        stage that actually replays it, from what `predict` returns.
+        """
+        return _StageOutcome(_replay_detail(_require(self._version, "the model version")))
+
+    def _predict(self) -> _StageOutcome:
+        """Replay the recorded transforms, score the rows, and measure drift against the baseline.
+
+        `predict` returns its artefacts instead of writing them, so this is where they enter the
+        run directory. `prepare.json` is the *training* run's report unchanged (DEC-049): it is the
+        truth about how these rows were prepared, and it is what the Data page of a scoring run
+        renders from. `drift.json` is written only when drift was measured - no baseline, no rows
+        or no features means "not measured", and an artefact is not invented to say so (DEC-051).
+
+        The version is passed by id rather than resolved again: see `_validate_against_schema`.
+        """
+        ctx = self._ctx
+        version = _require(self._version, "the model version")
+        result = score.predict(
+            _require(self._frame, "the uploaded rows"),
+            ctx.config,
+            run_id=ctx.run_id,
+            storage=self._storage,
+            registry=ctx.registry,
+            model_version_id=version.model_id,
+        )
+        self._result = result
+        self._write(PREPARE_FILENAME, result.prepare_report)
+        if result.drift is not None:
+            self._write(DRIFT_FILENAME, result.drift)
+            self._manifest.add_metrics({"max_psi": result.drift.max_psi}, prefix="drift_")
+        scored = result.prepared.copy()
+        scored[ctx.config.actions.score_field] = result.scores
+        self._scored = scored
+        _LOGGER.info(
+            "predict: %d rows scored by %s (v%d) drift=%s",
+            len(scored.index),
+            version.model_id,
+            version.version,
+            "not measured" if result.drift is None else result.drift.status.value,
+        )
+        return _StageOutcome(result.detail, len(scored.index))
+
+    def _explain_rows(self) -> _StageOutcome:
+        """A reason for every scored row, from the model `predict` has already loaded.
+
+        EVERY ROW, NOT A SAMPLE (`max_rows=None`). Plan §6.3 asks for a reason per scored row, and
+        `explain.reason_columns` refuses a partly explained frame rather than writing a
+        `scores.csv` whose reason cells are mostly empty. The train flow's sample is the other
+        answer to the same question, which is why that budget is a per-call argument and has no
+        default on the stage entry point.
+
+        THE MODEL IS LOADED ONCE. `explain.row_reasons` would open the stored predictor a second
+        time; `PredictResult.scorer` is the one predict loaded, with the threshold and the
+        calibrator it was approved with.
+
+        The reason columns are attached here, by `explain`'s own adapter, which joins them onto the
+        scored rows **by primary key** rather than by position - so this stage cannot quietly hand
+        export a frame whose reasons belong to other customers.
+
+        `evaluation.shap` is honoured, exactly as the train flow honours it: a configuration that
+        turned per-row reasons off gets none, no `row_explanations.parquet`, and empty reason cells
+        in `scores.csv` - which is what the export stage documents as "the explain stage did not
+        run". That is a user's choice to switch the feature off; it is not the sampling this flow
+        refuses, which would leave *most* of a file the user did ask reasons for unexplained.
+        """
+        ctx = self._ctx
+        result = _require(self._result, "the output of the predict stage")
+        if not ctx.config.evaluation.shap:
+            _LOGGER.info("explain_rows: per-row reasons are switched off for this use case")
+            return _StageOutcome(REASONS_OFF_DETAIL, 0)
+        reasons = explain.reasons_for(
+            result.scorer,
+            result.prepared,
+            ctx.config,
+            primary_key=ctx.primary_key,
+            seed=self._seed,
+            max_rows=None,
+        )
+        key = explain.write_row_explanations(reasons.explanations, run_id=ctx.run_id, storage=self._storage)
+        self._artefacts[explain.ROW_EXPLANATIONS_FILENAME] = key
+        self._scored = explain.with_reason_columns(
+            reasons.explanations,
+            _require(self._scored, "the scored rows"),
+            ctx.config,
+            primary_key=ctx.primary_key,
+        )
+        return _StageOutcome(_reasons_detail(reasons), len(reasons.explanations))
+
+    def _actions(self) -> _StageOutcome:
+        """Band, action, suppression reason and control-group flag, seeded by the run id."""
+        ctx = self._ctx
+        banded = actions.apply_actions(
+            _require(self._scored, "the scored rows"),
+            ctx.config,
+            run_id=ctx.run_id,
+            primary_key=ctx.primary_key,
+        )
+        self._scored = banded
+        return _StageOutcome(_actions_detail(banded), len(banded.index))
+
+    def _export(self) -> _StageOutcome:
+        """`scores.csv`, `scores.parquet` and `scoring_summary.json`.
+
+        The KPI is totalled from the rows **as they were uploaded**, not from the scored frame: a
+        column that is also a model feature has been clipped and filled by the replay, and a
+        column prepare dropped is not in the scored frame at all, so a total taken there would be
+        a number nobody can reconcile with their source system (plan §13.3). `export.summarise`
+        refuses a `sum_where_band_in` KPI rather than guess when those rows are not passed, so
+        this argument is not optional in practice.
+        """
+        ctx = self._ctx
+        version = _require(self._version, "the model version")
+        frame = _require(self._scored, "the scored rows")
+        files = export.write_scores(
+            frame, ctx.config, run_id=ctx.run_id, primary_key=ctx.primary_key, storage=self._storage
+        )
+        self._artefacts.update(files)
+        summary = export.summarise(
+            frame,
+            ctx.config,
+            run_id=ctx.run_id,
+            model_version_id=version.model_id,
+            model_display_name=version.model_display_name,
+            primary_key=ctx.primary_key,
+            drift=_require(self._result, "the output of the predict stage").drift,
+            files=files,
+            kpi_source=_require(self._frame, "the uploaded rows"),
+        )
+        self._summary = summary
+        self._write(SCORING_SUMMARY_FILENAME, summary)
+        self._manifest.add_metrics({"rows_scored": float(summary.rows_scored)})
+        return _StageOutcome(_export_detail(summary), summary.rows_scored)
+
+
+def _replay_detail(version: ModelVersion) -> str:
+    """The Running line for score mode's prepare stage: which model, and whose transforms."""
+    return (
+        f"{version.model_display_name} (v{version.version}) · "
+        f"prepared with the transforms its training run recorded"
+    )
+
+
+def _reasons_detail(reasons: explain.RowReasons) -> str:
+    """The Running line for explain_rows; `method` names the tier that really produced them."""
+    rows = len(reasons.explanations)
+    return f"{reasons.method} reasons for {humanise_count(rows)} {'row' if rows == 1 else 'rows'}"
+
+
+def _actions_detail(frame: pd.DataFrame) -> str:
+    """The Running line for actions. Every number is counted off the banded frame."""
+    suppressed = int(frame[actions.SUPPRESSED_REASON_COLUMN].notna().sum())
+    control = int(frame[actions.CONTROL_GROUP_COLUMN].astype(bool).sum())
+    return (
+        f"{humanise_count(len(frame.index))} rows banded · "
+        f"{humanise_count(suppressed)} suppressed · {humanise_count(control)} held out as control"
+    )
+
+
+def _export_detail(summary: ScoringSummary) -> str:
+    """The Running line for export: what was written, and the configured KPI it adds up to."""
+    return (
+        f"{humanise_count(summary.rows_scored)} rows written to scores.csv · "
+        f"{summary.kpi.label} {summary.kpi.display}"
+    )
+
+
 class Pipeline:
     """Orchestrates the stages of a run and keeps `status.json` current."""
 
@@ -1056,5 +1495,13 @@ class Pipeline:
         return _TrainFlow(self, ctx).execute()
 
     def run_score(self, ctx: StageContext) -> RunRecord:
-        """Run the score flow of plan §6.2 end to end."""
-        raise NotImplementedError("M4")
+        """Run the score flow of plan §6.2 end to end.
+
+        `ingest → validate_against_schema → prepare → predict → explain_rows → actions → export`,
+        with `status.json` rewritten at every transition, cancellation checked either side of every
+        stage, and `run_manifest.json` written whatever the outcome - the same contract `run_train`
+        keeps. Nothing in this flow fits anything: the model, its transforms, its threshold and its
+        calibrator were all settled at train time, and the run replays them and counts what came
+        out. See `_ScoreFlow` for why the prepare stage writes nothing of its own.
+        """
+        return _ScoreFlow(self, ctx).execute()

@@ -29,17 +29,31 @@ from api.routes import runs
 from api.schemas import RunDetailResponse, RunListResponse
 from engine.config import (
     ColumnRole,
+    ColumnType,
     ConfigError,
+    Metric,
     ProblemType,
     RunMode,
     UseCaseConfig,
     load_use_case,
     overridable_paths,
+    resolve_config,
 )
-from engine.contracts import RunRecord, RunState, Severity, ValidationCheck, ValidationReport
+from engine.contracts import (
+    FeatureSchema,
+    FeatureSchemaColumn,
+    ModelStatus,
+    ModelVersion,
+    RunRecord,
+    RunState,
+    Severity,
+    ValidationCheck,
+    ValidationReport,
+)
 from engine.jobs import CancelToken, ThreadJobRunner
-from engine.stages import validate
-from engine.storage import LocalStorage
+from engine.registry import REGISTRY_FILENAME, LocalModelRegistry
+from engine.stages import score, validate
+from engine.storage import LocalStorage, run_key
 from engine.utils.time import utc_now
 from tests.fixtures.make_data import (
     LEAKY_COLUMN,
@@ -62,6 +76,7 @@ from tests.integration.test_api_uploads import (
 pytestmark = pytest.mark.integration
 
 OTHER_ID = "win-back-campaign"
+OTHER_USE_CASE = "payment-propensity"
 TARGET = "converted_30d"
 PRIMARY_KEY = "customer_id"
 NON_BINARY_TARGET_MARKER = "grade"
@@ -340,6 +355,56 @@ def await_job(client: TestClient, run_id: str, timeout: float = 10.0) -> None:
     jobs.wait(run_id, timeout)
 
 
+def seed_model(
+    data_dir: Path,
+    *,
+    model_id: str,
+    use_case_id: str = DEMO_ID,
+    status: ModelStatus = ModelStatus.CHAMPION,
+) -> ModelVersion:
+    """Register one model version in the registry the app reads, with its `schema.json` on disk.
+
+    The app builds its own `LocalModelRegistry` on `data_dir / registry.db`; a second instance on
+    the same file is what `LocalModelRegistry` documents as safe, and is how the registry tests
+    seed rows too. The schema is the document `POST /runs` validates a scoring file against, so a
+    version without one could never start a run.
+    """
+    run_id = f"r_{model_id}"
+    version = ModelVersion(
+        model_id=model_id,
+        use_case_id=use_case_id,
+        version=1,
+        run_id=run_id,
+        created_at=utc_now(),
+        status=status,
+        metric=Metric.ROC_AUC,
+        metric_label="ROC-AUC",
+        test_score=0.81,
+        validation_score=0.82,
+        model_display_name="WeightedEnsemble_L2",
+        schema_key=run_key(run_id, "schema.json"),
+        run_config_key=run_key(run_id, "run_config.json"),
+        predictor_key=run_key(run_id, "model"),
+        engine_version="0.1.0",
+        autogluon_version="1.6.3",
+    )
+    LocalModelRegistry(data_dir / REGISTRY_FILENAME).register(version)
+    LocalStorage(data_dir).write_model(
+        version.schema_key,
+        FeatureSchema(
+            use_case_id=use_case_id,
+            model_version_id=model_id,
+            primary_key=PRIMARY_KEY,
+            target=TARGET,
+            problem_type=ProblemType.BINARY_CLASSIFICATION,
+            columns=(FeatureSchemaColumn(name="tenure_months", inferred_type=ColumnType.INTEGER),),
+            row_count_at_fit=1_000,
+            created_at=utc_now(),
+        ),
+    )
+    return version
+
+
 # ---------------------------------------------------------------------------
 # POST /runs - the happy path
 # ---------------------------------------------------------------------------
@@ -534,11 +599,108 @@ def test_mode_mismatch_is_409(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "UPLOAD_MODE_MISMATCH"
 
 
-def test_score_mode_has_no_champion_in_m2(client: TestClient) -> None:
+def test_score_mode_without_a_champion_answers_the_engines_one_no_champion_code(
+    client: TestClient, data_dir: Path, config_root: Path
+) -> None:
+    """One code for "this use case has no champion", on the endpoint and in the stage alike.
+
+    The endpoint used to answer a code of its own, `NO_CHAMPION_MODEL`, while the predict stage
+    raised `CHAMPION_NOT_FOUND` for the same condition mid-run, so a UI switching on the code had
+    to know both. The endpoint now reports the stage's code and the stage's sentence.
+    """
     upload_id = upload(client, mode="score")
     response = client.post("/runs", json=run_body(upload_id, mode="score", target=None))
+
     assert response.status_code == 409
-    assert response.json()["detail"]["code"] == "NO_CHAMPION_MODEL"
+    detail = response.json()["detail"]
+    assert detail["code"] == score.CHAMPION_NOT_FOUND
+    with pytest.raises(score.ScoreError) as raised:
+        score.resolve_model_version(
+            resolve_config(DEMO_ID, root=config_root).config,
+            registry=LocalModelRegistry(data_dir / REGISTRY_FILENAME),
+            model_version_id=None,
+        )
+    assert detail["message"] == raised.value.message, "the endpoint speaks the engine's words"
+
+
+def test_a_model_version_of_another_use_case_is_refused_before_the_run_starts(
+    client: TestClient, data_dir: Path, config_root: Path
+) -> None:
+    """Finding 5: one resolver, so what the endpoint accepts is what the predict stage will score.
+
+    The endpoint used to accept any `model_version_id` the registry knew, whatever use case it
+    belonged to; the run was created, the file was validated against a foreign model's schema, and
+    the run failed at the predict stage with `MODEL_USE_CASE_MISMATCH`. That refusal now happens
+    on the request, with the stage's own code and message, and no run is created.
+    """
+    foreign = seed_model(data_dir, model_id="m_payment-propensity_1", use_case_id=OTHER_USE_CASE)
+    upload_id = upload(client, mode="score")
+
+    response = client.post(
+        "/runs",
+        json=run_body(upload_id, mode="score", target=None, model_version_id=foreign.model_id),
+    )
+
+    assert response.status_code == 409
+    detail = response.json()["detail"]
+    assert detail["code"] == score.MODEL_USE_CASE_MISMATCH
+    assert OTHER_USE_CASE in detail["message"] and DEMO_ID in detail["message"]
+    with pytest.raises(score.ScoreError) as raised:
+        score.resolve_model_version(
+            resolve_config(DEMO_ID, root=config_root).config,
+            registry=LocalModelRegistry(data_dir / REGISTRY_FILENAME),
+            model_version_id=foreign.model_id,
+        )
+    assert (detail["code"], detail["message"]) == (raised.value.code, raised.value.message)
+    assert RunListResponse.model_validate(client.get("/runs").json()).runs == (), "no run was started"
+
+
+def test_an_unknown_model_version_is_a_404_about_that_version(client: TestClient, data_dir: Path) -> None:
+    """A body that names a version nobody registered is a missing id, not a missing champion."""
+    seed_model(data_dir, model_id="m_targeted-advertisement_1", status=ModelStatus.CHAMPION)
+    upload_id = upload(client, mode="score")
+
+    response = client.post(
+        "/runs",
+        json=run_body(upload_id, mode="score", target=None, model_version_id="m_does_not_exist"),
+    )
+
+    assert response.status_code == 404
+    detail = response.json()["detail"]
+    assert detail["code"] == score.MODEL_NOT_FOUND
+    assert "m_does_not_exist" in detail["message"]
+
+
+def test_a_version_of_this_use_case_starts_a_run_whatever_its_status(
+    client: TestClient, data_dir: Path
+) -> None:
+    """A named version is the user's choice, so a candidate scores as readily as the champion."""
+    candidate = seed_model(data_dir, model_id="m_targeted-advertisement_2", status=ModelStatus.CANDIDATE)
+    upload_id = upload(client, mode="score")
+
+    response = client.post(
+        "/runs",
+        json=run_body(upload_id, mode="score", target=None, model_version_id=candidate.model_id),
+    )
+
+    assert response.status_code == 202, response.text
+    run_id = response.json()["run_id"]
+    record = RunDetailResponse.model_validate(client.get(f"/runs/{run_id}").json()).run
+    assert record.model_version_id == candidate.model_id
+    assert record.mode is RunMode.SCORE
+
+
+def test_every_resolver_code_is_mapped_onto_the_error_envelope(client: TestClient) -> None:
+    """Finding 12: the codes are registered, so the envelope answers 4xx instead of guessing 500."""
+    assert set(runs.SCORE_ERROR_STATUS) == {
+        score.CHAMPION_NOT_FOUND,
+        score.MODEL_NOT_FOUND,
+        score.MODEL_USE_CASE_MISMATCH,
+    }
+    assert set(runs.SCORE_ERROR_STATUS) <= set(score.SCORE_ERRORS), "each one has a message table entry"
+    for code, status in runs.SCORE_ERROR_STATUS.items():
+        assert status in runs._RUN_ERRORS, f"{code} answers a status POST /runs documents"
+        assert status != runs.UNMAPPED_STATUS
 
 
 def test_an_unknown_override_path_is_422_and_names_the_path(client: TestClient) -> None:
