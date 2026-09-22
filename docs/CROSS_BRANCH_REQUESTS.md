@@ -59,6 +59,37 @@ on everything up to the pipeline boundary with no ruling at all. The smallest ch
 it is one line in §3: add `engine/pipeline.py`'s `StageContext` and its `sole_key()` call sites to
 Phase 2's pre-approved exception list.
 
+### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself
+
+**What is needed.** A decision on the cut point for the three phase branches, before they are cut.
+The contracts-first task of §2 was done twice, 64 seconds apart, by two agents unaware of each
+other: `5f93051` on `claude/gracious-lovelace-c344tl` (07:47:54) and `04c76da` on `main`
+(07:48:58). §2 says it is one PR on `main`, and §1 has all three branches rebase onto `main`, so
+what is on `main` is what the branches inherit. Measured against §2's own checklist, `main` is
+missing item 1's `RunManifest.primary_key`, all of item 3 (`engine/generative/contracts.py`,
+`LLMUsage`, `RunManifest.llm_usage`), all of item 4 (`engine/settings.py`, `ComputeInfo`,
+`ComputeBackend`, `RunManifest.compute`) and all of item 5 (`engine/llm.py`). It also does not
+carry `PARALLEL_WORK_PROTOCOL.md` or this file, so a branch cut from `main` today would have no
+ownership map, no merge order, no frozen-file list and nowhere to write a request.
+
+The consequence is the collision §2 exists to prevent: Phase 3a would add `llm_usage` and Phase 4a
+would add `compute`, on the same day, to the same `RunManifest`, in `engine/contracts.py`, which §3
+marks Shared. §2's "never rename, remove or change the meaning of an existing field" cannot prevent
+it, because on `main` those fields do not yet exist to be preserved.
+
+Suggested order: merge `5f93051` into `main`; reconcile `engine/onboarding/specs.py` (21-line stub
+on the branch, 706 lines on `main`) once the open request above for the three phase plans is
+answered, since the plan is the only definition of record for those models and is in neither
+branch; then cut the three branches from the merged `main`.
+
+**What I did meanwhile.** Verified the rest of the shared surface rather than assuming it: the
+branch's items 1, 4, 5, 6 and 7 are present and the marker blocks are in every shared file; `main`
+and the branch diverge at `46ab665`; the divergence in `engine/contracts.py` is additive on the
+branch (`ComputeBackend`, `LLMUsage`, `ComputeInfo` added, nothing renamed, removed or
+type-changed), so merging the branch into `main` should not break `main`'s Phase 2 work. Recorded
+as A-1 and A-2 in `reports/2026-09-22.md`. I hold no code and have pushed none; this entry is the
+whole of my action.
+
 ## Resolved
 
 ### 2026-09-22 — contracts-first: where §2's three model names live in this repository
