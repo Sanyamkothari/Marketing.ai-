@@ -41,11 +41,19 @@ else
 endif
 	$(BIN)/python -c "import autogluon.tabular, pydantic, fastapi, sqlmodel, yaml; print('setup ok: autogluon.tabular', autogluon.tabular.__version__)"
 
-test: ## fast tests (excludes @slow)
-	$(BIN)/python -m pytest -m "not slow"
+# The two markers that spend money are excluded here, not in pyproject's `addopts`, and that is not
+# a style choice: pytest keeps only the LAST `-m`, so a filter in `addopts` is silently replaced by
+# the `-m "not slow"` below and every @bedrock test would be collected again. Each self-skips
+# without credentials, but that is configuration rather than intent - the day a runner has both,
+# the suite bills an account nobody asked it to. `pytest -m bedrock` (or `-m aws`) still opts in
+# (DEC-358).
+PAID_MARKERS := not bedrock and not aws
 
-test-all: ## every test
-	$(BIN)/python -m pytest
+test: ## fast tests (excludes @slow and the two markers that bill a real account)
+	$(BIN)/python -m pytest -m "not slow and $(PAID_MARKERS)"
+
+test-all: ## every test that costs nothing; `pytest -m bedrock` or `-m aws` opts in to the paid ones
+	$(BIN)/python -m pytest -m "$(PAID_MARKERS)"
 
 lint: check-generated ## ruff + black --check + mypy --strict + generated-file drift check
 	$(BIN)/ruff check engine api scripts tests
@@ -146,9 +154,9 @@ infra-setup: ## create .venv-infra and install the deploy extra
 	$(INFRA_BIN)/python -m pip install -q --upgrade pip
 	$(INFRA_BIN)/python -m pip install -q -e ".[deploy]" -r infra/requirements.txt
 
-infra-lint: ## ruff + black --check + mypy --strict over infra/ and tests/infra/
-	$(BIN)/ruff check infra tests/infra
-	$(BIN)/black --check infra tests/infra
+infra-lint: ## ruff + black --check + mypy --strict over infra/ and tests/infra/ (needs only .venv-infra)
+	$(INFRA_BIN)/ruff check infra tests/infra
+	$(INFRA_BIN)/black --check infra tests/infra
 	$(INFRA_BIN)/mypy --strict infra tests/infra
 
 infra-test: ## the offline CDK assertions and snapshots (no AWS account needed)

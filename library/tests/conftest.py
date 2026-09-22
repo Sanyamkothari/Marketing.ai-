@@ -86,9 +86,15 @@ def train_on_sample(
     sample: str,
     primary_key: str,
     target: str,
+    runs_dir: Path,
     config_root: Path | None = LIBRARY_CONFIGS,
 ) -> SampleRun:
     """Validate and train on `library/<sample>`, then hand back the numbers.
+
+    `runs_dir` is required, and every caller passes a pytest temporary directory: the uploads, the
+    fitted models, the artefacts and the model registry all land there and nowhere else. A test run
+    therefore leaves nothing in the repository, and cannot depend on - or be broken by - a registry
+    an earlier run created (`library/run_engine.py` explains why the latter matters).
 
     The run is refused rather than crashed when validation fails, so a test can assert on the
     findings either way; `test_the_run_finished` is what turns a refusal into a failure.
@@ -97,13 +103,14 @@ def train_on_sample(
     if not csv_path.is_file():
         pytest.skip(f"{csv_path} is missing; run the dataset's fetch.py to rebuild it")
     outcome = run(
-        dataset=f"test-{dataset}",
+        dataset=dataset,
         use_case=use_case,
         csv_path=csv_path,
         primary_key=primary_key,
         target=target,
         overrides=dict(FAST),
         config_root=config_root,
+        runs_dir=runs_dir,
     )
     return SampleRun(results=outcome.results)
 

@@ -105,6 +105,14 @@ CMD ["serve"]
 # Built by `make image-test` and never shipped: it adds the dev extra and the test suite so the fast
 # suite can run INSIDE the image, which is what catches a missing system library before a deployment
 # does rather than after.
+#
+# It copies the whole build context, not just tests/. Roughly forty tests check the repository rather
+# than the runtime - that the docs name only real `make` targets, that the workflows say what they
+# should, that the generated dashboard matches its registry - and they read `docs/`, the Makefile,
+# the Dockerfile and `.github/`. With only tests/ copied they all failed on a missing file, and a new
+# test of that kind would have failed the same way whenever it was written. The runtime under test is
+# still the api image's: /opt/venv, the system libraries and the non-root user come from the stage
+# above, and the engine and api files it copies over are the same bytes from the same context (DEC-359).
 FROM api AS test
 
 USER root
@@ -114,6 +122,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     --mount=type=secret,id=pipca,target=/run/secrets/pipca,required=false \
     if [ -s /run/secrets/pipca ]; then export PIP_CERT=/run/secrets/pipca; fi; \
     pip install --only-binary=:all: -c /app/requirements-freeze.txt -r /tmp/dev.txt
-COPY tests /app/tests
+COPY . /app/
 USER 10001
-CMD ["pytest", "-m", "not slow", "-q"]
+# The same selection as `make test`: pytest keeps only the last -m, so the paid markers have to be
+# spelled out here as well rather than inherited (DEC-358).
+CMD ["pytest", "-m", "not slow and not bedrock and not aws", "-q"]

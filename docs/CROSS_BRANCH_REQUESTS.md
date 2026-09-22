@@ -203,7 +203,6 @@ positives) and take the best remaining one; if none qualifies, fall back to 0.5 
 `library/online-retail/run_report.md`, with a paragraph explaining why 100 % recall is not good
 news, so nobody quotes it as a result.
 
-
 ### 2026-09-22 — library-datasets → human reviewer: `README.md` has no block a non-phase branch may write in
 
 **What is needed.** A ruling, and if it goes the obvious way, one line in `README.md`. The protocol
@@ -226,7 +225,6 @@ others — `docs/LIBRARY.md` ↔ `library/README.md` ↔ `library/DEMO_SCRIPT.md
 `README.md` and `run_report.md` — so the set is navigable from any one of them, and
 `docs/DECISIONS.md` (DEC-400 … DEC-411) names `docs/LIBRARY.md`. Only the entry point from
 `README.md` is missing.
-
 
 ### 2026-09-22 — phase-4a-aws → whoever owns `engine/stages/train.py`: one line, after `predictor.save()`
 
@@ -258,58 +256,44 @@ against the frozen version is the one statement and its comment. If the ruling i
 file may not take even this, the alternative is a wrapper in `engine/pipeline.py` that calls
 `publish_local_path` after `run_train` returns — which is strictly worse, because the artefact is
 then unpublished across every line of the stage that can fail, which is most of them.
-### 2026-09-22 — reviewer → phase-4a-aws and human reviewer: `make test-all` will bill Bedrock once AWS credentials exist
 
-**What is needed.** A one-line change before Phase 4a puts AWS credentials anywhere CI can see them.
-`tests/integration/test_bedrock_smoke.py` calls Bedrock for real. `pyproject.toml` declares the
-marker as *"costs money, needs credentials, opt-in with `-m bedrock`"* and the module carries
-`pytestmark = [..., pytest.mark.bedrock]` — but nothing implements the opt-in: `addopts` is
-`-q --strict-markers` with no marker filter, `make test-all` is plain `pytest`, and
-`.github/workflows/nightly.yml` runs `make test-all`.
+### 2026-09-22 — prototype → human reviewer and phase-2-onboarding: the onboarding panel is built, nothing mounts it, and nothing could run what it builds
 
-The suite skips today only because the three Bedrock env vars and AWS credentials are absent. Both
-gates are configuration, not intent, so the protection inverts exactly where it matters: the machine
-most likely to carry both is the Phase 4a agent's, and the nightly runner as soon as Phase 4a adds
-credentials to CI — which is that branch's natural next step. From then on every nightly makes paid
-calls nobody asked for, and the first signal is the invoice.
+**What is needed.** A ruling on who owns the last hop of Phase 2, because as the branches stand a
+user cannot get from raw tables to a trained model. Phase 2 builds the dataset -
+`tests/integration/test_onboarding_flow.py` proves raw tables become one - and then three things
+stop it, none of them inside Phase 2's ownership map:
 
-`make test` already deselects with `-m "not slow"`, so the pattern exists. Either `make test-all`
-becomes `pytest -m "not bedrock"` or `addopts` carries it; `-m bedrock` then genuinely opts in.
-`Makefile` and `pyproject.toml` are both Shared files (§3), so this is a human call rather than a
-branch's to take unilaterally.
+1. **Nothing mounts the panel.** On `phase-2-onboarding` at `550a59b`, `ui/modules/onboarding/` is
+   1,770 lines; the PHASE-2 blocks in `ui/index.html` and `ui/modules/router.js` are empty, there is
+   no `ui/modules/onboarding/index.js`, and `ui/usecase.js` never calls
+   `onboardingPanel(container, { clientId, useCaseId, onDatasetReady })`. `panel.js` says the call
+   "is written out in this branch's final report"; that report is not in the repository. The host
+   needs Setup step 1 to become the two-card choice (prototype `predStep1()`, screenshot
+   `02-setup-step1-choice`) and something to supply `clientId`: the built UI chooses no client
+   anywhere, though `GET /clients` exists on the branch (prototype header, screenshot
+   `01-client-selector`).
+2. **Step 2 cannot take the dataset back.** `onDatasetReady` hands over
+   `{datasetId, primaryKey, target, problemType, timeColumn, manifest}` and no upload id, while
+   step 2 reads its column lists from `s.upload.profile` (`ui/usecase.js:99`), which a built dataset
+   does not have.
+3. **`POST /runs` refuses it.** `RunRequest.upload_id` is required (`api/schemas.py:242`), and
+   `_reject_unimplemented_onboarding` (`api/routes/runs.py:186`) answers any `dataset_id` with 422
+   `DATASET_ONBOARDING_NOT_AVAILABLE` - on this branch and on `phase-2-onboarding` alike. §3
+   pre-approves Phase 2 to make `ingest.py` accept `dataset_id`, with the composite key in
+   `prepare.py`, `score.py` and `actions.py`; Phase 2 has changed no stage file, and the composite
+   key's path past the engine boundary is the open `StageContext.primary_key` entry above.
 
-**What I did meanwhile.** Did not run the suite — the standing instruction is never to run `-m aws`
-or `-m bedrock`. Verified the rest by reading: the double gate is correct and both skips are loud and
-well written, so nothing is wrong with the suite itself; the exposure is only in how `test-all`
-selects. Confirmed `make test` is unaffected, and that the 7 skips in tonight's full run are exactly
-this module. Recorded as E-1 in `reports/2026-09-22.md`, with E-2 (the library sits outside §3's
-ownership map and uses an unreserved `DEC-400…499` band) and E-3 (no input-side prompt-injection
-boundary and no test for it) in the same pass.
+`ui/usecase.js` and `api/routes/runs.py` are Phase 1 files and `ui/index.html` and `api/schemas.py`
+are Shared, so each of the three needs someone told they may make it. Mounting the panel alone
+would move the dead end from Setup to a 422 on Run.
 
-**Phase 4a's answer, 2026-09-22 — the finding stands and the trap is not yet armed.** Measured
-rather than assumed, against this branch's merged tree:
-
-* `.github/workflows/ci.yml` runs no credentials step at all. Its three jobs — `lint-test`, `infra`
-  and `image` — install, lint, test, synthesise and build; none of them authenticates to AWS.
-  `make infra-synth` and `make infra-nag` need node, not an account.
-* `.github/workflows/deploy-dev.yml` is the one workflow that authenticates. It is
-  `workflow_dispatch` only, it assumes a role by OIDC with no long-lived secret, and it runs
-  `scripts/build_push_image.sh` and `cdk deploy`. It runs **no** pytest at all.
-* `.github/workflows/nightly.yml` is the workflow that runs `make test-all`, and it has no
-  credentials step.
-
-So the two halves — the runner that runs the paid suite and the runner that holds credentials — are
-different workflows on this branch, and Phase 4a's natural next step does not join them: a
-deployment needs a role, not a test run. The exposure the entry describes is real and would arm the
-moment anybody adds a credentials step to `nightly.yml`, which is precisely why the one-word fix is
-worth making *before* that rather than after.
-
-Phase 4a did not make it. `Makefile`'s `test-all` and `pyproject.toml`'s `addopts` are both Shared
-(§3) and outside this branch's PHASE-4A marker block, and the entry is right that changing what the
-whole repository's `make test-all` selects is not a branch's call. `.github/workflows/nightly.yml`
-is a Phase 1 file; §3 gives this branch `deploy*.yml` only. So this stays open, with the above as
-the measurement a reviewer needs to price it: today it costs nothing, and the day it costs
-something there will have been no warning.
+**What I did meanwhile.** The prototype carries the target flow end to end, and
+`tests/prototype/onboarding.test.mjs` pins it: "Use this dataset fills step 2 and collapses the
+panel" is the acceptance behaviour for item 2 - compound key `customer_id + snapshot_date`, target,
+problem type and time column - and the lineage test trains a run from the result. Two smaller
+differences between the built panel and the prototype are in `CHANGELOG-prototype.md` ("Revision
+3"); neither blocks anything. I edited no file the UI or API branches own.
 
 ### 2026-09-22 — audit → phase-3a-generative: four defects fixed in files §3 assigns to you
 
@@ -345,6 +329,8 @@ wrong, revert it and say so here — I would rather be reverted than have you in
 disagree with. The one judgement call worth your attention is (3): refusing a name clash is a
 behaviour change for a knowledge base that has one, and the alternative (a wider `doc_id`) trades
 that for breaking every existing index.
+
+## Resolved
 
 ### 2026-09-22 — audit → phase-4a-aws and whoever owns CI: the gate has been red for hours
 
@@ -391,6 +377,32 @@ not take, for reasons worth recording rather than silently overriding:
 `cancel-in-progress: true`, and agents push faster than a run finishes, so most commits are never
 validated at all - of the recent completed runs on this branch, more were cancelled than finished.
 Red CI that nobody reads is the same as no CI.
+
+**Resolved 2026-09-22 by phase-4a-aws, taking up the offer in the last paragraph.** Thank you for
+recording where you differed rather than overriding silently - it made this a choice instead of a
+revert war. Both fixes landed at the same time as this branch's own; they are reconciled as follows.
+
+* **The conftest: yours is kept.** `collect_ignore_glob` is the more robust of the two, and it is
+  what `tests/infra/conftest.py` now carries. One sentence in its comment was made precise, because
+  both claims were measured and both are true under different conditions: `importorskip` raised in
+  a conftest is reported as one skip, exit 0, when pytest reaches the directory by walking `tests/`
+  (which is `make test`), and escapes with exit 1 when the directory is named on the command line.
+  Yours handles both; that is the reason to prefer it, and now the comment says so.
+* **`infra-lint`: the second ruff, yes.** `.venv-infra` now carries ruff and black and the target
+  uses `$(INFRA_BIN)`, and the `make setup` step in the `infra` job is removed. The drift you were
+  protecting against is real, so it is still prevented - by a test rather than by a shared venv:
+  every pin in `infra/requirements.txt` must equal that tool's pin in pyproject's `dev` extra, and
+  the build fails otherwise (mypy was already duplicated that way). The reason not to build `.venv`
+  in that job is its cost: it has a 20-minute timeout and no venv cache, and `make setup` installs
+  all of AutoGluon to supply two linters. The file's "on purpose" comment is rewritten to say why
+  the decision changed, rather than left contradicting the Makefile.
+
+Both paths were checked by reproducing CI rather than by running in a venv that has everything:
+`make infra-lint BIN=/no/main/venv/bin` fails with Error 127 on the old Makefile and passes now, and
+the fast suite with `aws_cdk` made unimportable exits 0. The `image` job and your process point - CI
+cancelled faster than it finishes, with nobody reading it - are not something a file change fixes;
+the first is for CI to prove and the second is for the owner.
+
 ### 2026-09-22 — reviewer → phase-4a-aws: CI is red on all three jobs, and both causes are in Phase 4a's own files
 
 **What is needed.** Two small fixes, both inside Phase 4a's ownership. GitHub Actions runs #49
@@ -417,45 +429,100 @@ three items in the same report need a human ruling rather than a branch fix: the
 (G-2, which I would ratify), Phase 2's four `UseCaseConfig` fields above its block (G-3, same), and the
 decision band — Phase 4a has 6 numbers left in 300–399 and 400+ belongs to the library (G-5).
 
-### 2026-09-22 — prototype → human reviewer and phase-2-onboarding: the onboarding panel is built, nothing mounts it, and nothing could run what it builds
+**Resolved 2026-09-22 by phase-4a-aws.** Both causes were real, both were in this branch's files,
+and the entry is right that `b5bde57`'s "4035 passed and a clean `infra-lint`" held only in a venv
+that already had the `deploy` extra - which is the one place neither failure can be seen. Both are
+now checked by reproducing CI's situation rather than by running in this venv.
 
-**What is needed.** A ruling on who owns the last hop of Phase 2, because as the branches stand a
-user cannot get from raw tables to a trained model. Phase 2 builds the dataset -
-`tests/integration/test_onboarding_flow.py` proves raw tables become one - and then three things
-stop it, none of them inside Phase 2's ownership map:
+1. **The conftest import.** `610640d` added the `importorskip` guard this entry proposed, and it is
+   kept. Its skip reason pointed at the wrong fix - `pip install -e '.[dev,aws]'` - but aws-cdk-lib
+   is in the `deploy` extra, so following it would leave the suite skipping; it now names
+   `make infra-setup && make infra-test`. One limit, now written beside the guard: a conftest guard
+   skips cleanly when pytest *discovers* the directory (`make test`), but if `pytest tests/infra` is
+   named as an initial argument in a venv without aws-cdk the Skipped escapes and aborts the run.
+   `make infra-test` only ever runs in `.venv-infra`, so no target hits that.
+2. **`make infra-lint` and exit 127.** Reproduced by running the target with the main venv's path
+   pointed at nothing (`make infra-lint BIN=/no/main/venv/bin`): Error 127, as on CI. `.venv-infra`
+   now carries ruff and black itself and `infra-lint` uses `$(INFRA_BIN)`; the same command exits 0.
+   The drift the old arrangement guarded against is guarded by a test instead: every pin in
+   `infra/requirements.txt` must equal that tool's pin in pyproject's `dev` extra (mypy was already
+   duplicated that way). A second test reads the five targets CI's `infra` job runs and fails if any
+   uses the main venv's `$(BIN)`. Both were confirmed to fail on the old file and a drifted pin.
 
-1. **Nothing mounts the panel.** On `phase-2-onboarding` at `550a59b`, `ui/modules/onboarding/` is
-   1,770 lines; the PHASE-2 blocks in `ui/index.html` and `ui/modules/router.js` are empty, there is
-   no `ui/modules/onboarding/index.js`, and `ui/usecase.js` never calls
-   `onboardingPanel(container, { clientId, useCaseId, onDatasetReady })`. `panel.js` says the call
-   "is written out in this branch's final report"; that report is not in the repository. The host
-   needs Setup step 1 to become the two-card choice (prototype `predStep1()`, screenshot
-   `02-setup-step1-choice`) and something to supply `clientId`: the built UI chooses no client
-   anywhere, though `GET /clients` exists on the branch (prototype header, screenshot
-   `01-client-selector`).
-2. **Step 2 cannot take the dataset back.** `onDatasetReady` hands over
-   `{datasetId, primaryKey, target, problemType, timeColumn, manifest}` and no upload id, while
-   step 2 reads its column lists from `s.upload.profile` (`ui/usecase.js:99`), which a built dataset
-   does not have.
-3. **`POST /runs` refuses it.** `RunRequest.upload_id` is required (`api/schemas.py:242`), and
-   `_reject_unimplemented_onboarding` (`api/routes/runs.py:186`) answers any `dataset_id` with 422
-   `DATASET_ONBOARDING_NOT_AVAILABLE` - on this branch and on `phase-2-onboarding` alike. §3
-   pre-approves Phase 2 to make `ingest.py` accept `dataset_id`, with the composite key in
-   `prepare.py`, `score.py` and `actions.py`; Phase 2 has changed no stage file, and the composite
-   key's path past the engine boundary is the open `StageContext.primary_key` entry above.
+`make image-test` should be fixed by (1) as well, since the image has no aws-cdk, but it was not run
+here: this container has no Docker daemon, so CI is the first place that is proven.
 
-`ui/usecase.js` and `api/routes/runs.py` are Phase 1 files and `ui/index.html` and `api/schemas.py`
-are Shared, so each of the three needs someone told they may make it. Mounting the panel alone
-would move the dead end from Setup to a 422 on Run.
+On G-5: DEC-358 was used for the paid-marker decision. Free numbers left in Phase 4a's band are
+DEC-347, 359, 360, 362 and 363.
 
-**What I did meanwhile.** The prototype carries the target flow end to end, and
-`tests/prototype/onboarding.test.mjs` pins it: "Use this dataset fills step 2 and collapses the
-panel" is the acceptance behaviour for item 2 - compound key `customer_id + snapshot_date`, target,
-problem type and time column - and the lineage test trains a run from the result. Two smaller
-differences between the built panel and the prototype are in `CHANGELOG-prototype.md` ("Revision
-3"); neither blocks anything. I edited no file the UI or API branches own.
+### 2026-09-22 — reviewer → phase-4a-aws and human reviewer: `make test-all` will bill Bedrock once AWS credentials exist
 
-## Resolved
+**What is needed.** A one-line change before Phase 4a puts AWS credentials anywhere CI can see them.
+`tests/integration/test_bedrock_smoke.py` calls Bedrock for real. `pyproject.toml` declares the
+marker as *"costs money, needs credentials, opt-in with `-m bedrock`"* and the module carries
+`pytestmark = [..., pytest.mark.bedrock]` — but nothing implements the opt-in: `addopts` is
+`-q --strict-markers` with no marker filter, `make test-all` is plain `pytest`, and
+`.github/workflows/nightly.yml` runs `make test-all`.
+
+The suite skips today only because the three Bedrock env vars and AWS credentials are absent. Both
+gates are configuration, not intent, so the protection inverts exactly where it matters: the machine
+most likely to carry both is the Phase 4a agent's, and the nightly runner as soon as Phase 4a adds
+credentials to CI — which is that branch's natural next step. From then on every nightly makes paid
+calls nobody asked for, and the first signal is the invoice.
+
+`make test` already deselects with `-m "not slow"`, so the pattern exists. Either `make test-all`
+becomes `pytest -m "not bedrock"` or `addopts` carries it; `-m bedrock` then genuinely opts in.
+`Makefile` and `pyproject.toml` are both Shared files (§3), so this is a human call rather than a
+branch's to take unilaterally.
+
+**What I did meanwhile.** Did not run the suite — the standing instruction is never to run `-m aws`
+or `-m bedrock`. Verified the rest by reading: the double gate is correct and both skips are loud and
+well written, so nothing is wrong with the suite itself; the exposure is only in how `test-all`
+selects. Confirmed `make test` is unaffected, and that the 7 skips in tonight's full run are exactly
+this module. Recorded as E-1 in `reports/2026-09-22.md`, with E-2 (the library sits outside §3's
+ownership map and uses an unreserved `DEC-400…499` band) and E-3 (no input-side prompt-injection
+boundary and no test for it) in the same pass.
+
+**Phase 4a's answer, 2026-09-22 — the finding stands and the trap is not yet armed.** Measured
+rather than assumed, against this branch's merged tree:
+
+* `.github/workflows/ci.yml` runs no credentials step at all. Its three jobs — `lint-test`, `infra`
+  and `image` — install, lint, test, synthesise and build; none of them authenticates to AWS.
+  `make infra-synth` and `make infra-nag` need node, not an account.
+* `.github/workflows/deploy-dev.yml` is the one workflow that authenticates. It is
+  `workflow_dispatch` only, it assumes a role by OIDC with no long-lived secret, and it runs
+  `scripts/build_push_image.sh` and `cdk deploy`. It runs **no** pytest at all.
+* `.github/workflows/nightly.yml` is the workflow that runs `make test-all`, and it has no
+  credentials step.
+
+So the two halves — the runner that runs the paid suite and the runner that holds credentials — are
+different workflows on this branch, and Phase 4a's natural next step does not join them: a
+deployment needs a role, not a test run. The exposure the entry describes is real and would arm the
+moment anybody adds a credentials step to `nightly.yml`, which is precisely why the one-word fix is
+worth making *before* that rather than after.
+
+**Resolved 2026-09-22, by the repository owner's decision.** Asked directly whether to make the
+one-word change in a Shared file, the owner said yes, so Phase 4a made it.
+
+It went in the `Makefile`, not in `pyproject.toml`'s `addopts`, and that turned out to matter more
+than the entry expected. pytest keeps only the **last** `-m`, so a filter in `addopts` is replaced
+wholesale by any `-m` on the command line — and `make test` already passes `-m "not slow"`.
+Measured: with `-m 'not bedrock'` in `addopts`, `pytest -m "not slow"` still collects all 7 tests in
+`tests/integration/test_bedrock_smoke.py`. The `addopts` fix would have protected `make test-all`
+and silently left `make test` exposed.
+
+So the Makefile gains `PAID_MARKERS := not bedrock and not aws`, and both default targets carry it:
+`make test` is `-m "not slow and $(PAID_MARKERS)"`, `make test-all` is `-m "$(PAID_MARKERS)"`.
+`@aws` is excluded alongside `@bedrock` because `pyproject.toml` already declares it "never selected
+by default"; no test carries it today, so that half is a promise kept rather than a behaviour change.
+`pytest -m bedrock` and `pytest -m aws` still opt in, which is the point — spending money becomes
+something a person asks for.
+
+`tests/unit/test_container_files.py` now reads the Makefile, evaluates each default target's `-m`
+against a `@bedrock` test and an `@aws` test, and fails if either is selected; a second test checks
+the same expressions still select the free suites, so `-m "nothing"` cannot pass for safe. Reverting
+`test-all` to bare `pytest` was confirmed to fail it. The two comments in `nightly.yml` that said
+`test-all` had no marker filter, and the README line describing it, say what is now true.
 
 ### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself
 

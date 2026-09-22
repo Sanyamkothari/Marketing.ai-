@@ -115,13 +115,12 @@ jobs:
         with:
           node-version: "22"
 
-      # `make infra-lint` runs ruff and black from the MAIN .venv on purpose - infra/ and engine/
-      # are formatted by one version of one formatter rather than two that drift, which
-      # `infra/requirements.txt` says in as many words. That makes .venv a real dependency of this
-      # job, and without it the step died on `.venv/bin/ruff: No such file or directory`.
-      - name: make setup
-        run: make setup
-
+      # Everything this job runs comes from `.venv-infra`, including ruff and black: `make infra-lint`
+      # used to borrow them from the main `.venv`, which this job never built, and died with exit 127
+      # before `infra-test` could run (reviewer finding G-1). Building the main venv here as well
+      # would fix that by installing all of AutoGluon, uncached, inside a 20-minute timeout, for two
+      # linters. `infra/requirements.txt` pins them instead, at the same versions as pyproject's
+      # `dev` extra, and `tests/unit/test_container_files.py` fails if the two ever differ.
       - name: make infra-setup
         run: make infra-setup
 

@@ -9,6 +9,7 @@ non-root user. Each of those is a real mistake someone has made in a Dockerfile 
 
 from __future__ import annotations
 
+import json
 import re
 import stat
 from pathlib import Path
@@ -182,3 +183,128 @@ def test_deploying_names_a_digest_rather_than_a_tag(repo_root: Path) -> None:
     push = (repo_root / "scripts" / "build_push_image.sh").read_text(encoding="utf-8")
     assert "Manifest.Digest" in push
     assert "sha256:" in push
+
+
+# ---------------------------------------------------------------------------
+# The paid suites are opt-in, by selection and not only by credentials
+# ---------------------------------------------------------------------------
+_PAID_MARKERS = ("bedrock", "aws")
+
+
+def _makefile_selection(repo_root: Path, target: str) -> str:
+    """The `-m` expression `target`'s pytest line passes, with `$(VARIABLE)`s substituted."""
+    text = (repo_root / "Makefile").read_text(encoding="utf-8")
+    variables = dict(re.findall(r"^([A-Z_]+)\s*:=\s*(.+)$", text, re.MULTILINE))
+    recipe = re.search(rf"^{re.escape(target)}:.*\n((?:\t.*\n)+)", text, re.MULTILINE)
+    assert recipe is not None, f"the Makefile has no {target!r} target"
+    selection = re.search(r'pytest\b.*?-m "([^"]+)"', recipe.group(1))
+    assert selection is not None, f"`make {target}` runs pytest with no -m, so it selects everything"
+    return re.sub(r"\$\(([A-Z_]+)\)", lambda m: variables[m.group(1)].strip(), selection.group(1))
+
+
+def _selects(expression: str, markers: set[str]) -> bool:
+    """Whether a test carrying exactly `markers` passes `expression`.
+
+    These expressions are `not`/`and`/`or` over bare marker names, which is also valid Python, so
+    they are evaluated with every name bound to a bool and nothing else in scope.
+    """
+    names = set(re.findall(r"[A-Za-z_]\w*", expression)) - {"and", "or", "not"}
+    return bool(eval(expression, {"__builtins__": {}}, {name: name in markers for name in names}))
+
+
+@pytest.mark.parametrize("target", ["test", "test-all"])
+@pytest.mark.parametrize("marker", _PAID_MARKERS)
+def test_no_default_target_selects_a_test_that_bills_an_account(
+    repo_root: Path, target: str, marker: str
+) -> None:
+    """A self-skip on missing credentials is configuration; this is the intent (reviewer finding E-1).
+
+    Each @bedrock test skips when the `BEDROCK_SMOKE_*` variables or AWS credentials are absent. Both
+    gates are facts about a machine, not a decision, and the machine most likely to have both is a CI
+    runner the day somebody gives it a role. Excluding the markers at selection makes "costs money"
+    something a person asks for with `pytest -m bedrock`, rather than something that starts happening.
+
+    The filter cannot live in pyproject's `addopts`: pytest keeps only the last `-m`, so `make test`'s
+    own `-m "not slow"` would replace it and every paid test would be collected again. That is why
+    this reads the Makefile rather than the config.
+    """
+    expression = _makefile_selection(repo_root, target)
+    assert not _selects(
+        expression, {marker, "integration"}
+    ), f"`make {target}` selects @{marker} tests with -m {expression!r}"
+
+
+def test_the_default_targets_still_select_the_free_suites(repo_root: Path) -> None:
+    """The guard above would also pass for `-m "nothing"`; this is what keeps it honest."""
+    assert _selects(_makefile_selection(repo_root, "test"), {"integration"})
+    assert not _selects(_makefile_selection(repo_root, "test"), {"slow"})
+    assert _selects(_makefile_selection(repo_root, "test-all"), {"slow", "integration"})
+    assert _selects(_makefile_selection(repo_root, "test-all"), {"postgres"})
+
+
+def test_the_infra_venv_lints_with_the_same_tool_versions_as_the_main_one(repo_root: Path) -> None:
+    """`.venv-infra` carries its own ruff, black and mypy so CI's `infra` job needs nothing else.
+
+    It used to borrow ruff and black from the main `.venv`, which that job never builds: `make
+    infra-lint` exited 127 and the infrastructure suite behind it never ran in CI (reviewer finding
+    G-1). A second copy of a tool is only safe if it is the same version, so every pin in
+    `infra/requirements.txt` must equal that tool's pin in pyproject's `dev` extra.
+    """
+    infra = dict(
+        re.findall(
+            r"^([A-Za-z0-9_.-]+)==(\S+)$", (repo_root / "infra" / "requirements.txt").read_text(), re.M
+        )
+    )
+    dev = dict(
+        re.findall(r'^\s*"([A-Za-z0-9_.-]+)==([^"]+)"', (repo_root / "pyproject.toml").read_text(), re.M)
+    )
+    for tool in ("ruff", "black", "mypy"):
+        assert tool in infra, f"infra/requirements.txt has no {tool}; `make infra-lint` needs it"
+    for tool, version in infra.items():
+        assert (
+            dev.get(tool) == version
+        ), f"{tool}=={version} in infra/requirements.txt, {dev.get(tool)} in pyproject"
+
+
+def test_the_infra_targets_need_nothing_from_the_main_venv(repo_root: Path) -> None:
+    """The four targets CI's `infra` job runs, read for any use of the main venv's `$(BIN)`."""
+    text = (repo_root / "Makefile").read_text(encoding="utf-8")
+    for target in ("infra-setup", "infra-lint", "infra-test", "infra-synth", "infra-nag"):
+        recipe = re.search(rf"^{re.escape(target)}:.*\n((?:\t.*\n)+)", text, re.MULTILINE)
+        assert recipe is not None, f"the Makefile has no {target!r} target"
+        assert "$(BIN)" not in recipe.group(
+            1
+        ), f"`make {target}` uses the main venv, which CI's infra job lacks"
+
+
+def _test_stage(repo_root: Path) -> str:
+    text = (repo_root / "Dockerfile").read_text(encoding="utf-8")
+    start = text.index("FROM api AS test")
+    following = text.find("\nFROM ", start + 1)
+    return text[start:] if following == -1 else text[start:following]
+
+
+def test_the_image_suite_sees_the_repository_its_tests_check(repo_root: Path) -> None:
+    """About forty tests read `docs/`, the Makefile, the Dockerfile or `.github/`, not the runtime.
+
+    With only `tests/` copied into the test stage every one of them failed inside the image on a
+    missing file (CI run #62), and any new test of that kind would have done the same. The stage
+    copies the whole context instead; what stays out is decided by `.dockerignore`, which must
+    therefore not exclude what those tests read.
+    """
+    assert "COPY . /app/" in _test_stage(repo_root)
+    lines = (repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    ignored = {line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")}
+    for needed in ("docs", ".github", "*.md", "Makefile", "Dockerfile", "infra"):
+        assert needed not in ignored, f".dockerignore drops {needed}, which the image's suite reads"
+
+
+def test_the_image_suite_does_not_select_a_test_that_bills_an_account(repo_root: Path) -> None:
+    """Same rule as `make test` (DEC-358): the paid markers are excluded by selection, here too."""
+    cmd = re.search(r"^CMD (\[.*\])$", _test_stage(repo_root), re.MULTILINE)
+    assert cmd is not None, "the test stage has no exec-form CMD"
+    argv = json.loads(cmd.group(1))
+    expression = argv[argv.index("-m") + 1]
+    for marker in _PAID_MARKERS:
+        assert not _selects(expression, {marker, "integration"}), f"the image suite selects @{marker}"
+    assert _selects(expression, {"integration"}) and not _selects(expression, {"slow"})

@@ -2,7 +2,14 @@
 # which `make infra-setup` installs from pyproject.toml. Only the tools the infrastructure suite
 # runs with go here; the library pins stay in one place, next to every other pin in the project.
 #
-# ruff and black are NOT here on purpose: `make infra-lint` runs those from the main `.venv`, so
-# infra/ and engine/ are formatted by one version of one formatter rather than two that drift.
+# ruff and black are here so that `.venv-infra` is self-sufficient. They used to be deliberately
+# absent, with `make infra-lint` borrowing them from the main `.venv` - but CI's `infra` job builds
+# only `.venv-infra`, so `make infra-lint` died with exit 127 before `make infra-test` ever ran, and
+# the 175 infrastructure tests never ran in CI at all. The drift the old arrangement guarded against
+# is guarded here instead: every pin in this file must equal the same tool's pin in pyproject.toml's
+# `dev` extra, and `tests/unit/test_container_files.py` fails the build if one does not. mypy was
+# already pinned that way.
 pytest==9.1.1
 mypy==2.3.1
+ruff==0.16.8
+black==26.5.1

@@ -26,11 +26,13 @@ import pytest
 # `make infra-setup`.
 #
 # `collect_ignore_glob` is the fix rather than `importorskip`. Both were written, by two sessions,
-# and only this one works: `pytest.importorskip("aws_cdk")` raises `Skipped` while the *conftest*
-# is being imported, which pytest reports as a collection failure and exits 1 on. Measured both
-# ways on this tree - this file exits 0, that one exits 1. Set before the imports,
-# `collect_ignore_glob` instead tells pytest there is nothing here to collect, so the fast suite
-# runs clean and `make infra-test` - which has the extra - still collects everything.
+# and they differ in exactly one case. `pytest.importorskip("aws_cdk")` raises `Skipped` while the
+# *conftest* is being imported: when pytest reached this directory by walking `tests/` - which is
+# what `make test` does - that is reported as one skip and the run exits 0; when the directory is
+# named on the command line (`pytest tests/infra`), the same Skipped escapes and the run exits 1.
+# Both were measured on this tree. `collect_ignore_glob`, set before the imports, tells pytest
+# there is nothing here to collect in either case, so it is the robust one - and `make infra-test`,
+# which has the extra, still collects everything.
 #
 # The extra is `deploy`, not `aws`: `aws` carries boto3 for the runtime, `deploy` carries
 # aws-cdk-lib for synthesising infra/, so `pip install -e '.[dev,aws]'` does not fix this.
