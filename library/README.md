@@ -27,7 +27,7 @@ README.
 
 | Path | What it is |
 |---|---|
-| [`configs/`](configs/) | a second config root: four industry files, four use-case files, and their generated templates. `engine.yaml` is a **symlink** to `configs/engine.yaml`, so there is one copy of the defaults. See DEC-400 and [CBR-401](../CROSS_BRANCH_REQUESTS.md#cbr-401) for why they are not in the repository's own `configs/`. |
+| [`configs/`](configs/) | a second config root: four industry files, four use-case files, and their generated templates. `engine.yaml` is a **symlink** to `configs/engine.yaml`, so there is one copy of the defaults. See DEC-400 and the *two assertions forbid a second industry* entry in [`docs/CROSS_BRANCH_REQUESTS.md`](../docs/CROSS_BRANCH_REQUESTS.md) for why they are not in the repository's own `configs/`. |
 | [`run_engine.py`](run_engine.py) | the harness behind every `run_report.md`. It uploads a CSV, calls `Pipeline.run_train` exactly the way `POST /runs` does, and writes a `results.json` holding the validation findings, leaderboard, test metrics, baseline comparison, decile lift, top features and wall clock. Every number in every report comes out of it. |
 | [`tests/`](tests/) | one pytest module per dataset, opt-in (DEC-409) |
 | [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | one page: which dataset to show to which audience, and what to click |
@@ -59,7 +59,7 @@ The tests are **not** in pytest's default `testpaths`, so `make test` does not r
 
 * **Configuration and data only.** Nothing in `engine/`, `api/`, `ui/`, `tests/` or any existing
   YAML was edited. Where the engine needed a change, a
-  [cross-branch request](../CROSS_BRANCH_REQUESTS.md) was filed and the work went on without it.
+  [cross-branch request](../docs/CROSS_BRANCH_REQUESTS.md) was filed and the work went on without it.
 * **No fabricated numbers.** Every figure in a `run_report.md` came from a run whose `results.json`
   is named at the bottom of that report. Where a run failed, lost or never happened, the report
   says so in those words.

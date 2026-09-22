@@ -29,6 +29,11 @@ output:
     label: "Customers at risk"
     formula: 'count_where_band_in(["High","Medium"])'
 
+generative:
+  kind: root_cause_summary
+  root_cause:
+    complaint_text_column: complaint_text          # the template's free-text column; Phase 2's `complaints` role supersedes it
+
 ui:
   pages:
     data: "Usage + complaints + churn signals"

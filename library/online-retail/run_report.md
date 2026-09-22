@@ -41,7 +41,8 @@ validation report uses, skips DATE columns entirely and so said nothing.
 
 Here it changes nothing — the column was headed for the bin either way. On a file with several
 snapshot dates it would silently redact a live date column with no validation finding to say so.
-Filed as [**CBR-402**](../../CROSS_BRANCH_REQUESTS.md#cbr-402); not fixed here, because
+Filed in [`docs/CROSS_BRANCH_REQUESTS.md`](../../docs/CROSS_BRANCH_REQUESTS.md) as *two PII
+detectors that disagree*; not fixed here, because
 `engine/stages/prepare.py` is not this branch's to edit.
 
 ## Preparation and split
@@ -95,7 +96,9 @@ maximises F1 on the validation split, and with a 41 % base rate and a weak model
 is at "say yes to everyone" — accuracy 0.411 is exactly the positive rate. Nothing is
 mis-computed, and the ranking, the bands and the decile chart are unaffected because they read the
 score rather than the threshold. But a Model page reporting 100 % recall reads as a triumph and
-means no decision was made. Filed as [**CBR-404**](../../CROSS_BRANCH_REQUESTS.md#cbr-404).
+means no decision was made. Filed in
+[`docs/CROSS_BRANCH_REQUESTS.md`](../../docs/CROSS_BRANCH_REQUESTS.md) as *`threshold.mode: auto`
+can call every row positive*.
 
 ## Baseline comparison — **the model does NOT beat the baseline**
 

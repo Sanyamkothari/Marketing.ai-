@@ -8,7 +8,6 @@ import difflib
 import hashlib
 import importlib.util
 import json
-import os
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
@@ -28,6 +27,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from engine.settings import DEFAULT_CONFIG_DIR, ENV_VARS, settings
 
 
 class ConfigError(Exception):
@@ -54,6 +55,49 @@ class _Base(BaseModel):
 
 # Public alias: engine.contracts and api.schemas inherit from it so there is one definition.
 StrictBase = _Base
+
+
+# ---------------------------------------------------------------------------
+# The primary key: one column in Phase 1, possibly several from Phase 2 on
+# ---------------------------------------------------------------------------
+PrimaryKey = str | list[str]
+"""A row identifier: one column name, or several that identify a row together.
+
+The wide type is here from the start, on every contract the value travels through, because those
+contracts live in shared append-only files: a branch that needed to widen them later could not.
+Phase 1 only ever sets a single column, and `str` stays a legal value forever, so nothing in this
+phase changes shape.
+
+This is the one place the codebase's "collections are tuples" rule yields (`engine/contracts.py`
+docstring). The cross-branch contract spells the type `str | list[str]`, three branches are written
+against that spelling, and the serialised form is a JSON array either way. Read the value through
+:func:`key_columns` rather than an `isinstance` check and the distinction stops mattering.
+"""
+
+
+def key_columns(primary_key: PrimaryKey) -> tuple[str, ...]:
+    """The key's columns, in order, whether it was spelled as one name or as several."""
+    return (primary_key,) if isinstance(primary_key, str) else tuple(primary_key)
+
+
+def sole_key(primary_key: PrimaryKey, *, what: str = "This") -> str:
+    """The single column of `primary_key`, or a `ConfigError` when it names several.
+
+    Composite keys are Phase 2 behaviour. Until the stages that join, deduplicate and export on the
+    key can carry more than one column, a composite key is refused here - at the boundary, with a
+    message saying what to do - rather than silently reduced to its first column, which would join
+    the wrong rows and report success.
+    """
+    columns = key_columns(primary_key)
+    if len(columns) == 1:
+        return columns[0]
+    joined = ", ".join(columns) if columns else "(none)"
+    raise ConfigError(
+        "COMPOSITE_KEY_NOT_SUPPORTED",
+        f"{what} needs a single primary-key column and was given {len(columns)}: {joined}. "
+        "Combine them into one column before uploading, or pick the one that identifies a row on its own.",
+        path="primary_key",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +206,46 @@ class Retraining(StrEnum):
     ON_DRIFT = "on_drift"
     WEEKLY = "weekly"
     MONTHLY = "monthly"
+
+
+class GenerativeKind(StrEnum):
+    """Which generative flow a use case turns on. `none` leaves the whole block inert (DEC-200)."""
+
+    NONE = "none"
+    RAG_ASSISTANT = "rag_assistant"
+    ROOT_CAUSE_SUMMARY = "root_cause_summary"
+    CAMPAIGN_COPY = "campaign_copy"
+
+
+class LlmBackend(StrEnum):
+    """Which client a generative flow calls through: a deterministic fake, or Bedrock (DEC-203)."""
+
+    FAKE = "fake"
+    BEDROCK = "bedrock"
+
+
+class DocumentType(StrEnum):
+    """A file type the knowledge base accepts. The value is the extension, so a filename decides."""
+
+    PDF = "pdf"
+    DOCX = "docx"
+    MD = "md"
+    TXT = "txt"
+
+
+class Channel(StrEnum):
+    """A channel copy is written for. Nothing is sent: the name selects a prompt and a length limit."""
+
+    EMAIL = "email"
+    SMS = "sms"
+    WHATSAPP = "whatsapp"
+
+
+class SegmentBy(StrEnum):
+    """How a root-cause run divides the scored rows before it explains them."""
+
+    BAND = "band"
+    TOP_REASON = "top_reason"
 
 
 class ModelFamily(StrEnum):
@@ -728,6 +812,237 @@ class GovernanceConfig(_Base):
     approval_required: bool = True
 
 
+_IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+"""The shape a name must have to be usable as a column or as a `{{placeholder}}` in a template."""
+
+
+# ---------------------------------------------------------------------------
+# 4.5b The generative block (Phase 3a). Inert unless `kind` names a flow (DEC-200).
+#
+# One block, not three: the plan sketched `generative:` in engine.yaml but the root-cause and copy
+# blocks at the top level of a use-case file, and two spellings of one thing would need two merge
+# paths and would leave `extra="forbid"` rejecting whichever spelling a reader guessed wrong
+# (DEC-200). Every sub-block is named for the capability it configures, never for the use case that
+# turns it on, because an engine that knows a use-case id has started branching on one (plan
+# section 2.1, principle 1). Nothing here reaches the predictive stages: a generative flow reads a
+# finished run's artefacts, it never joins the pipeline that wrote them.
+# ---------------------------------------------------------------------------
+FAKE_MODEL_ID: Final[str] = "fake"
+"""What the deterministic fake calls itself in an artefact.
+
+The three model ids default to `""` because a real one is deployment data (DEC-204), but an
+artefact still has to say what answered, and `""` says nothing. Under the fake backend that answer
+is "the fake", written down as such, so a usage record read later cannot be mistaken for a record
+of a model that was never called.
+"""
+
+
+class LlmConfig(_Base):
+    backend: LlmBackend = LlmBackend.FAKE
+    region: Annotated[str, Field(min_length=1)] = "ap-south-1"
+    generation_model_id: str = ""
+    judge_model_id: str = ""
+    embedding_model_id: str = ""
+    temperature: Annotated[float, Field(ge=0.0, le=1.0)] = 0.20
+    max_output_tokens: Annotated[int, Field(ge=1, le=8192)] = 800
+    timeout_s: Annotated[int, Field(ge=1, le=600)] = 60
+    max_retries: Annotated[int, Field(ge=0, le=5)] = 2
+
+    @model_validator(mode="after")
+    def _check(self) -> Self:
+        # A model id is deployment data, never a literal in code (DEC-204), so the only place this
+        # can be caught is here - and it is caught at configuration time rather than three stages
+        # into a run that was always going to fail.
+        if self.backend is LlmBackend.BEDROCK:
+            missing = [
+                name
+                for name in ("generation_model_id", "judge_model_id", "embedding_model_id")
+                if not getattr(self, name).strip()
+            ]
+            if missing:
+                raise ConfigError(
+                    "LLM_MODEL_ID_MISSING",
+                    f"generative.llm.backend is 'bedrock', so {', '.join(missing)} must name a model.",
+                    path=f"generative.llm.{missing[0]}",
+                )
+        return self
+
+    @property
+    def generation_model(self) -> str:
+        """The id generation calls are made against, with the fake named when it is the backend."""
+        return self._resolve(self.generation_model_id or self.judge_model_id)
+
+    @property
+    def judge_model(self) -> str:
+        """The id judging calls are made against; falls back to the generating one when unset."""
+        return self._resolve(self.judge_model_id or self.generation_model_id)
+
+    @property
+    def embedding_model(self) -> str:
+        """The id embedding calls are made against."""
+        return self._resolve(self.embedding_model_id)
+
+    def _resolve(self, model_id: str) -> str:
+        if model_id:
+            return model_id
+        # `bedrock` with a blank id never gets here: `_check` refuses that document outright.
+        return FAKE_MODEL_ID
+
+
+class BudgetConfig(_Base):
+    max_cost_usd_per_run: Annotated[float, Field(ge=0.0)] = 2.00
+    max_calls_per_run: Annotated[int, Field(ge=1)] = 500
+    cache: bool = True
+
+
+class RagConfig(_Base):
+    chunk_tokens: Annotated[int, Field(ge=50, le=2000)] = 500
+    chunk_overlap: Annotated[float, Field(ge=0.0, le=0.5)] = 0.15
+    top_k: Annotated[int, Field(ge=1, le=50)] = 6
+    min_similarity: Annotated[float, Field(ge=0.0, le=1.0)] = 0.25
+    mmr_lambda: Annotated[float, Field(ge=0.0, le=1.0)] = 0.70
+    answer_language: Annotated[str, Field(pattern=r"^(auto|[a-z]{2})$")] = "auto"
+    refusal_message: Annotated[str, Field(min_length=1)] = (
+        "I don't have that information in the documents I've been given. Please contact support."
+    )
+
+
+class KnowledgeBaseConfig(_Base):
+    accepted_types: tuple[DocumentType, ...] = (
+        DocumentType.PDF,
+        DocumentType.DOCX,
+        DocumentType.MD,
+        DocumentType.TXT,
+    )
+    max_docs: Annotated[int, Field(ge=1)] = 200
+    max_mb: Annotated[int, Field(ge=1)] = 200
+
+    @field_validator("accepted_types")
+    @classmethod
+    def _types(cls, v: tuple[DocumentType, ...]) -> tuple[DocumentType, ...]:
+        if not v:
+            raise ConfigError(
+                "KNOWLEDGE_BASE_NO_TYPES",
+                "generative.knowledge_base.accepted_types must accept at least one file type.",
+                path="generative.knowledge_base.accepted_types",
+            )
+        return v
+
+
+class ReferenceSetConfig(_Base):
+    """The Q&A file an index is graded against.
+
+    Named for what it is rather than `evaluation`, which already means the model's evaluation on
+    `UseCaseConfig`; one word cannot carry both without a reader having to ask which (DEC-200).
+    """
+
+    question_column: Annotated[str, Field(min_length=1)] = "question"
+    reference_column: Annotated[str, Field(min_length=1)] = "reference_answer"
+    refusal_column: Annotated[str, Field(min_length=1)] = "expect_refusal"
+    pass_threshold: Annotated[float, Field(ge=0.0, le=1.0)] = 0.75
+
+
+class RootCauseConfig(_Base):
+    segment_by: SegmentBy = SegmentBy.BAND
+    max_segments: Annotated[int, Field(ge=1, le=20)] = 6
+    reasons_per_segment: Annotated[int, Field(ge=1, le=20)] = 5
+    complaint_samples_per_segment: Annotated[int, Field(ge=0, le=100)] = 20
+    complaint_text_column: str | None = None
+    tone: Annotated[str, Field(min_length=1)] = "neutral_business"
+    require_human_review: bool = False
+
+
+class CopyLimits(_Base):
+    sms_chars: Annotated[int, Field(ge=1, le=1600)] = 160
+    whatsapp_chars: Annotated[int, Field(ge=1, le=4096)] = 1024
+    email_subject_chars: Annotated[int, Field(ge=1, le=200)] = 60
+    email_body_words: Annotated[int, Field(ge=1, le=1000)] = 150
+
+
+class RequiredLines(_Base):
+    sms: Annotated[str, Field(min_length=1)] = "Reply STOP to opt out"
+    whatsapp: Annotated[str, Field(min_length=1)] = "Reply STOP to opt out"
+    email: Annotated[str, Field(min_length=1)] = "unsubscribe_link"
+
+    def for_channel(self, channel: Channel) -> str:
+        """The line a message on `channel` must end with (pure; the copywriter and guardrails share it)."""
+        return {Channel.SMS: self.sms, Channel.WHATSAPP: self.whatsapp, Channel.EMAIL: self.email}[channel]
+
+
+class CampaignCopyConfig(_Base):
+    """Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` (DEC-201)."""
+
+    variants_per_band: Annotated[int, Field(ge=1, le=4)] = 2
+    channels: tuple[Channel, ...] = (Channel.EMAIL, Channel.SMS, Channel.WHATSAPP)
+    bands_to_write: tuple[str, ...] = ("High", "Medium")
+    allowed_fields: tuple[str, ...] = (
+        "first_name",
+        "plan_type",
+        "tenure_months",
+        "last_offer",
+        "band",
+    )
+    banned_claims: tuple[str, ...] = ()
+    tone: Annotated[str, Field(min_length=1)] = "warm_concise"
+    brand_name: str = ""
+    require_human_review: bool = True
+    limits: CopyLimits = CopyLimits()
+    required_lines: RequiredLines = RequiredLines()
+
+    @field_validator("channels")
+    @classmethod
+    def _channels(cls, v: tuple[Channel, ...]) -> tuple[Channel, ...]:
+        if not v:
+            raise ConfigError(
+                "COPY_NO_CHANNELS",
+                "generative.campaign_copy.channels must name at least one channel.",
+                path="generative.campaign_copy.channels",
+            )
+        if len(set(v)) != len(v):
+            raise ConfigError(
+                "COPY_DUPLICATE_CHANNEL",
+                "generative.campaign_copy.channels names the same channel twice.",
+                path="generative.campaign_copy.channels",
+            )
+        return v
+
+    @field_validator("allowed_fields")
+    @classmethod
+    def _allowed_fields(cls, v: tuple[str, ...]) -> tuple[str, ...]:
+        # Every entry becomes a `{{name}}` placeholder rendered by jinja2; one that is not an
+        # identifier could not be rendered, and an empty list means no template can say anything.
+        if not v:
+            raise ConfigError(
+                "COPY_NO_ALLOWED_FIELDS",
+                "generative.campaign_copy.allowed_fields must list at least one field.",
+                path="generative.campaign_copy.allowed_fields",
+            )
+        for name in v:
+            if not _IDENTIFIER.fullmatch(name):
+                raise ConfigError(
+                    "COPY_FIELD_NOT_AN_IDENTIFIER",
+                    f"generative.campaign_copy.allowed_fields entry {name!r} is not a usable placeholder name.",
+                    path="generative.campaign_copy.allowed_fields",
+                )
+        return v
+
+
+class GenerativeConfig(_Base):
+    kind: GenerativeKind = GenerativeKind.NONE
+    llm: LlmConfig = LlmConfig()
+    budget: BudgetConfig = BudgetConfig()
+    rag: RagConfig = RagConfig()
+    knowledge_base: KnowledgeBaseConfig = KnowledgeBaseConfig()
+    reference_set: ReferenceSetConfig = ReferenceSetConfig()
+    root_cause: RootCauseConfig = RootCauseConfig()
+    campaign_copy: CampaignCopyConfig = CampaignCopyConfig()
+
+    @property
+    def enabled(self) -> bool:
+        """True when this use case turns a generative flow on; false leaves the block unread."""
+        return self.kind is not GenerativeKind.NONE
+
+
 # ---------------------------------------------------------------------------
 # 4.6 KPI formula grammar (DEC-007)
 # ---------------------------------------------------------------------------
@@ -918,6 +1233,7 @@ class UseCaseConfig(_Base):
     actions: ActionsConfig = ActionsConfig()
     monitoring: MonitoringConfig = MonitoringConfig()
     governance: GovernanceConfig = GovernanceConfig()
+    generative: GenerativeConfig = GenerativeConfig()
     output: OutputConfig
     ui: UiConfig
     template: TemplateConfig = TemplateConfig()
@@ -985,7 +1301,41 @@ class UseCaseConfig(_Base):
                 f"output.kpi.formula sums {kpi.column!r}, which is not a template column.",
                 path="output.kpi.formula",
             )
+        self._check_generative(band_names)
         return self
+
+    def _check_generative(self, band_names: set[str]) -> None:
+        """Tie the generative block to the rest of the document, or leave it alone when it is off.
+
+        Three things can disagree and only be found out at run time otherwise: a flow switched on
+        under `ai_type: predictive`, copy written for a band the actions block does not define, and
+        a complaint column that is not in the template.
+        """
+        generative = self.generative
+        if not generative.enabled:
+            return
+        if self.ai_type is AiType.PREDICTIVE:
+            raise ConfigError(
+                "GENERATIVE_ON_A_PREDICTIVE_USE_CASE",
+                f"generative.kind is {generative.kind.value!r}, so ai_type must be generative or hybrid.",
+                path="generative.kind",
+            )
+        if generative.kind is GenerativeKind.CAMPAIGN_COPY:
+            unknown = [name for name in generative.campaign_copy.bands_to_write if name not in band_names]
+            if unknown:
+                raise ConfigError(
+                    "COPY_UNKNOWN_BAND",
+                    f"generative.campaign_copy.bands_to_write names band(s) "
+                    f"{', '.join(unknown)} that actions.bands does not define.",
+                    path="generative.campaign_copy.bands_to_write",
+                )
+        column = generative.root_cause.complaint_text_column
+        if column is not None and self.template.columns and column not in self.template.column_names:
+            raise ConfigError(
+                "COMPLAINT_COLUMN_MISSING",
+                f"generative.root_cause.complaint_text_column {column!r} is not a template column.",
+                path="generative.root_cause.complaint_text_column",
+            )
 
     def _check_template(self) -> None:
         if not self.template.columns:
@@ -1113,20 +1463,22 @@ class EngineConfig(_Base):
 # ---------------------------------------------------------------------------
 # 4.5 Loaders, merge and overrides
 # ---------------------------------------------------------------------------
-DEFAULT_CONFIG_ROOT: Final[Path] = Path(__file__).resolve().parent.parent / "configs"
-CONFIG_DIR_ENV_VAR: Final[str] = "MARKETING_AI_CONFIG_DIR"
+DEFAULT_CONFIG_ROOT: Final[Path] = DEFAULT_CONFIG_DIR
+CONFIG_DIR_ENV_VAR: Final[str] = ENV_VARS["config_dir"]
 
 _ENGINE_CACHE: dict[Path, EngineConfig] = {}
 
 
 def config_root(root: Path | None = None) -> Path:
-    """`root` argument, else env `MARKETING_AI_CONFIG_DIR`, else `DEFAULT_CONFIG_ROOT`."""
+    """`root` argument, else env `MARKETING_AI_CONFIG_DIR`, else `DEFAULT_CONFIG_ROOT`.
+
+    The environment is read through `engine.settings` rather than directly, so every variable the
+    engine honours is listed in one place; `Settings.from_env` resolves a directory it was given
+    and leaves the default alone, which is what this function did before.
+    """
     if root is not None:
         return Path(root).resolve()
-    from_env = os.environ.get(CONFIG_DIR_ENV_VAR)
-    if from_env:
-        return Path(from_env).resolve()
-    return DEFAULT_CONFIG_ROOT
+    return settings().config_dir or DEFAULT_CONFIG_ROOT
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -1718,6 +2070,7 @@ class FieldSpec(_Base):
     max_visible: int | None = None
     help: str = ""
     required: bool = True
+    advisory: bool = False
     visible_when: VisibleWhen | None = None
     order: int
 
@@ -1824,8 +2177,52 @@ def _band_fields(bands: Sequence[Band]) -> tuple[FieldSpec, ...]:
     )
 
 
+ADVISORY_PATHS: Final[frozenset[str]] = frozenset(
+    {
+        "features.auto_feature_engineering",
+        "features.categorical_encoding",
+        "features.numeric_scaling",
+        "features.text_columns",
+        "features.selection",
+        "features.max_features",
+        "monitoring.retraining",
+        "monitoring.performance_alert_drop_pct",
+        "governance.retention_days",
+    }
+)
+"""Settings the schema still carries but no stage reads yet (DEC-074).
+
+They are real product intentions with a shape already agreed, so removing them would lose the
+agreement; leaving them as live controls would promise behaviour the engine does not have. So they
+stay, marked: the form renders them disabled under :const:`ADVISORY_NOTE`, and
+:attr:`Recipe.recipe_hash` leaves them out, because a setting that changes no model must not make
+two identical models look like different recipes.
+
+**Adding a path here is how a setting is parked; removing one is how it ships.** Nothing else needs
+to change in either direction - the form, the documentation and the hash all read this set.
+"""
+
+ADVISORY_NOTE: Final[str] = "Coming later — recorded with the run, not yet applied."
+"""What the form prints beside a disabled advisory control, so the reason is on screen (DEC-074)."""
+
+
 def _numbered(fields: Sequence[FieldSpec], start: int = 1) -> tuple[FieldSpec, ...]:
-    return tuple(field.model_copy(update={"order": start + index}) for index, field in enumerate(fields))
+    """Number a stage's fields in order, and mark the ones no stage reads yet (DEC-074).
+
+    `advisory` is derived here rather than written on each `FieldSpec` so that
+    :const:`ADVISORY_PATHS` stays the only place the fact is recorded: a setting cannot be parked
+    in the form and still counted in the recipe hash, because both read the same set.
+    """
+    return tuple(
+        field.model_copy(
+            update={
+                "order": start + index,
+                "advisory": field.path in ADVISORY_PATHS,
+                "help": ADVISORY_NOTE if field.path in ADVISORY_PATHS else field.help,
+            }
+        )
+        for index, field in enumerate(fields)
+    )
 
 
 def _stage_specs(bands: Sequence[Band]) -> tuple[StageSpec, ...]:
@@ -2525,7 +2922,7 @@ class Recipe(_Base):
     use_case_id: str = Field(description="Use case this recipe belongs to.")
     problem_type: ProblemType = Field(description="Learning task the model is fitted for.")
     target: str = Field(description="Column the model learns to predict.")
-    primary_key: str = Field(description="Row identifier; never used as a feature.")
+    primary_key: PrimaryKey = Field(description="Row identifier; never used as a feature.")
     feature_columns: tuple[str, ...] = Field(
         description="Exact ordered feature list handed to training, after exclusions."
     )
@@ -2542,15 +2939,28 @@ class Recipe(_Base):
         Canonical JSON with sorted keys, so two recipes that differ only in field
         order hash alike. Uses sha256 rather than `hash()`, which is salted per
         process and would not survive a restart.
+
+        :const:`ADVISORY_PATHS` are removed before hashing (DEC-074). The hash exists to answer
+        "would this produce the same model", and a setting no stage reads cannot change a model.
+        Leaving them in would make two runs that fitted byte-identical models hash differently
+        merely because someone moved a control that does nothing yet. They stay on the recipe
+        itself, and so in `run_config.json` and the run manifest, because what the user chose is
+        still worth recording; they are simply not part of its identity.
         """
-        canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        payload = self.model_dump(mode="json")
+        for path in ADVISORY_PATHS:
+            block, _, field = path.partition(".")
+            section = payload.get(block)
+            if isinstance(section, dict):
+                section.pop(field, None)
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 
 def recipe_from_config(
     config: UseCaseConfig,
     *,
-    primary_key: str,
+    primary_key: PrimaryKey,
     feature_columns: Sequence[str],
     seed: int,
     target: str | None = None,
@@ -2579,3 +2989,21 @@ def recipe_from_config(
         model_search=config.model_search,
         seed=seed,
     )
+
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file - run `black` on
+# what you paste, not on the file, if the formatter would reflow other lines.
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----

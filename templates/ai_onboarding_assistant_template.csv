@@ -1,0 +1,6 @@
+question,expect_refusal,source_doc,reference_answer
+How long does a new SIM take to activate?,false,faq_activation.md,"Usually within four hours of the verification call, and at most 24 hours."
+What is the late payment fee?,false,faq_billing.md,"Rs 100 or 2% of the outstanding amount, whichever is higher."
+Is an unused prepaid pack refundable?,false,policy_refunds.md,"Yes, in full, as long as no traffic has been carried on it."
+How do I get a porting code?,false,support_porting.md,Send PORT and your number to 1900; the code is valid for 15 days.
+What is Northwind's share price?,true,,

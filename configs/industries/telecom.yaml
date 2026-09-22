@@ -13,10 +13,7 @@ stages:                                    # ordered; the overview renders them 
     name: Onboarding
     ai_type: generative                    # -> "G"
     use_cases:
-      - id: ai-onboarding-assistant
-        status: planned                    # Phase 3; no use-case YAML in M1
-        name: AI Onboarding Assistant
-        description: A chat assistant grounded in product documentation that guides new customers through setup and answers their questions.
+      - {id: ai-onboarding-assistant, status: available}     # Phase 3a; name and description now come from its own file
   - id: service_payments
     name: Service / Payments
     ai_type: predictive                    # -> "P"

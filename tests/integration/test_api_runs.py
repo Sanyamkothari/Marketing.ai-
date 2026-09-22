@@ -63,10 +63,10 @@ from tests.fixtures.make_data import (
     GenerationSpec,
     generate,
 )
+from tests.fixtures.planned import PLANNED_ID, planned_config_root
 from tests.integration.test_api_uploads import (
     CLEAN_CSV,
     DEMO_ID,
-    PLANNED_ID,
     REAL_INGEST,
     UNKNOWN_ID,
     StubFrame,
@@ -584,12 +584,21 @@ def test_unknown_upload_is_404(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "UPLOAD_NOT_FOUND"
 
 
-def test_planned_and_unknown_use_cases_are_404(client: TestClient) -> None:
+def test_planned_and_unknown_use_cases_are_404(
+    client: TestClient, tmp_path: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown id on the shipped configuration; a planned one on a root that still has one."""
     upload_id = upload(client)
-    for use_case, code in ((PLANNED_ID, "USE_CASE_PLANNED"), (UNKNOWN_ID, "USE_CASE_NOT_FOUND")):
-        response = client.post("/runs", json=run_body(upload_id, use_case=use_case))
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == code
+    response = client.post("/runs", json=run_body(upload_id, use_case=UNKNOWN_ID))
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "USE_CASE_NOT_FOUND"
+
+    install_ingest_stub(monkeypatch)
+    root = planned_config_root(tmp_path / "planned")
+    with TestClient(create_app(config_root=root, data_dir=data_dir)) as planned_client:
+        planned = planned_client.post("/runs", json=run_body(upload_id, use_case=PLANNED_ID))
+    assert planned.status_code == 404
+    assert planned.json()["detail"]["code"] == "USE_CASE_PLANNED"
 
 
 def test_mode_mismatch_is_409(client: TestClient) -> None:
@@ -899,3 +908,31 @@ def test_broken_fixture_returns_409_with_the_validation_payload(
     assert report.error_count >= 1
     assert code in {check.code for check in report.checks}
     assert store.list_keys("runs/") == ()
+
+
+# ---------------------------------------------------------------------------
+# The Phase 2 shape, refused until Phase 2 implements it (DEC-077, DEC-078)
+# ---------------------------------------------------------------------------
+def test_a_composite_primary_key_is_refused_by_name(client: TestClient) -> None:
+    """The contract accepts several columns; this engine joins on one, and says so."""
+    response = start_run(client, primary_key=[PRIMARY_KEY, "gender"])
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "COMPOSITE_KEY_NOT_SUPPORTED"
+    assert PRIMARY_KEY in detail["message"] and "gender" in detail["message"]
+
+
+def test_a_single_primary_key_sent_as_a_list_is_accepted(client: TestClient) -> None:
+    """One column is one column however it is spelled; the wide type must not cost the narrow case."""
+    response = start_run(client, primary_key=[PRIMARY_KEY])
+    assert response.status_code == 202, response.text
+
+
+@pytest.mark.parametrize("field", ["dataset_id", "client_id"])
+def test_an_onboarded_dataset_is_refused_rather_than_ignored(client: TestClient, field: str) -> None:
+    """The request also carries an upload_id, so ignoring this would score a different file."""
+    response = start_run(client, **{field: "anything"})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "DATASET_ONBOARDING_NOT_AVAILABLE"
+    assert field in detail["message"]

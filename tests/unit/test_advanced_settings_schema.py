@@ -9,6 +9,8 @@ from typing import Any
 import pytest
 
 from engine.config import (
+    ADVISORY_NOTE,
+    ADVISORY_PATHS,
     DEFAULT_CONFIG_ROOT,
     FIELD_TABLE,
     AiType,
@@ -21,6 +23,8 @@ from engine.config import (
     list_use_case_ids,
     load_all_use_cases,
     load_use_case,
+    recipe_from_config,
+    resolve_config,
 )
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "configs"
@@ -154,7 +158,44 @@ LABELS: dict[str, str] = {
     "governance.approval_required": "Require approval before a model becomes champion",
 }
 
-USE_CASE_IDS = list_use_case_ids()
+
+def settings_use_case_ids() -> tuple[str, ...]:
+    """The use cases this table describes: every one that trains something.
+
+    `advanced_settings_schema` returns no stages at all for a generative use case, because none of
+    the eight stages below is a choice it has - there is no split to make, no model family to
+    search over and no threshold to set. Every sweep in this module asserts the shape of the full
+    table, so a generative use case would fail all of them by being exactly what it is. The sweep
+    is read off the configs rather than listed here, so a use case added by YAML alone still needs
+    no edit to this file (plan section 2.1); `test_a_narrowed_sweep_still_covers_something` keeps it
+    from quietly shrinking to nothing, and `test_a_generative_use_case_gets_no_stages` covers the
+    case this one leaves out.
+    """
+    return tuple(
+        sorted(
+            use_case_id
+            for use_case_id in list_use_case_ids()
+            if load_use_case(use_case_id).ai_type is not AiType.GENERATIVE
+        )
+    )
+
+
+USE_CASE_IDS = settings_use_case_ids()
+GENERATIVE_USE_CASE_IDS = tuple(sorted(set(list_use_case_ids()) - set(USE_CASE_IDS)))
+
+
+def test_a_narrowed_sweep_still_covers_something() -> None:
+    """A sweep that shrank to nothing would look exactly like a passing suite."""
+    assert len(USE_CASE_IDS) >= 5
+    assert set(USE_CASE_IDS) < set(list_use_case_ids())
+
+
+@pytest.mark.parametrize("use_case_id", GENERATIVE_USE_CASE_IDS)
+def test_a_generative_use_case_gets_no_stages(use_case_id: str) -> None:
+    """The other half of the narrowing: an empty table, not a table full of inapplicable choices."""
+    schema = advanced_settings_schema(load_all_use_cases()[use_case_id])
+    assert schema.stages == ()
+    assert schema.use_case_id == use_case_id
 
 
 def _resolve(config: UseCaseConfig, path: str) -> Any:
@@ -370,3 +411,95 @@ def test_the_static_field_table_matches_a_three_band_config() -> None:
     assert all(
         field.value is None and field.default is None for stage in FIELD_TABLE for field in stage.fields
     )
+
+
+# ---------------------------------------------------------------------------
+# DEC-074: settings the schema carries but no stage reads yet
+# ---------------------------------------------------------------------------
+def test_exactly_the_parked_settings_are_marked_advisory() -> None:
+    """The set is written down once; this is the assertion that it is the set the form renders."""
+    marked = {field.path for stage in FIELD_TABLE for field in stage.fields if field.advisory}
+    assert marked == set(ADVISORY_PATHS)
+    assert marked == {
+        "features.auto_feature_engineering",
+        "features.categorical_encoding",
+        "features.numeric_scaling",
+        "features.text_columns",
+        "features.selection",
+        "features.max_features",
+        "monitoring.retraining",
+        "monitoring.performance_alert_drop_pct",
+        "governance.retention_days",
+    }
+
+
+def test_every_advisory_field_says_on_screen_why_it_is_disabled() -> None:
+    for stage in FIELD_TABLE:
+        for field in stage.fields:
+            if field.advisory:
+                assert field.help == ADVISORY_NOTE, field.path
+
+
+def test_a_setting_the_engine_acts_on_is_never_marked_advisory() -> None:
+    """The ones a stage really reads. If one of these is parked, something has been unwired."""
+    wired = {
+        "prepare.missing_values",
+        "prepare.outliers",
+        "prepare.pii_handling",
+        "split.type",
+        "split.validation_fraction",
+        "model_search.metric",
+        "model_search.strategy",
+        "model_search.candidates",
+        "model_search.tuning_trials",  # DEC-073 wired this one into AutoGluon HPO
+        "model_search.time_limit_minutes",
+        "model_search.folds",
+        "model_search.imbalance",
+        "evaluation.calibration",
+        "evaluation.reasons_per_row",
+        "actions.control_group_fraction",
+        "monitoring.drift_psi_threshold",
+        "governance.consent_column",
+        "governance.approval_required",
+    }
+    marked = {field.path for stage in FIELD_TABLE for field in stage.fields if field.advisory}
+    assert wired.isdisjoint(marked)
+
+
+def test_the_schema_the_ui_receives_carries_the_advisory_flag() -> None:
+    schema = advanced_settings_schema(load_use_case("targeted-advertisement"))
+    payload = schema.model_dump(mode="json")
+    fields = {field["path"]: field for stage in payload["stages"] for field in stage["fields"]}
+    assert fields["features.max_features"]["advisory"] is True
+    assert fields["features.max_features"]["help"] == ADVISORY_NOTE
+    assert fields["model_search.tuning_trials"]["advisory"] is False
+
+
+def test_an_advisory_setting_does_not_change_the_recipe_hash() -> None:
+    """A control that changes no model must not make two identical models look different."""
+    base = resolve_config("targeted-advertisement", {})
+    moved = resolve_config(
+        "targeted-advertisement",
+        {"features.max_features": 300, "features.categorical_encoding": "one_hot"},
+    )
+
+    def recipe(resolved):
+        return recipe_from_config(
+            resolved.config, primary_key="customer_id", feature_columns=("a", "b"), seed=1
+        )
+
+    assert recipe(base).recipe_hash == recipe(moved).recipe_hash
+    # ... and it is still recorded, so run_config.json and the manifest keep what was chosen.
+    assert recipe(moved).features.max_features == 300
+
+
+def test_a_wired_setting_still_changes_the_recipe_hash() -> None:
+    base = resolve_config("targeted-advertisement", {})
+    moved = resolve_config("targeted-advertisement", {"model_search.tuning_trials": 9})
+
+    def recipe(resolved):
+        return recipe_from_config(
+            resolved.config, primary_key="customer_id", feature_columns=("a", "b"), seed=1
+        )
+
+    assert recipe(base).recipe_hash != recipe(moved).recipe_hash

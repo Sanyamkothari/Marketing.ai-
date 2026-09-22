@@ -1,0 +1,59 @@
+id: ai-onboarding-assistant
+name: AI Onboarding Assistant
+description: A chat assistant grounded in product documentation that guides new customers through setup and answers their questions.
+lifecycle_stage: Onboarding
+ai_type: generative                                # nothing is trained; the "model" is retrieval over the client's own documents
+
+entity: question                                   # one row per question, not per customer: the uploaded file is a reference Q&A set
+
+target:
+  column: reference_answer
+  positive_label: null
+  definition: The answer a person who knows the documents would give
+  label_source: Reference Q&A set written by the client
+
+validation:                                        # a reference set is tens of rows, not thousands, and has no positive class
+  min_rows: 40                                     # below this a pass rate is noise rather than a measurement
+  min_positive: 1                                  # the target is prose; "positives" means nothing here
+
+actions:                                           # nothing is sent, so there is no consent or contact column to suppress on.
+  suppression:                                     # The switches stay at their defaults: with no column named they do nothing.
+    opt_out_column: null
+    recently_contacted_column: null
+
+generative:
+  kind: rag_assistant
+
+output:
+  kpi:
+    label: "Questions answered"
+    formula: "count_rows()"
+
+ui:
+  target_label: "Reference answer column"
+  mode_labels:
+    train: "Build the knowledge index"
+    score: "Check the answers"
+  mode_help:
+    train: "Upload the documents new customers ask about. They are split, embedded and indexed; nothing is trained and nothing is invented."
+    score: "Upload a reference Q&A set. Every question is asked against the index and the answers are graded against yours."
+  dataset_hint:
+    train: "The documents themselves: PDF, Word, Markdown or plain text."
+    score: "One row per {entity}, with the answer you would give. CSV or Parquet."
+  columns_hint:
+    train: "No columns: the upload is a set of documents, and each one keeps its own name and sections."
+    score: "The question is what gets asked, and the reference answer is what the reply is compared against."
+  run_button:
+    train: "Build index"
+    score: "Run evaluation"
+  pages:
+    data: "Product documents + FAQs"
+    model: "Retrieval + Grounded Answers"
+    output: "Answers with citations"
+
+template:
+  columns:
+    - {name: question,         role: primary_key, type: string,  description: "A question a new customer asks, exactly as they would ask it. Asked once, so no two rows repeat one.", examples: ["How long does a new SIM take to activate?","What is the late payment fee?","Is an unused prepaid pack refundable?","How do I get a porting code?","What is Northwind's share price?"]}
+    - {name: expect_refusal,   role: feature,     type: boolean, description: "True when the documents cannot answer and the assistant must say so rather than guess.", examples: ["false","false","false","false","true"]}
+    - {name: source_doc,       role: feature,     type: string,  description: "The document the answer comes from, used to check that the right passage was retrieved. Blank for a refusal.", examples: ["faq_activation.md","faq_billing.md","policy_refunds.md","support_porting.md",""]}
+    - {name: reference_answer, role: target,      type: text,    description: "The answer the documents support, in your own words. Leave blank when the question should be refused.", examples: ["Usually within four hours of the verification call, and at most 24 hours.","Rs 100 or 2% of the outstanding amount, whichever is higher.","Yes, in full, as long as no traffic has been carried on it.","Send PORT and your number to 1900; the code is valid for 15 days.",""]}

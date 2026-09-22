@@ -48,15 +48,17 @@ Six runs, none longer than four and a half minutes, the largest on 381,109 rows.
 ## 2. What needed code changes
 
 This is the evidence for how config-only the engine really is, so it is the section to read
-sceptically. Four requests were filed in [`CROSS_BRANCH_REQUESTS.md`](../CROSS_BRANCH_REQUESTS.md).
+sceptically. Four entries were written in
+[`docs/CROSS_BRANCH_REQUESTS.md`](CROSS_BRANCH_REQUESTS.md), in the format
+`PARALLEL_WORK_PROTOCOL.md` §5.10 asks for — what is needed, and what the branch did meanwhile.
 **One of them blocked the work; three did not.**
 
-| Id | What | Owner | Blocked the library? |
+| Entry (2026-09-22, from `library-datasets`) | What | Owner | Blocked the library? |
 |---|---|---|---|
-| [CBR-401](../CROSS_BRANCH_REQUESTS.md#cbr-401) | Two assertions in `tests/unit/test_config_loading.py` pin the config directory to one industry and to telecom's seven use cases, so no second industry or seventh use case can be added to `configs/`. | `tests/` | **Yes** — see DEC-400 |
-| [CBR-402](../CROSS_BRANCH_REQUESTS.md#cbr-402) | `prepare` has a second, looser PII detector than `ingest`; its phone-number regex matches ISO dates, so `snapshot_date` was redacted with nothing in the validation report to say so. | `engine/` | No |
-| [CBR-403](../CROSS_BRANCH_REQUESTS.md#cbr-403) | Template column names cannot contain dots, so `emp.var.rate` and `default.payment.next.month` must be renamed before a use case can carry a template. | `engine/` | No |
-| [CBR-404](../CROSS_BRANCH_REQUESTS.md#cbr-404) | `threshold.mode: auto` can settle on a threshold that calls every row positive (recall 1.0, specificity 0.0), which reads as a triumph and is no decision at all. | `engine/` | No |
+| *two assertions forbid a second industry* | `test_industries_list_and_telecom_loads` pins the config directory to exactly one industry, and `test_industry_available_entries_have_files_and_matching_stage_names` pins the telecom file to listing every shipped use case. So no second industry and no eighth use case can be added to `configs/`. | `tests/` | **Yes** — see DEC-400 |
+| *two PII detectors that disagree* | `prepare` has a second, looser PII detector than `ingest`; its phone-number regex matches ISO dates, so `snapshot_date` was redacted with nothing in the validation report to say so. | `engine/` | No |
+| *a template column name cannot contain a dot* | `emp.var.rate` and `default.payment.next.month` must be renamed before a use case can carry a template. | `engine/` | No |
+| *`threshold.mode: auto` can call every row positive* | On a weak model at a ~50 % base rate the F1-maximising threshold gives recall 1.0 and specificity 0.0, which reads as a triumph and is no decision at all. | `engine/` | No |
 
 ### What this means, said plainly
 

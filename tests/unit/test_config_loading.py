@@ -36,6 +36,7 @@ from engine.config import (
     resolve_config,
     use_case_path,
 )
+from tests.fixtures.planned import PLANNED_ID, planned_config_root
 
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "configs"
 
@@ -136,13 +137,22 @@ def test_industry_available_entries_have_files_and_matching_stage_names() -> Non
     assert sorted(available) == sorted(list_use_case_ids())
 
 
-def test_industry_planned_entries_have_no_file_but_carry_their_own_copy() -> None:
-    industry = load_industry("telecom")
+def test_industry_planned_entries_have_no_file_but_carry_their_own_copy(tmp_path: Path) -> None:
+    """Read off a fixture root: Phase 3a shipped the last planned use case the real one had."""
+    root = planned_config_root(tmp_path)
+    industry = load_industry("telecom", root)
     planned = [ref for _, ref in industry.all_refs() if ref.status is UseCaseStatus.PLANNED]
-    assert [ref.id for ref in planned] == ["ai-onboarding-assistant"]
+    assert [ref.id for ref in planned] == [PLANNED_ID]
     for ref in planned:
-        assert not use_case_path(ref.id).is_file()
+        assert not use_case_path(ref.id, root).is_file()
         assert ref.name and ref.description
+
+
+def test_every_shipped_use_case_is_available() -> None:
+    """The other half: nothing in the real configuration is planned, so nothing is unreachable."""
+    refs = load_industry("telecom").all_refs()
+    assert refs
+    assert all(ref.status is UseCaseStatus.AVAILABLE for _, ref in refs)
 
 
 def test_config_root_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

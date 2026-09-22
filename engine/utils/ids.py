@@ -13,7 +13,7 @@ from datetime import datetime
 
 from engine.utils.time import utc_now
 
-__all__ = ["new_model_id", "new_run_id", "new_upload_id", "seed_from"]
+__all__ = ["new_index_id", "new_model_id", "new_run_id", "new_upload_id", "seed_from"]
 
 _SEED_MODULUS = 2**32
 
@@ -25,6 +25,16 @@ def new_run_id(now: datetime | None = None) -> str:
     """
     moment = utc_now() if now is None else now
     return f"r_{moment.strftime('%Y%m%d')}_{secrets.token_hex(4)}"
+
+
+def new_index_id(now: datetime | None = None) -> str:
+    """Return a new knowledge-index id of the form ``x_<yyyymmdd>_<8 hex>``.
+
+    Shaped like a run id and for the same reason: an index is built, superseded and compared with
+    the one before it, so a listing of ``data/indexes/`` reads in the order they were built.
+    """
+    moment = utc_now() if now is None else now
+    return f"x_{moment.strftime('%Y%m%d')}_{secrets.token_hex(4)}"
 
 
 def new_upload_id() -> str:

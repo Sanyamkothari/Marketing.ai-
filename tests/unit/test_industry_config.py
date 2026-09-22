@@ -80,7 +80,22 @@ def test_all_refs_walks_stages_in_order() -> None:
     assert [ref.id for _, ref in refs] == written
     assert len(written) > len(document["stages"]), "a flat walk, not one entry per stage"
 
+    assert all(
+        ref.status is UseCaseStatus.AVAILABLE for _, ref in refs
+    ), "every shipped entry has a use-case file; the planned-entry rules are proved on a fixture below"
+
+
+def test_a_planned_use_case_carries_its_own_name_and_description(tmp_path: Path) -> None:
+    """A planned entry has no use-case file, so the industry file is the only place its copy lives.
+
+    The shipped telecom file had the last one until Phase 3a made the AI Onboarding Assistant
+    available, so this reads a fixture instead: the rule outlives whichever use cases happen to be
+    unbuilt today.
+    """
+    root = _root_with_industry(tmp_path, "industry_with_a_planned_use_case.yaml")
+    refs = load_industry("telecom", root).all_refs()
     stage, planned = next((stage, ref) for stage, ref in refs if ref.status is UseCaseStatus.PLANNED)
-    assert stage.ai_type is AiType.GENERATIVE
-    assert planned.name == "AI Onboarding Assistant"
+    assert stage.ai_type is AiType.HYBRID
+    assert planned.name == "Uplift Modelling"
     assert planned.description and planned.description.endswith(".")
+    assert [ref.id for _, ref in refs] == ["targeted-advertisement", "win-back-campaign", "uplift-modelling"]

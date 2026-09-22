@@ -6,7 +6,7 @@ artefacts the run wrote. Every number that reaches a report comes out of this sc
 can never quote a figure that no run produced.
 
 Nothing here is engine code, and nothing here may become engine code: a dataset that needs a
-behaviour the engine does not have is a `CROSS_BRANCH_REQUESTS.md` entry, not a patch applied from
+behaviour the engine does not have is a `docs/CROSS_BRANCH_REQUESTS.md` entry, not a patch applied from
 this file.
 
     python -m library.run_engine \
