@@ -41,8 +41,9 @@ pytestmark = [pytest.mark.slow, pytest.mark.integration]
 
 
 @pytest.fixture(scope="module")
-def sample_run() -> SampleRun:
+def sample_run(tmp_path_factory: pytest.TempPathFactory) -> SampleRun:
     return train_on_sample(
+        runs_dir=tmp_path_factory.mktemp("runs"),
         dataset="online-retail",
         use_case="retail-win-back",
         sample="online-retail/sample.csv",
