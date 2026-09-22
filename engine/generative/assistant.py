@@ -39,6 +39,7 @@ from engine.generative.contracts import (
     GuardrailCheck,
     GuardrailOutcome,
 )
+from engine.generative.errors import MODEL_OUTPUT_MALFORMED
 from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, render
 from engine.generative.retrieval import Retrieved, retrieve
@@ -127,7 +128,9 @@ def answer(
         },
     )
     completion = meter.complete(rendered, GenerativePurpose.ASSISTANT_ANSWER)
-    text, refused, citations, unknown = _parse(completion.text, found.matches)
+    text, refused, citations, unknown = _parse(
+        completion.text, found.matches, question=question, refusal=rag.refusal_message
+    )
 
     checks = list(unknown)
     result = guardrails.check(
@@ -194,34 +197,53 @@ def _refusal(
 
 
 def _parse(
-    raw: str, matches: Sequence[Match]
+    raw: str,
+    matches: Sequence[Match],
+    *,
+    question: str,
+    refusal: str,
 ) -> tuple[str, bool, tuple[Citation, ...], tuple[GuardrailCheck, ...]]:
     """The model's answer, its refusal flag, its citations, and a check for every one it invented.
 
     A malformed reply is treated as a refusal rather than as a failure: the model said something
     the contract cannot read, and showing a customer an unparsed blob would be worse than saying
-    the documents do not cover it. The guardrail check records what happened.
+    the documents do not cover it. So the reply itself is *dropped* and the operator's refusal
+    sentence is returned in its place - returning the blob under `refused=True` would satisfy the
+    flag while still putting the thing on the screen, which is the outcome this paragraph exists
+    to prevent. The raw reply is not lost: it is what the model was metered for, and the guardrail
+    check records that the parse is what failed.
+
+    `question` is what every check here is targeted at, matching what `Guardrails.check` targets
+    for the checks it appends to the same tuple. A caller reading `answer.guardrails` is looking at
+    one list, and a `target` that means the question in one row and the answer in the next cannot
+    be read at all.
     """
     payload = _json(raw)
     if payload is None:
-        return raw.strip(), True, (), ()
+        return (
+            refusal,
+            True,
+            (),
+            (
+                GuardrailCheck(
+                    target=question[:60],
+                    rule=MODEL_OUTPUT_MALFORMED,
+                    outcome=GuardrailOutcome.BLOCKED,
+                    detail="the reply was not a JSON object, so it was dropped for the refusal",
+                ),
+            ),
+        )
     text = str(payload.get("answer", "")).strip()
     refused = bool(payload.get("refused", False))
     citations: list[Citation] = []
     checks: list[GuardrailCheck] = []
     for entry in payload.get("citations", []) or []:
         if not isinstance(entry, dict):
+            checks.append(_unknown_citation(question))
             continue
         number = _number(entry.get("chunk"))
         if number is None or not 1 <= number <= len(matches):
-            checks.append(
-                GuardrailCheck(
-                    target=text[:60],
-                    rule=UNKNOWN_CITATION,
-                    outcome=GuardrailOutcome.WARNED,
-                    detail="a citation pointed at an extract that was not supplied",
-                )
-            )
+            checks.append(_unknown_citation(question))
             continue
         match = matches[number - 1]
         citations.append(
@@ -234,6 +256,21 @@ def _parse(
             )
         )
     return text, refused, tuple(citations), tuple(checks)
+
+
+def _unknown_citation(question: str) -> GuardrailCheck:
+    """The check recorded for a citation that cannot be resolved to a supplied extract.
+
+    One entry not naming a number and one naming a number nobody supplied are the same failure -
+    a claim that pointed somewhere the evidence pack does not reach - so both go through this one
+    place rather than building the same `GuardrailCheck` twice.
+    """
+    return GuardrailCheck(
+        target=question[:60],
+        rule=UNKNOWN_CITATION,
+        outcome=GuardrailOutcome.WARNED,
+        detail="a citation pointed at an extract that was not supplied",
+    )
 
 
 def _json(raw: str) -> dict[str, Any] | None:
@@ -250,11 +287,18 @@ def _json(raw: str) -> dict[str, Any] | None:
 
 
 def _number(value: object) -> int | None:
-    """An extract number from whatever the model put there, or `None` if it is not one."""
+    """An extract number from whatever the model put there, or `None` if it is not one.
+
+    `{"chunk": 2.0}` is as much extract 2 as `{"chunk": 2}` or `{"chunk": "2"}` - a model writing
+    JSON has no reason to prefer one spelling of a whole number - so this reads the value as a
+    float first and only then asks whether it names a whole extract. `1.5` fails that question and
+    is dropped exactly as a word or a stray sign would be.
+    """
     try:
-        return int(str(value).strip())
+        number = float(str(value).strip())
     except (TypeError, ValueError):
         return None
+    return int(number) if number.is_integer() else None
 
 
 def _elapsed(started: float) -> int:

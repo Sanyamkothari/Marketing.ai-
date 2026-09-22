@@ -37,7 +37,12 @@ import numpy.typing as npt
 import pandas as pd
 
 from engine.generative.contracts import CHUNKS_FILENAME, EMBEDDINGS_FILENAME, Chunk
-from engine.generative.errors import INDEX_EMPTY, INDEX_NOT_FOUND, generative_error
+from engine.generative.errors import (
+    INDEX_CORRUPT,
+    INDEX_EMPTY,
+    INDEX_NOT_FOUND,
+    generative_error,
+)
 from engine.storage import Storage, StorageError, index_key
 from engine.utils.logging import get_logger
 
@@ -145,6 +150,16 @@ class LocalVectorStore:
         if not chunks:
             raise generative_error(INDEX_EMPTY, index_id=index_id)
         matrix = self.matrix(index_id)
+        if matrix.shape[0] != len(chunks):
+            # The two files are written separately, so a crash between the writes - or an
+            # overwrite of a live index id - can leave one new and one old. Row `i` of the matrix
+            # would then be a different chunk's vector than `chunks[i]`, and every similarity in
+            # the answer would be measured against the wrong passage while looking perfectly
+            # ordinary. Saying so is the whole value of the check: silence here is a wrong answer
+            # with a citation attached.
+            raise generative_error(
+                INDEX_CORRUPT, index_id=index_id, chunks=len(chunks), vectors=matrix.shape[0]
+            )
         question = _normalise(np.asarray(query, dtype=np.float64).reshape(1, -1))
         if question.shape[1] != matrix.shape[1]:
             raise ValueError(

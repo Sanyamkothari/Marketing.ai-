@@ -291,3 +291,75 @@ must stay true, because each one is a seam that a single shortcut would close:
 3. The champion rule stays a pure function, and its caller keeps re-scoring the incumbent.
 4. Cancellation stays cooperative and checked between stages.
 5. No data value reaches a log, and no unmeasured number is ever rendered as a measurement.
+
+---
+
+## 10. Running the Bedrock smoke tests
+
+Everything above this line is a Phase 4 plan for a system that is not built yet. This section is
+the one exception: `BedrockLLMClient` (`engine/llm.py`) is already built, in Phase 3a, and
+`tests/integration/test_bedrock_smoke.py` is an opt-in suite that calls the real service with it.
+It is documented here rather than in `docs/GENERATIVE.md` because it is an AWS account operation -
+credentials, a region, IAM permissions - and this is where those already live.
+
+**Why it exists at all.** `generative.llm.backend` defaults to `fake`, and every generative test
+that is not this one runs against `GroundedFakeLLMClient`, which hashes words into buckets so
+retrieval is exercisable offline (DEC-214). That fake has one documented blind spot: DEC-219 found
+a question that shares the corpus's *vocabulary* without sharing its *meaning* and scores it ABOVE
+several genuine questions, because a bag of words cannot separate the two. Nothing offline can
+prove a real embedding model gets that right. This suite is what does, and it is the only place in
+the repository allowed to call Bedrock for real.
+
+**Credentials.** Ordinary boto3 credential resolution - `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` (plus `AWS_SESSION_TOKEN` for temporary ones), `AWS_PROFILE` against a
+shared credentials file, or an execution role's own instance profile. Nothing test-specific is
+invented for this. The identity needs `bedrock:Converse`, `bedrock:InvokeModel` and, if the chosen
+generation model supports it, `bedrock:CountTokens` on whichever model ids you configure below -
+and, separately from IAM, that account must have requested and been granted *model access* for
+those model ids in the Bedrock console for the region you run in, which is a one-time, per-account,
+per-region step AWS gates independently of any IAM policy.
+
+**Region and model ids.** Three environment variables, read directly by the test module rather than
+through `engine.settings.Settings` - that module speaks for the whole application's single
+`MARKETING_AI_BEDROCK_MODEL_ID`, where this suite needs a generation id and a separate embedding id
+to run independent proofs, and is deliberately a smaller, louder, test-only vocabulary instead:
+
+| Variable | Required | Meaning |
+|---|---|---|
+| `BEDROCK_SMOKE_REGION` | yes | The region to call, e.g. `ap-south-1` - must be one where the chosen models have been granted access. |
+| `BEDROCK_SMOKE_GENERATION_MODEL_ID` | yes | The Bedrock model id `complete` is proved against. |
+| `BEDROCK_SMOKE_EMBEDDING_MODEL_ID` | yes | The Bedrock model id `embed` is proved against. |
+| `BEDROCK_SMOKE_EMBEDDING_DIMENSIONS` | no | Asserts the embedding model's exact vector width; omitted, the tests only check that the width is positive and stays the same across calls. |
+
+No default or example id is given here for the same reason `configs/llm_prices.yaml` ships empty
+and no model id appears anywhere in `engine/` (DEC-204, DEC-208): a model id is deployment data,
+it differs by account and region, and a plausible-looking one printed in a document gets copied
+into a real run by someone who never meant to pick it. Read the model ids your own account has been
+granted access to off the Bedrock console's model catalogue instead.
+
+**All three variables unset is the default, and is silent and instant.** Every test in the module
+self-skips, loudly, before importing `boto3` at all when any of the three is missing, so a checkout
+with no AWS access, no `-m bedrock`, and no export of any of the above runs the rest of the suite
+exactly as it always has. Setting the three variables without real credentials behind them still
+skips, one level later, once `boto3.Session().get_credentials()` comes back empty - bounded by
+botocore's own short timeouts, never an open-ended wait.
+
+**Running it.**
+
+```sh
+export BEDROCK_SMOKE_REGION=ap-south-1
+export BEDROCK_SMOKE_GENERATION_MODEL_ID=<a generation model id your account can invoke there>
+export BEDROCK_SMOKE_EMBEDDING_MODEL_ID=<an embedding model id your account can invoke there>
+.venv/bin/python -m pytest tests/integration/test_bedrock_smoke.py -m bedrock -v
+```
+
+The `bedrock` marker (registered in `pyproject.toml`) is what `-m bedrock` selects; it does not by
+itself exclude the suite from an unfiltered run; the environment-variable check does that.
+
+**Rough cost.** One run makes one short `Converse` call, one `CountTokens` call (which Bedrock does
+not bill as generation), and four short `embed` calls - a few hundred tokens moved in total, with
+the single completion call dominating whatever it costs. `tests/integration/test_bedrock_smoke.py`'s
+own module docstring carries the up-to-date estimate rather than this file repeating one that could
+drift out of step with it; as a shape rather than a figure, expect it to sit well under what a
+single page of this document costs to review, and to scale with the price of the generation model
+you chose far more than with anything else the suite does.

@@ -25,6 +25,7 @@ __all__ = [
     "DOCUMENT_UNREADABLE",
     "GENERATIVE_ERRORS",
     "GUARDRAIL_BLOCKED",
+    "INDEX_CORRUPT",
     "INDEX_EMPTY",
     "INDEX_NOT_FOUND",
     "KNOWLEDGE_BASE_TOO_LARGE",
@@ -66,6 +67,7 @@ DOCUMENT_EMPTY: Final[str] = "DOCUMENT_EMPTY"
 KNOWLEDGE_BASE_TOO_LARGE: Final[str] = "KNOWLEDGE_BASE_TOO_LARGE"
 INDEX_NOT_FOUND: Final[str] = "INDEX_NOT_FOUND"
 INDEX_EMPTY: Final[str] = "INDEX_EMPTY"
+INDEX_CORRUPT: Final[str] = "INDEX_CORRUPT"
 REFERENCE_SET_INVALID: Final[str] = "REFERENCE_SET_INVALID"
 
 # --- what a flow needs from the run it reads ------------------------------------------------
@@ -126,6 +128,12 @@ GENERATIVE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         INDEX_EMPTY: (
             "The {index_id} index holds no chunks, so no question can be answered from it.",
             "Every uploaded document failed to parse. The build report names each one.",
+        ),
+        INDEX_CORRUPT: (
+            "The {index_id} index holds {chunks} passages but {vectors} vectors, so a search "
+            "cannot tell which vector belongs to which passage.",
+            "Rebuild the index. This happens when a build was interrupted part way through "
+            "writing it, or when one was overwritten while it was being read.",
         ),
         REFERENCE_SET_INVALID: (
             "The reference set is missing the {column} column.",
