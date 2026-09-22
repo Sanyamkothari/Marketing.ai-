@@ -9,8 +9,8 @@ file          data/prepared.csv    (41,188 rows, 22 columns)
 primary key   client_id
 target        y, positive label "yes"
 
-RUN A   r_20260922_b9cd1fde   ENGINE DEFAULTS, no overrides        68.4 s
-RUN B   r_20260922_bf5da58f   + prepare.exclude_columns: [duration] 57.5 s
+RUN A   r_20260922_9162baf6   ENGINE DEFAULTS, no overrides          1314.0 s, 112 models
+RUN B   r_20260922_645fe3db   + prepare.exclude_columns: [duration]  1147.6 s, 144 models
 ```
 
 Run A is the defaults run the brief asks for. Run B changes exactly one setting — through the
@@ -35,7 +35,7 @@ branches of `LEAKAGE_SUSPECTED` describes this column:
 |---|---|---|
 | AUC | one column scores above 0.98 AUC alone | `duration` is strong but nowhere near 0.98 |
 | name pattern | name matches `^(churn\|converted\|outcome)`, or `_date$` after the target | `duration` matches neither |
-| baseline | a 3-fold logistic over all columns clears 0.98 | it does not: the whole file gets 0.9358 |
+| baseline | a 3-fold logistic over all columns clears 0.98 | it does not: the whole file gets 0.9371 |
 
 The check catches columns that **contain the answer**. `duration` does not contain the answer; it
 is merely a fact that does not exist yet at the moment the prediction is needed. No statistical
@@ -62,67 +62,71 @@ contact details), no `HIGH_NULL_COLUMN` (`unknown` is a literal category, not a 
 
 ## RUN A — engine defaults
 
-### Leaderboard — top 3 of 5
+### Leaderboard — top 3 of 112
+
+Ranked on the **validation** score; `test` is reported, never ranked on. The default
+`tuning_trials: 50` fits many variants of each family, so a twenty-two-minute search produced 112
+candidates; a `/T20` suffix is a tuning trial.
 
 | # | Model | Family | Validation ROC-AUC | Test ROC-AUC | Fit |
 |---|---|---|---|---|---|
-| 1 | `WeightedEnsemble_L2` | ensemble | 0.9534 | 0.9509 | 11.1 s |
-| 2 | `LightGBM_BAG_L1` | LightGBM | 0.9529 | 0.9509 | 3.4 s |
-| 3 | `XGBoost_BAG_L1` | XGBoost | 0.9525 | 0.9496 | 5.4 s |
+| 1 | `WeightedEnsemble_L2` | ensemble | 0.9534 | 0.9516 | 18.6 s |
+| 2 | `LightGBM_BAG_L1/T20` | LightGBM | 0.9502 | 0.9513 | 4.1 s |
+| 3 | `LightGBM_BAG_L1/T33` | LightGBM | 0.9500 | 0.9515 | 3.9 s |
 
 **Winner:** Ensemble (LightGBM + XGBoost + Random Forest), 20 features, 28,832 training rows.
 
-### Test metrics — 6,178 rows, threshold 0.4286 (auto)
+### Test metrics — 6,178 rows, threshold 0.3524 (auto)
 
 | Metric | Value |
 |---|---|
-| **ROC-AUC** | **0.9503** |
-| PR-AUC | 0.6450 |
-| F1 | 0.6375 |
-| Recall | 0.6279 |
-| Precision | 0.6474 |
-| Accuracy | 0.9196 |
-| Specificity | 0.9566 |
-| Brier score | 0.0551 |
+| **ROC-AUC** | **0.9509** |
+| PR-AUC | 0.6589 |
+| F1 | 0.6588 |
+| Recall | 0.7227 |
+| Precision | 0.6053 |
+| Accuracy | 0.9157 |
+| Specificity | 0.9402 |
+| Brier score | 0.0545 |
 
 ### Baseline comparison — **model beats baseline**
 
 | Metric | Model | Baseline | Δ |
 |---|---|---|---|
-| ROC-AUC | 0.9503 | 0.9358 | **+0.0145** |
-| PR-AUC | 0.6450 | 0.5862 | +0.0588 |
-| F1 | 0.6375 | 0.6228 | +0.0147 |
-| Recall | 0.6279 | 0.6739 | −0.0460 |
-| Precision | 0.6474 | 0.5790 | +0.0684 |
+| ROC-AUC | 0.9509 | 0.9371 | **+0.0138** |
+| PR-AUC | 0.6589 | 0.6051 | +0.0538 |
+| F1 | 0.6588 | 0.6254 | +0.0334 |
+| Recall | 0.7227 | 0.7184 | +0.0043 |
+| Precision | 0.6053 | 0.5537 | +0.0516 |
 
 ### Decile lift — base rate 11.27 %
 
 | Decile | Rows | Subscribers | Rate | Lift |
 |---|---|---|---|---|
-| **D1** | 618 | 406 | **65.70 %** | **5.83×** |
+| **D1** | 618 | 410 | **66.34 %** | **5.89×** |
 | D2 | 618 | 206 | 33.33 % | 2.96× |
-| D3 | 618 | 66 | 10.68 % | 0.95× |
+| D3 | 618 | 65 | 10.52 % | 0.93× |
 
-D1→D10: 5.83, 2.96, 0.95, 0.22, 0.03, 0.00, 0.00, 0.00, 0.01, 0.00. D1 captures **58.3 %** of all
-subscriptions.
+D1→D10: 5.89, 2.96, 0.93, 0.16, 0.04, 0.01, 0.00, 0.00, 0.00, 0.00. D1 captures **58.9 %** of all
+subscriptions and the top two capture **88.5 %**.
 
 ### Top 10 features
 
 | # | Feature | Share |
 |---|---|---|
-| 1 | **`duration`** | **73.5 %** |
-| 2 | `emp_var_rate` | 9.1 % |
-| 3 | `euribor3m` | 7.6 % |
-| 4 | `nr_employed` | 4.3 % |
-| 5 | `month` | 1.9 % |
-| 6 | `cons_conf_idx` | 0.7 % |
-| 7 | `age` | 0.6 % |
-| 8 | `pdays` | 0.5 % |
-| 9 | `contact` | 0.4 % |
-| 10 | `day_of_week` | 0.4 % |
+| 1 | **`duration`** | **67.7 %** |
+| 2 | `emp_var_rate` | 15.5 % |
+| 3 | `euribor3m` | 6.6 % |
+| 4 | `nr_employed` | 3.4 % |
+| 5 | `month` | 2.2 % |
+| 6 | `age` | 0.7 % |
+| 7 | `pdays` | 0.7 % |
+| 8 | `cons_price_idx` | 0.5 % |
+| 9 | `cons_conf_idx` | 0.5 % |
+| 10 | `contact` | 0.5 % |
 
-**Read the top row and the run is over.** Three quarters of this model is one column that does not
-exist until the call has already happened. A 0.95 ROC-AUC and a 5.8× lift look like a triumph and
+**Read the top row and the run is over.** Two thirds of this model is one column that does not
+exist until the call has already happened. A 0.95 ROC-AUC and a 5.9× lift look like a triumph and
 would be worth nothing on Monday morning, because you cannot sort a call list by how long the call
 is going to last.
 
@@ -134,84 +138,84 @@ One setting changed, in configuration: `prepare.exclude_columns: ["duration"]`. 
 override `LEAKAGE_SUSPECTED`'s `details.override_path` offers when it *does* fire, used here on a
 column the check could not have known about.
 
-### Leaderboard — top 3 of 5
+### Leaderboard — top 3 of 144
 
 | # | Model | Family | Validation ROC-AUC | Test ROC-AUC | Fit |
 |---|---|---|---|---|---|
-| 1 | `WeightedEnsemble_L2` | ensemble | 0.8055 | 0.7847 | 17.2 s |
-| 2 | `LightGBM_BAG_L1` | LightGBM | 0.8050 | 0.7851 | 2.7 s |
-| 3 | `XGBoost_BAG_L1` | XGBoost | 0.8045 | 0.7847 | 4.3 s |
+| 1 | `WeightedEnsemble_L2` | ensemble | 0.8067 | 0.7916 | 4.8 s |
+| 2 | `LightGBM_BAG_L1/T18` | LightGBM | 0.8064 | 0.7933 | 2.6 s |
+| 3 | `LightGBM_BAG_L1/T14` | LightGBM | 0.8062 | 0.7940 | 3.4 s |
 
-**Winner:** Ensemble (LightGBM + XGBoost + Logistic Regression), 19 features.
+**Winner:** Ensemble (LightGBM), 19 features. The weighted ensemble put all its weight on LightGBM
+variants, so the "ensemble" is one family's tuning trials blended together.
 
-### Test metrics — 6,178 rows, threshold 0.29 (auto)
+### Test metrics — 6,178 rows, threshold 0.2809 (auto)
 
 | Metric | Value |
 |---|---|
-| **ROC-AUC** | **0.7825** |
-| PR-AUC | 0.4258 |
-| F1 | 0.4849 |
-| Recall | 0.5532 |
-| Precision | 0.4316 |
-| Accuracy | 0.8676 |
-| Specificity | 0.9075 |
-| Brier score | 0.0788 |
+| **ROC-AUC** | **0.7906** |
+| PR-AUC | 0.4404 |
+| F1 | 0.4860 |
+| Recall | 0.4871 |
+| Precision | 0.4850 |
+| Accuracy | 0.8839 |
+| Specificity | 0.9343 |
+| Brier score | 0.0774 |
 
 ### Baseline comparison — **model beats baseline**
 
 | Metric | Model | Baseline | Δ |
 |---|---|---|---|
-| ROC-AUC | 0.7825 | 0.7724 | **+0.0101** |
-| PR-AUC | 0.4258 | 0.4098 | +0.0160 |
-| F1 | 0.4849 | 0.4606 | +0.0243 |
-| Recall | 0.5532 | 0.5086 | +0.0446 |
-| Precision | 0.4316 | 0.4209 | +0.0107 |
+| ROC-AUC | 0.7906 | 0.7831 | **+0.0075** |
+| PR-AUC | 0.4404 | 0.4153 | +0.0251 |
+| F1 | 0.4860 | 0.4739 | +0.0121 |
+| Recall | 0.4871 | 0.5216 | −0.0345 |
+| Precision | 0.4850 | 0.4342 | +0.0508 |
 
 ### Decile lift — base rate 11.27 %
 
 | Decile | Rows | Subscribers | Rate | Lift |
 |---|---|---|---|---|
-| **D1** | 618 | 303 | **49.03 %** | **4.35×** |
-| D2 | 618 | 115 | 18.61 % | 1.65× |
-| D3 | 618 | 60 | 9.71 % | 0.86× |
+| **D1** | 618 | 315 | **50.97 %** | **4.52×** |
+| D2 | 618 | 128 | 20.71 % | 1.84× |
+| D3 | 618 | 50 | 8.09 % | 0.72× |
 
-D1→D10: 4.35, 1.65, 0.86, 0.62, 0.52, 0.53, 0.50, 0.37, 0.33, 0.26. D1 captures **43.5 %** of all
-subscriptions.
+D1→D10: 4.52, 1.84, 0.72, 0.65, 0.39, 0.45, 0.29, 0.39, 0.36, 0.40. D1 captures **45.3 %** of all
+subscriptions and the top two capture **63.6 %**.
 
 ### Top 10 features
 
 | # | Feature | Share |
 |---|---|---|
-| 1 | `emp_var_rate` | 49.9 % |
-| 2 | `nr_employed` | 13.7 % |
-| 3 | `contact` | 9.8 % |
-| 4 | `month` | 7.6 % |
-| 5 | `cons_price_idx` | 5.4 % |
-| 6 | `euribor3m` | 4.9 % |
-| 7 | `cons_conf_idx` | 1.8 % |
-| 8 | `day_of_week` | 1.7 % |
-| 9 | `pdays` | 1.4 % |
-| 10 | `poutcome` | 1.3 % |
+| 1 | `nr_employed` | 27.8 % |
+| 2 | `month` | 24.6 % |
+| 3 | `emp_var_rate` | 12.7 % |
+| 4 | `euribor3m` | 12.1 % |
+| 5 | `contact` | 9.4 % |
+| 6 | `campaign` | 3.7 % |
+| 7 | `cons_price_idx` | 2.4 % |
+| 8 | `pdays` | 2.4 % |
+| 9 | `cons_conf_idx` | 2.0 % |
+| 10 | `day_of_week` | 1.9 % |
 
 ## What a business user should take from this
 
-**A term-deposit call list built this way is four times better than calling at random.** The top
-decile subscribes at 49 % against a campaign average of 11 %, and calling that one-tenth of the
-book reaches 44 % of everyone who was ever going to say yes. That is Run B — the model you can
-actually deploy.
+**A term-deposit call list built this way is four and a half times better than calling at random.**
+The top decile subscribes at 51 % against a campaign average of 11 %, and calling that one-tenth of
+the book reaches 45 % of everyone who was ever going to say yes. Call the top fifth and you reach
+64 %. That is Run B — the model you can actually deploy.
 
-**Most of what predicts a subscription is the economy, not the client.** Four of the top six
-features are macro-economic: the employment variation rate alone carries half the model, and the
-employment level, the consumer price index and Euribor add another quarter between them. The other
-two are the channel and the calendar month. This campaign succeeded when
-rates made deposits attractive. It is a genuine and slightly uncomfortable finding — the model is
-partly forecasting the interest-rate cycle — and it means the ranking will need retraining when
+**Most of what predicts a subscription is the economy and the calendar, not the client.** Four of
+the top five features are macro-economic or seasonal: the employment level, the month, the
+employment variation rate and Euribor together carry 77 % of the model. This campaign succeeded
+when rates made deposits attractive. It is a genuine and slightly uncomfortable finding — the model
+is partly forecasting the interest-rate cycle — and it means the ranking will need retraining when
 rates move, which is what `monitoring.retraining: on_drift` is for.
 
 **The difference between the two runs is the whole argument for having a person read the column
-list.** Run A scores 0.95 and is worthless; Run B scores 0.78 and works. No validation check found
-the difference and none could have: `duration` does not contain the answer, it simply does not
-exist yet. One line of configuration separates them.
+list.** Run A scores 0.95 and is worthless; Run B scores 0.79 and works. No validation check found
+the difference and none could: `duration` does not contain the answer, it simply does not exist
+yet. One line of configuration separates them.
 
 ## Reproducing them
 
@@ -230,5 +234,5 @@ python -m library.run_engine \
   --override 'prepare.exclude_columns=["duration"]'
 ```
 
-Artefacts: `library/.runs/uci-bank-marketing/r_20260922_b9cd1fde.results.json` (A) and
-`r_20260922_bf5da58f.results.json` (B).
+Artefacts: `library/.runs/uci-bank-marketing/r_20260922_9162baf6.results.json` (A) and
+`r_20260922_645fe3db.results.json` (B).

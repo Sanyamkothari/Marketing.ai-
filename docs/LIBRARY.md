@@ -19,31 +19,43 @@ happened, the table says so.
 
 | # | Dataset | Industry | Use case | Rows | Test metric | D1 lift | Story |
 |---|---|---|---|---|---|---|---|
-| 1 | [Telco Customer Churn](../library/telco-customer-churn/) | Telecom | `telco-churn` | 7,043 | ROC-AUC **0.8573** (baseline 0.8535) | **3.02×** | Call the top 10 % and three in four are leaving; tenure and contract type are 76 % of the answer. |
-| 2 | [UCI Bank Marketing](../library/uci-bank-marketing/) | Banking | `bank-term-deposit` | 41,188 | ROC-AUC **0.7825** (baseline 0.7724) *[0.9503 before the leaking column was excluded]* | **4.35×** *[5.83× before]* | The 0.95 model is worthless and the 0.78 model works — and no validation check could tell them apart. |
-| 3 | [UCI Online Retail](../library/online-retail/) | E-commerce | `retail-win-back` | 1,463 | PR-AUC **0.4982** (baseline 0.5027) — **loses** | 1.44× | An invoice log alone cannot predict who comes back; the engine ran the whole path and returned an honest no. |
-| 4 | [Health Insurance Cross-Sell](../library/health-insurance-cross-sell/) | Insurance | `insurance-cross-sell` | 381,109 | ROC-AUC **0.8555** (baseline 0.8371) | **3.18×** | Half the book is not worth a call; "already insured" is 57 % of the model on its own. |
-| 5 | [UCI Credit Default](../library/uci-credit-default/) | Banking | `card-default-propensity` | 30,000 | ROC-AUC **0.7869** (baseline 0.7245) | **3.26×** | The widest win over a linear baseline in the library: last month's payment status is half the answer. |
+| 1 | [Telco Customer Churn](../library/telco-customer-churn/) | Telecom | `telco-churn` | 7,043 | ROC-AUC **0.8448** (baseline 0.8409) | **2.99×** | Call the top 10 % and four in five are leaving; tenure, contract and internet service are 74 % of the answer. |
+| 2 | [UCI Bank Marketing](../library/uci-bank-marketing/) | Banking | `bank-term-deposit` | 41,188 | ROC-AUC **0.7906** (baseline 0.7831) *[0.9509 before the leaking column was excluded]* | **4.52×** *[5.89× before]* | The 0.95 model is worthless and the 0.79 model works — and no validation check could tell them apart. |
+| 3 | [UCI Online Retail](../library/online-retail/) | E-commerce | `retail-win-back` | 1,463 | PR-AUC **0.4975** (baseline 0.4985) — **loses** | 1.33× | An invoice log alone cannot predict who comes back; the engine ran the whole path and returned an honest no. |
+| 4 | [Health Insurance Cross-Sell](../library/health-insurance-cross-sell/) | Insurance | `insurance-cross-sell` | 381,109 | ROC-AUC **0.8581** (baseline 0.8380) | **3.23×** | Half the book is not worth a call; "already insured" is 55 % of the model on its own. |
+| 5 | [UCI Credit Default](../library/uci-credit-default/) | Banking | `card-default-propensity` | 30,000 | ROC-AUC **0.7957** (baseline 0.7279) | **3.25×** | The widest win over a linear baseline in the library, +0.068: last month's payment status is half the answer. |
 | 6 | [Criteo Uplift](../library/criteo-uplift/) | Ad-tech | `criteo-uplift` — **planned** | 13,979,592 | **not run** | — | Reserved for Phase 3b. The data is also unreachable from this environment, and both facts are recorded rather than papered over. |
 
-Every run used **engine defaults** — `strategy: balanced`, `time_limit_minutes: 30`, the default
-candidate pool — with no overrides, except the second bank run, which adds exactly one:
-`prepare.exclude_columns: ["duration"]`.
+Every run used **engine defaults** — `strategy: balanced`, `time_limit_minutes: 30`,
+`tuning_trials: 50`, the default candidate pool — with no overrides, except the second bank run,
+which adds exactly one: `prepare.exclude_columns: ["duration"]`.
 
 ### The same table, with the parts a demo cares about
 
 | Dataset | Wall clock | Models trained | Winner | Validation findings |
 |---|---|---|---|---|
-| Telco Customer Churn | 21.0 s | 5 | Ensemble (Logistic Regression + LightGBM + XGBoost) | none |
-| UCI Bank Marketing (defaults) | 68.4 s | 5 | Ensemble (LightGBM + XGBoost + Random Forest) | none |
-| UCI Bank Marketing (`duration` excluded) | 57.5 s | 5 | Ensemble (LightGBM + XGBoost + Logistic Regression) | none |
-| UCI Online Retail | 269.8 s | 5 | "Ensemble (Logistic Regression)" — of one model | 1 warning: `CONSTANT_COLUMN` on `snapshot_date` |
-| Health Insurance Cross-Sell | 167.0 s | 5 | Ensemble (XGBoost + LightGBM + Random Forest + 1 more) | none |
-| UCI Credit Default | 49.7 s | 5 | Ensemble (LightGBM + XGBoost + Random Forest) | none |
+| Telco Customer Churn | 624.3 s | 111 | Ensemble (XGBoost + Logistic Regression) | none |
+| UCI Bank Marketing (defaults) | 1314.0 s | 112 | Ensemble (LightGBM + XGBoost + Random Forest) | none |
+| UCI Bank Marketing (`duration` excluded) | 1147.6 s | 144 | Ensemble (LightGBM) | none |
+| UCI Online Retail | 910.4 s | 106 | Ensemble (XGBoost + Random Forest) | 1 warning: `CONSTANT_COLUMN` on `snapshot_date` |
+| Health Insurance Cross-Sell | 1245.6 s | 77 | Ensemble (XGBoost + LightGBM + Logistic Regression) | none |
+| UCI Credit Default | 888.6 s | 152 | Ensemble (LightGBM + XGBoost + Random Forest) | none |
 
-Six runs, none longer than four and a half minutes, the largest on 381,109 rows.
+Six runs, none longer than twenty-two minutes, the largest on 381,109 rows. Across all six: **zero
+validation errors and one warning**, and that warning was correct.
 
----
+### These numbers were measured twice, and the second time is the one that counts
+
+The library was first measured against the engine as it stood before this branch merged the
+contracts-first surface and Phase 3a. That merge brought `hyperparameter_tune_kwargs` into
+`engine/stages/train.py` (DEC-073): `model_search.tuning_trials` had been inert, and is now honoured.
+Nothing in any library config changed, and the search changed completely — telco went from 5 models
+in 21 s to 111 in 624 s, and its ROC-AUC moved 0.8573 → 0.8448.
+
+So every report was re-run and rewritten from artefacts produced against the merged tree. The
+figures above are those. It is also, incidentally, the cleanest demonstration in this repository of
+what the library is for: the same six configurations, unchanged, measured a real difference in the
+engine underneath them.
 
 ## 2. What needed code changes
 
@@ -93,11 +105,12 @@ reproduce.
   column that does not contain the answer but simply does not exist yet. The library says so
   rather than claiming a catch it did not make — and shows that the fix is one line of
   configuration.
-* **It returned a negative result rather than a flattering one.** On the win-back file the search
-  lost to its own logistic-regression baseline, and `baseline.json` says `model_beats_baseline:
-  false`. A system that could not do that would be worse than useless.
+* **It returned a negative result rather than a flattering one.** On the win-back file a
+  sixteen-minute, 106-candidate search tied with its own logistic-regression baseline on the
+  primary metric, and `baseline.json` says `model_beats_baseline: false`. A system that could not
+  do that would be worse than useless.
 * **It refused nothing it should have accepted.** Five files trained, zero validation *errors*,
-  one warning in total across every run.
+  one warning in total across all six runs.
 
 ### What the library could not demonstrate
 
