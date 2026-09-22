@@ -56,6 +56,8 @@ from __future__ import annotations
 import secrets
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
+from importlib import import_module
+from pathlib import Path
 from typing import Annotated, Final, cast
 
 from fastapi import APIRouter, HTTPException, Query, Response
@@ -69,7 +71,7 @@ from api.routes.sources import load_profile, load_source
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
 from engine.clients import ClientStore, ClientStoreError
-from engine.config import RunMode, StrictBase, get_roles
+from engine.config import RunMode, StrictBase, UseCaseConfig, get_roles
 from engine.contracts import RunState, Severity
 from engine.jobs import CancelToken, JobCancelledError, JobFn
 from engine.onboarding.datasets import (
@@ -118,6 +120,11 @@ _SPEC_ERRORS: dict[int | str, dict[str, object]] = {
 _PREVIEW_ERRORS: dict[int | str, dict[str, object]] = {
     404: {"model": ErrorResponse},
     422: {"model": ErrorResponse},
+    503: {"model": ErrorResponse},
+}
+_ARTEFACT_ERRORS: dict[int | str, dict[str, object]] = {
+    404: {"model": ErrorResponse},
+    409: {"model": ErrorResponse},
 }
 _NOT_FOUND: dict[int | str, dict[str, object]] = {404: {"model": ErrorResponse}}
 
@@ -225,7 +232,6 @@ def create_onboarding_spec(
     client_id: str,
     body: OnboardingSpecCreateRequest,
     root: ConfigRootDep,
-    storage: StorageDep,
     store: ClientStoreDep,
 ) -> OnboardingSpecCreateResponse:
     """Every id `body` names must resolve before anything is saved: the entity and event sources, and
@@ -351,7 +357,7 @@ def preview_onboarding_spec(
     "/datasets",
     response_model=DatasetCreatedResponse,
     status_code=202,
-    responses={**_NOT_FOUND, 409: {"model": DatasetChecksResponse}},
+    responses={**_NOT_FOUND, 409: {"model": DatasetChecksResponse}, 422: {"model": ErrorResponse}},
     summary="Validate a recipe and, when it passes, start building a dataset from it",
 )
 def create_dataset(
@@ -370,16 +376,16 @@ def create_dataset(
     """
     load_client(store, body.client_id)
     spec = load_spec(store, body.client_id, body.spec_id)
-    use_case_config(spec.use_case, root)
-    if body.source_ids is not None:
-        for source_id in body.source_ids:
-            load_source(store, body.client_id, source_id)
-    sources = load_sources(store, storage, body.client_id, (spec.entity_source_id, *spec.event_source_ids))
+    config = use_case_config(spec.use_case, root)
+    source_ids = (spec.entity_source_id, *spec.event_source_ids)
+    require_spec_sources(store, body.client_id, spec=spec, source_ids=body.source_ids)
+    sources = load_source_specs(store, body.client_id, source_ids)
     mappings = load_mappings(store, body.client_id, spec.mapping_ids)
-    checks = run_onboarding_checks(sources=sources, mappings=mappings, spec=spec)
+    checks = spec_checks(config, root, sources=sources, mappings=mappings, spec=spec)
     if blocking_errors(checks):
         return dataset_checks_conflict(checks)
 
+    profiles = load_profiles(storage, body.client_id, source_ids)
     registry = LocalDatasetRegistry(storage)
     dataset_id = registry.new_dataset_id(body.client_id, spec.use_case)
     registry.write_status(dataset_id, queued_status(dataset_id, body.client_id, spec.spec_id))
@@ -391,7 +397,7 @@ def create_dataset(
             dataset_id=dataset_id,
             spec=spec,
             mode=body.mode,
-            sources=sources,
+            sources=profiles,
             mappings=mappings,
             source_ids=body.source_ids,
         ),
@@ -422,7 +428,7 @@ def read_dataset(dataset_id: str, storage: StorageDep) -> DatasetGetResponse:
 @router.get(
     "/datasets/{dataset_id}/report",
     response_model=BuildReport,
-    responses=_NOT_FOUND,
+    responses=_ARTEFACT_ERRORS,
     summary="The build review screen's report for one dataset",
 )
 def read_dataset_report(dataset_id: str, storage: StorageDep) -> BuildReport:
@@ -430,13 +436,13 @@ def read_dataset_report(dataset_id: str, storage: StorageDep) -> BuildReport:
     try:
         return registry.read_report(dataset_id)
     except DatasetError as exc:
-        raise dataset_not_found(dataset_id) from exc
+        raise missing_artefact(registry, dataset_id, what="build report") from exc
 
 
 @router.get(
     "/datasets/{dataset_id}/sample",
     response_model=DatasetSampleResponse,
-    responses=_NOT_FOUND,
+    responses=_ARTEFACT_ERRORS,
     summary="A stringified, PII-redacted sample of one built dataset",
 )
 def read_dataset_sample(dataset_id: str, storage: StorageDep) -> DatasetSampleResponse:
@@ -444,22 +450,22 @@ def read_dataset_sample(dataset_id: str, storage: StorageDep) -> DatasetSampleRe
     try:
         rows = registry.read_sample(dataset_id)
     except DatasetError as exc:
-        raise dataset_not_found(dataset_id) from exc
+        raise missing_artefact(registry, dataset_id, what="sample") from exc
     return DatasetSampleResponse(rows=tuple(rows))
 
 
 @router.get(
     "/datasets/{dataset_id}/features.sql",
     response_class=Response,
-    responses=_NOT_FOUND,
+    responses=_ARTEFACT_ERRORS,
     summary="The compiled feature SQL of one built dataset, for debugging and Phase 4 porting",
 )
 def read_dataset_features_sql(dataset_id: str, storage: StorageDep) -> Response:
-    key = dataset_key(dataset_id, DATASET_FEATURES_SQL_FILENAME)
+    registry = LocalDatasetRegistry(storage)
     try:
-        text = storage.read_text(key)
+        text = storage.read_text(dataset_key(dataset_id, DATASET_FEATURES_SQL_FILENAME))
     except StorageError as exc:
-        raise dataset_not_found(dataset_id) from exc
+        raise missing_artefact(registry, dataset_id, what="feature SQL") from exc
     return Response(content=text, media_type="text/plain")
 
 
@@ -516,13 +522,37 @@ def build_m12_job(
         except JobCancelledError:
             raise
         except BuildEngineUnavailableError as exc:
-            write_build_unavailable(
-                registry, dataset_id=dataset_id, client_id=spec.client_id, spec_id=spec.spec_id, error=exc
+            write_build_failed(
+                registry,
+                dataset_id=dataset_id,
+                client_id=spec.client_id,
+                spec_id=spec.spec_id,
+                code=exc.code,
+                message=exc.message,
             )
             return
-        if report.passed:
-            manifest = registry.read_manifest(dataset_id)
-            store.register_dataset(manifest)
+        if not report.passed:
+            return
+        try:
+            store.register_dataset(registry.read_manifest(dataset_id))
+        except (DatasetError, ClientStoreError) as exc:
+            # The build wrote its own `done`, but this step is the one that puts the dataset in the
+            # client's index, and a dataset nothing can find is not a finished build. Saying so
+            # costs a status the build already wrote; leaving it would show a Build screen a green
+            # tick for a dataset the Datasets screen will never list.
+            log_failure(_LOGGER, f"dataset registration dataset_id={dataset_id}", exc)
+            write_build_failed(
+                registry,
+                dataset_id=dataset_id,
+                client_id=spec.client_id,
+                spec_id=spec.spec_id,
+                code="DATASET_NOT_REGISTERED",
+                message=(
+                    "This dataset was built but could not be added to the client's list of datasets, "
+                    "so nothing can use it yet. Build it again, and report the problem if it happens "
+                    "a second time."
+                ),
+            )
 
     return job
 
@@ -550,8 +580,9 @@ class BuildEngineUnavailableError(Exception):
     def __init__(self) -> None:
         self.code: str = "BUILD_ENGINE_NOT_AVAILABLE"
         self.message: str = (
-            "The dataset build engine is not available yet. This is expected while "
-            "engine.onboarding.build is still being written; try again once it has landed."
+            "This engine cannot build datasets yet, so nothing was built and no numbers were "
+            "produced. Ask whoever installed it to finish setting up the dataset build step, then "
+            "start the build again."
         )
         super().__init__(self.message)
 
@@ -561,15 +592,23 @@ def _build_callable() -> BuildDatasetFn:
     cleanly whether or not that module exists yet (`PARALLEL_WORK_PROTOCOL.md`: another agent is
     writing it in parallel, and the task for this milestone asks for exactly this indirection).
     Raises `BuildEngineUnavailableError` rather than letting a bare `ImportError` reach `run_build`'s
-    caller as an unhandled 500 or a silently failed background job.
+    caller as an unhandled 500 or a silently failed background job. Looked up through
+    `importlib.import_module` rather than a function-level `from ... import`, because the module
+    genuinely may not exist: a static import of a missing module is a `mypy --strict` failure that
+    would have to be silenced with an ignore comment, and that comment would itself become a
+    `warn_unused_ignores` failure the day the module lands.
     """
     try:
-        from engine.onboarding.build import build_dataset
+        module = import_module("engine.onboarding.build")
     except ImportError as exc:
         raise BuildEngineUnavailableError() from exc
-    # `cast`: `engine.onboarding.build` has no py.typed marker yet (it does not exist - see the
-    # module docstring), so mypy sees this import as `Any`; the cast asserts the contract this
-    # branch wrote `run_build` against and becomes a no-op once the real module lands.
+    build_dataset = getattr(module, "build_dataset", None)
+    if build_dataset is None:
+        # The module landed but under a different entry point: the same situation for a caller as
+        # no module at all, and the same honest answer, rather than an AttributeError in a job body.
+        raise BuildEngineUnavailableError()
+    # `cast`: looked up by name at runtime, so mypy sees `Any`; the cast asserts the contract
+    # `run_build` is written against and is the one place a wrong assumption would show up.
     return cast(BuildDatasetFn, build_dataset)
 
 
@@ -601,24 +640,23 @@ def run_build(
     )
 
 
-def write_build_unavailable(
+def write_build_failed(
     registry: DatasetRegistry,
     *,
     dataset_id: str,
     client_id: str,
     spec_id: str,
-    error: BuildEngineUnavailableError,
+    code: str,
+    message: str,
 ) -> None:
-    """Overwrite `build_status.json` as failed, so a poller sees a plain-language reason instead of
-    a build that silently never moves past "queued" (the M2 `STAGE_NOT_IMPLEMENTED` precedent in
-    `api.routes.runs.build_m2_job`, for the same "not built yet" situation)."""
-    stage = BuildStage(
-        key="build",
-        title="Build",
-        group_label="Build",
-        state=RunState.FAILED,
-        detail=error.message,
-    )
+    """Overwrite `build_status.json` as failed, so a poller sees a plain-language reason instead of a
+    build that silently never moves past "queued" or reports a "done" nothing can use (the M2
+    `STAGE_NOT_IMPLEMENTED` precedent in `api.routes.runs.build_m2_job`).
+
+    One honest stage, not an invented list: this function knows the build stopped and why, and
+    nothing about the stages a real build would have had, so it claims only the first (house rule 2).
+    """
+    stage = BuildStage(key="build", title="Build", group_label="Build", state=RunState.FAILED, detail=message)
     registry.write_status(
         dataset_id,
         BuildStatus(
@@ -630,8 +668,8 @@ def write_build_unavailable(
             stages=(stage,),
             current_stage=None,
             progress_pct=0,
-            detail=error.message,
-            error=error.code,
+            detail=message,
+            error=code,
         ),
     )
 
@@ -669,6 +707,70 @@ def build_onboarding_spec(spec_id: str, client_id: str, body: OnboardingSpecCrea
         )
     except ValidationError as exc:
         raise http_error(422, "ONBOARDING_SPEC_INVALID", str(exc.errors()[0]["msg"])) from exc
+
+
+def spec_checks(
+    config: UseCaseConfig,
+    root: Path,
+    *,
+    sources: Mapping[str, SourceSpec],
+    mappings: Mapping[str, MappingSpec],
+    spec: OnboardingSpec,
+) -> tuple[OnboardingCheck, ...]:
+    """Every check a recipe can be judged on before a row is read: the one call all three of
+    `POST /clients/{id}/onboarding-specs`, preview and `POST /datasets` make, so the three cannot
+    drift into disagreeing about whether the same recipe is buildable.
+
+    See `api.routes.mappings.check_params` for what this deliberately leaves unmeasured, and the
+    module docstring for why the data-shaped findings belong to the build report instead.
+    """
+    return run_onboarding_checks(
+        check_params(config, get_roles(root), facts_for(sources, mappings.values()), spec=spec)
+    )
+
+
+def build_mode(spec: OnboardingSpec) -> RunMode:
+    """`train` when the recipe derives a label, `score` when it does not.
+
+    A preview takes no mode of its own, and `OnboardingSpec.label_spec` is the field that decides
+    whether a recipe has a target at all ("null for a scoring-only recipe"). Defaulting to `train`
+    instead would ask the build engine to derive a label a scoring-only recipe never defines, so the
+    one preview a user most needs - did my window leave me any rows? - would fail for a reason that
+    has nothing to do with their window.
+    """
+    return RunMode.TRAIN if spec.label_spec is not None else RunMode.SCORE
+
+
+def require_spec_sources(
+    store: ClientStore, client_id: str, *, spec: OnboardingSpec, source_ids: tuple[str, ...] | None
+) -> None:
+    """`source_ids` narrows a build to some of the recipe's own sources, or it is refused.
+
+    An id the recipe never reads cannot narrow anything, so accepting one would mean either building
+    everything the recipe names while the user believes they restricted it, or building nothing at
+    all - `api.routes.runs.create_run_endpoint` refuses the same class of request for the same
+    reason: "accepting a request and quietly ignoring half of it is how a user comes to believe their
+    rows were joined on two columns when they were joined on one".
+    """
+    if source_ids is None:
+        return
+    named = {spec.entity_source_id, *spec.event_source_ids}
+    if not source_ids:
+        raise http_error(
+            409,
+            "DATASET_SOURCES_EMPTY",
+            "This build was restricted to no files at all, so there would be nothing to build from. "
+            "Name at least one of the recipe's files, or leave the list out to build from all of them.",
+        )
+    for source_id in source_ids:
+        load_source(store, client_id, source_id)
+        if source_id not in named:
+            raise http_error(
+                409,
+                "SOURCE_NOT_IN_SPEC",
+                f"{source_id!r} is not one of the files this recipe reads, so restricting the build "
+                "to it would build nothing. Choose a file the recipe names, or leave the list out.",
+            )
 
 
 def blocking_errors(checks: Iterable[OnboardingCheck]) -> tuple[OnboardingCheck, ...]:
@@ -714,16 +816,24 @@ def queued_status(
     )
 
 
-def load_sources(
-    store: ClientStore, storage: Storage, client_id: str, source_ids: Iterable[str]
-) -> dict[str, SourceProfile]:
-    """Every named source's stored profile, keyed by id; each a `404 SOURCE_NOT_FOUND` on its own,
-    exactly as `api.routes.sources` answers for its own endpoints."""
-    profiles: dict[str, SourceProfile] = {}
-    for source_id in source_ids:
-        load_source(store, client_id, source_id)
-        profiles[source_id] = load_profile(storage, client_id, source_id)
-    return profiles
+def load_source_specs(store: ClientStore, client_id: str, source_ids: Iterable[str]) -> dict[str, SourceSpec]:
+    """Every named source's registry row, keyed by id; each a `404 SOURCE_NOT_FOUND` on its own,
+    exactly as `api.routes.sources` answers for its own endpoints.
+
+    The registry row, not the profile, is what the checks read: `SourceFacts` wants the file's role
+    and its whole-file row count, both of which the row carries and neither of which needs the
+    profile document to be read back off disk.
+    """
+    return {source_id: load_source(store, client_id, source_id) for source_id in source_ids}
+
+
+def load_profiles(storage: Storage, client_id: str, source_ids: Iterable[str]) -> dict[str, SourceProfile]:
+    """Every named source's stored profile, keyed by id, for the build engine.
+
+    Loaded only on the paths that actually build - preview and `POST /datasets` - so a screen that
+    merely saves or validates a recipe never reads a document it has no use for.
+    """
+    return {source_id: load_profile(storage, client_id, source_id) for source_id in source_ids}
 
 
 def load_mappings(store: ClientStore, client_id: str, mapping_ids: Iterable[str]) -> dict[str, MappingSpec]:
@@ -759,6 +869,26 @@ def load_status(registry: DatasetRegistry, dataset_id: str) -> BuildStatus:
 
 def dataset_not_found(dataset_id: str) -> HTTPException:
     return http_error(404, "DATASET_NOT_FOUND", f"No dataset with id {dataset_id!r}.")
+
+
+def missing_artefact(registry: DatasetRegistry, dataset_id: str, *, what: str) -> HTTPException:
+    """A `404` when nothing was ever written under this id, a `409` when the build simply has not
+    produced this artefact.
+
+    The distinction is the whole point: a build that is still running, or that failed, has a real
+    dataset directory and a real `build_status.json`, so answering "no dataset with id ..." would
+    tell a user polling their own build that the thing they are watching does not exist. Which of
+    the two it is comes from `DatasetRegistry.exists`, not from a guess, and the `409` claims
+    nothing about *why* the artefact is absent because this call did not read the status to find out.
+    """
+    if registry.exists(dataset_id):
+        return http_error(
+            409,
+            "DATASET_NOT_BUILT",
+            f"This dataset's build has not produced a {what}. Check how the build is getting on; "
+            "if it failed, fix what it reported and build it again.",
+        )
+    return dataset_not_found(dataset_id)
 
 
 __all__ = ["router"]

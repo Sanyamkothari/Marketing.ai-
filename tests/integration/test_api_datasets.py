@@ -8,21 +8,20 @@ The fixtures below build the smallest app that serves all four M8/M12 routers to
 exactly as the endpoints depend on each other (clients -> sources -> mappings -> datasets), and read
 `app.state.config_root`/`data_dir` the same way `api.main.create_app` would set them.
 
-`api/routes/mappings.py` needs `engine.onboarding.mapping` (`suggested_mapping_spec`) and
-`engine.onboarding.validate` (`run_onboarding_checks`); `api/routes/datasets.py` needs
-`engine.onboarding.validate` too, but reaches `engine.onboarding.build.build_dataset` through its own
-`_build_callable()` indirection instead of a bare import, precisely so this module and the tests
-below can still exercise everything up to a `POST /datasets` job *submission* before that module
-exists (`test_create_dataset_with_a_good_spec_returns_202_and_a_pollable_id` polls the job to a
-terminal state and accepts either a real `done` or an honestly-reported `BUILD_ENGINE_NOT_AVAILABLE`
-failure - see that test). `engine.onboarding.sources` is a third, transitive dependency (needed by
-`api/routes/sources.py`, which every fixture below needs for a confirmed-role source to map). None of
-the three existed when this module was written: every fixture that needs one skips - not fails -
-collection until it lands, exactly as `test_api_clients.py`'s own `full_client` fixture already does
-for `engine.onboarding.sources` alone. `api/routes/mappings.py` and `api/routes/datasets.py` document,
-at their own top, the exact signatures this branch wrote each call against; if the real modules differ
-once they land, the fix belongs at those call sites, not in a weakened version of either route module
-or a test that stops exercising them.
+`engine.onboarding.mapping` and `engine.onboarding.validate` have landed, so every test here now
+runs for real against them rather than skipping; the `importorskip` guards stay because the fixtures
+are layered and a module that is being rewritten should skip this file, not fail it.
+
+`engine.onboarding.build` has *not* landed, and `api/routes/datasets.py` reaches
+`build_dataset` through its own `_build_callable()` indirection rather than a bare import precisely
+so everything up to and including a `POST /datasets` job submission is still exercised without it.
+The two tests that would otherwise need it - the preview and the poll-to-terminal build - each accept
+exactly two outcomes: the real one, or the honestly-reported `BUILD_ENGINE_NOT_AVAILABLE` refusal, and
+they assert the *same* invariants in both cases (a preview leaves no dataset directory behind either
+way; a build reaches a terminal state either way). Neither accepts silence, a fabricated row or a
+poll that never moves. Both were also run green against a scratch `engine/onboarding/build.py` stub
+matching the signature `api/routes/datasets.py` documents, so the happy branch is exercised code, not
+an untested `else`.
 """
 
 from __future__ import annotations
@@ -291,6 +290,134 @@ def test_save_mapping_returns_checks(full_client: TestClient) -> None:
     assert isinstance(saved["checks"], list)
 
 
+def test_save_mapping_checks_every_mapping_of_the_use_case_not_only_the_one_just_saved(
+    full_client: TestClient,
+) -> None:
+    """Whether an entity table has been mapped is a statement about the *set* of this client's
+    mappings, so saving the complaints mapping alone must report `NO_ENTITY_SOURCE` and saving the
+    entity mapping must clear it. A check run over only the mapping just written could report
+    neither, and would tell a client whose other tables are fine that their data is broken."""
+    ctx = _onboarded_client(full_client)
+    complaints = _suggest_mapping(full_client, ctx["client_id"], ctx["complaints_source_id"])
+    alone = _save_mapping(full_client, ctx["client_id"], complaints)
+    assert "NO_ENTITY_SOURCE" in {check["code"] for check in alone["checks"]}
+
+    entity = _suggest_mapping(full_client, ctx["client_id"], ctx["entity_source_id"])
+    both = _save_mapping(full_client, ctx["client_id"], entity)
+    assert "NO_ENTITY_SOURCE" not in {check["code"] for check in both["checks"]}
+
+
+def test_every_check_a_save_returns_carries_a_code_a_message_and_a_suggestion(
+    full_client: TestClient,
+) -> None:
+    """Plain-language failures (house rule 3): nothing reaches the mapping screen as a bare code."""
+    ctx = _onboarded_client(full_client)
+    complaints = _suggest_mapping(full_client, ctx["client_id"], ctx["complaints_source_id"])
+    checks = _save_mapping(full_client, ctx["client_id"], complaints)["checks"]
+    assert checks, "a client with no entity mapping has something to say"
+    for check in checks:
+        assert check["code"] and check["message"] and check["suggestion"]
+
+
+def test_save_mapping_cannot_overwrite_another_clients_mapping(full_client: TestClient) -> None:
+    """`LocalClientStore.save_mapping` upserts with `client_id = excluded.client_id`, so a save that
+    did not check what an id already held would silently move another client's mapping - and its
+    recipes - onto the caller's client. The id's existence is not this client's to learn either, so
+    the answer is the same 404 `GET` would give."""
+    ctx = _mapped_client(full_client)
+    other_id = create_client_via_api(full_client, name="Other Co")["client_id"]
+    other = upload_source(full_client, other_id, ENTITY_CSV.encode(), name="customers.csv", role="entity")
+    assert other.status_code == 201, other.text
+
+    response = full_client.put(
+        f"/clients/{other_id}/mappings/{ctx['entity_mapping_id']}",
+        json={
+            "client_id": other_id,
+            "source_id": other.json()["source_id"],
+            "use_case": TELCO_CHURN,
+            "role": "entity",
+            "columns": [],
+        },
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["code"] == "MAPPING_NOT_FOUND"
+
+    still_theirs = full_client.get(f"/clients/{ctx['client_id']}/mappings")
+    assert ctx["entity_mapping_id"] in {row["mapping_id"] for row in still_theirs.json()["mappings"]}
+    assert full_client.get(f"/clients/{other_id}/mappings").json()["mappings"] == []
+
+
+def test_save_mapping_cannot_repoint_an_existing_mapping_at_another_file(full_client: TestClient) -> None:
+    """A recipe names a mapping, and the mapping names the file it reads; saving a second file over
+    the first would change what every recipe using it builds from, without naming that recipe."""
+    ctx = _mapped_client(full_client)
+    response = full_client.put(
+        f"/clients/{ctx['client_id']}/mappings/{ctx['entity_mapping_id']}",
+        json={
+            "client_id": ctx["client_id"],
+            "source_id": ctx["complaints_source_id"],
+            "use_case": TELCO_CHURN,
+            "role": "complaints",
+            "columns": [],
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "MAPPING_SOURCE_MISMATCH"
+
+
+def test_save_mapping_claiming_a_role_the_source_does_not_have_is_409(full_client: TestClient) -> None:
+    ctx = _onboarded_client(full_client)
+    suggestion = _suggest_mapping(full_client, ctx["client_id"], ctx["entity_source_id"])
+    response = full_client.put(
+        f"/clients/{ctx['client_id']}/mappings/{suggestion['mapping_id']}",
+        json={
+            "client_id": ctx["client_id"],
+            "source_id": ctx["entity_source_id"],
+            "use_case": TELCO_CHURN,
+            "role": "complaints",
+            "columns": [],
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "MAPPING_ROLE_MISMATCH"
+
+
+def test_save_mapping_of_an_unknown_use_case_is_404(full_client: TestClient) -> None:
+    ctx = _onboarded_client(full_client)
+    suggestion = _suggest_mapping(full_client, ctx["client_id"], ctx["entity_source_id"])
+    response = full_client.put(
+        f"/clients/{ctx['client_id']}/mappings/{suggestion['mapping_id']}",
+        json={
+            "client_id": ctx["client_id"],
+            "source_id": ctx["entity_source_id"],
+            "use_case": UNKNOWN_ID,
+            "role": "entity",
+            "columns": suggestion["columns"],
+        },
+    )
+    assert response.status_code == 404, response.text
+    assert response.json()["detail"]["code"] == "USE_CASE_NOT_FOUND"
+
+
+def test_a_refused_save_writes_nothing(full_client: TestClient) -> None:
+    """Every 404 a save can answer is resolved before `save_mapping` runs, so a refused save leaves
+    no half-written mapping for the next screen to find."""
+    ctx = _onboarded_client(full_client)
+    suggestion = _suggest_mapping(full_client, ctx["client_id"], ctx["entity_source_id"])
+    refused = full_client.put(
+        f"/clients/{ctx['client_id']}/mappings/{suggestion['mapping_id']}",
+        json={
+            "client_id": ctx["client_id"],
+            "source_id": ctx["entity_source_id"],
+            "use_case": UNKNOWN_ID,
+            "role": "entity",
+            "columns": suggestion["columns"],
+        },
+    )
+    assert refused.status_code == 404
+    assert full_client.get(f"/clients/{ctx['client_id']}/mappings").json()["mappings"] == []
+
+
 def test_save_mapping_persists_it_under_the_suggested_id(full_client: TestClient) -> None:
     ctx = _onboarded_client(full_client)
     suggestion = _suggest_mapping(full_client, ctx["client_id"], ctx["entity_source_id"])
@@ -417,6 +544,25 @@ def test_create_onboarding_spec_naming_an_unknown_mapping_is_404(full_client: Te
     assert response.json()["detail"]["code"] == "MAPPING_NOT_FOUND"
 
 
+def test_create_onboarding_spec_naming_a_mapping_for_another_file_is_409(full_client: TestClient) -> None:
+    """`OnboardingSpec` documents `mapping_ids` as one per source; a mapping for a file the recipe
+    never reads has nothing to be applied to, so it is refused rather than saved and ignored."""
+    ctx = _mapped_client(full_client)
+    response = full_client.post(
+        f"/clients/{ctx['client_id']}/onboarding-specs",
+        json={
+            "use_case": TELCO_CHURN,
+            "entity_source_id": ctx["entity_source_id"],
+            "event_source_ids": [],
+            "mapping_ids": [ctx["entity_mapping_id"], ctx["complaints_mapping_id"]],
+            "feature_spec": {"features": []},
+            "snapshot_spec": {"mode": "single"},
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "MAPPING_NOT_FOR_SPEC"
+
+
 # ---------------------------------------------------------------------------
 # GET /clients/{id}/onboarding-specs
 # ---------------------------------------------------------------------------
@@ -438,18 +584,60 @@ def test_list_onboarding_specs_of_an_unknown_client_is_404(full_client: TestClie
 # ---------------------------------------------------------------------------
 # POST /clients/{id}/onboarding-specs/{sid}/preview
 # ---------------------------------------------------------------------------
-def test_preview_returns_rows_and_per_snapshot_stats(full_client: TestClient) -> None:
+def test_preview_returns_rows_and_per_snapshot_stats(full_client: TestClient, storage: LocalStorage) -> None:
+    """Rows, snapshot stats and null rates when the build engine is there; a `503` naming the one
+    reason it is not when it is not. Never a `200` carrying invented numbers."""
     ctx = _mapped_client(full_client)
     spec = _create_spec(full_client, ctx)
     response = full_client.post(f"/clients/{ctx['client_id']}/onboarding-specs/{spec['spec_id']}/preview")
+    if response.status_code == 503:
+        assert response.json()["detail"]["code"] == "BUILD_ENGINE_NOT_AVAILABLE"
+    else:
+        assert response.status_code == 200, response.text
+        body = response.json()
+        assert isinstance(body["rows"], list)
+        assert isinstance(body["per_snapshot"], list)
+        assert isinstance(body["feature_null_rates"], dict)
+        assert isinstance(body["checks"], list)
+    # Either way: a preview builds under a real dataset id and must take it with it when it goes,
+    # so no dataset directory survives a preview - and `GET /datasets` never learns of one.
+    assert storage.list_keys("datasets/") == ()
+    listed = full_client.get("/datasets", params={"client_id": ctx["client_id"]})
+    assert listed.status_code == 200, listed.text
+    assert listed.json()["datasets"] == []
+
+
+def test_preview_of_a_recipe_with_a_blocking_check_answers_200_with_the_checks_and_no_rows(
+    full_client: TestClient,
+) -> None:
+    """The preview screen's whole job is showing a user what is wrong, so a structural error is a
+    `200` carrying the checks - and emphatically not a `200` carrying a sample of something that was
+    never built."""
+    ctx = _onboarded_client(full_client)
+    entity_suggestion = _suggest_mapping(full_client, ctx["client_id"], ctx["entity_source_id"])
+    broken = full_client.put(
+        f"/clients/{ctx['client_id']}/mappings/{entity_suggestion['mapping_id']}",
+        json={
+            "client_id": ctx["client_id"],
+            "source_id": ctx["entity_source_id"],
+            "use_case": TELCO_CHURN,
+            "role": "entity",
+            "columns": [],
+        },
+    )
+    assert broken.status_code == 200, broken.text
+    complaints = _suggest_mapping(full_client, ctx["client_id"], ctx["complaints_source_id"])
+    ctx["entity_mapping_id"] = entity_suggestion["mapping_id"]
+    ctx["complaints_mapping_id"] = _save_mapping(full_client, ctx["client_id"], complaints)["mapping_id"]
+    spec = _create_spec(full_client, ctx)
+
+    response = full_client.post(f"/clients/{ctx['client_id']}/onboarding-specs/{spec['spec_id']}/preview")
     assert response.status_code == 200, response.text
     body = response.json()
-    assert isinstance(body["rows"], list)
-    assert isinstance(body["per_snapshot"], list)
-    assert isinstance(body["feature_null_rates"], dict)
-    assert isinstance(body["checks"], list)
-    # A preview never leaves a dataset behind under the id it built the sample with.
-    assert full_client.get(f"/clients/{ctx['client_id']}/onboarding-specs").status_code == 200
+    assert any(check["severity"] == "error" and not check["acknowledged"] for check in body["checks"])
+    assert body["rows"] == []
+    assert body["per_snapshot"] == []
+    assert body["feature_null_rates"] == {}
 
 
 def test_preview_of_an_unknown_client_is_404(full_client: TestClient) -> None:
@@ -545,6 +733,44 @@ def test_create_dataset_with_a_good_spec_returns_202_and_a_pollable_id(full_clie
         assert final["manifest"]["dataset_id"] == dataset_id
 
 
+def test_create_dataset_restricted_to_a_file_the_recipe_does_not_read_is_409(
+    full_client: TestClient,
+) -> None:
+    """`source_ids` narrows a build to some of the recipe's own files. An id it never reads cannot
+    narrow anything, so accepting it would build something other than what the user asked for."""
+    ctx = _mapped_client(full_client)
+    spec = _create_spec(full_client, ctx)
+    stray = upload_source(full_client, ctx["client_id"], ENTITY_CSV.encode(), name="other.csv")
+    assert stray.status_code == 201, stray.text
+    response = full_client.post(
+        "/datasets",
+        json={
+            "client_id": ctx["client_id"],
+            "spec_id": spec["spec_id"],
+            "mode": "train",
+            "source_ids": [stray.json()["source_id"]],
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "SOURCE_NOT_IN_SPEC"
+
+
+def test_create_dataset_restricted_to_no_files_at_all_is_409(full_client: TestClient) -> None:
+    ctx = _mapped_client(full_client)
+    spec = _create_spec(full_client, ctx)
+    response = full_client.post(
+        "/datasets",
+        json={
+            "client_id": ctx["client_id"],
+            "spec_id": spec["spec_id"],
+            "mode": "train",
+            "source_ids": [],
+        },
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "DATASET_SOURCES_EMPTY"
+
+
 def test_create_dataset_of_an_unknown_client_is_404(full_client: TestClient) -> None:
     response = full_client.post(
         "/datasets", json={"client_id": "c_does_not_exist_1", "spec_id": "spec_x", "mode": "train"}
@@ -587,6 +813,29 @@ def test_read_features_sql_of_an_unknown_dataset_is_404(full_client: TestClient)
     response = full_client.get("/datasets/ds_does_not_exist/features.sql")
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "DATASET_NOT_FOUND"
+
+
+@pytest.mark.parametrize("artefact", ["report", "sample", "features.sql"])
+def test_an_artefact_of_an_unfinished_build_is_409_not_404(full_client: TestClient, artefact: str) -> None:
+    """A dataset whose build has not produced this artefact exists: it has a directory, a status and
+    an id the Build screen is polling. Answering "no dataset with id ..." would tell a user that the
+    build they are watching is not there - so the answer is a `409` that says what is actually true."""
+    ctx = _mapped_client(full_client)
+    spec = _create_spec(full_client, ctx)
+    created = full_client.post(
+        "/datasets", json={"client_id": ctx["client_id"], "spec_id": spec["spec_id"], "mode": "train"}
+    )
+    assert created.status_code == 202, created.text
+    dataset_id = created.json()["dataset_id"]
+    final = _poll_until_finished(full_client, dataset_id)
+    if final["status"]["state"] == "done":
+        pytest.skip("the build engine landed and produced every artefact, so none is missing")
+
+    response = full_client.get(f"/datasets/{dataset_id}/{artefact}")
+    assert response.status_code == 409, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "DATASET_NOT_BUILT"
+    assert detail["message"]
 
 
 # ---------------------------------------------------------------------------

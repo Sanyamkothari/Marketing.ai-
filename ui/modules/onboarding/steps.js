@@ -95,10 +95,32 @@ function stepShell(id, number, title, hint, done, open, body) {
   </details>`;
 }
 
-function confidencePill(confidence) {
-  if (!present(confidence)) return `<span class="pill">${EM_DASH}</span>`;
-  const cls = confidence >= 0.85 ? "ok" : confidence >= 0.5 ? "warn" : "";
-  return `<span class="pill ${cls}">${fmtPct(confidence, 0)}</span>`;
+/** The one threshold this file draws in: at or above it a suggestion is shown green, below it amber
+ * (plan §10's mapping screen). It decides a colour, never a value - the number beside the pill is
+ * always the suggester's own, and a pair nobody suggested gets no number at all. */
+const CONFIDENT = 0.85;
+
+/**
+ * The confidence pill for one row: the suggester's measurement, or grey when there is none.
+ *
+ * `measured` is looked up in `state.mappingSuggested` - the untouched `MappingSpec` the API
+ * returned - and never in the working copy the table edits. That is the whole point: a column the
+ * user picked by hand was never scored by anything, and `MappingColumn.confidence` is a required
+ * float, so the working copy has to carry *some* number for the save request to be accepted at all.
+ * Printing that number as though it were a measurement is exactly the fabrication house rule 2
+ * forbids, so a hand-picked pair says who decided it instead, and says nothing about how sure
+ * anyone is.
+ */
+function confidencePill(decided, suggested) {
+  if (!decided) return `<span class="pill">${EM_DASH}</span>`;
+  const measured =
+    suggested &&
+    (suggested.columns || []).find(
+      (c) => c.source === decided.source && c.standard === decided.standard,
+    );
+  if (!measured || !present(measured.confidence)) return `<span class="pill">Your choice</span>`;
+  const cls = measured.confidence >= CONFIDENT ? "ok" : "warn";
+  return `<span class="pill ${cls}">${fmtPct(measured.confidence, 0)}</span>`;
 }
 
 /** `checks` rendered the same way the Phase 1 Setup form renders a validation report (`.vlist`). */
@@ -215,18 +237,52 @@ export function sourcesStep(state) {
 // Step 2: Mapping
 // ---------------------------------------------------------------------------------------------
 
-/** Every standard name a source's role may map a column to: the role's required names first. */
+/**
+ * The standard names a source in this role may fill, in the order `engine.onboarding.mapping`'s own
+ * `_targets()` builds them: the role's required columns, then the use case's columns for an entity
+ * table or the role's typical columns for an event log, then the role's optional ones.
+ *
+ * Mirroring that order matters twice over. An event log's real targets are `entity_key`,
+ * `event_time` and its own `typical_columns` (`amount`, `status`, ...) - offering it the use case's
+ * one-row-per-entity columns instead, as an earlier version did, left `bills` with no way to name
+ * its own amount column and no way to reach the names the build actually reads. And the list is
+ * deduplicated, because `MappingSpec` refuses a standard column claimed twice: a `<select>` that
+ * offered one name under two options would let the user build a mapping the API can only reject.
+ */
 function mappingTargets(state, role) {
-  const roles = state.schema.roles.roles[role];
-  const required = (roles ? roles.required_columns : []).map((name) => ({
-    value: name,
-    label: `${humanizeId(name)} (required)`,
-  }));
-  const columns = (state.schema.standard_schema.columns || []).map((column) => ({
-    value: column.name,
-    label: column.required ? `${column.description || column.name} (required)` : column.description || column.name,
-  }));
-  return [...required, ...columns];
+  const spec = state.schema.roles.roles[role];
+  if (!spec) return [];
+  const columns = state.schema.standard_schema.columns || [];
+  const defined = new Map(columns.map((column) => [column.name, column]));
+  const required = requiredTargetNames(state, spec);
+  const ordered = [
+    ...(spec.required_columns || []),
+    ...(spec.kind === "event" ? spec.typical_columns || [] : columns.map((column) => column.name)),
+    ...(spec.optional_columns || []),
+  ];
+  const targets = [];
+  const seen = new Set();
+  for (const name of ordered) {
+    if (seen.has(name)) continue;
+    seen.add(name);
+    const column = defined.get(name) || null;
+    const label = column && column.description ? column.description : humanizeId(name);
+    targets.push({ value: name, label: required.has(name) ? `${label} (required)` : label });
+  }
+  return targets;
+}
+
+/** `engine.onboarding.mapping._required()`: the role's own required columns, plus - for an entity
+ * table only - the use case's required columns that the build cannot derive for itself. A derivable
+ * column is not missing when nobody maps it, so marking it required would send the user looking for
+ * a column their file is not expected to have. */
+function requiredTargetNames(state, spec) {
+  const names = new Set(spec.required_columns || []);
+  if (spec.kind === "event") return names;
+  for (const column of state.schema.standard_schema.columns || []) {
+    if (column.required && !column.derivable) names.add(column.name);
+  }
+  return names;
 }
 
 function columnTargetOf(mapping, rawName) {
@@ -281,9 +337,9 @@ function mappingRow(state, sourceId, mapping, role, column) {
     <td><div class="control sel"><select data-act="set-mapping" data-source="${esc(
       sourceId,
     )}" data-column="${esc(column.name)}" aria-label="Standard column for ${esc(column.name)}">${options}</select></div></td>
-    <td>${esc(column.inferred_type)}</td>
+    <td>${esc(dash(column.inferred_type))}</td>
     <td>${esc(dash(sample))}</td>
-    <td>${confidencePill(decided ? decided.confidence : null)}</td>
+    <td>${confidencePill(decided, state.mappingSuggested[sourceId])}</td>
     <td>${standardColumn ? valueMapEditor(state, sourceId, current, standardColumn, mapping, column) : ""}</td>
   </tr>`;
 }
@@ -295,25 +351,11 @@ function mappingTable(state, entry) {
   if (state.mappingError[source.source_id]) return errorBox(state.mappingError[source.source_id]);
   if (!mapping) return `<div class="empty">Not analysed yet.</div>`;
   const rows = profile.profile.columns.map((column) => mappingRow(state, source.source_id, mapping, source.role, column)).join("");
-  const missing = requiredMissing(state, mapping, source.role);
   return `<div class="card"><h3>${esc(source.file_name)}<span style="float:right"><button type="button" class="linkbtn" data-act="accept-all" data-source="${esc(
     source.source_id,
   )}">Accept all suggestions</button></span></h3>
     <div class="tbl-wrap"><table><thead><tr><th>Your column</th><th>Our column</th><th>Type</th><th>Sample values</th><th>Confidence</th><th>Value map</th></tr></thead><tbody>${rows}</tbody></table></div>
-    ${
-      missing.length
-        ? `<div class="vlist" role="alert"><div class="vhead">${missing.length} required column${
-            missing.length === 1 ? "" : "s"
-          } not yet mapped</div>${missing
-            .map(
-              (name) =>
-                `<div class="vitem"><span class="pill bad">${esc(name)}</span><div class="vmsg">${esc(
-                  humanizeId(name),
-                )} has no source column yet.</div></div>`,
-            )
-            .join("")}</div>`
-        : ""
-    }
+    ${missingRequiredBlock(state, source.source_id, mapping)}
     ${checksList(state.mappingChecks[source.source_id])}
     <div class="kv"><span class="k">${state.mappingSaved[source.source_id] ? "Saved" : "Not saved yet"}</span><span class="v"><button type="button" class="linkbtn" data-act="save-mapping" data-source="${esc(
       source.source_id,
@@ -323,16 +365,41 @@ function mappingTable(state, entry) {
   </div>`;
 }
 
-function columnMissing(mapping, standardName) {
-  return !(mapping.columns || []).some((c) => c.standard === standardName);
-}
-
-/** Required standard columns still unmapped, recomputed live from the schema on every render so an
- * edit the user just made (not yet saved) updates this the moment it happens, rather than waiting on
- * a round trip to see `mapping.missing_required` catch up. */
-function requiredMissing(state, mapping, role) {
-  const required = mappingTargets(state, role).filter((t) => t.label.endsWith("(required)"));
-  return required.filter((t) => columnMissing(mapping, t.value)).map((t) => t.value);
+/**
+ * The required standard columns still unmapped, and the API's own words about each one.
+ *
+ * `missing_required` is the server's list, not a recount of the working copy: the engine decides
+ * what "required" means for a role (a derivable column is not missing; an event log's requirements
+ * are not an entity table's), and a second opinion computed here would eventually disagree with the
+ * one that actually blocks the build. The message beside each name is likewise the
+ * `REQUIRED_STANDARD_COLUMN_UNMAPPED` check's, or - before a save has been made and checks exist -
+ * the standard column's own description from the schema. The UI does not phrase validation
+ * failures; it shows the ones the API returned (house rule 3).
+ *
+ * The one thing done locally is *narrowing*: a name the user has since given a column to drops off
+ * the list before the next save confirms it. That direction is safe - it can only stop showing a
+ * warning the API raised, never raise one it did not - whereas recomputing the list from scratch
+ * would be this screen inventing a verdict the build does not share.
+ */
+function missingRequiredBlock(state, sourceId, mapping) {
+  const claimed = new Set((mapping.columns || []).map((column) => column.standard));
+  const names = (mapping.missing_required || []).filter((name) => !claimed.has(name));
+  if (!names.length) return "";
+  const checks = state.mappingChecks[sourceId] || [];
+  const defined = state.schema.standard_schema.columns || [];
+  const items = names
+    .map((name) => {
+      const check = checks.find((c) => c.column === name) || null;
+      const column = defined.find((c) => c.name === name) || null;
+      const message = check ? check.message : column && column.description ? column.description : "";
+      const suggestion = check && check.suggestion ? check.suggestion : "";
+      return `<div class="vitem"><span class="pill bad">${esc(name)}</span><div>${
+        message ? `<div class="vmsg">${esc(message)}</div>` : ""
+      }${suggestion ? `<div class="vsug">${esc(suggestion)}</div>` : ""}</div></div>`;
+    })
+    .join("");
+  const head = `${names.length} required column${names.length === 1 ? "" : "s"} not yet mapped`;
+  return `<div class="vlist" role="alert"><div class="vhead">${esc(head)}</div>${items}</div>`;
 }
 
 export function mappingStep(state) {
@@ -453,6 +520,16 @@ function labelSentence(state) {
   )}" aria-label="Horizon in days"></b> days after the snapshot.</p>`;
 }
 
+/** `min`/`max` attributes for a number input, written only where the API's own schema declared a
+ * bound. A fallback bound would be this screen inventing a limit nobody set - and silently refusing
+ * a value the API would have accepted, or accepting one it will not. */
+function numericBounds(bounds) {
+  const parts = [];
+  if (present(bounds && bounds.min)) parts.push(` min="${esc(bounds.min)}"`);
+  if (present(bounds && bounds.max)) parts.push(` max="${esc(bounds.max)}"`);
+  return parts.join("");
+}
+
 function snapshotSettings(state) {
   const ss = state.snapshotSchema;
   const snap = state.snapshot;
@@ -472,12 +549,20 @@ function snapshotSettings(state) {
     ${
       snap.mode === "periodic"
         ? `<div class="field"><span class="sub">Frequency</span><div class="control sel"><select data-act="set-snapshot" data-field="frequency" aria-label="Frequency">${freqOptions}</select></div></div>
-    <div class="field xs"><span class="sub">Max snapshots</span><div class="control"><input type="number" data-act="set-snapshot" data-field="max_snapshots" min="${
-      ss.maxSnapshots.min || 1
-    }" max="${ss.maxSnapshots.max || 120}" value="${esc(snap.max_snapshots)}" aria-label="Max snapshots"></div></div>`
+    <div class="field xs"><span class="sub">Max snapshots</span><div class="control"><input type="number" data-act="set-snapshot" data-field="max_snapshots"${numericBounds(
+      ss.maxSnapshots,
+    )} value="${esc(dash(snap.max_snapshots))}" aria-label="Max snapshots"></div></div>`
         : ""
     }
   </div>`;
+}
+
+/** A 0-100 track for a measured fraction, and nothing at all for one that was not measured: a
+ * zero-length bar beside an em dash reads as "we measured this and it came out at nought", which
+ * is precisely the sentence house rule 2 exists to prevent. */
+function rateBar(fraction, label) {
+  if (!present(fraction)) return "";
+  return barTrack(fraction * 100, `${label} ${fmtPct(fraction)}`);
 }
 
 function previewResults(state) {
@@ -492,10 +577,14 @@ function previewResults(state) {
     : `<div class="empty">The sample produced no rows.</div>`;
   const nullRates = Object.entries(preview.feature_null_rates || {}).map(([name, rate]) => [
     name,
-    fmtPct(rate),
-    barTrack(rate * 100, `${name} ${fmtPct(rate)} null`),
+    dash(rate, fmtPct),
+    rateBar(rate, `${name} null rate`),
   ]);
-  const snapshots = (preview.per_snapshot || []).map((s) => [s.date, dash(s.entities, fmtInt), dash(s.positive_rate, fmtPct)]);
+  const snapshots = (preview.per_snapshot || []).map((s) => [
+    dash(s.date),
+    dash(s.entities, fmtInt),
+    dash(s.positive_rate, fmtPct),
+  ]);
   return `<div class="card"><h3>Preview</h3>${rowsTable}
     <h4>Feature null rates</h4>${
       nullRates.length
