@@ -174,7 +174,57 @@ Validation confirmations ("yes, exclude the leaky column") are sent back as over
 
 ## Large-file handling
 
-<!-- BENCHMARK-PLACEHOLDER -->
+`scripts/bench_large_file.py` generates a synthetic targeted-advertisement scoring file, reads and
+profiles it, then runs the whole score flow (plan §6.2) over the same rows with a trained champion.
+Every number below was printed by that script. Nothing here is projected, and plan §13.3 is why:
+until this was run, "it streams" was an argument about the code rather than a result.
+
+Two independent runs, so the figures are a measured range rather than one sample:
+
+| stage | rows | seconds | rows/sec |
+| --- | --- | --- | --- |
+| ingest (read + profile, whole-file fingerprint) | 1,000,000 | 68.5 / 68.7 | 14,590 / 14,564 |
+| score (full score flow, a reason for every row) | 1,000,000 | 245.3 / 250.3 | 4,077 / 3,995 |
+
+57.8 MB CSV. Peak resident memory 6,160 MB and 6,116 MB (`resource.getrusage(RUSAGE_SELF).ru_maxrss`,
+a whole-process high-water mark). The two runs agree to within 2%. The score flow re-reads the upload
+as its own first stage, so about 66 s of the score number is a second ingest and the two rows are
+**not** additive. Generating the file (12.0 / 12.3 s) and training the champion on 4,000 rows
+(39.6 / 37.6 s, `time_limit_minutes: 1`, `strategy: fast`, no ensemble) are setup and are not in
+the table.
+
+Where the score time goes, from the first run's stage log (the second agrees to within 3 s
+on every stage):
+
+| stage | seconds |
+| --- | --- |
+| ingest | 66.1 |
+| validate_against_schema | 28.9 |
+| prepare (replay) | 0.001 |
+| predict | 1.6 |
+| **explain_rows** | **132.7** |
+| actions | 3.9 |
+| export | 10.2 |
+
+**Explaining the rows is the cost, not reading them.** Streaming ingest moves a million rows in
+about a minute; producing the per-row reason plan §6.3 requires for every exported row takes twice
+that. A deployment that wants a million rows scored faster should look there first — the tier that
+runs is reported in `status.json` and on the Running screen, so it is visible per run.
+
+A control point at 250,000 rows on the same machine — ingest 16.1 s (15,531 rows/sec), score 65.8 s
+(3,798 rows/sec), peak 1,705 MB — puts both paths at roughly linear scaling up to a million.
+
+Two honest caveats. This was measured on 4 CPUs, 15.7 GiB RAM, Python 3.11.15, Linux — **a
+container, not the laptop plan §11 names**. And the machine has to be quiet: a third attempt at the
+same row count was killed at a 45-minute cap while several other jobs held the same four cores, so on
+a busy box expect far worse than the table. Only the CSV path was exercised; the Parquet ingest path
+has not been measured.
+
+Re-run it with:
+
+```bash
+.venv/bin/python -m scripts.bench_large_file --rows 1000000
+```
 
 ---
 
@@ -206,10 +256,14 @@ M7 in detail. Done:
 - **`docs/` complete.** `DECISIONS.md`, `DATA_CONTRACT.md`, the generated `API.md`, and `AWS_DEPLOYMENT.md`.
 - **CI.** `.github/workflows/` (below), which plan §10 asks for.
 
-Not done: the **measured** half of large-file handling. `scripts/bench_large_file.py` times the real
-ingest and score paths on a generated file, but no run of it has been recorded here, so no row count
-and no duration are claimed above. Until it is, "it streams" is an argument about the code, not a result
-(plan §13.3).
+- **Large-file handling, measured.** `scripts/bench_large_file.py` was run at 1,000,000 rows and the
+  numbers are recorded above, not projected. Two qualifications keep M7 short of done on this line:
+  it was measured on a 4-CPU container rather than the laptop plan §11 names, and only the CSV
+  ingest path was exercised — the Parquet path is still untimed.
+
+Not done: **deletion**, the one data-protection control with no seam yet (`docs/AWS_DEPLOYMENT.md` §7),
+and the nine advisory settings of DEC-074, which the form records and the engine does not act on. Both
+are stated where a reader meets them rather than left to be discovered.
 
 ---
 
