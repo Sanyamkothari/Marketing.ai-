@@ -47,13 +47,22 @@ test("the win-back copy counts match the cards", () => {
   assert.equal(ev(dom, "COPY_SEED.length"), 12);
   assert.equal(ev(dom, "new Set(COPY_SEED.map(c=>c.ch)).size"), 3);
   assert.equal(ev(dom, "new Set(COPY_SEED.map(c=>c.band)).size"), 2);
-  assert.ok(ev(dom, "COPY_SEED.every(c=>c.why===''||c.status==='Blocked')"),
-    "only a blocked message carries a reason");
   assert.ok(ev(dom, "COPY_SEED.every(c=>c.alt&&c.alt!==c.text)"),
     "every card has different copy to regenerate into");
-  // the SMS blocked for length really is over the limit; the others are not
+  // status, block reason and judge scores are all read off the message (engine/generative/
+  // guardrails.py does the same), so none of the three can drift from the copy above it
+  assert.equal(ev(dom, "COPY_SEED.filter(c=>tplStatus(c)==='Blocked').length"), 2);
+  assert.ok(ev(dom, "COPY_SEED.every(c=>(tplStatus(c)==='Blocked')===tplGuards(c).some(g=>g[1]==='blocked'))"),
+    "a blocked status must be a blocked guardrail, and nothing else");
+  // the SMS blocked for length really is over its channel's limit; the others are not
   assert.ok(ev(dom, "COPY_SEED.find(c=>c.ch==='SMS'&&c.v==='B'&&c.band==='High').text.length") > 160);
-  assert.ok(ev(dom, "COPY_SEED.filter(c=>c.ch==='SMS'&&c.status!=='Blocked').every(c=>c.text.length<=160)"));
+  assert.ok(ev(dom, "COPY_SEED.filter(c=>c.ch==='SMS'&&tplStatus(c)!=='Blocked').every(c=>c.text.length<=CH_LIMIT.SMS)"));
+  // the two judges the engine runs on copy (win_back.py _TEMPLATE_JUDGES), and nothing invented
+  assert.ok(ev(dom, "COPY_SEED.every(c=>/^Compliance \\d\\.\\d\\d · Toxicity \\d\\.\\d\\d · \\d+ characters$/.test(judgeLine(c)))"),
+    "the judge line names the judges that actually run");
+  // control + suppressed + written-to = eligible
+  const n = (k) => Number(ev(dom, `HOLDOUT.${k}`).replace(/,/g, ""));
+  assert.equal(n("control") + n("suppressed") + n("sent"), n("eligible"));
 });
 
 test("every new setting carries a one-line hint", () => {
@@ -98,12 +107,12 @@ test("every new panel has a mobile layout", () => {
   }
 });
 
-test("nothing new invents a number the built product would have to fake", () => {
+test("a number the product has not measured is still an em dash", () => {
   const dom = load("#/uc/ai-onboarding-assistant");
   click(dom, "#f-sampledocs");
-  // an uploaded document has no page or chunk count until it is read
-  $(dom, "#f-docs").files = undefined;
   assert.equal(ev(dom, "DOCS[0][1]"), 48, "sample documents carry sample numbers");
-  // the cost of a run is never guessed
-  assert.ok(HTML.includes("LLM cost this run: —"));
+  // cost is an artefact now that engine/generative writes one, so the prototype shows its shape
+  assert.match(ev(dom, "usageLine(ASSISTANT_USAGE)"), /calls · .+ tokens · .*\$/);
+  // but a document the prototype has not read still has no page or chunk count
+  assert.ok(HTML.includes('size:"—",rows:"—"'), "a real upload starts with em dashes");
 });
