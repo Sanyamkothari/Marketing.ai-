@@ -973,11 +973,21 @@ def _never(column: pd.Series) -> pd.Series:
 
 
 def _replacement(column: pd.Series) -> object:
-    """The column's median (numeric) or first mode (anything else); `None` when it is all null."""
+    """The column's median (numeric) or first mode (anything else); `None` when it is all null.
+
+    An integer column's median is rounded to a whole number. The median of an even count of integers
+    can be x.5, which a nullable `Int64` column refuses outright - the explain stage raised on it,
+    whenever a model had no tree explainer and the sample happened to give such a median - and a
+    plain `int64` column accepts only by turning into a float, handing the scorer a value the model
+    never saw in training. A replacement stands for "a typical value of this feature", and a typical
+    value of an integer feature is an integer.
+    """
     import pandas as pd
 
     if pd.api.types.is_numeric_dtype(column) and not pd.api.types.is_bool_dtype(column):
         median = column.median()
+        if pd.api.types.is_integer_dtype(column) and not pd.isna(median):
+            return round(float(median))
         return None if pd.isna(median) else median
     modes = column.mode(dropna=True)
     return None if len(modes) == 0 else modes.iloc[0]

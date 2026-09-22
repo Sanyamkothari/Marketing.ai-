@@ -1277,3 +1277,27 @@ def test_the_stage_entry_point_loads_the_model_it_is_pointed_at(trained) -> None
         str(key) for key in rows[PRIMARY_KEY]
     ]
     assert all(isinstance(explanation, RowExplanation) for explanation in explanations)
+
+
+@pytest.mark.parametrize("dtype", ["Int64", "int64"])
+def test_an_integer_feature_is_replaced_by_a_whole_number_even_when_its_median_is_a_half(dtype: str) -> None:
+    """The permutation fallback swaps a feature for its median; for an integer column that must be an integer.
+
+    The median of an even number of integers can be x.5. A nullable `Int64` column cannot hold it, so
+    the explain stage raised `TypeError: Invalid value '17.5' for dtype 'Int64'` - on any real run
+    whose model had no tree explainer and whose sample happened to give that median, which is why a
+    full test run hit it and the same test alone did not. A plain `int64` column took it silently and
+    handed the scorer a tenure of 17.5 months, a value the model never saw in training.
+    """
+    import pandas as pd
+
+    from engine.stages.explain import _permutation_contributions
+
+    class _TenureScorer:
+        def score(self, frame: pd.DataFrame) -> pd.Series:
+            assert pd.api.types.is_integer_dtype(frame["tenure"]), "the replacement changed the column's type"
+            return frame["tenure"].astype("float64")
+
+    rows = pd.DataFrame({"tenure": pd.array([17, 18], dtype=dtype)})
+    result = _permutation_contributions(_TenureScorer(), rows, ["tenure"], {"tenure": 0})
+    assert result.values["tenure"].tolist() == [-1.0, 0.0]
