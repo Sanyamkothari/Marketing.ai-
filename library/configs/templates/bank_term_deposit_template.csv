@@ -1,0 +1,6 @@
+client_id,age,job,marital,education,default,housing,loan,contact,month,day_of_week,duration,campaign,pdays,previous,poutcome,emp_var_rate,cons_price_idx,cons_conf_idx,euribor3m,nr_employed,y
+1,41,admin.,married,university.degree,no,yes,no,cellular,may,mon,261,1,999,0,nonexistent,1.1,93.994,-36.4,4.857,5191.0,no
+2,29,technician,single,high.school,no,no,no,telephone,jul,thu,149,2,999,0,nonexistent,1.4,94.465,-41.8,4.962,5228.1,no
+3,57,blue-collar,married,basic.9y,unknown,yes,yes,cellular,aug,wed,380,1,6,1,failure,-0.1,93.2,-42.0,4.021,5195.8,yes
+4,33,management,divorced,professional.course,no,no,no,cellular,nov,fri,92,4,999,0,nonexistent,-1.8,92.893,-46.2,1.313,5099.1,no
+5,62,retired,married,basic.4y,no,yes,no,telephone,mar,tue,1042,3,3,2,success,-3.4,92.431,-26.9,0.722,4963.6,yes

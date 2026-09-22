@@ -1,0 +1,47 @@
+# Health Insurance Cross-Sell -> use case `insurance-cross-sell`
+#
+# The shape Phase 2's column-mapping UI will import. Nothing is renamed and nothing is derived:
+# `source` and `standard` are the same string in every row, because the use-case file was written
+# against this file's own column names.
+schema_version: 1
+dataset: health-insurance-cross-sell
+use_case: insurance-cross-sell
+config_root: library/configs               # see library/README.md for why the use case lives here
+
+source:
+  file: data/train.csv
+  format: csv
+  delimiter: ","
+  encoding: utf-8
+  rows: 381109
+  one_row_per: policyholder                # already true in the published file
+
+prepared:
+  file: data/prepared.csv
+  built_by: fetch.py
+  changes: none                            # a byte-identical copy; this dataset needs no preparation
+
+roles:
+  primary_key: id
+  target: Response
+  positive_label: 1
+  time: null                               # `Vintage` is a day count, not a date
+
+columns:
+    - {source: id,                            standard: id, role: primary_key}
+    - {source: Gender,                        standard: Gender, role: feature}
+    - {source: Age,                           standard: Age, role: feature}
+    - {source: Driving_License,               standard: Driving_License, role: feature}
+    - {source: Region_Code,                   standard: Region_Code, role: feature,
+       note: "Category code stored as a float, not a quantity."}
+    - {source: Previously_Insured,            standard: Previously_Insured, role: feature}
+    - {source: Vehicle_Age,                   standard: Vehicle_Age, role: feature}
+    - {source: Vehicle_Damage,                standard: Vehicle_Damage, role: feature}
+    - {source: Annual_Premium,                standard: Annual_Premium, role: feature}
+    - {source: Policy_Sales_Channel,          standard: Policy_Sales_Channel, role: feature,
+       note: "Category code stored as a float, not a quantity."}
+    - {source: Vintage,                       standard: Vintage, role: feature}
+    - {source: Response,                      standard: Response, role: target}
+
+dropped: []                                # nothing is dropped
+pii: []                                    # Gender and Age are attributes, not contact details; no names, emails or phone numbers

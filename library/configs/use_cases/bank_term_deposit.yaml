@@ -1,0 +1,67 @@
+id: bank-term-deposit
+name: Term Deposit Conversion
+description: Scores every client on how likely a direct-marketing call is to end in a term-deposit subscription, so the call list is worked in the order that converts.
+lifecycle_stage: Awareness
+entity: client                             # the engine's copy says "one row per client"; config, not code
+
+# UCI Bank Marketing (bank-additional-full), 41,188 calls made by a Portuguese retail bank between
+# May 2008 and November 2010, mapped to this engine by configuration alone. The column names, the
+# yes/no target and the macro-economic indicators are the real published schema; the only thing
+# library/uci-bank-marketing/fetch.py changes is punctuation (see that file's mapping.yaml).
+
+target:
+  column: y
+  positive_label: "yes"                    # the file labels the outcome with strings, not 0/1
+  definition: The client subscribed to a term deposit after the campaign call
+  label_source: UCI Bank Marketing (bank-additional-full), column y
+
+primary_key_hints: [client_id, customer_id, id]
+
+# The file carries `month` and `day_of_week` but no year, so no column reads as a date and the
+# split stays random_stratified (the engine default).
+
+actions:
+  score_field: deposit_prob
+  bands:
+    - {name: High,   min_score: 0.80, action: "Call first, offer the headline rate"}
+    - {name: Medium, min_score: 0.50, action: "Call in the second pass"}
+    - {name: Low,    min_score: 0.00, action: "Leave to inbound"}
+  suppression:
+    opt_out_column: null                   # the public file carries no consent or contact history
+    recently_contacted_column: null
+
+output:
+  kpi:
+    label: "Clients worth calling"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Client + campaign history"
+    model: "Term Deposit Propensity Model"
+    output: "Call List / Deposit Offers"
+
+template:
+  columns:
+    - {name: client_id,      role: primary_key, type: integer, description: "Row number in the published call order. Identifies the client; never used as a feature.", examples: ["1","2","3","4","5"]}
+    - {name: age,            role: feature,     type: integer, description: "Age of the client in years",                                                   examples: ["41","29","57","33","62"]}
+    - {name: job,            role: feature,     type: string,  description: "Type of job: admin., blue-collar, entrepreneur, housemaid, management, retired, self-employed, services, student, technician, unemployed or unknown", examples: ["admin.","technician","blue-collar","management","retired"]}
+    - {name: marital,        role: feature,     type: string,  description: "Marital status: divorced, married, single or unknown",                          examples: ["married","single","married","divorced","married"]}
+    - {name: education,      role: feature,     type: string,  description: "Highest education: basic.4y, basic.6y, basic.9y, high.school, illiterate, professional.course, university.degree or unknown", examples: ["university.degree","high.school","basic.9y","professional.course","basic.4y"]}
+    - {name: default,        role: feature,     type: string,  description: "Has credit in default: yes, no or unknown",                                     examples: ["no","no","unknown","no","no"]}
+    - {name: housing,        role: feature,     type: string,  description: "Has a housing loan: yes, no or unknown",                                        examples: ["yes","no","yes","no","yes"]}
+    - {name: loan,           role: feature,     type: string,  description: "Has a personal loan: yes, no or unknown",                                       examples: ["no","no","yes","no","no"]}
+    - {name: contact,        role: feature,     type: string,  description: "How the client was reached: cellular or telephone",                             examples: ["cellular","telephone","cellular","cellular","telephone"]}
+    - {name: month,          role: feature,     type: string,  description: "Month of the last contact, as a three-letter abbreviation. No year is published.", examples: ["may","jul","aug","nov","mar"]}
+    - {name: day_of_week,    role: feature,     type: string,  description: "Weekday of the last contact: mon, tue, wed, thu or fri",                         examples: ["mon","thu","wed","fri","tue"]}
+    - {name: duration,       role: feature,     type: integer, description: "Length of the last contact in seconds. Known only after the call ends, so a model that uses it cannot be used to plan the call. See README.md.", examples: ["261","149","380","92","1042"]}
+    - {name: campaign,       role: feature,     type: integer, description: "Contacts made to this client during this campaign, including the last one",      examples: ["1","2","1","4","3"]}
+    - {name: pdays,          role: feature,     type: integer, description: "Days since the client was last contacted in a previous campaign; 999 means never contacted before", examples: ["999","999","6","999","3"]}
+    - {name: previous,       role: feature,     type: integer, description: "Contacts made to this client before this campaign",                              examples: ["0","0","1","0","2"]}
+    - {name: poutcome,       role: feature,     type: string,  description: "Outcome of the previous campaign: failure, nonexistent or success",              examples: ["nonexistent","nonexistent","failure","nonexistent","success"]}
+    - {name: emp_var_rate,   role: feature,     type: float,   description: "Employment variation rate, quarterly indicator",                                 examples: ["1.1","1.4","-0.1","-1.8","-3.4"]}
+    - {name: cons_price_idx, role: feature,     type: float,   description: "Consumer price index, monthly indicator",                                        examples: ["93.994","94.465","93.2","92.893","92.431"]}
+    - {name: cons_conf_idx,  role: feature,     type: float,   description: "Consumer confidence index, monthly indicator",                                   examples: ["-36.4","-41.8","-42.0","-46.2","-26.9"]}
+    - {name: euribor3m,      role: feature,     type: float,   description: "Three-month Euribor rate, daily indicator",                                      examples: ["4.857","4.962","4.021","1.313","0.722"]}
+    - {name: nr_employed,    role: feature,     type: float,   description: "Number of employees, quarterly indicator, in thousands",                         examples: ["5191.0","5228.1","5195.8","5099.1","4963.6"]}
+    - {name: y,              role: target,      type: string,  description: "Target: yes when the client subscribed to a term deposit, else no. Leave blank when scoring.", examples: ["no","no","yes","no","yes"]}

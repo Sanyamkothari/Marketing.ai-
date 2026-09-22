@@ -1,0 +1,62 @@
+# UCI Bank Marketing (bank-additional-full) -> use case `bank-term-deposit`
+#
+# The shape Phase 2's column-mapping UI will import. Four columns are renamed because template
+# column names must match `^[A-Za-z_][A-Za-z0-9_]*$` and the published names contain dots; one
+# column is derived because the published file has no key at all.
+schema_version: 1
+dataset: uci-bank-marketing
+use_case: bank-term-deposit
+config_root: library/configs               # see library/README.md for why the use case lives here
+
+source:
+  file: data/bank-additional-full.csv
+  format: csv
+  delimiter: ";"                           # the published file is semicolon-separated
+  quotechar: '"'                           # and quotes every text field
+  encoding: utf-8
+  rows: 41188
+  one_row_per: campaign_call               # one row per call; a client called twice appears twice
+
+prepared:
+  file: data/prepared.csv
+  built_by: fetch.py
+  changes:
+    - "re-written as comma-separated UTF-8 CSV"
+    - "four dotted column names replaced with underscored ones"
+    - "client_id added: the 1-based row number in the published call order"
+
+roles:
+  primary_key: client_id
+  target: y
+  positive_label: "yes"
+  time: null                               # `month` and `day_of_week` carry no year, so no column reads as a date
+
+columns:
+    - {source: client_id,                     standard: client_id, role: primary_key,
+       derived: "1-based row number in the published order; the file ships no key of its own"}
+    - {source: age,                           standard: age, role: feature}
+    - {source: job,                           standard: job, role: feature}
+    - {source: marital,                       standard: marital, role: feature}
+    - {source: education,                     standard: education, role: feature}
+    - {source: default,                       standard: default, role: feature}
+    - {source: housing,                       standard: housing, role: feature}
+    - {source: loan,                          standard: loan, role: feature}
+    - {source: contact,                       standard: contact, role: feature}
+    - {source: month,                         standard: month, role: feature}
+    - {source: day_of_week,                   standard: day_of_week, role: feature}
+    - {source: duration,                      standard: duration, role: feature,
+       note: "Known only once the call has ended. UCI's own notes say to discard it for a realistic model; see README.md and run_report.md."}
+    - {source: campaign,                      standard: campaign, role: feature}
+    - {source: pdays,                         standard: pdays, role: feature,
+       note: "999 is a sentinel meaning 'never contacted before', not a quantity."}
+    - {source: previous,                      standard: previous, role: feature}
+    - {source: poutcome,                      standard: poutcome, role: feature}
+    - {source: emp.var.rate,                  standard: emp_var_rate, role: feature, renamed: true}
+    - {source: cons.price.idx,                standard: cons_price_idx, role: feature, renamed: true}
+    - {source: cons.conf.idx,                 standard: cons_conf_idx, role: feature, renamed: true}
+    - {source: euribor3m,                     standard: euribor3m, role: feature}
+    - {source: nr.employed,                   standard: nr_employed, role: feature, renamed: true}
+    - {source: y,                             standard: y, role: target}
+
+dropped: []                                # nothing is dropped
+pii: []                                    # no names, emails, phone numbers or government ids

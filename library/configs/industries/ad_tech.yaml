@@ -1,0 +1,20 @@
+schema_version: 1
+id: ad_tech
+name: Ad-tech
+journey_label: Audience Lifecycle
+
+# Ad-tech is configured but has nothing available yet. The Criteo Uplift dataset is mapped in
+# library/criteo-uplift/, and its use-case file is drafted there rather than installed here,
+# because the question that dataset exists to answer - the incremental effect of showing an ad -
+# is uplift modelling, which is Phase 3b (plan section 12). A propensity model on `conversion`
+# would train happily today and would answer the wrong question.
+
+stages:
+  - id: awareness
+    name: Awareness
+    ai_type: predictive
+    use_cases:
+      - id: criteo-uplift
+        status: planned
+        name: Incremental Ad Uplift
+        description: Ranks users by how much showing them an ad changes their chance of converting, rather than by how likely they are to convert anyway.

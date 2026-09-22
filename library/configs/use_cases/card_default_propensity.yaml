@@ -1,0 +1,69 @@
+id: card-default-propensity
+name: Card Default Propensity
+description: Scores every credit-card account on how likely it is to miss next month's payment, so payment plans and reminders reach the accounts that need them first.
+lifecycle_stage: Service / Payments
+entity: account                            # the engine's copy says "one row per account"
+
+# UCI "Default of Credit Card Clients", 30,000 Taiwanese card accounts observed April to September
+# 2005, mapped to this engine by configuration alone. library/uci-credit-default/fetch.py renames
+# exactly one column - the target, whose published name has dots in it - and changes nothing else.
+
+target:
+  column: default_payment_next_month
+  positive_label: 1
+  definition: The account failed to pay the minimum due in the month after the observation window
+  label_source: UCI Default of Credit Card Clients, column default.payment.next.month
+
+primary_key_hints: [ID, account_id, customer_id, id]
+
+# The six repayment, bill and payment columns are an ordered series (month 1 is the most recent),
+# but the file carries no dates, so the split stays random_stratified (the engine default).
+
+actions:
+  score_field: default_prob
+  bands:
+    - {name: High,   min_score: 0.80, action: "Call + offer a payment plan"}
+    - {name: Medium, min_score: 0.50, action: "SMS reminder before the due date"}
+    - {name: Low,    min_score: 0.00, action: "Statement only"}
+  suppression:
+    opt_out_column: null                   # the public file carries no consent or contact history
+    recently_contacted_column: null
+
+output:
+  kpi:
+    label: "Accounts at risk"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Account limit + repayment history"
+    model: "Default Propensity Model"
+    output: "At-risk Accounts / Payment Plans"
+
+template:
+  columns:
+    - {name: ID,                         role: primary_key, type: integer, description: "Unique account identifier. Never used as a feature.",                    examples: ["1","2","3","4","5"]}
+    - {name: LIMIT_BAL,                  role: feature,     type: float,   description: "Credit limit of the account, in New Taiwan dollars",                     examples: ["20000","120000","90000","50000","500000"]}
+    - {name: SEX,                        role: feature,     type: integer, description: "1 male, 2 female. A category code stored as a number.",                  examples: ["2","2","1","2","1"]}
+    - {name: EDUCATION,                  role: feature,     type: integer, description: "1 graduate school, 2 university, 3 high school, 4 other. Codes 0, 5 and 6 also occur and are not documented upstream.", examples: ["2","1","3","2","1"]}
+    - {name: MARRIAGE,                   role: feature,     type: integer, description: "1 married, 2 single, 3 other. Code 0 also occurs and is not documented upstream.", examples: ["1","2","2","1","2"]}
+    - {name: AGE,                        role: feature,     type: integer, description: "Age of the account holder in years",                                     examples: ["24","26","34","37","57"]}
+    - {name: PAY_0,                      role: feature,     type: integer, description: "Repayment status in the most recent month: -1 paid duly, 1 one month late, 2 two months late, and so on. Codes -2 and 0 also occur and are not documented upstream.", examples: ["2","-1","0","0","-1"]}
+    - {name: PAY_2,                      role: feature,     type: integer, description: "Repayment status one month earlier, coded as PAY_0",                     examples: ["2","2","0","0","0"]}
+    - {name: PAY_3,                      role: feature,     type: integer, description: "Repayment status two months earlier, coded as PAY_0",                     examples: ["-1","0","0","0","-1"]}
+    - {name: PAY_4,                      role: feature,     type: integer, description: "Repayment status three months earlier, coded as PAY_0",                   examples: ["-1","0","0","0","0"]}
+    - {name: PAY_5,                      role: feature,     type: integer, description: "Repayment status four months earlier, coded as PAY_0",                    examples: ["-2","0","0","0","0"]}
+    - {name: PAY_6,                      role: feature,     type: integer, description: "Repayment status five months earlier, coded as PAY_0",                    examples: ["-2","2","0","0","0"]}
+    - {name: BILL_AMT1,                  role: feature,     type: float,   description: "Bill statement amount in the most recent month",                          examples: ["3913","2682","29239","46990","8617"]}
+    - {name: BILL_AMT2,                  role: feature,     type: float,   description: "Bill statement amount one month earlier",                                 examples: ["3102","1725","14027","48233","5670"]}
+    - {name: BILL_AMT3,                  role: feature,     type: float,   description: "Bill statement amount two months earlier",                                examples: ["689","2682","13559","49291","35835"]}
+    - {name: BILL_AMT4,                  role: feature,     type: float,   description: "Bill statement amount three months earlier",                              examples: ["0","3272","14331","28314","20940"]}
+    - {name: BILL_AMT5,                  role: feature,     type: float,   description: "Bill statement amount four months earlier",                               examples: ["0","3455","14948","28959","19146"]}
+    - {name: BILL_AMT6,                  role: feature,     type: float,   description: "Bill statement amount five months earlier",                               examples: ["0","3261","15549","29547","19131"]}
+    - {name: PAY_AMT1,                   role: feature,     type: float,   description: "Amount paid in the most recent month",                                    examples: ["0","0","1518","2000","2000"]}
+    - {name: PAY_AMT2,                   role: feature,     type: float,   description: "Amount paid one month earlier",                                           examples: ["689","1000","1500","2019","36681"]}
+    - {name: PAY_AMT3,                   role: feature,     type: float,   description: "Amount paid two months earlier",                                          examples: ["0","1000","1000","1200","10000"]}
+    - {name: PAY_AMT4,                   role: feature,     type: float,   description: "Amount paid three months earlier",                                        examples: ["0","1000","1000","1100","9000"]}
+    - {name: PAY_AMT5,                   role: feature,     type: float,   description: "Amount paid four months earlier",                                         examples: ["0","0","1000","1069","689"]}
+    - {name: PAY_AMT6,                   role: feature,     type: float,   description: "Amount paid five months earlier",                                         examples: ["0","2000","5000","1000","679"]}
+    - {name: default_payment_next_month, role: target,      type: integer, description: "Target: 1 when the account defaulted on next month's payment, else 0. Leave blank when scoring.", examples: ["1","1","0","0","0"]}
