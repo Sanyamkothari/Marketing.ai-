@@ -60,7 +60,7 @@
       "threshold": "${JobCostUsdDailyBudgetUsd}",
       "threshold_source": "substitution",
       "treat_missing_data": "notBreaching",
-      "rationale": "The threshold is a budget, which is a business decision nobody has stated to this repository, so it is left as a substitution rather than invented. The one-day period is POLICY, chosen before this product has served any traffic. a budget is stated per day, so the alarm evaluates per day. Note that the metric is derived from AWS *list* prices, never from a bill, so this alarm is a tripwire on estimated spend and not on invoiced spend."
+      "rationale": "The threshold is a budget, which is a business decision nobody has stated to this repository, so it is left as a substitution rather than invented. The one-day period is POLICY, chosen before this product has served any traffic. A budget is stated per day, so the alarm evaluates per day. Note that the metric is derived from AWS *list* prices, never from a bill, so this alarm is a tripwire on estimated spend and not on invoiced spend."
     }
   ]
 }

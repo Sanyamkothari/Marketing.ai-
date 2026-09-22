@@ -232,7 +232,7 @@ def alarm_definitions() -> list[dict[str, Any]]:
             "rationale": (
                 "The threshold is a budget, which is a business decision nobody has stated to this"
                 " repository, so it is left as a substitution rather than invented. The one-day"
-                f" period is {policy} a budget is stated per day, so the alarm evaluates per day."
+                f" period is {policy} A budget is stated per day, so the alarm evaluates per day."
                 " Note that the metric is derived from AWS *list* prices, never from a bill, so"
                 " this alarm is a tripwire on estimated spend and not on invoiced spend."
             ),

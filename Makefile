@@ -139,7 +139,7 @@ infra-nag: ## cdk synth with the AwsSolutions checks switched on
 aws-deploy: ## build, push and `cdk deploy` into ENV (needs credentials)
 	./scripts/build_push_image.sh
 	cd infra && PATH="$(CURDIR)/$(INFRA_BIN):$$PATH" $(CDK) deploy --all -c env_name=$(ENV) \
-		-c image_digest="$$(cat .image-digest)" --require-approval broadening
+		-c image_digest="$$(cat $(CURDIR)/.image-digest)" --require-approval broadening
 
 aws-bootstrap: ## create the schema, seed the configs and verify the permissions of a deployment
 	$(BIN)/python -m scripts.aws_bootstrap --env $(ENV)
