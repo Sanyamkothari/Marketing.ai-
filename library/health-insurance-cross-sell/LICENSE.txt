@@ -1,0 +1,30 @@
+Health Insurance Cross-Sell Prediction — licence record
+=======================================================
+
+Dataset      Health Insurance Cross Sell Prediction, `train.csv` (381,109 policyholders, 12 columns)
+Upstream     https://www.kaggle.com/datasets/anmolkumar/health-insurance-cross-sell-prediction
+Copy fetched https://raw.githubusercontent.com/asyntychaki/Health-Insurance-Cross-Sell/main/
+             data/train.csv
+
+LICENCE — CHECK THIS ONE BEFORE YOU DEMO IT
+-------------------------------------------
+This is the only dataset in the library whose licence could **not** be read from its own source.
+kaggle.com is blocked by the egress policy of the environment this library was built in, so the
+licence field on the dataset page was never opened. Secondary sources that describe the dataset
+report the Kaggle licence as **GNU General Public License v2**, which is a copyleft software
+licence and not one of the Creative Commons data licences the other five datasets carry.
+
+Treat the dataset as usable for internal evaluation and demonstration, and **confirm the licence
+on the Kaggle page before using it in anything you ship, publish or show to a customer**. If the
+GPL-2 reading is right, redistributing a derived file may carry obligations that a CC BY dataset
+would not.
+
+ATTRIBUTION
+-----------
+Anmol Kumar, "Health Insurance Cross Sell Prediction", Kaggle, 2020.
+
+WHAT IS IN THE FILE
+-------------------
+Policyholder attributes (gender, age, region code, vehicle age and damage, annual premium, sales
+channel, days on book) and a `Response` column. No names, addresses, emails, phone numbers or
+government identifiers; the key is a sequential integer.

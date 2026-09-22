@@ -1,0 +1,6 @@
+customer_id,snapshot_date,country,recency_days,tenure_days,orders_total,items_total,distinct_products,active_months,spend_total,order_value_mean,order_value_max,days_between_orders_mean,returned_orders,returned_items,reactivated_90d
+12346,2011-09-10,United Kingdom,91,91,1,12,1,1,25.50,25.50,25.50,0.0,0,0,0
+12839,2011-09-10,United Kingdom,118,172,2,74,8,1,148.20,74.10,96.80,0.0,0,0,1
+13047,2011-09-10,France,164,215,3,168,19,2,318.70,246.98,287.89,31.5,1,3,0
+15311,2011-09-10,Germany,203,260,6,430,52,4,961.44,320.48,512.30,47.25,2,24,1
+17850,2011-09-10,EIRE,282,282,12,2104,134,7,5310.28,442.52,1840.75,184.0,5,180,1

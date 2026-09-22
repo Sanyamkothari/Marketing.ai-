@@ -1,0 +1,7 @@
+# Raw and prepared dataset files. `fetch.py` rebuilds every one of them; none is committed,
+# because the smallest is 1 MB and the largest is 45 MB (the library's limit is 20 MB, and the
+# committed evidence is `sample.csv`, not the download).
+*/data/
+
+# Engine run directories: uploads, fitted models, artefacts and the results.json each run writes.
+.runs/
