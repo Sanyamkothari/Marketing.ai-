@@ -1,30 +1,38 @@
 """The generative assistant, root-cause summaries and campaign copy - M20's API task (DEC-210).
 
-An index is not a run: `engine.generative.__init__` says so, and `DEC-211` gives an index build, a
-reference-set grading, a root-cause job and a campaign-copy job each their own status document
-rather than writing into a finished run's `status.json`. So the RAG assistant gets its own resource
-family here, `/use-cases/{id}/indexes` and `/indexes/{id}`, instead of being squeezed through
-`POST /runs`; root-cause and campaign-copy jobs, which genuinely do run *over* a finished run, reuse
-that run's own artefact route rather than inventing a second one - the one change `runs.read_artefact`
-needed for that is made there, not here (DEC-210 again: it whitelists the union of the predictive and
-the generative artefact maps).
+**An index is not a run.** `engine.generative.__init__` says so in as many words, and `DEC-211`
+gives an index build, a reference-set grading, a root-cause job and a campaign-copy job each their
+own status document rather than writing into a finished run's `status.json`. So the RAG assistant
+gets its own resource family here, `/use-cases/{id}/indexes` and `/indexes/{id}`, instead of being
+squeezed through `POST /runs`; root-cause and campaign-copy jobs, which genuinely do run *over* a
+finished run, reuse that run's own artefact route rather than inventing a second one - the one
+change `runs.read_artefact` needed for that is made there, not here (DEC-210 again: it whitelists
+the union of the predictive and the generative artefact maps).
 
-Every response that carries generated text also carries, directly or through `GenerativeLlmSummary`,
-the backend and the model ids the call actually ran with. That is plan section 13.3 read literally:
-under the fake backend `GenerativeLlmSummary.backend` says `fake` and the model ids read
-`fake-grounded-v1`, so a screen rendering a fake answer cannot be mistaken for one rendering a real
-one - nothing here is hidden behind a log line.
+**Nothing here is served by a fake backend without saying so.** Every response that carries
+generated text also carries, directly or through `GenerativeLlmSummary`, the backend and the model
+ids the call actually ran with. That is plan section 13.3 read literally: under the fake backend
+`GenerativeLlmSummary.backend` reads `fake` and the model ids read `fake` too (`LlmConfig`'s own
+resolution, not a rephrasing of it), so a screen rendering a fake answer cannot be mistaken for one
+rendering a real one - nothing here is hidden behind a log line.
 
-Three engine limits are accepted rather than hidden. `engine.generative.index.build_index` and
-`engine.generative.evaluation.evaluate` are monolithic - there is no hook between "parse" and "embed"
-to report through - so a job's `GenerativeStatus.stages` is coarse: one stage per engine call this
-module actually makes, never a fabricated breakdown of what happens inside one. `evaluate` also does
-not return the guardrail checks its own calls to `assistant.answer` produced, so `guardrail_report.json`
-is never written for an index; `IndexDetailResponse.guardrails` stays `null`, which is exactly what
-the contract says a check that has not run looks like. And `model_choice`'s "try every candidate
-model and keep the best" is Phase 4 work with nothing behind it yet in `engine.generative` - an
-explicit id overrides `generative.llm.generation_model_id`, and `"__automl__"` keeps the use case's
-own configured model, which is the whole of what this build can honour today.
+**Three engine limits are accepted rather than hidden.** `engine.generative.index.build_index` and
+`engine.generative.evaluation.evaluate` are monolithic - there is no hook between "parse" and
+"embed" to report through - so a job's `GenerativeStatus.stages` is coarse: one stage per engine
+call this module actually makes, never a fabricated breakdown of what happens inside one.
+`evaluate` also does not return the guardrail checks its own calls to `assistant.answer` produced,
+so `guardrail_report.json` is never written for an index; `IndexDetailResponse.guardrails` stays
+`null`, which is exactly what the contract says a check that has not run looks like. And
+`model_choice`'s "try every candidate model and keep the best" is Phase 4 work with nothing behind
+it yet in `engine.generative` - an explicit id overrides `generative.llm.generation_model_id`, and
+`"__automl__"` keeps the use case's own configured model, which is the whole of what this build can
+honour today.
+
+**A job's usage accumulates rather than resets.** A run's copy can cost more than one job over its
+life - a batch, then a regenerate, then another - and each is metered by its own fresh `Meter`.
+`_write_usage` folds a job's tally onto whatever `llm_usage.json` already held rather than
+overwriting it, because "one more `by_purpose` entry" (the contract's own words for a regenerate)
+only means something if the entries already there survive the write.
 """
 
 from __future__ import annotations
@@ -560,7 +568,7 @@ def _read_reference_frame(data: bytes) -> pd.DataFrame:
 
 
 # ---------------------------------------------------------------------------
-# 2 & 6. Index build and evaluate: shared document/reference-set resolution
+# 2 & 5. Index build and evaluate: shared document/reference-set resolution
 # ---------------------------------------------------------------------------
 def _persisted_documents(
     storage: Storage, index_id: str, uploads: Sequence[tuple[str, bytes]]
