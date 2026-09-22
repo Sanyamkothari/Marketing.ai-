@@ -22,8 +22,8 @@ citation does not, leaving a `UNKNOWN_CITATION` warning behind for the report to
 
 **Nothing the model wrote is taken as it stands.** The quote is cut to `QUOTE_WORDS` here rather
 than trusted from the reply, a code fence is stripped because stripping one changes no content, a
-reply the contract cannot read becomes a refusal instead of an exception, and only the last
-`HISTORY_TURNS` turns reach the prompt.
+reply the contract cannot read is dropped for the operator's refusal sentence rather than raised or
+shown, and only the last `HISTORY_TURNS` turns reach the prompt.
 
 The index is real and is built once for the module: three documents of the synthetic Northwind
 corpus, parsed, chunked and embedded by the code a deployment runs, so the retrieval order, the
@@ -33,15 +33,16 @@ fake's, so this module sets its own floor and never claims the shipped 0.25 prod
 outcome: that number is calibrated for the Bedrock embedding model and means something else here
 (DEC-218).
 
-Two expectations are marked `xfail` rather than written to match what the code does: a reply the
-parser cannot read is documented as reaching the customer as a refusal and does not, and one check
-in an answer's guardrails names the answer where the rest name the question. Each marker's reason
-says which sentence of which docstring it is holding the module to.
+`_parse` is called directly wherever the fake cannot be made to produce the reply that matters: a
+quote past the limit, a fenced object, a citation number nobody supplied sitting beside one that
+was. Those calls go through `parsed`, which hands the parser the question and the refusal sentence
+the flow would have handed it, so a check read off it is the check a caller would have seen.
 """
 
 from __future__ import annotations
 
 import json
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 
@@ -59,8 +60,8 @@ from engine.generative.assistant import (
     extracts_for,
 )
 from engine.generative.budget import Meter
-from engine.generative.contracts import AssistantAnswer, Chunk, GuardrailOutcome
-from engine.generative.errors import INDEX_NOT_FOUND, GenerativeError
+from engine.generative.contracts import AssistantAnswer, Chunk, Citation, GuardrailCheck, GuardrailOutcome
+from engine.generative.errors import INDEX_NOT_FOUND, MODEL_OUTPUT_MALFORMED, GenerativeError
 from engine.generative.guardrails import BANNED_PHRASES, PII_IN_OUTPUT, Guardrails, load_policy
 from engine.generative.index import build_index
 from engine.generative.prompts import load_prompt
@@ -98,10 +99,6 @@ class KnowledgeIndex:
     index_id: str
     store: VectorStore
     root: Path
-
-
-PARSE_QUESTION: str = "How long does activation take?"
-PARSE_REFUSAL: str = "I don't have that in the documents I've been given."
 
 
 def meter_for(client: GroundedFakeLLMClient) -> Meter:
@@ -196,6 +193,16 @@ def match(
 def reply(**payload: object) -> str:
     """A model reply in the shape the answering prompt asks for."""
     return json.dumps({"answer": "Within four hours.", "refused": False, **payload})
+
+
+def parsed(
+    raw: str, matches: Sequence[Match] = ()
+) -> tuple[str, bool, tuple[Citation, ...], tuple[GuardrailCheck, ...]]:
+    """`_parse` as the flow calls it, with the question asked and the sentence configured for a refusal.
+
+    A check read off it then carries the target a caller reading `answer.guardrails` would have seen.
+    """
+    return _parse(raw, matches, question=ANSWERED, refusal=REFUSAL)
 
 
 @pytest.fixture(scope="module")
@@ -364,22 +371,21 @@ def test_a_citation_that_points_nowhere_is_dropped_and_the_claim_survives(
     assert "not supplied" in warnings[0].detail
 
 
-def test_every_check_on_one_answer_names_the_same_thing_as_the_thing_it_checked(
+def test_every_check_on_one_answer_names_the_question_and_never_the_answer(
     knowledge_index: KnowledgeIndex,
 ) -> None:
-    """One answer was checked, so one target; two targets make the field mean two things at once."""
+    """One list whose `target` meant the question in one row and the answer in the next is unreadable."""
     _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.UNGROUNDED)
-    assert {check.target for check in result.guardrails} == {ANSWERED[:80]}
+    assert result.guardrails
+    assert all(ANSWERED.startswith(check.target) for check in result.guardrails)
 
 
 def test_a_false_citation_is_dropped_while_the_citation_beside_it_survives() -> None:
     """Dropping the answer would cost a reader the claim; dropping the reference costs them nothing."""
     matches = (match("Within four hours.", similarity=0.39), match("Restart the handset.", ordinal=1))
-    text, refused, citations, checks = _parse(
+    text, refused, citations, checks = parsed(
         reply(citations=[{"chunk": 2, "quote": "Restart the handset."}, {"chunk": 9, "quote": "invented"}]),
         matches,
-        question=PARSE_QUESTION,
-        refusal=PARSE_REFUSAL,
     )
     assert (text, refused) == ("Within four hours.", False)
     assert [citation.chunk_id for citation in citations] == [matches[1].chunk.chunk_id]
@@ -390,12 +396,7 @@ def test_a_false_citation_is_dropped_while_the_citation_beside_it_survives() -> 
 def test_a_citation_number_that_names_no_extract_is_dropped_however_it_was_written(cited) -> None:
     """Three extracts were supplied, so a fourth, a zeroth and a word are all the same mistake."""
     matches = tuple(match(f"Extract {number}.", ordinal=number) for number in (1, 2, 3))
-    _, _, citations, checks = _parse(
-        reply(citations=[{"chunk": cited, "quote": "q"}]),
-        matches,
-        question=PARSE_QUESTION,
-        refusal=PARSE_REFUSAL,
-    )
+    _, _, citations, checks = parsed(reply(citations=[{"chunk": cited, "quote": "q"}]), matches)
     assert citations == ()
     assert [(check.rule, check.outcome) for check in checks] == [(UNKNOWN_CITATION, GuardrailOutcome.WARNED)]
 
@@ -403,11 +404,8 @@ def test_a_citation_number_that_names_no_extract_is_dropped_however_it_was_writt
 def test_a_number_the_model_wrote_as_a_string_is_still_a_number() -> None:
     """Models write `"2"` as often as `2`, and refusing over the quotes would drop a good citation."""
     matches = (match("Within four hours."), match("Restart the handset.", ordinal=1, similarity=0.2))
-    _, _, citations, checks = _parse(
-        reply(citations=[{"chunk": "2", "quote": "Restart the handset."}]),
-        matches,
-        question=PARSE_QUESTION,
-        refusal=PARSE_REFUSAL,
+    _, _, citations, checks = parsed(
+        reply(citations=[{"chunk": "2", "quote": "Restart the handset."}]), matches
     )
     assert [citation.chunk_id for citation in citations] == [matches[1].chunk.chunk_id]
     assert checks == ()
@@ -416,8 +414,8 @@ def test_a_number_the_model_wrote_as_a_string_is_still_a_number() -> None:
 def test_a_reply_that_cites_nothing_cites_nothing_rather_than_failing() -> None:
     """A model that answers without citing is a guardrail's problem, not the parser's."""
     matches = (match("Within four hours."),)
-    assert _parse(reply(citations=None), matches, question=PARSE_QUESTION, refusal=PARSE_REFUSAL)[2] == ()
-    assert _parse(reply(), matches, question=PARSE_QUESTION, refusal=PARSE_REFUSAL)[2] == ()
+    assert parsed(reply(citations=None), matches)[2] == ()
+    assert parsed(reply(), matches)[2] == ()
 
 
 # ---------------------------------------------------------------------------
@@ -427,12 +425,7 @@ def test_a_quote_is_cut_to_the_word_limit_here_rather_than_trusted_from_the_mode
     """The prompt asks for at most 25 words; asking is not enforcing, and the artefact is enforced."""
     long_quote = " ".join(f"word{number}" for number in range(QUOTE_WORDS * 2))
     matches = (match("Within four hours."),)
-    _, _, citations, _ = _parse(
-        reply(citations=[{"chunk": 1, "quote": long_quote}]),
-        matches,
-        question=PARSE_QUESTION,
-        refusal=PARSE_REFUSAL,
-    )
+    _, _, citations, _ = parsed(reply(citations=[{"chunk": 1, "quote": long_quote}]), matches)
     assert citations[0].quote.split() == long_quote.split()[:QUOTE_WORDS]
 
 
@@ -446,24 +439,20 @@ def test_a_reply_wrapped_in_a_code_fence_is_still_read(fence: str) -> None:
     """A model asked for bare JSON supplies a fence often enough that refusing over it costs answers."""
     matches = (match("Within four hours."),)
     body = reply(citations=[{"chunk": 1, "quote": "Within four hours."}])
-    text, refused, citations, checks = _parse(
-        fence.format(body=body), matches, question=PARSE_QUESTION, refusal=PARSE_REFUSAL
-    )
+    text, refused, citations, checks = parsed(fence.format(body=body), matches)
     assert (text, refused) == ("Within four hours.", False)
     assert [citation.chunk_id for citation in citations] == [matches[0].chunk.chunk_id]
     assert checks == ()
 
 
-def test_a_reply_the_contract_cannot_read_is_a_refusal_and_not_an_exception() -> None:
-    """The model said something unreadable; raising would turn a bad answer into a failed request."""
-    assert (
-        _parse(
-            "Certainly! Here is your answer, in prose.", (), question=PARSE_QUESTION, refusal=PARSE_REFUSAL
-        )[1]
-        is True
-    )
-    assert _parse("[1, 2]", (), question=PARSE_QUESTION, refusal=PARSE_REFUSAL)[1] is True
-    assert _parse("", (), question=PARSE_QUESTION, refusal=PARSE_REFUSAL)[1] is True
+@pytest.mark.parametrize("raw", ["Certainly! Here is your answer, in prose.", "[1, 2]", "", "null"])
+def test_a_reply_the_contract_cannot_read_is_dropped_for_the_refusal(raw: str) -> None:
+    """Raising would turn a bad answer into a failed request; passing it on would put it on a screen."""
+    text, refused, citations, checks = parsed(raw)
+    assert (text, refused, citations) == (REFUSAL, True, ())
+    assert [(check.rule, check.outcome) for check in checks] == [
+        (MODEL_OUTPUT_MALFORMED, GuardrailOutcome.BLOCKED)
+    ]
 
 
 def test_a_malformed_reply_never_reaches_the_caller_as_an_answer(
@@ -480,10 +469,12 @@ def test_a_malformed_reply_never_reaches_the_caller_as_an_answer(
 def test_a_malformed_reply_is_refused_in_the_operators_own_words(
     knowledge_index: KnowledgeIndex,
 ) -> None:
-    """A refusal reads the same to a customer whoever caused it, or `refused` means two things."""
+    """With the judges off, so it is the parser refusing and not a judge that could not read a verdict."""
     _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.MALFORMED, judged=False)
     assert result.refused
     assert result.answer == REFUSAL
+    assert result.citations == ()
+    assert MODEL_OUTPUT_MALFORMED in {check.rule for check in result.guardrails}
 
 
 # ---------------------------------------------------------------------------

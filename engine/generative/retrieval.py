@@ -32,7 +32,7 @@ from engine.generative.contracts import Chunk
 from engine.generative.vectorstore import Match, VectorStore, cosine
 from engine.utils.logging import get_logger
 
-__all__ = ["OVERSAMPLE", "Retrieved", "mmr", "retrieve"]
+__all__ = ["OVERSAMPLE", "Retrieved", "mmr", "retrieve", "similarity_to"]
 
 _LOGGER = get_logger(__name__)
 
@@ -125,9 +125,15 @@ def mmr(
     """
     if not candidates or top_k < 1:
         return ()
+    # Sorted here rather than assumed. Both callers in the tree hand over a similarity-ordered
+    # list, so this is a no-op for them - but the first pick is taken from the front, and a direct
+    # caller passing an unordered list would otherwise get whichever candidate happened to be
+    # first as its top citation, with no error and a plausible-looking answer. The promise above
+    # is worth more than the microseconds.
+    ordered = sorted(candidates, key=lambda match: -match.similarity)
     if lambda_ >= 1.0:
-        return tuple(candidates[:top_k])
-    remaining = list(candidates)
+        return tuple(ordered[:top_k])
+    remaining = list(ordered)
     chosen: list[Match] = [remaining.pop(0)]
     while remaining and len(chosen) < top_k:
         best_index, best_score = 0, float("-inf")

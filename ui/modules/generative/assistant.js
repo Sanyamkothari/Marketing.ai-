@@ -170,12 +170,10 @@ function evaluateTabHtml(s) {
   if (!champion) {
     return `<p class="desc" style="margin-top:18px">Build an assistant first - there is no index yet to grade.</p>`;
   }
-  const columns = (s.referenceSet && s.referenceSet.columns) || [];
   const blocker = !s.referenceSet && !s.useSampleQuestions ? "Upload a reference-question file" : "";
   return `<form id="g-evaluate" novalidate style="margin-top:18px">
     <p class="desc">Grading <b>${esc(champion.llm && champion.llm.generation_model_id ? champion.llm.generation_model_id : champion.index_id)}</b> against a reference set. This does not rebuild the index.</p>
     ${referenceStep(s)}
-    ${columns.length ? "" : ""}
     ${s.submitError ? errorBox(s.submitError) : ""}
     <div class="actions"><button type="submit" class="run" id="g-eval-submit"${
       blocker || s.submitting ? " disabled" : ""

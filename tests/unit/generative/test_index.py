@@ -1,54 +1,43 @@
-"""`engine.generative.index`: what a build writes down, and what a rebuild is allowed to skip.
+"""`engine.generative.index`: the three decisions its own docstring names, proved against real builds.
 
-An index is the generative counterpart of a trained model, so a build is asked the questions a
-training run is asked: what went in, under which settings, what failed on the way, and what the
-next build is entitled to reuse. Five properties carry most of the weight here.
+Every test here runs the real parsers, the real chunker and `GroundedFakeLLMClient`'s real lexical
+embedding over a two- or three-document slice of the synthetic Northwind corpus - never a hand-built
+`Chunk` or a stubbed vector - because the property this module exists for is what happens *between*
+those steps, and stubbing any one of them would leave it unreachable. The corpus is sliced to two or
+three of its fourteen documents throughout, which is the whole of what "small" buys here: the same
+code runs, the same bugs are reachable, and a build finishes in milliseconds rather than seconds.
 
-**The saving is counted, never inferred.** A rebuild that reuses a document is the easiest thing in
-this module to assert wrongly, because chunking is deterministic: the chunks come back identical
-whether they were carried over or derived again, so comparing them proves nothing at all. The
-reuse is therefore proved on the fake client - a second build over an untouched knowledge base
-asks for no embedding whatsoever, and a build after one document was edited asks for that
-document's chunks and no others. The cost of proving it this way is that these tests know the
-client keeps a log, which is exactly what `GroundedFakeLLMClient.calls` is for.
+**The stale-vector invariant is the one test in this file worth more than the others.** `chunk_id` is
+`(doc_id, ordinal)`, so a document rewritten end to end produces chunks with exactly the same ids as
+the ones they replace - which means a rebuild that carried a previous vector over by matching on
+chunk id alone would hand a completely rewritten passage the vector of the passage it used to be,
+silently. `chunking.embedding_text` and `retrieval` would then agree on nothing: the text stored says
+one thing and the vector a question is matched against says another, and nothing about the citation
+that results looks wrong. DEC-220 records that this was a real bug and measured it - a rewritten
+document's stored vector was still cosine 1.0000 with its *old* text - so the test below rewrites a
+document's bytes completely, rather than only adding one, and checks the vector itself rather than
+trusting that a rebuild merely "ran".
 
-**A carried vector is proved to belong to the text it sits beside.** `chunk_id` is `(doc_id,
-ordinal)`, so an edited document produces chunks with the ids its old ones had; carrying a vector
-over by id would leave the index silently stale, matching on wording nobody can read any more. The
-stored row for an edited chunk is read back and compared with the passage it now holds and with
-the passage it replaced, which is the measurement DEC-220 was written from.
+**A build tolerates one bad document and refuses none.** A corrupt file with an accepted extension
+and a file with an extension the configuration does not accept are two different failures with two
+different codes, and both are proved to cost only themselves - the manifest still gets built, the
+other documents still get chunked - while a knowledge base of nothing but such failures is proved to
+raise `INDEX_EMPTY` instead, because an index with no chunks cannot answer a question.
 
-**One bad file costs that file.** A corrupt PDF, a text file with nothing in it and a spreadsheet
-nobody asked for are put in beside real documents, and the build is asserted to finish: each
-failure is recorded against its own row with the code that explains it, and contributes no chunks.
-The build that does raise is the one where every document failed, because an index with no chunks
-can answer nothing.
+**PII in a document is named, never removed.** A document containing an e-mail address is indexed
+with that address still in the chunk text a citation would quote, and the manifest carries
+`PII_IN_DOCS:email` naming what was seen - both halves are asserted together, because a warning with
+no text-unchanged assertion beside it would not catch a change that quietly started redacting.
 
-**PII in a document is a warning and never a redaction.** Both halves are asserted on purpose
-(DEC-216) - the manifest names the kind that was found, *and* the address is still in the chunk
-text character for character. The second half is the one a later reader is most likely to tidy
-away, and the first half would go on passing without it.
-
-**What is embedded is not what is stored.** A chunk is embedded as `chunking.embedding_text`
-renders it, its document id and heading in front of the passage, and the proof is the texts the
-fake recorded rather than a restatement of the call site (DEC-217).
-
-No test here asserts the similarity floor, and only one reads a vector back at all. 0.25 is
-calibrated for a real embedding model and means something else under a lexical fake (DEC-218), so
-the one comparison made is between a passage and itself - a claim about staleness, which travels,
-rather than about a threshold, which does not.
-
-Two tests are `xfail(strict=True)`. A document's identity across a rebuild is its fingerprint and
-nothing else, so a renamed file keeps the name it had in the manifest and on every citation, and
-two files with the same bytes collapse into one entry and a duplicated chunk id.
+One cost is accepted throughout: `GroundedFakeLLMClient`'s embedding is a lexical hash, not a real
+model's, so a cosine near zero here is two texts with almost no shared vocabulary and not a claim
+about semantic distance - which is exactly the comparison the stale-vector test needs and no more.
 """
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from datetime import UTC, datetime
 from pathlib import Path
-from typing import Final
 
 import pytest
 
@@ -56,494 +45,358 @@ from engine.config import KnowledgeBaseConfig, UseCaseConfig, load_use_case
 from engine.generative import parsers
 from engine.generative.budget import Meter
 from engine.generative.chunking import embedding_text
-from engine.generative.contracts import DOC_INDEX_MANIFEST_FILENAME, DocIndexManifest, IndexedDocument
-from engine.generative.errors import GenerativeError
-from engine.generative.index import (
-    ANSWER_PROMPTS,
-    EMBED_BATCH,
-    PII_IN_DOCS,
-    BuildResult,
-    build_index,
-    read_manifest,
+from engine.generative.contracts import ChunkConfig, DocIndexManifest
+from engine.generative.errors import (
+    DOCUMENT_TYPE_UNSUPPORTED,
+    INDEX_EMPTY,
+    INDEX_NOT_FOUND,
+    KNOWLEDGE_BASE_TOO_LARGE,
+    GenerativeError,
 )
+from engine.generative.index import PII_IN_DOCS, BuildResult, build_index, read_manifest
 from engine.generative.vectorstore import LocalVectorStore, cosine
-from engine.llm import GroundedFakeLLMClient
-from engine.storage import LocalStorage, index_key
+from engine.llm import GroundedFakeLLMClient, LLMCall
+from engine.storage import LocalStorage
 from engine.utils.ids import new_index_id
 from tests.fixtures.make_docs import build_knowledge_base
 
-USE_CASE: Final[UseCaseConfig] = load_use_case("ai-onboarding-assistant")
-"""The one shipped generative use case, read once: loading it is a catalog read per test otherwise."""
+USE_CASE = "ai-onboarding-assistant"
+BASE: UseCaseConfig = load_use_case(USE_CASE)
+"""The shipped RAG use case. Its `generative` block is what every build in this module runs under."""
 
-STEMS: Final[tuple[str, ...]] = ("faq_billing", "plans_prepaid", "faq_roaming")
-"""Three documents in three formats - plain text, Markdown and a PDF - and not all fourteen.
-
-A subset is the difference between a module that runs in a second and one nobody waits for, and the
-PDF is in it so `IndexedDocument.pages` is measured on a format that has pages.
-"""
-
-DIMENSIONS: Final[int] = 32
-"""The fake's vector width here, and deliberately not its default: a width nobody chose proves nothing."""
-
-SUPPORT_ADDRESS: Final[str] = "support@northwind.example.invalid"
-"""An invented address in a documentation-reserved domain, planted so a detector has something to find."""
-
-WITH_PII: Final[str] = f"# Support contact\n\nWrite to {SUPPORT_ADDRESS} when an activation stalls.\n"
-NO_HEADINGS: Final[str] = (
-    "Northwind Telecom upgrades the core network overnight on the first Sunday of every month, and "
-    "prepaid packs carry on working while the work is done.\n"
+REWRITE = (
+    "# A Completely Different Document\n\n"
+    "This paragraph is about volcanic islands and has nothing to do with telecom plans at all.\n"
 )
-ROUTER_PLACEMENT: Final[str] = (
-    "# Router placement\n\nPut the router in the open, away from a metal cupboard, so the signal "
-    "reaches every room.\n"
-)
-REFUND_WINDOW: Final[str] = (
-    "# Refund windows\n\nAn unused prepaid pack is refunded in full within fourteen days of purchase.\n"
-)
-"""The same file, rewritten end to end: no word of the first survives into the second."""
-
-EXTRA_SECTION: Final[str] = (
-    "\n\nExtra section\n\nThe billing cycle now closes on the fifth of each month and invoices are "
-    "issued the next day.\n"
-)
-NOT_A_PDF: Final[bytes] = b"not a pdf at all, just the bytes of one that never finished uploading"
-SPREADSHEET: Final[str] = "plan,price\nStarter,149\n"
-OVERSIZED: Final[str] = "# Tariffs\n\n" + "A sentence about prepaid tariffs. " * 40_000
-"""Comfortably over a one-megabyte ceiling, and never parsed, because the refusal comes first."""
-
-MANY_SECTIONS: Final[str] = "".join(
-    f"## Plan {number}\n\nPlan {number} carries its own tariff, its own allowance and its own validity.\n\n"
-    for number in range(EMBED_BATCH + 6)
-)
-"""One headed section per chunk, six past a full batch, so the second batch is a short one."""
+"""What `plans_prepaid.md` becomes when a test rewrites it: no word in common with the original."""
 
 
-def entry(result: BuildResult, name: str) -> IndexedDocument:
-    """The manifest row for one document, by the filename it was uploaded under."""
-    return next(item for item in result.manifest.documents if item.name == name)
+@pytest.fixture
+def storage(tmp_path: Path) -> LocalStorage:
+    return LocalStorage(tmp_path / "data")
 
 
-def vector_of(text: str) -> tuple[float, ...]:
-    """The fake's embedding of one text, from a client of its own so no build's log is disturbed."""
-    return GroundedFakeLLMClient(dimensions=DIMENSIONS).embed([text])[0]
+@pytest.fixture
+def store(storage: LocalStorage) -> LocalVectorStore:
+    return LocalVectorStore(storage)
 
 
-def with_limits(**overrides: object) -> UseCaseConfig:
-    """`USE_CASE` with knowledge-base limits this module owns, rather than the shipped ones it does not."""
-    knowledge_base = KnowledgeBaseConfig(**overrides)  # type: ignore[arg-type]
-    generative = USE_CASE.generative.model_copy(update={"knowledge_base": knowledge_base})
-    return USE_CASE.model_copy(update={"generative": generative})
+@pytest.fixture
+def mixed_knowledge_base(tmp_path: Path) -> tuple[Path, ...]:
+    """Two real documents, one corrupt PDF and one file of a type the shipped config does not accept."""
+    docs_dir = tmp_path / "docs"
+    valid = build_knowledge_base(docs_dir, stems=("faq_activation", "plans_prepaid"))
+    broken = docs_dir / "broken.pdf"
+    broken.write_bytes(b"this is not a pdf file and pypdf will refuse to open it")
+    unsupported = docs_dir / "notes.rtf"
+    unsupported.write_text("Some notes in a format nobody indexes.", encoding="utf-8")
+    return (*valid, broken, unsupported)
 
 
-class Rig:
-    """One knowledge base and the storage, store and fake client a build over it needs.
+def use_case_with(**overrides: object) -> UseCaseConfig:
+    """The shipped assistant use case, with one field of its `generative` block overridden."""
+    return BASE.model_copy(update={"generative": BASE.generative.model_copy(update=overrides)})
 
-    Each build gets a client of its own, so `embedded` is everything *that* build asked for and
-    nothing an earlier one did. Sharing one would make the incremental saving unreadable, which is
-    the whole thing several of these tests are counting.
+
+def meter_for(client: GroundedFakeLLMClient, *, use_case: UseCaseConfig = BASE) -> Meter:
+    """A meter carrying `use_case`'s own LLM and budget settings, so `ChunkConfig` records what ran."""
+    generative = use_case.generative
+    return Meter(client, job_id=new_index_id(), llm=generative.llm, budget=generative.budget)
+
+
+def build(
+    paths: Sequence[Path],
+    *,
+    store: LocalVectorStore,
+    storage: LocalStorage,
+    use_case: UseCaseConfig = BASE,
+    previous: DocIndexManifest | None = None,
+) -> tuple[GroundedFakeLLMClient, BuildResult]:
+    """Build once against `store`, handing back the client so its call log can be read afterwards.
+
+    A fresh client every time, never a shared one, because what each test reads off `.calls` is what
+    *this* build asked of a model - a client carried over from an earlier build would answer that
+    question about the wrong build.
     """
+    client = GroundedFakeLLMClient()
+    result = build_index(
+        list(paths),
+        index_id=new_index_id(),
+        use_case=use_case,
+        storage=storage,
+        store=store,
+        meter=meter_for(client, use_case=use_case),
+        previous=previous,
+    )
+    return client, result
 
-    def __init__(self, root: Path) -> None:
-        self.docs = root / "documents"
-        self.storage = LocalStorage(root / "data")
-        self.store = LocalVectorStore(self.storage)
-        self.client = GroundedFakeLLMClient(dimensions=DIMENSIONS)
 
-    def documents(self, *stems: str) -> list[Path]:
-        """The named documents of the synthetic corpus, written into this rig's knowledge base."""
-        return list(build_knowledge_base(self.docs, stems=stems or STEMS))
+def embed_calls(client: GroundedFakeLLMClient) -> tuple[LLMCall, ...]:
+    """Every call this build made to embed something, in call order."""
+    return tuple(call for call in client.calls if call.kind == "embed")
 
-    def write(self, filename: str, content: str | bytes) -> Path:
-        """One document of a test's own, beside the corpus, and the path it was written to."""
-        path = self.docs / filename
-        path.parent.mkdir(parents=True, exist_ok=True)
-        if isinstance(content, bytes):
-            path.write_bytes(content)
+
+def embedded_texts(client: GroundedFakeLLMClient) -> tuple[str, ...]:
+    """Every text this build actually sent to be embedded, across every call it made."""
+    return tuple(text for call in embed_calls(client) for text in call.texts)
+
+
+def vector_for(store: LocalVectorStore, index_id: str, chunk_id: str) -> tuple[float, ...]:
+    """The vector `index_id` stores for `chunk_id`, read back the way a search would read it."""
+    for chunk, vector in zip(store.chunks(index_id), store.matrix(index_id), strict=True):
+        if chunk.chunk_id == chunk_id:
+            return tuple(float(value) for value in vector)
+    raise AssertionError(f"{chunk_id!r} is not in {index_id!r}")
+
+
+def _unreachable_parse(*args: object, **kwargs: object) -> None:
+    """Stands in for `parsers.parse`; its call is the proof that a size refusal came before parsing."""
+    raise AssertionError("parsers.parse must not run once the knowledge base is oversized")
+
+
+# ---------------------------------------------------------------------------
+# The happy path
+# ---------------------------------------------------------------------------
+def test_the_happy_path_over_a_small_subset_writes_a_manifest_that_reads_back_whole(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path
+) -> None:
+    paths = build_knowledge_base(tmp_path / "docs", stems=("faq_activation", "plans_prepaid"))
+    _, result = build(paths, store=store, storage=storage)
+    manifest = result.manifest
+
+    assert manifest.total_chunks == len(result.chunks) > 0
+    assert sum(doc.chunks for doc in manifest.documents) == manifest.total_chunks
+    assert {doc.name for doc in manifest.documents} == {"faq_activation.md", "plans_prepaid.md"}
+
+    rag = BASE.generative.rag
+    dimensions = store.matrix(manifest.index_id).shape[1]
+    assert manifest.chunk_config == ChunkConfig(
+        chunk_tokens=rag.chunk_tokens,
+        chunk_overlap=rag.chunk_overlap,
+        embedding_model_id=BASE.generative.llm.embedding_model,
+        dimensions=int(dimensions),
+    )
+    assert manifest.chunk_config.dimensions > 0
+
+    assert read_manifest(storage, manifest.index_id) == manifest
+
+
+# ---------------------------------------------------------------------------
+# Incremental rebuild saves work
+# ---------------------------------------------------------------------------
+def test_rebuilding_with_nothing_changed_embeds_no_texts_at_all(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path
+) -> None:
+    paths = build_knowledge_base(tmp_path / "docs", stems=("faq_activation", "plans_prepaid"))
+    _, first = build(paths, store=store, storage=storage)
+    assert first.manifest.total_chunks > 0
+
+    second_client, second = build(paths, store=store, storage=storage, previous=first.manifest)
+
+    assert embed_calls(second_client) == ()
+    assert second.manifest.total_chunks == first.manifest.total_chunks
+    assert {chunk.chunk_id for chunk in second.chunks} == {chunk.chunk_id for chunk in first.chunks}
+
+
+def test_editing_one_documents_bytes_re_embeds_only_that_documents_chunks(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path
+) -> None:
+    docs_dir = tmp_path / "docs"
+    paths = build_knowledge_base(docs_dir, stems=("faq_activation", "faq_devices", "plans_prepaid"))
+    _, first = build(paths, store=store, storage=storage)
+
+    (docs_dir / "plans_prepaid.md").write_text(REWRITE, encoding="utf-8")
+    second_client, second = build(paths, store=store, storage=storage, previous=first.manifest)
+
+    edited = [chunk for chunk in second.chunks if chunk.doc_id == "plans_prepaid"]
+    untouched = [chunk for chunk in second.chunks if chunk.doc_id != "plans_prepaid"]
+    assert edited
+    assert untouched
+
+    assert set(embedded_texts(second_client)) == {embedding_text(chunk) for chunk in edited}
+
+    fingerprints_before = {doc.doc_id: doc.fingerprint for doc in first.manifest.documents}
+    for doc in second.manifest.documents:
+        if doc.doc_id == "plans_prepaid":
+            assert doc.fingerprint != fingerprints_before[doc.doc_id]
         else:
-            path.write_text(content, encoding="utf-8")
-        return path
-
-    def build(
-        self,
-        paths: Sequence[Path],
-        *,
-        previous: DocIndexManifest | None = None,
-        use_case: UseCaseConfig | None = None,
-        client_id: str | None = None,
-        index_id: str | None = None,
-        now: datetime | None = None,
-    ) -> BuildResult:
-        """Build one index over `paths`, against a fake and a meter belonging to this build alone."""
-        chosen = use_case if use_case is not None else USE_CASE
-        self.client = GroundedFakeLLMClient(dimensions=DIMENSIONS)
-        meter = Meter(
-            self.client,
-            job_id="x_build",
-            llm=chosen.generative.llm,
-            budget=chosen.generative.budget,
-        )
-        return build_index(
-            list(paths),
-            index_id=index_id if index_id is not None else new_index_id(),
-            use_case=chosen,
-            storage=self.storage,
-            store=self.store,
-            meter=meter,
-            client_id=client_id,
-            previous=previous,
-            now=now,
-        )
-
-    @property
-    def embedded(self) -> tuple[str, ...]:
-        """Every text the last build asked the model to embed, in the order it asked for them."""
-        return tuple(text for call in self.client.calls if call.kind == "embed" for text in call.texts)
-
-    @property
-    def batches(self) -> tuple[int, ...]:
-        """How many texts each embedding call of the last build carried."""
-        return tuple(len(call.texts) for call in self.client.calls if call.kind == "embed")
-
-
-@pytest.fixture
-def rig(tmp_path: Path) -> Rig:
-    """A knowledge base directory, the storage beside it and a vector store over that storage."""
-    return Rig(tmp_path)
-
-
-@pytest.fixture
-def parsed(monkeypatch: pytest.MonkeyPatch) -> list[Path]:
-    """Every path the parser was actually asked to read, so a refusal can be proved to precede one."""
-    asked: list[Path] = []
-    real = parsers.parse
-
-    def spy(path: Path, **keywords: object) -> parsers.ParsedDocument:
-        asked.append(path)
-        return real(path, **keywords)  # type: ignore[arg-type]
-
-    monkeypatch.setattr(parsers, "parse", spy)
-    return asked
+            assert doc.fingerprint == fingerprints_before[doc.doc_id]
 
 
 # ---------------------------------------------------------------------------
-# What a build writes
+# The stale-vector invariant (DEC-220)
 # ---------------------------------------------------------------------------
-def test_a_build_writes_a_manifest_that_says_what_went_into_the_index(rig: Rig) -> None:
-    """The manifest is the record of the build, so it has to survive the round trip through storage."""
-    result = rig.build(rig.documents())
-    stored = read_manifest(rig.storage, result.index_id)
-    assert stored == result.manifest
-    assert rig.storage.exists(index_key(result.index_id, DOC_INDEX_MANIFEST_FILENAME))
-    assert stored.index_id == result.index_id
-    assert stored.use_case_id == USE_CASE.id
-    assert [item.name for item in stored.documents] == [
-        "faq_billing.txt",
-        "faq_roaming.pdf",
-        "plans_prepaid.md",
-    ]
-    assert all(item.chunks for item in stored.documents)
-    assert all(item.warnings == () for item in stored.documents)
-    assert stored.warnings == ()
-    assert stored.build_seconds >= 0.0
+def test_a_rewritten_documents_stored_vector_is_the_vector_of_its_new_text_and_not_its_old(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path
+) -> None:
+    """`chunk_id` is `(doc_id, ordinal)`, so the rewritten document's first chunk keeps its old id.
+
+    A rebuild that carried the previous vector over by matching on that id alone would leave this
+    chunk answering to a question about volcanic islands with the vector of a paragraph about
+    prepaid plans, and nothing about the stored text or the chunk id would say so.
+    """
+    docs_dir = tmp_path / "docs"
+    paths = build_knowledge_base(docs_dir, stems=("faq_activation", "plans_prepaid"))
+    _, first = build(paths, store=store, storage=storage)
+
+    target = "plans_prepaid-00000"
+    old_chunk = next(chunk for chunk in first.chunks if chunk.chunk_id == target)
+    old_vector = vector_for(store, first.manifest.index_id, target)
+
+    (docs_dir / "plans_prepaid.md").write_text(REWRITE, encoding="utf-8")
+    _, second = build(paths, store=store, storage=storage, previous=first.manifest)
+
+    new_chunk = next(chunk for chunk in second.chunks if chunk.chunk_id == target)
+    new_vector = vector_for(store, second.manifest.index_id, target)
+    assert new_chunk.text != old_chunk.text
+
+    (fresh_vector,) = GroundedFakeLLMClient().embed([embedding_text(new_chunk)])
+    assert cosine(new_vector, fresh_vector) == pytest.approx(1.0)
+    assert cosine(old_vector, new_vector) < 0.5
 
 
-def test_the_manifest_counts_the_chunks_that_went_into_the_store(rig: Rig) -> None:
-    """`total_chunks` is a number a screen shows, so it is the number the store actually holds."""
-    result = rig.build(rig.documents())
-    assert result.manifest.total_chunks == len(result.chunks)
-    assert result.manifest.total_chunks == sum(item.chunks for item in result.manifest.documents)
-    assert rig.store.chunks(result.index_id) == result.chunks
-    assert rig.store.matrix(result.index_id).shape == (len(result.chunks), DIMENSIONS)
+# ---------------------------------------------------------------------------
+# A document that fails to parse costs only itself
+# ---------------------------------------------------------------------------
+def test_a_document_that_fails_to_parse_costs_only_itself_and_the_build_still_succeeds(
+    storage: LocalStorage, store: LocalVectorStore, mixed_knowledge_base: tuple[Path, ...]
+) -> None:
+    _, result = build(mixed_knowledge_base, store=store, storage=storage)
+    manifest = result.manifest
+
+    by_name = {doc.name: doc for doc in manifest.documents}
+    broken = by_name["broken.pdf"]
+    assert broken.chunks == 0
+    assert parsers.DOCUMENT_UNREADABLE in broken.warnings
+
+    valid_chunks = by_name["faq_activation.md"].chunks + by_name["plans_prepaid.md"].chunks
+    assert manifest.total_chunks == valid_chunks > 0
 
 
-def test_the_chunk_config_records_the_settings_the_model_and_the_width_it_measured(rig: Rig) -> None:
-    """What a rebuild is compared against, and what tells a reader which floor suits this index (DEC-218)."""
-    result = rig.build(rig.documents("plans_prepaid"))
-    config = result.manifest.chunk_config
-    assert config.chunk_tokens == USE_CASE.generative.rag.chunk_tokens
-    assert config.chunk_overlap == USE_CASE.generative.rag.chunk_overlap
-    assert config.embedding_model_id == USE_CASE.generative.llm.embedding_model
-    assert {call.model_id for call in rig.client.calls} == {config.embedding_model_id}
-    assert config.dimensions == DIMENSIONS
-    assert rig.store.matrix(result.index_id).shape[1] == config.dimensions
+def test_an_extension_the_knowledge_base_does_not_accept_is_document_type_unsupported(
+    storage: LocalStorage, store: LocalVectorStore, mixed_knowledge_base: tuple[Path, ...]
+) -> None:
+    _, result = build(mixed_knowledge_base, store=store, storage=storage)
+    unsupported = next(doc for doc in result.manifest.documents if doc.name == "notes.rtf")
+    assert unsupported.chunks == 0
+    assert unsupported.warnings == (DOCUMENT_TYPE_UNSUPPORTED,)
 
 
-def test_a_paged_format_records_the_pages_it_had_and_an_unpaged_one_records_none(rig: Rig) -> None:
-    """Measured by the reader that has pages; null is the honest answer for a format that has none."""
-    pages = {item.name: item.pages for item in rig.build(rig.documents()).manifest.documents}
-    assert pages["faq_roaming.pdf"] is not None
-    assert pages["faq_roaming.pdf"] >= 1
-    assert pages["faq_billing.txt"] is None
-    assert pages["plans_prepaid.md"] is None
+def test_a_build_where_every_document_fails_to_parse_raises_index_empty(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    broken = docs_dir / "broken.pdf"
+    broken.write_bytes(b"not a pdf at all")
+    unsupported = docs_dir / "notes.rtf"
+    unsupported.write_text("nothing indexable here", encoding="utf-8")
+
+    with pytest.raises(GenerativeError) as error:
+        build((broken, unsupported), store=store, storage=storage)
+    assert error.value.code == INDEX_EMPTY
 
 
-def test_the_documents_are_sorted_by_name_whatever_order_they_arrived_in(rig: Rig) -> None:
-    """The screen renders this list and never computes one, which is the rule every artefact here follows."""
-    arrived = list(reversed(rig.documents()))
-    names = [item.name for item in rig.build(arrived).manifest.documents]
-    assert names == sorted(names)
-    assert names != [path.name for path in arrived]
+# ---------------------------------------------------------------------------
+# PII in a document is a warning, never a redaction (DEC-216)
+# ---------------------------------------------------------------------------
+def test_pii_in_a_knowledge_document_is_warned_about_and_never_redacted(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    doc = docs_dir / "support_contact.md"
+    doc.write_text(
+        "# Support Contact\n\n"
+        "For help with your account, write to support@example.invalid and we reply within a day.\n",
+        encoding="utf-8",
+    )
+    _, result = build((doc,), store=store, storage=storage)
+    manifest = result.manifest
+
+    entry = manifest.documents[0]
+    assert entry.name == "support_contact.md"
+    doc_warning = next(warning for warning in entry.warnings if warning.startswith(f"{PII_IN_DOCS}:"))
+    assert "email" in doc_warning
+    assert doc_warning in manifest.warnings
+
+    assert any("support@example.invalid" in chunk.text for chunk in result.chunks)
 
 
-def test_the_manifest_names_the_prompts_an_answer_from_this_index_will_use(rig: Rig) -> None:
-    """An answer's wording is a property of the index it came from, so the index records the versions."""
-    versions = rig.build(rig.documents("plans_prepaid")).manifest.prompt_versions
-    assert set(versions) == set(ANSWER_PROMPTS)
-    assert all(version >= 1 for version in versions.values())
+# ---------------------------------------------------------------------------
+# The size check runs before anything is parsed
+# ---------------------------------------------------------------------------
+def test_check_size_refuses_a_knowledge_base_past_max_docs_before_a_byte_is_parsed(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = build_knowledge_base(tmp_path / "docs", stems=("faq_activation", "plans_prepaid"))
+    monkeypatch.setattr(parsers, "parse", _unreachable_parse)
+    tight = use_case_with(knowledge_base=KnowledgeBaseConfig(max_docs=1))
+
+    with pytest.raises(GenerativeError) as error:
+        build(paths, store=store, storage=storage, use_case=tight)
+    assert error.value.code == KNOWLEDGE_BASE_TOO_LARGE
 
 
-def test_the_client_the_documents_belong_to_is_recorded_and_defaults_to_nobody(rig: Rig) -> None:
-    """One deployment holds several clients' knowledge bases, and null is not the same as unclaimed."""
-    paths = rig.documents("plans_prepaid")
-    assert rig.build(paths, client_id="northwind").manifest.client_id == "northwind"
-    assert rig.build(paths).manifest.client_id is None
+def test_check_size_refuses_a_knowledge_base_past_max_mb_before_a_byte_is_parsed(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docs_dir = tmp_path / "docs"
+    paths = build_knowledge_base(docs_dir, stems=("faq_activation",))
+    filler = docs_dir / "filler.bin"
+    filler.write_bytes(b"0" * (2 * 1024 * 1024))
+    monkeypatch.setattr(parsers, "parse", _unreachable_parse)
+    tight = use_case_with(knowledge_base=KnowledgeBaseConfig(max_mb=1))
+
+    with pytest.raises(GenerativeError) as error:
+        build((*paths, filler), store=store, storage=storage, use_case=tight)
+    assert error.value.code == KNOWLEDGE_BASE_TOO_LARGE
 
 
-def test_the_time_a_build_finished_is_the_clock_the_caller_handed_it(rig: Rig) -> None:
-    """`now` is an argument so a manifest can be pinned, which is what an artefact test needs of it."""
-    finished = datetime(2026, 9, 22, 11, 30, tzinfo=UTC)
-    result = rig.build(rig.documents("plans_prepaid"), now=finished)
-    assert result.manifest.built_at == finished
-    assert read_manifest(rig.storage, result.index_id).built_at == finished
+# ---------------------------------------------------------------------------
+# Reading a manifest
+# ---------------------------------------------------------------------------
+def test_reading_the_manifest_of_a_missing_index_raises_index_not_found(storage: LocalStorage) -> None:
+    with pytest.raises(GenerativeError) as error:
+        read_manifest(storage, "x_20200101_deadbeef")
+    assert error.value.code == INDEX_NOT_FOUND
 
 
 # ---------------------------------------------------------------------------
 # What is embedded (DEC-217)
 # ---------------------------------------------------------------------------
-def test_what_is_embedded_is_the_chunk_with_its_document_and_heading_in_front_of_it(rig: Rig) -> None:
-    """The prefix is the difference between retrieving the right document 28 times and 40 (DEC-217)."""
-    result = rig.build(rig.documents("plans_prepaid"))
-    assert rig.embedded == tuple(embedding_text(chunk) for chunk in result.chunks)
-    first = result.chunks[0]
-    assert rig.embedded[0].startswith(f"{first.doc_id.replace('_', ' ')} {first.section}\n\n")
-    assert rig.embedded[0].endswith(first.text)
-    assert first.text not in rig.embedded
-
-
-def test_the_passage_is_stored_as_the_parser_read_it_and_not_as_it_was_embedded(rig: Rig) -> None:
-    """A citation quotes the document's own words, so the prefix that was embedded is not kept (DEC-217)."""
-    result = rig.build(rig.documents("plans_prepaid"))
-    assert all(embedding_text(chunk) != chunk.text for chunk in result.chunks)
-    assert all(embedding_text(chunk).endswith(chunk.text) for chunk in result.chunks)
-    assert {chunk.document for chunk in result.chunks} == {"plans_prepaid.md"}
-    assert [chunk.ordinal for chunk in result.chunks] == list(range(len(result.chunks)))
-
-
-def test_chunks_are_embedded_in_batches_rather_than_one_call_per_chunk(rig: Rig) -> None:
-    """One call per chunk would meter hundreds of requests for one build, which is what `EMBED_BATCH` is for."""
-    result = rig.build([rig.write("tariffs.md", MANY_SECTIONS)])
-    assert result.manifest.total_chunks == EMBED_BATCH + 6
-    assert rig.batches == (EMBED_BATCH, 6)
-    assert rig.embedded == tuple(embedding_text(chunk) for chunk in result.chunks)
-
-
-# ---------------------------------------------------------------------------
-# The incremental rebuild
-# ---------------------------------------------------------------------------
-def test_a_rebuild_reuses_an_unchanged_document_and_embeds_nothing_at_all(rig: Rig) -> None:
-    """Counted on the client, because deterministic chunks look identical whether reused or re-derived."""
-    paths = rig.documents("faq_billing", "plans_prepaid")
-    first = rig.build(paths)
-    embedded_first = rig.embedded
-    assert len(embedded_first) == first.manifest.total_chunks
-
-    second = rig.build(paths, previous=first.manifest)
-    assert len(rig.embedded) < len(embedded_first)
-    assert rig.embedded == ()
-    assert second.manifest.total_chunks == first.manifest.total_chunks
-    assert [chunk.chunk_id for chunk in second.chunks] == [chunk.chunk_id for chunk in first.chunks]
-    assert second.manifest.documents == first.manifest.documents
-
-
-def test_editing_one_document_re_embeds_that_document_and_no_other(rig: Rig) -> None:
-    """Re-indexing after one edit costs one document, which is the whole value of the fingerprint."""
-    paths = rig.documents("faq_billing", "plans_prepaid")
-    first = rig.build(paths)
-    billing = next(path for path in paths if path.name == "faq_billing.txt")
-    billing.write_text(billing.read_text(encoding="utf-8") + EXTRA_SECTION, encoding="utf-8")
-
-    second = rig.build(paths, previous=first.manifest)
-    rewritten = [chunk for chunk in second.chunks if chunk.doc_id == "faq_billing"]
-    assert rig.embedded == tuple(embedding_text(chunk) for chunk in rewritten)
-    assert len(rig.embedded) < second.manifest.total_chunks
-
-    edited = entry(second, "faq_billing.txt")
-    assert edited.fingerprint != entry(first, "faq_billing.txt").fingerprint
-    assert entry(second, "plans_prepaid.md") == entry(first, "plans_prepaid.md")
-
-
-def test_an_edited_passage_is_never_left_holding_the_vector_of_the_passage_it_replaced(rig: Rig) -> None:
-    """`chunk_id` is `(doc_id, ordinal)`, so carrying a vector over by id would stale the index (DEC-220)."""
-    handbook = rig.write("handbook.md", ROUTER_PLACEMENT)
-    paths = [*rig.documents("plans_prepaid"), handbook]
-    first = rig.build(paths)
-    before = next(chunk for chunk in first.chunks if chunk.doc_id == "handbook")
-
-    rig.write("handbook.md", REFUND_WINDOW)
-    second = rig.build(paths, previous=first.manifest)
-    after = next(chunk for chunk in second.chunks if chunk.doc_id == "handbook")
-    stored = rig.store.matrix(second.index_id)[second.chunks.index(after)]
-
-    assert after.chunk_id == before.chunk_id
-    assert after.text != before.text
-    assert cosine(stored, vector_of(embedding_text(after))) == pytest.approx(1.0)
-    assert cosine(stored, vector_of(embedding_text(before))) < 0.5
-
-
-def test_adding_a_document_embeds_only_the_document_that_was_added(rig: Rig) -> None:
-    """A knowledge base grows one file at a time, and re-embedding the rest would make that expensive."""
-    paths = rig.documents("faq_billing", "plans_prepaid")
-    first = rig.build(paths)
-    added = rig.write("handbook.md", ROUTER_PLACEMENT)
-
-    second = rig.build([*paths, added], previous=first.manifest)
-    fresh = [chunk for chunk in second.chunks if chunk.doc_id == "handbook"]
-    assert rig.embedded == tuple(embedding_text(chunk) for chunk in fresh)
-    assert second.manifest.total_chunks == first.manifest.total_chunks + len(fresh)
-
-
-# ---------------------------------------------------------------------------
-# A document that fails does not fail the build
-# ---------------------------------------------------------------------------
-@pytest.mark.parametrize(
-    ("filename", "content", "code"),
-    [
-        ("broken.pdf", NOT_A_PDF, "DOCUMENT_UNREADABLE"),
-        ("empty.txt", "", "DOCUMENT_EMPTY"),
-    ],
-)
-def test_one_document_that_cannot_be_read_costs_that_document_and_not_the_index(
-    rig: Rig, filename: str, content: str | bytes, code: str
+def test_what_is_embedded_is_the_chunks_embedding_text_and_never_its_bare_text(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path
 ) -> None:
-    """One corrupt file in a knowledge base of two hundred should cost that file, and nothing else."""
-    good = rig.documents("faq_billing", "plans_prepaid")
-    result = rig.build([*good, rig.write(filename, content)])
-    failed = entry(result, filename)
-    assert failed.warnings == (code,)
-    assert failed.chunks == 0
-    assert failed.sections == 0
-    assert failed.pages is None
-    assert failed.fingerprint.startswith("sha256-document:")
-    assert code in result.manifest.warnings
-    assert all(item.chunks for item in result.manifest.documents if item.name != filename)
-    assert result.manifest.total_chunks == sum(item.chunks for item in result.manifest.documents)
+    paths = build_knowledge_base(tmp_path / "docs", stems=("faq_activation", "plans_prepaid"))
+    client, result = build(paths, store=store, storage=storage)
+
+    embedded = set(embedded_texts(client))
+    assert embedded == {embedding_text(chunk) for chunk in result.chunks}
+    assert not any(chunk.text in embedded for chunk in result.chunks)
 
 
-def test_a_build_where_every_document_failed_raises_rather_than_writing_an_empty_index(rig: Rig) -> None:
-    """An index with no chunks can answer nothing, so it is a refusal and not an artefact."""
-    index_id = new_index_id()
-    with pytest.raises(GenerativeError) as error:
-        rig.build(
-            [rig.write("broken.pdf", NOT_A_PDF), rig.write("tariffs.csv", SPREADSHEET)],
-            index_id=index_id,
-        )
-    assert error.value.code == "INDEX_EMPTY"
-    assert index_id in error.value.message
-    assert error.value.suggestion
-    assert rig.embedded == ()
-    with pytest.raises(GenerativeError) as missing:
-        read_manifest(rig.storage, index_id)
-    assert missing.value.code == "INDEX_NOT_FOUND"
-
-
-def test_an_unsupported_extension_is_refused_before_a_parser_is_asked_about_it(
-    rig: Rig, parsed: list[Path]
+# ---------------------------------------------------------------------------
+# The manifest's own bookkeeping
+# ---------------------------------------------------------------------------
+def test_manifest_documents_are_sorted_by_name_and_no_headings_is_not_an_index_wide_warning(
+    storage: LocalStorage, store: LocalVectorStore, tmp_path: Path
 ) -> None:
-    """The accepted set is configuration, so a spreadsheet is turned away on its name and never opened."""
-    spreadsheet = rig.write("tariffs.csv", SPREADSHEET)
-    result = rig.build([*rig.documents("plans_prepaid"), spreadsheet])
-    refused = entry(result, "tariffs.csv")
-    assert refused.warnings == ("DOCUMENT_TYPE_UNSUPPORTED",)
-    assert refused.media_type == "csv"
-    assert refused.chunks == 0
-    assert refused.bytes == len(SPREADSHEET)
-    assert parsed
-    assert spreadsheet not in parsed
-
-
-# ---------------------------------------------------------------------------
-# Warnings: what reaches the index-wide list and what stays on its own row
-# ---------------------------------------------------------------------------
-def test_personal_data_in_a_document_is_a_warning_and_never_a_redaction(rig: Rig) -> None:
-    """Both halves of DEC-216: the manifest names the kind, and the address is indexed as written."""
-    result = rig.build([*rig.documents("plans_prepaid"), rig.write("support_contact.md", WITH_PII)])
-    warned = entry(result, "support_contact.md")
-    assert warned.warnings == (f"{PII_IN_DOCS}:email",)
-    assert f"{PII_IN_DOCS}:email" in result.manifest.warnings
-
-    indexed = next(chunk for chunk in result.chunks if chunk.doc_id == "support_contact")
-    assert SUPPORT_ADDRESS in indexed.text
-    assert "[REDACTED" not in indexed.text
-    assert all(SUPPORT_ADDRESS not in warning for warning in result.manifest.warnings)
-
-
-def test_a_document_with_no_headings_warns_on_its_own_row_and_not_on_the_whole_index(rig: Rig) -> None:
-    """Every unheaded document raises it, so on the manifest it would say nothing about this index."""
-    result = rig.build(
-        [rig.write("notice.md", NO_HEADINGS), rig.write("support_contact.md", WITH_PII)],
+    """Fed in reverse of alphabetical order, so a manifest that merely kept input order would fail."""
+    docs_dir = tmp_path / "docs"
+    (plans_prepaid,) = build_knowledge_base(docs_dir, stems=("plans_prepaid",))
+    no_heading = docs_dir / "aardvark_notes.txt"
+    no_heading.write_text(
+        "This short document has no heading at all, only a single plain sentence that ends the way "
+        "every other sentence in it does, with a full stop.",
+        encoding="utf-8",
     )
-    assert entry(result, "notice.md").warnings == ("DOCUMENT_NO_HEADINGS",)
-    assert "DOCUMENT_NO_HEADINGS" not in result.manifest.warnings
-    assert f"{PII_IN_DOCS}:email" in result.manifest.warnings
+    _, result = build((plans_prepaid, no_heading), store=store, storage=storage)
+    manifest = result.manifest
 
+    assert [doc.name for doc in manifest.documents] == ["aardvark_notes.txt", "plans_prepaid.md"]
 
-# ---------------------------------------------------------------------------
-# The limits, and the index that was never built
-# ---------------------------------------------------------------------------
-def test_a_knowledge_base_past_its_document_limit_is_refused_before_a_byte_is_parsed(
-    rig: Rig, parsed: list[Path]
-) -> None:
-    """A limit that was checked after the work is a limit that saved nothing."""
-    paths = rig.documents("faq_billing", "plans_prepaid")
-    with pytest.raises(GenerativeError) as error:
-        rig.build(paths, use_case=with_limits(max_docs=1))
-    assert error.value.code == "KNOWLEDGE_BASE_TOO_LARGE"
-    assert "2 documents" in error.value.message
-    assert error.value.suggestion
-    assert parsed == []
-
-
-def test_a_knowledge_base_past_its_size_limit_is_refused_the_same_way(rig: Rig, parsed: list[Path]) -> None:
-    """Measured off the files as uploaded, so the refusal costs one stat call per document."""
-    with pytest.raises(GenerativeError) as error:
-        rig.build([rig.write("tariffs.md", OVERSIZED)], use_case=with_limits(max_mb=1))
-    assert error.value.code == "KNOWLEDGE_BASE_TOO_LARGE"
-    assert "1.3 MB" in error.value.message
-    assert parsed == []
-
-
-def test_reading_the_manifest_of_an_index_that_was_never_built_is_a_coded_error(rig: Rig) -> None:
-    """The id is what a caller can act on; a storage key is a deployment detail they cannot."""
-    with pytest.raises(GenerativeError) as error:
-        read_manifest(rig.storage, "x_20260101_deadbeef")
-    assert error.value.code == "INDEX_NOT_FOUND"
-    assert "x_20260101_deadbeef" in error.value.message
-    assert "/" not in error.value.message
-    assert error.value.suggestion
-
-
-# ---------------------------------------------------------------------------
-# A document's identity across a rebuild is its fingerprint, and nothing else
-# ---------------------------------------------------------------------------
-def test_a_document_renamed_between_builds_is_indexed_under_the_name_it_now_has(rig: Rig) -> None:
-    """A file the knowledge base no longer holds is named by the manifest and quoted by every citation."""
-    paths = rig.documents("plans_prepaid")
-    original = rig.write("handbook.md", ROUTER_PLACEMENT)
-    first = rig.build([*paths, original])
-    renamed = rig.write("handbook_v2.md", ROUTER_PLACEMENT)
-    original.unlink()
-
-    second = rig.build([*paths, renamed], previous=first.manifest)
-    assert [item.name for item in second.manifest.documents] == ["handbook_v2.md", "plans_prepaid.md"]
-    assert "handbook.md" not in {chunk.document for chunk in second.chunks}
-
-
-def test_two_files_with_the_same_bytes_are_two_documents_in_the_index(rig: Rig) -> None:
-    """A duplicated chunk id makes the store's id-to-vector map lossy on the rebuild after this one."""
-    original = rig.write("handbook.md", ROUTER_PLACEMENT)
-    paths = [*rig.documents("plans_prepaid"), original]
-    first = rig.build(paths)
-
-    second = rig.build([*paths, rig.write("handbook_copy.md", ROUTER_PLACEMENT)], previous=first.manifest)
-    assert len({item.name for item in second.manifest.documents}) == 3
-    assert len({chunk.chunk_id for chunk in second.chunks}) == len(second.chunks)
+    entry = manifest.documents[0]
+    assert entry.name == "aardvark_notes.txt"
+    assert parsers.DOCUMENT_NO_HEADINGS in entry.warnings
+    assert parsers.DOCUMENT_NO_HEADINGS not in manifest.warnings
