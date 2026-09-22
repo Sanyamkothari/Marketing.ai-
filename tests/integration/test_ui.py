@@ -12,8 +12,10 @@ everything a regression could silently break without a browser noticing:
 
 from __future__ import annotations
 
+import posixpath
 import re
 from collections.abc import Iterator
+from pathlib import PurePosixPath
 from typing import Final
 
 import pytest
@@ -37,6 +39,17 @@ MODULES: Final[tuple[str, ...]] = (
     "usecase.js",
 )
 """Every module `index.html` reaches, directly or through an import."""
+
+SHARED_MODULES: Final[tuple[str, ...]] = ("modules/router.js",)
+"""Modules under `ui/modules/`, shared with the phase branches (PARALLEL_WORK_PROTOCOL.md §4).
+
+The registry itself and nothing else. Every screen a phase branch draws lives in its own
+`ui/modules/<phase>/` directory and reaches the page by registering with the router, so a branch
+adds files here without this tuple, or any other line of this test, having to learn their names.
+"""
+
+ALL_MODULES: Final[tuple[str, ...]] = (*MODULES, *SHARED_MODULES)
+"""Everything `index.html` reaches: the Phase 1 modules plus the shared registry."""
 
 FORM_MODULES: Final[tuple[str, ...]] = ("settings.js", "usecase.js")
 """The two modules that build the Setup screen; neither may name a setting."""
@@ -110,7 +123,8 @@ PAGE_ARTEFACT_BLOCK: Final[re.Pattern[str]] = re.compile(
 )
 PAGE_ARTEFACT_ENTRY: Final[re.Pattern[str]] = re.compile(r"(\w+):\s*\[(.*?)\]", re.DOTALL)
 API_PATH: Final[re.Pattern[str]] = re.compile(r"[`\"'](/[A-Za-z0-9_${}().,/-]*)[`\"']")
-IMPORT_PATH: Final[re.Pattern[str]] = re.compile(r"""from\s+["']\./([A-Za-z0-9_.-]+)["']""")
+IMPORT_PATH: Final[re.Pattern[str]] = re.compile(r"""from\s+["'](\.\.?/[A-Za-z0-9_./-]+)["']""")
+"""A relative import, captured with its `./` or `../` so it can be resolved against its importer."""
 LINE_COMMENT: Final[re.Pattern[str]] = re.compile(r"//[^\n]*")
 BLOCK_COMMENT: Final[re.Pattern[str]] = re.compile(r"/\*.*?\*/", re.DOTALL)
 
@@ -136,6 +150,16 @@ def code_of(name: str) -> str:
     return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", read(name)))
 
 
+def imports_of(name: str) -> list[str]:
+    """Every relative import of `name`, as a path relative to `ui/` - so nested modules resolve.
+
+    Read from `code_of`, not the raw text: an import written out in a comment - the registration
+    example in `modules/router.js` is one - is documentation, not an edge the graph has.
+    """
+    base = PurePosixPath(name).parent
+    return [posixpath.normpath(str(base / target)) for target in IMPORT_PATH.findall(code_of(name))]
+
+
 # ---------------------------------------------------------------------------
 # What the API serves
 # ---------------------------------------------------------------------------
@@ -143,6 +167,8 @@ def test_ui_directory_holds_exactly_the_modules_the_page_loads() -> None:
     assert UI_DIR.is_dir()
     assert sorted(p.name for p in UI_DIR.glob("*.js")) == sorted(MODULES)
     assert (UI_DIR / "index.html").is_file()
+    for name in SHARED_MODULES:
+        assert (UI_DIR / name).is_file(), name
 
 
 def test_index_is_served_as_the_prototype_page(client: TestClient) -> None:
@@ -156,16 +182,16 @@ def test_index_is_served_as_the_prototype_page(client: TestClient) -> None:
 
 
 def test_every_module_is_served_as_javascript(client: TestClient) -> None:
-    for name in MODULES:
+    for name in ALL_MODULES:
         response = client.get(f"/ui/{name}")
         assert response.status_code == 200, name
         assert "javascript" in response.headers["content-type"], name
 
 
 def test_every_import_resolves_to_a_served_module() -> None:
-    for name in MODULES:
-        for imported in IMPORT_PATH.findall(read(name)):
-            assert imported in MODULES, f"{name} imports {imported}"
+    for name in ALL_MODULES:
+        for imported in imports_of(name):
+            assert imported in ALL_MODULES, f"{name} imports {imported}"
 
 
 # ---------------------------------------------------------------------------
@@ -184,14 +210,14 @@ def test_the_prototype_theme_tokens_are_untouched() -> None:
 
 
 def test_no_illustrative_value_from_the_prototype_survived() -> None:
-    sources = {name: read(name) for name in (*MODULES, "index.html")}
+    sources = {name: read(name) for name in (*ALL_MODULES, "index.html")}
     leaked = [(name, value) for name, text in sources.items() for value in SAMPLE_VALUES if value in text]
     assert not leaked, f"prototype sample values reached the wired UI: {leaked}"
 
 
 def test_the_em_dash_is_the_only_placeholder() -> None:
     assert 'export const EM_DASH = "—";' in read("dom.js")
-    for name in MODULES:
+    for name in ALL_MODULES:
         text = read(name)
         for placeholder in PLACEHOLDERS:
             assert placeholder not in text, f"{name} uses {placeholder} instead of the em dash"

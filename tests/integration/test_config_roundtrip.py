@@ -6,7 +6,14 @@ from typing import Any
 
 import pytest
 
-from engine.config import AiType, ConfigError, ResolvedConfig, list_use_case_ids, load_use_case, resolve_config
+from engine.config import (
+    AiType,
+    ConfigError,
+    ResolvedConfig,
+    list_use_case_ids,
+    load_use_case,
+    resolve_config,
+)
 
 pytestmark = pytest.mark.integration
 

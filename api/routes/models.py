@@ -9,7 +9,7 @@ by the `register` stage; the atomic swap that demotes the incumbent and crowns t
 
 * `approve` finishes a decision the engine already made. `register` marked the version
   `pending_approval` because it *did* beat the re-scored champion but `governance.approval_required`
-  held it back (M3 design §7.3). Approving is a human saying yes to that, and nothing else: any other
+  held it back (plan §6.3). Approving is a human saying yes to that, and nothing else: any other
   status is refused, because there is no pending engine decision to say yes to.
 * `promote` overrides the champion rule by hand, from any state the registry deems eligible. It takes
   a required `reason`, because a champion swap nobody can account for later is worse than no swap.
@@ -85,8 +85,8 @@ def approve_model(model_id: str, body: ModelApproveRequest, registry: RegistryDe
     holds the title is refused by the registry with `CHAMPION_CHANGED`, which is a `409` here: the
     request is well formed and the version exists, but the comparison behind it is stale, and
     approval may not re-decide the championship on a head-to-head with a model that is no longer
-    the incumbent (DEC-047, and design rule 3 of this milestone). The user retrains or re-scores,
-    or overrides deliberately through `promote`.
+    the incumbent (DEC-047). The user retrains or re-scores, or overrides deliberately through
+    `promote`.
 
     `body.approved_by` is caller-supplied and unverified (plan §1.3 leaves Phase 1 without
     authentication); the registry stores it verbatim so the row names whoever claimed the decision

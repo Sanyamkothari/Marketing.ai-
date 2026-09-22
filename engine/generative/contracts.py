@@ -35,7 +35,7 @@ from typing import Final, Self
 
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
-from engine.contracts import Artefact, Direction, RunState
+from engine.contracts import Artefact, Direction, LLMUsage, RunState
 
 __all__ = [
     "CHUNKS_FILENAME",
@@ -55,6 +55,7 @@ __all__ = [
     "ROOT_CAUSE_STATUS_FILENAME",
     "ROOT_CAUSE_SUMMARY_FILENAME",
     "RUN_GENERATIVE_ARTEFACTS",
+    "TOKENS_ESTIMATED",
     "AssistantAnswer",
     "Chunk",
     "ChunkConfig",
@@ -80,7 +81,7 @@ __all__ = [
     "GuardrailSummary",
     "IndexedDocument",
     "JudgeScore",
-    "LlmUsage",
+    "LlmUsageReport",
     "ModelUsage",
     "PurposeUsage",
     "RagEval",
@@ -102,6 +103,16 @@ PRICE_UNKNOWN: Final[str] = "PRICE_UNKNOWN"
 Cost is then null rather than zero, for the reason `CostEstimate` gives about compute: a zero is a
 measurement, and there was none. The warning names the model so an operator knows which row to add
 (DEC-208).
+"""
+
+
+TOKENS_ESTIMATED: Final[str] = "TOKENS_ESTIMATED"
+"""The warning `LlmUsageReport.warnings` carries when a token count was approximated.
+
+The `LLMClient` protocol's `embed` returns vectors and nothing else, because no provider reports
+usage for an embedding through it, so the tokens an embedding batch cost are worked out from its
+characters rather than read off a response. That is a perfectly good number to budget with and a
+poor one to bill from, and the difference is worth saying out loud (DEC-215).
 """
 
 
@@ -185,29 +196,27 @@ class PurposeUsage(Artefact):
     )
 
 
-class LlmUsage(Artefact):
-    """`llm_usage.json` - every LLM call a run made, what it returned and what it cost.
+class LlmUsageReport(Artefact):
+    """`llm_usage.json` - every LLM call a job made, broken down by model and by purpose.
 
-    Written for any run that made at least one call, and written even when the run failed, because
-    a run that stopped halfway still spent what it spent. Tokens and calls are always real
-    measurements; `cost_estimate_usd` is null rather than zero when the price table does not know a
-    model, and `warnings` then carries `PRICE_UNKNOWN` naming it (DEC-208).
+    `engine.contracts.LLMUsage` is the shared total a run manifest carries, and `totals` is exactly
+    that object: this artefact does not restate it in different words, it explains it. Written for
+    any job that made at least one call, and written even when the job failed, because a job that
+    stopped halfway still spent what it spent.
+
+    Tokens and calls are always real measurements. `LLMUsage.cost_estimate_usd` is null rather than
+    zero when the price table does not know a model, and `warnings` then carries `PRICE_UNKNOWN`
+    naming it (DEC-208).
     """
 
     job_id: str = Field(description="Run or index build these calls belong to.")
-    calls: int = Field(description="Calls actually made to a model.")
+    totals: LLMUsage = Field(description="The shared per-run total, as a run manifest carries it.")
     cache_hits: int = Field(description="Calls answered from the on-disk cache, costing nothing.")
-    input_tokens: int = Field(description="Input tokens across every call made.")
-    output_tokens: int = Field(description="Output tokens across every call made.")
-    cost_estimate_usd: float | None = Field(
-        default=None,
-        description="Total cost in US dollars; null when any model used had no price (PRICE_UNKNOWN).",
-    )
     budget_usd: float | None = Field(
         default=None,
-        description="The run's cost ceiling; null when no price was known, so none could be enforced.",
+        description="The job's cost ceiling; null when no price was known, so none could be enforced.",
     )
-    budget_calls: int = Field(description="The run's call ceiling, which applies whether or not prices do.")
+    budget_calls: int = Field(description="The job's call ceiling, which applies whether or not prices do.")
     by_model: tuple[ModelUsage, ...] = Field(default=(), description="Usage per model, sorted by model id.")
     by_purpose: tuple[PurposeUsage, ...] = Field(
         default=(), description="Usage per purpose, sorted by purpose."
@@ -775,7 +784,7 @@ GENERATIVE_ARTEFACTS: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
         COPY_BATCH_FILENAME: CopyBatch,
         COPY_STATUS_FILENAME: GenerativeStatus,
         GUARDRAIL_REPORT_FILENAME: GuardrailReport,
-        LLM_USAGE_FILENAME: LlmUsage,
+        LLM_USAGE_FILENAME: LlmUsageReport,
     }
 )
 """Generative artefact filename -> the model that validates it. Disjoint from `ARTEFACT_REGISTRY`."""

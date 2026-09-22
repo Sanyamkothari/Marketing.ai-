@@ -44,8 +44,10 @@ from engine.stages.scorer import SCORER_FILENAME, TrainError, load_scorer
 from engine.stages.train import (
     AG_NAME_TO_FAMILY,
     AG_PROBLEM_TYPE,
+    FAMILIES_WITHOUT_SEARCH_SPACE,
     autogluon_fit_kwargs,
     autogluon_predictor_kwargs,
+    available_families,
     build_best_model,
     build_leaderboard,
     class_labels,
@@ -144,8 +146,48 @@ def test_fit_kwargs_match_the_design_table(strategy, preset, ensemble, imbalance
     assert kwargs["calibrate_decision_threshold"] is False  # D9: the engine owns the threshold
     assert kwargs["raise_on_no_models_fitted"] is True
     assert kwargs["ag_args_fit"] == {"random_seed": recipe.seed}
-    assert "hyperparameter_tune_kwargs" not in kwargs  # M3 runs no HPO; tuning_trials is unused
+    assert kwargs["hyperparameter_tune_kwargs"] == {  # DEC-073
+        "num_trials": recipe.model_search.tuning_trials,
+        "scheduler": "local",
+        "searcher": "auto",
+    }
     assert (kwargs["use_bag_holdout"] is True) == (kwargs["num_bag_folds"] > 0)
+
+
+def test_tuning_trials_is_the_hpo_budget_and_reaches_autogluon() -> None:
+    """DEC-073: the Model-search control the user moves is the number of trials that get fitted."""
+    for trials in (5, 50, 500):
+        recipe = make_recipe(tuning_trials=trials)
+        assert autogluon_fit_kwargs(recipe)["hyperparameter_tune_kwargs"]["num_trials"] == trials
+
+
+def test_the_families_are_passed_without_a_search_space_of_our_own() -> None:
+    """An empty dict means AutoGluon's own space for that family; see DEC-073 for why not ours."""
+    kwargs = autogluon_fit_kwargs(make_recipe())
+    assert kwargs["hyperparameters"] == {"XGB": {}, "GBM": {}, "RF": {}, "LR": {}}
+    assert all(space == {} for space in kwargs["hyperparameters"].values())
+
+
+@pytest.mark.parametrize(
+    ("name", "family"),
+    [
+        ("LightGBM", ModelFamily.LIGHTGBM),
+        ("LightGBM_BAG_L1", ModelFamily.LIGHTGBM),
+        ("XGBoost_BAG_L1_FULL", ModelFamily.XGBOOST),
+        # HPO appends the trial outside the bagging decorations; missing it would cost the
+        # leaderboard its family column and the explain stage its TreeSHAP tier (DEC-073).
+        ("LightGBM_BAG_L1/T1", ModelFamily.LIGHTGBM),
+        ("XGBoost/T12", ModelFamily.XGBOOST),
+        ("RandomForest_BAG_L1/T3", ModelFamily.RANDOM_FOREST),
+    ],
+)
+def test_a_tuned_models_name_still_resolves_to_its_family(name, family) -> None:
+    assert family_for_model_name(name) is family
+
+
+def test_the_weighted_ensemble_is_still_no_family_however_it_is_decorated() -> None:
+    assert family_for_model_name("WeightedEnsemble_L2") is None
+    assert family_for_model_name("WeightedEnsemble_L2/T1") is None
 
 
 def test_the_one_minute_smoke_run_asks_for_sixty_seconds() -> None:
@@ -807,3 +849,52 @@ def test_bagging_accepts_an_explicit_tuning_set(tmp_path) -> None:
     assert all(entry.family is not None or entry.is_ensemble for entry in leaderboard.entries)
     assert fitted.result.best.validation_score > 0.0
     assert "-fold CV" in fitted.result.detail
+
+
+# ---------------------------------------------------------------------------
+# DEC-073: the families HPO cannot tune
+# ---------------------------------------------------------------------------
+def test_the_untunable_family_set_still_matches_the_installed_autogluon() -> None:
+    """`FAMILIES_WITHOUT_SEARCH_SPACE` is a measured claim; this is what keeps it measured.
+
+    If a later AutoGluon gives RandomForest a default search space - or takes one away from another
+    family - the set is wrong and the warning it drives is wrong with it, so the suite says so
+    rather than letting `tuning_trials` quietly do nothing for a family nobody warned about.
+    """
+    from autogluon.common.space import Space
+    from autogluon.tabular.registry import ag_model_registry
+
+    catalog = get_catalog()
+    measured: set[ModelFamily] = set()
+    for family in (
+        ModelFamily.XGBOOST,
+        ModelFamily.LIGHTGBM,
+        ModelFamily.RANDOM_FOREST,
+        ModelFamily.LOGISTIC_REGRESSION,
+        ModelFamily.CATBOOST,
+    ):
+        cls = ag_model_registry.key_to_cls(catalog.model_families[family].autogluon_key)
+        try:
+            space = cls._get_default_searchspace(cls)
+        except Exception:  # needs a fitted instance; that family plainly has a space to fit
+            continue
+        if isinstance(space, dict) and not any(isinstance(v, Space) for v in space.values()):
+            measured.add(family)
+    assert measured == set(FAMILIES_WITHOUT_SEARCH_SPACE)
+
+
+def test_a_run_that_selects_an_untunable_family_says_so(caplog) -> None:
+    recipe = make_recipe(candidates=[ModelFamily.RANDOM_FOREST, ModelFamily.LIGHTGBM])
+    with caplog.at_level("WARNING"):
+        families = available_families(recipe)
+    assert set(families) == {ModelFamily.RANDOM_FOREST, ModelFamily.LIGHTGBM}
+    assert "tuning_trials" in caplog.text
+    assert ModelFamily.RANDOM_FOREST.value in caplog.text
+    assert ModelFamily.LIGHTGBM.value not in caplog.text.split("does not apply to")[-1]
+
+
+def test_a_run_without_an_untunable_family_stays_quiet(caplog) -> None:
+    recipe = make_recipe(candidates=[ModelFamily.LIGHTGBM, ModelFamily.XGBOOST])
+    with caplog.at_level("WARNING"):
+        available_families(recipe)
+    assert "tuning_trials" not in caplog.text

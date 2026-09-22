@@ -1,4 +1,4 @@
-"""The run lifecycle: `POST /runs`, the history, one run, its artefacts and cancel (design §4.3-§4.7).
+"""The run lifecycle: `POST /runs`, the history, one run, its artefacts and cancel (plan §8).
 
 `POST /runs` validates **synchronously** (plan §8) and answers `409` with the whole
 `ValidationReport` beside M1's error envelope when a blocking error remains, so the Setup screen's
@@ -13,10 +13,10 @@ on. A **training** run still runs the M2 job body, which executes the two stages
 owns for real and then fails at `prepare` with a named error (DEC-060): no stage on the Running
 screen ever shows a number nobody measured.
 
-Design §5.3 gives run creation its own module, `engine/runs.py`, which is not part of this change;
+Run creation belongs in its own module, `engine/runs.py`, which is not part of this change;
 `create_run`, `update_run`, `cancel_run` and `build_m2_job` live here until it lands, and move
 unchanged when it does. Likewise, `Pipeline` is built from the three existing dependencies here
-rather than from the `get_pipeline` provider design §4.8 adds to `api/deps.py`.
+rather than from a `get_pipeline` provider in `api/deps.py`, which does not exist yet.
 """
 
 from __future__ import annotations
@@ -50,7 +50,15 @@ from api.schemas import (
     ValidationErrorResponse,
 )
 from engine import __version__
-from engine.config import Catalog, ResolvedConfig, RunMode, UseCaseConfig, get_catalog, resolve_config
+from engine.config import (
+    Catalog,
+    ResolvedConfig,
+    RunMode,
+    UseCaseConfig,
+    get_catalog,
+    resolve_config,
+    sole_key,
+)
 from engine.contracts import (
     ARTEFACT_REGISTRY,
     TABULAR_SCHEMAS,
@@ -123,7 +131,7 @@ UNMAPPED_STATUS: Final[int] = 500
 """A code this router has not been taught is a server fault, not the caller's; reported as one."""
 
 ARTEFACT_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-z_]+\.(json|csv|parquet)$")
-"""Shape a URL segment must have before it is even looked up in the registry (design §4.6)."""
+"""Shape a URL segment must have before it is even looked up in the registry."""
 
 MEDIA_TYPES: Final[dict[str, str]] = {"json": "application/json", "csv": "text/csv"}
 DEFAULT_MEDIA_TYPE: Final[str] = "application/octet-stream"
@@ -149,6 +157,29 @@ _RUN_ERRORS: dict[int | str, dict[str, object]] = {
 # ---------------------------------------------------------------------------
 # 4.3 POST /runs
 # ---------------------------------------------------------------------------
+_ONBOARDING_FIELDS: Final[tuple[str, ...]] = ("dataset_id", "client_id")
+"""`RunRequest` fields whose shape exists for Phase 2 and whose behaviour does not exist yet."""
+
+
+def _reject_unimplemented_onboarding(body: RunRequest) -> None:
+    """`422` when a request names an onboarded dataset, which nothing in this phase can resolve.
+
+    The fields are on `RunRequest` because the contract they belong to is shared and append-only,
+    so it had to be settled before the branches started. Until the onboarding work lands there is
+    nothing behind them, and a run started from a `dataset_id` would silently score the upload the
+    request also carried - a different file from the one the caller asked for.
+    """
+    named = [name for name in _ONBOARDING_FIELDS if getattr(body, name) is not None]
+    if not named:
+        return
+    fields = " and ".join(named)
+    raise http_error(
+        422,
+        "DATASET_ONBOARDING_NOT_AVAILABLE",
+        f"This engine cannot start a run from {fields} yet. Upload the file and run against upload_id.",
+    )
+
+
 @router.post(
     "/runs",
     response_model=RunCreatedResponse,
@@ -164,8 +195,16 @@ def create_run_endpoint(
     jobs: JobsDep,
     response: Response,
 ) -> RunCreatedResponse | JSONResponse:
-    """Validate synchronously; `409` with the full report, or `202` with a run that is already pollable."""
+    """Validate synchronously; `409` with the full report, or `202` with a run that is already pollable.
+
+    `RunRequest` carries three fields Phase 2 will use and this phase cannot honour: a composite
+    `primary_key`, `dataset_id` and `client_id`. They are refused here rather than dropped -
+    accepting a request and quietly ignoring half of it is how a user comes to believe their rows
+    were joined on two columns when they were joined on one.
+    """
     use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
+    primary_key = sole_key(body.primary_key, what="A run")
+    _reject_unimplemented_onboarding(body)
     upload = load_upload(storage, body.upload_id)
     if upload.mode is not body.mode:
         raise http_error(
@@ -183,7 +222,7 @@ def create_run_endpoint(
         report = validate.validate_for_training(
             read_frame(storage, upload, profile_row_cap(config)),
             config,
-            primary_key=body.primary_key,
+            primary_key=primary_key,
             target=body.target or "",
             acknowledged=config.validation.acknowledged,
             upload_id=body.upload_id,
@@ -197,7 +236,7 @@ def create_run_endpoint(
         report = validate.validate_against_schema(
             read_frame(storage, upload, profile_row_cap(config)),
             storage.read_model(version.schema_key, FeatureSchema),
-            primary_key=body.primary_key,
+            primary_key=primary_key,
             config=config,
             acknowledged=config.validation.acknowledged,
             upload_id=body.upload_id,
@@ -217,7 +256,7 @@ def create_run_endpoint(
         profile=profile,
         report=report,
         mode=body.mode,
-        primary_key=body.primary_key,
+        primary_key=primary_key,
         target=body.target,
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
@@ -293,7 +332,7 @@ def read_run(run_id: str, storage: StorageDep) -> RunDetailResponse:
     summary="One artefact of a run, whitelisted against the artefact registry",
 )
 def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
-    """A whitelist, not a path join: no segment of the URL ever reaches the filesystem (design §4.6)."""
+    """A whitelist, not a path join: no segment of the URL ever reaches the filesystem."""
     if not ARTEFACT_NAME.fullmatch(name) or not (name in ARTEFACT_REGISTRY or name in TABULAR_SCHEMAS):
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     load_run(storage, run_id)
@@ -331,7 +370,7 @@ def cancel_run_endpoint(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunC
 
 
 # ---------------------------------------------------------------------------
-# 5.3-5.4 the run directory (design §5.3: `engine/runs.py` when that module lands)
+# The run directory (moves to `engine/runs.py` when that module lands)
 # ---------------------------------------------------------------------------
 def create_run(
     storage: Storage,
@@ -496,7 +535,7 @@ def build_score_job(
                 storage=storage,
                 registry=registry,
                 cancel=cancel,
-                primary_key=record.primary_key,
+                primary_key=sole_key(record.primary_key, what="A scoring run"),
                 target=record.target,
                 upload_key=upload.source_key,
                 model_version_id=record.model_version_id,
@@ -662,7 +701,7 @@ def _run_state(stages: tuple[StageStatus, ...]) -> RunState:
 
 
 def _progress(stages: tuple[StageStatus, ...]) -> int:
-    """Done stages over total, as whole percent (design §5.4)."""
+    """Done stages over total, as whole percent."""
     if not stages:
         return 0
     return round(100 * sum(1 for row in stages if row.state in _FINISHED) / len(stages))

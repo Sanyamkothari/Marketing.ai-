@@ -38,7 +38,6 @@ from engine.config import (
 )
 from tests.fixtures.planned import PLANNED_ID, planned_config_root
 
-
 FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "configs"
 
 

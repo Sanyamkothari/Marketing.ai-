@@ -32,10 +32,10 @@ from engine.generative.budget import (
     load_prices,
 )
 from engine.generative.cache import CompletionCache, NullCache, cache_key
-from engine.generative.contracts import PRICE_UNKNOWN, GenerativePurpose, LlmUsage
+from engine.generative.contracts import PRICE_UNKNOWN, GenerativePurpose, LlmUsageReport
 from engine.generative.errors import GenerativeError
 from engine.generative.prompts import RenderedPrompt, load_prompt, render
-from engine.llm import Completion, FakeLLMClient
+from engine.llm import GroundedFakeLLMClient, LLMCompletion
 
 PURPOSE = GenerativePurpose.JUDGE_TOXICITY
 PRICED = PriceTable(prices={"fake": ModelPrice(input_per_1m=3.0, output_per_1m=15.0)}, as_of="a-date")
@@ -55,7 +55,7 @@ def meter(
     use_cache: bool = True,
 ) -> Meter:
     return Meter(
-        FakeLLMClient(),
+        GroundedFakeLLMClient(),
         job_id="r_20260922_abcdef01",
         llm=LlmConfig(),
         budget=BudgetConfig(max_calls_per_run=calls, max_cost_usd_per_run=cost, cache=use_cache),
@@ -109,21 +109,21 @@ def test_a_call_is_tallied_by_model_and_by_purpose() -> None:
     subject = meter(prices=PRICED)
     subject.complete(rendered(), PURPOSE)
     usage = subject.usage()
-    assert isinstance(usage, LlmUsage)
-    assert usage.calls == 1
+    assert isinstance(usage, LlmUsageReport)
+    assert usage.totals.calls == 1
     assert usage.cache_hits == 0
     assert [(entry.model_id, entry.calls) for entry in usage.by_model] == [("fake", 1)]
     assert [(entry.purpose, entry.calls) for entry in usage.by_purpose] == [(PURPOSE, 1)]
-    assert usage.input_tokens > 0
-    assert usage.output_tokens > 0
+    assert usage.totals.input_tokens > 0
+    assert usage.totals.output_tokens > 0
 
 
 def test_a_priced_run_reports_a_cost_and_the_ceiling_that_was_in_force() -> None:
     subject = meter(prices=PRICED)
     subject.complete(rendered(), PURPOSE)
     usage = subject.usage()
-    assert usage.cost_estimate_usd is not None
-    assert usage.cost_estimate_usd > 0
+    assert usage.totals.cost_estimate_usd is not None
+    assert usage.totals.cost_estimate_usd > 0
     assert usage.budget_usd == 2.0
     assert usage.warnings == ()
 
@@ -133,7 +133,7 @@ def test_an_unpriced_model_gives_a_null_cost_and_a_warning_that_names_it() -> No
     subject = meter(prices=PriceTable())
     subject.complete(rendered(), PURPOSE)
     usage = subject.usage()
-    assert usage.cost_estimate_usd is None
+    assert usage.totals.cost_estimate_usd is None
     assert usage.budget_usd is None
     assert usage.warnings == (f"{PRICE_UNKNOWN}:fake",)
     assert usage.by_model[0].cost_estimate_usd is None
@@ -144,13 +144,13 @@ def test_the_price_unknown_warning_is_raised_once_per_model_not_once_per_call() 
     for _ in range(4):
         subject.complete(rendered(), PURPOSE)
     assert subject.usage().warnings == (f"{PRICE_UNKNOWN}:fake",)
-    assert subject.usage().calls == 4
+    assert subject.usage().totals.calls == 4
 
 
 def test_a_run_that_made_no_call_reports_no_cost_rather_than_zero() -> None:
     usage = meter(prices=PRICED).usage()
-    assert usage.calls == 0
-    assert usage.cost_estimate_usd is None
+    assert usage.totals.calls == 0
+    assert usage.totals.cost_estimate_usd is None
     assert usage.by_model == ()
     assert usage.by_purpose == ()
 
@@ -165,7 +165,7 @@ def test_the_call_ceiling_is_checked_before_the_call_not_after_it() -> None:
     assert error.value.code == "BUDGET_EXCEEDED"
     assert "call" in error.value.message
     assert subject.calls == 3
-    assert subject.usage().calls == 3
+    assert subject.usage().totals.calls == 3
 
 
 def test_the_call_ceiling_binds_even_when_nothing_can_be_priced() -> None:
@@ -196,7 +196,7 @@ def test_a_budget_refusal_still_leaves_a_usage_record_to_read() -> None:
     with pytest.raises(GenerativeError):
         subject.complete(rendered("blocked"), PURPOSE)
     usage = subject.usage()
-    assert usage.calls == 2
+    assert usage.totals.calls == 2
     assert usage.budget_calls == 2
     assert usage.job_id == "r_20260922_abcdef01"
 
@@ -216,7 +216,7 @@ def test_judging_uses_the_judging_model_and_generating_uses_the_generating_one()
         embedding_model_id="an-embedder",
     )
     subject = Meter(
-        FakeLLMClient(),
+        GroundedFakeLLMClient(),
         job_id="r_1",
         llm=config,
         budget=BudgetConfig(cache=False),
@@ -238,13 +238,13 @@ def test_an_unset_model_id_is_recorded_as_the_fake_rather_than_as_nothing() -> N
 def test_embedding_a_batch_is_one_call_and_an_empty_batch_is_none() -> None:
     """One request is what a provider bills, so one request is what the budget counts."""
     subject = meter(prices=PRICED)
-    assert subject.embed([]).vectors == ()
+    assert subject.embed([]) == ()
     assert subject.calls == 0
     subject.embed(["one", "two", "three"])
     usage = subject.usage()
-    assert usage.calls == 1
+    assert usage.totals.calls == 1
     assert [entry.purpose for entry in usage.by_purpose] == [GenerativePurpose.EMBEDDING]
-    assert usage.output_tokens == 0
+    assert usage.totals.output_tokens == 0
 
 
 def test_usage_lists_models_and_purposes_in_a_stable_order() -> None:
@@ -311,7 +311,7 @@ def test_the_null_cache_stores_nothing_and_says_so() -> None:
     cache = NullCache()
     cache.put(
         "a-key",
-        Completion(text="t", model_id="m", input_tokens=1, output_tokens=1, latency_ms=0, stop_reason="x"),
+        LLMCompletion(text="t", model_id="m", input_tokens=1, output_tokens=1, stop_reason="x"),
     )
     assert cache.get("a-key") is None
     assert cache.prune() == 0
@@ -319,14 +319,12 @@ def test_the_null_cache_stores_nothing_and_says_so() -> None:
 
 def test_a_cached_completion_round_trips_exactly(tmp_path: Path) -> None:
     cache = CompletionCache(tmp_path)
-    completion = Completion(
+    completion = LLMCompletion(
         text='a completion with a quote " and a newline\n',
         model_id="m",
         input_tokens=11,
         output_tokens=7,
-        latency_ms=42,
         stop_reason="end_turn",
-        estimated_tokens=True,
     )
     cache.put("k" * 40, completion)
     assert cache.get("k" * 40) == completion
@@ -352,9 +350,7 @@ def test_pruning_drops_the_least_recently_read_until_it_fits(tmp_path: Path) -> 
     for index in range(10):
         cache.put(
             f"{index:040d}",
-            Completion(
-                text="x" * 500, model_id="m", input_tokens=1, output_tokens=1, latency_ms=0, stop_reason="s"
-            ),
+            LLMCompletion(text="x" * 500, model_id="m", input_tokens=1, output_tokens=1, stop_reason="s"),
         )
     before = cache.size_bytes()
     assert before > 0

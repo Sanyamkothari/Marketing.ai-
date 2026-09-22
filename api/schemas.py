@@ -1,4 +1,4 @@
-"""Response models of the M1 API (design §7.4).
+"""Response models of the M1 API (plan §8).
 
 Every model is frozen and forbids extra keys because it inherits `engine.config.StrictBase`, the one
 `_Base` definition in the codebase. Engine models appear in a response only where the response *is*
@@ -16,6 +16,7 @@ from engine.config import (
     AiType,
     OutputConfig,
     PageTitles,
+    PrimaryKey,
     ProblemType,
     RunMode,
     StrictBase,
@@ -192,15 +193,15 @@ class HealthResponse(StrictBase):
 
 
 # ---------------------------------------------------------------------------
-# M2: uploads and runs (design §4.0)
+# M2: uploads and runs
 # ---------------------------------------------------------------------------
 class UploadRecord(Artefact):
     """`upload.json` - what `POST /uploads` stored, so a later run needs no request context.
 
-    Design §5.2 gives this record its own module, `engine/uploads.py`, which is not part of this
-    change; it lives here, beside the models of the two routers that read it, until that module
-    lands. It deliberately stays out of `ARTEFACT_REGISTRY`, which documents *run directory*
-    artefacts only (DEC-061).
+    This record belongs in `engine/uploads.py`, a module that is not part of this change; it lives
+    here, beside the models of the two routers that read it, until that module lands. It
+    deliberately stays out of `ARTEFACT_REGISTRY`, which documents *run directory* artefacts only
+    (DEC-061).
     """
 
     upload_id: str = Field(description="Id of the upload this record describes.")
@@ -228,12 +229,20 @@ class UploadResponse(StrictBase):
 
 
 class RunRequest(StrictBase):
-    """Body of `POST /runs` (plan §8, verbatim). `extra="forbid"`, so a typo is a loud 422."""
+    """Body of `POST /runs` (plan §8, verbatim). `extra="forbid"`, so a typo is a loud 422.
+
+    `primary_key` accepts several column names as well as one, and `dataset_id` / `client_id` name
+    an onboarded dataset instead of a raw upload. Both are the shape Phase 2 needs; neither has
+    behaviour behind it yet, and `POST /runs` says so plainly rather than accepting a request it
+    would then half-honour.
+    """
 
     use_case: str
     mode: RunMode = RunMode.TRAIN
     upload_id: str
-    primary_key: str
+    primary_key: PrimaryKey
+    dataset_id: str | None = None
+    client_id: str | None = None
     target: str | None = None
     model_choice: str | None = None
     model_version_id: str | None = None
@@ -328,3 +337,21 @@ class ModelPromoteRequest(StrictBase):
         min_length=1,
         description="Why this version is being made champion by hand; stored as the version's promotion note.",
     )
+
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file - run `black` on
+# what you paste, not on the file, if the formatter would reflow other lines.
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----

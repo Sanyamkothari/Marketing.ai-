@@ -1,4 +1,22 @@
-"""`engine.pipeline` and `engine.stages`: the M1 stage vocabulary, Running rows and typed stubs."""
+"""`engine.pipeline` and `engine.stages`: the stage vocabulary, Running rows and the stage-module surface.
+
+The front half pins the flows, titles and Running rows to plan section 6.1, 6.2 and the prototype
+screen in design section 6.4, so that reordering a stage or rewording a progress line has to be a
+deliberate edit here and cannot drift out of the UI unnoticed.
+
+The back half guards the stage-module surface of design section 6.5: every stage id in
+STAGE_MODULE_MAP resolves to an importable module that defines the functions that stage promises,
+the modules claimed as implemented really are stage modules, and nothing on the surface is still a
+milestone stub. That claim is inverted from the one the file was born with. In M1 the stage modules
+WERE typed stubs raising NotImplementedError("M2"), and the file existed to prove they raised
+uniformly rather than half-failing in bespoke ways; as each milestone landed, modules moved out of
+the stubbed half and into the implemented one. With the last stage in, the stubbed half is empty and
+gone, and what remains is the assertion that now matters: the surface exists, it matches
+STAGE_MODULE_MAP, and no part of it has quietly stayed a placeholder.
+
+The file keeps its M1 name because other modules and docs reference the path; read the name as
+historical, not as a description of what is asserted below.
+"""
 
 from __future__ import annotations
 
@@ -240,9 +258,10 @@ def test_every_stage_id_maps_to_a_module_that_defines_its_functions() -> None:
             assert inspect.isfunction(getattr(module, function_name))
 
 
-# Stage modules that now carry real implementations. A module moves into this set
-# deliberately, when its milestone lands, so neither half of the pair below can go
-# stale: a stubbed module must still raise, and an implemented one must not.
+# Stage modules that carry real implementations -- as of M4, every module in STAGE_MODULE_MAP.
+# Each entry names the milestone that landed it, and a module still joins this set by a deliberate
+# edit rather than by inference, so the two tests below can read it from both ends: every name here
+# must be a real stage module, and every one must actually run code.
 IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
     {
         "engine.stages.evaluate",  # M3: evaluate, compare_to_baseline
@@ -257,21 +276,19 @@ IMPLEMENTED_STAGE_MODULES: frozenset[str] = frozenset(
         "engine.stages.explain",  # M3: global importance and per-row reasons
     }
 )
-STUBBED_STAGE_MODULES: frozenset[str] = frozenset(STAGE_MODULE_MAP.values()) - IMPLEMENTED_STAGE_MODULES
 
 
 def test_implemented_modules_are_real_stage_modules() -> None:
     assert set(STAGE_MODULE_MAP.values()) >= IMPLEMENTED_STAGE_MODULES
 
 
-@pytest.mark.parametrize("module_name", sorted(STUBBED_STAGE_MODULES))
-def test_every_public_stage_function_is_a_milestone_stub(module_name: str) -> None:
-    module = importlib.import_module(module_name)
-    names = public_functions(module)
-    assert names, f"{module_name} defines no public function"
-    for name in names:
-        with pytest.raises(NotImplementedError, match=r"^M[0-9]$"):
-            call_with_placeholders(getattr(module, name))
+# The stub half of the pair -- test_every_public_stage_function_is_a_milestone_stub, parametrized
+# over STAGE_MODULE_MAP minus IMPLEMENTED_STAGE_MODULES -- was deleted when the last stage module
+# landed and that difference went empty. It was not dropped to make a failure go away: pytest was
+# skipping it as an empty parameter set, so it had already stopped asserting anything, and an
+# always-skipped test is worse than none because it reads like coverage. Nothing was lost. Every
+# module it used to watch is now covered by its mirror below, which makes the stronger claim on the
+# same modules: not "this still raises NotImplementedError" but "this no longer does".
 
 
 @pytest.mark.parametrize("module_name", sorted(IMPLEMENTED_STAGE_MODULES))

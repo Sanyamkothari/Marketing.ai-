@@ -100,6 +100,8 @@ OTHER_CATEGORY: Final[str] = "__other__"
 SCHEMA_FILENAME: Final[str] = "schema.json"
 RUN_CONFIG_FILENAME: Final[str] = "run_config.json"
 DRIFT_BASELINE_FILENAME: Final[str] = "drift_baseline.json"
+FEATURE_IMPORTANCE_FILENAME: Final[str] = "feature_importance.json"
+"""The explain stage wrote this before register ran; a scoring run reads it back for DEC-056."""
 
 PROMOTED_BY: Final[str] = "engine"
 """Who the registry records as the promoter when the champion rule promotes automatically."""
@@ -232,6 +234,7 @@ def build_model_version(
             SCHEMA_FILENAME: schema_key,
             RUN_CONFIG_FILENAME: run_config_key,
             DRIFT_BASELINE_FILENAME: drift_baseline_key,
+            FEATURE_IMPORTANCE_FILENAME: run_key(ctx.run_id, FEATURE_IMPORTANCE_FILENAME),
             MODEL_DIRECTORY: predictor_key,
         },
         approved_by=None,

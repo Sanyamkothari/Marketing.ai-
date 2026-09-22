@@ -1,4 +1,9 @@
-"""The generative engine: retrieval, grounded answers, root-cause summaries and campaign copy.
+"""Generative and hybrid features: RAG, root-cause summaries and generated copy (Phase 3a).
+
+Owned by the `phase-3a-generative` branch (PARALLEL_WORK_PROTOCOL.md §3). The contracts-first task
+created this package and `contracts.py`; the `LLMClient` protocol and `FakeLLMClient` these
+features are written against live in `engine/llm.py`, where Phase 3a adds `BedrockLLMClient` and
+`GroundedFakeLLMClient` beside them.
 
 This package **consumes** what the predictive engine produces and never joins it. A root-cause
 summary reads a finished run's `feature_importance.json`, `row_explanations.parquet` and

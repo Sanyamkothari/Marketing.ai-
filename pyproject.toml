@@ -21,6 +21,18 @@ dependencies = [
   "sqlmodel==0.0.42",
   "pydantic==2.13.5",
   "PyYAML==6.0.3",
+
+  # ========================================================================
+  # Shared file (PARALLEL_WORK_PROTOCOL.md §4). Add a dependency inside your
+  # own block and pin it exactly. Never bump a pin above this comment
+  # (pandas, pydantic, FastAPI, AutoGluon and the rest are shared): request
+  # the bump in docs/CROSS_BRANCH_REQUESTS.md instead.
+  # ========================================================================
+
+  # ---- PHASE-2 (onboarding) — append only below this line ----
+  # ---- END PHASE-2 ----
+
+  # ---- PHASE-3A (generative) — append only below this line ----
   # Phase 3a, the generative features. No orchestration framework: chunking, retrieval and the
   # vector store are forty lines each and a framework would hide them (Phase 3a plan §2.2).
   "boto3==1.43.98",                     # Bedrock Converse + embeddings; the only LLM client
@@ -28,6 +40,10 @@ dependencies = [
   "pypdf==6.19.0",                      # reads PDFs; it does not write them (DEC-207)
   "python-docx==1.2.0",                 # reads DOCX
   "markdown-it-py==4.2.0",              # reads Markdown with its headings intact
+  # ---- END PHASE-3A ----
+
+  # ---- PHASE-4A (aws) — append only below this line ----
+  # ---- END PHASE-4A ----
 ]
 
 [project.optional-dependencies]

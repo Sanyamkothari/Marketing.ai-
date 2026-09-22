@@ -1,4 +1,4 @@
-"""`POST /uploads` and `GET /uploads/{upload_id}/profile` (design §4.1, §4.2).
+"""`POST /uploads` and `GET /uploads/{upload_id}/profile` (plan §8).
 
 The upload route never holds the file in memory: it streams the request body into `Storage` a
 megabyte at a time, counting as it goes, so the configured size limit is enforced before the bytes
@@ -41,7 +41,7 @@ CHUNK_BYTES: Final[int] = 1 << 20
 """How much of the request body is read, counted and written at a time."""
 
 DEFAULT_PROFILE_ROW_CAP: Final[int] = 2_000_000
-"""Fallback for `config.validation.profile_row_cap` until that leaf lands (design §7, owner H)."""
+"""Fallback for `config.validation.profile_row_cap` until that config leaf exists."""
 
 UPLOAD_RECORD_FILENAME: Final[str] = "upload.json"
 UPLOAD_PROFILE_FILENAME: Final[str] = "profile.json"
@@ -49,7 +49,7 @@ UPLOAD_FINGERPRINT_FILENAME: Final[str] = "fingerprint.json"
 UPLOAD_VALIDATION_FILENAME: Final[str] = "validation.json"
 
 UNSUPPORTED_FORMAT_CODE: Final[str] = "UPLOAD_UNSUPPORTED_FORMAT"
-"""The one `IngestError` code that is a 415 rather than a 422 (design §4.1)."""
+"""The one `IngestError` code that is a 415 rather than a 422."""
 
 FileField = Annotated[UploadFile, File(description="The CSV or Parquet file to profile.")]
 UseCaseField = Annotated[str, Form(description="Use case whose limits and hints drive the profile.")]
@@ -79,7 +79,7 @@ async def create_upload(
     use_case: UseCaseField,
     mode: ModeField = RunMode.TRAIN,
 ) -> UploadResponse:
-    """Stream the file in, profile it and persist the upload directory of design §5.1.
+    """Stream the file in, profile it and persist the `uploads/<upload_id>/` directory.
 
     The use case is loaded *before* a single byte is read, because its `max_file_size_mb` is the
     limit being enforced and an unknown or planned id must not cost the user an upload.
@@ -186,7 +186,7 @@ def use_case_config(use_case_id: str, root: Path) -> UseCaseConfig:
 def profile_row_cap(config: UseCaseConfig) -> int:
     """`config.validation.profile_row_cap`, or `DEFAULT_PROFILE_ROW_CAP` until that leaf exists.
 
-    The leaf is added to `engine/config.py` by its own owner (design §7, H); reading it defensively
+    The leaf is added to `engine/config.py` by the change that owns it; reading it defensively
     keeps these routes independent of that change's landing order and costs one attribute lookup.
     """
     return int(getattr(config.validation, "profile_row_cap", DEFAULT_PROFILE_ROW_CAP))
@@ -225,7 +225,7 @@ def http_error(status_code: int, code: str, message: str, path: str | None = Non
 
 
 def ingest_http(code: str, message: str) -> HTTPException:
-    """Every `IngestError` is a 422 except the unsupported suffix, which is a 415 (design §4.1)."""
+    """Every `IngestError` is a 422 except the unsupported suffix, which is a 415."""
     return http_error(415 if code == UNSUPPORTED_FORMAT_CODE else 422, code, message)
 
 

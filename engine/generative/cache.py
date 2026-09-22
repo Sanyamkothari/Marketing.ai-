@@ -34,7 +34,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
-from engine.llm import Completion
+from engine.llm import LLMCompletion
 from engine.utils.logging import get_logger, log_failure
 
 __all__ = ["CACHE_DIRNAME", "DEFAULT_MAX_BYTES", "CompletionCache", "NullCache", "cache_key"]
@@ -69,12 +69,12 @@ def cache_key(*, content_hash: str, system: str, user: str, model_id: str, tempe
 class NullCache:
     """The cache a run gets when `generative.budget.cache` is off: it stores nothing and says so."""
 
-    def get(self, key: str) -> Completion | None:
+    def get(self, key: str) -> LLMCompletion | None:
         """Always a miss."""
         del key
         return None
 
-    def put(self, key: str, completion: Completion) -> None:
+    def put(self, key: str, completion: LLMCompletion) -> None:
         """Stores nothing."""
         del key, completion
 
@@ -103,7 +103,7 @@ class CompletionCache:
     def _path(self, key: str) -> Path:
         return self._root / key[:_FANOUT] / f"{key}{_SUFFIX}"
 
-    def get(self, key: str) -> Completion | None:
+    def get(self, key: str) -> LLMCompletion | None:
         """The stored completion for `key`, or `None` on a miss or on any failure to read one."""
         path = self._path(key)
         try:
@@ -114,17 +114,16 @@ class CompletionCache:
         except (OSError, ValueError) as exc:
             log_failure(_LOGGER, "llm_cache.read", exc)
             return None
-        return Completion(
+        return LLMCompletion(
             text=str(payload["text"]),
             model_id=str(payload["model_id"]),
             input_tokens=int(payload["input_tokens"]),
             output_tokens=int(payload["output_tokens"]),
-            latency_ms=int(payload["latency_ms"]),
+            cost_estimate_usd=payload["cost_estimate_usd"],
             stop_reason=str(payload["stop_reason"]),
-            estimated_tokens=bool(payload["estimated_tokens"]),
         )
 
-    def put(self, key: str, completion: Completion) -> None:
+    def put(self, key: str, completion: LLMCompletion) -> None:
         """Store `completion` under `key`, atomically, and give up quietly if the disk will not have it."""
         path = self._path(key)
         payload = {
@@ -132,9 +131,8 @@ class CompletionCache:
             "model_id": completion.model_id,
             "input_tokens": completion.input_tokens,
             "output_tokens": completion.output_tokens,
-            "latency_ms": completion.latency_ms,
+            "cost_estimate_usd": completion.cost_estimate_usd,
             "stop_reason": completion.stop_reason,
-            "estimated_tokens": completion.estimated_tokens,
         }
         try:
             path.parent.mkdir(parents=True, exist_ok=True)

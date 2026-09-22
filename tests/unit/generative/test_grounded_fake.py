@@ -1,8 +1,10 @@
-"""`engine.llm`: the protocol's two implementations, and the fake's two load-bearing properties.
+"""`GroundedFakeLLMClient`: the second fake, and the two properties it exists for.
 
-The fast suite runs entirely on `FakeLLMClient`, so what the fake is worth depends on whether it
-behaves like a model in the two ways the code under test cares about. Both are proved here rather
-than assumed:
+`FakeLLMClient` is the contracts-first seam and `tests/unit/test_llm.py` covers it. It derives every
+answer from a digest, which is right for what it was built for and, by the same design, unusable for
+retrieval: a hash embedding has no semantics, so the chunk that answers a question sits no closer to
+it than any other, and `[fake completion 3f2a…]` quotes no extract. Phase 3a therefore has a second
+fake, and these are the two properties that make it worth having (DEC-214):
 
 **Its embeddings carry lexical signal.** Retrieval, the similarity floor and MMR are all cosine
 arithmetic over these vectors. If the fake returned noise, every retrieval test would be testing
@@ -16,7 +18,7 @@ an extract number that exists, and an evidence reference names an id that is in 
 that returned a fixed string would make every grounding test pass by accident, so each of those is
 checked against the prompt the fake was handed.
 
-`FakeMode` is then checked one mode at a time: each must break exactly the rule it is named for and
+`GroundedFakeMode` is then checked one mode at a time: each must break exactly the rule it is named for and
 leave the others alone, because a test that sets `PII` and gets an over-length answer as well is a
 test that cannot say which guardrail it proved.
 """
@@ -29,15 +31,13 @@ import math
 import pytest
 
 from engine.llm import (
-    TOKENS_PER_CHARACTER,
+    APPROX_CHARS_PER_TOKEN,
     BedrockLLMClient,
-    Completion,
-    Embeddings,
-    FakeLLMClient,
-    FakeMode,
+    GroundedFakeLLMClient,
+    GroundedFakeMode,
     LLMClient,
+    LLMCompletion,
     LLMError,
-    TokenCount,
     build_client,
     estimate_tokens,
 )
@@ -91,11 +91,11 @@ def cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
     return sum(a * b for a, b in zip(left, right, strict=True))
 
 
-def answer(mode: FakeMode = FakeMode.GROUNDED, prompt: str = ANSWER_PROMPT) -> dict[str, object]:
+def answer(
+    mode: GroundedFakeMode = GroundedFakeMode.GROUNDED, prompt: str = ANSWER_PROMPT
+) -> dict[str, object]:
     """The fake's reply to `prompt`, parsed. Every generating prompt promises one JSON object."""
-    completion = FakeLLMClient(mode=mode).complete(
-        system="", user=prompt, model_id=MODEL, temperature=0.2, max_output_tokens=800
-    )
+    completion = GroundedFakeLLMClient(mode=mode).complete(prompt, model_id=MODEL, max_tokens=800)
     parsed = json.loads(completion.text)
     assert isinstance(parsed, dict)
     return parsed
@@ -106,7 +106,7 @@ def answer(mode: FakeMode = FakeMode.GROUNDED, prompt: str = ANSWER_PROMPT) -> d
 # ---------------------------------------------------------------------------
 def test_both_implementations_satisfy_the_protocol() -> None:
     """A `Protocol` that nothing is checked against is a comment; these two are the whole surface."""
-    assert isinstance(FakeLLMClient(), LLMClient)
+    assert isinstance(GroundedFakeLLMClient(), LLMClient)
     assert isinstance(BedrockLLMClient(region="ap-south-1"), LLMClient)
 
 
@@ -114,7 +114,7 @@ def test_the_fake_is_the_default_backend_so_nothing_costs_money_by_accident() ->
     """DEC-203: a developer with no credentials gets a working client, not a stack trace."""
     from engine.config import LlmConfig
 
-    assert isinstance(build_client(LlmConfig()), FakeLLMClient)
+    assert isinstance(build_client(LlmConfig()), GroundedFakeLLMClient)
 
 
 def test_building_the_bedrock_client_opens_no_connection() -> None:
@@ -137,16 +137,15 @@ def test_building_the_bedrock_client_opens_no_connection() -> None:
 
 def test_an_estimate_always_says_that_it_is_one() -> None:
     """A guessed token count that looked measured would quietly become a guessed cost."""
-    count = estimate_tokens("four characters to a token, near enough")
-    assert count.estimated is True
-    assert count.tokens == int(len("four characters to a token, near enough") * TOKENS_PER_CHARACTER)
-    assert estimate_tokens("").tokens >= 1
+    text = "four characters to a token, near enough"
+    assert estimate_tokens(text) == -(-len(text) // APPROX_CHARS_PER_TOKEN)
+    assert estimate_tokens("") == 0
 
 
 def test_the_fake_counts_tokens_the_same_way_the_real_client_falls_back_to() -> None:
     """So a test that measures token counts measures the same thing in both."""
     text = "a sentence of some length, long enough to have a token count worth checking"
-    assert FakeLLMClient().count_tokens(text, model_id=MODEL) == estimate_tokens(text)
+    assert GroundedFakeLLMClient().count_tokens(text, model_id=MODEL) == estimate_tokens(text)
 
 
 # ---------------------------------------------------------------------------
@@ -154,14 +153,14 @@ def test_the_fake_counts_tokens_the_same_way_the_real_client_falls_back_to() -> 
 # ---------------------------------------------------------------------------
 def test_every_vector_is_unit_length_so_a_dot_product_is_a_cosine() -> None:
     """Retrieval takes the dot product directly; un-normalised vectors would rank by length."""
-    vectors = FakeLLMClient().embed(["one text", "another entirely different text"], model_id=MODEL).vectors
+    vectors = GroundedFakeLLMClient().embed(["one text", "another entirely different text"], model_id=MODEL)
     for vector in vectors:
         assert math.isclose(math.sqrt(sum(value * value for value in vector)), 1.0, rel_tol=1e-9)
 
 
 def test_a_text_with_nothing_to_match_on_embeds_to_zero() -> None:
     """Similarity 0 to everything is the honest answer for a chunk with no content word in it."""
-    vectors = FakeLLMClient().embed(["", "the and of to", "..."], model_id=MODEL).vectors
+    vectors = GroundedFakeLLMClient().embed(["", "the and of to", "..."], model_id=MODEL)
     for vector in vectors:
         assert all(value == 0.0 for value in vector)
 
@@ -173,10 +172,10 @@ def test_a_question_is_closest_to_the_chunk_that_answers_it() -> None:
     must win outright, not tie: a tie would mean the ranking is arbitrary and any ordering test
     downstream is measuring nothing.
     """
-    client = FakeLLMClient()
+    client = GroundedFakeLLMClient()
     paragraphs = [plain_text(source_text(stem)).split("\n\n")[2] for stem in DOCUMENT_STEMS]
     question = "How long is an eSIM QR code valid and how often can I convert a physical SIM?"
-    vectors = client.embed([question, *paragraphs], model_id=MODEL).vectors
+    vectors = client.embed([question, *paragraphs], model_id=MODEL)
     scores = [cosine(vectors[0], vector) for vector in vectors[1:]]
     best = max(range(len(scores)), key=lambda index: scores[index])
     assert DOCUMENT_STEMS[best] == "guide_esim", dict(zip(DOCUMENT_STEMS, scores, strict=True))
@@ -184,7 +183,7 @@ def test_a_question_is_closest_to_the_chunk_that_answers_it() -> None:
 
 
 def test_unrelated_texts_are_not_close_and_the_same_text_is_identical() -> None:
-    client = FakeLLMClient()
+    client = GroundedFakeLLMClient()
     vectors = client.embed(
         [
             "The QR code is valid for seven days.",
@@ -192,31 +191,29 @@ def test_unrelated_texts_are_not_close_and_the_same_text_is_identical() -> None:
             "A cable cut affecting a street is restored within 72 hours.",
         ],
         model_id=MODEL,
-    ).vectors
+    )
     assert math.isclose(cosine(vectors[0], vectors[1]), 1.0, rel_tol=1e-9)
     assert cosine(vectors[0], vectors[2]) < 0.2
 
 
 def test_embedding_is_deterministic_and_reports_its_width() -> None:
     texts = ["one", "two", "three"]
-    first = FakeLLMClient().embed(texts, model_id=MODEL)
-    second = FakeLLMClient().embed(texts, model_id=MODEL)
-    assert first.vectors == second.vectors
-    assert first.dimensions == len(first.vectors[0])
-    assert Embeddings(vectors=(), model_id=MODEL, input_tokens=0, latency_ms=0).dimensions == 0
+    first = GroundedFakeLLMClient().embed(texts, model_id=MODEL)
+    second = GroundedFakeLLMClient().embed(texts, model_id=MODEL)
+    assert first == second
+    assert len(first[0]) == len(second[0])
+    assert GroundedFakeLLMClient().embed([], model_id=MODEL) == ()
 
 
 def test_a_repeated_word_counts_for_more_but_not_proportionally_more() -> None:
     """Log term frequency: a long chunk about one thing must not drown a short one about it."""
-    client = FakeLLMClient()
-    once, ten_times = client.embed(["refund", "refund " * 10], model_id=MODEL).vectors
+    client = GroundedFakeLLMClient()
+    once, ten_times = client.embed(["refund", "refund " * 10], model_id=MODEL)
     assert math.isclose(cosine(once, ten_times), 1.0, rel_tol=1e-9)
 
 
-def test_an_empty_batch_costs_nothing_and_returns_nothing() -> None:
-    result = FakeLLMClient().embed([], model_id=MODEL)
-    assert result.vectors == ()
-    assert result.input_tokens == 0
+def test_an_empty_batch_returns_nothing() -> None:
+    assert GroundedFakeLLMClient().embed([], model_id=MODEL) == ()
 
 
 # ---------------------------------------------------------------------------
@@ -250,11 +247,7 @@ def test_with_no_extracts_the_fake_refuses_in_the_configured_words() -> None:
 
 def test_a_root_cause_reply_cites_only_ids_that_are_in_the_pack() -> None:
     """The grounding parser rejects anything else, so the grounded fake must not produce anything else."""
-    reply = json.loads(
-        FakeLLMClient()
-        .complete(system="", user=EVIDENCE_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800)
-        .text
-    )
+    reply = json.loads(GroundedFakeLLMClient().complete(EVIDENCE_PROMPT, model_id=MODEL, max_tokens=800).text)
     refs = {ref for cause in reply["root_causes"] for ref in cause["evidence_refs"]}
     assert refs
     assert refs <= {"r1", "r2", "c1"}
@@ -262,11 +255,7 @@ def test_a_root_cause_reply_cites_only_ids_that_are_in_the_pack() -> None:
 
 
 def test_a_copy_reply_uses_only_the_placeholders_it_was_allowed() -> None:
-    reply = json.loads(
-        FakeLLMClient()
-        .complete(system="", user=COPY_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800)
-        .text
-    )
+    reply = json.loads(GroundedFakeLLMClient().complete(COPY_PROMPT, model_id=MODEL, max_tokens=800).text)
     assert [variant["label"] for variant in reply["variants"]] == ["A", "B"]
     for variant in reply["variants"]:
         assert "{{first_name}}" in variant["text"]
@@ -276,24 +265,16 @@ def test_a_copy_reply_uses_only_the_placeholders_it_was_allowed() -> None:
 
 def test_two_copy_variants_are_not_the_same_words_twice() -> None:
     """Two rewordings of one idea is one variant; the A/B split would then measure nothing."""
-    reply = json.loads(
-        FakeLLMClient()
-        .complete(system="", user=COPY_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800)
-        .text
-    )
+    reply = json.loads(GroundedFakeLLMClient().complete(COPY_PROMPT, model_id=MODEL, max_tokens=800).text)
     texts = [variant["text"] for variant in reply["variants"]]
     assert len(set(texts)) == len(texts)
 
 
 def test_a_judge_passes_a_text_by_default_and_fails_one_on_request() -> None:
-    passing = json.loads(
-        FakeLLMClient()
-        .complete(system="", user=JUDGE_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800)
-        .text
-    )
+    passing = json.loads(GroundedFakeLLMClient().complete(JUDGE_PROMPT, model_id=MODEL, max_tokens=800).text)
     failing = json.loads(
-        FakeLLMClient(mode=FakeMode.FAILING_JUDGE)
-        .complete(system="", user=JUDGE_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800)
+        GroundedFakeLLMClient(mode=GroundedFakeMode.FAILING_JUDGE)
+        .complete(JUDGE_PROMPT, model_id=MODEL, max_tokens=800)
         .text
     )
     assert passing["score"] == 1.0
@@ -303,53 +284,49 @@ def test_a_judge_passes_a_text_by_default_and_fails_one_on_request() -> None:
 
 def test_generation_is_deterministic() -> None:
     """An artefact written under the fake is byte-stable, so two runs can be compared."""
-    first = FakeLLMClient().complete(
-        system="s", user=ANSWER_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800
-    )
-    second = FakeLLMClient().complete(
-        system="s", user=ANSWER_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800
-    )
+    first = GroundedFakeLLMClient().complete(ANSWER_PROMPT, system="s", model_id=MODEL, max_tokens=800)
+    second = GroundedFakeLLMClient().complete(ANSWER_PROMPT, system="s", model_id=MODEL, max_tokens=800)
     assert first == second
 
 
 def test_a_completion_reports_what_it_consumed() -> None:
-    completion = FakeLLMClient().complete(
-        system="a system prompt", user=ANSWER_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800
+    completion = GroundedFakeLLMClient().complete(
+        ANSWER_PROMPT, system="a system prompt", model_id=MODEL, max_tokens=800
     )
-    assert isinstance(completion, Completion)
+    assert isinstance(completion, LLMCompletion)
     assert completion.model_id == MODEL
     assert completion.input_tokens > 0
     assert completion.output_tokens > 0
-    assert completion.estimated_tokens is True
+    assert completion.cost_estimate_usd is None
 
 
 # ---------------------------------------------------------------------------
 # One mode, one broken rule
 # ---------------------------------------------------------------------------
 def test_the_ungrounded_mode_cites_an_extract_that_was_never_supplied() -> None:
-    cited = [citation["chunk"] for citation in answer(FakeMode.UNGROUNDED)["citations"]]  # type: ignore[union-attr,index]
+    cited = [citation["chunk"] for citation in answer(GroundedFakeMode.UNGROUNDED)["citations"]]  # type: ignore[union-attr,index]
     assert cited
     assert all(number > 2 for number in cited)
 
 
 def test_the_pii_mode_puts_an_identifier_in_the_answer() -> None:
-    reply = answer(FakeMode.PII)
+    reply = answer(GroundedFakeMode.PII)
     assert "@" in str(reply["answer"])
     assert reply["refused"] is False
 
 
 def test_the_banned_mode_uses_a_globally_banned_phrase() -> None:
-    assert "guaranteed" in str(answer(FakeMode.BANNED)["answer"])
+    assert "guaranteed" in str(answer(GroundedFakeMode.BANNED)["answer"])
 
 
 def test_the_overlong_mode_blows_any_length_limit() -> None:
-    assert len(str(answer(FakeMode.OVERLONG)["answer"])) > 4_000
+    assert len(str(answer(GroundedFakeMode.OVERLONG)["answer"])) > 4_000
 
 
 def test_the_malformed_mode_returns_something_that_is_not_json() -> None:
     text = (
-        FakeLLMClient(mode=FakeMode.MALFORMED)
-        .complete(system="", user=ANSWER_PROMPT, model_id=MODEL, temperature=0.2, max_output_tokens=800)
+        GroundedFakeLLMClient(mode=GroundedFakeMode.MALFORMED)
+        .complete(ANSWER_PROMPT, model_id=MODEL, max_tokens=800)
         .text
     )
     with pytest.raises(json.JSONDecodeError):
@@ -357,9 +334,16 @@ def test_the_malformed_mode_returns_something_that_is_not_json() -> None:
 
 
 @pytest.mark.parametrize(
-    "mode", [FakeMode.UNGROUNDED, FakeMode.PII, FakeMode.BANNED, FakeMode.OVERLONG, FakeMode.REFUSING]
+    "mode",
+    [
+        GroundedFakeMode.UNGROUNDED,
+        GroundedFakeMode.PII,
+        GroundedFakeMode.BANNED,
+        GroundedFakeMode.OVERLONG,
+        GroundedFakeMode.REFUSING,
+    ],
 )
-def test_a_misbehaving_mode_still_returns_the_shape_the_prompt_asked_for(mode: FakeMode) -> None:
+def test_a_misbehaving_mode_still_returns_the_shape_the_prompt_asked_for(mode: GroundedFakeMode) -> None:
     """Every mode but `MALFORMED` breaks a content rule, never the format - or the parser, not the
     guardrail, would be what the test exercised."""
     reply = answer(mode)
@@ -388,8 +372,8 @@ def test_a_bedrock_failure_is_a_coded_error_that_names_no_value() -> None:
 
     client = BedrockLLMClient(region="ap-south-1", client=_Exploding())
     with pytest.raises(LLMError) as error:
-        client.complete(system="s", user="u", model_id=MODEL, temperature=0.2, max_output_tokens=10)
-    assert error.value.code == "LLM_CALL_FAILED"
+        client.complete("u", system="s", model_id=MODEL, max_tokens=10)
+    assert error.value.code == "LLM_UNAVAILABLE"
     assert "private document" not in error.value.message
 
 
@@ -400,8 +384,8 @@ def test_an_empty_bedrock_answer_is_its_own_code() -> None:
 
     client = BedrockLLMClient(region="ap-south-1", client=_Silent())
     with pytest.raises(LLMError) as error:
-        client.complete(system="s", user="u", model_id=MODEL, temperature=0.2, max_output_tokens=10)
-    assert error.value.code == "LLM_EMPTY_RESPONSE"
+        client.complete("u", system="s", model_id=MODEL, max_tokens=10)
+    assert error.value.code == "LLM_REFUSED"
 
 
 def test_bedrock_reads_the_usage_the_provider_reported() -> None:
@@ -414,10 +398,10 @@ def test_bedrock_reads_the_usage_the_provider_reported() -> None:
             }
 
     completion = BedrockLLMClient(region="ap-south-1", client=_Counting()).complete(
-        system="s", user="u", model_id=MODEL, temperature=0.2, max_output_tokens=10
+        "u", system="s", model_id=MODEL, max_tokens=10
     )
     assert (completion.input_tokens, completion.output_tokens) == (11, 7)
-    assert completion.estimated_tokens is False
+    assert completion.stop_reason == "end_turn"
 
 
 def test_count_tokens_falls_back_to_the_estimate_and_says_so() -> None:
@@ -427,21 +411,18 @@ def test_count_tokens_falls_back_to_the_estimate_and_says_so() -> None:
         def count_tokens(self, **kwargs: object) -> object:
             raise RuntimeError("no such operation")
 
-    count = BedrockLLMClient(region="ap-south-1", client=_Unsupported()).count_tokens(
-        "some text", model_id=MODEL
-    )
-    assert isinstance(count, TokenCount)
-    assert count.estimated is True
+    client = BedrockLLMClient(region="ap-south-1", client=_Unsupported())
+    assert client.count_tokens("some text", model_id=MODEL) == estimate_tokens("some text")
 
 
 def test_a_fake_with_too_few_dimensions_is_refused() -> None:
     with pytest.raises(ValueError, match="at least 8"):
-        FakeLLMClient(dimensions=4)
+        GroundedFakeLLMClient(dimensions=4)
 
 
 def test_the_planted_complaint_pii_is_not_what_the_fake_invents() -> None:
     """The fake's PII is its own, from a reserved range, so a redaction test cannot pass by luck."""
     planted = " ".join(generate_complaints(40)["text"])
-    invented = str(answer(FakeMode.PII)["answer"])
+    invented = str(answer(GroundedFakeMode.PII)["answer"])
     assert "priya.sharma@example.invalid" in invented
     assert "priya.sharma@example.invalid" not in planted

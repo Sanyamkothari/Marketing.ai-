@@ -775,8 +775,8 @@ PII_DETECTORS: Final[tuple[PiiDetector, ...]] = (
     ),
     PiiDetector(
         kind="phone",
-        # The design's pattern allowed exactly two digit groups after the country code, so the
-        # three-group NANP shape `+1-555-555-0001` - what `tests/fixtures/make_data.py`'s
+        # An earlier version of this pattern allowed exactly two digit groups after the country
+        # code, so the three-group NANP shape `+1-555-555-0001` - what `tests/fixtures/make_data.py`'s
         # `pii_column` variant writes, and the commonest international format there is - did not
         # match. The trailing group repeats one to two times instead; the guard that matters is
         # unchanged (at least seven digits), so a short integer column still cannot look like a phone.

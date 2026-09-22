@@ -33,17 +33,19 @@ from typing import Final
 import yaml
 
 from engine.config import BudgetConfig, LlmConfig, config_root
+from engine.contracts import LLMUsage
 from engine.generative.cache import CompletionCache, NullCache, cache_key
 from engine.generative.contracts import (
     PRICE_UNKNOWN,
+    TOKENS_ESTIMATED,
     GenerativePurpose,
-    LlmUsage,
+    LlmUsageReport,
     ModelUsage,
     PurposeUsage,
 )
 from engine.generative.errors import BUDGET_EXCEEDED, generative_error
 from engine.generative.prompts import RenderedPrompt
-from engine.llm import Completion, Embeddings, LLMClient
+from engine.llm import APPROX_CHARS_PER_TOKEN, LLMClient, LLMCompletion
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -179,7 +181,7 @@ class Meter:
         self._by_model: dict[str, _Tally] = {}
         self._by_purpose: dict[GenerativePurpose, _Tally] = {}
         self._warnings: list[str] = []
-        self._unpriced: set[str] = set()
+        self._seen_warnings: set[str] = set()
 
     # -- what has happened so far -------------------------------------------
     @property
@@ -207,7 +209,7 @@ class Meter:
         return max(0, self._budget.max_calls_per_run - self._calls)
 
     # -- the calls ----------------------------------------------------------
-    def complete(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> Completion:
+    def complete(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
         """Answer `rendered` with the generating model, from the cache when it can.
 
         Raises `BUDGET_EXCEEDED` before making a call that would take the job past a ceiling, so a
@@ -215,7 +217,7 @@ class Meter:
         """
         return self._call(rendered, purpose, self._llm.generation_model)
 
-    def judge(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> Completion:
+    def judge(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
         """The same, against the judging model.
 
         Its own method rather than an argument because a deployment may judge with a smaller and
@@ -223,7 +225,7 @@ class Meter:
         """
         return self._call(rendered, purpose, self._llm.judge_model)
 
-    def _call(self, rendered: RenderedPrompt, purpose: GenerativePurpose, model_id: str) -> Completion:
+    def _call(self, rendered: RenderedPrompt, purpose: GenerativePurpose, model_id: str) -> LLMCompletion:
         """Cache, then budget, then the model, then the tally - in that order and only that order."""
         key = cache_key(
             content_hash=rendered.content_hash,
@@ -238,11 +240,11 @@ class Meter:
             return cached
         self._check_budget()
         completion = self._client.complete(
+            rendered.user,
             system=rendered.system,
-            user=rendered.user,
             model_id=model_id,
+            max_tokens=self._llm.max_output_tokens,
             temperature=self._llm.temperature,
-            max_output_tokens=self._llm.max_output_tokens,
         )
         self._record(purpose, completion.model_id, completion.input_tokens, completion.output_tokens)
         # Only a completion that came back is stored: caching a failure would make a transient one
@@ -250,19 +252,26 @@ class Meter:
         self._cache.put(key, completion)
         return completion
 
-    def embed(self, texts: Sequence[str]) -> Embeddings:
+    def embed(self, texts: Sequence[str]) -> tuple[tuple[float, ...], ...]:
         """Embed a batch, metered as one call however many texts it carried.
 
-        One call is what the budget counts, because one request is what a provider bills; the
-        tokens are the batch's tokens and are tallied as such. Embeddings are not cached here - a
-        chunk is embedded once, when it is indexed, and the index is the cache.
+        One request is what a provider bills, so one request is what the budget counts. The
+        protocol's `embed` returns vectors and nothing else - no provider reports usage for an
+        embedding through it - so the token count here is the shared `APPROX_CHARS_PER_TOKEN`
+        approximation, and a `TOKENS_ESTIMATED` warning says so rather than letting an approximation
+        pass for a measurement (DEC-215).
+
+        Embeddings are not cached: a chunk is embedded once, when it is indexed, and the index is
+        the cache.
         """
         if not texts:
-            return Embeddings(vectors=(), model_id=self._llm.embedding_model, input_tokens=0, latency_ms=0)
+            return ()
         self._check_budget()
-        embeddings = self._client.embed(texts, model_id=self._llm.embedding_model)
-        self._record(GenerativePurpose.EMBEDDING, embeddings.model_id, embeddings.input_tokens, 0)
-        return embeddings
+        vectors = self._client.embed(texts, model_id=self._llm.embedding_model)
+        estimated = sum(-(-len(text) // APPROX_CHARS_PER_TOKEN) for text in texts)
+        self._warn(f"{TOKENS_ESTIMATED}:{GenerativePurpose.EMBEDDING.value}")
+        self._record(GenerativePurpose.EMBEDDING, self._llm.embedding_model, estimated, 0)
+        return vectors
 
     # -- bookkeeping --------------------------------------------------------
     def _check_budget(self) -> None:
@@ -277,11 +286,10 @@ class Meter:
     ) -> None:
         price = self._prices.get(model_id)
         cost = None if price is None else price.cost(input_tokens, output_tokens)
-        if cost is None and model_id not in self._unpriced:
-            self._unpriced.add(model_id)
-            self._warnings.append(f"{PRICE_UNKNOWN}:{model_id}")
+        if cost is None:
+            self._warn(f"{PRICE_UNKNOWN}:{model_id}")
             self._all_priced = False
-        elif cost is not None:
+        else:
             self._cost += cost
         self._calls += 1
         self._by_model.setdefault(model_id, _Tally()).add(input_tokens, output_tokens, cost)
@@ -294,15 +302,28 @@ class Meter:
             self._calls,
         )
 
-    def usage(self, *, now: datetime | None = None) -> LlmUsage:
-        """The `llm_usage.json` this job produced, whether it finished or not."""
-        return LlmUsage(
-            job_id=self._job_id,
+    def _warn(self, warning: str) -> None:
+        """Record a warning once, however many calls raise it."""
+        if warning not in self._seen_warnings:
+            self._seen_warnings.add(warning)
+            self._warnings.append(warning)
+
+    def totals(self) -> LLMUsage:
+        """The shared per-run total a `RunManifest` carries (contracts-first surface)."""
+        return LLMUsage(
             calls=self._calls,
-            cache_hits=self._cache_hits,
             input_tokens=sum(tally.input_tokens for tally in self._by_model.values()),
             output_tokens=sum(tally.output_tokens for tally in self._by_model.values()),
             cost_estimate_usd=self.cost_so_far if self._calls else None,
+            model_ids=tuple(sorted(self._by_model)),
+        )
+
+    def usage(self, *, now: datetime | None = None) -> LlmUsageReport:
+        """The `llm_usage.json` this job produced, whether it finished or not."""
+        return LlmUsageReport(
+            job_id=self._job_id,
+            totals=self.totals(),
+            cache_hits=self._cache_hits,
             budget_usd=self.budget_usd,
             budget_calls=self._budget.max_calls_per_run,
             by_model=tuple(

@@ -24,9 +24,10 @@ implementation of any of those would drift away from the one under test, and a g
 quietly ignored a suppressed row would then still pass.
 
 *Deterministic.* Every draw comes from a :class:`numpy.random.Generator` seeded by a BLAKE2b digest
-of ``(seed, use_case_id, purpose, column)``, as ``make_data`` does. The run id, the upload id and
-every timestamp are derived from the spec, and the only clock this module reads is the one the
-spec carries, so the same spec writes byte-identical files.
+of ``(seed, use_case_id, purpose, column)``, as ``make_data`` does. The run id and the upload id are
+digests of the whole spec, and no clock is read anywhere: a timestamp is either the one the spec
+carries or the day after the newest date in the rows that spec generated. So the same spec writes
+byte-identical files, which is what lets a test pin a value rather than a shape.
 
 *A reason is a reason.* Each feature gets one seeded weight and each row a standardised signal from
 its own cell, and the row's score is those contributions summed and squashed. So a reason really
@@ -57,7 +58,7 @@ No model version is registered either: a flow that needs a registry row seeds on
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Final
@@ -97,7 +98,7 @@ from tests.fixtures.make_docs import COMPLAINT_TEXT_COLUMN, generate_complaints
 if TYPE_CHECKING:
     from pydantic import BaseModel
 
-    from engine.config import UseCaseConfig
+    from engine.config import TemplateColumn, UseCaseConfig
     from engine.storage import Storage
 
 __all__ = [
@@ -159,6 +160,9 @@ and the basis says so in words, because a bare zero next to a null cost is ambig
 
 _CONTRIBUTION_DECIMALS: Final[int] = 6
 """Matches `engine.stages.explain`, so a reason written here rounds as a real one does."""
+
+_NUMERIC_TYPES: Final[frozenset[ColumnType]] = frozenset({ColumnType.INTEGER, ColumnType.FLOAT})
+_DATE_TYPES: Final[frozenset[ColumnType]] = frozenset({ColumnType.DATE, ColumnType.DATETIME})
 
 _INTERCEPT_STEPS: Final[int] = 200
 """Bisection steps for the intercept; the same budget `make_data` uses to hit its positive rate."""
@@ -355,7 +359,7 @@ def _resolved_created_at(spec: RunSpec, config: UseCaseConfig, frame: pd.DataFra
     for column in config.template.columns:
         if column.role not in (ColumnRole.TIME, ColumnRole.CONTACT) or column.name not in frame.columns:
             continue
-        parsed = pd.to_datetime(frame[column.name], errors="coerce", utc=True)
+        parsed = pd.to_datetime(frame[column.name], errors="coerce", utc=True, format="mixed")
         if parsed.notna().any():
             latest = parsed.max()
             newest = latest if newest is None else max(newest, latest)
@@ -391,21 +395,25 @@ def _standardise(values: npt.NDArray[np.float64]) -> npt.NDArray[np.float64]:
     return (values - float(np.mean(values))) / spread
 
 
-def _signal(frame: pd.DataFrame, column: str, *, spec: RunSpec, use_case_id: str) -> npt.NDArray[np.float64]:
-    """One column as a standardised number line, whatever the column holds.
+def _signal(
+    frame: pd.DataFrame, column: TemplateColumn, *, spec: RunSpec, use_case_id: str
+) -> npt.NDArray[np.float64]:
+    """One column as a standardised number line, according to the type its template declares.
 
-    Numbers are themselves, dates are days since the epoch, and anything else - a category, a
-    boolean spelled `true`/`false`, a blank - is mapped onto a seeded weight per distinct level.
-    Nulls sit at the column's own mean, which is the one position that says nothing about the row.
+    A number is itself, a date is days since the epoch, and everything else - a category, a boolean
+    spelled `true`/`false`, a blank - is mapped onto a seeded number per distinct level. The
+    template's declared type decides, never the cells, so a category whose levels happen to be
+    digits keeps the meaning the use case gave it. Nulls sit at the column's own mean, the one
+    position that says nothing about the row.
     """
-    numeric = pd.to_numeric(frame[column], errors="coerce")
-    if not numeric.notna().any():
-        stamps = pd.to_datetime(frame[column], errors="coerce", utc=True)
-        if stamps.notna().any():
-            numeric = (stamps - pd.Timestamp("1970-01-01", tz=UTC)).dt.days
-        else:
-            numeric = _level_numbers(frame[column], spec=spec, use_case_id=use_case_id, column=column)
-    values = numeric.astype("float64")
+    if column.type in _NUMERIC_TYPES:
+        numbers = pd.to_numeric(frame[column.name], errors="coerce")
+    elif column.type in _DATE_TYPES:
+        stamps = pd.to_datetime(frame[column.name], errors="coerce", utc=True, format="mixed")
+        numbers = (stamps - pd.Timestamp("1970-01-01", tz=UTC)).dt.days
+    else:
+        numbers = _level_numbers(frame[column.name], spec=spec, use_case_id=use_case_id, column=column.name)
+    values = numbers.astype("float64")
     filled = np.asarray(values.fillna(values.mean()).to_numpy(), dtype=np.float64)
     return _standardise(filled)
 
@@ -427,20 +435,20 @@ def _contributions(spec: RunSpec, config: UseCaseConfig, frame: pd.DataFrame) ->
     A row above the column's mean therefore contributes the opposite way to a row below it, which
     is what guarantees both directions occur in the file the evidence pack aggregates.
     """
-    names = [name for name in feature_columns(config) if name in frame.columns]
-    if not names:  # pragma: no cover - every predictive template declares features
+    columns = [column for column in _feature_template_columns(config) if column.name in frame.columns]
+    if not columns:  # pragma: no cover - every predictive template declares features
         raise ValueError(f"{config.id} has no feature columns to explain a score with")
-    weights = _rng(spec.seed, config.id, "feature_weight").normal(0.0, 1.0, len(names))
+    weights = _rng(spec.seed, config.id, "feature_weight").normal(0.0, 1.0, len(columns))
     norm = float(np.sqrt(np.sum(np.square(weights))))
     scaled = weights * (SCORE_LOGIT_SD / norm) if norm > 0.0 else weights
-    columns = {
-        name: np.round(
-            scaled[position] * _signal(frame, name, spec=spec, use_case_id=config.id),
+    built = {
+        column.name: np.round(
+            scaled[position] * _signal(frame, column, spec=spec, use_case_id=config.id),
             _CONTRIBUTION_DECIMALS,
         )
-        for position, name in enumerate(names)
+        for position, column in enumerate(columns)
     }
-    return pd.DataFrame(columns, index=frame.index)
+    return pd.DataFrame(built, index=frame.index)
 
 
 def _scores(spec: RunSpec, contributions: pd.DataFrame) -> npt.NDArray[np.float64]:
@@ -605,11 +613,17 @@ def _status(spec: RunSpec, *, run_id: str, created_at: datetime) -> RunStatus:
 
 
 def _manifest(
-    profile: DatasetProfile, *, run_id: str, metrics: dict[str, float], created_at: datetime
+    profile: DatasetProfile,
+    *,
+    run_id: str,
+    primary_key: str,
+    metrics: dict[str, float],
+    created_at: datetime,
 ) -> RunManifest:
     """The flat record of the run. `recipe` is null: nothing was fitted, so there is no recipe."""
     return RunManifest(
         run_id=run_id,
+        primary_key=primary_key,
         recipe=None,
         dataset_fingerprint=profile.fingerprint,
         seed=seed_from(run_id),
@@ -674,29 +688,30 @@ def _drift(
     that is also why it carries its own `baseline_run_id` - reusing this run's id would claim the
     file had been compared with itself. The numbers are genuinely measured, by the engine's own
     comparison, between two draws that differ only in their seed.
+
+    Both sides are narrowed to the feature columns first, because a real baseline is built from the
+    *prepared* training frame and prepare has already dropped the free text by then. Left in, a
+    column whose every cell is a different sentence would report a large PSI in every run - a
+    finding about free text, not about the data - and would drown the features that mean something.
     """
-    baseline_spec = GenerationSpec(
-        use_case_id=spec.use_case_id,
-        rows=spec.rows,
-        seed=_seed_for(spec.seed, "drift_baseline"),
-        variant=spec.data_spec.variant,
-        positive_rate=spec.positive_rate,
-        config_root=spec.config_root,
-    )
+    baseline_spec = replace(spec, seed=_seed_for(spec.seed, "drift_baseline"), created_at=created_at)
+    features = [name for name in feature_columns(config) if name in frame.columns]
     baseline = register.drift_baseline(
-        generate(baseline_spec),
+        _uploaded_frame(baseline_spec, config)[features],
         config,
         run_id=baseline_run_id,
         model_version_id=model_version_id,
         primary_key=primary_key_of(config),
     )
-    report = score.compute_drift(baseline, frame, config, run_id=run_id)
+    report = score.compute_drift(baseline, frame[features], config, run_id=run_id)
     if report is None:  # pragma: no cover - a fabricated run always has rows and features
         return None
     return report.model_copy(update={"computed_at": created_at})
 
 
-def _check_scores_csv(storage: Storage, key: str, config: UseCaseConfig, *, primary_key: str) -> None:
+def _check_scores_csv(
+    storage: Storage, key: str, config: UseCaseConfig, *, primary_key: str, rows: int
+) -> None:
     """The exported table has the configured header and one line per row, or the fixture fails here.
 
     `ScoreRow` describes a row of this file with its reasons as objects, which the flat CSV cannot
@@ -709,6 +724,8 @@ def _check_scores_csv(storage: Storage, key: str, config: UseCaseConfig, *, prim
     expected = scores_csv_columns(config, primary_key)
     if header != expected:
         raise ValueError(f"scores.csv header is {header}, the contract asks for {expected}")
+    if len(lines) - 1 != rows:
+        raise ValueError(f"scores.csv holds {len(lines) - 1} rows, the run scored {rows}")
 
 
 # ---------------------------------------------------------------------------
@@ -738,6 +755,9 @@ def write_run(storage: Storage, spec: RunSpec) -> str:
     artefacts: dict[str, str] = {
         name: run_key(run_id, name) for name in ("run.json", "status.json", "run_manifest.json")
     }
+    # `run_config.json` is produced honestly, by the resolver a real run uses, and everything below
+    # reads `resolved.config` rather than the loaded one - the same document, since no override is
+    # applied, but the one the run says it is reproducible from.
     resolved = resolve_config(spec.use_case_id, root=spec.config_root, now=created_at)
     config = resolved.config
     _write(storage, artefacts, run_id=run_id, filename="run_config.json", model=resolved)
@@ -808,7 +828,9 @@ def write_run(storage: Storage, spec: RunSpec) -> str:
         artefacts,
         run_id=run_id,
         filename="run_manifest.json",
-        model=_manifest(profile, run_id=run_id, metrics=metrics, created_at=created_at),
+        model=_manifest(
+            profile, run_id=run_id, primary_key=primary_key, metrics=metrics, created_at=created_at
+        ),
     )
     _write(
         storage,
@@ -861,7 +883,9 @@ def _write_score_artefacts(
     )
     files = export.write_scores(banded, config, run_id=run_id, primary_key=primary_key, storage=storage)
     artefacts.update(files)
-    _check_scores_csv(storage, files[export.SCORES_CSV], config, primary_key=primary_key)
+    _check_scores_csv(
+        storage, files[export.SCORES_CSV], config, primary_key=primary_key, rows=len(banded.index)
+    )
 
     drift = _drift(
         spec,

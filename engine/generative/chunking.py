@@ -115,7 +115,7 @@ def sentences(text: str) -> tuple[str, ...]:
 
 def _tokens(text: str) -> int:
     """How long `text` is, in the one definition of a token this engine has."""
-    return estimate_tokens(text).tokens
+    return estimate_tokens(text)
 
 
 def _join(parts: Sequence[str]) -> str:

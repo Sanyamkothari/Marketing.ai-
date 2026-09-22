@@ -35,13 +35,14 @@ the same way whichever format it arrived in - and a line carrying that separator
 heading, since a flattened PDF renders an em dash the same way and the two cannot be told apart
 mid-document. The first line of a PDF is exempt: it is the title, and titles carry em dashes.
 
-**Free text hides its PII mid-sentence.** The Phase 1 detectors in `engine.stages.ingest` match a
-whole cell, which is the right test for a column and the wrong one for a complaint. The patterns
-themselves are correct and are reused verbatim through :data:`FREE_TEXT_DETECTORS` with
-`re.finditer`; re-writing them here would have created a second definition of "what a phone number
-looks like" and guaranteed the two would disagree. :func:`redact` replaces what it finds with
-`engine.stages.ingest.REDACTED` and returns the *kinds*, never a matched value - the same discipline
-`detect_pii` keeps, for the same reason (plan section 13.7).
+**Personal data in a document is somebody else's job.** A knowledge-base document can carry a
+phone number in the middle of a sentence, and finding it needs `re.finditer` over the Phase 1
+patterns rather than the `fullmatch` over a whole cell that `engine.stages.ingest.detect_pii`
+does. That is exactly what `engine.generative.redaction` already is, and `guardrails` already
+calls it, so an index builder that wants to warn about a document calls `redaction.find` and one
+that wants the text cleaned calls `redaction.redact`. A second pair of functions here would have
+been a second answer to "what does a phone number look like in prose" and, worse, a second
+redaction marker, so this module has none.
 
 `pypdf`, `python-docx` and `markdown-it-py` are imported inside the reader bodies, never at module
 level, so `import engine` stays fast and the engine's import graph loads no document library
@@ -56,7 +57,6 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from engine.config import DocumentType
-from engine.stages.ingest import PII_DETECTORS, REDACTED
 from engine.utils.logging import get_logger, log_failure
 
 if TYPE_CHECKING:
@@ -64,8 +64,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
     from markdown_it.token import Token
-
-    from engine.stages.ingest import PiiDetector
 
 __all__ = [
     "CELL_SEPARATOR",
@@ -75,17 +73,14 @@ __all__ = [
     "DOCUMENT_PARSERS",
     "DOCUMENT_TYPE_UNSUPPORTED",
     "DOCUMENT_UNREADABLE",
-    "FREE_TEXT_DETECTORS",
     "HEADING_MAX_CHARS",
     "HEADING_MAX_WORDS",
     "PARSE_ERRORS",
     "ParseError",
     "ParsedDocument",
     "Section",
-    "find_pii",
     "parse",
     "parse_error",
-    "redact",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -632,92 +627,3 @@ def parse(path: Path, *, name: str | None = None) -> ParsedDocument:
         pages=reading.pages,
         warnings=tuple(warnings),
     )
-
-
-# ---------------------------------------------------------------------------
-# 7. Personal data in free text
-# ---------------------------------------------------------------------------
-FREE_TEXT_DETECTORS: Final[tuple[PiiDetector, ...]] = tuple(
-    detector
-    for detector in PII_DETECTORS
-    if detector.value_pattern is not None and detector.min_distinct_ratio == 0.0
-)
-"""The Phase 1 detectors whose value pattern can be trusted on its own, in `PII_DETECTORS` order.
-
-`min_distinct_ratio` is `PiiDetector`'s own record of which shapes need a column's vocabulary
-before they may be believed, and it is above zero for exactly one detector: `name`, whose pattern
-is "one to four capitalised words". Over a column that is a roster of people; over a complaint it
-is the first word of every sentence, and redacting on it would replace half the prose with markers
-and leave nothing a reviewer could read. Selecting on that field rather than naming the detector
-means the choice follows the detectors: a future shape that needs a column to be trusted is
-excluded here the day it is added, without this module being edited.
-"""
-
-
-@dataclass(frozen=True)
-class _Match:
-    """Where one detector fired. The matched characters are deliberately not carried."""
-
-    start: int
-    end: int
-    kind: str
-
-
-def _pii_matches(text: str) -> tuple[_Match, ...]:
-    """Every span a free-text detector matched, earliest first and longest first within a position.
-
-    `finditer`, not `fullmatch`: the Phase 1 detectors are applied to a whole cell, and a complaint
-    hides an e-mail address in the middle of a sentence.
-    """
-    found: list[_Match] = []
-    for detector in FREE_TEXT_DETECTORS:
-        pattern = detector.value_pattern
-        if pattern is None:  # pragma: no cover - FREE_TEXT_DETECTORS already excludes these
-            continue
-        found.extend(_Match(m.start(), m.end(), detector.kind) for m in pattern.finditer(text))
-    return tuple(sorted(found, key=lambda match: (match.start, -match.end)))
-
-
-def _kinds_of(matches: Sequence[_Match]) -> tuple[str, ...]:
-    """The kinds present in `matches`, in `FREE_TEXT_DETECTORS` order so the result is stable."""
-    fired = {match.kind for match in matches}
-    return tuple(detector.kind for detector in FREE_TEXT_DETECTORS if detector.kind in fired)
-
-
-def find_pii(text: str) -> tuple[str, ...]:
-    """Detector kinds present anywhere in `text`, in `FREE_TEXT_DETECTORS` order.
-
-    Returns the kinds and never the values, exactly as `engine.stages.ingest.detect_pii` does: the
-    caller wants to know that a document carries phone numbers, and telling it which ones would put
-    them in whatever the caller logs next (plan section 13.7).
-    """
-    return _kinds_of(_pii_matches(text))
-
-
-def redact(text: str) -> tuple[str, tuple[str, ...]]:
-    """`text` with every detected identifier replaced by `REDACTED`, and the kinds that were found.
-
-    Overlapping spans are merged before replacement - the phone and Aadhaar shapes both match a
-    twelve-digit string, from different offsets - so a value can never be half covered. The kinds
-    are every kind that matched, including one whose span another detector's span swallowed, so
-    what this function reports and what :func:`find_pii` reports are the same list.
-    """
-    matches = _pii_matches(text)
-    if not matches:
-        return text, ()
-
-    spans: list[tuple[int, int]] = []
-    for match in matches:
-        if spans and match.start <= spans[-1][1]:
-            spans[-1] = (spans[-1][0], max(spans[-1][1], match.end))
-        else:
-            spans.append((match.start, match.end))
-
-    parts: list[str] = []
-    cursor = 0
-    for start, end in spans:
-        parts.append(text[cursor:start])
-        parts.append(REDACTED)
-        cursor = end
-    parts.append(text[cursor:])
-    return "".join(parts), _kinds_of(matches)

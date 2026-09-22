@@ -80,9 +80,9 @@ def test_all_refs_walks_stages_in_order() -> None:
     assert [ref.id for _, ref in refs] == written
     assert len(written) > len(document["stages"]), "a flat walk, not one entry per stage"
 
-    assert all(ref.status is UseCaseStatus.AVAILABLE for _, ref in refs), (
-        "every shipped entry has a use-case file; the planned-entry rules are proved on a fixture below"
-    )
+    assert all(
+        ref.status is UseCaseStatus.AVAILABLE for _, ref in refs
+    ), "every shipped entry has a use-case file; the planned-entry rules are proved on a fixture below"
 
 
 def test_a_planned_use_case_carries_its_own_name_and_description(tmp_path: Path) -> None:
