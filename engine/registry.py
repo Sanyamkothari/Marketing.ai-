@@ -1,7 +1,16 @@
-"""The model registry: the `ModelRegistry` protocol, the champion policy and a SQLite implementation.
+"""The model registry: the `ModelRegistry` protocol, the champion policy and the SQL store.
 
 `should_promote` is a pure function rather than a protocol method (DEC-028): a Phase 4 registry
 stores facts, it does not own the policy.
+
+Phase 4a splits this module in two along a seam that was already there. `SqlRegistryStore` is
+every statement this registry makes, against whatever SQLAlchemy `Engine` it is handed;
+`LocalModelRegistry` is that store plus the one decision Phase 1 made about *which* engine - a
+SQLite file at a path, opened so the job threads can write to it. `engine/aws/postgres.py` makes
+the other choice and hands over a Postgres engine, and `engine/aws/s3_registry.py` wraps the store
+with the file publishing an S3 deployment needs. The method bodies did not change when they moved:
+a champion swap has to be the same transaction on both backends, and the surest way to keep it so
+is for there to be exactly one copy of it (DEC-338).
 """
 
 from __future__ import annotations
@@ -14,7 +23,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, ClassVar, Final, Protocol, runtime_checkable
 
-from sqlalchemy import UniqueConstraint
+from sqlalchemy import Column, DateTime, UniqueConstraint
+from sqlalchemy.engine import Engine
 from sqlmodel import Field as SQLField
 from sqlmodel import Session, SQLModel, col, create_engine, select
 
@@ -27,6 +37,7 @@ from engine.utils.time import utc_now
 DATA_DIR_ENV_VAR: Final[str] = "MARKETING_AI_DATA_DIR"
 DEFAULT_DATA_DIR: Final[str] = "data"
 REGISTRY_FILENAME: Final[str] = "registry.db"
+MODEL_VERSION_TABLE: Final[str] = "model_version"
 
 _PROMOTABLE: Final[frozenset[ModelStatus]] = frozenset({ModelStatus.CANDIDATE, ModelStatus.PENDING_APPROVAL})
 
@@ -110,37 +121,63 @@ def should_promote(
     return improvement_pct >= min_improvement_pct
 
 
-def _aware(moment: datetime) -> datetime:
-    """SQLite forgets the offset; every stored timestamp is UTC, so put the offset back."""
-    return moment if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
+def aware_utc(moment: datetime) -> datetime:
+    """The stored instant as UTC, whatever the driver handed back.
+
+    Two backends answer this differently and both answers have to become the same value. SQLite has
+    no timestamp type at all, so a read comes back naive and the offset has to be put back; it is
+    UTC because `_utc` is the only way a value gets in. Postgres returns a `timestamptz` **in the
+    session's time zone**, so on a server running `Asia/Kolkata` the same instant comes back at
+    +05:30 - the right moment, wearing the server's clock. Attaching UTC to that would be wrong and
+    leaving it alone would publish the server's time zone into `ModelVersion.created_at`, which the
+    contract says is UTC. Converting covers both: naive means UTC, aware is moved to UTC (DEC-339).
+    """
+    return moment.replace(tzinfo=UTC) if moment.tzinfo is None else moment.astimezone(UTC)
 
 
 def _aware_or_none(moment: datetime | None) -> datetime | None:
-    """`_aware` for the optional timestamp columns."""
-    return None if moment is None else _aware(moment)
+    """`aware_utc` for the optional timestamp columns."""
+    return None if moment is None else aware_utc(moment)
 
 
-def _utc(moment: datetime) -> datetime:
-    """Normalise to UTC before storing, so a naive read is still the right instant."""
+def to_utc(moment: datetime) -> datetime:
+    """Normalise to UTC before storing, so a naive read is still the right instant.
+
+    The write-side counterpart of `aware_utc`, and the reason SQLite is safe: SQLite has no
+    timestamp type and stores whatever it is handed, so a value that arrived at +05:30 would be
+    read back as 17:30 UTC - the wrong instant - unless it was converted here first. Public because
+    `engine/aws/postgres.py`'s run index has to store its timestamps the same way (DEC-339).
+    """
     return moment.astimezone(UTC) if moment.tzinfo is not None else moment.replace(tzinfo=UTC)
 
 
-def _utc_or_none(moment: datetime | None) -> datetime | None:
-    """`_utc` for the optional timestamp columns."""
-    return None if moment is None else _utc(moment)
+def to_utc_or_none(moment: datetime | None) -> datetime | None:
+    """`to_utc` for the optional timestamp columns."""
+    return None if moment is None else to_utc(moment)
 
 
 class ModelVersionRow(SQLModel, table=True):
-    """One row per model version; the SQLite projection of `engine.contracts.ModelVersion`."""
+    """One row per model version; the SQL projection of `engine.contracts.ModelVersion`.
 
-    __tablename__ = "model_version"
+    Every timestamp column is declared `DateTime(timezone=True)` through an explicit `sa_column`.
+    Without it SQLModel compiles `datetime` to `TIMESTAMP WITHOUT TIME ZONE` on Postgres, and a
+    driver handing an aware UTC value to such a column stores the *session's* wall clock instead of
+    the instant: on a server set to `Asia/Kolkata` a run registered at 12:00Z read back as 17:30Z,
+    five and a half hours into the future, silently and only on that server (DEC-339).
+
+    `sa_column` is mutually exclusive with SQLField's `index=` and `primary_key=`, and a `Column`
+    object belongs to exactly one table - neither is a constraint this row runs into, because none
+    of its timestamps is indexed and each one gets its own `Column`.
+    """
+
+    __tablename__ = MODEL_VERSION_TABLE
     __table_args__: ClassVar[Any] = (UniqueConstraint("use_case_id", "version", name="uq_use_case_version"),)
 
     model_id: str = SQLField(primary_key=True)
     use_case_id: str = SQLField(index=True)
     version: int
     run_id: str = SQLField(index=True)
-    created_at: datetime
+    created_at: datetime = SQLField(sa_column=Column("created_at", DateTime(timezone=True), nullable=False))
     status: str = SQLField(index=True)
     metric: str
     metric_label: str
@@ -153,8 +190,12 @@ class ModelVersionRow(SQLModel, table=True):
     drift_baseline_key: str | None = None
     artefact_keys_json: str = "{}"
     approved_by: str | None = None
-    approved_at: datetime | None = None
-    promoted_at: datetime | None = None
+    approved_at: datetime | None = SQLField(
+        default=None, sa_column=Column("approved_at", DateTime(timezone=True), nullable=True)
+    )
+    promoted_at: datetime | None = SQLField(
+        default=None, sa_column=Column("promoted_at", DateTime(timezone=True), nullable=True)
+    )
     promoted_by: str | None = None
     promotion_note: str | None = None
     previous_champion_id: str | None = None
@@ -171,7 +212,7 @@ class ModelVersionRow(SQLModel, table=True):
             use_case_id=self.use_case_id,
             version=self.version,
             run_id=self.run_id,
-            created_at=_aware(self.created_at),
+            created_at=aware_utc(self.created_at),
             status=ModelStatus(self.status),
             metric=Metric(self.metric),
             metric_label=self.metric_label,
@@ -203,7 +244,7 @@ class ModelVersionRow(SQLModel, table=True):
             use_case_id=v.use_case_id,
             version=v.version,
             run_id=v.run_id,
-            created_at=_utc(v.created_at),
+            created_at=to_utc(v.created_at),
             status=str(v.status),
             metric=str(v.metric),
             metric_label=v.metric_label,
@@ -216,8 +257,8 @@ class ModelVersionRow(SQLModel, table=True):
             drift_baseline_key=v.drift_baseline_key,
             artefact_keys_json=json.dumps(dict(v.artefact_keys), sort_keys=True),
             approved_by=v.approved_by,
-            approved_at=_utc_or_none(v.approved_at),
-            promoted_at=_utc_or_none(v.promoted_at),
+            approved_at=to_utc_or_none(v.approved_at),
+            promoted_at=to_utc_or_none(v.promoted_at),
             promoted_by=v.promoted_by,
             promotion_note=v.promotion_note,
             previous_champion_id=v.previous_champion_id,
@@ -228,31 +269,41 @@ class ModelVersionRow(SQLModel, table=True):
         )
 
 
-class LocalModelRegistry:
-    """SQLModel/SQLite registry: one session per call, one transaction per champion swap.
+def create_registry_tables(engine: Engine) -> None:
+    """Create `model_version` if it is missing, and nothing else.
 
-    The engine is created with `check_same_thread=False` so `ThreadJobRunner` workers can write, and
-    `create_all` is idempotent, so pointing two instances at the same file is safe.
+    `SQLModel.metadata` is one global namespace shared by every `table=True` class the process has
+    imported, so an unscoped `create_all` creates whatever happens to be in it. Phase 4a puts a
+    second table in that namespace - `engine/aws/run_index.py`'s run index - and an unscoped call
+    here would conjure it into every `registry.db` the moment anything imported that module, on a
+    deployment that had deliberately not asked for it. The table list is therefore explicit
+    (DEC-340). Postgres does not go through here at all: Alembic owns that schema (DEC-341).
+    """
+    SQLModel.metadata.create_all(engine, tables=[SQLModel.metadata.tables[MODEL_VERSION_TABLE]])
 
-    `create_all` creates missing tables, never missing columns, and Phase 1 has no migration tool:
-    a `registry.db` written before a column was added to `ModelVersionRow` has to be recreated. That
-    is a local development file, not client data (plan §1.3), so the cost is one deleted file.
+
+class SqlRegistryStore:
+    """Every statement the registry makes, against whatever `Engine` it is given.
+
+    One session per call and one transaction per champion swap: `_make_champion` demotes the
+    incumbent and crowns the challenger inside a single `commit`, so no reader can ever see a use
+    case with two champions or none. A `threading.Lock` serialises the writes, which is what lets
+    `ThreadJobRunner` workers register from several threads at once.
+
+    This class does not create tables and does not know what an engine is connected to. That is the
+    whole point of the split: `LocalModelRegistry` below chooses SQLite and calls
+    `create_registry_tables`, `engine/aws/postgres.py` chooses Postgres and leaves the schema to
+    Alembic, and both get the same transactions (DEC-338).
     """
 
-    def __init__(self, db_path: Path) -> None:
-        self._db_path = Path(db_path)
-        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+    def __init__(self, engine: Engine) -> None:
+        self._engine = engine
         self._lock = threading.Lock()
-        self._engine = create_engine(
-            f"sqlite:///{self._db_path}",
-            connect_args={"check_same_thread": False},
-        )
-        SQLModel.metadata.create_all(self._engine)
 
     @property
-    def db_path(self) -> Path:
-        """The SQLite file this registry writes to."""
-        return self._db_path
+    def engine(self) -> Engine:
+        """The engine every statement runs on; `engine/aws/s3_registry.py` needs nothing else."""
+        return self._engine
 
     def register(self, version: ModelVersion) -> ModelVersion:
         """Store a new model version; raises `DUPLICATE_MODEL_ID` when the id is taken."""
@@ -419,6 +470,33 @@ class LocalModelRegistry:
         if note is not None:
             row.promotion_note = note
         session.add(row)
+
+
+class LocalModelRegistry(SqlRegistryStore):
+    """`SqlRegistryStore` over a SQLite file: what Phase 1 called the registry, unchanged.
+
+    The engine is created with `check_same_thread=False` so `ThreadJobRunner` workers can write, and
+    `create_registry_tables` is idempotent, so pointing two instances at the same file is safe.
+
+    Creating a table is not migrating one: it adds a missing table, never a missing column, and the
+    local path has no migration tool. A `registry.db` written before a column was added to
+    `ModelVersionRow` still has to be recreated. That is a local development file, not client data
+    (plan §1.3), so the cost is one deleted file - and it is exactly the reason Postgres does not
+    work this way (DEC-341).
+    """
+
+    def __init__(self, db_path: Path) -> None:
+        self._db_path = Path(db_path)
+        self._db_path.parent.mkdir(parents=True, exist_ok=True)
+        super().__init__(
+            create_engine(f"sqlite:///{self._db_path}", connect_args={"check_same_thread": False})
+        )
+        create_registry_tables(self.engine)
+
+    @property
+    def db_path(self) -> Path:
+        """The SQLite file this registry writes to."""
+        return self._db_path
 
 
 def _stale_approval_message(row: ModelVersionRow, *, expected: str | None, current_id: str | None) -> str:

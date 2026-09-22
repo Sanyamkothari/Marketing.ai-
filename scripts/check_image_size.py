@@ -31,11 +31,15 @@ class ImageSizeError(Exception):
     """The image could not be inspected."""
 
 
-def image_size_bytes(ref: str, *, runner: object = None) -> int:
-    """`docker image inspect <ref>` -> the image's own size in bytes."""
-    run = subprocess.run if runner is None else runner  # type: ignore[assignment]
+def image_size_bytes(ref: str) -> int:
+    """`docker image inspect <ref>` -> the image's own size in bytes.
+
+    Not seamed for testing: the decision this script makes lives in `verdict`, which is a pure
+    function of two numbers and is tested directly. Faking `subprocess.run` here would only test
+    that the fake returns what the fake was told to.
+    """
     try:
-        completed = run(  # type: ignore[operator]
+        completed = subprocess.run(
             ["docker", "image", "inspect", ref, "--format", "{{json .Size}}"],
             capture_output=True,
             text=True,

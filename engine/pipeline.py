@@ -47,6 +47,7 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Final, TypeVar, cast
 
 from engine import __version__
+from engine.aws.run_index import RunIndex, mirror_run
 from engine.config import ModelFamily, ResolvedConfig, RunMode, UseCaseConfig, recipe_from_config
 from engine.contracts import (
     MODEL_DIRECTORY,
@@ -513,6 +514,7 @@ class _TrainFlow:
         self._started = perf_counter()
         self._status = _StatusWriter(ctx.storage, pipeline.initial_status(ctx.run_id, ctx.mode))
         self._run = _RunWriter(ctx)
+        self._index = pipeline.run_index
         self._manifest = _ManifestBuilder(run_id=ctx.run_id, seed=self._seed, started=self._started)
         self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
         for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
@@ -642,6 +644,13 @@ class _TrainFlow:
             )
         except Exception:
             _LOGGER.exception("the run manifest could not be written for run %s", self._ctx.run_id)
+            manifest = None
+        # The index row is written here, last, because this is the one point at which both `run.json`
+        # and the manifest are final - so a row never describes a run that is still moving. It is
+        # deliberately last in a second sense too: `mirror_run` never raises, because `run.json` is
+        # the record and the row is only an index of it. A run that finished must not be reported as
+        # failed because a database was briefly unreachable (DEC-341).
+        mirror_run(self._index, self._run.record, manifest)
 
     def _write(self, filename: str, model: BaseModel) -> str:
         """Write one artefact into the run directory and remember its key for `run.json`."""
@@ -1058,6 +1067,7 @@ class _ScoreFlow:
         self._started = perf_counter()
         self._status = _StatusWriter(ctx.storage, pipeline.initial_status(ctx.run_id, ctx.mode))
         self._run = _RunWriter(ctx)
+        self._index = pipeline.run_index
         self._manifest = _ManifestBuilder(run_id=ctx.run_id, seed=self._seed, started=self._started)
         self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
         for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
@@ -1176,6 +1186,13 @@ class _ScoreFlow:
             )
         except Exception:
             _LOGGER.exception("the run manifest could not be written for run %s", self._ctx.run_id)
+            manifest = None
+        # The index row is written here, last, because this is the one point at which both `run.json`
+        # and the manifest are final - so a row never describes a run that is still moving. It is
+        # deliberately last in a second sense too: `mirror_run` never raises, because `run.json` is
+        # the record and the row is only an index of it. A run that finished must not be reported as
+        # failed because a database was briefly unreachable (DEC-341).
+        mirror_run(self._index, self._run.record, manifest)
 
     def _write(self, filename: str, model: BaseModel) -> str:
         """Write one artefact into the run directory and remember its key for `run.json`."""
@@ -1450,10 +1467,18 @@ def _export_detail(summary: ScoringSummary) -> str:
 class Pipeline:
     """Orchestrates the stages of a run and keeps `status.json` current."""
 
-    def __init__(self, storage: Storage, registry: ModelRegistry, jobs: JobRunner) -> None:
+    def __init__(
+        self,
+        storage: Storage,
+        registry: ModelRegistry,
+        jobs: JobRunner,
+        *,
+        run_index: RunIndex | None = None,
+    ) -> None:
         self._storage = storage
         self._registry = registry
         self._jobs = jobs
+        self._run_index = run_index
 
     @property
     def storage(self) -> Storage:
@@ -1469,6 +1494,11 @@ class Pipeline:
     def jobs(self) -> JobRunner:
         """The runner that executes this pipeline off the request thread."""
         return self._jobs
+
+    @property
+    def run_index(self) -> RunIndex | None:
+        """The index `GET /runs` lists from, or `None` when this deployment enumerates the store."""
+        return self._run_index
 
     def initial_status(self, run_id: str, mode: RunMode) -> RunStatus:
         """The `status.json` a run starts with: every stage pending, no progress yet."""

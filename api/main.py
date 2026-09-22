@@ -91,6 +91,7 @@ def create_app(
     app.state.storage = None
     app.state.registry = None
     app.state.jobs = None
+    app.state.run_index = None
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins) if settings is not None else ["*"],

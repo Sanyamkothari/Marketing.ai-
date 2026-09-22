@@ -22,7 +22,7 @@ from __future__ import annotations
 import json
 import logging
 from collections.abc import Mapping
-from typing import Any, Final, Protocol
+from typing import Any, Final, Protocol, cast
 
 from engine.settings import ParameterSource, secret_name, ssm_prefix
 from engine.utils.logging import get_logger
@@ -101,16 +101,23 @@ class AwsParameterSource:
 
     def _ssm_client(self) -> _SsmClient:
         if self._ssm is None:
-            import boto3  # a deliberate local import: boto3 is optional (DEC-306)
+            # A deliberate local import: boto3 is an optional dependency (DEC-306).
+            import boto3
 
-            self._ssm = boto3.client("ssm", region_name=self._region)
+            # `cast` rather than a wider annotation: types-boto3 declares a client with a hundred
+            # methods, and the narrow Protocol above is the point - it says, checkably, that this
+            # module calls exactly one of them.
+            self._ssm = cast("_SsmClient", boto3.client("ssm", region_name=self._region))
         return self._ssm
 
     def _secrets_client(self) -> _SecretsClient:
         if self._secrets is None:
-            import boto3  # a deliberate local import: boto3 is optional (DEC-306)
+            # A deliberate local import: boto3 is an optional dependency (DEC-306).
+            import boto3
 
-            self._secrets = boto3.client("secretsmanager", region_name=self._region)
+            self._secrets = cast(
+                "_SecretsClient", boto3.client("secretsmanager", region_name=self._region)
+            )
         return self._secrets
 
     def parameters(self, prefix: str) -> dict[str, str]:

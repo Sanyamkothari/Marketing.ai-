@@ -1,12 +1,24 @@
-"""`engine.registry`: the champion policy, the SQLite store and its one-transaction champion swap."""
+"""`engine.registry`: the champion policy, the SQL store and its one-transaction champion swap.
+
+Every store test runs **twice**: once against a SQLite file and once against a real PostgreSQL
+schema migrated to head. That is the point of the Phase 4a split - `LocalModelRegistry` and the
+deployed registry are the same `SqlRegistryStore` over different engines (DEC-338) - and a suite
+that only ever ran on SQLite could not tell the difference between "the same" and "close enough".
+The timezone defect at the bottom of this module is precisely such a difference: it is invisible on
+SQLite and wrong by the server's UTC offset on Postgres.
+
+The Postgres half skips, loudly and with a reason, when there is no server; see
+`tests/fixtures/postgres.py`.
+"""
 
 from __future__ import annotations
 
 import threading
-from datetime import timedelta
+from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
+from sqlalchemy.exc import IntegrityError
 
 from engine.config import Metric
 from engine.contracts import NO_CHAMPION_AT_DECISION, ModelStatus, ModelVersion
@@ -15,11 +27,25 @@ from engine.registry import (
     ModelRegistry,
     ModelVersionRow,
     RegistryError,
+    SqlRegistryStore,
     should_promote,
 )
 from engine.utils.time import utc_now
+from tests.fixtures.postgres import (  # noqa: F401 - imported so pytest can resolve them by name
+    postgres_engine_fixture,
+    postgres_registry,
+    postgres_schema,
+    postgres_url_value,
+)
 
 USE_CASE: str = "a-use-case"
+
+UNIQUE_VIOLATION: dict[str, str] = {
+    # SQLite names the columns, Postgres names the constraint. Both mean the same refusal, and
+    # asserting on the real text of each is what keeps this test from passing on a different error.
+    "sqlite": "UNIQUE constraint failed",
+    "postgres": "uq_use_case_version",
+}
 
 
 def make_version(
@@ -56,9 +82,28 @@ def make_version(
     )
 
 
+@pytest.fixture(
+    params=[
+        pytest.param("sqlite", id="sqlite"),
+        pytest.param("postgres", id="postgres", marks=pytest.mark.postgres),
+    ]
+)
+def backend(request: pytest.FixtureRequest) -> str:
+    """Which store the test in hand is running against; also the id in the test name."""
+    return str(request.param)
+
+
 @pytest.fixture
-def registry(tmp_path: Path) -> LocalModelRegistry:
-    return LocalModelRegistry(tmp_path / "registry.db")
+def registry(backend: str, request: pytest.FixtureRequest, tmp_path: Path) -> SqlRegistryStore:
+    """The store under test: a SQLite file, or a migrated Postgres schema of this test's own.
+
+    `getfixturevalue` rather than a parameter so the Postgres fixtures - and the skip they raise
+    when there is no server - are only touched on the run that actually needs them.
+    """
+    if backend == "sqlite":
+        return LocalModelRegistry(tmp_path / "registry.db")
+    store: SqlRegistryStore = request.getfixturevalue("postgres_registry")
+    return store
 
 
 def test_local_registry_satisfies_the_protocol(tmp_path: Path) -> None:
@@ -71,13 +116,13 @@ def test_the_database_file_and_its_parent_are_created(tmp_path: Path) -> None:
     assert registry.db_path.is_file()
 
 
-def test_register_then_get_round_trips_every_field(registry: LocalModelRegistry) -> None:
+def test_register_then_get_round_trips_every_field(registry: SqlRegistryStore) -> None:
     version = make_version("m_1", 1)
     assert registry.register(version) == version
     assert registry.get("m_1") == version
 
 
-def test_a_duplicate_model_id_is_rejected(registry: LocalModelRegistry) -> None:
+def test_a_duplicate_model_id_is_rejected(registry: SqlRegistryStore) -> None:
     registry.register(make_version("m_1", 1))
     with pytest.raises(RegistryError) as excinfo:
         registry.register(make_version("m_1", 2))
@@ -85,13 +130,13 @@ def test_a_duplicate_model_id_is_rejected(registry: LocalModelRegistry) -> None:
     assert excinfo.value.model_id == "m_1"
 
 
-def test_an_unknown_model_id_is_reported(registry: LocalModelRegistry) -> None:
+def test_an_unknown_model_id_is_reported(registry: SqlRegistryStore) -> None:
     with pytest.raises(RegistryError) as excinfo:
         registry.get("m_absent")
     assert excinfo.value.code == "MODEL_NOT_FOUND"
 
 
-def test_next_version_increments_per_use_case(registry: LocalModelRegistry) -> None:
+def test_next_version_increments_per_use_case(registry: SqlRegistryStore) -> None:
     assert registry.next_version(USE_CASE) == 1
     registry.register(make_version("m_1", 1))
     assert registry.next_version(USE_CASE) == 2
@@ -102,7 +147,7 @@ def test_next_version_increments_per_use_case(registry: LocalModelRegistry) -> N
     assert registry.next_version(USE_CASE) == 3
 
 
-def test_list_versions_filters_and_sorts_newest_first(registry: LocalModelRegistry) -> None:
+def test_list_versions_filters_and_sorts_newest_first(registry: SqlRegistryStore) -> None:
     registry.register(make_version("m_1", 1, minutes=0))
     registry.register(make_version("m_2", 2, minutes=5))
     registry.register(make_version("m_other", 1, use_case_id="another-use-case", minutes=10))
@@ -112,13 +157,13 @@ def test_list_versions_filters_and_sorts_newest_first(registry: LocalModelRegist
     assert registry.list_versions("no-such-use-case") == ()
 
 
-def test_there_is_no_champion_until_one_is_approved(registry: LocalModelRegistry) -> None:
+def test_there_is_no_champion_until_one_is_approved(registry: SqlRegistryStore) -> None:
     assert registry.get_champion(USE_CASE) is None
     registry.register(make_version("m_1", 1))
     assert registry.get_champion(USE_CASE) is None
 
 
-def test_approve_promotes_and_archives_the_previous_champion(registry: LocalModelRegistry) -> None:
+def test_approve_promotes_and_archives_the_previous_champion(registry: SqlRegistryStore) -> None:
     registry.register(make_version("m_1", 1, status=ModelStatus.PENDING_APPROVAL))
     first = registry.approve("m_1", by="ops@telco")
     assert first.status is ModelStatus.CHAMPION
@@ -137,7 +182,7 @@ def test_approve_promotes_and_archives_the_previous_champion(registry: LocalMode
 
 
 def test_approving_a_version_whose_champion_has_been_replaced_is_refused(
-    registry: LocalModelRegistry,
+    registry: SqlRegistryStore,
 ) -> None:
     """DEC-047, the whole sequence: A and B both beat C, B is approved, A must not be approved over B."""
     registry.register(
@@ -176,7 +221,7 @@ def test_approving_a_version_whose_champion_has_been_replaced_is_refused(
 
 
 def test_approval_goes_through_while_the_compared_champion_still_holds(
-    registry: LocalModelRegistry,
+    registry: SqlRegistryStore,
 ) -> None:
     registry.register(make_version("m_c", 1, status=ModelStatus.CHAMPION))
     registry.register(
@@ -190,7 +235,7 @@ def test_approval_goes_through_while_the_compared_champion_still_holds(
 
 
 def test_a_version_decided_against_no_champion_is_approvable_only_while_there_is_none(
-    registry: LocalModelRegistry,
+    registry: SqlRegistryStore,
 ) -> None:
     """A first model waiting for approval is just as stale once somebody else has been crowned."""
     registry.register(
@@ -219,7 +264,7 @@ def test_a_version_decided_against_no_champion_is_approvable_only_while_there_is
 
 
 def test_a_version_registered_before_the_compared_champion_was_recorded_is_still_approvable(
-    registry: LocalModelRegistry,
+    registry: SqlRegistryStore,
 ) -> None:
     """A null records nothing about the comparison, so approval behaves as it did before DEC-047."""
     registry.register(make_version("m_c", 1, status=ModelStatus.CHAMPION))
@@ -231,7 +276,7 @@ def test_a_version_registered_before_the_compared_champion_was_recorded_is_still
 
 
 def test_promote_still_overrides_the_rule_after_the_champion_changed(
-    registry: LocalModelRegistry,
+    registry: SqlRegistryStore,
 ) -> None:
     """`CHAMPION_CHANGED` refuses the rubber stamp, not the informed manual override of plan §8."""
     registry.register(make_version("m_c", 1, status=ModelStatus.CHAMPION))
@@ -246,7 +291,7 @@ def test_promote_still_overrides_the_rule_after_the_champion_changed(
     assert promoted.promotion_note == "Compared both by hand on the newer data."
 
 
-def test_approving_a_candidate_is_an_invalid_transition(registry: LocalModelRegistry) -> None:
+def test_approving_a_candidate_is_an_invalid_transition(registry: SqlRegistryStore) -> None:
     registry.register(make_version("m_1", 1, status=ModelStatus.CANDIDATE))
     with pytest.raises(RegistryError) as excinfo:
         registry.approve("m_1", by="ops@telco")
@@ -254,7 +299,7 @@ def test_approving_a_candidate_is_an_invalid_transition(registry: LocalModelRegi
     assert registry.get("m_1").status is ModelStatus.CANDIDATE
 
 
-def test_promote_is_the_manual_override_and_records_the_note(registry: LocalModelRegistry) -> None:
+def test_promote_is_the_manual_override_and_records_the_note(registry: SqlRegistryStore) -> None:
     registry.register(make_version("m_1", 1, status=ModelStatus.PENDING_APPROVAL))
     registry.approve("m_1", by="ops@telco")
     registry.register(make_version("m_2", 2, status=ModelStatus.CANDIDATE, test_score=0.81))
@@ -270,14 +315,14 @@ def test_promote_is_the_manual_override_and_records_the_note(registry: LocalMode
     assert excinfo.value.code == "INVALID_TRANSITION"
 
 
-def test_archive_retires_a_version(registry: LocalModelRegistry) -> None:
+def test_archive_retires_a_version(registry: SqlRegistryStore) -> None:
     registry.register(make_version("m_1", 1, status=ModelStatus.PENDING_APPROVAL))
     registry.approve("m_1", by="ops@telco")
     assert registry.archive("m_1").status is ModelStatus.ARCHIVED
     assert registry.get_champion(USE_CASE) is None
 
 
-def test_the_row_projection_round_trips(registry: LocalModelRegistry) -> None:
+def test_the_row_projection_round_trips(registry: SqlRegistryStore) -> None:
     version = make_version("m_1", 1)
     assert ModelVersionRow.from_contract(version).to_contract() == version
     assert ModelVersionRow.__tablename__ == "model_version"
@@ -291,13 +336,14 @@ def test_the_row_projection_carries_the_compared_champion(measured_against: str 
     assert ModelVersionRow.from_contract(version).to_contract() == version
 
 
-def test_the_use_case_and_version_pair_is_unique(registry: LocalModelRegistry) -> None:
+def test_the_use_case_and_version_pair_is_unique(registry: SqlRegistryStore, backend: str) -> None:
     registry.register(make_version("m_1", 1))
-    with pytest.raises(Exception, match="UNIQUE constraint failed"):
+    with pytest.raises(IntegrityError) as excinfo:
         registry.register(make_version("m_2", 1))
+    assert UNIQUE_VIOLATION[backend] in str(excinfo.value)
 
 
-def test_two_threads_writing_concurrently_do_not_raise(registry: LocalModelRegistry) -> None:
+def test_two_threads_writing_concurrently_do_not_raise(registry: SqlRegistryStore) -> None:
     start = threading.Barrier(2)
     failures: list[BaseException] = []
 
@@ -376,3 +422,60 @@ def test_should_promote_over_a_zero_champion_needs_a_strict_gain_unless_the_rule
     champion = make_version("m_champ", 1, status=ModelStatus.CHAMPION, test_score=0.0)
     candidate = make_version("m_cand", 2, test_score=gain if greater_is_better else -gain)
     assert should_promote(candidate, champion, rule, greater_is_better=greater_is_better) is expected
+
+
+# ---------------------------------------------------------------------------
+# DEC-339: timestamps survive a backend whose clock is not UTC
+# ---------------------------------------------------------------------------
+KOLKATA: timezone = timezone(timedelta(hours=5, minutes=30))
+"""A non-UTC offset to write with. +05:30 is not a whole number of hours, so a test that passed by
+rounding, by truncating or by a lucky DST boundary would still fail here."""
+
+
+def test_every_timestamp_column_declares_a_time_zone() -> None:
+    """The model-level half of DEC-339, which holds whatever backend is in front of it.
+
+    Without `sa_column=Column(..., DateTime(timezone=True))` SQLModel compiles `datetime` to
+    `TIMESTAMP WITHOUT TIME ZONE` on Postgres, and the instant is silently replaced by the server's
+    wall clock. This asserts the declaration itself, so removing it fails here even on a machine
+    with no PostgreSQL at all.
+    """
+    columns = ModelVersionRow.__table__.columns
+    stamps = ("created_at", "approved_at", "promoted_at")
+    assert [columns[name].type.timezone for name in stamps] == [True, True, True]
+
+
+def test_a_timestamp_round_trips_as_the_same_instant_in_utc(registry: SqlRegistryStore) -> None:
+    """DEC-339, proved on whichever backend is running: same moment out, and wearing UTC.
+
+    The version is registered with `created_at` at +05:30 and every read of it must come back as
+    the same instant with a zero offset. On a `TIMESTAMP WITHOUT TIME ZONE` column this fails by
+    the server's own UTC offset, which is why `tests/fixtures/postgres.py` documents pointing the
+    suite at a server that is not set to UTC.
+    """
+    moment = datetime(2026, 9, 22, 17, 30, 0, tzinfo=KOLKATA)
+    registry.register(make_version("m_tz", 1).model_copy(update={"created_at": moment}))
+
+    for read in (registry.get("m_tz"), registry.list_versions(USE_CASE)[0]):
+        assert read.created_at == moment
+        assert read.created_at == datetime(2026, 9, 22, 12, 0, 0, tzinfo=UTC)
+        assert read.created_at.utcoffset() == timedelta(0)
+        assert read.created_at.hour == 12
+
+
+def test_the_approval_timestamps_are_also_utc_aware(registry: SqlRegistryStore) -> None:
+    """The nullable columns take the same route through `_utc`/`aware_utc` as `created_at` does."""
+    registry.register(make_version("m_1", 1, status=ModelStatus.PENDING_APPROVAL))
+    approved = registry.approve("m_1", by="ops@telco")
+    for stamp in (approved.approved_at, approved.promoted_at):
+        assert stamp is not None
+        assert stamp.utcoffset() == timedelta(0)
+    assert registry.get("m_1").approved_at == approved.approved_at
+
+
+def test_an_already_utc_timestamp_is_unchanged(registry: SqlRegistryStore) -> None:
+    """The guard against a vacuous pass: widening `aware_utc` must not move a value that was UTC."""
+    moment = datetime(2026, 9, 22, 12, 0, 0, tzinfo=UTC)
+    registry.register(make_version("m_utc", 1).model_copy(update={"created_at": moment}))
+    assert registry.get("m_utc").created_at == moment
+    assert registry.get("m_utc").created_at.isoformat() == "2026-09-22T12:00:00+00:00"
