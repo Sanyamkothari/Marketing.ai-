@@ -84,7 +84,7 @@ from engine.stages import (
     validate,
 )
 from engine.stages.scorer import AutoGluonScorer, BaselineScorer, load_scorer
-from engine.storage import Storage, StorageError, run_key
+from engine.storage import Storage, StorageError, release_local, run_key
 from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.text import humanise_count
@@ -541,7 +541,14 @@ class _TrainFlow:
 
     # -- the driver ---------------------------------------------------------
     def execute(self) -> RunRecord:
-        """Run every stage in order, then write the finished run record."""
+        """Run every stage in order, then write the finished run record.
+
+        The `finally` writes the manifest whatever the outcome, and then releases anything the
+        store was mirroring on local disk for this run. On `LocalStorage` the release is a no-op and
+        nothing about a local run changes; on a mirrored store it publishes whatever a stage wrote
+        through `local_path` and did not itself publish, and reclaims the disk (DEC-311). It runs
+        after the manifest because the manifest is written through the store like any other artefact.
+        """
         try:
             self._run.update(state=RunState.RUNNING, started_at=utc_now())
             for key, body in self._bodies():
@@ -549,6 +556,7 @@ class _TrainFlow:
             return self._complete()
         finally:
             self._flush_manifest()
+            release_local(self._storage, f"runs/{self._ctx.run_id}/")
 
     def _bodies(self) -> tuple[tuple[StageKey, Callable[[], _StageOutcome]], ...]:
         """The eight stages of plan §6.1, in order, each with the body that runs it."""
@@ -1067,7 +1075,14 @@ class _ScoreFlow:
 
     # -- the driver ---------------------------------------------------------
     def execute(self) -> RunRecord:
-        """Run every stage in order, then write the finished run record."""
+        """Run every stage in order, then write the finished run record.
+
+        The `finally` writes the manifest whatever the outcome, and then releases anything the
+        store was mirroring on local disk for this run. On `LocalStorage` the release is a no-op and
+        nothing about a local run changes; on a mirrored store it publishes whatever a stage wrote
+        through `local_path` and did not itself publish, and reclaims the disk (DEC-311). It runs
+        after the manifest because the manifest is written through the store like any other artefact.
+        """
         try:
             self._run.update(state=RunState.RUNNING, started_at=utc_now())
             for key, body in self._bodies():
@@ -1075,6 +1090,7 @@ class _ScoreFlow:
             return self._complete()
         finally:
             self._flush_manifest()
+            release_local(self._storage, f"runs/{self._ctx.run_id}/")
 
     def _bodies(self) -> tuple[tuple[StageKey, Callable[[], _StageOutcome]], ...]:
         """The seven stages of plan §6.2, in order, each with the body that runs it."""

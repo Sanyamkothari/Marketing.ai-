@@ -1,0 +1,18 @@
+# Everything the image does not need. Keeping the build context small is not just speed: a stray
+# `data/` directory would otherwise be COPYed into the image as somebody's real artefacts.
+.git
+.github
+.venv
+.venv-infra
+data
+infra/cdk.out
+infra/.cdk.staging
+**/__pycache__
+**/*.pyc
+.pytest_cache
+.mypy_cache
+.ruff_cache
+docs
+plan.md
+*.md
+!README.md
