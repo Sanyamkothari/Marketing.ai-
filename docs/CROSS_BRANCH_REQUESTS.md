@@ -258,6 +258,9 @@ against the frozen version is the one statement and its comment. If the ruling i
 file may not take even this, the alternative is a wrapper in `engine/pipeline.py` that calls
 `publish_local_path` after `run_train` returns — which is strictly worse, because the artefact is
 then unpublished across every line of the stage that can fail, which is most of them.
+
+## Resolved
+
 ### 2026-09-22 — reviewer → phase-4a-aws and human reviewer: `make test-all` will bill Bedrock once AWS credentials exist
 
 **What is needed.** A one-line change before Phase 4a puts AWS credentials anywhere CI can see them.
@@ -304,14 +307,28 @@ deployment needs a role, not a test run. The exposure the entry describes is rea
 moment anybody adds a credentials step to `nightly.yml`, which is precisely why the one-word fix is
 worth making *before* that rather than after.
 
-Phase 4a did not make it. `Makefile`'s `test-all` and `pyproject.toml`'s `addopts` are both Shared
-(§3) and outside this branch's PHASE-4A marker block, and the entry is right that changing what the
-whole repository's `make test-all` selects is not a branch's call. `.github/workflows/nightly.yml`
-is a Phase 1 file; §3 gives this branch `deploy*.yml` only. So this stays open, with the above as
-the measurement a reviewer needs to price it: today it costs nothing, and the day it costs
-something there will have been no warning.
+**Resolved 2026-09-22, by the repository owner's decision.** Asked directly whether to make the
+one-word change in a Shared file, the owner said yes, so Phase 4a made it.
 
-## Resolved
+It went in the `Makefile`, not in `pyproject.toml`'s `addopts`, and that turned out to matter more
+than the entry expected. pytest keeps only the **last** `-m`, so a filter in `addopts` is replaced
+wholesale by any `-m` on the command line — and `make test` already passes `-m "not slow"`.
+Measured: with `-m 'not bedrock'` in `addopts`, `pytest -m "not slow"` still collects all 7 tests in
+`tests/integration/test_bedrock_smoke.py`. The `addopts` fix would have protected `make test-all`
+and silently left `make test` exposed.
+
+So the Makefile gains `PAID_MARKERS := not bedrock and not aws`, and both default targets carry it:
+`make test` is `-m "not slow and $(PAID_MARKERS)"`, `make test-all` is `-m "$(PAID_MARKERS)"`.
+`@aws` is excluded alongside `@bedrock` because `pyproject.toml` already declares it "never selected
+by default"; no test carries it today, so that half is a promise kept rather than a behaviour change.
+`pytest -m bedrock` and `pytest -m aws` still opt in, which is the point — spending money becomes
+something a person asks for.
+
+`tests/unit/test_container_files.py` now reads the Makefile, evaluates each default target's `-m`
+against a `@bedrock` test and an `@aws` test, and fails if either is selected; a second test checks
+the same expressions still select the free suites, so `-m "nothing"` cannot pass for safe. Reverting
+`test-all` to bare `pytest` was confirmed to fail it. The two comments in `nightly.yml` that said
+`test-all` had no marker filter, and the README line describing it, say what is now true.
 
 ### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself
 

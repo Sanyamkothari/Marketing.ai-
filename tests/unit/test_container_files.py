@@ -182,3 +182,79 @@ def test_deploying_names_a_digest_rather_than_a_tag(repo_root: Path) -> None:
     push = (repo_root / "scripts" / "build_push_image.sh").read_text(encoding="utf-8")
     assert "Manifest.Digest" in push
     assert "sha256:" in push
+
+
+# ---------------------------------------------------------------------------
+# The paid suites are opt-in, by selection and not only by credentials
+# ---------------------------------------------------------------------------
+_PAID_MARKERS = ("bedrock", "aws")
+
+
+def _makefile_selection(repo_root: Path, target: str) -> str:
+    """The `-m` expression `target`'s pytest line passes, with `$(VARIABLE)`s substituted."""
+    text = (repo_root / "Makefile").read_text(encoding="utf-8")
+    variables = dict(re.findall(r"^([A-Z_]+)\s*:=\s*(.+)$", text, re.MULTILINE))
+    recipe = re.search(rf"^{re.escape(target)}:.*\n((?:\t.*\n)+)", text, re.MULTILINE)
+    assert recipe is not None, f"the Makefile has no {target!r} target"
+    selection = re.search(r'pytest\b.*?-m "([^"]+)"', recipe.group(1))
+    assert selection is not None, f"`make {target}` runs pytest with no -m, so it selects everything"
+    return re.sub(r"\$\(([A-Z_]+)\)", lambda m: variables[m.group(1)].strip(), selection.group(1))
+
+
+def _selects(expression: str, markers: set[str]) -> bool:
+    """Whether a test carrying exactly `markers` passes `expression`.
+
+    These expressions are `not`/`and`/`or` over bare marker names, which is also valid Python, so
+    they are evaluated with every name bound to a bool and nothing else in scope.
+    """
+    names = set(re.findall(r"[A-Za-z_]\w*", expression)) - {"and", "or", "not"}
+    return bool(eval(expression, {"__builtins__": {}}, {name: name in markers for name in names}))
+
+
+@pytest.mark.parametrize("target", ["test", "test-all"])
+@pytest.mark.parametrize("marker", _PAID_MARKERS)
+def test_no_default_target_selects_a_test_that_bills_an_account(
+    repo_root: Path, target: str, marker: str
+) -> None:
+    """A self-skip on missing credentials is configuration; this is the intent (reviewer finding E-1).
+
+    Each @bedrock test skips when the `BEDROCK_SMOKE_*` variables or AWS credentials are absent. Both
+    gates are facts about a machine, not a decision, and the machine most likely to have both is a CI
+    runner the day somebody gives it a role. Excluding the markers at selection makes "costs money"
+    something a person asks for with `pytest -m bedrock`, rather than something that starts happening.
+
+    The filter cannot live in pyproject's `addopts`: pytest keeps only the last `-m`, so `make test`'s
+    own `-m "not slow"` would replace it and every paid test would be collected again. That is why
+    this reads the Makefile rather than the config.
+    """
+    expression = _makefile_selection(repo_root, target)
+    assert not _selects(
+        expression, {marker, "integration"}
+    ), f"`make {target}` selects @{marker} tests with -m {expression!r}"
+
+
+def test_the_default_targets_still_select_the_free_suites(repo_root: Path) -> None:
+    """The guard above would also pass for `-m "nothing"`; this is what keeps it honest."""
+    assert _selects(_makefile_selection(repo_root, "test"), {"integration"})
+    assert not _selects(_makefile_selection(repo_root, "test"), {"slow"})
+    assert _selects(_makefile_selection(repo_root, "test-all"), {"slow", "integration"})
+    assert _selects(_makefile_selection(repo_root, "test-all"), {"postgres"})
+
+
+@pytest.mark.parametrize("target", ["test", "test-all"])
+def test_the_default_targets_leave_the_infra_suite_to_its_own_venv(repo_root: Path, target: str) -> None:
+    """`make setup` installs `.[dev]`, with no aws-cdk-lib; `tests/infra/conftest.py` imports it.
+
+    Collected from the product venv, that conftest is an ImportError, and pytest aborts the entire
+    run on one - so CI's main job would go red over a directory it was never meant to run. The infra
+    suite has its own venv, target and CI job (DEC-364); an explicitly named path overrides
+    `--ignore`, so `make infra-test` is unaffected.
+    """
+    text = (repo_root / "Makefile").read_text(encoding="utf-8")
+    variables = dict(re.findall(r"^([A-Z_]+)\s*:=\s*(.+)$", text, re.MULTILINE))
+    recipe = re.search(rf"^{re.escape(target)}:.*\n((?:\t.*\n)+)", text, re.MULTILINE)
+    assert recipe is not None
+    line = re.sub(
+        r"\$\(([A-Z_]+)\)", lambda m: variables.get(m.group(1), m.group(0)).strip(), recipe.group(1)
+    )
+    assert "--ignore=tests/infra" in line, f"`make {target}` would collect tests/infra without aws-cdk-lib"

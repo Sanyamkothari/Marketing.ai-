@@ -41,11 +41,25 @@ else
 endif
 	$(BIN)/python -c "import autogluon.tabular, pydantic, fastapi, sqlmodel, yaml; print('setup ok: autogluon.tabular', autogluon.tabular.__version__)"
 
-test: ## fast tests (excludes @slow)
-	$(BIN)/python -m pytest -m "not slow"
+# The two markers that spend money are excluded here, not in pyproject's `addopts`, and that is not
+# a style choice: pytest keeps only the LAST `-m`, so a filter in `addopts` is silently replaced by
+# the `-m "not slow"` below and every @bedrock test would be collected again. Each self-skips
+# without credentials, but that is configuration rather than intent - the day a runner has both,
+# the suite bills an account nobody asked it to. `pytest -m bedrock` (or `-m aws`) still opts in
+# (DEC-358).
+PAID_MARKERS := not bedrock and not aws
 
-test-all: ## every test
-	$(BIN)/python -m pytest
+# tests/infra is not collected here: it runs in its own venv through `make infra-test` and its own CI
+# job (DEC-364). `make setup` installs `.[dev]`, which does not carry aws-cdk-lib, so collecting it
+# here would be a conftest ImportError - and pytest aborts the whole run on one, not just that
+# directory. An explicitly named path overrides --ignore, so `make infra-test` still collects all of it.
+NOT_THIS_VENV := --ignore=tests/infra
+
+test: ## fast tests (excludes @slow and the two markers that bill a real account)
+	$(BIN)/python -m pytest $(NOT_THIS_VENV) -m "not slow and $(PAID_MARKERS)"
+
+test-all: ## every test that costs nothing; `pytest -m bedrock` or `-m aws` opts in to the paid ones
+	$(BIN)/python -m pytest $(NOT_THIS_VENV) -m "$(PAID_MARKERS)"
 
 lint: check-generated ## ruff + black --check + mypy --strict + generated-file drift check
 	$(BIN)/ruff check engine api scripts tests

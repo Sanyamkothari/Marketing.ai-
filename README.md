@@ -125,7 +125,8 @@ Optional extras:
 make setup EXTRAS=nn   # installs .[dev,nn] — adds torch so the NeuralNet family can be selected (DEC-011)
 ```
 
-Other targets: `make test-all` (every test, including `@slow`), `make format` (apply `ruff --fix` and
+Other targets: `make test-all` (every test, including `@slow`, but not the `@bedrock` and `@aws`
+tests that bill a real account — opt in with `pytest -m bedrock`), `make format` (apply `ruff --fix` and
 `black`), `make check-generated` (fail if `templates/` or `docs/API.md` are stale), `make clean`, and
 `make help` to list them all.
 

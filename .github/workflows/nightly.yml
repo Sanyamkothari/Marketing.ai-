@@ -3,9 +3,10 @@
 # The permission plan §10 grants to mark the AutoGluon integration tests @slow is only safe if
 # something still runs them; otherwise "may be marked slow" quietly becomes "may be skipped forever"
 # and the golden checks (ROC-AUC above the logistic baseline and above 0.7) stop guarding the
-# pipeline. This workflow is that something: the same install as CI, then `make test-all`, which is
-# plain `pytest` with no marker filter — the fast suite plus the full train flow on the synthetic
-# Targeted Advertisement data and the score flow that follows it.
+# pipeline. This workflow is that something: the same install as CI, then `make test-all` — the fast
+# suite plus the full train flow on the synthetic Targeted Advertisement data and the score flow that
+# follows it. `test-all` excludes exactly two markers, @bedrock and @aws, because those bill a real
+# account; see the Makefile for why that filter cannot live in pyproject's `addopts`.
 #
 # It runs nightly rather than per-push so that a real training run, dependency rot in AutoGluon's
 # own transitive pins, or a golden check drifting below its threshold surfaces within a day, while
@@ -61,7 +62,9 @@ jobs:
       - name: make setup
         run: make setup
 
-      # `make test-all` is `pytest` with no `-m` filter: everything ci.yml runs, plus the @slow
-      # AutoGluon train and score integration tests.
+      # `make test-all` is everything ci.yml runs, plus the @slow AutoGluon train and score
+      # integration tests - minus @bedrock and @aws, the two markers that spend money. Adding AWS
+      # credentials to this job therefore does not start billing anyone; running a paid suite here
+      # would need an explicit `pytest -m bedrock` step, which is the point.
       - name: make test-all
         run: make test-all
