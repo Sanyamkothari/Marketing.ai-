@@ -1,7 +1,7 @@
 ---
-name: rca_summary
+name: root_cause_summary
 version: 1
-purpose: rca_summary
+purpose: root_cause_summary
 description: Explain, in business language, why one risk segment behaves as the model says it does.
 variables: [segment, evidence, tone, entity]
 output: json

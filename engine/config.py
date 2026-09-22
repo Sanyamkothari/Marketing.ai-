@@ -783,6 +783,16 @@ _IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 # section 2.1, principle 1). Nothing here reaches the predictive stages: a generative flow reads a
 # finished run's artefacts, it never joins the pipeline that wrote them.
 # ---------------------------------------------------------------------------
+FAKE_MODEL_ID: Final[str] = "fake"
+"""What the deterministic fake calls itself in an artefact.
+
+The three model ids default to `""` because a real one is deployment data (DEC-204), but an
+artefact still has to say what answered, and `""` says nothing. Under the fake backend that answer
+is "the fake", written down as such, so a usage record read later cannot be mistaken for a record
+of a model that was never called.
+"""
+
+
 class LlmConfig(_Base):
     backend: LlmBackend = LlmBackend.FAKE
     region: Annotated[str, Field(min_length=1)] = "ap-south-1"
@@ -812,6 +822,27 @@ class LlmConfig(_Base):
                     path=f"generative.llm.{missing[0]}",
                 )
         return self
+
+    @property
+    def generation_model(self) -> str:
+        """The id generation calls are made against, with the fake named when it is the backend."""
+        return self._resolve(self.generation_model_id or self.judge_model_id)
+
+    @property
+    def judge_model(self) -> str:
+        """The id judging calls are made against; falls back to the generating one when unset."""
+        return self._resolve(self.judge_model_id or self.generation_model_id)
+
+    @property
+    def embedding_model(self) -> str:
+        """The id embedding calls are made against."""
+        return self._resolve(self.embedding_model_id)
+
+    def _resolve(self, model_id: str) -> str:
+        if model_id:
+            return model_id
+        # `bedrock` with a blank id never gets here: `_check` refuses that document outright.
+        return FAKE_MODEL_ID
 
 
 class BudgetConfig(_Base):
