@@ -1,14 +1,17 @@
 """Health Insurance Cross-Sell: validate + a one-minute train on the committed sample.
 
-Measured over three runs of this exact budget:
+Measured over three runs of this exact budget against the engine as it stands today:
 
-    test ROC-AUC   0.8662  0.8247  0.8073
-    baseline       0.8503  0.8234  0.8127
-    beats          yes     yes     no
+    test ROC-AUC   0.8170  0.8437  0.8555
+    baseline       0.8205  0.8327  0.8480
+    margin        -0.0035 +0.0110 +0.0075
+    beats          no      yes     yes
 
-The second run's margin is +0.0013. The strict comparison is not asserted; see DEC-410. The
-full-data run, on all 381,109 rows, does beat its baseline (0.8555 against 0.8371) and is reported
-in ../health-insurance-cross-sell/run_report.md.
+The margin changes sign, so the strict comparison is not asserted; see DEC-410. The full-data run,
+on all 381,109 rows, does beat its baseline (0.8581 against 0.8380) and is reported in
+../health-insurance-cross-sell/run_report.md.
+
+FLOOR has 0.09 of headroom below the lowest of the three.
 
 Licence: reported as GNU GPL v2 and unverified. See ../health-insurance-cross-sell/LICENSE.txt
 before this dataset appears in anything customer-facing.

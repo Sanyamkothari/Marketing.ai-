@@ -4,15 +4,23 @@
 it.** Unlike the other four, it makes no assertion at all about the model's score, because on this
 data at this budget there is no score worth asserting.
 
-Measured over six runs of exactly this budget (`strategy: fast`, `time_limit_minutes: 1`, all
-1,463 prepared rows, of which 219 are the test split):
+Measured over nine runs of exactly this budget (`strategy: fast`, `time_limit_minutes: 1`, all
+1,463 prepared rows, of which 219 are the test split) — six against the engine before it gained
+hyperparameter tuning, three against it afterwards:
 
-    test ROC-AUC   0.6434  0.6370  0.6339  0.5784  0.5920  0.5307
-    baseline       0.6136  0.6146  0.6404  0.6009  0.5987  0.5934
-    beats          yes     no      no      no      no      no
+    before   test ROC-AUC   0.6434  0.6370  0.6339  0.5784  0.5920  0.5307
+             baseline       0.6136  0.6146  0.6404  0.6009  0.5987  0.5934
+             beats          yes     no      no      no      no      no
 
-The spread is 0.53 to 0.64, and the gap to the baseline swings from +0.030 to -0.063. The full-data
-run agrees with the majority: `model_beats_baseline: false`, PR-AUC 0.4982 against 0.5027.
+    after    test ROC-AUC   0.6839  0.5814  0.6907
+             baseline       0.6470  0.6298  0.6653
+             margin        +0.0369 -0.0484 +0.0254
+             beats          yes     no      yes
+
+The spread is 0.53 to 0.69 and the gap to the baseline swings from +0.037 to -0.063. That -0.0484
+is more than twice `BASELINE_TOLERANCE`, so even the weaker "not materially worse" assertion the
+other four datasets make would fail here. The full-data run agrees with the majority:
+`model_beats_baseline: false`, PR-AUC 0.4975 against 0.4985.
 
 Any floor low enough to pass reliably would be a number tuned until it stopped failing, which is
 precisely what DEC-410 rules out. So this module asserts the things that *are* reproducible - the

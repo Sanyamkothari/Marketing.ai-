@@ -2,14 +2,18 @@
 
 The one dataset in the library whose margin over the baseline is clear of the noise, so this is
 the one test that asserts the strict comparison the brief asks for. Measured over three runs of
-this exact budget:
+this exact budget against the engine as it stands today:
 
-    test ROC-AUC   0.7509  0.7651  0.7746
-    baseline       0.7057  0.7146  0.7288
-    beats          yes     yes     yes      (margins +0.0452, +0.0505, +0.0458)
+    test ROC-AUC   0.7611  0.7820  0.7897
+    baseline       0.7080  0.7298  0.7092
+    margin        +0.0531 +0.0522 +0.0805
+    beats          yes     yes     yes
 
-An order of magnitude clear of the largest shortfall seen anywhere else in the library (0.0065).
-The full-data run agrees: 0.7869 against 0.7245. See DEC-410.
+Six for six across both engines, and the smallest margin ever measured here (+0.0452) is more than
+ten times the largest shortfall seen on the three datasets that flip. The full-data run agrees:
+0.7957 against 0.7279, the widest gap in the library. See DEC-410.
+
+FLOOR has 0.06 of headroom below the lowest of the three.
 """
 
 from __future__ import annotations

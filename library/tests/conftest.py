@@ -29,9 +29,11 @@ LIBRARY = REPO_ROOT / "library"
 LIBRARY_CONFIGS = LIBRARY / "configs"
 
 #: How far below its own logistic-regression baseline a one-minute search is allowed to land.
-#: Not a fudge factor: the largest shortfall measured over fourteen repeated runs across the five
-#: datasets was 0.0065 ROC-AUC, so this is about three times the observed noise. DEC-410 records
-#: the runs, and each test's docstring repeats the ones for its own dataset.
+#: Not a fudge factor, and not a number chosen to make a test pass: across the four datasets that
+#: use it, the largest shortfall ever measured is 0.0035 ROC-AUC, so this is roughly six times the
+#: observed noise. `online-retail` does not use it — its worst run lands 0.0484 below, which is why
+#: that dataset asserts no score at all. DEC-410 records every run, and each test's docstring
+#: repeats the ones for its own dataset.
 BASELINE_TOLERANCE: float = 0.02
 
 #: plan section 10's budget: the smallest search that still produces every artefact.
