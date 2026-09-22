@@ -4,7 +4,7 @@
    Phase 3a §9 E — win-back campaign copy. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, body, click, set, wait } from "./harness.mjs";
+import { load, go, ev, $, $$, body, click, set, wait, upload } from "./harness.mjs";
 
 /* ---------- A. client selector ---------- */
 
@@ -50,9 +50,49 @@ test("assistant setup: documents, then optional reference questions", () => {
   ]);
   assert.match(body(dom), /5 documents · 122 pages · 1,600 chunks at 512 tokens each\./);
   assert.equal($(dom, ".reason").textContent, "", "questions are optional, so the run is unblocked");
+  // before anything is uploaded, the step says what the file must contain
+  assert.deepEqual($$(dom, ".refcols .colchip").map((e) => e.textContent),
+    ["question", "expect_refusal", "reference_answer", "source_doc"]);
+  assert.equal($$(dom, ".refcols .colchip.t").length, 0);
   click(dom, "#f-sampleqa");
-  assert.equal($(dom, "#f-pk").value, "question_id");
+  // the sample is the product's own template, and its first column is the key
+  assert.equal($(dom, "#f-pk").value, "question");
   assert.equal($(dom, "#f-target").value, "reference_answer");
+  assert.equal($$(dom, ".refcols .colchip.t").length, 4, "every required column is there");
+});
+
+test("a reference set missing a column gets the API's own error, before anything runs", async () => {
+  const dom = load("#/uc/ai-onboarding-assistant");
+  click(dom, "#f-sampledocs");
+  // the documented example before the API review: no source_doc, no expect_refusal
+  await upload(dom, "#f-qa", "old_example.csv", "question_id,question,reference_answer\nq001,Hi?,Hello\n");
+  // named exactly as api/routes/generative.py names it: the first missing, in its order
+  assert.equal($(dom, ".referr").textContent, "The reference set is missing the expect_refusal column.");
+  assert.equal($(dom, "#f-target"), null, "a refused file fills in nothing");
+  assert.equal(ev(dom, "STATE['ai-onboarding-assistant'].qa"), null);
+  // one column short
+  await upload(dom, "#f-qa", "almost.csv", "question,expect_refusal,reference_answer\nHi?,false,Hello\n");
+  assert.equal($(dom, ".referr").textContent, "The reference set is missing the source_doc column.");
+  // all four, in any order, with a key column in front: accepted, and the key is the first column
+  await upload(dom, "#f-qa", "good.csv",
+    "qid,source_doc,question,reference_answer,expect_refusal\nq1,faq.md,Hi?,Hello,false\nq2,,Refund?,,true\n");
+  assert.equal($(dom, ".referr"), null, "the error clears");
+  assert.equal($(dom, "#f-pk").value, "qid");
+  assert.equal($(dom, "#f-target").value, "reference_answer");
+  assert.equal(ev(dom, "STATE['ai-onboarding-assistant'].qa.pairs"), 2);
+});
+
+test("evaluate mode checks its test questions the same way", async () => {
+  const dom = load("#/uc/ai-onboarding-assistant");
+  click(dom, '.seg button[data-mode="score"]');
+  assert.equal($$(dom, ".refcols .colchip").length, 4);
+  await upload(dom, "#f-qa", "new.csv", "question,reference_answer\nHi?,Hello\n");
+  assert.equal($(dom, ".referr").textContent, "The reference set is missing the expect_refusal column.");
+  await upload(dom, "#f-qa", "new.csv",
+    "question,expect_refusal,source_doc,reference_answer\nHi?,false,faq.md,Hello\n");
+  assert.equal($(dom, ".referr"), null);
+  assert.equal($(dom, "#f-pk").value, "question");
+  assert.equal($(dom, "#f-run").disabled, false, "a valid file unblocks the run");
 });
 
 test("assistant advanced settings carry the RAG settings including the refusal message", () => {
@@ -90,9 +130,10 @@ test("assistant results: index summary, pass rate, worst ten, try it, cost line"
   // eval pass rate against the threshold, with a bar
   assert.equal($(dom, ".evalbar .ebv").textContent, "91% passed");
   assert.equal($(dom, ".evalbar .eb i").style.width, "91%");
-  assert.equal($(dom, ".evalbar .ebm").style.left, "85%");
+  assert.equal($(dom, ".evalbar .ebm").style.left, "75%");
   assert.match($(dom, ".evalbar .ebl").textContent, /300 reference questions/);
-  assert.match($(dom, ".evalbar .ebl").textContent, /Threshold 85%/);
+  assert.match($(dom, ".evalbar .ebl").textContent, /Threshold 75%/);
+  assert.equal($(dom, ".evalbar .ebverdict").textContent, "Passes the 75% threshold.");
   // the worst ten answers
   const worst = $$(dom, ".evalbar ~ .tbl-wrap tbody tr");
   assert.equal(worst.length, 10);
@@ -144,6 +185,23 @@ test("assistant Try it answers a saved question and refuses anything else", asyn
   assert.ok(last.classList.contains("refused"));
   assert.match(last.textContent, /could not find this in the product documents/);
   assert.equal(last.querySelectorAll("details.cite").length, 0);
+});
+
+test("the pass threshold is a setting, and the result says which side of it the run landed", async () => {
+  const dom = load("#/uc/ai-onboarding-assistant");
+  click(dom, "#f-sampledocs");
+  click(dom, "#f-sampleqa");
+  const thr = $(dom, '[data-adv="passThr"]');
+  assert.equal(thr.value, "75", "the product's default, not a number of our own");
+  assert.match(thr.closest(".stage-d").textContent, /must pass for the build to count as passing/);
+  set(dom, '[data-adv="passThr"]', "95");
+  $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
+  assert.ok($$(dom, ".progress .pt").some((e) => e.textContent === "Grading the answers"));
+  await wait(1600);
+  assert.equal($(dom, ".evalbar .ebm").style.left, "95%");
+  assert.equal($(dom, ".evalbar .ebverdict").textContent, "Below the 95% threshold.");
+  assert.ok($(dom, ".evalbar .ebverdict").classList.contains("bad"));
+  assert.match($(dom, ".evalbar .eb i").getAttribute("style"), /--bad/, "a failing run is not drawn green");
 });
 
 /* ---------- D. RCA root causes ---------- */

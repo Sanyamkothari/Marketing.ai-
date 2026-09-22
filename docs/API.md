@@ -8,6 +8,10 @@ Contract schema version: 1.
 
 | Method | Path | Summary | Response model |
 |---|---|---|---|
+| DELETE | `/connection/aws` | Forget the chosen profile and go back to the default credential chain (local only) | AwsConnectionState |
+| GET | `/connection/aws` | The AWS identity Bedrock is called as, and whether this caller may change it | AwsConnectionState |
+| PUT | `/connection/aws` | Choose the AWS identity: the default chain, or an AWS CLI profile by name (local only) | AwsConnectionState |
+| POST | `/connection/aws/test` | Check the AWS identity and whether each configured Bedrock model is enabled - free, no tokens | ConnectionReport |
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/indexes/{index_id}` | One index in full: its status, its manifest and, once graded, its evaluation | IndexDetailResponse |
 | POST | `/indexes/{index_id}/ask` | Answer one question from an index, grounded in its documents or refused | AssistantAnswer |

@@ -104,6 +104,16 @@ const STATES = [
     await p.click(".cccard.blocked [data-cc-re]");
     await p.waitForTimeout(120);
   }],
+  ["18-assistant-reference-set-invalid", async (p) => {
+    await open(p, "#/uc/ai-onboarding-assistant");
+    await click(p, "#f-sampledocs");
+    // the example that was documented before the API review: no expect_refusal, no source_doc
+    await p.setInputFiles("#f-qa", {
+      name: "old_example.csv", mimeType: "text/csv",
+      buffer: Buffer.from("question_id,question,reference_answer\nq001,How long does activation take?,Up to 4 hours\n"),
+    });
+    await p.waitForSelector(".referr", { timeout: 5000 });
+  }],
   ["12-rca-before-generation", async (p) => { await open(p, "#/uc/rca/output"); }],
   ["13-rca-root-causes", async (p) => {
     await open(p, "#/uc/rca/output");
