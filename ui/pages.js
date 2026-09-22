@@ -434,13 +434,15 @@ function outputPage(uc, run, art, byPath, scoresHref) {
         ],
         [
           "Reasons",
-          summary
-            ? summary.rows_with_fallback_reasons
+          // A summary written before DEC-056 carries no such field. Absent is unknown, not zero:
+          // reporting "measured on every row" for it would be a claim nothing measured.
+          !summary || summary.rows_with_fallback_reasons === undefined
+            ? EM_DASH
+            : summary.rows_with_fallback_reasons
               ? `${fmtInt(summary.rows_with_fallback_reasons)} of ${fmtInt(
                   summary.rows_scored,
                 )} rows on fallback reasons`
-              : "measured on every row"
-            : EM_DASH,
+              : "measured on every row",
         ],
         ["Drift alert", `PSI above ${readPath(config, "monitoring.drift_psi_threshold")}`],
         [

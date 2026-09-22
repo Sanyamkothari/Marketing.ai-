@@ -125,8 +125,8 @@ Other targets: `make test-all` (every test, including `@slow`), `make format` (a
 ## Running the UI
 
 The UI is the adapted prototype: `ui/index.html` plus seven ES modules, with no build step. A browser
-cannot fetch an ES module over `file://`, so the same process that answers the API serves the screens —
-`api/main.py` mounts `ui/` at `/ui` (DEC-024).
+cannot fetch an ES module over `file://`, so the same process that answers the API serves the screens:
+`api/main.py` mounts `ui/` at `/ui` (plan §9).
 
 ```bash
 make run                     # uvicorn api.main:app on :8000
@@ -155,7 +155,7 @@ carries the request and response shapes; this table is the index.
 | `POST` | `/uploads` | stores a CSV or Parquet file, profiles it, and returns everything the Setup screen renders |
 | `GET` | `/uploads/{id}/profile` | the stored dataset profile of one upload |
 | `POST` | `/runs` | validates the upload synchronously; `409` + the validation report on errors, otherwise starts the job and returns `{run_id}` |
-| `GET` | `/runs` | run history, newest first, filterable by use case |
+| `GET` | `/runs` | run history, newest first, filterable by use case and by train/score mode |
 | `GET` | `/runs/{id}` | the run record plus the status document the Running screen polls |
 | `GET` | `/runs/{id}/artefacts/{name}` | one artefact of that run, whitelisted against the artefact registry |
 | `GET` | `/runs/{id}/scores.csv` | the scored rows of a scoring run, as CSV |
@@ -207,8 +207,8 @@ M7 in detail. Done:
 - **CI.** `.github/workflows/` (below), which plan §10 asks for.
 
 Not done: the **measured** half of large-file handling. `scripts/bench_large_file.py` times the real
-ingest and score paths on a generated file, but the run has not been recorded here, so no row count and
-no duration is claimed above. Until it is, "it streams" is an argument about the code, not a result
+ingest and score paths on a generated file, but no run of it has been recorded here, so no row count
+and no duration are claimed above. Until it is, "it streams" is an argument about the code, not a result
 (plan §13.3).
 
 ---

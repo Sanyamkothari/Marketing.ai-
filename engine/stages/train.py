@@ -122,13 +122,33 @@ AG_NAME_TO_FAMILY: Final[dict[str, ModelFamily]] = {
 _NAME_SUFFIX = re.compile(r"(_BAG|_FULL|_L\d+|_r\d+)+$")
 """Decorations AutoGluon appends to a fitted model's name; bare names appear without bagging. (D5.)"""
 
-_TRIAL_SUFFIX = re.compile(r"/T\d+$")
-"""What HPO appends to every trial it fits: `LightGBM_BAG_L1/T3` (DEC-057).
+_TRIAL_SUFFIX = re.compile(r"/[^/]+$")
+r"""What HPO appends to every trial it fits: `LightGBM_BAG_L1/T3` (DEC-057).
 
 It is stripped **before** :data:`_NAME_SUFFIX`, because it sits outside the bagging decorations
 rather than inside them. Missing it would be quiet rather than loud: `family_for_model_name` would
 return `None` for every model of a tuned run, which costs the leaderboard its family column and
 costs the explain stage its TreeSHAP tier, since that tier finds the best *tree* model by family.
+
+It matches any trailing path segment rather than `T\d+` alone, because the trial name is the HPO
+backend's to choose: the local scheduler numbers them `T1`, `T2`, while the Ray backend that
+`NN_TORCH` asks for names them after its own trial id. A model name has no other use for a slash,
+so the wider pattern costs nothing and covers a backend this engine has not met yet.
+"""
+
+FAMILIES_WITHOUT_SEARCH_SPACE: Final[frozenset[ModelFamily]] = frozenset({ModelFamily.RANDOM_FOREST})
+"""Families the installed AutoGluon has no default search space for, so HPO cannot tune them.
+
+`model_search.tuning_trials` asks for `n` trials per family, and a family whose default search
+space is empty has nothing to vary: AutoGluon fits it once, under its bare name and with its
+default hyperparameters, and the setting does nothing for it. Measured against AutoGluon 1.6.3,
+which fits `RandomForest` - no `/T1` suffix, one model - where the same call gives `LightGBM/T1..Tn`
+with different learning rates (DEC-057).
+
+It is a measured constant rather than a runtime probe because reading a model class's default
+search space means reaching past the public API, and a wrong answer there would be a silent one.
+`tests/unit/test_train.py` checks it against the installed package instead, so this set is a claim
+the suite keeps honest rather than a guess frozen into the engine.
 """
 
 _ENSEMBLE_PREFIX: Final[str] = "WeightedEnsemble"
@@ -354,6 +374,16 @@ def available_families(recipe: Recipe) -> tuple[ModelFamily, ...]:
     for family, modules in missing.items():
         _LOGGER.warning("model family %s is unavailable: %s not installed", family.value, ", ".join(modules))
     families = tuple(family for family in recipe.model_search.candidates if family not in missing)
+    untuned = [family for family in families if family in FAMILIES_WITHOUT_SEARCH_SPACE]
+    if untuned:
+        # Same reasoning as the missing-library warning above: the run is still valid, but a setting
+        # the user moved is doing nothing for part of it, and silence would be the wrong answer.
+        _LOGGER.warning(
+            "model_search.tuning_trials=%d does not apply to %s: the installed AutoGluon carries no "
+            "default search space for it, so it is fitted once with its defaults (DEC-057)",
+            recipe.model_search.tuning_trials,
+            ", ".join(family.value for family in untuned),
+        )
     if not families:
         wanted = ", ".join(family.value for family in recipe.model_search.candidates)
         raise TrainError(

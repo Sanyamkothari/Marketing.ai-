@@ -499,14 +499,15 @@ def reasons_for(
     primary: ReasonMethod | None = None
     pending = list(range(len(sample)))
 
-    for tier in _tier_calls(scorer, features, seed, rank, kernel_max_rows, every_row=max_rows is None):
+    attempted = False
+    tiers = _tier_calls(scorer, features, seed, rank, kernel_max_rows, sample, every_row=max_rows is None)
+    for tier in tiers:
         if not pending:
             break
-        outcome = tier(sample.iloc[pending])
+        outcome = tier(sample.iloc[pending], not attempted)
         if outcome is None:
             continue  # the tier declined outright; the next one sees the same rows
-        if primary is None:
-            primary = outcome.found.method
+        attempted = True  # whether or not it moved anything: the rows below are now a RETRY
         found = outcome.found
         totals = _aggregate_columns(found.values, _source_map(_names(found.values), features))
         _accumulate_strength(strength, totals)
@@ -518,25 +519,32 @@ def reasons_for(
             strict=True,
         ):
             if explanation.reasons:
+                # `primary` names a tier some row really carries, so the detail line's two clauses
+                # cannot contradict each other (DEC-056).
+                if primary is None:
+                    primary = found.method
                 explained[position] = explanation
             else:
                 blank[position] = explanation
                 still.append(position)
-        # Only a row this tier EXPLAINED and could not move retries. A row it never covered was
-        # left out by the caller's own row budget, and is dropped from the run as it always was.
         pending = still
 
-    if pending:
+    # Every row that is still blank, whether the last tier covered it or sampled past it. A row a
+    # later tier never looked at is NOT explained - re-exporting the earlier tier's empty tuple
+    # would put back exactly the blank cells this function exists to remove - so the whole
+    # unrescued set goes through the general fallback together (DEC-056).
+    unrescued = sorted(set(blank) - set(explained))
+    if unrescued:
         _LOGGER.warning(
             "explain: %d of %d rows measured every contribution as zero; falling back to general "
             "reasons from the importance chart",
-            len(pending),
+            len(unrescued),
             len(sample),
         )
         for position, explanation in zip(
-            pending,
+            unrescued,
             _general_explanations(
-                sample.iloc[pending],
+                sample.iloc[unrescued],
                 scorer,
                 _general_ranking(importance, strength, features),
                 primary_key=primary_key,
@@ -546,11 +554,15 @@ def reasons_for(
         ):
             explained[position] = explanation
 
-    for position, explanation in blank.items():  # only rows no fallback could rescue
-        explained.setdefault(position, explanation)
     method = ReasonMethod.PERMUTATION if primary is None else primary
     explanations = tuple(explained[position] for position in sorted(explained))
-    fallback_rows = sum(1 for explanation in explanations if explanation.method is not method)
+    # A row is on a fallback when its reasons did not come from the run's own tier, and a general
+    # row always is: nothing about it was measured on the row, whatever `method` ended up naming.
+    fallback_rows = sum(
+        1
+        for explanation in explanations
+        if explanation.method is not method or explanation.method is ReasonMethod.GENERAL
+    )
     log_stage(_LOGGER, "explain.reasons", rows=len(explanations), seconds=time.perf_counter() - started)
     return RowReasons(explanations=explanations, method=method, fallback_rows=fallback_rows)
 
@@ -590,27 +602,42 @@ def _tier_calls(
     seed: int,
     rank: Mapping[str, int],
     kernel_max_rows: int | None,
+    sample: pd.DataFrame,
     *,
     every_row: bool,
-) -> tuple[Callable[[pd.DataFrame], _TierOutcome | None], ...]:
+) -> tuple[Callable[[pd.DataFrame, bool], _TierOutcome | None], ...]:
     """The three per-row tiers as callables, in the order plan section 6.3 tries them.
 
-    Each returns the positions **within the frame it was handed** that it answered for, so the loop
-    above can tell a row a tier explained from one it never looked at. Only the KernelSHAP tier
-    ever answers for a subset, and only when the caller asked for a sample; its row cap is applied
-    here, before the call.
+    Each takes the rows to explain and whether it is the **first** tier to answer for this run, and
+    returns the positions *within the frame it was handed* that it covered - so the loop above can
+    tell a row a tier explained from one it never looked at.
+
+    Two things differ on a retry, and both follow from what a retry is (DEC-056):
+
+    * **KernelSHAP does not retry.** Its sampling is a coverage budget for a whole run, not a
+      per-row one, and at about a fifth of a second a row it would spend minutes re-measuring rows
+      a better tier already measured as zero - very likely to zero again, since the two tiers see
+      the same saturated prediction. The permutation tier, which is tens of microseconds a row and
+      always works, is the right rescuer.
+    * **The permutation tier keeps the whole sample as its reference population.** Its replacement
+      value is the column's median or mode, and taken over the pending rows alone that is degenerate
+      exactly when it matters most: one pending row would be replaced by its own value, making the
+      tier a guaranteed no-op and sending a rescuable row to the general fallback. `reference` is
+      therefore always the full sample.
     """
 
     def whole(
         call: Callable[[pd.DataFrame], _Contributions | None],
-    ) -> Callable[[pd.DataFrame], _TierOutcome | None]:
-        def run(rows: pd.DataFrame) -> _TierOutcome | None:
+    ) -> Callable[[pd.DataFrame, bool], _TierOutcome | None]:
+        def run(rows: pd.DataFrame, _first: bool) -> _TierOutcome | None:
             found = call(rows)
             return None if found is None else _TierOutcome(tuple(range(len(rows.index))), found)
 
         return run
 
-    def kernel(rows: pd.DataFrame) -> _TierOutcome | None:
+    def kernel(rows: pd.DataFrame, first: bool) -> _TierOutcome | None:
+        if not first:
+            return None
         positions = _kernel_positions(len(rows.index), kernel_max_rows, seed, every_row=every_row)
         if positions is None:
             return None
@@ -621,7 +648,7 @@ def _tier_calls(
     return (
         whole(lambda rows: _tree_shap(scorer, rows, features)),
         kernel,
-        whole(lambda rows: _permutation_contributions(scorer, rows, features, rank)),
+        whole(lambda rows: _permutation_contributions(scorer, rows, features, rank, reference=sample)),
     )
 
 
@@ -887,23 +914,36 @@ def _kernel_shap(
 
 
 def _permutation_contributions(
-    scorer: RowScorer, rows: pd.DataFrame, features: Sequence[str], rank: Mapping[str, int]
+    scorer: RowScorer,
+    rows: pd.DataFrame,
+    features: Sequence[str],
+    rank: Mapping[str, int],
+    *,
+    reference: pd.DataFrame | None = None,
 ) -> _Contributions:
     """Tier 3: `base - score(row with the feature replaced)`, one batched prediction per feature.
 
     Always available: it asks the scorer for scores and for nothing else. The replacement value is
-    the column's median (numeric) or first mode (anything else) over the rows being explained - an
-    approximation of the training statistic the prepare report would carry, logged once here so the
-    number is never mistaken for a fitted one.
+    the column's median (numeric) or first mode (anything else) - an approximation of the training
+    statistic the prepare report would carry, logged once here so the number is never mistaken for
+    a fitted one.
+
+    `reference` is the frame those medians and modes are taken over, and defaults to `rows` itself.
+    A retry passes the whole sample instead (DEC-056): taken over the handful of rows still pending,
+    the replacement degenerates - a single pending row would be replaced by its own value, making
+    every contribution exactly zero and the tier a guaranteed no-op on the one row that most needed
+    rescuing.
     """
     import numpy as np
     import pandas as pd
 
+    source = rows if reference is None else reference
     chosen = _permutation_features(features, rank)
     _LOGGER.warning(
         "explain: falling back to permutation reasons over %d features; the replacement values are "
-        "medians and modes of the explained rows, not fitted training statistics",
+        "medians and modes of %d reference rows, not fitted training statistics",
         len(chosen),
+        len(source.index),
     )
     base = np.asarray(scorer.score(rows).to_numpy(), dtype=np.float64)
     contributions: dict[str, FloatArray] = {}
@@ -912,7 +952,8 @@ def _permutation_contributions(
         column = replaced[feature]
         # Every row takes the replacement: the `where` mask is false everywhere, which is the one
         # spelling of "overwrite this column with one scalar" that keeps the column's own dtype.
-        replaced[feature] = column.where(_never(column), other=_replacement(column))
+        # The scalar comes from `source`, which is the whole sample on a retry (DEC-056).
+        replaced[feature] = column.where(_never(column), other=_replacement(source[feature]))
         moved = np.asarray(scorer.score(replaced).to_numpy(), dtype=np.float64)
         contributions[feature] = np.asarray(base - moved, dtype=np.float64)
     frame = pd.DataFrame(contributions, index=rows.index, columns=list(chosen))

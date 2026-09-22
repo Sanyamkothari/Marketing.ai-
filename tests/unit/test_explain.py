@@ -24,6 +24,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import engine.stages.explain as explain_module
 from engine.config import Strategy, load_use_case, recipe_from_config
 from engine.contracts import (
     Direction,
@@ -737,12 +738,64 @@ def test_a_row_the_first_tier_cannot_move_is_retried_on_the_next_one(config) -> 
         max_rows=None,
         kernel_max_rows=None,
     )
-    # KernelSHAP answered for every row and moved none of them; the permutation tier rescued them.
-    assert result.method == "KernelSHAP"
+    # KernelSHAP answered for every row and moved none of them, so no row carries its reasons and
+    # `method` does not name it: the permutation tier retried them all and rescued them all.
     assert len(result.explanations) == len(frame)
     assert {item.method for item in result.explanations} == {"permutation"}
+    assert result.method == "permutation"
     assert all(item.reasons for item in result.explanations)
-    assert result.fallback_rows == len(frame)
+    # Every row ended on the tier `method` names, and each one is a real per-row measurement, so
+    # none of them is on a fallback in the sense the Output page reports.
+    assert result.fallback_rows == 0
+
+
+def test_a_row_a_later_tier_never_covered_is_not_re_exported_blank(config, monkeypatch) -> None:
+    """The kernel cap is a coverage budget for a run, not a licence to export empty cells.
+
+    Tier 1 answers for all thirty rows and moves none of them. The KernelSHAP cap is ten, so before
+    DEC-056's fix the twenty rows it could not have looked at were put straight back carrying tier
+    1's empty reason tuple - stamped with tier 1's name, so `fallback_rows` did not even count them.
+    """
+    frame = make_frame(30)
+    monkeypatch.setattr(
+        explain_module,
+        "_tree_shap",
+        lambda scorer, rows, features: explain_module._Contributions(
+            rows=rows,
+            values=pd.DataFrame(0.0, index=rows.index, columns=list(features)),
+            method=explain_module.ReasonMethod.TREE_SHAP,
+        ),
+    )
+    result = reasons_for(
+        FlatScorer(predictor=TreePredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        importance=chart("visits_last_7d", "plan_tier"),
+        max_rows=30,
+        kernel_max_rows=10,  # smaller than the thirty rows tier 1 blanks
+    )
+    assert len(result.explanations) == 30
+    assert all(item.reasons for item in result.explanations), "no row may reach export unexplained"
+    assert len({item.primary_key for item in result.explanations}) == 30
+    assert result.fallback_rows == 30
+    assert "TreeSHAP" not in {str(item.method) for item in result.explanations}
+
+
+def test_a_lone_pending_row_is_still_rescuable_by_the_permutation_tier(config) -> None:
+    """The retry keeps the whole sample as its reference, so one row is not replaced by itself."""
+    frame = make_frame(20)
+    seen: list[int] = []
+    scorer = FakeScorer(predictor=LinearOnlyPredictor(frame))
+    result = reasons_for(
+        scorer, frame, config, primary_key=PRIMARY_KEY, seed=1, max_rows=None, kernel_max_rows=0
+    )
+    seen.append(len(result.explanations))
+    assert seen == [20]
+    # The permutation tier ran over the real logistic scorer, so these are measured, not general.
+    assert {item.method for item in result.explanations} == {"permutation"}
+    assert all(item.reasons for item in result.explanations)
 
 
 def test_a_row_no_tier_can_move_keeps_general_reasons_from_the_chart(config) -> None:

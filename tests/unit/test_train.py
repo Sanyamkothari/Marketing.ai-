@@ -44,8 +44,10 @@ from engine.stages.scorer import SCORER_FILENAME, TrainError, load_scorer
 from engine.stages.train import (
     AG_NAME_TO_FAMILY,
     AG_PROBLEM_TYPE,
+    FAMILIES_WITHOUT_SEARCH_SPACE,
     autogluon_fit_kwargs,
     autogluon_predictor_kwargs,
+    available_families,
     build_best_model,
     build_leaderboard,
     class_labels,
@@ -847,3 +849,52 @@ def test_bagging_accepts_an_explicit_tuning_set(tmp_path) -> None:
     assert all(entry.family is not None or entry.is_ensemble for entry in leaderboard.entries)
     assert fitted.result.best.validation_score > 0.0
     assert "-fold CV" in fitted.result.detail
+
+
+# ---------------------------------------------------------------------------
+# DEC-057: the families HPO cannot tune
+# ---------------------------------------------------------------------------
+def test_the_untunable_family_set_still_matches_the_installed_autogluon() -> None:
+    """`FAMILIES_WITHOUT_SEARCH_SPACE` is a measured claim; this is what keeps it measured.
+
+    If a later AutoGluon gives RandomForest a default search space - or takes one away from another
+    family - the set is wrong and the warning it drives is wrong with it, so the suite says so
+    rather than letting `tuning_trials` quietly do nothing for a family nobody warned about.
+    """
+    from autogluon.common.space import Space
+    from autogluon.tabular.registry import ag_model_registry
+
+    catalog = get_catalog()
+    measured: set[ModelFamily] = set()
+    for family in (
+        ModelFamily.XGBOOST,
+        ModelFamily.LIGHTGBM,
+        ModelFamily.RANDOM_FOREST,
+        ModelFamily.LOGISTIC_REGRESSION,
+        ModelFamily.CATBOOST,
+    ):
+        cls = ag_model_registry.key_to_cls(catalog.model_families[family].autogluon_key)
+        try:
+            space = cls._get_default_searchspace(cls)
+        except Exception:  # needs a fitted instance; that family plainly has a space to fit
+            continue
+        if isinstance(space, dict) and not any(isinstance(v, Space) for v in space.values()):
+            measured.add(family)
+    assert measured == set(FAMILIES_WITHOUT_SEARCH_SPACE)
+
+
+def test_a_run_that_selects_an_untunable_family_says_so(caplog) -> None:
+    recipe = make_recipe(candidates=[ModelFamily.RANDOM_FOREST, ModelFamily.LIGHTGBM])
+    with caplog.at_level("WARNING"):
+        families = available_families(recipe)
+    assert set(families) == {ModelFamily.RANDOM_FOREST, ModelFamily.LIGHTGBM}
+    assert "tuning_trials" in caplog.text
+    assert ModelFamily.RANDOM_FOREST.value in caplog.text
+    assert ModelFamily.LIGHTGBM.value not in caplog.text.split("does not apply to")[-1]
+
+
+def test_a_run_without_an_untunable_family_stays_quiet(caplog) -> None:
+    recipe = make_recipe(candidates=[ModelFamily.LIGHTGBM, ModelFamily.XGBOOST])
+    with caplog.at_level("WARNING"):
+        available_families(recipe)
+    assert "tuning_trials" not in caplog.text
