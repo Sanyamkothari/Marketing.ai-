@@ -25,10 +25,12 @@ from engine.contracts import (
     BestModel,
     DatasetProfile,
     DecileLift,
+    Direction,
     EvaluationReport,
     Leaderboard,
     ModelStatus,
     PrepareReport,
+    ReasonMethod,
     RunManifest,
     RunRecord,
     RunState,
@@ -189,9 +191,20 @@ def test_row_explanations_carry_real_reasons(flow: Flow) -> None:
         for reason in item.reasons:
             assert reason.text.strip()
             assert reason.feature in features
-            assert reason.direction.value in {"up", "down"}
-    explained = sum(1 for item in explanations if item.reasons)
-    assert explained > len(explanations) // 2, "most rows must have something to say"
+            # "none" is a general reason (DEC-056): every tier measured this row's contributions as
+            # zero, so the reason names a feature that matters across the run and claims nothing
+            # about this row beyond its own value. It must say so rather than borrow an arrow.
+            assert reason.direction.value in {"up", "down", "none"}
+            if reason.direction is Direction.NONE:
+                assert item.method is ReasonMethod.GENERAL
+                assert reason.contribution == 0.0
+                assert reason.text.endswith(explain.GENERAL_SUFFIX)
+            else:
+                assert item.method is not ReasonMethod.GENERAL
+                assert reason.contribution != 0.0
+    assert all(item.reasons for item in explanations), "plan §6.3: every explained row has a reason"
+    measured = sum(1 for item in explanations if item.method is not ReasonMethod.GENERAL)
+    assert measured > len(explanations) // 2, "most rows must have something measured on them"
 
 
 def test_the_leaderboard_is_a_real_search(flow: Flow) -> None:
