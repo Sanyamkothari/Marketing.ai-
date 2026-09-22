@@ -222,18 +222,15 @@ def create_run_endpoint(
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
     )
+    # The mode decides the flow, not whether a model version happened to be resolved: `version` is
+    # only ever set on the score path, so testing it here sent every training run to the M2 stub
+    # and stopped it at `prepare` (DEC-076).
     jobs.submit(
         record.run_id,
         (
-            build_m2_job(
-                storage,
-                run_id=record.run_id,
-                profile=profile,
-                report=report.model_copy(update={"run_id": record.run_id}),
-                mode=body.mode,
-            )
-            if version is None
-            else build_score_job(storage, registry, jobs, resolved=resolved, record=record, upload=upload)
+            build_score_job(storage, registry, jobs, resolved=resolved, record=record, upload=upload)
+            if body.mode is RunMode.SCORE
+            else build_train_job(storage, registry, jobs, resolved=resolved, record=record, upload=upload)
         ),
     )
     response.headers["Location"] = f"/runs/{record.run_id}"
@@ -506,6 +503,48 @@ def build_score_job(
     return job
 
 
+def build_train_job(
+    storage: Storage,
+    registry: ModelRegistry,
+    jobs: JobRunner,
+    *,
+    resolved: ResolvedConfig,
+    record: RunRecord,
+    upload: UploadRecord,
+) -> JobFn:
+    """The train flow of plan §6.1, off the request thread: `Pipeline.run_train` and nothing else.
+
+    The mirror of :func:`build_score_job`, and for the same reasons: the pipeline owns `status.json`
+    and `run_manifest.json` from here on, records a failure on the stage it happened at, and a
+    `JobCancelledError` is left to propagate so the runner reads it as "cancelled" rather than this
+    body overwriting the stage the pipeline stopped at.
+
+    This is what DEC-060's `build_m2_job` was a placeholder for, and what DEC-076 replaced it with:
+    until then every training run submitted through the API stopped at `prepare` with
+    `STAGE_NOT_IMPLEMENTED`, although `Pipeline.run_train` had worked since M3.
+    """
+    pipeline = Pipeline(storage, registry, jobs)
+
+    def job(cancel: CancelToken) -> None:
+        pipeline.run_train(
+            StageContext(
+                run_id=record.run_id,
+                mode=RunMode.TRAIN,
+                config=resolved.config,
+                resolved=resolved,
+                storage=storage,
+                registry=registry,
+                cancel=cancel,
+                primary_key=record.primary_key,
+                target=record.target,
+                upload_key=upload.source_key,
+                model_version_id=None,
+            )
+        )
+
+    return job
+
+
 def build_m2_job(
     storage: Storage,
     *,
@@ -518,7 +557,12 @@ def build_m2_job(
 
     Both stages have already done their work on the request thread - the job replays them onto the
     status document so the Running screen shows real detail lines - and `prepare` fails with a named
-    error instead of an unhandled `NotImplementedError`. M3 replaces this one function.
+    error instead of an unhandled `NotImplementedError`.
+
+    **Nothing in the product calls this any more** (DEC-076): `POST /runs` submits
+    :func:`build_train_job` for a training run and :func:`build_score_job` for a scoring one. It is
+    kept because its tests are the only place the coded-stop behaviour is exercised, and a future
+    stage that has to stop honestly should stop like this rather than raising.
     """
     checked = StageKey.VALIDATE if mode is RunMode.TRAIN else StageKey.VALIDATE_AGAINST_SCHEMA
 

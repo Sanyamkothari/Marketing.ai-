@@ -13,7 +13,8 @@ a named machine, with the command to reproduce it.
 
 What is measured, and what is only setup
 ----------------------------------------
-Two numbers are the result, each taken with `time.perf_counter` around the real engine call:
+Two numbers are the result *for every format measured*, each taken with `time.perf_counter`
+around the real engine call:
 
 * **ingest** - `ingest.read_upload` followed by `ingest.profile_dataset`: exactly what the
   pipeline's ingest stage does (`_ScoreFlow._ingest`), including the content fingerprint over
@@ -28,15 +29,40 @@ champion to score it with. The champion is deliberately trained on a few thousan
 cost at scale, not what AutoGluon costs, and a champion fitted on a sample scores a large file
 exactly as a champion fitted on a large one would.
 
+Which format is measured
+------------------------
+plan §4.1 accepts "CSV (UTF-8, comma separated, header row) or Parquet" and `read_upload` streams
+both, so a benchmark that only ever handed it a CSV left half of the accepted input untimed and
+`README.md` had to say so. `--format` picks the half: `csv` (the default, so an invocation written
+before this option measures exactly what it measured then), `parquet`, or `both`.
+
+`both` is the comparable measurement, and the only one. Two formats timed in one process, on one
+machine, over rows generated once and written twice differ by the read path and by nothing else -
+not by a busier machine, not by a different day, not by a different draw of rows. The ingests are
+timed back to back, before either scoring run, for the same reason: an ingest measured after a
+score flow would run in a process carrying that flow's heap, and whichever format went second
+would look slower for a reason that has nothing to do with its format. Timing every ingest first
+also means the number this script exists to produce is already printed if a long scoring run is
+killed at a time limit (plan §13.3: report what was measured).
+
+Two things `both` does not equalise, and neither is a flaw in the measurement. Parquet carries its
+own types, so its frame arrives typed while the CSV's is inferred from text - an empty CSV field is
+a null, an empty Parquet string stays an empty string - which is a real property of the two formats
+and part of what the ingest seconds buy. And `peak memory` is one high-water mark for one process,
+so under `both` it belongs to the session - the larger of the two paths - and not to either format
+alone; a per-format peak needs a run per format.
+
 Why the file is generated in a separate process
 -----------------------------------------------
 Peak memory is read from `resource.getrusage(RUSAGE_SELF).ru_maxrss`, which is a *high-water
 mark*: it only ever rises, and it cannot be reset. Building a million-row frame in pandas and
-rendering it to CSV is itself expensive, so doing it in this process would raise the mark before
-the first measured call and the reported peak would be the generator's, not the engine's. The
-generator therefore runs in a spawned child process, whose resident set never enters this
-process's mark. Training stays here on purpose: AutoGluon's imports and its fitted predictor are
-resident during scoring too, so they belong inside the number.
+rendering it to CSV or to Parquet is itself expensive, so doing it in this process would raise the
+mark before the first measured call and the reported peak would be the generator's, not the
+engine's. The generator therefore runs in a spawned child process, whose resident set never enters
+this process's mark. One child writes every requested format from one generated frame, so
+`--format both` compares two files holding the same rows and pays for building them once. Training
+stays here on purpose: AutoGluon's imports and its fitted predictor are resident during scoring
+too, so they belong inside the number.
 
 `tracemalloc` was the other candidate and is the wrong instrument here: it counts only blocks
 allocated through Python's allocator, which misses the pandas, NumPy, Arrow and LightGBM buffers
@@ -45,6 +71,7 @@ that hold nearly all of a large frame.
 Run it with::
 
     .venv/bin/python -m scripts.bench_large_file --rows 1000000
+    .venv/bin/python -m scripts.bench_large_file --rows 1000000 --format both
 """
 
 from __future__ import annotations
@@ -58,9 +85,9 @@ import shutil
 import sys
 import tempfile
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from time import perf_counter
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from tests.fixtures.make_data import GenerationSpec, generate
 
@@ -75,7 +102,7 @@ from engine.utils.ids import new_run_id
 from engine.utils.logging import configure_logging
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     from engine.config import ResolvedConfig
     from engine.contracts import ModelVersion
@@ -87,6 +114,22 @@ USE_CASE: Final[str] = "targeted-advertisement"
 
 PRIMARY_KEY: Final[str] = "customer_id"
 TARGET: Final[str] = "converted_30d"
+
+FileFormat = Literal["csv", "parquet"]
+"""The two formats plan §4.1 accepts, spelled as `ingest.ReadResult.file_format` spells them."""
+
+FORMAT_CHOICES: Final[dict[str, tuple[FileFormat, ...]]] = {
+    "csv": ("csv",),
+    "parquet": ("parquet",),
+    "both": ("csv", "parquet"),
+}
+"""What each `--format` value measures, in the order it measures it."""
+
+DEFAULT_FORMAT: Final[str] = "csv"
+"""CSV alone, so an invocation written before `--format` existed measures what it always measured."""
+
+FORMAT_LABELS: Final[dict[FileFormat, str]] = {"csv": "CSV", "parquet": "Parquet"}
+"""How each format is spelled in the report's prose, where a bare `csv` would read as a suffix."""
 
 DEFAULT_ROWS: Final[int] = 1_000_000
 """plan §11's M7 number: the size the definition of done names."""
@@ -115,41 +158,61 @@ PEAK_MEMORY_BASIS: Final[str] = (
     "Python-allocator blocks. File generation ran in a separate process and is excluded."
 )
 
+PEAK_MEMORY_SHARED: Final[str] = (
+    "Both formats were measured in this one process, so this mark is the session's - the larger "
+    "of the two paths - and belongs to neither format on its own; a per-format peak needs a run "
+    "per format."
+)
+"""Printed under `--format both`, because one high-water mark cannot be split between two paths."""
+
 
 # ---------------------------------------------------------------------------
 # Generation (a separate process; see the module docstring)
 # ---------------------------------------------------------------------------
-def write_dataset(rows: int, seed: int, destination: Path) -> None:
-    """Write a `rows`-row scoring file for the benchmark's use case at `destination`.
+def write_dataset(rows: int, seed: int, destinations: Sequence[Path]) -> None:
+    """Write a `rows`-row scoring file at each of `destinations`, in the format its suffix names.
 
     The `scoring` variant carries the template's columns **without** the target, which is what a
     real scoring upload looks like and what the score flow has to accept; a file with the answers
     in it would not exercise the same path.
 
+    One `generate` call feeds every destination: under `--format both` the CSV and the Parquet file
+    have to hold the *same* rows for the two ingest numbers to be comparable. Which format each
+    destination gets is decided by `ingest.file_format_for`, the engine's own rule for what it will
+    read that file back as, rather than by a second spelling of the suffixes here.
+
     This is a module-level function rather than a closure because the spawned child process has to
     import it by name.
     """
-    destination.parent.mkdir(parents=True, exist_ok=True)
     frame = generate(GenerationSpec(USE_CASE, rows=rows, variant="scoring", seed=seed))
-    frame.to_csv(destination, index=False, lineterminator="\n", encoding="utf-8")
+    for destination in destinations:
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if ingest.file_format_for(destination.name) == "parquet":
+            # pyarrow's defaults on purpose - snappy, its own row-group size: what is being timed
+            # is the file a user's `to_parquet` hands the engine, not one tuned to be read fast.
+            frame.to_parquet(destination, engine="pyarrow", index=False)
+        else:
+            frame.to_csv(destination, index=False, lineterminator="\n", encoding="utf-8")
 
 
-def generate_dataset(rows: int, seed: int, destination: Path) -> float:
-    """Generate the file in a spawned child process; returns the wall-clock seconds it took.
+def generate_dataset(rows: int, seed: int, destinations: Sequence[Path]) -> float:
+    """Generate every requested file in one spawned child; returns the wall-clock seconds it took.
 
     The child's resident set is not this process's, so the peak memory the benchmark reports stays
     a statement about the engine. A child that dies takes the benchmark with it: a truncated or
-    missing file would silently turn the measurement into a measurement of something else.
+    missing file would silently turn the measurement into a measurement of something else, and
+    under `--format both` that is true of either file, so every destination is checked.
     """
     started = perf_counter()
     context = multiprocessing.get_context("spawn")
-    child = context.Process(target=write_dataset, args=(rows, seed, destination))
+    child = context.Process(target=write_dataset, args=(rows, seed, tuple(destinations)))
     child.start()
     child.join()
     if child.exitcode != 0:
         raise RuntimeError(f"the data generator exited with code {child.exitcode}; no file was measured")
-    if not destination.is_file():
-        raise RuntimeError(f"the data generator wrote no file at {destination}")
+    missing = [str(path) for path in destinations if not path.is_file()]
+    if missing:
+        raise RuntimeError(f"the data generator wrote no file at {', '.join(missing)}")
     return perf_counter() - started
 
 
@@ -204,11 +267,17 @@ def train_champion(
 # ---------------------------------------------------------------------------
 @dataclass(frozen=True, slots=True)
 class Measurement:
-    """One timed stage: what it cost, and how many rows it cost that for."""
+    """One timed stage: which stage, over which format, what it cost, and for how many rows."""
 
-    name: str
+    stage: str
+    file_format: FileFormat
     seconds: float
     rows: int
+
+    @property
+    def name(self) -> str:
+        """`ingest csv`, `score parquet`: with two formats in one run the stage alone is ambiguous."""
+        return f"{self.stage} {self.file_format}"
 
     @property
     def rows_per_second(self) -> float:
@@ -221,13 +290,20 @@ def measurement_line(item: Measurement) -> str:
     return f"{item.name} {item.seconds:,.1f} s · {item.rows_per_second:,.0f} rows/sec · {item.rows:,} rows"
 
 
-def measure_ingest(storage: LocalStorage, key: str, resolved: ResolvedConfig) -> Measurement:
+def measure_ingest(
+    storage: LocalStorage, key: str, resolved: ResolvedConfig, *, file_format: FileFormat
+) -> Measurement:
     """Time `read_upload` + `profile_dataset` - the pipeline's ingest stage, call for call.
 
     This is `_ScoreFlow._ingest` without the artefact write: the same `profile_row_cap`, the same
     single streaming pass, and the same whole-file fingerprint, so the seconds are the seconds the
     stage really spends. The profile is returned to nothing and dropped, so the frame it was built
     from is released before the score flow reads the file again.
+
+    Nothing here branches on the format. `read_upload` chooses the CSV reader or the Parquet reader
+    from the key's suffix exactly as `POST /uploads` does, and `read.file_format` goes straight into
+    the profile, so the Parquet path is timed through the same two calls and not a variant of them;
+    `file_format` is carried only to label the result.
     """
     config = resolved.config
     started = perf_counter()
@@ -236,7 +312,7 @@ def measure_ingest(storage: LocalStorage, key: str, resolved: ResolvedConfig) ->
         read.frame,
         config,
         upload_id="u_bench_score",
-        file_name="source.csv",
+        file_name=PurePosixPath(key).name,
         file_format=read.file_format,
         file_size_bytes=storage.size_bytes(key),
         delimiter=read.delimiter,
@@ -245,7 +321,7 @@ def measure_ingest(storage: LocalStorage, key: str, resolved: ResolvedConfig) ->
         fingerprint=read.fingerprint,
     )
     seconds = perf_counter() - started
-    return Measurement("ingest", seconds, profile.row_count)
+    return Measurement("ingest", file_format, seconds, profile.row_count)
 
 
 def measure_score(
@@ -254,12 +330,16 @@ def measure_score(
     resolved: ResolvedConfig,
     *,
     key: str,
+    file_format: FileFormat,
     jobs: ThreadJobRunner,
 ) -> Measurement:
     """Time `Pipeline.run_score` over the same file: the whole of plan §6.2, nothing stubbed.
 
     `model_version_id=None` on purpose - the flow resolves the champion the way `POST /runs` does,
     so the benchmark measures the path a user's scoring run takes rather than a shortcut into it.
+    The champion is the one fitted on the CSV sample whichever format is being scored: a model is
+    fitted on the rows a file held, not on the container they arrived in, and re-fitting per format
+    would put AutoGluon's variance inside a comparison that is meant to be about reading.
     """
     run_id = new_run_id()
     storage.write_model(run_key(run_id, "run_config.json"), resolved)
@@ -281,7 +361,7 @@ def measure_score(
     seconds = perf_counter() - started
     if record.state is not RunState.DONE:
         raise RuntimeError(f"the scoring run did not finish: {record.error}")
-    return Measurement("score", seconds, record.row_count or 0)
+    return Measurement("score", file_format, seconds, record.row_count or 0)
 
 
 # ---------------------------------------------------------------------------
@@ -313,7 +393,7 @@ def machine_line() -> str:
 def print_report(
     *,
     rows: int,
-    file_bytes: int,
+    files: Mapping[FileFormat, int],
     generate_seconds: float,
     train_seconds: float,
     train_rows: int,
@@ -327,21 +407,74 @@ def print_report(
     print(rule)
     print(f"machine      : {machine_line()}")
     print(f"rows         : {rows:,}")
-    print(f"file         : {file_bytes / 1_000_000:.1f} MB CSV · {USE_CASE} · scoring variant")
+    sizes = ", ".join(f"{size / 1_000_000:.1f} MB {FORMAT_LABELS[fmt]}" for fmt, size in files.items())
+    print(f"file         : {sizes} · {USE_CASE} · scoring variant")
     print()
     print("setup (NOT part of the measured result)")
     print(f"  generate   : {generate_seconds:8.1f} s   (separate process; excluded from peak memory)")
     print(f"  train      : {train_seconds:8.1f} s   ({train_rows:,} rows, {_overrides_line()})")
     print()
     print("measured")
-    print(f"  {'stage':<10}{'seconds':>12}{'rows/sec':>14}{'rows':>14}")
+    print(f"  {'stage':<16}{'seconds':>12}{'rows/sec':>14}{'rows':>14}")
     for item in measurements:
-        print(f"  {item.name:<10}{item.seconds:>12.1f}{item.rows_per_second:>14,.0f}{item.rows:>14,}")
+        print(f"  {item.name:<16}{item.seconds:>12.1f}{item.rows_per_second:>14,.0f}{item.rows:>14,}")
+    comparison = comparison_lines(measurements, files)
+    if comparison:
+        print()
+        print("parquet against csv (same rows, same process, same machine)")
+        for line in comparison:
+            print(line)
     print()
     print(f"peak memory  : {peak_mb:,.0f} MB")
     for line in _wrap(PEAK_MEMORY_BASIS, width=62):
         print(f"               {line}")
+    if len({item.file_format for item in measurements}) > 1:
+        for line in _wrap(PEAK_MEMORY_SHARED, width=62):
+            print(f"               {line}")
     print(rule)
+
+
+def comparison_lines(measurements: Sequence[Measurement], files: Mapping[FileFormat, int]) -> list[str]:
+    """Parquet as a multiple of CSV, per stage; empty unless this run measured both formats.
+
+    A ratio, not a "faster" verdict: the two numbers beside it say which way it points, and a ratio
+    stays true whichever format wins on the machine the run happened on. Only stages this run timed
+    in *both* formats appear, so a half-finished run compares nothing rather than something wrong.
+    """
+    seconds: dict[str, dict[FileFormat, float]] = {}
+    for item in measurements:
+        seconds.setdefault(item.stage, {})[item.file_format] = item.seconds
+    lines: list[str] = []
+    for stage, by_format in seconds.items():
+        csv_seconds = by_format.get("csv")
+        parquet_seconds = by_format.get("parquet")
+        if csv_seconds is None or parquet_seconds is None or csv_seconds <= 0:
+            continue
+        lines.append(
+            _ratio_line(
+                stage,
+                ratio=parquet_seconds / csv_seconds,
+                unit="the seconds",
+                detail=f"{parquet_seconds:,.1f} s vs {csv_seconds:,.1f} s",
+            )
+        )
+    csv_bytes = files.get("csv")
+    parquet_bytes = files.get("parquet")
+    if csv_bytes and parquet_bytes:
+        lines.append(
+            _ratio_line(
+                "file",
+                ratio=parquet_bytes / csv_bytes,
+                unit="the bytes",
+                detail=f"{parquet_bytes / 1_000_000:,.1f} MB vs {csv_bytes / 1_000_000:,.1f} MB",
+            )
+        )
+    return lines
+
+
+def _ratio_line(label: str, *, ratio: float, unit: str, detail: str) -> str:
+    """One comparison row, aligned with the measured table above it."""
+    return f"  {label:<16}{ratio:>7.2f}× {unit:<14}({detail})"
 
 
 def _overrides_line() -> str:
@@ -371,7 +504,10 @@ def _wrap(text: str, *, width: int) -> list[str]:
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog=COMMAND,
-        description="Generate a large synthetic file, then measure the ingest and score paths on it.",
+        description=(
+            "Generate a large synthetic file, then measure the ingest and score paths on it, in "
+            "CSV, in Parquet, or in both formats side by side."
+        ),
     )
     parser.add_argument(
         "--rows", type=int, default=DEFAULT_ROWS, help=f"rows to generate and score (default: {DEFAULT_ROWS})"
@@ -384,6 +520,15 @@ def _parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--keep", action="store_true", help="keep the generated file and the run artefacts afterwards"
+    )
+    parser.add_argument(
+        "--format",
+        choices=tuple(FORMAT_CHOICES),
+        default=DEFAULT_FORMAT,
+        help=(
+            "which accepted input format to measure: csv, parquet, or both side by side in one "
+            f"session (default: {DEFAULT_FORMAT})"
+        ),
     )
     parser.add_argument(
         "--train-rows",
@@ -404,6 +549,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = _parser().parse_args(list(argv) if argv is not None else None)
     rows: int = args.rows
     train_rows: int = args.train_rows
+    formats: tuple[FileFormat, ...] = FORMAT_CHOICES[args.format]
     if rows < 1:
         print("--rows must be at least 1", file=sys.stderr)
         return 2
@@ -426,33 +572,46 @@ def main(argv: Sequence[str] | None = None) -> int:
     # and a scoring run must be timed as a user's scoring run, not as a tuned one.
     score_config = resolve_config(USE_CASE, root=config_root)
 
-    key = upload_key("u_bench_score", "source.csv")
-    source = storage.local_path(key)
+    keys: dict[FileFormat, str] = {fmt: upload_key("u_bench_score", f"source.{fmt}") for fmt in formats}
+    sources: dict[FileFormat, Path] = {fmt: storage.local_path(key) for fmt, key in keys.items()}
     try:
         print(f"workspace    : {workspace}")
-        print(f"generating   : {rows:,} rows …", flush=True)
-        generate_seconds = generate_dataset(rows, SCORE_SEED, source)
-        file_bytes = source.stat().st_size
+        print(f"generating   : {rows:,} rows · {', '.join(formats)} …", flush=True)
+        generate_seconds = generate_dataset(rows, SCORE_SEED, tuple(sources.values()))
+        files: dict[FileFormat, int] = {fmt: path.stat().st_size for fmt, path in sources.items()}
         print(f"training     : champion on {train_rows:,} rows …", flush=True)
         _, train_seconds = train_champion(storage, registry, train_config, rows=train_rows, jobs=jobs)
-        print("measuring    : ingest …", flush=True)
-        ingest_measurement = measure_ingest(storage, key, score_config)
-        # Each measurement is printed the moment it is taken, not only in the table below. A run
-        # at a size this machine cannot finish is stopped in the middle of the score stage - by a
-        # `timeout`, by an operator, by the OOM killer - and the ingest number it *did* measure is
-        # a real result that must not die with it (plan §13.3: report what was measured).
-        print(f"measured     : {measurement_line(ingest_measurement)}", flush=True)
-        print("measuring    : score …", flush=True)
-        score_measurement = measure_score(storage, registry, score_config, key=key, jobs=jobs)
-        print(f"measured     : {measurement_line(score_measurement)}", flush=True)
+        # Each measurement is printed the moment it is taken, not only in the table below, and
+        # every ingest is taken before any scoring run. A run at a size this machine cannot finish
+        # is stopped in the middle of a score stage - by a `timeout`, by an operator, by the OOM
+        # killer - and the ingest numbers it *did* measure are a real result that must not die with
+        # it (plan §13.3: report what was measured).
+        measurements: list[Measurement] = []
+        for file_format in formats:
+            print(f"measuring    : ingest {file_format} …", flush=True)
+            measured = measure_ingest(storage, keys[file_format], score_config, file_format=file_format)
+            measurements.append(measured)
+            print(f"measured     : {measurement_line(measured)}", flush=True)
+        for file_format in formats:
+            print(f"measuring    : score {file_format} …", flush=True)
+            measured = measure_score(
+                storage,
+                registry,
+                score_config,
+                key=keys[file_format],
+                file_format=file_format,
+                jobs=jobs,
+            )
+            measurements.append(measured)
+            print(f"measured     : {measurement_line(measured)}", flush=True)
         print()
         print_report(
             rows=rows,
-            file_bytes=file_bytes,
+            files=files,
             generate_seconds=generate_seconds,
             train_seconds=train_seconds,
             train_rows=train_rows,
-            measurements=(ingest_measurement, score_measurement),
+            measurements=tuple(measurements),
             peak_mb=peak_memory_mb(),
         )
     finally:
