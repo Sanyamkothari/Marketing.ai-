@@ -47,6 +47,15 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Final, TypeVar, cast
 
 from engine import __version__
+from engine.aws.metrics import (
+    MetricSink,
+    NullMetricSink,
+    record_job_cost,
+    record_run_failed,
+    record_run_started,
+    record_stage_duration,
+)
+from engine.aws.run_index import RunIndex, mirror_run
 from engine.config import (
     ModelFamily,
     PrimaryKey,
@@ -94,9 +103,9 @@ from engine.stages import (
     validate,
 )
 from engine.stages.scorer import AutoGluonScorer, BaselineScorer, load_scorer
-from engine.storage import Storage, StorageError, run_key
+from engine.storage import Storage, StorageError, release_local, run_key
 from engine.utils.ids import seed_from
-from engine.utils.logging import get_logger, log_stage
+from engine.utils.logging import bind_log_context, get_logger, log_stage
 from engine.utils.text import humanise_count
 from engine.utils.time import utc_now
 
@@ -532,6 +541,8 @@ class _TrainFlow:
         self._started = perf_counter()
         self._status = _StatusWriter(ctx.storage, pipeline.initial_status(ctx.run_id, ctx.mode))
         self._run = _RunWriter(ctx)
+        self._index = pipeline.run_index
+        self._metrics = pipeline.metrics
         self._manifest = _ManifestBuilder(
             run_id=ctx.run_id, primary_key=ctx.primary_key, seed=self._seed, started=self._started
         )
@@ -562,14 +573,34 @@ class _TrainFlow:
 
     # -- the driver ---------------------------------------------------------
     def execute(self) -> RunRecord:
-        """Run every stage in order, then write the finished run record."""
-        try:
-            self._run.update(state=RunState.RUNNING, started_at=utc_now())
-            for key, body in self._bodies():
-                self._run_stage(key, body)
-            return self._complete()
-        finally:
-            self._flush_manifest()
+        """Run every stage in order, then write the finished run record.
+
+        The `finally` writes the manifest whatever the outcome, and then releases anything the
+        store was mirroring on local disk for this run. On `LocalStorage` the release is a no-op and
+        nothing about a local run changes; on a mirrored store it publishes whatever a stage wrote
+        through `local_path` and did not itself publish, and reclaims the disk (DEC-311). It runs
+        after the manifest because the manifest is written through the store like any other artefact.
+        """
+        # The context is bound HERE, inside the job body, and not around the `submit` that started
+        # it: a `ContextVar` set on the request thread is not copied into a `ThreadPoolExecutor`
+        # worker, so a binding made outside would simply not be there when a stage logged (DEC-382).
+        with bind_log_context(run_id=self._ctx.run_id):
+            record_run_started(self._metrics, use_case_id=self._ctx.config.id)
+            try:
+                self._run.update(state=RunState.RUNNING, started_at=utc_now())
+                for key, body in self._bodies():
+                    self._run_stage(key, body)
+                return self._complete()
+            except JobCancelledError:
+                # A cancellation is not a failure. Counting it as one would make an alarm on
+                # RunsFailed fire every time somebody changed their mind (DEC-388).
+                raise
+            except Exception:
+                record_run_failed(self._metrics, use_case_id=self._ctx.config.id)
+                raise
+            finally:
+                self._flush_manifest()
+                release_local(self._storage, f"runs/{self._ctx.run_id}/")
 
     def _bodies(self) -> tuple[tuple[StageKey, Callable[[], _StageOutcome]], ...]:
         """The eight stages of plan §6.1, in order, each with the body that runs it."""
@@ -595,7 +626,8 @@ class _TrainFlow:
         try:
             self._ctx.cancel.raise_if_cancelled()
             self._status.start(key)
-            outcome = body()
+            with bind_log_context(stage=key.value):
+                outcome = body()
             self._ctx.cancel.raise_if_cancelled()
         except JobCancelledError:
             self._stop(key, RunState.CANCELLED, perf_counter() - started, error=None)
@@ -612,6 +644,7 @@ class _TrainFlow:
         self._status.finish(key, detail=outcome.detail, seconds=seconds)
         self._manifest.record(key, seconds)
         log_stage(_LOGGER, key.value, rows=outcome.rows, seconds=seconds)
+        record_stage_duration(self._metrics, stage=key.value, seconds=seconds)
 
     def _stop(self, key: StageKey, state: RunState, seconds: float, *, error: RunError | None) -> None:
         """Write both documents before the exception leaves the pipeline, so the UI's next poll sees why."""
@@ -646,6 +679,11 @@ class _TrainFlow:
         try:
             manifest = self._manifest.build(_file_fingerprint(self._storage, self._ctx.upload_key))
             self._storage.write_model(run_key(self._ctx.run_id, MANIFEST_FILENAME), manifest)
+            record_job_cost(
+                self._metrics,
+                manifest.cost_estimate,
+                backend="local" if manifest.compute is None else manifest.compute.backend,
+            )
             _LOGGER.info(
                 "manifest: run=%s recipe=%s fingerprint=%s duration=%.1fs",
                 manifest.run_id,
@@ -655,6 +693,13 @@ class _TrainFlow:
             )
         except Exception:
             _LOGGER.exception("the run manifest could not be written for run %s", self._ctx.run_id)
+            manifest = None
+        # The index row is written here, last, because this is the one point at which both `run.json`
+        # and the manifest are final - so a row never describes a run that is still moving. It is
+        # deliberately last in a second sense too: `mirror_run` never raises, because `run.json` is
+        # the record and the row is only an index of it. A run that finished must not be reported as
+        # failed because a database was briefly unreachable (DEC-342).
+        mirror_run(self._index, self._run.record, manifest)
 
     def _write(self, filename: str, model: BaseModel) -> str:
         """Write one artefact into the run directory and remember its key for `run.json`."""
@@ -1071,6 +1116,8 @@ class _ScoreFlow:
         self._started = perf_counter()
         self._status = _StatusWriter(ctx.storage, pipeline.initial_status(ctx.run_id, ctx.mode))
         self._run = _RunWriter(ctx)
+        self._index = pipeline.run_index
+        self._metrics = pipeline.metrics
         self._manifest = _ManifestBuilder(
             run_id=ctx.run_id, primary_key=ctx.primary_key, seed=self._seed, started=self._started
         )
@@ -1091,14 +1138,34 @@ class _ScoreFlow:
 
     # -- the driver ---------------------------------------------------------
     def execute(self) -> RunRecord:
-        """Run every stage in order, then write the finished run record."""
-        try:
-            self._run.update(state=RunState.RUNNING, started_at=utc_now())
-            for key, body in self._bodies():
-                self._run_stage(key, body)
-            return self._complete()
-        finally:
-            self._flush_manifest()
+        """Run every stage in order, then write the finished run record.
+
+        The `finally` writes the manifest whatever the outcome, and then releases anything the
+        store was mirroring on local disk for this run. On `LocalStorage` the release is a no-op and
+        nothing about a local run changes; on a mirrored store it publishes whatever a stage wrote
+        through `local_path` and did not itself publish, and reclaims the disk (DEC-311). It runs
+        after the manifest because the manifest is written through the store like any other artefact.
+        """
+        # The context is bound HERE, inside the job body, and not around the `submit` that started
+        # it: a `ContextVar` set on the request thread is not copied into a `ThreadPoolExecutor`
+        # worker, so a binding made outside would simply not be there when a stage logged (DEC-382).
+        with bind_log_context(run_id=self._ctx.run_id):
+            record_run_started(self._metrics, use_case_id=self._ctx.config.id)
+            try:
+                self._run.update(state=RunState.RUNNING, started_at=utc_now())
+                for key, body in self._bodies():
+                    self._run_stage(key, body)
+                return self._complete()
+            except JobCancelledError:
+                # A cancellation is not a failure. Counting it as one would make an alarm on
+                # RunsFailed fire every time somebody changed their mind (DEC-388).
+                raise
+            except Exception:
+                record_run_failed(self._metrics, use_case_id=self._ctx.config.id)
+                raise
+            finally:
+                self._flush_manifest()
+                release_local(self._storage, f"runs/{self._ctx.run_id}/")
 
     def _bodies(self) -> tuple[tuple[StageKey, Callable[[], _StageOutcome]], ...]:
         """The seven stages of plan §6.2, in order, each with the body that runs it."""
@@ -1118,7 +1185,8 @@ class _ScoreFlow:
         try:
             self._ctx.cancel.raise_if_cancelled()
             self._status.start(key)
-            outcome = body()
+            with bind_log_context(stage=key.value):
+                outcome = body()
             self._ctx.cancel.raise_if_cancelled()
         except JobCancelledError:
             self._stop(key, RunState.CANCELLED, perf_counter() - started, error=None)
@@ -1135,6 +1203,7 @@ class _ScoreFlow:
         self._status.finish(key, detail=outcome.detail, seconds=seconds)
         self._manifest.record(key, seconds)
         log_stage(_LOGGER, key.value, rows=outcome.rows, seconds=seconds)
+        record_stage_duration(self._metrics, stage=key.value, seconds=seconds)
 
     def _stop(self, key: StageKey, state: RunState, seconds: float, *, error: RunError | None) -> None:
         """Write both documents before the exception leaves the pipeline, so the UI's next poll sees why."""
@@ -1176,6 +1245,11 @@ class _ScoreFlow:
         try:
             manifest = self._manifest.build(_file_fingerprint(self._storage, self._ctx.upload_key))
             self._storage.write_model(run_key(self._ctx.run_id, MANIFEST_FILENAME), manifest)
+            record_job_cost(
+                self._metrics,
+                manifest.cost_estimate,
+                backend="local" if manifest.compute is None else manifest.compute.backend,
+            )
             _LOGGER.info(
                 "manifest: run=%s recipe=none fingerprint=%s duration=%.1fs",
                 manifest.run_id,
@@ -1184,6 +1258,13 @@ class _ScoreFlow:
             )
         except Exception:
             _LOGGER.exception("the run manifest could not be written for run %s", self._ctx.run_id)
+            manifest = None
+        # The index row is written here, last, because this is the one point at which both `run.json`
+        # and the manifest are final - so a row never describes a run that is still moving. It is
+        # deliberately last in a second sense too: `mirror_run` never raises, because `run.json` is
+        # the record and the row is only an index of it. A run that finished must not be reported as
+        # failed because a database was briefly unreachable (DEC-342).
+        mirror_run(self._index, self._run.record, manifest)
 
     def _write(self, filename: str, model: BaseModel) -> str:
         """Write one artefact into the run directory and remember its key for `run.json`."""
@@ -1490,10 +1571,20 @@ def _export_detail(summary: ScoringSummary) -> str:
 class Pipeline:
     """Orchestrates the stages of a run and keeps `status.json` current."""
 
-    def __init__(self, storage: Storage, registry: ModelRegistry, jobs: JobRunner) -> None:
+    def __init__(
+        self,
+        storage: Storage,
+        registry: ModelRegistry,
+        jobs: JobRunner,
+        *,
+        run_index: RunIndex | None = None,
+        metrics: MetricSink | None = None,
+    ) -> None:
         self._storage = storage
         self._registry = registry
         self._jobs = jobs
+        self._run_index = run_index
+        self._metrics = metrics or NullMetricSink()
 
     @property
     def storage(self) -> Storage:
@@ -1509,6 +1600,16 @@ class Pipeline:
     def jobs(self) -> JobRunner:
         """The runner that executes this pipeline off the request thread."""
         return self._jobs
+
+    @property
+    def run_index(self) -> RunIndex | None:
+        """The index `GET /runs` lists from, or `None` when this deployment enumerates the store."""
+        return self._run_index
+
+    @property
+    def metrics(self) -> MetricSink:
+        """Where this run's measurements go; the null sink unless a deployment asked otherwise."""
+        return self._metrics
 
     def initial_status(self, run_id: str, mode: RunMode) -> RunStatus:
         """The `status.json` a run starts with: every stage pending, no progress yet."""

@@ -89,6 +89,29 @@ The failure attached to a failed run or stage.
 | `message` | string | yes | Business-language explanation of what went wrong. |
 | `stage` | StageKey ("ingest" \| "validate" \| "prepare" \| "split" \| "train" \| "evaluate" \| "explain" \| "register" \| "validate_against_schema" \| "predict" \| "explain_rows" \| "actions" \| "export") \| null | yes | Stage that failed, when one was running. |
 
+### `job_spec.json`
+
+`job_spec.json` - the declarative description of the work a run's job has to do (DEC-324).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `job_id` | string | yes | Job id in the runner's vocabulary; the run id today. |
+| `run_id` | string | yes | Run this job produces. |
+| `entrypoint` | JobEntrypoint ("train" \| "score") | yes | Which pipeline flow to run. |
+| `mode` | RunMode ("train" \| "score") | yes | train or score; the same distinction the run record carries. |
+| `use_case_id` | string | yes | Use case the run belongs to. |
+| `run_config_key` | string | yes | Storage key of run_config.json, the resolved configuration. |
+| `upload_key` | string | yes | Storage key of the uploaded file the run consumes. |
+| `upload_format` | "csv" \| "parquet" | yes | Format of the uploaded file. |
+| `primary_key` | string | yes | Column identifying each entity. |
+| `target` | string \| null | no | Target column; set for a training job only. |
+| `model_version_id` | string \| null | no | Model version to score with; set for a scoring job only. |
+| `engine_version` | string | yes | Engine version that wrote this spec. |
+| `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the spec was written. |
+| `backend` | string | no | Where this job is meant to run; filled in by the runner. |
+| `tags` | object of string -> string | no | Cost-allocation tags the job carries: product, client, use_case, run_id. |
+
 ### `status.json`
 
 `status.json` - everything the Running screen polls.
@@ -1152,13 +1175,13 @@ Every choice that determines a trained model, and nothing else.  `train(recipe)`
 
 #### CostEstimate
 
-What a run cost to produce.  `estimated_usd` is null for a local run rather than zero: nothing was billed, and a fabricated zero would be indistinguishable from a real measurement of free compute (plan section 13.3).
+What a run cost to produce.  `estimated_usd` is null for a local run rather than zero: nothing was billed, and a fabricated zero would be indistinguishable from a real measurement of free compute (plan section 13.3).  It is null again whenever the number cannot be stated honestly: no billable time reported, no published rate for that instance in that region, or no price table at all. When it *is* set it is billable seconds multiplied by a **published AWS list price**, and `basis` says so in those words, naming the rate, the offer version and the date it was published. A list price is not a bill - it ignores savings plans, spot, free tier, tax and any negotiated discount - so `basis` is the field that keeps the number honest and must always be read with it (DEC-330).
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `compute_seconds` | number | yes | Wall-clock seconds of compute the run consumed. |
-| `estimated_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
+| `estimated_usd` | number \| null | no | Billable time at the published list rate named in `basis`; null when it cannot be stated. |
 | `basis` | string | yes | How the estimate was derived, in plain words. |
 
 #### LLMUsage
@@ -1186,6 +1209,13 @@ Where a run actually ran, and what that cost.  `job_arn` and `instance_type` are
 | `instance_type` | string \| null | no | Instance the managed job ran on; null for a local run. |
 | `duration_s` | number | yes | Wall-clock seconds the compute was occupied. |
 | `cost_estimate_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
+| `entrypoint` | JobEntrypoint ("train" \| "score") \| null | no | Container entrypoint the managed job ran; null for a local run. |
+| `job_name` | string \| null | no | Name of the managed job; null for a local run. |
+| `instance_count` | integer \| null | no | Instances the managed job ran on; null for a local run. |
+| `region` | string \| null | no | Region the managed job ran in; null for a local run. |
+| `image_uri` | string \| null | no | Container image the managed job ran; null for a local run. |
+| `billable_seconds` | number \| null | no | Seconds per instance the platform reports as billable; null when it reports none. |
+| `billable_seconds_source` | string \| null | no | API field `billable_seconds` was read from; null when there is no such number. |
 
 ## Tabular artefacts
 

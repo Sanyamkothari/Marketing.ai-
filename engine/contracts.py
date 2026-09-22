@@ -76,6 +76,8 @@ __all__ = [
     "FeatureSchema",
     "FeatureSchemaColumn",
     "HistogramBin",
+    "JobEntrypoint",
+    "JobSpec",
     "KpiValue",
     "LLMUsage",
     "Leaderboard",
@@ -209,6 +211,13 @@ class StageKey(StrEnum):
     EXPLAIN_ROWS = "explain_rows"
     ACTIONS = "actions"
     EXPORT = "export"
+
+
+class JobEntrypoint(StrEnum):
+    """Which pipeline flow a job runs. The declarative half of `JobSpec` (DEC-324)."""
+
+    TRAIN = "train"
+    SCORE = "score"
 
 
 # ---------------------------------------------------------------------------
@@ -1114,17 +1123,27 @@ class FeatureSchema(Artefact):
 # ---------------------------------------------------------------------------
 # run_manifest.json: one flat, queryable record per run (DEC-042)
 # ---------------------------------------------------------------------------
+
+
 class CostEstimate(Artefact):
     """What a run cost to produce.
 
     `estimated_usd` is null for a local run rather than zero: nothing was billed,
     and a fabricated zero would be indistinguishable from a real measurement of
     free compute (plan section 13.3).
+
+    It is null again whenever the number cannot be stated honestly: no billable time reported, no
+    published rate for that instance in that region, or no price table at all. When it *is* set it
+    is billable seconds multiplied by a **published AWS list price**, and `basis` says so in those
+    words, naming the rate, the offer version and the date it was published. A list price is not a
+    bill - it ignores savings plans, spot, free tier, tax and any negotiated discount - so `basis`
+    is the field that keeps the number honest and must always be read with it (DEC-330).
     """
 
     compute_seconds: float = Field(description="Wall-clock seconds of compute the run consumed.")
     estimated_usd: float | None = Field(
-        default=None, description="Billed cost when the platform reports one; null when nothing was billed."
+        default=None,
+        description="Billable time at the published list rate named in `basis`; null when it cannot be stated.",
     )
     basis: str = Field(description="How the estimate was derived, in plain words.")
 
@@ -1166,6 +1185,40 @@ class ComputeInfo(Artefact):
     duration_s: float = Field(description="Wall-clock seconds the compute was occupied.")
     cost_estimate_usd: float | None = Field(
         default=None, description="Billed cost when the platform reports one; null when nothing was billed."
+    )
+
+    # --- Phase 4a ----------------------------------------------------------------------
+    # Added fields only, every one optional and defaulting to null, which is what
+    # PARALLEL_WORK_PROTOCOL.md section 2 allows a branch to do to a shared model. A local run
+    # keeps exactly the record it kept before: five fields, the rest null.
+    #
+    # These are what a list price cannot be looked up without. `instance_type` and `region` name
+    # the rate; `instance_count` multiplies it; `billable_seconds` is the quantity AWS itself bills
+    # and is deliberately separate from `duration_s`, because a job that queued for four minutes
+    # and trained for one occupied the wall clock for five and is billed for one.
+    # `billable_seconds_source` names the API field the number came from, so a reader can check it
+    # rather than trust it (plan section 13.3).
+    entrypoint: JobEntrypoint | None = Field(
+        default=None,
+        description="Container entrypoint the managed job ran; null for a local run.",
+    )
+    job_name: str | None = Field(default=None, description="Name of the managed job; null for a local run.")
+    instance_count: int | None = Field(
+        default=None, description="Instances the managed job ran on; null for a local run."
+    )
+    region: str | None = Field(
+        default=None, description="Region the managed job ran in; null for a local run."
+    )
+    image_uri: str | None = Field(
+        default=None, description="Container image the managed job ran; null for a local run."
+    )
+    billable_seconds: float | None = Field(
+        default=None,
+        description="Seconds per instance the platform reports as billable; null when it reports none.",
+    )
+    billable_seconds_source: str | None = Field(
+        default=None,
+        description="API field `billable_seconds` was read from; null when there is no such number.",
     )
 
 
@@ -1210,10 +1263,51 @@ class RunManifest(Artefact):
     created_at: AwareDatetime = Field(description="UTC time the manifest was written.")
 
 
+class JobSpec(Artefact):
+    """`job_spec.json` - the declarative description of the work a run's job has to do (DEC-324).
+
+    `JobRunner.submit` takes a Python callable, which is exactly right for a thread pool and
+    impossible for a container: a closure cannot cross a process boundary. Rather than change the
+    protocol, this document becomes the source and the callable becomes something *derived* from it.
+    `engine.runs.build_job_fn` turns a spec into the closure `ThreadJobRunner` runs in this process;
+    `SageMakerJobRunner` ships the spec's storage key to a container that reads it back and calls
+    the same pipeline function. Local and remote runs are then two renderings of one description,
+    and there is no second definition of the work to drift.
+
+    It is written by whoever creates the run, beside `run.json` and `status.json`, and is
+    deliberately **not** a member of `TRAIN_ARTEFACTS` or `SCORE_ARTEFACTS`: those sets mean
+    "everything the flow writes", and the flow does not write this - it is handed it.
+    """
+
+    job_id: str = Field(description="Job id in the runner's vocabulary; the run id today.")
+    run_id: str = Field(description="Run this job produces.")
+    entrypoint: JobEntrypoint = Field(description="Which pipeline flow to run.")
+    mode: RunMode = Field(description="train or score; the same distinction the run record carries.")
+    use_case_id: str = Field(description="Use case the run belongs to.")
+    run_config_key: str = Field(description="Storage key of run_config.json, the resolved configuration.")
+    upload_key: str = Field(description="Storage key of the uploaded file the run consumes.")
+    upload_format: Literal["csv", "parquet"] = Field(description="Format of the uploaded file.")
+    primary_key: str = Field(description="Column identifying each entity.")
+    target: str | None = Field(default=None, description="Target column; set for a training job only.")
+    model_version_id: str | None = Field(
+        default=None, description="Model version to score with; set for a scoring job only."
+    )
+    engine_version: str = Field(description="Engine version that wrote this spec.")
+    created_at: AwareDatetime = Field(description="UTC time the spec was written.")
+    backend: str = Field(
+        default="local-thread", description="Where this job is meant to run; filled in by the runner."
+    )
+    tags: dict[str, str] = Field(
+        default_factory=dict,
+        description="Cost-allocation tags the job carries: product, client, use_case, run_id.",
+    )
+
+
 # ---------------------------------------------------------------------------
 ARTEFACT_REGISTRY: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
     {
         "run.json": RunRecord,
+        "job_spec.json": JobSpec,
         "status.json": RunStatus,
         "run_config.json": ResolvedConfig,
         "profile.json": DatasetProfile,
@@ -1336,4 +1430,9 @@ def load_artefact(filename: str, payload: str | bytes) -> BaseModel:
 # ---- END PHASE-3A ----
 
 # ---- PHASE-4A (aws) — append only below this line ----
+# `JobEntrypoint` and `JobSpec` are defined in the body above rather than here, and deliberately:
+# `ARTEFACT_REGISTRY` maps `job_spec.json` to `JobSpec` and is a `MappingProxyType`, so the class
+# has to exist before that mapping is built and cannot be registered from down here. The shared-file
+# rule (PARALLEL_WORK_PROTOCOL.md section 4) is about not disturbing another branch's code; two new
+# names and one new registry row add nothing above them that was not already there.
 # ---- END PHASE-4A ----

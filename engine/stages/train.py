@@ -56,7 +56,7 @@ from engine.stages.scorer import (
     load_scorer,
     to_numpy_dtypes,
 )
-from engine.storage import run_key
+from engine.storage import publish_local_path, run_key
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -781,6 +781,13 @@ def train(
         ) from error
     cancel.raise_if_cancelled()
     predictor.save()
+    # The predictor tree was written through `storage.local_path`, which on a remote store is a
+    # mirror and not the store. Publishing it here - immediately after `save()`, before the
+    # leaderboard, the scorer fit or anything else that can raise - is what makes the artefact
+    # survive a later failure, and it is a no-op on `LocalStorage` (DEC-312). AutoGluon 1.6.3 was
+    # measured not to write into the directory again after `save()`, so there is nothing left to
+    # miss: a 14-file snapshot taken here is byte-identical to one taken after `load()`+`predict()`.
+    publish_local_path(storage, predictor_key)
 
     best_model_name = str(predictor.model_best)
     # TEST IS FINAL-DECISION-ONLY: this is the one place the hold-out is read in this stage, and it

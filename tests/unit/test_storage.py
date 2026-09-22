@@ -12,7 +12,13 @@ from engine.storage import (
     LocalStorage,
     Storage,
     StorageError,
-    model_key,
+    SupportsLocalMirror,
+    SupportsPresignedDownload,
+    flush_local,
+    presigned_download_url,
+    publish_local_path,
+    published_model_key,
+    release_local,
     run_key,
     upload_key,
     validate_key,
@@ -157,7 +163,25 @@ def test_local_path_does_not_copy(storage: LocalStorage) -> None:
 def test_key_helpers() -> None:
     assert run_key("r_20260921_abcdef01", "run.json") == "runs/r_20260921_abcdef01/run.json"
     assert upload_key("u_0123456789ab", "customers.csv") == "uploads/u_0123456789ab/customers.csv"
-    assert model_key("m_uc_1", "model") == "models/m_uc_1/model"
-    assert model_key("m_uc_1", "model", "predictor.pkl") == "models/m_uc_1/model/predictor.pkl"
-    for key in (run_key("r1", "run.json"), upload_key("u1", "f.csv"), model_key("m1", "model")):
+    assert published_model_key("telco_churn", 3) == "models/telco_churn/3"
+    assert published_model_key("telco_churn", 3, "model", "predictor.pkl") == (
+        "models/telco_churn/3/model/predictor.pkl"
+    )
+    for key in (run_key("r1", "run.json"), upload_key("u1", "f.csv"), published_model_key("uc", 1, "model")):
         assert validate_key(key) == key
+
+
+def test_local_storage_has_neither_capability_and_the_dispatchers_no_op(storage: LocalStorage) -> None:
+    """DEC-311: a capability protocol is how a store says it needs something extra.
+
+    `LocalStorage` says no to both, so every dispatcher is a no-op and the call sites in
+    `engine/stages/train.py` and `engine/pipeline.py` change nothing about a local run.
+    """
+    assert not isinstance(storage, SupportsLocalMirror)
+    assert not isinstance(storage, SupportsPresignedDownload)
+    storage.write_bytes("runs/r1/a.json", b"{}")
+    assert publish_local_path(storage, "runs/r1/a.json") == ()
+    assert flush_local(storage, "runs/r1/") == ()
+    assert release_local(storage, "runs/r1/") is None
+    assert presigned_download_url(storage, "runs/r1/a.json", expires_in=900) is None
+    assert storage.read_bytes("runs/r1/a.json") == b"{}"  # and nothing was disturbed

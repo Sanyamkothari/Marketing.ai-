@@ -1,0 +1,96 @@
+# Deploy to a development account. Manual only: Phase 4a's deployment model is one deployment per
+# customer account, so a push to a branch has no business changing somebody's infrastructure.
+#
+# Two properties are worth stating plainly, because they are the difference between this workflow
+# and a convenient one:
+#
+#   * No long-lived credentials. The job assumes a role by OIDC, whose trust policy names this
+#     repository and this environment. There is no access key to leak, rotate or find in a log.
+#   * The deployment names an image DIGEST, not a tag. A tag can be moved after it is tested; a
+#     digest cannot, so what the smoke test passed is what the service runs.
+
+name: deploy-dev
+
+on:
+  workflow_dispatch:
+    inputs:
+      env_name:
+        description: "Which deployment to update"
+        type: choice
+        options: [dev]
+        default: dev
+      skip_smoke:
+        description: "Deploy without running the smoke test afterwards (not recommended)"
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+  id-token: write # the OIDC token this job exchanges for a role; nothing else needs it
+
+concurrency:
+  group: deploy-${{ inputs.env_name }}
+  cancel-in-progress: false # never interrupt a deployment half way through
+
+jobs:
+  deploy:
+    name: build, push, deploy, smoke
+    runs-on: ubuntu-latest
+    environment: ${{ inputs.env_name }}
+    timeout-minutes: 90
+    env:
+      AWS_REGION: ap-south-1
+      ENV: ${{ inputs.env_name }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Assume the deployment role
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ vars.DEPLOY_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: deploy-${{ inputs.env_name }}-${{ github.run_id }}
+
+      - uses: aws-actions/amazon-ecr-login@v2
+        id: ecr
+
+      - name: Build and push the image, recording its digest
+        env:
+          ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
+          ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
+          IMAGE_TAG: ${{ github.sha }}
+        run: ./scripts/build_push_image.sh
+
+      - name: Install the infrastructure toolchain
+        run: make infra-setup
+
+      - name: Deploy
+        run: |
+          make aws-deploy ENV="${ENV}"
+
+      # The schema and the seed data are applied after the stacks exist and before the smoke test
+      # runs, because a service whose database has no tables is not deployed, only started.
+      - name: Create the schema and verify the permissions
+        run: make aws-bootstrap ENV="${ENV}"
+
+      - name: Smoke test
+        if: ${{ !inputs.skip_smoke }}
+        run: .venv-infra/bin/python -m scripts.smoke_deployment --env "${ENV}" --region "${AWS_REGION}"
+
+      - name: Report what was deployed
+        if: always()
+        run: |
+          echo "### Deployment: ${ENV}" >> "$GITHUB_STEP_SUMMARY"
+          echo "" >> "$GITHUB_STEP_SUMMARY"
+          echo "| | |" >> "$GITHUB_STEP_SUMMARY"
+          echo "|---|---|" >> "$GITHUB_STEP_SUMMARY"
+          echo "| commit | \`${GITHUB_SHA}\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| image digest | \`$(cat .image-digest 2>/dev/null || echo 'not built')\` |" >> "$GITHUB_STEP_SUMMARY"
+          echo "| region | ${AWS_REGION} |" >> "$GITHUB_STEP_SUMMARY"

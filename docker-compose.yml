@@ -1,0 +1,78 @@
+# A production-like local stack, and the database the metadata tests run against.
+#
+# Two Postgres services rather than one, on purpose. `postgres` is an ordinary UTC server, which is
+# what a deployment looks like. `postgres-tz` runs on Asia/Kolkata so the timezone handling in
+# `engine/registry.py` and `engine/aws/postgres.py` is proved rather than assumed: a naive datetime
+# and an aware one are indistinguishable on a UTC server, so a test that only ever sees UTC would
+# pass with the bug still in place.
+#
+# The images are parameterised because some build environments cannot reach Docker Hub's CDN and
+# have to use a mirror; `POSTGRES_IMAGE=mirror.gcr.io/library/postgres:16-alpine docker compose up`
+# is the whole workaround, and the default stays the name everyone else would type.
+
+name: marketing-ai
+
+services:
+  api:
+    build:
+      context: .
+      target: api
+      args:
+        PYTHON_BASE: ${PYTHON_BASE:-python:3.11-slim}
+    image: marketing-ai:local
+    ports:
+      - "${API_PORT:-8000}:8000"
+    environment:
+      MARKETING_AI_ENV: local
+      MARKETING_AI_LOG_LEVEL: ${MARKETING_AI_LOG_LEVEL:-INFO}
+      MARKETING_AI_DATA_DIR: /var/lib/marketing-ai
+      # Left on sqlite by default so `docker compose up api` works on its own. Point it at the
+      # database with `MARKETING_AI_METADATA_BACKEND=postgres` plus the URL below.
+      MARKETING_AI_METADATA_BACKEND: ${MARKETING_AI_METADATA_BACKEND:-sqlite}
+      MARKETING_AI_DATABASE_URL: ${MARKETING_AI_DATABASE_URL:-}
+    volumes:
+      - artefacts:/var/lib/marketing-ai
+    depends_on:
+      postgres:
+        condition: service_healthy
+        required: false
+
+  postgres:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    environment:
+      POSTGRES_USER: marketing
+      POSTGRES_PASSWORD: marketing
+      POSTGRES_DB: marketing
+    ports:
+      - "55432:5432"
+    tmpfs:
+      # The test database is disposable by design: a metadata test that depended on yesterday's
+      # rows would be a test of the developer's machine rather than of the code.
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketing -d marketing"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  postgres-tz:
+    image: ${POSTGRES_IMAGE:-postgres:16-alpine}
+    command: ["postgres", "-c", "timezone=Asia/Kolkata"]
+    environment:
+      POSTGRES_USER: marketing
+      POSTGRES_PASSWORD: marketing
+      POSTGRES_DB: marketing
+      TZ: Asia/Kolkata
+      PGTZ: Asia/Kolkata
+    ports:
+      - "55433:5432"
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U marketing -d marketing"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+volumes:
+  artefacts:
