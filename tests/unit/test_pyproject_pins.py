@@ -123,9 +123,9 @@ def test_mypy_is_globally_strict_over_engine_api_and_scripts(pyproject: dict[str
         "engine",
         "api",
         "scripts",
-        "alembic",                  # the migrations own the Postgres schema, so they are held to the same bar
+        "alembic",  # the migrations own the Postgres schema, so they are held to the same bar
         "tests/fixtures/make_data.py",
-        "tests/fakes",              # FakeSageMaker stands in for a service; DEC-041's precedent
+        "tests/fakes",  # FakeSageMaker stands in for a service; DEC-041's precedent
     ]
     assert mypy["python_version"] == "3.11"
 
@@ -193,7 +193,10 @@ def test_the_phase_4a_extras_are_pinned_and_optional(pyproject: dict[str, Any]) 
         assert extras[name], f"the {name} extra is empty"
         for requirement in extras[name]:
             assert PIN_RE.match(requirement.strip()), f"unpinned {name} requirement: {requirement!r}"
-    runtime = {normalise(requirement.split("[")[0].split("=")[0]) for requirement in pyproject["project"]["dependencies"]}
+    runtime = {
+        normalise(requirement.split("[")[0].split("=")[0])
+        for requirement in pyproject["project"]["dependencies"]
+    }
     for name in ("boto3", "botocore", "psycopg", "alembic", "aws-cdk-lib", "cdk-nag", "constructs"):
         assert name not in runtime, f"{name} must stay optional, not a runtime dependency"
 

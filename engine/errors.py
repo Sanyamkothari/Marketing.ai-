@@ -36,6 +36,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "ENGINE_ERRORS",
+    "JOB_FAILED_REMOTELY",
+    "JOB_SPEC_UNREADABLE",
+    "JOB_SUBMIT_FAILED",
     "RUN_BLOCKED_BY_VALIDATION",
     "STAGE_FAILED",
     "STAGE_OUT_OF_ORDER",
@@ -54,6 +57,15 @@ STAGE_FAILED: Final[str] = "STAGE_FAILED"
 STAGE_OUT_OF_ORDER: Final[str] = "STAGE_OUT_OF_ORDER"
 """A stage ran before the stage that produces its input. Only a wiring mistake reaches this."""
 
+JOB_SUBMIT_FAILED: Final[str] = "JOB_SUBMIT_FAILED"
+"""The compute service refused the job, so no stage ever ran (DEC-331)."""
+
+JOB_FAILED_REMOTELY: Final[str] = "JOB_FAILED_REMOTELY"
+"""The compute ended without the run writing an ending; reconciliation wrote this one (DEC-325)."""
+
+JOB_SPEC_UNREADABLE: Final[str] = "JOB_SPEC_UNREADABLE"
+"""The container could not read the `job_spec.json` it was pointed at, so it ran nothing (DEC-328)."""
+
 
 ENGINE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
     {
@@ -68,6 +80,18 @@ ENGINE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         STAGE_OUT_OF_ORDER: (
             "{what} is not available, because an earlier stage did not produce it.",
             "This is an engine fault rather than a problem with the data; send the run id to support.",
+        ),
+        JOB_SUBMIT_FAILED: (
+            "The run could not be started on the compute service, so nothing has run yet.",
+            "Start the run again in a few minutes. If it keeps failing, send the run id to support.",
+        ),
+        JOB_FAILED_REMOTELY: (
+            "The run stopped because the compute running it ended before the work finished.",
+            "Start the run again. If it stops the same way, send the run id to support.",
+        ),
+        JOB_SPEC_UNREADABLE: (
+            "The run could not be started, because the description of the work could not be read.",
+            "Start the run again; this one changed nothing. If it happens again, send the run id to support.",
         ),
     }
 )

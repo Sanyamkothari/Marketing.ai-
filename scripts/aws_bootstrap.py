@@ -53,7 +53,11 @@ class Check:
     def line(self) -> str:
         """The single line an operator reads."""
         rendered = f"  [{self.status:>7}] {self.name}: {self.detail}"
-        return f"{rendered}\n            fix: {self.remedy}" if self.status == FAILED and self.remedy else rendered
+        return (
+            f"{rendered}\n            fix: {self.remedy}"
+            if self.status == FAILED and self.remedy
+            else rendered
+        )
 
 
 def _probe(name: str, remedy: str, body: Callable[[], str]) -> Check:
@@ -71,6 +75,7 @@ def _probe(name: str, remedy: str, body: Callable[[], str]) -> Check:
 
 def check_configuration(settings: Settings) -> list[Check]:
     """The configuration the deployment will serve loads, and names at least one use case."""
+
     def body() -> str:
         ids = list_use_case_ids(settings.config_dir)
         for use_case_id in ids:
@@ -211,7 +216,9 @@ def report(settings: Settings, checks: Sequence[Check]) -> str:
 
 def main(argv: Sequence[str] | None = None) -> int:
     """`--env`, `--no-migrate` and `--dry-run`; returns the process exit code."""
-    parser = argparse.ArgumentParser(prog=COMMAND, description="Prepare a deployment and probe its permissions.")
+    parser = argparse.ArgumentParser(
+        prog=COMMAND, description="Prepare a deployment and probe its permissions."
+    )
     parser.add_argument("--env", default=None, help="deployment name; defaults to MARKETING_AI_ENV")
     parser.add_argument("--no-migrate", action="store_true", help="probe only; do not touch the schema")
     parser.add_argument("--dry-run", action="store_true", help="print what would be checked and stop")

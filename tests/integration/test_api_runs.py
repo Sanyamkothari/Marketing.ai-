@@ -12,6 +12,14 @@ never come back as a 422; and that a follow-up run carrying the suggestion is ac
 
 The parametrised sweep over `tests/fixtures/make_data.VARIANTS` at the bottom needs the real ingest
 and validate modules and skips until they land.
+
+Phase 4a moved the job body behind a document. `POST /runs` writes `job_spec.json` and submits
+`build_job_fn(spec, ...)`, which for a training run is now `Pipeline.run_train` rather than the M2
+stub (DEC-324, DEC-326) - the real flow, which needs a real frame and a real AutoGluon, and which
+every test here has stubbed out from under it. So what used to be a monkeypatch of `build_m2_job`
+is a monkeypatch of `build_job_fn`: `install_m2_job_stub` puts the same M2 body back, which is
+still the honest way to move a run through the real status machine in milliseconds. The real flow
+reaching `done` through this same API is `tests/integration/test_jobs_as_sagemaker.py`.
 """
 
 from __future__ import annotations
@@ -40,6 +48,7 @@ from engine.config import (
     resolve_config,
 )
 from engine.contracts import (
+    DatasetProfile,
     FeatureSchema,
     FeatureSchemaColumn,
     ModelStatus,
@@ -261,6 +270,29 @@ def install_validate_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(validate, "validation_detail", stub_validation_detail, raising=False)
 
 
+def install_m2_job_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Submit the M2 body for every run, in place of the flow the spec names.
+
+    The route derives its closure from `job_spec.json` now, so this replaces `build_job_fn` rather
+    than a job body: the spec is still written, still submitted and still the only description of
+    the work - only what that description is *rendered into* changes, which is exactly the seam
+    DEC-324 introduced. Everything the M2 body needs is read back out of the run directory the
+    route has already written, so the stub knows nothing the container would not know.
+    """
+
+    def build(spec: Any, *, storage: Any, registry: Any) -> Any:
+        del registry
+        return runs.build_m2_job(
+            storage,
+            run_id=spec.run_id,
+            profile=storage.read_model(run_key(spec.run_id, runs.PROFILE_FILENAME), DatasetProfile),
+            report=storage.read_model(run_key(spec.run_id, runs.VALIDATION_FILENAME), ValidationReport),
+            mode=spec.mode,
+        )
+
+    monkeypatch.setattr(runs, "build_job_fn", build)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
 # ---------------------------------------------------------------------------
@@ -276,6 +308,7 @@ def data_dir(tmp_path: Path) -> Path:
 def client(config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     install_ingest_stub(monkeypatch)
     install_validate_stub(monkeypatch)
+    install_m2_job_stub(monkeypatch)
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
         yield test_client
 
@@ -288,14 +321,14 @@ def blocked_client(
     install_ingest_stub(monkeypatch)
     install_validate_stub(monkeypatch)
 
-    def blocking(_storage: Any, **_kwargs: Any) -> Any:
+    def blocking(_spec: Any, **_kwargs: Any) -> Any:
         def job(cancel: CancelToken) -> None:
             cancel.wait(10)
             cancel.raise_if_cancelled()
 
         return job
 
-    monkeypatch.setattr(runs, "build_m2_job", blocking)
+    monkeypatch.setattr(runs, "build_job_fn", blocking)
     app = create_app(config_root=config_root, data_dir=data_dir)
     app.state.jobs = ThreadJobRunner(max_workers=1)
     with TestClient(app) as test_client:
@@ -422,7 +455,9 @@ def test_clean_upload_starts_a_run_that_is_pollable_immediately(
     assert detail.status.run_id == run_id
     assert 0 <= detail.status.progress_pct <= 100
     assert {stage.state for stage in detail.status.stages} <= {RunState.PENDING, RunState.RUNNING}
-    assert len(storage.list_keys(f"runs/{run_id}/")) == 5
+    assert set(storage.list_keys(f"runs/{run_id}/")) == {
+        f"runs/{run_id}/{name}" for name in (*runs.CREATED_ARTEFACTS, "job_spec.json")
+    }
 
 
 def test_run_record_at_creation_matches_the_design_document(blocked_client: TestClient) -> None:
@@ -448,13 +483,15 @@ def test_run_record_at_creation_matches_the_design_document(blocked_client: Test
     }
 
 
-def test_run_directory_holds_exactly_the_five_m2_artefacts(
+def test_run_directory_holds_the_five_created_artefacts_and_the_job_spec(
     blocked_client: TestClient, storage: LocalStorage
 ) -> None:
+    """The spec is beside them and not one of them: it is what the run was handed (DEC-324)."""
     run_id = start_run(blocked_client).json()["run_id"]
     assert set(storage.list_keys(f"runs/{run_id}/")) == {
-        f"runs/{run_id}/{name}" for name in runs.CREATED_ARTEFACTS
+        f"runs/{run_id}/{name}" for name in (*runs.CREATED_ARTEFACTS, "job_spec.json")
     }
+    assert "job_spec.json" not in runs.CREATED_ARTEFACTS
 
 
 def test_m2_job_runs_two_stages_then_fails_honestly_at_prepare(client: TestClient) -> None:
@@ -844,6 +881,59 @@ def test_cancel_an_unknown_run_is_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reconciliation: a runner that can lose a job gets to say so first (DEC-325)
+# ---------------------------------------------------------------------------
+class _Reconciling:
+    """A `JobRunner` whose jobs can end without this process hearing about it."""
+
+    def __init__(self, *, raising: bool = False) -> None:
+        self.reconciled: list[str] = []
+        self._raising = raising
+
+    def submit(self, job_id: str, fn: Any) -> Any:  # pragma: no cover - the run already exists
+        raise AssertionError("this runner is swapped in after the run was created")
+
+    def status(self, job_id: str) -> Any:  # pragma: no cover - never asked
+        raise KeyError(job_id)
+
+    def cancel(self, job_id: str) -> bool:  # pragma: no cover - never asked
+        return False
+
+    def shutdown(self, *, wait: bool = True) -> None:
+        del wait
+
+    def reconcile(self, job_id: str) -> None:
+        self.reconciled.append(job_id)
+        if self._raising:
+            raise RuntimeError("the control plane could not be reached")
+
+
+def test_reading_a_run_lets_the_runner_write_an_ending_it_never_got_to_write(
+    client: TestClient,
+) -> None:
+    """`ThreadJobRunner` is not asked at all; a remote runner is, on every poll."""
+    run_id = start_run(client).json()["run_id"]
+    await_job(client, run_id)
+    runner = _Reconciling()
+    client.app.state.jobs = runner
+
+    assert client.get(f"/runs/{run_id}").status_code == 200
+    assert runner.reconciled == [run_id]
+
+
+def test_a_reconciliation_that_fails_does_not_fail_the_read(client: TestClient) -> None:
+    """The stored documents are still the answer; a runner that cannot reach AWS has not changed them."""
+    run_id = start_run(client).json()["run_id"]
+    await_job(client, run_id)
+    client.app.state.jobs = _Reconciling(raising=True)
+
+    response = client.get(f"/runs/{run_id}")
+
+    assert response.status_code == 200
+    assert RunDetailResponse.model_validate(response.json()).run.run_id == run_id
+
+
+# ---------------------------------------------------------------------------
 # The acceptance sweep over the committed generator, once ingest and validate land
 # ---------------------------------------------------------------------------
 TRAIN_VARIANTS = [name for name, code in VARIANTS.items() if VARIANT_SPECS[name].has_target]
@@ -866,9 +956,15 @@ def use_case_for(variant: str) -> str:
 )
 @pytest.mark.parametrize("variant", TRAIN_VARIANTS)
 def test_broken_fixture_returns_409_with_the_validation_payload(
-    config_root: Path, data_dir: Path, variant: str
+    config_root: Path, data_dir: Path, variant: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Design §6.9: every error-severity variant is refused with its code; warnings never block."""
+    """Design §6.9: every error-severity variant is refused with its code; warnings never block.
+
+    The job body is stood in for even though ingest and validate are real here: what this sweep is
+    about is the verdict `POST /runs` returns, and a variant that passes would otherwise run a full
+    AutoGluon search on 10,000 rows now that a training run reaches the real flow (DEC-326).
+    """
+    install_m2_job_stub(monkeypatch)
     use_case = use_case_for(variant)
     frame = generate(GenerationSpec(use_case, variant=variant, config_root=config_root))
     payload = frame.to_csv(index=False, lineterminator="\n").encode()

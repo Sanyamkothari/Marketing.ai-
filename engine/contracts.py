@@ -1194,7 +1194,8 @@ class JobSpec(Artefact):
         default="local-thread", description="Where this job is meant to run; filled in by the runner."
     )
     tags: dict[str, str] = Field(
-        default_factory=dict, description="Cost-allocation tags the job carries: product, client, use_case, run_id."
+        default_factory=dict,
+        description="Cost-allocation tags the job carries: product, client, use_case, run_id.",
     )
 
 

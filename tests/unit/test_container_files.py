@@ -47,9 +47,9 @@ def test_the_app_is_copied_as_source_and_not_installed(dockerfile: str) -> None:
     assert "PYTHONPATH=/app" in dockerfile
     for directory in ("engine", "api", "ui", "configs", "templates", "scripts"):
         assert re.search(rf"^COPY\s+{directory}\s+/app/{directory}$", dockerfile, re.MULTILINE), directory
-    assert not re.search(r"pip install\s+(-e\s+)?\.\s*$", dockerfile, re.MULTILINE), (
-        "installing the project itself would move ui/ and configs/ into site-packages"
-    )
+    assert not re.search(
+        r"pip install\s+(-e\s+)?\.\s*$", dockerfile, re.MULTILINE
+    ), "installing the project itself would move ui/ and configs/ into site-packages"
 
 
 def test_libgomp_is_installed_because_lightgbm_cannot_load_without_it(dockerfile: str) -> None:
@@ -101,14 +101,18 @@ def test_the_build_context_excludes_the_artefact_directory(repo_root: Path) -> N
 # ---------------------------------------------------------------------------
 # The local stack
 # ---------------------------------------------------------------------------
-def test_compose_publishes_both_postgres_servers_on_the_ports_the_fixtures_use(compose: dict[str, object]) -> None:
+def test_compose_publishes_both_postgres_servers_on_the_ports_the_fixtures_use(
+    compose: dict[str, object],
+) -> None:
     services = compose["services"]
     assert isinstance(services, dict)
     assert services["postgres"]["ports"] == ["55432:5432"]
     assert services["postgres-tz"]["ports"] == ["55433:5432"]
 
 
-def test_the_second_server_is_not_utc_so_the_timezone_handling_is_really_tested(compose: dict[str, object]) -> None:
+def test_the_second_server_is_not_utc_so_the_timezone_handling_is_really_tested(
+    compose: dict[str, object],
+) -> None:
     """On a UTC server a naive datetime and an aware one are indistinguishable."""
     services = compose["services"]
     assert isinstance(services, dict)
