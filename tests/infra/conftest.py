@@ -16,6 +16,15 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import pytest
+
+# The `aws` extra is optional — `make setup` installs `.[dev]`, which does not carry aws-cdk-lib —
+# and a module-level import of it makes `make test` fail at COLLECTION for everyone who has not
+# installed it, CI included. The same guard `tests/unit/test_aws_secrets.py` already uses.
+pytest.importorskip(
+    "aws_cdk",
+    reason="the `aws` extra is not installed (pip install -e '.[dev,aws]')",
+)
+
 from aws_cdk.assertions import Template
 from infra.app import STACK_ORDER, Deployment, build_app
 from infra.context import AppContext
