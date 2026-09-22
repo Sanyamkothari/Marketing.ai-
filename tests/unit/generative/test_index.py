@@ -400,3 +400,29 @@ def test_manifest_documents_are_sorted_by_name_and_no_headings_is_not_an_index_w
     assert entry.name == "aardvark_notes.txt"
     assert parsers.DOCUMENT_NO_HEADINGS in entry.warnings
     assert parsers.DOCUMENT_NO_HEADINGS not in manifest.warnings
+
+
+def test_two_documents_whose_names_differ_only_by_file_type_are_refused(tmp_path: Path) -> None:
+    """`policy.pdf` and `policy.md` both claim the chunk id `policy-00000`.
+
+    `doc_id` is `path.stem` and `chunk_id` is f"{doc_id}-{ordinal:05d}" from a per-document ordinal,
+    and the embedding map is keyed on `chunk_id` - so one document's vector overwrote the other's
+    and both chunks were written carrying it. The assistant then verified a quote from one file
+    against the other's embedding and answered under a citation that looked entirely real. It is
+    refused before a byte is parsed, and the error names both files (DEC-221's identity rule).
+    """
+    from engine.generative.errors import DOCUMENT_NAME_CLASH, GenerativeError
+    from engine.generative.index import _check_names
+
+    with pytest.raises(GenerativeError) as raised:
+        _check_names([tmp_path / "policy.pdf", tmp_path / "policy.md", tmp_path / "faq.txt"])
+    assert raised.value.code == DOCUMENT_NAME_CLASH
+    assert "policy.md" in raised.value.message and "policy.pdf" in raised.value.message
+    assert "faq" not in raised.value.message, "only the clashing pair is named"
+
+
+def test_distinct_document_names_are_not_refused(tmp_path: Path) -> None:
+    """The guard must cost nothing to every knowledge base that does not have the problem."""
+    from engine.generative.index import _check_names
+
+    assert _check_names([tmp_path / "faq.md", tmp_path / "plans.pdf", tmp_path / "terms.txt"]) is None

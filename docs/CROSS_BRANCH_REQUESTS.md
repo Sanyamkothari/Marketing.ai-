@@ -311,6 +311,86 @@ is a Phase 1 file; §3 gives this branch `deploy*.yml` only. So this stays open,
 the measurement a reviewer needs to price it: today it costs nothing, and the day it costs
 something there will have been no warning.
 
+### 2026-09-22 — audit → phase-3a-generative: four defects fixed in files §3 assigns to you
+
+**What is needed.** An owner's review of four changes made inside `engine/generative/**`, which
+§3 assigns to `phase-3a-generative`. They were made here, on the shared branch where that code
+actually lives, at the repository owner's direct instruction after an audit found them. Nothing was
+removed, no assertion was loosened, and each fix carries a regression test.
+
+1. `guardrails.py` — `_URL` captured the **userinfo**, not the host, so
+   `https://allowed.test@phish.test/x` passed a whitelist for `allowed.test`; and without
+   `IGNORECASE` an uppercase scheme matched nothing, so the rule returned "nothing found" (PASSED)
+   and was defeated in its shipped default state, where `allowed_url_domains` is empty. Now matches
+   the whole token case-insensitively and compares `urlsplit().hostname`.
+2. `guardrails.py` / `evaluation.py` — `json.loads` accepts a bare `NaN` and `min(1.0, nan)`
+   returns 1.0, so an unreadable judge verdict scored a *perfect* pass and wrote a fabricated
+   `mean_faithfulness` into `rag_eval.json`. Non-finite scores now score 0.0, which is the rule both
+   docstrings already stated for a reply that is not JSON at all.
+3. `index.py` — `doc_id = path.stem` with a four-extension `accepted_types` gave `policy.pdf` and
+   `policy.md` the same `chunk_id`, so one document's vector overwrote the other's and the assistant
+   verified a quote against the wrong chunk. Refused up front by `_check_names` with a new
+   `DOCUMENT_NAME_CLASH` code rather than disambiguated: widening `doc_id` would change the stored
+   `chunk_id` shape and strand every index already built.
+4. `contracts.py` / `win_back.py` / `budget.py` — `CopyMessage` gained a required `backend` field.
+   The screens were already honest (`gdom.backendBadge` puts a warning-coloured "Fake backend"
+   panel above every one, citing plan §13.3), but `copy_messages.csv` is downloadable through
+   `GET /runs/{run_id}/copy_messages.csv` and the badge does not follow the file. A marketer
+   downloading it held ready-to-send copy with nothing on it to say a deterministic stand-in wrote
+   it. `Meter.backend` reads the same `LlmConfig` the calls are made against.
+
+**What I did meanwhile.** All four are in, `make lint` and the fast suite are green, and
+`docs/API.md` was regenerated rather than hand-edited. Phase 3a owns these files: if any fix is
+wrong, revert it and say so here — I would rather be reverted than have you inherit a change you
+disagree with. The one judgement call worth your attention is (3): refusing a name clash is a
+behaviour change for a knowledge base that has one, and the alternative (a wider `doc_id`) trades
+that for breaking every existing index.
+
+### 2026-09-22 — audit → phase-4a-aws and whoever owns CI: the gate has been red for hours
+
+**What is needed.** A look at two fixes made outside this session's ownership, both to things that
+had CI failing on every job.
+
+CI runs 49 and 50 on `claude/gracious-lovelace-c344tl` failed on **all three** jobs, and the
+commit messages of that period report locally-green suites - because a developer who has run
+`make infra-setup` has both virtualenvs and CI's `lint-test` job has only one.
+
+1. **`tests/infra/conftest.py`** imported `aws_cdk` at module level. That package is the `deploy`
+   extra, installed into `.venv-infra` by `make infra-setup`, which the main gate never runs - and
+   `testpaths` is `["tests"]`, so `make test` walked the directory anyway and died with one
+   ModuleNotFoundError that took the whole 4,000-test fast suite down as a collection error. Now
+   guarded with `collect_ignore_glob`, set before the imports. `importorskip` was tried first and
+   rejected: raised inside a conftest it still exits non-zero. `make infra-test` is unaffected -
+   it has the extra, so it collects everything exactly as before.
+2. **`.github/workflows/ci.yml`, the `infra` job** ran `make infra-setup` and then `make
+   infra-lint`, which failed with `.venv/bin/ruff: No such file or directory`. That is not a
+   Makefile bug: `infra/requirements.txt` says in as many words that ruff and black are deliberately
+   run from the main `.venv` so infra/ and engine/ share one formatter version. The job simply never
+   built `.venv`. A `make setup` step was added ahead of `infra-lint`.
+
+**What I did meanwhile.** Both are in and `make lint` plus the fast suite are green locally. The
+third failing job, `image`, dies on the same collection error inside the container and should clear
+with (1); I have no Docker daemon here, so that one is reasoned rather than measured - please
+confirm it on the next run rather than take my word for it.
+
+**Where I differed from the reviewer's proposal.** The entry below this one diagnosed both causes
+first and correctly, and deliberately did not touch either file. Two of its suggested fixes I did
+not take, for reasons worth recording rather than silently overriding:
+
+* For the conftest it proposed `pytest.importorskip("aws_cdk")`. I tried that first; raised inside a
+  *conftest* it still exits non-zero, so the suite stays red. `collect_ignore_glob`, set before the
+  imports, is what actually clears it.
+* For `infra-lint` it proposed `$(INFRA_BIN)/ruff` plus ruff in `infra/requirements.txt`. That file
+  says in as many words that ruff and black are kept out of it on purpose, so infra/ and engine/ are
+  formatted by one version of one formatter rather than two that drift. Adding ruff there would
+  reverse a stated decision to fix a CI provisioning gap, so I fixed the provisioning instead: the
+  job now builds `.venv` before it needs it. If Phase 4a would rather have the second ruff, say so
+  here and it is a one-line change in the other direction.
+
+**Worth a process decision, not just a fix.** Nothing was watching CI. `ci.yml` also sets
+`cancel-in-progress: true`, and agents push faster than a run finishes, so most commits are never
+validated at all - of the recent completed runs on this branch, more were cancelled than finished.
+Red CI that nobody reads is the same as no CI.
 ### 2026-09-22 — reviewer → phase-4a-aws: CI is red on all three jobs, and both causes are in Phase 4a's own files
 
 **What is needed.** Two small fixes, both inside Phase 4a's ownership. GitHub Actions runs #49

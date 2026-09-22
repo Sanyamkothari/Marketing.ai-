@@ -21,6 +21,7 @@ __all__ = [
     "BUDGET_EXCEEDED",
     "COMPLAINT_COLUMN_MISSING",
     "DOCUMENT_EMPTY",
+    "DOCUMENT_NAME_CLASH",
     "DOCUMENT_TYPE_UNSUPPORTED",
     "DOCUMENT_UNREADABLE",
     "GENERATIVE_ERRORS",
@@ -65,6 +66,7 @@ DOCUMENT_TYPE_UNSUPPORTED: Final[str] = "DOCUMENT_TYPE_UNSUPPORTED"
 DOCUMENT_UNREADABLE: Final[str] = "DOCUMENT_UNREADABLE"
 DOCUMENT_EMPTY: Final[str] = "DOCUMENT_EMPTY"
 KNOWLEDGE_BASE_TOO_LARGE: Final[str] = "KNOWLEDGE_BASE_TOO_LARGE"
+DOCUMENT_NAME_CLASH: Final[str] = "DOCUMENT_NAME_CLASH"
 INDEX_NOT_FOUND: Final[str] = "INDEX_NOT_FOUND"
 INDEX_EMPTY: Final[str] = "INDEX_EMPTY"
 INDEX_CORRUPT: Final[str] = "INDEX_CORRUPT"
@@ -120,6 +122,11 @@ GENERATIVE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         KNOWLEDGE_BASE_TOO_LARGE: (
             "This knowledge base would hold {documents} documents and {megabytes} MB.",
             "The limits are generative.knowledge_base.max_docs and max_mb.",
+        ),
+        DOCUMENT_NAME_CLASH: (
+            "More than one document is named {stem}, differing only by file type: {names}.",
+            "A chunk is identified by its document's name, so two documents that share one cannot be "
+            "told apart. Rename or remove all but one of them and build again.",
         ),
         INDEX_NOT_FOUND: (
             "There is no knowledge index called {index_id}.",
