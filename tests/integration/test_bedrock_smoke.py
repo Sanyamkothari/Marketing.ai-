@@ -63,10 +63,10 @@ pytestmark = [pytest.mark.integration, pytest.mark.bedrock]
 
 # ---------------------------------------------------------------------------
 # Opt-in configuration. Read straight from `os.environ`, deliberately not through
-# `engine.settings.Settings`: that module speaks for the whole application's backend choice, one
-# Bedrock model id for one purpose, where this module needs a generation id, a judge-shaped call
-# and a separate embedding id to run three independent proofs, and is happy to be a smaller,
-# louder, test-only vocabulary rather than borrow a shape built for something else.
+# `engine.settings.Settings`: that module speaks for the whole application's single backend choice
+# and one Bedrock model id, where this module needs a generation id and a separate embedding id to
+# run independent proofs against, and is happy to be a smaller, louder, test-only vocabulary rather
+# than borrow a shape built for something else.
 # ---------------------------------------------------------------------------
 _REGION_VAR: Final[str] = "BEDROCK_SMOKE_REGION"
 _GENERATION_MODEL_VAR: Final[str] = "BEDROCK_SMOKE_GENERATION_MODEL_ID"

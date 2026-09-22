@@ -89,9 +89,13 @@ function templateCard(runId, s, template) {
         : ""
     }
     <div class="gtpl-actions">
-      <button type="button" class="g-approve" data-approve="${esc(template.template_id)}"${
-        canApprove ? "" : " disabled"
-      }>${busy === "approve" ? "Approving…" : "Approve"}</button>
+      ${
+        template.status === "approved"
+          ? ""
+          : `<button type="button" class="g-approve" data-approve="${esc(
+              template.template_id,
+            )}"${canApprove ? "" : " disabled"}>${busy === "approve" ? "Approving…" : "Approve"}</button>`
+      }
       <button type="button" class="g-regen" data-regen="${esc(template.template_id)}"${
         canRegenerate ? "" : " disabled"
       }>${busy === "regenerate" ? "Regenerating…" : "Regenerate"}</button>
