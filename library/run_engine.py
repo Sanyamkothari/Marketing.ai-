@@ -11,13 +11,21 @@ this file.
 
     python -m library.run_engine \
         --dataset uci-bank-marketing \
-        --use-case bank-term-deposit \
-        --csv library/uci-bank-marketing/data/bank-additional-full.prepared.csv \
+        --use-case bank-term-deposit --config-root library/configs \
+        --csv library/uci-bank-marketing/data/prepared.csv \
         --primary-key client_id --target y
 
-Writes `library/.runs/<dataset>/<run_id>/` (git-ignored) plus a `results.json` holding the
-validation findings, the leaderboard, the test metrics, the baseline comparison, the decile-1 lift,
-the top features and the wall-clock time.
+Writes the run directory to `library/.runs/<dataset>/data/runs/<run_id>/` (git-ignored) and, beside
+the dataset directory, `library/.runs/<dataset>/<run_id>.results.json` holding the validation
+findings, the leaderboard, the test metrics, the baseline comparison, the decile-1 lift, the top
+features and the wall-clock time.
+
+**The CLI keeps one model registry per dataset**, at `library/.runs/<dataset>/registry.db`, so that
+successive runs of the same dataset can be compared. That file is created, never migrated: when
+`ModelVersionRow` gains a column, an old `registry.db` has to be deleted before the next run
+(`engine.registry.LocalModelRegistry`, DEC-341). The library's tests do not share this - `run()`
+takes a `runs_dir`, and every test passes a fresh temporary directory, so a test run leaves nothing
+in the repository and can never trip over a registry an earlier run created.
 """
 
 from __future__ import annotations
@@ -125,9 +133,14 @@ def run(
     target: str,
     overrides: dict[str, Any],
     config_root: Path | None = None,
+    runs_dir: Path | None = None,
 ) -> RunOutcome:
-    """Upload `csv_path`, run the train flow, and collect every number a report may quote."""
-    directory = RUNS_DIR / dataset
+    """Upload `csv_path`, run the train flow, and collect every number a report may quote.
+
+    `runs_dir` defaults to `library/.runs`, which persists between runs so the CLI's artefacts can
+    be read afterwards. Tests pass a temporary directory instead, so they are hermetic.
+    """
+    directory = (runs_dir if runs_dir is not None else RUNS_DIR) / dataset
     directory.mkdir(parents=True, exist_ok=True)
     storage = LocalStorage(directory / "data")
     registry = LocalModelRegistry(directory / "registry.db")

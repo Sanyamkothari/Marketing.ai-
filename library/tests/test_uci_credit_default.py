@@ -29,8 +29,9 @@ FLOOR = 0.70
 
 
 @pytest.fixture(scope="module")
-def sample_run() -> SampleRun:
+def sample_run(tmp_path_factory: pytest.TempPathFactory) -> SampleRun:
     return train_on_sample(
+        runs_dir=tmp_path_factory.mktemp("runs"),
         dataset="uci-credit-default",
         use_case="card-default-propensity",
         sample="uci-credit-default/sample.csv",
