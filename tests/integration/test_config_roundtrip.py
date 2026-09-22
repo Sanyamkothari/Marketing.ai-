@@ -6,11 +6,20 @@ from typing import Any
 
 import pytest
 
-from engine.config import ResolvedConfig, list_use_case_ids, load_use_case, resolve_config
+from engine.config import AiType, ConfigError, ResolvedConfig, list_use_case_ids, load_use_case, resolve_config
 
 pytestmark = pytest.mark.integration
 
-USE_CASE_IDS: tuple[str, ...] = list_use_case_ids()
+USE_CASE_IDS: tuple[str, ...] = tuple(
+    # The override document below touches `split`, `actions.bands` and `prepare` - three of the
+    # eight advanced-settings stages. A generative use case emits no such stages, so none of those
+    # paths is overridable on one and every case here would be an `OVERRIDE_UNKNOWN_PATH`. The
+    # sweep is read off the configs rather than listed, so a use case added by YAML alone still
+    # needs no edit here (plan section 2.1).
+    use_case_id
+    for use_case_id in list_use_case_ids()
+    if load_use_case(use_case_id).ai_type is not AiType.GENERATIVE
+)
 
 OVERRIDES: dict[str, Any] = {
     "split": {"test_fraction": 0.20},
@@ -66,6 +75,21 @@ def test_the_document_round_trips_through_json(resolved: ResolvedConfig) -> None
     # An index patch keys its mapping by `int`; JSON has string keys only, so the reloaded
     # `overrides_applied` carries "0" where the in-memory document carries 0.
     assert again.overrides_applied["split"] == resolved.overrides_applied["split"]
+
+
+def test_the_narrowed_sweep_still_covers_something() -> None:
+    """A sweep that shrank to nothing would look exactly like a passing suite."""
+    assert len(USE_CASE_IDS) >= 5
+    assert set(USE_CASE_IDS) < set(list_use_case_ids())
+
+
+def test_a_generative_use_case_refuses_a_predictive_override() -> None:
+    """The other half of the narrowing: refused by name, not silently ignored."""
+    generative = [i for i in list_use_case_ids() if load_use_case(i).ai_type is AiType.GENERATIVE]
+    assert generative, "no generative use case to check the refusal against"
+    with pytest.raises(ConfigError) as error:
+        resolve_config(generative[0], {"split.test_fraction": 0.20})
+    assert error.value.code == "OVERRIDE_UNKNOWN_PATH"
 
 
 def test_without_overrides_nothing_is_marked_override() -> None:

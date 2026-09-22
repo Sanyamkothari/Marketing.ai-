@@ -63,10 +63,10 @@ from tests.fixtures.make_data import (
     GenerationSpec,
     generate,
 )
+from tests.fixtures.planned import PLANNED_ID, planned_config_root
 from tests.integration.test_api_uploads import (
     CLEAN_CSV,
     DEMO_ID,
-    PLANNED_ID,
     REAL_INGEST,
     UNKNOWN_ID,
     StubFrame,
@@ -584,12 +584,21 @@ def test_unknown_upload_is_404(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "UPLOAD_NOT_FOUND"
 
 
-def test_planned_and_unknown_use_cases_are_404(client: TestClient) -> None:
+def test_planned_and_unknown_use_cases_are_404(
+    client: TestClient, tmp_path: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown id on the shipped configuration; a planned one on a root that still has one."""
     upload_id = upload(client)
-    for use_case, code in ((PLANNED_ID, "USE_CASE_PLANNED"), (UNKNOWN_ID, "USE_CASE_NOT_FOUND")):
-        response = client.post("/runs", json=run_body(upload_id, use_case=use_case))
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == code
+    response = client.post("/runs", json=run_body(upload_id, use_case=UNKNOWN_ID))
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "USE_CASE_NOT_FOUND"
+
+    install_ingest_stub(monkeypatch)
+    root = planned_config_root(tmp_path / "planned")
+    with TestClient(create_app(config_root=root, data_dir=data_dir)) as planned_client:
+        planned = planned_client.post("/runs", json=run_body(upload_id, use_case=PLANNED_ID))
+    assert planned.status_code == 404
+    assert planned.json()["detail"]["code"] == "USE_CASE_PLANNED"
 
 
 def test_mode_mismatch_is_409(client: TestClient) -> None:

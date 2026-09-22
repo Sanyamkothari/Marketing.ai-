@@ -242,6 +242,16 @@ def upload_key(upload_id: str, filename: str) -> str:
     return f"uploads/{upload_id}/{filename}"
 
 
+def index_key(index_id: str, *parts: str) -> str:
+    """Key of a file inside a knowledge index's directory.
+
+    A knowledge index sits beside runs and models rather than inside one: it outlives any single
+    question, several use cases could be pointed at one, and Phase 4 moves the whole directory to
+    S3 and then to OpenSearch without a run having to move with it.
+    """
+    return "/".join(("indexes", index_id, *parts))
+
+
 def model_key(model_id: str, *parts: str) -> str:
     """Key of a file (or directory) belonging to a model version."""
     return "/".join(("models", model_id, *parts))

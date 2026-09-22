@@ -206,8 +206,9 @@ def test_the_build_is_byte_identical_when_repeated(tmp_path: Path) -> None:
 # The reference Q&A set
 # ---------------------------------------------------------------------------
 def test_the_reference_set_has_the_columns_the_evaluation_reads() -> None:
+    """In the template's own order: primary key first, target last, as every other template is."""
     frame = read_reference_qa()
-    assert list(frame.columns) == ["question", "reference_answer", "expect_refusal", "source_doc"]
+    assert list(frame.columns) == ["question", "expect_refusal", "source_doc", "reference_answer"]
 
 
 def test_the_reference_set_is_big_enough_and_carries_refusals() -> None:

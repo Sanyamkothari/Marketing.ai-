@@ -29,11 +29,11 @@ from engine.contracts import CategoryCount, ColumnProfile, DatasetFingerprint, D
 from engine.stages import ingest
 from engine.storage import LocalStorage, Storage
 from engine.utils.time import utc_now
+from tests.fixtures.planned import PLANNED_ID, planned_config_root
 
 pytestmark = pytest.mark.integration
 
 DEMO_ID = "targeted-advertisement"
-PLANNED_ID = "ai-onboarding-assistant"
 UNKNOWN_ID = "not-a-use-case"
 
 CLEAN_CSV = (
@@ -371,16 +371,21 @@ def test_every_ingest_error_becomes_its_documented_status_and_leaves_no_orphan(
 
 
 def test_planned_and_unknown_use_cases_are_404_before_any_byte_is_stored(
-    client: TestClient, storage: LocalStorage
+    tmp_path: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    for use_case, code in ((PLANNED_ID, "USE_CASE_PLANNED"), (UNKNOWN_ID, "USE_CASE_NOT_FOUND")):
-        response = client.post(
-            "/uploads",
-            files={"file": ("history.csv", CLEAN_CSV.encode(), "text/csv")},
-            data={"use_case": use_case, "mode": "train"},
-        )
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == code
+    """The planned half is proved on a fixture root: the shipped configuration has none left."""
+    install_ingest_stub(monkeypatch)
+    storage = LocalStorage(data_dir)
+    root = planned_config_root(tmp_path / "planned")
+    with TestClient(create_app(config_root=root, data_dir=data_dir)) as client:
+        for use_case, code in ((PLANNED_ID, "USE_CASE_PLANNED"), (UNKNOWN_ID, "USE_CASE_NOT_FOUND")):
+            response = client.post(
+                "/uploads",
+                files={"file": ("history.csv", CLEAN_CSV.encode(), "text/csv")},
+                data={"use_case": use_case, "mode": "train"},
+            )
+            assert response.status_code == 404
+            assert response.json()["detail"]["code"] == code
     assert storage.list_keys("uploads/") == ()
 
 

@@ -1,0 +1,26 @@
+# A VALID industry file that still carries a `planned` entry.
+#
+# `configs/industries/telecom.yaml` had one until Phase 3a shipped the AI Onboarding Assistant and
+# flipped it to `available`, which left the planned-entry rules - a planned entry carries its own
+# name and description, because there is no use-case file to read them from - with nothing in the
+# shipped configuration to prove them against. This fixture is that proof, and it goes on working
+# whatever the shipped file comes to contain.
+schema_version: 1
+id: telecom
+name: Telecom
+journey_label: Customer Lifecycle
+stages:
+  - id: awareness
+    name: Awareness
+    ai_type: predictive
+    use_cases:
+      - {id: targeted-advertisement, status: available}
+  - id: win_back
+    name: Win-back
+    ai_type: hybrid
+    use_cases:
+      - {id: win-back-campaign, status: available}
+      - id: uplift-modelling
+        status: planned
+        name: Uplift Modelling
+        description: Ranks customers by how much an offer changes what they do, not by how likely they are to act anyway.

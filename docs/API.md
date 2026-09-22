@@ -149,6 +149,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `actions` | ActionsConfig | no |  |
 | `monitoring` | MonitoringConfig | no |  |
 | `governance` | GovernanceConfig | no |  |
+| `generative` | GenerativeConfig | no |  |
 | `output` | OutputConfig | yes |  |
 | `ui` | UiConfig | yes |  |
 | `template` | TemplateConfig | no |  |
@@ -258,6 +259,19 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `consent_column` | string \| null | no |  |
 | `approval_required` | boolean | no |  |
 
+#### GenerativeConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `kind` | GenerativeKind ("none" \| "rag_assistant" \| "root_cause_summary" \| "campaign_copy") | no | Which generative flow a use case turns on. `none` leaves the whole block inert (DEC-200). |
+| `llm` | LlmConfig | no |  |
+| `budget` | BudgetConfig | no |  |
+| `rag` | RagConfig | no |  |
+| `knowledge_base` | KnowledgeBaseConfig | no |  |
+| `reference_set` | ReferenceSetConfig | no | The Q&A file an index is graded against.  Named for what it is rather than `evaluation`, which already means the model's evaluation on `UseCaseConfig`; one word cannot carry both without a reader having to ask which (DEC-200). |
+| `root_cause` | RootCauseConfig | no |  |
+| `campaign_copy` | CampaignCopyConfig | no | Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` (DEC-201). |
+
 #### OutputConfig
 
 | Field | Type | Required | Meaning |
@@ -307,6 +321,88 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `recently_contacted_column` | string \| null | no |  |
 | `recently_contacted_days` | integer | no |  |
 
+#### LlmConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `backend` | LlmBackend ("fake" \| "bedrock") | no | Which client a generative flow calls through: a deterministic fake, or Bedrock (DEC-203). |
+| `region` | string | no |  |
+| `generation_model_id` | string | no |  |
+| `judge_model_id` | string | no |  |
+| `embedding_model_id` | string | no |  |
+| `temperature` | number | no |  |
+| `max_output_tokens` | integer | no |  |
+| `timeout_s` | integer | no |  |
+| `max_retries` | integer | no |  |
+
+#### BudgetConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `max_cost_usd_per_run` | number | no |  |
+| `max_calls_per_run` | integer | no |  |
+| `cache` | boolean | no |  |
+
+#### RagConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `chunk_tokens` | integer | no |  |
+| `chunk_overlap` | number | no |  |
+| `top_k` | integer | no |  |
+| `min_similarity` | number | no |  |
+| `mmr_lambda` | number | no |  |
+| `answer_language` | string | no |  |
+| `refusal_message` | string | no |  |
+
+#### KnowledgeBaseConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `accepted_types` | list[DocumentType ("pdf" \| "docx" \| "md" \| "txt")] | no |  |
+| `max_docs` | integer | no |  |
+| `max_mb` | integer | no |  |
+
+#### ReferenceSetConfig
+
+The Q&A file an index is graded against.  Named for what it is rather than `evaluation`, which already means the model's evaluation on `UseCaseConfig`; one word cannot carry both without a reader having to ask which (DEC-200).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `question_column` | string | no |  |
+| `reference_column` | string | no |  |
+| `refusal_column` | string | no |  |
+| `pass_threshold` | number | no |  |
+
+#### RootCauseConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `segment_by` | SegmentBy ("band" \| "top_reason") | no | How a root-cause run divides the scored rows before it explains them. |
+| `max_segments` | integer | no |  |
+| `reasons_per_segment` | integer | no |  |
+| `complaint_samples_per_segment` | integer | no |  |
+| `complaint_text_column` | string \| null | no |  |
+| `tone` | string | no |  |
+| `require_human_review` | boolean | no |  |
+
+#### CampaignCopyConfig
+
+Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` (DEC-201).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `variants_per_band` | integer | no |  |
+| `channels` | list[Channel ("email" \| "sms" \| "whatsapp")] | no |  |
+| `bands_to_write` | list[string] | no |  |
+| `allowed_fields` | list[string] | no |  |
+| `banned_claims` | list[string] | no |  |
+| `tone` | string | no |  |
+| `brand_name` | string | no |  |
+| `require_human_review` | boolean | no |  |
+| `limits` | CopyLimits | no |  |
+| `required_lines` | RequiredLines | no |  |
+
 #### KpiConfig
 
 | Field | Type | Required | Meaning |
@@ -338,6 +434,23 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `type` | ColumnType ("string" \| "integer" \| "float" \| "boolean" \| "date" \| "datetime" \| "text") | yes |  |
 | `description` | string | yes |  |
 | `examples` | tuple[string, string, string, string, string] | yes |  |
+
+#### CopyLimits
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `sms_chars` | integer | no |  |
+| `whatsapp_chars` | integer | no |  |
+| `email_subject_chars` | integer | no |  |
+| `email_body_words` | integer | no |  |
+
+#### RequiredLines
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `sms` | string | no |  |
+| `whatsapp` | string | no |  |
+| `email` | string | no |  |
 
 ### `profile.json`
 
@@ -1001,6 +1114,9 @@ One column of the schema a scoring file must match.
 | `leaderboard_path` | string \| null | no | Storage key of leaderboard.json; null when no search was run. |
 | `duration_s` | number | yes | Wall-clock seconds from run start to final state. |
 | `cost_estimate` | CostEstimate | yes | What the run cost to produce. |
+| `llm_calls` | integer | no | Calls a generative flow made over this run; 0 for a run nothing was generated from. |
+| `llm_cost_estimate_usd` | number \| null | no | What those calls cost in US dollars; null when no call was made, and also null when one was but the price table knew no price for the model (PRICE_UNKNOWN), because a zero there would be a measurement nobody took. |
+| `llm_usage_path` | string \| null | no | Storage key of llm_usage.json, which breaks those calls down; null when there were none. |
 | `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the manifest was written. |
 
 #### Recipe
@@ -1272,6 +1388,64 @@ Keys of the default document that no advanced-settings field renders, with their
 | `ui.pages.output` | str |
 | `template` | plan §4.3; every use case supplies the full column list |
 | `template.columns` | list[TemplateColumn] {name, role, type, description, examples[5]}; §3 |
+| `generative` | Phase 3a. Inert until `kind` names a flow; the predictive |
+| `generative.kind` | enum: none \| rag_assistant \| root_cause_summary \| campaign_copy |
+| `generative.llm` | non-UI; the client every generative flow calls through |
+| `generative.llm.backend` | enum: fake \| bedrock; `fake` so the screens run without credentials (DEC-203) |
+| `generative.llm.region` | str; data residency, not a default anyone should inherit silently |
+| `generative.llm.generation_model_id` | str; per deployment. A model id is never written in code (DEC-204) |
+| `generative.llm.judge_model_id` | str; the guardrail judges; may be the same id as above |
+| `generative.llm.embedding_model_id` | str; used by the index build and by every question |
+| `generative.llm.temperature` | float 0..1; low, because every flow wants the same answer twice |
+| `generative.llm.max_output_tokens` | int 1..8192 |
+| `generative.llm.timeout_s` | int 1..600 |
+| `generative.llm.max_retries` | int 0..5; transport retries, not regenerations |
+| `generative.budget` | non-UI; what one run is allowed to spend (plan §6) |
+| `generative.budget.max_cost_usd_per_run` | float >= 0; refused once exceeded, with partial artefacts |
+| `generative.budget.max_calls_per_run` | int >= 1; the ceiling that still holds when a price is unknown |
+| `generative.budget.cache` | bool; reuse an identical (prompt, input, model, temperature) |
+| `generative.rag` | how a question is answered from documents |
+| `generative.rag.chunk_tokens` | int 50..2000; target size of one chunk |
+| `generative.rag.chunk_overlap` | float 0..0.5; share of a chunk repeated from the one before |
+| `generative.rag.top_k` | int 1..50; chunks retrieved per question |
+| `generative.rag.min_similarity` | float 0..1; below this nothing is retrieved and the answer is a refusal |
+| `generative.rag.mmr_lambda` | float 0..1; 1 is pure relevance, 0 is pure diversity |
+| `generative.rag.answer_language` | enum: auto \| en \| hi ...; `auto` echoes the question's language |
+| `generative.knowledge_base` | what may be uploaded and indexed |
+| `generative.knowledge_base.accepted_types` | list[enum]; anything else is refused at upload |
+| `generative.knowledge_base.max_docs` | int >= 1 |
+| `generative.knowledge_base.max_mb` | int >= 1; the whole knowledge base, not one file |
+| `generative.reference_set` | the Q&A file an index is graded against. Named for what it is: |
+| `generative.reference_set.question_column` | str |
+| `generative.reference_set.reference_column` | str |
+| `generative.reference_set.refusal_column` | str; rows whose answer should be the refusal message |
+| `generative.reference_set.pass_threshold` | float 0..1; share of questions that must pass |
+| `generative.root_cause` | the root-cause summary written over a finished run. Named for the |
+| `generative.root_cause.segment_by` | enum: band \| top_reason |
+| `generative.root_cause.max_segments` | int 1..20 |
+| `generative.root_cause.reasons_per_segment` | int 1..20; strongest aggregated reasons put in the evidence pack |
+| `generative.root_cause.complaint_samples_per_segment` | int 0..100; 0 means summaries are built from reasons alone |
+| `generative.root_cause.complaint_text_column` | str \| null; free-text column of the run's own dataset |
+| `generative.root_cause.tone` | str; passed to the prompt verbatim |
+| `generative.root_cause.require_human_review` | bool; a summary is read, not sent (DEC-205) |
+| `generative.campaign_copy` | the copy written over a finished scoring run. Named in full because |
+| `generative.campaign_copy.variants_per_band` | int 1..4; labelled A, B, C, D in that order |
+| `generative.campaign_copy.channels` | list[enum]; a channel with no prompt file is refused |
+| `generative.campaign_copy.bands_to_write` | list[str]; names must be actions.bands names |
+| `generative.campaign_copy.allowed_fields` | list[str]; the ONLY placeholders |
+| `generative.campaign_copy.banned_claims` | list[str]; added to guardrails.yaml's global list |
+| `generative.campaign_copy.tone` | str; passed to the prompt verbatim |
+| `generative.campaign_copy.brand_name` | str; who the message is from. Empty is refused rather than invented |
+| `generative.campaign_copy.require_human_review` | bool; true means nothing leaves the review queue on its own |
+| `generative.campaign_copy.limits` | hard ceilings, checked on the template AND on every rendered message |
+| `generative.campaign_copy.limits.sms_chars` | int >= 1 |
+| `generative.campaign_copy.limits.whatsapp_chars` | int >= 1 |
+| `generative.campaign_copy.limits.email_subject_chars` | int >= 1 |
+| `generative.campaign_copy.limits.email_body_words` | int >= 1 |
+| `generative.campaign_copy.required_lines` | the line each channel must end with; email's is a placeholder name |
+| `generative.campaign_copy.required_lines.sms` | str |
+| `generative.campaign_copy.required_lines.whatsapp` | str |
+| `generative.campaign_copy.required_lines.email` | str |
 
 ### Catalog keys
 

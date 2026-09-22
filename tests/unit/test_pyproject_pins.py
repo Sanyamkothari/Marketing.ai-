@@ -119,7 +119,13 @@ def test_mypy_is_globally_strict_over_engine_api_and_scripts(pyproject: dict[str
     """DEC-013: one flag, no per-module strictness games."""
     mypy = pyproject["tool"]["mypy"]
     assert mypy["strict"] is True
-    assert mypy["files"] == ["engine", "api", "scripts", "tests/fixtures/make_data.py"]
+    assert mypy["files"] == [
+        "engine",
+        "api",
+        "scripts",
+        "tests/fixtures/make_data.py",
+        "tests/fixtures/make_docs.py",
+    ]
     assert mypy["python_version"] == "3.11"
 
 
@@ -164,7 +170,7 @@ def test_pytest_finds_the_packages_without_an_editable_install(pyproject: dict[s
     ini = pyproject["tool"]["pytest"]["ini_options"]
     assert ini["pythonpath"] == ["."]
     assert ini["testpaths"] == ["tests"]
-    assert {marker.split(":")[0] for marker in ini["markers"]} == {"slow", "integration"}
+    assert {marker.split(":")[0] for marker in ini["markers"]} == {"slow", "integration", "bedrock"}
 
 
 def test_the_nn_extra_is_torch_only(pyproject: dict[str, Any]) -> None:

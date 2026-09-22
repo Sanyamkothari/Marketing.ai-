@@ -1101,6 +1101,22 @@ class RunManifest(Artefact):
     )
     duration_s: float = Field(description="Wall-clock seconds from run start to final state.")
     cost_estimate: CostEstimate = Field(description="What the run cost to produce.")
+    llm_calls: int = Field(
+        default=0,
+        description="Calls a generative flow made over this run; 0 for a run nothing was generated from.",
+    )
+    llm_cost_estimate_usd: float | None = Field(
+        default=None,
+        description=(
+            "What those calls cost in US dollars; null when no call was made, and also null when one "
+            "was but the price table knew no price for the model (PRICE_UNKNOWN), because a zero "
+            "there would be a measurement nobody took."
+        ),
+    )
+    llm_usage_path: str | None = Field(
+        default=None,
+        description="Storage key of llm_usage.json, which breaks those calls down; null when there were none.",
+    )
     created_at: AwareDatetime = Field(description="UTC time the manifest was written.")
 
 
