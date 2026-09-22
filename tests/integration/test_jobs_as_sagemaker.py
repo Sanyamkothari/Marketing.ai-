@@ -38,7 +38,6 @@ from api.main import create_app
 from engine.aws.prices import NOT_BILLED
 from engine.aws.sagemaker_jobs import (
     JOB_SPEC_KEY_ENV_VAR,
-    PROCESSING_BACKEND,
     TRAINING_BACKEND,
     SageMakerJobConfig,
     SageMakerJobRunner,
@@ -46,6 +45,7 @@ from engine.aws.sagemaker_jobs import (
 from engine.contracts import (
     SCORE_ARTEFACTS,
     TRAIN_ARTEFACTS,
+    ComputeBackend,
     JobEntrypoint,
     JobSpec,
     ModelVersion,
@@ -57,7 +57,7 @@ from engine.contracts import (
 )
 from engine.registry import REGISTRY_FILENAME, LocalModelRegistry
 from engine.runs import job_spec_key
-from engine.settings import Deployment, JobBackend, Settings, build_storage
+from engine.settings import Settings, build_storage
 from engine.storage import Storage, run_key
 from tests.fakes.fake_sagemaker import (
     CREATE_PROCESSING_JOB,
@@ -167,17 +167,17 @@ def settings(tmp_path_factory: pytest.TempPathFactory) -> Settings:
     """
     root = tmp_path_factory.mktemp("jobs-as-sagemaker")
     return Settings(
-        env=Deployment.DEV,
-        region=REGION,
+        env="dev",
+        aws_region=REGION,
         data_dir=root / "meta",
         storage_backend="s3",
         s3_bucket=BUCKET,
         s3_prefix="artefacts",
         local_cache_dir=root / "mirror",
-        job_backend=JobBackend.SAGEMAKER,
+        job_backend="sagemaker",
         sagemaker_role_arn="arn:aws:iam::000000000000:role/marketing-ai-job",
         sagemaker_image_uri="000000000000.dkr.ecr.ap-south-1.amazonaws.com/marketing-ai:1",
-        sagemaker_train_instance_type=TRAIN_INSTANCE,
+        sagemaker_instance_type=TRAIN_INSTANCE,
         sagemaker_processing_instance_type=PROCESSING_INSTANCE,
         sagemaker_volume_size_gb=30,
         client_id="acme",
@@ -414,7 +414,8 @@ def test_the_training_manifest_says_where_it_ran_and_what_aws_billed(
     manifest = deployed.artefact(run_id, "run_manifest.json", RunManifest)
 
     assert manifest.compute is not None
-    assert manifest.compute.backend == TRAINING_BACKEND
+    assert manifest.compute.backend == ComputeBackend.SAGEMAKER
+    assert manifest.compute.entrypoint is JobEntrypoint.TRAIN
     assert manifest.compute.instance_type == TRAIN_INSTANCE
     assert manifest.compute.region == REGION
     assert manifest.compute.job_name is not None
@@ -440,8 +441,9 @@ def test_the_scoring_manifest_reports_wall_clock_and_no_price(deployed: Deployed
     manifest = deployed.artefact(run_id, "run_manifest.json", RunManifest)
 
     assert manifest.compute is not None
-    assert manifest.compute.backend == PROCESSING_BACKEND
-    assert manifest.compute.wall_clock_seconds is not None
+    assert manifest.compute.backend == ComputeBackend.SAGEMAKER
+    assert manifest.compute.entrypoint is JobEntrypoint.SCORE
+    assert manifest.compute.duration_s is not None
     assert manifest.compute.billable_seconds is None
     assert manifest.cost_estimate.estimated_usd is None
     assert manifest.cost_estimate.basis != NOT_BILLED, "it *was* carried by a service that bills"

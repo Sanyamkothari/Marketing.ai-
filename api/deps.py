@@ -29,7 +29,7 @@ from fastapi import Depends, Request
 from engine.config import config_root
 from engine.jobs import JobRunner, ThreadJobRunner
 from engine.registry import REGISTRY_FILENAME, LocalModelRegistry, ModelRegistry
-from engine.settings import JobBackend, MetadataBackend, Settings, build_registry, build_storage
+from engine.settings import Settings, build_registry, build_storage, load_settings
 from engine.storage import LocalStorage, Storage
 
 if TYPE_CHECKING:  # imported lazily below so the local path never loads a driver or a table module
@@ -58,7 +58,7 @@ def get_settings(request: Request) -> Settings:
     with _LOCK:
         existing: Settings | None = getattr(state, "settings", None)
         if existing is None:
-            existing = Settings.load()
+            existing = load_settings()
             state.settings = existing
     return existing
 
@@ -129,7 +129,7 @@ def get_jobs(request: Request) -> JobRunner:
     if cached is not None:
         return cached
     settings = get_settings(request)
-    remote = settings.job_backend is JobBackend.SAGEMAKER and _state_path(request, "data_dir") is None
+    remote = settings.job_backend == "sagemaker" and _state_path(request, "data_dir") is None
     fresh: JobRunner = (
         _sagemaker_runner(settings, request)
         if remote
@@ -171,7 +171,7 @@ def get_run_index(request: Request) -> RunIndex | None:
     if _state_path(request, "data_dir") is not None:
         return None
     settings = get_settings(request)
-    if settings.metadata_backend is not MetadataBackend.POSTGRES:
+    if settings.metadata_backend != "postgres":
         return None
     # A deliberate local import: psycopg is an optional dependency, and this module declares tables
     # that must not reach SQLModel's metadata on a SQLite deployment (DEC-306, DEC-340).

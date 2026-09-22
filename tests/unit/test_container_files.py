@@ -138,11 +138,17 @@ def test_ci_runs_the_suite_inside_the_image(workflows: dict[str, dict[str, objec
 
 
 def test_ci_makes_the_postgres_tests_fail_rather_than_skip(workflows: dict[str, dict[str, object]]) -> None:
-    """A test that silently stopped running is worse than one that fails."""
+    """A test that silently stopped running is worse than one that fails.
+
+    Either placement counts. On the job it covers every step, which is what the workflow does; on a
+    step it covers that step. What matters is that the variable reaches `make test`, because without
+    it a CI run with a broken Postgres service would report green with the metadata tests skipped.
+    """
     jobs = workflows["ci"]["jobs"]
     assert isinstance(jobs, dict)
-    steps = jobs["lint-and-test"]["steps"]
-    assert any(step.get("env", {}).get("MARKETING_AI_REQUIRE_POSTGRES") == "1" for step in steps)
+    job = jobs["lint-test"]
+    scopes = [job.get("env", {}), *(step.get("env", {}) for step in job["steps"])]
+    assert any(scope.get("MARKETING_AI_REQUIRE_POSTGRES") == "1" for scope in scopes)
 
 
 def test_ci_synthesises_the_infrastructure_for_real(workflows: dict[str, dict[str, object]]) -> None:

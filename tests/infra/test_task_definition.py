@@ -53,7 +53,7 @@ def test_the_task_definition_sets_only_what_must_be_true_before_ssm_can_be_read(
     assert environment_names(dev_templates) == {
         "MARKETING_AI_SETTINGS_SOURCE",
         "MARKETING_AI_ENV",
-        "MARKETING_AI_REGION",
+        "MARKETING_AI_AWS_REGION",
     }
 
 
@@ -69,7 +69,7 @@ def test_the_settings_source_selects_aws(dev_templates: dict[str, Template]) -> 
     values = {entry["Name"]: entry["Value"] for entry in container(dev_templates)["Environment"]}
     assert values["MARKETING_AI_SETTINGS_SOURCE"] == "aws"
     assert values["MARKETING_AI_ENV"] == "dev"
-    assert values["MARKETING_AI_REGION"] == "ap-south-1"
+    assert values["MARKETING_AI_AWS_REGION"] == "ap-south-1"
 
 
 def test_no_secret_is_injected_into_the_task_definition(
@@ -105,7 +105,7 @@ def test_parameters_are_flat_under_the_deployment_path(dev_templates: dict[str, 
         ("log_format", "json"),
         ("metrics_backend", "emf"),
         ("sagemaker_job_name_prefix", "marketing-ai"),
-        ("sagemaker_train_instance_type", "ml.m5.2xlarge"),
+        ("sagemaker_instance_type", "ml.m5.2xlarge"),
         ("sagemaker_processing_instance_type", "ml.m5.xlarge"),
         ("sagemaker_max_concurrent_jobs", "3"),
     ],

@@ -144,7 +144,7 @@ Lowest first (DEC-301):
 The environment beating AWS is deliberate: it is what lets an operator override one value on one
 task without editing a parameter. It is also the trap in the other direction, which is why the task
 definition sets exactly three variables — `MARKETING_AI_SETTINGS_SOURCE=aws`, `MARKETING_AI_ENV` and
-`MARKETING_AI_REGION`. A task definition that also set `MARKETING_AI_S3_BUCKET` would not disagree
+`MARKETING_AI_AWS_REGION`. A task definition that also set `MARKETING_AI_S3_BUCKET` would not disagree
 with the parameter of the same name; it would silently win over it, for ever.
 
 `GetParametersByPath` is called with `Recursive=False`, so a parameter must sit exactly one level
@@ -163,7 +163,7 @@ that refuses to start without it. "Written by `cdk deploy`" marks the parameters
 | Field | Environment variable | SSM parameter | Default | Needed by | Written by `cdk deploy` |
 |---|---|---|---|---|---|
 | `env` | `MARKETING_AI_ENV` | — it selects the path | `local` | always | task definition |
-| `region` | `MARKETING_AI_REGION` | `region` | none; also read from `AWS_REGION`, `AWS_DEFAULT_REGION` | sagemaker | task definition |
+| `aws_region` | `MARKETING_AI_AWS_REGION` | `aws_region` | none | s3, sagemaker, bedrock | task definition |
 | `config_dir` | `MARKETING_AI_CONFIG_DIR` | `config_dir` | the checkout's `configs/` | — | no |
 | `storage_backend` | `MARKETING_AI_STORAGE_BACKEND` | `storage_backend` | `local` | always | yes, `s3` |
 | `data_dir` | `MARKETING_AI_DATA_DIR` | `data_dir` | `data` | local storage | no |
@@ -173,36 +173,44 @@ that refuses to start without it. "Written by `cdk deploy`" marks the parameters
 | `download_url_ttl_seconds` | `MARKETING_AI_DOWNLOAD_URL_TTL_SECONDS` | `download_url_ttl_seconds` | `900`, between 60 and 3600 | s3 storage | no |
 | `local_cache_dir` | `MARKETING_AI_LOCAL_CACHE_DIR` | `local_cache_dir` | a temp directory | s3 storage | no |
 | `metadata_backend` | `MARKETING_AI_METADATA_BACKEND` | `metadata_backend` | `sqlite` | always | yes, `postgres` |
-| `database_url` | `MARKETING_AI_DATABASE_URL` | **the secret only**, §3.3 | none | postgres | yes, into the secret |
+| `postgres_dsn` | `MARKETING_AI_POSTGRES_DSN` | **the secret only**, §3.3 | none | postgres | yes, into the secret |
 | `postgres_schema` | `MARKETING_AI_POSTGRES_SCHEMA` | `postgres_schema` | the connection's search path | — | yes |
 | `job_backend` | `MARKETING_AI_JOB_BACKEND` | `job_backend` | `thread` | always | yes, `sagemaker` |
-| `job_max_workers` | `MARKETING_AI_JOB_MAX_WORKERS` | `job_max_workers` | `2`, between 1 and 32 | thread jobs | no |
+| `job_max_workers` | `MARKETING_AI_JOB_MAX_WORKERS` | `job_max_workers` | `2`, at least 1 | thread jobs | no |
 | `sagemaker_role_arn` | `MARKETING_AI_SAGEMAKER_ROLE_ARN` | `sagemaker_role_arn` | none | sagemaker | yes |
 | `sagemaker_image_uri` | `MARKETING_AI_SAGEMAKER_IMAGE_URI` | `sagemaker_image_uri` | none | sagemaker | yes, the digest |
-| `sagemaker_train_instance_type` | `MARKETING_AI_SAGEMAKER_TRAIN_INSTANCE_TYPE` | `sagemaker_train_instance_type` | none, on purpose | sagemaker | yes, from `-c sagemaker_instance_train` |
-| `sagemaker_processing_instance_type` | `MARKETING_AI_SAGEMAKER_PROCESSING_INSTANCE_TYPE` | `sagemaker_processing_instance_type` | none, on purpose | sagemaker | yes, from `-c sagemaker_instance_process` |
+| `sagemaker_instance_type` | `MARKETING_AI_SAGEMAKER_INSTANCE_TYPE` | `sagemaker_instance_type` | none, on purpose | sagemaker | yes, from `-c sagemaker_instance_train` |
+| `sagemaker_processing_instance_type` | `MARKETING_AI_SAGEMAKER_PROCESSING_INSTANCE_TYPE` | `sagemaker_processing_instance_type` | none, on purpose | the score job | yes, from `-c sagemaker_instance_process` |
 | `sagemaker_instance_count` | `MARKETING_AI_SAGEMAKER_INSTANCE_COUNT` | `sagemaker_instance_count` | `1` | sagemaker | no |
 | `sagemaker_volume_size_gb` | `MARKETING_AI_SAGEMAKER_VOLUME_SIZE_GB` | `sagemaker_volume_size_gb` | unset, so the service default applies | — | no |
 | `sagemaker_max_runtime_seconds` | `MARKETING_AI_SAGEMAKER_MAX_RUNTIME_SECONDS` | `sagemaker_max_runtime_seconds` | unset, so the service default applies | — | no |
-| `sagemaker_max_concurrent_jobs` | `MARKETING_AI_SAGEMAKER_MAX_CONCURRENT_JOBS` | `sagemaker_max_concurrent_jobs` | `2` | sagemaker | yes, from `-c max_concurrent_jobs` |
+| `sagemaker_max_concurrent_jobs` | `MARKETING_AI_SAGEMAKER_MAX_CONCURRENT_JOBS` | `sagemaker_max_concurrent_jobs` | `2`, at least 1 | sagemaker | yes, from `-c max_concurrent_jobs` |
 | `sagemaker_subnet_ids` | `MARKETING_AI_SAGEMAKER_SUBNET_IDS` | `sagemaker_subnet_ids` | empty, meaning no VPC configuration | — | yes, the app subnets |
 | `sagemaker_security_group_ids` | `MARKETING_AI_SAGEMAKER_SECURITY_GROUP_IDS` | `sagemaker_security_group_ids` | empty | — | yes |
 | `sagemaker_job_name_prefix` | `MARKETING_AI_SAGEMAKER_JOB_NAME_PREFIX` | `sagemaker_job_name_prefix` | `marketing-ai` | sagemaker — it is also the IAM boundary | yes |
-| `bedrock_enabled` | `MARKETING_AI_BEDROCK_ENABLED` | `bedrock_enabled` | `false` | reserved, §3.4 | yes |
-| `bedrock_model_ids` | `MARKETING_AI_BEDROCK_MODEL_IDS` | `bedrock_model_ids` | empty, meaning deny — never allow-all | reserved, §3.4 | only when given |
+| `llm_backend` | `MARKETING_AI_LLM_BACKEND` | `llm_backend` | `fake` | always | yes, from `-c bedrock_enabled` |
+| `bedrock_model_id` | `MARKETING_AI_BEDROCK_MODEL_ID` | `bedrock_model_id` | none | `llm_backend=bedrock` | only when `-c bedrock_model_ids` is given |
 | `log_level` | `MARKETING_AI_LOG_LEVEL` | `log_level` | `INFO` | — | yes |
 | `log_format` | `MARKETING_AI_LOG_FORMAT` | `log_format` | `text` | the metric filters need `json` | yes, `json` |
 | `metrics_backend` | `MARKETING_AI_METRICS_BACKEND` | `metrics_backend` | `none` | CloudWatch metrics need `emf` | yes, `emf` |
 | `client_id` | `MARKETING_AI_CLIENT_ID` | `client_id` | none | cost-allocation tags and metric dimensions | only when given |
 | `cors_origins` | `MARKETING_AI_CORS_ORIGINS` | `cors_origins` | `*` | refused on prod, §3.5 | yes |
 
-Four fields are tuples filled from one comma-separated value: `sagemaker_subnet_ids`,
-`sagemaker_security_group_ids`, `bedrock_model_ids`, `cors_origins`.
+Three fields are tuples filled from one comma-separated value: `sagemaker_subnet_ids`,
+`sagemaker_security_group_ids` and `cors_origins`.
 
-Five `MARKETING_AI_*` names are deliberately **not** settings and are listed in `NON_FIELD_ENV_VARS`
-so the unknown-variable check does not refuse them: `MARKETING_AI_SETTINGS_SOURCE`,
-`MARKETING_AI_JOB_SPEC_KEY`, `MARKETING_AI_FAILURE_PATH`, `MARKETING_AI_REQUIRE_POSTGRES` and
-`MARKETING_AI_TEST_DATABASE_URL`. Of those five, a task definition sets exactly one.
+`aws_region` is read from `MARKETING_AI_AWS_REGION` and from nowhere else. It is **not** filled from
+`AWS_REGION` or `AWS_DEFAULT_REGION`: those are whatever the host happens to export, and a
+deployment that silently followed one of them would read a different account's Parameter Store
+because of an environment variable nobody set deliberately.
+
+Five `MARKETING_AI_*` names are deliberately **not** settings and are listed in `NON_FIELD_ENV_VARS`:
+`MARKETING_AI_SETTINGS_SOURCE`, `MARKETING_AI_JOB_SPEC_KEY`, `MARKETING_AI_FAILURE_PATH`,
+`MARKETING_AI_REQUIRE_POSTGRES` and `MARKETING_AI_TEST_DATABASE_URL`. The application ignores a
+`MARKETING_AI_*` name it does not recognise; what that list is for is the deployment, where
+`tests/infra/test_task_definition.py` fails the build if a task definition sets a `MARKETING_AI_*`
+variable that is in neither that list nor the table above (DEC-304). Of those five, a task
+definition sets exactly one.
 
 The two instance-type fields have no default **on purpose**: an instance type is a cost decision and
 this repository does not take cost decisions on a customer's behalf. The deployment supplies its
@@ -211,7 +219,7 @@ own defaults live in one place, `infra/context.py`, next to every other knob.
 
 ### 3.3 The one secret
 
-`database_url` is the only `SecretStr` in the model and the only value that is not in Parameter
+`postgres_dsn` is the only `SecretStr` in the model and the only value that is not in Parameter
 Store. It lives in the Secrets Manager document `marketing-ai/<env>/app`, whose keys are `Settings`
 field names, and the task role may read that one ARN and nothing else.
 
@@ -219,25 +227,30 @@ The database's own credential is a **separate** secret, `marketing-ai/<env>/db`.
 read it. That is the secret RDS knows about and the one the AWS single-user rotation function
 rewrites.
 
-`Settings.__repr__` and `Settings.summary()` are built from an allow-list of non-secret fields, and
-`SettingsError` names a field and never a value, so a wrong URL cannot escape through a log line or
-a traceback.
+`engine.settings.summary()` and `redacted()` are built from an allow-list of non-secret fields, and
+`SettingsError` names the variable to export and never its value, so a wrong URL cannot escape
+through a log line or a traceback.
 
 The URL in `marketing-ai/<env>/app` is a **snapshot composed at deploy time** (DEC-376). The rotation
 function changes the password in the credential secret and knows nothing about the application
 document, so after a rotation the URL carries the previous password until the database stack is
 deployed again. §10.5 is what that looks like from the outside.
 
-### 3.4 Bedrock is reserved, not wired
+### 3.4 Bedrock: two knobs, and which one is IAM
 
-`bedrock_enabled` and `bedrock_model_ids` exist, `infra/policies.py` can emit a scoped
-`bedrock:InvokeModel` statement — and **nothing in this repository reads either field**. Phase 3a,
-the generative layer, is not in this tree. Leave `bedrock_enabled` false. Requesting model access in
-the Bedrock console changes nothing about what the product does today; it is in §2 only so an
-operator who plans ahead knows it is a per-account, per-model request with a lead time.
+`llm_backend` is the application's switch: `fake` (the default) or `bedrock`. `bedrock_model_id` is
+the one model completions go to, and `Settings` refuses `llm_backend=bedrock` without it and without
+`aws_region`.
 
-The same is true of Phase 2 — client onboarding, dataset management, DuckDB. None of it is here.
-The `LlmCostUsd` metric (§6.2) is a hook with nothing behind it for the same reason.
+The CDK has a *third* knob that is not a setting: `-c bedrock_model_ids`, a comma-separated list.
+That list is an IAM question rather than a configuration one — a role may legitimately be allowed to
+invoke several models (a generation model, an embedding model, a judge) while the engine sends
+completions to one — so it is what `infra/policies.py` scopes `bedrock:InvokeModel` to, and the
+first entry is what the deployment writes into `bedrock_model_id`.
+
+An empty list with `-c bedrock_enabled=true`, or `bedrock_enabled=false`, synthesises an explicit
+`Deny` rather than an absent `Allow` (DEC-371). Requesting model access is a per-account, per-model
+request with a lead time; it is in §2 so an operator who plans ahead knows that.
 
 ### 3.5 The three refusals
 
@@ -245,11 +258,17 @@ A deployment that is described wrongly fails at startup, loudly, rather than at 
 
 | Refusal | Code | What it means |
 |---|---|---|
-| An unknown `MARKETING_AI_*` variable | `SETTINGS_UNKNOWN` | The name matches no field and is not in `NON_FIELD_ENV_VARS`. It is refused rather than ignored because a typo in a parameter name is otherwise invisible until somebody wonders why a setting had no effect (DEC-304) |
-| An incomplete backend | `SETTINGS_INCOMPLETE` | `storage_backend=s3` with no `s3_bucket`; `metadata_backend=postgres` with no `database_url`; `job_backend=sagemaker` without the role, the image, both instance types and the region — or with a storage backend that is not S3, because a remote job cannot read a local disk (DEC-302) |
-| `cors_origins` containing `*` when `env=prod` | `SETTINGS_INVALID` | DEC-024 left CORS open for a UI opened as a local file. That is a statement about a laptop, not about an internet-facing load balancer, so a prod deployment that never mentions `cors_origins` is refused rather than inheriting the laptop's answer (DEC-307) |
+| An incomplete backend | `SETTING_REQUIRED` | `storage_backend=s3` with no `s3_bucket` or no `aws_region`; `metadata_backend=postgres` with no `postgres_dsn`; `job_backend=sagemaker` without the role, the image, the instance type and the region; `llm_backend=bedrock` without `bedrock_model_id` |
+| `job_backend=sagemaker` without `storage_backend=s3` | `SETTING_REQUIRED` | A remote job cannot read a local disk, so this combination is a deployment that would fail at its first run (DEC-302) |
+| `cors_origins` containing `*` when `env=prod` | `SETTING_REQUIRED` | DEC-024 left CORS open for a UI opened as a local file. That is a statement about a laptop, not about an internet-facing load balancer, so a prod deployment that never mentions `cors_origins` is refused rather than inheriting the laptop's answer (DEC-307) |
+| A value the field cannot hold | `SETTING_INVALID` | `MARKETING_AI_JOB_MAX_WORKERS=nine`, a `download_url_ttl_seconds` outside 60…3600, an `s3_prefix` containing a `..` segment |
 
-The message always names the field and never the value (DEC-303).
+The message always names the environment variable to export and never its value (DEC-303).
+
+A `MARKETING_AI_*` variable that matches no field is **ignored** by the application rather than
+refused: a deployment must not fail to start because some other tool on the host exported a name in
+that space. The check that a typo is caught is one layer out, at the deployment — see the note under
+the field table.
 
 `infra/context.py` refuses the same class of mistake one layer up: an unrecognised `-c` key is a
 `ContextError` with a "did you mean" hint, because `-c db_storage_bg=50` otherwise synthesises
@@ -376,7 +395,7 @@ The `jobs` probe describes a training job that does not exist. A role allowed to
 failure. Describing a job that does not exist is the only way to test the permission without
 creating one and paying for it.
 
-The first line is `Settings.summary()`, rendered from an allow-list of non-secret fields. It cannot
+The first line is `engine.settings.summary()`, rendered from an allow-list of non-secret fields. It cannot
 print the database URL.
 
 ### 4.4 The same three steps in CI
@@ -649,7 +668,7 @@ The unit of a deployment is an image digest and a schema revision. Roll them one
 ### 7.1 Migrate the database
 
 ```bash
-MARKETING_AI_DATABASE_URL="postgresql://...?sslmode=require" make migrate
+MARKETING_AI_POSTGRES_DSN="postgresql://...?sslmode=require" make migrate
 ```
 
 That is `alembic upgrade head`. From inside the deployment, the same thing runs as a one-off task
@@ -918,16 +937,20 @@ not run there and the layer is unproven rather than proven. The Dockerfile is or
 this image on a machine with normal network access is the first person to execute it. If the build
 fails at that step, the network is the suspect before the Dockerfile is.
 
-### 10.4 The application refuses to start: `SETTINGS_UNKNOWN` — or a setting has no effect
+### 10.4 A setting has no effect — or the application refuses to start naming one
 
-**Symptom.** The task exits immediately with a message naming a `MARKETING_AI_*` variable. Or the
-opposite: no error at all, and a parameter you edited changes nothing.
+**Symptom.** A parameter you edited changes nothing, and there is no error at all. Or the task exits
+immediately with `SETTING_REQUIRED` naming a `MARKETING_AI_*` variable you thought you had set.
 
 **Cause.** Three different mistakes with the same shape.
 
-- **A misspelt variable.** `resolve_values` refuses any `MARKETING_AI_*` name that is neither a
-  field nor in `NON_FIELD_ENV_VARS`, because a typo is otherwise invisible until somebody wonders
-  why a setting had no effect (DEC-304). The field table in §3.2 is the list.
+- **A misspelt name.** The application *ignores* a `MARKETING_AI_*` name it does not recognise, so a
+  typo is silent here — which is why the check is at the deployment instead:
+  `tests/infra/test_task_definition.py` fails the build on any `MARKETING_AI_*` variable that is
+  neither a field nor in `NON_FIELD_ENV_VARS` (DEC-304). A typo in an *SSM leaf* is silent
+  everywhere, so the field table in §3.2 is the list to check it against. The parameter is also
+  accepted under either spelling — `s3_bucket` or `MARKETING_AI_S3_BUCKET` — and a leaf matching
+  neither is ignored.
 - **A parameter written one level too deep.** `GetParametersByPath` runs with `Recursive=False`, so
   `/marketing-ai/dev/sagemaker/role_arn` is stored, looks correct in the console, and is never read.
   It has to be `/marketing-ai/dev/sagemaker_role_arn`.
@@ -954,7 +977,7 @@ security group admits only the app and job security groups. A URL without `sslmo
 client outside those groups, cannot connect. That is the control working.
 
 **Cause (b).** The credential rotated. The AWS single-user rotation function rewrites `password` in
-`marketing-ai/<env>/db` and knows nothing about `marketing-ai/<env>/app`, whose `database_url` was
+`marketing-ai/<env>/db` and knows nothing about `marketing-ai/<env>/app`, whose `postgres_dsn` was
 composed at deploy time, so the application document now holds the previous password (DEC-376).
 
 **Fix.**

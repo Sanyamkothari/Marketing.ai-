@@ -108,13 +108,13 @@ class SageMakerRegistryConfig:
         A deployment that wants the mirror therefore has to construct it deliberately, which is the
         right amount of friction for a write into a shared account (DEC-348).
         """
-        tags = {"product": settings.sagemaker_job_name_prefix, "env": settings.env.value}
+        tags = {"product": settings.sagemaker_job_name_prefix, "env": settings.env}
         if settings.client_id is not None:
             tags["client"] = settings.client_id
         return cls(
             enabled=enabled,
             group_prefix=settings.sagemaker_job_name_prefix,
-            region=settings.region,
+            region=settings.aws_region,
             tags=tags,
         )
 

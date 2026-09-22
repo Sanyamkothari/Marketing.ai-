@@ -41,7 +41,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 from engine import __version__
-from engine.config import Catalog, ResolvedConfig, RunMode
+from engine.config import Catalog, ResolvedConfig, RunMode, sole_key
 from engine.contracts import (
     DatasetProfile,
     JobEntrypoint,
@@ -391,7 +391,7 @@ def job_spec_for(
         run_config_key=run_key(record.run_id, RUN_CONFIG_FILENAME),
         upload_key=upload.source_key,
         upload_format=upload.file_format,
-        primary_key=record.primary_key,
+        primary_key=sole_key(record.primary_key, what="A run"),
         target=record.target,
         model_version_id=record.model_version_id,
         engine_version=__version__,
@@ -528,7 +528,7 @@ def build_train_job(
                 storage=storage,
                 registry=registry,
                 cancel=cancel,
-                primary_key=record.primary_key,
+                primary_key=sole_key(record.primary_key, what="A run"),
                 target=record.target,
                 upload_key=upload.source_key,
                 model_version_id=record.model_version_id,
@@ -572,7 +572,7 @@ def build_score_job(
                 storage=storage,
                 registry=registry,
                 cancel=cancel,
-                primary_key=record.primary_key,
+                primary_key=sole_key(record.primary_key, what="A run"),
                 target=record.target,
                 upload_key=upload.source_key,
                 model_version_id=record.model_version_id,

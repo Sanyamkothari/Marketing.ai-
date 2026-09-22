@@ -23,7 +23,7 @@ from engine.aws.secrets import (  # noqa: E402 - must follow the importorskip gu
     StaticParameterSource,
     quiet_aws_wire_logs,
 )
-from engine.settings import Settings, secret_name, ssm_prefix  # noqa: E402
+from engine.settings import secret_name, settings_from_aws, ssm_prefix  # noqa: E402
 
 REGION = "ap-south-1"
 SECRET_VALUE = "postgresql+psycopg://marketing:hunter2-do-not-log@db.internal:5432/marketing"
@@ -87,8 +87,8 @@ def test_an_absent_prefix_is_empty_rather_than_an_error(aws: None) -> None:
 
 
 def test_the_secret_is_parsed_as_a_flat_json_object(aws: None) -> None:
-    put_secret({"database_url": SECRET_VALUE})
-    assert AwsParameterSource(region=REGION).secret(secret_name("dev")) == {"database_url": SECRET_VALUE}
+    put_secret({"postgres_dsn": SECRET_VALUE})
+    assert AwsParameterSource(region=REGION).secret(secret_name("dev")) == {"postgres_dsn": SECRET_VALUE}
 
 
 def test_an_absent_secret_is_empty_rather_than_an_error(aws: None) -> None:
@@ -153,7 +153,7 @@ def test_a_read_logs_how_many_it_found_and_not_what_they_were(
     aws: None, caplog: pytest.LogCaptureFixture
 ) -> None:
     put_parameters({"s3_bucket": "marketing-ai-dev"})
-    put_secret({"database_url": SECRET_VALUE})
+    put_secret({"postgres_dsn": SECRET_VALUE})
     with caplog.at_level(logging.INFO, logger="engine.aws.secrets"):
         source = AwsParameterSource(region=REGION)
         source.parameters(ssm_prefix("dev"))
@@ -169,43 +169,49 @@ def test_a_read_logs_how_many_it_found_and_not_what_they_were(
 # End to end into Settings
 # ---------------------------------------------------------------------------
 def test_settings_from_aws_reads_both_stores_and_the_environment_still_wins(aws: None) -> None:
-    put_parameters({"storage_backend": "s3", "s3_bucket": "from-ssm", "region": REGION})
-    put_secret({"database_url": SECRET_VALUE, "metadata_backend": "postgres"})
+    put_parameters({"storage_backend": "s3", "s3_bucket": "from-ssm", "aws_region": REGION})
+    put_secret({"postgres_dsn": SECRET_VALUE, "metadata_backend": "postgres"})
     source = AwsParameterSource(region=REGION)
 
-    settings = Settings.from_aws(source=source, env="dev", environ={})
+    settings = settings_from_aws(source=source, env="dev", environ={})
     assert settings.s3_bucket == "from-ssm"
-    assert settings.metadata_backend.value == "postgres"
-    assert settings.database_url is not None
-    assert settings.database_url.get_secret_value() == SECRET_VALUE
+    assert settings.metadata_backend == "postgres"
+    assert settings.postgres_dsn is not None
+    assert settings.postgres_dsn.get_secret_value() == SECRET_VALUE
     assert SECRET_VALUE not in repr(settings)
 
-    overridden = Settings.from_aws(source=source, env="dev", environ={"MARKETING_AI_S3_BUCKET": "from-env"})
+    overridden = settings_from_aws(source=source, env="dev", environ={"MARKETING_AI_S3_BUCKET": "from-env"})
     assert overridden.s3_bucket == "from-env"
 
 
 def test_a_parameter_may_be_named_either_way(aws: None) -> None:
     """One naming convention in Parameter Store serves both spellings (DEC-305)."""
     put_parameters({"MARKETING_AI_LOG_FORMAT": "json", "log_level": "DEBUG"})
-    settings = Settings.from_aws(source=AwsParameterSource(region=REGION), env="dev", environ={})
+    settings = settings_from_aws(source=AwsParameterSource(region=REGION), env="dev", environ={})
     assert settings.log_format == "json"
     assert settings.log_level == "DEBUG"
 
 
 def test_an_unknown_parameter_is_ignored_rather_than_refused(aws: None) -> None:
     """Parameter Store is a shared namespace; a later phase will put things there this one ignores."""
-    put_parameters({"s3_bucket": "b", "storage_backend": "s3", "phase_9_setting": "whatever"})
-    assert Settings.from_aws(source=AwsParameterSource(region=REGION), env="dev", environ={}).s3_bucket == "b"
+    put_parameters(
+        {"s3_bucket": "b", "storage_backend": "s3", "aws_region": REGION, "phase_9_setting": "whatever"}
+    )
+    assert settings_from_aws(source=AwsParameterSource(region=REGION), env="dev", environ={}).s3_bucket == "b"
 
 
 def test_the_static_source_behaves_like_the_real_one() -> None:
     source = StaticParameterSource(
-        {"/marketing-ai/dev/s3_bucket": "b", "/marketing-ai/dev/storage_backend": "s3"},
-        {"marketing-ai/dev/app": {"database_url": SECRET_VALUE, "metadata_backend": "postgres"}},
+        {
+            "/marketing-ai/dev/s3_bucket": "b",
+            "/marketing-ai/dev/storage_backend": "s3",
+            "/marketing-ai/dev/aws_region": REGION,
+        },
+        {"marketing-ai/dev/app": {"postgres_dsn": SECRET_VALUE, "metadata_backend": "postgres"}},
     )
-    settings = Settings.from_aws(source=source, env="dev", environ={})
+    settings = settings_from_aws(source=source, env="dev", environ={})
     assert settings.s3_bucket == "b"
-    assert settings.metadata_backend.value == "postgres"
+    assert settings.metadata_backend == "postgres"
 
 
 def _client_error(code: str) -> Exception:

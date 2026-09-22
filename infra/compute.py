@@ -3,8 +3,8 @@
 The task definition sets **three** environment variables. That is not minimalism for its own sake,
 it is the only shape that leaves the SSM parameters meaning anything.
 
-`Settings.from_aws` merges four sources, lowest first: SSM, the application secret, the process
-environment, then explicit overrides (DEC-301). The environment beats SSM. So a task definition
+`settings_from_aws` merges three sources, lowest first: SSM, the application secret, then the
+process environment (DEC-301). The environment beats SSM. So a task definition
 that also sets `MARKETING_AI_S3_BUCKET` does not "agree with" the parameter of the same name - it
 *overrides* it, permanently and invisibly, and an operator who edits
 `/marketing-ai/<env>/s3_bucket` watches their change have no effect. Everything this deployment
@@ -342,7 +342,7 @@ class ComputeStack(Stack):
             # Which region's Parameter Store to read. `Settings` would also accept AWS_REGION, but
             # naming its own variable means the deployment is not relying on what the ECS agent
             # happens to inject.
-            SETTINGS_ENV_VARS["region"]: self.context.region,
+            SETTINGS_ENV_VARS["aws_region"]: self.context.region,
         }
 
     def deployment_parameters(self, **values: str) -> dict[str, str]:
@@ -353,11 +353,13 @@ class ComputeStack(Stack):
             "metadata_backend": "postgres",
             "postgres_schema": DATABASE_SCHEMA,
             "job_backend": "sagemaker",
-            "sagemaker_train_instance_type": context.sagemaker_instance_train,
+            "sagemaker_instance_type": context.sagemaker_instance_train,
             "sagemaker_processing_instance_type": context.sagemaker_instance_process,
             "sagemaker_max_concurrent_jobs": str(context.max_concurrent_jobs),
             "sagemaker_job_name_prefix": JOB_NAME_PREFIX,
-            "bedrock_enabled": "true" if context.bedrock_enabled else "false",
+            # `bedrock_enabled` is a context key, not a Settings field: the engine switches on
+            # `llm_backend`, and the IAM policy below is the only thing that reads the model list.
+            "llm_backend": "bedrock" if context.bedrock_enabled else "fake",
             "log_level": "INFO",
             # The CloudWatch shape. `engine/utils/logging.py` writes one JSON object per line, which
             # is what the metric filters in the observability stack match on.
@@ -368,8 +370,12 @@ class ComputeStack(Stack):
         }
         if context.client_id:
             parameters["client_id"] = context.client_id
-        if context.bedrock_model_ids:
-            parameters["bedrock_model_ids"] = ",".join(context.bedrock_model_ids)
+        if context.bedrock_enabled and context.bedrock_model_ids:
+            # `Settings.bedrock_model_id` is one model, the one completions go to; the context's
+            # tuple is the wider set the execution role is allowed to invoke (embeddings, a judge
+            # model), which is an IAM question and not a setting. The first is the one the engine
+            # is told about, and `AppContext.validate` fixes the order.
+            parameters["bedrock_model_id"] = context.bedrock_model_ids[0]
         return parameters
 
     def cors_origins(self) -> str:

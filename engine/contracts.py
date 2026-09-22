@@ -23,6 +23,7 @@ from engine.config import (
     ColumnType,
     Metric,
     ModelFamily,
+    PrimaryKey,
     ProblemType,
     Recipe,
     ResolvedConfig,
@@ -31,6 +32,8 @@ from engine.config import (
     StrictBase,
     ThresholdMode,
     UseCaseConfig,
+    key_columns,
+    sole_key,
 )
 
 __all__ = [
@@ -50,6 +53,7 @@ __all__ = [
     "CalibrationSummary",
     "CategoryCount",
     "ColumnProfile",
+    "ComputeBackend",
     "ComputeInfo",
     "ConfusionMatrix",
     "CostEstimate",
@@ -75,12 +79,14 @@ __all__ = [
     "JobEntrypoint",
     "JobSpec",
     "KpiValue",
+    "LLMUsage",
     "Leaderboard",
     "LeaderboardEntry",
     "MetricValue",
     "ModelStatus",
     "ModelVersion",
     "PrepareReport",
+    "PrimaryKey",
     "Reason",
     "RowExplanation",
     "RowRemoval",
@@ -102,8 +108,10 @@ __all__ = [
     "ValidationReport",
     "artefact_model",
     "dump_artefact",
+    "key_columns",
     "load_artefact",
     "scores_csv_columns",
+    "sole_key",
 ]
 
 
@@ -153,10 +161,38 @@ class DriftStatus(StrEnum):
 
 
 class Direction(StrEnum):
-    """Direction of a per-row reason's contribution."""
+    """Direction of a per-row reason's contribution.
+
+    `NONE` is the direction of a reason that was not measured on this row at all - a general reason,
+    carried over from the importance chart because every tier measured this row's contributions as
+    zero. It pushed the score neither way, and claiming an arrow would be invention (DEC-056).
+    """
 
     UP = "up"
     DOWN = "down"
+    NONE = "none"
+
+
+class ComputeBackend(StrEnum):
+    """What carried a run: this process, or a managed SageMaker job (Phase 4a)."""
+
+    LOCAL = "local"
+    SAGEMAKER = "sagemaker"
+
+
+class ReasonMethod(StrEnum):
+    """How one row's reasons were produced.
+
+    The first three are the per-row tiers of plan section 6.3, in the order they are tried.
+    `GENERAL` is the floor under them (DEC-056): a row every tier measured as all-zero keeps a
+    reason, drawn from the run's global feature importance and labelled as general, rather than
+    reaching `scores.csv` with empty cells.
+    """
+
+    TREE_SHAP = "TreeSHAP"
+    KERNEL_SHAP = "KernelSHAP"
+    PERMUTATION = "permutation"
+    GENERAL = "general"
 
 
 class StageKey(StrEnum):
@@ -215,7 +251,7 @@ class RunRecord(Artefact):
     row_count: int | None = Field(
         default=None, description="Rows in the upload, taken from the dataset profile."
     )
-    primary_key: str = Field(description="Column identifying each entity.")
+    primary_key: PrimaryKey = Field(description="Column, or columns, identifying each entity.")
     target: str | None = Field(default=None, description="Target column; set for training runs only.")
     problem_type: ProblemType = Field(
         description="Problem type resolved for this run, detected or overridden."
@@ -807,6 +843,14 @@ class RowExplanation(Artefact):
     primary_key: str = Field(description="Primary-key value of the explained row.")
     score: float = Field(description="Score the reasons explain.")
     reasons: tuple[Reason, ...] = Field(description="Top reasons, strongest contribution first.")
+    method: ReasonMethod = Field(
+        default=ReasonMethod.PERMUTATION,
+        description=(
+            "Tier that produced this row's reasons. A value other than the run's own "
+            "RowReasons.method means this row needed a fallback, which is what "
+            "ScoringSummary.rows_with_fallback_reasons counts."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -938,6 +982,14 @@ class ScoringSummary(Artefact):
     actions: tuple[ActionCount, ...] = Field(description="Action counts, largest first.")
     suppressed: tuple[SuppressionCount, ...] = Field(description="Suppression counts by reason.")
     control_group_rows: int = Field(description="Rows held out as the control group.")
+    rows_with_fallback_reasons: int = Field(
+        default=0,
+        description=(
+            "Rows whose reasons did not come from the run's primary explanation tier, because every "
+            "feature's contribution on that row measured zero. They carry a later tier's reasons or, "
+            "as a floor, general ones from the importance chart (DEC-056)."
+        ),
+    )
     kpi: KpiValue = Field(description="The configured headline KPI.")
     drift_status: DriftStatus | None = Field(
         default=None, description="Drift verdict, when drift was computed."
@@ -1056,7 +1108,7 @@ class FeatureSchema(Artefact):
 
     use_case_id: str = Field(description="Use case the schema belongs to.")
     model_version_id: str = Field(description="Model version the schema was saved with.")
-    primary_key: str = Field(description="Primary-key column.")
+    primary_key: PrimaryKey = Field(description="Primary-key column, or columns.")
     target: str | None = Field(description="Target column; null for scoring-only schemas.")
     problem_type: ProblemType = Field(description="Problem type the model was fitted for.")
     columns: tuple[FeatureSchemaColumn, ...] = Field(
@@ -1071,38 +1123,6 @@ class FeatureSchema(Artefact):
 # ---------------------------------------------------------------------------
 # run_manifest.json: one flat, queryable record per run (DEC-042)
 # ---------------------------------------------------------------------------
-class ComputeInfo(Artefact):
-    """Where a run's compute actually ran (DEC-329).
-
-    Written by whatever executed the run: the thread pool fills `backend` and the wall clock and
-    nothing else, a SageMaker job fills the job name, the instance and - for a training job only -
-    the billable seconds AWS itself reports. Every field past `backend` is optional because a
-    backend that does not report something must leave it null rather than have a number invented
-    for it (plan section 13.3).
-
-    `billable_seconds` means what AWS means by it and is set only where AWS says it:
-    `DescribeTrainingJob.BillableTimeInSeconds`. A processing job reports start and end times, which
-    are wall clock, so those go in `wall_clock_seconds` and `billable_seconds` stays null.
-    `billable_seconds_source` names the API field the number came from, so a reader never has to
-    guess which of the two they are looking at.
-    """
-
-    backend: str = Field(description="What ran the job: thread, sagemaker-training or sagemaker-processing.")
-    job_name: str | None = Field(default=None, description="Platform job name, when the platform names jobs.")
-    job_arn: str | None = Field(default=None, description="Platform job ARN, when the platform has one.")
-    instance_type: str | None = Field(default=None, description="Instance the job ran on.")
-    instance_count: int | None = Field(default=None, description="How many of them.")
-    region: str | None = Field(default=None, description="Region the job ran in.")
-    image_uri: str | None = Field(default=None, description="Container image the job ran.")
-    wall_clock_seconds: float | None = Field(
-        default=None, description="Seconds from job start to job end, as the platform reports them."
-    )
-    billable_seconds: float | None = Field(
-        default=None, description="Seconds the platform says are billable; null when it does not say."
-    )
-    billable_seconds_source: str | None = Field(
-        default=None, description="The API field `billable_seconds` was read from; null when it is null."
-    )
 
 
 class CostEstimate(Artefact):
@@ -1128,6 +1148,80 @@ class CostEstimate(Artefact):
     basis: str = Field(description="How the estimate was derived, in plain words.")
 
 
+class LLMUsage(Artefact):
+    """What a run spent on language models.
+
+    Counted, never estimated: `calls`, `input_tokens` and `output_tokens` are what the client was
+    told by the provider, and `cost_estimate_usd` is `None` unless a real billed figure exists -
+    the same rule `CostEstimate.estimated_usd` follows, because a fabricated zero cannot be told
+    apart from a measurement of something free. A run that called no model carries `None` for the
+    whole object rather than a zeroed one.
+    """
+
+    calls: int = Field(description="Completion and embedding requests the run made.")
+    input_tokens: int = Field(description="Tokens sent, totalled over every call.")
+    output_tokens: int = Field(description="Tokens returned, totalled over every call.")
+    cost_estimate_usd: float | None = Field(
+        default=None, description="Billed cost when the provider reports one; null when nothing was billed."
+    )
+    model_ids: tuple[str, ...] = Field(
+        default=(), description="Every model the run used, sorted, so a manifest names its sources."
+    )
+
+
+class ComputeInfo(Artefact):
+    """Where a run actually ran, and what that cost.
+
+    `job_arn` and `instance_type` are null for a local run because a local run has neither; the
+    fields are not padded with a placeholder. `cost_estimate_usd` follows `CostEstimate`: null
+    unless something was billed.
+    """
+
+    backend: ComputeBackend = Field(description="Which compute carried the run: local or sagemaker.")
+    job_arn: str | None = Field(default=None, description="ARN of the managed job; null for a local run.")
+    instance_type: str | None = Field(
+        default=None, description="Instance the managed job ran on; null for a local run."
+    )
+    duration_s: float = Field(description="Wall-clock seconds the compute was occupied.")
+    cost_estimate_usd: float | None = Field(
+        default=None, description="Billed cost when the platform reports one; null when nothing was billed."
+    )
+
+    # --- Phase 4a ----------------------------------------------------------------------
+    # Added fields only, every one optional and defaulting to null, which is what
+    # PARALLEL_WORK_PROTOCOL.md section 2 allows a branch to do to a shared model. A local run
+    # keeps exactly the record it kept before: five fields, the rest null.
+    #
+    # These are what a list price cannot be looked up without. `instance_type` and `region` name
+    # the rate; `instance_count` multiplies it; `billable_seconds` is the quantity AWS itself bills
+    # and is deliberately separate from `duration_s`, because a job that queued for four minutes
+    # and trained for one occupied the wall clock for five and is billed for one.
+    # `billable_seconds_source` names the API field the number came from, so a reader can check it
+    # rather than trust it (plan section 13.3).
+    entrypoint: JobEntrypoint | None = Field(
+        default=None,
+        description="Container entrypoint the managed job ran; null for a local run.",
+    )
+    job_name: str | None = Field(default=None, description="Name of the managed job; null for a local run.")
+    instance_count: int | None = Field(
+        default=None, description="Instances the managed job ran on; null for a local run."
+    )
+    region: str | None = Field(
+        default=None, description="Region the managed job ran in; null for a local run."
+    )
+    image_uri: str | None = Field(
+        default=None, description="Container image the managed job ran; null for a local run."
+    )
+    billable_seconds: float | None = Field(
+        default=None,
+        description="Seconds per instance the platform reports as billable; null when it reports none.",
+    )
+    billable_seconds_source: str | None = Field(
+        default=None,
+        description="API field `billable_seconds` was read from; null when there is no such number.",
+    )
+
+
 class RunManifest(Artefact):
     """`run_manifest.json` - one flat record per run, written for every run.
 
@@ -1138,6 +1232,13 @@ class RunManifest(Artefact):
     """
 
     run_id: str = Field(description="Run this manifest describes.")
+    primary_key: PrimaryKey = Field(description="Column, or columns, that identified a row.")
+    dataset_id: str | None = Field(
+        default=None, description="Onboarded dataset the run consumed; null for a direct upload."
+    )
+    client_id: str | None = Field(
+        default=None, description="Client the dataset belongs to; null when no client was named."
+    )
     recipe: Recipe | None = Field(
         default=None,
         description="Training choices; null for a scoring run that did not fit a model.",
@@ -1153,8 +1254,11 @@ class RunManifest(Artefact):
     )
     duration_s: float = Field(description="Wall-clock seconds from run start to final state.")
     cost_estimate: CostEstimate = Field(description="What the run cost to produce.")
+    llm_usage: LLMUsage | None = Field(
+        default=None, description="Language-model usage; null when the run called no model."
+    )
     compute: ComputeInfo | None = Field(
-        default=None, description="Where the compute ran; null when the backend reported nothing about it."
+        default=None, description="Where the run ran and what it cost; null when nothing recorded it."
     )
     created_at: AwareDatetime = Field(description="UTC time the manifest was written.")
 
@@ -1309,3 +1413,26 @@ def dump_artefact(model: BaseModel) -> str:
 def load_artefact(filename: str, payload: str | bytes) -> BaseModel:
     """Validate a serialised artefact against the model registered for its filename."""
     return artefact_model(filename).model_validate_json(payload)
+
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file - run `black` on
+# what you paste, not on the file, if the formatter would reflow other lines.
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# `JobEntrypoint` and `JobSpec` are defined in the body above rather than here, and deliberately:
+# `ARTEFACT_REGISTRY` maps `job_spec.json` to `JobSpec` and is a `MappingProxyType`, so the class
+# has to exist before that mapping is built and cannot be registered from down here. The shared-file
+# rule (PARALLEL_WORK_PROTOCOL.md section 4) is about not disturbing another branch's code; two new
+# names and one new registry row add nothing above them that was not already there.
+# ---- END PHASE-4A ----

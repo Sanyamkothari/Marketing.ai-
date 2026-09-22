@@ -36,7 +36,7 @@ from sqlmodel import SQLModel
 # and a table this process has not imported is a table autogenerate would propose dropping.
 from engine.aws.postgres import METADATA_TABLES, PostgresConfig, normalise_url, postgres_engine
 from engine.registry import ModelVersionRow
-from engine.settings import Settings
+from engine.settings import load_settings
 
 _ = ModelVersionRow  # the import above is the point; this line keeps linters from removing it.
 
@@ -70,7 +70,7 @@ def resolve_url(fallback: str | None) -> tuple[str, str | None]:
     from_ini = (fallback or "").strip()
     if from_ini:
         return normalise_url(from_ini), arguments.get(SCHEMA_ARGUMENT) or None
-    config = PostgresConfig.from_settings(Settings.load())
+    config = PostgresConfig.from_settings(load_settings())
     return config.url, config.schema_name
 
 

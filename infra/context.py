@@ -91,7 +91,7 @@ REQUIRED_PRIVATE_ENDPOINTS: Final[tuple[str, ...]] = (
 `ecr.api` and `ecr.dkr` are the image pull (plus the S3 gateway endpoint, which carries the layer
 blobs and is always created). `logs` is `awslogs`, which Fargate needs *before* the container is
 running - without it the task stops with a log-driver error, not a log line. `secretsmanager` and
-`ssm` are `Settings.load()` with `MARKETING_AI_SETTINGS_SOURCE=aws`: the process exits on its first
+`ssm` are `load_settings()` with `MARKETING_AI_SETTINGS_SOURCE=aws`: the process exits on its first
 statement, before it can say why.
 """
 

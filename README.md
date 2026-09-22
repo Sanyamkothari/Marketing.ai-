@@ -18,9 +18,15 @@ model, and every prediction comes with a reason and a recommended action.
 ```
 marketing-ai/
 ├── README.md
+├── plan.md                       # the Phase 1 plan; normative for everything below
+├── PARALLEL_WORK_PROTOCOL.md     # the contract between the phase 2 / 3a / 4a branches
 ├── pyproject.toml
 ├── requirements-freeze.txt       # resolver output; the pin test reads it (DEC-018)
 ├── Makefile                      # make setup / test / lint / run / generate
+├── .github/
+│   └── workflows/
+│       ├── ci.yml                # lint + the fast suite, on every push and pull request
+│       └── nightly.yml           # the full suite including @slow, nightly and on demand
 ├── configs/
 │   ├── engine.yaml               # catalog (engine constants) + defaults (advanced-settings defaults)
 │   ├── industries/
@@ -31,44 +37,69 @@ marketing-ai/
 │       ├── order_fulfillment.yaml
 │       ├── fault_prediction.yaml
 │       ├── rca.yaml
-│       └── win_back_campaign.yaml
+│       ├── win_back_campaign.yaml
+│       └── telco_churn.yaml      # the public-dataset mapping (M6); YAML only, no engine change
 ├── templates/                    # generated and committed (DEC-014): <use_case>_template.csv and
 │   └── ...                       #   <use_case>_template_README.md for each of the seven use cases
 ├── engine/
 │   ├── __init__.py               # __version__
 │   ├── config.py                 # pydantic models for YAML configs, merge, overrides, advanced settings
 │   ├── contracts.py              # pydantic models for every artefact JSON
+│   ├── settings.py               # the one env-driven Settings: which backends this process talks to
+│   ├── llm.py                    # LLMClient protocol + the deterministic FakeLLMClient
+│   ├── errors.py                 # the pipeline's exception and the RunError any stage failure becomes
 │   ├── templates.py              # renders the CSV/README templates from a use-case config
 │   ├── storage.py                # Storage protocol + LocalStorage
 │   ├── registry.py               # ModelRegistry protocol + SQLite implementation + champion rule
-│   ├── jobs.py                   # JobRunner protocol + ThreadJobRunner
-│   ├── pipeline.py               # orchestrates stages for train and score (stub until M2)
-│   ├── stages/                   # typed stubs until M2: ingest, validate, prepare (+ split), train,
-│   │                             #   evaluate, explain, register, score, actions, export (DEC-021)
+│   ├── jobs.py                   # JobRunner protocol + ThreadJobRunner + the cancel token
+│   ├── pipeline.py               # orchestrates the train and score flows; owns stage order and status.json
+│   ├── stages/
+│   │   ├── ingest.py             # streaming CSV/Parquet read, schema inference, profile, fingerprint
+│   │   ├── validate.py           # every check in plan §6
+│   │   ├── prepare.py            # cleaning, exclusions, PII, split; fitted on training rows only (DEC-046)
+│   │   ├── train.py              # AutoGluon training + leaderboard
+│   │   ├── scorer.py             # the fitted model: calibration and the decision threshold (DEC-043)
+│   │   ├── evaluate.py           # metrics, confusion matrix, calibration, decile lift, fairness
+│   │   ├── explain.py            # feature importance + per-row SHAP reasons
+│   │   ├── register.py           # model versions, champion rule and head-to-head promotion
+│   │   ├── score.py              # batch scoring with the champion, schema check and drift
+│   │   ├── actions.py            # risk bands, suppression, control group, action mapping
+│   │   └── export.py             # scores.csv and the output summary
+│   ├── onboarding/               # Phase 2's package; specs.py awaits the Phase 2 plan
+│   ├── generative/               # Phase 3a's package; contracts.py awaits the Phase 3a plan
 │   └── utils/                    # ids, time, text, logging
 ├── api/
-│   ├── main.py                   # FastAPI app factory (create_app) and the module-level app
+│   ├── main.py                   # create_app, the module-level app, and the /ui mount
 │   ├── deps.py                   # config root, storage, registry and job-runner dependencies
-│   ├── routes/                   # industries, use_cases (M1); uploads, runs, models, artefacts (M2–M4)
+│   ├── routes/                   # industries, use_cases, uploads, runs, models
 │   └── schemas.py                # response models
+├── ui/                           # plain HTML + ES modules, no build step, served at /ui
+│   ├── index.html                # the adapted prototype: markup and stylesheet
+│   ├── app.js                    # the router
+│   ├── api.js                    # every call the screens make
+│   ├── dom.js                    # rendering helpers; a value nobody measured renders as an em dash
+│   ├── overview.js               # the Overview screen, from GET /industries
+│   ├── usecase.js                # the use-case screen: Setup → Running → Results
+│   ├── pages.js                  # the Data / Model / Output pages, from a run's artefacts
+│   ├── settings.js               # advanced settings, generated from the config schema
+│   └── modules/
+│       └── router.js             # the phase-module registry; app.js asks it before its own routing
 ├── scripts/
 │   ├── gen_templates.py          # regenerates templates/ (make generate; --check in make lint)
-│   └── gen_api_docs.py           # regenerates docs/API.md (make generate; --check in make lint)
+│   ├── gen_api_docs.py           # regenerates docs/API.md (make generate; --check in make lint)
+│   └── bench_large_file.py       # times ingest and score on a generated large file
 ├── tests/
 │   ├── unit/
 │   ├── integration/
-│   └── fixtures/configs/         # deliberately broken YAMLs (the synthetic CSVs arrive in M2)
+│   └── fixtures/                 # make_data.py (synthetic CSVs) + configs/ (deliberately broken YAMLs)
 ├── docs/
 │   ├── DECISIONS.md              # architecture decision log
 │   ├── DATA_CONTRACT.md
 │   ├── API.md                    # generated from the contracts, routes and configs
+│   ├── CROSS_BRANCH_REQUESTS.md  # what a branch needs from outside its own files
 │   └── AWS_DEPLOYMENT.md         # Phase 4 notes
-├── ui/                           # M5: the adapted prototype (index.html, static/)
-└── data/                         # M2+: local artefact store, gitignored (runs/<run_id>/...)
+└── data/                         # local artefact store, gitignored, created on first run (runs/<run_id>/...)
 ```
-
-Milestone 1 creates the skeleton: `configs/`, `templates/`, `engine/`, `api/`, `scripts/`, `tests/` and
-`docs/`. `ui/` (M5) and `data/` (M2) arrive with later milestones.
 
 ---
 
@@ -100,21 +131,141 @@ Other targets: `make test-all` (every test, including `@slow`), `make format` (a
 
 ---
 
-## API endpoints available in M1
+## Running the UI
 
-M1 ships the config-only part of the API. Everything else (uploads, runs, models, artefacts) arrives in
-M2–M4.
+The UI is the adapted prototype: `ui/index.html` plus seven ES modules, with no build step. A browser
+cannot fetch an ES module over `file://`, so the same process that answers the API serves the screens:
+`api/main.py` mounts `ui/` at `/ui` (plan §9).
+
+```bash
+make run                     # uvicorn api.main:app on :8000
+# then open http://localhost:8000/ui
+```
+
+Every screen renders from a response the API just gave it. The Overview comes from `GET /industries`,
+the Setup form and its advanced settings are generated from `GET /use-cases/{id}`, the Running screen
+polls `GET /runs/{id}`, and the Data / Model / Output pages read that run's artefacts. Anything the API
+did not send renders as an em dash — the UI never fills a gap with a sample number (plan §13.3).
+
+---
+
+## API endpoints
+
+Every route below is mounted today. `docs/API.md` is generated from the same routes and contracts and
+carries the request and response shapes; this table is the index.
 
 | Method | Path | Returns |
 |---|---|---|
 | `GET` | `/healthz` | `{"status": "ok", "version": "0.1.0"}` (DEC-024) |
-| `GET` | `/industries` | the industry template: lifecycle stages in order, their use cases, and the legend |
+| `GET` | `/industries` | every industry journey: lifecycle stages in order, their use-case cards, and the legend |
 | `GET` | `/use-cases/{id}` | the merged config, the advanced-settings schema and the Setup-screen copy |
 | `GET` | `/use-cases/{id}/template.csv` | the downloadable CSV template for that use case |
 | `GET` | `/use-cases/{id}/template_README.md` | the one-line-per-column description of that template (DEC-024) |
+| `POST` | `/uploads` | stores a CSV or Parquet file, profiles it, and returns everything the Setup screen renders |
+| `GET` | `/uploads/{id}/profile` | the stored dataset profile of one upload |
+| `POST` | `/runs` | validates the upload synchronously; `409` + the validation report on errors, otherwise starts the job and returns `{run_id}` |
+| `GET` | `/runs` | run history, newest first, filterable by use case and by train/score mode |
+| `GET` | `/runs/{id}` | the run record plus the status document the Running screen polls |
+| `GET` | `/runs/{id}/artefacts/{name}` | one artefact of that run, whitelisted against the artefact registry |
+| `GET` | `/runs/{id}/scores.csv` | the scored rows of a scoring run, as CSV |
+| `POST` | `/runs/{id}/cancel` | asks a pending or running run to stop |
+| `GET` | `/models` | registered model versions, newest first, with the champion flagged |
+| `POST` | `/models/{id}/approve` | approves a version waiting for a human, making it champion |
+| `POST` | `/models/{id}/promote` | makes a version champion by hand, recording who did it and why |
 
 `GET /use-cases/{id}` accepts optional `columns`, `primary_key` and `target` query parameters so the
 column widgets in the advanced settings can be populated from the uploaded file.
+
+Validation confirmations ("yes, exclude the leaky column") are sent back as overrides on `POST /runs`:
+`overrides.prepare.exclude_columns` and `overrides.validation.acknowledged` (plan §8).
+
+---
+
+## Large-file handling
+
+`scripts/bench_large_file.py` generates a synthetic targeted-advertisement scoring file, reads and
+profiles it, then runs the whole score flow (plan §6.2) over the same rows with a trained champion.
+Every number below was printed by that script. Nothing here is projected, and plan §13.3 is why:
+until this was run, "it streams" was an argument about the code rather than a result.
+
+Two independent runs, so the figures are a measured range rather than one sample:
+
+| stage | rows | seconds | rows/sec |
+| --- | --- | --- | --- |
+| ingest (read + profile, whole-file fingerprint) | 1,000,000 | 68.5 / 68.7 | 14,590 / 14,564 |
+| score (full score flow, a reason for every row) | 1,000,000 | 245.3 / 250.3 | 4,077 / 3,995 |
+
+57.8 MB CSV. Peak resident memory 6,160 MB and 6,116 MB (`resource.getrusage(RUSAGE_SELF).ru_maxrss`,
+a whole-process high-water mark). The two runs agree to within 2%. The score flow re-reads the upload
+as its own first stage, so about 66 s of the score number is a second ingest and the two rows are
+**not** additive. Generating the file (12.0 / 12.3 s) and training the champion on 4,000 rows
+(39.6 / 37.6 s, `time_limit_minutes: 1`, `strategy: fast`, no ensemble) are setup and are not in
+the table.
+
+Where the score time goes, from the first run's stage log (the second agrees to within 3 s
+on every stage):
+
+| stage | seconds |
+| --- | --- |
+| ingest | 66.1 |
+| validate_against_schema | 28.9 |
+| prepare (replay) | 0.001 |
+| predict | 1.6 |
+| **explain_rows** | **132.7** |
+| actions | 3.9 |
+| export | 10.2 |
+
+**Explaining the rows is the cost, not reading them.** Streaming ingest moves a million rows in
+about a minute; producing the per-row reason plan §6.3 requires for every exported row takes twice
+that. A deployment that wants a million rows scored faster should look there first — the tier that
+runs is reported in `status.json` and on the Running screen, so it is visible per run.
+
+A control point at 250,000 rows on the same machine — ingest 16.1 s (15,531 rows/sec), score 65.8 s
+(3,798 rows/sec), peak 1,705 MB — puts both paths at roughly linear scaling up to a million.
+
+### Parquet against CSV, measured
+
+A later run of the same script with `--format both` builds one frame, writes it to both formats and
+reads each back, so the two ingests cover identical rows, back to back, in one process on one machine:
+
+| ingest (read + profile, whole-file fingerprint) | rows | seconds | rows/sec | file on disk |
+| --- | --- | --- | --- | --- |
+| Parquet | 1,000,000 | 67.1 | 14,913 | 9.8 MB |
+| CSV | 1,000,000 | 67.7 | 14,774 | 57.8 MB |
+
+Parquet costs **0.99× the seconds** off a file **0.17× the size**. Streaming ingest is not where the
+two formats differ. The engine's own stage log says why: `profile_dataset` took 31.6 s on the CSV
+frame and 32.6 s on the Parquet frame, which leaves the read half at about 36.1 s CSV against 34.5 s
+Parquet — Parquet reads roughly 4% faster, and the format-independent profiling and whole-file
+fingerprint swamp that. The Parquet file is the one `pandas.to_parquet` writes with pyarrow defaults
+(snappy, default row-group size), not one tuned for fast reads.
+
+Two things from that run are **not** results about the formats, and are recorded here so they are not
+read as if they were. The scoring stages took 896.7 s (Parquet) against 930.1 s (CSV) — about 3.8×
+the 245 s the table above records for the same stage — because the box was saturated while they ran
+(load average 4.03 on 4 CPUs). That is contention, not format. The ingest pair is the trustworthy half
+of the run: the two ingests are adjacent, they agree to within 1%, and both land within 2% of the
+68.5 / 68.7 s already recorded for CSV on a quiet machine. Peak resident memory was 6,313 MB for a
+process that ran both paths, so it is one high-water mark belonging to neither format alone; a
+per-format peak needs a run per format.
+
+One property of the formats, not of the benchmark: Parquet carries its own types, while the CSV frame
+is inferred from text, so an empty CSV field arrives as null where an empty Parquet string stays an
+empty string. Both files scored end to end without error, but the two paths do not produce identical
+profiles.
+
+Two honest caveats over everything above. It was measured on 4 CPUs, 15.7 GiB RAM, Python 3.11.15,
+Linux — **a container, not the laptop plan §11 names**. And the machine has to be quiet: a third
+attempt at a million rows was killed at a 45-minute cap while several other jobs held the same four
+cores, and the `--format both` scoring figures are the same effect caught in the act, so on a busy box
+expect far worse than the tables.
+
+Re-run it with:
+
+```bash
+.venv/bin/python -m scripts.bench_large_file --rows 1000000                # CSV, the first table
+.venv/bin/python -m scripts.bench_large_file --rows 1000000 --format both  # adds the Parquet half
+```
 
 ---
 
@@ -123,12 +274,116 @@ column widgets in the advanced settings can be populated from the uploaded file.
 | # | Milestone | Definition of done | Status |
 |---|---|---|---|
 | M1 | Skeleton + configs | Repo layout, `pyproject`, configs load and validate, contracts defined, `make setup` works on a clean machine | **done** |
-| M2 | Ingest + validate | All validation checks implemented with tests; `POST /uploads` and `POST /runs` return proper 409 payloads on the broken fixtures | pending |
-| M3 | Train flow | Full train on synthetic data produces every artefact; leaderboard, evaluation, decile lift, SHAP reasons are real; registry with champion rule | pending |
-| M4 | Score flow | Champion scores a new file; schema mismatch reported by column name; drift computed; bands, suppression, control group applied; `scores.csv` downloadable | pending |
-| M5 | UI wired | Prototype screens run against the API end to end with no simulated values; Data/Model/Output pages render from artefacts | pending |
-| M6 | Config-only reuse | `payment_propensity` and the Telco churn mapping work by adding YAML only; documented in README | mapping and tests in place; the end-to-end run on the real file is the remaining manual step |
-| M7 | Hardening | Cancel, error states, large-file handling, logging, `docs/` complete | pending |
+| M2 | Ingest + validate | All validation checks implemented with tests; `POST /uploads` and `POST /runs` return proper 409 payloads on the broken fixtures | **done** |
+| M3 | Train flow | Full train on synthetic data produces every artefact; leaderboard, evaluation, decile lift, SHAP reasons are real; registry with champion rule | **done in the engine** — `Pipeline.run_train` and its tests are real, but `POST /runs` never calls it; see the acceptance test below |
+| M4 | Score flow | Champion scores a new file; schema mismatch reported by column name; drift computed; bands, suppression, control group applied; `scores.csv` downloadable | **done** |
+| M5 | UI wired | Prototype screens run against the API end to end with no simulated values; Data/Model/Output pages render from artefacts | **partial** — every page renders from real artefacts with nothing simulated, but in a browser the journey does not complete; see the acceptance test below |
+| M6 | Config-only reuse | `payment_propensity` and the Telco churn mapping work by adding YAML only; documented in README | **done** — both are config only and tested; the end-to-end run on the downloaded Kaggle file stays a manual step by design (plan §10) |
+| M7 | Hardening | Cancel, error states, large-file handling (streaming, 1M rows in under the time limit on a laptop), logging, `docs/` complete | **partial** — see below |
+
+**Plan §11's overall Phase 1 acceptance test does not pass.** That criterion is a sentence about a
+person rather than an API call — a non-technical user "uploads it, keeps every default, clicks Run,
+and receives a scored file with reasons and actions for a second upload" — and until now nothing in
+the suite performed it. `tests/integration/test_acceptance.py` now does: it starts the real app under
+uvicorn, opens `/ui` in Chromium and walks Overview → Targeted Advertisement → the Setup screen's own
+template link → the file input → Run → the Running screen → Results → the Data / Model / Output pages
+→ "Score new data" → the `scores.csv` download, clicking only what a user would click; Advanced
+settings is asserted closed, so every default really is kept (DEC-075).
+
+**It stops at the Run button**, on the product's own words: *"✕ Run failed · Preparing features is
+not built yet."* The Data tile reads Failed; Model and Output read Not reached. Two defects, neither of
+them in `engine/`, stand between the screens and that sentence:
+
+- `api/routes/runs.py` submits `build_m2_job` for every run whose request carries no model version —
+  which is every *training* run — so a Run click replays ingest and validate and then writes
+  `STAGE_NOT_IMPLEMENTED`, "Preparing features is not built yet.", onto `prepare`. That job is DEC-060's
+  M2 placeholder, the one its own entry says "M3 replaces wholesale"; M3 shipped the train flow and left
+  the route pointing at the placeholder, so nothing a user can click reaches it.
+- `ui/api.js`'s `postUpload` sends the file and the use case but never `mode`, so `POST /uploads` takes
+  its default of `train` and a "Score new data" upload is then refused by `POST /runs` with
+  `UPLOAD_MODE_MISMATCH` — advice the user cannot act on, because the same screen repeats the same
+  upload.
+
+The test is left asserting the plan and failing rather than trimmed to what the product does — trimming
+it would turn a defect into a documented feature. Its 13 cases share one module-scoped journey fixture,
+so the walk is paid for once and a stop anywhere in it reports as 13 errors, in about ten seconds. It is
+marked `@slow` and skips cleanly where playwright or a browser is missing, so `ci.yml` stays green on a
+machine with no browser and `nightly.yml` is where it actually runs.
+
+M7 in detail. Done:
+
+- **Cancel.** `POST /runs/{id}/cancel`; `engine/jobs.py` carries a cancel token the pipeline checks
+  between steps, and a job that has not started yet is cancelled outright.
+- **Error states.** Every stage raises a coded exception; `engine/errors.py` turns any failure into the
+  `RunError` that `status.json` and `run.json` carry, and the UI renders failed and cancelled states
+  rather than stalling on a spinner.
+- **Streaming ingest.** `engine/stages/ingest.py` pulls a CSV through `read_csv(chunksize=…)` and a
+  Parquet file through `iter_batches`, folding every row into the content fingerprint as it goes, so
+  memory stays flat in the number of rows.
+- **The logging audit.** `tests/unit/test_logging_audit.py` drives every stage that logs over a frame of
+  sentinel values and fails if a single one reaches a log record — plan §13.7 enforced mechanically
+  rather than by inspection.
+- **`docs/` complete.** `DECISIONS.md`, `DATA_CONTRACT.md`, the generated `API.md`, and `AWS_DEPLOYMENT.md`.
+- **CI.** `.github/workflows/` (below), which plan §10 asks for.
+
+- **Large-file handling, measured.** `scripts/bench_large_file.py` was run at 1,000,000 rows, in CSV
+  and now in Parquet, and every number above was printed by it rather than projected. One qualification
+  keeps M7 short of done on this line: it was measured on a 4-CPU container rather than the laptop
+  plan §11 names.
+
+### What is left, and whose phase it belongs to
+
+DEC-074 parked nine settings that the form records and no stage reads. Listing them as one block of
+"not done" implied they were all Phase 1 debt. Checked against plan §12, which names the later phases,
+they are not the same kind of thing at all.
+
+**Phase 1 work genuinely outstanding:**
+
+- **The two defects above**, which keep plan §11's acceptance criterion from passing. They are the
+  largest single gap in Phase 1: the train flow exists and cannot be reached from the product.
+- **The `features` block** — `auto_feature_engineering`, `categorical_encoding`, `numeric_scaling`,
+  `text_columns`, `selection` and `max_features`, six of DEC-074's nine. These are neither parked
+  Phase 1 work nor deferred Phase 4 work: **`plan.md` does not ask for them anywhere.** Nothing in it
+  mentions feature engineering, encoding, scaling or feature selection, in §12's later phases or
+  outside them. They are scope the implementation invented, offered on the Setup screen, and never
+  built. DEC-074 made them inert and said so on the control, which was the right repair for a promise
+  the engine could not keep; what it did not settle is whether they should exist at all, and that is
+  still open.
+- **The laptop.** Plan §11 asks for a million rows under the time limit *on a laptop*, and the numbers
+  above were measured on a 4-CPU container. The Parquet half of that line is now measured, so the
+  format gap is closed and the machine gap is not.
+
+**Parked for Phase 4 by plan §12, not Phase 1 debt** — §12 defers "drift monitoring schedule,
+retraining triggers … DPDP controls (retention, consent, deletion)" by name:
+
+- **`governance.retention_days`** and **deletion**. Retention is recorded with the run and not enforced;
+  deletion has no seam at all (`docs/AWS_DEPLOYMENT.md` §7). The seam is worth calling out because §12
+  closes by asking that Phase 4 be implementations behind the `Storage` / `JobRunner` / `ModelRegistry`
+  protocols rather than rewrites, and a per-entity deletion path reaching across the upload, the run
+  artefacts and the metadata row is not yet one of those. The consent *filter* plan §6 asks for is built
+  and shipped; it is the data-protection control of the same name that §12 defers.
+- **`monitoring.retraining`** and **`monitoring.performance_alert_drop_pct`**. Per-run drift is Phase 1
+  and shipped — PSI against `drift_baseline.json`, written to `drift.json`, warned on above the
+  threshold. What these two settings would need is monitoring *between* runs, a schedule and an alert,
+  which is exactly the half §12 names.
+
+Those three settings being disabled and recorded is the correct state for work the plan defers, not a
+shortfall against Phase 1. Each is stated where a reader meets it rather than left to be discovered.
+
+---
+
+## Continuous integration
+
+Two workflows, both installing the project exactly the way a developer does (`make setup`) so that CI
+cannot pass or fail for reasons the Makefile does not know about:
+
+- **`.github/workflows/ci.yml`** — lint plus the fast suite (`make lint test`) on every push and pull
+  request. `make lint` chains the generated-file drift check, ruff, `black --check` and `mypy --strict`,
+  so a stale `templates/` or `docs/API.md` fails the pull request. The `@slow` AutoGluon tests are
+  deliberately excluded to keep the wait in minutes.
+- **`.github/workflows/nightly.yml`** — the full suite including `@slow` (`make test-all`), on a nightly
+  schedule and on demand via `workflow_dispatch`. This is what keeps "may be marked slow" (plan §10)
+  from becoming "never run": the integration train and score flows and the golden checks run here.
 
 ---
 
@@ -207,6 +462,151 @@ case is named anywhere under `engine/` or `api/`.
 ## Decisions
 
 Every choice that `plan.md` does not make is recorded in [`docs/DECISIONS.md`](docs/DECISIONS.md) as a
-`DEC-` entry with its context, decision and consequences. M1 opens the log with DEC-001 … DEC-040; later
-milestones append. See also [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md) for the shape of the upload
-and [`docs/AWS_DEPLOYMENT.md`](docs/AWS_DEPLOYMENT.md) for the Phase 4 notes.
+`DEC-` entry with its context, decision and consequences. The log runs DEC-001 … DEC-081: M1 opened it
+with DEC-001 … DEC-040, each milestone since has appended its own, and DEC-075 … DEC-079 are the shared
+surface the phase branches build on. DEC-059, DEC-064 and DEC-071 are unused — no code cites them.
+Numbers from DEC-100 up are allocated per phase — 100…199 for Phase 2, 200…299 for Phase 3a, 300…399
+for Phase 4a — so three branches cannot claim the same one. Entries are never rewritten in place — a
+decision that is reversed gets a new entry naming the one it supersedes (plan §13.2). See also
+[`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md) for the shape of the upload and
+[`docs/AWS_DEPLOYMENT.md`](docs/AWS_DEPLOYMENT.md) for the Phase 4 notes.
+
+---
+
+## Working in parallel: phases 2, 3a and 4a
+
+Three branches build on this one at the same time. `PARALLEL_WORK_PROTOCOL.md` is the contract
+between them — branch order, who owns which file, and what a shared file's marker blocks mean —
+and `docs/CROSS_BRANCH_REQUESTS.md` is where a branch writes down what it needs from outside its
+own files.
+
+**Shared surface added before the branches started.** `engine/settings.py` is the one object that
+says what this process talks to (DEC-075); `engine/llm.py` is the `LLMClient` protocol and its
+deterministic fake (DEC-076); `primary_key` accepts several columns on every contract it travels
+through (DEC-077); `RunRequest` and `RunManifest` carry `dataset_id` and `client_id` (DEC-078);
+`RunManifest` carries `llm_usage` and `compute`. Twelve shared files have marker blocks and
+`tests/unit/test_shared_file_markers.py` fails when one goes missing (DEC-079).
+
+**If you are working on a phase branch:** read the protocol first, work only inside your own
+block in a shared file, and run `make lint test` before every commit and `make test-all` before
+every rebase.
+
+<!-- =======================================================================
+     Shared file (PARALLEL_WORK_PROTOCOL.md §4). Append a section per
+     milestone under your own phase heading, inside your own block.
+     ======================================================================= -->
+
+<!-- ---- PHASE-2 (onboarding) — append only below this line ---- -->
+
+### Phase 2 — Data onboarding
+
+**The reference prototype is in the repository.** `marketing-ai-prototype.html` is the design
+source of truth named in `plan.md` §9 — one HTML file, hash routing, dark mode, mobile layout,
+no build step. It now carries the Phase 2 §10 screens the build agents copy: a client selector
+in the header, Setup step 1 as a choice between a prepared file and raw tables, the four-step
+onboarding panel behind it (sources → mapping → features & label → build & review), score mode
+with a saved recipe, and the lineage block on the Data page. It also carries the Phase 3a §9
+screens (see below). `CHANGELOG-prototype.md` lists every screen with the plan section it
+implements and the illustrative numbers they share.
+
+```bash
+open marketing-ai-prototype.html   # no build step, no server needed
+make prototype-test                # 37 jsdom tests in tests/prototype/
+make prototype-screenshots         # docs/prototype/*.png, desktop and mobile
+```
+
+`tests/prototype/existing.test.mjs` pins the screens that must not move: the lifecycle
+overview, the seven use-case definitions, the eight advanced-settings stages, the three run
+states and the colour tokens. Screenshots of every new state, desktop (1440px) and mobile
+(390px), are in `docs/prototype/`.
+
+<!-- ---- END PHASE-2 ---- -->
+
+<!-- ---- PHASE-3A (generative) — append only below this line ---- -->
+
+### Phase 3a — Generative and hybrid
+
+**The prototype carries the Phase 3a §9 screens.** In `marketing-ai-prototype.html`: the AI
+Onboarding Assistant's document upload, optional reference questions, refusal message,
+index-build running screen and results (index summary, pass rate against its threshold, the ten
+weakest answers, a Try it panel whose citations expand to the quoted chunk, a cost line); RCA's
+root causes per risk segment; and win-back's campaign copy with judge scores, block reasons and
+approve / regenerate. `CHANGELOG-prototype.md` maps each to its plan section; the file and its
+tests are listed under Phase 2 above.
+
+<!-- ---- END PHASE-3A ---- -->
+
+<!-- ---- PHASE-4A (aws) — append only below this line ---- -->
+
+### Phase 4a — AWS and production
+
+**What it is.** Phase 1 put storage, jobs and the model registry behind protocols so that AWS would
+be a set of new *implementations* rather than a rewrite (plan §12). Phase 4a writes those
+implementations, packages the product in a container, and describes the infrastructure that runs it
+in a customer's own AWS account in `ap-south-1`.
+
+Three rules shaped every line of it, and each is enforced by something mechanical rather than by
+anybody remembering:
+
+* **No protocol changed.** `Storage`, `JobRunner` and `ModelRegistry` have the same members they had
+  in Phase 1, and the same four test fakes still satisfy them. What a remote backend needs that a
+  local one does not is an *additive capability protocol* — `SupportsLocalMirror`,
+  `SupportsPresignedDownload`, `ReconcilingJobRunner` — reached through a free function that no-ops
+  for a store or runner that does not implement it.
+* **Local behaviour does not change.** Every `Settings` default reproduces Phase 1 exactly: the
+  local filesystem, SQLite, a two-worker thread pool, the same directory, the same two environment
+  variable names. `tests/unit/test_settings.py` asserts each default, so a later edit cannot drift
+  them.
+* **The same suite runs against AWS with only `Settings` changed.** `tests/unit/test_storage_contract.py`
+  is one conformance suite parametrised over `LocalStorage` and `S3Storage`-on-moto; the registry and
+  metadata suites work the same way. A backend that passes is a backend that behaves like the other
+  one.
+
+**Where to read about it.**
+
+* [`docs/AWS_DEPLOYMENT.md`](docs/AWS_DEPLOYMENT.md) — the deployment walk-through, read once per
+  account: what to create, in what order, what each stack costs in *shape* and what it is for. Its
+  cost tables ship with every cell holding the literal marker `NOT YET MEASURED`, beside the exact
+  commands that fill them — no AWS account exists behind this repository, and plan §13.3 forbids
+  writing a number nobody measured (DEC-397).
+* [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — day-two operations, organised by symptom, for the moment an
+  alarm fires rather than the moment the account is created (DEC-398).
+* [`infra/README.md`](infra/README.md) — the CDK app: seven stacks, what each owns, and the
+  first-deployment checklist.
+* [`docs/DECISIONS.md`](docs/DECISIONS.md) — DEC-300 … DEC-399, allocated by area so entries written
+  in parallel could not collide.
+
+**What is in the tree** (none of it reachable from the paths listed higher up this file, which
+predate the branch):
+
+```
+engine/
+├── settings.py                   # one frozen model describing a deployment; the only place os.environ is read
+├── runs.py                       # create_run, the job bodies, and JobSpec <-> closure
+└── aws/                          # nothing here imports boto3 at module scope (DEC-306)
+    ├── s3_storage.py             # Storage over S3: ranged GETs, multipart, SSE-KMS, content-diff
+    ├── postgres.py, run_index.py # the model registry and the run index over Postgres
+    ├── s3_registry.py            # published models as objects, for a reader with no database
+    ├── sagemaker_jobs.py         # JobRunner as a SageMaker job, plus reconcile and a queue
+    ├── sagemaker_registry.py     # the optional model-package mirror
+    ├── prices.py                 # a published list price, never a bill
+    ├── secrets.py, metrics.py    # SSM + Secrets Manager; CloudWatch EMF
+alembic/                          # the migrations; `make migrate`
+infra/                            # the CDK app, in its own venv (DEC-364)
+scripts/run_job_entrypoint.py     # what the container runs
+Dockerfile, docker-compose.yml    # the image, and a local Postgres to test against
+```
+
+**Make targets.** `make aws-test` runs every Phase 4a suite offline — moto for S3, fakes for
+SageMaker, a docker-compose Postgres for the metadata tests, which skip *with a reason* when no
+server is there. `make infra-setup`, `infra-lint`, `infra-test`, `infra-synth` and `infra-nag` are
+the infrastructure's own chain; `make image` and `image-test` build the container and run the fast
+suite *inside* it, which is the only thing that catches a missing system library before a
+deployment does. `make aws-deploy` and `aws-bootstrap` are the two that need credentials.
+
+**Milestones.** M21 settings and `S3Storage`; M22 the container and its entrypoint; M23
+`SageMakerJobRunner`; M24 Postgres, Alembic and `S3ModelRegistry`; M25 the CDK infrastructure; M26
+observability and the two documents. The milestone table higher up this file stops at M7 because it
+is Phase 1's table; this paragraph is Phase 4a's.
+
+<!-- ---- END PHASE-4A ---- -->

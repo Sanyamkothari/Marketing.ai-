@@ -288,9 +288,30 @@ function multiSelectField(field, value, choices, asChips) {
     .join("")}${hidden > 0 ? `<span class="sub">+${hidden} more</span>` : ""}</div>`;
 }
 
+/**
+ * A setting the engine records but does not act on yet: shown, so the agreed shape is not lost,
+ * but inert, so the screen never promises behaviour the engine does not have. The schema decides
+ * which ones — this file still knows no setting by name.
+ *
+ * Disabling is what makes it inert, not decoration: a disabled control fires no `change` event, so
+ * its value never reaches `applyControl` and never becomes a run override.
+ */
+function asAdvisory(html, field) {
+  if (!html) return html;
+  return html
+    .replace(/^<div class="/, '<div class="advisory ')
+    .replace(/<(input|select)\b/g, "<$1 disabled")
+    .replace(/<\/div>$/, `<span class="advisory-note">${esc(field.help)}</span></div>`);
+}
+
 /** One field, in the widget the schema asked for. Unknown widgets are skipped, never guessed. */
 export function fieldHtml(field, values, columns) {
   const value = readPath(values, field.path);
+  const html = widgetHtml(field, value, columns);
+  return field.advisory ? asAdvisory(html, field) : html;
+}
+
+function widgetHtml(field, value, columns) {
   switch (field.widget) {
     case "select":
       return selectField(field, value);

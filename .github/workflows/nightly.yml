@@ -1,0 +1,67 @@
+# Satisfies the second half of plan §10: "integration tests may be marked slow."
+#
+# The permission plan §10 grants to mark the AutoGluon integration tests @slow is only safe if
+# something still runs them; otherwise "may be marked slow" quietly becomes "may be skipped forever"
+# and the golden checks (ROC-AUC above the logistic baseline and above 0.7) stop guarding the
+# pipeline. This workflow is that something: the same install as CI, then `make test-all`, which is
+# plain `pytest` with no marker filter — the fast suite plus the full train flow on the synthetic
+# Targeted Advertisement data and the score flow that follows it.
+#
+# It runs nightly rather than per-push so that a real training run, dependency rot in AutoGluon's
+# own transitive pins, or a golden check drifting below its threshold surfaces within a day, while
+# pull requests keep the minutes-long feedback loop that ci.yml gives them.
+
+name: Nightly (full suite)
+
+on:
+  schedule:
+    # 03:00 UTC: off-peak for GitHub's shared runners, so a scheduled job is less likely to sit in
+    # the queue. Note that GitHub only runs `schedule` on the default branch — a change to this file
+    # on a feature branch is exercised through workflow_dispatch below, never by the cron.
+    - cron: "0 3 * * *"
+  workflow_dispatch:                    # manual runs: before a milestone sign-off, or to re-check a fix
+
+permissions:
+  contents: read
+
+jobs:
+  test-all:
+    name: full suite (includes @slow)
+    runs-on: ubuntu-latest
+    # The slow suite trains real models and takes ~15 minutes; 60 leaves room for a cold cache (the
+    # AutoGluon install) and a slow runner, while still killing a training run that has hung rather
+    # than letting it hold a runner for six hours.
+    timeout-minutes: 60
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Identical to ci.yml on purpose: the nightly must fail because of the slow tests, never
+      # because it installed the project differently from the gate that let the change through.
+      # No matrix — pyproject pins >=3.11,<3.12.
+      - name: Set up Python 3.11
+        id: python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-freeze.txt
+
+      # Same key shape as ci.yml, so the nightly reuses the entry CI already warmed for this commit
+      # instead of paying for the AutoGluon install a second time. The patch version is in the key
+      # because a restored venv points at the exact interpreter that built it.
+      - name: Cache the venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'requirements-freeze.txt') }}
+
+      - name: make setup
+        run: make setup
+
+      # `make test-all` is `pytest` with no `-m` filter: everything ci.yml runs, plus the @slow
+      # AutoGluon train and score integration tests.
+      - name: make test-all
+        run: make test-all

@@ -1,0 +1,56 @@
+id: insurance-cross-sell
+name: Vehicle Policy Cross-sell
+description: Scores every health-insurance policyholder on how likely they are to take a vehicle policy, so the cross-sell list is worked in the order that converts.
+lifecycle_stage: Awareness
+entity: policyholder                       # the engine's copy says "one row per policyholder"
+
+# Kaggle "Health Insurance Cross Sell Prediction", 381,109 policyholders, mapped to this engine by
+# configuration alone. library/health-insurance-cross-sell/fetch.py changes nothing at all: the
+# published file is already one row per policyholder with a unique key and an outcome column.
+
+target:
+  column: Response
+  positive_label: 1
+  definition: The policyholder said they were interested in the vehicle policy
+  label_source: Kaggle Health Insurance Cross Sell Prediction, column Response
+
+primary_key_hints: [id, policyholder_id, customer_id]
+
+# The file carries no date column - `Vintage` is a day count, not a date - so the split stays
+# random_stratified (the engine default).
+
+actions:
+  score_field: cross_sell_prob
+  bands:
+    - {name: High,   min_score: 0.80, action: "Agent call within 48 hours"}
+    - {name: Medium, min_score: 0.50, action: "Quote by email, follow up in a week"}
+    - {name: Low,    min_score: 0.00, action: "Renewal pack only"}
+  suppression:
+    opt_out_column: null                   # the public file carries no consent or contact history
+    recently_contacted_column: null
+
+output:
+  kpi:
+    label: "Cross-sell audience"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Policyholder + vehicle profile"
+    model: "Cross-sell Propensity Model"
+    output: "Cross-sell List / Quote Offers"
+
+template:
+  columns:
+    - {name: id,                   role: primary_key, type: integer, description: "Unique policyholder identifier. Never used as a feature.",                    examples: ["1","2","3","4","5"]}
+    - {name: Gender,               role: feature,     type: string,  description: "Male or Female",                                                              examples: ["Male","Female","Male","Male","Female"]}
+    - {name: Age,                  role: feature,     type: integer, description: "Age of the policyholder in years",                                            examples: ["44","76","47","21","29"]}
+    - {name: Driving_License,      role: feature,     type: integer, description: "1 when the policyholder holds a driving licence, else 0",                     examples: ["1","1","1","1","1"]}
+    - {name: Region_Code,          role: feature,     type: float,   description: "Code of the policyholder's region. A category code stored as a number, not a quantity.", examples: ["28.0","3.0","11.0","41.0","33.0"]}
+    - {name: Previously_Insured,   role: feature,     type: integer, description: "1 when the policyholder already has a vehicle policy, else 0",                 examples: ["0","0","0","1","1"]}
+    - {name: Vehicle_Age,          role: feature,     type: string,  description: "Age of the vehicle: < 1 Year, 1-2 Year or > 2 Years",                          examples: ["> 2 Years","1-2 Year","< 1 Year","< 1 Year","1-2 Year"]}
+    - {name: Vehicle_Damage,       role: feature,     type: string,  description: "Yes when the vehicle has been damaged in the past, else No",                   examples: ["Yes","No","Yes","No","No"]}
+    - {name: Annual_Premium,       role: feature,     type: float,   description: "Premium the policyholder pays for the year, in rupees",                        examples: ["40454.0","33536.0","38294.0","28619.0","27496.0"]}
+    - {name: Policy_Sales_Channel, role: feature,     type: float,   description: "Code of the channel that reached the policyholder. A category code stored as a number, not a quantity.", examples: ["26.0","26.0","26.0","152.0","152.0"]}
+    - {name: Vintage,              role: feature,     type: integer, description: "Days the policyholder has been with the company",                              examples: ["217","183","27","203","39"]}
+    - {name: Response,             role: target,      type: integer, description: "Target: 1 when the policyholder was interested in the vehicle policy, else 0. Leave blank when scoring.", examples: ["1","0","1","0","0"]}

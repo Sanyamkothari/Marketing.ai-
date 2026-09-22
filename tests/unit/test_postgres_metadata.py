@@ -35,7 +35,7 @@ from engine.registry import (
     SqlRegistryStore,
     create_registry_tables,
 )
-from engine.settings import MetadataBackend, Settings, SettingsError
+from engine.settings import ENV_VARS, Settings, SettingsError
 from tests.fixtures.postgres import (  # noqa: F401 - imported so pytest can resolve them by name
     postgres_engine_fixture,
     postgres_schema,
@@ -49,11 +49,11 @@ FAKE_URL: str = "postgresql://someone:secret@db.example.invalid:5432/marketing"
 def deployment(**overrides: object) -> Settings:
     """A Postgres deployment, described the way `Settings` wants it."""
     values: dict[str, object] = {
-        "metadata_backend": MetadataBackend.POSTGRES,
-        "database_url": FAKE_URL,
+        "metadata_backend": "postgres",
+        "postgres_dsn": FAKE_URL,
     }
     values.update(overrides)
-    return Settings.build(**values)
+    return Settings(**values)
 
 
 # ---------------------------------------------------------------------------
@@ -96,15 +96,15 @@ def test_a_schema_that_is_not_an_identifier_is_refused_by_name() -> None:
     with pytest.raises(SettingsError) as excinfo:
         PostgresConfig.from_settings(deployment(postgres_schema="public;DROP SCHEMA public"))
     assert excinfo.value.code == "SETTINGS_INVALID"
-    assert excinfo.value.field == "postgres_schema"
+    assert excinfo.value.env_var == ENV_VARS["postgres_schema"]
     assert "DROP" not in excinfo.value.message
 
 
 def test_a_sqlite_deployment_has_no_postgres_config() -> None:
     with pytest.raises(SettingsError) as excinfo:
-        PostgresConfig.from_settings(Settings.build())
+        PostgresConfig.from_settings(Settings())
     assert excinfo.value.code == "SETTINGS_INCOMPLETE"
-    assert excinfo.value.field == "database_url"
+    assert excinfo.value.env_var == ENV_VARS["postgres_dsn"]
 
 
 def test_the_password_is_not_in_the_engines_repr() -> None:
@@ -129,8 +129,8 @@ def test_postgres_store_is_the_same_store_the_laptop_uses() -> None:
 
 def test_a_sqlite_deployment_is_told_it_has_no_run_index_rather_than_given_an_empty_one() -> None:
     with pytest.raises(SettingsError) as excinfo:
-        postgres_run_index(Settings.build())
-    assert excinfo.value.field == "metadata_backend"
+        postgres_run_index(Settings())
+    assert excinfo.value.env_var == ENV_VARS["metadata_backend"]
     assert "no run index" in excinfo.value.message
 
 

@@ -51,7 +51,7 @@ A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explana
 | `upload_id` | string | yes | Id of the upload this run consumed. |
 | `file_name` | string | yes | The user's original file name, shown in the Results bar and run history. |
 | `row_count` | integer \| null | no | Rows in the upload, taken from the dataset profile. |
-| `primary_key` | string | yes | Column identifying each entity. |
+| `primary_key` | string \| list[string] | yes | Column, or columns, identifying each entity. |
 | `target` | string \| null | no | Target column; set for training runs only. |
 | `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Problem type resolved for this run, detected or overridden. |
 | `model_choice` | string | yes | Step-3 choice: the AutoML sentinel or a single model family value. |
@@ -172,6 +172,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `actions` | ActionsConfig | no |  |
 | `monitoring` | MonitoringConfig | no |  |
 | `governance` | GovernanceConfig | no |  |
+| `generative` | GenerativeConfig | no |  |
 | `output` | OutputConfig | yes |  |
 | `ui` | UiConfig | yes |  |
 | `template` | TemplateConfig | no |  |
@@ -281,6 +282,19 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `consent_column` | string \| null | no |  |
 | `approval_required` | boolean | no |  |
 
+#### GenerativeConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `kind` | GenerativeKind ("none" \| "rag_assistant" \| "root_cause_summary" \| "campaign_copy") | no | Which generative flow a use case turns on. `none` leaves the whole block inert (DEC-200). |
+| `llm` | LlmConfig | no |  |
+| `budget` | BudgetConfig | no |  |
+| `rag` | RagConfig | no |  |
+| `knowledge_base` | KnowledgeBaseConfig | no |  |
+| `reference_set` | ReferenceSetConfig | no | The Q&A file an index is graded against.  Named for what it is rather than `evaluation`, which already means the model's evaluation on `UseCaseConfig`; one word cannot carry both without a reader having to ask which (DEC-200). |
+| `root_cause` | RootCauseConfig | no |  |
+| `campaign_copy` | CampaignCopyConfig | no | Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` (DEC-201). |
+
 #### OutputConfig
 
 | Field | Type | Required | Meaning |
@@ -330,6 +344,88 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `recently_contacted_column` | string \| null | no |  |
 | `recently_contacted_days` | integer | no |  |
 
+#### LlmConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `backend` | LlmBackend ("fake" \| "bedrock") | no | Which client a generative flow calls through: a deterministic fake, or Bedrock (DEC-203). |
+| `region` | string | no |  |
+| `generation_model_id` | string | no |  |
+| `judge_model_id` | string | no |  |
+| `embedding_model_id` | string | no |  |
+| `temperature` | number | no |  |
+| `max_output_tokens` | integer | no |  |
+| `timeout_s` | integer | no |  |
+| `max_retries` | integer | no |  |
+
+#### BudgetConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `max_cost_usd_per_run` | number | no |  |
+| `max_calls_per_run` | integer | no |  |
+| `cache` | boolean | no |  |
+
+#### RagConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `chunk_tokens` | integer | no |  |
+| `chunk_overlap` | number | no |  |
+| `top_k` | integer | no |  |
+| `min_similarity` | number | no |  |
+| `mmr_lambda` | number | no |  |
+| `answer_language` | string | no |  |
+| `refusal_message` | string | no |  |
+
+#### KnowledgeBaseConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `accepted_types` | list[DocumentType ("pdf" \| "docx" \| "md" \| "txt")] | no |  |
+| `max_docs` | integer | no |  |
+| `max_mb` | integer | no |  |
+
+#### ReferenceSetConfig
+
+The Q&A file an index is graded against.  Named for what it is rather than `evaluation`, which already means the model's evaluation on `UseCaseConfig`; one word cannot carry both without a reader having to ask which (DEC-200).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `question_column` | string | no |  |
+| `reference_column` | string | no |  |
+| `refusal_column` | string | no |  |
+| `pass_threshold` | number | no |  |
+
+#### RootCauseConfig
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `segment_by` | SegmentBy ("band" \| "top_reason") | no | How a root-cause run divides the scored rows before it explains them. |
+| `max_segments` | integer | no |  |
+| `reasons_per_segment` | integer | no |  |
+| `complaint_samples_per_segment` | integer | no |  |
+| `complaint_text_column` | string \| null | no |  |
+| `tone` | string | no |  |
+| `require_human_review` | boolean | no |  |
+
+#### CampaignCopyConfig
+
+Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` (DEC-201).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `variants_per_band` | integer | no |  |
+| `channels` | list[Channel ("email" \| "sms" \| "whatsapp")] | no |  |
+| `bands_to_write` | list[string] | no |  |
+| `allowed_fields` | list[string] | no |  |
+| `banned_claims` | list[string] | no |  |
+| `tone` | string | no |  |
+| `brand_name` | string | no |  |
+| `require_human_review` | boolean | no |  |
+| `limits` | CopyLimits | no |  |
+| `required_lines` | RequiredLines | no |  |
+
 #### KpiConfig
 
 | Field | Type | Required | Meaning |
@@ -361,6 +457,23 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `type` | ColumnType ("string" \| "integer" \| "float" \| "boolean" \| "date" \| "datetime" \| "text") | yes |  |
 | `description` | string | yes |  |
 | `examples` | tuple[string, string, string, string, string] | yes |  |
+
+#### CopyLimits
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `sms_chars` | integer | no |  |
+| `whatsapp_chars` | integer | no |  |
+| `email_subject_chars` | integer | no |  |
+| `email_body_words` | integer | no |  |
+
+#### RequiredLines
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `sms` | string | no |  |
+| `whatsapp` | string | no |  |
+| `email` | string | no |  |
 
 ### `profile.json`
 
@@ -896,6 +1009,7 @@ Drift of one feature between the training data and the scored file.
 | `actions` | list[ActionCount] | yes | Action counts, largest first. |
 | `suppressed` | list[SuppressionCount] | yes | Suppression counts by reason. |
 | `control_group_rows` | integer | yes | Rows held out as the control group. |
+| `rows_with_fallback_reasons` | integer | no | Rows whose reasons did not come from the run's primary explanation tier, because every feature's contribution on that row measured zero. They carry a later tier's reasons or, as a floor, general ones from the importance chart (DEC-056). |
 | `kpi` | KpiValue | yes | The configured headline KPI. |
 | `drift_status` | DriftStatus ("stable" \| "watch" \| "drifted") \| null | no | Drift verdict, when drift was computed. |
 | `drift_max_psi` | number \| null | no | Largest population stability index. |
@@ -975,7 +1089,7 @@ One per-row reason behind a score.
 | `feature` | string | yes | Feature the reason is about. |
 | `value` | string | yes | The row's value for that feature, stringified. |
 | `contribution` | number | yes | Signed contribution of this feature to the score. |
-| `direction` | Direction ("up" \| "down") | yes | Whether the feature pushed the score up or down. |
+| `direction` | Direction ("up" \| "down" \| "none") | yes | Whether the feature pushed the score up or down. |
 | `text` | string | yes | Ready-to-render sentence for this reason. |
 
 ### `schema.json`
@@ -987,7 +1101,7 @@ One per-row reason behind a score.
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `use_case_id` | string | yes | Use case the schema belongs to. |
 | `model_version_id` | string | yes | Model version the schema was saved with. |
-| `primary_key` | string | yes | Primary-key column. |
+| `primary_key` | string \| list[string] | yes | Primary-key column, or columns. |
 | `target` | string \| null | yes | Target column; null for scoring-only schemas. |
 | `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Problem type the model was fitted for. |
 | `columns` | list[FeatureSchemaColumn] | yes | Columns in the exact order used at fit time. |
@@ -1017,6 +1131,9 @@ One column of the schema a scoring file must match.
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `run_id` | string | yes | Run this manifest describes. |
+| `primary_key` | string \| list[string] | yes | Column, or columns, that identified a row. |
+| `dataset_id` | string \| null | no | Onboarded dataset the run consumed; null for a direct upload. |
+| `client_id` | string \| null | no | Client the dataset belongs to; null when no client was named. |
 | `recipe` | Recipe \| null | no | Training choices; null for a scoring run that did not fit a model. |
 | `dataset_fingerprint` | DatasetFingerprint | yes | Identity of the data the run consumed. |
 | `seed` | integer | yes | Seed that made the run reproducible. |
@@ -1024,7 +1141,8 @@ One column of the schema a scoring file must match.
 | `leaderboard_path` | string \| null | no | Storage key of leaderboard.json; null when no search was run. |
 | `duration_s` | number | yes | Wall-clock seconds from run start to final state. |
 | `cost_estimate` | CostEstimate | yes | What the run cost to produce. |
-| `compute` | ComputeInfo \| null | no | Where the compute ran; null when the backend reported nothing about it. |
+| `llm_usage` | LLMUsage \| null | no | Language-model usage; null when the run called no model. |
+| `compute` | ComputeInfo \| null | no | Where the run ran and what it cost; null when nothing recorded it. |
 | `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the manifest was written. |
 
 #### Recipe
@@ -1036,7 +1154,7 @@ Every choice that determines a trained model, and nothing else.  `train(recipe)`
 | `use_case_id` | string | yes | Use case this recipe belongs to. |
 | `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Learning task the model is fitted for. |
 | `target` | string | yes | Column the model learns to predict. |
-| `primary_key` | string | yes | Row identifier; never used as a feature. |
+| `primary_key` | string \| list[string] | yes | Row identifier; never used as a feature. |
 | `feature_columns` | list[string] | yes | Exact ordered feature list handed to training, after exclusions. |
 | `prepare` | PrepareConfig | yes | Cleaning and exclusion choices applied before fitting. |
 | `split` | SplitConfig | yes | How rows are partitioned into train, validation and test. |
@@ -1055,23 +1173,38 @@ What a run cost to produce.  `estimated_usd` is null for a local run rather than
 | `estimated_usd` | number \| null | no | Billable time at the published list rate named in `basis`; null when it cannot be stated. |
 | `basis` | string | yes | How the estimate was derived, in plain words. |
 
-#### ComputeInfo
+#### LLMUsage
 
-Where a run's compute actually ran (DEC-329).  Written by whatever executed the run: the thread pool fills `backend` and the wall clock and nothing else, a SageMaker job fills the job name, the instance and - for a training job only - the billable seconds AWS itself reports. Every field past `backend` is optional because a backend that does not report something must leave it null rather than have a number invented for it (plan section 13.3).  `billable_seconds` means what AWS means by it and is set only where AWS says it: `DescribeTrainingJob.BillableTimeInSeconds`. A processing job reports start and end times, which are wall clock, so those go in `wall_clock_seconds` and `billable_seconds` stays null. `billable_seconds_source` names the API field the number came from, so a reader never has to guess which of the two they are looking at.
+What a run spent on language models.  Counted, never estimated: `calls`, `input_tokens` and `output_tokens` are what the client was told by the provider, and `cost_estimate_usd` is `None` unless a real billed figure exists - the same rule `CostEstimate.estimated_usd` follows, because a fabricated zero cannot be told apart from a measurement of something free. A run that called no model carries `None` for the whole object rather than a zeroed one.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
-| `backend` | string | yes | What ran the job: thread, sagemaker-training or sagemaker-processing. |
-| `job_name` | string \| null | no | Platform job name, when the platform names jobs. |
-| `job_arn` | string \| null | no | Platform job ARN, when the platform has one. |
-| `instance_type` | string \| null | no | Instance the job ran on. |
-| `instance_count` | integer \| null | no | How many of them. |
-| `region` | string \| null | no | Region the job ran in. |
-| `image_uri` | string \| null | no | Container image the job ran. |
-| `wall_clock_seconds` | number \| null | no | Seconds from job start to job end, as the platform reports them. |
-| `billable_seconds` | number \| null | no | Seconds the platform says are billable; null when it does not say. |
-| `billable_seconds_source` | string \| null | no | The API field `billable_seconds` was read from; null when it is null. |
+| `calls` | integer | yes | Completion and embedding requests the run made. |
+| `input_tokens` | integer | yes | Tokens sent, totalled over every call. |
+| `output_tokens` | integer | yes | Tokens returned, totalled over every call. |
+| `cost_estimate_usd` | number \| null | no | Billed cost when the provider reports one; null when nothing was billed. |
+| `model_ids` | list[string] | no | Every model the run used, sorted, so a manifest names its sources. |
+
+#### ComputeInfo
+
+Where a run actually ran, and what that cost.  `job_arn` and `instance_type` are null for a local run because a local run has neither; the fields are not padded with a placeholder. `cost_estimate_usd` follows `CostEstimate`: null unless something was billed.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `backend` | ComputeBackend ("local" \| "sagemaker") | yes | Which compute carried the run: local or sagemaker. |
+| `job_arn` | string \| null | no | ARN of the managed job; null for a local run. |
+| `instance_type` | string \| null | no | Instance the managed job ran on; null for a local run. |
+| `duration_s` | number | yes | Wall-clock seconds the compute was occupied. |
+| `cost_estimate_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
+| `entrypoint` | JobEntrypoint ("train" \| "score") \| null | no | Container entrypoint the managed job ran; null for a local run. |
+| `job_name` | string \| null | no | Name of the managed job; null for a local run. |
+| `instance_count` | integer \| null | no | Instances the managed job ran on; null for a local run. |
+| `region` | string \| null | no | Region the managed job ran in; null for a local run. |
+| `image_uri` | string \| null | no | Container image the managed job ran; null for a local run. |
+| `billable_seconds` | number \| null | no | Seconds per instance the platform reports as billable; null when it reports none. |
+| `billable_seconds_source` | string \| null | no | API field `billable_seconds` was read from; null when there is no such number. |
 
 ## Tabular artefacts
 
@@ -1087,6 +1220,7 @@ Row schema of `row_explanations.parquet` - the top reasons per scored row.
 | `primary_key` | string | yes | Primary-key value of the explained row. |
 | `score` | number | yes | Score the reasons explain. |
 | `reasons` | list[Reason] | yes | Top reasons, strongest contribution first. |
+| `method` | ReasonMethod ("TreeSHAP" \| "KernelSHAP" \| "permutation" \| "general") | no | Tier that produced this row's reasons. A value other than the run's own RowReasons.method means this row needed a fallback, which is what ScoringSummary.rows_with_fallback_reasons counts. |
 
 ### `scores.csv`
 
@@ -1314,6 +1448,64 @@ Keys of the default document that no advanced-settings field renders, with their
 | `ui.pages.output` | str |
 | `template` | plan §4.3; every use case supplies the full column list |
 | `template.columns` | list[TemplateColumn] {name, role, type, description, examples[5]}; §3 |
+| `generative` | Phase 3a. Inert until `kind` names a flow; the predictive |
+| `generative.kind` | enum: none \| rag_assistant \| root_cause_summary \| campaign_copy |
+| `generative.llm` | non-UI; the client every generative flow calls through |
+| `generative.llm.backend` | enum: fake \| bedrock; `fake` so the screens run without credentials (DEC-203) |
+| `generative.llm.region` | str; data residency, not a default anyone should inherit silently |
+| `generative.llm.generation_model_id` | str; per deployment. A model id is never written in code (DEC-204) |
+| `generative.llm.judge_model_id` | str; the guardrail judges; may be the same id as above |
+| `generative.llm.embedding_model_id` | str; used by the index build and by every question |
+| `generative.llm.temperature` | float 0..1; low, because every flow wants the same answer twice |
+| `generative.llm.max_output_tokens` | int 1..8192 |
+| `generative.llm.timeout_s` | int 1..600 |
+| `generative.llm.max_retries` | int 0..5; transport retries, not regenerations |
+| `generative.budget` | non-UI; what one run is allowed to spend (plan §6) |
+| `generative.budget.max_cost_usd_per_run` | float >= 0; refused once exceeded, with partial artefacts |
+| `generative.budget.max_calls_per_run` | int >= 1; the ceiling that still holds when a price is unknown |
+| `generative.budget.cache` | bool; reuse an identical (prompt, input, model, temperature) |
+| `generative.rag` | how a question is answered from documents |
+| `generative.rag.chunk_tokens` | int 50..2000; target size of one chunk |
+| `generative.rag.chunk_overlap` | float 0..0.5; share of a chunk repeated from the one before |
+| `generative.rag.top_k` | int 1..50; chunks retrieved per question |
+| `generative.rag.min_similarity` | float 0..1; below this nothing is retrieved and the answer is a refusal |
+| `generative.rag.mmr_lambda` | float 0..1; 1 is pure relevance, 0 is pure diversity |
+| `generative.rag.answer_language` | enum: auto \| en \| hi ...; `auto` echoes the question's language |
+| `generative.knowledge_base` | what may be uploaded and indexed |
+| `generative.knowledge_base.accepted_types` | list[enum]; anything else is refused at upload |
+| `generative.knowledge_base.max_docs` | int >= 1 |
+| `generative.knowledge_base.max_mb` | int >= 1; the whole knowledge base, not one file |
+| `generative.reference_set` | the Q&A file an index is graded against. Named for what it is: |
+| `generative.reference_set.question_column` | str |
+| `generative.reference_set.reference_column` | str |
+| `generative.reference_set.refusal_column` | str; rows whose answer should be the refusal message |
+| `generative.reference_set.pass_threshold` | float 0..1; share of questions that must pass |
+| `generative.root_cause` | the root-cause summary written over a finished run. Named for the |
+| `generative.root_cause.segment_by` | enum: band \| top_reason |
+| `generative.root_cause.max_segments` | int 1..20 |
+| `generative.root_cause.reasons_per_segment` | int 1..20; strongest aggregated reasons put in the evidence pack |
+| `generative.root_cause.complaint_samples_per_segment` | int 0..100; 0 means summaries are built from reasons alone |
+| `generative.root_cause.complaint_text_column` | str \| null; free-text column of the run's own dataset |
+| `generative.root_cause.tone` | str; passed to the prompt verbatim |
+| `generative.root_cause.require_human_review` | bool; a summary is read, not sent (DEC-205) |
+| `generative.campaign_copy` | the copy written over a finished scoring run. Named in full because |
+| `generative.campaign_copy.variants_per_band` | int 1..4; labelled A, B, C, D in that order |
+| `generative.campaign_copy.channels` | list[enum]; a channel with no prompt file is refused |
+| `generative.campaign_copy.bands_to_write` | list[str]; names must be actions.bands names |
+| `generative.campaign_copy.allowed_fields` | list[str]; the ONLY placeholders |
+| `generative.campaign_copy.banned_claims` | list[str]; added to guardrails.yaml's global list |
+| `generative.campaign_copy.tone` | str; passed to the prompt verbatim |
+| `generative.campaign_copy.brand_name` | str; who the message is from. Empty is refused rather than invented |
+| `generative.campaign_copy.require_human_review` | bool; true means nothing leaves the review queue on its own |
+| `generative.campaign_copy.limits` | hard ceilings, checked on the template AND on every rendered message |
+| `generative.campaign_copy.limits.sms_chars` | int >= 1 |
+| `generative.campaign_copy.limits.whatsapp_chars` | int >= 1 |
+| `generative.campaign_copy.limits.email_subject_chars` | int >= 1 |
+| `generative.campaign_copy.limits.email_body_words` | int >= 1 |
+| `generative.campaign_copy.required_lines` | the line each channel must end with; email's is a placeholder name |
+| `generative.campaign_copy.required_lines.sms` | str |
+| `generative.campaign_copy.required_lines.whatsapp` | str |
+| `generative.campaign_copy.required_lines.email` | str |
 
 ### Catalog keys
 

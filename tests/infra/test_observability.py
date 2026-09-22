@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import re
 
+import pytest
 from aws_cdk.assertions import Template
 from infra.app import build_app
 from infra.context import AppContext
@@ -60,6 +61,32 @@ def test_an_alert_email_is_subscribed_when_one_is_given(
     properties = next(iter(subscriptions.values()))["Properties"]
     assert properties["Protocol"] == "email"
     assert properties["Endpoint"] == "ops@example.com"
+
+
+def test_every_filter_pattern_names_a_field_the_json_formatter_actually_writes() -> None:
+    """A pattern naming a field that is never written is a metric that is silently always zero.
+
+    `RedactingJsonFormatter` assembles its payload key by key from the closed allow-list
+    `JSON_FIELDS` and never reads `record.__dict__`, so a field attached through `extra=` does not
+    reach the log line. A filter on one would match nothing for ever, and a dashboard would render
+    the resulting flat zero as good news. This test is what catches that, rather than a deployment
+    catching it six months later.
+
+    The engine is imported with `importorskip` for the reason `test_settings_contract.py` gives:
+    `make infra-setup` installs the product into `.venv-infra`, and a trimmed venv should say "this
+    check did not run" rather than fail as though the schema had diverged.
+    """
+    logging_module = pytest.importorskip(
+        "engine.utils.logging",
+        reason="the product is not installed in this venv; run `make infra-setup`",
+    )
+    written = set(logging_module.JSON_FIELDS)
+    for name, pattern, _why in METRIC_FILTERS:
+        for field in re.findall(r"\$\.([A-Za-z_][A-Za-z0-9_]*)", pattern):
+            assert field in written, (
+                f"the {name!r} filter matches on ${{{field}}}, which RedactingJsonFormatter never "
+                f"writes; it can only ever produce zero. Fields written: {sorted(written)}."
+            )
 
 
 def test_the_metric_filters_match_the_json_log_schema(dev_templates: dict[str, Template]) -> None:

@@ -307,7 +307,7 @@ stay inserted, and a run it failed stays failed.
 | ECS service size | `api_min_tasks`, `api_max_tasks` (CDK context) | 1 and 3 | The service scales on CPU toward a 60% target, with a 120-second cooldown either way. The range is the knob; the policy is not |
 | Task size | `api_cpu`, `api_memory` | 2048 / 8192 | A pair Fargate does not offer is refused at synth time, not at deploy time |
 | Concurrent jobs | `sagemaker_max_concurrent_jobs` | 2 | How many remote jobs may run at once before a run waits |
-| Job size | `sagemaker_train_instance_type`, `sagemaker_processing_instance_type` | none, deliberately | An instance type is a cost decision; this repository does not take one for a customer |
+| Job size | `sagemaker_instance_type`, `sagemaker_processing_instance_type` | none, deliberately | An instance type is a cost decision; this repository does not take one for a customer |
 
 **"Waiting for compute" is not an error.** It is the detail line on a run held back by
 `sagemaker_max_concurrent_jobs`, and the run's state stays `pending` — which is what it is. There is

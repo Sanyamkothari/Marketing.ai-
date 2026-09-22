@@ -40,8 +40,9 @@ class JobCancelledError(Exception):
     """Raised inside a job function by `CancelToken.raise_if_cancelled()` once cancellation is requested."""
 
 
-# The design document calls this exception `JobCancelled`; ruff's N818 wants the `Error` suffix (erratum E2),
-# so the suffixed name is canonical and this alias keeps the documented name importable.
+# This exception was first named `JobCancelled`; ruff's N818 wants the `Error` suffix (erratum E2),
+# so the suffixed name is canonical and this alias keeps the shorter name importable for callers
+# that already spell it that way.
 JobCancelled = JobCancelledError
 
 

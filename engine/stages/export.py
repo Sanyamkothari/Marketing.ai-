@@ -160,6 +160,7 @@ def summarise(
     drift: DriftReport | None,
     files: Mapping[str, str],
     kpi_source: pd.DataFrame | None = None,
+    rows_with_fallback_reasons: int = 0,
     scored_at: datetime | None = None,
 ) -> ScoringSummary:
     """Counts per band, per action and per suppression reason, plus the configured KPI.
@@ -172,6 +173,10 @@ def summarise(
     KPI is totalled from them, joined on `primary_key`, so the tile prints the real values rather
     than clipped ones and a column prepare dropped is still available. A configuration whose KPI
     counts rather than totals needs no source. `scored_at` defaults to the current UTC time.
+
+    `rows_with_fallback_reasons` is another value only the caller holds: the explain stage counted
+    it while it ran, and nothing in the scored frame records which tier explained a row, so this
+    stage takes the number rather than guessing at it (DEC-056).
     """
     import pandas as pd
 
@@ -192,6 +197,7 @@ def summarise(
         actions=_action_counts(frame),
         suppressed=_suppression_counts(frame, config),
         control_group_rows=int(frame[CONTROL_GROUP_COLUMN].astype(bool).sum()),
+        rows_with_fallback_reasons=rows_with_fallback_reasons,
         kpi=_evaluate_kpi(frame, config, kpi_source=kpi_source, primary_key=primary_key),
         drift_status=None if drift is None else drift.status,
         drift_max_psi=None if drift is None else drift.max_psi,

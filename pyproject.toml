@@ -21,6 +21,29 @@ dependencies = [
   "sqlmodel==0.0.42",
   "pydantic==2.13.5",
   "PyYAML==6.0.3",
+
+  # ========================================================================
+  # Shared file (PARALLEL_WORK_PROTOCOL.md §4). Add a dependency inside your
+  # own block and pin it exactly. Never bump a pin above this comment
+  # (pandas, pydantic, FastAPI, AutoGluon and the rest are shared): request
+  # the bump in docs/CROSS_BRANCH_REQUESTS.md instead.
+  # ========================================================================
+
+  # ---- PHASE-2 (onboarding) — append only below this line ----
+  # ---- END PHASE-2 ----
+
+  # ---- PHASE-3A (generative) — append only below this line ----
+  # Phase 3a, the generative features. No orchestration framework: chunking, retrieval and the
+  # vector store are forty lines each and a framework would hide them (Phase 3a plan §2.2).
+  "boto3==1.43.99",                     # Bedrock Converse + embeddings; the only LLM client
+  "jinja2==3.1.6",                      # sandboxed rendering of prompts and of copy templates
+  "pypdf==6.19.0",                      # reads PDFs; it does not write them (DEC-207)
+  "python-docx==1.2.0",                 # reads DOCX
+  "markdown-it-py==4.2.0",              # reads Markdown with its headings intact
+  # ---- END PHASE-3A ----
+
+  # ---- PHASE-4A (aws) — append only below this line ----
+  # ---- END PHASE-4A ----
 ]
 
 [project.optional-dependencies]
@@ -45,8 +68,17 @@ dev = [
   "mypy==2.3.1",
   "pandas-stubs==3.0.5.260914",
   "types-PyYAML==6.0.12.20260906",
+  "playwright==1.56.0",                 # drives plan §11's acceptance journey through the real screens
+                                        # (tests/integration/test_acceptance.py). Pinned exactly because the
+                                        # package and the browser build are one unit: 1.56 is Chromium 1194,
+                                        # and a bump needs a matching `playwright install`. Absent it, that
+                                        # module skips rather than fails.
+  "boto3-stubs[bedrock-runtime]==1.43.99",   # boto3 ships no py.typed; the other four Phase 3a deps do
   # Phase 4a. The fast suite exercises the AWS backends offline, so everything the `aws` extra
   # declares is also a dev dependency, plus the fakes and the stubs that keep mypy --strict clean.
+  # `types-boto3` is the same project as `boto3-stubs` under its newer name; the two sets of service
+  # stubs live in different module namespaces (`types_boto3_s3` and `mypy_boto3_bedrock_runtime`),
+  # so both are declared rather than one being made to cover the other's services.
   "boto3==1.43.99",
   "botocore==1.43.99",
   "psycopg[binary]==3.3.6",
@@ -91,10 +123,17 @@ target-version = ["py311"]
 [tool.mypy]
 python_version = "3.11"
 strict = true                           # engine, api AND scripts (plan §13.6 minimum is engine/; DEC-013)
-files = ["engine", "api", "scripts", "alembic", "tests/fixtures/make_data.py", "tests/fakes"]  # source dirs, plus the synthetic
-                                        # generator: test infrastructure every later milestone builds on, so it is held to the
-                                        # same bar (DEC-041). Other tests are not type-checked; no per-module `strict` anywhere
-                                        # (it is not a per-module option).
+files = [
+  "engine",
+  "api",
+  "scripts",
+  "alembic",                            # the migrations own the Postgres schema, so they are held to the same bar
+  "tests/fixtures/make_data.py",
+  "tests/fixtures/make_docs.py",
+  "tests/fakes",                        # FakeSageMaker stands in for a service (DEC-041, DEC-206's precedent)
+]                                       # source dirs, plus the synthetic generators and the service fakes: test
+                                        # infrastructure every later milestone builds on. Other tests are not
+                                        # type-checked; no per-module `strict` anywhere (it is not a per-module option).
 warn_unreachable = true
 warn_unused_configs = true
 show_error_codes = true
@@ -111,6 +150,7 @@ addopts = "-q --strict-markers -rs"     # `-rs` prints every skip WITH ITS REASO
 markers = [
   "slow: takes more than a few seconds (AutoGluon training); excluded from `make test`",
   "integration: exercises several modules, the filesystem or the API together",
+  "bedrock: calls Amazon Bedrock for real; costs money, needs credentials, opt-in with `-m bedrock`",
   "postgres: needs a PostgreSQL server (`make postgres-up`); skips with a reason when there is none",
   "docker: needs a working Docker daemon and a pullable base image; skips with a reason when there is none",
   "aws: talks to a real AWS account; never selected by default, run by hand against a dev account",

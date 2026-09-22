@@ -1,7 +1,12 @@
-"""The FastAPI application: config-only endpoints in M1 (design §7).
+"""The FastAPI application: every endpoint plan §8 lists, plus the screens that call them.
 
-`create_app` takes the configuration root and the data directory as arguments so a test can point the
-whole app at a fixture tree; `app` is the module-level instance `uvicorn api.main:app` serves.
+`create_app` mounts the five routers of `api.routes` - industries, use-cases, uploads, runs and models -
+and adds the `/healthz` probe here rather than in a router of its own, because a liveness check that
+lived behind the same imports as the routes it is meant to vouch for would answer for them instead of
+for the process. The UI is mounted on the same app at `/ui` (plan §9) so one process serves both halves
+of the product. `create_app` takes the configuration root and the data directory as arguments so a test
+can point the whole app at a fixture tree; `app` is the module-level instance `uvicorn api.main:app`
+serves.
 """
 
 from __future__ import annotations
@@ -9,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -18,7 +23,7 @@ from api.routes import ALL_ROUTERS
 from api.schemas import ErrorBody, ErrorResponse, HealthResponse
 from engine import __version__
 from engine.config import ConfigError
-from engine.settings import Settings, SettingsError
+from engine.settings import ENV_VARS, Settings, SettingsError
 from engine.utils.logging import configure_logging
 
 NOT_FOUND_CODES: Final[frozenset[str]] = frozenset(
@@ -28,6 +33,14 @@ NOT_FOUND_CODES: Final[frozenset[str]] = frozenset(
 
 UI_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "ui"
 """The prototype screens, wired to this same app and served from `/ui` (plan §9)."""
+
+PHASE_ROUTERS: Final[list[APIRouter]] = []
+"""Routers the phase branches mount, appended from their own blocks at the foot of this module.
+
+`ALL_ROUTERS` is the Phase 1 set and its tuple stays closed; a branch appends here instead, so
+three branches can each add a router without any of them editing a line another branch wrote.
+Mounted after `ALL_ROUTERS`, in the order the blocks appear.
+"""
 
 
 async def config_error_handler(_request: Request, exc: Exception) -> JSONResponse:
@@ -46,12 +59,13 @@ async def settings_error_handler(_request: Request, exc: Exception) -> JSONRespo
     missing, a parameter is misspelt, a backend was selected without what it needs. It is raised
     lazily, on the first request that needs a service, so without this handler an operator would get
     FastAPI's bare 500 and no idea which setting was at fault. 503 rather than 500 because the
-    process is healthy and the *configuration* is not - and `path` carries the field name, never the
-    value, for the same reason `SettingsError` itself refuses to quote one (DEC-303).
+    process is healthy and the *configuration* is not - and `path` carries the name of the variable
+    to export, never its value, for the same reason `SettingsError` itself refuses to quote one
+    (DEC-303).
     """
     if not isinstance(exc, SettingsError):
         raise exc
-    body = ErrorResponse(detail=ErrorBody(code=exc.code, message=exc.message, path=exc.field))
+    body = ErrorResponse(detail=ErrorBody(code=exc.code, message=exc.message, path=exc.env_var))
     return JSONResponse(status_code=503, content=body.model_dump(mode="json"))
 
 
@@ -78,12 +92,12 @@ def create_app(
     `Settings` refuses `*` on a production deployment so the laptop's answer cannot be inherited by
     omission.
     """
-    if settings is not None and data_dir is not None and settings.storage_backend.value != "local":
+    if settings is not None and data_dir is not None and settings.storage_backend != "local":
         raise SettingsError(
             "SETTINGS_CONFLICT",
             "create_app(data_dir=...) means the local filesystem; it cannot be combined with "
-            f"storage_backend={settings.storage_backend.value}.",
-            field="storage_backend",
+            f"storage_backend={settings.storage_backend}.",
+            env_var=ENV_VARS["storage_backend"],
         )
     # Phase 1 never called this, so the API inherited whatever logging uvicorn had set up and the
     # `RedactingFormatter` guarantee - that no line the engine writes can carry an exception's
@@ -109,7 +123,7 @@ def create_app(
     )
     app.add_exception_handler(ConfigError, config_error_handler)
     app.add_exception_handler(SettingsError, settings_error_handler)
-    for router in ALL_ROUTERS:
+    for router in (*ALL_ROUTERS, *PHASE_ROUTERS):
         app.include_router(router)
     if UI_DIR.is_dir():
         # The UI is plain HTML and ES modules: a module cannot be fetched over `file://`, so the
@@ -123,5 +137,24 @@ def create_app(
 
     return app
 
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file.
+# A router goes in `PHASE_ROUTERS` (defined above), not in `ALL_ROUTERS`:
+#     from api.routes.onboarding import router as onboarding_router
+#     PHASE_ROUTERS.append(onboarding_router)
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----
 
 app: FastAPI = create_app()

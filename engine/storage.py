@@ -18,12 +18,16 @@ from typing import BinaryIO, Final, Protocol, TypeVar, runtime_checkable
 from pydantic import BaseModel
 
 from engine.contracts import dump_artefact
+from engine.settings import DEFAULT_DATA_DIR as _DEFAULT_DATA_DIR
+from engine.settings import ENV_VARS, settings
 
 M = TypeVar("M", bound=BaseModel)
 
 MAX_KEY_LENGTH: Final[int] = 512
-DATA_DIR_ENV_VAR: Final[str] = "MARKETING_AI_DATA_DIR"
-DEFAULT_DATA_DIR: Final[str] = "data"
+DATA_DIR_ENV_VAR: Final[str] = ENV_VARS["data_dir"]
+# Both constants are defined in `engine.settings` and re-exported here, where every caller of
+# this module already looks for them.
+DEFAULT_DATA_DIR: Final[str] = _DEFAULT_DATA_DIR
 
 
 class StorageError(Exception):
@@ -321,18 +325,43 @@ def upload_key(upload_id: str, filename: str) -> str:
     return f"uploads/{upload_id}/{filename}"
 
 
-def published_model_key(use_case_id: str, version: int, *parts: str) -> str:
-    """Key of a file (or directory) under a published model version.
+def index_key(index_id: str, *parts: str) -> str:
+    """Key of a file inside a knowledge index's directory.
 
-    `models/<use_case_id>/<version>/…`. This replaces Phase 1's `model_key(model_id, …)`, which had
-    no call site anywhere and used a third layout; two conventions for one prefix in one tree is an
-    invitation to use the wrong one, so there is now exactly one (DEC-310). The use case and the
-    version are in the key rather than the opaque model id because that is the order a human browses
-    a bucket in, and because it is the boundary an IAM prefix condition can be written against.
+    A knowledge index sits beside runs and models rather than inside one: it outlives any single
+    question, several use cases could be pointed at one, and Phase 4 moves the whole directory to
+    S3 and then to OpenSearch without a run having to move with it.
+    """
+    return "/".join(("indexes", index_id, *parts))
+
+
+def model_key(model_id: str, *parts: str) -> str:
+    """Key of a file (or directory) belonging to a model version."""
+    return "/".join(("models", model_id, *parts))
+
+
+def published_model_key(use_case_id: str, version: int, *parts: str) -> str:
+    """Key of a file (or directory) under a PUBLISHED model version: `models/<use_case>/<version>/…`.
+
+    `model_key` above keys by the opaque model id and has no call site; this keys by the use case
+    and the version, which is the order a human browses a bucket in and the boundary an IAM prefix
+    condition can be written against. `S3ModelRegistry` publishes here at register time.
+
+    Two spellings of one prefix is an invitation to use the wrong one, and the Phase 4a draft of
+    this change deleted `model_key` for exactly that reason. It is kept because the merged tree is
+    not this branch's to prune: removing a helper another branch carries is the kind of edit
+    `PARALLEL_WORK_PROTOCOL.md` section 2 rules out. Whoever consolidates them should delete
+    `model_key`, which remains unused (DEC-310).
     """
     return "/".join(("models", use_case_id, str(version), *parts))
 
 
 def default_storage() -> LocalStorage:
-    """The process-wide default store: `$MARKETING_AI_DATA_DIR` (or `data/`)."""
-    return LocalStorage(Path(os.environ.get(DATA_DIR_ENV_VAR, DEFAULT_DATA_DIR)))
+    """The process-wide default store: `$MARKETING_AI_DATA_DIR` (or `data/`).
+
+    Read through `engine.settings`, so the variable is documented in one place. `Settings` also
+    carries `storage_backend`, which is `local` until Phase 4a implements `S3Storage`; this factory
+    stays local-only until that implementation exists, rather than branching on a value with
+    nothing behind it.
+    """
+    return LocalStorage(settings().data_dir)

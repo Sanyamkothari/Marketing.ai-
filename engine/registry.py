@@ -16,7 +16,6 @@ is for there to be exactly one copy of it (DEC-338).
 from __future__ import annotations
 
 import json
-import os
 import threading
 from collections.abc import Sequence
 from datetime import UTC, datetime
@@ -32,12 +31,18 @@ from sqlmodel import Session, SQLModel, col, create_engine, select
 # module because mypy --strict does not follow implicit re-exports.
 from engine.config import Metric
 from engine.contracts import NO_CHAMPION_AT_DECISION, ModelStatus, ModelVersion
+from engine.settings import DEFAULT_DATA_DIR as _DEFAULT_DATA_DIR
+from engine.settings import ENV_VARS, settings
+from engine.settings import REGISTRY_FILENAME as _REGISTRY_FILENAME
 from engine.utils.time import utc_now
 
-DATA_DIR_ENV_VAR: Final[str] = "MARKETING_AI_DATA_DIR"
-DEFAULT_DATA_DIR: Final[str] = "data"
-REGISTRY_FILENAME: Final[str] = "registry.db"
+DATA_DIR_ENV_VAR: Final[str] = ENV_VARS["data_dir"]
+# All three are defined in `engine.settings` and re-exported here, where `api.deps` and the
+# registry's own tests already import them from.
+DEFAULT_DATA_DIR: Final[str] = _DEFAULT_DATA_DIR
+REGISTRY_FILENAME: Final[str] = _REGISTRY_FILENAME
 MODEL_VERSION_TABLE: Final[str] = "model_version"
+"""The one table `LocalModelRegistry` creates. `create_all` is scoped to it (DEC-340)."""
 
 _PROMOTABLE: Final[frozenset[ModelStatus]] = frozenset({ModelStatus.CANDIDATE, ModelStatus.PENDING_APPROVAL})
 
@@ -514,5 +519,9 @@ def _stale_approval_message(row: ModelVersionRow, *, expected: str | None, curre
 
 
 def default_registry() -> LocalModelRegistry:
-    """The process-wide default registry: `$MARKETING_AI_DATA_DIR/registry.db` (or `data/registry.db`)."""
-    return LocalModelRegistry(Path(os.environ.get(DATA_DIR_ENV_VAR, DEFAULT_DATA_DIR)) / REGISTRY_FILENAME)
+    """The process-wide default registry: `$MARKETING_AI_DATA_DIR/registry.db` (or `data/registry.db`).
+
+    Read through `engine.settings`, which also carries `metadata_backend`; it is `sqlite` until
+    Phase 4a implements `PostgresMetadata`, so this factory does not yet branch on it.
+    """
+    return LocalModelRegistry(settings().registry_path)

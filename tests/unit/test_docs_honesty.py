@@ -25,8 +25,9 @@ hard:
 * **Every `make` target and every `MARKETING_AI_*` variable the documents name is real.** A
   documented target that no longer exists wastes the reader's hour - the Phase 4a acceptance test
   is an hour long. A documented variable that is neither a `Settings` field nor in
-  `NON_FIELD_ENV_VARS` is worse, because following the document makes the application refuse to
-  start with `SETTINGS_UNKNOWN` (DEC-304).
+  `NON_FIELD_ENV_VARS` is worse: the application ignores a name it does not recognise, so a reader
+  who follows the document gets no error and no effect, and spends that hour looking at the wrong
+  thing (DEC-304).
 
 The `make` check reads only text the documents marked as code - a fenced block, or an inline
 backtick span - because that is what "the document tells the reader to run" means here: in both
@@ -46,7 +47,7 @@ from pathlib import Path
 
 import pytest
 
-from engine.settings import ENV_VAR_FOR_FIELD, NON_FIELD_ENV_VARS
+from engine.settings import ENV_VARS, NON_FIELD_ENV_VARS
 
 DOCUMENTS: tuple[str, ...] = ("docs/AWS_DEPLOYMENT.md", "docs/RUNBOOK.md")
 """The documents this gate covers, both of them Phase 4a operator documentation."""
@@ -246,12 +247,13 @@ def test_every_make_target_named_exists(document: tuple[str, str], repo_root: Pa
 
 
 def test_every_environment_variable_named_is_real(document: tuple[str, str]) -> None:
-    """A documented `MARKETING_AI_*` name that is neither a field nor allowed stops the app booting."""
+    """A documented `MARKETING_AI_*` name that is neither a field nor allowed has no effect at all."""
     relative, text = document
-    known = set(ENV_VAR_FOR_FIELD.values()) | set(NON_FIELD_ENV_VARS)
+    known = set(ENV_VARS.values()) | set(NON_FIELD_ENV_VARS)
     unknown = sorted(set(ENV_VAR.findall(text)) - known)
     assert not unknown, (
-        f"{relative} names {unknown}. `resolve_values` refuses a MARKETING_AI_* variable that is "
-        "not a Settings field and is not in NON_FIELD_ENV_VARS: it raises SETTINGS_UNKNOWN, so "
-        "following this document would stop the application from starting (DEC-304)."
+        f"{relative} names {unknown}, which is neither a Settings field nor in NON_FIELD_ENV_VARS. "
+        "The application ignores a MARKETING_AI_* name it does not recognise, so a reader who "
+        "follows this document gets no error and no effect - which is the failure DEC-304 exists "
+        "to make impossible to ship."
     )

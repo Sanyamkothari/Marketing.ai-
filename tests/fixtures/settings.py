@@ -23,7 +23,7 @@ def s3_settings(**overrides: Any) -> Settings:
     """An S3-backed deployment with nothing else switched on."""
     values: dict[str, Any] = {
         "env": "dev",
-        "region": "ap-south-1",
+        "aws_region": "ap-south-1",
         "storage_backend": "s3",
         "s3_bucket": "marketing-ai-test",
     }
@@ -37,7 +37,7 @@ def sagemaker_settings(**overrides: Any) -> Settings:
         "job_backend": "sagemaker",
         "sagemaker_role_arn": "arn:aws:iam::111122223333:role/marketing-ai-dev-sagemaker",
         "sagemaker_image_uri": "111122223333.dkr.ecr.ap-south-1.amazonaws.com/marketing-ai:test",
-        "sagemaker_train_instance_type": "ml.m5.2xlarge",
+        "sagemaker_instance_type": "ml.m5.2xlarge",
         "sagemaker_processing_instance_type": "ml.m5.xlarge",
     }
     values.update(overrides)

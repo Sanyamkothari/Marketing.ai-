@@ -37,14 +37,14 @@ from typing import TYPE_CHECKING, Any, Final
 
 import yaml
 
-from engine.contracts import ComputeInfo, CostEstimate
+from engine.contracts import ComputeInfo, CostEstimate, JobEntrypoint
 from engine.utils.logging import get_logger, log_failure
 
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
 __all__ = [
-    "COMPONENT_FOR_BACKEND",
+    "COMPONENT_FOR_ENTRYPOINT",
     "LIST_PRICE_BASIS",
     "NOT_BILLED",
     "NO_BILLABLE_TIME",
@@ -76,12 +76,15 @@ TRAINING_COMPONENT: Final[str] = "training"
 PROCESSING_COMPONENT: Final[str] = "processing"
 """The two SageMaker components this product runs; the keys `fetch_aws_prices` writes."""
 
-COMPONENT_FOR_BACKEND: Final[Mapping[str, str]] = {
-    "sagemaker-training": TRAINING_COMPONENT,
-    "sagemaker-processing": PROCESSING_COMPONENT,
+COMPONENT_FOR_ENTRYPOINT: Final[Mapping[JobEntrypoint, str]] = {
+    JobEntrypoint.TRAIN: TRAINING_COMPONENT,
+    JobEntrypoint.SCORE: PROCESSING_COMPONENT,
 }
-"""`ComputeInfo.backend` -> the rate card component it is billed under. A backend that is not here
-is not a SageMaker job, so it has no list price and gets `None`."""
+"""`ComputeInfo.entrypoint` -> the rate card component it is billed under.
+
+Keyed on the entrypoint rather than on `backend`, because `backend` says `sagemaker` for both and
+the two are billed under different components: train runs as a Training job, score as a Processing
+job. A `ComputeInfo` with no entrypoint is a local run, so it has no list price and gets `None`."""
 
 NO_TABLE: Final[str] = (
     "No AWS price list is installed, so no list price could be applied. "
@@ -255,7 +258,7 @@ def cost_estimate(
     count.
     """
     seconds = _seconds(compute, compute_seconds)
-    component = COMPONENT_FOR_BACKEND.get(compute.backend)
+    component = COMPONENT_FOR_ENTRYPOINT.get(compute.entrypoint) if compute.entrypoint else None
     if component is None:
         return local_cost_estimate(seconds, basis=NOT_BILLED)
     if table is None:
@@ -305,6 +308,4 @@ def _seconds(compute: ComputeInfo, measured: float | None) -> float:
     """The seconds `CostEstimate.compute_seconds` reports: what was measured, else the wall clock."""
     if measured is not None:
         return measured
-    if compute.wall_clock_seconds is not None:
-        return compute.wall_clock_seconds
-    return 0.0
+    return compute.duration_s

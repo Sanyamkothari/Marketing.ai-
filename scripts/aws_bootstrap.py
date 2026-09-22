@@ -18,19 +18,14 @@ not a sequence of one-at-a-time fixes.
 from __future__ import annotations
 
 import argparse
+import os
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Any, Final
+from typing import Final
 
 from engine.config import list_use_case_ids, load_use_case
-from engine.settings import (
-    JobBackend,
-    MetadataBackend,
-    Settings,
-    SettingsError,
-    StorageBackend,
-)
+from engine.settings import ENV_VARS, Settings, SettingsError, load_settings, summary
 
 COMMAND: Final[str] = "python -m scripts.aws_bootstrap"
 PROBE_KEY: Final[str] = "_bootstrap/permission-probe.txt"
@@ -87,8 +82,8 @@ def check_configuration(settings: Settings) -> list[Check]:
 
 def check_storage(settings: Settings) -> list[Check]:
     """The task role can write, read and delete an object under the product's prefix."""
-    if settings.storage_backend is not StorageBackend.S3:
-        return [Check("storage", SKIPPED, f"storage_backend={settings.storage_backend.value}")]
+    if settings.storage_backend != "s3":
+        return [Check("storage", SKIPPED, f"storage_backend={settings.storage_backend}")]
 
     def body() -> str:
         from engine.settings import build_storage
@@ -114,9 +109,9 @@ def check_storage(settings: Settings) -> list[Check]:
 
 def check_metadata(settings: Settings, *, migrate: bool) -> list[Check]:
     """The database is reachable, and the schema is at head."""
-    if settings.metadata_backend is not MetadataBackend.POSTGRES:
-        return [Check("metadata", SKIPPED, f"metadata_backend={settings.metadata_backend.value}")]
-    url = settings.database_url.get_secret_value() if settings.database_url else ""
+    if settings.metadata_backend != "postgres":
+        return [Check("metadata", SKIPPED, f"metadata_backend={settings.metadata_backend}")]
+    url = settings.postgres_dsn.get_secret_value() if settings.postgres_dsn else ""
 
     def connect() -> str:
         from sqlalchemy import create_engine, text
@@ -160,14 +155,14 @@ def check_jobs(settings: Settings) -> list[Check]:
     `AccessDeniedException`, which is a failure. Describing a job that does not exist is the only
     way to test the permission without creating one and paying for it.
     """
-    if settings.job_backend is not JobBackend.SAGEMAKER:
-        return [Check("jobs", SKIPPED, f"job_backend={settings.job_backend.value}")]
+    if settings.job_backend != "sagemaker":
+        return [Check("jobs", SKIPPED, f"job_backend={settings.job_backend}")]
 
     def body() -> str:
         import boto3
         from botocore.exceptions import ClientError
 
-        client = boto3.client("sagemaker", region_name=settings.region)
+        client = boto3.client("sagemaker", region_name=settings.aws_region)
         name = f"{settings.sagemaker_job_name_prefix}-bootstrap-probe-does-not-exist"
         try:
             client.describe_training_job(TrainingJobName=name)
@@ -203,7 +198,7 @@ def run(settings: Settings, *, migrate: bool = True) -> tuple[list[Check], int]:
 
 def report(settings: Settings, checks: Sequence[Check]) -> str:
     """The whole report, including the settings summary - which never renders a secret."""
-    lines = [f"{COMMAND}: {settings.summary()}", ""]
+    lines = [f"{COMMAND}: {summary(settings)}", ""]
     lines.extend(check.line() for check in checks)
     failed = [check.name for check in checks if check.status == FAILED]
     lines.append("")
@@ -223,14 +218,17 @@ def main(argv: Sequence[str] | None = None) -> int:
     parser.add_argument("--no-migrate", action="store_true", help="probe only; do not touch the schema")
     parser.add_argument("--dry-run", action="store_true", help="print what would be checked and stop")
     args = parser.parse_args(argv)
-    overrides: dict[str, Any] = {"env": args.env} if args.env else {}
+    # `--env` is layered over the process environment rather than set on the built object: the
+    # loader has to see it (it picks the SSM prefix and the secret name from it), and a
+    # `model_copy` afterwards would skip the validators that refuse an incoherent deployment.
+    environ: Mapping[str, str] = {**os.environ, ENV_VARS["env"]: args.env} if args.env else os.environ
     try:
-        settings = Settings.load() if not overrides else Settings.from_env(**overrides)
+        settings = load_settings(environ)
     except SettingsError as exc:
         print(f"{COMMAND}: {exc.message}", file=sys.stderr)
         return 1
     if args.dry_run:
-        print(f"{COMMAND}: would check configuration, storage, metadata and jobs for {settings.summary()}")
+        print(f"{COMMAND}: would check configuration, storage, metadata and jobs for {summary(settings)}")
         return 0
     checks, code = run(settings, migrate=not args.no_migrate)
     print(report(settings, checks), file=sys.stderr if code else sys.stdout)

@@ -29,6 +29,7 @@ from engine.aws.run_index import (
 )
 from engine.config import ProblemType, RunMode
 from engine.contracts import (
+    ComputeBackend,
     ComputeInfo,
     CostEstimate,
     DatasetFingerprint,
@@ -86,13 +87,16 @@ def make_manifest(run_id: str) -> RunManifest:
     """A manifest carrying the three columns a record alone cannot fill."""
     return RunManifest(
         run_id=run_id,
+        primary_key="customer_id",
         dataset_fingerprint=DatasetFingerprint(
             hash="0" * 64, algorithm="sha256", n_rows=1000, columns=("customer_id", "churned")
         ),
         seed=7,
         duration_s=12.5,
         cost_estimate=CostEstimate(compute_seconds=12.5, basis="Local run: nothing was billed."),
-        compute=ComputeInfo(backend="thread"),
+        # A local run: `ComputeBackend` has two members and `thread` is not one of them - the
+        # manifest records *what carried the run*, and a thread pool is this process.
+        compute=ComputeInfo(backend=ComputeBackend.LOCAL, duration_s=12.5),
         created_at=datetime(2026, 9, 22, 12, 1, 0, tzinfo=UTC),
     )
 
@@ -206,7 +210,7 @@ def test_the_projection_copies_the_record_and_computes_nothing() -> None:
 def test_the_manifest_fills_the_three_columns_a_record_cannot() -> None:
     entry = index_entry(make_record("r_1"), make_manifest("r_1"))
     assert entry.duration_s == 12.5
-    assert entry.compute_backend == "thread"
+    assert entry.compute_backend == "local"
     assert entry.estimated_usd is None  # a local run was not billed; DEC-330 forbids a zero
 
 

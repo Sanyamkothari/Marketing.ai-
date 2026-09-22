@@ -55,7 +55,7 @@ from engine.aws.metrics import (
     record_stage_duration,
 )
 from engine.contracts import CostEstimate
-from engine.settings import Deployment, Settings
+from engine.settings import Settings
 
 USE_CASE = "targeted-advertisement"
 
@@ -125,7 +125,7 @@ def test_the_null_sink_satisfies_the_protocol_and_writes_nothing(capsys: pytest.
 
 @pytest.mark.parametrize("backend", ["none", "emf"])
 def test_the_backend_setting_chooses_the_sink(backend: str) -> None:
-    settings = Settings(metrics_backend=backend, env=Deployment.DEV, client_id="acme")
+    settings = Settings(metrics_backend=backend, env="dev", client_id="acme")
     sink = metric_sink_for(settings)
     assert isinstance(sink, EmfMetricSink if backend == "emf" else NullMetricSink)
 

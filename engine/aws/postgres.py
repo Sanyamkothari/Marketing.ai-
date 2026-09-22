@@ -47,7 +47,7 @@ from engine.registry import (
     to_utc,
     to_utc_or_none,
 )
-from engine.settings import MetadataBackend, Settings, SettingsError
+from engine.settings import ENV_VARS, Settings, SettingsError
 
 __all__ = [
     "METADATA_TABLES",
@@ -122,11 +122,11 @@ class PostgresConfig:
         `Settings` has already refused `metadata_backend=postgres` without a `database_url`, so the
         null branch here is the case where somebody called this for a SQLite deployment.
         """
-        if settings.database_url is None:
+        if settings.postgres_dsn is None:
             raise SettingsError(
                 "SETTINGS_INCOMPLETE",
-                "metadata_backend=postgres needs database_url.",
-                field="database_url",
+                f"metadata_backend=postgres needs {ENV_VARS['postgres_dsn']}.",
+                env_var=ENV_VARS["postgres_dsn"],
             )
         schema_name = settings.postgres_schema
         if schema_name is not None and not _IDENTIFIER.fullmatch(schema_name):
@@ -134,10 +134,10 @@ class PostgresConfig:
                 "SETTINGS_INVALID",
                 "postgres_schema must be a plain SQL identifier: a letter or underscore followed "
                 "by letters, digits or underscores.",
-                field="postgres_schema",
+                env_var=ENV_VARS["postgres_schema"],
             )
         return cls(
-            url=normalise_url(settings.database_url.get_secret_value()),
+            url=normalise_url(settings.postgres_dsn.get_secret_value()),
             schema_name=schema_name,
             application_name=settings.client_id or APPLICATION_NAME,
         )
@@ -188,12 +188,12 @@ def postgres_run_index(settings: Settings) -> SqlRunIndex:
     to say out loud that a SQLite deployment has no table to rebuild, instead of reporting that it
     rebuilt nothing.
     """
-    if settings.metadata_backend is not MetadataBackend.POSTGRES:
+    if settings.metadata_backend != "postgres":
         raise SettingsError(
             "SETTINGS_INCOMPLETE",
-            f"There is no run index on metadata_backend={settings.metadata_backend.value}; "
+            f"There is no run index on metadata_backend={settings.metadata_backend}; "
             "the run documents in storage are the whole history.",
-            field="metadata_backend",
+            env_var=ENV_VARS["metadata_backend"],
         )
     return SqlRunIndex(postgres_engine(PostgresConfig.from_settings(settings)))
 

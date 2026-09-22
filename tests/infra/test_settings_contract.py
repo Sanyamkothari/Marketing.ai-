@@ -42,7 +42,7 @@ def test_the_field_list_is_the_field_list(settings_module: Any) -> None:
 
 
 def test_the_environment_variable_table_matches(settings_module: Any) -> None:
-    assert dict(settings_module.ENV_VAR_FOR_FIELD) == SETTINGS_ENV_VARS
+    assert dict(settings_module.ENV_VARS) == SETTINGS_ENV_VARS
 
 
 def test_the_non_field_variables_match(settings_module: Any) -> None:
@@ -108,26 +108,31 @@ def test_a_deployment_built_from_these_names_actually_validates(settings_module:
         sagemaker_subnet_ids="subnet-aaaa,subnet-bbbb",
         sagemaker_security_group_ids="sg-aaaa",
     )
-    settings = settings_module.Settings.from_aws(
-        source=_StaticSource(parameters),
+    # `postgres_dsn` arrives from the application secret, never as a parameter and never as a
+    # keyword: it is the one field in `SECRET_FIELDS`, and the point of the split is that the
+    # deployment writes it somewhere only the task's own role can read (DEC-305).
+    settings = settings_module.settings_from_aws(
+        source=_StaticSource(
+            parameters, secret={"postgres_dsn": "postgresql+psycopg://u:p@host:5432/marketing_ai"}
+        ),
         env="prod",
-        environ={"MARKETING_AI_REGION": "ap-south-1"},
-        database_url="postgresql+psycopg://u:p@host:5432/marketing_ai",
+        environ={"MARKETING_AI_AWS_REGION": "ap-south-1"},
     )
-    assert settings.storage_backend.value == "s3"
-    assert settings.job_backend.value == "sagemaker"
-    assert settings.metadata_backend.value == "postgres"
+    assert settings.storage_backend == "s3"
+    assert settings.job_backend == "sagemaker"
+    assert settings.metadata_backend == "postgres"
     assert settings.cors_origins == ("https://marketing.example.com",)
 
 
 class _StaticSource:
-    """A `ParameterSource` backed by a dictionary; no AWS, no boto3."""
+    """A `ParameterSource` backed by two dictionaries; no AWS, no boto3."""
 
-    def __init__(self, parameters: dict[str, str]) -> None:
+    def __init__(self, parameters: dict[str, str], secret: dict[str, str] | None = None) -> None:
         self._parameters = parameters
+        self._secret = dict(secret or {})
 
     def parameters(self, _prefix: str) -> dict[str, str]:
         return dict(self._parameters)
 
     def secret(self, _name: str) -> dict[str, str]:
-        return {}
+        return dict(self._secret)

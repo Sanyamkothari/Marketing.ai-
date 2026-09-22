@@ -82,24 +82,26 @@ invents.
 """
 
 SETTINGS_FIELDS: Final[tuple[str, ...]] = (
-    "env",
-    "region",
-    "config_dir",
     "storage_backend",
+    "job_backend",
+    "metadata_backend",
+    "llm_backend",
+    "aws_region",
     "data_dir",
+    "config_dir",
     "s3_bucket",
     "s3_prefix",
+    "job_max_workers",
+    "sagemaker_role_arn",
+    "sagemaker_instance_type",
+    "postgres_dsn",
+    "bedrock_model_id",
+    "env",
     "s3_kms_key_id",
     "download_url_ttl_seconds",
     "local_cache_dir",
-    "metadata_backend",
-    "database_url",
     "postgres_schema",
-    "job_backend",
-    "job_max_workers",
-    "sagemaker_role_arn",
     "sagemaker_image_uri",
-    "sagemaker_train_instance_type",
     "sagemaker_processing_instance_type",
     "sagemaker_instance_count",
     "sagemaker_volume_size_gb",
@@ -108,32 +110,32 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "sagemaker_subnet_ids",
     "sagemaker_security_group_ids",
     "sagemaker_job_name_prefix",
-    "bedrock_enabled",
-    "bedrock_model_ids",
     "log_level",
     "log_format",
     "metrics_backend",
     "client_id",
     "cors_origins",
 )
-"""Every field of `engine.settings.Settings`, in declaration order.
+"""Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 
 A field name is simultaneously three things: the field, the SSM parameter leaf under
 `/marketing-ai/<env>/`, and (upper-cased, with the `MARKETING_AI_` prefix) the environment
 variable. `SETTINGS_ENV_VARS` below is derived from this tuple rather than typed out again, so the
 three can only disagree in one place.
+
+This is a second copy of a list that `engine.settings` also holds, and that is deliberate: `infra`
+is a separate virtualenv with aws-cdk-lib in it and no pydantic, so it cannot import the engine.
+`tests/infra/test_settings_contract.py` imports both and fails when they disagree, which is what
+makes the copy safe to keep (DEC-361).
 """
 
-_LEGACY_ENV_VARS: Final[dict[str, str]] = {
-    "data_dir": "MARKETING_AI_DATA_DIR",
-    "config_dir": "MARKETING_AI_CONFIG_DIR",
-}
-"""The two names Phase 1 already read; they keep their spelling. Mirrors `engine.settings`."""
+SETTINGS_ENV_VARS: Final[dict[str, str]] = {name: f"MARKETING_AI_{name.upper()}" for name in SETTINGS_FIELDS}
+"""Field name -> environment variable. The frozen table; a task definition may set nothing else.
 
-SETTINGS_ENV_VARS: Final[dict[str, str]] = {
-    name: _LEGACY_ENV_VARS.get(name, f"MARKETING_AI_{name.upper()}") for name in SETTINGS_FIELDS
-}
-"""Field name -> environment variable. The frozen table; a task definition may set nothing else."""
+Every name derives the same way, with no exceptions: `engine.settings.ENV_VARS` spells all of its
+values `f"{ENV_PREFIX}{name.upper()}"`, and the contract test above compares the two mappings key
+by key rather than trusting that sentence.
+"""
 
 NON_FIELD_ENV_VARS: Final[frozenset[str]] = frozenset(
     {

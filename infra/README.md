@@ -94,7 +94,7 @@ task definition's environment is compared against that frozen table in
 `tests/infra/test_task_definition.py`.
 
 The task carries three variables - `MARKETING_AI_SETTINGS_SOURCE=aws`, `MARKETING_AI_ENV` and
-`MARKETING_AI_REGION` - which is *which deployment this is and where to read it from*. Everything
+`MARKETING_AI_AWS_REGION` - which is *which deployment this is and where to read it from*. Everything
 else is read at start-up from `/marketing-ai/<env>/<field_name>` in Parameter Store (flat,
 non-recursive, leaf names are field names) and from the JSON secret `marketing-ai/<env>/app`.
 
@@ -150,7 +150,7 @@ database. How those private subnets reach AWS is a parameter, not a decision bak
 `AppContext.validate` **refuses `nat_gateways=0` without those five endpoints**, and this is a guard
 worth having rather than a formality. Without `ecr.api` and `ecr.dkr` a Fargate task cannot pull its
 image; without `logs` it cannot start its `awslogs` driver, so it stops with a log-driver error and
-no log line; without `secretsmanager` and `ssm` it exits on `Settings.load()`'s first statement,
+no log line; without `secretsmanager` and `ssm` it exits on `load_settings()`'s first statement,
 before it can say why. Each failure looks like a different bug and none of them looks like "no route
 to the internet". The S3 gateway endpoint is always created - it is a route-table entry rather than
 an ENI, so it is neither a per-AZ resource nor priced like one - and it carries every artefact and
@@ -183,7 +183,7 @@ There are **two secrets**, and the difference matters:
   about, and it is what AWS's single-user rotation function rewrites every 90 days. Nothing but the
   database and the rotation function reads it. The application is never given it.
 * `marketing-ai/<env>/app` is the **application document** that `engine/aws/secrets.py` fetches,
-  whose keys are `Settings` field names. It holds one key, `database_url`, composed at deploy time
+  whose keys are `Settings` field names. It holds one key, `postgres_dsn`, composed at deploy time
   from the credential through a CloudFormation dynamic reference.
 
 > **Operator note - what to do when the credential rotates.** That composed URL is a *snapshot*

@@ -648,8 +648,8 @@ def fit_scorer(
 ) -> AutoGluonScorer:
     """Fit the calibrator and choose the threshold for `predictor`, on the **validation** split.
 
-    THE TEST SPLIT IS FINAL-DECISION-ONLY (design section 3.9): the only frame this function reads
-    is `validation`. The threshold and the calibration curve are the two numbers that decide what
+    THE TEST SPLIT IS FINAL-DECISION-ONLY (DEC-045): the only frame this function reads is
+    `validation`. The threshold and the calibration curve are the two numbers that decide what
     every downstream metric means, so fitting either on the hold-out would make the hold-out score
     a self-assessment. `tests/unit/test_scorer.py::test_fit_scorer_reads_validation_only` proves
     the property by perturbing a test frame and watching nothing move.

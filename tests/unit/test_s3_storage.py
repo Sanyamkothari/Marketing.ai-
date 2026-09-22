@@ -388,13 +388,13 @@ def test_size_bytes_of_a_forbidden_key_raises_rather_than_reporting_absence(tmp_
 # ---------------------------------------------------------------------------
 def test_build_storage_builds_this_class_from_settings(tmp_path: Path) -> None:
     """`engine/settings.py` names this constructor; the two must agree or nothing deploys."""
-    from engine.settings import Settings, StorageBackend, build_storage
+    from engine.settings import Settings, build_storage
 
     settings = Settings(
-        storage_backend=StorageBackend.S3,
+        storage_backend="s3",
         s3_bucket=BUCKET,
         s3_prefix="artefacts/",
-        region="eu-west-1",
+        aws_region="eu-west-1",
         client_id="acme",
         local_cache_dir=tmp_path / "cache",
     )

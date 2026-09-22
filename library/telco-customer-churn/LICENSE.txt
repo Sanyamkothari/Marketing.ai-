@@ -1,0 +1,29 @@
+Telco Customer Churn — licence record
+=====================================
+
+Dataset      Telco Customer Churn (7,043 subscribers, 21 columns)
+Copy fetched https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/
+             data/Telco-Customer-Churn.csv
+Also on      https://www.kaggle.com/datasets/blastchar/telco-customer-churn
+
+LICENCE
+-------
+The repository the file is fetched from, IBM/telco-customer-churn-on-icp4d, is published by IBM
+under the Apache License 2.0 (its LICENSE file was read on 2026-09-22 and is Apache-2.0 verbatim).
+That licence covers the repository's contents, the CSV included.
+
+The underlying data is an IBM Cognos Analytics sample dataset. IBM publishes it as sample data for
+its own products and tutorials; it is fictional customer data, not a record of real subscribers.
+The Kaggle mirror (user `blastchar`) is the copy most people know it by and is where the
+engine's `telco-churn` use case takes its column names from.
+
+ATTRIBUTION
+-----------
+IBM Cognos Analytics sample data, "Telco customer churn", republished in
+IBM/telco-customer-churn-on-icp4d under Apache-2.0.
+
+NOT VERIFIED HERE
+-----------------
+The Kaggle dataset page could not be opened from the environment this library was built in
+(kaggle.com is blocked by its egress policy), so the licence field shown on Kaggle was not read.
+The Apache-2.0 statement above comes from the LICENSE file of the repository actually fetched.

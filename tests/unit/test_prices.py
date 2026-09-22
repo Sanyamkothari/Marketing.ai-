@@ -40,8 +40,7 @@ from engine.aws.prices import (
     local_cost_estimate,
     price_table_path,
 )
-from engine.aws.sagemaker_jobs import PROCESSING_BACKEND, TRAINING_BACKEND
-from engine.contracts import ComputeInfo
+from engine.contracts import ComputeBackend, ComputeInfo, JobEntrypoint
 
 REGION = "ap-south-1"
 """The one region the installed rate card carries; a test that needs "no rate" uses another."""
@@ -57,12 +56,13 @@ def table(config_root: Path) -> PriceTable:
 def compute(**overrides: object) -> ComputeInfo:
     """A finished training job's `ComputeInfo`, with whatever this test wants changed."""
     values: dict[str, object] = {
-        "backend": TRAINING_BACKEND,
+        "backend": ComputeBackend.SAGEMAKER,
+        "entrypoint": JobEntrypoint.TRAIN,
         "job_name": "marketing-ai-train-r-1",
         "instance_type": "ml.m5.xlarge",
         "instance_count": 1,
         "region": REGION,
-        "wall_clock_seconds": 300.0,
+        "duration_s": 300.0,
         "billable_seconds": 240.0,
         "billable_seconds_source": "DescribeTrainingJob.BillableTimeInSeconds",
     }
@@ -213,7 +213,7 @@ def test_without_a_measurement_the_platforms_wall_clock_is_used(table: PriceTabl
 
 def test_with_neither_the_seconds_are_zero_which_is_itself_a_measurement(table: PriceTable) -> None:
     """No seconds were recorded: that is a fact, unlike a fabricated price."""
-    estimate = cost_estimate(compute(wall_clock_seconds=None), table=table)
+    estimate = cost_estimate(compute(duration_s=0.0), table=table)
     assert estimate.compute_seconds == 0.0
 
 
@@ -230,7 +230,7 @@ def test_no_rate_card_means_no_estimate_and_says_which_file_is_missing() -> None
 def test_a_job_with_no_billable_time_has_no_estimate(table: PriceTable) -> None:
     """A processing job reports wall clock, and wall clock is not what SageMaker bills (DEC-332)."""
     estimate = cost_estimate(
-        compute(backend=PROCESSING_BACKEND, billable_seconds=None, billable_seconds_source=None),
+        compute(entrypoint=JobEntrypoint.SCORE, billable_seconds=None, billable_seconds_source=None),
         table=table,
     )
     assert estimate.estimated_usd is None
@@ -261,7 +261,7 @@ def test_a_backend_that_did_not_say_what_it_ran_on_is_a_missing_rate_not_a_missi
 
 def test_a_run_nothing_billed_for_has_no_estimate(table: PriceTable) -> None:
     """A fabricated zero is indistinguishable from a real measurement of free compute."""
-    estimate = cost_estimate(compute(backend="thread"), table=table)
+    estimate = cost_estimate(compute(backend=ComputeBackend.LOCAL, entrypoint=None), table=table)
 
     assert estimate.estimated_usd is None
     assert estimate.basis == NOT_BILLED
@@ -270,7 +270,7 @@ def test_a_run_nothing_billed_for_has_no_estimate(table: PriceTable) -> None:
 @pytest.mark.parametrize(
     "broken",
     [
-        {"backend": "thread"},
+        {"backend": ComputeBackend.LOCAL, "entrypoint": None},
         {"instance_type": "ml.made.up"},
         {"billable_seconds": None, "billable_seconds_source": None},
         {"region": "eu-west-1"},

@@ -32,7 +32,7 @@ from engine.errors import ENGINE_ERRORS, JOB_SPEC_UNREADABLE, STAGE_FAILED
 from engine.jobs import CancelToken, JobCancelledError
 from engine.pipeline import STATUS_FILENAME
 from engine.runs import job_spec_key, write_job_spec
-from engine.settings import ENV_VAR_FOR_FIELD
+from engine.settings import ENV_VARS
 from engine.storage import LocalStorage, run_key
 from scripts.run_job_entrypoint import (
     DEFAULT_FAILURE_PATH,
@@ -95,8 +95,8 @@ def workspace(tmp_path: Path) -> Path:
 def environ(workspace: Path) -> dict[str, str]:
     """The environment a container is handed: a described deployment plus this job's spec key."""
     return {
-        ENV_VAR_FOR_FIELD["data_dir"]: str(workspace / "data"),
-        ENV_VAR_FOR_FIELD["log_level"]: "WARNING",
+        ENV_VARS["data_dir"]: str(workspace / "data"),
+        ENV_VARS["log_level"]: "WARNING",
         FAILURE_PATH_ENV_VAR: str(workspace / "output" / "failure"),
     }
 

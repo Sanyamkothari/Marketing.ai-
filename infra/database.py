@@ -12,7 +12,7 @@ it is what the AWS single-user rotation function rewrites. Nothing but the datab
 rotation function ever reads it.
 
 `marketing-ai/<env>/app` is the **application document** `engine/aws/secrets.py` fetches, whose keys
-are `Settings` field names. It holds one key, `database_url`, composed at deploy time from the
+are `Settings` field names. It holds one key, `postgres_dsn`, composed at deploy time from the
 credential secret through a CloudFormation dynamic reference.
 
 That second secret is a seam, not a design, and it is written down as one (DEC-376): the composed
@@ -206,7 +206,7 @@ class DatabaseStack(Stack):
             ),
             encryption_key=key,
             removal_policy=removal,
-            secret_object_value={"database_url": SecretValue.unsafe_plain_text(url)},
+            secret_object_value={"postgres_dsn": SecretValue.unsafe_plain_text(url)},
         )
 
         CfnOutput(

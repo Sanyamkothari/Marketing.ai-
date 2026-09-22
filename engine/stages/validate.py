@@ -1,7 +1,7 @@
 """Validation stage (M2): every check of plan section 6.3 as a pure function of a DataFrame.
 
-The architectural rule (M2_DESIGN section 2.1, DEC-065): **a check knows about data, not about a
-request.** Every check takes a :class:`pandas.DataFrame` and a flat, frozen, fully-defaulted
+The architectural rule (DEC-065): **a check knows about data, not about a request.** Every check
+takes a :class:`pandas.DataFrame` and a flat, frozen, fully-defaulted
 :class:`CheckParams`, and returns a :class:`CheckResult`. It never sees a ``UseCaseConfig``, a
 ``Storage``, a ``DatasetProfile``, a run, an upload or the clock, so ``check(df, CheckParams())`` is
 always legal and the same checks can later be re-run over engineered features.
@@ -121,7 +121,7 @@ logger = get_logger(__name__)
 
 
 # ---------------------------------------------------------------------------
-# Module constants (M2_DESIGN sections 2.1, 2.5, 2.25)
+# Module constants
 # ---------------------------------------------------------------------------
 #: Catalog defaults, repeated here so `CheckParams()` needs no config and no catalog read.
 TIME_LIKE_PATTERN: Final[str] = "date|time|month|week|day|_ts$|_at$"
@@ -138,7 +138,7 @@ BASELINE_MAX_FEATURES: Final[int] = 200
 BASELINE_FOLDS: Final[int] = 3
 BASELINE_MAX_CATEGORIES: Final[int] = 20
 
-#: `looks_like_id` (M2_DESIGN section 1.6, recomputed from facts rather than from a profile).
+#: `looks_like_id` thresholds, recomputed from the frame facts rather than read off a profile.
 ID_MIN_ROWS: Final[int] = 20
 ID_DISTINCT_RATIO: Final[float] = 0.99
 
@@ -153,7 +153,7 @@ VALUE_COUNTS_MAX_DISTINCT: Final[int] = 10
 
 REDACTED: Final[str] = "[REDACTED]"
 
-#: Errors before warnings before info (M2_DESIGN section 2.3).
+#: Errors before warnings before info - the order every report lists its findings in.
 SEVERITY_RANK: Final[Mapping[Severity, int]] = {
     Severity.ERROR: 0,
     Severity.WARNING: 1,
@@ -222,7 +222,7 @@ _SCORE_ONLY: Final[frozenset[RunMode]] = frozenset({RunMode.SCORE})
 
 
 # ---------------------------------------------------------------------------
-# Value objects (M2_DESIGN section 2.1)
+# Value objects
 # ---------------------------------------------------------------------------
 class ColumnStatsLike(Protocol):
     """The read-only shape of `engine.stages.ingest.ColumnStats`.
@@ -378,7 +378,7 @@ def check(
 
 
 # ---------------------------------------------------------------------------
-# Frame facts (M2_DESIGN section 2.1)
+# Frame facts
 # ---------------------------------------------------------------------------
 _InferFn: TypeAlias = "Callable[[pd.Series], ColumnType]"
 _DetectPiiFn: TypeAlias = "Callable[[pd.Series, str, ColumnType], tuple[str, ...]]"
@@ -387,18 +387,18 @@ _DetectPiiFn: TypeAlias = "Callable[[pd.Series, str, ColumnType], tuple[str, ...
 def _ingest_helpers() -> tuple[_InferFn, _DetectPiiFn]:
     """`infer_column_type` and `detect_pii` for `derive_facts`, both from the ingest stage.
 
-    PII detection has exactly **one** definition in the engine - `engine.stages.ingest.detect_pii`
-    (M2_DESIGN section 1.5) - and this module calls it rather than keeping a second copy of the
-    detector table. A rule about people's data must have one behaviour: a second table would be
-    dormant while ingest exists and would resurface the moment it did not, with whatever guards
+    PII detection has exactly **one** definition in the engine - `engine.stages.ingest.detect_pii` -
+    and this module calls it rather than keeping a second copy of the detector table. A rule about
+    people's data must have one behaviour: a second table would be dormant while ingest exists and
+    would resurface the moment it did not, with whatever guards
     the real one has since grown (the distinct-ratio guard that stops an ordinary low-cardinality
     category such as `gender` being read as a roster of personal names is exactly such a guard).
     The import is a function-body import of a module that never imports this one, so the engine's
     import graph stays the DAG `tests/integration/test_engine_imports.py` pins.
 
-    Type inference keeps a local equivalent (:func:`_infer_column_type`, M2_DESIGN section 1.4)
-    for the case where `ingest` is still a stub in another worktree; ingest's own function wins
-    whenever it exists, so the two can never both be live.
+    Type inference keeps a local equivalent (:func:`_infer_column_type`) for the case where `ingest`
+    is still a stub in another worktree; ingest's own function wins whenever it exists, so the two
+    can never both be live.
     """
     from engine.stages import ingest
 
@@ -443,10 +443,10 @@ def facts_for(frame: pd.DataFrame, params: CheckParams) -> FrameFacts:
 
 
 # ---------------------------------------------------------------------------
-# Fallback type inference (M2_DESIGN section 1.4)
+# Fallback type inference
 # ---------------------------------------------------------------------------
 def _infer_column_type(series: pd.Series) -> ColumnType:
-    """M2_DESIGN section 1.4's branch table, first match wins."""
+    """The branch table that names a column's type, first match wins."""
     import pandas as pd
 
     values = series.dropna()
@@ -489,7 +489,7 @@ def _infer_column_type(series: pd.Series) -> ColumnType:
 
 
 # ---------------------------------------------------------------------------
-# Shared helpers (M2_DESIGN section 2.5) - all pure
+# Shared helpers - all pure
 # ---------------------------------------------------------------------------
 def _cell_str(value: object) -> str:
     """One cell as the user's file held it. `""` for null; never a repr, never longer than 200."""

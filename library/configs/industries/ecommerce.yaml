@@ -1,0 +1,31 @@
+schema_version: 1
+id: ecommerce
+name: E-commerce
+journey_label: Shopper Lifecycle
+
+# One public dataset carries this industry today: the UCI Online Retail invoice log, aggregated to
+# one row per lapsed shopper, at Win-back. The two planned entries are the stages a transaction log
+# cannot answer until Phase 2's aggregation lets the engine build the rows itself.
+
+stages:
+  - id: awareness
+    name: Awareness
+    ai_type: predictive
+    use_cases:
+      - id: first-purchase-propensity
+        status: planned
+        name: First Purchase Propensity
+        description: Scores browsers who have never bought on how likely a first order is, so acquisition spend follows intent rather than traffic.
+  - id: basket
+    name: Basket
+    ai_type: hybrid
+    use_cases:
+      - id: abandoned-basket-recovery
+        status: planned
+        name: Abandoned Basket Recovery
+        description: Predicts which abandoned baskets a reminder will recover, and writes the reminder.
+  - id: win_back
+    name: Win-back
+    ai_type: predictive
+    use_cases:
+      - {id: retail-win-back, status: available}

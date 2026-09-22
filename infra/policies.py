@@ -288,8 +288,10 @@ def bedrock_statements(*, enabled: bool, model_ids: Iterable[str], region: str) 
     An empty `bedrock_model_ids` is a statement, not a gap. Leaving the permission out would be
     indistinguishable from forgetting it, and the difference matters the day somebody attaches a
     broad managed policy to the task role for an unrelated reason: an explicit `Deny` survives that,
-    an absent `Allow` does not. `Settings.bedrock_model_ids` documents the same rule from the other
-    side - "empty means deny, never allow-all" (DEC-371).
+    an absent `Allow` does not. The model list is a context key rather than a `Settings` field,
+    because which models a role may invoke is an IAM question; `Settings.bedrock_model_id` is the
+    one model completions go to, and `llm_backend` is what switches the engine on. The rule here is
+    "empty means deny, never allow-all" (DEC-371).
     """
     wanted = [model_id.strip() for model_id in model_ids if model_id.strip()]
     if not enabled or not wanted:

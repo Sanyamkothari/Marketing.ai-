@@ -2,7 +2,7 @@
 
 Both renderers are pure functions of a `UseCaseConfig`: no timestamps, no sorting, no dict-order
 dependence, so `scripts/gen_templates.py` and the `GET /use-cases/{id}/template.csv` route produce
-byte-identical output (design §8.1, plan §4.3).
+byte-identical output (plan §4.3).
 """
 
 from __future__ import annotations

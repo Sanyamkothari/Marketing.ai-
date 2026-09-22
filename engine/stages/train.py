@@ -13,8 +13,8 @@ and `autogluon_fit_kwargs`, so what was asked for can be read off without runnin
 > `TEST_SPLIT_LEAKED_INTO_FIT` when the frames headed for `fit()` share an index label with the
 > test split, so the invariant is enforced and not merely documented.
 
-**Honest determinism (design section 4.1, D18).** Every seed AutoGluon exposes is pinned from the
-recipe (`ag_args_fit={"random_seed": recipe.seed}`, and a bagged fold *k* then uses
+**Honest determinism (D18).** Every seed AutoGluon exposes is pinned from the recipe
+(`ag_args_fit={"random_seed": recipe.seed}`, and a bagged fold *k* then uses
 `recipe.seed + k`), and every other choice - families, presets, bagging, the tuning data, the
 imbalance handling, the feature list - is a projection of the recipe. The wall-clock `time_limit` is
 not something a seed can control: which candidates finish inside the budget depends on machine load,
@@ -26,8 +26,8 @@ the recipe, so two runs with different budgets are different recipes and hash di
 `Leaderboard.models_trained` with each entry's `fit_time_seconds` records what the budget bought.
 
 Where AutoGluon 1.6.3 differs from the plan's assumptions, the installed library wins (plan section
-13.8) and the difference is marked `D<n>` at the line that handles it; the table lives in the M3
-design document, section 1.3.
+13.8) and the difference is marked `D<n>` at the line that handles it. There is no separate table:
+each marker is defined where it appears, in the comment or docstring that carries it.
 
 `autogluon`, `sklearn`, `imblearn`, `pandas` and `numpy` are imported inside function bodies, so
 importing the engine stays free of heavy libraries.
@@ -122,6 +122,35 @@ AG_NAME_TO_FAMILY: Final[dict[str, ModelFamily]] = {
 _NAME_SUFFIX = re.compile(r"(_BAG|_FULL|_L\d+|_r\d+)+$")
 """Decorations AutoGluon appends to a fitted model's name; bare names appear without bagging. (D5.)"""
 
+_TRIAL_SUFFIX = re.compile(r"/[^/]+$")
+r"""What HPO appends to every trial it fits: `LightGBM_BAG_L1/T3` (DEC-073).
+
+It is stripped **before** :data:`_NAME_SUFFIX`, because it sits outside the bagging decorations
+rather than inside them. Missing it would be quiet rather than loud: `family_for_model_name` would
+return `None` for every model of a tuned run, which costs the leaderboard its family column and
+costs the explain stage its TreeSHAP tier, since that tier finds the best *tree* model by family.
+
+It matches any trailing path segment rather than `T\d+` alone, because the trial name is the HPO
+backend's to choose: the local scheduler numbers them `T1`, `T2`, while the Ray backend that
+`NN_TORCH` asks for names them after its own trial id. A model name has no other use for a slash,
+so the wider pattern costs nothing and covers a backend this engine has not met yet.
+"""
+
+FAMILIES_WITHOUT_SEARCH_SPACE: Final[frozenset[ModelFamily]] = frozenset({ModelFamily.RANDOM_FOREST})
+"""Families the installed AutoGluon has no default search space for, so HPO cannot tune them.
+
+`model_search.tuning_trials` asks for `n` trials per family, and a family whose default search
+space is empty has nothing to vary: AutoGluon fits it once, under its bare name and with its
+default hyperparameters, and the setting does nothing for it. Measured against AutoGluon 1.6.3,
+which fits `RandomForest` - no `/T1` suffix, one model - where the same call gives `LightGBM/T1..Tn`
+with different learning rates (DEC-073).
+
+It is a measured constant rather than a runtime probe because reading a model class's default
+search space means reaching past the public API, and a wrong answer there would be a silent one.
+`tests/unit/test_train.py` checks it against the installed package instead, so this set is a claim
+the suite keeps honest rather than a guess frozen into the engine.
+"""
+
 _ENSEMBLE_PREFIX: Final[str] = "WeightedEnsemble"
 _MAX_ENSEMBLE_LABELS: Final[int] = 3
 _SMOTE_MAX_GROWTH: Final[int] = 4
@@ -164,12 +193,12 @@ def family_for_model_name(name: str) -> ModelFamily | None:
     """The engine family of a fitted model, or `None` for the weighted ensemble or an unknown name.
 
     Bagging and stacking decorate the name (`LightGBM_BAG_L1`, `XGBoost_BAG_L1_FULL`); without
-    bagging the names are bare (`LightGBM`, `LinearModel`). The decorations are stripped before the
-    lookup. (D5.)
+    bagging the names are bare (`LightGBM`, `LinearModel`); HPO adds a trial suffix on top of
+    either (`LightGBM_BAG_L1/T3`). Every decoration is stripped before the lookup. (D5, DEC-073.)
     """
     if name.startswith(_ENSEMBLE_PREFIX):
         return None
-    return AG_NAME_TO_FAMILY.get(_NAME_SUFFIX.sub("", name))
+    return AG_NAME_TO_FAMILY.get(_NAME_SUFFIX.sub("", _TRIAL_SUFFIX.sub("", name)))
 
 
 def _label_value(value: object) -> LabelValue:
@@ -278,7 +307,7 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     """`predictor.fit(train_data=..., tuning_data=..., **this)`. Pure, and complete on purpose.
 
     Every preset field the engine cares about is passed explicitly, because a preset that quietly
-    turns something on would take over a responsibility the design assigns elsewhere:
+    turns something on would take over a responsibility that lives elsewhere in the engine:
 
     * `auto_stack` / `dynamic_stacking` - `good_quality` and `best_quality` set both; stacking would
       multiply the fit time and break plan section 10's one-minute budget for no benefit the
@@ -293,6 +322,16 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
       at train time on validation (`engine.stages.scorer.fit_scorer`), so both are off. (D9.)
     * `hyperparameters` - only the requested families, and only the ones whose libraries are
       installed. (D10.)
+    * `hyperparameter_tune_kwargs` - `model_search.tuning_trials` trials per family, random search
+      on the tree families and bayesian optimisation on the neural one, which is what the installed
+      AutoGluon calls `searcher: "auto"`. Left out, HPO does not happen at all and the setting would
+      be decoration. (DEC-073.)
+
+    The families are passed as `{key: {}}` rather than with search spaces of our own: an empty dict
+    means "this family's default search space", and AutoGluon 1.6.3 carries a real one per family -
+    a tuned run fits `LightGBM/T1..Tn` with genuinely different `learning_rate`, `num_leaves` and
+    `feature_fraction`. Authoring spaces here would freeze one version's idea of a sensible range
+    into the engine, and plan section 13.8 says to follow the installed version instead.
     """
     catalog = get_catalog()
     search = recipe.model_search
@@ -301,6 +340,11 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     return {
         "presets": catalog.strategy_presets[search.strategy],  # D1
         "hyperparameters": {catalog.model_families[family].autogluon_key: {} for family in families},
+        "hyperparameter_tune_kwargs": {  # DEC-073
+            "num_trials": search.tuning_trials,
+            "scheduler": "local",
+            "searcher": "auto",
+        },
         "time_limit": search.time_limit_minutes * 60,
         "num_bag_folds": search.folds if bagging else 0,
         "num_stack_levels": 0,
@@ -330,6 +374,16 @@ def available_families(recipe: Recipe) -> tuple[ModelFamily, ...]:
     for family, modules in missing.items():
         _LOGGER.warning("model family %s is unavailable: %s not installed", family.value, ", ".join(modules))
     families = tuple(family for family in recipe.model_search.candidates if family not in missing)
+    untuned = [family for family in families if family in FAMILIES_WITHOUT_SEARCH_SPACE]
+    if untuned:
+        # Same reasoning as the missing-library warning above: the run is still valid, but a setting
+        # the user moved is doing nothing for part of it, and silence would be the wrong answer.
+        _LOGGER.warning(
+            "model_search.tuning_trials=%d does not apply to %s: the installed AutoGluon carries no "
+            "default search space for it, so it is fitted once with its defaults (DEC-073)",
+            recipe.model_search.tuning_trials,
+            ", ".join(family.value for family in untuned),
+        )
     if not families:
         wanted = ", ".join(family.value for family in recipe.model_search.candidates)
         raise TrainError(
@@ -653,9 +707,9 @@ def train(
 ) -> TrainResult:
     """Fit the candidates, save the predictor and return the leaderboard, the winner and the scorer.
 
-    THE TEST SPLIT IS FINAL-DECISION-ONLY (design section 3.9). `parts["train"]` becomes
-    `train_data` and `parts["validation"]` becomes `tuning_data`, so AutoGluon never re-splits and
-    never sees `parts["test"]`. The hold-out is read once, below, to fill the leaderboard's reported
+    THE TEST SPLIT IS FINAL-DECISION-ONLY (DEC-045). `parts["train"]` becomes `train_data` and
+    `parts["validation"]` becomes `tuning_data`, so AutoGluon never re-splits and never sees
+    `parts["test"]`. The hold-out is read once, below, to fill the leaderboard's reported
     `score_test` column; the ranking and `predictor.model_best` both come from the validation score.
 
     The threshold and the calibrator are fitted afterwards by `scorer.fit_scorer`, on validation, and

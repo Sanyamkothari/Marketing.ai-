@@ -1,0 +1,62 @@
+# UCI Default of Credit Card Clients -> use case `card-default-propensity`
+#
+# The shape Phase 2's column-mapping UI will import. Exactly one column is renamed: the target,
+# whose published name contains dots and so cannot be a template column name.
+schema_version: 1
+dataset: uci-credit-default
+use_case: card-default-propensity
+config_root: library/configs               # see library/README.md for why the use case lives here
+
+source:
+  file: data/UCI_Credit_Card.csv
+  format: csv
+  delimiter: ","
+  encoding: utf-8
+  rows: 30000
+  one_row_per: account                     # already true in the published file
+
+prepared:
+  file: data/prepared.csv
+  built_by: fetch.py
+  changes:
+    - "default.payment.next.month renamed to default_payment_next_month"
+
+roles:
+  primary_key: ID
+  target: default_payment_next_month
+  positive_label: 1
+  time: null                               # the six-month series is ordered but carries no dates
+
+columns:
+    - {source: ID,                            standard: ID, role: primary_key}
+    - {source: LIMIT_BAL,                     standard: LIMIT_BAL, role: feature}
+    - {source: SEX,                           standard: SEX, role: feature,
+       note: "Category code (1 male, 2 female) stored as a number."}
+    - {source: EDUCATION,                     standard: EDUCATION, role: feature,
+       note: "Codes 0, 5 and 6 occur in the data and are not documented upstream."}
+    - {source: MARRIAGE,                      standard: MARRIAGE, role: feature,
+       note: "Code 0 occurs in the data and is not documented upstream."}
+    - {source: AGE,                           standard: AGE, role: feature}
+    - {source: PAY_0,                         standard: PAY_0, role: feature,
+       note: "The most recent month. The published name skips PAY_1; codes -2 and 0 are undocumented."}
+    - {source: PAY_2,                         standard: PAY_2, role: feature}
+    - {source: PAY_3,                         standard: PAY_3, role: feature}
+    - {source: PAY_4,                         standard: PAY_4, role: feature}
+    - {source: PAY_5,                         standard: PAY_5, role: feature}
+    - {source: PAY_6,                         standard: PAY_6, role: feature}
+    - {source: BILL_AMT1,                     standard: BILL_AMT1, role: feature}
+    - {source: BILL_AMT2,                     standard: BILL_AMT2, role: feature}
+    - {source: BILL_AMT3,                     standard: BILL_AMT3, role: feature}
+    - {source: BILL_AMT4,                     standard: BILL_AMT4, role: feature}
+    - {source: BILL_AMT5,                     standard: BILL_AMT5, role: feature}
+    - {source: BILL_AMT6,                     standard: BILL_AMT6, role: feature}
+    - {source: PAY_AMT1,                      standard: PAY_AMT1, role: feature}
+    - {source: PAY_AMT2,                      standard: PAY_AMT2, role: feature}
+    - {source: PAY_AMT3,                      standard: PAY_AMT3, role: feature}
+    - {source: PAY_AMT4,                      standard: PAY_AMT4, role: feature}
+    - {source: PAY_AMT5,                      standard: PAY_AMT5, role: feature}
+    - {source: PAY_AMT6,                      standard: PAY_AMT6, role: feature}
+    - {source: default.payment.next.month,    standard: default_payment_next_month, role: target, renamed: true}
+
+dropped: []                                # nothing is dropped
+pii: []                                    # no names, emails, phone numbers or government ids

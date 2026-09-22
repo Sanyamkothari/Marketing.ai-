@@ -1,0 +1,35 @@
+Criteo Uplift Prediction Dataset — licence record
+=================================================
+
+Dataset      Criteo Uplift Prediction Dataset v2.1 (13,979,592 rows, 15 columns)
+Upstream     https://ailab.criteo.com/criteo-uplift-prediction-dataset/
+Direct link  http://go.criteo.net/criteo-research-uplift-v2.1.csv.gz
+Mirror       https://huggingface.co/datasets/criteo/criteo-uplift
+
+LICENCE — NON-COMMERCIAL
+------------------------
+Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International (CC BY-NC-SA 4.0).
+
+This matters more than the other five licences in this library: **NonCommercial** means the
+dataset may not be used in a commercial demo, a sales deck, a customer pilot or a shipped product.
+ShareAlike means a derived dataset must carry the same licence. It is fine for internal research
+and for the Phase 3b uplift work this dataset is reserved for; it is not fine for the demo script
+in docs/LIBRARY.md, and that script does not list it.
+
+ATTRIBUTION / CITATION
+----------------------
+  Eustache Diemert, Artem Betlei, Christophe Renaudin, Massih-Reza Amini.
+  "A Large Scale Benchmark for Uplift Modeling." AdKDD & TargetAd Workshop, KDD, 2018.
+
+  Eustache Diemert, Artem Betlei, Christophe Renaudin, Massih-Reza Amini, Theophane Gregoir,
+  Thibaud Rahier. "A Large Scale Benchmark for Individual Treatment Effect Prediction and Uplift
+  Modeling." NeurIPS 2021 Datasets and Benchmarks Track.
+
+NOT VERIFIED HERE
+-----------------
+ailab.criteo.com, go.criteo.net and huggingface.co are all blocked by the egress policy of the
+environment this library was built in, so neither the dataset page nor the file itself was
+reached. The CC BY-NC-SA 4.0 statement above is what Criteo's dataset page and the CC licence text
+bundled with the download state, as reported by the NeurIPS benchmark repository
+(github.com/criteo-research/large-scale-ITE-UM-benchmark) and secondary sources. Re-read the
+dataset page before using the data for anything.

@@ -45,6 +45,7 @@ from typing import Any, Final, Protocol, cast
 from engine.aws.prices import PriceTable, cost_estimate, load_price_table
 from engine.aws.secrets import quiet_aws_wire_logs
 from engine.contracts import (
+    ComputeBackend,
     ComputeInfo,
     JobEntrypoint,
     JobSpec,
@@ -66,7 +67,7 @@ from engine.runs import (
     update_stage,
     write_job_spec,
 )
-from engine.settings import ENV_VAR_FOR_FIELD, SECRET_FIELDS, SETTINGS_SOURCE_ENV_VAR, Settings
+from engine.settings import ENV_VARS, SECRET_FIELDS, SETTINGS_SOURCE_ENV_VAR, Settings
 from engine.storage import Storage, StorageError, run_key
 from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
@@ -153,7 +154,7 @@ _TAG_VALUE: Final[re.Pattern[str]] = re.compile(r"^[\w\s+\-=.:/@]{0,256}$")
 
 SHIPPED_SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "env",
-    "region",
+    "aws_region",
     "config_dir",
     "storage_backend",
     "data_dir",
@@ -296,13 +297,11 @@ class SageMakerJobConfig:
         return cls(
             role_arn=_required(settings.sagemaker_role_arn, "sagemaker_role_arn"),
             image_uri=_required(settings.sagemaker_image_uri, "sagemaker_image_uri"),
-            train_instance_type=_required(
-                settings.sagemaker_train_instance_type, "sagemaker_train_instance_type"
-            ),
+            train_instance_type=_required(settings.sagemaker_instance_type, "sagemaker_instance_type"),
             processing_instance_type=_required(
                 settings.sagemaker_processing_instance_type, "sagemaker_processing_instance_type"
             ),
-            region=_required(settings.region, "region"),
+            region=_required(settings.aws_region, "region"),
             output_s3_uri=f"s3://{bucket}/{prefix}sagemaker/",
             instance_count=settings.sagemaker_instance_count,
             volume_size_gb=settings.sagemaker_volume_size_gb,
@@ -327,7 +326,7 @@ def _required(value: str | None, field_name: str) -> str:
     if not value:
         raise SageMakerError(
             JOB_SUBMIT_FAILED,
-            f"This deployment runs jobs on SageMaker but {ENV_VAR_FOR_FIELD[field_name]} "
+            f"This deployment runs jobs on SageMaker but {ENV_VARS[field_name]} "
             f"({field_name}) is not configured.",
         )
     return value
@@ -336,7 +335,7 @@ def _required(value: str | None, field_name: str) -> str:
 def container_environment(settings: Settings, environ: Mapping[str, str] | None = None) -> dict[str, str]:
     """The deployment description a job's container is handed, as environment variables.
 
-    `SHIPPED_SETTINGS_FIELDS` is the allow-list and `engine.settings.ENV_VAR_FOR_FIELD` gives every
+    `SHIPPED_SETTINGS_FIELDS` is the allow-list and `engine.settings.ENV_VARS` gives every
     name, so the container is configured through exactly the mechanism a laptop is and there is no
     second spelling of any variable to keep in step (DEC-337).
 
@@ -350,7 +349,7 @@ def container_environment(settings: Settings, environ: Mapping[str, str] | None 
     for name in SHIPPED_SETTINGS_FIELDS:
         rendered = _as_text(getattr(settings, name))
         if rendered:
-            out[ENV_VAR_FOR_FIELD[name]] = rendered
+            out[ENV_VARS[name]] = rendered
     if source:
         out[SETTINGS_SOURCE_ENV_VAR] = source
     return out
@@ -468,7 +467,7 @@ def processing_request(
         raise SageMakerError(
             JOB_SUBMIT_FAILED,
             "A scoring job needs a disk size, because SageMaker's processing API has no default "
-            f"for one. Set {ENV_VAR_FOR_FIELD['sagemaker_volume_size_gb']} for this deployment.",
+            f"for one. Set {ENV_VARS['sagemaker_volume_size_gb']} for this deployment.",
             job_name=name,
         )
     cluster: dict[str, Any] = {
@@ -872,8 +871,13 @@ def _compute_info(
 
     `billable_seconds` is filled from `DescribeTrainingJob.BillableTimeInSeconds` and from nowhere
     else. A processing job's start and end times are wall clock - the service does not report a
-    billable time for one - so they go to `wall_clock_seconds` and the billable field stays null
-    rather than being filled with a number that means something different (DEC-332).
+    billable time for one - so they go to `duration_s` and the billable field stays null rather
+    than being filled with a number that means something different (DEC-332).
+
+    `backend` is `sagemaker` for both job kinds, because that is what `ComputeBackend` says and a
+    reader of the manifest is asking what carried the run. Which of the two rate cards it is billed
+    under is `entrypoint`: train is a Training job, score is a Processing job, and the price table
+    is read with that rather than with a second spelling of the backend.
     """
     started, ended = _moment(_started(description)), _moment(_ended(description))
     wall_clock = (ended - started).total_seconds() if started is not None and ended is not None else None
@@ -882,14 +886,18 @@ def _compute_info(
         (description.get("ProcessingResources") or {}).get("ClusterConfig") or {}
     )
     return ComputeInfo(
-        backend=BACKEND_FOR_ENTRYPOINT[spec.entrypoint],
+        backend=ComputeBackend.SAGEMAKER,
+        entrypoint=spec.entrypoint,
         job_name=job_name,
         job_arn=_arn(description),
         instance_type=str(resources.get("InstanceType") or config.instance_type_for(spec.entrypoint)),
         instance_count=int(resources.get("InstanceCount") or config.instance_count),
         region=config.region,
         image_uri=config.image_uri,
-        wall_clock_seconds=wall_clock,
+        # `duration_s` is required and means "seconds the compute was occupied". A description with
+        # no end time yet has not occupied it for a knowable number of seconds, and 0.0 is the
+        # honest reading of "nothing has been measured" - the same answer `CostEstimate` gives.
+        duration_s=wall_clock if wall_clock is not None else 0.0,
         billable_seconds=float(billable) if isinstance(billable, (int, float)) else None,
         billable_seconds_source=(
             "DescribeTrainingJob.BillableTimeInSeconds" if isinstance(billable, (int, float)) else None

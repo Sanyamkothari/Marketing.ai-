@@ -320,7 +320,7 @@ def metric_sink_for(settings: Settings) -> MetricSink:
     """
     if settings.metrics_backend != "emf":
         return NullMetricSink()
-    return EmfMetricSink(env=settings.env.value, client_id=settings.client_id)
+    return EmfMetricSink(env=settings.env, client_id=settings.client_id)
 
 
 def record_run_started(sink: MetricSink, *, use_case_id: str) -> None:

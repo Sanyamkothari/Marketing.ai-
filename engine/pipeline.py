@@ -56,12 +56,22 @@ from engine.aws.metrics import (
     record_stage_duration,
 )
 from engine.aws.run_index import RunIndex, mirror_run
-from engine.config import ModelFamily, ResolvedConfig, RunMode, UseCaseConfig, recipe_from_config
+from engine.config import (
+    ModelFamily,
+    PrimaryKey,
+    ResolvedConfig,
+    RunMode,
+    UseCaseConfig,
+    recipe_from_config,
+)
 from engine.contracts import (
     MODEL_DIRECTORY,
+    ComputeInfo,
     CostEstimate,
     DatasetFingerprint,
+    FeatureImportance,
     FeatureSchema,
+    LLMUsage,
     ModelStatus,
     RunError,
     RunManifest,
@@ -111,7 +121,6 @@ if TYPE_CHECKING:
         DatasetProfile,
         EvaluationReport,
         FairnessReport,
-        FeatureImportance,
         ModelVersion,
         ScoringSummary,
         SplitReport,
@@ -361,7 +370,7 @@ def _progress_pct(stages: Sequence[StageStatus]) -> int:
     Only `done` counts: a skipped stage is work that will never happen, so counting it would let a
     run that failed in its first stage report almost complete. With eight train stages the sequence
     is 12, 25, 38, 50, 62, 75, 88, 100 - Python's `round` is half-even, so the two exact halves
-    (12.5 and 62.5) round down; the M3 design's "13 … 63" assumed half-up.
+    (12.5 and 62.5) round down rather than up to the 13 and 63 half-up rounding would give.
     """
     if not stages:
         return 0
@@ -381,6 +390,7 @@ class _ManifestBuilder:
     """
 
     run_id: str
+    primary_key: PrimaryKey
     seed: int
     started: float
     fingerprint: DatasetFingerprint | None = None
@@ -388,6 +398,10 @@ class _ManifestBuilder:
     metrics: dict[str, float] = field(default_factory=dict)
     leaderboard_path: str | None = None
     seconds: dict[str, float] = field(default_factory=dict)
+    dataset_id: str | None = None
+    client_id: str | None = None
+    llm_usage: LLMUsage | None = None
+    compute: ComputeInfo | None = None
 
     def record(self, key: StageKey, seconds: float) -> None:
         """Remember what a stage cost, whether it finished, failed or was cancelled."""
@@ -401,6 +415,9 @@ class _ManifestBuilder:
         """The manifest as it stands; `fingerprint` is the fallback when ingest never produced one."""
         return RunManifest(
             run_id=self.run_id,
+            primary_key=self.primary_key,
+            dataset_id=self.dataset_id,
+            client_id=self.client_id,
             recipe=self.recipe,
             dataset_fingerprint=self.fingerprint if self.fingerprint is not None else fingerprint,
             seed=self.seed,
@@ -412,6 +429,8 @@ class _ManifestBuilder:
                 estimated_usd=None,
                 basis=COST_BASIS,
             ),
+            llm_usage=self.llm_usage,
+            compute=self.compute,
             created_at=utc_now(),
         )
 
@@ -524,7 +543,9 @@ class _TrainFlow:
         self._run = _RunWriter(ctx)
         self._index = pipeline.run_index
         self._metrics = pipeline.metrics
-        self._manifest = _ManifestBuilder(run_id=ctx.run_id, seed=self._seed, started=self._started)
+        self._manifest = _ManifestBuilder(
+            run_id=ctx.run_id, primary_key=ctx.primary_key, seed=self._seed, started=self._started
+        )
         self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
         for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
             # The three documents the pipeline itself owns; the manifest is written in the `finally`
@@ -895,9 +916,9 @@ class _TrainFlow:
         parts = _require(self._parts, "the split partitions")
         model_id, version = register.next_version_id(ctx)
         # `schema.json` and `drift_baseline.json` describe the columns the model was FITTED ON, in
-        # fit order (design §7.1), so the frame handed to them is narrowed to the recipe's feature
-        # list plus the target. The prepared training split still carries the reserved columns - the
-        # key, the snapshot date, the consent flag - because the score flow needs them, but a model
+        # fit order, so the frame handed to them is narrowed to the recipe's feature list plus the
+        # target. The prepared training split still carries the reserved columns - the key, the
+        # snapshot date, the consent flag - because the score flow needs them, but a model
         # that never saw a column must not claim it in its schema, and M4 checks a scoring file
         # against exactly this list.
         fitted = parts["train"]
@@ -1045,7 +1066,7 @@ def _row_phase_detail(plan: prepare.RowPlan, rows: int) -> str:
 
 
 def _evaluate_detail(report: EvaluationReport, fairness: FairnessReport) -> str:
-    """The Running line for evaluate (M3 design §5.10): headline, optimisation and calibration."""
+    """The Running line for evaluate (plan §6): headline, optimisation and calibration."""
     calibration = "no" if report.calibration is None else report.calibration.method.value
     line = (
         f"{report.primary_metric_label} {report.headline_score:.2f} · optimised for "
@@ -1057,7 +1078,7 @@ def _evaluate_detail(report: EvaluationReport, fairness: FairnessReport) -> str:
 
 
 def _register_detail(config: UseCaseConfig, status: ModelStatus) -> str:
-    """The Running line for register (M3 design §7.5), including the honest `kept as candidate`."""
+    """The Running line for register (plan §6), including the honest `kept as candidate`."""
     reasons = f"top {config.evaluation.reasons_per_row} SHAP reasons · " if config.evaluation.shap else ""
     return f"{reasons}{_PROMOTION_WORDS[status]} · drift baseline stored"
 
@@ -1097,7 +1118,9 @@ class _ScoreFlow:
         self._run = _RunWriter(ctx)
         self._index = pipeline.run_index
         self._metrics = pipeline.metrics
-        self._manifest = _ManifestBuilder(run_id=ctx.run_id, seed=self._seed, started=self._started)
+        self._manifest = _ManifestBuilder(
+            run_id=ctx.run_id, primary_key=ctx.primary_key, seed=self._seed, started=self._started
+        )
         self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
         for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
             self._artefacts.setdefault(name, run_key(ctx.run_id, name))
@@ -1111,6 +1134,7 @@ class _ScoreFlow:
         self._result: score.PredictResult | None = None
         self._scored: pd.DataFrame | None = None
         self._summary: ScoringSummary | None = None
+        self._fallback_rows: int = 0
 
     # -- the driver ---------------------------------------------------------
     def execute(self) -> RunRecord:
@@ -1422,8 +1446,10 @@ class _ScoreFlow:
             ctx.config,
             primary_key=ctx.primary_key,
             seed=self._seed,
+            importance=self._training_importance(),
             max_rows=None,
         )
+        self._fallback_rows = reasons.fallback_rows
         key = explain.write_row_explanations(reasons.explanations, run_id=ctx.run_id, storage=self._storage)
         self._artefacts[explain.ROW_EXPLANATIONS_FILENAME] = key
         self._scored = explain.with_reason_columns(
@@ -1433,6 +1459,32 @@ class _ScoreFlow:
             primary_key=ctx.primary_key,
         )
         return _StageOutcome(_reasons_detail(reasons), len(reasons.explanations))
+
+    def _training_importance(self) -> FeatureImportance | None:
+        """The chart the model's own training run measured, or `None` when it cannot be read.
+
+        It ranks the general reasons of DEC-056's last resort, picks the features the permutation
+        tier perturbs and breaks ties between equal contributions. It is read from the training
+        run's directory rather than recomputed: a scoring file carries no target, so permutation
+        importance cannot be measured here at all, and the number that matters is the one the model
+        was explained with. A missing or unreadable chart is not a failure - `reasons_for` ranks by
+        what this run measured instead - so this never raises.
+        """
+        version = self._version
+        if version is None:
+            return None
+        key = version.artefact_keys.get(
+            FEATURE_IMPORTANCE_FILENAME, run_key(version.run_id, FEATURE_IMPORTANCE_FILENAME)
+        )
+        try:
+            return self._storage.read_model(key, FeatureImportance)
+        except (StorageError, ValueError):
+            _LOGGER.warning(
+                "explain_rows: the training run's %s could not be read; general reasons will be "
+                "ranked by what this run measured",
+                FEATURE_IMPORTANCE_FILENAME,
+            )
+            return None
 
     def _actions(self) -> _StageOutcome:
         """Band, action, suppression reason and control-group flag, seeded by the run id."""
@@ -1473,6 +1525,7 @@ class _ScoreFlow:
             drift=_require(self._result, "the output of the predict stage").drift,
             files=files,
             kpi_source=_require(self._frame, "the uploaded rows"),
+            rows_with_fallback_reasons=self._fallback_rows,
         )
         self._summary = summary
         self._write(SCORING_SUMMARY_FILENAME, summary)
@@ -1491,7 +1544,10 @@ def _replay_detail(version: ModelVersion) -> str:
 def _reasons_detail(reasons: explain.RowReasons) -> str:
     """The Running line for explain_rows; `method` names the tier that really produced them."""
     rows = len(reasons.explanations)
-    return f"{reasons.method} reasons for {humanise_count(rows)} {'row' if rows == 1 else 'rows'}"
+    return (
+        f"{reasons.method} reasons for {humanise_count(rows)} {'row' if rows == 1 else 'rows'}"
+        f"{explain.fallback_note(reasons)}"
+    )
 
 
 def _actions_detail(frame: pd.DataFrame) -> str:
@@ -1606,3 +1662,21 @@ class Pipeline:
         out. See `_ScoreFlow` for why the prepare stage writes nothing of its own.
         """
         return _ScoreFlow(self, ctx).execute()
+
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file - run `black` on
+# what you paste, not on the file, if the formatter would reflow other lines.
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----

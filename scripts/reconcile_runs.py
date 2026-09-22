@@ -29,7 +29,7 @@ from engine.aws.run_index import (
     reconcile_runs,
 )
 from engine.config import RunMode
-from engine.settings import MetadataBackend, Settings, SettingsError, build_storage
+from engine.settings import SettingsError, build_storage, load_settings
 from engine.utils.logging import configure_logging
 
 __all__ = ["DryRunIndex", "main"]
@@ -122,13 +122,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     configure_logging()
     try:
-        settings = Settings.load()
+        settings = load_settings()
     except SettingsError as exc:
         print(exc.message, file=sys.stderr)
         return EXIT_NO_INDEX
-    if settings.metadata_backend is not MetadataBackend.POSTGRES:
+    if settings.metadata_backend != "postgres":
         print(
-            f"metadata_backend={settings.metadata_backend.value} keeps no run index: the run "
+            f"metadata_backend={settings.metadata_backend} keeps no run index: the run "
             "documents in storage are the whole history, and there is nothing to rebuild.",
             file=sys.stderr,
         )

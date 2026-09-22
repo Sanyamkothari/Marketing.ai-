@@ -72,6 +72,31 @@ run: ## serve the API on :8000
 clean:
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache
 
+# ==========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4). Add targets inside your own
+# block: `onboarding-test`, `generative-test`, `aws-test`. Declare them in a
+# `.PHONY:` line of your own and give each a `## help text` comment so it
+# appears in `make help`. Do not change setup, test, test-all or lint.
+# ==========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+.PHONY: prototype-test prototype-screenshots
+
+prototype-test: ## jsdom tests for marketing-ai-prototype.html (needs node + npm)
+	cd tests/prototype && npm install --no-audit --no-fund && node --test
+
+prototype-screenshots: ## regenerate docs/prototype/*.png (needs node + playwright)
+	node scripts/prototype_screenshots.mjs
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+.PHONY: image image-test image-size compose-up compose-down postgres-up postgres-down \
+        test-postgres migrate revision prices freeze infra-setup infra-lint infra-test \
+        infra-synth infra-nag aws-deploy aws-bootstrap aws-test
+
 # --- Phase 4a: the container ------------------------------------------------
 image: ## build the api image (override PYTHON_BASE/RUNTIME_APT_PACKAGES for an unusual base)
 	docker build --target api --build-arg PYTHON_BASE=$(PYTHON_BASE) -t $(IMAGE):$(IMAGE_TAG) .
@@ -143,3 +168,17 @@ aws-deploy: ## build, push and `cdk deploy` into ENV (needs credentials)
 
 aws-bootstrap: ## create the schema, seed the configs and verify the permissions of a deployment
 	$(BIN)/python -m scripts.aws_bootstrap --env $(ENV)
+
+# Two interpreters, because the infrastructure has its own venv: `make setup` installs `.[dev]`,
+# which does not carry aws-cdk-lib, so collecting tests/infra with $(BIN) would fail on a checkout
+# that has never run `make infra-setup` (DEC-364). It is `infra-test` rather than a second pytest
+# invocation so there is one definition of how the infra suite runs.
+aws-test: infra-test ## every Phase 4a suite: the AWS backends, the container files and the infrastructure
+	$(BIN)/python -m pytest tests/unit/test_settings.py tests/unit/test_aws_secrets.py \
+		tests/unit/test_storage_contract.py tests/unit/test_s3_storage.py tests/unit/test_s3_streaming.py \
+		tests/unit/test_postgres_metadata.py tests/unit/test_alembic_migrations.py \
+		tests/unit/test_run_index.py tests/unit/test_s3_registry.py tests/unit/test_sagemaker_mirror.py \
+		tests/unit/test_runs_module.py tests/unit/test_sagemaker_jobs.py tests/unit/test_prices.py \
+		tests/unit/test_job_entrypoint.py tests/unit/test_metrics.py tests/unit/test_container_files.py \
+		tests/unit/test_docs_honesty.py tests/integration/test_jobs_as_sagemaker.py -q
+# ---- END PHASE-4A ----

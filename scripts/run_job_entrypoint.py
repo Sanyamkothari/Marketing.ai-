@@ -46,7 +46,7 @@ from typing import Final
 from engine.errors import ENGINE_ERRORS, JOB_SPEC_UNREADABLE, STAGE_FAILED
 from engine.jobs import CancelToken, JobCancelledError
 from engine.runs import read_job_spec, run_job_spec
-from engine.settings import Settings, build_services
+from engine.settings import build_services, load_settings
 from engine.utils.logging import bind_log_context, configure_logging, get_logger, log_failure
 
 __all__ = ["DEFAULT_FAILURE_PATH", "FAILURE_PATH_ENV_VAR", "main", "write_failure_file"]
@@ -103,7 +103,7 @@ def main(
     args = parser.parse_args(argv)
     env: Mapping[str, str] = os.environ if environ is None else environ
 
-    settings = Settings.load(env)
+    settings = load_settings(env)
     configure_logging(settings.log_level, log_format=settings.log_format)
     spec_key = args.spec_key or env.get(JOB_SPEC_KEY_ENV_VAR, "")
     failure_path = Path(env.get(FAILURE_PATH_ENV_VAR, DEFAULT_FAILURE_PATH))

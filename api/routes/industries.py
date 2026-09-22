@@ -1,4 +1,4 @@
-"""`GET /industries` — the overview screen: one journey per industry file (design §7.1)."""
+"""`GET /industries` — the overview screen: one journey per industry file (plan §5)."""
 
 from __future__ import annotations
 

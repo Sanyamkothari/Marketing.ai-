@@ -2,7 +2,7 @@
 
 `engine/settings.py` defines *what* a deployment is; this module is one way of finding out, and the
 only one that talks to AWS. It is kept behind the `ParameterSource` protocol so that
-`Settings.from_aws` can be tested with a dictionary and so that `engine.settings` never imports
+`settings_from_aws` can be tested with a dictionary and so that `engine.settings` never imports
 boto3 (DEC-306).
 
 Two stores, because they answer two different questions. Parameter Store holds the values an

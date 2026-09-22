@@ -14,12 +14,12 @@ from api.schemas import IndustriesResponse, UseCaseResponse
 from engine import __version__
 from engine.config import DEFAULT_CONFIG_ROOT, UseCaseConfig, get_catalog, list_use_case_ids
 from engine.templates import template_filenames
+from tests.fixtures.planned import PLANNED_ID, planned_config_root
 
 pytestmark = pytest.mark.integration
 
 USE_CASE_IDS: tuple[str, ...] = list_use_case_ids()
 DEMO_ID: str = "targeted-advertisement"
-PLANNED_ID: str = "ai-onboarding-assistant"
 EXPECTED_MARKERS: tuple[str, ...] = ("P", "G", "P", "H", "H")
 EXPECTED_PAGES: dict[str, str] = {
     "data": "Customer + campaign data",
@@ -60,8 +60,15 @@ def test_industries_legend_has_three_entries_with_stars(client: TestClient) -> N
     assert {entry.label for entry in legend} == {"Predictive AI", "Generative AI", "Hybrid"}
 
 
-def test_a_planned_use_case_is_a_card_without_a_configuration(client: TestClient) -> None:
-    body = IndustriesResponse.model_validate(client.get("/industries").json())
+@pytest.fixture
+def planned_client(tmp_path: Path) -> Iterator[TestClient]:
+    """An app over a root that still has a planned use case; the shipped configuration has none."""
+    with TestClient(create_app(config_root=planned_config_root(tmp_path))) as test_client:
+        yield test_client
+
+
+def test_a_planned_use_case_is_a_card_without_a_configuration(planned_client: TestClient) -> None:
+    body = IndustriesResponse.model_validate(planned_client.get("/industries").json())
     cards = {card.id: card for stage in body.industries[0].stages for card in stage.use_cases}
     planned = cards[PLANNED_ID]
     assert planned.status == "planned"
@@ -74,6 +81,15 @@ def test_a_planned_use_case_is_a_card_without_a_configuration(client: TestClient
     assert available.status == "available"
     assert available.problem_type == "binary_classification"
     assert available.target_column == "converted_30d"
+
+
+def test_every_shipped_use_case_is_a_card_with_a_configuration(client: TestClient) -> None:
+    """And over the real configuration, where Phase 3a left nothing planned."""
+    body = IndustriesResponse.model_validate(client.get("/industries").json())
+    cards = [card for stage in body.industries[0].stages for card in stage.use_cases]
+    assert cards
+    assert all(card.status == "available" for card in cards)
+    assert all(card.entity and card.problem_type for card in cards)
 
 
 def test_use_case_body_validates_and_carries_the_setup_screen(client: TestClient) -> None:
@@ -157,8 +173,8 @@ def test_without_columns_the_column_widgets_have_no_choices(client: TestClient) 
     assert fields["prepare.exclude_columns"].choices is None
 
 
-def test_a_planned_use_case_is_a_404_with_its_own_code(client: TestClient) -> None:
-    response = client.get(f"/use-cases/{PLANNED_ID}")
+def test_a_planned_use_case_is_a_404_with_its_own_code(planned_client: TestClient) -> None:
+    response = planned_client.get(f"/use-cases/{PLANNED_ID}")
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "USE_CASE_PLANNED"
 

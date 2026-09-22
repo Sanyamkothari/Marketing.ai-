@@ -179,3 +179,74 @@ defaults:
 
   template:                             # plan §4.3; every use case supplies the full column list
     columns: []                         # list[TemplateColumn] {name, role, type, description, examples[5]}; §3
+
+  generative:                           # Phase 3a. Inert until `kind` names a flow; the predictive
+                                        # stages never read a leaf of this block (DEC-200).
+    kind: none                          # enum: none | rag_assistant | root_cause_summary | campaign_copy
+
+    llm:                                # non-UI; the client every generative flow calls through
+      backend: fake                     # enum: fake | bedrock; `fake` so the screens run without credentials (DEC-203)
+      region: ap-south-1                # str; data residency, not a default anyone should inherit silently
+      generation_model_id: ""           # str; per deployment. A model id is never written in code (DEC-204)
+      judge_model_id: ""                # str; the guardrail judges; may be the same id as above
+      embedding_model_id: ""            # str; used by the index build and by every question
+      temperature: 0.20                 # float 0..1; low, because every flow wants the same answer twice
+      max_output_tokens: 800            # int 1..8192
+      timeout_s: 60                     # int 1..600
+      max_retries: 2                    # int 0..5; transport retries, not regenerations
+
+    budget:                             # non-UI; what one run is allowed to spend (plan §6)
+      max_cost_usd_per_run: 2.00        # float >= 0; refused once exceeded, with partial artefacts
+      max_calls_per_run: 500            # int >= 1; the ceiling that still holds when a price is unknown
+      cache: true                       # bool; reuse an identical (prompt, input, model, temperature)
+
+    rag:                                # how a question is answered from documents
+      chunk_tokens: 500                 # int 50..2000; target size of one chunk
+      chunk_overlap: 0.15               # float 0..0.5; share of a chunk repeated from the one before
+      top_k: 6                          # int 1..50; chunks retrieved per question
+      min_similarity: 0.25              # float 0..1; below this nothing is retrieved and the answer is a refusal
+      mmr_lambda: 0.70                  # float 0..1; 1 is pure relevance, 0 is pure diversity
+      answer_language: auto             # enum: auto | en | hi ...; `auto` echoes the question's language
+      refusal_message: "I don't have that information in the documents I've been given. Please contact support."
+
+    knowledge_base:                     # what may be uploaded and indexed
+      accepted_types: [pdf, docx, md, txt]   # list[enum]; anything else is refused at upload
+      max_docs: 200                     # int >= 1
+      max_mb: 200                       # int >= 1; the whole knowledge base, not one file
+
+    reference_set:                      # the Q&A file an index is graded against. Named for what it is:
+                                        # `evaluation` above is the model's, and one word cannot mean both.
+      question_column: question         # str
+      reference_column: reference_answer    # str
+      refusal_column: expect_refusal    # str; rows whose answer should be the refusal message
+      pass_threshold: 0.75              # float 0..1; share of questions that must pass
+
+    root_cause:                         # the root-cause summary written over a finished run. Named for the
+                                        # capability, never for the use case that uses it (plan §2.1, principle 1)
+      segment_by: band                  # enum: band | top_reason
+      max_segments: 6                   # int 1..20
+      reasons_per_segment: 5            # int 1..20; strongest aggregated reasons put in the evidence pack
+      complaint_samples_per_segment: 20 # int 0..100; 0 means summaries are built from reasons alone
+      complaint_text_column: null       # str | null; free-text column of the run's own dataset
+      tone: neutral_business            # str; passed to the prompt verbatim
+      require_human_review: false       # bool; a summary is read, not sent (DEC-205)
+
+    campaign_copy:                      # the copy written over a finished scoring run. Named in full because
+                                        # a pydantic field called `copy` shadows BaseModel.copy() (DEC-201)
+      variants_per_band: 2              # int 1..4; labelled A, B, C, D in that order
+      channels: [email, sms, whatsapp]  # list[enum]; a channel with no prompt file is refused
+      bands_to_write: [High, Medium]    # list[str]; names must be actions.bands names
+      allowed_fields: [first_name, plan_type, tenure_months, last_offer, band]   # list[str]; the ONLY placeholders
+      banned_claims: []                 # list[str]; added to guardrails.yaml's global list
+      tone: warm_concise                # str; passed to the prompt verbatim
+      brand_name: ""                    # str; who the message is from. Empty is refused rather than invented
+      require_human_review: true        # bool; true means nothing leaves the review queue on its own
+      limits:                           # hard ceilings, checked on the template AND on every rendered message
+        sms_chars: 160                  # int >= 1
+        whatsapp_chars: 1024            # int >= 1
+        email_subject_chars: 60         # int >= 1
+        email_body_words: 150           # int >= 1
+      required_lines:                   # the line each channel must end with; email's is a placeholder name
+        sms: "Reply STOP to opt out"    # str
+        whatsapp: "Reply STOP to opt out"   # str
+        email: "unsubscribe_link"       # str

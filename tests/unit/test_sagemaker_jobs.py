@@ -54,6 +54,7 @@ from engine.aws.sagemaker_jobs import (
     training_request,
 )
 from engine.contracts import (
+    ComputeBackend,
     CostEstimate,
     DatasetFingerprint,
     JobEntrypoint,
@@ -68,7 +69,7 @@ from engine.jobs import CancelToken, JobRunner, ReconcilingJobRunner
 from engine.pipeline import STATUS_FILENAME
 from engine.registry import LocalModelRegistry
 from engine.runs import RUN_MANIFEST_FILENAME, job_spec_key, update_stage, write_job_spec
-from engine.settings import ENV_VAR_FOR_FIELD, SECRET_FIELDS, Deployment, JobBackend, Settings
+from engine.settings import ENV_VARS, SECRET_FIELDS, Settings
 from engine.storage import LocalStorage, run_key
 from engine.utils.time import utc_now
 from tests.fakes.fake_sagemaker import (
@@ -96,15 +97,15 @@ PROCESSING_INSTANCE = "ml.m5.large"
 def make_settings(**overrides: Any) -> Settings:
     """A deployment that runs its jobs on SageMaker; `Settings` refuses an incomplete one itself."""
     values: dict[str, Any] = {
-        "env": Deployment.DEV,
-        "region": REGION,
+        "env": "dev",
+        "aws_region": REGION,
         "storage_backend": "s3",
         "s3_bucket": BUCKET,
         "s3_prefix": "artefacts",
-        "job_backend": JobBackend.SAGEMAKER,
+        "job_backend": "sagemaker",
         "sagemaker_role_arn": ROLE,
         "sagemaker_image_uri": IMAGE,
-        "sagemaker_train_instance_type": TRAIN_INSTANCE,
+        "sagemaker_instance_type": TRAIN_INSTANCE,
         "sagemaker_processing_instance_type": PROCESSING_INSTANCE,
         "client_id": "acme",
     }
@@ -191,26 +192,40 @@ def test_a_configuration_built_from_the_wrong_settings_names_the_missing_setting
         SageMakerJobConfig.from_settings(local)
     assert caught.value.code == JOB_SUBMIT_FAILED
     assert "s3_bucket" in caught.value.message
-    assert ENV_VAR_FOR_FIELD["s3_bucket"] in caught.value.message
+    assert ENV_VARS["s3_bucket"] in caught.value.message
 
 
 # ---------------------------------------------------------------------------
 # The container's environment
 # ---------------------------------------------------------------------------
+def test_every_shipped_field_is_a_real_field_with_a_real_variable() -> None:
+    """An allow-list entry that names nothing is an AttributeError at job submission.
+
+    `container_environment` reads each name off `Settings` with `getattr` and renders it through
+    `ENV_VARS`, so a name that is no longer a field - a field renamed in a later phase, say - does
+    not fail here or at import: it fails on the first `POST /runs` of a SageMaker deployment, which
+    is the worst place to find out. This test moves that to collection time.
+    """
+    fields = set(Settings.model_fields)
+    for name in SHIPPED_SETTINGS_FIELDS:
+        assert name in fields, f"SHIPPED_SETTINGS_FIELDS names {name!r}, which is not a Settings field"
+        assert name in ENV_VARS, f"{name!r} is a field but has no environment variable to ship it in"
+
+
 def test_no_secret_is_ever_shipped_to_a_container(settings: Settings) -> None:
     """`DescribeTrainingJob` is readable by anybody with read access to the account (DEC-337)."""
     assert set(SHIPPED_SETTINGS_FIELDS) & SECRET_FIELDS == set()
     environment = container_environment(settings, {})
     for field_name in SECRET_FIELDS:
-        assert ENV_VAR_FOR_FIELD[field_name] not in environment
+        assert ENV_VARS[field_name] not in environment
 
 
 def test_the_container_is_told_where_the_artefacts_are(settings: Settings) -> None:
     environment = container_environment(settings, {})
-    assert environment[ENV_VAR_FOR_FIELD["storage_backend"]] == "s3"
-    assert environment[ENV_VAR_FOR_FIELD["s3_bucket"]] == BUCKET
-    assert environment[ENV_VAR_FOR_FIELD["region"]] == REGION
-    assert environment[ENV_VAR_FOR_FIELD["client_id"]] == "acme"
+    assert environment[ENV_VARS["storage_backend"]] == "s3"
+    assert environment[ENV_VARS["s3_bucket"]] == BUCKET
+    assert environment[ENV_VARS["aws_region"]] == REGION
+    assert environment[ENV_VARS["client_id"]] == "acme"
 
 
 def test_the_container_is_not_told_how_to_submit_jobs(settings: Settings) -> None:
@@ -222,7 +237,7 @@ def test_the_container_is_not_told_how_to_submit_jobs(settings: Settings) -> Non
 def test_an_absent_setting_ships_no_variable_at_all(settings: Settings) -> None:
     """A container that reads an empty string would believe it; an absent name it cannot."""
     without = make_settings(client_id=None)
-    assert ENV_VAR_FOR_FIELD["client_id"] not in container_environment(without, {})
+    assert ENV_VARS["client_id"] not in container_environment(without, {})
 
 
 def test_the_settings_source_is_copied_from_this_process(settings: Settings) -> None:
@@ -339,7 +354,7 @@ def test_a_scoring_job_is_refused_rather_than_sized_by_this_repository(
         processing_request(spec_for("score"), config, spec_key="k")
 
     assert caught.value.code == JOB_SUBMIT_FAILED
-    assert ENV_VAR_FOR_FIELD["sagemaker_volume_size_gb"] in caught.value.message
+    assert ENV_VARS["sagemaker_volume_size_gb"] in caught.value.message
 
 
 def test_a_vpc_is_configured_only_when_the_deployment_asked_for_one(spec_for: Any) -> None:
@@ -797,6 +812,7 @@ def seed_manifest(storage: LocalStorage, run_id: str, *, seconds: float) -> None
         run_key(run_id, RUN_MANIFEST_FILENAME),
         RunManifest(
             run_id=run_id,
+            primary_key="customer_id",
             dataset_fingerprint=DatasetFingerprint(hash="0" * 16, algorithm="sha256", n_rows=1, columns=()),
             seed=1,
             duration_s=seconds,
@@ -828,10 +844,11 @@ def test_a_finished_training_job_writes_where_it_ran_and_what_aws_billed(
 
     manifest = storage.read_model(run_key(spec.run_id, RUN_MANIFEST_FILENAME), RunManifest)
     assert manifest.compute is not None
-    assert manifest.compute.backend == TRAINING_BACKEND
+    assert manifest.compute.backend == ComputeBackend.SAGEMAKER
+    assert manifest.compute.entrypoint is JobEntrypoint.TRAIN
     assert manifest.compute.billable_seconds == 240
     assert manifest.compute.billable_seconds_source == "DescribeTrainingJob.BillableTimeInSeconds"
-    assert manifest.compute.wall_clock_seconds == 300
+    assert manifest.compute.duration_s == 300
     assert manifest.compute.instance_count == 2
     assert manifest.cost_estimate.compute_seconds == 12.5, "what the pipeline measured is kept"
     assert manifest.cost_estimate.estimated_usd is not None
@@ -861,10 +878,11 @@ def test_a_finished_processing_job_reports_wall_clock_and_no_billable_time(
 
     manifest = storage.read_model(run_key(spec.run_id, RUN_MANIFEST_FILENAME), RunManifest)
     assert manifest.compute is not None
-    assert manifest.compute.backend == PROCESSING_BACKEND
+    assert manifest.compute.backend == ComputeBackend.SAGEMAKER
+    assert manifest.compute.entrypoint is JobEntrypoint.SCORE
     assert manifest.compute.billable_seconds is None
     assert manifest.compute.billable_seconds_source is None
-    assert manifest.compute.wall_clock_seconds == 60
+    assert manifest.compute.duration_s == 60
     assert manifest.cost_estimate.estimated_usd is None
     assert "billable" in manifest.cost_estimate.basis.lower()
 

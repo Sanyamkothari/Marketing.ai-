@@ -71,16 +71,23 @@ METRIC_FILTERS: Final[tuple[tuple[str, str, str], ...]] = (
         '{ $.level = "ERROR" }',
         "One data point per ERROR line the API or a job wrote.",
     ),
-    (
-        "RunFailures",
-        '{ $.event = "run_failed" }',
-        "One data point per run that ended in a coded failure.",
-    ),
 )
 """(metric name, filter pattern, why) for each filter applied to the API and jobs log groups.
 
-Each pattern names a field `engine/utils/logging.py` writes when `log_format=json`. None of them
-carries a threshold: a filter counts, an alarm judges, and the judging is done elsewhere.
+Each pattern names a field `engine/utils/logging.py` actually writes when `log_format=json`, which
+is a shorter list than it looks: `RedactingJsonFormatter` assembles its payload key by key from the
+closed allow-list `JSON_FIELDS` and never reads `record.__dict__`, so a field attached through
+`extra=` is not serialised and a pattern naming one would match nothing, for ever, silently
+(DEC-383, DEC-382).
+
+There is exactly one filter for that reason. A second, on `{ $.event = "run_failed" }`, was written
+and removed: `event` is not in `JSON_FIELDS`, so the metric it created could only ever have been
+zero - and a metric that is always zero is worse than an absent one, because a dashboard renders it
+as good news. What it was meant to count is already counted properly: `RunsFailed` is an EMF metric
+`engine/aws/metrics.py` emits from the application, in this namespace, and it is what the
+`marketing-ai-<env>-runs-failed` alarm watches.
+
+No pattern carries a threshold: a filter counts, an alarm judges, and the judging is done elsewhere.
 """
 
 UNSET_CLIENT_ID: Final[str] = "unset"

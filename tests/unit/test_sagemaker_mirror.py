@@ -25,7 +25,7 @@ from engine.aws.sagemaker_registry import (
 )
 from engine.config import Metric
 from engine.contracts import ModelStatus, ModelVersion
-from engine.settings import Deployment, Settings
+from engine.settings import Settings
 
 REGION: str = "eu-west-1"
 USE_CASE: str = "a-use-case"
@@ -84,7 +84,7 @@ def client_error(code: str) -> ClientError:
 # Off by default (DEC-348)
 # ---------------------------------------------------------------------------
 def test_the_mirror_is_off_unless_somebody_turns_it_on() -> None:
-    settings = Settings.build(region=REGION, client_id="telco", env=Deployment.DEV)
+    settings = Settings(aws_region=REGION, client_id="telco", env="dev")
     assert SageMakerRegistryConfig.from_settings(settings).enabled is False
     assert SageMakerRegistryConfig().enabled is False
 
@@ -99,7 +99,7 @@ def test_a_disabled_mirror_makes_no_call_at_all() -> None:
 
 
 def test_from_settings_carries_the_prefix_the_region_and_the_tags() -> None:
-    settings = Settings.build(region=REGION, client_id="telco", env=Deployment.DEV)
+    settings = Settings(aws_region=REGION, client_id="telco", env="dev")
     config = SageMakerRegistryConfig.from_settings(settings, enabled=True)
     assert config.enabled is True
     assert config.region == REGION

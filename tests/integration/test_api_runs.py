@@ -35,6 +35,7 @@ from fastapi.testclient import TestClient
 from api.main import create_app
 from api.routes import runs
 from api.schemas import RunDetailResponse, RunListResponse
+from engine import runs as engine_runs_module
 from engine.config import (
     ColumnRole,
     ColumnType,
@@ -72,10 +73,10 @@ from tests.fixtures.make_data import (
     GenerationSpec,
     generate,
 )
+from tests.fixtures.planned import PLANNED_ID, planned_config_root
 from tests.integration.test_api_uploads import (
     CLEAN_CSV,
     DEMO_ID,
-    PLANNED_ID,
     REAL_INGEST,
     UNKNOWN_ID,
     StubFrame,
@@ -304,6 +305,31 @@ def data_dir(tmp_path: Path) -> Path:
     return directory
 
 
+def install_stub_train_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the train flow, the way this module already stands in for ingest and validate.
+
+    These are **API** tests: what they assert is the route, the 409 contract, the run directory and
+    the cancel path, none of which need a fitted model. Since DEC-081 the route submits the real
+    `Pipeline.run_train`, so without this the fast suite would train an AutoGluon model per test and
+    take hours. The stub is DEC-060's coded stop, which is fast and writes a realistic status
+    document, so a run here reaches a terminal state at `prepare`.
+
+    The two halves that matters are each asserted where they belong: that the route submits the
+    *train* builder, by `test_a_training_run_submits_the_train_flow` below; and what that builder
+    actually does, by the `@slow` integration tests and `tests/integration/test_acceptance.py`.
+    """
+
+    def build(storage: Any, *_args: Any, **kwargs: Any) -> Any:
+        record: RunRecord = kwargs["record"]
+        profile = storage.read_model(run_key(record.run_id, "profile.json"), DatasetProfile)
+        report = storage.read_model(run_key(record.run_id, "validation.json"), ValidationReport)
+        return runs.build_m2_job(
+            storage, run_id=record.run_id, profile=profile, report=report, mode=RunMode.TRAIN
+        )
+
+    monkeypatch.setattr(runs, "build_train_job", build)
+
+
 @pytest.fixture
 def client(config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     install_ingest_stub(monkeypatch)
@@ -321,7 +347,10 @@ def blocked_client(
     install_ingest_stub(monkeypatch)
     install_validate_stub(monkeypatch)
 
-    def blocking(_spec: Any, **_kwargs: Any) -> Any:
+    # `build_job_fn(spec, *, storage, registry)` is what the route submits now, so that is the seam
+    # (DEC-324). A training run really does reach the train flow (DEC-081), which is why it has to be
+    # blocked here rather than allowed to fit an AutoGluon model in the fast suite.
+    def blocking(*_args: Any, **_kwargs: Any) -> Any:
         def job(cancel: CancelToken) -> None:
             cancel.wait(10)
             cancel.raise_if_cancelled()
@@ -494,9 +523,77 @@ def test_run_directory_holds_the_five_created_artefacts_and_the_job_spec(
     assert "job_spec.json" not in runs.CREATED_ARTEFACTS
 
 
-def test_m2_job_runs_two_stages_then_fails_honestly_at_prepare(client: TestClient) -> None:
+def test_a_training_run_submits_the_train_flow(
+    config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEC-081. This is the assertion whose absence let the product ship unable to train.
+
+    `POST /runs` used to choose its job by whether a model version had been resolved, and a version
+    is only ever resolved on the score path - so every training run got `build_m2_job` and stopped
+    at `prepare` with `STAGE_NOT_IMPLEMENTED`, months after `Pipeline.run_train` started working.
+    The old test here asserted exactly that failure, which is why the suite stayed green over it.
+
+    The flow itself is exercised end to end by the `@slow` integration tests and by
+    `tests/integration/test_acceptance.py`; what is checked here is the wiring those tests are too
+    expensive to guard on every commit - that the *train* builder is the one the route submits.
+    """
+    install_ingest_stub(monkeypatch)
+    install_validate_stub(monkeypatch)
+    built: list[str] = []
+
+    def spy(name: str) -> Any:
+        def build(*_args: Any, **_kwargs: Any) -> Any:
+            built.append(name)
+            return lambda _cancel: None
+
+        return build
+
+    # The route derives its closure from `job_spec.json` now (DEC-324), so the entrypoint recorded
+    # on the spec is what decides the flow. DEC-081's property is unchanged and still worth pinning:
+    # a training run must reach the train flow, not the M2 stub.
+    def spy_build(spec: Any, **kwargs: Any) -> Any:
+        del kwargs
+        built.append(spec.entrypoint.value)
+        return lambda _cancel: None
+
+    monkeypatch.setattr(runs, "build_job_fn", spy_build)
+    app = create_app(config_root=config_root, data_dir=data_dir)
+    with TestClient(app) as test_client:
+        run_id = start_run(test_client).json()["run_id"]
+        await_job(test_client, run_id)
+    assert built == ["train"], f"a training run must submit the train flow, not {built}"
+
+
+def test_the_m2_stub_is_no_longer_reachable_from_the_route() -> None:
+    """It is kept for its own tests (below) and called by nothing (DEC-081, DEC-324).
+
+    `build_m2_job` and the two flow builders live in `engine/runs.py` now and are re-exported from
+    the route, so the reachability question is asked of the module that does the submitting: the
+    route builds a `JobSpec` and calls `build_job_fn`, and nothing on that path names the stub.
+    """
+    source = Path(runs.__file__).read_text(encoding="utf-8")
+    assert "build_m2_job(" not in source, "the route still submits the M2 stub"
+    assert "build_job_fn(" in source, "the route no longer derives its job from the spec"
+    engine_runs = Path(engine_runs_module.__file__).read_text(encoding="utf-8")
+    body = engine_runs.split("def build_m2_job", 1)[0]
+    assert "build_train_job(" in body and "build_score_job(" in body
+
+
+def test_the_m2_stub_still_stops_honestly_when_it_is_called(
+    client: TestClient, data_dir: Path, storage: LocalStorage
+) -> None:
+    """DEC-060's behaviour, tested directly now that nothing in the route reaches it.
+
+    A stage that cannot run must fail with a code and a sentence a reader can act on, rather than
+    an unhandled `NotImplementedError`; that is worth keeping tested for the next stage that has to.
+    """
     run_id = start_run(client).json()["run_id"]
     await_job(client, run_id)
+    profile = storage.read_model(run_key(run_id, "profile.json"), DatasetProfile)
+    report = storage.read_model(run_key(run_id, "validation.json"), ValidationReport)
+    runs.build_m2_job(storage, run_id=run_id, profile=profile, report=report, mode=RunMode.TRAIN)(
+        CancelToken()
+    )
     detail = RunDetailResponse.model_validate(client.get(f"/runs/{run_id}").json())
     assert detail.run.state is RunState.FAILED
     assert detail.run.error is not None
@@ -506,7 +603,6 @@ def test_m2_job_runs_two_stages_then_fails_honestly_at_prepare(client: TestClien
     assert by_key["ingest"].state is RunState.DONE and by_key["ingest"].detail
     assert by_key["validate"].state is RunState.DONE and by_key["validate"].detail
     assert by_key["prepare"].state is RunState.FAILED
-    assert detail.status.state is RunState.FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -621,12 +717,21 @@ def test_unknown_upload_is_404(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "UPLOAD_NOT_FOUND"
 
 
-def test_planned_and_unknown_use_cases_are_404(client: TestClient) -> None:
+def test_planned_and_unknown_use_cases_are_404(
+    client: TestClient, tmp_path: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown id on the shipped configuration; a planned one on a root that still has one."""
     upload_id = upload(client)
-    for use_case, code in ((PLANNED_ID, "USE_CASE_PLANNED"), (UNKNOWN_ID, "USE_CASE_NOT_FOUND")):
-        response = client.post("/runs", json=run_body(upload_id, use_case=use_case))
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == code
+    response = client.post("/runs", json=run_body(upload_id, use_case=UNKNOWN_ID))
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "USE_CASE_NOT_FOUND"
+
+    install_ingest_stub(monkeypatch)
+    root = planned_config_root(tmp_path / "planned")
+    with TestClient(create_app(config_root=root, data_dir=data_dir)) as planned_client:
+        planned = planned_client.post("/runs", json=run_body(upload_id, use_case=PLANNED_ID))
+    assert planned.status_code == 404
+    assert planned.json()["detail"]["code"] == "USE_CASE_PLANNED"
 
 
 def test_mode_mismatch_is_409(client: TestClient) -> None:
@@ -961,8 +1066,9 @@ def test_broken_fixture_returns_409_with_the_validation_payload(
     """Design §6.9: every error-severity variant is refused with its code; warnings never block.
 
     The job body is stood in for even though ingest and validate are real here: what this sweep is
-    about is the verdict `POST /runs` returns, and a variant that passes would otherwise run a full
-    AutoGluon search on 10,000 rows now that a training run reaches the real flow (DEC-326).
+    about is the verdict `POST /runs` returns, and a variant that passes would otherwise fit an
+    AutoGluon model per variant, because a training run really does reach the train flow now
+    (DEC-081, DEC-326).
     """
     install_m2_job_stub(monkeypatch)
     use_case = use_case_for(variant)
@@ -995,3 +1101,31 @@ def test_broken_fixture_returns_409_with_the_validation_payload(
     assert report.error_count >= 1
     assert code in {check.code for check in report.checks}
     assert store.list_keys("runs/") == ()
+
+
+# ---------------------------------------------------------------------------
+# The Phase 2 shape, refused until Phase 2 implements it (DEC-077, DEC-078)
+# ---------------------------------------------------------------------------
+def test_a_composite_primary_key_is_refused_by_name(client: TestClient) -> None:
+    """The contract accepts several columns; this engine joins on one, and says so."""
+    response = start_run(client, primary_key=[PRIMARY_KEY, "gender"])
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "COMPOSITE_KEY_NOT_SUPPORTED"
+    assert PRIMARY_KEY in detail["message"] and "gender" in detail["message"]
+
+
+def test_a_single_primary_key_sent_as_a_list_is_accepted(client: TestClient) -> None:
+    """One column is one column however it is spelled; the wide type must not cost the narrow case."""
+    response = start_run(client, primary_key=[PRIMARY_KEY])
+    assert response.status_code == 202, response.text
+
+
+@pytest.mark.parametrize("field", ["dataset_id", "client_id"])
+def test_an_onboarded_dataset_is_refused_rather_than_ignored(client: TestClient, field: str) -> None:
+    """The request also carries an upload_id, so ignoring this would score a different file."""
+    response = start_run(client, **{field: "anything"})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "DATASET_ONBOARDING_NOT_AVAILABLE"
+    assert field in detail["message"]
