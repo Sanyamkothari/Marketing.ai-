@@ -275,13 +275,13 @@ Re-run it with:
 |---|---|---|---|
 | M1 | Skeleton + configs | Repo layout, `pyproject`, configs load and validate, contracts defined, `make setup` works on a clean machine | **done** |
 | M2 | Ingest + validate | All validation checks implemented with tests; `POST /uploads` and `POST /runs` return proper 409 payloads on the broken fixtures | **done** |
-| M3 | Train flow | Full train on synthetic data produces every artefact; leaderboard, evaluation, decile lift, SHAP reasons are real; registry with champion rule | **done in the engine** — `Pipeline.run_train` and its tests are real, but `POST /runs` never calls it; see the acceptance test below |
+| M3 | Train flow | Full train on synthetic data produces every artefact; leaderboard, evaluation, decile lift, SHAP reasons are real; registry with champion rule | **done** — and reached from the product since DEC-081; the browser acceptance test below trains through the screens |
 | M4 | Score flow | Champion scores a new file; schema mismatch reported by column name; drift computed; bands, suppression, control group applied; `scores.csv` downloadable | **done** |
-| M5 | UI wired | Prototype screens run against the API end to end with no simulated values; Data/Model/Output pages render from artefacts | **partial** — every page renders from real artefacts with nothing simulated, but in a browser the journey does not complete; see the acceptance test below |
+| M5 | UI wired | Prototype screens run against the API end to end with no simulated values; Data/Model/Output pages render from artefacts | **done** — every page renders from real artefacts with nothing simulated, and the browser acceptance test below walks the whole journey |
 | M6 | Config-only reuse | `payment_propensity` and the Telco churn mapping work by adding YAML only; documented in README | **done** — both are config only and tested; the end-to-end run on the downloaded Kaggle file stays a manual step by design (plan §10) |
 | M7 | Hardening | Cancel, error states, large-file handling (streaming, 1M rows in under the time limit on a laptop), logging, `docs/` complete | **partial** — see below |
 
-**Plan §11's overall Phase 1 acceptance test does not pass.** That criterion is a sentence about a
+**Plan §11's overall Phase 1 acceptance test passes.** That criterion is a sentence about a
 person rather than an API call — a non-technical user "uploads it, keeps every default, clicks Run,
 and receives a scored file with reasons and actions for a second upload" — and until now nothing in
 the suite performed it. `tests/integration/test_acceptance.py` now does: it starts the real app under
@@ -290,24 +290,26 @@ template link → the file input → Run → the Running screen → Results → 
 → "Score new data" → the `scores.csv` download, clicking only what a user would click; Advanced
 settings is asserted closed, so every default really is kept (DEC-075).
 
-**It stops at the Run button**, on the product's own words: *"✕ Run failed · Preparing features is
-not built yet."* The Data tile reads Failed; Model and Output read Not reached. Two defects, neither of
-them in `engine/`, stand between the screens and that sentence:
+**Running it for the first time found that the product could not train a model** — and that is worth
+recording, because the suite was green over it. Two defects, neither in `engine/`, stood between the
+screens and that sentence, and both are fixed (DEC-081):
 
-- `api/routes/runs.py` submits `build_m2_job` for every run whose request carries no model version —
-  which is every *training* run — so a Run click replays ingest and validate and then writes
-  `STAGE_NOT_IMPLEMENTED`, "Preparing features is not built yet.", onto `prepare`. That job is DEC-060's
-  M2 placeholder, the one its own entry says "M3 replaces wholesale"; M3 shipped the train flow and left
-  the route pointing at the placeholder, so nothing a user can click reaches it.
-- `ui/api.js`'s `postUpload` sends the file and the use case but never `mode`, so `POST /uploads` takes
-  its default of `train` and a "Score new data" upload is then refused by `POST /runs` with
-  `UPLOAD_MODE_MISMATCH` — advice the user cannot act on, because the same screen repeats the same
-  upload.
+- `api/routes/runs.py` chose its job with `if version is None`, and a version is only ever resolved on
+  the *score* path — so every **training** run got DEC-060's M2 placeholder and stopped at `prepare`
+  with *"Preparing features is not built yet."* `Pipeline.run_train` had worked since M3 and was never
+  reached from anything a user could click. The route now dispatches on `body.mode`.
+- `ui/api.js`'s `postUpload` sent the file and the use case but never `mode`, so `POST /uploads` took
+  its default of `train` and a "Score new data" upload was then refused by `POST /runs` with
+  `UPLOAD_MODE_MISMATCH` — advice the user could not act on, because the same screen repeats the same
+  upload. It now sends the mode the screen already holds.
 
-The test is left asserting the plan and failing rather than trimmed to what the product does — trimming
-it would turn a defect into a documented feature. Its 13 cases share one module-scoped journey fixture,
-so the walk is paid for once and a stop anywhere in it reports as 13 errors, in about ten seconds. It is
-marked `@slow` and skips cleanly where playwright or a browser is missing, so `ci.yml` stays green on a
+The suite had been holding the first one in place: `test_m2_job_runs_two_stages_then_fails_honestly_at
+_prepare` asserted the failure, so thousands of green tests said nothing about whether a user could
+train. It is replaced by `test_a_training_run_submits_the_train_flow`, which asserts the builder the
+route *submits* — the assertion whose absence let this ship.
+
+The 13 cases share one module-scoped journey fixture, so the walk is paid for once. It is marked
+`@slow` and skips cleanly where playwright or a browser is missing, so `ci.yml` stays green on a
 machine with no browser and `nightly.yml` is where it actually runs.
 
 M7 in detail. Done:
@@ -339,8 +341,6 @@ they are not the same kind of thing at all.
 
 **Phase 1 work genuinely outstanding:**
 
-- **The two defects above**, which keep plan §11's acceptance criterion from passing. They are the
-  largest single gap in Phase 1: the train flow exists and cannot be reached from the product.
 - **The `features` block** — `auto_feature_engineering`, `categorical_encoding`, `numeric_scaling`,
   `text_columns`, `selection` and `max_features`, six of DEC-074's nine. These are neither parked
   Phase 1 work nor deferred Phase 4 work: **`plan.md` does not ask for them anywhere.** Nothing in it
