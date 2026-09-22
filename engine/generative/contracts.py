@@ -756,6 +756,15 @@ class CopyMessage(Artefact):
     block_reason: str | None = Field(
         default=None, description="Why this rendering was refused; null when it was not."
     )
+    backend: str = Field(
+        description="Which client wrote this copy: `fake` or `bedrock`. Carried per row on purpose."
+    )
+    """Every screen already says which backend produced what it shows - `gdom.backendBadge` puts a
+    warning-coloured "Fake backend" panel above the copy, citing plan section 13.3. `copy_messages.csv`
+    is the one artefact that leaves the app, through `GET /runs/{run_id}/copy_messages.csv`, and it
+    left that context behind: a marketer who downloads it holds rendered, ready-to-send marketing
+    copy with nothing on it to say a deterministic stand-in wrote it. The badge does not follow the
+    file, so the file carries the fact itself."""
 
 
 # ---------------------------------------------------------------------------

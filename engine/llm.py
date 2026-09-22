@@ -739,7 +739,9 @@ class BedrockLLMClient:
         timeout_s: int = 60,
         max_retries: int = 2,
         client: Any | None = None,
+        profile: str | None = None,
     ) -> None:
+        self._profile = profile
         self._region = region
         self._model_id = model_id
         self._embedding_model_id = embedding_model_id
@@ -759,11 +761,22 @@ class BedrockLLMClient:
             try:
                 import boto3
                 from botocore.config import Config
+                from botocore.exceptions import ProfileNotFound
             except ImportError as exc:  # pragma: no cover - boto3 is a pinned dependency
                 raise LLMError("LLM_UNAVAILABLE", "boto3 is not installed.") from exc
-            self._client = boto3.client(
+            # A named profile is resolved through a `Session` so that it is this client's alone: a
+            # process serving several people must never mutate `AWS_PROFILE` or the default session
+            # to switch between them. `None` is boto3's default chain, i.e. the behaviour before a
+            # profile could be chosen at all (engine/aws_connection.py).
+            try:
+                session = boto3.Session(profile_name=self._profile, region_name=self._region)
+            except ProfileNotFound as exc:
+                raise LLMError(
+                    "LLM_UNAVAILABLE",
+                    f"There is no AWS profile named {self._profile!r} on the machine running Marketing AI.",
+                ) from exc
+            self._client = session.client(
                 BEDROCK_SERVICE,
-                region_name=self._region,
                 config=Config(
                     read_timeout=self._timeout_s,
                     connect_timeout=min(self._timeout_s, 10),
@@ -858,13 +871,19 @@ class BedrockLLMClient:
         return int(response.get("inputTokens", 0))
 
 
-def build_client(config: LlmConfig, *, fake_mode: GroundedFakeMode = GroundedFakeMode.GROUNDED) -> LLMClient:
+def build_client(
+    config: LlmConfig,
+    *,
+    fake_mode: GroundedFakeMode = GroundedFakeMode.GROUNDED,
+    profile: str | None = None,
+) -> LLMClient:
     """The client `generative.llm.backend` names.
 
     The fake backend gets `GroundedFakeLLMClient` rather than `FakeLLMClient`: a generative flow
     retrieves, cites and grounds, and a digest can do none of those (DEC-214). `fake_mode` is read
     only when the backend is the fake, so a caller may pass one unconditionally without accidentally
-    asking Bedrock to misbehave.
+    asking Bedrock to misbehave. `profile` is read only when it is Bedrock, for the same reason: it
+    names an AWS CLI profile on this machine, and `None` is boto3's default chain.
     """
     from engine.config import LlmBackend
 
@@ -876,4 +895,5 @@ def build_client(config: LlmConfig, *, fake_mode: GroundedFakeMode = GroundedFak
         embedding_model_id=config.embedding_model,
         timeout_s=config.timeout_s,
         max_retries=config.max_retries,
+        profile=profile,
     )

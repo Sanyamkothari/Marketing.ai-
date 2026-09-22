@@ -68,6 +68,7 @@ for cost. It is still graded, reported on every row it can be, and averaged into
 from __future__ import annotations
 
 import json
+import math
 import re
 import time
 from collections.abc import Mapping, Sequence
@@ -260,12 +261,16 @@ def _parse_score(text: str) -> float:
     """The `score` field of a judge's JSON reply, or 0.0 for a reply that cannot be read as one.
 
     Mirrors how `guardrails._parse_verdict` reads the same shape: a verdict nobody can read is not a
-    pass, so it scores as the worst answer rather than as a missing one.
+    pass, so it scores as the worst answer rather than as a missing one. That includes `NaN`, which
+    `json.loads` accepts and which `min(1.0, nan)` would have clamped to a perfect 1.0, writing a
+    fabricated mean into `rag_eval.json` and flipping `meets_threshold`.
     """
     try:
         payload = json.loads(text)
         score = float(payload["score"])
     except (ValueError, KeyError, TypeError):
+        return 0.0
+    if not math.isfinite(score):
         return 0.0
     return max(0.0, min(1.0, score))
 

@@ -319,6 +319,7 @@ def test_a_rendering_that_clears_the_templates_length_limit_can_still_fail_after
         entity_key="C-1",
         config=config,
         guardrails=guardrails,
+        backend="fake",
     )
 
     assert message.rendered_text == ""
@@ -361,7 +362,12 @@ def test_a_banned_claim_hiding_inside_a_rows_own_field_value_is_caught_only_at_r
     guardrails = Guardrails(load_policy(), meter=None)
 
     clean = render_message(
-        template, {"last_offer": "a fresh start"}, entity_key="C-1", config=config, guardrails=guardrails
+        template,
+        {"last_offer": "a fresh start"},
+        entity_key="C-1",
+        config=config,
+        guardrails=guardrails,
+        backend="fake",
     )
     assert clean.block_reason is None
     assert clean.rendered_text != ""
@@ -372,6 +378,7 @@ def test_a_banned_claim_hiding_inside_a_rows_own_field_value_is_caught_only_at_r
         entity_key="C-2",
         config=config,
         guardrails=guardrails,
+        backend="fake",
     )
     assert tainted.block_reason == "failed the banned_phrases check"
     assert tainted.rendered_text == ""
@@ -397,6 +404,7 @@ def test_rendering_many_messages_never_calls_a_judge_so_message_count_does_not_d
             entity_key=f"C-{row}",
             config=config,
             guardrails=guardrails,
+            backend="fake",
         )
 
     assert meter.calls == 0
@@ -644,3 +652,21 @@ def test_generate_campaign_copy_writes_a_copy_batch_and_a_messages_csv_that_both
         row.pop("schema_version", None)
         row["block_reason"] = None if pd.isna(row.get("block_reason")) else row["block_reason"]
         assert CopyMessage.model_validate(row) == message
+
+
+def test_a_downloaded_message_says_which_backend_wrote_it() -> None:
+    """The screen badge does not follow `copy_messages.csv` out of the app; the row must.
+
+    Every generative screen carries `gdom.backendBadge` - a warning-coloured "Fake backend ·
+    no model was called" panel, citing plan §13.3. `copy_messages.csv` is downloadable through
+    `GET /runs/{run_id}/copy_messages.csv`, and without this field a marketer opens rendered,
+    ready-to-send marketing copy with nothing on it to say a deterministic stand-in wrote it.
+    `backend` is a field of `CopyMessage`, so it is a column of that CSV by construction:
+    `_write_messages_csv` writes `list(CopyMessage.model_fields)`.
+    """
+    from engine.generative.contracts import CopyMessage
+
+    assert "backend" in CopyMessage.model_fields
+    assert CopyMessage.model_fields["backend"].is_required(), "a row must never omit it"
+    columns = list(CopyMessage.model_fields)
+    assert "backend" in columns, "the CSV writes exactly these columns"

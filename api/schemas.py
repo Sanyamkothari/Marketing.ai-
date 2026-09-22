@@ -523,6 +523,52 @@ class GenerativeJobStartedResponse(StrictBase):
     job_id: str = Field(description="Id of the root-cause or campaign-copy job that was started.")
 
 
+from engine.aws_connection import AwsConnection, LockReason  # noqa: E402
+
+
+class AwsConnectionState(StrictBase):
+    """Body of `GET`, `PUT` and `DELETE /connection/aws`: the identity in force, and who may change it.
+
+    `profiles` is empty for any caller who may not choose one. A list of the operator's profile names
+    is nobody else's business, and showing a menu that the next request would refuse is worse than
+    showing none.
+    """
+
+    editable: bool = Field(description="True when this caller may choose the identity.")
+    locked_reason: LockReason | None = Field(
+        default=None, description="`deployed` or `remote_client` when `editable` is false."
+    )
+    env: str = Field(description="The deployment name: `local`, `dev`, `staging` or `prod`.")
+    connection: AwsConnection = Field(description="The identity choice in force. Never a credential.")
+    profiles: tuple[str, ...] = Field(
+        default=(), description="AWS CLI profile names on the server's machine. Empty unless editable."
+    )
+    aws_profile_env: str | None = Field(
+        default=None,
+        description="The AWS_PROFILE the server was started with, which the default chain uses. Unless editable, null.",
+    )
+    explanation: str = Field(description="One paragraph saying where the credentials come from.")
+
+
+class ConnectionTestRequest(StrictBase):
+    """Body of `POST /connection/aws/test`. Every field is optional; an empty body tests what is in force.
+
+    `connection` lets a person try a profile before saving it, so it is honoured only for a caller
+    who could have saved it. There is deliberately no field for a key: this product never takes one.
+    """
+
+    connection: AwsConnection | None = Field(
+        default=None, description="A candidate identity to test instead of the saved one. Local only."
+    )
+    region: str | None = Field(
+        default=None,
+        description="Region to test against. Defaults to the use case's `generative.llm.region`.",
+    )
+    use_case_id: str = Field(
+        default="ai-onboarding-assistant", description="Use case whose configured models are checked."
+    )
+
+
 # ---- END PHASE-3A ----
 
 # ---- PHASE-4A (aws) — append only below this line ----

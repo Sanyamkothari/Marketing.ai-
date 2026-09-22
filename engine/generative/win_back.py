@@ -282,6 +282,7 @@ def render_message(
     entity_key: str,
     config: CampaignCopyConfig,
     guardrails: Guardrails,
+    backend: str,
 ) -> CopyMessage:
     """One rendering of `template` for one row, checked again by the deterministic rules only.
 
@@ -323,6 +324,7 @@ def render_message(
         rendered_text="" if block_reason is not None else whole,
         status=template.status,
         block_reason=block_reason,
+        backend=backend,
     )
 
 
@@ -765,7 +767,14 @@ def generate_campaign_copy(
             entity_key = str(row_map[primary_key])
             values = _row_values(row_map, template)
             messages.append(
-                render_message(template, values, entity_key=entity_key, config=copy, guardrails=guardrails)
+                render_message(
+                    template,
+                    values,
+                    entity_key=entity_key,
+                    config=copy,
+                    guardrails=guardrails,
+                    backend=meter.backend,
+                )
             )
 
     used_names = sorted({_CHANNEL_PROMPTS[channel] for channel in copy.channels}) if per_band else []
