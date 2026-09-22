@@ -1,14 +1,18 @@
 """Telco Customer Churn: validate + a one-minute train on the committed sample.
 
 Measured over three runs of this exact budget (`strategy: fast`, `time_limit_minutes: 1`, the
-5,000-row `sample.csv`):
+5,000-row `sample.csv`) against the engine as it stands today:
 
-    test ROC-AUC   0.8444  0.8363  0.8550
-    baseline       0.8334  0.8376  0.8472
-    beats          yes     no      yes
+    test ROC-AUC   0.8224  0.8350  0.8449
+    baseline       0.8249  0.8331  0.8414
+    margin        -0.0025 +0.0019 +0.0035
+    beats          no      yes     yes
 
-So the strict comparison is not asserted here; see DEC-410. The full-data run *does* beat its
-baseline (0.8573 against 0.8535) and is reported in ../telco-customer-churn/run_report.md.
+The margin is thousandths and it changes sign, so the strict comparison is not asserted here; see
+DEC-410. The full-data run does beat its baseline (0.8448 against 0.8409) and is reported in
+../telco-customer-churn/run_report.md.
+
+FLOOR has 0.06 of headroom below the lowest of the three.
 """
 
 from __future__ import annotations

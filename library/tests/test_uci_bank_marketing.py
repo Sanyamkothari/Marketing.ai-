@@ -1,13 +1,17 @@
 """UCI Bank Marketing: validate + a one-minute train on the committed sample.
 
-Measured over three runs of this exact budget:
+Measured over three runs of this exact budget against the engine as it stands today:
 
-    test ROC-AUC   0.9347  0.9350  0.9388
-    baseline       0.9267  0.9305  0.9254
-    beats          yes     yes     yes      (margins +0.0080, +0.0045, +0.0134)
+    test ROC-AUC   0.9408  0.9427  0.9311
+    baseline       0.9281  0.9336  0.9164
+    margin        +0.0127 +0.0091 +0.0147
+    beats          yes     yes     yes
 
-Three for three, but the smallest margin is 0.0045, which is inside the noise of a sixty-second
-search. The strict comparison is therefore not asserted; see DEC-410.
+Three for three, and three for three on the previous engine too — but the smallest margin is
+0.0091, which is still within reach of the noise of a sixty-second search (telco and insurance
+both change sign at that scale). The strict comparison is therefore not asserted; see DEC-410.
+
+FLOOR has 0.05 of headroom below the lowest of the three.
 
 These runs include `duration`, the column that is only known once the call has ended. That is
 deliberate: this test checks the engine still trains on the published file. The realistic model,
