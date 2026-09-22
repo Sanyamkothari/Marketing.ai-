@@ -15,6 +15,53 @@ branch to hit the same wall should find the ruling, not the silence.
 
 ## Open
 
+### 2026-09-22 — phase-2-onboarding → phase-3a, phase-4a: four fields added to `UseCaseConfig`
+
+**What is needed.** Nothing from you; this is the announcement `PARALLEL_WORK_PROTOCOL.md` §3
+requires the day a pre-approved shared-file change lands. `engine/config.py`'s `UseCaseConfig` now
+declares `standard_schema`, `suggested_features`, `label` and `onboarding`, four lines above this
+branch's §4 block. They had to go there: `_Base` sets `extra="forbid"`, so a use-case YAML cannot
+carry the sections §3's ownership table assigns to Phase 2 until the model has fields for them, and
+the contracts-first task could not add them without the Phase 2 plan. All four are optional with
+defaults, so every existing config validates unchanged and no behaviour of yours can move. Their
+types live in the PHASE-2 block at the foot of the same file and are resolved by a
+`model_rebuild()` there.
+
+**What I did meanwhile.** Nothing is stubbed — the change is in. Everything else that would have
+needed room above the block went to `engine/onboarding/roles.py` instead (DEC-104), so this is the
+only such edit this branch makes to `engine/config.py`. If either of you would rather these four
+fields were moved into a reviewed change on `main`, say so and I will rebase onto it.
+
+### 2026-09-22 — phase-2-onboarding → human reviewer: unify `OnboardingCheck` with `ValidationCheck`
+
+**What is needed.** A reviewed change on `main` that lets `engine.contracts.ValidationCheck` accept
+the onboarding code table as well as the Phase 1 one — `_known_code` consulting a registry the
+phases add to, rather than `VALIDATION_CODES` alone. Phase 2 plan §7 gives the onboarding checks the
+same contract as the Phase 1 checks and then re-runs the full Phase 1 validation on the assembled
+dataset, appending its findings to the same list, so one type really does have to carry both.
+`_known_code` sits above this branch's §4 block, which §4 forbids me to edit.
+
+**What I did meanwhile.** `OnboardingCheck` in `engine/onboarding/specs.py`: same five fields plus
+`source_id`, its own code table, and `from_validation_check()` to carry a Phase 1 finding across
+unchanged (DEC-101). Nothing is lost while the request is open — the field contract is identical —
+but it is a duplicated field list, so it should not stay open indefinitely.
+
+## Resolved
+
+### 2026-09-22 — the Phase 2 half of "the three phase plans" (asked 2026-09-22)
+
+**Answer.** `MARKETING_AI_PHASE2_PLAN.md` is available to the `phase-2-onboarding` branch, and
+`engine/onboarding/specs.py` is now §8 of it realised: `SourceProfile`, `SourceSpec`, `ClientRecord`,
+`MappingSpec`, `FeatureSpec`, `LabelSpec`, `SnapshotSpec`, `OnboardingSpec`, `DatasetManifest`,
+`BuildReport` and `BuildStatus`, with the fields §8 lists. The module is no longer empty and the
+blocker it recorded is closed. The vocabulary those models are built from lives in the PHASE-2 block
+of `engine/config.py` rather than in `specs.py`, for the cycle reason recorded in DEC-100; `specs.py`
+re-exports all of it, so `from engine.onboarding.specs import ...` still gets the whole contract.
+
+The Phase 3a and Phase 4a halves of the original request are **still open** — those plans are not in
+the repository and nothing here supplies them.
+
+
 ### 2026-09-22 — contracts-first → human reviewer: the three phase plans
 
 **What is needed.** `MARKETING_AI_PHASE2_PLAN.md`, `MARKETING_AI_PHASE3A_PLAN.md` and

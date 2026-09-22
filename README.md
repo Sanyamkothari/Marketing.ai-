@@ -404,7 +404,33 @@ every rebase.
 
 ### Phase 2 — Data onboarding
 
-_Nothing merged yet._
+Phase 2 turns a client's *raw* tables — a customer master, a billing table with one row per invoice,
+a complaints table with one row per ticket, and usually no target column at all — into the
+one-row-per-entity dataset Phase 1 already knows how to train and score on.
+
+| # | Milestone | Definition of done | Status |
+|---|---|---|---|
+| — | Onboarding contracts | `configs/roles.yaml`, the spec vocabulary, `engine/onboarding/specs.py`, the `onboarding` defaults block; Phase 1 suites green and unedited | **done** |
+| M8 | Clients, sources, roles, standard schema | `ClientStore`; source upload with profiling and role detection; `standard_schema` for the predictive use cases; `GET /use-cases/{id}/standard-schema` | pending |
+| M9 | Mapping | Heuristic suggester, transforms, value maps, mapping checks; an entity-only source maps to a Phase 1-shaped table | pending |
+| M10 | Aggregation engine | `FeatureSpec` → DuckDB; the function library; the golden and point-in-time tests; `features.sql` written | pending |
+| M11 | Labels, snapshots, composite keys | All four label types; censoring; periodic snapshots; the stages taught composite keys | pending |
+| M12 | Datasets, lineage, run integration | `DatasetRegistry`, the build job, `POST /runs` with `dataset_id`, build-then-score | pending |
+| M13 | UI | The four-step onboarding panel inside Setup, the client selector, preview, lineage | pending |
+| M14 | Hardening and docs | Build benchmark, cancel and error states, `docs/ONBOARDING.md` | pending |
+
+The contracts landed first, as `PARALLEL_WORK_PROTOCOL.md` §2 asks: `configs/roles.yaml` (what an
+uploaded table *is*), the spec vocabulary in the PHASE-2 block of `engine/config.py`, the artefact
+models in `engine/onboarding/specs.py`, and the `onboarding` defaults in `engine.yaml`. They fill
+the blocker the contracts-first task recorded against `engine/onboarding/specs.py`, which was empty
+because the Phase 2 plan was not in the repository when that task ran. Nothing executes them yet.
+
+Two rules in this package are absolute and are worth knowing before reading it. **Point-in-time
+correctness:** a feature for snapshot date *T* may read only events at or before *T*, a label only
+events after it; `FUTURE_EVENTS_LEAKED` is a bug, and `OnboardingCheck` refuses to mark it
+acknowledgeable. **Suggest, never decide silently:** roles, mappings and features are proposed with
+a confidence and confirmed by the user, and an auto-accepted item is still shown and still
+reversible.
 
 <!-- ---- END PHASE-2 ---- -->
 

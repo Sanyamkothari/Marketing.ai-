@@ -1,0 +1,87 @@
+# configs/roles.yaml
+# The role catalogue (Phase 2 plan section 4.1). A *role* is what an uploaded table IS, not what a
+# client calls it: `entity` is one row per entity, every other role is an event log with one row per
+# thing that happened. Role detection proposes; the user confirms (principle 9).
+#
+# Read by engine/onboarding/roles.py. Like configs/engine.yaml's `catalog`, this file is engine data:
+# it is NOT merged into a use case and a use-case file cannot invent, rename or remap a role. Adding
+# a role means adding a block here - never a branch in engine/onboarding/.
+#
+# Every event role carries the same two required standard columns, `entity_key` and `event_time`;
+# everything else is role-typical and optional. `name_tokens` are the file-name and column-name
+# tokens role detection scores against, and `typical_columns` double as alias hints for the mapper.
+
+schema_version: 1
+
+roles:
+
+  entity:
+    kind: entity                        # enum: entity | event; exactly one entity source per dataset
+    description: One row per customer (or order, or asset) with their attributes.
+    required_columns: [entity_key]      # list[str]; standard column names, not the client's
+    optional_columns: [signup_date, plan_type, region, segment, as_of_date]
+    typical_columns: []
+    name_tokens: [customer, customers, subscriber, account, master, entity, dim, profile]
+
+  bills:
+    kind: event
+    description: One row per invoice.
+    required_columns: [entity_key, event_time]
+    typical_columns: [amount, due_date, paid_date, status]
+    name_tokens: [bill, bills, billing, invoice, invoices, statement]
+
+  payments:
+    kind: event
+    description: One row per payment.
+    required_columns: [entity_key, event_time]
+    typical_columns: [amount, method, days_late]
+    name_tokens: [payment, payments, pay, receipt, remittance, txn, transaction]
+
+  complaints:
+    kind: event
+    description: One row per complaint or support ticket.
+    required_columns: [entity_key, event_time]
+    typical_columns: [category, resolved_time, severity, text]
+    name_tokens: [complaint, complaints, ticket, tickets, case, cases, grievance, support]
+
+  usage:
+    kind: event
+    description: One row per usage record.
+    required_columns: [entity_key, event_time]
+    typical_columns: [data_mb, minutes, sessions]
+    name_tokens: [usage, cdr, consumption, traffic, session, sessions]
+
+  campaign_events:
+    kind: event
+    description: One row per campaign touch (sent, opened, clicked, converted).
+    required_columns: [entity_key, event_time]
+    typical_columns: [campaign_id, event_type, treatment]   # `treatment` is kept for Phase 3 uplift (plan section 14)
+    name_tokens: [campaign, campaigns, marketing, offer, offers, promo, touch]
+
+  orders:
+    kind: event
+    description: One row per order.
+    required_columns: [entity_key, event_time]
+    typical_columns: [order_value, promised_date, delivered_date]
+    name_tokens: [order, orders, shipment, shipments, delivery, deliveries, fulfilment, fulfillment]
+
+  plan_changes:
+    kind: event
+    description: One row per plan, tariff or package change.
+    required_columns: [entity_key, event_time]
+    typical_columns: [plan, previous_plan, reason]
+    name_tokens: [plan, plans, tariff, package, subscription, upgrade, downgrade]
+
+  activity:
+    kind: event
+    description: Any "the customer did something" log.
+    required_columns: [entity_key, event_time]
+    typical_columns: [event_type]
+    name_tokens: [activity, activities, event, events, login, logins, visit, visits, interaction]
+
+  other_event:
+    kind: event
+    description: An event table that fits none of the roles above.
+    required_columns: [entity_key, event_time]
+    typical_columns: []
+    name_tokens: []

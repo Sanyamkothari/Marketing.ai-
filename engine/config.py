@@ -965,6 +965,21 @@ class UseCaseConfig(_Base):
     output: OutputConfig
     ui: UiConfig
     template: TemplateConfig = TemplateConfig()
+    # --- Phase 2 (onboarding) ------------------------------------------------------------------
+    # The only declaration this branch adds above its PARALLEL_WORK_PROTOCOL.md §4 block, and it is
+    # here because it cannot be anywhere else: `_Base` forbids unknown keys, so a use-case YAML
+    # cannot carry the sections §3's ownership table assigns to Phase 2 until the model has fields
+    # for them. All four are optional and defaulted, so every existing config validates unchanged
+    # and no other branch is affected. Their types are defined in the PHASE-2 block at the foot of
+    # this file; the cross-field checks live in `engine/onboarding/roles.py`, which this file does
+    # not import. Announced in `docs/CROSS_BRANCH_REQUESTS.md`.
+    # The annotations are forward references and the defaults are factories, because both name
+    # classes defined below; `UseCaseConfig.model_rebuild()` at the foot of the PHASE-2 block
+    # resolves them once those classes exist.
+    standard_schema: StandardSchemaConfig = Field(default_factory=lambda: StandardSchemaConfig())
+    suggested_features: tuple[FeatureDef, ...] = ()
+    label: LabelDefinition | None = None
+    onboarding: OnboardingConfig = Field(default_factory=lambda: OnboardingConfig())
 
     _catalog: Catalog | None = PrivateAttr(default=None)
 
@@ -2694,6 +2709,667 @@ def recipe_from_config(
 # ===========================================================================
 
 # ---- PHASE-2 (onboarding) — append only below this line ----
+# The onboarding vocabulary: the blocks a use-case YAML and `engine.yaml:defaults` may carry once a
+# client's raw tables are onboarded (Phase 2 plan sections 4, 5 and 6). They live in this file rather
+# than in `engine/onboarding/specs.py` because `UseCaseConfig` has fields of their types and
+# `engine.config` may not import anything of ours; `specs.py` re-exports every name below, so one
+# import still serves the whole Phase 2 contract (DEC-100).
+#
+# `date` is imported here rather than at the top of the file because PARALLEL_WORK_PROTOCOL.md §4
+# forbids editing above this marker; the noqa records that it is the protocol, not a preference.
+from datetime import date  # noqa: E402
+
+
+class RoleKind(StrEnum):
+    """What a source table is shaped like. `entity`: one row per entity. `event`: many, dated."""
+
+    ENTITY = "entity"
+    EVENT = "event"
+
+
+class StandardType(StrEnum):
+    """The type vocabulary of a *standard* column, which is coarser than `ColumnType` on purpose.
+
+    Mapping asks "can this source column mean that standard column?", and for that question
+    `integer` and `float` are one answer, not two.
+    """
+
+    NUMERIC = "numeric"
+    CATEGORICAL = "categorical"
+    BOOLEAN = "boolean"
+    DATE = "date"
+    TEXT = "text"
+
+
+class AggFunction(StrEnum):
+    """The feature library (plan section 6.2). Users pick from this list; they never write SQL."""
+
+    COUNT = "count"
+    SUM = "sum"
+    MEAN = "mean"
+    MIN = "min"
+    MAX = "max"
+    STD = "std"
+    NUNIQUE = "nunique"
+    LATEST = "latest"
+    FIRST = "first"
+    DAYS_SINCE_LAST = "days_since_last"
+    DAYS_SINCE_FIRST = "days_since_first"
+    EXISTS = "exists"
+    RATIO = "ratio"
+    DERIVE = "derive"
+
+
+class WhereOp(StrEnum):
+    """Comparisons a feature or label filter may use (plan section 6.2)."""
+
+    EQ = "eq"
+    NE = "ne"
+    GT = "gt"
+    GTE = "gte"
+    LT = "lt"
+    LTE = "lte"
+    IN = "in"
+    IS_NULL = "is_null"
+    NOT_NULL = "not_null"
+
+
+class LabelType(StrEnum):
+    """How the target is derived (plan section 5.2). `column` is the Phase 1 "already have it" case."""
+
+    COLUMN = "column"
+    EVENT_PRESENCE = "event_presence"
+    EVENT_ABSENCE = "event_absence"
+    VALUE_THRESHOLD = "value_threshold"
+
+
+class SnapshotMode(StrEnum):
+    """One row per entity (`single`) or one row per entity per date (`periodic`)."""
+
+    SINGLE = "single"
+    PERIODIC = "periodic"
+
+
+class SnapshotFrequency(StrEnum):
+    """Spacing of periodic snapshots."""
+
+    WEEKLY = "weekly"
+    MONTHLY = "monthly"
+
+
+class TransformKind(StrEnum):
+    """The pure, replayable transforms a mapping may attach to a column (plan section 6.1)."""
+
+    CAST = "cast"
+    VALUE_MAP = "value_map"
+    NEGATE = "negate"
+    SCALE = "scale"
+    STRIP = "strip"
+    LOWER = "lower"
+    LSTRIP_ZEROS = "lstrip_zeros"
+    DERIVE = "derive"
+    DEDUPE = "dedupe"
+
+
+class DecidedBy(StrEnum):
+    """Who settled a mapping decision. Auto-accepted items are still shown and reversible."""
+
+    AUTO = "auto"
+    USER = "user"
+
+
+_FEATURE_NAME_PATTERN: Final[str] = r"^[a-z_][a-z0-9_]*$"
+_STANDARD_NAME_PATTERN: Final[str] = r"^[A-Za-z_][A-Za-z0-9_]*$"
+
+_NO_VALUE_OPS: Final[frozenset[WhereOp]] = frozenset({WhereOp.IS_NULL, WhereOp.NOT_NULL})
+"""Operators that take no right-hand side; giving one is a config error, not a silent ignore."""
+
+AGGREGATES_OVER_COLUMN: Final[frozenset[AggFunction]] = frozenset(
+    {
+        AggFunction.SUM,
+        AggFunction.MEAN,
+        AggFunction.MIN,
+        AggFunction.MAX,
+        AggFunction.STD,
+        AggFunction.NUNIQUE,
+        AggFunction.LATEST,
+        AggFunction.FIRST,
+    }
+)
+"""Functions that need a `column` to aggregate. `count`/`exists`/`days_since_*` count rows instead."""
+
+WINDOWLESS_FUNCTIONS: Final[frozenset[AggFunction]] = frozenset({AggFunction.RATIO, AggFunction.DERIVE})
+"""Functions whose window lives in their parts (`ratio`) or nowhere (`derive`)."""
+
+
+class WhereClause(_Base):
+    """One filter on an event table: `{column, op, value}` (plan section 6.2)."""
+
+    column: Annotated[str, Field(min_length=1)]
+    op: WhereOp
+    value: Any = None
+
+    @model_validator(mode="after")
+    def _value_matches_op(self) -> Self:
+        if self.op in _NO_VALUE_OPS:
+            if self.value is not None:
+                raise ConfigError(
+                    "WHERE_VALUE_NOT_ALLOWED",
+                    f"'{self.op.value}' takes no value, but {self.value!r} was given.",
+                    path="where.value",
+                )
+            return self
+        if self.value is None:
+            raise ConfigError(
+                "WHERE_VALUE_REQUIRED",
+                f"'{self.op.value}' needs a value to compare {self.column!r} against.",
+                path="where.value",
+            )
+        if self.op is WhereOp.IN and not isinstance(self.value, (list, tuple)):
+            raise ConfigError(
+                "WHERE_IN_NEEDS_LIST",
+                f"'in' compares {self.column!r} against a list of values, not {type(self.value).__name__}.",
+                path="where.value",
+            )
+        if self.op is not WhereOp.IN and isinstance(self.value, (list, tuple)):
+            raise ConfigError(
+                "WHERE_VALUE_NOT_A_LIST",
+                f"'{self.op.value}' compares {self.column!r} against one value; use 'in' for a list.",
+                path="where.value",
+            )
+        return self
+
+
+class SubAggregation(_Base):
+    """One half of a `ratio` feature. Deliberately not recursive: a ratio of ratios is unreadable."""
+
+    function: AggFunction
+    column: str | None = None
+    window_days: Annotated[int, Field(gt=0)] | None = None
+    where: WhereClause | None = None
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        if self.function in WINDOWLESS_FUNCTIONS:
+            raise ConfigError(
+                "SUB_AGGREGATION_NOT_ALLOWED",
+                f"'{self.function.value}' cannot be one half of a ratio.",
+                path="function",
+            )
+        if self.function in AGGREGATES_OVER_COLUMN and not self.column:
+            raise ConfigError(
+                "FEATURE_COLUMN_REQUIRED",
+                f"'{self.function.value}' needs the column it aggregates.",
+                path="column",
+            )
+        return self
+
+
+class FeatureDef(_Base):
+    """One feature, in the format `suggested_features` and `feature_spec.json` both use.
+
+    A suggestion and a user-authored feature are the same document, so accepting a suggestion is a
+    copy rather than a translation, and the Evolve layer of Phase 5 has one thing to propose edits to.
+    """
+
+    name: Annotated[str, Field(pattern=_FEATURE_NAME_PATTERN)]
+    role: Annotated[str, Field(min_length=1)]
+    function: AggFunction
+    column: str | None = None
+    window_days: Annotated[int, Field(gt=0)] | None = None
+    where: WhereClause | None = None
+    of: SubAggregation | None = None
+    over: SubAggregation | None = None
+    expression: str | None = None
+    description: str = ""
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        function = self.function
+        if function is AggFunction.RATIO:
+            if self.of is None or self.over is None:
+                raise ConfigError(
+                    "FEATURE_RATIO_NEEDS_PARTS",
+                    f"Feature {self.name!r} is a ratio, so it needs both 'of' and 'over'.",
+                    path="of",
+                )
+        elif self.of is not None or self.over is not None:
+            raise ConfigError(
+                "FEATURE_PARTS_NOT_ALLOWED",
+                f"Only a ratio has 'of' and 'over'; {self.name!r} is a {function.value}.",
+                path="of",
+            )
+        if function is AggFunction.DERIVE:
+            if not self.expression:
+                raise ConfigError(
+                    "FEATURE_EXPRESSION_REQUIRED",
+                    f"Feature {self.name!r} is derived, so it needs an expression.",
+                    path="expression",
+                )
+        elif self.expression is not None:
+            raise ConfigError(
+                "FEATURE_EXPRESSION_NOT_ALLOWED",
+                f"Only a derived feature has an expression; {self.name!r} is a {function.value}.",
+                path="expression",
+            )
+        if function in AGGREGATES_OVER_COLUMN and not self.column:
+            raise ConfigError(
+                "FEATURE_COLUMN_REQUIRED",
+                f"Feature {self.name!r} is a {function.value}, so it needs the column it aggregates.",
+                path="column",
+            )
+        if function in WINDOWLESS_FUNCTIONS and self.window_days is not None:
+            raise ConfigError(
+                "FEATURE_WINDOW_NOT_ALLOWED",
+                f"A {function.value} feature carries no window of its own; {self.name!r} has one.",
+                path="window_days",
+            )
+        return self
+
+    @property
+    def windows(self) -> tuple[int | None, ...]:
+        """Every window this feature reads, including both halves of a ratio."""
+        if self.function is AggFunction.RATIO and self.of is not None and self.over is not None:
+            return (self.of.window_days, self.over.window_days)
+        return (self.window_days,)
+
+
+class LabelDefinition(_Base):
+    """How the target is derived (plan section 5.2).
+
+    `agent_editable` is `False` and cannot be set to anything else: the Evolve layer of Phase 5 may
+    propose feature specs, never label or snapshot specs, because an agent that can redefine churn
+    can make any score go up without improving anything (plan section 14).
+    """
+
+    name: Annotated[str, Field(pattern=_STANDARD_NAME_PATTERN)]
+    type: LabelType
+    role: str | None = None
+    column: str | None = None
+    horizon_days: Annotated[int, Field(gt=0)] | None = None
+    where: WhereClause | None = None
+    expression: str | None = None
+    any_event: bool = Field(default=True, alias="any")
+    description: str = ""
+    agent_editable: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        if self.type is LabelType.COLUMN:
+            if not self.column:
+                raise ConfigError(
+                    "LABEL_COLUMN_REQUIRED",
+                    f"Label {self.name!r} reads an existing column, so it must name it.",
+                    path="column",
+                )
+            for field, value in (("role", self.role), ("expression", self.expression)):
+                if value is not None:
+                    raise ConfigError(
+                        "LABEL_FIELD_NOT_ALLOWED",
+                        f"A label read from a column has no {field}; {self.name!r} has one.",
+                        path=field,
+                    )
+            if self.horizon_days is not None:
+                raise ConfigError(
+                    "LABEL_FIELD_NOT_ALLOWED",
+                    f"A label read from a column has no horizon; {self.name!r} has one.",
+                    path="horizon_days",
+                )
+            return self
+        if not self.role:
+            raise ConfigError(
+                "LABEL_ROLE_REQUIRED",
+                f"Label {self.name!r} is derived from events, so it must name the role they are in.",
+                path="role",
+            )
+        if self.horizon_days is None:
+            raise ConfigError(
+                "LABEL_HORIZON_REQUIRED",
+                f"Label {self.name!r} looks forward from the snapshot, so it needs a horizon in days.",
+                path="horizon_days",
+            )
+        if self.column is not None:
+            raise ConfigError(
+                "LABEL_FIELD_NOT_ALLOWED",
+                f"Only a label of type 'column' names a column; {self.name!r} is a {self.type.value}.",
+                path="column",
+            )
+        if self.type is LabelType.VALUE_THRESHOLD:
+            if not self.expression:
+                raise ConfigError(
+                    "LABEL_EXPRESSION_REQUIRED",
+                    f"Label {self.name!r} tests a condition, so it needs an expression.",
+                    path="expression",
+                )
+        elif self.expression is not None:
+            raise ConfigError(
+                "LABEL_FIELD_NOT_ALLOWED",
+                f"Only a value_threshold label has an expression; {self.name!r} is a {self.type.value}.",
+                path="expression",
+            )
+        return self
+
+
+class SnapshotDefinition(_Base):
+    """Which dates to build rows for (plan section 6.4), and `engine.yaml`'s default for them.
+
+    Like `LabelDefinition`, this is never agent-editable: moving the snapshot dates moves the
+    measurement, and a search that may move its own measurement measures nothing.
+    """
+
+    mode: SnapshotMode = SnapshotMode.PERIODIC
+    frequency: SnapshotFrequency = SnapshotFrequency.MONTHLY
+    start: date | None = None
+    end: date | None = None
+    max_snapshots: Annotated[int, Field(ge=1, le=120)] = 12
+    min_history_days: Annotated[int, Field(ge=0)] = 90
+    inclusive_snapshot_time: bool = True
+    agent_editable: Literal[False] = False
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.start is not None and self.end is not None and self.start > self.end:
+            raise ConfigError(
+                "SNAPSHOT_RANGE_INVERTED",
+                f"The first snapshot ({self.start}) is after the last ({self.end}).",
+                path="start",
+            )
+        return self
+
+
+class Derivable(_Base):
+    """How a standard column can be computed when the client has no column for it."""
+
+    from_role: str = "entity"
+    expression: Annotated[str, Field(min_length=1)]
+
+
+class StandardColumn(_Base):
+    """One column of the shape a use case wants, and every way a client might have spelled it."""
+
+    name: Annotated[str, Field(pattern=_STANDARD_NAME_PATTERN)]
+    type: StandardType
+    required: bool = False
+    aliases: tuple[str, ...] = ()
+    description: str = ""
+    value_aliases: dict[str, tuple[str, ...]] = Field(default_factory=dict)
+    range: tuple[float, float] | None = None
+    derivable: Derivable | None = None
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        if self.value_aliases and self.type not in {StandardType.CATEGORICAL, StandardType.BOOLEAN}:
+            raise ConfigError(
+                "VALUE_ALIASES_NOT_ALLOWED",
+                f"Only a categorical or boolean column has value aliases; {self.name!r} is {self.type.value}.",
+                path="value_aliases",
+            )
+        if self.range is not None:
+            if self.type is not StandardType.NUMERIC:
+                raise ConfigError(
+                    "RANGE_NOT_ALLOWED",
+                    f"Only a numeric column has a range; {self.name!r} is {self.type.value}.",
+                    path="range",
+                )
+            if self.range[0] > self.range[1]:
+                raise ConfigError(
+                    "RANGE_INVERTED",
+                    f"The range of {self.name!r} starts above where it ends.",
+                    path="range",
+                )
+        return self
+
+
+class StandardSchemaConfig(_Base):
+    """The one-row-per-entity shape a use case wants, in *our* names (plan section 4.2)."""
+
+    entity_key: Annotated[str, Field(pattern=_STANDARD_NAME_PATTERN)] = "entity_key"
+    snapshot_column: Annotated[str, Field(pattern=_STANDARD_NAME_PATTERN)] = "snapshot_date"
+    columns: tuple[StandardColumn, ...] = ()
+
+    @model_validator(mode="after")
+    def _unique_and_disjoint(self) -> Self:
+        names = [column.name for column in self.columns]
+        duplicates = sorted({name for name in names if names.count(name) > 1})
+        if duplicates:
+            raise ConfigError(
+                "STANDARD_DUPLICATE_COLUMN",
+                f"standard_schema.columns lists {', '.join(duplicates)} more than once.",
+                path="standard_schema.columns",
+            )
+        for reserved, what in (
+            (self.entity_key, "the entity key"),
+            (self.snapshot_column, "the snapshot date"),
+        ):
+            if reserved in names:
+                raise ConfigError(
+                    "STANDARD_RESERVED_COLUMN",
+                    f"{reserved!r} is {what}, so it must not also be listed as a standard column.",
+                    path="standard_schema.columns",
+                )
+        return self
+
+    @property
+    def column_names(self) -> tuple[str, ...]:
+        return tuple(column.name for column in self.columns)
+
+    @property
+    def reserved_names(self) -> tuple[str, ...]:
+        """The two names the engine owns: they identify a row, they are never features."""
+        return (self.entity_key, self.snapshot_column)
+
+    def by_name(self, name: str) -> StandardColumn | None:
+        for column in self.columns:
+            if column.name == name:
+                return column
+        return None
+
+    @property
+    def required_columns(self) -> tuple[StandardColumn, ...]:
+        return tuple(column for column in self.columns if column.required)
+
+
+class MappingDefaults(_Base):
+    """`engine.yaml:defaults.onboarding.mapping` (plan section 5.3)."""
+
+    auto_accept_confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.85
+    suggest_confidence: Annotated[float, Field(ge=0.0, le=1.0)] = 0.50
+    max_value_levels_for_value_mapping: Annotated[int, Field(ge=1)] = 50
+
+    @model_validator(mode="after")
+    def _ordered(self) -> Self:
+        if self.suggest_confidence > self.auto_accept_confidence:
+            raise ConfigError(
+                "MAPPING_CONFIDENCE_INVERTED",
+                "suggest_confidence must not be above auto_accept_confidence.",
+                path="onboarding.mapping.suggest_confidence",
+            )
+        return self
+
+
+class FeatureLibraryDefaults(_Base):
+    """The cross-use-case default feature library (plan section 5.1).
+
+    A use case's own `suggested_features` are *named* documents that win over anything generated
+    here with the same name, which is how "use-case files add or override" survives the rule that a
+    list replaces rather than merges (DEC-002).
+    """
+
+    enabled: bool = True
+    windows_days: tuple[int, ...] = (7, 30, 90, 180, 365)
+    functions: tuple[AggFunction, ...] = (
+        AggFunction.COUNT,
+        AggFunction.SUM,
+        AggFunction.MEAN,
+        AggFunction.LATEST,
+        AggFunction.DAYS_SINCE_LAST,
+    )
+
+    @field_validator("windows_days")
+    @classmethod
+    def _positive(cls, v: tuple[int, ...]) -> tuple[int, ...]:
+        if any(window <= 0 for window in v):
+            raise ConfigError(
+                "WINDOW_NOT_POSITIVE",
+                "A window is a number of days before the snapshot, so it must be above zero.",
+                path="onboarding.features.library.windows_days",
+            )
+        return v
+
+    @field_validator("functions")
+    @classmethod
+    def _generatable(cls, v: tuple[AggFunction, ...]) -> tuple[AggFunction, ...]:
+        wrong = [f.value for f in v if f in WINDOWLESS_FUNCTIONS]
+        if wrong:
+            raise ConfigError(
+                "LIBRARY_FUNCTION_NOT_GENERATABLE",
+                f"{', '.join(wrong)} needs parts the library cannot guess, so it cannot be generated.",
+                path="onboarding.features.library.functions",
+            )
+        return v
+
+
+class FeatureDefaults(_Base):
+    """`engine.yaml:defaults.onboarding.features` (plan section 5.3)."""
+
+    default_windows_days: tuple[int, ...] = (30, 90, 180)
+    max_features: Annotated[int, Field(ge=1)] = 300
+    drop_if_null_fraction_above: Annotated[float, Field(ge=0.0, le=1.0)] = 0.98
+    library: FeatureLibraryDefaults = FeatureLibraryDefaults()
+
+
+class LabelDefaults(_Base):
+    """`engine.yaml:defaults.onboarding.labels` (plan section 5.3)."""
+
+    drop_censored: bool = True
+
+
+class OnboardingLimits(_Base):
+    """`engine.yaml:defaults.onboarding.limits` (plan section 5.3). Phase 2 reads files, not warehouses."""
+
+    max_source_rows: Annotated[int, Field(ge=1)] = 50_000_000
+    max_sources: Annotated[int, Field(ge=1)] = 10
+
+
+class OnboardingConfig(_Base):
+    """`engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3)."""
+
+    mapping: MappingDefaults = MappingDefaults()
+    features: FeatureDefaults = FeatureDefaults()
+    snapshots: SnapshotDefinition = SnapshotDefinition()
+    labels: LabelDefaults = LabelDefaults()
+    limits: OnboardingLimits = OnboardingLimits()
+
+
+# --- the role catalogue (configs/roles.yaml) --------------------------------
+class RoleSpec(_Base):
+    """One role from `configs/roles.yaml`: what a table is, and what it must carry to be usable."""
+
+    kind: RoleKind
+    description: str = ""
+    required_columns: tuple[str, ...] = ()
+    optional_columns: tuple[str, ...] = ()
+    typical_columns: tuple[str, ...] = ()
+    name_tokens: tuple[str, ...] = ()
+
+    @property
+    def is_event(self) -> bool:
+        return self.kind is RoleKind.EVENT
+
+
+class RoleCatalogue(_Base):
+    """`configs/roles.yaml`. Engine data like `engine.yaml:catalog`: never merged, never overridable."""
+
+    schema_version: Literal[1]
+    roles: dict[str, RoleSpec]
+
+    @model_validator(mode="after")
+    def _shape(self) -> Self:
+        if not self.roles:
+            raise ConfigError("ROLES_EMPTY", "configs/roles.yaml defines no roles.", path="roles")
+        entity = [name for name, spec in self.roles.items() if spec.kind is RoleKind.ENTITY]
+        if len(entity) != 1:
+            raise ConfigError(
+                "ROLES_NEED_ONE_ENTITY",
+                f"Exactly one role must have kind 'entity'; found {len(entity)}.",
+                path="roles",
+            )
+        return self
+
+    @property
+    def entity_role(self) -> str:
+        """The single role whose kind is `entity`."""
+        return next(name for name, spec in self.roles.items() if spec.kind is RoleKind.ENTITY)
+
+    @property
+    def event_roles(self) -> tuple[str, ...]:
+        return tuple(sorted(name for name, spec in self.roles.items() if spec.is_event))
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(sorted(self.roles))
+
+    def get(self, role: str) -> RoleSpec | None:
+        return self.roles.get(role)
+
+    def require(self, role: str, *, path: str = "role") -> RoleSpec:
+        """The role, or a `ConfigError` that lists the ones that exist."""
+        spec = self.roles.get(role)
+        if spec is None:
+            raise ConfigError(
+                "ROLE_UNKNOWN",
+                f"{role!r} is not a role; configs/roles.yaml defines {', '.join(self.names)}.",
+                path=path,
+            )
+        return spec
+
+
+ROLES_FILENAME: Final[str] = "roles.yaml"
+_ROLES_CACHE: dict[Path, RoleCatalogue] = {}
+
+
+def load_role_catalogue(root: Path | None = None) -> RoleCatalogue:
+    """`configs/roles.yaml`, cached per root.
+
+    Engine data, like `engine.yaml:catalog`: it is never merged into a use case and a use-case file
+    cannot invent, rename or remap a role. A checkout without the file is an error rather than an
+    empty catalogue, because "this client has no roles" and "the engine lost its role table" are
+    different problems and only one of them is the user's.
+    """
+    base = config_root(root)
+    cached = _ROLES_CACHE.get(base)
+    if cached is not None:
+        return cached
+    document = load_yaml(base / ROLES_FILENAME)
+    version = document.get("schema_version")
+    if version != SCHEMA_VERSION:
+        raise ConfigError(
+            "ROLES_SCHEMA_VERSION",
+            f"roles.yaml declares schema_version {version!r}; this engine reads {SCHEMA_VERSION}.",
+            path="schema_version",
+        )
+    try:
+        catalogue = RoleCatalogue.model_validate(document)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        dotted = _dotted_loc(first["loc"])
+        raise ConfigError("CONFIG_INVALID", f"{dotted}: {first['msg']}.", path=dotted) from exc
+    _ROLES_CACHE[base] = catalogue
+    return catalogue
+
+
+def get_roles(root: Path | None = None) -> RoleCatalogue:
+    """The role catalogue of `root`; the Phase 2 counterpart of `get_catalog`."""
+    return load_role_catalogue(root)
+
+
+# `UseCaseConfig` declares four fields whose types are defined above in this block, so pydantic left
+# them as unresolved forward references when the class was created. Rebuilding here - inside the
+# block, after the types exist - completes it, and the models that nest it have to be rebuilt too
+# because each cached a reference to the incomplete schema.
+UseCaseConfig.model_rebuild()
+ResolvedConfig.model_rebuild()
+
 # ---- END PHASE-2 ----
 
 # ---- PHASE-3A (generative) — append only below this line ----

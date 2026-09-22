@@ -179,3 +179,43 @@ defaults:
 
   template:                             # plan §4.3; every use case supplies the full column list
     columns: []                         # list[TemplateColumn] {name, role, type, description, examples[5]}; §3
+  # --- Phase 2: turning a client's raw tables into the shape above -----------
+  # `standard_schema`, `suggested_features` and `label` are per-use-case and default to empty/null:
+  # a use case that has not been onboarded yet still trains from a prepared file exactly as before.
+
+  standard_schema:                      # Phase 2 §4.2; what one row per entity should look like, in OUR names
+    entity_key: entity_key              # str; the column every source joins on after mapping
+    snapshot_column: snapshot_date      # str; the as-of date a row's features are computed at; never a feature
+    columns: []                         # list[StandardColumn] {name, type, required, aliases[], description, value_aliases{}, range, derivable}
+
+  suggested_features: []                # list[FeatureDef]; §5.1. Named features that win over the generated library below
+
+  label: null                           # LabelDefinition | null; §5.2. null = the Phase 1 rule, `target.column` must be in the file
+
+  onboarding:                           # §5.3; every default of the onboarding pipeline, overridable per use case
+    mapping:
+      auto_accept_confidence: 0.85      # float 0..1; at or above this a suggestion is shown accepted (still editable)
+      suggest_confidence: 0.50          # float 0..1; below this the column is left unmapped; must be <= auto_accept_confidence
+      max_value_levels_for_value_mapping: 50   # int >= 1; a categorical with more levels than this gets no value-map UI
+    features:
+      default_windows_days: [30, 90, 180]      # list[int > 0]; the windows the "Add feature" form offers
+      max_features: 300                 # int >= 1; TOO_MANY_FEATURES above this
+      drop_if_null_fraction_above: 0.98 # float 0..1; FEATURE_ALL_NULL above this, and the feature is dropped
+      library:                          # §5.1's cross-use-case default library, generated for every mapped event role
+        enabled: true                   # bool; false offers only the use case's own suggested_features
+        windows_days: [7, 30, 90, 180, 365]    # list[int > 0]
+        functions: [count, sum, mean, latest, days_since_last]   # list[enum AggFunction]; ratio/derive cannot be generated
+    snapshots:                          # §6.4; also the shape of a saved snapshot_spec.json
+      mode: periodic                    # enum: single | periodic
+      frequency: monthly                # enum: weekly | monthly
+      start: null                       # date | null; defaults to min(event_time) + min_history_days
+      end: null                         # date | null; defaults to max(event_time) - horizon_days
+      max_snapshots: 12                 # int 1..120; the most recent N are kept
+      min_history_days: 90              # int >= 0; the first snapshot must have at least this much history behind it
+      inclusive_snapshot_time: true     # bool; an event at exactly T counts as "before T"
+      agent_editable: false             # literal false; plan §14 - an agent may never move the measurement
+    labels:
+      drop_censored: true               # bool; drop snapshots whose outcome window runs past the end of the data
+    limits:
+      max_source_rows: 50000000         # int >= 1; SOURCE_TOO_LARGE above this
+      max_sources: 10                   # int >= 1; TOO_MANY_SOURCES above this

@@ -152,6 +152,10 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `output` | OutputConfig | yes |  |
 | `ui` | UiConfig | yes |  |
 | `template` | TemplateConfig | no |  |
+| `standard_schema` | StandardSchemaConfig | no | The one-row-per-entity shape a use case wants, in *our* names (plan section 4.2). |
+| `suggested_features` | list[FeatureDef] | no |  |
+| `label` | LabelDefinition \| null | no |  |
+| `onboarding` | OnboardingConfig | no | `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3). |
 
 #### TargetConfig
 
@@ -282,6 +286,62 @@ A fully merged, validated use case. This is what the whole engine consumes.
 |---|---|---|---|
 | `columns` | list[TemplateColumn] | no |  |
 
+#### StandardSchemaConfig
+
+The one-row-per-entity shape a use case wants, in *our* names (plan section 4.2).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `entity_key` | string | no |  |
+| `snapshot_column` | string | no |  |
+| `columns` | list[StandardColumn] | no |  |
+
+#### FeatureDef
+
+One feature, in the format `suggested_features` and `feature_spec.json` both use.  A suggestion and a user-authored feature are the same document, so accepting a suggestion is a copy rather than a translation, and the Evolve layer of Phase 5 has one thing to propose edits to.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | string | yes |  |
+| `role` | string | yes |  |
+| `function` | AggFunction ("count" \| "sum" \| "mean" \| "min" \| "max" \| "std" \| "nunique" \| "latest" \| "first" \| "days_since_last" \| "days_since_first" \| "exists" \| "ratio" \| "derive") | yes | The feature library (plan section 6.2). Users pick from this list; they never write SQL. |
+| `column` | string \| null | no |  |
+| `window_days` | integer \| null | no |  |
+| `where` | WhereClause \| null | no |  |
+| `of` | SubAggregation \| null | no |  |
+| `over` | SubAggregation \| null | no |  |
+| `expression` | string \| null | no |  |
+| `description` | string | no |  |
+
+#### LabelDefinition
+
+How the target is derived (plan section 5.2).  `agent_editable` is `False` and cannot be set to anything else: the Evolve layer of Phase 5 may propose feature specs, never label or snapshot specs, because an agent that can redefine churn can make any score go up without improving anything (plan section 14).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | string | yes |  |
+| `type` | LabelType ("column" \| "event_presence" \| "event_absence" \| "value_threshold") | yes | How the target is derived (plan section 5.2). `column` is the Phase 1 "already have it" case. |
+| `role` | string \| null | no |  |
+| `column` | string \| null | no |  |
+| `horizon_days` | integer \| null | no |  |
+| `where` | WhereClause \| null | no |  |
+| `expression` | string \| null | no |  |
+| `any` | boolean | no |  |
+| `description` | string | no |  |
+| `agent_editable` | false | no |  |
+
+#### OnboardingConfig
+
+`engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `mapping` | MappingDefaults | no | `engine.yaml:defaults.onboarding.mapping` (plan section 5.3). |
+| `features` | FeatureDefaults | no | `engine.yaml:defaults.onboarding.features` (plan section 5.3). |
+| `snapshots` | SnapshotDefinition | no | Which dates to build rows for (plan section 6.4), and `engine.yaml`'s default for them.  Like `LabelDefinition`, this is never agent-editable: moving the snapshot dates moves the measurement, and a search that may move its own measurement measures nothing. |
+| `labels` | LabelDefaults | no | `engine.yaml:defaults.onboarding.labels` (plan section 5.3). |
+| `limits` | OnboardingLimits | no | `engine.yaml:defaults.onboarding.limits` (plan section 5.3). Phase 2 reads files, not warehouses. |
+
 #### ThresholdConfig
 
 | Field | Type | Required | Meaning |
@@ -338,6 +398,114 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `type` | ColumnType ("string" \| "integer" \| "float" \| "boolean" \| "date" \| "datetime" \| "text") | yes |  |
 | `description` | string | yes |  |
 | `examples` | tuple[string, string, string, string, string] | yes |  |
+
+#### StandardColumn
+
+One column of the shape a use case wants, and every way a client might have spelled it.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `name` | string | yes |  |
+| `type` | StandardType ("numeric" \| "categorical" \| "boolean" \| "date" \| "text") | yes | The type vocabulary of a *standard* column, which is coarser than `ColumnType` on purpose.  Mapping asks "can this source column mean that standard column?", and for that question `integer` and `float` are one answer, not two. |
+| `required` | boolean | no |  |
+| `aliases` | list[string] | no |  |
+| `description` | string | no |  |
+| `value_aliases` | object of string -> list[string] | no |  |
+| `range` | tuple[number, number] \| null | no |  |
+| `derivable` | Derivable \| null | no |  |
+
+#### WhereClause
+
+One filter on an event table: `{column, op, value}` (plan section 6.2).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `column` | string | yes |  |
+| `op` | WhereOp ("eq" \| "ne" \| "gt" \| "gte" \| "lt" \| "lte" \| "in" \| "is_null" \| "not_null") | yes | Comparisons a feature or label filter may use (plan section 6.2). |
+| `value` | any | no |  |
+
+#### SubAggregation
+
+One half of a `ratio` feature. Deliberately not recursive: a ratio of ratios is unreadable.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `function` | AggFunction ("count" \| "sum" \| "mean" \| "min" \| "max" \| "std" \| "nunique" \| "latest" \| "first" \| "days_since_last" \| "days_since_first" \| "exists" \| "ratio" \| "derive") | yes | The feature library (plan section 6.2). Users pick from this list; they never write SQL. |
+| `column` | string \| null | no |  |
+| `window_days` | integer \| null | no |  |
+| `where` | WhereClause \| null | no |  |
+
+#### MappingDefaults
+
+`engine.yaml:defaults.onboarding.mapping` (plan section 5.3).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `auto_accept_confidence` | number | no |  |
+| `suggest_confidence` | number | no |  |
+| `max_value_levels_for_value_mapping` | integer | no |  |
+
+#### FeatureDefaults
+
+`engine.yaml:defaults.onboarding.features` (plan section 5.3).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `default_windows_days` | list[integer] | no |  |
+| `max_features` | integer | no |  |
+| `drop_if_null_fraction_above` | number | no |  |
+| `library` | FeatureLibraryDefaults | no | The cross-use-case default feature library (plan section 5.1).  A use case's own `suggested_features` are *named* documents that win over anything generated here with the same name, which is how "use-case files add or override" survives the rule that a list replaces rather than merges (DEC-002). |
+
+#### SnapshotDefinition
+
+Which dates to build rows for (plan section 6.4), and `engine.yaml`'s default for them.  Like `LabelDefinition`, this is never agent-editable: moving the snapshot dates moves the measurement, and a search that may move its own measurement measures nothing.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `mode` | SnapshotMode ("single" \| "periodic") | no | One row per entity (`single`) or one row per entity per date (`periodic`). |
+| `frequency` | SnapshotFrequency ("weekly" \| "monthly") | no | Spacing of periodic snapshots. |
+| `start` | string \| null | no |  |
+| `end` | string \| null | no |  |
+| `max_snapshots` | integer | no |  |
+| `min_history_days` | integer | no |  |
+| `inclusive_snapshot_time` | boolean | no |  |
+| `agent_editable` | false | no |  |
+
+#### LabelDefaults
+
+`engine.yaml:defaults.onboarding.labels` (plan section 5.3).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `drop_censored` | boolean | no |  |
+
+#### OnboardingLimits
+
+`engine.yaml:defaults.onboarding.limits` (plan section 5.3). Phase 2 reads files, not warehouses.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `max_source_rows` | integer | no |  |
+| `max_sources` | integer | no |  |
+
+#### Derivable
+
+How a standard column can be computed when the client has no column for it.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `from_role` | string | no |  |
+| `expression` | string | yes |  |
+
+#### FeatureLibraryDefaults
+
+The cross-use-case default feature library (plan section 5.1).  A use case's own `suggested_features` are *named* documents that win over anything generated here with the same name, which is how "use-case files add or override" survives the rule that a list replaces rather than merges (DEC-002).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `enabled` | boolean | no |  |
+| `windows_days` | list[integer] | no |  |
+| `functions` | list[AggFunction ("count" \| "sum" \| "mean" \| "min" \| "max" \| "std" \| "nunique" \| "latest" \| "first" \| "days_since_last" \| "days_since_first" \| "exists" \| "ratio" \| "derive")] | no |  |
 
 ### `profile.json`
 
@@ -1305,6 +1473,35 @@ Keys of the default document that no advanced-settings field renders, with their
 | `ui.pages.output` | str |
 | `template` | plan §4.3; every use case supplies the full column list |
 | `template.columns` | list[TemplateColumn] {name, role, type, description, examples[5]}; §3 |
+| `standard_schema` | Phase 2 §4.2; what one row per entity should look like, in OUR names |
+| `standard_schema.entity_key` | str; the column every source joins on after mapping |
+| `standard_schema.snapshot_column` | str; the as-of date a row's features are computed at; never a feature |
+| `standard_schema.columns` | list[StandardColumn] {name, type, required, aliases[], description, value_aliases{}, range, derivable} |
+| `suggested_features` | list[FeatureDef]; §5.1. Named features that win over the generated library below |
+| `label` | LabelDefinition \| null; §5.2. null = the Phase 1 rule, `target.column` must be in the file |
+| `onboarding` | §5.3; every default of the onboarding pipeline, overridable per use case |
+| `onboarding.mapping.auto_accept_confidence` | float 0..1; at or above this a suggestion is shown accepted (still editable) |
+| `onboarding.mapping.suggest_confidence` | float 0..1; below this the column is left unmapped; must be <= auto_accept_confidence |
+| `onboarding.mapping.max_value_levels_for_value_mapping` | int >= 1; a categorical with more levels than this gets no value-map UI |
+| `onboarding.features.default_windows_days` | list[int > 0]; the windows the "Add feature" form offers |
+| `onboarding.features.max_features` | int >= 1; TOO_MANY_FEATURES above this |
+| `onboarding.features.drop_if_null_fraction_above` | float 0..1; FEATURE_ALL_NULL above this, and the feature is dropped |
+| `onboarding.features.library` | §5.1's cross-use-case default library, generated for every mapped event role |
+| `onboarding.features.library.enabled` | bool; false offers only the use case's own suggested_features |
+| `onboarding.features.library.windows_days` | list[int > 0] |
+| `onboarding.features.library.functions` | list[enum AggFunction]; ratio/derive cannot be generated |
+| `onboarding.snapshots` | §6.4; also the shape of a saved snapshot_spec.json |
+| `onboarding.snapshots.mode` | enum: single \| periodic |
+| `onboarding.snapshots.frequency` | enum: weekly \| monthly |
+| `onboarding.snapshots.start` | date \| null; defaults to min(event_time) + min_history_days |
+| `onboarding.snapshots.end` | date \| null; defaults to max(event_time) - horizon_days |
+| `onboarding.snapshots.max_snapshots` | int 1..120; the most recent N are kept |
+| `onboarding.snapshots.min_history_days` | int >= 0; the first snapshot must have at least this much history behind it |
+| `onboarding.snapshots.inclusive_snapshot_time` | bool; an event at exactly T counts as "before T" |
+| `onboarding.snapshots.agent_editable` | literal false; plan §14 - an agent may never move the measurement |
+| `onboarding.labels.drop_censored` | bool; drop snapshots whose outcome window runs past the end of the data |
+| `onboarding.limits.max_source_rows` | int >= 1; SOURCE_TOO_LARGE above this |
+| `onboarding.limits.max_sources` | int >= 1; TOO_MANY_SOURCES above this |
 
 ### Catalog keys
 
