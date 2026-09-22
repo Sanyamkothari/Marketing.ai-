@@ -22,10 +22,11 @@ That is what makes the incremental rebuild in `DocIndexManifest` safe - a docume
 :func:`fingerprint` has not moved can be skipped, and the chunks already in the index are exactly
 the chunks a rebuild would have written.
 
-Token counts come from `engine.llm.estimate_tokens` and from nowhere else. The number is the
-chars-over-four estimate and is marked as an estimate at its source; what matters here is that the
-chunker, the budget and the usage meter all mean the same thing by "a token", because two
-definitions would make a budget that was measured against one and enforced against the other.
+Token counts come from `engine.llm.estimate_tokens` and from nowhere else. It is the chars-over-four
+approximation rather than a tokeniser, which is why `Chunk.tokens` is described as approximate; what
+matters here is that the chunker, the budget and the usage meter all mean the same thing by "a
+token", because two definitions would make a budget that was measured against one and enforced
+against the other.
 """
 
 from __future__ import annotations
