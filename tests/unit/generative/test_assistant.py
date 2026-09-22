@@ -60,7 +60,14 @@ from engine.generative.assistant import (
     extracts_for,
 )
 from engine.generative.budget import Meter
-from engine.generative.contracts import AssistantAnswer, Chunk, Citation, GuardrailCheck, GuardrailOutcome
+from engine.generative.contracts import (
+    AssistantAnswer,
+    Chunk,
+    Citation,
+    GenerativePurpose,
+    GuardrailCheck,
+    GuardrailOutcome,
+)
 from engine.generative.errors import INDEX_NOT_FOUND, MODEL_OUTPUT_MALFORMED, GenerativeError
 from engine.generative.guardrails import BANNED_PHRASES, PII_IN_OUTPUT, Guardrails, load_policy
 from engine.generative.index import build_index
@@ -134,8 +141,13 @@ def ask(
     history: tuple[Turn, ...] = (),
     config_root: Path | None = None,
     **overrides: object,
-) -> tuple[GroundedFakeLLMClient, AssistantAnswer]:
-    """Answer `question` against `index`, handing back the client so its calls can be read.
+) -> tuple[GroundedFakeLLMClient, Meter, AssistantAnswer]:
+    """Answer `question` against `index`, handing back the client and the meter that paid for it.
+
+    The client's own call log cannot by itself distinguish a call the flow routed through the
+    meter from one it made directly against the client - both land in `client.calls` the same way
+    - so a test that needs to prove "every call went through the meter" reads `meter.usage()`
+    rather than the log alone.
 
     `judged=False` builds the guardrails without a meter, which is the documented way to run the
     deterministic rules and skip the judges; it is what a test uses when a judge's verdict would
@@ -143,15 +155,19 @@ def ask(
     """
     client = GroundedFakeLLMClient(mode=mode)
     meter = meter_for(client)
-    return client, answer(
-        question,
-        index_id=index.index_id,
-        use_case=use_case(**overrides),
-        store=index.store,
-        meter=meter,
-        guardrails=Guardrails(load_policy(), meter=meter if judged else None),
-        history=history,
-        config_root=config_root,
+    return (
+        client,
+        meter,
+        answer(
+            question,
+            index_id=index.index_id,
+            use_case=use_case(**overrides),
+            store=index.store,
+            meter=meter,
+            guardrails=Guardrails(load_policy(), meter=meter if judged else None),
+            history=history,
+            config_root=config_root,
+        ),
     )
 
 
@@ -231,7 +247,7 @@ def test_a_question_the_documents_share_no_words_with_is_refused_without_calling
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """The single most important claim in the module: nothing above the floor, so nothing was asked."""
-    client, result = ask(knowledge_index, DISJOINT)
+    client, _, result = ask(knowledge_index, DISJOINT)
     assert result.refused
     assert result.answer == REFUSAL
     assert result.retrieved == 0
@@ -245,7 +261,7 @@ def test_a_floor_nothing_can_reach_refuses_the_question_the_documents_do_answer(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """Same state from the other direction: it is the floor that refuses, not the question."""
-    client, result = ask(knowledge_index, ANSWERED, min_similarity=0.99)
+    client, _, result = ask(knowledge_index, ANSWERED, min_similarity=0.99)
     assert result.refused
     assert result.answer == REFUSAL
     assert (result.retrieved, result.called_model) == (0, False)
@@ -256,13 +272,13 @@ def test_a_floor_nothing_can_reach_refuses_the_question_the_documents_do_answer(
 
 def test_a_refusal_the_floor_made_carries_no_guardrail_checks(knowledge_index: KnowledgeIndex) -> None:
     """Nothing was generated, so nothing was checked; a passing check would claim otherwise."""
-    _, result = ask(knowledge_index, DISJOINT)
+    _, _, result = ask(knowledge_index, DISJOINT)
     assert result.guardrails == ()
 
 
 def test_the_question_is_embedded_bare_and_exactly_once(knowledge_index: KnowledgeIndex) -> None:
     """A chunk is embedded with its heading in front of it; the question is not (DEC-217)."""
-    client, _ = ask(knowledge_index, ANSWERED)
+    client, _, _ = ask(knowledge_index, ANSWERED)
     embeddings = [call for call in client.calls if call.kind == "embed"]
     assert [call.texts for call in embeddings] == [(ANSWERED,)]
 
@@ -274,21 +290,26 @@ def test_a_question_the_documents_answer_comes_back_answered_and_cited(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """The baseline: without it every refusal below could be passing because nothing ever answers."""
-    client, result = ask(knowledge_index, ANSWERED)
+    client, meter, result = ask(knowledge_index, ANSWERED)
     found = retrieved_for(knowledge_index, ANSWERED)
     assert not result.refused
     assert result.answer and result.answer != REFUSAL
     assert result.called_model is True
     assert result.retrieved == len(found.matches) > 1
     assert result.citations
-    assert completes(client)
+    assert len(completes(client)) == 2
+    assert {usage.purpose: usage.calls for usage in meter.usage().by_purpose} == {
+        GenerativePurpose.EMBEDDING: 1,
+        GenerativePurpose.ASSISTANT_ANSWER: 1,
+        GenerativePurpose.JUDGE_FAITHFULNESS: 1,
+    }
 
 
 def test_every_citation_points_at_a_chunk_that_was_really_retrieved(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """A citation carries the chunk's provenance and the similarity of the match it came from."""
-    _, result = ask(knowledge_index, ANSWERED)
+    _, _, result = ask(knowledge_index, ANSWERED)
     retrieved = {found.chunk.chunk_id: found for found in retrieved_for(knowledge_index, ANSWERED).matches}
     assert result.citations
     for citation in result.citations:
@@ -304,7 +325,7 @@ def test_the_extracts_the_model_saw_are_the_chunks_retrieval_chose_in_the_order_
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """The prompt numbers by position, so the numbering has to be retrieval's order and nothing else."""
-    client, result = ask(knowledge_index, ANSWERED)
+    client, _, result = ask(knowledge_index, ANSWERED)
     extracts = extracts_for(retrieved_for(knowledge_index, ANSWERED).matches)
     prompt = completes(client)[0].prompt
     for number, extract in enumerate(extracts, start=1):
@@ -319,7 +340,7 @@ def test_the_faithfulness_judge_is_given_the_extracts_the_prompt_was_given(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """Asking "is every claim supported?" means something only when it is asked of the same text."""
-    client, _ = ask(knowledge_index, ANSWERED)
+    client, _, _ = ask(knowledge_index, ANSWERED)
     judged = completes(client)[1].prompt
     for found in retrieved_for(knowledge_index, ANSWERED).matches:
         assert found.chunk.text in judged
@@ -362,7 +383,7 @@ def test_a_citation_that_points_nowhere_is_dropped_and_the_claim_survives(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """The model saw the extracts and answered from them; only its reference is wrong."""
-    _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.UNGROUNDED)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.UNGROUNDED)
     assert not result.refused
     assert result.answer and result.answer != REFUSAL
     assert result.citations == ()
@@ -375,9 +396,10 @@ def test_every_check_on_one_answer_names_the_question_and_never_the_answer(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """One list whose `target` meant the question in one row and the answer in the next is unreadable."""
-    _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.UNGROUNDED)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.UNGROUNDED)
     assert result.guardrails
-    assert all(ANSWERED.startswith(check.target) for check in result.guardrails)
+    assert {check.target for check in result.guardrails} <= {ANSWERED[:60], ANSWERED[:80]}
+    assert all(check.target for check in result.guardrails)
 
 
 def test_a_false_citation_is_dropped_while_the_citation_beside_it_survives() -> None:
@@ -401,11 +423,20 @@ def test_a_citation_number_that_names_no_extract_is_dropped_however_it_was_writt
     assert [(check.rule, check.outcome) for check in checks] == [(UNKNOWN_CITATION, GuardrailOutcome.WARNED)]
 
 
-def test_a_number_the_model_wrote_as_a_string_is_still_a_number() -> None:
-    """Models write `"2"` as often as `2`, and refusing over the quotes would drop a good citation."""
+@pytest.mark.parametrize("cited", [["extract 3"], [3], [None], [[{"chunk": 1}]]])
+def test_a_citation_that_is_not_an_object_is_recorded_like_any_other_that_points_nowhere(cited) -> None:
+    """A citation entry with no `chunk` to read is still a claim that pointed nowhere, not a silent drop."""
+    _, _, citations, checks = parsed(reply(citations=cited), (match("Within four hours."),))
+    assert citations == ()
+    assert [(check.rule, check.outcome) for check in checks] == [(UNKNOWN_CITATION, GuardrailOutcome.WARNED)]
+
+
+@pytest.mark.parametrize("cited", ["2", 2.0])
+def test_a_number_the_model_wrote_as_a_string_or_a_whole_float_is_still_a_number(cited: object) -> None:
+    """Models write `"2"` and `2.0` as often as `2`, and dropping either would cost a good citation."""
     matches = (match("Within four hours."), match("Restart the handset.", ordinal=1, similarity=0.2))
     _, _, citations, checks = parsed(
-        reply(citations=[{"chunk": "2", "quote": "Restart the handset."}]), matches
+        reply(citations=[{"chunk": cited, "quote": "Restart the handset."}]), matches
     )
     assert [citation.chunk_id for citation in citations] == [matches[1].chunk.chunk_id]
     assert checks == ()
@@ -459,22 +490,24 @@ def test_a_malformed_reply_never_reaches_the_caller_as_an_answer(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """Whatever else happens to it, an unparsed blob is not what the customer is shown."""
-    _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.MALFORMED)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.MALFORMED)
     assert result.refused
     assert result.called_model is True
     assert result.citations == ()
-    assert "in prose rather than in JSON" not in result.answer
+    assert result.answer == REFUSAL
+    assert MODEL_OUTPUT_MALFORMED in {check.rule for check in result.guardrails}
 
 
 def test_a_malformed_reply_is_refused_in_the_operators_own_words(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """With the judges off, so it is the parser refusing and not a judge that could not read a verdict."""
-    _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.MALFORMED, judged=False)
+    client, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.MALFORMED, judged=False)
     assert result.refused
     assert result.answer == REFUSAL
     assert result.citations == ()
     assert MODEL_OUTPUT_MALFORMED in {check.rule for check in result.guardrails}
+    assert len(completes(client)) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -484,12 +517,12 @@ def test_a_refusal_the_model_made_called_the_model_where_a_refusal_the_floor_mad
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """The pair is the proof: without it `called_model` would look like a synonym for `refused` (DEC-219)."""
-    prompted_client, prompted = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.REFUSING)
-    floored_client, floored = ask(knowledge_index, DISJOINT)
+    prompted_client, _, prompted = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.REFUSING)
+    floored_client, _, floored = ask(knowledge_index, DISJOINT)
     assert prompted.refused and floored.refused
     assert prompted.called_model is True
     assert floored.called_model is False
-    assert len(completes(prompted_client)) >= 1
+    assert len(completes(prompted_client)) == 2
     assert completes(floored_client) == ()
     assert prompted.retrieved > 0
     assert floored.retrieved == 0
@@ -500,7 +533,7 @@ def test_a_refusal_the_model_made_still_reports_what_was_put_in_front_of_it(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """`retrieved` is what the extracts cost, not what the answer used, so a refusal still carries it."""
-    _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.REFUSING)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.REFUSING)
     assert result.retrieved == len(retrieved_for(knowledge_index, ANSWERED).matches)
     assert result.answer == REFUSAL
 
@@ -516,7 +549,7 @@ def test_an_answer_a_rule_blocked_is_replaced_by_the_refusal_and_keeps_its_check
     knowledge_index: KnowledgeIndex, mode: GroundedFakeMode, rule: str
 ) -> None:
     """The blocked text is not shown, not cited and not forgotten: the check is what says it happened."""
-    _, result = ask(knowledge_index, ANSWERED, mode=mode)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=mode)
     assert result.answer == REFUSAL
     assert result.refused
     assert result.citations == ()
@@ -530,7 +563,7 @@ def test_a_blocked_answer_reports_the_checks_that_passed_beside_the_one_that_did
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """A reviewer asking what was looked at gets the whole sweep, not only the rule that fired."""
-    _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.BANNED)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.BANNED)
     assert len({check.rule for check in result.guardrails}) > 1
     assert any(check.outcome is GuardrailOutcome.PASSED for check in result.guardrails)
 
@@ -539,7 +572,7 @@ def test_an_answer_nothing_objected_to_is_returned_with_its_checks(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """A clean answer still carries the sweep, so "checked and fine" is a thing the artefact can say."""
-    _, result = ask(knowledge_index, ANSWERED)
+    _, _, result = ask(knowledge_index, ANSWERED)
     assert not result.refused
     assert result.guardrails
     assert all(check.outcome is GuardrailOutcome.PASSED for check in result.guardrails)
@@ -553,7 +586,7 @@ def test_only_the_last_turns_of_a_conversation_reach_the_prompt(
 ) -> None:
     """A longer window would cost tokens on every question to serve the rare one that needs it."""
     history = tuple(Turn(role="user", text=f"turn number {number}") for number in range(HISTORY_TURNS + 3))
-    client, _ = ask(knowledge_index, ANSWERED, history=history)
+    client, _, _ = ask(knowledge_index, ANSWERED, history=history)
     prompt = completes(client)[0].prompt
     assert [turn["text"] for turn in history if turn["text"] in prompt] == [
         turn["text"] for turn in history[-HISTORY_TURNS:]
@@ -566,14 +599,14 @@ def test_a_conversation_shorter_than_the_window_is_carried_whole(
 ) -> None:
     """Truncation is a ceiling, not a quota: two turns are two turns."""
     history = (Turn(role="user", text="is the sim live"), Turn(role="assistant", text="not yet"))
-    client, _ = ask(knowledge_index, ANSWERED, history=history)
+    client, _, _ = ask(knowledge_index, ANSWERED, history=history)
     prompt = completes(client)[0].prompt
     assert all(turn["text"] in prompt for turn in history)
 
 
 def test_a_question_asked_with_no_history_carries_none(knowledge_index: KnowledgeIndex) -> None:
     """The client sends the conversation it has; nothing is stored, so nothing is remembered."""
-    client, _ = ask(knowledge_index, ANSWERED)
+    client, _, _ = ask(knowledge_index, ANSWERED)
     assert "Earlier in this conversation" not in completes(client)[0].prompt
 
 
@@ -587,27 +620,30 @@ def test_the_prompt_version_is_the_version_of_the_prompt_that_was_loaded(
     shipped = (config_root / "prompts" / f"{ANSWER_PROMPT}.v1.md").read_text(encoding="utf-8")
     renamed = shipped.replace("version: 1", "version: 7")
     (prompts / f"{ANSWER_PROMPT}.v7.md").write_text(renamed, encoding="utf-8")
-    _, result = ask(knowledge_index, question, config_root=tmp_path / "configs")
+    _, _, result = ask(knowledge_index, question, config_root=tmp_path / "configs")
     assert result.prompt_version == 7
-    _, shipped_result = ask(knowledge_index, question)
+    _, _, shipped_result = ask(knowledge_index, question)
     assert shipped_result.prompt_version == load_prompt(ANSWER_PROMPT).version
 
 
 @pytest.mark.parametrize("question", [ANSWERED, DISJOINT])
-def test_the_latency_is_a_whole_number_of_milliseconds_and_never_negative(
-    knowledge_index: KnowledgeIndex, question: str
+def test_the_latency_is_measured_from_a_monotonic_clock_on_every_path(
+    monkeypatch: pytest.MonkeyPatch, knowledge_index: KnowledgeIndex, question: str
 ) -> None:
-    """Measured on a monotonic clock, so a machine that puts its clock back cannot produce a -3."""
-    _, result = ask(knowledge_index, question)
-    assert isinstance(result.latency_ms, int)
-    assert result.latency_ms >= 0
+    """`_elapsed` subtracts two clock readings; stubbing the clock is what proves the subtraction runs,
+    on the refusal path as much as the answered one, rather than a literal `0` that would pass either
+    way."""
+    ticks = iter([100.0, 100.25])
+    monkeypatch.setattr("engine.generative.assistant.time.monotonic", lambda: next(ticks))
+    _, _, result = ask(knowledge_index, question)
+    assert result.latency_ms == 250
 
 
 def test_the_question_comes_back_on_the_answer_exactly_as_it_was_asked(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """A row of `rag_eval.json` is read beside the reference set, so the key has to survive the trip."""
-    _, result = ask(knowledge_index, ANSWERED)
+    _, _, result = ask(knowledge_index, ANSWERED)
     assert result.question == ANSWERED
 
 

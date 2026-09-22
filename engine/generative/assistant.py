@@ -239,17 +239,11 @@ def _parse(
     checks: list[GuardrailCheck] = []
     for entry in payload.get("citations", []) or []:
         if not isinstance(entry, dict):
+            checks.append(_unknown_citation(question))
             continue
         number = _number(entry.get("chunk"))
         if number is None or not 1 <= number <= len(matches):
-            checks.append(
-                GuardrailCheck(
-                    target=question[:60],
-                    rule=UNKNOWN_CITATION,
-                    outcome=GuardrailOutcome.WARNED,
-                    detail="a citation pointed at an extract that was not supplied",
-                )
-            )
+            checks.append(_unknown_citation(question))
             continue
         match = matches[number - 1]
         citations.append(
@@ -262,6 +256,21 @@ def _parse(
             )
         )
     return text, refused, tuple(citations), tuple(checks)
+
+
+def _unknown_citation(question: str) -> GuardrailCheck:
+    """The check recorded for a citation that cannot be resolved to a supplied extract.
+
+    One entry not naming a number and one naming a number nobody supplied are the same failure -
+    a claim that pointed somewhere the evidence pack does not reach - so both go through this one
+    place rather than building the same `GuardrailCheck` twice.
+    """
+    return GuardrailCheck(
+        target=question[:60],
+        rule=UNKNOWN_CITATION,
+        outcome=GuardrailOutcome.WARNED,
+        detail="a citation pointed at an extract that was not supplied",
+    )
 
 
 def _json(raw: str) -> dict[str, Any] | None:
@@ -278,11 +287,18 @@ def _json(raw: str) -> dict[str, Any] | None:
 
 
 def _number(value: object) -> int | None:
-    """An extract number from whatever the model put there, or `None` if it is not one."""
+    """An extract number from whatever the model put there, or `None` if it is not one.
+
+    `{"chunk": 2.0}` is as much extract 2 as `{"chunk": 2}` or `{"chunk": "2"}` - a model writing
+    JSON has no reason to prefer one spelling of a whole number - so this reads the value as a
+    float first and only then asks whether it names a whole extract. `1.5` fails that question and
+    is dropped exactly as a word or a stray sign would be.
+    """
     try:
-        return int(str(value).strip())
+        number = float(str(value).strip())
     except (TypeError, ValueError):
         return None
+    return int(number) if number.is_integer() else None
 
 
 def _elapsed(started: float) -> int:
