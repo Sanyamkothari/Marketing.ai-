@@ -417,7 +417,40 @@ one-row-per-entity dataset Phase 1 already knows how to train and score on.
 | M11 | Labels, snapshots, composite keys | All four label types; censoring; periodic snapshots; the stages taught composite keys | pending |
 | M12 | Datasets, lineage, run integration | `DatasetRegistry`, the build job, `POST /runs` with `dataset_id`, build-then-score | pending |
 | M13 | UI | The four-step onboarding panel inside Setup, the client selector, preview, lineage | pending |
-| M14 | Hardening and docs | Build benchmark, cancel and error states, `docs/ONBOARDING.md` | pending |
+| M14 | Hardening and docs | Build benchmark, cancel and error states, `docs/ONBOARDING.md` | **done** — benchmark recorded below |
+
+#### Build performance, measured
+
+`scripts/bench_onboarding.py` generates the raw tables and times a real `build_dataset` — no stage
+stubbed, every onboarding and Phase 1 check run, `dataset.parquet` on disk at the end. One run at
+the plan's own target, on **4 CPUs · 15.7 GiB RAM · Python 3.11.15 · Linux** (a container, not a
+laptop):
+
+| | |
+|---|---|
+| Input | 200,000 customers · 5,000,000 usage rows · 6 CSVs · 1,377 MB |
+| Output | 2,400,000 rows · 200,000 entities · 12 snapshots · 60 features (3 dropped, all-null) |
+| Build | **828.9 s** · peak RSS 10,975 MB · `passed=True`, 0 blocking checks |
+| Target | the same shape in under 300 s |
+| Verdict | **not met** — correct at this size, about 2.8× slower than the plan asks |
+
+Where the time goes: `write` 386 s, `apply_mappings` 209 s, `validate` 112 s, all five feature
+queries together 81 s. The DuckDB aggregation the plan worried about is the cheapest part of the
+build; parquet writing and the per-source cast-and-rename pass are the expensive ones, and neither
+is something the plan anticipated. Nothing here has been optimised — the target is missed by a
+factor small enough that the two obvious fixes (writing the frame in row-group chunks, and casting
+in DuckDB rather than pandas) plausibly close it, but neither has been tried and neither should be
+assumed.
+
+Smaller runs, same script: 5,000 customers · 120,000 usage rows builds in **26.1 s**; 400 customers
+· 6,000 usage rows in **4.8 s**.
+
+Two defects were found by running this and could not have been found any other way. The build was
+reading only the first 2,000,000 rows of each source, having inherited the *profiling* row cap; and
+the leak probe compared floats exactly, so DuckDB's parallel summation order made every float
+feature look like it had moved and raised `FUTURE_EVENTS_LEAKED` — the one finding a user may never
+acknowledge. Both are fixed, both have regression tests, and both are described in
+`docs/DECISIONS.md`.
 
 The contracts landed first, as `PARALLEL_WORK_PROTOCOL.md` §2 asks: `configs/roles.yaml` (what an
 uploaded table *is*), the spec vocabulary in the PHASE-2 block of `engine/config.py`, the artefact
