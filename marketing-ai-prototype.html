@@ -486,6 +486,11 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .approver{padding:0 20px 14px}
 .approver .field{width:280px;max-width:100%}
 .segshare{font-size:12px;color:var(--muted)}
+.refcols{display:grid;grid-template-columns:auto minmax(0,1fr);gap:6px 10px;align-items:center;margin:10px 0 2px;font-size:12px;color:var(--muted)}
+.refcols .colchip{justify-self:start}
+.referr{margin-top:10px;padding:10px 12px;border-radius:8px;background:var(--bad-t);color:var(--bad);font-size:12px}
+.ebverdict{font-size:12px;margin-top:8px;font-weight:500}
+.ebverdict.ok{color:var(--ok)}.ebverdict.bad{color:var(--bad)}
 .docrow{display:grid;grid-template-columns:minmax(150px,1fr) 88px 96px;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line);font-size:12px}
 .docrow:first-child{border-top:0}
 .docrow .dn{font-weight:500;color:var(--ink);overflow-wrap:anywhere}
@@ -932,7 +937,15 @@ const DOCS=[["broadband_setup_guide.pdf",48,612],["router_troubleshooting.pdf",3
  ["sim_activation_guide.pdf",21,264],["plans_and_pricing.html",12,188],["billing_faq.html",9,126]];
 const DOC_PAGES=122, DOC_CHUNKS="1,600";
 const QA_FILE={name:"onboarding_eval_300.csv",pairs:300};
-const EVAL={pass:91,threshold:85};
+const EVAL={pass:91};
+/* generative.reference_set.pass_threshold: 0.75 in configs/engine.yaml */
+const PASS_THRESHOLD_DEFAULT=75;
+/* The columns a reference set must carry (DATA_CONTRACT.md §8.2), in the order
+   api/routes/generative.py checks them, so a missing one is named exactly as its 422 names it. */
+const REF_COLUMNS=["question","expect_refusal","reference_answer","source_doc"];
+const REF_MEANS={question:"what a customer would ask",expect_refusal:"true where the documents should not answer",
+  reference_answer:"the answer you would accept",source_doc:"the document that should have been found"};
+const refInvalid=c=>`The reference set is missing the ${c} column.`;
 const WORST10=[
  ["Can I keep my number if I move to another state?","0.31","Nothing in the documents covers moving a number between states."],
  ["Why was I charged twice in March?","0.38","Needs the customer's own bill. The answer came from the general FAQ."],
@@ -974,10 +987,11 @@ function assistantResults(u){const s=st(u);
   const idx=[["Documents",`${DOCS.length}`],["Pages",String(DOC_PAGES)],["Text chunks",DOC_CHUNKS],
     ["Embedding model",s.adv.embed],["Index","OpenSearch Serverless"],[`Retrieval`,`top-${s.adv.topk}${s.adv.hybrid?" · hybrid":""}`],
     ["When nothing is found",s.adv.refusal||REFUSAL]];
-  const w=Math.round(EVAL.pass), tm=EVAL.threshold;
+  const w=Math.round(EVAL.pass), tm=s.adv.passThr, ok=EVAL.pass>=tm, n=(s.qa&&s.qa.pairs)||QA_FILE.pairs;
   const bar=`<div class="evalbar"><div class="ebv">${EVAL.pass}% passed</div>
-    <div class="eb"><i style="width:${w}%"></i><span class="ebm" style="left:${tm}%"></span></div>
-    <div class="ebl"><span>${QA_FILE.pairs} reference questions</span><span>Threshold ${tm}%</span></div></div>`;
+    <div class="eb"><i style="width:${w}%;background:var(${ok?"--ok":"--bad"})"></i><span class="ebm" style="left:${tm}%"></span></div>
+    <div class="ebl"><span>${esc(String(n))} reference questions</span><span>Threshold ${tm}%</span></div>
+    <div class="ebverdict ${ok?"ok":"bad"}">${ok?`Passes the ${tm}% threshold.`:`Below the ${tm}% threshold.`}</div></div>`;
   const bubble=x=>`<div class="bubble q">${esc(x.q)}</div>
     <div class="bubble a${x.refused?" refused":""}">${esc(x.a)}
       ${x.cites.length?`<div class="cites">${x.cites.map(([l,sim,q])=>`<details class="cite"><summary>${esc(l)} <span class="gsim">sim ${sim.toFixed(2)}</span></summary><div class="quote">${esc(q)}</div></details>`).join("")}</div>`:`<div class="cites"><span class="evchip">no document matched</span></div>`}
@@ -1166,7 +1180,7 @@ const SETUP = {
 const AUTO="AutoML (recommended)";
 const STATE = {};
 function defaultAdv(cfg){return cfg.gen
-  ? {pii:"Redact",chunk:512,overlap:50,embed:"Titan Text Embeddings v2",topk:5,minsim:0.25,hybrid:true,temp:0.2,maxtok:600,guard:true,refusal:REFUSAL,metric:cfg.metrics[0],judge:"LLM judge + human sample"}
+  ? {pii:"Redact",chunk:512,overlap:50,embed:"Titan Text Embeddings v2",topk:5,minsim:0.25,hybrid:true,temp:0.2,maxtok:600,guard:true,refusal:REFUSAL,metric:cfg.metrics[0],judge:"LLM judge + human sample",passThr:PASS_THRESHOLD_DEFAULT}
   : {missing:"Auto",outliers:"Clip (1st–99th pct)",dedupe:true,leakage:true,pii:"Redact",minpos:500,excl:[],
      split:cfg.timeSplit?"Time-based":"Random (stratified)",test:15,val:15,timeCol:"",groupCol:"",
      autofeat:true,encoding:"Auto",scaling:"Auto",text:"Ignore",fsel:"Importance-based",maxfeat:100,
@@ -1179,7 +1193,7 @@ function st(u){
   if(!STATE[u.id]){const c=SETUP[u.id];
     STATE[u.id]={mode:"train",file:null,cols:[],preview:null,pk:"",target:"",ptype:"",model:AUTO,adv:defaultAdv(c),advOpen:false,view:"setup",current:null,scoreRun:"r1",
       source:"file",docs:null,qa:null,pkExtra:"",pkParts:null,builtFrom:false,recipe:RECIPE,
-      runs:[{id:"r1",at:"14 Sep 2026, 10:20",mode:"train",file:`${u.id.replace(/-/g,"_")}_history.csv`,rows:u.data.kp[0][1],model:AUTO,best:c.best,score:c.score,target:c.target,pk:c.gen?"question_id":"customer_id",champion:true}]};}
+      runs:[{id:"r1",at:"14 Sep 2026, 10:20",mode:"train",file:`${u.id.replace(/-/g,"_")}_history.csv`,rows:u.data.kp[0][1],model:AUTO,best:c.best,score:c.score,target:c.target,pk:c.gen?"question":"customer_id",champion:true}]};}
   return STATE[u.id];
 }
 const fmtSize = b => b<1024?`${b} B`:b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(1)} MB`;
@@ -1205,17 +1219,25 @@ function blocker(u){const s=st(u),cfg=SETUP[u.id];
   if(s.mode==="score"&&!s.runs.some(r=>r.mode==="train"))return "Train a model first";
   return "";}
 function sampleFile(u){const s=st(u),cfg=SETUP[u.id];const feats=u.data.ft.map(f=>f[0]);
-  const idc=cfg.gen?"question_id":"customer_id";
+  const idc=cfg.gen?"question":"customer_id";
   s.cols=s.mode==="train"?[idc,"snapshot_date",...feats,cfg.target]:[idc,"snapshot_date",...feats];
   s.file={name:`${u.id.replace(/-/g,"_")}_${s.mode==="train"?"history":"this_week"}.csv`,size:"Sample dataset",rows:s.mode==="train"?u.data.kp[0][1]:"12,480",sample:true};
   s.pk=idc;s.target=s.mode==="train"?cfg.target:"";s.preview=null;s.adv.timeCol="snapshot_date";
 }
 function sampleDocs(u){const s=st(u);s.docs=DOCS;
   s.file={name:"product_docs (5 files)",size:`${DOC_PAGES} pages · ${DOC_CHUNKS} chunks`,rows:DOC_CHUNKS,sample:true,docs:true};}
-function sampleQA(u){const s=st(u),train=s.mode==="train";
-  s.qa=train?QA_FILE:{name:"new_test_questions.csv",pairs:120};
-  s.cols=["question_id","question","reference_answer"];s.pk="question_id";s.target=train?"reference_answer":"";
-  if(!train)s.file={name:s.qa.name,size:`${s.qa.pairs} questions`,rows:String(s.qa.pairs),sample:true};}
+function acceptReferenceSet(u,name,cols,rows){const s=st(u),train=s.mode==="train";
+  s.qaError="";s.qa={name,pairs:rows};s.cols=cols;s.pk=cols[0];
+  s.target=train&&cols.includes("reference_answer")?"reference_answer":"";
+  if(!train)s.file={name,size:`${rows} questions`,rows:String(rows),sample:true};}
+/* The same header, in the same order, as templates/ai_onboarding_assistant_template.csv */
+function sampleQA(u){const train=st(u).mode==="train";
+  acceptReferenceSet(u,train?QA_FILE.name:"new_test_questions.csv",
+    ["question","expect_refusal","source_doc","reference_answer"],train?QA_FILE.pairs:120);}
+function refColumnsHtml(s){const have=s.qa?s.cols:[];
+  return `<div class="fhint" style="margin:12px 0 0">A CSV with four columns, named exactly:</div>
+    <div class="refcols">${REF_COLUMNS.map(c=>`<span class="colchip ${have.includes(c)?"t":""}">${have.includes(c)?"✓ ":""}${esc(c)}</span><span>${esc(REF_MEANS[c])}</span>`).join("")}</div>
+    ${s.qaError?`<div class="referr" role="alert">${esc(s.qaError)}</div>`:""}`;}
 function useDataset(u){const s=st(u),o=onb(u);
   const feats=keptFeats(o).map(f=>f.name);
   s.cols=["customer_id","snapshot_date",...feats,labelCol(o)];
@@ -1237,7 +1259,8 @@ function predStep1(u){const s=st(u),o=onb(u),train=s.mode==="train";
 function genStep1(u){const s=st(u);
   if(s.mode!=="train") return `<div class="fstep ${s.qa?"done":""}"><div class="stepno">1</div><div>
     <div class="flabel">Test questions</div><div class="fhint">New questions to run through a saved assistant. One row per question.</div>
-    <div class="orline"><label class="control file ${s.qa?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.qa?esc(s.qa.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sampleqa">use the sample questions</button></span></div>
+    <div class="orline"><label class="control file ${s.qa?"has":""}"><input type="file" id="f-qa" class="sr" accept=".csv"><span class="fname">${s.qa?esc(s.qa.name):"Upload CSV"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sampleqa">use the sample questions</button></span></div>
+    ${refColumnsHtml(s)}
     ${s.qa?`<div class="preview"><div class="pv-head"><span><b>${s.qa.pairs}</b> questions</span><span>${esc(s.file?s.file.size:"")}</span></div></div>`:""}</div></div>`;
   return `<div class="fstep ${s.docs?"done":""}"><div class="stepno">1</div><div>
     <div class="flabel">Documents</div><div class="fhint">Everything the assistant is allowed to answer from. PDF, HTML, Word or plain text.</div>
@@ -1250,7 +1273,8 @@ function genStep2(u){const s=st(u);
   return `<div class="fstep ${s.docs?"":"locked"} ${s.qa?"done":""}"><div class="stepno">2</div><div>
     <div class="flabel">Reference questions <span style="font-weight:400;color:var(--muted)">· optional</span></div>
     <div class="fhint">Questions paired with the answer you would accept. Without them the assistant is built but never scored.</div>
-    <div class="orline"><label class="control file ${s.qa?"has":""}"><input type="file" id="f-qa" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.qa?esc(s.qa.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sampleqa">use the sample questions</button></span></div>
+    <div class="orline"><label class="control file ${s.qa?"has":""}"><input type="file" id="f-qa" class="sr" accept=".csv"><span class="fname">${s.qa?esc(s.qa.name):"Upload CSV"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sampleqa">use the sample questions</button></span></div>
+    ${refColumnsHtml(s)}
     ${s.qa?`<div class="frow" style="margin-top:12px"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${opt(s.cols,s.pk,"Select a column…")}</select></div></div><div class="field"><span class="sub">Reference answer column</span><div class="control sel"><select id="f-target">${opt(s.cols.filter(c=>c!==s.pk),s.target,"Select a column…")}</select></div></div></div>`:`<div class="fhint" style="margin-top:10px">No reference questions yet. The assistant will be built but not scored.</div>`}</div></div>`;}
 function previewHtml(u){const s=st(u);if(!s.file)return "";
   const showCols=s.cols.slice(0,6), more=s.cols.length-showCols.length;
@@ -1270,7 +1294,7 @@ function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
     ${stage(1,"Documents",`${a.chunk}-token chunks · ${a.overlap} overlap · PII: ${a.pii}`,`<div class="frow">${num("chunk","Chunk size (tokens)",64,128,2048)}${num("overlap","Overlap (tokens)",10,0,200)}${sel("pii",["Redact","Drop rows","Keep"],"PII handling")}</div>`)}
     ${stage(2,"Retrieval",`${a.embed} · top-${a.topk}${a.hybrid?" · hybrid search":""} · floor ${a.minsim}`,`<div class="frow">${sel("embed",["Titan Text Embeddings v2","Cohere Embed v3"],"Embedding model")}${num("topk","Top-k chunks",1,1,20)}${num("minsim","Minimum similarity",0.05,0,1)}${chk("hybrid","Hybrid (keyword + vector) search")}</div><p class="obhint" style="padding:0 16px 4px 52px">Below the minimum similarity nothing is retrieved and the answer is the refusal message instead of a guess.</p>`)}
     ${stage(3,"Generation",`temperature ${a.temp} · ${a.maxtok} tokens${a.guard?" · guardrails on":""} · refusal message set`,`<div class="frow">${num("temp","Temperature",0.1,0,1)}${num("maxtok","Max answer tokens",50,100,2000)}${chk("guard","Bedrock Guardrails (PII, topics, tone)")}${txt("refusal","When nothing relevant is found, reply","Sent instead of a guess. Keep it short and say what happens next.")}</div>`)}
-    ${stage(4,"Evaluation",`${a.metric} · ${a.judge}`,`<div class="frow">${sel("metric",cfg.metrics,"Primary metric")}${sel("judge",["LLM judge + human sample","LLM judge only","Human review only"],"Grading method")}</div>`)}
+    ${stage(4,"Evaluation",`${a.metric} · ${a.judge} · pass at ${a.passThr}%`,`<div class="frow">${sel("metric",cfg.metrics,"Primary metric")}${sel("judge",["LLM judge + human sample","LLM judge only","Human review only"],"Grading method")}${num("passThr","Pass threshold (%)",5,0,100)}</div><p class="obhint" style="padding:0 16px 4px 52px">The share of reference questions that must pass for the build to count as passing.</p>`)}
   </div>`;
   const timeCols=s.cols.filter(c=>/date|time|month|week|day|ts$/i.test(c));
   const featCols=s.cols.filter(c=>c!==s.pk&&c!==s.target&&!(s.pkParts||[]).includes(c));
@@ -1353,7 +1377,7 @@ function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
        ["Redacting personal data",`PII: ${a.pii.toLowerCase()} · duplicate chunks removed (4%)`],
        ["Creating embeddings",`${a.embed} · ${DOC_CHUNKS} vectors`],
        ["Building the retrieval index",`OpenSearch Serverless · top-${a.topk}${a.hybrid?" hybrid":""}`],
-       ...(s.qa?[["Answering the reference questions",`${s.qa.pairs} questions · ${a.judge.toLowerCase()}`],["Grading the answers",`${cfg.score} · ${EVAL.pass}% passed, threshold ${EVAL.threshold}%`]]:[]),
+       ...(s.qa?[["Answering the reference questions",`${s.qa.pairs} questions · ${a.judge.toLowerCase()}`],["Grading the answers",`${cfg.score} · ${EVAL.pass}% passed, threshold ${a.passThr}%`]]:[]),
        ["Saving assistant version",s.qa?"Set as champion":"Saved without a score"]]
     : [["Validating data",`${a.leakage?"No leakage found · ":""}${u.data.q[0][1]}${a.excl.length?` · ${a.excl.length} columns excluded`:""}${a.consentCol?" · consent filter applied":""}`],["Preparing features",`${u.data.kp[1][1]} features · ${a.split==="Time-based"?"time-based":"stratified"} split${a.groupCol?" · grouped by "+a.groupCol:""} · ${a.val}/${a.test}% val/test`],[s.model===AUTO?`Training ${a.algos.length} candidate models (${a.strategy.toLowerCase()})`:`Training ${s.model}`,`${a.trials} trials · ${a.folds}-fold CV · best: ${s.model===AUTO?cfg.best:s.model}${a.ensemble&&s.model===AUTO?" (ensembled)":""}`],["Evaluating on hold-out set",`${cfg.score} · optimised for ${a.metric} · ${a.calib.toLowerCase()} calibration${a.fair?" · fairness by "+a.fair+": passed":""}`],[a.shap?"Generating explanations & saving":"Saving model",`${a.shap?`top ${a.reasons} SHAP reasons · `:""}${a.approval?"awaiting approval as champion":"set as champion"} · drift baseline stored`]];
   return cfg.gen
@@ -1423,8 +1447,13 @@ function bindDetail(u){
     s.docs=fs.map(f=>[f.name,"—","—"]);
     s.file={name:`${fs.length} document${fs.length>1?"s":""}`,size:"—",rows:"—",sample:false,docs:true};rerender(u);});
   on("f-qa","change",e=>{const f=e.target.files[0];if(!f)return;
-    s.qa={name:f.name,pairs:"—"};s.cols=["question_id","question","reference_answer"];s.pk="question_id";
-    if(s.mode==="train")s.target="reference_answer";rerender(u);});
+    f.slice(0,262144).text().then(t=>{
+      const lines=t.replace(/^﻿/,"").split(/\r?\n/).filter(l=>l.trim());
+      const cols=parseLine(lines[0]||"").filter(Boolean);
+      const missing=REF_COLUMNS.find(c=>!cols.includes(c));
+      if(missing){s.qa=null;s.cols=[];s.pk="";s.target="";s.qaError=refInvalid(missing);if(s.mode!=="train")s.file=null;}
+      else acceptReferenceSet(u,f.name,cols,Math.max(0,lines.length-1));
+      rerender(u);}).catch(()=>{s.qaError="The file could not be read.";rerender(u);});});
   /* onboarding panel */
   const o=onb(u);
   document.querySelectorAll("[data-ob-open]").forEach(b=>b.addEventListener("click",()=>{

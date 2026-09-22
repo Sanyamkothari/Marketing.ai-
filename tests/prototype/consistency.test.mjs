@@ -3,7 +3,7 @@
    panel must have a mobile layout. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, body, click, HTML } from "./harness.mjs";
+import { load, go, ev, $, $$, body, click, HTML, repoText } from "./harness.mjs";
 
 const CSS = HTML.slice(HTML.indexOf("<style>"), HTML.indexOf("</style>"));
 
@@ -38,8 +38,33 @@ test("the document numbers add up", () => {
   assert.equal(ev(dom, "DOCS.reduce((a,d)=>a+d[2],0)"), 1600);
   assert.equal(ev(dom, "DOC_CHUNKS"), "1,600");
   assert.equal(ev(dom, "WORST10.length"), 10);
-  assert.ok(ev(dom, "EVAL.pass") > ev(dom, "EVAL.threshold"), "the run passes its threshold");
+  assert.ok(ev(dom, "EVAL.pass") > ev(dom, "PASS_THRESHOLD_DEFAULT"), "the sample run passes its threshold");
   assert.equal(ev(dom, "QA_FILE.pairs"), 300, "the same 300-question set the Model page names");
+});
+
+test("the reference set and its threshold are the product's, not the prototype's", () => {
+  // These read the product's own files, so the prototype cannot drift from them unnoticed.
+  const dom = load("#/uc/ai-onboarding-assistant");
+  const yaml = repoText("configs/engine.yaml");
+  const block = yaml.slice(yaml.indexOf("reference_set:"), yaml.indexOf("root_cause:"));
+  const val = (k) => (block.match(new RegExp(`${k}:\\s*([\\w.]+)`)) || [])[1];
+  assert.equal(ev(dom, "PASS_THRESHOLD_DEFAULT"), Math.round(Number(val("pass_threshold")) * 100),
+    "the threshold shown is generative.reference_set.pass_threshold");
+  // the order the API checks the columns in, so the prototype names the same missing one
+  const api = repoText("api/routes/generative.py");
+  const required = api.slice(api.indexOf("required = ["), api.indexOf("]", api.indexOf("required = [")));
+  const order = [...required.matchAll(/(question_column|refusal_column|reference_column|SOURCE_DOC_COLUMN)/g)]
+    .map((m) => (m[1] === "SOURCE_DOC_COLUMN" ? "source_doc" : val(m[1])));
+  assert.deepEqual(JSON.parse(ev(dom, "JSON.stringify(REF_COLUMNS)")), order);
+  // the sample reference set is the downloadable template, column for column
+  const template = repoText("templates/ai_onboarding_assistant_template.csv").split(/\r?\n/)[0].split(",");
+  const dom2 = load("#/uc/ai-onboarding-assistant");
+  click(dom2, "#f-sampledocs");
+  click(dom2, "#f-sampleqa");
+  assert.deepEqual(JSON.parse(ev(dom2, "JSON.stringify(STATE['ai-onboarding-assistant'].cols)")), template);
+  assert.equal(ev(dom, "refInvalid('source_doc')"), "The reference set is missing the source_doc column.",
+    "the wording of REFERENCE_SET_INVALID in DATA_CONTRACT.md §8.2");
+  assert.ok(repoText("docs/DATA_CONTRACT.md").includes("The reference set is missing the {column} column."));
 });
 
 test("the win-back copy counts match the cards", () => {
