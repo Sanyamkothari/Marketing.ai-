@@ -42,3 +42,64 @@ template:
     - {name: marketing_opt_in,       role: consent,     type: boolean, description: "Customer agreed to marketing contact. Rows that are false are suppressed.", examples: ["true","true","true","false","true"]}
     - {name: last_contacted_at,      role: contact,     type: date,    description: "Date of the last reminder sent (blank if never)",                 examples: ["2026-07-11","","2026-06-30","2026-07-25",""]}
     - {name: late_or_missed_payment, role: target,      type: integer, description: "Target: 1 if the invoice was paid late or not paid, else 0. Leave blank when scoring.", examples: ["1","1","0","0","1"]}
+
+# --- Phase 2: onboarding from raw tables ---------------------------------------------------------
+# Plan section 11's config-only reuse test: the SAME raw telecom tables as telco-churn, onboarded to
+# a different outcome by YAML alone. Only the label changes shape - from "the customer went quiet"
+# to "a bill went unpaid" - and nothing under engine/ knows the difference.
+
+standard_schema:
+  entity_key: account_id
+  columns:
+    - name: tenure_months
+      type: numeric
+      aliases: [tenure, tnr_mnths, months_active, customer_age_months, tenure_mths, vintage_months]
+      description: Months since the customer signed up, as of the snapshot date.
+      range: [0, 600]
+      derivable: {from_role: entity, expression: "months_between(signup_date, snapshot_date)"}
+    - name: signup_date
+      type: date
+      aliases: [signup_dt, start_date, activation_date, joined_on, acct_open_dt]
+      description: When the customer joined. Used to derive tenure and to exclude pre-signup snapshots.
+    - name: plan_type
+      type: categorical
+      aliases: [plan, tariff, package, product, plan_name]
+      description: The plan the account is on.
+      value_aliases: {prepaid: ["pre", "ppd", "pre-paid"], postpaid: ["post", "post-paid"]}
+    - name: autopay_enabled
+      type: boolean
+      aliases: [autopay, auto_pay, standing_instruction, si_flag, mandate_active]
+      description: Whether the account pays automatically, which is the strongest single predictor of paying on time.
+      value_aliases: {"true": ["y", "yes", "1", "active"], "false": ["n", "no", "0", "inactive"]}
+    - name: region
+      type: categorical
+      aliases: [circle, zone, state, geo, area]
+      description: Where the customer is, as the client's own geography names it.
+    - name: marketing_opt_in
+      type: boolean
+      aliases: [opt_in, consent, marketing_consent, dnd_flag, do_not_disturb, dnd]
+      description: The customer agreed to marketing contact. A DND-style flag means the opposite and is mapped with negate.
+      value_aliases: {"true": ["y", "yes", "1", "t", "allowed", "opted_in"], "false": ["n", "no", "0", "f", "blocked", "opted_out"]}
+    - name: last_contacted_at
+      type: date
+      aliases: [last_contact_dt, last_contacted, last_touch_date, lst_cntct_dt]
+      description: Date of the last outbound contact, so recently-contacted rows can be suppressed.
+
+label:
+  name: late_or_missed_payment
+  type: value_threshold
+  role: bills
+  horizon_days: 45
+  expression: "paid_date IS NULL OR paid_date > due_date + INTERVAL 7 DAY"
+  any: true
+  description: A bill issued in the 45 days after the snapshot was unpaid, or paid more than a week after its due date.
+
+suggested_features:
+  - {name: late_payments_6m,          role: payments,   function: count, window_days: 180, where: {column: days_late, op: gt, value: 0}, description: "Payments made after the due date in six months."}
+  - {name: late_payments_12m,         role: payments,   function: count, window_days: 365, where: {column: days_late, op: gt, value: 0}, description: "Payments made after the due date in a year."}
+  - {name: max_days_late_6m,          role: payments,   function: max,   column: days_late, window_days: 180, description: "The worst delay in six months."}
+  - {name: days_since_last_payment,   role: payments,   function: days_since_last, description: "Days since the account last paid anything."}
+  - {name: avg_bill_6m,               role: bills,      function: mean,  column: amount, window_days: 180, description: "Average bill over six months."}
+  - {name: bill_change_3m_vs_6m,      role: bills,      function: ratio, of: {function: mean, column: amount, window_days: 90}, over: {function: mean, column: amount, window_days: 180}, description: "A bill that has jumped is a bill that gets disputed."}
+  - {name: unpaid_bills_6m,           role: bills,      function: count, window_days: 180, where: {column: paid_date, op: is_null}, description: "Bills from six months that were never paid."}
+  - {name: complaints_90d,            role: complaints, function: count, window_days: 90, description: "Complaints raised in the last 90 days."}

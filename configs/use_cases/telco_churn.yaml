@@ -63,3 +63,64 @@ template:
     - {name: MonthlyCharges,   role: feature,     type: float,   description: "Amount charged to the subscriber this month",                              examples: ["29.85","56.95","53.85","42.30","99.65"]}
     - {name: TotalCharges,     role: feature,     type: float,   description: "Amount charged to the subscriber in total; blank for a subscriber whose tenure is 0", examples: ["29.85","1889.50","108.15","1840.75","820.50"]}
     - {name: Churn,            role: target,      type: string,  description: "Target: Yes if the subscriber left within the month, else No. Leave blank when scoring.", examples: ["No","No","Yes","No","Yes"]}
+
+# --- Phase 2: onboarding from raw tables ---------------------------------------------------------
+# The Kaggle file this use case is mapped to is already one row per subscriber, so onboarding it is
+# the `single` snapshot, `label.type: column` path. The schema below is what a *real* telco's raw
+# tables get mapped onto: the same columns, but recovered from a customer master plus billing,
+# complaint and usage event tables.
+
+standard_schema:
+  entity_key: customer_id
+  columns:
+    - name: tenure_months
+      type: numeric
+      aliases: [tenure, tnr_mnths, months_active, customer_age_months, tenure_mths, vintage_months]
+      description: Months since the customer signed up, as of the snapshot date.
+      range: [0, 600]
+      derivable: {from_role: entity, expression: "months_between(signup_date, snapshot_date)"}
+    - name: signup_date
+      type: date
+      aliases: [signup_dt, start_date, activation_date, joined_on, acct_open_dt]
+      description: When the customer joined. Used to derive tenure and to exclude pre-signup snapshots.
+    - name: plan_type
+      type: categorical
+      aliases: [plan, tariff, package, product, plan_name, contract_type]
+      description: The plan the subscriber is on.
+      value_aliases: {prepaid: ["pre", "ppd", "pre-paid", "prepay"], postpaid: ["post", "post-paid", "postpay"]}
+    - name: region
+      type: categorical
+      aliases: [circle, zone, state, geo, area]
+      description: Where the customer is, as the client's own geography names it.
+    - name: monthly_charges
+      type: numeric
+      aliases: [monthlycharges, mrc, arpu, monthly_bill, rental]
+      description: What the subscriber is billed in a normal month.
+      range: [0, 100000]
+    - name: marketing_opt_in
+      type: boolean
+      aliases: [opt_in, consent, marketing_consent, dnd_flag, do_not_disturb, dnd]
+      description: The customer agreed to marketing contact. A DND-style flag means the opposite and is mapped with negate.
+      value_aliases: {"true": ["y", "yes", "1", "t", "allowed", "opted_in"], "false": ["n", "no", "0", "f", "blocked", "opted_out"]}
+    - name: last_contacted_at
+      type: date
+      aliases: [last_contact_dt, last_contacted, last_touch_date, lst_cntct_dt]
+      description: Date of the last outbound contact, so recently-contacted rows can be suppressed.
+
+label:
+  name: churn_next_60d
+  type: event_absence
+  role: activity
+  horizon_days: 60
+  description: No activity of any kind in the 60 days after the snapshot date.
+
+suggested_features:
+  - {name: complaints_90d,             role: complaints, function: count,            window_days: 90,  description: "Complaints raised in the last 90 days."}
+  - {name: complaints_open_30d,        role: complaints, function: count,            window_days: 30,  where: {column: resolved_time, op: is_null}, description: "Complaints from the last 30 days still unresolved."}
+  - {name: days_since_last_complaint,  role: complaints, function: days_since_last,  description: "Days since the subscriber last complained."}
+  - {name: avg_bill_6m,                role: bills,      function: mean,  column: amount, window_days: 180, description: "Average bill over six months."}
+  - {name: bill_trend_3m_vs_6m,        role: bills,      function: ratio, of: {function: mean, column: amount, window_days: 90}, over: {function: mean, column: amount, window_days: 180}, description: "Recent bills against the six-month average; above 1 means bills are rising."}
+  - {name: late_payments_6m,           role: payments,   function: count, window_days: 180, where: {column: days_late, op: gt, value: 0}, description: "Payments made after the due date in six months."}
+  - {name: usage_mb_30d,               role: usage,      function: sum,   column: data_mb, window_days: 30, description: "Data used in the last 30 days."}
+  - {name: usage_drop_30d_vs_90d,      role: usage,      function: ratio, of: {function: mean, column: data_mb, window_days: 30}, over: {function: mean, column: data_mb, window_days: 90}, description: "Recent usage against the quarter; well below 1 means the subscriber is going quiet."}
+  - {name: days_since_last_activity,   role: activity,   function: days_since_last, description: "Days since the subscriber last did anything."}

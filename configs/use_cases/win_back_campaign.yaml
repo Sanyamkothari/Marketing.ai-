@@ -45,3 +45,45 @@ template:
     - {name: marketing_opt_in,   role: consent,     type: boolean, description: "Customer agreed to marketing contact. Rows that are false are suppressed.", examples: ["true","true","false","true","true"]}
     - {name: last_contacted_at,  role: contact,     type: date,    description: "Date of the last win-back contact (blank if never)",                   examples: ["2026-06-15","2026-07-05","","2026-07-27",""]}
     - {name: reactivated_90d,    role: target,      type: integer, description: "Target: 1 if the customer rejoined within 90 days of an offer, else 0. Leave blank when scoring.", examples: ["1","0","0","1","0"]}
+
+# --- Phase 2: onboarding from raw tables ---------------------------------------------------------
+
+standard_schema:
+  entity_key: customer_id
+  columns:
+    - name: signup_date
+      type: date
+      aliases: [signup_dt, start_date, activation_date, joined_on, acct_open_dt]
+      description: When the customer joined. Used to derive tenure and to exclude pre-signup snapshots.
+    - name: churn_reason
+      type: categorical
+      aliases: [reason, exit_reason, cancel_reason, deact_reason]
+      description: Why the customer left, as the client's own reason codes record it.
+    - name: preferred_channel
+      type: categorical
+      aliases: [channel, contact_channel, pref_channel, comm_pref]
+      description: How the customer prefers to be reached.
+      value_aliases: {sms: ["text", "mobile"], email: ["mail", "e-mail"], call: ["phone", "voice", "telecall"]}
+    - name: marketing_opt_in
+      type: boolean
+      aliases: [opt_in, consent, marketing_consent, dnd_flag, do_not_disturb, dnd]
+      description: The customer agreed to marketing contact. A DND-style flag means the opposite and is mapped with negate.
+      value_aliases: {"true": ["y", "yes", "1", "t", "allowed", "opted_in"], "false": ["n", "no", "0", "f", "blocked", "opted_out"]}
+    - name: last_contacted_at
+      type: date
+      aliases: [last_contact_dt, last_contacted, last_touch_date, lst_cntct_dt]
+      description: Date of the last outbound contact, so recently-contacted rows can be suppressed.
+
+label:
+  name: reactivated_90d
+  type: event_presence
+  role: activity
+  horizon_days: 90
+  description: The lapsed customer did something again within 90 days of the snapshot.
+
+suggested_features:
+  - {name: months_since_last_activity, role: activity,        function: days_since_last, description: "How long the customer has been gone."}
+  - {name: offers_accepted_365d,       role: campaign_events, function: count, window_days: 365, where: {column: event_type, op: eq, value: converted}, description: "Win-back offers this customer has taken before."}
+  - {name: offers_sent_180d,           role: campaign_events, function: count, window_days: 180, description: "Win-back offers already sent, so nobody is contacted twice."}
+  - {name: avg_monthly_spend_12m,      role: bills,           function: mean,  column: amount, window_days: 365, description: "What the customer was worth before they left."}
+  - {name: complaints_before_leaving,  role: complaints,      function: count, window_days: 365, description: "Complaints in the year before the snapshot."}

@@ -109,7 +109,10 @@ def test_a_feature_may_not_be_named_after_a_standard_column(roles) -> None:
 
 
 def test_a_feature_may_not_be_named_after_the_key_or_the_snapshot(roles) -> None:
-    for reserved in ("entity_key", "snapshot_date"):
+    """The two names the engine owns. They are per use case, so they are read off the config."""
+    base = load_use_case("telco-churn")
+    assert base.standard_schema.reserved_names == ("customer_id", "snapshot_date")
+    for reserved in base.standard_schema.reserved_names:
         config = _config(suggested_features=(FeatureDef(name=reserved, role="complaints", function="count"),))
         with pytest.raises(ConfigError, match="can only mean one thing"):
             check_suggested_features(config, roles)

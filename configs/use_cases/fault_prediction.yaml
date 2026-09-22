@@ -52,3 +52,51 @@ template:
     - {name: marketing_opt_in,  role: consent,     type: boolean, description: "Account agreed to proactive service contact. Rows that are false are suppressed.", examples: ["true","true","true","false","true"]}
     - {name: last_contacted_at, role: contact,     type: date,    description: "Date of the last proactive service contact for this asset (blank if never)", examples: ["2026-07-22","","2026-06-18","","2026-07-30"]}
     - {name: fault_next_72h,    role: target,      type: integer, description: "Target: 1 if a fault occurred within 72 hours, else 0. Leave blank when scoring.", examples: ["1","0","0","0","1"]}
+
+# --- Phase 2: onboarding from raw tables ---------------------------------------------------------
+# The entity here is an asset, not a customer, which is exactly the point: `entity_key` is a
+# standard name, not a customer id, and the engine never assumes otherwise.
+
+standard_schema:
+  entity_key: asset_id
+  columns:
+    - name: device_model
+      type: categorical
+      aliases: [model, model_no, hw_model, equipment_type, device_type]
+      description: The model of the asset.
+    - name: firmware_age_days
+      type: numeric
+      aliases: [fw_age, firmware_days, sw_age_days, days_since_fw_update]
+      description: Days since the asset's firmware was last updated.
+      range: [0, 10000]
+    - name: installed_date
+      type: date
+      aliases: [install_dt, commissioned_on, deployed_date]
+      description: When the asset was installed, so its age can be derived.
+    - name: region
+      type: categorical
+      aliases: [circle, zone, state, geo, area]
+      description: Where the customer is, as the client's own geography names it.
+    - name: marketing_opt_in
+      type: boolean
+      aliases: [opt_in, consent, marketing_consent, dnd_flag, do_not_disturb, dnd]
+      description: The customer agreed to marketing contact. A DND-style flag means the opposite and is mapped with negate.
+      value_aliases: {"true": ["y", "yes", "1", "t", "allowed", "opted_in"], "false": ["n", "no", "0", "f", "blocked", "opted_out"]}
+    - name: last_contacted_at
+      type: date
+      aliases: [last_contact_dt, last_contacted, last_touch_date, lst_cntct_dt]
+      description: Date of the last outbound contact, so recently-contacted rows can be suppressed.
+
+label:
+  name: fault_next_72h
+  type: event_presence
+  role: other_event
+  horizon_days: 3
+  description: The asset raised a fault within 72 hours of the snapshot.
+
+suggested_features:
+  - {name: faults_30d,               role: other_event, function: count, window_days: 30, description: "Faults raised in the last 30 days."}
+  - {name: faults_7d,                role: other_event, function: count, window_days: 7, description: "Faults raised in the last week; a cluster is the clearest warning there is."}
+  - {name: days_since_last_fault,    role: other_event, function: days_since_last, description: "Days since the asset last raised a fault."}
+  - {name: complaints_30d,           role: complaints,  function: count, window_days: 30, description: "Customer complaints against this asset in 30 days."}
+  - {name: usage_sessions_7d,        role: usage,       function: sum,   column: sessions, window_days: 7, description: "How hard the asset has been worked this week."}

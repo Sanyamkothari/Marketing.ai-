@@ -30,6 +30,8 @@ dependencies = [
   # ========================================================================
 
   # ---- PHASE-2 (onboarding) — append only below this line ----
+  "duckdb==1.5.5",                      # in-process SQL for the point-in-time feature aggregations (plan §2.2)
+  "rapidfuzz==3.14.6",                  # fuzzy column-name similarity for mapping suggestions (plan §6.1)
   # ---- END PHASE-2 ----
 
   # ---- PHASE-3A (generative) — append only below this line ----
