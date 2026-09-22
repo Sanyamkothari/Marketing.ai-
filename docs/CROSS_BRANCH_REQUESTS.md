@@ -311,6 +311,32 @@ is a Phase 1 file; §3 gives this branch `deploy*.yml` only. So this stays open,
 the measurement a reviewer needs to price it: today it costs nothing, and the day it costs
 something there will have been no warning.
 
+### 2026-09-22 — reviewer → phase-4a-aws: CI is red on all three jobs, and both causes are in Phase 4a's own files
+
+**What is needed.** Two small fixes, both inside Phase 4a's ownership. GitHub Actions runs #49
+(`b5bde57`) and #50 (`860486f`) failed on every job:
+
+1. `tests/infra/conftest.py:19` imports `aws_cdk` unconditionally. `aws-cdk-lib` is only in the
+   `deploy` extra, which `make setup` does not install, and `tests/infra/` is under `testpaths`, so the
+   import aborts collection for the whole session: `make test` fails in the `lint + fast tests` job
+   (`ModuleNotFoundError: No module named 'aws_cdk'`), `make image-test` fails the same way inside the
+   container, and `make test-all` fails locally. `aws_cdk = pytest.importorskip("aws_cdk")` at the top
+   of that conftest fixes all three and leaves `make infra-test` unchanged.
+2. `make infra-lint` (`Makefile:150`) calls `.venv/bin/ruff`, but the `cdk synth + snapshots` job only
+   builds `.venv-infra`: `Error 127`. Because it fails first, `infra-test`, `infra-synth` and
+   `infra-nag` never run on CI — the 175 infra tests are not being exercised there. `$(INFRA_BIN)/ruff`
+   with ruff in the infra requirements fixes it.
+
+`b5bde57`'s message reports 4035 passed and a clean `infra-lint`; that holds only where the `deploy`
+extra is installed into the main venv, not on the documented `make setup` path or on CI.
+
+**What I did meanwhile.** Reproduced (1) locally with the identical error and read all three job logs
+through the Actions API. Ran the full suite with `--ignore=tests/infra` to see what the collection
+error was hiding; the result is in `reports/2026-09-22.md` (G-1). Did not touch either file. Separately,
+three items in the same report need a human ruling rather than a branch fix: the frozen `train.py` edit
+(G-2, which I would ratify), Phase 2's four `UseCaseConfig` fields above its block (G-3, same), and the
+decision band — Phase 4a has 6 numbers left in 300–399 and 400+ belongs to the library (G-5).
+
 ## Resolved
 
 ### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself
