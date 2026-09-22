@@ -123,6 +123,7 @@ __all__ = [
     "fill_placeholders",
     "generate_campaign_copy",
     "placeholders_in",
+    "regenerate_template",
     "render_message",
     "unsupported_markup",
 ]
@@ -831,3 +832,71 @@ def approve_template(
     if not found:
         raise KeyError(f"{batch.batch_id} has no template {template_id!r} to approve.")
     return batch.model_copy(update={"templates": tuple(updated)})
+
+
+def regenerate_template(
+    batch: CopyBatch,
+    template_id: str,
+    *,
+    run_id: str,
+    use_case: UseCaseConfig,
+    storage: Storage,
+    meter: Meter,
+    guardrails: Guardrails,
+    config_root: Path | None = None,
+) -> CopyTemplate:
+    """One fresh `CopyTemplate` in `template_id`'s place: the API's `POST .../regenerate` in full.
+
+    A template is not generated alone - `_generate_for_band_channel` asks the model for every
+    variant of one band and one channel in a single call, because that is the unit a prompt reasons
+    about ("write A, B and C for the High band on email") - so there is no cheaper way to redo one
+    variant than to redo that whole call and keep only the one this function was asked for. The
+    audience, the band's aggregated reasons and the allowed-fields set are therefore rebuilt exactly
+    as `generate_campaign_copy` built them the first time, from the run's own scores and explanations
+    rather than from anything cached, so a regenerate reflects the run as it stands now.
+
+    The replacement keeps `template_id`'s own id rather than minting a new one - `docs/generative-
+    ui-endpoints.md` allows either, and the UI already matches a response back into its grid by
+    whichever id comes back, so keeping it is one fewer thing for a caller to reconcile. `attempts`
+    is the sum of what the original template had already spent and what this call spent: neither
+    number alone would answer "how many generations has this variant cost in total", which is the
+    question a reviewer staring at a still-blocked template after two regenerates is actually asking.
+
+    Raises `KeyError` when `template_id` is not in `batch` - the same signal `approve_template` gives
+    for the same condition, so a caller checks one exception type for "no such template" either way.
+    """
+    target = next((template for template in batch.templates if template.template_id == template_id), None)
+    if target is None:
+        raise KeyError(f"{batch.batch_id} has no template {template_id!r} to regenerate.")
+
+    copy = use_case.generative.campaign_copy
+    record = storage.read_model(run_key(run_id, RUN_RECORD_FILENAME), RunRecord)
+    primary_key = sole_key(record.primary_key, what=f"Campaign copy for run {run_id}")
+    profile = storage.read_model(record.artefacts[PROFILE_FILENAME], DatasetProfile)
+    source_fields = tuple(field for field in copy.allowed_fields if field not in _RESERVED_FIELDS)
+
+    scores = _read_scores(storage, record.artefacts[SCORES_CSV], primary_key)
+    fields = _read_source_fields(storage, record, profile, source_fields, primary_key)
+    audience, _holdout, _per_band = _classify(
+        scores, fields, primary_key=primary_key, bands_to_write=copy.bands_to_write
+    )
+    explanations = _read_reasons(storage, record)
+    band_actions = {band.name: band.action for band in use_case.actions.bands}
+    reasons = _band_reasons(audience, explanations, target.band, primary_key)
+    channel = Channel(target.channel)
+
+    fresh = _generate_for_band_channel(
+        band=target.band,
+        band_action=band_actions.get(target.band, target.band),
+        channel=channel,
+        reasons=reasons,
+        config=copy,
+        entity=use_case.entity,
+        meter=meter,
+        guardrails=guardrails,
+        config_root=config_root,
+    )
+    replacement = next((template for template in fresh if template.variant == target.variant), fresh[0])
+    return replacement.model_copy(
+        update={"template_id": target.template_id, "attempts": target.attempts + replacement.attempts}
+    )

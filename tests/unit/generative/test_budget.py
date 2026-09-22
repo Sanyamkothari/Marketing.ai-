@@ -12,6 +12,13 @@ deployment nobody has priced must say "I do not know what this cost", and the co
 record that it could not be enforced rather than appearing to hold. The call ceiling, which needs
 no prices, must still bind - otherwise an unpriced deployment would have no limit at all.
 
+The half-filled price table is the case worth writing tests for rather than reasoning about
+(DEC-227): a deployment that priced its generating model and not its judge has a real ceiling in
+configuration, a total that cannot be worked out, and therefore no cost test that could be made -
+so what `budget_usd` reports must be null there too, and the call ceiling must be what still stops
+the run. What the cost ceiling promises is asserted for exactly what it is: a run stops at the first
+call after its spending reached the ceiling, which can leave it over.
+
 The cache is checked for the three things a cache has to get right: a hit is a hit and not a call,
 a different prompt or a different model or a different temperature is a miss, and a failure to read
 or write is survivable - a cache that raised would turn a working run into a failed one.
@@ -40,6 +47,11 @@ from engine.llm import GroundedFakeLLMClient, LLMCompletion
 PURPOSE = GenerativePurpose.JUDGE_TOXICITY
 PRICED = PriceTable(prices={"fake": ModelPrice(input_per_1m=3.0, output_per_1m=15.0)}, as_of="a-date")
 
+GENERATOR = "a-generator"
+JUDGE = "a-judge"
+HALF_PRICED = PriceTable(prices={GENERATOR: ModelPrice(input_per_1m=3.0, output_per_1m=15.0)})
+"""A row for the generating model and none for the judge: what a half-filled price file looks like."""
+
 
 def rendered(text: str = "a text to check") -> RenderedPrompt:
     """One rendered prompt. `judge_toxicity` takes a single variable, which keeps the fixture small."""
@@ -61,6 +73,22 @@ def meter(
         budget=BudgetConfig(max_calls_per_run=calls, max_cost_usd_per_run=cost, cache=use_cache),
         prices=prices,
         cache=cache,
+    )
+
+
+def split_meter(*, calls: int = 500, cost: float = 2.0, prices: PriceTable = HALF_PRICED) -> Meter:
+    """A meter that generates with one model and judges with another, so one of them can be unpriced."""
+    return Meter(
+        GroundedFakeLLMClient(),
+        job_id="r_20260922_abcdef01",
+        llm=LlmConfig(
+            backend=LlmBackend.BEDROCK,
+            generation_model_id=GENERATOR,
+            judge_model_id=JUDGE,
+            embedding_model_id="an-embedder",
+        ),
+        budget=BudgetConfig(max_calls_per_run=calls, max_cost_usd_per_run=cost, cache=False),
+        prices=prices,
     )
 
 
@@ -186,6 +214,52 @@ def test_the_cost_ceiling_stops_a_run_that_has_spent_its_budget() -> None:
     assert error.value.code == "BUDGET_EXCEEDED"
     assert "cost" in error.value.message
     assert subject.calls >= 1
+
+
+def test_a_run_stops_at_the_first_call_after_its_spending_reached_the_cost_ceiling() -> None:
+    """What the cost ceiling promises and no more: a call's cost is known only once it comes back,
+    so the call that reached the ceiling may have gone over it, and what is bounded is how far the
+    run goes on (DEC-227)."""
+    expensive = PriceTable(prices={"fake": ModelPrice(input_per_1m=1_000_000.0, output_per_1m=0.0)})
+    subject = meter(cost=0.01, prices=expensive, use_cache=False)
+    with pytest.raises(GenerativeError):
+        for index in range(20):
+            subject.complete(rendered(f"text {index}"), PURPOSE)
+    spent = subject.cost_so_far
+    assert spent is not None and spent >= 0.01
+    stopped_at = subject.calls
+    with pytest.raises(GenerativeError):
+        subject.complete(rendered("one more"), PURPOSE)
+    assert subject.calls == stopped_at
+
+
+def test_a_ceiling_stops_being_reported_the_moment_a_call_could_not_be_priced() -> None:
+    """A half-filled price table would otherwise print a ceiling into `llm_usage.json` while the cost
+    test it names was being skipped, which is the one thing this module must not do (DEC-227)."""
+    subject = split_meter()
+    subject.complete(rendered("generated"), GenerativePurpose.ASSISTANT_ANSWER)
+    assert subject.budget_usd == 2.0
+    assert subject.cost_so_far is not None
+    subject.judge(rendered("judged"), PURPOSE)
+    assert subject.cost_so_far is None
+    assert subject.budget_usd is None
+    assert subject.usage().budget_usd is None
+    assert subject.usage().warnings == (f"{PRICE_UNKNOWN}:{JUDGE}",)
+
+
+def test_the_call_ceiling_is_what_binds_a_run_whose_cost_cannot_be_totalled() -> None:
+    """A partial total is not the run's cost, so nothing may be refused on it; the ceiling that needs
+    no prices still stops the run (DEC-227)."""
+    expensive = PriceTable(prices={GENERATOR: ModelPrice(input_per_1m=1_000_000.0, output_per_1m=0.0)})
+    subject = split_meter(calls=3, cost=0.01, prices=expensive)
+    subject.judge(rendered("unpriced"), PURPOSE)
+    for index in range(2):
+        subject.complete(rendered(f"far past a cent {index}"), GenerativePurpose.ASSISTANT_ANSWER)
+    with pytest.raises(GenerativeError) as error:
+        subject.complete(rendered("one too many"), GenerativePurpose.ASSISTANT_ANSWER)
+    assert "call" in error.value.message
+    assert subject.calls == 3
+    assert subject.budget_usd is None
 
 
 def test_a_budget_refusal_still_leaves_a_usage_record_to_read() -> None:

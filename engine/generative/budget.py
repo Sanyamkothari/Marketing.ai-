@@ -5,18 +5,28 @@ through, in this order, and the order is the point:
 
 1. **The cache is asked.** A hit costs nothing, is counted as a hit and never as a call, and is
    returned without the budget being touched - a call that was not made cannot exceed a ceiling.
-2. **The budget is checked.** A call that would take the run past `max_calls_per_run`, or past
-   `max_cost_usd_per_run` given what has been spent so far, is refused with `BUDGET_EXCEEDED`
-   *before* it is made. A run that stops this way stops cleanly, with its partial artefacts and a
+2. **The budget is checked.** A call is refused with `BUDGET_EXCEEDED` *before* it is made when the
+   run has already used `max_calls_per_run` calls, or when what it has already spent has reached
+   `max_cost_usd_per_run`. A run that stops this way stops cleanly, with its partial artefacts and a
    usage record that says why.
 3. **The call is made and tallied** - tokens, latency, and cost when the price table knows the
    model. When it does not, the cost is `None` and a `PRICE_UNKNOWN` warning names the model
    (DEC-208). `None` is not `0.0`: a zero is a measurement and there was none.
 
-The cost ceiling can only bind on what can be priced. A run whose models are all unpriced records
-that its cost ceiling could not be enforced rather than pretending it was - and the call ceiling,
-which needs no prices, still binds. That is why `LlmUsage` carries both, and why `budget_usd` is
-nullable.
+The call ceiling is exact and the cost ceiling is not, and the difference is worth stating rather
+than glossing. A call is a call before it is made, so `max_calls_per_run` is never exceeded. What a
+call will *cost* is known only once it comes back, since the output tokens are the model's to
+choose, so the cost test can only ask whether the run has already reached its ceiling: a job stops
+at the first call after its spending got there, and the call that carried it there may have carried
+it over. The ceiling bounds how far a job goes on, not its final total. Projecting a call's cost
+from `max_output_tokens` and refusing on the projection would bound the total - with a number
+nobody measured, which is the one thing this package will not put in front of anyone (DEC-227).
+
+The cost ceiling can only bind on what can be priced, and it binds on nothing the moment one call
+cannot be. `budget_usd` is therefore `None` unless every call so far was priced: a run that reports
+a ceiling it is not testing against would be the "pretending" this module exists to avoid. The call
+ceiling needs no prices and still binds. That is why `LlmUsage` carries both, and why `budget_usd`
+is nullable.
 
 Prices come from `configs/llm_prices.yaml`, which ships empty on purpose. Filling it in is a
 documented one-file change; inventing a row here would be inventing a number on a screen.
@@ -201,8 +211,17 @@ class Meter:
 
     @property
     def budget_usd(self) -> float | None:
-        """The cost ceiling in force, or `None` when no price is known so none can be enforced."""
-        return None if self._prices.is_empty else self._budget.max_cost_usd_per_run
+        """The cost ceiling actually in force, or `None` when none can be enforced.
+
+        `None` whenever a price is missing - the whole table empty, or one model in a partly filled
+        table without a row - because the ceiling is tested against `cost_so_far`, and `cost_so_far`
+        is `None` the moment one call could not be priced. A number reported here while that test is
+        being skipped would be a ceiling on a screen and in `llm_usage.json` that nothing was
+        enforcing (DEC-227).
+        """
+        if self._prices.is_empty or not self._all_priced:
+            return None
+        return self._budget.max_cost_usd_per_run
 
     def remaining_calls(self) -> int:
         """How many more calls this job may make."""
@@ -212,8 +231,9 @@ class Meter:
     def complete(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
         """Answer `rendered` with the generating model, from the cache when it can.
 
-        Raises `BUDGET_EXCEEDED` before making a call that would take the job past a ceiling, so a
-        job that runs out of budget has spent exactly what it was allowed to and not a cent more.
+        Raises `BUDGET_EXCEEDED` before the call rather than after it, so a job that runs out of
+        budget makes not one call more than it was allowed - which for the call ceiling is exact and
+        for the cost ceiling is as tight as an unknown price per call permits (DEC-227).
         """
         return self._call(rendered, purpose, self._llm.generation_model)
 
@@ -275,10 +295,13 @@ class Meter:
 
     # -- bookkeeping --------------------------------------------------------
     def _check_budget(self) -> None:
+        """Refuse the next call when a ceiling is reached. `budget_usd` is `None` exactly when the
+        cost test cannot be made, so asking it is also what stops an unpriced run from being measured
+        against a ceiling it is not reporting (DEC-227)."""
         if self._calls >= self._budget.max_calls_per_run:
             raise generative_error(BUDGET_EXCEEDED, limit=_CALLS_LIMIT, calls=self._calls)
         ceiling = self.budget_usd
-        if ceiling is not None and self._all_priced and self._cost >= ceiling:
+        if ceiling is not None and self._cost >= ceiling:
             raise generative_error(BUDGET_EXCEEDED, limit=_COST_LIMIT, calls=self._calls)
 
     def _record(

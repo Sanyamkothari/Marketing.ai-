@@ -25,6 +25,13 @@ than trusted from the reply, a code fence is stripped because stripping one chan
 reply the contract cannot read is dropped for the operator's refusal sentence rather than raised or
 shown, and only the last `HISTORY_TURNS` turns reach the prompt.
 
+**A quote is words from the chunk or it is nothing.** Everything else a `Citation` carries is the
+engine's own - the chunk id, the document, the heading, the similarity - so a quote taken on trust
+would be the single invented thing in a row of real provenance, and the reader most likely to
+believe it is the one who checked the document name first. Both halves are proved: a quote the cited
+chunk really contains survives to the artefact, and one it does not is dropped for an empty string
+with an `UNSUPPORTED_QUOTE` warning, while the citation around it stands (DEC-226).
+
 The index is real and is built once for the module: three documents of the synthetic Northwind
 corpus, parsed, chunked and embedded by the code a deployment runs, so the retrieval order, the
 similarities and the chunk ids asserted below are earned rather than stubbed. Two costs come with
@@ -54,6 +61,7 @@ from engine.generative.assistant import (
     HISTORY_TURNS,
     QUOTE_WORDS,
     UNKNOWN_CITATION,
+    UNSUPPORTED_QUOTE,
     Turn,
     _parse,
     answer,
@@ -318,7 +326,7 @@ def test_every_citation_points_at_a_chunk_that_was_really_retrieved(
         assert citation.section == found.chunk.section
         assert citation.similarity == pytest.approx(round(found.similarity, 4))
         assert 0 < len(citation.quote.split()) <= QUOTE_WORDS
-        assert set(citation.quote.lower().split()) <= set(found.chunk.text.lower().split())
+        assert citation.quote.lower() in " ".join(found.chunk.text.lower().split())
 
 
 def test_the_extracts_the_model_saw_are_the_chunks_retrieval_chose_in_the_order_it_chose_them(
@@ -454,10 +462,105 @@ def test_a_reply_that_cites_nothing_cites_nothing_rather_than_failing() -> None:
 # ---------------------------------------------------------------------------
 def test_a_quote_is_cut_to_the_word_limit_here_rather_than_trusted_from_the_model() -> None:
     """The prompt asks for at most 25 words; asking is not enforcing, and the artefact is enforced."""
-    long_quote = " ".join(f"word{number}" for number in range(QUOTE_WORDS * 2))
+    passage = " ".join(f"word{number}" for number in range(QUOTE_WORDS * 2))
+    matches = (match(passage),)
+    _, _, citations, checks = parsed(reply(citations=[{"chunk": 1, "quote": passage}]), matches)
+    assert citations[0].quote.split() == passage.split()[:QUOTE_WORDS]
+    assert checks == (), "the whole passage is the chunk's own, so trimming it invents nothing"
+
+
+# ---------------------------------------------------------------------------
+# A quote the chunk does not contain (DEC-226)
+# ---------------------------------------------------------------------------
+def test_a_quote_the_cited_chunk_really_contains_is_carried_through_as_the_model_wrote_it() -> None:
+    """Without this the check below could pass by dropping every quote there has ever been."""
+    matches = (match("A new SIM is usually live within four hours of the form being accepted."),)
+    _, _, citations, checks = parsed(
+        reply(citations=[{"chunk": 1, "quote": "usually live within four hours"}]), matches
+    )
+    assert [citation.quote for citation in citations] == ["usually live within four hours"]
+    assert checks == ()
+
+
+def test_a_quote_the_cited_chunk_does_not_contain_is_dropped_and_the_citation_survives() -> None:
+    """The invented words go; the chunk id, document, heading and similarity are the engine's own."""
+    matches = (match("A new SIM is usually live within four hours.", similarity=0.42),)
+    _, _, citations, checks = parsed(
+        reply(citations=[{"chunk": 1, "quote": "activation is instant and always free"}]), matches
+    )
+    assert [(citation.chunk_id, citation.quote) for citation in citations] == [
+        (matches[0].chunk.chunk_id, "")
+    ]
+    assert [citation.similarity for citation in citations] == [0.42]
+    assert [(check.rule, check.outcome) for check in checks] == [(UNSUPPORTED_QUOTE, GuardrailOutcome.WARNED)]
+    assert "does not contain" in checks[0].detail
+
+
+def test_a_quote_that_borrows_a_real_documents_name_for_invented_words_is_still_dropped() -> None:
+    """The failure worth naming: invented words under a chunk id, a document and a heading that are real."""
+    matches = (match("A new SIM is usually live within four hours."),)
+    _, _, citations, _ = parsed(reply(citations=[{"chunk": 1, "quote": "live within four minutes"}]), matches)
+    assert citations[0].document == "faq_activation.md"
+    assert citations[0].section == "How long does activation take?"
+    assert citations[0].quote == ""
+
+
+@pytest.mark.parametrize(
+    "quoted",
+    ["Within\n four   hours.", "WITHIN FOUR HOURS.", "  within four hours.  "],
+)
+def test_a_quote_the_chunk_contains_but_spells_differently_is_still_the_chunks_own_words(
+    quoted: str,
+) -> None:
+    """A passage crosses a template and a JSON string; re-wrapping it changes no word of it."""
     matches = (match("Within four hours."),)
-    _, _, citations, _ = parsed(reply(citations=[{"chunk": 1, "quote": long_quote}]), matches)
-    assert citations[0].quote.split() == long_quote.split()[:QUOTE_WORDS]
+    _, _, citations, checks = parsed(reply(citations=[{"chunk": 1, "quote": quoted}]), matches)
+    assert citations[0].quote
+    assert checks == ()
+
+
+@pytest.mark.parametrize("quoted", ["", "   ", None])
+def test_a_citation_that_quotes_nothing_is_not_recorded_as_having_invented_a_quote(
+    quoted: object,
+) -> None:
+    """No words were claimed, so none were invented; an empty quote shows a reader nothing at all."""
+    matches = (match("Within four hours."),)
+    _, _, citations, checks = parsed(reply(citations=[{"chunk": 1, "quote": quoted}]), matches)
+    assert [citation.quote for citation in citations] == [""]
+    assert checks == ()
+
+
+def test_a_dropped_quote_is_warned_about_beside_the_good_citation_it_was_found_next_to() -> None:
+    """One bad quote costs one quote, not the other citation and not the answer."""
+    matches = (match("Within four hours."), match("Restart the handset.", ordinal=1))
+    text, _, citations, checks = parsed(
+        reply(
+            citations=[
+                {"chunk": 1, "quote": "within four hours"},
+                {"chunk": 2, "quote": "replace the handset"},
+            ]
+        ),
+        matches,
+    )
+    assert text == "Within four hours."
+    assert [citation.quote for citation in citations] == ["within four hours", ""]
+    assert [check.rule for check in checks] == [UNSUPPORTED_QUOTE]
+
+
+def test_a_check_on_a_dropped_quote_names_the_question_like_every_other_check() -> None:
+    """One list whose `target` meant two different things could not be read at all (DEC-223)."""
+    _, _, _, checks = parsed(
+        reply(citations=[{"chunk": 1, "quote": "invented words"}]), (match("Within four hours."),)
+    )
+    assert [check.target for check in checks] == [ANSWERED[:60]]
+
+
+def test_a_grounded_answer_from_the_fake_keeps_its_quote(knowledge_index: KnowledgeIndex) -> None:
+    """End to end, so the check is proved not to reject the quotes a cooperative model really writes."""
+    _, _, result = ask(knowledge_index, ANSWERED)
+    assert result.citations
+    assert all(citation.quote for citation in result.citations)
+    assert UNSUPPORTED_QUOTE not in {check.rule for check in result.guardrails}
 
 
 def test_the_word_limit_the_prompt_asks_for_is_the_one_the_parser_enforces() -> None:

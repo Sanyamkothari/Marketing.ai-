@@ -10,9 +10,12 @@ The flow is short and its order is the substance:
    one, and no generation can hallucinate an answer that was never asked for.
 3. **Otherwise render the prompt with numbered extracts, and call once.** The numbering is what a
    citation refers to, so the model cites a position rather than inventing a filename.
-4. **Parse, and drop any citation that points nowhere.** A model that cites extract 7 when six were
-   supplied has said something about a document that was not in front of it; the claim survives,
-   the false citation does not, and the answer is marked for the guardrails.
+4. **Parse, and drop any citation that points nowhere, and any quote the chunk does not contain.**
+   A model that cites extract 7 when six were supplied has said something about a document that was
+   not in front of it; the claim survives, the false citation does not, and the answer is marked for
+   the guardrails. A quote is checked the same way and for the same reason: the words shown under a
+   real document, a real heading and a real chunk id have to be that chunk's own words, or the
+   citation's whole purpose - letting a reader check the claim - is served by something invented.
 5. **Check, then return.** The faithfulness judge is given exactly the extracts as its source, so
    "is every claim supported?" is asked against the same text the prompt was.
 
@@ -51,6 +54,7 @@ __all__ = [
     "HISTORY_TURNS",
     "QUOTE_WORDS",
     "UNKNOWN_CITATION",
+    "UNSUPPORTED_QUOTE",
     "Turn",
     "answer",
     "extracts_for",
@@ -72,6 +76,11 @@ QUOTE_WORDS: Final[int] = 25
 
 UNKNOWN_CITATION: Final[str] = "UNKNOWN_CITATION"
 """Recorded when a model cited an extract number nobody supplied. The citation is dropped."""
+
+UNSUPPORTED_QUOTE: Final[str] = "UNSUPPORTED_QUOTE"
+"""Recorded when a quote is not in the chunk it was attributed to. The quote is dropped, not the
+citation: the chunk id, the document, the heading and the similarity are the engine's own facts and
+stay true, and only the words the model put between quotation marks are taken away (DEC-226)."""
 
 _CODE_FENCE: Final[re.Pattern[str]] = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 
@@ -217,6 +226,12 @@ def _parse(
     for the checks it appends to the same tuple. A caller reading `answer.guardrails` is looking at
     one list, and a `target` that means the question in one row and the answer in the next cannot
     be read at all.
+
+    Two things are checked against what was actually supplied rather than read off the reply: the
+    extract number, and the quote. Everything else on a `Citation` - the chunk id, the document,
+    the heading, the similarity - is the engine's own and is copied from the match, so a fabricated
+    quote would be the one invented thing in a row of otherwise real provenance, which is the worst
+    place for it (DEC-226).
     """
     payload = _json(raw)
     if payload is None:
@@ -246,16 +261,48 @@ def _parse(
             checks.append(_unknown_citation(question))
             continue
         match = matches[number - 1]
+        quote, invented = _verified_quote(entry.get("quote", ""), match.chunk.text)
+        if invented:
+            checks.append(_unsupported_quote(question))
         citations.append(
             Citation(
                 chunk_id=match.chunk.chunk_id,
                 document=match.chunk.document,
                 section=match.chunk.section,
-                quote=" ".join(str(entry.get("quote", "")).split()[:QUOTE_WORDS]),
+                quote=quote,
                 similarity=round(match.similarity, 4),
             )
         )
     return text, refused, tuple(citations), tuple(checks)
+
+
+def _verified_quote(claimed: object, chunk_text: str) -> tuple[str, bool]:
+    """The quote a citation may carry, and whether the model claimed one the chunk does not contain.
+
+    Trimming to `QUOTE_WORDS` bounds how much is shown and says nothing about where the words came
+    from, so the trimmed quote is looked for in the cited chunk before it is allowed to appear under
+    that chunk's id. Whitespace and case are flattened on both sides first: a chunk reaches a prompt
+    through a template and comes back inside a JSON string, so a passage copied faithfully can still
+    arrive re-wrapped or with its first letter changed, and refusing those would throw away quotes
+    that are exactly as checkable as the ones that survive. A quote found that way is the chunk's own
+    words; anything else is words nobody wrote.
+
+    A reply that quoted nothing is not the same failure and gets no check: the model claimed no
+    words, so it invented none, and a citation with an empty quote shows a reader nothing rather than
+    showing them something false. `null` is one of the ways a model writes that, so it is read as an
+    absent quote rather than stringified into the word it spells.
+    """
+    quote = "" if claimed is None else " ".join(str(claimed).split()[:QUOTE_WORDS])
+    if not quote:
+        return "", False
+    if _flattened(quote) in _flattened(chunk_text):
+        return quote, False
+    return "", True
+
+
+def _flattened(text: str) -> str:
+    """`text` with its case and its runs of whitespace taken out, for comparing one passage to another."""
+    return " ".join(text.lower().split())
 
 
 def _unknown_citation(question: str) -> GuardrailCheck:
@@ -270,6 +317,20 @@ def _unknown_citation(question: str) -> GuardrailCheck:
         rule=UNKNOWN_CITATION,
         outcome=GuardrailOutcome.WARNED,
         detail="a citation pointed at an extract that was not supplied",
+    )
+
+
+def _unsupported_quote(question: str) -> GuardrailCheck:
+    """The check recorded for a quote the cited chunk does not contain.
+
+    `WARNED` rather than `BLOCKED`, because nothing was refused: the answer stands, the citation
+    stands, and what was dropped is the one part of the row the model made up.
+    """
+    return GuardrailCheck(
+        target=question[:60],
+        rule=UNSUPPORTED_QUOTE,
+        outcome=GuardrailOutcome.WARNED,
+        detail="a citation quoted words the cited extract does not contain, so the quote was dropped",
     )
 
 

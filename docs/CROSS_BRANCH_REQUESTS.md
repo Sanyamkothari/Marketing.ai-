@@ -228,6 +228,34 @@ others — `docs/LIBRARY.md` ↔ `library/README.md` ↔ `library/DEMO_SCRIPT.md
 `README.md` is missing.
 
 
+### 2026-09-22 — reviewer → phase-4a-aws and human reviewer: `make test-all` will bill Bedrock once AWS credentials exist
+
+**What is needed.** A one-line change before Phase 4a puts AWS credentials anywhere CI can see them.
+`tests/integration/test_bedrock_smoke.py` calls Bedrock for real. `pyproject.toml` declares the
+marker as *"costs money, needs credentials, opt-in with `-m bedrock`"* and the module carries
+`pytestmark = [..., pytest.mark.bedrock]` — but nothing implements the opt-in: `addopts` is
+`-q --strict-markers` with no marker filter, `make test-all` is plain `pytest`, and
+`.github/workflows/nightly.yml` runs `make test-all`.
+
+The suite skips today only because the three Bedrock env vars and AWS credentials are absent. Both
+gates are configuration, not intent, so the protection inverts exactly where it matters: the machine
+most likely to carry both is the Phase 4a agent's, and the nightly runner as soon as Phase 4a adds
+credentials to CI — which is that branch's natural next step. From then on every nightly makes paid
+calls nobody asked for, and the first signal is the invoice.
+
+`make test` already deselects with `-m "not slow"`, so the pattern exists. Either `make test-all`
+becomes `pytest -m "not bedrock"` or `addopts` carries it; `-m bedrock` then genuinely opts in.
+`Makefile` and `pyproject.toml` are both Shared files (§3), so this is a human call rather than a
+branch's to take unilaterally.
+
+**What I did meanwhile.** Did not run the suite — the standing instruction is never to run `-m aws`
+or `-m bedrock`. Verified the rest by reading: the double gate is correct and both skips are loud and
+well written, so nothing is wrong with the suite itself; the exposure is only in how `test-all`
+selects. Confirmed `make test` is unaffected, and that the 7 skips in tonight's full run are exactly
+this module. Recorded as E-1 in `reports/2026-09-22.md`, with E-2 (the library sits outside §3's
+ownership map and uses an unreserved `DEC-400…499` band) and E-3 (no input-side prompt-injection
+boundary and no test for it) in the same pass.
+
 ## Resolved
 
 ### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself

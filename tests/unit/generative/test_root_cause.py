@@ -57,6 +57,7 @@ from engine.generative.errors import (
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.generative.root_cause import (
     ROOT_CAUSE_PROMPT,
+    _match_reasons,
     aggregate_reasons,
     build_root_cause_summary,
     generate_segment_summary,
@@ -617,3 +618,38 @@ def test_running_out_of_budget_stops_the_job_rather_than_blocking_every_remainin
 
     assert excinfo.value.code == BUDGET_EXCEEDED
     assert meter.calls == 1, "the meter refused the second call rather than making it"
+
+
+# ---------------------------------------------------------------------------
+# Matching a complaint to the reasons it echoes, without matching it to the rest
+# ---------------------------------------------------------------------------
+def _reason(reason_id: str, feature: str) -> EvidenceReason:
+    return EvidenceReason(
+        id=reason_id,
+        feature=feature,
+        direction=Direction.UP,
+        mean_abs_contribution=0.2,
+        share_pct=20.0,
+        rows=3,
+    )
+
+
+MATCH_REASONS = (
+    _reason("r1", "outages_90d"),
+    _reason("r2", "billing_disputes_90d"),
+    _reason("r3", "usage_drop_30d"),
+)
+
+
+def test_a_complaint_matches_the_reason_whose_feature_name_its_own_words_contain() -> None:
+    assert _match_reasons("the outage lasted all weekend", MATCH_REASONS) == ("r1",)
+
+
+def test_a_complaint_does_not_match_a_reason_on_a_short_word_buried_in_its_feature_name() -> None:
+    """Containment is symmetric: "i" is inside "billing", and a floor on one side is no floor."""
+    assert _match_reasons("i am in it", MATCH_REASONS) == ()
+
+
+def test_a_complaint_about_one_thing_does_not_match_every_other_reason_too() -> None:
+    complaint = "i have a billing query and nobody has answered it"
+    assert _match_reasons(complaint, MATCH_REASONS) == ("r2",)
