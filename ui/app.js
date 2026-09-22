@@ -6,6 +6,7 @@ import { errorBox, esc, pageHead } from "./dom.js";
 import { overviewHtml } from "./overview.js";
 import { PAGE_ARTEFACTS, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
+import { resolveRoute } from "./modules/router.js";
 
 const app = document.getElementById("app");
 const PAGES = ["data", "model", "output"];
@@ -117,6 +118,14 @@ async function showPage(id, kind, runId) {
 async function render() {
   const parts = window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   try {
+    // A phase branch registers whole screens of its own through `modules/router.js`; nothing is
+    // registered on this branch, so this resolves to null and the Phase 1 routing below runs.
+    const claimed = resolveRoute(parts);
+    if (claimed) {
+      active = null;
+      await claimed.render(app, parts);
+      return;
+    }
     if (parts[0] !== "uc" || !parts[1]) {
       await showOverview();
       document.title = "Marketing AI · Minfy";

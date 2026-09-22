@@ -158,7 +158,44 @@ LABELS: dict[str, str] = {
     "governance.approval_required": "Require approval before a model becomes champion",
 }
 
-USE_CASE_IDS = list_use_case_ids()
+
+def settings_use_case_ids() -> tuple[str, ...]:
+    """The use cases this table describes: every one that trains something.
+
+    `advanced_settings_schema` returns no stages at all for a generative use case, because none of
+    the eight stages below is a choice it has - there is no split to make, no model family to
+    search over and no threshold to set. Every sweep in this module asserts the shape of the full
+    table, so a generative use case would fail all of them by being exactly what it is. The sweep
+    is read off the configs rather than listed here, so a use case added by YAML alone still needs
+    no edit to this file (plan section 2.1); `test_a_narrowed_sweep_still_covers_something` keeps it
+    from quietly shrinking to nothing, and `test_a_generative_use_case_gets_no_stages` covers the
+    case this one leaves out.
+    """
+    return tuple(
+        sorted(
+            use_case_id
+            for use_case_id in list_use_case_ids()
+            if load_use_case(use_case_id).ai_type is not AiType.GENERATIVE
+        )
+    )
+
+
+USE_CASE_IDS = settings_use_case_ids()
+GENERATIVE_USE_CASE_IDS = tuple(sorted(set(list_use_case_ids()) - set(USE_CASE_IDS)))
+
+
+def test_a_narrowed_sweep_still_covers_something() -> None:
+    """A sweep that shrank to nothing would look exactly like a passing suite."""
+    assert len(USE_CASE_IDS) >= 5
+    assert set(USE_CASE_IDS) < set(list_use_case_ids())
+
+
+@pytest.mark.parametrize("use_case_id", GENERATIVE_USE_CASE_IDS)
+def test_a_generative_use_case_gets_no_stages(use_case_id: str) -> None:
+    """The other half of the narrowing: an empty table, not a table full of inapplicable choices."""
+    schema = advanced_settings_schema(load_all_use_cases()[use_case_id])
+    assert schema.stages == ()
+    assert schema.use_case_id == use_case_id
 
 
 def _resolve(config: UseCaseConfig, path: str) -> Any:

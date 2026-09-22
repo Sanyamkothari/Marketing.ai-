@@ -18,6 +18,8 @@ model, and every prediction comes with a reason and a recommended action.
 ```
 marketing-ai/
 ├── README.md
+├── plan.md                       # the Phase 1 plan; normative for everything below
+├── PARALLEL_WORK_PROTOCOL.md     # the contract between the phase 2 / 3a / 4a branches
 ├── pyproject.toml
 ├── requirements-freeze.txt       # resolver output; the pin test reads it (DEC-018)
 ├── Makefile                      # make setup / test / lint / run / generate
@@ -43,6 +45,8 @@ marketing-ai/
 │   ├── __init__.py               # __version__
 │   ├── config.py                 # pydantic models for YAML configs, merge, overrides, advanced settings
 │   ├── contracts.py              # pydantic models for every artefact JSON
+│   ├── settings.py               # the one env-driven Settings: which backends this process talks to
+│   ├── llm.py                    # LLMClient protocol + the deterministic FakeLLMClient
 │   ├── errors.py                 # the pipeline's exception and the RunError any stage failure becomes
 │   ├── templates.py              # renders the CSV/README templates from a use-case config
 │   ├── storage.py                # Storage protocol + LocalStorage
@@ -61,6 +65,8 @@ marketing-ai/
 │   │   ├── score.py              # batch scoring with the champion, schema check and drift
 │   │   ├── actions.py            # risk bands, suppression, control group, action mapping
 │   │   └── export.py             # scores.csv and the output summary
+│   ├── onboarding/               # Phase 2's package; specs.py awaits the Phase 2 plan
+│   ├── generative/               # Phase 3a's package; contracts.py awaits the Phase 3a plan
 │   └── utils/                    # ids, time, text, logging
 ├── api/
 │   ├── main.py                   # create_app, the module-level app, and the /ui mount
@@ -75,7 +81,9 @@ marketing-ai/
 │   ├── overview.js               # the Overview screen, from GET /industries
 │   ├── usecase.js                # the use-case screen: Setup → Running → Results
 │   ├── pages.js                  # the Data / Model / Output pages, from a run's artefacts
-│   └── settings.js               # advanced settings, generated from the config schema
+│   ├── settings.js               # advanced settings, generated from the config schema
+│   └── modules/
+│       └── router.js             # the phase-module registry; app.js asks it before its own routing
 ├── scripts/
 │   ├── gen_templates.py          # regenerates templates/ (make generate; --check in make lint)
 │   ├── gen_api_docs.py           # regenerates docs/API.md (make generate; --check in make lint)
@@ -88,6 +96,7 @@ marketing-ai/
 │   ├── DECISIONS.md              # architecture decision log
 │   ├── DATA_CONTRACT.md
 │   ├── API.md                    # generated from the contracts, routes and configs
+│   ├── CROSS_BRANCH_REQUESTS.md  # what a branch needs from outside its own files
 │   └── AWS_DEPLOYMENT.md         # Phase 4 notes
 └── data/                         # local artefact store, gitignored, created on first run (runs/<run_id>/...)
 ```
@@ -453,9 +462,84 @@ case is named anywhere under `engine/` or `api/`.
 ## Decisions
 
 Every choice that `plan.md` does not make is recorded in [`docs/DECISIONS.md`](docs/DECISIONS.md) as a
-`DEC-` entry with its context, decision and consequences. The log runs DEC-001 … DEC-075: M1 opened it
-with DEC-001 … DEC-040 and each milestone since has appended its own. DEC-059, DEC-064 and DEC-071 are
-unused — no code cites them. Entries are never rewritten in
-place — a decision that is reversed gets a new entry naming the one it supersedes (plan §13.2). See also
+`DEC-` entry with its context, decision and consequences. The log runs DEC-001 … DEC-081: M1 opened it
+with DEC-001 … DEC-040, each milestone since has appended its own, and DEC-075 … DEC-079 are the shared
+surface the phase branches build on. DEC-059, DEC-064 and DEC-071 are unused — no code cites them.
+Numbers from DEC-100 up are allocated per phase — 100…199 for Phase 2, 200…299 for Phase 3a, 300…399
+for Phase 4a — so three branches cannot claim the same one. Entries are never rewritten in place — a
+decision that is reversed gets a new entry naming the one it supersedes (plan §13.2). See also
 [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md) for the shape of the upload and
 [`docs/AWS_DEPLOYMENT.md`](docs/AWS_DEPLOYMENT.md) for the Phase 4 notes.
+
+---
+
+## Working in parallel: phases 2, 3a and 4a
+
+Three branches build on this one at the same time. `PARALLEL_WORK_PROTOCOL.md` is the contract
+between them — branch order, who owns which file, and what a shared file's marker blocks mean —
+and `docs/CROSS_BRANCH_REQUESTS.md` is where a branch writes down what it needs from outside its
+own files.
+
+**Shared surface added before the branches started.** `engine/settings.py` is the one object that
+says what this process talks to (DEC-075); `engine/llm.py` is the `LLMClient` protocol and its
+deterministic fake (DEC-076); `primary_key` accepts several columns on every contract it travels
+through (DEC-077); `RunRequest` and `RunManifest` carry `dataset_id` and `client_id` (DEC-078);
+`RunManifest` carries `llm_usage` and `compute`. Twelve shared files have marker blocks and
+`tests/unit/test_shared_file_markers.py` fails when one goes missing (DEC-079).
+
+**If you are working on a phase branch:** read the protocol first, work only inside your own
+block in a shared file, and run `make lint test` before every commit and `make test-all` before
+every rebase.
+
+<!-- =======================================================================
+     Shared file (PARALLEL_WORK_PROTOCOL.md §4). Append a section per
+     milestone under your own phase heading, inside your own block.
+     ======================================================================= -->
+
+<!-- ---- PHASE-2 (onboarding) — append only below this line ---- -->
+
+### Phase 2 — Data onboarding
+
+**The reference prototype is in the repository.** `marketing-ai-prototype.html` is the design
+source of truth named in `plan.md` §9 — one HTML file, hash routing, dark mode, mobile layout,
+no build step. It now carries the Phase 2 §10 screens the build agents copy: a client selector
+in the header, Setup step 1 as a choice between a prepared file and raw tables, the four-step
+onboarding panel behind it (sources → mapping → features & label → build & review), score mode
+with a saved recipe, and the lineage block on the Data page. It also carries the Phase 3a §9
+screens (see below). `CHANGELOG-prototype.md` lists every screen with the plan section it
+implements and the illustrative numbers they share.
+
+```bash
+open marketing-ai-prototype.html   # no build step, no server needed
+make prototype-test                # 37 jsdom tests in tests/prototype/
+make prototype-screenshots         # docs/prototype/*.png, desktop and mobile
+```
+
+`tests/prototype/existing.test.mjs` pins the screens that must not move: the lifecycle
+overview, the seven use-case definitions, the eight advanced-settings stages, the three run
+states and the colour tokens. Screenshots of every new state, desktop (1440px) and mobile
+(390px), are in `docs/prototype/`.
+
+<!-- ---- END PHASE-2 ---- -->
+
+<!-- ---- PHASE-3A (generative) — append only below this line ---- -->
+
+### Phase 3a — Generative and hybrid
+
+**The prototype carries the Phase 3a §9 screens.** In `marketing-ai-prototype.html`: the AI
+Onboarding Assistant's document upload, optional reference questions, refusal message,
+index-build running screen and results (index summary, pass rate against its threshold, the ten
+weakest answers, a Try it panel whose citations expand to the quoted chunk, a cost line); RCA's
+root causes per risk segment; and win-back's campaign copy with judge scores, block reasons and
+approve / regenerate. `CHANGELOG-prototype.md` maps each to its plan section; the file and its
+tests are listed under Phase 2 above.
+
+<!-- ---- END PHASE-3A ---- -->
+
+<!-- ---- PHASE-4A (aws) — append only below this line ---- -->
+
+### Phase 4a — AWS and production
+
+_Nothing merged yet._
+
+<!-- ---- END PHASE-4A ---- -->

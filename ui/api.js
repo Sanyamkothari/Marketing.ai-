@@ -52,7 +52,7 @@ export const templateUrl = (path) => url(path);
  * against the mode it was made for, and `POST /runs` refuses a mismatch with UPLOAD_MODE_MISMATCH.
  * Leaving it out registered every scoring upload as a training one, so "Score new data" failed on
  * the Run click with advice the screen could not act on — it offered to upload the file again,
- * which is what had just gone wrong (DEC-076).
+ * which is what had just gone wrong (DEC-081).
  */
 export function postUpload(file, useCaseId, mode) {
   const form = new FormData();

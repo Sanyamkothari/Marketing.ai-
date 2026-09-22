@@ -1,0 +1,53 @@
+# configs/guardrails.yaml
+# What must be true of a generated text before it is stored, and what happens when it is not.
+#
+# Read by engine/generative/guardrails.py. Two layers, in this order and never the other way round:
+# the deterministic rules are code, cost nothing and cannot be talked out of a verdict, so they run
+# first and a text that fails them is never sent to a judge. The judges are themselves LLM calls:
+# they cost money, they are metered like any other call, and they are asked only about the things a
+# regular expression cannot decide.
+#
+# `block` refuses the text and records the failure. `warn` records it and lets the text through.
+# Nothing here ever edits a generated text: a guardrail that rewrote its input would make the
+# artefact a record of something no model actually produced.
+
+schema_version: 1                       # int; bumped on any breaking change of this document's shape
+
+deterministic:                          # rule -> block | warn | off
+  pii_in_output: block                  # an e-mail, phone, PAN or Aadhaar shape anywhere in the text
+  banned_phrases: block                 # the use case's banned_claims, plus `global_banned_phrases`
+  max_length: block                     # the channel's character or word limit
+  required_lines: block                 # the opt-out line a channel must carry
+  allowed_fields_only: block            # a {{placeholder}} naming a field outside allowed_fields
+  url_whitelist: block                  # a link to a domain outside `allowed_url_domains`
+  language_match: warn                  # the answer is not in the language that was asked for
+  empty_output: block                   # the model returned nothing, or only whitespace
+
+llm_judge:                              # purpose -> {threshold 0..1, on_fail: block | warn | off}
+  faithfulness: {threshold: 0.80, on_fail: block}   # assistant answers and RCA summaries
+  compliance:   {threshold: 0.80, on_fail: block}   # campaign copy
+  toxicity:     {threshold: 0.90, on_fail: block}   # everything shown to a customer
+
+retries: 2                              # int 0..5; regenerations allowed before a failure is final
+
+global_banned_phrases:                  # list[str]; matched case-insensitively, on word boundaries.
+  # Promises no model can keep and no operator wants to defend. A use case adds its own in
+  # `generative.copy.banned_claims`; this list applies to every generated text, copy or not.
+  - guaranteed
+  - guarantee
+  - risk-free
+  - no questions asked
+  - act now
+  - last chance
+  - limited time only
+  - once in a lifetime
+  - unbeatable
+  - cheapest
+  - fastest in the market
+
+allowed_url_domains: []                 # list[str]; empty means no link may appear in any output.
+                                        # A client's own domains go here; a bare domain matches its
+                                        # subdomains, and nothing else is ever allowed through.
+
+max_output_chars: 8000                  # int; a hard ceiling under every channel limit, so a model
+                                        # that ignores its instructions cannot fill an artefact.

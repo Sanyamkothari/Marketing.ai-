@@ -64,10 +64,10 @@ from tests.fixtures.make_data import (
     GenerationSpec,
     generate,
 )
+from tests.fixtures.planned import PLANNED_ID, planned_config_root
 from tests.integration.test_api_uploads import (
     CLEAN_CSV,
     DEMO_ID,
-    PLANNED_ID,
     REAL_INGEST,
     UNKNOWN_ID,
     StubFrame,
@@ -277,7 +277,7 @@ def install_stub_train_job(monkeypatch: pytest.MonkeyPatch) -> None:
     """Stand in for the train flow, the way this module already stands in for ingest and validate.
 
     These are **API** tests: what they assert is the route, the 409 contract, the run directory and
-    the cancel path, none of which need a fitted model. Since DEC-076 the route submits the real
+    the cancel path, none of which need a fitted model. Since DEC-081 the route submits the real
     `Pipeline.run_train`, so without this the fast suite would train an AutoGluon model per test and
     take hours. The stub is DEC-060's coded stop, which is fast and writes a realistic status
     document, so a run here reaches a terminal state at `prepare`.
@@ -316,7 +316,7 @@ def blocked_client(
     install_validate_stub(monkeypatch)
 
     # `build_train_job(storage, registry, jobs, *, ...)` — three positional arguments, like
-    # `build_score_job`, so the stub must accept them (DEC-076).
+    # `build_score_job`, so the stub must accept them (DEC-081).
     def blocking(*_args: Any, **_kwargs: Any) -> Any:
         def job(cancel: CancelToken) -> None:
             cancel.wait(10)
@@ -324,7 +324,7 @@ def blocked_client(
 
         return job
 
-    # DEC-076: a training run submits the train flow, so that is what must block here.
+    # DEC-081: a training run submits the train flow, so that is what must block here.
     monkeypatch.setattr(runs, "build_train_job", blocking)
     app = create_app(config_root=config_root, data_dir=data_dir)
     app.state.jobs = ThreadJobRunner(max_workers=1)
@@ -490,7 +490,7 @@ def test_run_directory_holds_exactly_the_five_m2_artefacts(
 def test_a_training_run_submits_the_train_flow(
     config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """DEC-076. This is the assertion whose absence let the product ship unable to train.
+    """DEC-081. This is the assertion whose absence let the product ship unable to train.
 
     `POST /runs` used to choose its job by whether a model version had been resolved, and a version
     is only ever resolved on the score path - so every training run got `build_m2_job` and stopped
@@ -523,7 +523,7 @@ def test_a_training_run_submits_the_train_flow(
 
 
 def test_the_m2_stub_is_no_longer_reachable_from_the_route() -> None:
-    """It is kept for its own tests (below) and called by nothing (DEC-076)."""
+    """It is kept for its own tests (below) and called by nothing (DEC-081)."""
     source = Path(runs.__file__).read_text(encoding="utf-8")
     body = source.split("def build_m2_job", 1)[0]
     assert "build_m2_job(" not in body, "the route still submits the M2 stub"
@@ -668,12 +668,21 @@ def test_unknown_upload_is_404(client: TestClient) -> None:
     assert response.json()["detail"]["code"] == "UPLOAD_NOT_FOUND"
 
 
-def test_planned_and_unknown_use_cases_are_404(client: TestClient) -> None:
+def test_planned_and_unknown_use_cases_are_404(
+    client: TestClient, tmp_path: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An unknown id on the shipped configuration; a planned one on a root that still has one."""
     upload_id = upload(client)
-    for use_case, code in ((PLANNED_ID, "USE_CASE_PLANNED"), (UNKNOWN_ID, "USE_CASE_NOT_FOUND")):
-        response = client.post("/runs", json=run_body(upload_id, use_case=use_case))
-        assert response.status_code == 404
-        assert response.json()["detail"]["code"] == code
+    response = client.post("/runs", json=run_body(upload_id, use_case=UNKNOWN_ID))
+    assert response.status_code == 404
+    assert response.json()["detail"]["code"] == "USE_CASE_NOT_FOUND"
+
+    install_ingest_stub(monkeypatch)
+    root = planned_config_root(tmp_path / "planned")
+    with TestClient(create_app(config_root=root, data_dir=data_dir)) as planned_client:
+        planned = planned_client.post("/runs", json=run_body(upload_id, use_case=PLANNED_ID))
+    assert planned.status_code == 404
+    assert planned.json()["detail"]["code"] == "USE_CASE_PLANNED"
 
 
 def test_mode_mismatch_is_409(client: TestClient) -> None:
@@ -955,7 +964,7 @@ def test_broken_fixture_returns_409_with_the_validation_payload(
     """Design §6.9: every error-severity variant is refused with its code; warnings never block.
 
     The train job is stubbed for the same reason the `client` fixture stubs it: a warning-only
-    variant is accepted with a 202, and since DEC-076 that really does start the train flow, which
+    variant is accepted with a 202, and since DEC-081 that really does start the train flow, which
     would fit an AutoGluon model per variant in the fast suite.
     """
     install_stub_train_job(monkeypatch)
@@ -989,3 +998,31 @@ def test_broken_fixture_returns_409_with_the_validation_payload(
     assert report.error_count >= 1
     assert code in {check.code for check in report.checks}
     assert store.list_keys("runs/") == ()
+
+
+# ---------------------------------------------------------------------------
+# The Phase 2 shape, refused until Phase 2 implements it (DEC-077, DEC-078)
+# ---------------------------------------------------------------------------
+def test_a_composite_primary_key_is_refused_by_name(client: TestClient) -> None:
+    """The contract accepts several columns; this engine joins on one, and says so."""
+    response = start_run(client, primary_key=[PRIMARY_KEY, "gender"])
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "COMPOSITE_KEY_NOT_SUPPORTED"
+    assert PRIMARY_KEY in detail["message"] and "gender" in detail["message"]
+
+
+def test_a_single_primary_key_sent_as_a_list_is_accepted(client: TestClient) -> None:
+    """One column is one column however it is spelled; the wide type must not cost the narrow case."""
+    response = start_run(client, primary_key=[PRIMARY_KEY])
+    assert response.status_code == 202, response.text
+
+
+@pytest.mark.parametrize("field", ["dataset_id", "client_id"])
+def test_an_onboarded_dataset_is_refused_rather_than_ignored(client: TestClient, field: str) -> None:
+    """The request also carries an upload_id, so ignoring this would score a different file."""
+    response = start_run(client, **{field: "anything"})
+    assert response.status_code == 422
+    detail = response.json()["detail"]
+    assert detail["code"] == "DATASET_ONBOARDING_NOT_AVAILABLE"
+    assert field in detail["message"]

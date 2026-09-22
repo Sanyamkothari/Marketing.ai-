@@ -18,12 +18,16 @@ from typing import BinaryIO, Final, Protocol, TypeVar, runtime_checkable
 from pydantic import BaseModel
 
 from engine.contracts import dump_artefact
+from engine.settings import DEFAULT_DATA_DIR as _DEFAULT_DATA_DIR
+from engine.settings import ENV_VARS, settings
 
 M = TypeVar("M", bound=BaseModel)
 
 MAX_KEY_LENGTH: Final[int] = 512
-DATA_DIR_ENV_VAR: Final[str] = "MARKETING_AI_DATA_DIR"
-DEFAULT_DATA_DIR: Final[str] = "data"
+DATA_DIR_ENV_VAR: Final[str] = ENV_VARS["data_dir"]
+# Both constants are defined in `engine.settings` and re-exported here, where every caller of
+# this module already looks for them.
+DEFAULT_DATA_DIR: Final[str] = _DEFAULT_DATA_DIR
 
 
 class StorageError(Exception):
@@ -242,11 +246,27 @@ def upload_key(upload_id: str, filename: str) -> str:
     return f"uploads/{upload_id}/{filename}"
 
 
+def index_key(index_id: str, *parts: str) -> str:
+    """Key of a file inside a knowledge index's directory.
+
+    A knowledge index sits beside runs and models rather than inside one: it outlives any single
+    question, several use cases could be pointed at one, and Phase 4 moves the whole directory to
+    S3 and then to OpenSearch without a run having to move with it.
+    """
+    return "/".join(("indexes", index_id, *parts))
+
+
 def model_key(model_id: str, *parts: str) -> str:
     """Key of a file (or directory) belonging to a model version."""
     return "/".join(("models", model_id, *parts))
 
 
 def default_storage() -> LocalStorage:
-    """The process-wide default store: `$MARKETING_AI_DATA_DIR` (or `data/`)."""
-    return LocalStorage(Path(os.environ.get(DATA_DIR_ENV_VAR, DEFAULT_DATA_DIR)))
+    """The process-wide default store: `$MARKETING_AI_DATA_DIR` (or `data/`).
+
+    Read through `engine.settings`, so the variable is documented in one place. `Settings` also
+    carries `storage_backend`, which is `local` until Phase 4a implements `S3Storage`; this factory
+    stays local-only until that implementation exists, rather than branching on a value with
+    nothing behind it.
+    """
+    return LocalStorage(settings().data_dir)

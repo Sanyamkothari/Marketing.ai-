@@ -27,6 +27,12 @@ output:
     label: "Eligible customers"
     formula: 'count_where_band_in(["High","Medium"])'
 
+generative:
+  kind: campaign_copy
+  campaign_copy:
+    allowed_fields: [first_name, plan_type, last_offer]        # narrower than the engine default: no band, no tenure
+    banned_claims: ["guaranteed", "free forever", "best in India", "lowest price"]
+
 ui:
   pages:
     data: "Churned customer + offer data"
