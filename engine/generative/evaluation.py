@@ -16,7 +16,11 @@ we find it and then say something unusable" about. So `evaluate` re-embeds the q
 `retrieval.retrieve` itself, over the same store and the same `RagConfig` the assistant used, rather
 than reading `AssistantAnswer.citations`. The cost is one extra embedding per question over the
 minimum possible; the benefit is that retrieval quality is measured independently of what the model
-or a guardrail did with what it was given.
+or a guardrail did with what it was given. A row the reference set says should be refused is the
+exception and gets no verdict at all: it is not an answerable question, it has no document it ought
+to have found, and folding it into `retrieval_hit_rate` would measure retrieval against rows nobody
+wanted retrieval for - which is why `RagEvalQuestion.retrieval_hit` is null for one whether or not
+its `source_doc` cell happens to be filled in.
 
 **A retrieval hit is a document match confirmed by a text match.** Whether the right document was
 retrieved is decided by comparing a chunk's `doc_id` - the document's stem, with no extension - to
@@ -53,7 +57,8 @@ text says, and nothing else about the row is even worth checking. **Retrieval** 
 row that correctly did not refuse: a hit, or no verdict at all when there was no `source_doc` to
 check against. **Faithfulness** comes last, checked against the same threshold
 `configs/guardrails.yaml` already sets for the assistant's own grounding guardrail, because "were the
-claims grounded" is exactly that guardrail's question asked a second time with a number attached.
+claims grounded" is exactly that guardrail's question asked a second time with a number attached -
+and not checked at all where that file sets no bar, for the reason `_faithfulness_threshold` gives.
 `correctness` is deliberately not a fourth gate: nothing in this package's configuration sets a bar
 for it, and inventing one here would be precisely the guessed number DEC-208 refuses to write down
 for cost. It is still graded, reported on every row it can be, and averaged into
@@ -85,7 +90,7 @@ from engine.generative.contracts import (
     RagEvalQuestion,
 )
 from engine.generative.errors import REFERENCE_SET_INVALID, generative_error
-from engine.generative.guardrails import Guardrails
+from engine.generative.guardrails import GuardrailAction, Guardrails
 from engine.generative.prompts import Prompt, load_prompt, prompt_versions, render
 from engine.generative.retrieval import Retrieved, retrieve
 from engine.generative.vectorstore import VectorStore
@@ -330,15 +335,15 @@ def _grade(
         guardrails=guardrails,
         config_root=config_root,
     )
-    has_source = bool(row.source_doc)
+    gradeable = bool(row.source_doc) and not row.expect_refusal
     retrieval = (
         _retrieve(meter, store, index_id, row.question, use_case.generative.rag)
-        if has_source or not result.refused
+        if gradeable or not result.refused
         else None
     )
     retrieval_hit = (
         _retrieval_hit(retrieval, row.source_doc, row.reference_answer)
-        if has_source and retrieval is not None
+        if gradeable and retrieval is not None
         else None
     )
     faithfulness: float | None = None
@@ -374,6 +379,26 @@ def _grade(
         latency_ms=result.latency_ms,
         cost_estimate_usd=_cost_delta(before, meter.cost_so_far),
     )
+
+
+def _faithfulness_threshold(guardrails: Guardrails) -> float:
+    """The bar a row's faithfulness must clear, or 0.0 when the configuration sets none.
+
+    The bar is `configs/guardrails.yaml`'s, because "were the claims grounded" is the assistant's own
+    faithfulness guardrail asked a second time with a number attached, and grading it against a
+    second bar written here would be two answers to one question. A deployment that has no
+    faithfulness judge, or has set its `on_fail` to `off`, has said what it wants: `0.0`, which no
+    clamped score is below, so `UNFAITHFUL` cannot be the failure named on a row nobody set a bar
+    for. The tempting alternative, failing closed at 1.0, would invent the strictest bar in the range
+    for a check the operator switched off - exactly the guessed number DEC-208 refuses to write down
+    for cost, and it would mark every answerable row `unfaithful` in a deployment whose
+    `guardrails.yaml` is simply absent. The score itself is still judged and still reported; only the
+    gate goes.
+    """
+    rule = guardrails.policy.judges.get("faithfulness")
+    if rule is None or rule.on_fail is GuardrailAction.OFF:
+        return 0.0
+    return rule.threshold
 
 
 def _worst_first(question: RagEvalQuestion) -> tuple[bool, float]:
@@ -445,8 +470,7 @@ def evaluate(
     rows = _read_reference_set(reference_set_path, generative.reference_set)
     faithfulness_prompt = load_prompt(FAITHFULNESS_PROMPT, config_root)
     correctness_prompt = load_prompt(CORRECTNESS_PROMPT, config_root)
-    faithfulness_rule = guardrails.policy.judges.get("faithfulness")
-    faithfulness_threshold = faithfulness_rule.threshold if faithfulness_rule is not None else 1.0
+    faithfulness_threshold = _faithfulness_threshold(guardrails)
 
     questions = [
         _grade(

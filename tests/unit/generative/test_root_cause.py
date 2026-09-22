@@ -45,6 +45,7 @@ from engine.generative.contracts import (
     SegmentStats,
 )
 from engine.generative.errors import (
+    BUDGET_EXCEEDED,
     COMPLAINT_COLUMN_MISSING,
     MODEL_OUTPUT_MALFORMED,
     RUN_NOT_FINISHED,
@@ -586,3 +587,33 @@ def test_the_root_cause_summary_artefact_validates_end_to_end(
         for cause in segment.summary.root_causes:
             assert cause.evidence_refs
             assert set(cause.evidence_refs) <= segment.evidence_pack.reference_ids
+
+
+# ---------------------------------------------------------------------------
+# A job that runs out of budget stops, rather than blaming each segment in turn
+# ---------------------------------------------------------------------------
+def test_running_out_of_budget_stops_the_job_rather_than_blocking_every_remaining_segment(
+    run: tuple[LocalStorage, str, UseCaseConfig], config_root: Path
+) -> None:
+    """`BUDGET_EXCEEDED` is about the job: no later segment could have been generated either."""
+    storage, run_id, use_case = run
+    meter = Meter(
+        GroundedFakeLLMClient(),
+        job_id="rc_budget",
+        llm=LlmConfig(),
+        budget=BudgetConfig(cache=False, max_calls_per_run=1),
+    )
+    guardrails = _guardrails(meter, config_root)
+
+    with pytest.raises(GenerativeError) as excinfo:
+        build_root_cause_summary(
+            run_id,
+            use_case=use_case,
+            storage=storage,
+            meter=meter,
+            guardrails=guardrails,
+            config_root=config_root,
+        )
+
+    assert excinfo.value.code == BUDGET_EXCEEDED
+    assert meter.calls == 1, "the meter refused the second call rather than making it"
