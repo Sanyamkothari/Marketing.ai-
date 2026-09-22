@@ -432,6 +432,16 @@ function outputPage(uc, run, art, byPath, scoresHref) {
             .filter(Boolean)
             .join(" · ") || "None",
         ],
+        [
+          "Reasons",
+          summary
+            ? summary.rows_with_fallback_reasons
+              ? `${fmtInt(summary.rows_with_fallback_reasons)} of ${fmtInt(
+                  summary.rows_scored,
+                )} rows on fallback reasons`
+              : "measured on every row"
+            : EM_DASH,
+        ],
         ["Drift alert", `PSI above ${readPath(config, "monitoring.drift_psi_threshold")}`],
         [
           "Drift measured",

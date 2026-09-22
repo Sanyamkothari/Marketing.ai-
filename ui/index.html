@@ -112,6 +112,10 @@ img,svg{max-width:100%}
 .field{display:flex;flex-direction:column;gap:6px;width:240px}
 .field.sm{width:170px}
 .field .sub{font-size:12px;color:var(--muted)}
+/* A setting the engine records but does not act on yet: legible, plainly inert, and labelled. */
+.field.advisory{opacity:.62}
+.field.advisory input,.field.advisory select{cursor:not-allowed}
+.field.advisory .advisory-note{font-size:11px;color:var(--faint);line-height:1.35}
 @media (max-width:700px){.field,.field.sm{width:100%}}
 .control{position:relative;display:flex;align-items:center;height:38px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);font-size:13px;color:var(--ink);transition:border-color .15s}
 .control:hover{border-color:var(--ink2)}

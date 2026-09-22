@@ -63,7 +63,13 @@ TARGET: str = "converted_30d"
 ROWS: int = 10_000
 # plan §10, verbatim: "full train flow on the synthetic Targeted Advertisement data with
 # `time_limit_minutes: 1` and `strategy: fast`".
-OVERRIDES: dict[str, object] = {"model_search.time_limit_minutes": 1, "model_search.strategy": "fast"}
+# `tuning_trials: 5` keeps the one-minute budget honest: since DEC-057 each trial is a real
+# AutoGluon HPO fit, so the shipped default of 50 would divide this minute 50 ways per family.
+OVERRIDES: dict[str, object] = {
+    "model_search.time_limit_minutes": 1,
+    "model_search.strategy": "fast",
+    "model_search.tuning_trials": 5,
+}
 
 
 @dataclass(frozen=True)

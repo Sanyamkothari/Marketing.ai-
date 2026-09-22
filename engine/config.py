@@ -1718,6 +1718,7 @@ class FieldSpec(_Base):
     max_visible: int | None = None
     help: str = ""
     required: bool = True
+    advisory: bool = False
     visible_when: VisibleWhen | None = None
     order: int
 
@@ -1824,8 +1825,52 @@ def _band_fields(bands: Sequence[Band]) -> tuple[FieldSpec, ...]:
     )
 
 
+ADVISORY_PATHS: Final[frozenset[str]] = frozenset(
+    {
+        "features.auto_feature_engineering",
+        "features.categorical_encoding",
+        "features.numeric_scaling",
+        "features.text_columns",
+        "features.selection",
+        "features.max_features",
+        "monitoring.retraining",
+        "monitoring.performance_alert_drop_pct",
+        "governance.retention_days",
+    }
+)
+"""Settings the schema still carries but no stage reads yet (DEC-058).
+
+They are real product intentions with a shape already agreed, so removing them would lose the
+agreement; leaving them as live controls would promise behaviour the engine does not have. So they
+stay, marked: the form renders them disabled under :const:`ADVISORY_NOTE`, and
+:attr:`Recipe.recipe_hash` leaves them out, because a setting that changes no model must not make
+two identical models look like different recipes.
+
+**Adding a path here is how a setting is parked; removing one is how it ships.** Nothing else needs
+to change in either direction - the form, the documentation and the hash all read this set.
+"""
+
+ADVISORY_NOTE: Final[str] = "Coming later — recorded with the run, not yet applied."
+"""What the form prints beside a disabled advisory control, so the reason is on screen (DEC-058)."""
+
+
 def _numbered(fields: Sequence[FieldSpec], start: int = 1) -> tuple[FieldSpec, ...]:
-    return tuple(field.model_copy(update={"order": start + index}) for index, field in enumerate(fields))
+    """Number a stage's fields in order, and mark the ones no stage reads yet (DEC-058).
+
+    `advisory` is derived here rather than written on each `FieldSpec` so that
+    :const:`ADVISORY_PATHS` stays the only place the fact is recorded: a setting cannot be parked
+    in the form and still counted in the recipe hash, because both read the same set.
+    """
+    return tuple(
+        field.model_copy(
+            update={
+                "order": start + index,
+                "advisory": field.path in ADVISORY_PATHS,
+                "help": ADVISORY_NOTE if field.path in ADVISORY_PATHS else field.help,
+            }
+        )
+        for index, field in enumerate(fields)
+    )
 
 
 def _stage_specs(bands: Sequence[Band]) -> tuple[StageSpec, ...]:
@@ -2542,8 +2587,21 @@ class Recipe(_Base):
         Canonical JSON with sorted keys, so two recipes that differ only in field
         order hash alike. Uses sha256 rather than `hash()`, which is salted per
         process and would not survive a restart.
+
+        :const:`ADVISORY_PATHS` are removed before hashing (DEC-058). The hash exists to answer
+        "would this produce the same model", and a setting no stage reads cannot change a model.
+        Leaving them in would make two runs that fitted byte-identical models hash differently
+        merely because someone moved a control that does nothing yet. They stay on the recipe
+        itself, and so in `run_config.json` and the run manifest, because what the user chose is
+        still worth recording; they are simply not part of its identity.
         """
-        canonical = json.dumps(self.model_dump(mode="json"), sort_keys=True, separators=(",", ":"))
+        payload = self.model_dump(mode="json")
+        for path in ADVISORY_PATHS:
+            block, _, field = path.partition(".")
+            section = payload.get(block)
+            if isinstance(section, dict):
+                section.pop(field, None)
+        canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
         return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
 
 

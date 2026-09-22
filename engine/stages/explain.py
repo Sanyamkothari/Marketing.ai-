@@ -24,6 +24,15 @@ needs no `shap` at all and therefore always works. A tier that raises is logged 
 next one runs; :class:`RowReasons` carries the tier that actually produced the numbers, which is
 what the Running screen's detail line names.
 
+**The tiers also run per row, not only per run (DEC-056).** A tier can answer for a whole frame and
+still measure *one* row's every contribution as zero - a prediction so saturated that moving a
+single feature does not move it is the usual cause - and a zero is not a reason, so that row would
+otherwise reach `scores.csv` with empty cells. The tiers therefore run again on exactly those rows,
+in the same order, and a row no tier can measure keeps **general** reasons instead: the run's most
+important features, carrying that row's own values, with `Direction.NONE`, a zero contribution and
+`(general)` in the sentence. `RowReasons.fallback_rows` counts every row that needed either, and
+reaches the Output page as `ScoringSummary.rows_with_fallback_reasons`.
+
 **Reason text.** `Reason.text` is built from the feature, its value and the direction, and from
 nothing else: `"visits_last_7d ↑ (12)"`, `"plan_tier = basic"`, `"last_contacted_at missing"`.
 The plan's example reads `"visits_last_7d ↑ (12 visits)"`; the unit `"visits"` exists in no
@@ -41,7 +50,7 @@ import math
 import time
 from dataclasses import dataclass
 from functools import lru_cache
-from typing import TYPE_CHECKING, Final, Literal, Protocol, cast
+from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from engine.config import ModelFamily
 from engine.contracts import (
@@ -49,6 +58,7 @@ from engine.contracts import (
     FeatureImportance,
     FeatureImportanceItem,
     Reason,
+    ReasonMethod,
     RowExplanation,
 )
 from engine.stages.scorer import load_scorer, to_numpy_dtypes
@@ -58,7 +68,7 @@ from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger, log_stage
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Callable, Mapping, Sequence
 
     import numpy as np
     import numpy.typing as npt
@@ -72,6 +82,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "EXPLAIN_MAX_ROWS",
+    "GENERAL_SUFFIX",
     "IMPORTANCE_CAPTION",
     "IMPORTANCE_UNAVAILABLE_CAPTION",
     "KERNEL_SHAP_MAX_ROWS",
@@ -85,6 +96,7 @@ __all__ = [
     "build_feature_importance",
     "build_row_explanations",
     "explain_detail",
+    "fallback_note",
     "format_value",
     "global_importance",
     "read_row_explanations",
@@ -163,8 +175,8 @@ _IMPORTANCE_BUDGET_SHARE: Final[float] = 0.1
 _NUM_SHUFFLE_SETS: Final[int] = 5
 _UNRANKED: Final[int] = 1_000_000
 
-ReasonMethod = Literal["TreeSHAP", "KernelSHAP", "permutation"]
-"""The tier that produced a row's contributions; the detail line names it verbatim."""
+GENERAL_SUFFIX: Final[str] = "(general)"
+"""What a general reason's sentence ends with, so a reader can tell it from a measured one."""
 
 
 class RowScorer(Protocol):
@@ -226,10 +238,16 @@ class RowReasons:
 
     `row_reasons` returns the explanations alone, as the design's signature says; the pipeline calls
     :func:`reasons_for` instead when it needs `method` for the Running screen's detail line.
+
+    `method` is the **primary** tier: the first one that produced contributions for any row.
+    Individual rows may carry a later tier's reasons, or general ones, when the primary tier
+    measured every one of their contributions as zero; `fallback_rows` counts exactly those, and
+    reaches the Output page as `ScoringSummary.rows_with_fallback_reasons` (DEC-056).
     """
 
     explanations: tuple[RowExplanation, ...]
     method: ReasonMethod
+    fallback_rows: int = 0
 
 
 @dataclass(frozen=True)
@@ -239,6 +257,14 @@ class _Contributions:
     rows: pd.DataFrame
     values: pd.DataFrame
     method: ReasonMethod
+
+
+@dataclass(frozen=True)
+class _TierOutcome:
+    """A tier's contributions plus which positions of the frame it was handed they cover."""
+
+    positions: tuple[int, ...]
+    found: _Contributions
 
 
 # ---------------------------------------------------------------------------
@@ -446,40 +472,250 @@ def reasons_for(
     thousand.
 
     `importance` is the global chart, when one was computed: it settles the tie-break between two
-    equally strong contributions and chooses which features the permutation tier perturbs. It
-    orders an explanation and does nothing else - least of all change the model.
+    equally strong contributions, chooses which features the permutation tier perturbs, and ranks
+    the general reasons of the last resort below. It orders an explanation and does nothing else -
+    least of all change the model.
+
+    **No row is left without a reason (DEC-056).** A tier can measure every one of a row's
+    contributions as zero - a saturated prediction that no single feature moves is the usual
+    cause - and :func:`reasons_for_row` will not invent a reason out of a zero. Rather than export
+    that row with empty cells, the tiers run again *on those rows alone*, in order; and if the last
+    one still measures nothing, the row keeps general reasons taken from the importance chart,
+    marked `ReasonMethod.GENERAL`, with no direction and a contribution of zero, because that is
+    what was actually measured. `RowReasons.fallback_rows` counts every row that needed any of
+    this, so the number is reported rather than hidden.
     """
     started = time.perf_counter()
     features = [column for column in scorer.feature_columns if column in frame.columns]
     rank = _importance_rank(importance)
     if len(frame) == 0:
-        return RowReasons(explanations=(), method="permutation")
+        return RowReasons(explanations=(), method=ReasonMethod.PERMUTATION)
     sample = _sample_rows(frame, max_rows, seed)
-    found = _tree_shap(scorer, sample, features)
-    if found is None:
-        kernel_rows = _kernel_rows(sample, kernel_max_rows, seed, every_row=max_rows is None)
-        found = None if kernel_rows is None else _kernel_shap(scorer, kernel_rows, features, seed)
-    if found is None:
-        found = _permutation_contributions(scorer, sample, features, rank)
+    limit = config.evaluation.reasons_per_row
+
+    explained: dict[int, RowExplanation] = {}
+    blank: dict[int, RowExplanation] = {}
+    strength: dict[str, float] = {}
+    primary: ReasonMethod | None = None
+    pending = list(range(len(sample)))
+
+    for tier in _tier_calls(scorer, features, seed, rank, kernel_max_rows, every_row=max_rows is None):
+        if not pending:
+            break
+        outcome = tier(sample.iloc[pending])
+        if outcome is None:
+            continue  # the tier declined outright; the next one sees the same rows
+        if primary is None:
+            primary = outcome.found.method
+        found = outcome.found
+        totals = _aggregate_columns(found.values, _source_map(_names(found.values), features))
+        _accumulate_strength(strength, totals)
+        covered = [pending[position] for position in outcome.positions]
+        still: list[int] = []
+        for position, explanation in zip(
+            covered,
+            _explanations_from(found, totals, scorer, primary_key=primary_key, limit=limit, rank=rank),
+            strict=True,
+        ):
+            if explanation.reasons:
+                explained[position] = explanation
+            else:
+                blank[position] = explanation
+                still.append(position)
+        # Only a row this tier EXPLAINED and could not move retries. A row it never covered was
+        # left out by the caller's own row budget, and is dropped from the run as it always was.
+        pending = still
+
+    if pending:
+        _LOGGER.warning(
+            "explain: %d of %d rows measured every contribution as zero; falling back to general "
+            "reasons from the importance chart",
+            len(pending),
+            len(sample),
+        )
+        for position, explanation in zip(
+            pending,
+            _general_explanations(
+                sample.iloc[pending],
+                scorer,
+                _general_ranking(importance, strength, features),
+                primary_key=primary_key,
+                limit=limit,
+            ),
+            strict=True,
+        ):
+            explained[position] = explanation
+
+    for position, explanation in blank.items():  # only rows no fallback could rescue
+        explained.setdefault(position, explanation)
+    method = ReasonMethod.PERMUTATION if primary is None else primary
+    explanations = tuple(explained[position] for position in sorted(explained))
+    fallback_rows = sum(1 for explanation in explanations if explanation.method is not method)
+    log_stage(_LOGGER, "explain.reasons", rows=len(explanations), seconds=time.perf_counter() - started)
+    return RowReasons(explanations=explanations, method=method, fallback_rows=fallback_rows)
+
+
+def _names(values: pd.DataFrame) -> list[str]:
+    """Contribution-frame column names as strings."""
+    return [str(name) for name in values.columns]
+
+
+def _explanations_from(
+    found: _Contributions,
+    totals: Mapping[str, list[float]],
+    scorer: RowScorer,
+    *,
+    primary_key: str,
+    limit: int,
+    rank: Mapping[str, int],
+) -> tuple[RowExplanation, ...]:
+    """One tier's contributions turned into explanations, stamped with the tier that measured them."""
     scores = [float(value) for value in scorer.score(found.rows).tolist()]
-    explanations = build_row_explanations(
+    return build_row_explanations(
         found.rows,
         found.values,
         scores,
-        features=features,
+        features=list(totals),
         primary_key=primary_key,
-        limit=config.evaluation.reasons_per_row,
+        limit=limit,
         rank=rank,
+        method=found.method,
+        totals=totals,
     )
-    log_stage(_LOGGER, "explain.reasons", rows=len(explanations), seconds=time.perf_counter() - started)
-    return RowReasons(explanations=explanations, method=found.method)
+
+
+def _tier_calls(
+    scorer: RowScorer,
+    features: Sequence[str],
+    seed: int,
+    rank: Mapping[str, int],
+    kernel_max_rows: int | None,
+    *,
+    every_row: bool,
+) -> tuple[Callable[[pd.DataFrame], _TierOutcome | None], ...]:
+    """The three per-row tiers as callables, in the order plan section 6.3 tries them.
+
+    Each returns the positions **within the frame it was handed** that it answered for, so the loop
+    above can tell a row a tier explained from one it never looked at. Only the KernelSHAP tier
+    ever answers for a subset, and only when the caller asked for a sample; its row cap is applied
+    here, before the call.
+    """
+
+    def whole(
+        call: Callable[[pd.DataFrame], _Contributions | None],
+    ) -> Callable[[pd.DataFrame], _TierOutcome | None]:
+        def run(rows: pd.DataFrame) -> _TierOutcome | None:
+            found = call(rows)
+            return None if found is None else _TierOutcome(tuple(range(len(rows.index))), found)
+
+        return run
+
+    def kernel(rows: pd.DataFrame) -> _TierOutcome | None:
+        positions = _kernel_positions(len(rows.index), kernel_max_rows, seed, every_row=every_row)
+        if positions is None:
+            return None
+        picked = rows if len(positions) == len(rows.index) else rows.iloc[list(positions)]
+        found = _kernel_shap(scorer, picked, features, seed)
+        return None if found is None else _TierOutcome(positions, found)
+
+    return (
+        whole(lambda rows: _tree_shap(scorer, rows, features)),
+        kernel,
+        whole(lambda rows: _permutation_contributions(scorer, rows, features, rank)),
+    )
+
+
+def _accumulate_strength(strength: dict[str, float], totals: Mapping[str, Sequence[float]]) -> None:
+    """Add each feature's mean absolute contribution, so a run can rank features it did measure."""
+    for feature, values in totals.items():
+        if values:
+            strength[feature] = strength.get(feature, 0.0) + sum(abs(value) for value in values) / len(values)
+
+
+def _general_ranking(
+    importance: FeatureImportance | None, strength: Mapping[str, float], features: Sequence[str]
+) -> tuple[str, ...]:
+    """Features most worth naming in a general reason, best first.
+
+    The global chart is the right answer and the usual one. Failing that, the mean absolute
+    contribution over the rows this run *did* measure is a real ranking taken from this model. The
+    feature order is the floor: still deterministic, and the reason text says it is general either
+    way.
+    """
+    known = set(features)
+    if importance is not None and importance.items:
+        ordered = [item.feature for item in importance.items if item.feature in known]
+        if ordered:
+            return tuple(ordered)
+    if strength:
+        ranked = sorted(strength, key=lambda name: (-strength[name], name))
+        if ranked:
+            return tuple(ranked)
+    return tuple(features)
+
+
+def _general_explanations(
+    rows: pd.DataFrame,
+    scorer: RowScorer,
+    ranking: Sequence[str],
+    *,
+    primary_key: str,
+    limit: int,
+) -> tuple[RowExplanation, ...]:
+    """The last resort: the top general features, carrying each row's own value.
+
+    Nothing here is measured on the row, so nothing here claims to be: the contribution is zero
+    because zero is what every tier measured, and the direction is `NONE` because the feature moved
+    this row's score neither way.
+    """
+    chosen = [feature for feature in ranking if feature in rows.columns][:limit]
+    scores = [float(value) for value in scorer.score(rows).tolist()]
+    keys = (
+        [str(value) for value in rows[primary_key].tolist()]
+        if primary_key in rows.columns
+        else [str(index) for index in rows.index]
+    )
+    values = {feature: rows[feature].tolist() for feature in chosen}
+    return tuple(
+        RowExplanation(
+            primary_key=keys[position],
+            score=round(scores[position], _SCORE_DECIMALS),
+            reasons=tuple(_general_reason(feature, values[feature][position]) for feature in chosen),
+            method=ReasonMethod.GENERAL,
+        )
+        for position in range(len(rows.index))
+    )
+
+
+def _general_reason(feature: str, value: object) -> Reason:
+    """One general reason: this feature matters across the run, and here is this row's value."""
+    text = format_value(value)
+    return Reason(
+        feature=feature,
+        value=text,
+        contribution=0.0,
+        direction=Direction.NONE,
+        text=reason_text(
+            feature, text, Direction.NONE, numeric=_is_numeric(value), missing=_is_missing(value)
+        ),
+    )
 
 
 def explain_detail(importance: FeatureImportance, reasons: RowReasons | None) -> str:
     """The Running-screen line for the explain stage (design section 6.5)."""
     if reasons is None:
         return f"top {len(importance.items)} features · per-row reasons turned off"
-    return f"top {len(importance.items)} features · {reasons.method} reasons for {len(reasons.explanations)} rows"
+    return (
+        f"top {len(importance.items)} features · {reasons.method} reasons for "
+        f"{len(reasons.explanations)} rows{fallback_note(reasons)}"
+    )
+
+
+def fallback_note(reasons: RowReasons) -> str:
+    """The clause that names the rows the primary tier could not explain, or nothing (DEC-056)."""
+    if reasons.fallback_rows == 0:
+        return ""
+    return f" · {reasons.fallback_rows} on fallback reasons"
 
 
 def _importance_rank(importance: FeatureImportance | None) -> dict[str, int]:
@@ -489,20 +725,26 @@ def _importance_rank(importance: FeatureImportance | None) -> dict[str, int]:
     return {item.feature: item.rank for item in importance.items}
 
 
-def _sample_rows(frame: pd.DataFrame, limit: int | None, seed: int) -> pd.DataFrame:
-    """At most `limit` rows, seeded and kept in the frame's own row order; `None` keeps every row."""
+def _sample_positions(rows: int, limit: int | None, seed: int) -> tuple[int, ...]:
+    """At most `limit` row positions, seeded and in ascending order; `None` keeps every one."""
     import numpy as np
 
-    if limit is None or len(frame) <= limit:
-        return frame
-    picks = np.sort(np.random.default_rng(seed).choice(len(frame), size=limit, replace=False))
-    return frame.iloc[picks]
+    if limit is None or rows <= limit:
+        return tuple(range(rows))
+    picks = np.sort(np.random.default_rng(seed).choice(rows, size=limit, replace=False))
+    return tuple(int(pick) for pick in picks)
 
 
-def _kernel_rows(
-    sample: pd.DataFrame, kernel_max_rows: int | None, seed: int, *, every_row: bool
-) -> pd.DataFrame | None:
-    """The rows tier 2 would explain, or `None` when the tier must be skipped altogether.
+def _sample_rows(frame: pd.DataFrame, limit: int | None, seed: int) -> pd.DataFrame:
+    """At most `limit` rows, seeded and kept in the frame's own row order; `None` keeps every row."""
+    positions = _sample_positions(len(frame), limit, seed)
+    return frame if len(positions) == len(frame) else frame.iloc[list(positions)]
+
+
+def _kernel_positions(
+    rows: int, kernel_max_rows: int | None, seed: int, *, every_row: bool
+) -> tuple[int, ...] | None:
+    """The row positions tier 2 would explain, or `None` when the tier must be skipped altogether.
 
     KernelSHAP costs about a fifth of a second per row for a twenty-feature model - every row is
     `2048 + 2 * features` model evaluations over the background sample - so a scoring file of a
@@ -510,18 +752,23 @@ def _kernel_rows(
     sample instead, because the rows left out would reach `scores.csv` with empty reason cells. The
     tier therefore declines, and the permutation tier explains all of them at tens of microseconds
     a row. A caller who does want KernelSHAP over everything passes `kernel_max_rows=None`.
+
+    A sample here is a **coverage** decision, not a failure: the rows it leaves out are ones the
+    caller's own `max_rows` budget already said need no reason, so they are dropped from the run
+    rather than retried on the next tier (DEC-056). Only a row this tier explained and could not
+    move goes on to the next one.
     """
-    if kernel_max_rows is None or len(sample) <= kernel_max_rows:
-        return sample
+    if kernel_max_rows is None or rows <= kernel_max_rows:
+        return tuple(range(rows))
     if every_row:
         _LOGGER.warning(
             "explain: KernelSHAP is capped at %d rows and all %d rows must be explained; using the "
             "permutation tier, which explains every row, rather than leaving rows without a reason",
             kernel_max_rows,
-            len(sample),
+            rows,
         )
         return None
-    return _sample_rows(sample, kernel_max_rows, seed)
+    return _sample_positions(rows, kernel_max_rows, seed)
 
 
 def _tree_shap(scorer: RowScorer, rows: pd.DataFrame, features: Sequence[str]) -> _Contributions | None:
@@ -548,7 +795,7 @@ def _tree_shap(scorer: RowScorer, rows: pd.DataFrame, features: Sequence[str]) -
     except Exception:
         _LOGGER.warning("explain: TreeSHAP is unavailable, falling back", exc_info=True)
         return None
-    return _Contributions(rows=rows, values=frame, method="TreeSHAP")
+    return _Contributions(rows=rows, values=frame, method=ReasonMethod.TREE_SHAP)
 
 
 def _best_tree_model(predictor: _Predictor) -> _TreeModel | None:
@@ -636,7 +883,7 @@ def _kernel_shap(
     except Exception:
         _LOGGER.warning("explain: KernelSHAP is unavailable, falling back", exc_info=True)
         return None
-    return _Contributions(rows=rows, values=frame, method="KernelSHAP")
+    return _Contributions(rows=rows, values=frame, method=ReasonMethod.KERNEL_SHAP)
 
 
 def _permutation_contributions(
@@ -669,7 +916,7 @@ def _permutation_contributions(
         moved = np.asarray(scorer.score(replaced).to_numpy(), dtype=np.float64)
         contributions[feature] = np.asarray(base - moved, dtype=np.float64)
     frame = pd.DataFrame(contributions, index=rows.index, columns=list(chosen))
-    return _Contributions(rows=rows, values=frame, method="permutation")
+    return _Contributions(rows=rows, values=frame, method=ReasonMethod.PERMUTATION)
 
 
 def _permutation_features(features: Sequence[str], rank: Mapping[str, int]) -> list[str]:
@@ -707,15 +954,23 @@ def build_row_explanations(
     primary_key: str,
     limit: int,
     rank: Mapping[str, int] | None = None,
+    method: ReasonMethod = ReasonMethod.PERMUTATION,
+    totals: Mapping[str, list[float]] | None = None,
 ) -> tuple[RowExplanation, ...]:
     """One `RowExplanation` per row of `rows`, in the frame's own order.
 
     Contributions of generated columns are summed back onto the column the user uploaded, so a
     reason always names something the reader recognises: AutoGluon's `snapshot_date.year` and
     `snapshot_date.month` become one `snapshot_date` reason.
+
+    `method` stamps every explanation with the tier that measured it, so a caller that retries a
+    later tier on the rows the first one left blank can tell them apart afterwards (DEC-056).
+    `totals` is that same aggregation when the caller has already computed it; leaving it `None`
+    recomputes it here, which is what every caller outside this module does.
     """
     columns = [str(name) for name in contributions.columns]
-    totals = _aggregate_columns(contributions, _source_map(columns, features))
+    if totals is None:
+        totals = _aggregate_columns(contributions, _source_map(columns, features))
     names = list(totals)
     values = {name: (rows[name].tolist() if name in rows.columns else [None] * len(rows)) for name in names}
     keys = [str(value) for value in rows[primary_key].tolist()] if primary_key in rows.columns else None
@@ -729,6 +984,7 @@ def build_row_explanations(
                 limit=limit,
                 rank=rank,
             ),
+            method=method,
         )
         for position in range(len(rows))
     )
@@ -767,10 +1023,11 @@ def reasons_for_row(
     """The strongest `limit` reasons for one row, strongest contribution first.
 
     A zero contribution is not a reason: the feature did not move the score, so saying it did would
-    be an invented explanation. A row whose contributions are all zero gets no reasons at all, which
-    is the prototype's "-", and nothing is ever padded to reach `limit`. Two equal contributions are
-    ordered by the feature's global-importance rank and then alphabetically, so the list a run
-    produces does not depend on dictionary order.
+    be an invented explanation. A row whose contributions are all zero therefore gets no reasons
+    **here**, and nothing is ever padded to reach `limit`; :func:`reasons_for` is what turns that
+    empty tuple into another tier's measurement or a general reason, so no row reaches `scores.csv`
+    unexplained (DEC-056). Two equal contributions are ordered by the feature's global-importance
+    rank and then alphabetically, so the list a run produces does not depend on dictionary order.
     """
     ranks: Mapping[str, int] = {} if rank is None else rank
     rounded = [
@@ -804,9 +1061,17 @@ def reason_text(
 
     `missing` is the one addition to the design's signature: a categorical level spelled `"missing"`
     is a value, not an absent one, and the two must not render the same way.
+
+    `Direction.NONE` marks a general reason (DEC-056). It carries no arrow, because no direction was
+    measured on this row, and ends in :const:`GENERAL_SUFFIX` so a reader can tell the two apart at
+    a glance in `scores.csv`.
     """
+    general = direction is Direction.NONE
+    tail = f" {GENERAL_SUFFIX}" if general else ""
     if missing or not value:
-        return f"{feature} {MISSING_VALUE}"
+        return f"{feature} {MISSING_VALUE}{tail}"
+    if general:
+        return f"{feature} = {value}{tail}"
     if numeric:
         arrow = UP_ARROW if direction is Direction.UP else DOWN_ARROW
         return f"{feature} {arrow} ({value})"
@@ -959,6 +1224,7 @@ def row_explanation_schema() -> pa.Schema:
             ("schema_version", pa.int32()),
             ("primary_key", pa.string()),
             ("score", pa.float64()),
+            ("method", pa.string()),
             (
                 "reasons",
                 pa.list_(

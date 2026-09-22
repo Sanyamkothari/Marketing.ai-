@@ -846,7 +846,13 @@ def train_and_register(
     """Train a small real model on the synthetic file and register it as the champion."""
     base = load_use_case(USE_CASE)
     search = base.model_search.model_copy(
-        update={"time_limit_minutes": 1, "strategy": Strategy.FAST, "ensemble": False, "folds": 3}
+        update={
+            "time_limit_minutes": 1,
+            "strategy": Strategy.FAST,
+            "ensemble": False,
+            "folds": 3,
+            "tuning_trials": 5,  # DEC-057: a trial is a real fit; 5 is the schema floor
+        }
     )
     config = base.model_copy(update={"model_search": search})
 

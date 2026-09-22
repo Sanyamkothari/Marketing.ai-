@@ -1,7 +1,12 @@
-"""The FastAPI application: config-only endpoints in M1 (design §7).
+"""The FastAPI application: every endpoint plan §8 lists, plus the screens that call them.
 
-`create_app` takes the configuration root and the data directory as arguments so a test can point the
-whole app at a fixture tree; `app` is the module-level instance `uvicorn api.main:app` serves.
+`create_app` mounts the five routers of `api.routes` - industries, use-cases, uploads, runs and models -
+and adds the `/healthz` probe here rather than in a router of its own, because a liveness check that
+lived behind the same imports as the routes it is meant to vouch for would answer for them instead of
+for the process. The UI is mounted on the same app at `/ui` (plan §9) so one process serves both halves
+of the product. `create_app` takes the configuration root and the data directory as arguments so a test
+can point the whole app at a fixture tree; `app` is the module-level instance `uvicorn api.main:app`
+serves.
 """
 
 from __future__ import annotations

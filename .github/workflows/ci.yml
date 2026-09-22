@@ -1,0 +1,78 @@
+# Satisfies plan §10: "CI: `make lint test` must pass; integration tests may be marked slow."
+#
+# This workflow is the gate, not a second build system: it installs the project the same way a
+# developer does (`make setup`) and then runs the same two targets plan §13.2 asks for after every
+# milestone. Nothing here re-implements a lint or a test invocation, because a check that CI spells
+# out differently from the Makefile is a check that can pass locally and fail here for reasons that
+# have nothing to do with the change. `make lint` already chains check-generated (templates/ and
+# docs/API.md drift), ruff, black --check and mypy --strict, so drift in a generated file fails the
+# pull request rather than being discovered later by a reader of a stale file.
+#
+# The @slow AutoGluon integration tests are deliberately NOT run here — that is the second half of
+# plan §10's sentence. `make test` is `pytest -m "not slow"`; the full suite runs in nightly.yml, so
+# a pull request waits minutes rather than a quarter of an hour.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# A push to a pull request branch triggers both `push` and `pull_request`; superseding the older run
+# of the same ref keeps that from doubling the queue on a busy branch.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read                        # the gate only reads the tree; nothing here writes to the repo
+
+jobs:
+  lint-test:
+    name: lint + fast tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30                 # the fast suite is minutes; this only catches a hang or a wedged install
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # No matrix. pyproject pins `requires-python = ">=3.11,<3.12"` and mypy/ruff/black all target
+      # py311, so a second interpreter would test a configuration the project refuses to install on.
+      - name: Set up Python 3.11
+        id: python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip                    # wheel cache: the miss path below still has to install AutoGluon
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-freeze.txt
+
+      # Two layers, because AutoGluon (plus catboost, lightgbm, xgboost, torch-free but still large)
+      # dominates the job's wall clock. A hit here skips resolution and installation entirely; a miss
+      # falls back on setup-python's pip cache above, so the worst case is unpacking wheels rather
+      # than downloading them again.
+      #
+      # The key carries the resolved patch version because a venv holds absolute paths into the
+      # interpreter that created it: a restored .venv built against 3.11.x is broken once the runner
+      # image ships 3.11.(x+1). There are deliberately no `restore-keys` — a partially matching venv
+      # would keep packages that the new pyproject no longer asks for, which is how a dropped
+      # dependency stays invisible until someone installs from scratch.
+      - name: Cache the venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'requirements-freeze.txt') }}
+
+      # `make setup` is idempotent: with .venv restored it skips creation and re-runs the editable
+      # install, which also re-links engine/api/scripts after the checkout. Its final import check
+      # fails loudly if AutoGluon did not land, so a half-restored cache is a setup failure here and
+      # not a confusing collection error three steps later.
+      - name: make setup
+        run: make setup
+
+      - name: make lint
+        run: make lint
+
+      - name: make test
+        run: make test

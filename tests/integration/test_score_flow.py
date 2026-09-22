@@ -24,10 +24,12 @@ import pytest
 from engine.config import ResolvedConfig, RunMode, resolve_config
 from engine.contracts import (
     SCORE_ARTEFACTS,
+    Direction,
     DriftReport,
     ModelStatus,
     ModelVersion,
     PrepareReport,
+    ReasonMethod,
     RunManifest,
     RunRecord,
     RunState,
@@ -66,11 +68,15 @@ TRAIN_SEED: int = 20260921
 SCORE_SEED: int = 20270405
 
 # plan §10's settings, plus `ensemble: false` so the run stays inside a slow test's budget.
+# `tuning_trials: 5` belongs to that same budget, not to the flow under test: since DEC-057 the
+# trials are real AutoGluon HPO fits, and the shipped default of 50 across four families is 200
+# fits, which one minute cannot give a fair share of. Five is the schema's floor for the setting and still exercises the HPO path.
 OVERRIDES: dict[str, object] = {
     "model_search.time_limit_minutes": 1,
     "model_search.strategy": "fast",
     "model_search.ensemble": False,
     "model_search.folds": 3,
+    "model_search.tuning_trials": 5,
 }
 
 
@@ -331,7 +337,24 @@ def test_row_explanations_parquet_covers_every_scored_row(scored: Flow) -> None:
         assert len(item.reasons) <= limit
         for reason in item.reasons:
             assert reason.text.strip()
-            assert reason.direction.value in {"up", "down"}
+            # "none" is a general reason (DEC-056): the row moved neither way, and says so.
+            assert reason.direction.value in {"up", "down", "none"}
+            if reason.direction is Direction.NONE:
+                assert item.method is ReasonMethod.GENERAL
+                assert reason.contribution == 0.0
+                assert reason.text.endswith(explain.GENERAL_SUFFIX)
+
+
+def test_the_summary_counts_the_rows_that_needed_a_fallback_reason(scored: Flow) -> None:
+    """DEC-056: whatever the model saturated on, the Output page is told how much of it there was."""
+    explanations = explain.read_row_explanations(
+        scored.record.artefacts[explain.ROW_EXPLANATIONS_FILENAME], storage=scored.storage
+    )
+    methods = {item.method for item in explanations}
+    primary = max(methods, key=lambda name: sum(1 for item in explanations if item.method is name))
+    counted = sum(1 for item in explanations if item.method is not primary)
+    assert scored.summary().rows_with_fallback_reasons == counted
+    assert 0 <= counted <= SCORE_ROWS
 
 
 def test_the_reasons_in_the_file_belong_to_the_row_they_are_on(scored: Flow) -> None:

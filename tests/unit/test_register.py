@@ -544,6 +544,8 @@ def test_the_storage_keys_point_at_this_runs_artefacts(tmp_path: Path, resolved:
         "schema.json": f"runs/{RUN_ID}/schema.json",
         "run_config.json": f"runs/{RUN_ID}/run_config.json",
         "drift_baseline.json": f"runs/{RUN_ID}/drift_baseline.json",
+        # A scoring run reads this one back to rank DEC-056's general reasons.
+        "feature_importance.json": f"runs/{RUN_ID}/feature_importance.json",
         "model/": f"runs/{RUN_ID}/model",
     }
     assert version.engine_version == engine.__version__

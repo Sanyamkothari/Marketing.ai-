@@ -150,10 +150,31 @@ class DriftStatus(StrEnum):
 
 
 class Direction(StrEnum):
-    """Direction of a per-row reason's contribution."""
+    """Direction of a per-row reason's contribution.
+
+    `NONE` is the direction of a reason that was not measured on this row at all - a general reason,
+    carried over from the importance chart because every tier measured this row's contributions as
+    zero. It pushed the score neither way, and claiming an arrow would be invention (DEC-056).
+    """
 
     UP = "up"
     DOWN = "down"
+    NONE = "none"
+
+
+class ReasonMethod(StrEnum):
+    """How one row's reasons were produced.
+
+    The first three are the per-row tiers of plan section 6.3, in the order they are tried.
+    `GENERAL` is the floor under them (DEC-056): a row every tier measured as all-zero keeps a
+    reason, drawn from the run's global feature importance and labelled as general, rather than
+    reaching `scores.csv` with empty cells.
+    """
+
+    TREE_SHAP = "TreeSHAP"
+    KERNEL_SHAP = "KernelSHAP"
+    PERMUTATION = "permutation"
+    GENERAL = "general"
 
 
 class StageKey(StrEnum):
@@ -797,6 +818,14 @@ class RowExplanation(Artefact):
     primary_key: str = Field(description="Primary-key value of the explained row.")
     score: float = Field(description="Score the reasons explain.")
     reasons: tuple[Reason, ...] = Field(description="Top reasons, strongest contribution first.")
+    method: ReasonMethod = Field(
+        default=ReasonMethod.PERMUTATION,
+        description=(
+            "Tier that produced this row's reasons. A value other than the run's own "
+            "RowReasons.method means this row needed a fallback, which is what "
+            "ScoringSummary.rows_with_fallback_reasons counts."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -928,6 +957,14 @@ class ScoringSummary(Artefact):
     actions: tuple[ActionCount, ...] = Field(description="Action counts, largest first.")
     suppressed: tuple[SuppressionCount, ...] = Field(description="Suppression counts by reason.")
     control_group_rows: int = Field(description="Rows held out as the control group.")
+    rows_with_fallback_reasons: int = Field(
+        default=0,
+        description=(
+            "Rows whose reasons did not come from the run's primary explanation tier, because every "
+            "feature's contribution on that row measured zero. They carry a later tier's reasons or, "
+            "as a floor, general ones from the importance chart (DEC-056)."
+        ),
+    )
     kpi: KpiValue = Field(description="The configured headline KPI.")
     drift_status: DriftStatus | None = Field(
         default=None, description="Drift verdict, when drift was computed."

@@ -33,16 +33,20 @@ from engine.contracts import (
     scores_csv_columns,
 )
 from engine.stages.explain import (
+    DOWN_ARROW,
     EXPLAIN_MAX_ROWS,
+    GENERAL_SUFFIX,
     IMPORTANCE_CAPTION,
     IMPORTANCE_UNAVAILABLE_CAPTION,
     KERNEL_SHAP_MAX_ROWS,
     MISSING_VALUE,
     TOP_FEATURES,
+    UP_ARROW,
     RowReasons,
     build_feature_importance,
     build_row_explanations,
     explain_detail,
+    fallback_note,
     format_value,
     global_importance,
     read_row_explanations,
@@ -690,6 +694,159 @@ def test_a_caller_may_lift_the_kernel_cap_and_pay_for_it(config) -> None:
 
 
 # ---------------------------------------------------------------------------
+# DEC-056: no row leaves this module without a reason
+# ---------------------------------------------------------------------------
+class FlatPredictor(LinearOnlyPredictor):
+    """A predictor whose probability never moves, so KernelSHAP measures every row as zero.
+
+    `FakeScorer.score` is still the real logistic, so the permutation tier - which asks the scorer
+    rather than the predictor - can move the same rows this tier cannot. That gap is exactly the
+    one DEC-056's per-row retry exists to close, and it is here so the retry is observed.
+    """
+
+    def predict_proba(self, data: pd.DataFrame, as_multiclass: bool = True, transform_features: bool = True):
+        assert as_multiclass is False and transform_features is False
+        return np.full(len(data.index), 0.5, dtype="float64")
+
+
+@dataclass
+class FlatScorer(FakeScorer):
+    """A scorer nothing moves: every tier measures zero, so only a general reason is left."""
+
+    def score(self, frame: pd.DataFrame) -> pd.Series:
+        self.calls.append(len(frame))
+        return pd.Series(np.full(len(frame.index), 0.5), index=frame.index, dtype="float64")
+
+
+def chart(*features: str) -> FeatureImportance:
+    """A global chart naming `features` in the order a general reason should quote them."""
+    return build_feature_importance(
+        importance_frame({name: float(len(features) - position) for position, name in enumerate(features)}),
+        run_id=RUN_ID,
+    )
+
+
+def test_a_row_the_first_tier_cannot_move_is_retried_on_the_next_one(config) -> None:
+    frame = make_frame(12)
+    result = reasons_for(
+        FakeScorer(predictor=FlatPredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        max_rows=None,
+        kernel_max_rows=None,
+    )
+    # KernelSHAP answered for every row and moved none of them; the permutation tier rescued them.
+    assert result.method == "KernelSHAP"
+    assert len(result.explanations) == len(frame)
+    assert {item.method for item in result.explanations} == {"permutation"}
+    assert all(item.reasons for item in result.explanations)
+    assert result.fallback_rows == len(frame)
+
+
+def test_a_row_no_tier_can_move_keeps_general_reasons_from_the_chart(config) -> None:
+    frame = make_frame(8)
+    result = reasons_for(
+        FlatScorer(predictor=LinearOnlyPredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        importance=chart("spend_last_30d", "plan_tier", "visits_last_7d"),
+        max_rows=None,
+        kernel_max_rows=0,  # tier 2 declines; tier 3 runs and measures nothing
+    )
+    assert result.method == "permutation"
+    assert result.fallback_rows == len(frame)
+    assert {item.method for item in result.explanations} == {"general"}
+    for item in result.explanations:
+        assert item.reasons, "plan §6.3: a reason for every row"
+        # The chart's order, top first, cut to reasons_per_row.
+        assert [reason.feature for reason in item.reasons] == [
+            "spend_last_30d",
+            "plan_tier",
+            "visits_last_7d",
+        ][: config.evaluation.reasons_per_row]
+
+
+def test_a_general_reason_claims_no_direction_and_says_it_is_general(config) -> None:
+    frame = make_frame(4)
+    result = reasons_for(
+        FlatScorer(predictor=LinearOnlyPredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        importance=chart("visits_last_7d", "plan_tier"),
+        max_rows=None,
+        kernel_max_rows=0,
+    )
+    first = result.explanations[0].reasons[0]
+    assert first.direction is Direction.NONE
+    assert first.contribution == 0.0
+    assert first.text.endswith(GENERAL_SUFFIX)
+    assert UP_ARROW not in first.text and DOWN_ARROW not in first.text
+    # The value is the row's own, not the chart's: a general reason still describes this row.
+    assert first.value == format_value(frame["visits_last_7d"].iloc[0])
+
+
+def test_general_reasons_fall_back_to_what_this_run_measured_when_no_chart_is_given(config) -> None:
+    frame = make_frame(6)
+    result = reasons_for(
+        FlatScorer(predictor=LinearOnlyPredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        max_rows=None,
+        kernel_max_rows=0,
+    )
+    assert {item.method for item in result.explanations} == {"general"}
+    for item in result.explanations:
+        assert item.reasons
+        assert {reason.feature for reason in item.reasons} <= set(FEATURES)
+
+
+def test_fallback_rows_is_zero_when_the_primary_tier_explained_everything(config) -> None:
+    frame = make_frame(12)
+    result = reasons_for(
+        FakeScorer(predictor=TreePredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        max_rows=None,
+    )
+    assert result.method == "TreeSHAP"
+    assert result.fallback_rows == 0
+    assert {item.method for item in result.explanations} == {"TreeSHAP"}
+    assert fallback_note(result) == ""
+
+
+def test_the_detail_line_names_the_rows_that_needed_a_fallback() -> None:
+    reasons = RowReasons(explanations=(), method="TreeSHAP", fallback_rows=7)
+    assert fallback_note(reasons) == " · 7 on fallback reasons"
+
+
+def test_the_method_survives_the_parquet_round_trip(tmp_path, config) -> None:
+    frame = make_frame(5)
+    result = reasons_for(
+        FlatScorer(predictor=LinearOnlyPredictor(frame)),
+        frame,
+        config,
+        primary_key=PRIMARY_KEY,
+        seed=1,
+        importance=chart("visits_last_7d"),
+        max_rows=None,
+        kernel_max_rows=0,
+    )
+    storage = LocalStorage(tmp_path)
+    key = write_row_explanations(result.explanations, run_id=RUN_ID, storage=storage)
+    assert read_row_explanations(key, storage=storage) == result.explanations
+
+
+# ---------------------------------------------------------------------------
 # The adapter: explanations -> the reason columns export reads
 # ---------------------------------------------------------------------------
 def explanation(key: str, count: int = 2, *, score: float = 0.5) -> RowExplanation:
@@ -897,7 +1054,7 @@ def test_the_parquet_file_round_trips_through_the_contract(tmp_path) -> None:
 
 def test_the_parquet_schema_is_explicit_about_every_column() -> None:
     schema = row_explanation_schema()
-    assert schema.names == ["schema_version", "primary_key", "score", "reasons"]
+    assert schema.names == ["schema_version", "primary_key", "score", "method", "reasons"]
     reason_struct = schema.field("reasons").type.value_type
     assert [field.name for field in reason_struct] == [
         "feature",
@@ -956,7 +1113,12 @@ def trained(tmp_path_factory) -> Trained:
 
     base = load_use_case(USE_CASE)
     search = base.model_search.model_copy(
-        update={"time_limit_minutes": 1, "strategy": Strategy.FAST, "ensemble": False}
+        update={
+            "time_limit_minutes": 1,
+            "strategy": Strategy.FAST,
+            "ensemble": False,
+            "tuning_trials": 5,  # DEC-057: a trial is a real fit; 5 is the schema floor
+        }
     )
     config = base.model_copy(update={"model_search": search})
     frame = generate(GenerationSpec(USE_CASE, rows=3_000, variant="clean"))

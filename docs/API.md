@@ -873,6 +873,7 @@ Drift of one feature between the training data and the scored file.
 | `actions` | list[ActionCount] | yes | Action counts, largest first. |
 | `suppressed` | list[SuppressionCount] | yes | Suppression counts by reason. |
 | `control_group_rows` | integer | yes | Rows held out as the control group. |
+| `rows_with_fallback_reasons` | integer | no | Rows whose reasons did not come from the run's primary explanation tier, because every feature's contribution on that row measured zero. They carry a later tier's reasons or, as a floor, general ones from the importance chart (DEC-056). |
 | `kpi` | KpiValue | yes | The configured headline KPI. |
 | `drift_status` | DriftStatus ("stable" \| "watch" \| "drifted") \| null | no | Drift verdict, when drift was computed. |
 | `drift_max_psi` | number \| null | no | Largest population stability index. |
@@ -952,7 +953,7 @@ One per-row reason behind a score.
 | `feature` | string | yes | Feature the reason is about. |
 | `value` | string | yes | The row's value for that feature, stringified. |
 | `contribution` | number | yes | Signed contribution of this feature to the score. |
-| `direction` | Direction ("up" \| "down") | yes | Whether the feature pushed the score up or down. |
+| `direction` | Direction ("up" \| "down" \| "none") | yes | Whether the feature pushed the score up or down. |
 | `text` | string | yes | Ready-to-render sentence for this reason. |
 
 ### `schema.json`
@@ -1045,6 +1046,7 @@ Row schema of `row_explanations.parquet` - the top reasons per scored row.
 | `primary_key` | string | yes | Primary-key value of the explained row. |
 | `score` | number | yes | Score the reasons explain. |
 | `reasons` | list[Reason] | yes | Top reasons, strongest contribution first. |
+| `method` | ReasonMethod ("TreeSHAP" \| "KernelSHAP" \| "permutation" \| "general") | no | Tier that produced this row's reasons. A value other than the run's own RowReasons.method means this row needed a fallback, which is what ScoringSummary.rows_with_fallback_reasons counts. |
 
 ### `scores.csv`
 

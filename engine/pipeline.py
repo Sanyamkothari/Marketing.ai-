@@ -52,6 +52,7 @@ from engine.contracts import (
     MODEL_DIRECTORY,
     CostEstimate,
     DatasetFingerprint,
+    FeatureImportance,
     FeatureSchema,
     ModelStatus,
     RunError,
@@ -102,7 +103,6 @@ if TYPE_CHECKING:
         DatasetProfile,
         EvaluationReport,
         FairnessReport,
-        FeatureImportance,
         ModelVersion,
         ScoringSummary,
         SplitReport,
@@ -1064,6 +1064,7 @@ class _ScoreFlow:
         self._result: score.PredictResult | None = None
         self._scored: pd.DataFrame | None = None
         self._summary: ScoringSummary | None = None
+        self._fallback_rows: int = 0
 
     # -- the driver ---------------------------------------------------------
     def execute(self) -> RunRecord:
@@ -1341,8 +1342,10 @@ class _ScoreFlow:
             ctx.config,
             primary_key=ctx.primary_key,
             seed=self._seed,
+            importance=self._training_importance(),
             max_rows=None,
         )
+        self._fallback_rows = reasons.fallback_rows
         key = explain.write_row_explanations(reasons.explanations, run_id=ctx.run_id, storage=self._storage)
         self._artefacts[explain.ROW_EXPLANATIONS_FILENAME] = key
         self._scored = explain.with_reason_columns(
@@ -1352,6 +1355,32 @@ class _ScoreFlow:
             primary_key=ctx.primary_key,
         )
         return _StageOutcome(_reasons_detail(reasons), len(reasons.explanations))
+
+    def _training_importance(self) -> FeatureImportance | None:
+        """The chart the model's own training run measured, or `None` when it cannot be read.
+
+        It ranks the general reasons of DEC-056's last resort, picks the features the permutation
+        tier perturbs and breaks ties between equal contributions. It is read from the training
+        run's directory rather than recomputed: a scoring file carries no target, so permutation
+        importance cannot be measured here at all, and the number that matters is the one the model
+        was explained with. A missing or unreadable chart is not a failure - `reasons_for` ranks by
+        what this run measured instead - so this never raises.
+        """
+        version = self._version
+        if version is None:
+            return None
+        key = version.artefact_keys.get(
+            FEATURE_IMPORTANCE_FILENAME, run_key(version.run_id, FEATURE_IMPORTANCE_FILENAME)
+        )
+        try:
+            return self._storage.read_model(key, FeatureImportance)
+        except (StorageError, ValueError):
+            _LOGGER.warning(
+                "explain_rows: the training run's %s could not be read; general reasons will be "
+                "ranked by what this run measured",
+                FEATURE_IMPORTANCE_FILENAME,
+            )
+            return None
 
     def _actions(self) -> _StageOutcome:
         """Band, action, suppression reason and control-group flag, seeded by the run id."""
@@ -1392,6 +1421,7 @@ class _ScoreFlow:
             drift=_require(self._result, "the output of the predict stage").drift,
             files=files,
             kpi_source=_require(self._frame, "the uploaded rows"),
+            rows_with_fallback_reasons=self._fallback_rows,
         )
         self._summary = summary
         self._write(SCORING_SUMMARY_FILENAME, summary)
@@ -1410,7 +1440,10 @@ def _replay_detail(version: ModelVersion) -> str:
 def _reasons_detail(reasons: explain.RowReasons) -> str:
     """The Running line for explain_rows; `method` names the tier that really produced them."""
     rows = len(reasons.explanations)
-    return f"{reasons.method} reasons for {humanise_count(rows)} {'row' if rows == 1 else 'rows'}"
+    return (
+        f"{reasons.method} reasons for {humanise_count(rows)} {'row' if rows == 1 else 'rows'}"
+        f"{explain.fallback_note(reasons)}"
+    )
 
 
 def _actions_detail(frame: pd.DataFrame) -> str:

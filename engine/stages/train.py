@@ -122,6 +122,15 @@ AG_NAME_TO_FAMILY: Final[dict[str, ModelFamily]] = {
 _NAME_SUFFIX = re.compile(r"(_BAG|_FULL|_L\d+|_r\d+)+$")
 """Decorations AutoGluon appends to a fitted model's name; bare names appear without bagging. (D5.)"""
 
+_TRIAL_SUFFIX = re.compile(r"/T\d+$")
+"""What HPO appends to every trial it fits: `LightGBM_BAG_L1/T3` (DEC-057).
+
+It is stripped **before** :data:`_NAME_SUFFIX`, because it sits outside the bagging decorations
+rather than inside them. Missing it would be quiet rather than loud: `family_for_model_name` would
+return `None` for every model of a tuned run, which costs the leaderboard its family column and
+costs the explain stage its TreeSHAP tier, since that tier finds the best *tree* model by family.
+"""
+
 _ENSEMBLE_PREFIX: Final[str] = "WeightedEnsemble"
 _MAX_ENSEMBLE_LABELS: Final[int] = 3
 _SMOTE_MAX_GROWTH: Final[int] = 4
@@ -164,12 +173,12 @@ def family_for_model_name(name: str) -> ModelFamily | None:
     """The engine family of a fitted model, or `None` for the weighted ensemble or an unknown name.
 
     Bagging and stacking decorate the name (`LightGBM_BAG_L1`, `XGBoost_BAG_L1_FULL`); without
-    bagging the names are bare (`LightGBM`, `LinearModel`). The decorations are stripped before the
-    lookup. (D5.)
+    bagging the names are bare (`LightGBM`, `LinearModel`); HPO adds a trial suffix on top of
+    either (`LightGBM_BAG_L1/T3`). Every decoration is stripped before the lookup. (D5, DEC-057.)
     """
     if name.startswith(_ENSEMBLE_PREFIX):
         return None
-    return AG_NAME_TO_FAMILY.get(_NAME_SUFFIX.sub("", name))
+    return AG_NAME_TO_FAMILY.get(_NAME_SUFFIX.sub("", _TRIAL_SUFFIX.sub("", name)))
 
 
 def _label_value(value: object) -> LabelValue:
@@ -293,6 +302,16 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
       at train time on validation (`engine.stages.scorer.fit_scorer`), so both are off. (D9.)
     * `hyperparameters` - only the requested families, and only the ones whose libraries are
       installed. (D10.)
+    * `hyperparameter_tune_kwargs` - `model_search.tuning_trials` trials per family, random search
+      on the tree families and bayesian optimisation on the neural one, which is what the installed
+      AutoGluon calls `searcher: "auto"`. Left out, HPO does not happen at all and the setting would
+      be decoration. (DEC-057.)
+
+    The families are passed as `{key: {}}` rather than with search spaces of our own: an empty dict
+    means "this family's default search space", and AutoGluon 1.6.3 carries a real one per family -
+    a tuned run fits `LightGBM/T1..Tn` with genuinely different `learning_rate`, `num_leaves` and
+    `feature_fraction`. Authoring spaces here would freeze one version's idea of a sensible range
+    into the engine, and plan section 13.8 says to follow the installed version instead.
     """
     catalog = get_catalog()
     search = recipe.model_search
@@ -301,6 +320,11 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     return {
         "presets": catalog.strategy_presets[search.strategy],  # D1
         "hyperparameters": {catalog.model_families[family].autogluon_key: {} for family in families},
+        "hyperparameter_tune_kwargs": {  # DEC-057
+            "num_trials": search.tuning_trials,
+            "scheduler": "local",
+            "searcher": "auto",
+        },
         "time_limit": search.time_limit_minutes * 60,
         "num_bag_folds": search.folds if bagging else 0,
         "num_stack_levels": 0,
