@@ -68,7 +68,7 @@ TRAIN_SEED: int = 20260921
 SCORE_SEED: int = 20270405
 
 # plan §10's settings, plus `ensemble: false` so the run stays inside a slow test's budget.
-# `tuning_trials: 5` belongs to that same budget, not to the flow under test: since DEC-057 the
+# `tuning_trials: 5` belongs to that same budget, not to the flow under test: since DEC-073 the
 # trials are real AutoGluon HPO fits, and the shipped default of 50 across four families is 200
 # fits, which one minute cannot give a fair share of. Five is the schema's floor for the setting and still exercises the HPO path.
 OVERRIDES: dict[str, object] = {

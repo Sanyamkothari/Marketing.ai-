@@ -851,7 +851,7 @@ def train_and_register(
             "strategy": Strategy.FAST,
             "ensemble": False,
             "folds": 3,
-            "tuning_trials": 5,  # DEC-057: a trial is a real fit; 5 is the schema floor
+            "tuning_trials": 5,  # DEC-073: a trial is a real fit; 5 is the schema floor
         }
     )
     config = base.model_copy(update={"model_search": search})

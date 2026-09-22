@@ -377,7 +377,7 @@ def test_the_static_field_table_matches_a_three_band_config() -> None:
 
 
 # ---------------------------------------------------------------------------
-# DEC-058: settings the schema carries but no stage reads yet
+# DEC-074: settings the schema carries but no stage reads yet
 # ---------------------------------------------------------------------------
 def test_exactly_the_parked_settings_are_marked_advisory() -> None:
     """The set is written down once; this is the assertion that it is the set the form renders."""
@@ -414,7 +414,7 @@ def test_a_setting_the_engine_acts_on_is_never_marked_advisory() -> None:
         "model_search.metric",
         "model_search.strategy",
         "model_search.candidates",
-        "model_search.tuning_trials",  # DEC-057 wired this one into AutoGluon HPO
+        "model_search.tuning_trials",  # DEC-073 wired this one into AutoGluon HPO
         "model_search.time_limit_minutes",
         "model_search.folds",
         "model_search.imbalance",

@@ -1838,7 +1838,7 @@ ADVISORY_PATHS: Final[frozenset[str]] = frozenset(
         "governance.retention_days",
     }
 )
-"""Settings the schema still carries but no stage reads yet (DEC-058).
+"""Settings the schema still carries but no stage reads yet (DEC-074).
 
 They are real product intentions with a shape already agreed, so removing them would lose the
 agreement; leaving them as live controls would promise behaviour the engine does not have. So they
@@ -1851,11 +1851,11 @@ to change in either direction - the form, the documentation and the hash all rea
 """
 
 ADVISORY_NOTE: Final[str] = "Coming later — recorded with the run, not yet applied."
-"""What the form prints beside a disabled advisory control, so the reason is on screen (DEC-058)."""
+"""What the form prints beside a disabled advisory control, so the reason is on screen (DEC-074)."""
 
 
 def _numbered(fields: Sequence[FieldSpec], start: int = 1) -> tuple[FieldSpec, ...]:
-    """Number a stage's fields in order, and mark the ones no stage reads yet (DEC-058).
+    """Number a stage's fields in order, and mark the ones no stage reads yet (DEC-074).
 
     `advisory` is derived here rather than written on each `FieldSpec` so that
     :const:`ADVISORY_PATHS` stays the only place the fact is recorded: a setting cannot be parked
@@ -2588,7 +2588,7 @@ class Recipe(_Base):
         order hash alike. Uses sha256 rather than `hash()`, which is salted per
         process and would not survive a restart.
 
-        :const:`ADVISORY_PATHS` are removed before hashing (DEC-058). The hash exists to answer
+        :const:`ADVISORY_PATHS` are removed before hashing (DEC-074). The hash exists to answer
         "would this produce the same model", and a setting no stage reads cannot change a model.
         Leaving them in would make two runs that fitted byte-identical models hash differently
         merely because someone moved a control that does nothing yet. They stay on the recipe

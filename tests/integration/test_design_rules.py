@@ -72,7 +72,7 @@ OVERRIDES: dict[str, object] = {
     "model_search.strategy": "fast",
     "model_search.ensemble": False,
     "model_search.candidates": ["LightGBM"],
-    "model_search.tuning_trials": 5,  # DEC-057: a trial is a real fit; 5 is the schema floor
+    "model_search.tuning_trials": 5,  # DEC-073: a trial is a real fit; 5 is the schema floor
     # `fill` records a fitted value for EVERY feature column and `clip` records fitted percentiles
     # for every numeric one, so the report below carries the widest set of fitted parameters the
     # prepare stage can produce - the most there is for a hold-out row to contaminate.

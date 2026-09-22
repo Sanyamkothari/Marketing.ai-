@@ -146,7 +146,7 @@ def test_fit_kwargs_match_the_design_table(strategy, preset, ensemble, imbalance
     assert kwargs["calibrate_decision_threshold"] is False  # D9: the engine owns the threshold
     assert kwargs["raise_on_no_models_fitted"] is True
     assert kwargs["ag_args_fit"] == {"random_seed": recipe.seed}
-    assert kwargs["hyperparameter_tune_kwargs"] == {  # DEC-057
+    assert kwargs["hyperparameter_tune_kwargs"] == {  # DEC-073
         "num_trials": recipe.model_search.tuning_trials,
         "scheduler": "local",
         "searcher": "auto",
@@ -155,14 +155,14 @@ def test_fit_kwargs_match_the_design_table(strategy, preset, ensemble, imbalance
 
 
 def test_tuning_trials_is_the_hpo_budget_and_reaches_autogluon() -> None:
-    """DEC-057: the Model-search control the user moves is the number of trials that get fitted."""
+    """DEC-073: the Model-search control the user moves is the number of trials that get fitted."""
     for trials in (5, 50, 500):
         recipe = make_recipe(tuning_trials=trials)
         assert autogluon_fit_kwargs(recipe)["hyperparameter_tune_kwargs"]["num_trials"] == trials
 
 
 def test_the_families_are_passed_without_a_search_space_of_our_own() -> None:
-    """An empty dict means AutoGluon's own space for that family; see DEC-057 for why not ours."""
+    """An empty dict means AutoGluon's own space for that family; see DEC-073 for why not ours."""
     kwargs = autogluon_fit_kwargs(make_recipe())
     assert kwargs["hyperparameters"] == {"XGB": {}, "GBM": {}, "RF": {}, "LR": {}}
     assert all(space == {} for space in kwargs["hyperparameters"].values())
@@ -175,7 +175,7 @@ def test_the_families_are_passed_without_a_search_space_of_our_own() -> None:
         ("LightGBM_BAG_L1", ModelFamily.LIGHTGBM),
         ("XGBoost_BAG_L1_FULL", ModelFamily.XGBOOST),
         # HPO appends the trial outside the bagging decorations; missing it would cost the
-        # leaderboard its family column and the explain stage its TreeSHAP tier (DEC-057).
+        # leaderboard its family column and the explain stage its TreeSHAP tier (DEC-073).
         ("LightGBM_BAG_L1/T1", ModelFamily.LIGHTGBM),
         ("XGBoost/T12", ModelFamily.XGBOOST),
         ("RandomForest_BAG_L1/T3", ModelFamily.RANDOM_FOREST),
@@ -852,7 +852,7 @@ def test_bagging_accepts_an_explicit_tuning_set(tmp_path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# DEC-057: the families HPO cannot tune
+# DEC-073: the families HPO cannot tune
 # ---------------------------------------------------------------------------
 def test_the_untunable_family_set_still_matches_the_installed_autogluon() -> None:
     """`FAMILIES_WITHOUT_SEARCH_SPACE` is a measured claim; this is what keeps it measured.

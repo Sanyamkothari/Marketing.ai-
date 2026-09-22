@@ -1170,7 +1170,7 @@ def trained(tmp_path_factory) -> Trained:
             "time_limit_minutes": 1,
             "strategy": Strategy.FAST,
             "ensemble": False,
-            "tuning_trials": 5,  # DEC-057: a trial is a real fit; 5 is the schema floor
+            "tuning_trials": 5,  # DEC-073: a trial is a real fit; 5 is the schema floor
         }
     )
     config = base.model_copy(update={"model_search": search})

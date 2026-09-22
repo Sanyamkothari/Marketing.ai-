@@ -123,7 +123,7 @@ _NAME_SUFFIX = re.compile(r"(_BAG|_FULL|_L\d+|_r\d+)+$")
 """Decorations AutoGluon appends to a fitted model's name; bare names appear without bagging. (D5.)"""
 
 _TRIAL_SUFFIX = re.compile(r"/[^/]+$")
-r"""What HPO appends to every trial it fits: `LightGBM_BAG_L1/T3` (DEC-057).
+r"""What HPO appends to every trial it fits: `LightGBM_BAG_L1/T3` (DEC-073).
 
 It is stripped **before** :data:`_NAME_SUFFIX`, because it sits outside the bagging decorations
 rather than inside them. Missing it would be quiet rather than loud: `family_for_model_name` would
@@ -143,7 +143,7 @@ FAMILIES_WITHOUT_SEARCH_SPACE: Final[frozenset[ModelFamily]] = frozenset({ModelF
 space is empty has nothing to vary: AutoGluon fits it once, under its bare name and with its
 default hyperparameters, and the setting does nothing for it. Measured against AutoGluon 1.6.3,
 which fits `RandomForest` - no `/T1` suffix, one model - where the same call gives `LightGBM/T1..Tn`
-with different learning rates (DEC-057).
+with different learning rates (DEC-073).
 
 It is a measured constant rather than a runtime probe because reading a model class's default
 search space means reaching past the public API, and a wrong answer there would be a silent one.
@@ -194,7 +194,7 @@ def family_for_model_name(name: str) -> ModelFamily | None:
 
     Bagging and stacking decorate the name (`LightGBM_BAG_L1`, `XGBoost_BAG_L1_FULL`); without
     bagging the names are bare (`LightGBM`, `LinearModel`); HPO adds a trial suffix on top of
-    either (`LightGBM_BAG_L1/T3`). Every decoration is stripped before the lookup. (D5, DEC-057.)
+    either (`LightGBM_BAG_L1/T3`). Every decoration is stripped before the lookup. (D5, DEC-073.)
     """
     if name.startswith(_ENSEMBLE_PREFIX):
         return None
@@ -325,7 +325,7 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     * `hyperparameter_tune_kwargs` - `model_search.tuning_trials` trials per family, random search
       on the tree families and bayesian optimisation on the neural one, which is what the installed
       AutoGluon calls `searcher: "auto"`. Left out, HPO does not happen at all and the setting would
-      be decoration. (DEC-057.)
+      be decoration. (DEC-073.)
 
     The families are passed as `{key: {}}` rather than with search spaces of our own: an empty dict
     means "this family's default search space", and AutoGluon 1.6.3 carries a real one per family -
@@ -340,7 +340,7 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     return {
         "presets": catalog.strategy_presets[search.strategy],  # D1
         "hyperparameters": {catalog.model_families[family].autogluon_key: {} for family in families},
-        "hyperparameter_tune_kwargs": {  # DEC-057
+        "hyperparameter_tune_kwargs": {  # DEC-073
             "num_trials": search.tuning_trials,
             "scheduler": "local",
             "searcher": "auto",
@@ -380,7 +380,7 @@ def available_families(recipe: Recipe) -> tuple[ModelFamily, ...]:
         # the user moved is doing nothing for part of it, and silence would be the wrong answer.
         _LOGGER.warning(
             "model_search.tuning_trials=%d does not apply to %s: the installed AutoGluon carries no "
-            "default search space for it, so it is fitted once with its defaults (DEC-057)",
+            "default search space for it, so it is fitted once with its defaults (DEC-073)",
             recipe.model_search.tuning_trials,
             ", ".join(family.value for family in untuned),
         )
