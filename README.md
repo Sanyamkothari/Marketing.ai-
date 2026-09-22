@@ -511,7 +511,7 @@ implements and the illustrative numbers they share.
 
 ```bash
 open marketing-ai-prototype.html   # no build step, no server needed
-make prototype-test                # 37 jsdom tests in tests/prototype/
+make prototype-test                # 38 jsdom tests in tests/prototype/
 make prototype-screenshots         # docs/prototype/*.png, desktop and mobile
 ```
 

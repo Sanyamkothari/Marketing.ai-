@@ -152,6 +152,9 @@ def create_app(
 # ---- END PHASE-2 ----
 
 # ---- PHASE-3A (generative) — append only below this line ----
+from api.routes.generative import router as generative_router  # noqa: E402
+
+PHASE_ROUTERS.append(generative_router)
 # ---- END PHASE-3A ----
 
 # ---- PHASE-4A (aws) — append only below this line ----

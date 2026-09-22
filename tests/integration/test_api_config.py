@@ -264,6 +264,17 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/models",
         "/models/{model_id}/approve",
         "/models/{model_id}/promote",
+        # Phase 3a: the generative assistant, root-cause summaries and campaign copy
+        "/use-cases/{use_case_id}/reference-sets",
+        "/use-cases/{use_case_id}/indexes",
+        "/indexes/{index_id}",
+        "/indexes/{index_id}/evaluate",
+        "/indexes/{index_id}/ask",
+        "/runs/{run_id}/root-cause",
+        "/runs/{run_id}/campaign-copy",
+        "/runs/{run_id}/campaign-copy/templates/{template_id}/approve",
+        "/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate",
+        "/runs/{run_id}/copy_messages.csv",
     }
 
 

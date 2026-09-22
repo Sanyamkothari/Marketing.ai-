@@ -108,13 +108,13 @@ can call every row positive*.
 
 `model_beats_baseline: false`. The verdict is taken on the **primary metric**, PR-AUC, which this
 use case sets deliberately — and there the ensemble loses by a thousandth. It is ahead on ROC-AUC
-and behind on F1 and recall. Sixteen minutes and 106 candidates bought a result that cannot be
+and behind on F1 and recall. Fifteen minutes and 106 candidates bought a result that cannot be
 distinguished from a logistic regression fitted in a second, on a 219-row hold-out where a
 thousandth of PR-AUC is a fraction of one row.
 
 ## Decile lift
 
-Base rate 41.10 %. Each decile holds 22 shoppers.
+Base rate 41.10 %. Each decile holds 22 shoppers, except D10 which holds 21.
 
 | Decile | Rows | Reactivated | Rate | Lift |
 |---|---|---|---|---|
@@ -154,9 +154,9 @@ is not a finding about shoppers; it is a measurement of how little signal there 
 ## What a business user should take from this
 
 **This dataset does not support a win-back model, and the engine said so correctly.** The best
-model a sixteen-minute, 106-candidate search could build ties with a plain logistic regression on
+model a fifteen-minute, 106-candidate search could build ties with a plain logistic regression on
 the primary metric, the decile curve is flat and out of order, and the feature ranking is unstable
-between runs. The right conclusion is not "tune it harder" — it is that fourteen months of invoices
+between runs. The right conclusion is not "tune it harder" — it is that twelve months of invoices
 for 1,463 lapsed shoppers, with no campaign history, no contact log and no offer data, does not
 contain enough to predict who comes back. The engine ran the whole path, produced every artefact,
 and handed back an honest negative. That is the system working.

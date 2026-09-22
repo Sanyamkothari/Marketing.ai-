@@ -70,6 +70,7 @@ from engine.contracts import (
     RunStatus,
     ValidationReport,
 )
+from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
 from engine.jobs import JobRunner, ReconcilingJobRunner
 from engine.pipeline import STATUS_FILENAME, Pipeline
 from engine.registry import ModelRegistry
@@ -348,8 +349,20 @@ def read_run(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunDetailRespon
     summary="One artefact of a run, whitelisted against the artefact registry",
 )
 def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
-    """A whitelist, not a path join: no segment of the URL ever reaches the filesystem (design §4.6)."""
-    if not ARTEFACT_NAME.fullmatch(name) or not (name in ARTEFACT_REGISTRY or name in TABULAR_SCHEMAS):
+    """A whitelist, not a path join: no segment of the URL ever reaches the filesystem.
+
+    The whitelist is the union of the predictive registry and the generative one (DEC-210): a
+    root-cause or campaign-copy job writes `root_cause_summary.json`, `copy_batch.json` and the rest
+    into the *run's own* directory rather than inventing a second artefact route, so this is the one
+    place both maps are checked together. `GENERATIVE_ARTEFACTS`/`GENERATIVE_TABULAR_SCHEMAS` also
+    name a knowledge index's own files (`doc_index_manifest.json`, `chunks.parquet`, ...), which this
+    run never wrote; whitelisting them here costs nothing beyond a normal `ARTEFACT_NOT_FOUND` for a
+    name this run's directory does not hold, the same 404 an unproduced predictive artefact already
+    answers with.
+    """
+    known = name in ARTEFACT_REGISTRY or name in TABULAR_SCHEMAS
+    known = known or name in GENERATIVE_ARTEFACTS or name in GENERATIVE_TABULAR_SCHEMAS
+    if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     load_run(storage, run_id)
     try:

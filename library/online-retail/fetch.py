@@ -13,7 +13,8 @@ come back?* Answering it from a transaction log needs three dates and one rule:
 
     SNAPSHOT       2011-09-10   the day the campaign would be planned
     LAPSE WINDOW   90 days      a customer is "lapsed" at the snapshot if their last purchase was
-                                on or before 2011-06-12
+                                at least 90 whole days earlier, i.e. at or before
+                                2011-06-12 00:00 (a purchase later that day counts as 89 days)
     OUTCOME WINDOW 90 days      `reactivated_90d` is 1 when they bought again in
                                 (2011-09-10, 2011-12-09]
 

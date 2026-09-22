@@ -9,6 +9,9 @@ Contract schema version: 1.
 | Method | Path | Summary | Response model |
 |---|---|---|---|
 | GET | `/healthz` | Liveness probe | HealthResponse |
+| GET | `/indexes/{index_id}` | One index in full: its status, its manifest and, once graded, its evaluation | IndexDetailResponse |
+| POST | `/indexes/{index_id}/ask` | Answer one question from an index, grounded in its documents or refused | AssistantAnswer |
+| POST | `/indexes/{index_id}/evaluate` | Re-grade an already-built index against a reference set, without rebuilding it | IndexJobStartedResponse |
 | GET | `/industries` | Every industry journey with its stages and use-case cards | IndustriesResponse |
 | GET | `/models` | Registered model versions, newest first, with the champion flagged | ModelListResponse |
 | POST | `/models/{model_id}/approve` | Approve a version that is waiting for a human, making it champion | ModelVersionResponse |
@@ -17,11 +20,19 @@ Contract schema version: 1.
 | POST | `/runs` | Validate an upload and, when it passes, start a run | RunCreatedResponse |
 | GET | `/runs/{run_id}` | One run: its record and the status the Running screen polls | RunDetailResponse |
 | GET | `/runs/{run_id}/artefacts/{name}` | One artefact of a run, whitelisted against the artefact registry | - |
+| POST | `/runs/{run_id}/campaign-copy` | Start campaign-copy generation over a finished scoring run | GenerativeJobStartedResponse |
+| POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/approve` | Record that a person approved one campaign-copy template | CopyTemplate |
+| POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate` | Re-run generation for one campaign-copy template in place | CopyTemplate |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
+| GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
+| POST | `/runs/{run_id}/root-cause` | Start a root-cause summary over a finished scoring run | GenerativeJobStartedResponse |
 | GET | `/runs/{run_id}/scores.csv` | The scored rows of a scoring run as CSV | - |
 | POST | `/uploads` | Store a CSV or Parquet file, profile it and return everything the Setup screen renders | UploadResponse |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
+| GET | `/use-cases/{use_case_id}/indexes` | Every index this use case has built or graded, newest first | IndexListResponse |
+| POST | `/use-cases/{use_case_id}/indexes` | Start a knowledge-index build, and grade it when a reference set is given | IndexJobStartedResponse |
+| POST | `/use-cases/{use_case_id}/reference-sets` | Profile an uploaded reference-question file | ReferenceSetResponse |
 | GET | `/use-cases/{use_case_id}/template.csv` | The upload template of one use case as CSV | - |
 | GET | `/use-cases/{use_case_id}/template_README.md` | The upload template's README of one use case as Markdown | - |
 
