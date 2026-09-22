@@ -9,7 +9,8 @@
 // so nothing here can collide with a class a shared file defines now or later.
 
 const CSS = `
-.gbackend{display:flex;flex-direction:column;gap:2px;padding:10px 14px;border-radius:8px;border:1px solid var(--line);font-size:12px;margin:8px 0 20px;width:fit-content}
+.gbackend{display:flex;flex-direction:column;gap:2px;padding:10px 14px;border-radius:8px;border:1px solid var(--line);font-size:12px;margin:8px 0 20px;width:fit-content;cursor:pointer;transition:border-color .15s}
+.gbackend:hover{border-color:var(--ink2)}
 .gbackend b{font-size:13px}
 .gbackend span{color:var(--muted)}
 .gbackend.g-fake{border-color:var(--warn);background:var(--warn-t);color:var(--warn)}

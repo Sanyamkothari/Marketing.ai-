@@ -8,20 +8,31 @@ only an HTTP boundary can get wrong.
 offending input back to the caller - measured, a request carrying `aws_secret_access_key` gets the
 secret reflected in the response, and so does a bare JSON string. That puts the key into devtools,
 into any proxy that logs responses and into every HAR file attached to a bug report. So these routes
-read the raw body, and an error names what is *accepted* rather than repeating what was sent.
+read the raw body, and an error names what is *accepted* rather than repeating what was sent. The
+body is read as a stream and abandoned at 4 KiB, so an oversized upload is refused rather than held
+in memory; nesting deeper than a connection setting can be, and a key named twice (the way to hide
+one value behind another), are refused as malformed rather than half-parsed.
 
 **A pasted credential is recognised and explained.** A field whose name looks like a secret, or any
-value shaped like an access key id, gets `CREDENTIALS_NOT_ACCEPTED`: a sentence saying this product
-never takes keys, what to do instead, and that a key which has been pasted into a web page should be
-rotated. A person making that mistake deserves to find out immediately, not to believe it worked.
+value shaped like an access key id, a secret access key or a session token, gets
+`CREDENTIALS_NOT_ACCEPTED`: a sentence saying this product never takes keys, what to do instead, and
+that a key which has been pasted into a web page should be rotated. A person making that mistake
+deserves to find out immediately, not to believe it worked - and a secret key, which is a valid
+profile name about half the time, must never be quoted back as "no profile named ...".
 
-**Who may choose is decided by the deployment and the socket, never by a header.**
-`request.client.host` is the peer that opened the connection; `X-Forwarded-For` is whatever a
-caller chose to write. Only the first is consulted, and even that only unlocks a `local` deployment
-(`engine.aws_connection.editability`).
+**Who may choose is decided by the deployment and the connection, never by a claim.** The peer that
+opened the socket must be loopback, the `Host` must name this machine and a browser's `Origin` must
+be a loopback page (`engine.aws_connection.editability`), because the API is unauthenticated and
+CORS is open on a laptop: without the last two, any web page open in the same browser could list the
+profiles, read every identity unmasked and repoint Bedrock at the profile of its choosing. A request
+carrying `X-Forwarded-For`, `Forwarded` or `X-Real-IP` came through something else and is not local,
+whatever its peer says. Everything else - reading the state, testing what is saved - stays open, and
+is masked exactly as for a caller on another machine.
 
-**The check runs off the event loop.** It makes up to four AWS calls with ten-second timeouts, and
-running them inline would freeze every other request for as long as AWS took to answer.
+**The check runs off the event loop, and only a few at a time.** It makes up to four AWS calls with
+ten-second timeouts. Inline, it would freeze every request; unbounded, forty unauthenticated calls
+would hold every worker thread the API has for over a minute. At most `_MAX_CONCURRENT_CHECKS` run at
+once and the rest are told `429 CHECK_BUSY` straight away.
 
 **Nothing here is cached.** Every response carries `Cache-Control: no-store`: an identity is the kind
 of answer a shared browser or an intermediate cache should not keep.
@@ -32,6 +43,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import threading
 from functools import partial
 from typing import Any, Final, TypeVar
 
@@ -39,7 +51,7 @@ from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ValidationError
 from starlette.concurrency import run_in_threadpool
 
-from api.deps import ConfigRootDep
+from api.deps import ConfigRootDep, SettingsDep
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import AwsConnectionState, ConnectionTestRequest
 from engine.aws_connection import (
@@ -54,7 +66,8 @@ from engine.aws_connection import (
     save_connection,
     valid_region,
 )
-from engine.settings import Settings, settings
+from engine.config import ConfigError, GenerativeKind
+from engine.settings import Settings
 
 __all__ = ["router"]
 
@@ -70,6 +83,27 @@ _CREDENTIAL_KEY: Final[re.Pattern[str]] = re.compile(
     r"secret|access[_-]?key|session[_-]?token|password|credential", re.IGNORECASE
 )
 _ACCESS_KEY_ID: Final[re.Pattern[str]] = re.compile(r"\b(?:AKIA|ASIA|AROA|AIDA)[A-Z0-9]{16}\b")
+_SECRET_KEY: Final[re.Pattern[str]] = re.compile(
+    r"(?<![A-Za-z0-9/+=])"
+    r"(?=[A-Za-z0-9/+]{0,39}[A-Z])(?=[A-Za-z0-9/+]{0,39}[a-z])(?=[A-Za-z0-9/+]{0,39}[0-9])"
+    r"[A-Za-z0-9/+]{40}(?![A-Za-z0-9/+=])"
+)
+"""A secret access key: exactly forty base64 characters mixing cases and digits. Without a `/` it is
+also a valid profile name, which is why it has to be caught before a profile name is ever quoted."""
+_SESSION_TOKEN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9/+=]{100,}")
+"""A session token: a long unbroken base64 run. Nothing this API accepts is anywhere near that long."""
+
+_MAX_DEPTH: Final[int] = 8
+"""Deeper than any body these routes accept (two levels), shallow enough to walk without recursion."""
+
+_FORWARDING_HEADERS: Final[tuple[str, ...]] = ("x-forwarded-for", "forwarded", "x-real-ip")
+
+_UNKNOWN_USE_CASE: Final[frozenset[str]] = frozenset({"USE_CASE_NOT_FOUND", "USE_CASE_PLANNED"})
+
+_MAX_CONCURRENT_CHECKS: Final[int] = 4
+_CHECKS: Final[threading.BoundedSemaphore] = threading.BoundedSemaphore(_MAX_CONCURRENT_CHECKS)
+"""Connection checks in flight. A thread semaphore, not an event-loop one, so it is shared by every
+loop the process runs - the test client starts one per client."""
 
 _NOT_ACCEPTED: Final[str] = (
     "Marketing AI never accepts AWS keys through the browser, and nothing from this request was "
@@ -89,8 +123,9 @@ _EXPLANATION: Final[dict[LockReason | None, str]] = {
         "can be chosen from a browser. An operator changes the role, not the page."
     ),
     LockReason.REMOTE_CLIENT: (
-        "The AWS identity can only be changed from the machine running Marketing AI. From another "
-        "machine you can test the connection, but not change it."
+        "The AWS identity can only be changed from the machine running Marketing AI, on the page it "
+        "serves at http://localhost or http://127.0.0.1. From anywhere else you can test the "
+        "connection, but not change it."
     ),
 }
 
@@ -120,11 +155,10 @@ def _request_body(model: type[BaseModel]) -> dict[str, Any]:
     response_model=AwsConnectionState,
     summary="The AWS identity Bedrock is called as, and whether this caller may change it",
 )
-def get_aws_connection(request: Request, response: Response) -> AwsConnectionState:
+def get_aws_connection(request: Request, response: Response, current: SettingsDep) -> AwsConnectionState:
     """Where the credentials come from - never the credentials themselves."""
     response.headers["Cache-Control"] = _NO_STORE
-    current = settings()
-    return _state(current, editability(current, _peer(request)))
+    return _state(current, _lock(request, current))
 
 
 # ---------------------------------------------------------------------------
@@ -136,12 +170,13 @@ def get_aws_connection(request: Request, response: Response) -> AwsConnectionSta
     summary="Choose the AWS identity: the default chain, or an AWS CLI profile by name (local only)",
     openapi_extra=_request_body(AwsConnection),
 )
-async def put_aws_connection(request: Request, response: Response) -> AwsConnectionState:
+async def put_aws_connection(
+    request: Request, response: Response, current: SettingsDep
+) -> AwsConnectionState:
     """Save the choice. `403 CONNECTION_LOCKED` on a deployment or from another machine."""
     response.headers["Cache-Control"] = _NO_STORE
     connection = await _parse(request, AwsConnection)
-    current = settings()
-    lock = editability(current, _peer(request))
+    lock = _lock(request, current)
     if lock is not None:
         raise _locked(lock)
     if connection.source is CredentialSource.PROFILE and connection.profile not in available_profiles():
@@ -163,11 +198,10 @@ async def put_aws_connection(request: Request, response: Response) -> AwsConnect
     response_model=AwsConnectionState,
     summary="Forget the chosen profile and go back to the default credential chain (local only)",
 )
-def delete_aws_connection(request: Request, response: Response) -> AwsConnectionState:
+def delete_aws_connection(request: Request, response: Response, current: SettingsDep) -> AwsConnectionState:
     """Return to the default chain. `403 CONNECTION_LOCKED` on a deployment or from another machine."""
     response.headers["Cache-Control"] = _NO_STORE
-    current = settings()
-    lock = editability(current, _peer(request))
+    lock = _lock(request, current)
     if lock is not None:
         raise _locked(lock)
     save_connection(current, AwsConnection())
@@ -184,17 +218,24 @@ def delete_aws_connection(request: Request, response: Response) -> AwsConnection
     openapi_extra=_request_body(ConnectionTestRequest),
 )
 async def test_aws_connection(
-    request: Request, response: Response, config_root: ConfigRootDep
+    request: Request, response: Response, config_root: ConfigRootDep, current: SettingsDep
 ) -> ConnectionReport:
     """Who the credentials are, and which models they can use. Masked for any caller who cannot edit."""
     response.headers["Cache-Control"] = _NO_STORE
     body = await _parse(request, ConnectionTestRequest)
-    current = settings()
-    lock = editability(current, _peer(request))
+    lock = _lock(request, current)
     if body.connection is not None and lock is not None:
         raise _locked(lock)
-    use_case = use_case_config(body.use_case_id, config_root)
-    if use_case.generative is None:
+    try:
+        use_case = use_case_config(body.use_case_id, config_root)
+    except ConfigError as exc:
+        # Re-raised rather than left to the app's handler, whose message quotes the id back.
+        if exc.code in _UNKNOWN_USE_CASE:
+            raise _error(404, exc.code, "There is no available use case with that id.") from None
+        raise _error(422, exc.code, exc.message) from None
+    # `generative` is never None - engine.yaml's defaults give every use case the block - so a
+    # predictive use case is told apart by its kind, exactly as api/routes/generative.py does.
+    if use_case.generative.kind is GenerativeKind.NONE:
         raise _error(
             409,
             "NOT_A_GENERATIVE_USE_CASE",
@@ -215,7 +256,14 @@ async def test_aws_connection(
         },
         mask_identity=lock is not None,
     )
-    return await run_in_threadpool(check)
+    if not _CHECKS.acquire(blocking=False):
+        busy = _error(429, "CHECK_BUSY", "Other connection checks are running. Try again in a few seconds.")
+        busy.headers = {**(busy.headers or {}), "Retry-After": "5"}
+        raise busy
+    try:
+        return await run_in_threadpool(check)
+    finally:
+        _CHECKS.release()
 
 
 # ---------------------------------------------------------------------------
@@ -224,6 +272,27 @@ async def test_aws_connection(
 def _peer(request: Request) -> str | None:
     """The address that opened this connection. Deliberately not `X-Forwarded-For`, which is a claim."""
     return request.client.host if request.client is not None else None
+
+
+def _lock(request: Request, current: Settings) -> LockReason | None:
+    """`editability` for this request: its peer, its `Host`, its `Origin`, and whether it was forwarded.
+
+    A header sent twice is treated as one that names nowhere: `""` matches no local authority.
+    """
+    return editability(
+        current,
+        _peer(request),
+        host=_single(request, "host"),
+        origin=_single(request, "origin"),
+        forwarded=any(name in request.headers for name in _FORWARDING_HEADERS),
+    )
+
+
+def _single(request: Request, name: str) -> str | None:
+    values = request.headers.getlist(name)
+    if not values:
+        return None
+    return values[0] if len(values) == 1 else ""
 
 
 def _state(current: Settings, lock: LockReason | None) -> AwsConnectionState:
@@ -253,16 +322,23 @@ def _locked(lock: LockReason) -> HTTPException:
 
 async def _parse(request: Request, model: type[_M]) -> _M:
     """`model` from the raw body, with errors that describe the shape and never repeat the input."""
-    raw = await request.body()
-    if len(raw) > _MAX_BODY_BYTES:
-        raise _error(413, "BODY_TOO_LARGE", "This request body is larger than a connection setting can be.")
+    raw = await _read_body(request)
+    text = raw.decode("utf-8", errors="replace")
+    if _ACCESS_KEY_ID.search(text) or _SECRET_KEY.search(text) or _SESSION_TOKEN.search(text):
+        # Checked on the raw text as well as the parsed value: a key hidden under a duplicated
+        # field name, or in a body too deep to walk, is still a key that was pasted.
+        raise _error(422, "CREDENTIALS_NOT_ACCEPTED", _NOT_ACCEPTED)
     if not raw.strip():
         data: Any = {}
     else:
         try:
-            data = json.loads(raw)
-        except ValueError:
+            data = json.loads(raw, object_pairs_hook=_unique_keys)
+        except _DuplicateKeyError:
+            raise _error(422, "BODY_INVALID", "The request body names a field more than once.") from None
+        except (ValueError, RecursionError):
             raise _error(422, "BODY_INVALID", "The request body is not JSON.") from None
+    if _too_deep(data):
+        raise _error(422, "BODY_INVALID", "The request body is nested deeper than this endpoint accepts.")
     if _looks_like_credentials(data):
         raise _error(422, "CREDENTIALS_NOT_ACCEPTED", _NOT_ACCEPTED)
     if not isinstance(data, dict):
@@ -282,21 +358,82 @@ async def _parse(request: Request, model: type[_M]) -> _M:
         ) from None
 
 
-def _looks_like_credentials(value: Any) -> bool:
-    """True when anywhere in `value` a key is named like a secret, or a string is shaped like a key id.
+async def _read_body(request: Request) -> bytes:
+    """The body, refused with `413` as soon as it is longer than a connection setting can be.
 
-    Recursive, because `ConnectionTestRequest` nests `AwsConnection` and a key pasted one level down
-    is still a key pasted into a web page.
+    Streamed rather than `await request.body()`, which buffers the whole upload first: a declared or
+    chunked body of any size would otherwise be held in memory before its length was ever checked.
     """
-    if isinstance(value, dict):
-        return any(
-            (isinstance(key, str) and (_CREDENTIAL_KEY.search(key) or _ACCESS_KEY_ID.search(key)))
-            or _looks_like_credentials(item)
-            for key, item in value.items()
-        )
-    if isinstance(value, list):
-        return any(_looks_like_credentials(item) for item in value)
-    return isinstance(value, str) and _ACCESS_KEY_ID.search(value) is not None
+    declared = request.headers.get("content-length")
+    if declared is not None and (
+        not (declared.isascii() and declared.isdigit()) or int(declared) > _MAX_BODY_BYTES
+    ):
+        raise _too_large()
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in request.stream():
+        size += len(chunk)
+        if size > _MAX_BODY_BYTES:
+            raise _too_large()
+        chunks.append(chunk)
+    return b"".join(chunks)
+
+
+def _too_large() -> HTTPException:
+    return _error(413, "BODY_TOO_LARGE", "This request body is larger than a connection setting can be.")
+
+
+class _DuplicateKeyError(ValueError):
+    """A JSON object named one field twice. Never carries the field or its values."""
+
+
+def _unique_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """`json.loads`' object hook: a dict, unless a key repeats - `json` would silently keep the last."""
+    result = dict(pairs)
+    if len(result) != len(pairs):
+        raise _DuplicateKeyError
+    return result
+
+
+def _walk(value: Any) -> list[tuple[Any, int]]:
+    """Every value inside `value` with its depth, walked with a stack rather than recursion and stopping
+    below `_MAX_DEPTH`, so the walk is bounded however the body was built."""
+    found: list[tuple[Any, int]] = []
+    pending: list[tuple[Any, int]] = [(value, 0)]
+    while pending:
+        item, depth = pending.pop()
+        found.append((item, depth))
+        if depth > _MAX_DEPTH:
+            continue
+        if isinstance(item, dict):
+            pending.extend((child, depth + 1) for child in item.values())
+        elif isinstance(item, list):
+            pending.extend((child, depth + 1) for child in item)
+    return found
+
+
+def _too_deep(value: Any) -> bool:
+    return any(depth > _MAX_DEPTH for _, depth in _walk(value))
+
+
+def _looks_like_credentials(value: Any) -> bool:
+    """True when anywhere in `value` a key is named like a secret, or a string is shaped like a key.
+
+    The whole value is walked, because `ConnectionTestRequest` nests `AwsConnection` and a key pasted
+    one level down is still a key pasted into a web page.
+    """
+    for item, _depth in _walk(value):
+        if isinstance(item, dict) and any(
+            isinstance(key, str) and (_CREDENTIAL_KEY.search(key) or _looks_like_key(key)) for key in item
+        ):
+            return True
+        if isinstance(item, str) and _looks_like_key(item):
+            return True
+    return False
+
+
+def _looks_like_key(text: str) -> bool:
+    return any(pattern.search(text) for pattern in (_ACCESS_KEY_ID, _SECRET_KEY, _SESSION_TOKEN))
 
 
 def _safe_names(fields: list[str]) -> list[str]:

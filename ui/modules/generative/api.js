@@ -118,3 +118,23 @@ export const postRegenerateTemplate = (runId, templateId) =>
   );
 
 export const copyMessagesUrl = (runId) => url(`/runs/${encodeURIComponent(runId)}/copy_messages.csv`);
+
+// --- AWS connection (engine/aws_connection.py): a source, never a secret -----------------------
+
+/** Where Bedrock is called from right now, and whether this caller may change it. */
+export const getAwsConnection = () => request("/connection/aws");
+
+/** Saves the chosen source. `403 CONNECTION_LOCKED` outside a local, loopback caller. */
+export const putAwsConnection = (connection) =>
+  request("/connection/aws", { method: "PUT", ...json(connection) });
+
+/** Forgets the chosen profile and returns to the default credential chain. */
+export const deleteAwsConnection = () => request("/connection/aws", { method: "DELETE" });
+
+/**
+ * Checks an identity for free - `sts:GetCallerIdentity` plus a Bedrock availability check per
+ * configured model, never a model call. `body` is `{}` to test what is saved, or
+ * `{connection}` to try a selection before it is saved.
+ */
+export const postTestAwsConnection = (body = {}) =>
+  request("/connection/aws/test", { method: "POST", ...json(body) });

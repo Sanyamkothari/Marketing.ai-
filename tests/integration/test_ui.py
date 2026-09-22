@@ -15,7 +15,7 @@ from __future__ import annotations
 import posixpath
 import re
 from collections.abc import Iterator
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Final
 
 import pytest
@@ -128,6 +128,47 @@ IMPORT_PATH: Final[re.Pattern[str]] = re.compile(r"""from\s+["'](\.\.?/[A-Za-z0-
 LINE_COMMENT: Final[re.Pattern[str]] = re.compile(r"//[^\n]*")
 BLOCK_COMMENT: Final[re.Pattern[str]] = re.compile(r"/\*.*?\*/", re.DOTALL)
 
+GENERATIVE_DIR: Final[Path] = UI_DIR / "modules" / "generative"
+"""Phase 3a's own screens - not part of `MODULES`, which is only what `index.html` loads directly."""
+
+INPUT_TAG: Final[re.Pattern[str]] = re.compile(r"<input\b[^>]*>")
+INPUT_TYPE: Final[re.Pattern[str]] = re.compile(r'type="([a-z]+)"')
+
+CREDENTIAL_TERMS: Final[tuple[str, ...]] = (
+    "password",
+    "secret",
+    "access_key",
+    "accesskey",
+    "private_key",
+    "sessiontoken",
+    "session_token",
+)
+"""Words that must never appear in the connection screen's *code*: this is the point of the design
+(`engine/aws_connection.py`'s module docstring) - there is no field here a secret could go in."""
+
+UNESCAPED_INTERPOLATIONS: Final[tuple[str, ...]] = (
+    "${report.principal_arn}",
+    "${report.account_id}",
+    "${report.credential_method}",
+    "${report.message}",
+    "${report.error_code}",
+    "${report.region}",
+    "${report.profile}",
+    "${report.source}",
+    "${model.model_id}",
+    "${model.detail}",
+    "${model.role}",
+    "${s.data.explanation}",
+    "${s.data.locked_reason}",
+    "${s.selectedProfile}",
+    "${p}",
+    "${part}",
+)
+"""The shape a value from the API would take if a future edit dropped its `esc()` wrapper.
+
+Mirrors `PLACEHOLDERS` above: a blocklist of the exact regression, not a parser for `dom.js`'s
+escaping convention - `esc()` itself is exercised by unit tests, not re-verified here."""
+
 
 @pytest.fixture(scope="module")
 def app() -> FastAPI:
@@ -148,6 +189,17 @@ def read(name: str) -> str:
 def code_of(name: str) -> str:
     """One module with its comments removed, so prose about a setting is not mistaken for code."""
     return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", read(name)))
+
+
+def read_generative(name: str) -> str:
+    return (GENERATIVE_DIR / name).read_text(encoding="utf-8")
+
+
+def code_of_generative(name: str) -> str:
+    """`read_generative`, comments stripped - the AWS connection screen explains its own absence of
+    a secret field in prose (`connection.js`'s module docstring), and that prose must not be mistaken
+    for the field it says does not exist."""
+    return LINE_COMMENT.sub("", BLOCK_COMMENT.sub("", read_generative(name)))
 
 
 def imports_of(name: str) -> list[str]:
@@ -296,3 +348,64 @@ def test_every_endpoint_the_ui_calls_exists_in_this_api(client: TestClient) -> N
     assert called, "no API path was found in api.js"
     missing = sorted(path for path in called if path not in served)
     assert not missing, f"the UI calls endpoints this API does not serve: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# The AWS connection screen (engine/aws_connection.py, api/routes/connection.py)
+# ---------------------------------------------------------------------------
+def test_the_connection_screen_module_exists() -> None:
+    assert (GENERATIVE_DIR / "connection.js").is_file()
+
+
+def test_the_connection_screen_is_served_as_javascript(client: TestClient) -> None:
+    response = client.get("/ui/modules/generative/connection.js")
+    assert response.status_code == 200
+    assert "javascript" in response.headers["content-type"]
+
+
+def test_the_generative_module_imports_and_routes_the_connection_screen() -> None:
+    index_code = code_of_generative("index.js")
+    assert './connection.js"' in index_code, "index.js does not import connection.js"
+    assert 'kind === "connection"' in index_code, "index.js has no route for the connection screen"
+    assert "renderConnection" in index_code
+
+
+def test_the_backend_badge_links_to_the_connection_screen() -> None:
+    """Discoverable from every generative screen (plan §13.3's badge, not a page nobody finds)."""
+    assert "#/generative/connection" in code_of_generative("gdom.js")
+
+
+def test_the_connection_screen_calls_every_route_connection_py_serves() -> None:
+    """The paths live in `api.js`, the one place generative screens make requests from; the screen
+    itself only imports the four functions named after them."""
+    api_code = code_of_generative("api.js")
+    assert "/connection/aws" in api_code
+    assert "/connection/aws/test" in api_code
+    connection_code = code_of_generative("connection.js")
+    for fn in ("getAwsConnection", "putAwsConnection", "deleteAwsConnection", "postTestAwsConnection"):
+        assert fn in connection_code, fn
+
+
+def test_the_connection_screen_renders_only_radio_inputs() -> None:
+    """No `type=\"password\"` and no other input shape a secret could hide in (`ABSOLUTELY NO`,
+    the connection screen's build note): every `<input>` this screen renders is a radio button
+    choosing between the default chain and a named profile."""
+    code = code_of_generative("connection.js")
+    tags = INPUT_TAG.findall(code)
+    assert tags, "expected at least one <input> in the AWS connection screen"
+    for tag in tags:
+        match = INPUT_TYPE.search(tag)
+        assert match is not None and match.group(1) == "radio", tag
+
+
+def test_the_connection_screen_names_no_field_after_a_credential() -> None:
+    code = code_of_generative("connection.js").lower()
+    found = [term for term in CREDENTIAL_TERMS if term in code]
+    assert not found, f"connection.js mentions {found} - this screen must never name a credential field"
+
+
+def test_the_connection_screen_escapes_its_interpolations() -> None:
+    code = code_of_generative("connection.js")
+    assert code.count("esc(") >= 15, "the connection screen should escape every value the API sent"
+    leaked = [pattern for pattern in UNESCAPED_INTERPOLATIONS if pattern in code]
+    assert not leaked, f"connection.js interpolates {leaked} without esc()"

@@ -71,7 +71,7 @@ from api.schemas import (
     ReferenceSetResponse,
     RootCauseRequest,
 )
-from engine.aws_connection import load_connection
+from engine.aws_connection import profile_in_force
 from engine.config import (
     GenerativeConfig,
     GenerativeKind,
@@ -135,7 +135,6 @@ from engine.generative.vectorstore import LocalVectorStore, VectorStore
 from engine.generative.win_back import approve_template, generate_campaign_copy, regenerate_template
 from engine.jobs import CancelToken, JobFn
 from engine.llm import build_client
-from engine.settings import settings
 from engine.stages.explain import ROW_EXPLANATIONS_FILENAME
 from engine.stages.export import SCORES_CSV
 from engine.storage import Storage, StorageError, index_key, run_key
@@ -570,8 +569,10 @@ def _client_meter_guardrails(
 ) -> tuple[Meter, Guardrails]:
     generative = use_case.generative
     # The identity is read per request rather than at import: a person may switch profile on the
-    # connection screen between two jobs, and the next job should run as whoever they chose.
-    client = build_client(generative.llm, profile=load_connection(settings()).profile)
+    # connection screen between two jobs, and the next job should run as whoever they chose. Not
+    # `load_connection(settings())`: on `prod` that raises, because a deployment's settings are in
+    # Parameter Store and the environment alone is not a valid prod configuration.
+    client = build_client(generative.llm, profile=profile_in_force())
     meter = Meter(client, job_id=job_id, llm=generative.llm, budget=generative.budget)
     guardrails = Guardrails(load_policy(config_root), meter=meter, prompts_root=config_root)
     return meter, guardrails

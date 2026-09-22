@@ -17,12 +17,14 @@ import { getUseCase } from "../../api.js";
 import { errorBox, esc, pageHead } from "../../dom.js";
 import { registerModule } from "../router.js";
 import { assistantHtml, createAssistantController } from "./assistant.js";
+import { connectionHtml, createConnectionController } from "./connection.js";
 import { createCopyController, copyHtml } from "./copy.js";
 import { createRcaController, rcaHtml } from "./rca.js";
 
 const assistantControllers = new Map();
 const rcaControllers = new Map();
 const copyControllers = new Map();
+let connectionController = null;
 
 function paint(app, html, after) {
   app.innerHTML = html;
@@ -80,6 +82,18 @@ async function renderRca(app, useCaseId, runId) {
   paint(app, rcaHtml(uc, controller.state), () => controller.bind(app));
 }
 
+async function renderConnection(app) {
+  if (!connectionController) {
+    connectionController = createConnectionController(() => {
+      paint(app, connectionHtml(connectionController.state), () => connectionController.bind(app));
+    });
+  }
+  const controller = connectionController;
+  paint(app, connectionHtml(controller.state), () => controller.bind(app));
+  await controller.load();
+  paint(app, connectionHtml(controller.state), () => controller.bind(app));
+}
+
 async function renderCopy(app, useCaseId, runId) {
   const uc = await getUseCase(useCaseId);
   const key = runId;
@@ -105,6 +119,11 @@ registerModule({
     // parts[0] is always "generative"; parts[1] picks the screen.
     const [, kind, useCaseId, thirdSegment] = parts;
     try {
+      if (kind === "connection") {
+        await renderConnection(app);
+        document.title = "AWS connection · Marketing AI";
+        return;
+      }
       if (kind === "assistant" && useCaseId) {
         await renderAssistant(app, useCaseId, thirdSegment || null);
         document.title = "AI Assistant · Marketing AI";

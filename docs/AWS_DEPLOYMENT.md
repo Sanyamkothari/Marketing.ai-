@@ -248,6 +248,12 @@ invoke several models (a generation model, an embedding model, a judge) while th
 completions to one — so it is what `infra/policies.py` scopes `bedrock:InvokeModel` to, and the
 first entry is what the deployment writes into `bedrock_model_id`.
 
+A deployment calls Bedrock as its task role and nothing else. The AWS connection screen
+(`#/generative/connection`) is read-only on every deployment: it can confirm that the role reaches
+Bedrock and which configured models it may use - masked, and without invoking one - but it cannot
+point the deployment at another identity, and it never stores a key. Choosing a profile is a laptop
+feature; see docs/GENERATIVE.md, section 9.
+
 An empty list with `-c bedrock_enabled=true`, or `bedrock_enabled=false`, synthesises an explicit
 `Deny` rather than an absent `Allow` (DEC-371). Requesting model access is a per-account, per-model
 request with a lead time; it is in §2 so an operator who plans ahead knows that.

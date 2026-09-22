@@ -17,15 +17,20 @@ injectGenerativeStyles();
  * backend must be as obvious as a watermark, because nothing it renders should be mistaken for a
  * real answer, a real root cause or copy fit to send. `llm` is the resolved `generative.llm` block
  * from a run's `run_config.json`, or the equivalent snapshot an index build was made with.
+ *
+ * It is a link, always to the AWS connection screen: which identity answered is exactly the
+ * question that screen exists to answer, so the badge that names a backend is also how a person
+ * finds where that backend's credentials come from.
  */
 export function backendBadge(llm) {
-  if (!llm) return `<div class="gbackend g-unknown">Backend ${EM_DASH}</div>`;
+  const href = `href="#/generative/connection"`;
+  if (!llm) return `<a class="gbackend g-unknown" ${href}>Backend ${EM_DASH}</a>`;
   if (llm.backend === "fake") {
-    return `<div class="gbackend g-fake"><b>Fake backend</b><span>Deterministic stand-in · no model was called anywhere on this screen · $0 could ever be spent</span></div>`;
+    return `<a class="gbackend g-fake" ${href}><b>Fake backend</b><span>Deterministic stand-in · no model was called anywhere on this screen · $0 could ever be spent</span></a>`;
   }
   const model = present(llm.generation_model_id) ? llm.generation_model_id : EM_DASH;
   const region = present(llm.region) ? ` · ${esc(llm.region)}` : "";
-  return `<div class="gbackend g-live"><b>Bedrock</b><span>${esc(model)}${region}</span></div>`;
+  return `<a class="gbackend g-live" ${href}><b>Bedrock</b><span>${esc(model)}${region}</span></a>`;
 }
 
 /** One line of calls / tokens / cost, so cost reads as an artefact rather than an afterthought. */

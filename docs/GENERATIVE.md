@@ -523,6 +523,46 @@ a path that reaches the UI - applies exactly as hard to invented prose as to an 
 score. A screen that could show `[fake completion 3f2a...]`-shaped text to a person evaluating a real
 deployment would be showing them a fabricated value with nothing that says so.
 
+
+### Whose AWS credentials: the connection screen
+
+Different people use this product with different AWS credentials, and the screen at
+`#/generative/connection` - reached from the backend badge on every generative screen - is where a
+person says which. It never asks for a key. It chooses a **source**, and the server resolves the
+source from wherever AWS tooling already keeps credentials (`engine/aws_connection.py`):
+
+- **Default credentials** - boto3's own chain: `AWS_PROFILE`, environment variables, an SSO login,
+  an instance or task role. This is what every job used before the screen existed, and it is still
+  what a job uses when nobody has chosen anything.
+- **A named profile** - any profile in `~/.aws/config` or `~/.aws/credentials`, including SSO
+  profiles. A person without one creates it where their secrets belong, in a terminal on the machine
+  running Marketing AI: `aws configure --profile NAME`, or `aws configure sso` for single sign-on.
+
+**Test connection** answers "who am I, and can I use these models?" without spending anything. It asks
+STS who the credentials belong to - a call that needs no permission at all - and asks Bedrock whether
+each configured model is enabled for that account in that region, which invokes nothing. A task role
+scoped to `bedrock:InvokeModel` is usually refused that second question while being perfectly able to
+use the model, so a refusal is reported as *unverified*, never as *unavailable*.
+
+Choosing is possible only on the machine that owns the identities: a `local` deployment, asked by the
+page the product itself serves, from loopback. Anywhere else the screen is read-only and the identity
+is masked:
+
+| Who is asking | Can choose | Sees |
+|---|---|---|
+| The person at the laptop, in the product's own page | yes | full identity, profile list |
+| A colleague opening the laptop's URL over the network | no | masked account, no profiles |
+| Another website open in the same browser | no | masked account, no profiles |
+| Anyone, on a `dev`, `staging` or `prod` deployment | no | masked account - the IAM task role |
+
+A deployment is single tenant and unauthenticated (docs/AWS_DEPLOYMENT.md, section 9.2), so there is
+no person a choice could belong to there. It calls Bedrock as its task role, which is the arrangement
+a laptop's named profile is imitating, and an operator changes the role rather than the page.
+
+If someone pastes a key into a request anyway, it is refused with `CREDENTIALS_NOT_ACCEPTED`, it is
+never repeated back, and the message says to rotate it: a key typed into a web page should be treated
+as exposed. DEC-228 to DEC-232 record why each of these rules is the one it is.
+
 ---
 
 ## 10. What Phase 3a deliberately does not do

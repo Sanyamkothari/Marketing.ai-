@@ -30,10 +30,22 @@ all - quote the credential scope, which names the access key id. Every failure i
 and a sentence written here. On a deployment even the identity is masked, because an unauthenticated
 visitor has no business learning the account id and role name the product runs as.
 
+**"From this machine" means the browser's page too, not only the socket.** A loopback peer is not
+enough on its own, because a web page from anywhere, open in a browser on the same laptop, makes its
+requests from loopback: with CORS open (DEC-024) it could list the profiles, read every identity
+unmasked and switch Bedrock to the profile of its choosing. So a request may choose only when its
+`Host` names this machine (a DNS-rebinding page names its own domain there), its `Origin`, when a
+browser sent one, is a loopback origin, and it carries no forwarding header. uvicorn rewrites the
+peer from `X-Forwarded-For` when the proxy is itself loopback, which can only move a request *out*
+of loopback; a request that says it was forwarded is refused either way, so a tunnel or a proxy that
+trusts too much cannot turn a remote caller into a local one.
+
 **What is remembered is a name, and only on a laptop.** The one thing persisted is the chosen
 profile name, under the local data directory, readable by its owner alone. Never the resolved
 account or ARN (engine/settings.py, rule 1), and a deployed server does not read the file at all, so
-nothing planted there can redirect it.
+nothing planted there can redirect it. On a laptop the file is written through a fresh, unguessable
+temporary name, and read back only when it is a regular file owned by this user and writable by
+nobody else, so a shared or careless data directory cannot plant a choice or aim the write elsewhere.
 """
 
 from __future__ import annotations
@@ -41,6 +53,8 @@ from __future__ import annotations
 import ipaddress
 import os
 import re
+import stat
+import tempfile
 from collections.abc import Callable, Mapping
 from enum import StrEnum
 from pathlib import Path
@@ -48,7 +62,7 @@ from typing import Any, Final, Literal, Self
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from engine.settings import Settings
+from engine.settings import ENV_VARS, Settings
 from engine.utils.logging import get_logger
 
 __all__ = [
@@ -71,9 +85,12 @@ __all__ = [
     "classify_failure",
     "connection_path",
     "editability",
+    "is_local_authority",
+    "is_local_origin",
     "is_loopback",
     "load_connection",
     "mask_account",
+    "profile_in_force",
     "save_connection",
     "valid_profile_name",
     "valid_region",
@@ -99,6 +116,17 @@ _REGION: Final[re.Pattern[str]] = re.compile(r"[a-z]{2}(-[a-z]+)+-\d{1,2}")
 """An AWS region name. Checked before it reaches botocore, which builds an endpoint hostname from it."""
 
 _CHECK_TIMEOUT_S: Final[int] = 10
+
+_AUTHORITY: Final[re.Pattern[str]] = re.compile(
+    r"(?:\[(?P<ipv6>[0-9A-Fa-f:.]+)\]|(?P<name>[A-Za-z0-9.-]+))(?::(?P<port>\d{1,5}))?"
+)
+"""`host[:port]` exactly as a `Host` header or an origin carries it. No userinfo, path or spaces."""
+
+_ORIGIN: Final[re.Pattern[str]] = re.compile(r"https?://(?P<authority>[^/?#@\s]+)")
+"""A serialised browser origin: scheme and authority, nothing after. `null` never matches."""
+
+_AWS_ERROR_CODE: Final[re.Pattern[str]] = re.compile(r"[A-Za-z][A-Za-z0-9.]{0,63}")
+"""The shape of an AWS error code. Anything else is not repeated, even though AWS sent it."""
 
 
 class CredentialSource(StrEnum):
@@ -205,8 +233,9 @@ FAILURES: Final[Mapping[str, tuple[str, str]]] = {
         "Create it there with `aws configure --profile {profile}` or `aws configure sso --profile {profile}`.",
     ),
     "NO_CREDENTIALS": (
-        "No AWS credentials were found on the machine running Marketing AI.",
-        "Run `aws configure` or `aws sso login` in a terminal on that machine, or choose a named profile.",
+        "No AWS credentials were found{subject} on the machine running Marketing AI.",
+        "Run `aws configure{profile_flag}`, or `aws sso login{profile_flag}` for single sign-on, in a terminal "
+        "on that machine.",
     ),
     "SSO_LOGIN_REQUIRED": (
         "The AWS SSO session for these credentials has expired or was never started.",
@@ -288,15 +317,53 @@ def is_loopback(host: str | None) -> bool:
         return False
 
 
-def editability(settings: Settings, client_host: str | None) -> LockReason | None:
+def is_local_authority(authority: str | None) -> bool:
+    """True when a `Host` header is absent or names this machine: `localhost` or a loopback address.
+
+    A DNS-rebinding page reaches 127.0.0.1 under its own domain, and that domain is what its browser
+    writes here. `None` is an absent header - no browser omits it, so only a local tool does.
+    """
+    if authority is None:
+        return True
+    match = _AUTHORITY.fullmatch(authority)
+    if match is None:
+        return False
+    name = match.group("ipv6") or match.group("name")
+    return name.lower() == "localhost" or is_loopback(name)
+
+
+def is_local_origin(origin: str | None) -> bool:
+    """True when a browser sent no `Origin`, or the page that sent it was served from this machine.
+
+    `null` - a sandboxed frame, a `file://` page, a redirect across origins - is refused, because any
+    site can produce it.
+    """
+    if origin is None:
+        return True
+    match = _ORIGIN.fullmatch(origin)
+    return match is not None and is_local_authority(match.group("authority"))
+
+
+def editability(
+    settings: Settings,
+    client_host: str | None,
+    *,
+    host: str | None = None,
+    origin: str | None = None,
+    forwarded: bool = False,
+) -> LockReason | None:
     """`None` when this request may choose the identity, or the reason it may not.
 
     The deployment is checked first and independently: a reverse proxy on the same host makes every
-    request look like loopback, so loopback alone must never be what unlocks a deployed server.
+    request look like loopback, so loopback alone must never be what unlocks a deployed server. On a
+    laptop the peer, the `Host`, the `Origin` and the absence of forwarding must all say "this
+    machine" (the module docstring says why each one is needed); `None` means the header was absent.
     """
     if settings.env != EDITABLE_ENV:
         return LockReason.DEPLOYED
-    if not is_loopback(client_host):
+    if forwarded or not is_loopback(client_host):
+        return LockReason.REMOTE_CLIENT
+    if not is_local_authority(host) or not is_local_origin(origin):
         return LockReason.REMOTE_CLIENT
     return None
 
@@ -346,12 +413,44 @@ def load_connection(settings: Settings) -> AwsConnection:
         return AwsConnection()
     path = connection_path(settings)
     try:
-        return AwsConnection.model_validate_json(path.read_text(encoding="utf-8"))
+        return AwsConnection.model_validate_json(_read_own_file(path))
     except FileNotFoundError:
         return AwsConnection()
     except (OSError, ValueError) as exc:
         _LOGGER.warning("aws_connection.unreadable kind=%s", type(exc).__name__)
         return AwsConnection()
+
+
+def profile_in_force(environ: Mapping[str, str] | None = None) -> str | None:
+    """The profile a Bedrock client should be built with now, or `None` for the default chain.
+
+    What a generative job calls instead of `load_connection(settings())`. Only the deployment's name
+    is read before deciding: a deployment's full settings live in Parameter Store, and building them
+    from the environment alone fails on `prod` (no CORS origins there) - the choice is never read on
+    a deployment anyway, so there is nothing to build them for.
+    """
+    source = os.environ if environ is None else environ
+    if (source.get(ENV_VARS["env"], "").strip() or EDITABLE_ENV) != EDITABLE_ENV:
+        return None
+    return load_connection(Settings.from_env(source)).profile
+
+
+def _read_own_file(path: Path) -> str:
+    """`path`'s text, when it is a regular file this user owns and nobody else may write.
+
+    Opened without following a symlink and checked on the open descriptor, so what is checked is
+    what is read. A file that fails the check raises `PermissionError`, which the caller treats like
+    any unreadable file: the default chain.
+    """
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0)
+    descriptor = os.open(path, flags)
+    with os.fdopen(descriptor, "r", encoding="utf-8") as handle:
+        status = os.fstat(handle.fileno())
+        if not stat.S_ISREG(status.st_mode):
+            raise PermissionError("not a regular file")
+        if hasattr(os, "geteuid") and (status.st_uid != os.geteuid() or status.st_mode & 0o022):
+            raise PermissionError("not owned by this user, or writable by others")
+        return handle.read(64 * 1024)
 
 
 def save_connection(settings: Settings, connection: AwsConnection) -> None:
@@ -366,14 +465,21 @@ def save_connection(settings: Settings, connection: AwsConnection) -> None:
     if connection == AwsConnection():
         path.unlink(missing_ok=True)
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_suffix(".tmp")
-    descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-        handle.write(connection.model_dump_json())
-        handle.flush()
-        os.fsync(handle.fileno())
-    temporary.replace(path)
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # `mkstemp` creates a new file with O_EXCL under a random name, mode 0600: a predictable name
+    # could be pre-planted as a symlink that aims this write at another file, or as a file whose
+    # looser mode `replace` would carry over to the one that is kept.
+    descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{CONNECTION_FILENAME}.", suffix=".tmp")
+    temporary = Path(name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(connection.model_dump_json())
+            handle.flush()
+            os.fsync(handle.fileno())
+        temporary.replace(path)
+    except BaseException:
+        temporary.unlink(missing_ok=True)
+        raise
 
 
 # ---------------------------------------------------------------------------
@@ -496,7 +602,8 @@ def _check_model(session: Any, role: ModelRole, model_id: str, region: str) -> M
                 "ids (us., eu., apac.) cannot be checked this way."
             )
         else:
-            detail = f"The availability check was refused ({code or 'no code'})."
+            shown = code if _AWS_ERROR_CODE.fullmatch(code) else "no code"
+            detail = f"The availability check was refused ({shown})."
         return ModelCheck(role=role, model_id=model_id, status=ModelStatus.UNVERIFIED, detail=detail)
     except Exception as exc:
         _LOGGER.info("aws_connection.model_check_failed kind=%s", type(exc).__name__)
@@ -541,7 +648,11 @@ def _failure(
 ) -> ConnectionReport:
     message, hint = FAILURES[code]
     shown = effective_profile or "default"
-    flag = f" --profile {effective_profile}" if effective_profile else ""
+    # A profile is named back - in the sentence, and in the command a person is told to paste - only
+    # to a caller who may see the identity. For anyone masked, the same failure reads generically.
+    named = None if mask_identity else effective_profile
+    flag = f" --profile {named}" if named else ""
+    subject = f" for the profile '{named}'" if named else ""
     return ConnectionReport(
         ok=False,
         source=connection.source,
@@ -549,7 +660,7 @@ def _failure(
         region=region,
         identity_masked=mask_identity,
         error_code=code,
-        message=message.format(profile=shown),
+        message=message.format(profile=shown, subject=subject),
         hint=hint.format(profile=shown, profile_flag=flag),
     )
 
