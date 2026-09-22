@@ -98,6 +98,8 @@ on everything up to the pipeline boundary with no ruling at all. The smallest ch
 it is one line in §3: add `engine/pipeline.py`'s `StageContext` and its `sole_key()` call sites to
 Phase 2's pre-approved exception list.
 
+## Resolved
+
 ### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself
 
 **What is needed.** A decision on the cut point for the three phase branches, before they are cut.
@@ -123,13 +125,39 @@ branch; then cut the three branches from the merged `main`.
 
 **What I did meanwhile.** Verified the rest of the shared surface rather than assuming it: the
 branch's items 1, 4, 5, 6 and 7 are present and the marker blocks are in every shared file; `main`
-and the branch diverge at `46ab665`; the divergence in `engine/contracts.py` is additive on the
-branch (`ComputeBackend`, `LLMUsage`, `ComputeInfo` added, nothing renamed, removed or
-type-changed), so merging the branch into `main` should not break `main`'s Phase 2 work. Recorded
-as A-1 and A-2 in `reports/2026-09-22.md`. I hold no code and have pushed none; this entry is the
-whole of my action.
+and the branch diverge at `46ab665`.
 
-## Resolved
+**Correction, same day — read this before acting on the paragraph above.** I first wrote here that
+the `engine/contracts.py` divergence "is additive on the branch … so merging the branch into
+`main` should not break `main`'s Phase 2 work." That was read off the diff, not measured, and it
+is **wrong**. The §8 merge simulation has now been run: merging the branch into `main` conflicts in
+**8 files, 17 hunks** — `engine/contracts.py` (4), `api/routes/runs.py` (3), `docs/API.md` (3),
+`api/schemas.py` (2), `engine/onboarding/specs.py` (2, add/add), `README.md` (1),
+`docs/DECISIONS.md` (1), `engine/onboarding/__init__.py` (1, add/add). The merged tree cannot be
+tested because the merge never reaches a commit.
+
+The conflicts are semantic. §2.1 item 1 specifies `primary_key: str | list[str]`. The branch has
+`PrimaryKey = str | list[str]` and matches it; `main` has `str | tuple[str, ...]` and does not.
+`tuple` and `list` differ in JSON serialisation and in every downstream type check, and
+`sole_key()`, the composite-key narrowing path and `FeatureSchema` are all typed against the
+branch's alias. Suggested resolution: take the protocol's type, since §2.1 is the written
+specification and `main` departed from it.
+
+This does not change the request — it makes it more urgent, since the reconciliation is a real
+merge rather than the near-clean one I implied, and it is far cheaper before any phase branch is
+cut than after three have built on two incompatible surfaces. Recorded as A-1, A-2 and A-4 in
+`reports/2026-09-22.md`. I hold no code and have pushed none; this entry is the whole of my
+action.
+
+**Resolved 2026-09-22.** `main` was force-updated from `04c76da` to `5f93051`, the
+contracts-first commit this branch already carried, so the divergent surface is gone from every
+branch rather than reconciled hunk by hunk. `main` now has all seven §2 items, the
+protocol-conforming `primary_key: str | list[str]`, `PARALLEL_WORK_PROTOCOL.md` and this file.
+`merge-base(main, branch) == main`: the branch is 11 commits ahead, 0 behind, and merges clean, so
+the 17-hunk conflict measured against `04c76da` no longer exists anywhere. The phase branches can
+be cut from `main` safely. The three phase plans (still open above) continue to gate
+`engine/onboarding/specs.py`, which is the one §2 item `main` carries only as a stub.
+
 
 ### 2026-09-22 — contracts-first → human reviewer: the Phase 3a half of "the three phase plans"
 
