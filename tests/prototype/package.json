@@ -1,0 +1,12 @@
+{
+  "name": "marketing-ai-prototype-tests",
+  "private": true,
+  "type": "module",
+  "description": "jsdom tests for marketing-ai-prototype.html (the reference prototype)",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}

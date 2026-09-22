@@ -404,7 +404,25 @@ every rebase.
 
 ### Phase 2 — Data onboarding
 
-_Nothing merged yet._
+**The reference prototype is in the repository.** `marketing-ai-prototype.html` is the design
+source of truth named in `plan.md` §9 — one HTML file, hash routing, dark mode, mobile layout,
+no build step. It now carries the Phase 2 §10 screens the build agents copy: a client selector
+in the header, Setup step 1 as a choice between a prepared file and raw tables, the four-step
+onboarding panel behind it (sources → mapping → features & label → build & review), score mode
+with a saved recipe, and the lineage block on the Data page. It also carries the Phase 3a §9
+screens (see below). `CHANGELOG-prototype.md` lists every screen with the plan section it
+implements and the illustrative numbers they share.
+
+```bash
+open marketing-ai-prototype.html   # no build step, no server needed
+make prototype-test                # 37 jsdom tests in tests/prototype/
+make prototype-screenshots         # docs/prototype/*.png, desktop and mobile
+```
+
+`tests/prototype/existing.test.mjs` pins the screens that must not move: the lifecycle
+overview, the seven use-case definitions, the eight advanced-settings stages, the three run
+states and the colour tokens. Screenshots of every new state, desktop (1440px) and mobile
+(390px), are in `docs/prototype/`.
 
 <!-- ---- END PHASE-2 ---- -->
 
@@ -412,7 +430,13 @@ _Nothing merged yet._
 
 ### Phase 3a — Generative and hybrid
 
-_Nothing merged yet._
+**The prototype carries the Phase 3a §9 screens.** In `marketing-ai-prototype.html`: the AI
+Onboarding Assistant's document upload, optional reference questions, refusal message,
+index-build running screen and results (index summary, pass rate against its threshold, the ten
+weakest answers, a Try it panel whose citations expand to the quoted chunk, a cost line); RCA's
+root causes per risk segment; and win-back's campaign copy with judge scores, block reasons and
+approve / regenerate. `CHANGELOG-prototype.md` maps each to its plan section; the file and its
+tests are listed under Phase 2 above.
 
 <!-- ---- END PHASE-3A ---- -->
 

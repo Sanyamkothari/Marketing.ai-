@@ -1,0 +1,1527 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marketing AI · Minfy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+:root{
+  --bg:#F5F6F8;--surface:#FFFFFF;--soft:#F9FAFB;--line:#E5E7EB;--line2:#D1D5DB;
+  --ink:#111827;--ink2:#374151;--muted:#6B7280;--faint:#9CA3AF;
+  --stage:#111827;--stage-ink:#FFFFFF;--stage-num:#9CA3AF;
+  --p:#2F6FDB;--p-t:#EDF3FD;--g:#7A55D3;--g-t:#F3EFFC;--h:#12957F;--h-t:#E8F6F3;
+  --ok:#15803D;--ok-t:#E8F6EE;--warn:#B45309;--warn-t:#FEF3C7;--bad:#B42318;--bad-t:#FDECEC;
+  --brand-blue:#1E57BD;--brand-yellow:#FFD500;
+  --track:#F3F4F6;
+}
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]){
+    --bg:#0F1216;--surface:#171B21;--soft:#1D222A;--line:#2A3039;--line2:#36404B;
+    --ink:#F3F4F6;--ink2:#D1D5DB;--muted:#9AA3AF;--faint:#6B7480;
+    --stage:#E5E7EB;--stage-ink:#111827;--stage-num:#6B7280;
+    --p:#6E9BEA;--p-t:#1B2A44;--g:#A68BEA;--g-t:#2A2342;--h:#4CC3AC;--h-t:#16302B;
+    --ok:#5BD08A;--ok-t:#16301F;--warn:#F2B35B;--warn-t:#3A2C14;--bad:#F2877B;--bad-t:#3B1C19;
+    --brand-blue:#6E9BEA;--track:#232932;
+  }
+}
+:root[data-theme="dark"]{
+  --bg:#0F1216;--surface:#171B21;--soft:#1D222A;--line:#2A3039;--line2:#36404B;
+  --ink:#F3F4F6;--ink2:#D1D5DB;--muted:#9AA3AF;--faint:#6B7480;
+  --stage:#E5E7EB;--stage-ink:#111827;--stage-num:#6B7280;
+  --p:#6E9BEA;--p-t:#1B2A44;--g:#A68BEA;--g-t:#2A2342;--h:#4CC3AC;--h-t:#16302B;
+  --ok:#5BD08A;--ok-t:#16301F;--warn:#F2B35B;--warn-t:#3A2C14;--bad:#F2877B;--bad-t:#3B1C19;
+  --brand-blue:#6E9BEA;--track:#232932;
+}
+*{box-sizing:border-box}
+html,body{margin:0}
+body{background:var(--bg);color:var(--ink);font-family:Inter,"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
+a{color:inherit;text-decoration:none}
+a:focus-visible{outline:2px solid var(--brand-blue);outline-offset:2px;border-radius:6px}
+img,svg{max-width:100%}
+.screen{max-width:1440px;margin:24px auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:44px 64px 64px}
+@media (max-width:900px){.screen{margin:0;border-radius:0;border-left:0;border-right:0;padding:28px 20px 40px}}
+
+/* header */
+.head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
+.head .titles{display:flex;flex-direction:column;gap:8px;min-width:0}
+.h1{font-size:28px;font-weight:700;letter-spacing:-.01em;margin:0;line-height:1.2}
+.sub{color:var(--muted);font-size:15px;margin:0}
+.desc{color:var(--muted);font-size:14px;margin:0;max-width:640px;line-height:1.5}
+.logo{width:142px;height:38px;flex:none}
+.logo .b{fill:var(--brand-blue)} .logo .y{fill:var(--brand-yellow)} .logo .s{stroke:var(--brand-blue)}
+.rule{height:1px;background:var(--line);margin:24px 0}
+.crumbs{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;font-weight:500;color:var(--muted)}
+.crumbs a:hover{color:var(--ink)}
+.crumbs .sep{color:var(--faint)} .crumbs .cur{color:var(--ink);font-weight:600}
+.over{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
+.chips{display:flex;gap:8px;flex-wrap:wrap}
+.chip{display:inline-flex;gap:6px;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.chip.stage{background:var(--soft);border:1px solid var(--line)} .chip.stage span{color:var(--muted);font-weight:400}
+.t-P{--c:var(--p);--t:var(--p-t)} .t-G{--c:var(--g);--t:var(--g-t)} .t-H{--c:var(--h);--t:var(--h-t)}
+.chip.type{background:var(--t);color:var(--c)}
+.back{font-size:12px;font-weight:500;color:var(--muted)} .back:hover{color:var(--ink)}
+
+/* overview */
+.bar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
+.cap{font-size:12px;font-weight:500;color:var(--muted)}
+.legend{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+.legend .lbl{font-size:12px;color:var(--faint)}
+.timeline-wrap{overflow-x:auto;margin-top:40px;padding-bottom:8px}
+.timeline{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));column-gap:38px;min-width:1100px}
+.stage-col{display:flex;flex-direction:column;gap:12px;align-items:flex-start}
+.stage-pill{position:relative;width:100%;height:48px;display:flex;align-items:center;gap:10px;padding:0 16px;border-radius:8px;background:var(--stage);color:var(--stage-ink);font-weight:600;font-size:15px}
+.stage-pill .n{color:var(--stage-num);font-size:12px}
+.stage-col:not(:last-child) .stage-pill::after{content:"→";position:absolute;right:-28px;top:50%;transform:translateY(-50%);color:var(--faint);font-weight:400;font-size:18px}
+.uc-list{display:flex;flex-direction:column;gap:8px;width:100%}
+.uc{position:relative;display:flex;align-items:center;justify-content:space-between;gap:8px;padding:14px 12px 14px 18px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);font-weight:500;overflow:hidden;transition:border-color .15s, background .15s}
+.uc::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c)}
+.uc .chev{color:var(--faint);font-size:18px;line-height:1}
+.uc:hover{border-color:var(--c);background:var(--soft)} .uc:hover .chev{color:var(--c)}
+.hint{margin-top:48px;font-size:12px;color:var(--faint)}
+
+/* detail */
+.flow{display:grid;grid-template-columns:1fr 56px 1fr 56px 1fr;align-items:stretch;margin-top:16px}
+.flow .arrow{display:flex;align-items:center;justify-content:center;color:var(--faint);font-size:22px}
+.block{position:relative;display:flex;flex-direction:column;justify-content:space-between;gap:28px;min-height:196px;padding:28px 24px 22px;border:1px solid var(--line2);border-radius:10px;background:var(--surface);overflow:hidden;transition:border-color .15s, background .15s}
+.block::before{content:"";position:absolute;left:0;right:0;top:0;height:4px;background:var(--c)}
+.block .lab{font-size:12px;font-weight:600;letter-spacing:.1em;color:var(--muted);text-transform:uppercase}
+.block .val{font-size:20px;font-weight:600;margin-top:10px;line-height:1.3}
+.block .go{display:flex;justify-content:space-between;color:var(--c);font-weight:500;font-size:13px}
+.block:hover{border-color:var(--c);background:var(--soft)}
+@media (max-width:900px){.flow{grid-template-columns:1fr}.flow .arrow{transform:rotate(90deg);height:40px}}
+
+/* detail setup */
+.setup-grid{display:grid;grid-template-columns:minmax(0,1fr) 380px;gap:24px;align-items:start;margin-top:8px}
+@media (max-width:1100px){.setup-grid{grid-template-columns:1fr}}
+.seg{display:inline-flex;padding:3px;border:1px solid var(--line);border-radius:10px;background:var(--soft);gap:2px}
+.seg button{border:0;background:transparent;font:inherit;font-size:13px;font-weight:500;color:var(--muted);padding:7px 14px;border-radius:8px;cursor:pointer}
+.seg button.on{background:var(--surface);color:var(--ink);box-shadow:0 1px 2px rgba(0,0,0,.08);font-weight:600}
+.seg-help{font-size:12px;color:var(--muted);margin:10px 0 0}
+.form-body{padding:20px}
+.fstep{display:grid;grid-template-columns:28px minmax(0,1fr);gap:14px;padding:18px 0;border-top:1px solid var(--line)}
+.fstep:first-of-type{border-top:0;padding-top:4px}
+.fstep.locked{opacity:.4;pointer-events:none}
+.stepno{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--t);color:var(--c);font-size:11px;font-weight:600;margin-top:2px}
+.fstep.done .stepno{background:var(--ok-t);color:var(--ok)}
+.flabel{font-size:13px;font-weight:600;color:var(--ink)}
+.fhint{font-size:12px;color:var(--muted);margin:2px 0 10px}
+.frow{display:flex;gap:12px;flex-wrap:wrap}
+.field{display:flex;flex-direction:column;gap:6px;width:240px}
+.field.sm{width:170px}
+.field .sub{font-size:12px;color:var(--muted)}
+@media (max-width:700px){.field,.field.sm{width:100%}}
+.control{position:relative;display:flex;align-items:center;height:38px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);font-size:13px;color:var(--ink);transition:border-color .15s}
+.control:hover{border-color:var(--ink2)}
+.control:focus-within{outline:2px solid var(--brand-blue);outline-offset:1px}
+.control.file{cursor:pointer;padding:0 12px;justify-content:space-between;gap:8px;font-weight:500;width:260px;max-width:100%}
+.control.file .fname{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.control.file .ico{color:var(--faint);font-size:15px}
+.control.file.has{border-color:var(--c);background:var(--t);color:var(--c)}
+.control.file.has .ico{color:var(--c)}
+.control.sel::after{content:"";position:absolute;right:13px;top:50%;width:7px;height:7px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:translateY(-70%) rotate(45deg);pointer-events:none}
+.control select,.control input[type=number],.control input[type=text]{appearance:none;-webkit-appearance:none;width:100%;height:100%;border:0;background:transparent;color:inherit;font:inherit;padding:0 32px 0 12px;outline:none;text-overflow:ellipsis}
+.control input[type=text]{padding:0 12px}
+.field.wide{width:100%}
+.control select{cursor:pointer}.control input[type=number]{padding-right:12px}
+.control select option{color:var(--ink);background:var(--surface)}
+.sr{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
+.linkbtn{border:0;background:none;padding:0;font:inherit;font-size:12px;color:var(--brand-blue);text-decoration:underline;cursor:pointer}
+.orline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.preview{margin-top:14px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--soft)}
+.preview .pv-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:8px 12px;font-size:12px;color:var(--muted)}
+.preview .pv-head b{color:var(--ink);font-weight:600}
+.preview table{font-size:12px;background:var(--surface)}
+.preview th{padding:7px 12px}.preview td{padding:7px 12px;color:var(--ink2);white-space:nowrap}
+.colchips{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 10px}
+.colchip{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--ink2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.colchip.t{border-color:var(--c);color:var(--c)}
+details.adv{border-top:1px solid var(--line);padding:14px 0 0}
+details.adv summary{cursor:pointer;font-size:13px;font-weight:500;color:var(--ink2);list-style:none;display:flex;align-items:center;gap:8px}
+details.adv summary::-webkit-details-marker{display:none}
+details.adv summary::before{content:"";width:7px;height:7px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+details.adv[open] summary::before{transform:rotate(45deg)}
+details.adv .frow{padding-top:14px}
+.check{display:flex;align-items:center;gap:8px;font-size:13px;height:38px}
+.check input{width:16px;height:16px;accent-color:var(--brand-blue)}
+.actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-top:20px;border-top:1px solid var(--line);margin-top:6px}
+.run{height:40px;padding:0 20px;border:0;border-radius:8px;background:var(--stage);color:var(--stage-ink);font:inherit;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.run:hover{opacity:.88}.run:focus-visible{outline:2px solid var(--brand-blue);outline-offset:2px}
+.run[disabled]{opacity:.45;cursor:not-allowed}
+.reason{font-size:13px;color:var(--muted)}
+.runs-list{display:flex;flex-direction:column}
+.runrow{display:flex;justify-content:space-between;gap:12px;padding:12px 20px;border-top:1px solid var(--line);font-size:13px;align-items:center}
+.runrow:first-child{border-top:0}
+.runrow .r1{font-weight:500;color:var(--ink)}.runrow .r2{font-size:12px;color:var(--muted);margin-top:2px}
+.runrow .r3{text-align:right;white-space:nowrap}
+.runrow .r3 b{display:block;font-weight:600}
+.champ{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--ok-t);color:var(--ok);margin-left:6px;vertical-align:1px}
+.empty{padding:16px 20px;font-size:13px;color:var(--muted)}
+.next{margin-top:24px;font-size:12px;color:var(--faint)}
+.adv-wrap{border-top:1px solid var(--line);margin-top:4px;padding-top:6px}
+.adv-wrap>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:10px 0;font-size:13px;font-weight:500;color:var(--ink2)}
+.adv-wrap>summary::-webkit-details-marker{display:none}
+.adv-wrap>summary::before{content:"";width:7px;height:7px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+.adv-wrap[open]>summary::before{transform:rotate(45deg)}
+.adv-wrap>summary .n{margin-left:auto;font-size:12px;font-weight:400;color:var(--faint)}
+.stages{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:6px 0 16px}
+.stage-d{border-top:1px solid var(--line)}
+.stage-d:first-child{border-top:0}
+.stage-d>summary{cursor:pointer;list-style:none;display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 16px;font-size:13px;background:var(--surface)}
+.stage-d>summary::-webkit-details-marker{display:none}
+.stage-d>summary:hover{background:var(--soft)}
+.stage-d>summary .sn{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:11px;font-weight:600;color:var(--muted)}
+.stage-d>summary .st{font-weight:600;color:var(--ink)}
+.stage-d>summary .ss{font-size:12px;color:var(--muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stage-d>summary .sc{font-size:12px;color:var(--faint)}
+.stage-d[open]>summary .sc{color:var(--c)}
+.stage-d .frow{padding:4px 16px 16px 52px;background:var(--soft)}
+.field.xs{width:130px}
+.algos{display:flex;flex-wrap:wrap;gap:8px 16px;padding:4px 16px 16px 52px;background:var(--soft)}
+.algos label{display:flex;align-items:center;gap:7px;font-size:13px}
+.algos input{width:15px;height:15px;accent-color:var(--brand-blue)}
+.fstep .frow .field{width:220px}
+.ptype{display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-top:12px;font-size:12px;color:var(--muted)}
+.ptype .pill{background:var(--t);color:var(--c)}
+.ptype select{border:0;background:transparent;font:inherit;font-size:12px;color:var(--brand-blue);text-decoration:underline;cursor:pointer;padding:0}
+/* running */
+.progress{list-style:none;margin:0;padding:8px 20px 20px;display:flex;flex-direction:column}
+.progress li{display:grid;grid-template-columns:28px minmax(0,1fr);gap:14px;padding:12px 0;border-top:1px solid var(--line);align-items:start}
+.progress li:first-child{border-top:0}
+.progress .dot{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;font-size:12px;font-weight:600;background:var(--soft);color:var(--faint);border:1px solid var(--line)}
+.progress li.active .dot{border-color:var(--c);color:var(--c);background:var(--t)}
+.progress li.active .dot::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--c);animation:pulse 1s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:.3;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
+.progress li.done .dot{background:var(--ok-t);color:var(--ok);border-color:transparent}
+.progress .pt{font-size:13px;font-weight:500;color:var(--faint)}
+.progress li.active .pt,.progress li.done .pt{color:var(--ink)}
+.progress .pd{font-size:12px;color:var(--muted);margin-top:2px;min-height:14px}
+.progress li.done .pd{color:var(--ok)}
+/* results */
+.summary{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:14px 18px;border:1px solid var(--line);border-radius:10px;background:var(--soft);font-size:13px;margin-top:8px}
+.summary .ok{color:var(--ok);font-weight:600}.summary .muted{color:var(--muted)}
+.summary .again{margin-left:auto;color:var(--brand-blue);font-weight:500;background:none;border:0;padding:0;font:inherit;cursor:pointer;text-decoration:underline}
+.block .meta{font-size:12px;color:var(--muted);margin-top:8px}
+.block .lab{display:flex;justify-content:space-between;align-items:center;gap:8px}
+.bstate{font-size:12px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--ok)}
+.results .cap{display:block;margin:28px 0 0}
+.runs-below{margin-top:32px}
+
+/* mock pages */
+.tabs-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
+.tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.tab{display:inline-flex;gap:6px;align-items:center;padding:7px 14px;border-radius:999px;border:1px solid var(--line2);font-size:13px;font-weight:500;color:var(--ink2)}
+.tab .n{color:var(--faint);font-size:12px;font-weight:600}
+.tab.on{background:var(--stage);border-color:var(--stage);color:var(--stage-ink)}
+.tab:not(.on):hover{border-color:var(--ink2)}
+.tabs .arr{color:var(--faint)}
+.note{font-size:12px;color:var(--faint)}
+.stack{display:flex;flex-direction:column;gap:24px;margin-top:24px}
+.kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.kpi{border:1px solid var(--line);border-radius:10px;padding:18px 20px}
+.kpi .l{font-size:12px;color:var(--muted)} .kpi .v{font-size:22px;font-weight:600;margin-top:6px;line-height:1.2}
+.row{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:24px;align-items:stretch}
+.row.rev{grid-template-columns:420px minmax(0,1fr)}
+@media (max-width:1100px){.row,.row.rev{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}}
+.card{border:1px solid var(--line);border-radius:10px;background:var(--surface);overflow:hidden;display:flex;flex-direction:column}
+.card h3{margin:0;padding:16px 20px;font-size:14px;font-weight:600;border-bottom:1px solid var(--line)}
+.card h4{margin:0;padding:13px 20px;font-size:13px;font-weight:600;background:var(--soft);border-bottom:1px solid var(--line);border-top:1px solid var(--line)}
+.tbl-wrap{overflow-x:auto}
+table{width:100%;border-collapse:collapse;font-size:13px}
+th{background:var(--soft);text-align:left;font-size:11px;font-weight:600;color:var(--muted);padding:10px 20px;white-space:nowrap}
+td{padding:12px 20px;border-top:1px solid var(--line);color:var(--ink2);vertical-align:middle}
+td:first-child{color:var(--ink);font-weight:500}
+table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-child(3){color:var(--muted)}
+.code{font-family:inherit;font-feature-settings:"tnum"}
+.kv{display:flex;justify-content:space-between;gap:16px;padding:11px 20px;border-top:1px solid var(--line);font-size:13px}
+.card h3 + .kv{border-top:0}
+.kv .k{color:var(--muted)} .kv .v{font-weight:500;text-align:right}
+.steps{list-style:none;margin:0;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
+.steps li{display:flex;gap:12px;align-items:center}
+.steps .no{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--t);color:var(--c);font-size:11px;font-weight:600}
+.steps .s1{font-size:13px;font-weight:500} .steps .s2{font-size:12px;color:var(--muted)}
+.bars{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
+.brow{display:grid;grid-template-columns:200px 1fr 48px;gap:16px;align-items:center;font-size:13px}
+.brow .lab{color:var(--ink2);overflow-wrap:anywhere}
+.track{height:8px;border-radius:4px;background:var(--track);overflow:hidden}
+.track i{display:block;height:100%;border-radius:4px;background:var(--c)}
+.brow .pct{font-weight:500;text-align:right}
+.caption{font-size:12px;color:var(--faint);padding:0 20px 18px}
+.bars + .caption{padding-top:0}
+.cm{padding:18px 20px;display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;align-items:center}
+.cm .hd{font-size:11px;font-weight:600;color:var(--muted);text-align:center}
+.cm .rl{font-size:11px;font-weight:600;color:var(--muted)}
+.cm .cell{height:64px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--soft)}
+.cm .cell.good{background:var(--t)} .cm .cell b{font-size:16px;font-weight:600;color:var(--ink2)} .cm .cell.good b{color:var(--c)}
+.cm .cell small{font-size:11px;color:var(--muted)}
+.vchart{flex:1;display:flex;align-items:flex-end;gap:12px;padding:24px 20px 12px;min-height:240px;overflow-x:auto}
+.vcol{flex:1;min-width:34px;max-width:70px;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:11px}
+.vcol .bv{color:var(--ink2);font-weight:500}
+.vcol .bb{width:100%;max-width:40px;border-radius:4px 4px 0 0;background:var(--t)}
+.vcol.top .bb{background:var(--c)}
+.vcol .bl{color:var(--muted)}
+.pill{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
+.pill.ok{background:var(--ok-t);color:var(--ok)} .pill.warn{background:var(--warn-t);color:var(--warn)} .pill.bad{background:var(--bad-t);color:var(--bad)}
+.spacer{flex:1}
+@media (prefers-reduced-motion:no-preference){ #app{animation:fade .18s ease-out} @keyframes fade{from{opacity:.4}to{opacity:1}} }
+/* --- header client picker (Phase 2 §10 A) --- */
+.headtools{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none}
+.clientpick{display:flex;align-items:center;gap:8px}
+.clientpick .clabel{font-size:12px;font-weight:500;color:var(--muted)}
+.clientpick .control{height:32px;width:186px;font-size:12px}
+.clientpick .control select{padding:0 28px 0 10px}
+.chint{font-size:11px;color:var(--faint);text-align:right}
+@media (max-width:700px){.head{flex-wrap:wrap;gap:12px}
+.headtools{order:-1;width:100%;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
+.clientpick .control{width:150px}.chint{order:3;width:100%;text-align:left}.logo{width:110px;height:30px}}
+
+/* --- step 1 source choice + onboarding panel (Phase 2 §10 B) --- */
+.pick{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:2px}
+@media (max-width:700px){.pick{grid-template-columns:1fr}}
+.pickcard{position:relative;display:flex;flex-direction:column;gap:4px;text-align:left;padding:14px 16px;border:1px solid var(--line2);border-radius:10px;background:var(--surface);font:inherit;color:inherit;cursor:pointer;transition:border-color .15s,background .15s}
+.pickcard:hover{border-color:var(--c);background:var(--soft)}
+.pickcard.on{border-color:var(--c);background:var(--t)}
+.pickcard .pt1{font-size:13px;font-weight:600;color:var(--ink)}
+.pickcard.on .pt1{color:var(--c)}
+.pickcard .pt2{font-size:12px;color:var(--muted);line-height:1.45}
+.pickcard .ptag{position:absolute;top:12px;right:12px;font-size:11px;font-weight:600;color:var(--c)}
+.ob{border:1px solid var(--line2);border-radius:10px;margin-top:14px;overflow:hidden;background:var(--surface)}
+.ob>.obhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;padding:14px 16px;background:var(--soft);border-bottom:1px solid var(--line)}
+.ob>.obhead .obt{font-size:13px;font-weight:600}
+.ob>.obhead .obh{font-size:12px;color:var(--muted)}
+.obstep{border-top:1px solid var(--line)}
+.obstep:first-of-type{border-top:0}
+.obsum{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;padding:12px 16px;border:0;background:var(--surface);font:inherit;text-align:left;cursor:pointer}
+.obsum:hover{background:var(--soft)}
+.obtick{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:11px;font-weight:600;color:var(--muted)}
+.obstep.done .obtick{background:var(--ok-t);border-color:transparent;color:var(--ok)}
+.obsum .ot{display:block;font-size:13px;font-weight:600;color:var(--ink)}
+.obsum .os{display:block;font-size:12px;color:var(--muted);margin-top:1px}
+.obsum .oc{font-size:12px;color:var(--faint)}
+.obstep.open .obsum .oc{color:var(--c)}
+.obbody{padding:4px 16px 18px;background:var(--soft);border-top:1px solid var(--line)}
+.obbody .sechd{font-size:12px;font-weight:600;color:var(--ink2);margin:16px 0 6px}
+.obbody .sechd:first-child{margin-top:12px}
+.obhint{font-size:12px;color:var(--muted);margin:2px 0 10px}
+.drop{display:flex;flex-direction:column;align-items:center;gap:4px;padding:20px;border:1px dashed var(--line2);border-radius:10px;background:var(--surface);text-align:center;cursor:pointer;margin-top:10px}
+.drop:hover{border-color:var(--c)}
+.drop .d1{font-size:13px;font-weight:500}
+.drop .d2{font-size:12px;color:var(--muted)}
+.srctbl{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}
+.srcrow{display:grid;grid-template-columns:minmax(150px,1.4fr) 104px 168px 152px 152px;gap:10px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.srcrow:first-child{border-top:0}
+.srcrow .sname{font-size:13px;font-weight:500;overflow-wrap:anywhere}
+.srcrow .srows{font-size:12px;color:var(--muted);font-feature-settings:"tnum"}
+.srcfoot{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:-2px}
+.srchint{font-size:12px;color:var(--faint)}
+@media (max-width:1100px){.srcrow{grid-template-columns:1fr 1fr}.srcrow .sname{grid-column:1/-1}}
+@media (max-width:700px){.buildprog li{grid-template-columns:22px minmax(0,1fr)}.buildprog li .bn{grid-column:2}}
+.cov{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:500;background:var(--ok-t);color:var(--ok);white-space:nowrap}
+.cov.warn{background:var(--warn-t);color:var(--warn)}
+.control.tiny{height:32px;font-size:12px}
+.control.tiny select{padding:0 26px 0 10px}
+.control.tiny input{padding:0 10px}
+
+/* mapping */
+.mapcard{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;margin-bottom:12px}
+.mapcard>.mh{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--line)}
+.mapcard>.mh .m1{font-size:13px;font-weight:600}
+.mapcard>.mh .m2{font-size:12px;color:var(--muted)}
+.maprow{display:grid;grid-template-columns:150px 18px 176px 92px minmax(120px,1fr) 108px;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line)}
+.maprow .mcol{font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.maprow .marrow{color:var(--faint);text-align:center}
+.maprow .mtype{font-size:12px;color:var(--muted)}
+.maprow .msamp{font-size:12px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.maprow.need{background:var(--bad-t)}
+.needmsg{grid-column:1/-1;font-size:12px;color:var(--bad);margin-top:2px}
+@media (max-width:1100px){.maprow{grid-template-columns:1fr 1fr}.maprow .marrow{display:none}.maprow .mcol{grid-column:1/-1}}
+.conf{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;font-feature-settings:"tnum";background:var(--ok-t);color:var(--ok)}
+.conf.amber{background:var(--warn-t);color:var(--warn)}
+.conf.grey{background:var(--soft);color:var(--faint);border:1px solid var(--line)}
+.vmapbtn{border:0;background:none;padding:0;font:inherit;font-size:11px;color:var(--brand-blue);text-decoration:underline;cursor:pointer}
+.vmap{margin:0 14px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--soft);padding:12px 14px}
+.vmap .vt{font-size:12px;font-weight:600;margin-bottom:6px}
+.vmap .vrow{display:grid;grid-template-columns:110px 18px 1fr;gap:8px;align-items:center;font-size:12px;padding:4px 0;border-top:1px solid var(--line)}
+.vmap .vrow:first-of-type{border-top:0}
+.vmap code{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+
+/* features & label */
+.featgrp{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;margin-bottom:10px}
+.featgrp>.fg{padding:9px 14px;background:var(--surface);border-bottom:1px solid var(--line);font-size:12px;font-weight:600;color:var(--ink2)}
+.featrow{display:grid;grid-template-columns:18px minmax(150px,1fr) minmax(0,1.6fr) 118px;gap:10px;align-items:center;padding:8px 14px;border-top:1px solid var(--line);font-size:12px}
+.featrow:first-of-type{border-top:0}
+.featrow input{width:15px;height:15px;accent-color:var(--brand-blue)}
+.featrow .fn{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink);overflow-wrap:anywhere}
+.featrow .fd{color:var(--muted)}
+.featrow .fw{color:var(--faint);text-align:right;white-space:nowrap}
+.featrow.dropped .fn,.featrow.dropped .fd{color:var(--faint);text-decoration:line-through}
+@media (max-width:900px){.featrow{grid-template-columns:18px 1fr}.featrow .fd,.featrow .fw{grid-column:2/-1;text-align:left}}
+.sentence{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:14px;line-height:2.1;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.sentence .control{height:32px;font-size:13px;width:auto}
+.sentence .control select{padding:0 28px 0 10px}
+.sentence .control input{width:62px;padding:0 10px;text-align:center}
+.sentence .control.name input{width:130px;text-align:left}
+.nullbars{display:flex;flex-direction:column;gap:9px;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.nullbars .nrow{display:grid;grid-template-columns:minmax(120px,190px) 1fr 44px;gap:12px;align-items:center;font-size:12px}
+.nullbars .nrow .nl{color:var(--ink2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.nullbars .nrow .np{text-align:right;color:var(--muted);font-feature-settings:"tnum"}
+.posrate{display:flex;gap:10px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.posrate .pcol{flex:1;min-width:70px;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px}
+.posrate .pcol .pv{font-weight:600;color:var(--ink2);font-feature-settings:"tnum"}
+.posrate .pcol .pl{color:var(--muted)}
+
+/* build & review */
+.buildprog{list-style:none;margin:10px 0 0;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.buildprog li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--faint)}
+.buildprog li:first-child{border-top:0}
+.buildprog li .bd{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:10px;font-weight:600}
+.buildprog li.done{color:var(--ink2)}
+.buildprog li.done .bd{background:var(--ok-t);border-color:transparent;color:var(--ok)}
+.buildprog li.active{color:var(--ink)}
+.buildprog li.active .bd{border-color:var(--c);background:var(--t);color:var(--c)}
+.buildprog li .bn{color:var(--muted);font-feature-settings:"tnum"}
+.report{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;margin-top:12px}
+.report>.rh{padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--line);font-size:12px;font-weight:600}
+.report .rrow{display:grid;grid-template-columns:minmax(140px,1.4fr) 120px 110px minmax(0,1fr);gap:10px;align-items:center;padding:8px 14px;border-top:1px solid var(--line);font-size:12px}
+.report .rrow .r1{font-weight:500;color:var(--ink);overflow-wrap:anywhere}
+.report .rrow .r2,.report .rrow .r3{color:var(--muted);font-feature-settings:"tnum"}
+@media (max-width:900px){.report .rrow{grid-template-columns:1fr 1fr}.report .rrow .r1{grid-column:1/-1}}
+.mini{display:block}
+.checks{list-style:none;margin:0;padding:0}
+.checks li{display:grid;grid-template-columns:16px minmax(0,1fr);gap:10px;padding:8px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--ink2)}
+.checks li .ck{color:var(--ok);font-weight:600}
+.checks li.bad .ck{color:var(--bad)}
+.obact{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:14px}
+.run.sm{height:34px;padding:0 16px;font-size:12px}
+.run.ghost{background:transparent;color:var(--ink2);border:1px solid var(--line2)}
+.run.ghost:hover{border-color:var(--ink2);opacity:1}
+
+/* lineage (Phase 2 §10 F) */
+.lineage{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;padding:14px 20px;overflow-x:auto}
+.lnode{flex:1;min-width:132px;display:flex;flex-direction:column;gap:3px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--soft)}
+.lnode .l1{font-size:12px;font-weight:600;color:var(--ink)}
+.lnode .l2{font-size:11px;color:var(--c);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.lnode .l3{font-size:11px;color:var(--muted)}
+.larrow{display:flex;align-items:center;justify-content:center;width:26px;flex:none;color:var(--faint)}
+@media (max-width:700px){.lineage{flex-direction:column}.larrow{width:auto;height:22px;transform:rotate(90deg)}}
+
+/* root causes (Phase 3a §9 D) */
+.rcseg{border-top:1px solid var(--line)}
+.rcseg:first-of-type{border-top:0}
+.rcseg .rs{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;padding:14px 20px 0}
+.rcseg .rs .rsh{font-size:13px;font-weight:600}
+.rcseg .rs .rsn{font-size:12px;color:var(--muted)}
+.rcseg .rline{font-size:13px;color:var(--ink2);padding:6px 20px 12px}
+.cause{padding:12px 20px;border-top:1px solid var(--line)}
+.cause .ct{font-size:13px;font-weight:500;color:var(--ink)}
+.evchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+.evchip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:4px 10px;border-radius:999px;font-size:11px;background:var(--soft);border:1px solid var(--line);color:var(--ink2)}
+.evchip.reason{background:var(--t);border-color:transparent;color:var(--c);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.evchip.quote{font-style:italic;color:var(--muted)}
+.rcfoot{padding:12px 20px;border-top:1px solid var(--line);background:var(--soft)}
+.rcfoot .fl{font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:6px}
+.rcfoot ul{margin:0;padding-left:18px;font-size:12px;color:var(--ink2)}
+.rcfoot ul li{margin:3px 0}
+.rcfoot .cav{font-size:12px;color:var(--faint);margin-top:10px}
+.genbox{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:20px}
+.genbox .gb1{font-size:13px;color:var(--ink2)}
+.genbox .gb2{font-size:12px;color:var(--muted)}
+
+/* campaign copy (Phase 3a §9 E) */
+.banner{display:flex;gap:10px;align-items:flex-start;padding:12px 20px;background:var(--warn-t);color:var(--warn);font-size:12px;border-bottom:1px solid var(--line)}
+.ccbar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 20px;border-bottom:1px solid var(--line);font-size:12px;color:var(--muted)}
+.ccgrid{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;padding:14px 20px}
+@media (max-width:1100px){.ccgrid{grid-template-columns:repeat(2,1fr)}}
+@media (max-width:700px){.ccgrid{grid-template-columns:1fr}}
+.cccard{display:flex;flex-direction:column;gap:8px;padding:12px 14px;border:1px solid var(--line2);border-radius:10px;background:var(--surface)}
+.cccard.blocked{border-color:var(--bad)}
+.cccard .cch{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.cccard .cct{font-size:12px;font-weight:600;color:var(--ink)}
+.cccard .ccb{font-size:13px;color:var(--ink2);line-height:1.5}
+.cccard .ccm{font-size:11px;color:var(--faint);font-feature-settings:"tnum"}
+.cccard .ccwhy{font-size:11px;color:var(--bad)}
+.cccard .ccact{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
+.ccbtn{border:1px solid var(--line2);background:var(--surface);border-radius:8px;padding:5px 12px;font:inherit;font-size:12px;color:var(--ink2);cursor:pointer}
+.ccbtn:hover{border-color:var(--ink2)}
+.ccbtn[disabled]{opacity:.45;cursor:not-allowed}
+.ccgrouphd{grid-column:1/-1;font-size:12px;font-weight:600;color:var(--muted);margin-top:4px}
+
+/* assistant results (Phase 3a §9 C) */
+.evalbar{padding:16px 20px}
+.evalbar .eb{position:relative;height:10px;border-radius:5px;background:var(--track);overflow:hidden}
+.evalbar .eb i{display:block;height:100%;border-radius:5px;background:var(--ok)}
+.evalbar .ebm{position:absolute;top:-4px;bottom:-4px;width:2px;background:var(--ink2)}
+.evalbar .ebl{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted);margin-top:8px}
+.evalbar .ebv{font-size:22px;font-weight:600;color:var(--ink);margin-bottom:10px}
+.chatpanel{display:flex;flex-direction:column;gap:12px;padding:16px 20px}
+.bubble{max-width:88%;padding:10px 14px;border-radius:12px;font-size:13px;line-height:1.5}
+.bubble.q{align-self:flex-end;background:var(--t);color:var(--c);border-bottom-right-radius:4px}
+.bubble.a{align-self:flex-start;background:var(--soft);border:1px solid var(--line);color:var(--ink2);border-bottom-left-radius:4px}
+.cites{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
+details.cite{max-width:100%}
+details.cite summary{display:inline-flex;align-items:center;gap:6px;list-style:none;cursor:pointer;padding:3px 10px;border-radius:999px;font-size:11px;background:var(--surface);border:1px solid var(--line2);color:var(--ink2)}
+details.cite summary::-webkit-details-marker{display:none}
+details.cite summary:hover{border-color:var(--c);color:var(--c)}
+details.cite[open] summary{border-color:var(--c);color:var(--c)}
+details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(--c);background:var(--surface);border-radius:0 8px 8px 0;font-size:12px;color:var(--muted);line-height:1.55}
+.costline{padding:12px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+.docrow{display:grid;grid-template-columns:minmax(150px,1fr) 88px 96px;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line);font-size:12px}
+.docrow:first-child{border-top:0}
+.docrow .dn{font-weight:500;color:var(--ink);overflow-wrap:anywhere}
+.docrow .dv{color:var(--muted);text-align:right;font-feature-settings:"tnum"}
+.doclist{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;margin-top:10px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<script>
+const LOGO = `<svg class="logo" viewBox="0 0 2576 690" role="img" aria-label="Minfy"><rect class="b" x="0" y="0" width="493" height="493"/><rect class="y" x="246" y="0" width="247" height="246"/><g fill="none" class="s" stroke-width="87"><path d="M719.5 493V338A121.5 121.5 0 0 1 962.5 338V493"/><path d="M961 493V338A121 121 0 0 1 1203 338V493"/><path d="M1548.5 493V338A120.5 120.5 0 0 1 1789.5 338V493"/><path d="M1962.5 493V182A121 121 0 0 1 2204.5 182"/><path d="M2291 354A120.75 120.75 0 0 0 2532.5 354"/><path d="M2532.5 182V520A120.5 120.5 0 0 1 2319.7 597.5"/></g><circle class="b" cx="1376" cy="61" r="61"/><rect class="b" x="1332" y="182" width="87" height="311"/><rect class="b" x="2006" y="268" width="156" height="86"/><rect class="y" x="2248" y="182" width="86" height="86"/></svg>`;
+const TYPES = {P:{stars:"★",label:"Predictive AI"},G:{stars:"★★",label:"Generative AI"},H:{stars:"★ + ★★",label:"Hybrid"}};
+const STAGES = [["Awareness","P"],["Onboarding","G"],["Service / Payments","P"],["Churn","H"],["Win-back","H"]];
+const D10 = ["D1","D2","D3","D4","D5","D6","D7","D8","D9","D10"];
+
+const UC = [
+{id:"targeted-advertisement",desc:"Scores every customer on how likely they are to convert, so ads go only to the audiences most likely to respond.",name:"Targeted Advertisement",stage:"Awareness",k:"P",d:"Customer + campaign data",m:"Audience Propensity Model",o:"Target Audience / Ad Targeting",
+ data:{kp:[["Rows","2.4M"],["Features","42"],["Date range","Sep 2025 – Aug 2026"],["Missing values","3.1%"]],
+  ds:[["crm_customer_profile","Amazon Redshift","1.2M","Daily"],["campaign_interactions","Amazon S3","860K","Hourly"],["web_app_events","Kinesis → S3","340K","Streaming"]],
+  tt:"Target & labelling",target:[["Target column","converted_30d"],["Definition","Purchased within 30 days of ad exposure"],["Label source","Campaign conversion logs"]],
+  pipe:[["Ingest","AWS Glue jobs"],["Clean & validate","Null / outlier checks"],["Feature engineering","PySpark on EMR"],["Feature store","SageMaker Feature Store"]],
+  q:[["Class balance","12% positive"],["Train / val / test","70 / 15 / 15"],["Leakage check","Passed"]],ftt:"Feature set (sample of 42)",fcols:["feature","type","description","transform"],
+  ft:[["visits_last_7d","Numeric","Site / app visits in last 7 days","Log transform"],["ad_ctr_90d","Numeric","Click-through rate on past ads","Min-max scaling"],["plan_tier","Categorical","Current subscription plan","One-hot encoding"],["tenure_months","Numeric","Months as a customer","Binning"],["region","Categorical","Customer region","Target encoding"]]},
+ model:{kp:[["Algorithm","XGBoost"],["ROC-AUC","0.84"],["F1 score","0.66"],["Last trained","12 Sep 2026"]],st:"Training setup",
+  setup:[["Problem type","Binary classification"],["Target","converted_30d"],["Algorithm","XGBoost"],["Hyperparameters","depth 6 · lr 0.05 · 400 trees"],["Validation","5-fold cross-validation"],["Class imbalance","scale_pos_weight"],["Platform","Amazon SageMaker"]],
+  evt:"Evaluation (hold-out test set)",base:"baseline (logistic regression)",ev:[["ROC-AUC","0.84","0.71"],["Precision","0.62","0.48"],["Recall","0.71","0.55"],["F1 score","0.66","0.51"]],
+  bt:"Feature importance (SHAP)",br:[["visits_last_7d",32],["ad_ctr_90d",26],["plan_tier",18],["tenure_months",14],["region",10]],cap:"Relative importance, mean |SHAP| value (%)",cm:["1,420","580","870","17,130"]},
+ out:{kp:[["Target audience","184K"],["Lift (top decile)","3.2x"],["Campaign CTR","+22%"],["Customers scored / day","1.2M"]],
+  ct:"Lift by propensity decile",lb:D10,vals:[3.2,2.4,1.8,1.3,1.0,0.8,0.6,0.4,0.3,0.2],unit:"x",cap:"Conversion lift vs average. D1 is the highest score; the top 3 deciles are targeted.",
+  dep:[["Inference","SageMaker Batch Transform"],["Schedule","Daily, 02:00 IST"],["Output store","S3 → Redshift"],["Consumer","Ad platform audience sync"],["Data drift","PSI 0.06, stable"],["Retraining","Weekly or PSI > 0.2"]],
+  tt:"Prediction output (sample rows)",cols:["customer_id","propensity","segment","top_reason (SHAP)","action"],band:2,
+  rows:[["C-10482","0.91","High","visits_last_7d ↑ (12 visits)","Serve ad"],["C-22917","0.87","High","ad_ctr_90d ↑ (4.1%)","Serve ad"],["C-31055","0.64","Medium","plan_tier = basic","Retarget"],["C-40219","0.38","Low","No recent activity","Suppress"]]}},
+
+{id:"ai-onboarding-assistant",desc:"A chat assistant grounded in product documentation that guides new customers through setup and answers their questions.",name:"AI Onboarding Assistant",stage:"Onboarding",k:"G",d:"Product docs + customer profile",m:"LLM Assistant (RAG)",o:"Guided Onboarding / Setup Help",
+ data:{kp:[["Documents","1,250"],["Text chunks","38K"],["Chat transcripts","96K"],["PII redacted","100%"]],
+  ds:[["product_docs","Amazon S3 (PDF / HTML)","1,250 docs","Weekly"],["customer_profile","Amazon Redshift","1.2M","Daily"],["onboarding_chats","Amazon Connect → S3","96K","Daily"]],
+  tt:"Evaluation set",target:[["Test set","300 question–answer pairs"],["Source","Real onboarding questions"],["Reviewed by","Support subject experts"]],
+  pipe:[["Ingest documents","AWS Glue"],["Clean & chunk","512 tokens, 50 overlap"],["Create embeddings","Titan Text Embeddings v2"],["Index vectors","OpenSearch Serverless"]],
+  q:[["PII redaction","Amazon Comprehend"],["Doc freshness","Under 7 days"],["Duplicate chunks","Removed (4%)"]],ftt:"Context fields passed to the LLM",fcols:["field","type","description","processing"],
+  ft:[["doc_chunk","Text","Passage retrieved from product docs","Embedding (1024-d)"],["plan_type","Categorical","Customer plan, for personalised answers","Prompt variable"],["device_list","List","Devices registered by the customer","Prompt variable"],["onboarding_step","Categorical","Current setup step","Session state"],["chat_history","Text","Last 5 conversation turns","Context window"]]},
+ model:{kp:[["Approach","RAG"],["LLM","Claude on Bedrock"],["Faithfulness","0.92"],["p95 latency","2.4 s"]],st:"System setup",
+  setup:[["Problem type","Conversational Q&A"],["LLM","Anthropic Claude (Bedrock)"],["Embeddings","Titan Text Embeddings v2"],["Vector store","OpenSearch Serverless"],["Retrieval","Hybrid search, top-k 5"],["Guardrails","Bedrock Guardrails (PII, topics)"],["Temperature","0.2"]],
+  evt:"Evaluation (300-question test set)",base:"baseline (FAQ bot)",ev:[["Faithfulness","0.92","—"],["Answer relevance","0.89","0.61"],["Hallucination rate","3%","—"],["Task completion","78%","42%"]],
+  bt:"Retrieval source share",br:[["Setup guides",38],["FAQs",27],["Plan details",20],["Past chats",15]],cap:"Share of retrieved chunks used in answers (%)",
+  pt:"RAG pipeline",steps:[["User question","App / web chat"],["Embed query","Titan Embeddings"],["Retrieve top-5 chunks","OpenSearch Serverless"],["Generate grounded answer","Claude on Bedrock"],["Safety & PII check","Bedrock Guardrails"]]},
+ out:{kp:[["Conversations","12.6K"],["Self-serve rate","78%"],["Escalation rate","9%"],["CSAT","4.5 / 5"]],
+  ct:"Questions by onboarding intent",lb:["Setup","Device","Payment","Plan","Other"],vals:[34,26,18,14,8],unit:"%",cap:"Share of conversations by detected intent.",
+  dep:[["Serving","API Gateway + Lambda"],["Channel","App chat & web widget"],["Logging","CloudWatch + S3"],["LLM evaluation","Weekly, 300-question set"],["Feedback loop","Thumbs up / down → eval set"],["Knowledge refresh","Weekly re-index"]],
+  tt:"Assistant output log (sample rows)",cols:["session_id","intent","grounded","resolution","next_action"],band:-1,
+  rows:[["S-50311","Account setup","Yes","Resolved","Send welcome tips"],["S-50422","Device activation","Yes","In progress","Guide next step"],["S-50537","Payment setup","No","Escalated","Agent handoff"],["S-50640","Plan change","Yes","Resolved","Suggest add-ons"]]}},
+
+{id:"order-fulfillment",desc:"Predicts which orders are at risk of missing their delivery date, so teams can fix them before the customer notices.",name:"Order Fulfillment",stage:"Service / Payments",k:"P",d:"Order + inventory + logistics data",m:"Delivery Delay Prediction Model",o:"At-risk Orders / Proactive Alerts",
+ data:{kp:[["Rows","640K"],["Features","36"],["Date range","Mar – Aug 2026"],["Missing values","2.4%"]],
+  ds:[["orders","Amazon RDS","420K","Real-time"],["inventory_levels","Amazon Redshift","38K SKUs","Hourly"],["shipment_tracking","Carrier APIs → S3","180K","Streaming"]],
+  tt:"Target & labelling",target:[["Target column","delayed_beyond_sla"],["Definition","Delivered after the promised SLA date"],["Label source","Shipment tracking"]],
+  pipe:[["Ingest","AWS Glue + Kinesis"],["Clean & join","PySpark"],["Feature engineering","Rolling SLA statistics"],["Feature store","SageMaker Feature Store"]],
+  q:[["Class balance","8% delayed"],["Train / val / test","Time-based 70 / 15 / 15"],["Leakage check","Passed"]],ftt:"Feature set (sample of 36)",fcols:["feature","type","description","transform"],
+  ft:[["carrier_ontime_30d","Numeric","Carrier on-time rate, last 30 days","Rolling mean"],["stock_cover_days","Numeric","Days of stock left for ordered items","Clipping"],["distance_km","Numeric","Warehouse → customer distance","Log transform"],["orders_same_day","Numeric","Order volume on the same day","Standard scaling"],["weather_alert","Binary","Severe weather on delivery route","Flag"]]},
+ model:{kp:[["Algorithm","LightGBM"],["ROC-AUC","0.88"],["Recall","0.81"],["Last trained","14 Sep 2026"]],st:"Training setup",
+  setup:[["Problem type","Binary classification"],["Target","delayed_beyond_sla"],["Algorithm","LightGBM"],["Hyperparameters","64 leaves · lr 0.03"],["Validation","Time-series split"],["Class imbalance","Class weights"],["Platform","Amazon SageMaker"]],
+  evt:"Evaluation (hold-out test set)",base:"baseline (rules)",ev:[["ROC-AUC","0.88","0.74"],["Precision","0.69","0.52"],["Recall","0.81","0.60"],["F1 score","0.74","0.56"]],
+  bt:"Feature importance (SHAP)",br:[["carrier_ontime_30d",30],["stock_cover_days",25],["distance_km",20],["orders_same_day",15],["weather_alert",10]],cap:"Relative importance, mean |SHAP| value (%)",cm:["3,240","760","1,460","44,540"]},
+ out:{kp:[["At-risk orders","1,340"],["On-time delivery","94%"],["Alerts sent","860"],["Delay cost saved","₹18L / month"]],
+  ct:"Actual delay rate by risk decile",lb:D10,vals:[46,31,19,12,8,5,4,3,2,1],unit:"%",cap:"Share of orders actually delayed. D1 is the highest predicted risk.",
+  dep:[["Inference","SageMaker real-time endpoint"],["Latency","p95 120 ms"],["Trigger","New order / status change"],["Consumer","OMS alerts + customer SMS"],["Data drift","PSI 0.08, stable"],["Retraining","Daily"]],
+  tt:"Prediction output (sample rows)",cols:["order_id","delay_prob","risk_band","top_reason (SHAP)","action"],band:2,
+  rows:[["O-78120","0.88","High","stock_cover_days ↓ (0.5 days)","Reroute warehouse"],["O-78134","0.76","High","carrier_ontime_30d ↓ (71%)","Switch carrier"],["O-78159","0.52","Medium","orders_same_day ↑","Notify customer"],["O-78201","0.21","Low","—","No action"]]}},
+
+{id:"fault-prediction",desc:"Uses telemetry and service history to predict which assets will fail in the next 72 hours, so service happens before the fault.",name:"Fault Prediction",stage:"Service / Payments",k:"P",d:"Network telemetry + service tickets",m:"Fault Prediction Model",o:"Predicted Faults / Preventive Service",
+ data:{kp:[["Rows","5.8M"],["Features","58"],["Date range","Dec 2025 – Aug 2026"],["Missing values","4.7%"]],
+  ds:[["network_telemetry","Kinesis → S3 (Parquet)","5.1M","Streaming"],["device_logs","Amazon S3","520K","Hourly"],["service_tickets","ServiceNow → Redshift","140K","Daily"]],
+  tt:"Target & labelling",target:[["Target column","fault_next_72h"],["Definition","Fault ticket or outage within 72 hours"],["Label source","Service tickets + NOC alarms"]],
+  pipe:[["Ingest streams","Kinesis Data Streams"],["Resample to 5-min windows","PySpark"],["Lag & rolling features","PySpark"],["Feature store","SageMaker Feature Store"]],
+  q:[["Class balance","2.1% faults"],["Train / val / test","Time-based 70 / 15 / 15"],["Missing handling","Forward fill"]],ftt:"Feature set (sample of 58)",fcols:["feature","type","description","transform"],
+  ft:[["error_rate_24h","Numeric","Errors per hour, 24h window","Rolling mean"],["latency_p95_1h","Numeric","95th percentile latency, 1h window","Standard scaling"],["firmware_age_days","Numeric","Days since last firmware update","Binning"],["tickets_90d","Numeric","Service tickets in last 90 days","Count"],["device_model","Categorical","Hardware model","One-hot encoding"]]},
+ model:{kp:[["Algorithm","LSTM"],["PR-AUC","0.71"],["Recall","0.79"],["Last trained","13 Sep 2026"]],st:"Training setup",
+  setup:[["Problem type","Time-series classification"],["Target","fault_next_72h"],["Algorithm","LSTM, 2 layers, 128 units"],["Input window","48-hour sequences"],["Validation","Rolling-origin backtest"],["Class imbalance","Focal loss"],["Platform","SageMaker (PyTorch)"]],
+  evt:"Evaluation (hold-out test set)",base:"baseline (threshold rules)",ev:[["PR-AUC","0.71","0.43"],["Precision","0.64","0.38"],["Recall","0.79","0.52"],["F1 score","0.71","0.44"]],
+  bt:"Feature importance (SHAP)",br:[["error_rate_24h",34],["latency_p95_1h",24],["firmware_age_days",18],["tickets_90d",14],["device_model",10]],cap:"Relative importance, mean |SHAP| value (%)",cm:["1,030","270","580","58,120"]},
+ out:{kp:[["Predicted faults (72h)","412"],["Precision @ top 500","64%"],["Tickets avoided","28%"],["Truck rolls saved","96 / week"]],
+  ct:"Actual fault rate by risk decile",lb:D10,vals:[21,9,5,3,2,1.2,0.8,0.5,0.3,0.2],unit:"%",cap:"Share of assets with a fault within 72h. D1 is the highest predicted risk.",
+  dep:[["Inference","SageMaker Batch Transform"],["Schedule","Every 6 hours"],["Output store","S3 → OpenSearch"],["Consumer","NOC dashboard + field service"],["Data drift","PSI 0.11, watch"],["Retraining","Weekly"]],
+  tt:"Prediction output (sample rows)",cols:["asset_id","fault_prob_72h","risk_band","top_reason (SHAP)","action"],band:2,
+  rows:[["A-2210","0.93","Critical","error_rate_24h ↑ 4x","Schedule visit"],["A-2245","0.81","High","latency_p95_1h spikes","Remote reset"],["A-2289","0.58","Medium","firmware_age_days = 410","Push update"],["A-2301","0.24","Low","—","Monitor"]]}},
+
+{id:"payment-propensity",desc:"Predicts which customers are likely to pay late, so reminders and payment plans reach them before the due date.",name:"Payment Propensity",stage:"Service / Payments",k:"P",d:"Billing + payment history",m:"Payment Propensity Model",o:"Payment Risk Score / Smart Reminders",
+ data:{kp:[["Rows","1.9M"],["Features","31"],["Date range","Mar 2025 – Aug 2026"],["Missing values","1.8%"]],
+  ds:[["billing_invoices","Amazon Redshift","980K","Daily"],["payment_transactions","Payment gateway → S3","760K","Daily"],["customer_profile","Amazon Redshift","1.2M","Daily"]],
+  tt:"Target & labelling",target:[["Target column","late_or_missed_payment"],["Definition","Paid after the due date, or not paid"],["Label source","Payment transactions"]],
+  pipe:[["Ingest","AWS Glue"],["Clean & de-duplicate","PySpark"],["Payment behaviour features","Aggregations (3 / 6 / 12 months)"],["Feature store","SageMaker Feature Store"]],
+  q:[["Class balance","18% late / missed"],["Train / val / test","70 / 15 / 15 stratified"],["Leakage check","Passed"]],ftt:"Feature set (sample of 31)",fcols:["feature","type","description","transform"],
+  ft:[["late_payments_6m","Numeric","Late payments in last 6 months","Count"],["autopay_enabled","Binary","Autopay is active","Flag"],["bill_change_pct","Numeric","Bill change vs 3-month average","Winsorising"],["tenure_months","Numeric","Months as a customer","Binning"],["plan_type","Categorical","Prepaid / postpaid plan","One-hot encoding"]]},
+ model:{kp:[["Algorithm","XGBoost"],["ROC-AUC","0.86"],["F1 score","0.69"],["Last trained","15 Sep 2026"]],st:"Training setup",
+  setup:[["Problem type","Binary classification"],["Target","late_or_missed_payment"],["Algorithm","XGBoost"],["Hyperparameters","depth 5 · lr 0.05 · 300 trees"],["Validation","5-fold stratified CV"],["Calibration","Isotonic regression"],["Platform","Amazon SageMaker"]],
+  evt:"Evaluation (hold-out test set)",base:"baseline (logistic regression)",ev:[["ROC-AUC","0.86","0.73"],["Precision","0.66","0.51"],["Recall","0.72","0.58"],["F1 score","0.69","0.54"]],
+  bt:"Feature importance (SHAP)",br:[["late_payments_6m",36],["autopay_enabled",22],["bill_change_pct",18],["tenure_months",14],["plan_type",10]],cap:"Relative importance, mean |SHAP| value (%)",cm:["2,590","1,010","1,330","15,070"]},
+ out:{kp:[["At-risk accounts","9.2K"],["Collection rate","+11%"],["Reminders sent","7.4K"],["Bad debt reduced","₹42L / quarter"]],
+  ct:"Late-payment rate by risk decile",lb:D10,vals:[62,41,27,18,12,8,6,4,3,2],unit:"%",cap:"Share of accounts that actually paid late. D1 is the highest predicted risk.",
+  dep:[["Inference","SageMaker Batch Transform"],["Schedule","5 days before due date"],["Output store","S3 → Redshift"],["Consumer","Billing system + SMS / email"],["Data drift","PSI 0.05, stable"],["Retraining","Monthly"]],
+  tt:"Prediction output (sample rows)",cols:["account_id","late_prob","risk_band","top_reason (SHAP)","action"],band:2,
+  rows:[["AC-6101","0.82","High","late_payments_6m = 3","Call + payment plan"],["AC-6134","0.58","Medium","bill_change_pct ↑ 35%","SMS reminder"],["AC-6170","0.33","Low","autopay_enabled = 0","Email reminder"],["AC-6192","0.07","Very low","—","No action"]]}},
+
+{id:"rca",desc:"Flags customers likely to churn and uses an LLM to summarise the root cause behind each one, with a recommended retention action.",name:"RCA (Root Cause Analysis)",stage:"Churn",k:"H",d:"Usage + complaints + churn signals",m:"Churn Model + LLM Root Cause Summary",o:"Churn Drivers / Retention Actions",
+ data:{kp:[["Rows","1.4M"],["Features","47"],["Complaint texts","210K"],["Missing values","3.6%"]],
+  ds:[["usage_metrics","Amazon Redshift","1.1M","Daily"],["complaint_tickets","CRM → S3 (text)","210K","Daily"],["churn_events","Amazon Redshift","48K","Weekly"]],
+  tt:"Target & labelling",target:[["Target column","churn_next_60d"],["Definition","Disconnected within 60 days"],["Label source","Churn events"]],
+  pipe:[["Ingest","AWS Glue"],["Clean text & redact PII","Amazon Comprehend"],["Tabular + text features","PySpark + Titan Embeddings"],["Feature store","SageMaker Feature Store"]],
+  q:[["Class balance","4.3% churned"],["Train / val / test","Time-based 70 / 15 / 15"],["Text coverage","82% of churners"]],ftt:"Feature set (sample of 47)",fcols:["feature","type","description","transform"],
+  ft:[["usage_drop_30d","Numeric","Usage change vs previous 30 days","Percent change"],["outages_90d","Numeric","Outages experienced, last 90 days","Count"],["billing_disputes_90d","Numeric","Billing disputes, last 90 days","Count"],["price_change_flag","Binary","Recent price increase","Flag"],["complaint_text","Text","Latest complaint notes","PII-redacted LLM input"]]},
+ model:{kp:[["Churn model","XGBoost"],["ROC-AUC","0.82"],["LLM","Claude on Bedrock"],["Summary accuracy","88%"]],st:"Training setup",
+  setup:[["Problem type","Classification + summarisation"],["Target","churn_next_60d"],["Predictive","XGBoost + SHAP"],["Generative","Claude on Amazon Bedrock"],["LLM input","Top SHAP drivers + complaints"],["Validation","5-fold CV + 200 human reviews"],["Platform","SageMaker + Bedrock"]],
+  evt:"Evaluation (hold-out test set)",base:"baseline (rules)",ev:[["ROC-AUC (churn)","0.82","0.69"],["Recall @ top 10%","0.58","0.34"],["RCA summary accuracy","88%","—"],["Analyst time saved","70%","—"]],
+  bt:"Top churn drivers (SHAP)",br:[["outages_90d",31],["billing_disputes_90d",24],["price_change_flag",20],["usage_drop_30d",15],["complaint_text signal",10]],cap:"Relative importance, mean |SHAP| value (%)",
+  pt:"Hybrid pipeline",steps:[["Score churn risk","XGBoost on SageMaker"],["Explain drivers","SHAP values"],["Pull complaint text","Retrieval by customer"],["Summarise root cause","Claude on Bedrock"],["Recommend action","Rules + LLM"]]},
+ out:{kp:[["Customers at risk","6.8K"],["Top root cause","Network issues"],["Retention actions","2.1K"],["Churn reduced","−14%"]],
+  ct:"Actual churn rate by risk decile",lb:D10,vals:[38,22,14,9,6,4,3,2,1.5,1],unit:"%",cap:"Share of customers who churned within 60 days. D1 is the highest predicted risk.",
+  dep:[["Inference","SageMaker Batch + Bedrock"],["Schedule","Weekly"],["Output store","S3 → Redshift"],["Consumer","Retention team dashboard"],["Data drift","PSI 0.09, stable"],["Human review","Sample of LLM summaries"]],
+  tt:"Prediction output (sample rows)",cols:["customer_id","churn_prob","root_cause (LLM)","evidence","action"],band:-1,
+  rows:[["C-71204","0.89","Repeated outages","3 outages + 2 tickets in 90 days","Tech callback"],["C-71233","0.77","Billing dispute","Disputed ₹1,200 charge","Credit + apology"],["C-71268","0.61","Price increase","Bill ↑ 20%, usage ↓ 30%","Loyalty discount"],["C-71290","0.35","Low engagement","Usage ↓ 45%, no complaints","Usage tips"]]}},
+
+{id:"win-back-campaign",desc:"Ranks churned customers by how likely an offer is to bring them back, and generates a personalised message for each.",name:"Win-back Campaign",stage:"Win-back",k:"H",d:"Churned customer + offer data",m:"Win-back Propensity + GenAI Content",o:"Personalised Win-back Offers",
+ data:{kp:[["Rows","320K"],["Features","29"],["Offers in catalog","120"],["Missing values","2.2%"]],
+  ds:[["churned_customers","Amazon Redshift","48K","Weekly"],["offer_catalog","Amazon DynamoDB","120 offers","Monthly"],["winback_history","Amazon S3","150K","Weekly"]],
+  tt:"Target & labelling",target:[["Target column","reactivated_90d"],["Definition","Rejoined within 90 days of an offer"],["Label source","Win-back history"]],
+  pipe:[["Ingest","AWS Glue"],["Clean & join","PySpark"],["Churn-reason & spend features","PySpark"],["Feature store","SageMaker Feature Store"]],
+  q:[["Class balance","9% won back"],["Train / val / test","70 / 15 / 15 stratified"],["Consent filter","Marketing opt-in only"]],ftt:"Feature set (sample of 29)",fcols:["feature","type","description","transform"],
+  ft:[["churn_reason","Categorical","Stated reason for leaving","Target encoding"],["months_since_churn","Numeric","Months since disconnection","Binning"],["avg_monthly_spend","Numeric","Average past monthly bill","Log transform"],["offers_accepted","Numeric","Past offers accepted","Count"],["preferred_channel","Categorical","Email / SMS / call","One-hot encoding"]]},
+ model:{kp:[["Propensity model","LightGBM"],["ROC-AUC","0.78"],["LLM","Claude on Bedrock"],["Copy approval","94%"]],st:"Training setup",
+  setup:[["Problem type","Propensity + content generation"],["Target","reactivated_90d"],["Predictive","LightGBM"],["Offer selection","Uplift ranking"],["Generative","Claude on Amazon Bedrock"],["Validation","CV + A/B test vs control"],["Platform","SageMaker + Bedrock"]],
+  evt:"Evaluation (hold-out test set)",base:"baseline (generic offer)",ev:[["ROC-AUC","0.78","0.62"],["Win-back rate","9.6%","5.1%"],["Offer CTR","7.8%","3.9%"],["Copy approval rate","94%","—"]],
+  bt:"Feature importance (SHAP)",br:[["churn_reason",33],["months_since_churn",25],["avg_monthly_spend",20],["offers_accepted",12],["preferred_channel",10]],cap:"Relative importance, mean |SHAP| value (%)",
+  pt:"Hybrid pipeline",steps:[["Score win-back propensity","LightGBM on SageMaker"],["Pick best offer","Uplift model"],["Generate message","Claude on Bedrock"],["Brand & compliance check","Bedrock Guardrails"],["Send via channel","Amazon SES (email) / End User Messaging (SMS)"]]},
+ out:{kp:[["Eligible customers","14.5K"],["Win-back rate","9.6%"],["Offers sent","11.2K"],["Revenue recovered","₹1.3 Cr"]],
+  ct:"Actual win-back rate by propensity decile",lb:D10,vals:[24,17,12,9,7,5,4,3,2,1],unit:"%",cap:"Share of customers reactivated within 90 days. D1 is the highest score.",
+  dep:[["Inference","SageMaker Batch + Bedrock"],["Schedule","Weekly campaign run"],["Channel","Amazon SES + AWS End User Messaging"],["Experiment","A/B test vs control group"],["Content check","Bedrock Guardrails"],["Retraining","Monthly"]],
+  tt:"Prediction output (sample rows)",cols:["customer_id","winback_prob","offer","generated_message (LLM)","channel"],band:-1,
+  rows:[["C-90112","0.84","30% off for 3 months","Our network is upgraded. Come back for 30% off.","Email"],["C-90147","0.71","Free upgrade","Your old plan, now with double data, free.","SMS"],["C-90183","0.55","Bundle deal","Get TV + broadband, first month free.","Email"],["C-90210","0.22","Hold","—","—"]]}}
+];
+
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const typeChip = k => `<span class="chip type t-${k}">${TYPES[k].stars} ${TYPES[k].label}</span>`;
+const stageChip = s => `<span class="chip stage"><span>Stage</span>${esc(s)}</span>`;
+const kvs = pairs => pairs.map(([k,v]) => `<div class="kv"><span class="k">${esc(k)}</span><span class="v">${esc(v)}</span></div>`).join("");
+const table = (cols, rows, cls="", band=-1) => `<div class="tbl-wrap"><table class="${cls}"><thead><tr>${cols.map(c=>`<th>${esc(c)}</th>`).join("")}</tr></thead><tbody>${
+  rows.map(r=>`<tr>${r.map((v,j)=>`<td>${j===band?bandPill(v):esc(v)}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+function bandPill(v){const cls=/High|Critical/.test(v)?"bad":/Medium/.test(v)?"warn":"ok";return `<span class="pill ${cls}">${esc(v)}</span>`;}
+const kpis = arr => `<div class="kpis">${arr.map(([l,v])=>`<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join("")}</div>`;
+const steps = arr => `<ol class="steps">${arr.map(([a,b],i)=>`<li><span class="no">${i+1}</span><span><div class="s1">${esc(a)}</div><div class="s2">${esc(b)}</div></span></li>`).join("")}</ol>`;
+
+/* ===== Phase 2 §10 A — client selector (visual only) ===== */
+const CLIENTS=["Demo Telecom","Northwind Mobile","Acme Broadband"];
+let CLIENT=CLIENTS[0];
+function clientPicker(){return `<div class="clientpick"><span class="clabel">Client</span><div class="control sel"><select id="f-client" aria-label="Client">${CLIENTS.map(c=>`<option ${c===CLIENT?"selected":""}>${esc(c)}</option>`).join("")}<option value="__new">+ New client</option></select></div></div>
+  <span class="chint">Tables, recipes and models are kept per client.</span>`;}
+
+/* ===== Phase 2 §10 B — build a dataset from raw tables ===== */
+const ROLES=["Customers","Bills","Payments","Complaints","Usage","Campaign events","Orders","Activity","Other event"];
+const ROLE_HINT={
+ "Customers":"One row per customer. This table becomes the spine of the dataset.",
+ "Bills":"One row per bill. We total, average and count them over each window.",
+ "Payments":"One row per payment. Late and missed payments are read from here.",
+ "Complaints":"One row per complaint. Counts, open tickets and the latest note are used.",
+ "Usage":"One row per customer per day. We roll it up into windows.",
+ "Campaign events":"One row per message sent. Contact history and opt-outs come from here.",
+ "Orders":"One row per order. Value and delivery outcomes come from here.",
+ "Activity":"One row per login or session. This is usually what the label is built from.",
+ "Other event":"We count rows per customer per window and read nothing else from it."
+};
+const OUR_COLS={
+ "Customers":["customer_id","signup_date","plan","region","marketing_opt_in","monthly_charge","contract_end_date"],
+ "Bills":["customer_id","event_date","bill_amount","billing_cycle","tax_amount","due_date"],
+ "Payments":["customer_id","event_date","payment_amount","payment_method","days_late"],
+ "Complaints":["customer_id","event_date","complaint_type","complaint_text","closed_date"],
+ "Usage":["customer_id","event_date","data_mb","voice_minutes","sms_count"],
+ "Campaign events":["customer_id","event_date","channel","campaign_id","response"],
+ "Orders":["customer_id","event_date","order_value","order_status"],
+ "Activity":["customer_id","event_date","activity_type","channel"],
+ "Other event":["customer_id","event_date","event_type","event_value"]
+};
+const REQ_MSG={
+ customer_id:"Every table needs the column that identifies the customer. Without it this table cannot be joined to the others.",
+ event_date:"Every event table needs the date the event happened. Without it we cannot tell which rows came before a snapshot."
+};
+const requiredFor=role=>role==="Customers"?["customer_id"]:["customer_id","event_date"];
+const RAW_TABLES=[
+ {file:"customers.csv",   rows:"20,000",    role:"Customers",  key:"CUST_ID",time:"ACTIVATION_DT",cov:null},
+ {file:"bills.csv",       rows:"240,000",   role:"Bills",      key:"CUST_ID",time:"BILL_DT",      cov:96},
+ {file:"payments.csv",    rows:"228,000",   role:"Payments",   key:"CUST_ID",time:"PAID_ON",      cov:96},
+ {file:"complaints.csv",  rows:"31,400",    role:"Complaints", key:"CUST_ID",time:"TICKET_TS",    cov:96},
+ {file:"usage_daily.csv", rows:"1,840,000", role:"Usage",      key:"CUST_ID",time:"USAGE_DT",     cov:96},
+ {file:"activity_log.csv",rows:"2,140,000", role:"Activity",   key:"CUST_ID",time:"EVENT_TS",     cov:96}
+];
+const MAP_SEED={
+ "customers.csv":[["CUST_ID","customer_id","ID","C-10482 · C-10483 · C-10486",0.99],
+  ["ACTIVATION_DT","signup_date","Date","2019-04-11 · 2021-08-02 · 2023-01-19",0.94],
+  ["PLAN_CD","plan","Category","PRE-99 · POST-499 · POST-999",0.88],
+  ["CIRCLE","region","Category","MH · KA · TN",0.86],
+  ["DND_FLAG","marketing_opt_in","Boolean","Y · N · Y",0.71,"vmap"],
+  ["AADHAAR_NO","","ID","hidden · hidden · hidden",0,"pii"]],
+ "bills.csv":[["CUST_ID","customer_id","ID","C-10482 · C-10482 · C-10483",0.99],
+  ["BILL_DT","event_date","Date","2026-03-01 · 2026-04-01 · 2026-05-01",0.96],
+  ["AMT","bill_amount","Number","612.00 · 640.00 · 599.00",0.92],
+  ["CYCLE","billing_cycle","Category","M1 · M1 · M2",0.64],
+  ["TAX","","Number","110.16 · 115.20 · 107.82",0.42]],
+ "payments.csv":[["CUST_ID","customer_id","ID","C-10482 · C-10483 · C-10486",0.99],
+  ["PAID_ON","event_date","Date","2026-03-09 · 2026-04-14 · 2026-05-02",0.95],
+  ["AMOUNT","payment_amount","Number","612.00 · 640.00 · 599.00",0.93],
+  ["MODE","payment_method","Category","UPI · CARD · NETBANK",0.81]],
+ "complaints.csv":[["CUST_ID","customer_id","ID","C-10482 · C-10491 · C-10502",0.99],
+  ["TICKET_TS","","Date","2026-05-11 09:14 · 2026-06-02 17:40 · 2026-06-21 11:05",0.48],
+  ["CLOSED_TS","","Date","2026-05-13 10:02 · — · 2026-06-22 09:30",0.44],
+  ["CATEGORY","complaint_type","Category","Network · Billing · Network",0.87],
+  ["NOTES","complaint_text","Text","“Third time this month…” · “Bill went up…”",0.83]],
+ "usage_daily.csv":[["CUST_ID","customer_id","ID","C-10482 · C-10482 · C-10483",0.99],
+  ["USAGE_DT","event_date","Date","2026-08-01 · 2026-08-02 · 2026-08-03",0.95],
+  ["MB_USED","data_mb","Number","1840 · 2210 · 980",0.90],
+  ["MIN_USED","voice_minutes","Number","42 · 18 · 61",0.88]],
+ "activity_log.csv":[["CUST_ID","customer_id","ID","C-10482 · C-10483 · C-10486",0.99],
+  ["EVENT_TS","event_date","Date","2026-08-01 06:12 · 2026-08-01 19:44 · 2026-08-02 08:03",0.97],
+  ["EVENT_TYPE","activity_type","Category","login · recharge · stream",0.85],
+  ["SRC","","Category","app · web · app",0.39]]
+};
+const VMAP={file:"customers.csv",col:"DND_FLAG",to:"marketing_opt_in",
+ note:"DND means do-not-disturb, so a tick there means no marketing here. The values are flipped.",
+ rows:[["Y","false"],["N","true"],["(empty)","false"]]};
+const PII_NOTE="Looks like personal data. Left out unless you map it on purpose.";
+const FEATS=[
+ ["Customers","tenure_months","Months since activation, at the snapshot.","At snapshot"],
+ ["Customers","plan","Plan held at the snapshot.","At snapshot"],
+ ["Customers","region","Region at the snapshot.","At snapshot"],
+ ["Bills","bill_amount_sum_90d","Total billed in the window.","90 days"],
+ ["Bills","bill_amount_mean_180d","Average bill over the window.","180 days"],
+ ["Bills","bill_amount_change_pct_90d","Change against the previous window.","90 days"],
+ ["Payments","payments_late_count_180d","Payments made after the due date.","180 days"],
+ ["Payments","days_since_last_payment","Days since the most recent payment.","Since last"],
+ ["Complaints","complaints_90d","Complaints raised in the window.","90 days"],
+ ["Complaints","complaints_open_now","Complaints still open at the snapshot.","At snapshot"],
+ ["Complaints","complaint_text_latest","The most recent complaint note, redacted.","At snapshot"],
+ ["Usage","data_mb_sum_30d","Data used in the window.","30 days"],
+ ["Usage","data_mb_change_pct_30d","Change against the previous window.","30 days"],
+ ["Usage","voice_minutes_sum_30d","Voice minutes in the window.","30 days"],
+ ["Activity","active_days_30d","Days with any activity.","30 days"],
+ ["Activity","days_since_last_activity","Days since the last activity.","Since last"]
+];
+const FUNCS=["Total","Average","Count","Latest value","Days since last","Change vs previous window","Highest","Lowest"];
+const WINDOWS=["7 days","30 days","60 days","90 days","180 days","365 days","Since last","At snapshot"];
+const LABEL_WHEN=["no activity","no payment","no bill paid","a disconnection event"];
+const DROPPED=[["voice_minutes_sum_30d","Empty for 71% of rows."],
+ ["bill_amount_mean_180d","Almost the same as bill_amount_sum_90d (correlation 0.97)."]];
+const NULLRATE=[["voice_minutes_sum_30d",71],["complaint_text_latest",46],["complaints_open_now",12],
+ ["bill_amount_change_pct_90d",8],["data_mb_change_pct_30d",6],["days_since_last_payment",3],["tenure_months",0]];
+const pc1=v=>v.toFixed(1);
+const SNAPS=[["Apr 2026",10.9],["May 2026",11.4],["Jun 2026",11.6],["Jul 2026",12.0],["Aug 2026",12.3],["Sep 2026",12.6]];
+const CHECKS=[["One row per customer per snapshot",1],["96% of event rows match a customer",1],
+ ["No feature reads data from after its snapshot",1],["14,160 positive examples, above the minimum of 500",1],
+ ["1 personal-data column left out (AADHAAR_NO)",1],["Every snapshot has at least 30 days of history",1]];
+const PREVIEW_ROWS=[["C-10482","2026-09-01","64","POST-499","MH","1,851.00"],
+ ["C-10483","2026-09-01","28","PRE-99","KA","297.00"],
+ ["C-10486","2026-09-01","111","POST-999","TN","2,940.00"],
+ ["C-10491","2026-09-01","9","PRE-99","MH","297.00"],
+ ["C-10502","2026-09-01","47","POST-499","KA","1,797.00"]];
+const RECIPE={id:"rcp_71e4f0",name:"Telecom churn recipe",version:3,at:"14 Sep 2026, 10:20"};
+const LINEAGE=[["Sources","src_8f31c2","6 tables · 4.5M rows"],["Mapping","map_2d90ab","28 columns · 24 mapped"],
+ ["Recipe","rcp_71e4f0","14 features · 6 snapshots"],["Dataset","ds_c40a19","120,000 rows · sha256 9b1f…c7e2"],
+ ["Run","run_5ae803","trained 14 Sep 2026, 10:20"]];
+
+const ROLE_GUESS=[[/customer|subscriber|account|crm|profile/i,"Customers"],[/bill|invoice/i,"Bills"],
+ [/pay|txn|transaction|collection/i,"Payments"],[/complaint|ticket|case|grievance/i,"Complaints"],
+ [/usage|consumption|cdr|traffic/i,"Usage"],[/campaign|message|comms|outreach/i,"Campaign events"],
+ [/order|fulfil|shipment/i,"Orders"],[/activity|login|session|event|log/i,"Activity"]];
+const guessRole=n=>(ROLE_GUESS.find(([re])=>re.test(n))||[null,"Other event"])[1];
+function suggestTarget(col,role){const t=OUR_COLS[role]||[],c=String(col).toLowerCase().replace(/[^a-z0-9]+/g,"_");
+  if(t.includes(c))return [c,0.99];
+  if(t.includes("customer_id")&&/^(id|cust.*|.*cust.*|.*subscriber.*|.*account.*)$/.test(c)&&/id|no|num|code|^id$/.test(c))return ["customer_id",0.90];
+  if(t.includes("event_date")&&/(date|dt|time|ts|_on|_at)$/.test(c))return ["event_date",0.86];
+  const part=t.find(x=>c.includes(x)||x.includes(c));
+  return part?[part,0.72]:["",0.30];}
+const inferType=vals=>{const v=(vals||[]).filter(x=>x!==undefined&&x!=="");
+  if(!v.length)return "Text";
+  if(new Set(v.map(x=>String(x).toLowerCase())).size<=2&&v.length>1)return "Boolean";
+  if(v.every(x=>!isNaN(parseFloat(x))&&isFinite(x)))return "Number";
+  if(v.every(x=>!isNaN(Date.parse(x))))return "Date";
+  return v.every(x=>String(x).length<24)?"Category":"Text";};
+function onb(u){const s=st(u);
+  if(!s.onb) s.onb={open:1,loaded:false,tables:null,maps:null,accepted:false,vmap:false,
+    feats:FEATS.map(f=>({role:f[0],name:f[1],desc:f[2],win:f[3],on:true})),
+    label:{name:"churned",when:LABEL_WHEN[0],days:60},snap:"Periodic (monthly)",snapMax:6,
+    previewed:false,building:false,step:-1,built:false,used:false,addRole:"Complaints",addFn:FUNCS[2],addCol:"complaint_type",addWin:"90 days",addFilter:""};
+  return s.onb;}
+const labelCol=o=>`${o.label.name.trim().replace(/\s+/g,"_").toLowerCase()||"label"}_${o.label.days}d`;
+const selFeats=o=>o.feats.filter(f=>f.on);
+const keptFeats=o=>o.feats.filter(f=>f.on&&!DROPPED.some(d=>d[0]===f.name));
+const snapCount=o=>o.snap==="Single"?1:Math.min(o.snapMax,12);
+const datasetRows=o=>20000*snapCount(o);
+function mapsOf(u){const o=onb(u);
+  if(!o.maps)o.maps={};
+  (o.tables||[]).forEach(t=>{
+    if(o.maps[t.file])return;
+    if(!t.real&&MAP_SEED[t.file]){o.maps[t.file]=MAP_SEED[t.file].map(r=>({col:r[0],to:r[1],type:r[2],samp:r[3],conf:r[4],flag:r[5]||""}));return;}
+    o.maps[t.file]=(t.cols||[]).map((c,i)=>{const g=suggestTarget(c,t.role),vals=(t.sample||[]).map(r=>r[i]);
+      return {col:c,to:g[0],type:inferType(vals),samp:vals.filter(v=>v!==undefined&&v!=="").slice(0,3).join(" · ")||"—",conf:g[1],flag:""};});});
+  return o.maps;}
+function needsOf(u){const o=onb(u),m=mapsOf(u),out=[];
+  (o.tables||[]).forEach(t=>{const rows=m[t.file]||[];
+    requiredFor(t.role).forEach(req=>{if(!rows.some(r=>r.to===req))out.push([t.file,req]);});});
+  return out;}
+const confPill=c=>c>=0.85?`<span class="conf">${c.toFixed(2)}</span>`:c>=0.5?`<span class="conf amber">${c.toFixed(2)}</span>`:`<span class="conf grey">${c?c.toFixed(2):"—"}</span>`;
+function miniBar(v,max){const w=Math.max(2,Math.round(110*v/max));
+  return `<svg class="mini" width="110" height="8" viewBox="0 0 110 8" role="img" aria-label="${v}% positive"><rect width="110" height="8" rx="4" fill="var(--track)"/><rect width="${w}" height="8" rx="4" fill="var(--c)"/></svg>`;}
+const tinySel=(attr,arr,cur,none)=>`<div class="control sel tiny"><select ${attr}>${opt(arr,cur,none)}</select></div>`;
+
+const colsOf=t=>t.cols&&t.cols.length?t.cols:(MAP_SEED[t.file]||[]).map(r=>r[0]);
+const candidates=(t,cur)=>[...new Set([...colsOf(t),cur].filter(Boolean))];
+function obSources(u){const o=onb(u),s=st(u),score=s.mode==="score";
+  if(!o.loaded) return `<p class="obhint">Drop every table you have. We read the headers and the first rows only — nothing leaves this screen.</p>
+    <label class="drop"><input type="file" id="ob-files" class="sr" accept=".csv,.parquet" multiple><span class="d1">Drop your tables here, or choose files</span><span class="d2">CSV or Parquet · any number of files</span></label>
+    <p class="obhint" style="margin-top:10px">or <button type="button" class="linkbtn" id="ob-sample">use the sample tables</button></p>`;
+  const rows=o.tables.map((t,i)=>`<div class="srcrow">
+    <span class="sname">${esc(t.file)}</span>
+    <span class="srows">${esc(t.rows)} rows</span>
+    ${tinySel(`data-ob-role="${i}"`,ROLES,t.role)}
+    ${tinySel(`data-ob-key="${i}"`,candidates(t,t.key),t.key)}
+    ${tinySel(`data-ob-time="${i}"`,candidates(t,t.time),t.time)}
+    <span class="srcfoot"><span class="srchint">${esc(ROLE_HINT[t.role]||"")}</span>
+      ${t.cov==null?'<span class="cov warn">spine table</span>':`<span class="cov">${t.cov}% of rows match a customer</span>`}</span></div>`).join("");
+  return `<p class="obhint">${score?"These are this month's tables. The roles come from the saved recipe.":"Check the role we detected for each table. The role decides which features we can build from it."}</p>
+    <div class="srctbl">${rows}</div>
+    <p class="obhint" style="margin-top:10px">Key and time columns are the ones we detected. ${score?"":'<button type="button" class="linkbtn" id="ob-reset">Start over with different files</button>'}</p>`;}
+
+function obMapping(u){const o=onb(u),m=mapsOf(u),needs=needsOf(u);
+  const cards=(o.tables||[]).map(t=>{
+    const rows=m[t.file]||[], targets=OUR_COLS[t.role]||[];
+    const body=rows.map((r,i)=>`<div class="maprow">
+      <span class="mcol">${esc(r.col)}</span><span class="marrow" aria-hidden="true">→</span>
+      ${tinySel(`data-ob-map="${esc(t.file)}|${i}"`,targets,r.to,"not used")}
+      <span class="mtype">${esc(r.type)}</span>
+      <span class="msamp">${esc(r.samp)}</span>
+      <span>${confPill(r.conf)}${r.flag==="vmap"&&r.to?` <button type="button" class="vmapbtn" id="ob-vmap">value map</button>`:""}</span>
+      ${r.flag==="pii"&&!r.to?`<span class="srchint">${esc(PII_NOTE)}</span>`:""}
+    </div>`).join("");
+    const vm=(o.vmap&&t.file===VMAP.file)?`<div class="vmap"><div class="vt">${esc(VMAP.col)} → ${esc(VMAP.to)}</div>
+      ${VMAP.rows.map(([a,b])=>`<div class="vrow"><code>${esc(a)}</code><span class="marrow" aria-hidden="true">→</span><code>${esc(b)}</code></div>`).join("")}
+      <p class="obhint" style="margin:8px 0 0">${esc(VMAP.note)}</p>
+      <label class="check" style="height:auto"><input type="checkbox" id="ob-invert" checked> Flip the values</label></div>`:"";
+    const need=needs.filter(n=>n[0]===t.file).map(([,req])=>`<div class="maprow need">
+      <span class="mcol">—</span><span class="marrow" aria-hidden="true">→</span>
+      ${tinySel(`data-ob-need="${esc(t.file)}|${esc(req)}"`,rows.filter(r=>!r.to).map(r=>r.col),"","choose a column…")}
+      <span class="mtype">required</span><span class="msamp">${esc(req)}</span><span>${confPill(0)}</span>
+      <span class="needmsg">${esc(REQ_MSG[req]||"This column is required.")}</span></div>`).join("");
+    const mapped=rows.filter(r=>r.to).length;
+    return `<div class="mapcard"><div class="mh"><span class="m1">${esc(t.file)}</span><span class="m2">${esc(t.role)} · ${mapped} of ${rows.length} columns mapped</span></div>${body}${need}${vm}</div>`;}).join("");
+  const total=Object.values(m).reduce((a,r)=>a+r.length,0), done=Object.values(m).reduce((a,r)=>a+r.filter(x=>x.to).length,0);
+  return `<p class="obhint">Your column names on the left, ours on the right. Change anything that looks wrong — the confidence score is how sure we are.</p>
+    ${cards}
+    <div class="obact"><button type="button" class="run sm ${o.accepted?"ghost":""}" id="ob-accept" ${o.accepted?"disabled":""}>${o.accepted?"Suggestions accepted":"Accept all suggestions"}</button>
+      <span class="reason">${done} of ${total} columns mapped${needs.length?` · ${needs.length} required column${needs.length>1?"s":""} still missing`:""}</span></div>`;}
+
+function obFeatures(u){const o=onb(u);
+  const byRole={};o.feats.forEach(f=>{(byRole[f.role]=byRole[f.role]||[]).push(f);});
+  const groups=Object.keys(byRole).map(role=>`<div class="featgrp"><div class="fg">${esc(role)} · ${byRole[role].filter(f=>f.on).length} of ${byRole[role].length} selected</div>
+    ${byRole[role].map(f=>`<label class="featrow"><input type="checkbox" data-ob-feat="${esc(f.name)}" ${f.on?"checked":""}>
+      <span class="fn">${esc(f.name)}</span><span class="fd">${esc(f.desc)}</span><span class="fw">${esc(f.win)}</span></label>`).join("")}</div>`).join("");
+  const cols=(OUR_COLS[o.addRole]||[]).filter(c=>c!=="customer_id"&&c!=="event_date");
+  const add=`<div class="frow">
+    <div class="field sm"><span class="sub">From table</span>${tinySel('id="ob-add-role"',(o.tables||[]).map(t=>t.role),o.addRole)}</div>
+    <div class="field sm"><span class="sub">Function</span>${tinySel('id="ob-add-fn"',FUNCS,o.addFn)}</div>
+    <div class="field sm"><span class="sub">Column</span>${tinySel('id="ob-add-col"',cols,o.addCol)}</div>
+    <div class="field sm"><span class="sub">Window</span>${tinySel('id="ob-add-win"',WINDOWS,o.addWin)}</div>
+    <div class="field sm"><span class="sub">Only rows where (optional)</span><div class="control tiny"><input type="text" id="ob-add-filter" value="${esc(o.addFilter)}" placeholder="complaint_type = Network"></div></div>
+    <div class="field sm"><span class="sub">&nbsp;</span><button type="button" class="run sm" id="ob-add">Add feature</button></div></div>
+    <p class="obhint">A feature is one number per customer per snapshot. The window is how far back we look from each snapshot.</p>`;
+  const sent=`<div class="sentence"><span>A customer counts as</span>
+    <div class="control name"><input type="text" id="ob-lname" value="${esc(o.label.name)}" aria-label="Label name"></div>
+    <span>if there is</span>${tinySel('id="ob-lwhen"',LABEL_WHEN,o.label.when)}
+    <span>in the</span><div class="control"><input type="number" id="ob-ldays" min="7" max="365" step="1" value="${o.label.days}" aria-label="Days after the snapshot"></div>
+    <span>days after the snapshot.</span></div>
+    <p class="obhint">This becomes the target column <code>${esc(labelCol(o))}</code>. Nothing after the snapshot is used as a feature.</p>`;
+  const snaps=`<div class="frow">
+    <div class="field sm"><span class="sub">Snapshots</span>${tinySel('id="ob-snap"',["Single","Periodic (monthly)"],o.snap)}</div>
+    ${o.snap==="Single"?"":`<div class="field sm"><span class="sub">How many (max 12)</span><div class="control tiny"><input type="number" id="ob-snapmax" min="1" max="12" step="1" value="${o.snapMax}"></div></div>`}</div>
+    <p class="obhint">A snapshot is a point in time. Monthly snapshots give the model more examples from the same customers: ${fmtN(datasetRows(o))} rows from 20,000 customers.</p>`;
+  const prev=o.previewed?`<div class="sechd">Preview · first 5 rows</div>
+    ${table(["customer_id","snapshot_date","tenure_months","plan","region","bill_amount_sum_90d"],PREVIEW_ROWS)}
+    <div class="sechd">How often each feature is empty</div>
+    <div class="nullbars">${NULLRATE.map(([n,v])=>`<div class="nrow"><span class="nl">${esc(n)}</span><span class="track"><i style="width:${v}%"></i></span><span class="np">${v}%</span></div>`).join("")}</div>
+    <p class="obhint">Anything above 60% empty is dropped when the dataset is built.</p>
+    <div class="sechd">Positive rate per snapshot</div>
+    <div class="posrate">${SNAPS.slice(0,snapCount(o)).map(([m,v])=>`<div class="pcol"><span class="pv">${pc1(v)}%</span><span class="pl">${esc(m)}</span></div>`).join("")}</div>
+    <p class="obhint">11.8% of rows are positive across all ${snapCount(o)} snapshots. A steady rate means the label behaves the same over time.</p>`:"";
+  return `<div class="sechd">Suggested features · ${selFeats(o).length} of ${o.feats.length} selected</div>
+    <p class="obhint">Untick anything you do not want. Each one is built from a table you mapped.</p>${groups}
+    <div class="sechd">Add a feature</div>${add}
+    <div class="sechd">Label</div>${sent}
+    <div class="sechd">Snapshots</div>${snaps}
+    <div class="obact"><button type="button" class="run sm ghost" id="ob-preview">Preview</button><span class="reason">5 rows, how empty each feature is, and the positive rate per snapshot.</span></div>${prev}`;}
+
+function buildSteps(u){const o=onb(u),roles=[...new Set((o.tables||[]).map(t=>t.role))];
+  const per=roles.map(r=>[`Features: ${r}`,`${o.feats.filter(f=>f.role===r&&f.on).length} features`]);
+  return [["Apply mappings","24 of 28 columns"],["Build snapshots",`${snapCount(o)} monthly snapshots · ${fmtN(datasetRows(o))} rows`],
+    ...per,["Build labels",`${labelCol(o)} · 11.8% positive`],
+    ["Assemble dataset",`${fmtN(datasetRows(o))} rows × ${keptFeats(o).length} features`],
+    ["Validate",`${CHECKS.length} checks`],["Write dataset","telecom_churn_2026-09.parquet"]];}
+
+function obBuild(u){const o=onb(u);
+  if(!o.built&&!o.building) return `<p class="obhint">We apply the mappings, build the snapshots, calculate every feature and check the result. Nothing is overwritten — the dataset is written as a new file.</p>
+    <div class="obact"><button type="button" class="run sm" id="ob-build">Build dataset</button><span class="reason">${fmtN(datasetRows(o))} rows · ${selFeats(o).length} features · ${snapCount(o)} snapshots</span></div>`;
+  const steps=buildSteps(u);
+  const list=`<ol class="buildprog" id="ob-prog">${steps.map(([t,d],i)=>`<li id="bp-${i}" class="${o.built?"done":""}"><span class="bd">${i+1}</span><span>${esc(t)}</span><span class="bn">${o.built?esc(d):""}</span></li>`).join("")}</ol>`;
+  if(!o.built) return `<p class="obhint">Building…</p>${list}`;
+  const srcRows=(o.tables||[]).map(t=>`<div class="rrow"><span class="r1">${esc(t.file)}</span><span class="r2">${esc(t.role)}</span><span class="r3">${esc(t.rows)} rows</span><span>${t.cov==null?'<span class="cov warn">spine table</span>':`<span class="cov">${t.cov}% matched</span>`}</span></div>`).join("");
+  const max=Math.max(...SNAPS.map(x=>x[1]));
+  const snapRows=SNAPS.slice(0,snapCount(o)).map(([m,v])=>`<div class="rrow"><span class="r1">${esc(m)}</span><span class="r2">20,000 rows</span><span class="r3">${pc1(v)}% positive</span><span>${miniBar(v,max)}</span></div>`).join("");
+  const dropRows=DROPPED.map(([n,why])=>`<div class="rrow"><span class="r1">${esc(n)}</span><span class="r2">dropped</span><span class="r3"></span><span class="msamp">${esc(why)}</span></div>`).join("");
+  const checks=`<ul class="checks">${CHECKS.map(([t,ok])=>`<li class="${ok?"":"bad"}"><span class="ck">${ok?"✓":"✕"}</span><span>${esc(t)}</span></li>`).join("")}</ul>`;
+  return `${list}
+    <div class="report"><div class="rh">Sources</div>${srcRows}</div>
+    <div class="report"><div class="rh">Snapshots · 11.8% positive overall</div>${snapRows}</div>
+    <div class="report"><div class="rh">Features dropped (${DROPPED.length} of ${DROPPED.length+keptFeats(o).length})</div>${dropRows}</div>
+    <div class="report"><div class="rh">Checks</div>${checks}</div>
+    <div class="obact"><button type="button" class="run sm" id="ob-use" ${o.used?"disabled":""}>${o.used?"Dataset in use":"Use this dataset"}</button>
+      <span class="reason">${o.used?"Step 2 is filled in below.":`Fills in the key, target and time column below · ${fmtN(datasetRows(o))} rows × ${keptFeats(o).length} features`}</span></div>`;}
+
+function obPanel(u){const o=onb(u),s=st(u),m=mapsOf(u);
+  const mapped=Object.values(m).reduce((a,r)=>a+r.filter(x=>x.to).length,0);
+  const roleOk=o.loaded&&o.tables.every(t=>t.role)&&o.tables.filter(t=>t.role==="Customers").length===1;
+  const done=[roleOk, o.loaded&&o.accepted&&!needsOf(u).length, o.loaded&&keptFeats(o).length>0&&o.label.days>0, o.built];
+  const summ=[
+    o.loaded?`${o.tables.length} tables · ${[...new Set(o.tables.map(t=>t.role))].length} roles · 96% of event rows match a customer`:"No tables yet",
+    o.loaded?`${mapped} of ${Object.values(m).reduce((a,r)=>a+r.length,0)} columns mapped${needsOf(u).length?` · ${needsOf(u).length} required missing`:""}`:"Waiting for tables",
+    o.loaded?`${o.built?keptFeats(o).length:selFeats(o).length} features · ${labelCol(o)} · ${snapCount(o)} snapshot${snapCount(o)>1?"s":""}`:"Waiting for tables",
+    o.built?`${fmtN(datasetRows(o))} rows · ${keptFeats(o).length} features · ${CHECKS.length} checks passed`:"Not built yet"];
+  const titles=["Sources","Mapping","Features & label","Build & review"];
+  const bodies=[obSources,obMapping,obFeatures,obBuild];
+  const steps=titles.map((t,i)=>{const n=i+1,open=o.open===n,lock=i>0&&!o.loaded;
+    return `<div class="obstep ${done[i]?"done":""} ${open?"open":""}">
+      <button type="button" class="obsum" data-ob-open="${n}" aria-expanded="${open}"><span class="obtick">${done[i]?"✓":n}</span>
+        <span><span class="ot">${esc(t)}</span><span class="os">${esc(summ[i])}</span></span><span class="oc">${open?"Hide":lock?"Locked":"Open"}</span></button>
+      ${open&&!lock?`<div class="obbody">${bodies[i](u)}</div>`:""}</div>`;}).join("");
+  return `<div class="ob"><div class="obhead"><span class="obt">Build a dataset from raw tables</span>
+    <span class="obh">${s.mode==="score"?`Saved recipe: ${esc(RECIPE.name)} v${RECIPE.version}`:"Four steps. You can go back to any of them before building."}</span></div>${steps}</div>`;}
+
+/* ===== Phase 3a §9 C — AI Onboarding Assistant ===== */
+const DOCS=[["broadband_setup_guide.pdf",48,612],["router_troubleshooting.pdf",32,410],
+ ["sim_activation_guide.pdf",21,264],["plans_and_pricing.html",12,188],["billing_faq.html",9,126]];
+const DOC_PAGES=122, DOC_CHUNKS="1,600";
+const QA_FILE={name:"onboarding_eval_300.csv",pairs:300};
+const EVAL={pass:91,threshold:85};
+const WORST10=[
+ ["Can I keep my number if I move to another state?","0.31","Nothing in the documents covers moving a number between states."],
+ ["Why was I charged twice in March?","0.38","Needs the customer's own bill. The answer came from the general FAQ."],
+ ["How do I cancel within the cooling-off period?","0.42","The refund window differs by plan and the answer picked one plan."],
+ ["Is the 5G router compatible with my old set-top box?","0.46","Answered from a guide for a different router model."],
+ ["What speed do I get after my data limit?","0.51","Two documents disagree and the older one was used."],
+ ["Can my father use my account to pay?","0.55","Answered in general terms and skipped the authorisation step."],
+ ["How long does a SIM swap take?","0.58","Gave the shop timing, not the online one that was asked about."],
+ ["Do I need a static IP for CCTV?","0.61","Correct, but no document was cited."],
+ ["Where do I find my customer ID?","0.64","Cited the right page but listed the steps out of order."],
+ ["How do I change my billing date?","0.68","Correct for postpaid only. The question did not say which plan."]];
+const REFUSAL="I could not find this in the product documents. I will pass you to a person.";
+const TRYIT=[
+ {q:"My new router has a red light. What do I do?",
+  a:"A steady red light means the router cannot reach the network. Switch it off at the wall, wait thirty seconds and switch it back on. If it is still red after two minutes, the line is not active yet — activation can take up to four hours after installation.",
+  cites:[["router_troubleshooting.pdf · p. 11","A steady red WAN light indicates the router cannot reach the network. Power-cycle the unit: switch off at the wall, wait 30 seconds, switch on. Allow 2 minutes for the light to turn white."],
+         ["broadband_setup_guide.pdf · p. 6","After installation, activation can take up to 4 hours. The router shows a red WAN light until the line is active."]]},
+ {q:"How much is the unlimited plan?",
+  a:"Unlimited broadband is ₹999 a month on a twelve-month contract, or ₹1,199 a month with no contract. The router is included either way.",
+  cites:[["plans_and_pricing.html · Broadband","Unlimited — ₹999/month on a 12-month contract, ₹1,199/month with no contract. Router included on both."]]},
+ {q:"Can I get a refund for last month?",a:REFUSAL,cites:[]}];
+
+function docList(){return `<div class="doclist">${DOCS.map(([n,p,c])=>`<div class="docrow"><span class="dn">${esc(n)}</span><span class="dv">${p} pages</span><span class="dv">${c} chunks</span></div>`).join("")}</div>`;}
+function assistantResults(u){const s=st(u);
+  const idx=[["Documents",`${DOCS.length}`],["Pages",String(DOC_PAGES)],["Text chunks",DOC_CHUNKS],
+    ["Embedding model",s.adv.embed],["Index","OpenSearch Serverless"],[`Retrieval`,`top-${s.adv.topk}${s.adv.hybrid?" · hybrid":""}`],
+    ["When nothing is found",s.adv.refusal||REFUSAL]];
+  const w=Math.round(EVAL.pass), tm=EVAL.threshold;
+  const bar=`<div class="evalbar"><div class="ebv">${EVAL.pass}% passed</div>
+    <div class="eb"><i style="width:${w}%"></i><span class="ebm" style="left:${tm}%"></span></div>
+    <div class="ebl"><span>${QA_FILE.pairs} reference questions</span><span>Threshold ${tm}%</span></div></div>`;
+  const chat=`<div class="chatpanel">${TRYIT.map(x=>`<div class="bubble q">${esc(x.q)}</div>
+    <div class="bubble a">${esc(x.a)}${x.cites.length?`<div class="cites">${x.cites.map(([l,q])=>`<details class="cite"><summary>${esc(l)}</summary><div class="quote">${esc(q)}</div></details>`).join("")}</div>`:`<div class="cites"><span class="evchip">no document matched</span></div>`}</div>`).join("")}</div>
+    <p class="caption">Three saved questions. Click a citation to read the exact passage the answer used.</p>`;
+  return `<span class="cap">Assistant</span>
+   <div class="row" style="margin-top:8px">
+     <section class="card"><h3>Evaluation</h3>${bar}${table(["question","score","what went wrong"],WORST10)}<p class="caption">The ten weakest answers. Everything else scored above 0.68.</p></section>
+     <section class="card"><h3>Index</h3>${kvs(idx)}<div class="spacer"></div><div class="costline">LLM cost this run: —</div></section>
+   </div>
+   <section class="card" style="margin-top:24px"><h3>Try it</h3>${chat}</section>`;}
+
+/* ===== Phase 3a §9 D — RCA root causes ===== */
+const RCA_SEGS=[
+ {band:"High risk",n:"2,180 customers",head:"Network problems first, then a bill nobody explained.",
+  causes:[
+   {t:"Repeated outages in the last 90 days",chips:[["reason","outages_90d ↑ 3x"],["quote","“Third time this month the line is down before 9am.”"]]},
+   {t:"A price change they were not told about",chips:[["reason","billing_disputes_90d ↑"],["quote","“My bill went up ₹240 and nobody told me why.”"]]},
+   {t:"Complaints still open at the snapshot",chips:[["reason","complaints_open_now = 1"],["quote","“Raised a ticket two weeks ago, still no update.”"]]}],
+  actions:["Call before the next bill is issued.","Credit the disputed amount without asking them to chase it.","Close the open ticket first — an offer on top of an open complaint reads badly."],
+  caveat:"Built from 1,840 complaint notes across 2,180 customers. 18% of this segment has no complaint text, so those causes rest on the model drivers alone."},
+ {band:"Medium risk",n:"3,410 customers",head:"Quietly using less, with no complaint to explain it.",
+  causes:[
+   {t:"Usage falling for two months running",chips:[["reason","usage_drop_30d ↓ 38%"],["quote","“Moved most of my data to the office wifi.”"]]},
+   {t:"A price increase with no contact since",chips:[["reason","price_change_flag = 1"],["quote","“The new plan costs more for the same thing.”"]]},
+   {t:"No contact from us in four months",chips:[["reason","days_since_last_contact ↑ 112"],["quote","“Nobody has called me since the day I joined.”"]]}],
+  actions:["Send usage tips, not a discount.","Check the plan still fits what they actually use.","Reach out before the renewal date, not after."],
+  caveat:"Built from 1,260 complaint notes across 3,410 customers. 63% of this segment has no complaint text, so these causes lean more on the model drivers."}];
+let RCA_ON=false;
+function rcaBlock(){
+  if(!RCA_ON) return `<section class="card"><h3>Root causes</h3><div class="genbox">
+    <span class="gb1">Root causes have not been written for this run yet.</span>
+    <span class="gb2">We take the top drivers for each risk segment and the complaint notes behind them, and write three causes per segment. Nothing is sent to anyone.</span>
+    <button type="button" class="run sm" id="rca-gen">Generate root causes</button></div></section>`;
+  const segs=RCA_SEGS.map(s=>`<div class="rcseg">
+    <div class="rs"><span class="rsh">${esc(s.band)}</span><span class="rsn">${esc(s.n)}</span></div>
+    <div class="rline">${esc(s.head)}</div>
+    ${s.causes.map(c=>`<div class="cause"><div class="ct">${esc(c.t)}</div>
+      <div class="evchips">${c.chips.map(([k,v])=>`<span class="evchip ${k}">${esc(v)}</span>`).join("")}</div></div>`).join("")}
+    <div class="rcfoot"><div class="fl">What to do</div><ul>${s.actions.map(a=>`<li>${esc(a)}</li>`).join("")}</ul>
+      <div class="cav">${esc(s.caveat)}</div></div></div>`).join("");
+  return `<section class="card"><h3>Root causes</h3>${segs}
+    <p class="caption">Written from the model drivers and the complaint notes. Read the caveat before acting on a segment.</p></section>`;}
+
+/* ===== Phase 3a §9 E — win-back campaign copy ===== */
+const COPY_SEED=[
+ {band:"High",offer:"30% off for 3 months",ch:"Email",v:"A",status:"Approved",
+  text:"Your area is on the upgraded network now. Come back and pay 30% less for three months.",
+  scores:"Brand 0.95 · Clarity 0.93 · Compliance 1.00",why:"",
+  alt:"The network in your area has been upgraded. Come back for 30% off your first three months."},
+ {band:"High",offer:"30% off for 3 months",ch:"Email",v:"B",status:"Pending review",
+  text:"We fixed what made you leave. Come back this month and pay 30% less for three months.",
+  scores:"Brand 0.88 · Clarity 0.90 · Compliance 1.00",why:"",
+  alt:"We have fixed the problem in your area. Come back this month for 30% off for three months."},
+ {band:"High",offer:"30% off for 3 months",ch:"SMS",v:"A",status:"Approved",
+  text:"Your area is upgraded. Come back for 30% off for 3 months. Reply YES.",
+  scores:"Brand 0.92 · Clarity 0.95 · Compliance 1.00",why:"",
+  alt:"Network upgraded in your area. 30% off for 3 months if you return. Reply YES."},
+ {band:"High",offer:"30% off for 3 months",ch:"SMS",v:"B",status:"Blocked",
+  text:"We have upgraded the whole network in your area since you left us, and we would really like you to come back, so here is 30% off your bill for the first three months if you return this month. Reply YES.",
+  scores:"Brand 0.90 · Clarity 0.86 · Compliance 1.00",why:"Exceeds 160 characters.",
+  alt:"Your area is upgraded. Return this month for 30% off for 3 months. Reply YES."},
+ {band:"High",offer:"30% off for 3 months",ch:"WhatsApp",v:"A",status:"Approved",
+  text:"Hi {first_name}, your area is now on the upgraded network. 30% off for three months if you come back. Want the details?",
+  scores:"Brand 0.94 · Clarity 0.92 · Compliance 1.00",why:"",
+  alt:"Hi {first_name}, the network where you live has been upgraded. Come back for 30% off for three months."},
+ {band:"High",offer:"30% off for 3 months",ch:"WhatsApp",v:"B",status:"Pending review",
+  text:"Hi {first_name}, we have missed you. Come back this month and pay 30% less for three months.",
+  scores:"Brand 0.87 · Clarity 0.91 · Compliance 1.00",why:"",
+  alt:"Hi {first_name}, there is 30% off for three months waiting if you come back this month."},
+ {band:"Medium",offer:"Free upgrade",ch:"Email",v:"A",status:"Approved",
+  text:"Your old plan, now with double the data. Free for the first three months.",
+  scores:"Brand 0.93 · Clarity 0.94 · Compliance 1.00",why:"",
+  alt:"The plan you had now comes with double the data, free for three months."},
+ {band:"Medium",offer:"Free upgrade",ch:"Email",v:"B",status:"Approved",
+  text:"Same plan, twice the data, nothing extra to pay for three months.",
+  scores:"Brand 0.91 · Clarity 0.96 · Compliance 1.00",why:"",
+  alt:"Twice the data on the same plan, at no extra cost for three months."},
+ {band:"Medium",offer:"Free upgrade",ch:"SMS",v:"A",status:"Approved",
+  text:"Your old plan now has double data, free for 3 months. Reply YES.",
+  scores:"Brand 0.90 · Clarity 0.95 · Compliance 1.00",why:"",
+  alt:"Double data on your old plan, free for 3 months. Reply YES."},
+ {band:"Medium",offer:"Free upgrade",ch:"SMS",v:"B",status:"Pending review",
+  text:"Double data, free for 3 months. Reply YES to come back.",
+  scores:"Brand 0.84 · Clarity 0.93 · Compliance 1.00",why:"",
+  alt:"Come back to double data, free for 3 months. Reply YES."},
+ {band:"Medium",offer:"Free upgrade",ch:"WhatsApp",v:"A",status:"Approved",
+  text:"Hi {first_name}, your old plan now comes with double the data. Free for three months.",
+  scores:"Brand 0.92 · Clarity 0.94 · Compliance 1.00",why:"",
+  alt:"Hi {first_name}, double the data on the plan you had, free for three months."},
+ {band:"Medium",offer:"Free upgrade",ch:"WhatsApp",v:"B",status:"Blocked",
+  text:"Hi {first_name}, come back for double data and 50% off your first bill.",
+  scores:"Brand 0.89 · Clarity 0.90 · Compliance 0.40",why:"Promises a 50% discount that is not in this offer.",
+  alt:"Hi {first_name}, come back to double data, free for three months."}];
+let COPY_CARDS=null;
+const copyCards=()=>COPY_CARDS||(COPY_CARDS=COPY_SEED.map(c=>({...c})));
+const SMS_LIMIT=160;
+const blockWhy=c=>c.status!=="Blocked"?"":(c.ch==="SMS"&&c.text.length>SMS_LIMIT?`Exceeds ${SMS_LIMIT} characters (${c.text.length}).`:c.why);
+const statusPill=s=>`<span class="pill ${s==="Approved"?"ok":s==="Blocked"?"bad":"warn"}">${esc(s)}</span>`;
+function copyBlock(){const cards=copyCards();
+  const counts=["Approved","Pending review","Blocked"].map(s=>[s,cards.filter(c=>c.status===s).length]);
+  const bands=[...new Set(cards.map(c=>c.band))];
+  const grid=bands.map(b=>`<div class="ccgrouphd">${esc(b)} band · ${esc(cards.find(c=>c.band===b).offer)}</div>
+    ${cards.map((c,i)=>[c,i]).filter(([c])=>c.band===b).map(([c,i])=>`<div class="cccard ${c.status==="Blocked"?"blocked":""}">
+      <div class="cch"><span class="cct">${esc(c.ch)} · Variant ${esc(c.v)}</span>${statusPill(c.status)}</div>
+      <div class="ccb">${esc(c.text)}</div>
+      <div class="ccm">${esc(c.scores)} · ${c.text.length} characters</div>
+      ${blockWhy(c)?`<div class="ccwhy">${esc(blockWhy(c))}</div>`:""}
+      <div class="ccact"><button type="button" class="ccbtn" data-cc-ok="${i}" ${c.status==="Approved"?"disabled":""}>Approve</button>
+        <button type="button" class="ccbtn" data-cc-re="${i}">Regenerate</button></div></div>`).join("")}`).join("");
+  return `<section class="card"><h3>Campaign copy</h3>
+    <div class="banner"><span aria-hidden="true">⚑</span><span>Nothing is sent from here. Approved messages are exported for your campaign tool.</span></div>
+    <div class="ccbar"><span>${cards.length} templates · ${bands.length} bands × 3 channels × 2 variants</span>
+      <span>${counts.map(([s,n])=>`${n} ${s.toLowerCase()}`).join(" · ")}</span>
+      <button type="button" class="run sm ghost" id="cc-dl">Download messages</button></div>
+    <div class="ccgrid">${grid}</div>
+    <p class="caption">Scores come from the copy judge. A blocked message is never exported, whatever its scores.</p></section>`;}
+
+/* ===== Phase 2 §10 F — lineage ===== */
+function lineageBlock(u){const s=st(u);
+  if(!s.runs.some(r=>r.lineage)) return "";
+  const nodes=LINEAGE.map(([t,id,meta],i)=>`${i?'<div class="larrow" aria-hidden="true">→</div>':""}
+    <div class="lnode"><span class="l1">${esc(t)}</span><span class="l2">${esc(id)}…</span><span class="l3">${esc(meta)}</span></div>`).join("");
+  return `<section class="card"><h3>Where this dataset came from</h3><div class="lineage">${nodes}</div>
+    <p class="caption">Built from raw tables. Every id is stored with the run, so the same recipe can be replayed on next month's tables.</p></section>`;}
+
+function pageHead(inner){return `<div class="head"><div class="titles">${inner}</div><div class="headtools">${clientPicker()}${LOGO}</div></div><div class="rule"></div>`;}
+
+function overview(){
+  const cols = STAGES.map(([s,k],i)=>{
+    const cases = UC.filter(u=>u.stage===s);
+    return `<div class="stage-col t-${k}">
+      <div class="stage-pill"><span class="n">${String(i+1).padStart(2,"0")}</span>${esc(s)}</div>
+      ${typeChip(k)}
+      <div class="uc-list">${cases.map(u=>`<a class="uc" href="#/uc/${u.id}"><span>${esc(u.name)}</span><span class="chev" aria-hidden="true">›</span></a>`).join("")}</div>
+    </div>`;}).join("");
+  return `<main class="screen">
+    ${pageHead(`<h1 class="h1">Marketing AI</h1><p class="sub">Customer Lifecycle</p>`)}
+    <div class="bar"><span class="cap">Lifecycle stage → AI use cases</span>
+      <div class="legend"><span class="lbl">Legend</span>${typeChip("P")}${typeChip("G")}${typeChip("H")}</div></div>
+    <div class="timeline-wrap"><div class="timeline">${cols}</div></div>
+    <p class="hint">Select a use case to see its Data → Model → Output pipeline.</p>
+  </main>`;
+}
+
+const SETUP = {
+ "targeted-advertisement":{models:["XGBoost","LightGBM","Random Forest","Logistic Regression","Linear Learner"],target:"converted_30d",metrics:["ROC-AUC","PR-AUC","F1 score","Recall","Precision"],timeSplit:false,best:"XGBoost",score:"ROC-AUC 0.84"},
+ "ai-onboarding-assistant":{gen:true,models:["Claude on Bedrock","Amazon Nova Pro","Llama on Bedrock"],target:"reference_answer",tlabel:"Reference answer column",metrics:["Faithfulness","Answer relevance","Task completion"],timeSplit:false,best:"Claude on Bedrock (RAG)",score:"Faithfulness 0.92",
+   modes:{train:"Build assistant",score:"Evaluate assistant"},help:{train:"Upload documents and question–answer pairs. The assistant is built and checked against the reference answers.",score:"Upload new test questions and run them through a saved assistant version."}},
+ "order-fulfillment":{models:["LightGBM","XGBoost","Random Forest","Logistic Regression","Linear Learner"],target:"delayed_beyond_sla",metrics:["ROC-AUC","Recall","PR-AUC","F1 score","Precision"],timeSplit:true,best:"LightGBM",score:"ROC-AUC 0.88"},
+ "fault-prediction":{models:["LSTM (sequence)","XGBoost on lag features","Random Forest","Isolation Forest (anomaly)"],target:"fault_next_72h",metrics:["PR-AUC","Recall","ROC-AUC","F1 score"],timeSplit:true,best:"LSTM (sequence)",score:"PR-AUC 0.71"},
+ "payment-propensity":{models:["XGBoost","LightGBM","Random Forest","Logistic Regression"],target:"late_or_missed_payment",metrics:["ROC-AUC","PR-AUC","F1 score","Recall","Precision"],timeSplit:false,best:"XGBoost",score:"ROC-AUC 0.86"},
+ "rca":{models:["XGBoost","LightGBM","Random Forest","Logistic Regression"],llm:"Claude summary",target:"churn_next_60d",metrics:["ROC-AUC","Recall","PR-AUC","F1 score"],timeSplit:true,best:"XGBoost + Claude summary",score:"ROC-AUC 0.82"},
+ "win-back-campaign":{models:["LightGBM","XGBoost","Uplift forest","Logistic Regression"],llm:"Claude copy",target:"reactivated_90d",metrics:["ROC-AUC","Uplift (Qini)","Recall","F1 score"],timeSplit:false,best:"LightGBM + Claude copy",score:"ROC-AUC 0.78"}
+};
+const AUTO="AutoML (recommended)";
+const STATE = {};
+function defaultAdv(cfg){return cfg.gen
+  ? {pii:"Redact",chunk:512,overlap:50,embed:"Titan Text Embeddings v2",topk:5,hybrid:true,temp:0.2,maxtok:600,guard:true,refusal:REFUSAL,metric:cfg.metrics[0],judge:"LLM judge + human sample"}
+  : {missing:"Auto",outliers:"Clip (1st–99th pct)",dedupe:true,leakage:true,pii:"Redact",minpos:500,excl:[],
+     split:cfg.timeSplit?"Time-based":"Random (stratified)",test:15,val:15,timeCol:"",groupCol:"",
+     autofeat:true,encoding:"Auto",scaling:"Auto",text:"Ignore",fsel:"Importance-based",maxfeat:100,
+     strategy:"Balanced",algos:cfg.models.slice(),ensemble:true,trials:50,limit:30,folds:5,imbalance:"Auto",
+     metric:cfg.metrics[0],calib:"Isotonic",thr:"Auto",shap:true,reasons:3,fair:"",champ:1,
+     hi:0.8,md:0.5,supOpt:true,supRecent:true,recentDays:14,control:10,
+     drift:0.2,retrain:"On drift",alert:5,
+     retention:90,consentCol:"",approval:true};}
+function st(u){
+  if(!STATE[u.id]){const c=SETUP[u.id];
+    STATE[u.id]={mode:"train",file:null,cols:[],preview:null,pk:"",target:"",ptype:"",model:AUTO,adv:defaultAdv(c),advOpen:false,view:"setup",current:null,scoreRun:"r1",
+      source:"file",docs:null,qa:null,pkExtra:"",pkParts:null,builtFrom:false,recipe:RECIPE,
+      runs:[{id:"r1",at:"14 Sep 2026, 10:20",mode:"train",file:`${u.id.replace(/-/g,"_")}_history.csv`,rows:u.data.kp[0][1],model:AUTO,best:c.best,score:c.score,target:c.target,pk:c.gen?"question_id":"customer_id",champion:true}]};}
+  return STATE[u.id];
+}
+const fmtSize = b => b<1024?`${b} B`:b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(1)} MB`;
+const fmtN = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${Math.round(n/1e3)}K`:String(n);
+function parseLine(line){const out=[];let cur="",q=false;for(const ch of line){if(ch==='"'){q=!q;}else if(ch===","&&!q){out.push(cur.trim());cur="";}else cur+=ch;}out.push(cur.trim());return out;}
+const nowStamp=()=>new Date().toLocaleString("en-IN",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}).replace(/(\d{4}),?\s*/,"$1, ");
+function modeLabels(cfg){return cfg.modes||{train:"Train a model",score:"Score new data"};}
+function modeHelp(cfg,mode){if(cfg.help)return cfg.help[mode];return mode==="train"?"Upload historical data where the outcome is already known. The best model is trained and saved.":"Upload new records without the outcome. The saved model scores every row and recommends an action.";}
+function blocker(u){const s=st(u),cfg=SETUP[u.id];
+  if(cfg.gen){
+    if(s.mode==="score"){
+      if(!s.runs.some(r=>r.mode==="train"))return "Build an assistant first";
+      if(!s.qa)return "Upload the test questions to continue";
+      if(!s.pk)return "Choose the primary key column";
+      return "";}
+    if(!s.docs)return "Upload the documents to continue";
+    if(s.qa&&!s.pk)return "Choose the primary key column";
+    if(s.qa&&!s.target)return "Choose the reference answer column";
+    return "";}
+  if(!s.file)return s.source==="raw"?"Build the dataset from your tables to continue":"Upload a dataset to continue";
+  if(!s.pk)return "Choose the primary key column";
+  if(s.mode==="train"&&!s.target)return `Choose the ${cfg.tlabel?"reference answer":"target"} column`;
+  if(s.mode==="score"&&!s.runs.some(r=>r.mode==="train"))return "Train a model first";
+  return "";}
+function sampleFile(u){const s=st(u),cfg=SETUP[u.id];const feats=u.data.ft.map(f=>f[0]);
+  const idc=cfg.gen?"question_id":"customer_id";
+  s.cols=s.mode==="train"?[idc,"snapshot_date",...feats,cfg.target]:[idc,"snapshot_date",...feats];
+  s.file={name:`${u.id.replace(/-/g,"_")}_${s.mode==="train"?"history":"this_week"}.csv`,size:"Sample dataset",rows:s.mode==="train"?u.data.kp[0][1]:"12,480",sample:true};
+  s.pk=idc;s.target=s.mode==="train"?cfg.target:"";s.preview=null;s.adv.timeCol="snapshot_date";
+}
+function sampleDocs(u){const s=st(u);s.docs=DOCS;
+  s.file={name:"product_docs (5 files)",size:`${DOC_PAGES} pages · ${DOC_CHUNKS} chunks`,rows:DOC_CHUNKS,sample:true,docs:true};}
+function sampleQA(u){const s=st(u),train=s.mode==="train";
+  s.qa=train?QA_FILE:{name:"new_test_questions.csv",pairs:120};
+  s.cols=["question_id","question","reference_answer"];s.pk="question_id";s.target=train?"reference_answer":"";
+  if(!train)s.file={name:s.qa.name,size:`${s.qa.pairs} questions`,rows:String(s.qa.pairs),sample:true};}
+function useDataset(u){const s=st(u),o=onb(u);
+  const feats=keptFeats(o).map(f=>f.name);
+  s.cols=["customer_id","snapshot_date",...feats,labelCol(o)];
+  s.pkParts=["customer_id","snapshot_date"];s.pkExtra="customer_id + snapshot_date";s.pk=s.pkExtra;
+  s.target=labelCol(o);s.ptype=PTYPES[0];s.preview=PREVIEW_ROWS;s.builtFrom=true;
+  s.file={name:"telecom_churn_2026-09.parquet",size:`Built from ${o.tables.length} tables · ${feats.length} features`,rows:fmtN(datasetRows(o)),sample:false,built:true};
+  s.adv.timeCol="snapshot_date";s.adv.split="Time-based";
+  o.used=true;o.open=0;}
+function predStep1(u){const s=st(u),o=onb(u),train=s.mode==="train";
+  const card=(id,t,h)=>`<button type="button" class="pickcard ${s.source===id?"on":""}" data-src="${id}"><span class="pt1">${esc(t)}</span><span class="pt2">${esc(h)}</span>${s.source===id?'<span class="ptag">Selected</span>':""}</button>`;
+  const pick=`<div class="pick">${card("file","Upload a prepared file",`One row per customer${train?", including the outcome column":""}. CSV or Parquet.`)}
+    ${card("raw",train?"Build from raw tables":"Upload this month's tables",train?"Bring the tables you already have. We map them, build the features and the label, and write the dataset.":`The saved recipe ${RECIPE.name} v${RECIPE.version} maps and builds them exactly as last time.`)}</div>`;
+  const body=s.source==="raw"
+    ? `${obPanel(u)}${o.used?previewHtml(u):""}`
+    : `<div class="orline" style="margin-top:12px"><label class="control file ${s.file?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.file?esc(s.file.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sample">use the sample dataset</button></span></div>${previewHtml(u)}`;
+  return `<div class="fstep ${s.file?"done":""}"><div class="stepno">1</div><div>
+    <div class="flabel">Dataset</div><div class="fhint">Start from a file you have already prepared, or from the raw tables as they come out of your systems.</div>
+    ${pick}${body}</div></div>`;}
+function genStep1(u){const s=st(u);
+  if(s.mode!=="train") return `<div class="fstep ${s.qa?"done":""}"><div class="stepno">1</div><div>
+    <div class="flabel">Test questions</div><div class="fhint">New questions to run through a saved assistant. One row per question.</div>
+    <div class="orline"><label class="control file ${s.qa?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.qa?esc(s.qa.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sampleqa">use the sample questions</button></span></div>
+    ${s.qa?`<div class="preview"><div class="pv-head"><span><b>${s.qa.pairs}</b> questions</span><span>${esc(s.file?s.file.size:"")}</span></div></div>`:""}</div></div>`;
+  return `<div class="fstep ${s.docs?"done":""}"><div class="stepno">1</div><div>
+    <div class="flabel">Documents</div><div class="fhint">Everything the assistant is allowed to answer from. PDF, HTML, Word or plain text.</div>
+    <div class="orline"><label class="control file ${s.docs?"has":""}"><input type="file" id="f-docs" class="sr" accept=".pdf,.html,.htm,.docx,.txt" multiple><span class="fname">${s.docs?`${s.docs.length} documents`:"Upload documents"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sampledocs">use the sample documents</button></span></div>
+    ${s.docs?`${docList()}<div class="fhint" style="margin-top:8px">${DOCS.length} documents · ${DOC_PAGES} pages · ${DOC_CHUNKS} chunks at ${s.adv.chunk} tokens each.</div>`:""}</div></div>`;}
+function genStep2(u){const s=st(u);
+  if(s.mode!=="train") return `<div class="fstep ${s.qa?"":"locked"} ${s.pk?"done":""}"><div class="stepno">2</div><div>
+    <div class="flabel">Columns</div><div class="fhint">The primary key identifies each question so the answers can be joined back.</div>
+    <div class="frow"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${opt(s.cols,s.pk,"Select a column…")}</select></div></div></div></div></div>`;
+  return `<div class="fstep ${s.docs?"":"locked"} ${s.qa?"done":""}"><div class="stepno">2</div><div>
+    <div class="flabel">Reference questions <span style="font-weight:400;color:var(--muted)">· optional</span></div>
+    <div class="fhint">Questions paired with the answer you would accept. Without them the assistant is built but never scored.</div>
+    <div class="orline"><label class="control file ${s.qa?"has":""}"><input type="file" id="f-qa" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.qa?esc(s.qa.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sampleqa">use the sample questions</button></span></div>
+    ${s.qa?`<div class="frow" style="margin-top:12px"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${opt(s.cols,s.pk,"Select a column…")}</select></div></div><div class="field"><span class="sub">Reference answer column</span><div class="control sel"><select id="f-target">${opt(s.cols.filter(c=>c!==s.pk),s.target,"Select a column…")}</select></div></div></div>`:`<div class="fhint" style="margin-top:10px">No reference questions yet. The assistant will be built but not scored.</div>`}</div></div>`;}
+function previewHtml(u){const s=st(u);if(!s.file)return "";
+  const showCols=s.cols.slice(0,6), more=s.cols.length-showCols.length;
+  const tbl=s.preview?`<div class="tbl-wrap"><table><thead><tr>${showCols.map(c=>`<th>${esc(c)}</th>`).join("")}${more>0?`<th>+${more} more</th>`:""}</tr></thead><tbody>${s.preview.map(r=>`<tr>${showCols.map((_,j)=>`<td>${esc(r[j]??"")}</td>`).join("")}${more>0?"<td>…</td>":""}</tr>`).join("")}</tbody></table></div>`:"";
+  const chips=`<div class="colchips">${s.cols.slice(0,10).map(c=>`<span class="colchip ${c===s.target||c===s.pk?"t":""}">${esc(c)}</span>`).join("")}${s.cols.length>10?`<span class="colchip">+${s.cols.length-10} more</span>`:""}</div>`;
+  return `<div class="preview"><div class="pv-head"><span><b>${esc(s.file.rows)}</b> rows · <b>${s.cols.length}</b> columns</span><span>${esc(s.file.size)}</span></div>${tbl}${s.preview?"":chips}</div>`;
+}
+const opt=(arr,cur,none)=>`${none?`<option value="">${esc(none)}</option>`:""}${arr.map(c=>`<option ${String(c)===String(cur)?"selected":""}>${esc(c)}</option>`).join("")}`;
+const sel=(key,arr,label,cls="")=>`<div class="field ${cls}"><span class="sub">${esc(label)}</span><div class="control sel"><select data-adv="${key}">${opt(arr,st(CUR).adv[key])}</select></div></div>`;
+const num=(key,label,step,min,max,cls="xs")=>`<div class="field ${cls}"><span class="sub">${esc(label)}</span><div class="control"><input type="number" data-adv="${key}" step="${step}" min="${min}" max="${max}" value="${st(CUR).adv[key]}"></div></div>`;
+const chk=(key,label)=>`<div class="field"><span class="sub">&nbsp;</span><label class="check"><input type="checkbox" data-adv="${key}" ${st(CUR).adv[key]?"checked":""}> ${esc(label)}</label></div>`;
+const txt=(key,label,hint)=>`<div class="field wide"><span class="sub">${esc(label)}</span><div class="control"><input type="text" data-adv="${key}" value="${esc(st(CUR).adv[key])}"></div>${hint?`<span class="sub" style="color:var(--faint)">${esc(hint)}</span>`:""}</div>`;
+let CUR=null;
+function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
+  const stage=(i,title,summ,body)=>`<details class="stage-d"><summary><span class="sn">${i}</span><span><div class="st">${esc(title)}</div><div class="ss">${esc(summ)}</div></span><span class="sc">Configure</span></summary>${body}</details>`;
+  if(cfg.gen) return `<div class="stages">
+    ${stage(1,"Documents",`${a.chunk}-token chunks · ${a.overlap} overlap · PII: ${a.pii}`,`<div class="frow">${num("chunk","Chunk size (tokens)",64,128,2048)}${num("overlap","Overlap (tokens)",10,0,200)}${sel("pii",["Redact","Drop rows","Keep"],"PII handling")}</div>`)}
+    ${stage(2,"Retrieval",`${a.embed} · top-${a.topk}${a.hybrid?" · hybrid search":""}`,`<div class="frow">${sel("embed",["Titan Text Embeddings v2","Cohere Embed v3"],"Embedding model")}${num("topk","Top-k chunks",1,1,20)}${chk("hybrid","Hybrid (keyword + vector) search")}</div>`)}
+    ${stage(3,"Generation",`temperature ${a.temp} · ${a.maxtok} tokens${a.guard?" · guardrails on":""} · refusal message set`,`<div class="frow">${num("temp","Temperature",0.1,0,1)}${num("maxtok","Max answer tokens",50,100,2000)}${chk("guard","Bedrock Guardrails (PII, topics, tone)")}${txt("refusal","When nothing relevant is found, reply","Sent instead of a guess. Keep it short and say what happens next.")}</div>`)}
+    ${stage(4,"Evaluation",`${a.metric} · ${a.judge}`,`<div class="frow">${sel("metric",cfg.metrics,"Primary metric")}${sel("judge",["LLM judge + human sample","LLM judge only","Human review only"],"Grading method")}</div>`)}
+  </div>`;
+  const timeCols=s.cols.filter(c=>/date|time|month|week|day|ts$/i.test(c));
+  const featCols=s.cols.filter(c=>c!==s.pk&&c!==s.target&&!(s.pkParts||[]).includes(c));
+  const timeField=a.split==="Time-based"?`<div class="field"><span class="sub">Time column</span><div class="control sel"><select data-adv="timeCol">${opt(timeCols.length?timeCols:s.cols,a.timeCol,"Select…")}</select></div></div>`:"";
+  const excl=`<div class="algos"><span class="sub" style="width:100%;font-size:12px;color:var(--muted)">Exclude columns from features${a.excl.length?` · ${a.excl.length} excluded`:""}</span>${featCols.slice(0,14).map(c=>`<label><input type="checkbox" data-excl="${esc(c)}" ${a.excl.includes(c)?"checked":""}> <span class="colchip">${esc(c)}</span></label>`).join("")}${featCols.length>14?`<span class="sub">+${featCols.length-14} more</span>`:""}</div>`;
+  const cnt=(n)=>`${n} settings`;
+  return `<div class="stages">
+    ${stage(1,"Data preparation",`Missing: ${a.missing} · outliers: ${a.outliers}${a.leakage?" · leakage check":""} · PII: ${a.pii}${a.excl.length?` · ${a.excl.length} excluded`:""}`,
+      `<div class="frow">${sel("missing",["Auto","Fill (median / mode)","Drop rows"],"Missing values")}${sel("outliers",["Clip (1st–99th pct)","Remove rows","Keep"],"Outliers")}${sel("pii",["Redact","Drop columns","Keep"],"PII handling")}${num("minpos","Min positive examples",50,50,100000)}${chk("dedupe","Remove duplicate rows")}${chk("leakage","Check for target leakage")}</div>${s.cols.length?excl:""}`)}
+    ${stage(2,"Data split",`${a.split} · ${a.val}% val · ${a.test}% test${a.split==="Time-based"&&a.timeCol?" · by "+a.timeCol:""}${a.groupCol?" · grouped by "+a.groupCol:""}`,
+      `<div class="frow">${sel("split",["Random (stratified)","Time-based"],"Split type")}${num("val","Validation (%)",5,5,40)}${num("test","Test (%)",5,5,40)}${timeField}<div class="field"><span class="sub">Group column (keep together)</span><div class="control sel"><select data-adv="groupCol">${opt(featCols,a.groupCol,"None")}</select></div></div></div>`)}
+    ${stage(3,"Feature engineering",`${a.autofeat?"Auto features on":"Auto features off"} · encoding ${a.encoding} · text: ${a.text} · selection: ${a.fsel} · max ${a.maxfeat}`,
+      `<div class="frow">${chk("autofeat","Automatic feature engineering (dates, ratios, aggregates)")}${sel("encoding",["Auto","One-hot","Target encoding","Ordinal"],"Categorical encoding")}${sel("scaling",["Auto","Standard","Min-max","None"],"Numeric scaling")}${sel("text",["Ignore","TF-IDF","Embeddings"],"Text columns")}${sel("fsel",["Importance-based","Correlation filter","PCA (reduces explainability)","None"],"Feature selection")}${num("maxfeat","Max features",10,10,500)}</div>`)}
+    ${stage(4,"Model search",`${a.strategy} · ${s.model===AUTO?`${a.algos.length} of ${cfg.models.length} algorithms`:s.model}${a.ensemble?" · ensembling":""} · ${a.trials} trials · ${a.limit} min · ${a.folds}-fold CV`,
+      `${s.model===AUTO?`<div class="algos">${cfg.models.map(m=>`<label><input type="checkbox" data-algo="${esc(m)}" ${a.algos.includes(m)?"checked":""}> ${esc(m)}</label>`).join("")}</div>`:""}
+       <div class="frow">${sel("strategy",["Fast","Balanced","Exhaustive"],"Search strategy")}${num("trials","Tuning trials",10,5,500)}${num("limit","Time limit (min)",5,5,240)}${num("folds","CV folds",1,2,10)}${sel("imbalance",["Auto","Class weights","Oversampling (SMOTE)","None"],"Class imbalance")}${chk("ensemble","Ensemble / stack the best models")}</div>`)}
+    ${stage(5,"Evaluation & explainability",`${a.metric} · calibration ${a.calib} · threshold ${a.thr}${a.shap?` · top ${a.reasons} SHAP reasons`:""}${a.fair?" · fairness by "+a.fair:""} · champion if +${a.champ}%`,
+      `<div class="frow">${sel("metric",cfg.metrics,"Optimise for")}${sel("calib",["Isotonic","Platt","None"],"Probability calibration")}${sel("thr",["Auto","0.5","Manual (below)"],"Decision threshold")}${num("reasons","Reasons per row",1,1,5)}<div class="field"><span class="sub">Fairness check (sensitive column)</span><div class="control sel"><select data-adv="fair">${opt(featCols,a.fair,"None")}</select></div></div>${num("champ","Replace champion if better by (%)",0.5,0,20)}${chk("shap","Generate SHAP explanations per row")}</div>`)}
+    ${stage(6,"Actions & output",`High ≥ ${a.hi} · Medium ≥ ${a.md}${a.supOpt?" · skip opted-out":""}${a.supRecent?` · skip contacted <${a.recentDays}d`:""} · ${a.control}% control group`,
+      `<div class="frow">${num("hi","High-risk score ≥",0.05,0,1)}${num("md","Medium-risk score ≥",0.05,0,1)}${num("control","Control group holdout (%)",1,0,50)}${num("recentDays","Recently contacted (days)",1,1,90)}${chk("supOpt","Suppress opted-out customers")}${chk("supRecent","Suppress recently contacted")}</div>`)}
+    ${stage(7,"Monitoring & retraining",`Drift alert PSI > ${a.drift} · retrain: ${a.retrain} · alert if score drops ${a.alert}%`,
+      `<div class="frow">${num("drift","Drift alert (PSI above)",0.05,0.05,1)}${sel("retrain",["Manual","On drift","Weekly","Monthly"],"Retraining")}${num("alert","Performance alert (% drop)",1,1,50)}</div>`)}
+    ${stage(8,"Governance & privacy",`Keep uploads ${a.retention} days${a.consentCol?" · consent: "+a.consentCol:""}${a.approval?" · approval before champion":""}`,
+      `<div class="frow">${num("retention","Data retention (days)",30,0,730)}<div class="field"><span class="sub">Consent column (use rows where true)</span><div class="control sel"><select data-adv="consentCol">${opt(featCols,a.consentCol,"None")}</select></div></div>${chk("approval","Require approval before a model becomes champion")}</div>`)}
+  </div>`;
+}
+const PTYPES=["Classification (yes / no)","Regression (a number)","Forecasting (a number over time)","Clustering (no target)"];
+function detectType(u){const s=st(u),cfg=SETUP[u.id];if(cfg.gen)return "";if(!s.target)return "";
+  if(s.file&&s.file.sample)return PTYPES[0];
+  const i=s.cols.indexOf(s.target);const vals=(s.preview||[]).map(r=>r[i]).filter(v=>v!==undefined&&v!=="");
+  const uniq=new Set(vals.map(v=>String(v).toLowerCase()));const numeric=vals.length&&vals.every(v=>!isNaN(parseFloat(v)));
+  if(uniq.size<=2)return PTYPES[0];
+  if(numeric)return s.cols.some(c=>/date|time|month|week|day|ts$/i.test(c))?PTYPES[2]:PTYPES[1];
+  return PTYPES[0];}
+function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg),train=s.mode==="train",why=blocker(u);
+  const detected=detectType(u), ptype=s.ptype||detected;
+  const ptypeHtml = train&&!cfg.gen&&s.target ? `<div class="ptype"><span>Problem type</span><span class="pill">${esc(ptype)}</span><span>${s.ptype&&s.ptype!==detected?"set manually":"detected from the target column"}</span><select id="f-ptype" aria-label="Change problem type"><option value="">change…</option>${PTYPES.map(t=>`<option ${t===ptype?"disabled":""}>${esc(t)}</option>`).join("")}</select>${ptype!==PTYPES[0]?`<span style="flex-basis:100%;color:var(--warn)">${ptype.startsWith("Clustering")?"Clustering ignores the target and groups similar rows.":"Metrics and models will switch to "+ptype.split(" (")[0].toLowerCase()+" defaults."}</span>`:""}</div>` : "";
+  const trainRuns=s.runs.filter(r=>r.mode==="train");
+  const step1 = cfg.gen?genStep1(u):predStep1(u);
+  const step2 = cfg.gen?genStep2(u):`<div class="fstep ${s.file?"":"locked"} ${s.pk&&(!train||s.target)?"done":""}"><div class="stepno">2</div><div>
+        <div class="flabel">Columns</div><div class="fhint">${train?`The primary key identifies each row and is never used as a feature. The ${cfg.tlabel?"reference answer":"target"} is what the model learns to predict.`:"The primary key identifies each row so scores can be joined back to your systems."}</div>
+        <div class="frow"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${opt(s.pkExtra?[s.pkExtra,...s.cols]:s.cols,s.pk,"Select a column…")}</select></div></div>
+        ${train?`<div class="field"><span class="sub">${esc(cfg.tlabel||"Target column")}</span><div class="control sel"><select id="f-target">${opt(s.cols.filter(c=>c!==s.pk),s.target,"Select a column…")}</select></div></div>`:""}</div>${ptypeHtml}</div></div>`;
+  const step3 = train
+   ? `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
+        <div class="flabel">Model</div><div class="fhint">AutoML tries every selected ${cfg.gen?"LLM":"algorithm"} and keeps the best. Pick one only if you need to.</div>
+        <div class="frow"><div class="field"><div class="control sel"><select id="f-model">${opt([AUTO,...cfg.models],s.model)}</select></div></div></div></div></div>`
+   : `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
+        <div class="flabel">Trained model</div><div class="fhint">The saved model that will score the uploaded rows.</div>
+        <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun">${trainRuns.map(r=>`<option value="${r.id}" ${r.id===s.scoreRun?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}</option>`).join("")}</select></div></div></div></div></div>`;
+  const adv = train ? `<details class="adv-wrap" id="f-adv" ${s.advOpen?"open":""}><summary>Advanced settings<span class="n">Each ${cfg.gen?"pipeline":"AutoML"} stage can be configured · defaults work for most data</span></summary>${stagesHtml(u)}</details>` : "";
+  return `<div class="setup-grid">
+    <section class="card"><div class="form-body">
+      <div class="seg" role="group" aria-label="Mode"><button type="button" data-mode="train" class="${train?"on":""}">${esc(ml.train)}</button><button type="button" data-mode="score" class="${train?"":"on"}">${esc(ml.score)}</button></div>
+      <p class="seg-help">${esc(modeHelp(cfg,s.mode))}</p>
+      <form id="f-setup" novalidate style="margin-top:18px">
+        ${step1}
+        ${step2}${step3}${adv}
+        <div class="actions"><button type="submit" class="run" id="f-run" ${why?"disabled":""}>${train?(cfg.gen?"Build assistant":"Run training"):(cfg.gen?"Run evaluation":"Score data")}</button><span class="reason">${esc(why)}</span></div>
+      </form></div></section>
+    ${runsCard(u)}
+  </div>
+  <p class="next">After the run, this page shows the pipeline: Data → Model → Output.</p>`;
+}
+function runsCard(u){const s=st(u);
+  return `<section class="card"><h3>Previous runs</h3><div class="runs-list">${s.runs.length?s.runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">No runs yet.</div>`}</div></section>`;
+}
+function flowBlocks(u,run){
+  const items = [
+    ["data","Data",run.file,`${run.rows} rows · key ${run.pk}${run.mode==="train"?` · target ${run.target}${run.ptype?" · "+run.ptype.toLowerCase():""}`:""}`],
+    ["model","Model",run.best,run.mode==="train"?(run.model===AUTO?`Selected by AutoML · ${run.score}`:run.score):`Champion model · ${run.score}`],
+    ["output","Output",run.mode==="train"?u.o:`${run.rows} rows scored`,`${u.out.kp[0][0]}: ${u.out.kp[0][1]}${run.mode==="train"?"":" · reasons + actions"}`]
+  ];
+  return items.map(([slug,lab,val,meta],i)=>`${i?'<div class="arrow" aria-hidden="true">→</div>':""}<a class="block" href="#/uc/${u.id}/${slug}"><div><div class="lab"><span>${String(i+1).padStart(2,"0")}&nbsp;&nbsp;${lab}</span><span class="bstate">✓ Done</span></div><div class="val">${esc(val)}</div><div class="meta">${esc(meta)}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`).join("");
+}
+function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
+  if(s.mode==="train") return cfg.gen
+    ? [["Reading documents",`${DOCS.length} documents · ${DOC_PAGES} pages`],
+       ["Splitting into chunks",`${DOC_CHUNKS} chunks · ${a.chunk} tokens · ${a.overlap} overlap`],
+       ["Redacting personal data",`PII: ${a.pii.toLowerCase()} · duplicate chunks removed (4%)`],
+       ["Creating embeddings",`${a.embed} · ${DOC_CHUNKS} vectors`],
+       ["Building the retrieval index",`OpenSearch Serverless · top-${a.topk}${a.hybrid?" hybrid":""}`],
+       ...(s.qa?[["Answering the reference questions",`${s.qa.pairs} questions · ${a.judge.toLowerCase()}`],["Grading the answers",`${cfg.score} · ${EVAL.pass}% passed, threshold ${EVAL.threshold}%`]]:[]),
+       ["Saving assistant version",s.qa?"Set as champion":"Saved without a score"]]
+    : [["Validating data",`${a.leakage?"No leakage found · ":""}${u.data.q[0][1]}${a.excl.length?` · ${a.excl.length} columns excluded`:""}${a.consentCol?" · consent filter applied":""}`],["Preparing features",`${u.data.kp[1][1]} features · ${a.split==="Time-based"?"time-based":"stratified"} split${a.groupCol?" · grouped by "+a.groupCol:""} · ${a.val}/${a.test}% val/test`],[s.model===AUTO?`Training ${a.algos.length} candidate models (${a.strategy.toLowerCase()})`:`Training ${s.model}`,`${a.trials} trials · ${a.folds}-fold CV · best: ${s.model===AUTO?cfg.best:s.model}${a.ensemble&&s.model===AUTO?" (ensembled)":""}`],["Evaluating on hold-out set",`${cfg.score} · optimised for ${a.metric} · ${a.calib.toLowerCase()} calibration${a.fair?" · fairness by "+a.fair+": passed":""}`],[a.shap?"Generating explanations & saving":"Saving model",`${a.shap?`top ${a.reasons} SHAP reasons · `:""}${a.approval?"awaiting approval as champion":"set as champion"} · drift baseline stored`]];
+  return cfg.gen
+    ? [["Validating test questions","No PII found"],["Running questions through assistant","Claude on Bedrock (RAG)"],["Grading answers",cfg.score],["Writing evaluation report","Ready"]]
+    : [["Validating columns","All expected features present"],["Loading champion model",cfg.best],["Scoring rows",`${s.file.rows} rows scored`],["Generating reasons & actions",`Top SHAP reason per row · high ≥ ${a.hi}, medium ≥ ${a.md}`]];
+}
+function runningHtml(u){return `<div class="setup-grid"><section class="card"><h3>Running…</h3><ol class="progress" id="prog">${runSteps(u).map(([t],i)=>`<li id="ps-${i}"><span class="dot">${i+1}</span><div><div class="pt">${esc(t)}</div><div class="pd"></div></div></li>`).join("")}</ol></section>${runsCard(u)}</div>`;}
+function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id];
+  return `<div class="results"><div class="summary"><span class="ok">✓ ${r.mode==="train"?(cfg.gen?"Assistant built":"Training complete"):(cfg.gen?"Evaluation complete":"Scoring complete")}</span>
+    <span>${r.mode==="train"?`Best model <b>${esc(r.best)}</b> · ${esc(r.score)}`:`<b>${esc(r.rows)}</b> rows scored with ${esc(r.best)}`}</span>
+    ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}
+    <span class="muted">${esc(r.file)} · ${esc(r.at)}</span><button class="again" id="f-again">Run again / change settings</button></div>
+    <span class="cap">AI pipeline</span><div class="flow">${flowBlocks(u,r)}</div>
+    ${cfg.gen?assistantResults(u):""}
+    <div class="runs-below">${runsCard(u)}</div></div>`;
+}
+function detail(u){const s=st(u);
+  const body = s.view==="running"?runningHtml(u):s.view==="results"?resultsHtml(u):setupHtml(u);
+  return `<main class="screen t-${u.k}">
+    ${pageHead(`<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">${esc(u.name)}</h1><p class="desc">${esc(u.desc)}</p><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}</div>`)}
+    ${body}
+  </main>`;
+}
+function rerender(u){const m=document.querySelector("#app main");if(!m)return;const open=[...document.querySelectorAll(".stage-d[open]")].map(d=>d.querySelector(".st").textContent);m.outerHTML=detail(u);document.querySelectorAll(".stage-d").forEach(d=>{if(open.includes(d.querySelector(".st").textContent))d.open=true;});bindDetail(u);}
+function bindDetail(u){
+  const s=st(u), cfg=SETUP[u.id], $=id=>document.getElementById(id);
+  const on=(id,ev,fn)=>{const el=$(id);if(el)el.addEventListener(ev,fn);};
+  document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{if(s.mode!==b.dataset.mode){s.mode=b.dataset.mode;s.file=null;s.cols=[];s.preview=null;s.target="";s.pk="";rerender(u);}}));
+  on("f-sample","click",()=>{sampleFile(u);rerender(u);});
+  on("f-file","change",e=>{const f=e.target.files[0];if(!f)return;
+    s.file={name:f.name,size:fmtSize(f.size),rows:"—",sample:false};s.cols=[];s.preview=null;s.target="";s.pk="";s.ptype="";
+    if(/\.csv$/i.test(f.name)){
+      const CH=262144;
+      f.slice(0,CH).text().then(t=>{
+        const lines=t.replace(/^\uFEFF/,"").split(/\r?\n/).filter(l=>l.trim());
+        const cols=parseLine(lines[0]||"").filter(Boolean);
+        if(cols.length){s.cols=cols;
+          const n=lines.length-1, est=f.size>CH?Math.round(n*f.size/CH):n;
+          s.file.rows=(f.size>CH?"~":"")+fmtN(est);
+          s.preview=lines.slice(1,6).map(parseLine);
+          if(cols.includes(cfg.target)&&s.mode==="train")s.target=cfg.target;
+          const idc=cols.find(c=>/(^id$|_id$|^id_|_key$|customer|cust)/i.test(c));if(idc)s.pk=idc;
+          const tc=cols.find(c=>/date|time|month|week|day|ts$/i.test(c));if(tc)s.adv.timeCol=tc;}
+        rerender(u);}).catch(()=>rerender(u));
+    } else rerender(u);});
+  on("f-pk","change",e=>{s.pk=e.target.value;if(s.target===s.pk)s.target="";rerender(u);});
+  on("f-target","change",e=>{s.target=e.target.value;s.ptype="";rerender(u);});
+  on("f-ptype","change",e=>{s.ptype=e.target.value;rerender(u);});
+  on("f-model","change",e=>{s.model=e.target.value;rerender(u);});
+  on("f-scorerun","change",e=>{s.scoreRun=e.target.value;});
+  on("f-adv","toggle",e=>{s.advOpen=e.target.open;});
+  document.querySelectorAll("[data-adv]").forEach(el=>el.addEventListener("change",()=>{
+    const k=el.dataset.adv; s.adv[k]= el.type==="checkbox"?el.checked: el.type==="number"?+el.value: el.value; rerender(u);}));
+  document.querySelectorAll("[data-excl]").forEach(el=>el.addEventListener("change",()=>{
+    const c=el.dataset.excl; s.adv.excl=el.checked?[...new Set([...s.adv.excl,c])]:s.adv.excl.filter(x=>x!==c); rerender(u);}));
+  document.querySelectorAll("[data-algo]").forEach(el=>el.addEventListener("change",()=>{
+    const m=el.dataset.algo; s.adv.algos=el.checked?[...new Set([...s.adv.algos,m])]:s.adv.algos.filter(x=>x!==m); if(!s.adv.algos.length){s.adv.algos=[m];} rerender(u);}));
+  on("f-again","click",()=>{s.view="setup";rerender(u);});
+  /* --- Phase 2 §10 B / Phase 3a §9 C: new setup controls --- */
+  document.querySelectorAll("[data-src]").forEach(b=>b.addEventListener("click",()=>{
+    if(s.source===b.dataset.src)return;
+    s.source=b.dataset.src;s.file=null;s.cols=[];s.preview=null;s.pk="";s.target="";s.ptype="";s.pkExtra="";s.pkParts=null;s.builtFrom=false;
+    const o=onb(u);o.used=false;if(s.source==="raw"&&!o.open)o.open=1;rerender(u);}));
+  on("f-sampledocs","click",()=>{sampleDocs(u);rerender(u);});
+  on("f-sampleqa","click",()=>{sampleQA(u);rerender(u);});
+  on("f-docs","change",e=>{const fs=[...e.target.files];if(!fs.length)return;
+    s.docs=fs.map(f=>[f.name,"—","—"]);
+    s.file={name:`${fs.length} document${fs.length>1?"s":""}`,size:"—",rows:"—",sample:false,docs:true};rerender(u);});
+  on("f-qa","change",e=>{const f=e.target.files[0];if(!f)return;
+    s.qa={name:f.name,pairs:"—"};s.cols=["question_id","question","reference_answer"];s.pk="question_id";
+    if(s.mode==="train")s.target="reference_answer";rerender(u);});
+  /* onboarding panel */
+  const o=onb(u);
+  document.querySelectorAll("[data-ob-open]").forEach(b=>b.addEventListener("click",()=>{
+    const n=+b.dataset.obOpen;if(n>1&&!o.loaded)return;o.open=o.open===n?0:n;rerender(u);}));
+  on("ob-files","change",e=>{const fs=[...e.target.files];if(!fs.length)return;
+    o.tables=[];o.maps=null;o.loaded=true;o.accepted=false;o.built=false;o.used=false;o.previewed=false;
+    let pending=fs.length;const settle=()=>{if(!--pending)rerender(u);};
+    fs.forEach(f=>{const role=guessRole(f.name);
+      const t={file:f.name,rows:"—",role,key:"—",time:"—",cov:role==="Customers"?null:96,real:true,cols:[],sample:[]};
+      o.tables.push(t);
+      if(/\.csv$/i.test(f.name)){const CH=262144;
+        f.slice(0,CH).text().then(txt=>{
+          const lines=txt.replace(/^﻿/,"").split(/\r?\n/).filter(l=>l.trim());
+          const cols=parseLine(lines[0]||"").filter(Boolean);
+          if(cols.length){const n=lines.length-1,est=f.size>CH?Math.round(n*f.size/CH):n;
+            t.rows=(f.size>CH?"~":"")+fmtN(est);t.cols=cols;t.sample=lines.slice(1,4).map(parseLine);
+            t.key=cols.find(c=>/(^id$|_id$|cust|account|subscriber)/i.test(c))||cols[0];
+            t.time=cols.find(c=>/date|time|_dt$|_ts$|_on$|_at$/i.test(c))||"—";}
+          settle();}).catch(settle);
+      } else settle();});
+    rerender(u);});
+  on("ob-sample","click",()=>{o.tables=RAW_TABLES.map(t=>({...t}));o.maps=null;o.loaded=true;
+    o.accepted=s.mode==="score";o.built=false;o.used=false;o.previewed=false;rerender(u);});
+  on("ob-reset","click",()=>{o.loaded=false;o.tables=null;o.maps=null;o.accepted=false;o.built=false;o.used=false;o.previewed=false;rerender(u);});
+  document.querySelectorAll("[data-ob-role]").forEach(el=>el.addEventListener("change",()=>{
+    const t=o.tables[+el.dataset.obRole];t.role=el.value;t.cov=t.role==="Customers"?null:96;
+    if(t.real)delete o.maps[t.file];rerender(u);}));
+  document.querySelectorAll("[data-ob-key]").forEach(el=>el.addEventListener("change",()=>{o.tables[+el.dataset.obKey].key=el.value;rerender(u);}));
+  document.querySelectorAll("[data-ob-time]").forEach(el=>el.addEventListener("change",()=>{o.tables[+el.dataset.obTime].time=el.value;rerender(u);}));
+  document.querySelectorAll("[data-ob-map]").forEach(el=>el.addEventListener("change",()=>{
+    const [file,i]=el.dataset.obMap.split("|");o.maps[file][+i].to=el.value;rerender(u);}));
+  document.querySelectorAll("[data-ob-need]").forEach(el=>el.addEventListener("change",()=>{
+    const [file,req]=el.dataset.obNeed.split("|");if(!el.value)return;
+    const row=o.maps[file].find(r=>r.col===el.value);if(row){row.to=req;row.conf=Math.max(row.conf,0.86);}rerender(u);}));
+  on("ob-vmap","click",()=>{o.vmap=!o.vmap;rerender(u);});
+  on("ob-accept","click",()=>{o.accepted=true;rerender(u);});
+  document.querySelectorAll("[data-ob-feat]").forEach(el=>el.addEventListener("change",()=>{
+    const f=o.feats.find(x=>x.name===el.dataset.obFeat);if(f)f.on=el.checked;rerender(u);}));
+  on("ob-add-role","change",e=>{o.addRole=e.target.value;o.addCol=(OUR_COLS[o.addRole]||[]).filter(c=>c!=="customer_id"&&c!=="event_date")[0]||"";rerender(u);});
+  on("ob-add-fn","change",e=>{o.addFn=e.target.value;});
+  on("ob-add-col","change",e=>{o.addCol=e.target.value;});
+  on("ob-add-win","change",e=>{o.addWin=e.target.value;});
+  on("ob-add-filter","change",e=>{o.addFilter=e.target.value;});
+  on("ob-add","click",()=>{if(!o.addCol)return;
+    const fn={"Total":"sum","Average":"mean","Count":"count","Latest value":"latest","Days since last":"days_since_last","Change vs previous window":"change_pct","Highest":"max","Lowest":"min"}[o.addFn]||"sum";
+    const w=o.addWin==="At snapshot"?"now":o.addWin==="Since last"?"":o.addWin.replace(/(\d+) days/,"$1d");
+    const name=[o.addCol,fn,w].filter(Boolean).join("_");
+    if(!o.feats.some(f=>f.name===name))o.feats.push({role:o.addRole,name,
+      desc:`${o.addFn} of ${o.addCol}${o.addFilter?` where ${o.addFilter}`:""}.`,win:o.addWin,on:true});
+    rerender(u);});
+  on("ob-lname","change",e=>{o.label.name=e.target.value;rerender(u);});
+  on("ob-lwhen","change",e=>{o.label.when=e.target.value;rerender(u);});
+  on("ob-ldays","change",e=>{o.label.days=+e.target.value||60;rerender(u);});
+  on("ob-snap","change",e=>{o.snap=e.target.value;rerender(u);});
+  on("ob-snapmax","change",e=>{o.snapMax=Math.max(1,Math.min(12,+e.target.value||6));rerender(u);});
+  on("ob-preview","click",()=>{o.previewed=true;rerender(u);});
+  on("ob-build","click",()=>{o.building=true;o.built=false;rerender(u);
+    const bs=buildSteps(u),reduce=matchMedia("(prefers-reduced-motion: reduce)").matches,dt=reduce?50:320;
+    const mark=(i,cls,d)=>{const li=document.getElementById("bp-"+i);if(!li)return;
+      li.classList.remove("active","done");li.classList.add(cls);
+      if(d!==undefined)li.querySelector(".bn").textContent=d;};
+    bs.forEach((_,i)=>setTimeout(()=>{mark(i,"active","");if(i>0)mark(i-1,"done",bs[i-1][1]);},i*dt));
+    setTimeout(()=>{mark(bs.length-1,"done",bs[bs.length-1][1]);
+      o.building=false;o.built=true;rerender(u);},bs.length*dt);});
+  on("ob-use","click",()=>{useDataset(u);rerender(u);});
+  on("f-setup","submit",e=>{
+    e.preventDefault(); if(blocker(u)) return;
+    s.view="running"; rerender(u);
+    const steps=runSteps(u), reduce=matchMedia("(prefers-reduced-motion: reduce)").matches, dt=reduce?120:800;
+    const mark=(i,cls,detail)=>{const li=document.getElementById("ps-"+i);if(!li)return;li.classList.remove("active","done");li.classList.add(cls);if(detail!==undefined)li.querySelector(".pd").textContent=detail;};
+    steps.forEach((_,i)=>setTimeout(()=>{mark(i,"active","");if(i>0)mark(i-1,"done",steps[i-1][1]);},i*dt));
+    setTimeout(()=>{
+      mark(steps.length-1,"done",steps[steps.length-1][1]);
+      const base=s.mode==="score"?s.runs.find(r=>r.id===s.scoreRun)||s.runs[0]:null;
+      const run={id:"r"+(s.runs.length+1),at:nowStamp(),mode:s.mode,file:s.file.name,rows:s.file.rows,pk:s.pk,ptype:(s.ptype||detectType(u)||"").split(" (")[0],model:s.mode==="train"?s.model:base.model,
+        best:s.mode==="train"?(s.model===AUTO?cfg.best:s.model):base.best,score:s.mode==="train"?cfg.score:base.score,target:s.mode==="train"?s.target:base.target,champion:s.mode==="train",beat:false,lineage:!!s.builtFrom};
+      if(run.champion){run.beat=s.runs.some(r=>r.champion);s.runs.forEach(r=>r.champion=false);}
+      s.runs.push(run); s.current=run; if(run.mode==="train")s.scoreRun=run.id;
+      setTimeout(()=>{ if(s.view==="running"){s.view="results";rerender(u);} }, reduce?100:500);
+    }, steps.length*dt);
+  });
+}
+
+function mock(u, kind){
+  const K = {data:"Data",model:"Model",output:"Output"}[kind];
+  const title = {data:u.d,model:u.m,output:u.o}[kind];
+  const tabs = ["data","model","output"].map((t,i)=>`${i?'<span class="arr" aria-hidden="true">→</span>':""}<a class="tab ${t===kind?"on":""}" href="#/uc/${u.id}/${t}" ${t===kind?'aria-current="page"':""}><span class="n">0${i+1}</span>${{data:"Data",model:"Model",output:"Output"}[t]}</a>`).join("");
+  let body = "";
+  if(kind==="data"){const x=u.data;
+    body = `${kpis(x.kp)}
+    ${lineageBlock(u)}
+    <div class="row">
+      <section class="card"><h3>Input datasets</h3>${table(["dataset","source","rows","refresh"],x.ds)}<h4>${esc(x.tt)}</h4>${kvs(x.target).replace('class="kv"','class="kv" style="border-top:0"')}</section>
+      <section class="card"><h3>Data pipeline</h3>${steps(x.pipe)}<h4>Data quality</h4>${kvs(x.q).replace('class="kv"','class="kv" style="border-top:0"')}</section>
+    </div>
+    <section class="card"><h3>${esc(x.ftt)}</h3>${table(x.fcols,x.ft)}</section>`;
+  } else if(kind==="model"){const x=u.model;const max=Math.max(...x.br.map(b=>b[1]));
+    const side = x.steps ? `<section class="card"><h3>${esc(x.pt)}</h3>${steps(x.steps)}</section>`
+      : `<section class="card"><h3>Confusion matrix</h3><div class="cm">
+          <span></span><span class="hd">Predicted +</span><span class="hd">Predicted −</span>
+          <span class="rl">Actual +</span><div class="cell good"><b>${x.cm[0]}</b><small>True positive</small></div><div class="cell"><b>${x.cm[1]}</b><small>False negative</small></div>
+          <span class="rl">Actual −</span><div class="cell"><b>${x.cm[2]}</b><small>False positive</small></div><div class="cell good"><b>${x.cm[3]}</b><small>True negative</small></div>
+        </div><p class="caption">Test set, decision threshold 0.5</p></section>`;
+    body = `${kpis(x.kp)}
+    <div class="row rev">
+      <section class="card"><h3>${esc(x.st)}</h3>${kvs(x.setup)}</section>
+      <section class="card"><h3>${esc(x.evt)}</h3>${table(["metric","model",x.base],x.ev,"eval")}</section>
+    </div>
+    <div class="row">
+      <section class="card"><h3>${esc(x.bt)}</h3><div class="bars">${x.br.map(([l,v])=>`<div class="brow"><span class="lab">${esc(l)}</span><span class="track"><i style="width:${Math.round(100*v/max)}%"></i></span><span class="pct">${v}%</span></div>`).join("")}</div><p class="caption">${esc(x.cap)}</p></section>
+      ${side}
+    </div>`;
+  } else {const x=u.out;const max=Math.max(...x.vals);
+    body = `${kpis(x.kp)}
+    <div class="row">
+      <section class="card"><h3>${esc(x.ct)}</h3><div class="vchart">${x.vals.map((v,i)=>`<div class="vcol ${i<3?"top":""}"><span class="bv">${v}${x.unit}</span><span class="bb" style="height:${Math.max(3,Math.round(160*v/max))}px"></span><span class="bl">${esc(x.lb[i])}</span></div>`).join("")}</div><p class="caption">${esc(x.cap)}</p></section>
+      <section class="card"><h3>Deployment &amp; monitoring</h3>${kvs(x.dep)}</section>
+    </div>
+    ${u.id==="rca"?rcaBlock():""}${u.id==="win-back-campaign"?copyBlock():""}
+    <section class="card"><h3>${esc(x.tt)}</h3>${table(x.cols,x.rows,"",x.band)}</section>`;
+  }
+  return `<main class="screen t-${u.k}">
+    ${pageHead(`<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Customer Lifecycle</a><span class="sep">›</span><a href="#/uc/${u.id}">${esc(u.name)}</a><span class="sep">›</span><span class="cur">${K}</span></nav>
+      <span class="over" style="color:var(--c)">${K}</span><h1 class="h1">${esc(title)}</h1><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}</div>`)}
+    <div class="tabs-bar"><nav class="tabs" aria-label="Pipeline">${tabs}</nav><span class="note">Illustrative sample, AWS reference stack</span></div>
+    <div class="stack">${body}</div>
+  </main>`;
+}
+
+function downloadMessages(){const rows=copyCards().filter(c=>c.status==="Approved");
+  const csv=["band,channel,variant,offer,message",...rows.map(c=>[c.band,c.ch,c.v,c.offer,c.text]
+    .map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","))].join("\n");
+  try{const b=new Blob([csv],{type:"text/csv"}),a=document.createElement("a");
+    a.href=URL.createObjectURL(b);a.download="winback_messages_approved.csv";a.click();
+    setTimeout(()=>URL.revokeObjectURL(a.href),1000);}catch(e){}}
+function bindGlobal(){
+  const c=document.getElementById("f-client");
+  if(c)c.addEventListener("change",e=>{if(e.target.value==="__new")e.target.value=CLIENT;else CLIENT=e.target.value;});
+  const g=document.getElementById("rca-gen");
+  if(g)g.addEventListener("click",()=>{RCA_ON=true;render();});
+  document.querySelectorAll("[data-cc-ok]").forEach(b=>b.addEventListener("click",()=>{
+    const c=copyCards()[+b.dataset.ccOk];c.status="Approved";c.why="";render();}));
+  document.querySelectorAll("[data-cc-re]").forEach(b=>b.addEventListener("click",()=>{
+    const c=copyCards()[+b.dataset.ccRe],t=c.text;c.text=c.alt;c.alt=t;c.status="Pending review";c.why="";render();}));
+  const d=document.getElementById("cc-dl");
+  if(d)d.addEventListener("click",downloadMessages);}
+
+function render(){
+  const parts = location.hash.replace(/^#\/?/,"").split("/").filter(Boolean);
+  const app = document.getElementById("app");
+  let html, t = "Marketing AI · Minfy", after = null;
+  if(parts[0]==="uc"){
+    const u = UC.find(x=>x.id===parts[1]);
+    if(!u){ html = overview(); }
+    else if(["data","model","output"].includes(parts[2])){ html = mock(u,parts[2]); t = `${u.name} · ${parts[2][0].toUpperCase()+parts[2].slice(1)} · Marketing AI`; }
+    else { html = detail(u); t = `${u.name} · Marketing AI`; after = () => bindDetail(u); }
+  } else html = overview();
+  app.style.animation="none"; void app.offsetWidth; app.style.animation="";
+  app.innerHTML = html; document.title = t; if(after) after(); bindGlobal(); window.scrollTo(0,0);
+}
+window.addEventListener("hashchange", render);
+render();
+</script>
+</body>
+</html>

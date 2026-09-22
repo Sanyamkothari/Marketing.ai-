@@ -64,6 +64,13 @@ clean:
 # ==========================================================================
 
 # ---- PHASE-2 (onboarding) — append only below this line ----
+.PHONY: prototype-test prototype-screenshots
+
+prototype-test: ## jsdom tests for marketing-ai-prototype.html (needs node + npm)
+	cd tests/prototype && npm install --no-audit --no-fund && node --test
+
+prototype-screenshots: ## regenerate docs/prototype/*.png (needs node + playwright)
+	node scripts/prototype_screenshots.mjs
 # ---- END PHASE-2 ----
 
 # ---- PHASE-3A (generative) — append only below this line ----
