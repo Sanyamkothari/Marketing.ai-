@@ -12,7 +12,11 @@ Two halves:
 *The registry* (`DatasetRegistry` protocol, `LocalDatasetRegistry`) owns one directory per dataset,
 `datasets/<dataset_id>/`, mirroring the shape `engine/registry.py` and `engine/clients.py` already
 use for their own stores: a protocol, one `Local*` implementation over `Storage`, and a coded
-exception (`DatasetError`) that never leaks a bare `KeyError` or `StorageError` to a caller. Six
+exception (`DatasetError`) carrying the id, so that everything about *which dataset was asked for*
+- missing, blank, unusable as a directory name, filed under the wrong id - reaches a caller as a
+code it can turn into a plain-language 404, never as the `StorageError('KEY_INVALID')` that
+`engine.storage.validate_key` would otherwise raise several frames deeper. A storage fault that is
+genuinely about storage (a full disk, an unreadable file) still surfaces as `StorageError`. Six
 files live in that directory (`engine.onboarding.specs.DATASET_ARTEFACTS` is the exhaustive list):
 three JSON documents this module round-trips as pydantic models (`dataset_manifest.json`,
 `build_report.json`, `build_status.json`), the built table itself (`dataset.parquet`), a 50-row
@@ -46,6 +50,7 @@ from pydantic import Field
 from engine import __version__
 from engine.contracts import Artefact, DatasetFingerprint
 from engine.onboarding.specs import (
+    DATASET_ARTEFACTS,
     BuildReport,
     BuildStatus,
     DatasetColumn,
@@ -56,7 +61,7 @@ from engine.onboarding.specs import (
     SourceProfile,
 )
 from engine.onboarding.specs import spec_hash as compute_spec_hash
-from engine.stages.ingest import REDACTED, dataset_fingerprint
+from engine.stages.ingest import MAX_CELL_CHARS, REDACTED, dataset_fingerprint
 from engine.storage import Storage, StorageError, default_storage
 from engine.utils.time import utc_now
 
@@ -116,11 +121,12 @@ def _dataset_prefix(dataset_id: str) -> str:
 class DatasetError(Exception):
     """A dataset-registry or lineage operation failed.
 
-    `code` is one of DATASET_NOT_FOUND | DATASET_ID_BLANK | DATASET_ID_MISMATCH |
-    DATASET_MAPPING_MISSING | DATASET_SOURCE_MISSING | DATASET_COLUMNS_MISMATCH |
-    DATASET_ENTITY_KEY_MISSING | DATASET_SNAPSHOT_COLUMN_MISSING | DATASET_LINEAGE_INCOMPLETE.
-    `dataset_id` is set whenever the operation named one, exactly as `StorageError.key` and
-    `RegistryError.model_id` do for their own stores.
+    `code` is one of DATASET_NOT_FOUND | DATASET_ID_BLANK | DATASET_ID_INVALID |
+    DATASET_ID_MISMATCH | DATASET_MAPPING_MISSING | DATASET_SOURCE_MISSING |
+    DATASET_COLUMNS_MISMATCH | DATASET_ENTITY_KEY_MISSING | DATASET_SNAPSHOT_COLUMN_MISSING |
+    DATASET_SNAPSHOT_VALUE_INVALID | DATASET_SAMPLE_UNREADABLE | DATASET_MAX_ROWS_INVALID |
+    DATASET_LINEAGE_INCOMPLETE. `dataset_id` is set whenever the operation named one, exactly as
+    `StorageError.key` and `RegistryError.model_id` do for their own stores.
     """
 
     def __init__(self, code: str, message: str, *, dataset_id: str | None = None) -> None:
@@ -132,6 +138,30 @@ class DatasetError(Exception):
 
 def _not_found(dataset_id: str) -> DatasetError:
     return DatasetError("DATASET_NOT_FOUND", f"No dataset {dataset_id!r}.", dataset_id=dataset_id)
+
+
+def _require_id(dataset_id: str) -> str:
+    """Return `dataset_id` when it can name a dataset directory, else raise a coded `DatasetError`.
+
+    Every public registry method starts here. `datasets/<dataset_id>/<filename>` is a storage key,
+    and `engine.storage.validate_key` rejects an empty segment or a `..` one with a
+    `StorageError` - a code the onboarding API has no plain-language wording for and which, on the
+    write side, nothing catches at all. An id that arrived blank from a path parameter, or carrying
+    a separator, is a question about *which dataset*, so it is answered here in this module's own
+    vocabulary before a key is ever built.
+
+    `dataset_key` itself stays a pure string builder and is deliberately left free of this check:
+    `api/routes/datasets.py` calls it directly and handles the `StorageError` that follows.
+    """
+    if not dataset_id.strip():
+        raise DatasetError("DATASET_ID_BLANK", "A dataset id is required.", dataset_id=dataset_id)
+    if any(char in dataset_id for char in "/\\\x00") or dataset_id in {".", ".."}:
+        raise DatasetError(
+            "DATASET_ID_INVALID",
+            f"{dataset_id!r} cannot name a dataset directory; a dataset id carries no path separator.",
+            dataset_id=dataset_id,
+        )
+    return dataset_id
 
 
 def _check_id(dataset_id: str, other: str, *, what: str) -> None:
@@ -181,6 +211,11 @@ def _short_hash(value: str) -> str:
     return value if len(value) <= 18 else f"{value[:18]}…"
 
 
+_UNKNOWN: Final[str] = "—"
+"""What a card shows where nobody settled a value - `ui/dom.js`'s `EM_DASH`, written server-side
+because these strings are pre-formatted here (house rule 2: never a stand-in that reads as a fact)."""
+
+
 def lineage(
     manifest: DatasetManifest,
     *,
@@ -192,7 +227,10 @@ def lineage(
     `mappings` and `sources` must cover everything `manifest` names - every key of
     `manifest.mapping_hashes` and `manifest.source_fingerprints` - or this refuses rather than
     drawing a card for a mapping or a source it was not handed a profile for: a lineage with a
-    silently blank card is worse than an explicit error, because it looks complete.
+    silently blank card is worse than an explicit error, because it looks complete. A mapping that
+    reads a source the manifest does not record is refused for the same reason: `parents` is what
+    the UI draws an edge from, so such a node would point the Lineage block at a card that is not
+    in the tree, which is the same gap wearing a different shape.
     """
     missing_mappings = sorted(set(manifest.mapping_hashes) - set(mappings))
     if missing_mappings:
@@ -208,16 +246,28 @@ def lineage(
             f"Source(s) {', '.join(missing_sources)} were not supplied; the lineage would be incomplete.",
             dataset_id=manifest.dataset_id,
         )
+    dangling = sorted(
+        mapping_id
+        for mapping_id in manifest.mapping_hashes
+        if mappings[mapping_id].source_id not in manifest.source_fingerprints
+    )
+    if dangling:
+        raise DatasetError(
+            "DATASET_LINEAGE_INCOMPLETE",
+            f"Mapping(s) {', '.join(dangling)} read a source this dataset does not record; "
+            "the tree would carry an edge to a card that is not in it.",
+            dataset_id=manifest.dataset_id,
+        )
 
     source_nodes = tuple(
         LineageNode(
             kind="source",
             id=source_id,
             label=sources[source_id].file_name,
-            detail=f"{fingerprint.n_rows:,} row(s) · role {sources[source_id].role or 'unconfirmed'}",
+            detail=f"{fingerprint.n_rows:,} row(s) · role {sources[source_id].role or _UNKNOWN}",
             parents=(),
         )
-        for source_id, fingerprint in sorted(manifest.source_fingerprints.items())
+        for source_id, fingerprint in sorted(manifest.source_fingerprints.items(), key=lambda kv: kv[0])
     )
     mapping_nodes = tuple(
         LineageNode(
@@ -240,14 +290,20 @@ def lineage(
         parents=tuple(sorted(manifest.mapping_hashes)),
     )
     entity_word = "entity" if manifest.n_entities == 1 else "entities"
+    # A single-snapshot manifest records no dates at all (`build_manifest` leaves `snapshot_dates`
+    # empty, because there is one snapshot and the build did not date it), so counting that tuple
+    # would tell the card "0 snapshot(s)" about a dataset that has exactly one. The mode is the
+    # measured fact here; the count is only a fact when the mode is periodic (house rule 2).
+    snapshot_clause = (
+        f"{len(manifest.snapshot_dates):,} snapshot(s)"
+        if manifest.snapshot_mode is SnapshotMode.PERIODIC
+        else "a single snapshot"
+    )
     dataset_node = LineageNode(
         kind="dataset",
         id=manifest.dataset_id,
         label=f"Dataset {manifest.dataset_id}",
-        detail=(
-            f"{manifest.n_rows:,} row(s) · {manifest.n_entities:,} {entity_word} · "
-            f"{len(manifest.snapshot_dates)} snapshot(s)"
-        ),
+        detail=f"{manifest.n_rows:,} row(s) · {manifest.n_entities:,} {entity_word} · {snapshot_clause}",
         parents=(manifest.spec_id,),
     )
     return Lineage(
@@ -346,7 +402,7 @@ def build_manifest(
                 dataset_id=dataset_id,
             )
         primary_key = (entity_key, snapshot_column)
-        snapshot_dates = _snapshot_dates(frame, snapshot_column)
+        snapshot_dates = _snapshot_dates(frame, snapshot_column, dataset_id=dataset_id)
     else:
         primary_key = (entity_key,)
         snapshot_dates = ()
@@ -376,12 +432,34 @@ def build_manifest(
     )
 
 
-def _snapshot_dates(frame: pd.DataFrame, snapshot_column: str) -> tuple[date, ...]:
-    """Every distinct snapshot date that survived into `frame`, earliest first."""
+def _snapshot_dates(frame: pd.DataFrame, snapshot_column: str, *, dataset_id: str) -> tuple[date, ...]:
+    """Every distinct snapshot date in `frame`, earliest first; a value it cannot read is refused.
+
+    `snapshot_dates` is what the Lineage card and the Build review count snapshots from, so a value
+    that does not read as a date must not simply fall out of the set: a periodic dataset holding one
+    unreadable snapshot value would otherwise report one snapshot fewer than it has, and a count
+    nobody measured presented as one that was is exactly what house rule 2 forbids. Coercing and
+    then counting what was lost is the only way to tell the two apart.
+
+    Stopping is right *here* even though "bad data is never an exception" holds one stage earlier
+    (`engine.stages.ingest`): this column is not a client's file, it is what the snapshot planner
+    just built, so an unreadable value in it is a fault in the build rather than a fact about the
+    client worth reporting as a check. The message counts rows, never quotes one (house rule 4).
+    """
     import pandas as pd
 
-    parsed = pd.to_datetime(frame[snapshot_column], errors="coerce").dropna()
-    return tuple(sorted({value.date() for value in parsed}))
+    column = frame[snapshot_column]
+    parsed = pd.to_datetime(column, errors="coerce")
+    unreadable = int((parsed.isna() & column.notna()).sum())
+    if unreadable:
+        raise DatasetError(
+            "DATASET_SNAPSHOT_VALUE_INVALID",
+            f"{unreadable} row(s) hold a {snapshot_column!r} value that is not a date, so the "
+            "snapshots of this dataset cannot be listed. Rebuild it with the snapshot column cast "
+            "to a date.",
+            dataset_id=dataset_id,
+        )
+    return tuple(sorted({value.date() for value in parsed.dropna()}))
 
 
 # ---------------------------------------------------------------------------
@@ -393,7 +471,10 @@ def _stringify_cell(value: object) -> str:
     A local twin of `engine.stages.ingest._cell_str`, which answers the same question for the Setup
     preview but is module-private there and so not importable. The two are not kept in sync by a
     shared call because there is nothing to share - both exist to answer "what does one cell look
-    like on a screen?", the same way twice, because that is what a screen wants.
+    like on a screen?", the same way twice, because that is what a screen wants. The one thing they
+    *do* share is `MAX_CELL_CHARS`, imported rather than repeated: how long a cell may be before it
+    is cut is one decision about one review surface, and two copies of it would drift into a Setup
+    preview and a Build review that cut the same value at different places.
     """
     import pandas as pd
 
@@ -402,24 +483,43 @@ def _stringify_cell(value: object) -> str:
     if pd.api.types.is_bool(value):
         return "true" if value else "false"
     if isinstance(value, pd.Timestamp):
-        return value.date().isoformat() if value == value.normalize() else value.isoformat()
-    if isinstance(value, float):
+        rendered = value.date().isoformat() if value == value.normalize() else value.isoformat()
+    elif isinstance(value, float):
         if math.isnan(value):
             return ""
-        return str(int(value)) if value.is_integer() else str(value)
-    if isinstance(value, (datetime, date)):
-        return value.isoformat()
-    return str(value)
+        rendered = str(int(value)) if value.is_integer() else str(value)
+    elif isinstance(value, (datetime, date)):
+        rendered = value.isoformat()
+    else:
+        rendered = str(value)
+    if len(rendered) > MAX_CELL_CHARS:
+        return rendered[: MAX_CELL_CHARS - 1] + "…"
+    return rendered
 
 
 def _sample_rows(frame: pd.DataFrame, *, pii_columns: frozenset[str]) -> list[dict[str, str]]:
-    """The first `SAMPLE_ROWS` rows, stringified, a PII column's values replaced by `REDACTED`."""
+    """The first `SAMPLE_ROWS` rows, stringified, a PII column's values replaced by `REDACTED`.
+
+    Read column by column, never with `DataFrame.iterrows`: a row pulled out of a frame is a
+    `Series`, so it has to have *one* dtype, and a frame of `int64` ids beside a `float64` amount -
+    a built dataset's ordinary shape - hands every id back as a float. A customer id past 2**53 then
+    reaches the review screen with different digits than went into the parquet, which is a fabricated
+    number on a screen (house rule 2) and the hardest kind to notice, because it still looks like an
+    id. Reading each column in its own dtype is what makes `sample.json` show what was built.
+    """
     head = frame.head(SAMPLE_ROWS)
-    names = tuple(str(name) for name in head.columns)
-    return [
-        {name: REDACTED if name in pii_columns else _stringify_cell(row[name]) for name in names}
-        for _, row in head.iterrows()
+    rendered: list[tuple[str, list[str]]] = [
+        (
+            str(name),
+            (
+                [REDACTED] * len(head)
+                if str(name) in pii_columns
+                else [_stringify_cell(value) for value in head.iloc[:, position].tolist()]
+            ),
+        )
+        for position, name in enumerate(head.columns)
     ]
+    return [{name: values[index] for name, values in rendered} for index in range(len(head))]
 
 
 # ---------------------------------------------------------------------------
@@ -485,11 +585,17 @@ class LocalDatasetRegistry:
         use-case slug in the middle of it would not help that.
 
         Unlike `engine.utils.ids.new_run_id`, which trusts eight random hex characters not to
-        collide within a day, this generator checks: a `dataset_id` is the only key a manifest can
-        ever be recovered from, so a silent collision would mean the wrong lineage for the wrong
-        parquet, not merely a `409` on the next call. The microsecond-precision timestamp already
-        makes a collision vanishingly unlikely; the loop, which tries only ids nothing has claimed,
-        makes it impossible, and terminates because only finitely many datasets share one prefix.
+        collide within a day, this generator checks the store: a `dataset_id` is the only key a
+        manifest can ever be recovered from, so a silent collision would mean the wrong lineage over
+        the wrong parquet, not merely a `409` on the next call. The microsecond-precision timestamp
+        already makes a collision vanishingly unlikely; the loop hands back only an id nothing has
+        been written under, and terminates because only finitely many datasets share one prefix.
+
+        What the loop cannot rule out is two callers minting in the same microsecond before either
+        has written anything - nothing is reserved here, because a reservation would be a seventh
+        file in a directory `DATASET_ARTEFACTS` says holds six. That race is caught one step later
+        instead: every writer passes its document through `_check_id`, and a build files its
+        `build_status.json` before it does anything else.
         """
         if not client_id.strip():
             raise DatasetError("DATASET_ID_BLANK", "A dataset id needs the client it was built for.")
@@ -504,20 +610,24 @@ class LocalDatasetRegistry:
         return candidate
 
     def write_status(self, dataset_id: str, status: BuildStatus) -> None:
+        _require_id(dataset_id)
         _check_id(dataset_id, status.dataset_id, what="build status")
         self._storage.write_model(dataset_key(dataset_id, DATASET_STATUS_FILENAME), status)
 
     def read_status(self, dataset_id: str) -> BuildStatus:
+        _require_id(dataset_id)
         try:
             return self._storage.read_model(dataset_key(dataset_id, DATASET_STATUS_FILENAME), BuildStatus)
         except StorageError as exc:
             raise _not_found(dataset_id) from exc
 
     def write_manifest(self, dataset_id: str, manifest: DatasetManifest) -> None:
+        _require_id(dataset_id)
         _check_id(dataset_id, manifest.dataset_id, what="dataset manifest")
         self._storage.write_model(dataset_key(dataset_id, DATASET_MANIFEST_FILENAME), manifest)
 
     def read_manifest(self, dataset_id: str) -> DatasetManifest:
+        _require_id(dataset_id)
         try:
             return self._storage.read_model(
                 dataset_key(dataset_id, DATASET_MANIFEST_FILENAME), DatasetManifest
@@ -526,10 +636,12 @@ class LocalDatasetRegistry:
             raise _not_found(dataset_id) from exc
 
     def write_report(self, dataset_id: str, report: BuildReport) -> None:
+        _require_id(dataset_id)
         _check_id(dataset_id, report.dataset_id, what="build report")
         self._storage.write_model(dataset_key(dataset_id, DATASET_REPORT_FILENAME), report)
 
     def read_report(self, dataset_id: str) -> BuildReport:
+        _require_id(dataset_id)
         try:
             return self._storage.read_model(dataset_key(dataset_id, DATASET_REPORT_FILENAME), BuildReport)
         except StorageError as exc:
@@ -544,6 +656,7 @@ class LocalDatasetRegistry:
         a `Storage` round-trip is not part of what identifies a dataset, and computing it once here
         means a caller never has to read the whole parquet file back just to learn its own identity.
         """
+        _require_id(dataset_id)
         buffer = io.BytesIO()
         frame.to_parquet(buffer, engine="pyarrow", index=False)
         self._storage.write_bytes(dataset_key(dataset_id, DATASET_FRAME_FILENAME), buffer.getvalue())
@@ -554,8 +667,21 @@ class LocalDatasetRegistry:
         return dataset_fingerprint_of(frame)
 
     def read_frame(self, dataset_id: str, *, max_rows: int | None = None) -> pd.DataFrame:
+        """The built table, optionally only its first `max_rows` rows.
+
+        A negative `max_rows` is refused rather than passed to `head`, which reads it as "all but
+        the last n" and would hand a caller that meant "no rows" a frame missing its tail with
+        nothing to say so.
+        """
         import pandas as pd
 
+        _require_id(dataset_id)
+        if max_rows is not None and max_rows < 0:
+            raise DatasetError(
+                "DATASET_MAX_ROWS_INVALID",
+                f"A row limit cannot be negative; {max_rows} was asked for.",
+                dataset_id=dataset_id,
+            )
         key = dataset_key(dataset_id, DATASET_FRAME_FILENAME)
         if not self._storage.exists(key):
             raise _not_found(dataset_id)
@@ -564,23 +690,49 @@ class LocalDatasetRegistry:
 
     def write_features_sql(self, dataset_id: str, sql: str) -> str:
         """Write the compiled feature SQL and return its storage key."""
+        _require_id(dataset_id)
         key = dataset_key(dataset_id, DATASET_FEATURES_SQL_FILENAME)
         self._storage.write_text(key, sql)
         return key
 
     def read_sample(self, dataset_id: str) -> list[dict[str, str]]:
+        """The rows `write_frame` put in `sample.json`, exactly as it wrote them."""
+        _require_id(dataset_id)
         key = dataset_key(dataset_id, DATASET_SAMPLE_FILENAME)
-        if not self._storage.exists(key):
-            raise _not_found(dataset_id)
-        rows: list[dict[str, str]] = json.loads(self._storage.read_text(key))
+        try:
+            text = self._storage.read_text(key)
+        except StorageError as exc:
+            raise _not_found(dataset_id) from exc
+        try:
+            rows: list[dict[str, str]] = json.loads(text)
+        except json.JSONDecodeError as exc:
+            raise DatasetError(
+                "DATASET_SAMPLE_UNREADABLE",
+                f"The stored sample of dataset {dataset_id!r} is not readable. Rebuild the dataset.",
+                dataset_id=dataset_id,
+            ) from exc
         return rows
 
     def exists(self, dataset_id: str) -> bool:
-        """Whether anything at all has been written for this id - any artefact, in any order."""
-        return bool(self._storage.list_keys(_dataset_prefix(dataset_id)))
+        """Whether any artefact has been written for this id - any of the six, in any order.
+
+        Six `Storage.exists` calls rather than one `list_keys`: `DATASET_ARTEFACTS` is the
+        exhaustive list of what a dataset directory ever holds, so the two answer the same question,
+        and `LocalStorage.list_keys` answers it by walking the *whole* data directory and filtering
+        by prefix - a cost `new_dataset_id` would pay on every single mint, growing with every run,
+        upload and model the store has ever held.
+        """
+        _require_id(dataset_id)
+        return any(self._storage.exists(dataset_key(dataset_id, name)) for name in DATASET_ARTEFACTS)
 
     def delete(self, dataset_id: str) -> None:
-        """Remove every artefact of `dataset_id`; deleting an id nothing was ever written for is a no-op."""
+        """Remove every artefact of `dataset_id`; deleting an id nothing was ever written for is a no-op.
+
+        Prefix-based, unlike `exists`: deleting is the one operation that must also carry off a file
+        this module did not put there, so that a directory a future artefact once occupied does not
+        outlive the dataset it belonged to.
+        """
+        _require_id(dataset_id)
         for key in self._storage.list_keys(_dataset_prefix(dataset_id)):
             self._storage.delete(key)
 

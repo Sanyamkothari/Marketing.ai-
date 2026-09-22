@@ -29,7 +29,13 @@ from fastapi.testclient import TestClient
 
 from api.main import config_error_handler
 from api.routes.clients import router as clients_router
-from engine.config import ConfigError
+from engine.config import (
+    ConfigError,
+    FeatureDef,
+    LabelDefinition,
+    RoleCatalogue,
+    StandardSchemaConfig,
+)
 from engine.onboarding.specs import ClientRecord
 from engine.storage import LocalStorage
 
@@ -45,7 +51,18 @@ EVENT_CSV = (
     "C-1,2026-02-01,phone\n"
     "C-2,2026-02-03,email\n"
     "C-1,2026-02-10,phone\n"
+    "C-9,2026-02-11,email\n"
 )
+
+EVENT_KEY_COVERAGE = 0.75
+"""What `EVENT_CSV.customer_id` against `ENTITY_CSV.customer_id` has to come to, counted by hand:
+four non-null event keys, of which C-1, C-2 and C-1 are in the entity table and C-9 is not - 3/4.
+
+Every coverage assertion below is against this hand-counted number rather than against "some float
+between 0 and 1", because a badge that renders whatever the API happens to send is exactly the thing
+these tests exist to catch: `0.75` can only come from a real join, where a range check also passes
+when nothing was measured at all, when the wrong pair of columns was compared, or when a stale
+number from a deleted source was left on the record."""
 
 
 # ---------------------------------------------------------------------------
@@ -123,7 +140,7 @@ def small_limits_config_root(
 
 
 def create_client_via_api(
-    client: TestClient, *, name: str = "Acme Water Co", industry: str = "utilities", notes: str = ""
+    client: TestClient, *, name: str = "Acme Water Co", industry: str = "telecom", notes: str = ""
 ) -> dict[str, Any]:
     response = client.post("/clients", json={"name": name, "industry": industry, "notes": notes})
     assert response.status_code == 201, response.text
@@ -169,13 +186,13 @@ def test_list_clients_is_newest_first(client: TestClient) -> None:
 
 
 def test_read_client_round_trips_every_field(client: TestClient) -> None:
-    created = create_client_via_api(client, name="Acme", industry="utilities", notes="pilot account")
+    created = create_client_via_api(client, name="Acme", industry="telecom", notes="pilot account")
     response = client.get(f"/clients/{created['client_id']}")
     assert response.status_code == 200, response.text
     record = ClientRecord.model_validate(response.json())
     assert record.client_id == created["client_id"]
     assert record.name == "Acme"
-    assert record.industry == "utilities"
+    assert record.industry == "telecom"
     assert record.notes == "pilot account"
 
 
@@ -195,12 +212,26 @@ def test_every_error_body_is_the_m1_envelope(client: TestClient) -> None:
 # GET /use-cases/{id}/standard-schema
 # ---------------------------------------------------------------------------
 def test_standard_schema_returns_the_merged_configs_onboarding_vocabulary(client: TestClient) -> None:
+    """Four keys, each the engine's own document rather than a shape this route invented.
+
+    The blocks are validated back into the real models to prove it: they all inherit `StrictBase`,
+    which forbids unknown keys, so a response that had quietly grown a field of its own - or dropped
+    one the mapping UI is generated from - would fail here rather than at the far end in the browser.
+    """
     response = client.get(f"/use-cases/{TELCO_CHURN}/standard-schema")
     assert response.status_code == 200, response.text
     body = response.json()
-    assert body["standard_schema"]["columns"], "telco-churn's M8 config declares standard columns"
-    assert "entity" in body["roles"]["roles"]
-    assert body["roles"]["roles"]["entity"]["kind"] == "entity"
+    assert set(body) == {"standard_schema", "suggested_features", "label", "roles"}
+
+    schema = StandardSchemaConfig.model_validate(body["standard_schema"])
+    features = [FeatureDef.model_validate(row) for row in body["suggested_features"]]
+    catalogue = RoleCatalogue.model_validate(body["roles"])
+    assert schema.columns, "telco-churn's M8 config declares standard columns"
+    assert features, "...and the feature library the mapping screen offers"
+    assert catalogue.entity_role == "entity"
+    # a use case with no label says so with a null, never with a stand-in label (house rule 2)
+    if body["label"] is not None:
+        LabelDefinition.model_validate(body["label"])
 
 
 def test_standard_schema_of_an_unknown_use_case_is_404(client: TestClient) -> None:
@@ -309,6 +340,62 @@ def test_source_too_large_is_409_and_leaves_no_orphan(
     assert LocalStorage(data_dir).list_keys(f"clients/{client_id}/sources/") == ()
 
 
+def test_too_many_sources_names_the_count_it_measured_not_the_limit(
+    config_root: Path, tmp_path: Path, data_dir: Path
+) -> None:
+    """House rule 2 reaches error messages: the count in the message is the client's real one.
+
+    Lowering `max_sources` under a client that already holds more than the new limit is the case
+    that tells the two apart - a message built from the limit would tell this user they hold one
+    source when they hold two, and send them looking for the one they would have to delete.
+    """
+    pytest.importorskip("engine.onboarding.sources")
+    from api.routes.sources import router as sources_router
+
+    def app_for(root: Path) -> FastAPI:
+        app = _bare_app(root, data_dir)
+        app.include_router(clients_router)
+        app.include_router(sources_router)
+        return app
+
+    with TestClient(app_for(config_root)) as generous:
+        client_id = create_client_via_api(generous)["client_id"]
+        for name in ("customers.csv", "complaints.csv"):
+            assert upload_source(generous, client_id, name=name).status_code == 201
+
+    lowered = small_limits_config_root(config_root, tmp_path / "lowered", max_sources=1)
+    with TestClient(app_for(lowered)) as strict:
+        refused = upload_source(strict, client_id, name="more.csv")
+
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["code"] == "TOO_MANY_SOURCES"
+    assert "2 sources" in detail["message"], detail["message"]
+    assert "allows 1" in detail["message"], detail["message"]
+
+
+def test_a_failure_after_the_row_is_written_leaves_no_half_registered_source(
+    full_client: TestClient, storage: LocalStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`uploads.py`'s promise, kept for a source: the last step of `create_source` is made to fail,
+    and afterwards the client has neither a listed source nor a file left behind - a registry row
+    whose profile never landed would 404 every later `GET /clients/{id}/sources` for this client."""
+    from api.routes import sources as sources_module
+
+    client_id = create_client_via_api(full_client)["client_id"]
+
+    def explode(*args: Any, **kwargs: Any) -> None:
+        raise RuntimeError("the store went away mid-upload")
+
+    monkeypatch.setattr(sources_module, "resync_join_coverage", explode)
+    with pytest.raises(RuntimeError):
+        upload_source(full_client, client_id)
+
+    monkeypatch.undo()
+    assert full_client.get(f"/clients/{client_id}/sources").json()["sources"] == []
+    assert storage.list_keys(f"clients/{client_id}/sources/") == ()
+
+
 # ---------------------------------------------------------------------------
 # GET /clients/{id}/sources
 # ---------------------------------------------------------------------------
@@ -354,6 +441,26 @@ def test_patch_role_of_an_unknown_source_is_404(full_client: TestClient) -> None
     assert response.json()["detail"]["code"] == "SOURCE_NOT_FOUND"
 
 
+def coverage_of(profile: dict[str, Any], column: str) -> float | None:
+    """The stored coverage of one key candidate, by column name."""
+    return next(k["coverage"] for k in profile["key_candidates"] if k["column"] == column)
+
+
+def test_patch_confirms_the_role_on_the_profile_as_well_as_the_spec(full_client: TestClient) -> None:
+    """The role is on both documents `GET /clients/{id}/sources` serves, and the mapping screen reads
+    the profile - so a spec that says "entity" beside a profile that says "not settled yet" would
+    show the user their own confirmed answer as still open."""
+    client_id = create_client_via_api(full_client)["client_id"]
+    source_id = upload_source(full_client, client_id).json()["source_id"]
+
+    full_client.patch(f"/clients/{client_id}/sources/{source_id}", json={"role": "entity"})
+
+    body = full_client.get(f"/clients/{client_id}/sources").json()
+    assert body["sources"][0]["role"] == "entity"
+    assert body["profiles"][source_id]["role"] == "entity"
+    assert body["profiles"][source_id]["role_decided_by"] == "user"
+
+
 def test_confirming_the_entity_role_measures_join_coverage_on_other_sources(full_client: TestClient) -> None:
     """The scenario the task calls out by name: an event source uploaded first, an entity source
     confirmed second, and the coverage badge on the *first* source's key candidates becomes real."""
@@ -362,17 +469,76 @@ def test_confirming_the_entity_role_measures_join_coverage_on_other_sources(full
         "source_id"
     ]
     entity_id = upload_source(full_client, client_id, name="customers.csv").json()["source_id"]
+    before = full_client.get(f"/clients/{client_id}/sources").json()["profiles"]
+    assert coverage_of(before[event_id], "customer_id") is None, "nothing to measure against yet"
 
     full_client.patch(f"/clients/{client_id}/sources/{entity_id}", json={"role": "entity"})
 
     profiles = full_client.get(f"/clients/{client_id}/sources").json()["profiles"]
-    event_candidates = profiles[event_id]["key_candidates"]
-    assert isinstance(event_candidates, list)
-    for candidate in event_candidates:
-        assert candidate["coverage"] is None or 0.0 <= candidate["coverage"] <= 1.0
+    assert coverage_of(profiles[event_id], "customer_id") == EVENT_KEY_COVERAGE
+    # a column that is not a join key is measured too, and honestly: no complaint date is a customer id
+    assert coverage_of(profiles[event_id], "complaint_date") == 0.0
     # the entity source is never measured against itself
     for candidate in profiles[entity_id]["key_candidates"]:
         assert candidate["coverage"] is None
+
+
+def test_uploading_against_a_confirmed_entity_measures_coverage_on_the_new_source(
+    full_client: TestClient,
+) -> None:
+    """The other direction: the entity is already confirmed, so the source being uploaded now comes
+    back with its coverage already measured - and the `201` body says what the list will say."""
+    client_id = create_client_via_api(full_client)["client_id"]
+    upload_source(full_client, client_id, name="customers.csv", role="entity")
+
+    created = upload_source(full_client, client_id, EVENT_CSV.encode(), name="complaints.csv").json()
+    assert coverage_of(created["profile"], "customer_id") == EVENT_KEY_COVERAGE
+
+    listed = full_client.get(f"/clients/{client_id}/sources").json()["profiles"]
+    assert listed[created["source_id"]] == created["profile"]
+
+
+def test_deleting_the_entity_source_clears_the_coverage_it_was_measured_against(
+    full_client: TestClient,
+) -> None:
+    """A measurement outlives neither the table it was measured against nor the badge's honesty:
+    with the entity source gone there is nothing to have covered, so the number goes back to null
+    and the UI renders an em dash."""
+    client_id = create_client_via_api(full_client)["client_id"]
+    entity_id = upload_source(full_client, client_id, name="customers.csv", role="entity").json()["source_id"]
+    event_id = upload_source(full_client, client_id, EVENT_CSV.encode(), name="complaints.csv").json()[
+        "source_id"
+    ]
+    profiles = full_client.get(f"/clients/{client_id}/sources").json()["profiles"]
+    assert coverage_of(profiles[event_id], "customer_id") == EVENT_KEY_COVERAGE
+
+    assert full_client.delete(f"/clients/{client_id}/sources/{entity_id}").status_code == 204
+
+    profiles = full_client.get(f"/clients/{client_id}/sources").json()["profiles"]
+    assert coverage_of(profiles[event_id], "customer_id") is None
+
+
+def test_moving_the_role_away_from_entity_clears_the_coverage_it_measured(
+    full_client: TestClient,
+) -> None:
+    """The same stale measurement, reached by re-labelling the entity table instead of deleting it."""
+    client_id = create_client_via_api(full_client)["client_id"]
+    entity_id = upload_source(full_client, client_id, name="customers.csv", role="entity").json()["source_id"]
+    event_id = upload_source(full_client, client_id, EVENT_CSV.encode(), name="complaints.csv").json()[
+        "source_id"
+    ]
+    assert (
+        coverage_of(
+            full_client.get(f"/clients/{client_id}/sources").json()["profiles"][event_id], "customer_id"
+        )
+        == EVENT_KEY_COVERAGE
+    )
+
+    moved = full_client.patch(f"/clients/{client_id}/sources/{entity_id}", json={"role": "complaints"})
+    assert moved.status_code == 200, moved.text
+
+    profiles = full_client.get(f"/clients/{client_id}/sources").json()["profiles"]
+    assert coverage_of(profiles[event_id], "customer_id") is None
 
 
 # ---------------------------------------------------------------------------

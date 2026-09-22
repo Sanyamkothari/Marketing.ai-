@@ -17,9 +17,13 @@ envelope. What is new here, because a *source* is not an *upload*, is layered on
 * Once a client has a confirmed *entity* source, every other source's `key_candidates` carry a real
   `coverage` number against it (`engine.onboarding.sources.join_coverage`) - the join-coverage badge
   the mapping screen shows is a measurement, not a placeholder, from the moment there is something
-  to measure it against. `with_join_coverage`/`refresh_other_sources_against_new_entity` recompute it
-  in both directions: for the source just added, against whichever entity source already exists, and
-  for every source already on file, the moment one of them is confirmed as the entity.
+  to measure it against. `resync_join_coverage` is the single place that decides what each stored
+  profile's `coverage` says, and every route that can change the answer calls it: uploading a
+  source, confirming or changing a role, and deleting one. It derives the number from the client's
+  sources *as they now are*, which is what keeps the badge honest in the direction that is easy to
+  miss - when the entity source is deleted, or its role moved to something else, there is nothing
+  left to have measured against, so the number is cleared back to `None` (an em dash on screen)
+  rather than left on display as a measurement of a table that is no longer there.
 
 `profile_source` reads only a `UseCaseConfig`'s `.catalog` (its own docstring says so - the same
 root-wide `Catalog` every use case in one root shares, DEC-038), never anything use-case-specific,
@@ -30,8 +34,9 @@ below loads whichever use case sorts first, purely to reach that shared catalogu
 from __future__ import annotations
 
 import secrets
+from contextlib import suppress
 from pathlib import Path
-from typing import TYPE_CHECKING, Annotated, Final, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 
@@ -130,19 +135,27 @@ async def create_source(
     Ordered exactly as `create_upload` orders it (design intent shared with `uploads.py`): every
     check that can be answered before a byte is written - the client exists, the role (if given) is
     real, the source count is under the limit - runs first, so a request that was always going to be
-    refused never touches storage.
+    refused never touches storage, and anything that fails *after* the first byte lands unwinds
+    through `discard_source`, so no half-registered source survives a failed upload.
+
+    The profile returned is re-read from storage rather than returned from memory, so the body of
+    this `201` is the same document `GET /clients/{id}/sources` will serve - including the join
+    coverage `resync_join_coverage` may have just measured onto it. `uploads.py` keeps the same
+    promise for `profile.json`, and it is what stops a badge from reading one way on the upload
+    screen and another way on the mapping screen.
     """
     load_client(store, client_id)
     roles = get_roles(root)
     if role is not None:
         require_role(roles, role)
     limits = onboarding_limits(root)
-    if len(store.list_sources(client_id)) >= limits.max_sources:
+    held = len(store.list_sources(client_id))
+    if held >= limits.max_sources:
         raise http_error(
             409,
             "TOO_MANY_SOURCES",
-            f"{client_id} already has {limits.max_sources} sources, the most this engine allows. "
-            "Remove one before adding another.",
+            f"This client already has {held} source{'' if held == 1 else 's'}, and this engine "
+            f"allows {limits.max_sources}. Remove one before adding another.",
         )
     try:
         file_format = ingest.file_format_for(file.filename or "")
@@ -156,72 +169,70 @@ async def create_source(
             sink.write(chunk)
 
     try:
-        result = ingest.read_upload(
-            storage, raw_key, file_format=file_format, row_cap=min(limits.max_source_rows, PROFILE_ROW_CAP)
-        )
-    except ingest.IngestError as exc:
-        storage.delete(raw_key)
-        raise ingest_http(exc.code, exc.message) from exc
+        try:
+            result = ingest.read_upload(
+                storage,
+                raw_key,
+                file_format=file_format,
+                row_cap=min(limits.max_source_rows, PROFILE_ROW_CAP),
+            )
+        except ingest.IngestError as exc:
+            raise ingest_http(exc.code, exc.message) from exc
 
-    if result.row_count > limits.max_source_rows:
-        storage.delete(raw_key)
-        raise http_error(
-            409,
-            "SOURCE_TOO_LARGE",
-            f"{file.filename} has {result.row_count:,} rows, above the {limits.max_source_rows:,} "
-            "row limit for one source. Split the file or raise the limit before uploading it again.",
-        )
-
-    use_case = any_use_case_config(root)
-    file_name = file.filename or f"source.{file_format}"
-    profile = profile_source(
-        result.frame,
-        use_case,
-        source_id=source_id,
-        client_id=client_id,
-        file_name=file_name,
-        file_format=result.file_format,
-        file_size_bytes=storage.size_bytes(raw_key),
-        delimiter=result.delimiter,
-        encoding=result.encoding,
-        row_count=result.row_count,
-        fingerprint=result.fingerprint,
-        roles=roles,
-    )
-    profile = profile.model_copy(
-        update={"role": role, "role_decided_by": DecidedBy.USER if role is not None else None}
-    )
-
-    spec = SourceSpec(
-        source_id=source_id,
-        client_id=client_id,
-        file_name=file_name,
-        storage_key=raw_key,
-        file_format=file_format,
-        role=role,
-        rows=profile.rows,
-        columns=tuple(column.name for column in profile.profile.columns),
-        fingerprint=profile.fingerprint,
-        created_at=utc_now(),
-    )
-
-    if role != roles.entity_role:
-        entity = find_entity_source(store, roles, client_id)
-        if entity is not None:
-            profile = with_join_coverage(
-                storage, use_case=use_case, entity=entity, source_frame=result.frame, profile=profile
+        if result.row_count > limits.max_source_rows:
+            raise http_error(
+                409,
+                "SOURCE_TOO_LARGE",
+                f"This file has {result.row_count:,} rows, above the {limits.max_source_rows:,} "
+                "row limit for one source. Split the file or raise the limit before uploading it again.",
             )
 
-    store.add_source(client_id, spec)
-    storage.write_model(source_profile_key(client_id, source_id), profile)
-
-    if role == roles.entity_role:
-        refresh_other_sources_against_new_entity(
-            storage, store, use_case=use_case, client_id=client_id, entity=spec
+        file_name = file.filename or f"source.{file_format}"
+        profile = profile_source(
+            result.frame,
+            any_use_case_config(root),
+            source_id=source_id,
+            client_id=client_id,
+            file_name=file_name,
+            file_format=result.file_format,
+            file_size_bytes=storage.size_bytes(raw_key),
+            delimiter=result.delimiter,
+            encoding=result.encoding,
+            row_count=result.row_count,
+            fingerprint=result.fingerprint,
+            roles=roles,
         )
+        profile = profile.model_copy(
+            update={"role": role, "role_decided_by": DecidedBy.USER if role is not None else None}
+        )
+        spec = SourceSpec(
+            source_id=source_id,
+            client_id=client_id,
+            file_name=file_name,
+            storage_key=raw_key,
+            file_format=file_format,
+            role=role,
+            rows=profile.rows,
+            columns=tuple(column.name for column in profile.profile.columns),
+            fingerprint=profile.fingerprint,
+            created_at=utc_now(),
+        )
+        store.add_source(client_id, spec)
+        storage.write_model(source_profile_key(client_id, source_id), profile)
+        resync_join_coverage(
+            storage,
+            store,
+            root=root,
+            roles=roles,
+            client_id=client_id,
+            only=None if role == roles.entity_role else frozenset({source_id}),
+        )
+    except Exception:
+        discard_source(storage, store, client_id=client_id, source_id=source_id, raw_key=raw_key)
+        raise
 
     response.headers["Location"] = f"/clients/{client_id}/sources/{source_id}"
-    return SourceCreateResponse(source_id=source_id, profile=profile)
+    return SourceCreateResponse(source_id=source_id, profile=load_profile(storage, client_id, source_id))
 
 
 # ---------------------------------------------------------------------------
@@ -257,15 +268,28 @@ def update_source_role(
     root: ConfigRootDep,
     store: ClientStoreDep,
 ) -> SourceSpec:
+    """Confirm a role on both documents that carry it, then re-derive the client's join coverage.
+
+    The role lives in two places by design - on the `SourceSpec` the registry lists and on the
+    `SourceProfile` the mapping screen reads - so writing only one of them leaves the two halves of
+    `GET /clients/{id}/sources` contradicting each other about a fact the user just settled. It is
+    written here as `DecidedBy.USER` because this endpoint *is* the user deciding; a role the
+    detector merely proposed stays in `role_candidates` where it can be told apart.
+
+    Coverage is re-derived on every role change, not only when the new role is the entity: moving a
+    role *away* from the entity leaves the client with nothing to measure against, and the stale
+    number has to come off the badge (house rule 2) as surely as a fresh one has to go on it.
+    """
     load_source(store, client_id, source_id)
     roles = get_roles(root)
     require_role(roles, body.role)
     updated = store.set_source_role(source_id, body.role)
-    if body.role == roles.entity_role:
-        use_case = any_use_case_config(root)
-        refresh_other_sources_against_new_entity(
-            storage, store, use_case=use_case, client_id=client_id, entity=updated
-        )
+    profile = load_profile(storage, client_id, source_id)
+    storage.write_model(
+        source_profile_key(client_id, source_id),
+        profile.model_copy(update={"role": body.role, "role_decided_by": DecidedBy.USER}),
+    )
+    resync_join_coverage(storage, store, root=root, roles=roles, client_id=client_id)
     return updated
 
 
@@ -278,11 +302,24 @@ def update_source_role(
     responses=_NOT_FOUND,
     summary="Remove one source",
 )
-def delete_source(client_id: str, source_id: str, storage: StorageDep, store: ClientStoreDep) -> Response:
+def delete_source(
+    client_id: str,
+    source_id: str,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    store: ClientStoreDep,
+) -> Response:
+    """Remove the row and both stored files, then re-derive what is left of the client's coverage.
+
+    Deleting the entity source is the case worth spelling out: every other source's `coverage` was
+    measured against the table that just went away, so leaving those numbers on file would show the
+    user a measurement of something that no longer exists.
+    """
     source = load_source(store, client_id, source_id)
     store.delete_source(source_id)
     storage.delete(source.storage_key)
     storage.delete(source_profile_key(client_id, source_id))
+    resync_join_coverage(storage, store, root=root, roles=get_roles(root), client_id=client_id)
     return Response(status_code=204)
 
 
@@ -332,7 +369,10 @@ def any_use_case_config(root: Path) -> UseCaseConfig:
     ids = list_use_case_ids(root)
     if not ids:
         raise http_error(
-            500, "NO_USE_CASES_CONFIGURED", "No use case is configured, so a source cannot be profiled."
+            500,
+            "NO_USE_CASES_CONFIGURED",
+            "This engine has no use cases configured, so there is nothing to profile a source "
+            "against. Add a use case to the configuration before uploading client data.",
         )
     return load_use_case(ids[0], root)
 
@@ -344,7 +384,8 @@ def require_role(roles: RoleCatalogue, role: str) -> None:
         raise http_error(
             409,
             "ROLE_UNKNOWN",
-            f"{role!r} is not a role; configs/roles.yaml defines {', '.join(roles.names)}.",
+            f"{role!r} is not a kind of table this engine knows. "
+            f"Choose one of: {', '.join(roles.names)}.",
         )
 
 
@@ -380,99 +421,118 @@ def source_not_found(source_id: str) -> HTTPException:
 # ---------------------------------------------------------------------------
 # Join coverage
 # ---------------------------------------------------------------------------
-def find_entity_source(store: ClientStore, roles: RoleCatalogue, client_id: str) -> SourceSpec | None:
-    """The client's confirmed entity source, or `None` while there is none."""
-    for candidate in store.list_sources(client_id):
-        if candidate.role == roles.entity_role:
-            return candidate
-    return None
-
-
 def entity_key_column(entity_profile: SourceProfile) -> str | None:
     """The entity source's best-ranked key candidate - no mapping is confirmed yet at upload time,
     so this is the same heuristic best guess the mapping screen will show the user first."""
     return entity_profile.key_candidates[0].column if entity_profile.key_candidates else None
 
 
-def with_join_coverage(
-    storage: Storage,
-    *,
-    use_case: UseCaseConfig,
-    entity: SourceSpec,
-    source_frame: pd.DataFrame,
-    profile: SourceProfile,
-) -> SourceProfile:
-    """`profile.key_candidates`, each carrying its measured coverage against `entity`.
-
-    `source_frame` is the frame already read for `profile` - the new source's own upload - so
-    nothing is re-read for its side of the comparison; only `entity`'s raw file is read here, once,
-    through `FileSourceReader` (`engine.onboarding.sources`'s own seam for this).
-    """
-    if not profile.key_candidates:
-        return profile
-    entity_profile = load_profile(storage, entity.client_id, entity.source_id)
-    column = entity_key_column(entity_profile)
-    if column is None:
-        return profile
-    entity_frame = FileSourceReader(storage, use_case).read(entity, max_rows=None)
-    if column not in entity_frame.columns:
-        return profile
-    entity_keys = entity_frame[column]
-    updated: tuple[KeyCandidate, ...] = tuple(
-        (
-            candidate.model_copy(
-                update={"coverage": join_coverage(source_frame[candidate.column], entity_keys)}
-            )
-            if candidate.column in source_frame.columns
-            else candidate
-        )
-        for candidate in profile.key_candidates
-    )
-    return profile.model_copy(update={"key_candidates": updated})
-
-
-def refresh_other_sources_against_new_entity(
+def resync_join_coverage(
     storage: Storage,
     store: ClientStore,
     *,
-    use_case: UseCaseConfig,
+    root: Path,
+    roles: RoleCatalogue,
     client_id: str,
-    entity: SourceSpec,
+    only: frozenset[str] | None = None,
 ) -> None:
-    """When a source becomes the confirmed entity table, every other source's coverage badge turns
-    from decorative to real for the first time - so each one is re-measured and rewritten now,
-    rather than only ever measured against whichever entity source happened to exist first."""
-    entity_profile = load_profile(storage, client_id, entity.source_id)
-    column = entity_key_column(entity_profile)
-    if column is None:
-        return
-    reader = FileSourceReader(storage, use_case)
-    entity_frame = reader.read(entity, max_rows=None)
-    if column not in entity_frame.columns:
-        return
-    entity_keys = entity_frame[column]
-    for other in store.list_sources(client_id):
-        if other.source_id == entity.source_id:
+    """Re-derive `KeyCandidate.coverage` on this client's stored profiles from the sources as they
+    now are, and rewrite the ones whose answer changed.
+
+    One function rather than one per direction, because coverage is not a fact about the moment a
+    source was uploaded - it is a fact about the client's current set of sources, and it changes
+    from *every* side: a source arrives, a role is confirmed, a role moves, a source is deleted.
+    Deriving it from scratch each time is the only version of this that cannot drift; the three
+    cases the earlier add-only version got wrong (the entity deleted, its role moved elsewhere, a
+    previously-measured source becoming the entity itself) all fall out of it for free.
+
+    Coverage is a measurement or it is `None` - never a leftover. A source is measurable only when
+    the client has a confirmed entity source, that entity has a key column to compare against, and
+    the source is not that entity; anything else clears the number back to `None`, which the UI
+    renders as an em dash (house rule 2).
+
+    `only` narrows the *rewrite* to named sources - the upload path uses it, because adding one
+    non-entity source cannot change any other source's answer and re-reading every file to confirm
+    that would make each upload cost a full pass over the client's data. It never narrows what is
+    measured *against*: the entity is always resolved from the whole list, newest first, so when two
+    sources are both confirmed as the entity - which nothing forbids, since which table is the
+    entity is the user's to change - the more recent confirmation is the one that counts.
+    """
+    sources = store.list_sources(client_id)
+    entity = next((source for source in sources if source.role == roles.entity_role), None)
+    entity_keys: pd.Series[Any] | None = None
+    reader: FileSourceReader | None = None
+    if entity is not None:
+        column = entity_key_column(load_profile(storage, client_id, entity.source_id))
+        if column is not None:
+            reader = FileSourceReader(storage, any_use_case_config(root))
+            entity_frame = reader.read(entity, max_rows=None)
+            if column in entity_frame.columns:
+                entity_keys = entity_frame[column]
+    for source in sources:
+        if only is not None and source.source_id not in only:
             continue
-        profile = load_profile(storage, client_id, other.source_id)
+        profile = load_profile(storage, client_id, source.source_id)
         if not profile.key_candidates:
             continue
-        other_frame = reader.read(other, max_rows=None)
-        updated: tuple[KeyCandidate, ...] = tuple(
-            (
-                candidate.model_copy(
-                    update={"coverage": join_coverage(other_frame[candidate.column], entity_keys)}
-                )
-                if candidate.column in other_frame.columns
-                else candidate
+        if entity is None or entity_keys is None or reader is None or source.source_id == entity.source_id:
+            updated = cleared_coverage(profile.key_candidates)
+        else:
+            updated = measured_coverage(
+                profile.key_candidates, reader.read(source, max_rows=None), entity_keys
             )
-            for candidate in profile.key_candidates
-        )
         if updated != profile.key_candidates:
             storage.write_model(
-                source_profile_key(client_id, other.source_id),
+                source_profile_key(client_id, source.source_id),
                 profile.model_copy(update={"key_candidates": updated}),
             )
+
+
+def measured_coverage(
+    candidates: tuple[KeyCandidate, ...], frame: pd.DataFrame, entity_keys: pd.Series[Any]
+) -> tuple[KeyCandidate, ...]:
+    """`candidates` with each one's share of keys found in `entity_keys` measured on `frame`.
+
+    `frame` is the source's whole table, read for this comparison rather than reused from the
+    profiling pass: that pass stops at `PROFILE_ROW_CAP` rows, and a share of the first two million
+    rows presented as "share of this source's rows" would be a number that means something other
+    than what the badge says it means.
+
+    A candidate whose column is not in the frame at all is cleared rather than left alone, so a
+    stale number can never outlive the column it was measured on.
+    """
+    return tuple(
+        (
+            candidate.model_copy(update={"coverage": join_coverage(frame[candidate.column], entity_keys)})
+            if candidate.column in frame.columns
+            else candidate.model_copy(update={"coverage": None})
+        )
+        for candidate in candidates
+    )
+
+
+def cleared_coverage(candidates: tuple[KeyCandidate, ...]) -> tuple[KeyCandidate, ...]:
+    """`candidates` with every `coverage` back to `None` - there is nothing to measure against."""
+    return tuple(
+        candidate if candidate.coverage is None else candidate.model_copy(update={"coverage": None})
+        for candidate in candidates
+    )
+
+
+def discard_source(
+    storage: Storage, store: ClientStore, *, client_id: str, source_id: str, raw_key: str
+) -> None:
+    """Unwind a half-finished upload: both storage keys and the registry row, if they got that far.
+
+    `api.routes.uploads.delete_upload`'s promise, kept for a source: whatever failed between the
+    first byte landing and the last write finishing, `GET /clients/{id}/sources` must not afterwards
+    show a source with no file, or a row whose profile was never written. The registry row may
+    legitimately not exist yet, which is why its absence is suppressed rather than reported.
+    """
+    storage.delete(raw_key)
+    storage.delete(source_profile_key(client_id, source_id))
+    with suppress(ClientStoreError):
+        store.delete_source(source_id)
 
 
 __all__ = ["router"]

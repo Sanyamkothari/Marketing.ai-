@@ -29,20 +29,26 @@ keeping them straight is most of what it does:
   function cannot: hand the finished manifest to `ClientStore.register_dataset`, because a client's
   dataset index is not a dataset-directory artefact and so outside `DatasetRegistry`'s remit.
 
+The checks come from `engine.onboarding.validate`, which takes one flat `OnboardingCheckParams` of
+**measured** facts rather than the request's ids; `api.routes.mappings.check_params`/`facts_for` are
+this API's copy of the config-to-params mapping its docstring asks every caller to do, and that
+module's docstring explains what these routes deliberately leave out of it (no frame, so no check
+that needs the data itself answers from a route - the build answers those, with the tables in front
+of it). The consequence is worth stating plainly: what `POST /datasets` refuses on is every
+*structural* problem - no entity source, an unmapped entity key, a required column nothing maps, more
+sources or features than the use case allows - and the data-shaped findings arrive in the build
+report, where they were actually measured.
+
 `engine.onboarding.build` is landing in parallel (`PARALLEL_WORK_PROTOCOL.md`) and did not exist when
-this module was written. Every other sibling this milestone needs - `engine.onboarding.validate`
-(`run_onboarding_checks`) - is imported at the top in the ordinary way, on the general instruction
-that a missing module is the *test*'s problem to skip past, not this module's to work around; only
-`build_dataset` gets the `_build_callable()` indirection the task calls for by name, because it is
-called from inside a background job body where an unhandled `ImportError` would surface as an opaque
-failed job rather than the coded, business-language refusal `BuildEngineUnavailableError` gives instead.
-This branch's assumed signature - `build_dataset(spec, *, mode, dataset_id, registry, sources,
-mappings, source_ids=None, sample_entities=None, cancel=None) -> BuildReport`, writing through the
-given `DatasetRegistry` as it runs and returning the finished report - is documented on
-`_build_callable` and on `tests/integration/test_api_datasets.py`'s module docstring; if the real
-signature differs, the fix is at these call sites; `run_onboarding_checks(*, sources, mappings,
-spec=None) -> tuple[OnboardingCheck, ...]` is likewise this branch's reading, documented on
-`api/routes/mappings.py`, which needs the same function for the same reason.
+this module was written, so `build_dataset` gets the `_build_callable()` indirection the task calls
+for by name: it is called from inside a background job body where an unhandled `ImportError` would
+surface as an opaque failed job rather than the coded, business-language refusal
+`BuildEngineUnavailableError` gives instead. This branch's assumed signature -
+`build_dataset(spec, *, mode, dataset_id, registry, sources, mappings, source_ids=None,
+sample_entities=None, cancel=None) -> BuildReport`, writing through the given `DatasetRegistry` as it
+runs and returning the finished report - is documented on `_build_callable` and on
+`tests/integration/test_api_datasets.py`'s module docstring; if the real signature differs, the fix
+is at these call sites.
 """
 
 from __future__ import annotations
@@ -50,7 +56,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Callable, Iterable, Mapping
 from datetime import datetime
-from typing import Annotated, Final
+from typing import Annotated, Final, cast
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
@@ -58,12 +64,12 @@ from pydantic import ValidationError
 
 from api.deps import ConfigRootDep, JobsDep, StorageDep
 from api.routes.clients import ClientStoreDep, load_client
-from api.routes.mappings import load_mapping
+from api.routes.mappings import check_params, facts_for, load_mapping
 from api.routes.sources import load_profile, load_source
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
 from engine.clients import ClientStore, ClientStoreError
-from engine.config import RunMode, StrictBase
+from engine.config import RunMode, StrictBase, get_roles
 from engine.contracts import RunState, Severity
 from engine.jobs import CancelToken, JobCancelledError, JobFn
 from engine.onboarding.datasets import (
@@ -86,6 +92,7 @@ from engine.onboarding.specs import (
     SnapshotSpec,
     SnapshotStat,
     SourceProfile,
+    SourceSpec,
 )
 from engine.onboarding.validate import run_onboarding_checks
 from engine.storage import Storage, StorageError
@@ -224,16 +231,32 @@ def create_onboarding_spec(
     """Every id `body` names must resolve before anything is saved: the entity and event sources, and
     every mapping - each a `404` on its own code, exactly as `api.routes.mappings.load_mapping` and
     `api.routes.sources.load_source` already answer for their own endpoints, so a broken reference
-    reads the same whichever screen surfaces it."""
+    reads the same whichever screen surfaces it.
+
+    A mapping that targets a file this recipe does not read is refused rather than saved and ignored:
+    `OnboardingSpec` documents `mapping_ids` as "one per source", the build has nothing to apply such
+    a mapping to, and a recipe that silently drops half of what it was given is how a user comes to
+    believe a table was included when it was not.
+    """
     load_client(store, client_id)
-    use_case_config(body.use_case, root)
+    config = use_case_config(body.use_case, root)
     source_ids = (body.entity_source_id, *body.event_source_ids)
-    sources = load_sources(store, storage, client_id, source_ids)
+    sources = load_source_specs(store, client_id, source_ids)
     mappings = load_mappings(store, client_id, body.mapping_ids)
+    for mapping in mappings.values():
+        if mapping.source_id not in sources:
+            raise http_error(
+                409,
+                "MAPPING_NOT_FOR_SPEC",
+                f"Mapping {mapping.mapping_id!r} describes a file this recipe does not read, so there "
+                "would be nothing to apply it to. Remove it, or add its file to the recipe.",
+            )
     spec = build_onboarding_spec(new_spec_id(), client_id, body)
     saved = store.save_spec(spec)
-    checks = run_onboarding_checks(sources=sources, mappings=mappings, spec=saved)
-    return OnboardingSpecCreateResponse(spec_id=saved.spec_id, checks=checks)
+    return OnboardingSpecCreateResponse(
+        spec_id=saved.spec_id,
+        checks=spec_checks(config, root, sources=sources, mappings=mappings, spec=saved),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -262,7 +285,7 @@ def list_onboarding_specs(
     summary="Build this recipe on a 200-entity sample, synchronously, to preview its effect",
 )
 def preview_onboarding_spec(
-    client_id: str, spec_id: str, storage: StorageDep, store: ClientStoreDep
+    client_id: str, spec_id: str, root: ConfigRootDep, storage: StorageDep, store: ClientStoreDep
 ) -> PreviewResponse:
     """Refuse first, on the same structural checks `POST /datasets` refuses on; otherwise call
     `build_dataset` on `PREVIEW_SAMPLE_ENTITIES` entities and report exactly what it measured.
@@ -274,27 +297,33 @@ def preview_onboarding_spec(
     """
     load_client(store, client_id)
     spec = load_spec(store, client_id, spec_id)
-    sources = load_sources(store, storage, client_id, (spec.entity_source_id, *spec.event_source_ids))
+    config = use_case_config(spec.use_case, root)
+    source_ids = (spec.entity_source_id, *spec.event_source_ids)
+    sources = load_source_specs(store, client_id, source_ids)
     mappings = load_mappings(store, client_id, spec.mapping_ids)
-    structural = run_onboarding_checks(sources=sources, mappings=mappings, spec=spec)
+    structural = spec_checks(config, root, sources=sources, mappings=mappings, spec=spec)
     if blocking_errors(structural):
         return PreviewResponse(rows=(), per_snapshot=(), feature_null_rates={}, checks=structural)
 
+    profiles = load_profiles(storage, client_id, source_ids)
     registry = LocalDatasetRegistry(storage)
     preview_id = registry.new_dataset_id(client_id, spec.use_case)
     try:
         report = run_build(
             spec,
-            mode=RunMode.TRAIN,
+            mode=build_mode(spec),
             dataset_id=preview_id,
             registry=registry,
-            sources=sources,
+            sources=profiles,
             mappings=mappings,
             sample_entities=PREVIEW_SAMPLE_ENTITIES,
         )
         rows = tuple(registry.read_sample(preview_id))
     except BuildEngineUnavailableError as exc:
-        raise http_error(422, exc.code, exc.message) from exc
+        # 503, not 422: the recipe this request named is fine and re-sending it unchanged is exactly
+        # what the user should do once the engine can build. A 422 would tell them to go and fix a
+        # request that has nothing wrong with it.
+        raise http_error(503, exc.code, exc.message) from exc
     except DatasetError as exc:
         raise http_error(422, exc.code, exc.message) from exc
     except Exception as exc:  # the engine's own failure; a code and a message, never a raw traceback
@@ -538,7 +567,10 @@ def _build_callable() -> BuildDatasetFn:
         from engine.onboarding.build import build_dataset
     except ImportError as exc:
         raise BuildEngineUnavailableError() from exc
-    return build_dataset
+    # `cast`: `engine.onboarding.build` has no py.typed marker yet (it does not exist - see the
+    # module docstring), so mypy sees this import as `Any`; the cast asserts the contract this
+    # branch wrote `run_build` against and becomes a no-op once the real module lands.
+    return cast(BuildDatasetFn, build_dataset)
 
 
 def run_build(

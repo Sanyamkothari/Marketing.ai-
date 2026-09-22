@@ -18,6 +18,7 @@
 //   featureForm   - the "Add feature" draft the generated form is editing, or null when closed
 //   featureSchema - {function: string[], where: string[], namePattern: string} from openapi.json,
 //                   or null before it loads; the Add-feature form stays disabled until it has this
+//   vocabularyError - the ApiError loading featureSchema or snapshotSchema raised, or null
 //   label         - editable copy of schema.label (only horizon_days differs from it), or null
 //   snapshotSchema- {mode, frequency, maxSnapshots: {choices|min|max|default}} from openapi.json
 //   snapshot      - editable SnapshotDefinition-shaped object
@@ -165,8 +166,8 @@ function sourceRow(state, entry, entityConfirmed, entityRole) {
     <td>${esc(source.file_name)}</td>
     <td>${dash(source.rows, fmtInt)}</td>
     <td>${roleSelect(state, source.source_id, source.role, profile.role_candidates)}</td>
-    <td>${dash(keyTop && keyTop.column)}</td>
-    <td>${dash(timeTop && timeTop.column)}</td>
+    <td>${esc(dash(keyTop && keyTop.column))}</td>
+    <td>${esc(dash(timeTop && timeTop.column))}</td>
     <td>${coverageBadge(entityConfirmed, source.role, isEntityRole, profile.key_candidates)}</td>
     <td><button type="button" class="linkbtn" data-act="delete-source" data-source="${esc(
       source.source_id,
@@ -281,7 +282,7 @@ function mappingRow(state, sourceId, mapping, role, column) {
       sourceId,
     )}" data-column="${esc(column.name)}" aria-label="Standard column for ${esc(column.name)}">${options}</select></div></td>
     <td>${esc(column.inferred_type)}</td>
-    <td>${esc(sample) || EM_DASH}</td>
+    <td>${esc(dash(sample))}</td>
     <td>${confidencePill(decided ? decided.confidence : null)}</td>
     <td>${standardColumn ? valueMapEditor(state, sourceId, current, standardColumn, mapping, column) : ""}</td>
   </tr>`;
@@ -391,12 +392,19 @@ function addFeatureForm(state) {
     return `<button type="button" class="linkbtn" data-act="open-add-feature">+ Add a feature</button>`;
   }
   const fs = state.featureSchema;
-  if (!fs) return `<div class="loading">Loading the feature vocabulary…</div>`;
+  if (!fs) {
+    return state.vocabularyError
+      ? errorBox(state.vocabularyError)
+      : `<div class="loading">Loading the feature vocabulary…</div>`;
+  }
   const entityRole = entityRoleId(state.schema);
   const roles = [...new Set(state.sources.filter((e) => e.source.role && e.source.role !== entityRole).map((e) => e.source.role))];
   const draft = state.featureForm;
   const fnOptions = fs.function.map((f) => `<option value="${esc(f)}"${draft.function === f ? " selected" : ""}>${esc(f)}</option>`).join("");
   const roleOptions = roles.map((r) => `<option value="${esc(r)}"${draft.role === r ? " selected" : ""}>${esc(humanizeId(r))}</option>`).join("");
+  const opOptions = fs.where
+    .map((op) => `<option value="${esc(op)}"${draft.whereOp === op ? " selected" : ""}>${esc(op)}</option>`)
+    .join("");
   return `<div class="card"><h4>New feature</h4><div style="padding:16px">
     <div class="frow">
       <div class="field"><span class="sub">Name</span><div class="control"><input data-act="feature-field" data-field="name" value="${esc(
@@ -414,6 +422,19 @@ function addFeatureForm(state) {
         draft.description || "",
       )}" aria-label="Description"></div></div>
     </div>
+    <details class="adv-wrap"><summary>Filter (optional)<span class="n">only count events that match</span></summary>
+      <div class="frow">
+        <div class="field"><span class="sub">Column</span><div class="control"><input data-act="feature-field" data-field="whereColumn" value="${esc(
+          draft.whereColumn || "",
+        )}" aria-label="Filter column"></div></div>
+        <div class="field"><span class="sub">Is</span><div class="control sel"><select data-act="feature-field" data-field="whereOp" aria-label="Filter operator"><option value=""${
+          draft.whereOp ? "" : " selected"
+        }>No filter</option>${opOptions}</select></div></div>
+        <div class="field"><span class="sub">Value</span><div class="control"><input data-act="feature-field" data-field="whereValue" value="${esc(
+          draft.whereValue || "",
+        )}" aria-label="Filter value"></div></div>
+      </div>
+    </details>
     <div class="actions" style="border-top:0;padding-top:10px">
       <button type="button" class="run" data-act="save-feature">Add feature</button>
       <button type="button" class="linkbtn" data-act="cancel-add-feature">Cancel</button>
@@ -435,7 +456,11 @@ function labelSentence(state) {
 function snapshotSettings(state) {
   const ss = state.snapshotSchema;
   const snap = state.snapshot;
-  if (!ss || !snap) return `<div class="loading">Loading snapshot settings…</div>`;
+  if (!ss || !snap) {
+    return state.vocabularyError
+      ? errorBox(state.vocabularyError)
+      : `<div class="loading">Loading snapshot settings…</div>`;
+  }
   const modeOptions = ss.mode
     .map((m) => `<option value="${esc(m)}"${snap.mode === m ? " selected" : ""}>${esc(humanizeId(m))}</option>`)
     .join("");

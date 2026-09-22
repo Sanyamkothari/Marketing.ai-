@@ -129,9 +129,25 @@ export const suggestMapping = (clientId, sourceId, useCaseId) =>
     use_case: useCaseId,
   });
 
-/** `mapping` is the (possibly user-edited) `MappingSpec` the suggestion started from. */
+/**
+ * `mapping` is the (possibly user-edited) `MappingSpec` the suggestion started from; the request
+ * body is narrowed to exactly `MappingSaveRequest`'s fields before it is sent. `mapping_id` is the
+ * URL's to own (the route reads it from there, never the body - two people editing the same
+ * suggestion must save to one id, not fork it into two), and `created_at`/`hash` are the store's to
+ * stamp on write - sending any of the three would be an unknown field against a route that forbids
+ * them, not a value the API would have used anyway.
+ */
 export const saveMapping = (clientId, mappingId, mapping) =>
-  json(`/clients/${encodeURIComponent(clientId)}/mappings/${encodeURIComponent(mappingId)}`, "PUT", mapping);
+  json(`/clients/${encodeURIComponent(clientId)}/mappings/${encodeURIComponent(mappingId)}`, "PUT", {
+    client_id: mapping.client_id,
+    source_id: mapping.source_id,
+    use_case: mapping.use_case,
+    role: mapping.role,
+    columns: mapping.columns,
+    unmapped_source: mapping.unmapped_source,
+    missing_required: mapping.missing_required,
+    value_maps: mapping.value_maps,
+  });
 
 // --- the onboarding spec and its preview ------------------------------------------------------------
 
