@@ -57,6 +57,11 @@ dev = [
   "mypy==2.3.1",
   "pandas-stubs==3.0.5.260914",
   "types-PyYAML==6.0.12.20260906",
+  "playwright==1.56.0",                 # drives plan §11's acceptance journey through the real screens
+                                        # (tests/integration/test_acceptance.py). Pinned exactly because the
+                                        # package and the browser build are one unit: 1.56 is Chromium 1194,
+                                        # and a bump needs a matching `playwright install`. Absent it, that
+                                        # module skips rather than fails.
   "boto3-stubs[bedrock-runtime]==1.43.99",   # boto3 ships no py.typed; the other four Phase 3a deps do
 ]
 

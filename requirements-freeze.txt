@@ -62,6 +62,7 @@ pandas-stubs==3.0.5.260914
 pathspec==1.1.1
 pillow==12.3.0
 platformdirs==4.11.11
+playwright==1.56.0
 plotly==7.1.0
 pluggy==1.6.0
 psutil==7.2.2
@@ -70,6 +71,7 @@ pydantic==2.13.5
 pydantic-core==2.46.5
 pydantic-extra-types==2.11.1
 pydantic-settings==2.15.0
+pyee==13.0.1
 pygments==2.21.0
 pyparsing==3.3.3
 pypdf==6.19.0

@@ -40,6 +40,7 @@ from engine.config import (
     resolve_config,
 )
 from engine.contracts import (
+    DatasetProfile,
     FeatureSchema,
     FeatureSchemaColumn,
     ModelStatus,
@@ -272,10 +273,36 @@ def data_dir(tmp_path: Path) -> Path:
     return directory
 
 
+def install_stub_train_job(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Stand in for the train flow, the way this module already stands in for ingest and validate.
+
+    These are **API** tests: what they assert is the route, the 409 contract, the run directory and
+    the cancel path, none of which need a fitted model. Since DEC-081 the route submits the real
+    `Pipeline.run_train`, so without this the fast suite would train an AutoGluon model per test and
+    take hours. The stub is DEC-060's coded stop, which is fast and writes a realistic status
+    document, so a run here reaches a terminal state at `prepare`.
+
+    The two halves that matters are each asserted where they belong: that the route submits the
+    *train* builder, by `test_a_training_run_submits_the_train_flow` below; and what that builder
+    actually does, by the `@slow` integration tests and `tests/integration/test_acceptance.py`.
+    """
+
+    def build(storage: Any, *_args: Any, **kwargs: Any) -> Any:
+        record: RunRecord = kwargs["record"]
+        profile = storage.read_model(run_key(record.run_id, "profile.json"), DatasetProfile)
+        report = storage.read_model(run_key(record.run_id, "validation.json"), ValidationReport)
+        return runs.build_m2_job(
+            storage, run_id=record.run_id, profile=profile, report=report, mode=RunMode.TRAIN
+        )
+
+    monkeypatch.setattr(runs, "build_train_job", build)
+
+
 @pytest.fixture
 def client(config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     install_ingest_stub(monkeypatch)
     install_validate_stub(monkeypatch)
+    install_stub_train_job(monkeypatch)
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
         yield test_client
 
@@ -288,14 +315,17 @@ def blocked_client(
     install_ingest_stub(monkeypatch)
     install_validate_stub(monkeypatch)
 
-    def blocking(_storage: Any, **_kwargs: Any) -> Any:
+    # `build_train_job(storage, registry, jobs, *, ...)` — three positional arguments, like
+    # `build_score_job`, so the stub must accept them (DEC-081).
+    def blocking(*_args: Any, **_kwargs: Any) -> Any:
         def job(cancel: CancelToken) -> None:
             cancel.wait(10)
             cancel.raise_if_cancelled()
 
         return job
 
-    monkeypatch.setattr(runs, "build_m2_job", blocking)
+    # DEC-081: a training run submits the train flow, so that is what must block here.
+    monkeypatch.setattr(runs, "build_train_job", blocking)
     app = create_app(config_root=config_root, data_dir=data_dir)
     app.state.jobs = ThreadJobRunner(max_workers=1)
     with TestClient(app) as test_client:
@@ -457,9 +487,64 @@ def test_run_directory_holds_exactly_the_five_m2_artefacts(
     }
 
 
-def test_m2_job_runs_two_stages_then_fails_honestly_at_prepare(client: TestClient) -> None:
+def test_a_training_run_submits_the_train_flow(
+    config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEC-081. This is the assertion whose absence let the product ship unable to train.
+
+    `POST /runs` used to choose its job by whether a model version had been resolved, and a version
+    is only ever resolved on the score path - so every training run got `build_m2_job` and stopped
+    at `prepare` with `STAGE_NOT_IMPLEMENTED`, months after `Pipeline.run_train` started working.
+    The old test here asserted exactly that failure, which is why the suite stayed green over it.
+
+    The flow itself is exercised end to end by the `@slow` integration tests and by
+    `tests/integration/test_acceptance.py`; what is checked here is the wiring those tests are too
+    expensive to guard on every commit - that the *train* builder is the one the route submits.
+    """
+    install_ingest_stub(monkeypatch)
+    install_validate_stub(monkeypatch)
+    built: list[str] = []
+
+    def spy(name: str) -> Any:
+        def build(*_args: Any, **_kwargs: Any) -> Any:
+            built.append(name)
+            return lambda _cancel: None
+
+        return build
+
+    monkeypatch.setattr(runs, "build_train_job", spy("train"))
+    monkeypatch.setattr(runs, "build_score_job", spy("score"))
+    monkeypatch.setattr(runs, "build_m2_job", spy("m2"))
+    app = create_app(config_root=config_root, data_dir=data_dir)
+    with TestClient(app) as test_client:
+        run_id = start_run(test_client).json()["run_id"]
+        await_job(test_client, run_id)
+    assert built == ["train"], f"a training run must submit the train flow, not {built}"
+
+
+def test_the_m2_stub_is_no_longer_reachable_from_the_route() -> None:
+    """It is kept for its own tests (below) and called by nothing (DEC-081)."""
+    source = Path(runs.__file__).read_text(encoding="utf-8")
+    body = source.split("def build_m2_job", 1)[0]
+    assert "build_m2_job(" not in body, "the route still submits the M2 stub"
+    assert "build_train_job(" in body and "build_score_job(" in body
+
+
+def test_the_m2_stub_still_stops_honestly_when_it_is_called(
+    client: TestClient, data_dir: Path, storage: LocalStorage
+) -> None:
+    """DEC-060's behaviour, tested directly now that nothing in the route reaches it.
+
+    A stage that cannot run must fail with a code and a sentence a reader can act on, rather than
+    an unhandled `NotImplementedError`; that is worth keeping tested for the next stage that has to.
+    """
     run_id = start_run(client).json()["run_id"]
     await_job(client, run_id)
+    profile = storage.read_model(run_key(run_id, "profile.json"), DatasetProfile)
+    report = storage.read_model(run_key(run_id, "validation.json"), ValidationReport)
+    runs.build_m2_job(storage, run_id=run_id, profile=profile, report=report, mode=RunMode.TRAIN)(
+        CancelToken()
+    )
     detail = RunDetailResponse.model_validate(client.get(f"/runs/{run_id}").json())
     assert detail.run.state is RunState.FAILED
     assert detail.run.error is not None
@@ -469,7 +554,6 @@ def test_m2_job_runs_two_stages_then_fails_honestly_at_prepare(client: TestClien
     assert by_key["ingest"].state is RunState.DONE and by_key["ingest"].detail
     assert by_key["validate"].state is RunState.DONE and by_key["validate"].detail
     assert by_key["prepare"].state is RunState.FAILED
-    assert detail.status.state is RunState.FAILED
 
 
 # ---------------------------------------------------------------------------
@@ -875,9 +959,15 @@ def use_case_for(variant: str) -> str:
 )
 @pytest.mark.parametrize("variant", TRAIN_VARIANTS)
 def test_broken_fixture_returns_409_with_the_validation_payload(
-    config_root: Path, data_dir: Path, variant: str
+    config_root: Path, data_dir: Path, variant: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Design §6.9: every error-severity variant is refused with its code; warnings never block."""
+    """Design §6.9: every error-severity variant is refused with its code; warnings never block.
+
+    The train job is stubbed for the same reason the `client` fixture stubs it: a warning-only
+    variant is accepted with a 202, and since DEC-081 that really does start the train flow, which
+    would fit an AutoGluon model per variant in the fast suite.
+    """
+    install_stub_train_job(monkeypatch)
     use_case = use_case_for(variant)
     frame = generate(GenerationSpec(use_case, variant=variant, config_root=config_root))
     payload = frame.to_csv(index=False, lineterminator="\n").encode()

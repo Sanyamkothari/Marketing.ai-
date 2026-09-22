@@ -22,10 +22,11 @@ That is what makes the incremental rebuild in `DocIndexManifest` safe - a docume
 :func:`fingerprint` has not moved can be skipped, and the chunks already in the index are exactly
 the chunks a rebuild would have written.
 
-Token counts come from `engine.llm.estimate_tokens` and from nowhere else. The number is the
-chars-over-four estimate and is marked as an estimate at its source; what matters here is that the
-chunker, the budget and the usage meter all mean the same thing by "a token", because two
-definitions would make a budget that was measured against one and enforced against the other.
+Token counts come from `engine.llm.estimate_tokens` and from nowhere else. It is the chars-over-four
+approximation rather than a tokeniser, which is why `Chunk.tokens` is described as approximate; what
+matters here is that the chunker, the budget and the usage meter all mean the same thing by "a
+token", because two definitions would make a budget that was measured against one and enforced
+against the other.
 """
 
 from __future__ import annotations
@@ -49,6 +50,7 @@ __all__ = [
     "DOCUMENT_FINGERPRINT_ALGORITHM",
     "DOCUMENT_FINGERPRINT_PREFIX",
     "chunk_document",
+    "embedding_text",
     "fingerprint",
     "sentences",
 ]
@@ -219,3 +221,27 @@ def fingerprint(data: bytes) -> str:
     whose sections may have moved.
     """
     return DOCUMENT_FINGERPRINT_PREFIX + hashlib.sha256(data).hexdigest()
+
+
+def embedding_text(chunk: Chunk) -> str:
+    """The rendering of `chunk` that gets embedded: its document and heading, then its words.
+
+    A chunk is embedded with its provenance in front of it rather than bare, because the words a
+    question uses are very often in the heading and nowhere in the prose beneath it. "Late payment
+    and reconnection" is the whole vocabulary of "what is the late payment fee?", while the
+    paragraph under it says "a fee of Rs 100 or 2% of the outstanding amount, whichever is higher"
+    and never repeats the heading's words at all. Embedding the passage alone throws that away on
+    exactly the questions a knowledge base exists to answer.
+
+    Measured over the 45 answerable questions of the reference set, this is the difference between
+    retrieving the right document 28 times and retrieving it 40 times, and it *widens* the gap
+    between a real question and an off-topic one rather than narrowing it - a heading is specific
+    where a body paragraph is discursive (DEC-217).
+
+    The question is embedded bare, with no prefix of its own. That asymmetry is deliberate and
+    standard: the prefix is context the passage lacks, not a format both sides must share.
+
+    `doc_id` is used rather than `document` because the filename carries an extension, and "pdf"
+    is a word in every chunk of every PDF - a term that says nothing about which one to retrieve.
+    """
+    return f"{chunk.doc_id.replace('_', ' ')} {chunk.section}\n\n{chunk.text}"

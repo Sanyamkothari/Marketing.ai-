@@ -1,0 +1,262 @@
+"""Answering one question from one index: retrieve, ground, check, or refuse.
+
+The flow is short and its order is the substance:
+
+1. **Embed the question and retrieve.** `retrieval` applies the similarity floor and the MMR
+   de-duplication; what comes back is everything the model will be allowed to see.
+2. **If nothing survived the floor, refuse - without calling a model.** That is the single most
+   important line in this module. A question the documents do not answer costs one embedding and
+   nothing else, the refusal is the operator's configured sentence rather than a model's improvised
+   one, and no generation can hallucinate an answer that was never asked for.
+3. **Otherwise render the prompt with numbered extracts, and call once.** The numbering is what a
+   citation refers to, so the model cites a position rather than inventing a filename.
+4. **Parse, and drop any citation that points nowhere.** A model that cites extract 7 when six were
+   supplied has said something about a document that was not in front of it; the claim survives,
+   the false citation does not, and the answer is marked for the guardrails.
+5. **Check, then return.** The faithfulness judge is given exactly the extracts as its source, so
+   "is every claim supported?" is asked against the same text the prompt was.
+
+Nothing here writes a file. An answer is a response body and a row of `rag_eval.json`, and the
+caller decides which; keeping the flow free of storage is what lets the evaluation run it a hundred
+times without a hundred artefacts.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import time
+from collections.abc import Mapping, Sequence
+from pathlib import Path
+from typing import Any, Final
+
+from engine.config import UseCaseConfig
+from engine.generative.budget import Meter
+from engine.generative.contracts import (
+    AssistantAnswer,
+    Citation,
+    GenerativePurpose,
+    GuardrailCheck,
+    GuardrailOutcome,
+)
+from engine.generative.guardrails import CheckContext, Guardrails
+from engine.generative.prompts import load_prompt, render
+from engine.generative.retrieval import Retrieved, retrieve
+from engine.generative.vectorstore import Match, VectorStore
+from engine.utils.logging import get_logger
+
+__all__ = [
+    "ANSWER_PROMPT",
+    "HISTORY_TURNS",
+    "QUOTE_WORDS",
+    "UNKNOWN_CITATION",
+    "Turn",
+    "answer",
+    "extracts_for",
+]
+
+_LOGGER = get_logger(__name__)
+
+ANSWER_PROMPT: Final[str] = "assistant_answer"
+HISTORY_TURNS: Final[int] = 6
+"""How many earlier turns the prompt carries. Six is three exchanges - enough for "and the other one?"
+
+Nothing is stored server-side: the client sends the conversation it has, and the assistant answers
+this question with that context and forgets it again. A longer window would cost tokens on every
+question to serve the rare conversation that needs it.
+"""
+
+QUOTE_WORDS: Final[int] = 25
+"""The longest quote a citation may carry, trimmed here rather than trusted from the model."""
+
+UNKNOWN_CITATION: Final[str] = "UNKNOWN_CITATION"
+"""Recorded when a model cited an extract number nobody supplied. The citation is dropped."""
+
+_CODE_FENCE: Final[re.Pattern[str]] = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
+
+
+class Turn(dict[str, str]):
+    """One earlier exchange, as the client sends it: `{"role": ..., "text": ...}`.
+
+    A `dict` subclass rather than a model because it crosses the API boundary as JSON and is handed
+    straight to a template; validating it into a frozen object and back would buy nothing.
+    """
+
+
+def extracts_for(matches: Sequence[Match]) -> tuple[dict[str, str], ...]:
+    """The numbered extracts a prompt renders, in retrieval order.
+
+    The prompt numbers them by position, so this order *is* the citation vocabulary: extract 1 is
+    the first element here and nothing else.
+    """
+    return tuple(
+        {"document": match.chunk.document, "section": match.chunk.section, "text": match.chunk.text}
+        for match in matches
+    )
+
+
+def answer(
+    question: str,
+    *,
+    index_id: str,
+    use_case: UseCaseConfig,
+    store: VectorStore,
+    meter: Meter,
+    guardrails: Guardrails,
+    history: Sequence[Mapping[str, str]] = (),
+    config_root: Path | None = None,
+) -> AssistantAnswer:
+    """Answer `question` from `index_id`, or refuse because the documents do not answer it."""
+    started = time.monotonic()
+    rag = use_case.generative.rag
+    (question_vector,) = meter.embed([question])
+    found = retrieve(store, index_id, question_vector, config=rag)
+
+    if found.empty:
+        return _refusal(question, found, started, rag.refusal_message, config_root)
+
+    prompt = load_prompt(ANSWER_PROMPT, config_root)
+    rendered = render(
+        prompt,
+        {
+            "question": question,
+            "chunks": extracts_for(found.matches),
+            "refusal_message": rag.refusal_message,
+            "answer_language": rag.answer_language,
+            "history": list(history)[-HISTORY_TURNS:],
+        },
+    )
+    completion = meter.complete(rendered, GenerativePurpose.ASSISTANT_ANSWER)
+    text, refused, citations, unknown = _parse(completion.text, found.matches)
+
+    checks = list(unknown)
+    result = guardrails.check(
+        text,
+        CheckContext(
+            target=question[:80],
+            expected_language=None if rag.answer_language == "auto" else rag.answer_language,
+            source="\n\n".join(match.chunk.text for match in found.matches),
+            judges=("faithfulness",),
+        ),
+    )
+    checks.extend(result.checks)
+    if not result.passed:
+        _LOGGER.info("assistant.blocked rule=%s", result.blocked_by)
+        return AssistantAnswer(
+            question=question,
+            answer=rag.refusal_message,
+            refused=True,
+            citations=(),
+            retrieved=len(found.matches),
+            called_model=True,
+            prompt_version=prompt.version,
+            latency_ms=_elapsed(started),
+            guardrails=tuple(checks),
+        )
+
+    return AssistantAnswer(
+        question=question,
+        answer=text,
+        refused=refused,
+        citations=() if refused else citations,
+        retrieved=len(found.matches),
+        called_model=True,
+        prompt_version=prompt.version,
+        latency_ms=_elapsed(started),
+        guardrails=tuple(checks),
+    )
+
+
+def _refusal(
+    question: str,
+    found: Retrieved,
+    started: float,
+    message: str,
+    config_root: Path | None,
+) -> AssistantAnswer:
+    """The answer when nothing passed the floor: the configured sentence, and no model call.
+
+    `called_model=False` is what a cost screen reads to explain a question that cost an embedding
+    and nothing else, and what a test asserts to prove the floor really does come first.
+    """
+    _LOGGER.info("assistant.refused considered=%d above_floor=%d", found.considered, found.above_floor)
+    return AssistantAnswer(
+        question=question,
+        answer=message,
+        refused=True,
+        citations=(),
+        retrieved=0,
+        called_model=False,
+        prompt_version=load_prompt(ANSWER_PROMPT, config_root).version,
+        latency_ms=_elapsed(started),
+        guardrails=(),
+    )
+
+
+def _parse(
+    raw: str, matches: Sequence[Match]
+) -> tuple[str, bool, tuple[Citation, ...], tuple[GuardrailCheck, ...]]:
+    """The model's answer, its refusal flag, its citations, and a check for every one it invented.
+
+    A malformed reply is treated as a refusal rather than as a failure: the model said something
+    the contract cannot read, and showing a customer an unparsed blob would be worse than saying
+    the documents do not cover it. The guardrail check records what happened.
+    """
+    payload = _json(raw)
+    if payload is None:
+        return raw.strip(), True, (), ()
+    text = str(payload.get("answer", "")).strip()
+    refused = bool(payload.get("refused", False))
+    citations: list[Citation] = []
+    checks: list[GuardrailCheck] = []
+    for entry in payload.get("citations", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        number = _number(entry.get("chunk"))
+        if number is None or not 1 <= number <= len(matches):
+            checks.append(
+                GuardrailCheck(
+                    target=text[:60],
+                    rule=UNKNOWN_CITATION,
+                    outcome=GuardrailOutcome.WARNED,
+                    detail="a citation pointed at an extract that was not supplied",
+                )
+            )
+            continue
+        match = matches[number - 1]
+        citations.append(
+            Citation(
+                chunk_id=match.chunk.chunk_id,
+                document=match.chunk.document,
+                section=match.chunk.section,
+                quote=" ".join(str(entry.get("quote", "")).split()[:QUOTE_WORDS]),
+                similarity=round(match.similarity, 4),
+            )
+        )
+    return text, refused, tuple(citations), tuple(checks)
+
+
+def _json(raw: str) -> dict[str, Any] | None:
+    """The reply as an object, or `None` when it is not one.
+
+    A code fence is stripped first: a model asked for bare JSON supplies one often enough that
+    refusing over it would throw away good answers, and stripping it changes no content.
+    """
+    try:
+        parsed = json.loads(_CODE_FENCE.sub("", raw).strip())
+    except ValueError:
+        return None
+    return parsed if isinstance(parsed, dict) else None
+
+
+def _number(value: object) -> int | None:
+    """An extract number from whatever the model put there, or `None` if it is not one."""
+    try:
+        return int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def _elapsed(started: float) -> int:
+    """Milliseconds since `started`, which is what the artefact records."""
+    return int((time.monotonic() - started) * 1000)
