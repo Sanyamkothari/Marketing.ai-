@@ -337,6 +337,44 @@ three items in the same report need a human ruling rather than a branch fix: the
 (G-2, which I would ratify), Phase 2's four `UseCaseConfig` fields above its block (G-3, same), and the
 decision band — Phase 4a has 6 numbers left in 300–399 and 400+ belongs to the library (G-5).
 
+### 2026-09-22 — prototype → human reviewer and phase-2-onboarding: the onboarding panel is built, nothing mounts it, and nothing could run what it builds
+
+**What is needed.** A ruling on who owns the last hop of Phase 2, because as the branches stand a
+user cannot get from raw tables to a trained model. Phase 2 builds the dataset -
+`tests/integration/test_onboarding_flow.py` proves raw tables become one - and then three things
+stop it, none of them inside Phase 2's ownership map:
+
+1. **Nothing mounts the panel.** On `phase-2-onboarding` at `550a59b`, `ui/modules/onboarding/` is
+   1,770 lines; the PHASE-2 blocks in `ui/index.html` and `ui/modules/router.js` are empty, there is
+   no `ui/modules/onboarding/index.js`, and `ui/usecase.js` never calls
+   `onboardingPanel(container, { clientId, useCaseId, onDatasetReady })`. `panel.js` says the call
+   "is written out in this branch's final report"; that report is not in the repository. The host
+   needs Setup step 1 to become the two-card choice (prototype `predStep1()`, screenshot
+   `02-setup-step1-choice`) and something to supply `clientId`: the built UI chooses no client
+   anywhere, though `GET /clients` exists on the branch (prototype header, screenshot
+   `01-client-selector`).
+2. **Step 2 cannot take the dataset back.** `onDatasetReady` hands over
+   `{datasetId, primaryKey, target, problemType, timeColumn, manifest}` and no upload id, while
+   step 2 reads its column lists from `s.upload.profile` (`ui/usecase.js:99`), which a built dataset
+   does not have.
+3. **`POST /runs` refuses it.** `RunRequest.upload_id` is required (`api/schemas.py:242`), and
+   `_reject_unimplemented_onboarding` (`api/routes/runs.py:186`) answers any `dataset_id` with 422
+   `DATASET_ONBOARDING_NOT_AVAILABLE` - on this branch and on `phase-2-onboarding` alike. §3
+   pre-approves Phase 2 to make `ingest.py` accept `dataset_id`, with the composite key in
+   `prepare.py`, `score.py` and `actions.py`; Phase 2 has changed no stage file, and the composite
+   key's path past the engine boundary is the open `StageContext.primary_key` entry above.
+
+`ui/usecase.js` and `api/routes/runs.py` are Phase 1 files and `ui/index.html` and `api/schemas.py`
+are Shared, so each of the three needs someone told they may make it. Mounting the panel alone
+would move the dead end from Setup to a 422 on Run.
+
+**What I did meanwhile.** The prototype carries the target flow end to end, and
+`tests/prototype/onboarding.test.mjs` pins it: "Use this dataset fills step 2 and collapses the
+panel" is the acceptance behaviour for item 2 - compound key `customer_id + snapshot_date`, target,
+problem type and time column - and the lineage test trains a run from the result. Two smaller
+differences between the built panel and the prototype are in `CHANGELOG-prototype.md` ("Revision
+3"); neither blocks anything. I edited no file the UI or API branches own.
+
 ## Resolved
 
 ### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself
