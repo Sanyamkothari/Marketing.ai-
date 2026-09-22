@@ -39,6 +39,7 @@ from engine.generative.contracts import (
     GuardrailCheck,
     GuardrailOutcome,
 )
+from engine.generative.errors import MODEL_OUTPUT_MALFORMED
 from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, render
 from engine.generative.retrieval import Retrieved, retrieve
@@ -127,7 +128,9 @@ def answer(
         },
     )
     completion = meter.complete(rendered, GenerativePurpose.ASSISTANT_ANSWER)
-    text, refused, citations, unknown = _parse(completion.text, found.matches)
+    text, refused, citations, unknown = _parse(
+        completion.text, found.matches, question=question, refusal=rag.refusal_message
+    )
 
     checks = list(unknown)
     result = guardrails.check(
@@ -194,17 +197,42 @@ def _refusal(
 
 
 def _parse(
-    raw: str, matches: Sequence[Match]
+    raw: str,
+    matches: Sequence[Match],
+    *,
+    question: str,
+    refusal: str,
 ) -> tuple[str, bool, tuple[Citation, ...], tuple[GuardrailCheck, ...]]:
     """The model's answer, its refusal flag, its citations, and a check for every one it invented.
 
     A malformed reply is treated as a refusal rather than as a failure: the model said something
     the contract cannot read, and showing a customer an unparsed blob would be worse than saying
-    the documents do not cover it. The guardrail check records what happened.
+    the documents do not cover it. So the reply itself is *dropped* and the operator's refusal
+    sentence is returned in its place - returning the blob under `refused=True` would satisfy the
+    flag while still putting the thing on the screen, which is the outcome this paragraph exists
+    to prevent. The raw reply is not lost: it is what the model was metered for, and the guardrail
+    check records that the parse is what failed.
+
+    `question` is what every check here is targeted at, matching what `Guardrails.check` targets
+    for the checks it appends to the same tuple. A caller reading `answer.guardrails` is looking at
+    one list, and a `target` that means the question in one row and the answer in the next cannot
+    be read at all.
     """
     payload = _json(raw)
     if payload is None:
-        return raw.strip(), True, (), ()
+        return (
+            refusal,
+            True,
+            (),
+            (
+                GuardrailCheck(
+                    target=question[:60],
+                    rule=MODEL_OUTPUT_MALFORMED,
+                    outcome=GuardrailOutcome.BLOCKED,
+                    detail="the reply was not a JSON object, so it was dropped for the refusal",
+                ),
+            ),
+        )
     text = str(payload.get("answer", "")).strip()
     refused = bool(payload.get("refused", False))
     citations: list[Citation] = []
@@ -216,7 +244,7 @@ def _parse(
         if number is None or not 1 <= number <= len(matches):
             checks.append(
                 GuardrailCheck(
-                    target=text[:60],
+                    target=question[:60],
                     rule=UNKNOWN_CITATION,
                     outcome=GuardrailOutcome.WARNED,
                     detail="a citation pointed at an extract that was not supplied",

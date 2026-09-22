@@ -100,6 +100,10 @@ class KnowledgeIndex:
     root: Path
 
 
+PARSE_QUESTION: str = "How long does activation take?"
+PARSE_REFUSAL: str = "I don't have that in the documents I've been given."
+
+
 def meter_for(client: GroundedFakeLLMClient) -> Meter:
     """A meter over `client` with the cache off, so every call is a call the client records."""
     return Meter(client, job_id="x_20260101_abcdef01", llm=LlmConfig(), budget=BudgetConfig(cache=False))
@@ -360,13 +364,6 @@ def test_a_citation_that_points_nowhere_is_dropped_and_the_claim_survives(
     assert "not supplied" in warnings[0].detail
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="`_parse` has no access to the question, so it targets the UNKNOWN_CITATION check at the "
-    "answer's first 60 characters while every check `Guardrails.check` adds to the same tuple targets "
-    "the question. `GuardrailCheck.target` is documented as what was checked, and a report that groups "
-    "an answer's checks by target therefore splits this one answer into two rows.",
-)
 def test_every_check_on_one_answer_names_the_same_thing_as_the_thing_it_checked(
     knowledge_index: KnowledgeIndex,
 ) -> None:
@@ -381,6 +378,8 @@ def test_a_false_citation_is_dropped_while_the_citation_beside_it_survives() -> 
     text, refused, citations, checks = _parse(
         reply(citations=[{"chunk": 2, "quote": "Restart the handset."}, {"chunk": 9, "quote": "invented"}]),
         matches,
+        question=PARSE_QUESTION,
+        refusal=PARSE_REFUSAL,
     )
     assert (text, refused) == ("Within four hours.", False)
     assert [citation.chunk_id for citation in citations] == [matches[1].chunk.chunk_id]
@@ -391,7 +390,12 @@ def test_a_false_citation_is_dropped_while_the_citation_beside_it_survives() -> 
 def test_a_citation_number_that_names_no_extract_is_dropped_however_it_was_written(cited) -> None:
     """Three extracts were supplied, so a fourth, a zeroth and a word are all the same mistake."""
     matches = tuple(match(f"Extract {number}.", ordinal=number) for number in (1, 2, 3))
-    _, _, citations, checks = _parse(reply(citations=[{"chunk": cited, "quote": "q"}]), matches)
+    _, _, citations, checks = _parse(
+        reply(citations=[{"chunk": cited, "quote": "q"}]),
+        matches,
+        question=PARSE_QUESTION,
+        refusal=PARSE_REFUSAL,
+    )
     assert citations == ()
     assert [(check.rule, check.outcome) for check in checks] == [(UNKNOWN_CITATION, GuardrailOutcome.WARNED)]
 
@@ -400,7 +404,10 @@ def test_a_number_the_model_wrote_as_a_string_is_still_a_number() -> None:
     """Models write `"2"` as often as `2`, and refusing over the quotes would drop a good citation."""
     matches = (match("Within four hours."), match("Restart the handset.", ordinal=1, similarity=0.2))
     _, _, citations, checks = _parse(
-        reply(citations=[{"chunk": "2", "quote": "Restart the handset."}]), matches
+        reply(citations=[{"chunk": "2", "quote": "Restart the handset."}]),
+        matches,
+        question=PARSE_QUESTION,
+        refusal=PARSE_REFUSAL,
     )
     assert [citation.chunk_id for citation in citations] == [matches[1].chunk.chunk_id]
     assert checks == ()
@@ -409,8 +416,8 @@ def test_a_number_the_model_wrote_as_a_string_is_still_a_number() -> None:
 def test_a_reply_that_cites_nothing_cites_nothing_rather_than_failing() -> None:
     """A model that answers without citing is a guardrail's problem, not the parser's."""
     matches = (match("Within four hours."),)
-    assert _parse(reply(citations=None), matches)[2] == ()
-    assert _parse(reply(), matches)[2] == ()
+    assert _parse(reply(citations=None), matches, question=PARSE_QUESTION, refusal=PARSE_REFUSAL)[2] == ()
+    assert _parse(reply(), matches, question=PARSE_QUESTION, refusal=PARSE_REFUSAL)[2] == ()
 
 
 # ---------------------------------------------------------------------------
@@ -420,7 +427,12 @@ def test_a_quote_is_cut_to_the_word_limit_here_rather_than_trusted_from_the_mode
     """The prompt asks for at most 25 words; asking is not enforcing, and the artefact is enforced."""
     long_quote = " ".join(f"word{number}" for number in range(QUOTE_WORDS * 2))
     matches = (match("Within four hours."),)
-    _, _, citations, _ = _parse(reply(citations=[{"chunk": 1, "quote": long_quote}]), matches)
+    _, _, citations, _ = _parse(
+        reply(citations=[{"chunk": 1, "quote": long_quote}]),
+        matches,
+        question=PARSE_QUESTION,
+        refusal=PARSE_REFUSAL,
+    )
     assert citations[0].quote.split() == long_quote.split()[:QUOTE_WORDS]
 
 
@@ -434,7 +446,9 @@ def test_a_reply_wrapped_in_a_code_fence_is_still_read(fence: str) -> None:
     """A model asked for bare JSON supplies a fence often enough that refusing over it costs answers."""
     matches = (match("Within four hours."),)
     body = reply(citations=[{"chunk": 1, "quote": "Within four hours."}])
-    text, refused, citations, checks = _parse(fence.format(body=body), matches)
+    text, refused, citations, checks = _parse(
+        fence.format(body=body), matches, question=PARSE_QUESTION, refusal=PARSE_REFUSAL
+    )
     assert (text, refused) == ("Within four hours.", False)
     assert [citation.chunk_id for citation in citations] == [matches[0].chunk.chunk_id]
     assert checks == ()
@@ -442,9 +456,14 @@ def test_a_reply_wrapped_in_a_code_fence_is_still_read(fence: str) -> None:
 
 def test_a_reply_the_contract_cannot_read_is_a_refusal_and_not_an_exception() -> None:
     """The model said something unreadable; raising would turn a bad answer into a failed request."""
-    assert _parse("Certainly! Here is your answer, in prose.", ())[1] is True
-    assert _parse("[1, 2]", ())[1] is True
-    assert _parse("", ())[1] is True
+    assert (
+        _parse(
+            "Certainly! Here is your answer, in prose.", (), question=PARSE_QUESTION, refusal=PARSE_REFUSAL
+        )[1]
+        is True
+    )
+    assert _parse("[1, 2]", (), question=PARSE_QUESTION, refusal=PARSE_REFUSAL)[1] is True
+    assert _parse("", (), question=PARSE_QUESTION, refusal=PARSE_REFUSAL)[1] is True
 
 
 def test_a_malformed_reply_never_reaches_the_caller_as_an_answer(
@@ -458,15 +477,6 @@ def test_a_malformed_reply_never_reaches_the_caller_as_an_answer(
     assert "in prose rather than in JSON" not in result.answer
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="`_parse` returns the unreadable reply itself as the answer text, and `answer` returns that "
-    "text whenever the guardrails let it through. `AssistantAnswer.answer` is documented as the answer "
-    "or the configured refusal sentence verbatim, and `_parse`'s own docstring says showing a customer "
-    "an unparsed blob would be worse than saying the documents do not cover it. With the shipped policy "
-    "the faithfulness judge happens to block it, which hides this; with the judges off the blob is the "
-    "answer. Nothing records that the reply was malformed either.",
-)
 def test_a_malformed_reply_is_refused_in_the_operators_own_words(
     knowledge_index: KnowledgeIndex,
 ) -> None:

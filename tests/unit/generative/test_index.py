@@ -359,7 +359,7 @@ def test_editing_one_document_re_embeds_that_document_and_no_other(rig: Rig) -> 
     """Re-indexing after one edit costs one document, which is the whole value of the fingerprint."""
     paths = rig.documents("faq_billing", "plans_prepaid")
     first = rig.build(paths)
-    billing = paths[0]
+    billing = next(path for path in paths if path.name == "faq_billing.txt")
     billing.write_text(billing.read_text(encoding="utf-8") + EXTRA_SECTION, encoding="utf-8")
 
     second = rig.build(paths, previous=first.manifest)
@@ -525,10 +525,6 @@ def test_reading_the_manifest_of_an_index_that_was_never_built_is_a_coded_error(
 # ---------------------------------------------------------------------------
 # A document's identity across a rebuild is its fingerprint, and nothing else
 # ---------------------------------------------------------------------------
-@pytest.mark.xfail(
-    strict=True,
-    reason="a reused document keeps the previous manifest's entry, its old filename included",
-)
 def test_a_document_renamed_between_builds_is_indexed_under_the_name_it_now_has(rig: Rig) -> None:
     """A file the knowledge base no longer holds is named by the manifest and quoted by every citation."""
     paths = rig.documents("plans_prepaid")
@@ -542,10 +538,6 @@ def test_a_document_renamed_between_builds_is_indexed_under_the_name_it_now_has(
     assert "handbook.md" not in {chunk.document for chunk in second.chunks}
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="two paths with one fingerprint reuse one entry, so one chunk id is written twice",
-)
 def test_two_files_with_the_same_bytes_are_two_documents_in_the_index(rig: Rig) -> None:
     """A duplicated chunk id makes the store's id-to-vector map lossy on the rebuild after this one."""
     original = rig.write("handbook.md", ROUTER_PLACEMENT)

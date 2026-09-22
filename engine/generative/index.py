@@ -181,7 +181,7 @@ def read_manifest(storage: Storage, index_id: str) -> DocIndexManifest:
 def _index_one(
     path: Path,
     generative: GenerativeConfig,
-    reusable: dict[str, tuple[Chunk, ...]],
+    reusable: dict[tuple[str, str], tuple[Chunk, ...]],
     previous: DocIndexManifest | None,
 ) -> tuple[IndexedDocument, tuple[Chunk, ...], bool]:
     """Parse and chunk one document, or reuse its chunks; never raises for one bad file."""
@@ -195,9 +195,10 @@ def _index_one(
         failure = generative_error(DOCUMENT_TYPE_UNSUPPORTED, name=path.name, extension=extension)
         return _failed(doc_id, path, data, failure.code), (), False
 
-    if previous is not None and digest in reusable:
-        existing = reusable[digest]
-        before = next(item for item in previous.documents if item.fingerprint == digest)
+    identity = (digest, doc_id)
+    if previous is not None and identity in reusable:
+        existing = reusable[identity]
+        before = next(item for item in previous.documents if (item.fingerprint, item.doc_id) == identity)
         _LOGGER.info("index.reused doc_chunks=%d", len(existing))
         return before, existing, True
 
@@ -280,13 +281,31 @@ def _embed(
     )
 
 
-def _reusable_chunks(store: VectorStore, previous: DocIndexManifest) -> dict[str, tuple[Chunk, ...]]:
-    """Fingerprint -> the chunks that document already contributed, for an incremental rebuild."""
+def _reusable_chunks(
+    store: VectorStore, previous: DocIndexManifest
+) -> dict[tuple[str, str], tuple[Chunk, ...]]:
+    """(fingerprint, doc id) -> the chunks that document already contributed, for a rebuild.
+
+    Keyed on both halves of a document's identity, and neither alone is enough. The fingerprint
+    answers "are these the same bytes?" and the `doc_id` answers "is this the same document?", and
+    a rebuild may only reuse chunks when both are yes.
+
+    Dropping the `doc_id` breaks two ways that look unrelated and are not. A file renamed between
+    builds keeps its bytes, so it would match on fingerprint and be handed the previous manifest's
+    entry - which carries the *old* filename, and a citation would go on naming a file that no
+    longer exists. And two different files with identical bytes - a policy attached twice under two
+    names, a duplicated upload - would both match that one entry, so one document's chunks would be
+    written into the index twice, giving two rows the same `chunk_id`.
+
+    Keying on the pair costs a re-embed of a file that was only renamed. That is the right trade:
+    a rename is rare, and `chunk_id` is built from `doc_id`, so the chunks really are different
+    chunks and reusing them would put the wrong id on every one of them.
+    """
     by_doc: dict[str, list[Chunk]] = {}
     for chunk in store.chunks(previous.index_id):
         by_doc.setdefault(chunk.doc_id, []).append(chunk)
     return {
-        document.fingerprint: tuple(by_doc.get(document.doc_id, ()))
+        (document.fingerprint, document.doc_id): tuple(by_doc.get(document.doc_id, ()))
         for document in previous.documents
         if document.chunks
     }
