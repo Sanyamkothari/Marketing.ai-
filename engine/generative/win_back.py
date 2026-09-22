@@ -27,7 +27,10 @@ reserved merge field an unsubscribe link is written into (`UNSUBSCRIBE_FIELD`). 
 model to keep to that list, and `_finalize_template` checks the model's own reply against it with a
 regular expression before anything is judged or stored, exactly as `allowed_fields_only` already does
 for a rendered answer elsewhere in this package - a request the model happens to honour is not a
-guarantee, and this package does not store the difference.
+guarantee, and this package does not store the difference. That check reads `{{field}}` names, so it
+is paired with `unsupported_markup`, which refuses everything else jinja2 would evaluate: a reply
+whose only markup is `{% for %}` or `{{ 7*7 }}` uses no field at all by the first check's reading,
+and renders a loop or an invented number by the renderer's.
 
 **A run's control group and suppression rules are read, never redrawn.** `engine.stages.actions`
 already drew a deterministic, per-customer control holdout from the run's own seed and already
@@ -121,6 +124,7 @@ __all__ = [
     "generate_campaign_copy",
     "placeholders_in",
     "render_message",
+    "unsupported_markup",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -164,6 +168,15 @@ _RESERVED_FIELDS: Final[frozenset[str]] = frozenset({"band", UNSUBSCRIBE_FIELD})
 """Placeholder names a template may use that are never read off the uploaded data."""
 
 _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
+_MARKUP: Final[re.Pattern[str]] = re.compile(r"{{.*?}}|{%.*?%}|{#.*?#}", re.DOTALL)
+"""Every run of jinja2 markup, not only the ones that are a plain placeholder.
+
+`_PLACEHOLDER` is what a template is *allowed* to contain, and on its own it is a filter rather than
+a check: it silently sees nothing in `{{ 7*7 }}` or `{% for %}`, which the renderer then evaluates
+anyway. Matching all three delimiter pairs is what lets `unsupported_markup` say "this reply is not
+prose with placeholders" instead of quietly agreeing that it used no fields.
+"""
+
 _CODE_FENCE: Final[re.Pattern[str]] = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 
 _RENDER_ENVIRONMENT: Final[SandboxedEnvironment] = SandboxedEnvironment(
@@ -189,10 +202,30 @@ class CampaignCopyResult:
 def placeholders_in(text: str) -> frozenset[str]:
     """Every `{{field}}` name in `text`, checked by regular expression rather than by asking the model.
 
-    This is the whole of "grounded or nothing" for copy: a template's own claim to use only allowed
-    fields is worth nothing until something outside the model reads its reply and says so.
+    Half of "grounded or nothing" for copy: a template's own claim to use only allowed fields is
+    worth nothing until something outside the model reads its reply and says so. The other half is
+    `unsupported_markup`, because a name this function does not see is not a name the renderer will
+    leave alone.
     """
     return frozenset(_PLACEHOLDER.findall(text))
+
+
+def unsupported_markup(text: str) -> int:
+    """How many runs of jinja2 markup in `text` are something other than a plain `{{field}}`.
+
+    The allowed-fields check reads `{{field}}` names and nothing else, and a renderer that evaluated
+    only those names would be safe. `_RENDER_ENVIRONMENT` evaluates whatever jinja2 accepts, so the
+    two disagree about exactly the constructs a prompt forbids: `{{ 7*7 }}` names no field, passes
+    the allowed-fields check with `fields_used` empty, and renders as an invented number in a
+    customer's message - which is rule 2 of every copy prompt, broken by the one path that was
+    supposed to enforce rule 1 in code. `{% for %}` is evaluated the same way, and `{{ a.b }}` and
+    `{{ field|filter }}` reach `fill_placeholders` as names no row was ever checked for and raise
+    there, aborting a batch that was already paid for.
+
+    A count rather than the offending text: the text is a model's invention, the blocked template
+    carries it verbatim for a reviewer to read, and a `block_reason` reaches a log and a screen.
+    """
+    return sum(1 for markup in _MARKUP.findall(text) if _PLACEHOLDER.fullmatch(markup) is None)
 
 
 def allowed_placeholder_fields(config: CampaignCopyConfig, channel: Channel) -> frozenset[str]:
@@ -354,16 +387,27 @@ def _finalize_template(
 ) -> CopyTemplate:
     """Check one candidate variant and return the `CopyTemplate` it becomes, stored or blocked.
 
-    The allowed-fields check runs first and never reaches the shared `Guardrails` at all when it
+    The two grounding checks run first and never reach the shared `Guardrails` at all when either
     fails: a template that names a field with no data behind it is not a text worth judging, and a
     judge call spent on it would be a judge call spent to confirm something a regular expression
     already knows for free (DEC-... `guardrails.py`'s own ordering rule, applied one layer up).
+
+    Markup is checked before fields because it decides whether the field list means anything:
+    `fields_used` is read off `{{field}}` placeholders, so a reply full of `{% %}` blocks or
+    computed `{{ }}` expressions has an empty, entirely truthful-looking field list and would
+    otherwise pass the check it most needs to fail.
     """
+    markup = unsupported_markup(text) + (unsupported_markup(subject) if subject else 0)
     fields_used = tuple(
         sorted(placeholders_in(text) | (placeholders_in(subject) if subject else frozenset()))
     )
     unknown = sorted(set(fields_used) - allowed)
-    if unknown:
+    if markup or unknown:
+        reason = (
+            f"used template markup that is not a plain placeholder, in {markup} place(s)"
+            if markup
+            else f"used a placeholder outside allowed_fields: {', '.join(unknown)}"
+        )
         return CopyTemplate(
             template_id=template_id,
             band=band,
@@ -375,7 +419,7 @@ def _finalize_template(
             status=CopyStatus.BLOCKED,
             judge_scores=(),
             guardrails=(),
-            block_reason=f"used a placeholder outside allowed_fields: {', '.join(unknown)}",
+            block_reason=reason,
             attempts=attempts,
             approved_by=None,
             approved_at=None,
@@ -760,6 +804,11 @@ def approve_template(
     mutation - the caller writes it back with `storage.write_model` exactly as `generate_campaign_copy`
     wrote the original, and the previous version is simply what `copy_batch.json` held before that
     write, not a state this function tracks.
+
+    A blocked template is refused rather than approved. `model_copy(update=...)` does not revalidate,
+    so approving one would write `status: approved` beside the `block_reason` that says why it was
+    not stored - a text a guardrail refused, recorded as one a person signed off. Which template is
+    blocked is the caller's to check before offering it; `ValueError` says the caller did not.
     """
     found = False
     updated: list[CopyTemplate] = []
@@ -767,6 +816,8 @@ def approve_template(
         if template.template_id != template_id:
             updated.append(template)
             continue
+        if template.status is CopyStatus.BLOCKED:
+            raise ValueError(f"{template_id!r} was blocked and cannot be approved.")
         found = True
         updated.append(
             template.model_copy(

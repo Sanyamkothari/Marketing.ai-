@@ -46,6 +46,7 @@ from engine.generative.evaluation import (
     RETRIEVAL_HIT_OVERLAP,
     RETRIEVAL_MISS,
     UNFAITHFUL,
+    _faithfulness_threshold,
     _read_reference_set,
     _ReferenceRow,
     _retrieval_hit,
@@ -54,7 +55,13 @@ from engine.generative.evaluation import (
     evaluate,
     ngram_overlap,
 )
-from engine.generative.guardrails import Guardrails, load_policy
+from engine.generative.guardrails import (
+    GuardrailAction,
+    GuardrailPolicy,
+    Guardrails,
+    JudgeRule,
+    load_policy,
+)
 from engine.generative.index import build_index
 from engine.generative.retrieval import Retrieved
 from engine.generative.vectorstore import LocalVectorStore, Match, VectorStore
@@ -507,3 +514,52 @@ def test_evaluating_the_same_index_twice_does_not_grow_its_stored_files(
     )
     after = sorted(p for p in graded_fixture.storage.root.rglob("*") if p.is_file())
     assert after == before
+
+
+# ---------------------------------------------------------------------------
+# The faithfulness bar, and the rows it is not allowed to be applied to
+# ---------------------------------------------------------------------------
+def test_the_faithfulness_bar_is_the_one_the_guardrail_policy_sets() -> None:
+    policy = GuardrailPolicy(judges={"faithfulness": JudgeRule(0.8, GuardrailAction.BLOCK)})
+    assert _faithfulness_threshold(Guardrails(policy)) == pytest.approx(0.8)
+
+
+def test_a_deployment_that_configures_no_faithfulness_judge_gets_no_faithfulness_bar() -> None:
+    """A bar invented here would fail every answerable row against a number nobody chose."""
+    assert _faithfulness_threshold(Guardrails(GuardrailPolicy())) == 0.0
+
+
+def test_a_faithfulness_judge_switched_off_is_off_rather_than_a_bar_that_still_fails_rows() -> None:
+    policy = GuardrailPolicy(judges={"faithfulness": JudgeRule(0.8, GuardrailAction.OFF)})
+    assert _faithfulness_threshold(Guardrails(policy)) == 0.0
+
+
+def test_an_unset_faithfulness_bar_cannot_fail_a_row_whatever_the_judge_scored() -> None:
+    """`_verdict` is where the bar is spent, so the 0.0 has to mean "nothing fails" there too."""
+    assert _verdict(row(), False, True, 0.0, faithfulness_threshold=0.0) == (True, None)
+
+
+def test_a_row_the_reference_set_says_should_refuse_gets_no_retrieval_verdict(
+    graded_fixture: GradedFixture, tmp_path: Path
+) -> None:
+    """A question nobody wanted retrieval for is never folded into the retrieval hit rate."""
+    reference_set_path = write_reference_csv(
+        tmp_path / "refusals.csv", [(DISJOINT, "true", "faq_activation.md", "Nothing to say about it.")]
+    )
+    meter = meter_for(GroundedFakeLLMClient())
+
+    result = evaluate(
+        index_id=graded_fixture.index_id,
+        use_case=small_use_case(),
+        reference_set_path=reference_set_path,
+        storage=graded_fixture.storage,
+        store=graded_fixture.store,
+        meter=meter,
+        guardrails=Guardrails(load_policy(), meter=meter),
+    )
+
+    (question,) = result.questions
+    assert question.refused is True
+    assert question.passed is True
+    assert question.retrieval_hit is None
+    assert result.aggregates.retrieval_hit_rate is None

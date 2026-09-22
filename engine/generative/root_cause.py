@@ -27,12 +27,15 @@ that parses to nothing: both count as a failed attempt, retried up to `guardrail
 then raised as `UNGROUNDED_CLAIM` or `MODEL_OUTPUT_MALFORMED`, naming the segment and the attempt
 count rather than the model's words.
 
-**A segment's failure is not the job's failure.** `generate_segment_summary` raises once a segment is
-out of retries; `build_root_cause_summary` catches that one segment's exception and stores a
-`SummarisedSegment` with `summary=None` and `blocked_reason` set, then moves on to the next segment.
-The alternative - one bad segment aborting the whole run - would throw away every other segment's
-evidence pack along with it, and the pack is the artefact a reader can act on even where the prose
-could not be produced.
+**A segment's failure is not the job's failure, and the job's failure is not a segment's.**
+`generate_segment_summary` raises once a segment is out of retries; `build_root_cause_summary`
+catches that one segment's exception and stores a `SummarisedSegment` with `summary=None` and
+`blocked_reason` set, then moves on to the next segment. The alternative - one bad segment aborting
+the whole run - would throw away every other segment's evidence pack along with it, and the pack is
+the artefact a reader can act on even where the prose could not be produced. `BUDGET_EXCEEDED` is
+the one code that is not a segment's to absorb: the meter refuses the call before making it, so
+every remaining segment would be refused identically, and a job that ran out of money is a fact
+about the job.
 """
 
 from __future__ import annotations
@@ -66,6 +69,7 @@ from engine.generative.contracts import (
     SummarisedSegment,
 )
 from engine.generative.errors import (
+    BUDGET_EXCEEDED,
     COMPLAINT_COLUMN_MISSING,
     GUARDRAIL_BLOCKED,
     MODEL_OUTPUT_MALFORMED,
@@ -506,12 +510,22 @@ def _summarise_segment(
     guardrails: Guardrails,
     config_root: Path | None,
 ) -> SummarisedSegment:
-    """One segment's row in `RootCauseSummary.segments`, whether generation succeeded or not."""
+    """One segment's row in `RootCauseSummary.segments`, whether generation succeeded or not.
+
+    Only a failure that is *about this segment* becomes a row. `BUDGET_EXCEEDED` is about the job:
+    the meter refused the call before making it, every later segment would be refused the same way,
+    and recording it per segment turns one clean stop into a summary whose segments each say "this
+    run reached its call limit" as though the evidence had been weighed and found wanting. It is
+    re-raised, which is what `budget.Meter` promises a caller - a run that stops this way stops
+    cleanly, with the segments it did finish and a usage record that says why.
+    """
     try:
         summary, checks, attempts = generate_segment_summary(
             segment, pack, use_case=use_case, meter=meter, guardrails=guardrails, config_root=config_root
         )
     except GenerativeError as exc:
+        if exc.code == BUDGET_EXCEEDED:
+            raise
         _LOGGER.info("root_cause.blocked segment=%s code=%s", segment, exc.code)
         return SummarisedSegment(
             segment=segment,
