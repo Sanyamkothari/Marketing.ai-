@@ -677,7 +677,7 @@ class _TrainFlow:
         # and the manifest are final - so a row never describes a run that is still moving. It is
         # deliberately last in a second sense too: `mirror_run` never raises, because `run.json` is
         # the record and the row is only an index of it. A run that finished must not be reported as
-        # failed because a database was briefly unreachable (DEC-341).
+        # failed because a database was briefly unreachable (DEC-342).
         mirror_run(self._index, self._run.record, manifest)
 
     def _write(self, filename: str, model: BaseModel) -> str:
@@ -1239,7 +1239,7 @@ class _ScoreFlow:
         # and the manifest are final - so a row never describes a run that is still moving. It is
         # deliberately last in a second sense too: `mirror_run` never raises, because `run.json` is
         # the record and the row is only an index of it. A run that finished must not be reported as
-        # failed because a database was briefly unreachable (DEC-341).
+        # failed because a database was briefly unreachable (DEC-342).
         mirror_run(self._index, self._run.record, manifest)
 
     def _write(self, filename: str, model: BaseModel) -> str:

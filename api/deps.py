@@ -162,7 +162,7 @@ def get_run_index(request: Request) -> RunIndex | None:
     `None` is the normal answer, not a degraded one: `run.json` is the record of a run and the index
     is only a faster way to list them, so `GET /runs` falls back to enumerating the store exactly as
     Phase 1 did. A deployment on SQLite therefore behaves identically to Phase 1, and a deployment on
-    Postgres gets a list whose cost does not grow with the number of artefacts (DEC-341).
+    Postgres gets a list whose cost does not grow with the number of artefacts (DEC-342).
     """
     state = request.app.state
     cached: RunIndex | None = getattr(state, "run_index", None)
