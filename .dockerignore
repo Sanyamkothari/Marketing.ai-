@@ -1,7 +1,6 @@
 # Everything the image does not need. Keeping the build context small is not just speed: a stray
 # `data/` directory would otherwise be COPYed into the image as somebody's real artefacts.
 .git
-.github
 .venv
 .venv-infra
 data
@@ -12,7 +11,10 @@ infra/.cdk.staging
 .pytest_cache
 .mypy_cache
 .ruff_cache
-docs
+# The production stages COPY named directories only (engine, api, ui, scripts, configs, templates,
+# alembic), so nothing below decides what ships - it decides what the build context carries. The
+# `test` stage copies the whole context on top of the api image, because a third of the suite checks
+# the repository itself (the docs, the Makefile, the workflows, the generated observability files);
+# so the docs and the workflows are in the context, and only what no test reads stays out.
+docs/prototype
 plan.md
-*.md
-!README.md

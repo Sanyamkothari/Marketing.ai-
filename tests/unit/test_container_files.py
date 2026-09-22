@@ -9,6 +9,7 @@ non-root user. Each of those is a real mistake someone has made in a Dockerfile 
 
 from __future__ import annotations
 
+import json
 import re
 import stat
 from pathlib import Path
@@ -274,3 +275,36 @@ def test_the_infra_targets_need_nothing_from_the_main_venv(repo_root: Path) -> N
         assert "$(BIN)" not in recipe.group(
             1
         ), f"`make {target}` uses the main venv, which CI's infra job lacks"
+
+
+def _test_stage(repo_root: Path) -> str:
+    text = (repo_root / "Dockerfile").read_text(encoding="utf-8")
+    start = text.index("FROM api AS test")
+    following = text.find("\nFROM ", start + 1)
+    return text[start:] if following == -1 else text[start:following]
+
+
+def test_the_image_suite_sees_the_repository_its_tests_check(repo_root: Path) -> None:
+    """About forty tests read `docs/`, the Makefile, the Dockerfile or `.github/`, not the runtime.
+
+    With only `tests/` copied into the test stage every one of them failed inside the image on a
+    missing file (CI run #62), and any new test of that kind would have done the same. The stage
+    copies the whole context instead; what stays out is decided by `.dockerignore`, which must
+    therefore not exclude what those tests read.
+    """
+    assert "COPY . /app/" in _test_stage(repo_root)
+    lines = (repo_root / ".dockerignore").read_text(encoding="utf-8").splitlines()
+    ignored = {line.strip() for line in lines if line.strip() and not line.lstrip().startswith("#")}
+    for needed in ("docs", ".github", "*.md", "Makefile", "Dockerfile", "infra"):
+        assert needed not in ignored, f".dockerignore drops {needed}, which the image's suite reads"
+
+
+def test_the_image_suite_does_not_select_a_test_that_bills_an_account(repo_root: Path) -> None:
+    """Same rule as `make test` (DEC-358): the paid markers are excluded by selection, here too."""
+    cmd = re.search(r"^CMD (\[.*\])$", _test_stage(repo_root), re.MULTILINE)
+    assert cmd is not None, "the test stage has no exec-form CMD"
+    argv = json.loads(cmd.group(1))
+    expression = argv[argv.index("-m") + 1]
+    for marker in _PAID_MARKERS:
+        assert not _selects(expression, {marker, "integration"}), f"the image suite selects @{marker}"
+    assert _selects(expression, {"integration"}) and not _selects(expression, {"slow"})
