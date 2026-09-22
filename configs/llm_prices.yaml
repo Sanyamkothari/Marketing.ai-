@@ -1,0 +1,33 @@
+# configs/llm_prices.yaml
+# What each model costs, so a run can report what it spent.
+#
+# This file ships EMPTY on purpose. Prices change, they differ by region, and they differ again
+# under a negotiated commitment - so a number invented here would be a number shown to a user that
+# nobody measured, which plan §13.3 forbids as squarely as a made-up accuracy score would be.
+#
+# Until an operator fills it in, every call is still metered: `llm_usage.json` carries the real
+# call count and the real token counts, `cost_estimate_usd` is `null`, a `PRICE_UNKNOWN` warning
+# names the model that was missing, and the screen shows an em dash where the cost would go
+# (plan §2.1, principle 5). The budget's `max_calls_per_run` still applies; its
+# `max_cost_usd_per_run` cannot, and the run records that it could not.
+#
+# To fill it in, copy the current per-1M-token prices for your region from your provider's own
+# price list, set `as_of` to the date you read them, and put the page you read in `source`.
+
+schema_version: 1                       # int; bumped on any breaking change of this document's shape
+
+as_of: null                             # date (YYYY-MM-DD) | null; when these prices were read
+source: ""                              # str; the price list they were read from
+currency: USD                           # str; the only currency the artefacts report in
+
+models: {}                              # model id -> {input_per_1m, output_per_1m}, both float >= 0
+#
+# For example, once filled in:
+#
+# as_of: 2026-09-22
+# source: "https://<your provider>/pricing (ap-south-1, on demand)"
+# models:
+#   some.generation-model-v1:0: {input_per_1m: 0.00, output_per_1m: 0.00}
+#   some.embedding-model-v2:0:  {input_per_1m: 0.00, output_per_1m: 0.00}
+#
+# An embedding model produces no output tokens; leave `output_per_1m` at 0 for one.
