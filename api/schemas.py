@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, model_validator
 
 from engine.config import (
     AdvancedSettingsSchema,
@@ -231,22 +231,44 @@ class UploadResponse(StrictBase):
 class RunRequest(StrictBase):
     """Body of `POST /runs` (plan §8, verbatim). `extra="forbid"`, so a typo is a loud 422.
 
-    `primary_key` accepts several column names as well as one, and `dataset_id` / `client_id` name
-    an onboarded dataset instead of a raw upload. Both are the shape Phase 2 needs; neither has
-    behaviour behind it yet, and `POST /runs` says so plainly rather than accepting a request it
-    would then half-honour.
+    A run reads EITHER an `upload_id` - a file the user prepared themselves, exactly as in Phase 1 -
+    OR a `dataset_id`, a dataset the onboarding pipeline built from their raw tables. Exactly one of
+    the two, because a request naming both would have two answers to "which data produced this
+    score" and the manifest can only record one.
+
+    `primary_key` accepts several column names as well as one. It is required with an upload, where
+    only the user knows what a row is, and optional with a dataset, whose manifest already says
+    (plan section 6.5, change 4; DEC-107).
     """
 
     use_case: str
     mode: RunMode = RunMode.TRAIN
-    upload_id: str
-    primary_key: PrimaryKey
+    upload_id: str | None = None
+    primary_key: PrimaryKey | None = None
     dataset_id: str | None = None
     client_id: str | None = None
     target: str | None = None
     model_choice: str | None = None
     model_version_id: str | None = None
     overrides: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def _one_source_of_data(self) -> RunRequest:
+        if (self.upload_id is None) == (self.dataset_id is None):
+            given = "both" if self.upload_id is not None else "neither"
+            raise ValueError(
+                "A run reads one uploaded file or one built dataset; give exactly one of upload_id "
+                f"and dataset_id ({given} given)."
+            )
+        if self.upload_id is not None and self.primary_key is None:
+            raise ValueError(
+                "An uploaded file needs primary_key: only you know which column identifies a row."
+            )
+        if self.client_id is not None and self.dataset_id is None:
+            # A field that is quietly ignored is how a caller comes to believe they scoped a run to
+            # a client when they scoped it to nothing. It means something only beside a dataset.
+            raise ValueError("client_id names the owner of a dataset, so it needs a dataset_id.")
+        return self
 
 
 class RunCreatedResponse(StrictBase):

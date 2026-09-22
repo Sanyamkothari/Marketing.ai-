@@ -48,7 +48,10 @@ A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explana
 | `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the run record was created. |
 | `started_at` | datetime (ISO-8601, with timezone) \| null | no | UTC time the first stage started. |
 | `finished_at` | datetime (ISO-8601, with timezone) \| null | no | UTC time the run reached a final state. |
-| `upload_id` | string | yes | Id of the upload this run consumed. |
+| `upload_id` | string \| null | no | Id of the upload this run consumed; null when the run read a built dataset instead. Exactly one of upload_id and dataset_id is set. |
+| `dataset_id` | string \| null | no | Id of the built dataset this run consumed; null for an upload. |
+| `client_id` | string \| null | no | Client the dataset belongs to; null for an upload. |
+| `dataset_fingerprint` | string \| null | no | Fingerprint of the built dataset, from its manifest; null for an upload, whose own fingerprint stays on the dataset profile where Phase 1 put it. |
 | `file_name` | string | yes | The user's original file name, shown in the Results bar and run history. |
 | `row_count` | integer \| null | no | Rows in the upload, taken from the dataset profile. |
 | `primary_key` | string \| list[string] | yes | Column, or columns, identifying each entity. |
