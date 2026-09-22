@@ -29,10 +29,14 @@ it yet in `engine.generative` - an explicit id overrides `generative.llm.generat
 honour today.
 
 **A job's usage accumulates rather than resets.** A run's copy can cost more than one job over its
-life - a batch, then a regenerate, then another - and each is metered by its own fresh `Meter`.
-`_write_usage` folds a job's tally onto whatever `llm_usage.json` already held rather than
-overwriting it, because "one more `by_purpose` entry" (the contract's own words for a regenerate)
-only means something if the entries already there survive the write.
+life - a batch, then a regenerate, then another - as can an index: a build, and then every question
+`POST /indexes/{id}/ask` is asked of it. Each is metered by its own fresh `Meter`, so `_write_usage`
+folds a job's tally onto whatever `llm_usage.json` already held rather than overwriting it, because
+"one more `by_purpose` entry" (the contract's own words for a regenerate) only means something if
+the entries already there survive the write. Two jobs writing the same file at the same moment is
+the accepted cost: the merge is read-modify-write with no lock, which a single-process deployment
+running two job threads and a handful of asks does not lose a tally to in practice, and which a
+Phase-4 move to object storage would have to solve at the store rather than here anyway.
 """
 
 from __future__ import annotations
@@ -123,7 +127,7 @@ from engine.generative.errors import (
     GenerativeError,
     generative_error,
 )
-from engine.generative.evaluation import evaluate
+from engine.generative.evaluation import SOURCE_DOC_COLUMN, evaluate
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.generative.index import build_index, read_manifest
 from engine.generative.root_cause import build_root_cause_summary
@@ -312,19 +316,29 @@ def _merged_generative_sub(
     return GenerativeConfig.model_validate(merged["generative"])
 
 
-def _with_reference_columns(
-    generative: GenerativeConfig, *, primary_key: str | None, reference_column: str | None
-) -> GenerativeConfig:
-    """`generative.reference_set` with its two UI-facing column names set, when the caller gave them."""
-    if primary_key is None and reference_column is None:
+def _with_reference_column(generative: GenerativeConfig, reference_column: str | None) -> GenerativeConfig:
+    """`generative.reference_set.reference_column` set to the column the caller picked, if they did.
+
+    The Setup screen offers two selects and only one of them names a column this engine reads.
+    `primary_key` is the predictive screen's own row-identifier select reused on the generative one -
+    `marketing-ai-prototype.html` copies the pair wholesale - and `docs/generative-ui-endpoints.md`
+    keeps that meaning: "column of the reference file identifying each question", with `question_id`
+    as its worked example. `ReferenceSetConfig` names a question column, a reference-answer column
+    and a refusal column and no key at all, and nothing under `engine.generative.evaluation` reads a
+    row id, so there is nothing here for `primary_key` to set. It is checked against the file's real
+    columns by `_require_gradeable_reference_set` and then dropped, rather than folded into
+    `question_column`: a build that folded it would send the judge `q001` where the question a
+    customer asked belongs, score an answer against it, and report the result as a faithfulness
+    number with nothing on the screen to say the grading was nonsense.
+    """
+    if reference_column is None:
         return generative
-    updates: dict[str, str] = {}
-    if primary_key is not None:
-        updates["question_column"] = primary_key
-    if reference_column is not None:
-        updates["reference_column"] = reference_column
     return generative.model_copy(
-        update={"reference_set": generative.reference_set.model_copy(update=updates)}
+        update={
+            "reference_set": generative.reference_set.model_copy(
+                update={"reference_column": reference_column}
+            )
+        }
     )
 
 
@@ -400,6 +414,25 @@ def _moved(
     stages: Sequence[GenerativeStage], key: str, state: RunState, *, seconds: float = 0.0
 ) -> tuple[GenerativeStage, ...]:
     return tuple(_stage(s.key, state, seconds=seconds) if s.key == key else s for s in stages)
+
+
+def _failed(stages: Sequence[GenerativeStage], error: GenerativeError) -> tuple[GenerativeStage, ...]:
+    """`stages` with whichever step was in flight marked `failed`, carrying why as its detail.
+
+    A document that says `state: failed` while one of its steps still says `running` describes a
+    spinner nobody will ever stop. `GenerativeStatus` is a registered artefact any client may read
+    back through the run's own artefact route (DEC-210), not only the screen that happens to key its
+    rendering off the overall state, so the step that was running when the error arrived is the step
+    that gets written down as the one that failed.
+    """
+    return tuple(
+        (
+            stage.model_copy(update={"state": RunState.FAILED, "detail": error.message})
+            if stage.state is RunState.RUNNING
+            else stage
+        )
+        for stage in stages
+    )
 
 
 def _sum_optional(left: float | None, right: float | None) -> float | None:
@@ -620,6 +653,40 @@ def _resolve_reference_set_path(
     return storage.local_path(key)
 
 
+def _require_gradeable_reference_set(
+    path: Path, generative: GenerativeConfig, *, primary_key: str | None
+) -> None:
+    """Refuse, on the request thread, a reference set the grader would refuse minutes later.
+
+    `engine.generative.evaluation` reads four columns - the three `ReferenceSetConfig` names plus
+    its own fixed `source_doc` - and raises `REFERENCE_SET_INVALID` for the first one missing.
+    Raised inside the job that is a `202` followed by a failed status document the caller has to go
+    and poll for; raised here it is the `422` `GENERATIVE_ERROR_STATUS` already promises that code,
+    naming the column to add. It is the same reason `_require_finished_run` runs the root-cause
+    preconditions in front of the queue rather than inside it: a request that was never going to be
+    satisfiable should not cost a job slot to find out. `primary_key` is checked here too - it sets
+    nothing (see `_with_reference_column`), but a caller who names a column that is not in the file
+    has misread their own upload, and saying so is better than accepting it silently. Only the
+    header row is parsed, so a long reference set costs no more to check than a short one.
+    """
+    reference_set = generative.reference_set
+    required = [
+        reference_set.question_column,
+        reference_set.refusal_column,
+        reference_set.reference_column,
+        SOURCE_DOC_COLUMN,
+    ]
+    if primary_key is not None:
+        required.append(primary_key)
+    try:
+        header = tuple(pd.read_csv(path, nrows=0).columns)
+    except (OSError, pd.errors.ParserError, pd.errors.EmptyDataError) as exc:
+        raise generative_http(generative_error(REFERENCE_SET_INVALID, column=required[0])) from exc
+    missing = [column for column in required if column not in header]
+    if missing:
+        raise generative_http(generative_error(REFERENCE_SET_INVALID, column=missing[0]))
+
+
 def _source_label(paths: Sequence[Path]) -> str:
     return f"{len(paths)} document{'s' if len(paths) != 1 else ''}"
 
@@ -655,9 +722,7 @@ async def create_index(
     catalog = get_catalog(root)
     generative = _merged_generative(config, parsed_overrides)
     generative = _with_model_choice(generative, model_choice, automl_value=catalog.automl_choice.value)
-    generative = _with_reference_columns(
-        generative, primary_key=primary_key, reference_column=reference_column
-    )
+    generative = _with_reference_column(generative, reference_column)
     config = config.model_copy(update={"generative": generative})
 
     if not documents and not use_sample_documents:
@@ -665,16 +730,21 @@ async def create_index(
             422, "INDEX_DOCUMENTS_REQUIRED", "Upload at least one document, or use the sample set."
         )
 
+    # Everything the request can be refused for is checked before one byte of it is written down:
+    # a build refused after its documents are on disk leaves an index directory nothing will ever
+    # finish or clean up.
+    reference_path = _resolve_reference_set_path(
+        storage, reference_set_id=reference_set_id, use_sample_questions=use_sample_questions
+    )
+    if reference_path is not None:
+        _require_gradeable_reference_set(reference_path, generative, primary_key=primary_key)
+
     index_id = new_index_id()
     if use_sample_documents:
         paths = _sample_document_paths()
     else:
         uploads = [(file.filename or "document", await file.read()) for file in documents or ()]
         paths = _persisted_documents(storage, index_id, uploads)
-
-    reference_path = _resolve_reference_set_path(
-        storage, reference_set_id=reference_set_id, use_sample_questions=use_sample_questions
-    )
 
     started = utc_now()
     stage_keys = ("build",) + (("evaluate",) if reference_path is not None else ())
@@ -762,13 +832,14 @@ def _index_build_job(
             )
             stages = _moved(stages, "build", RunState.DONE, seconds=time.monotonic() - began)
             if reference_path is not None:
+                stages = _moved(stages, "evaluate", RunState.RUNNING)
                 _write_status(
                     storage,
                     status_key,
                     job_id=index_id,
                     kind=GenerativeJobKind.INDEX_BUILD,
                     state=RunState.RUNNING,
-                    stages=_moved(stages, "evaluate", RunState.RUNNING),
+                    stages=stages,
                     started_at=started_at,
                 )
                 began = time.monotonic()
@@ -790,7 +861,7 @@ def _index_build_job(
                 job_id=index_id,
                 kind=GenerativeJobKind.INDEX_BUILD,
                 state=RunState.FAILED,
-                stages=stages,
+                stages=_failed(stages, exc),
                 started_at=started_at,
                 error=exc,
             )
@@ -926,9 +997,7 @@ async def create_evaluation(
     owner = _read_owner(storage, index_id)
     config = use_case_config(owner.use_case_id, root)
     _require_generative_kind(config, GenerativeKind.RAG_ASSISTANT)
-    generative = _with_reference_columns(
-        config.generative, primary_key=primary_key, reference_column=reference_column
-    )
+    generative = _with_reference_column(config.generative, reference_column)
     config = config.model_copy(update={"generative": generative})
 
     reference_path = _resolve_reference_set_path(
@@ -936,6 +1005,7 @@ async def create_evaluation(
     )
     if reference_path is None:
         raise http_error(422, "REFERENCE_SET_REQUIRED", "Name a reference_set_id or use_sample_questions.")
+    _require_gradeable_reference_set(reference_path, generative, primary_key=primary_key)
 
     started = utc_now()
     label = (
@@ -1024,7 +1094,7 @@ def _evaluate_job(
                 job_id=index_id,
                 kind=GenerativeJobKind.REFERENCE_EVAL,
                 state=RunState.FAILED,
-                stages=stages,
+                stages=_failed(stages, exc),
                 started_at=started_at,
                 error=exc,
             )
@@ -1076,6 +1146,15 @@ def ask_index(
         )
     except GenerativeError as exc:
         raise generative_http(exc) from exc
+    finally:
+        # An ask is short, but it is not free, and the third rule does not stop at the request
+        # thread: this call embedded the question and usually generated an answer, and both are
+        # metered calls that `llm_usage.json` has to carry or the index's Cost card is a record of
+        # the build alone while the bill keeps growing. `_write_usage` folds them onto what the
+        # build left, and returns without writing when a refusal cost nothing to make. It runs in
+        # `finally` because a budget the answer walked into is money already spent - an exception is
+        # the one case where forgetting it would flatter the number most.
+        _write_usage(storage, index_key(index_id, LLM_USAGE_FILENAME), meter)
 
 
 # ---------------------------------------------------------------------------
@@ -1152,7 +1231,7 @@ def _root_cause_job(
                 job_id=run_id,
                 kind=GenerativeJobKind.ROOT_CAUSE,
                 state=RunState.FAILED,
-                stages=stages,
+                stages=_failed(stages, exc),
                 started_at=started_at,
                 error=exc,
             )
@@ -1258,7 +1337,7 @@ def _campaign_copy_job(
                 job_id=run_id,
                 kind=GenerativeJobKind.CAMPAIGN_COPY,
                 state=RunState.FAILED,
-                stages=stages,
+                stages=_failed(stages, exc),
                 started_at=started_at,
                 error=exc,
             )

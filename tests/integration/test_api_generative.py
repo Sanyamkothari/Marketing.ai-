@@ -132,6 +132,11 @@ def _poll_run_status(client: TestClient, run_id: str, filename: str, **kwargs: A
     return _poll(lambda: client.get(f"/runs/{run_id}/artefacts/{filename}").json(), **kwargs)
 
 
+def _calls_for(usage: dict[str, Any], purpose: str) -> int:
+    """Calls `usage` records against one purpose, or zero when it has never been billed for one."""
+    return next((row["calls"] for row in usage["by_purpose"] if row["purpose"] == purpose), 0)
+
+
 def _build_sample_index(
     client: TestClient, *, use_case_id: str = RAG_USE_CASE, with_questions: bool = True
 ) -> str:
@@ -299,6 +304,120 @@ def test_ask_refuses_an_unanswerable_question_without_calling_a_model(client: Te
     assert body["refused"] is True
     assert body["called_model"] is False
     assert body["citations"] == []
+
+
+def test_asking_a_question_adds_what_it_cost_to_the_index_usage_report(client: TestClient) -> None:
+    """An ask is metered like any other call, so the index's `llm_usage.json` grows by it."""
+    index_id = _build_sample_index(client)
+    before = client.get(f"/indexes/{index_id}").json()["llm_usage"]
+    assert before is not None
+
+    asked = client.post(f"/indexes/{index_id}/ask", json={"question": "What is the late payment fee?"})
+    assert asked.status_code == 200, asked.text
+
+    after = client.get(f"/indexes/{index_id}").json()["llm_usage"]
+    assert after["totals"]["calls"] > before["totals"]["calls"]
+    assert _calls_for(after, "assistant_answer") > _calls_for(before, "assistant_answer")
+    assert _calls_for(after, "embedding") > _calls_for(before, "embedding")
+
+
+# ---------------------------------------------------------------------------
+# An uploaded reference set: refused up front, and graded on the right column
+# ---------------------------------------------------------------------------
+GRADEABLE_REFERENCE_CSV = (
+    "question_id,question,reference_answer,expect_refusal,source_doc\n"
+    "q001,How long does a new SIM take to activate?,Usually within four hours.,false,faq_activation.md\n"
+    "q002,What is the late payment fee?,A flat fee after the due date.,false,faq_billing.md\n"
+)
+"""`docs/generative-ui-endpoints.md`'s own example columns plus the `source_doc` column
+`engine.generative.evaluation` fixes rather than configures, which that example leaves out."""
+
+
+def _upload_reference_set(client: TestClient, csv: str) -> str:
+    response = client.post(
+        f"/use-cases/{RAG_USE_CASE}/reference-sets",
+        files={"file": ("questions.csv", csv.encode(), "text/csv")},
+    )
+    assert response.status_code == 200, response.text
+    return str(response.json()["reference_set_id"])
+
+
+def _build_against(client: TestClient, **fields: str) -> Any:
+    return client.post(
+        f"/use-cases/{RAG_USE_CASE}/indexes",
+        data={"use_sample_documents": "true", "model_choice": "__automl__", "overrides": "{}", **fields},
+    )
+
+
+def test_a_reference_set_missing_a_column_the_grader_needs_is_refused_before_any_job_starts(
+    client: TestClient,
+) -> None:
+    """A file without `source_doc` is a 422 naming it, not a 202 and a failed job to go and poll."""
+    reference_set_id = _upload_reference_set(
+        client, "question_id,question,reference_answer,expect_refusal\nq001,How long?,Four hours.,false\n"
+    )
+    response = _build_against(
+        client,
+        reference_set_id=reference_set_id,
+        primary_key="question_id",
+        reference_column="reference_answer",
+    )
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "REFERENCE_SET_INVALID"
+    assert "source_doc" in detail["message"]
+
+
+def test_naming_a_column_the_reference_file_does_not_hold_is_refused(client: TestClient) -> None:
+    """A primary key picked from a stale profile is caught by name, not accepted and ignored."""
+    reference_set_id = _upload_reference_set(client, GRADEABLE_REFERENCE_CSV)
+    response = _build_against(
+        client,
+        reference_set_id=reference_set_id,
+        primary_key="not_a_column",
+        reference_column="reference_answer",
+    )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "REFERENCE_SET_INVALID"
+    assert "not_a_column" in response.json()["detail"]["message"]
+
+
+def test_the_primary_key_column_is_never_graded_as_though_it_were_the_question(
+    client: TestClient,
+) -> None:
+    """`primary_key` identifies a row; the questions graded are the ones a customer would ask."""
+    reference_set_id = _upload_reference_set(client, GRADEABLE_REFERENCE_CSV)
+    response = _build_against(
+        client,
+        reference_set_id=reference_set_id,
+        primary_key="question_id",
+        reference_column="reference_answer",
+    )
+    assert response.status_code == 202, response.text
+    index_id = response.json()["index_id"]
+    assert _poll_index(client, index_id)["state"] == "done"
+
+    graded = client.get(f"/indexes/{index_id}").json()["rag_eval"]["questions"]
+    assert [row["question"] for row in graded] == [
+        "How long does a new SIM take to activate?",
+        "What is the late payment fee?",
+    ]
+
+
+def test_a_failed_build_marks_the_step_that_failed_rather_than_leaving_it_running(
+    client: TestClient,
+) -> None:
+    """A document the knowledge base cannot index fails the build, and the step says so."""
+    response = client.post(
+        f"/use-cases/{RAG_USE_CASE}/indexes",
+        data={"use_sample_documents": "false", "model_choice": "__automl__", "overrides": "{}"},
+        files=[("documents", ("notes.csv", b"a,b\n1,2\n", "text/csv"))],
+    )
+    assert response.status_code == 202, response.text
+    status = _poll_index(client, response.json()["index_id"])
+    assert status["state"] == "failed", status
+    assert [stage["state"] for stage in status["stages"]] == ["failed"]
+    assert status["stages"][0]["detail"] == status["error_message"]
 
 
 # ---------------------------------------------------------------------------
