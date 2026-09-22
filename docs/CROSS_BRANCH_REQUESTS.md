@@ -98,6 +98,8 @@ on everything up to the pipeline boundary with no ruling at all. The smallest ch
 it is one line in §3: add `engine/pipeline.py`'s `StageContext` and its `sole_key()` call sites to
 Phase 2's pre-approved exception list.
 
+## Resolved
+
 ### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself
 
 **What is needed.** A decision on the cut point for the three phase branches, before they are cut.
@@ -147,7 +149,15 @@ cut than after three have built on two incompatible surfaces. Recorded as A-1, A
 `reports/2026-09-22.md`. I hold no code and have pushed none; this entry is the whole of my
 action.
 
-## Resolved
+**Resolved 2026-09-22.** `main` was force-updated from `04c76da` to `5f93051`, the
+contracts-first commit this branch already carried, so the divergent surface is gone from every
+branch rather than reconciled hunk by hunk. `main` now has all seven §2 items, the
+protocol-conforming `primary_key: str | list[str]`, `PARALLEL_WORK_PROTOCOL.md` and this file.
+`merge-base(main, branch) == main`: the branch is 11 commits ahead, 0 behind, and merges clean, so
+the 17-hunk conflict measured against `04c76da` no longer exists anywhere. The phase branches can
+be cut from `main` safely. The three phase plans (still open above) continue to gate
+`engine/onboarding/specs.py`, which is the one §2 item `main` carries only as a stub.
+
 
 ### 2026-09-22 — contracts-first → human reviewer: the Phase 3a half of "the three phase plans"
 
