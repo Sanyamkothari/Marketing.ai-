@@ -10,13 +10,16 @@ package exists to make that failure either impossible or visible, never silent, 
 document leads with reasoning rather than with an endpoint list: the facts below are downstream of
 three rules, and the rules are the part worth understanding first.
 
-This document is written from the code as it stands. `engine/generative/contracts.py` is complete
-and authoritative - it is the source of truth for what a screen renders and what every artefact
-means - and is cited throughout. `evaluation.py`, `root_cause.py` and `win_back.py` are being
-written alongside this document, so where this document describes the RAG evaluation flow, the
-root-cause flow or the campaign-copy flow, it describes their **contracts**: the artefacts they must
-produce and the shape those artefacts already have, not the internals of modules that do not exist
-yet.
+This document is written from the code as it stands, and one rule governs it: a claim about
+behaviour names the module and the function that makes it true, and a claim about something not yet
+built says so in the same breath. A document that describes an intention in the present tense is
+worse than no document, because the reader who trusted it stops checking. `evaluation.py`,
+`root_cause.py` and `win_back.py` have all landed since the first draft of this file, and what has
+not is the generative half of the API (`api/routes/generative.py`) and the job runner that writes a
+generative job's status document, its guardrail report and its usage record; section 7 says which
+artefacts are written by code today and which are so far only contracts.
+`engine/generative/contracts.py` is complete and authoritative - it is the source of truth for what
+a screen renders and what every artefact means - and is cited throughout.
 
 ---
 
@@ -77,17 +80,28 @@ summary's every claim carries a reference to something in the evidence pack it w
 copy may use only whitelisted fields. Three different mechanisms enforce this, one per flow, because
 "grounded" means something different in each:
 
-- For the assistant, `engine/generative/assistant.py`'s `_parse` drops any citation whose chunk
-  number is not among the extracts that were actually supplied (recorded as an `UNKNOWN_CITATION`
-  guardrail check), and the faithfulness judge is given exactly those extracts as its only source of
-  truth - a claim the model made up has nothing to be checked against but the real documents.
-- For root-cause summaries, `RootCause` itself refuses to exist without evidence:
-  `RootCause._has_evidence` (`engine/generative/contracts.py`) is a `model_validator` that raises
-  the moment a cause's `evidence_refs` is empty, and `EvidencePack.reference_ids` is the frozen set
-  every id in `evidence_refs` must belong to - a claim citing an id outside that set is caught the
-  same way a claim citing nothing is. This is enforced by the **data model**, not by a check a caller
-  might forget to run: any future code path that tries to construct an ungrounded `RootCause` fails
-  at construction.
+- For the assistant, `engine/generative/assistant.py`'s `_parse` checks both halves of a citation
+  against what was actually supplied. The chunk *number* must be among the extracts that were put in
+  front of the model, or the citation is dropped and an `UNKNOWN_CITATION` guardrail check records
+  it; the *quote* must appear in the cited chunk's own text, flattened for case and whitespace, or
+  the quote alone is dropped for an empty string and an `UNSUPPORTED_QUOTE` check records that
+  (DEC-226). The second check exists because everything else a `Citation` carries - chunk id,
+  document, heading, similarity - is copied from the match the engine itself retrieved, so an
+  unchecked quote would be the one invented thing in a row of real provenance, read by the person who
+  wanted to verify the claim. The faithfulness judge is then given exactly those extracts as its only
+  source of truth - a claim the model made up has nothing to be checked against but the real
+  documents.
+- For root-cause summaries, the work is split between the data model and one caller, and a flow
+  author needs to know which half is which. `RootCause._has_evidence`
+  (`engine/generative/contracts.py`) is a `model_validator`, so the **data model** refuses one thing
+  and one thing only: a cause whose `evidence_refs` is empty cannot be constructed by any code path,
+  now or later. Membership is **not** the data model's to check - a `RootCause` has never seen the
+  pack it was written from - and is enforced by the caller: `grounded_causes`
+  (`engine/generative/root_cause.py`) drops any parsed cause whose refs are not a subset of
+  `EvidencePack.reference_ids` before anything is stored, and a segment that grounds nothing is
+  retried and then failed with `UNGROUNDED_CLAIM`. A future flow that builds a `RootCause` from
+  somewhere else therefore inherits the empty-refs guarantee for free, and has to make the
+  membership check itself.
 - For campaign copy, `CopyTemplate.fields_used` is compared against
   `generative.campaign_copy.allowed_fields` by the `allowed_fields_only` guardrail rule
   (`engine/generative/guardrails.py`), which names any `{{placeholder}}` the model invented that has
@@ -106,12 +120,15 @@ to be refused would spend money to produce a verdict nobody will read.
 
 **Cost is an artefact.** `Meter` (`engine/generative/budget.py`) is the only way any flow talks to a
 model: every `complete`, `judge` and `embed` call goes through it, and `_check_budget` runs *before*
-the call is made, not after. A call that would take the job past `max_calls_per_run`, or past
-`max_cost_usd_per_run` given what has already been spent, is refused with `BUDGET_EXCEEDED` before it
-happens, so a job that runs out of budget has spent exactly what it was allowed to and not a cent
-more. This is enforced structurally rather than by convention because there is no second way to reach
-an `LLMClient` from inside a generative flow - `assistant.answer`, and the root-cause and campaign-
-copy flows once they land, hold a `Meter` and nothing else that can make a call.
+the call is made, not after. A job that has already used `max_calls_per_run` calls, or whose spending
+has already reached `max_cost_usd_per_run`, is refused with `BUDGET_EXCEEDED` before the next call
+happens, so it makes **not one call more** than it was allowed. The call ceiling is exact, because a
+call is a call before it is made; the cost ceiling is not, because what a call will cost is known
+only once it comes back, so the run can stop at or slightly above its ceiling rather than below it
+(DEC-227, and section 8 for what that means when a price is missing). This is enforced structurally
+rather than by convention because there is no second way to reach an `LLMClient` from inside a
+generative flow: `assistant.answer`, `root_cause.build_root_cause_summary` and `win_back`'s copy
+flow hold a `Meter` and nothing else that can make a call.
 
 ---
 
@@ -155,16 +172,27 @@ between retrieving the right document 28 times and retrieving it 40 times - and 
 real question and an off-topic one *widens* rather than narrows, because a heading is specific where
 a body paragraph is discursive. The question itself is still embedded bare: the prefix is context the
 passage lacks, not a format both sides of a comparison must share. Only what is new is embedded on a
-rebuild - a document's fingerprint, not its chunk ids, decides what counts as new (DEC-220), because
-an edited document's chunks keep the same ids as the ones they replaced, and matching on id alone
-would hand a rewritten passage the vector of the passage it no longer says.
+rebuild, and what counts as "not new" is a document's fingerprint **and** its `doc_id` together -
+never either alone (DEC-220, narrowed by DEC-221). The fingerprint is needed because an edited
+document's chunks keep the same ids as the ones they replaced, so matching on id alone would hand a
+rewritten passage the vector of the passage it no longer says. The id is needed because the
+fingerprint answers only "are these the same bytes?": a renamed file matches on fingerprint and would
+be handed the old manifest entry, so every citation would go on naming a file that no longer exists,
+and two uploads of identical bytes would both match one entry and write one document's chunks into
+the index twice under the same `chunk_id`. `_reusable_chunks` is therefore keyed on
+`(fingerprint, doc_id)`, and a renamed file is re-embedded - which is the right trade, because
+`chunk_id` is built from `doc_id` and its chunks really are different chunks.
 
 **4. Index.** `engine/generative/vectorstore.py`'s `LocalVectorStore` writes `chunks.parquet` and
 `embeddings.parquet` as two files rather than one, because a citation reads a chunk's text and a
 question reads every vector, and keeping them apart means neither operation pays for data it will not
-touch. The `VectorStore` protocol is three operations - write, read the chunks, search - deliberately
-small enough that Phase 4's OpenSearch implementation can stand behind the same three without either
-side knowing the other exists.
+touch. Two files also means two writes, each atomic on its own and neither atomic with the other, so
+`search` compares the two lengths before it zips them and raises `INDEX_CORRUPT` naming both counts
+when they disagree (DEC-224). That is the difference between refusing to search an index a crash left
+half-rebuilt and pairing every passage with another passage's vector, which produces confidently
+wrong citations that look exactly like right ones. The `VectorStore` protocol is four operations -
+`write`, `chunks`, `search` and `exists` - deliberately small enough that Phase 4's OpenSearch
+implementation can stand behind the same four without either side knowing the other exists.
 
 **5. Retrieve, with a similarity floor and MMR.** `engine/generative/retrieval.py`'s `retrieve` makes
 two decisions, and both are about what to leave out. The **similarity floor** drops anything below
@@ -173,9 +201,12 @@ telecom knowledge base about a share price would otherwise hand back the five le
 paragraphs it owns. **Maximal marginal relevance** then thins what survives the floor, because the top
 matches by raw similarity are routinely near-duplicates - the same policy line repeated in an FAQ, a
 table and the prose around it - and handing a model five wordings of one fact wastes the context a
-second, different fact needed. Neither decision is a model's to make and neither costs a call; what
-reaches the prompt is `retrieve`'s output and nothing else, which is what makes "answer only from the
-extracts" a rule the engine enforces rather than a request the prompt makes.
+second, different fact needed. `mmr` sorts its candidates itself rather than trusting that they
+arrived sorted (DEC-225), so its promise that the first pick is always the best raw match is a
+property of the function rather than of the callers it happens to have: a reader who checks the top
+citation finds the passage they expected. Neither decision is a model's to make and neither costs
+a call; what reaches the prompt is `retrieve`'s output and nothing else, which is what makes "answer
+only from the extracts" a rule the engine enforces rather than a request the prompt makes.
 
 **6. Answer or refuse.** `engine/generative/assistant.py`'s `answer` embeds the question, retrieves,
 and only then decides whether to call a model at all - see the refusal discussion below. When it does
@@ -183,33 +214,62 @@ call, the rendered prompt numbers the extracts, and that numbering *is* the cita
 model cites a position, never a filename it might misremember.
 
 **7. Cite.** Every citation in an `AssistantAnswer` carries the chunk id, the document, the heading
-and a quote of at most 25 words copied from the chunk's own text - trimmed by the engine, never
-trusted from the model's own count - plus the cosine similarity that retrieved it, so a reader can
-see not just what was cited but how confidently.
+and the cosine similarity that retrieved it - all four copied from the match the engine itself chose,
+so a reader sees not just what was cited but how confidently - plus a quote of at most 25 words. The
+quote is the one field the model supplies, and it is checked twice before it is kept: trimmed to
+`QUOTE_WORDS` by the engine rather than trusted from the model's own count, and then looked for in
+the cited chunk's own text with case and whitespace flattened on both sides. A quote that is not
+found there is dropped for an empty string and an `UNSUPPORTED_QUOTE` guardrail check is recorded
+(DEC-226) - so a citation may show no quote, but it can never show words the chunk does not
+contain. A screen renders an empty quote as no quote.
 
-### Two refusal mechanisms, and why they are different
+### Four refusal mechanisms, and why they are different
 
-A refusal is not one thing in this pipeline; it is two mechanisms that happen to produce the same
-sentence, and conflating them would hide the one number that matters most about a deployment: how
-much of its refusal behaviour is free.
+A refusal is not one thing in this pipeline. Four different things end with `refused=True` and the
+same sentence on the screen, and conflating them would hide the one number that matters most about a
+deployment: how much of its refusal behaviour is free. Exactly one of the four is free; the other
+three have already paid for a call by the time they refuse, which is what
+`AssistantAnswer.called_model` is for.
 
-The **similarity-floor refusal** happens in `assistant.answer` before a model is ever called: when
-`retrieve` finds nothing above `min_similarity`, `_refusal` returns immediately with
-`called_model=False`. This is the single most important line in the module, and for a concrete reason
-- it is both the honest answer ("the documents have nothing close to this") and a free one. It is
-also the *operator's own sentence*: `rag.refusal_message` is configuration, so the words a customer
-reads when the documents cannot help them are words the deployment chose, not words a model
-improvised under pressure to say something.
+All four say the same words, and they are the *operator's own*: `rag.refusal_message` is
+configuration, so what a customer reads when the documents cannot help them was written by the
+deployment rather than improvised by a model under pressure to say something.
 
-The **prompt-level refusal** happens only after a model was called: the extracts passed the floor,
-but the model itself decided none of them actually answers the question that was asked - "the
-extracts answer a neighbouring question but not this one," in the prompt's own words
-(`configs/prompts/assistant_answer.v1.md`) - and returns `"refused": true` in its structured reply.
-This refusal costs exactly what any other call costs, because reaching this decision required reading
-the extracts.
+**1. The similarity floor - the free one.** In `assistant.answer`, before a model is ever called:
+when `retrieve` finds nothing above `min_similarity`, `_refusal` returns immediately with
+`called_model=False`, `retrieved=0` and no guardrail checks at all, because nothing was generated and
+a passing check would claim otherwise. This is the single most important line in the module, and for
+a concrete reason - it is both the honest answer ("the documents have nothing close to this") and a
+free one.
 
-Why the floor cannot substitute for the model, and why the model's refusal is not free: retrieval
-and refusal by relevance are different signals. DEC-219 states this precisely by giving two concrete
+**2. The model's own refusal - paid.** The extracts passed the floor, but the model decided none of
+them actually answers the question asked - "the extracts answer a neighbouring question but not this
+one," in the prompt's own words (`configs/prompts/assistant_answer.v1.md`) - and returned
+`"refused": true` in its structured reply. This costs what any other call costs, because reaching the
+decision required reading the extracts.
+
+**3. A guardrail block - paid, and the answer is discarded.** The model answered, and a deterministic
+rule or a judge refused what it wrote. `answer` then returns the refusal sentence with
+`called_model=True`, `retrieved` unchanged and `citations` emptied, and the whole sweep of checks -
+the one that blocked and the ones that passed beside it - travels on the answer. The generated text
+is not stored, not cited and not shown; the check is what records that it happened.
+
+**4. An unreadable reply - paid, and the reply is dropped rather than relabelled (DEC-222).** When
+the reply is not a JSON object the contract can read, `_parse` discards it and returns the refusal
+sentence in its place, with a `MODEL_OUTPUT_MALFORMED` check recording that the parse is what failed.
+Returning the blob under `refused=True` would satisfy the flag and still put an unparsed model
+completion in front of a customer, which is the outcome this mechanism exists to prevent. The reply
+is not lost: it is what the model was metered for.
+
+The three paid mechanisms all leave guardrail checks behind, and so do the citation and quote checks
+on an answer nothing refused; only the floor leaves none, because nothing was generated to check.
+Every check on an answer, wherever in the flow it was raised, is targeted at the *question* and never
+at the answer, so `answer.guardrails` reads as one column rather than two meanings interleaved
+(DEC-223).
+
+Why the floor cannot substitute for the model, and why the model's refusal is not free - that is,
+why mechanisms 1 and 2 are not one mechanism seen twice: retrieval and refusal by relevance are
+different signals. DEC-219 states this precisely by giving two concrete
 questions against the reference set's lexical fake. "Can you recommend a competitor with a cheaper
 plan?" shares almost no vocabulary with the corpus, scores 0.154 against every chunk, and the floor
 refuses it correctly with no call at all. "How many employees does Northwind Telecom have?" scores
@@ -273,14 +333,19 @@ event.
 a guardrail report can never claim a text was checked for something nobody checked it for. The eight
 deterministic rules run first and in a deliberate order (`RULES`): an empty output makes every later
 rule meaningless, so it runs first; a length failure is worth reporting before a phrase failure inside
-a text that was never going to be used anyway. `pii_in_output`, `banned_phrases`, `max_length` and
-`required_lines` are `block` by default in the shipped configuration; `language_match` is `warn`,
-because telling English from a wrong script needs only a character-class check, but telling Hindi
-from Marathi needs a model this rule does not have, so it says what it can see and nothing more.
+a text that was never going to be used anyway. Every one of the eight is `block` in the shipped
+configuration except `language_match`, which is `warn`: telling English from a wrong script needs
+only a character-class check, but telling Hindi from Marathi needs a model this rule does not have,
+so it says what it can see and nothing more.
 
 Only text that survives every deterministic rule reaches a judge, and a judge is itself a metered LLM
 call, configured under `llm_judge` as `{threshold, on_fail}` per judge name - `faithfulness` and
-`compliance` at 0.80, `toxicity` at 0.90, all `block` in the shipped file. A judge that does not answer
+`compliance` at 0.80, `toxicity` at 0.90, all `block` in the shipped file. The fourth judge
+`JUDGE_PROMPTS` knows, `correctness`, is not in that file and is not a gate: it is a *grading* judge
+that `evaluation` calls itself, so `RagEvalQuestion.correctness` is a score on a screen rather than a
+verdict that refuses an answer (nothing in the shipped configuration sets a bar for it).
+
+A judge that does not answer
 in the JSON its prompt asked for scores 0 (`guardrails._parse_verdict`) rather than being treated as a
 pass, because a verdict nobody can read must not become a silently disabled guardrail. `retries`
 (default 2) bounds how many times a caller may regenerate a text before a failure is final - the
@@ -320,17 +385,44 @@ by noticing an absence.
 
 Every filename this package can write is one of two maps in `engine/generative/contracts.py`:
 `GENERATIVE_ARTEFACTS` (a JSON document, one pydantic model) or `GENERATIVE_TABULAR_SCHEMAS` (a
-table, one model per row). Both are proved disjoint from the predictive engine's own
-`ARTEFACT_REGISTRY`, and the artefact route serves their union, so a generative artefact is fetched
-through the same `GET /runs/{id}/artefacts/{name}` shape as a predictive one with no special case
-(DEC-210).
+table, one model per row). They are parallel to the predictive engine's `ARTEFACT_REGISTRY` and
+`TABULAR_SCHEMAS` rather than inside them, because `tests/unit/test_artefact_registry.py` pins those
+two name for name and a generative artefact is not a predictive one (DEC-210).
 
-Two groupings within that union matter for knowing when to expect a file. `INDEX_ARTEFACTS` is what a
-finished index build writes - the manifest, its own status document and the two Parquet files -
-joined by `rag_eval.json` only once a reference set has actually been graded.
-`RUN_GENERATIVE_ARTEFACTS` is what a root-cause or campaign-copy job may *add* to a run directory that
-the predictive engine already finished writing: it adds files, and it never rewrites the ones already
-there (DEC-210, DEC-211).
+**What is true today, and what is intended, are different sentences, and this paragraph keeps them
+apart.** Today `api/routes/runs.py:read_artefact` whitelists `ARTEFACT_REGISTRY` and
+`TABULAR_SCHEMAS` and nothing else, so `GET /runs/{id}/artefacts/{name}` answers
+`404 ARTEFACT_UNKNOWN` for every generative filename; `GENERATIVE_ARTEFACTS`,
+`GENERATIVE_TABULAR_SCHEMAS` and the `generative_artefact_model` lookup written for that route have
+no caller anywhere in the tree yet. The four maps' names do not in fact collide - that can be
+checked in a REPL - but no test asserts it, so "proved disjoint" is not something this document may
+say. (`contracts.py`'s own module docstring states the union and the disjointness in the present
+tense for the same reason this document used to: both describe the design DEC-210 settled on, and
+neither describes what the artefact route does today.) Index artefacts are further out of reach
+still: an index lives at `indexes/{index_id}/` (`engine.storage.index_key`), beside runs rather than
+inside one, so no run route could serve `doc_index_manifest.json` or `chunks.parquet` whatever its
+whitelist said. **The intended design** is
+that the run route's whitelist becomes the union of the predictive and generative run maps, with the
+disjointness a pinned test rather than a coincidence, and that the index artefacts are served by
+`api/routes/generative.py` under `GET /indexes/{index_id}/...` - which is the same reason
+`generative_artefact_model` returns `None` rather than raising for a name it does not own: the caller
+that will ask is a route that wants to fall through to the predictive map.
+
+Two groupings matter for knowing when to expect a file. `INDEX_ARTEFACTS` is what a finished index
+build writes - the manifest, its own status document and the two Parquet files - joined by
+`rag_eval.json` only once a reference set has actually been graded. `RUN_GENERATIVE_ARTEFACTS` is
+what a root-cause or campaign-copy job may *add* to a run directory that the predictive engine
+already finished writing: it adds files, and it never rewrites the ones already there (DEC-210,
+DEC-211).
+
+**Which of these are written by code today.** `index.build_index` writes `doc_index_manifest.json`
+and, through `LocalVectorStore`, `chunks.parquet` and `embeddings.parquet`; `evaluation.evaluate`
+writes `rag_eval.json`; `win_back` writes `copy_batch.json` and `copy_messages.csv`. The three status
+documents, `guardrail_report.json`, `llm_usage.json` and `root_cause_summary.json`, are so far
+contracts only: their producer is the job runner that has not landed yet, and the objects exist
+without a writer - `root_cause.build_root_cause_summary` returns a `RootCauseSummary`, `Meter.usage`
+returns an `LlmUsageReport`, and nothing puts either into storage. The "Written when" column below is
+therefore the contract each file is written against, not a promise that something writes it today.
 
 | File | Model | Written when | What a reader uses it for |
 |---|---|---|---|
@@ -366,6 +458,23 @@ price, so an operator knows which row to add. `max_calls_per_run` needs no price
 on an entirely unpriced deployment; `max_cost_usd_per_run` cannot bind on what cannot be priced, and
 `Meter.budget_usd` returns `None` in that case rather than pretending a ceiling that cannot be checked
 is being enforced.
+
+"That case" is wider than an empty price file, and the widening is DEC-227. `budget_usd` is `None`
+whenever *any* call so far could not be priced - the table empty, or a table with a row for the
+generating model and none for the judge - because that is exactly the condition under which
+`cost_so_far` is `None` and the cost comparison in `_check_budget` cannot be made. A half-filled
+price file would otherwise put a real-looking ceiling into `llm_usage.json` while nothing was being
+tested against it, which is the same fabrication as a cost of `0.0` wearing different clothes. What
+still binds on such a deployment is the call ceiling, and it is the only thing that does.
+
+The cost ceiling's promise is also narrower than "not a cent over", and worth stating exactly.
+`_check_budget` runs before a call and compares what has *already* been spent, because what a call
+will cost is known only once it comes back - the output tokens are the model's to choose. So a run
+stops at the first call after its spending reached the ceiling, and the call that took it there may
+have taken it past. The ceiling bounds how much further a job goes, not its final total. Projecting
+a call's cost from `max_output_tokens` and refusing on the projection would bound the total, at the
+price of refusing real work on the strength of a number nobody measured - which is the trade plan
+section 13.3 settles the same way everywhere else in this package (DEC-227).
 
 `TOKENS_ESTIMATED` exists for a narrower reason (DEC-215). The `LLMClient` protocol's `embed` returns
 vectors and nothing else, because no provider reports token usage through an embedding call the way
@@ -438,7 +547,7 @@ building a send path here would mean this codebase making a compliance-carrying 
 contacted, and when) that belongs to whichever system in a client's stack already owns consent and
 delivery.
 
-**No OpenSearch.** `VectorStore` is a three-method protocol precisely so that `LocalVectorStore` -
+**No OpenSearch.** `VectorStore` is a four-method protocol precisely so that `LocalVectorStore` -
 Parquet for the chunks, Parquet for the vectors, cosine similarity in NumPy - can be the whole
 implementation for now, with zero infrastructure: an index is a directory beside the runs, and nothing
 has to be running for a test to search one. Phase 4 swaps in OpenSearch Serverless behind the same

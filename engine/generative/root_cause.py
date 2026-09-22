@@ -118,7 +118,15 @@ _SHARE_DECIMALS: Final[int] = 1
 _CODE_FENCE: Final[re.Pattern[str]] = re.compile(r"^\s*```(?:json)?\s*|\s*```\s*$", re.MULTILINE)
 _WORD: Final[re.Pattern[str]] = re.compile(r"[a-z]+")
 _MIN_MATCH_TOKEN: Final[int] = 4
-"""Shortest feature-name token worth matching against a complaint; shorter ones match too much."""
+"""Shortest word worth matching, on *either* side; shorter ones match too much.
+
+`_match_reasons` tests two strings for containment in both directions, so a length floor applied to
+only one of them is not a floor at all: `"i" in "billing"` is true, and a complaint containing the
+word "i" therefore scored against every reason whose feature name has an `i` in it. Measured over
+the twelve fixture complaints, the one-sided version matched up to five of six reasons on letters
+alone, and matched billing to an outage; with the floor on both sides each sentence matches the
+reason whose feature name its own words actually contain, or nothing.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -297,9 +305,11 @@ def _match_reasons(text: str, reasons: Sequence[EvidenceReason]) -> tuple[str, .
 
     A soft, best-effort heuristic - a feature name and a customer's sentence share a vocabulary only
     loosely - so it is scored by substring overlap between a feature's own tokens and the complaint's
-    words rather than by an exact match a real complaint would rarely produce.
+    words rather than by an exact match a real complaint would rarely produce. Soft is not the same
+    as arbitrary: both sides are held to `_MIN_MATCH_TOKEN`, because containment is symmetric and a
+    floor on one side leaves every short word in the sentence matching half the feature names.
     """
-    words = _WORD.findall(text.lower())
+    words = [word for word in _WORD.findall(text.lower()) if len(word) >= _MIN_MATCH_TOKEN]
     scored: list[tuple[int, str]] = []
     for reason in reasons:
         tokens = [token for token in _WORD.findall(reason.feature.lower()) if len(token) >= _MIN_MATCH_TOKEN]
