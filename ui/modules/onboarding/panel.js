@@ -108,7 +108,10 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     container.querySelectorAll(".stage-d").forEach((details) => {
       details.open = state.open === details.dataset.step;
       details.addEventListener("toggle", () => {
+        // Both directions: collapsing the open step has to clear `state.open`, or the next render
+        // reopens the step the user just closed.
         if (details.open) state.open = details.dataset.step;
+        else if (state.open === details.dataset.step) state.open = null;
       });
     });
   }
@@ -123,7 +126,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     try {
       state.schema = await getStandardSchema(useCaseId);
       state.label = state.schema.label ? { ...state.schema.label } : null;
-      seedFeatures();
+      syncFeatures();
     } catch (error) {
       state.schemaError = error;
     }
@@ -135,6 +138,22 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
    * rather than the mapping/window/where vocabulary and the snapshot vocabulary failing separately
    * and silently in two different corners of the form. Either one failing must not throw past this
    * function - an uncaught rejection here would crash the mount before the user ever sees a screen. */
+  /** An empty `enum` means the API's OpenAPI document has no such component - the onboarding
+   * routers are not mounted, or a model was renamed - and an empty `<select>` would leave the user
+   * staring at a form with no choices and no reason given. A code, a business-language message and
+   * a suggestion instead (house rule 3), raised as the same `ApiError` every other failure on this
+   * screen is rendered from. */
+  function requireChoices(name, choices) {
+    if (choices && choices.length) return choices;
+    throw new ApiError(
+      0,
+      "SCHEMA_VOCABULARY_MISSING",
+      `This engine did not describe its ${name} choices, so this form cannot be filled in safely. ` +
+        "Ask whoever installed it to finish enabling the onboarding endpoints, then reload the page.",
+      null,
+    );
+  }
+
   async function loadFeatureSchema() {
     try {
       const [functionChoices, whereChoices, nameProp] = await Promise.all([
@@ -143,8 +162,8 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
         schemaProperty("FeatureDef", "name"),
       ]);
       state.featureSchema = {
-        function: functionChoices,
-        where: whereChoices,
+        function: requireChoices("feature function", functionChoices),
+        where: requireChoices("filter operator", whereChoices),
         namePattern: (nameProp && nameProp.pattern) || "",
       };
     } catch (error) {
@@ -152,6 +171,16 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     }
   }
 
+  /**
+   * The snapshot form's choices, bounds and starting values, all read off the API's own schema.
+   *
+   * `default` is the value `SnapshotDefinition` itself would have used had the request left the
+   * field out, so starting the form there is showing the user what the engine is configured to do -
+   * not a number chosen here. When the schema has no default there is nothing true to start from,
+   * so the field starts empty and the API supplies its own on save; the earlier fallback chain
+   * ending in a literal `1` was a max-snapshots setting this file invented and then presented as
+   * the engine's.
+   */
   async function loadSnapshotSchema() {
     try {
       const [modeChoices, freqChoices, modeProp, freqProp, maxProp] = await Promise.all([
@@ -162,17 +191,22 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
         schemaProperty("SnapshotDefinition", "max_snapshots"),
       ]);
       state.snapshotSchema = {
-        mode: modeChoices,
-        frequency: freqChoices,
-        maxSnapshots: { min: maxProp && maxProp.minimum, max: maxProp && maxProp.maximum },
+        mode: requireChoices("snapshot mode", modeChoices),
+        frequency: requireChoices("snapshot frequency", freqChoices),
+        maxSnapshots: {
+          min: maxProp ? maxProp.minimum : null,
+          max: maxProp ? maxProp.maximum : null,
+        },
       };
       state.snapshot = {
-        mode: (modeProp && modeProp.default) || modeChoices[0],
-        frequency: (freqProp && freqProp.default) || freqChoices[0],
-        max_snapshots: (maxProp && maxProp.default) || (maxProp && maxProp.minimum) || 1,
+        mode: modeProp && present(modeProp.default) ? modeProp.default : modeChoices[0],
+        frequency: freqProp && present(freqProp.default) ? freqProp.default : freqChoices[0],
+        max_snapshots: maxProp && present(maxProp.default) ? maxProp.default : null,
       };
     } catch (error) {
       state.vocabularyError = error;
+      state.snapshotSchema = null;
+      state.snapshot = null;
     }
     rerender();
   }
@@ -184,8 +218,12 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     rerender();
     try {
       const result = await listSources(clientId);
-      state.sources = result.sources.map((source) => ({ source, profile: result.profiles[source.source_id] }));
-      seedFeatures();
+      state.sources = result.sources.map((source) => ({
+        source,
+        profile: result.profiles[source.source_id],
+      }));
+      state.sourcesError = null; // a read that succeeded answers the failure the last one reported
+      syncFeatures();
     } catch (error) {
       state.sourcesError = error;
     }
@@ -194,21 +232,29 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     await ensureMappingsLoaded();
   }
 
-  /** Every suggested feature whose role the client has now mapped, added once and never removed:
-   * a role confirmed later only grows the checklist, it never throws away a tick the user made. */
-  function seedFeatures() {
+  /**
+   * The feature checklist, kept in step with which roles the client actually has a source for.
+   *
+   * It grows when a role is confirmed and shrinks when its last source goes away, because a spec
+   * naming features for a role no source fills is one `POST /datasets` can only refuse. `featureChecked`
+   * is deliberately *not* pruned alongside: a tick the user removed survives the source being
+   * re-added, which is the one piece of this the user, rather than the data, decided.
+   */
+  function syncFeatures() {
     if (!state.schema) return;
     const mappedRoles = new Set(state.sources.filter((e) => e.source.role).map((e) => e.source.role));
+    state.features = state.features.filter((feature) => mappedRoles.has(feature.role));
     const known = new Set(state.features.map((f) => f.name));
     for (const feature of state.schema.suggested_features || []) {
       if (mappedRoles.has(feature.role) && !known.has(feature.name)) {
         state.features.push(feature);
-        state.featureChecked[feature.name] = true;
+        if (!(feature.name in state.featureChecked)) state.featureChecked[feature.name] = true;
       }
     }
   }
 
   async function uploadFiles(fileList) {
+    state.sourcesError = null;
     for (const file of Array.from(fileList)) {
       state.uploading = [...state.uploading, file.name];
       rerender();
@@ -222,31 +268,57 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     await loadSources();
   }
 
+  /**
+   * Confirm (or change) a source's role, then re-read every source.
+   *
+   * The re-read is the point, not housekeeping: `PATCH /clients/{id}/sources/{sid}` answers with
+   * the one `SourceSpec` it changed, but it also re-derives `KeyCandidate.coverage` on *every* one
+   * of this client's stored profiles (`api.routes.sources.resync_join_coverage`) - confirming the
+   * entity table is exactly what makes every other table's coverage measurable, and moving that
+   * role away is what clears it again. Patching the single row in place would leave the coverage
+   * badges showing the em dash for a number the server has just measured, which is the mirror image
+   * of house rule 2: not a fabricated value, but a measured one the screen refuses to show.
+   */
   async function setRoleFor(sourceId, role) {
     try {
-      const updated = await setSourceRole(clientId, sourceId, role);
-      state.sources = state.sources.map((e) => (e.source.source_id === sourceId ? { ...e, source: updated } : e));
+      await setSourceRole(clientId, sourceId, role);
       delete state.mappings[sourceId];
       delete state.mappingSuggested[sourceId];
       delete state.mappingSaved[sourceId];
-      seedFeatures();
+      delete state.mappingChecks[sourceId];
     } catch (error) {
       state.sourcesError = error;
+      rerender();
+      return;
     }
-    rerender();
-    await ensureMappingsLoaded();
+    await loadSources();
   }
 
+  /** Confirm the role the `<select>` is already showing. The select's own `change` never fires for
+   * a user who agrees with the detector's top candidate, so without this the preselected proposal
+   * could never become a confirmed fact - see `steps.js`'s `roleSelect`. */
+  function confirmRoleFor(button) {
+    const row = button.closest("tr");
+    const select = row && row.querySelector('select[data-act="set-role"]');
+    if (!select || !select.value) return;
+    return setRoleFor(button.dataset.source, select.value);
+  }
+
+  /** Deleting a source re-derives the same coverage numbers a role change does, so this re-reads
+   * the client's sources for the same reason `setRoleFor` does. */
   async function deleteSourceFor(sourceId) {
     try {
       await deleteSource(clientId, sourceId);
-      state.sources = state.sources.filter((e) => e.source.source_id !== sourceId);
       delete state.mappings[sourceId];
       delete state.mappingSuggested[sourceId];
+      delete state.mappingSaved[sourceId];
+      delete state.mappingChecks[sourceId];
     } catch (error) {
       state.sourcesError = error;
+      rerender();
+      return;
     }
-    rerender();
+    await loadSources();
   }
 
   // --- mapping ---------------------------------------------------------------------------------
@@ -255,6 +327,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     const id = entry.source.source_id;
     if (!entry.source.role || state.mappings[id] || state.mappingLoading[id]) return;
     state.mappingLoading[id] = true;
+    state.mappingError[id] = null;
     rerender();
     try {
       const mapping = await suggestMapping(clientId, id, useCaseId);
@@ -271,22 +344,63 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     return Promise.all(state.sources.map(ensureMapping));
   }
 
+  /**
+   * Point one of the client's columns at one of ours, or at nothing.
+   *
+   * Two invariants `MappingSpec`'s own validator enforces are kept here rather than discovered as a
+   * `422` on save: one source column claims one standard name, and one standard name is claimed by
+   * one source column. Re-pointing a standard name therefore *displaces* whichever column held it,
+   * back onto the unmapped list, instead of leaving two columns claiming it; and a column that
+   * stops being mapped joins that list rather than vanishing from both.
+   *
+   * `confidence` is the suggester's own measurement whenever this pair is one it proposed. When it
+   * is not, nothing measured it: `MappingColumn.confidence` is a required float, so the request
+   * body carries the settled-by-a-human `1` alongside `decided_by: "user"` (which is what stops the
+   * engine asking for a review of a decision a human just made), and `steps.js` reads the pill off
+   * the untouched suggestion so that number is never shown as though it were a measurement.
+   */
   function handleSetMapping(el) {
     const sourceId = el.dataset.source;
     const columnName = el.dataset.column;
     const standard = el.value;
     const mapping = state.mappings[sourceId];
     if (!mapping) return;
-    const columns = (mapping.columns || []).filter((c) => c.source !== columnName);
-    let unmapped = (mapping.unmapped_source || []).filter((c) => c !== columnName);
+    const displaced = standard
+      ? (mapping.columns || []).filter((c) => c.standard === standard && c.source !== columnName)
+      : [];
+    const columns = (mapping.columns || []).filter(
+      (c) => c.source !== columnName && !displaced.includes(c),
+    );
+    const freed = displaced.map((c) => c.source);
+    let unmapped = (mapping.unmapped_source || []).filter(
+      (c) => c !== columnName && !freed.includes(c),
+    );
     if (standard) {
-      columns.push({ source: columnName, standard, confidence: 1, decided_by: "user", transform: null });
+      columns.push({
+        source: columnName,
+        standard,
+        confidence: suggestedConfidence(sourceId, columnName, standard),
+        decided_by: "user",
+        transform: null,
+      });
+      unmapped = [...unmapped, ...freed];
     } else {
       unmapped = [...unmapped, columnName];
     }
     state.mappings[sourceId] = { ...mapping, columns, unmapped_source: unmapped };
     state.mappingSaved[sourceId] = false;
     rerender();
+  }
+
+  /** The suggester's score for exactly this (source column -> standard column) pair, or `1` when it
+   * never proposed this pair - see `handleSetMapping` for why that number is a wire value and not a
+   * displayed one. */
+  function suggestedConfidence(sourceId, columnName, standard) {
+    const suggested = state.mappingSuggested[sourceId];
+    const match =
+      suggested &&
+      (suggested.columns || []).find((c) => c.source === columnName && c.standard === standard);
+    return match && present(match.confidence) ? match.confidence : 1;
   }
 
   function handleSetValueMap(el) {
@@ -314,6 +428,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     try {
       const result = await saveMapping(clientId, mapping.mapping_id, mapping);
       state.mappingSaved[sourceId] = true;
+      state.mappingError[sourceId] = null;
       state.mappingChecks[sourceId] = result.checks || [];
     } catch (error) {
       state.mappingError[sourceId] = error;
@@ -404,7 +519,9 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
 
   function specBody() {
     const entity = entitySourceEntry();
-    const eventSources = state.sources.filter((e) => e.source.role && (!entity || e.source.source_id !== entity.source.source_id));
+    const eventSources = state.sources.filter(
+      (e) => e.source.role && (!entity || e.source.source_id !== entity.source.source_id),
+    );
     // Only a SAVED mapping has a row `api/routes/onboarding-specs` can load by id; a suggestion the
     // user has not saved yet exists only in this tab's memory, and naming it here would 404 the
     // instant the server tried to load it back.
@@ -412,7 +529,8 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       .filter((e) => e.source.role && state.mappingSaved[e.source.source_id])
       .map((e) => state.mappings[e.source.source_id])
       .filter(Boolean)
-      .map((m) => m.mapping_id);
+      .map((m) => m.mapping_id)
+      .sort(); // `OnboardingSpec.mapping_ids` is documented sorted, and its hash is order-sensitive.
     const tickedFeatures = state.features.filter((f) => state.featureChecked[f.name] !== false);
     return {
       use_case: useCaseId,
@@ -421,8 +539,17 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       mapping_ids: mappingIds,
       feature_spec: { features: tickedFeatures },
       label_spec: state.label,
-      snapshot_spec: state.snapshot,
+      snapshot_spec: withoutBlanks(state.snapshot),
     };
+  }
+
+  /** A settings object with the fields the user left blank removed rather than sent as `null`.
+   * `SnapshotDefinition.max_snapshots` is a plain `int` with its own default: leaving it out means
+   * "whatever this engine is configured to use", while sending `null` means "no value", which the
+   * API is right to refuse. */
+  function withoutBlanks(settings) {
+    if (!settings) return settings;
+    return Object.fromEntries(Object.entries(settings).filter(([, value]) => present(value)));
   }
 
   async function runPreview() {
@@ -444,6 +571,18 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     rerender();
   }
 
+  /**
+   * Save the recipe and start the build.
+   *
+   * `409` is not an error on this screen: `POST /datasets` answers it with the whole check list when
+   * a blocking problem remains, and that list is the screen's content, rendered exactly like the
+   * checks any other step shows. Anything else is an error box.
+   *
+   * The first `GET /datasets/{id}` is inside its own `try`: by then the build has really started
+   * (`POST /datasets` writes `build_status.json` before it returns), so a failed first poll is a
+   * reading problem, not a starting one, and reporting it as "the build could not be started" would
+   * be telling the user something untrue about a job that is running.
+   */
   async function startBuild() {
     state.building = true;
     state.buildError = null;
@@ -455,47 +594,55 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       state.specChecks = spec.checks || [];
       const created = await createDataset({ client_id: clientId, spec_id: spec.spec_id, mode: "train" });
       state.datasetId = created.dataset_id;
-      state.dataset = await getDataset(state.datasetId);
-      pollBuild();
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && error.body && error.body.checks) {
         state.buildChecks = error.body.checks;
       } else {
         state.buildError = error;
       }
+      state.building = false;
+      rerender();
+      return;
     }
     state.building = false;
-    rerender();
+    await pollOnce();
+    scheduleNextPoll();
   }
 
-  function pollBuild() {
-    if (pollTimer) clearInterval(pollTimer);
-    pollTimer = setInterval(async () => {
-      let status;
-      try {
-        state.dataset = await getDataset(state.datasetId);
-        status = state.dataset.status;
-      } catch (error) {
-        clearInterval(pollTimer);
-        pollTimer = null;
-        state.buildError = error;
-        rerender();
-        return;
-      }
-      if (status.state === "pending" || status.state === "running") {
-        rerender();
-        return;
-      }
-      clearInterval(pollTimer);
-      pollTimer = null;
-      if (status.state === "done") {
-        try {
-          state.buildReport = await getDatasetReport(state.datasetId);
-        } catch (error) {
-          state.buildError = error;
-        }
-      }
+  /** One poll, and whatever it settles. Returns `true` while the build is still going. */
+  async function pollOnce() {
+    let status;
+    try {
+      state.dataset = await getDataset(state.datasetId);
+      status = state.dataset.status;
+    } catch (error) {
+      state.buildError = error;
       rerender();
+      return false;
+    }
+    if (status.state === "pending" || status.state === "running") {
+      rerender();
+      return true;
+    }
+    if (status.state === "done") {
+      try {
+        state.buildReport = await getDatasetReport(state.datasetId);
+      } catch (error) {
+        state.buildError = error;
+      }
+    }
+    rerender();
+    return false;
+  }
+
+  /** `setTimeout` rather than `setInterval`: the next poll is scheduled once the previous one has
+   * answered, so a slow API is never given a queue of overlapping requests to answer, and a build
+   * that ends between ticks is never polled again after its report has been read. */
+  function scheduleNextPoll() {
+    if (pollTimer) clearTimeout(pollTimer);
+    pollTimer = setTimeout(async () => {
+      pollTimer = null;
+      if (await pollOnce()) scheduleNextPoll();
     }, POLL_MS);
   }
 
@@ -535,6 +682,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     if (!el) return;
     const act = el.dataset.act;
     if (act === "delete-source") deleteSourceFor(el.dataset.source);
+    else if (act === "confirm-role") confirmRoleFor(el);
     else if (act === "accept-all") acceptAllFor(el.dataset.source);
     else if (act === "save-mapping") saveMappingFor(el.dataset.source);
     else if (act === "open-add-feature") openAddFeature();
@@ -570,5 +718,14 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
   loadSources();
   loadSnapshotSchema();
 
-  return { getState: () => state, rerender, stop: () => pollTimer && clearInterval(pollTimer) };
+  /** `stop()` is the host's way out: `ui/usecase.js` replaces its whole `<main>` on a route change,
+   * and a poll still running against a container nobody can see is a request nobody reads. */
+  return {
+    getState: () => state,
+    rerender,
+    stop: () => {
+      if (pollTimer) clearTimeout(pollTimer);
+      pollTimer = null;
+    },
+  };
 }

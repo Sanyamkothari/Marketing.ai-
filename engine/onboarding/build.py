@@ -759,6 +759,15 @@ def build_dataset(
     `sample_entities` caps the build to that many entities for the Setup screen's preview. It is a
     filter on the spine and on everything that joins to it, never on the rows read, so the numbers a
     preview reports are the real numbers for the entities it covers rather than a fraction of them.
+    A sampled build does not re-run the Phase 1 validation: every judgement it makes - how many rows,
+    how many positives, how imbalanced, how predictive - is about the whole dataset, and answering it
+    from two hundred customers would put "this file has too few rows" in front of a user whose file
+    has plenty. The onboarding checks, which are about the mapping and the recipe, still run.
+
+    A scoring build keeps the recipe's own `snapshot_mode`, and therefore its `snapshot_date` column
+    and its primary key, even though it stands at a single date. The scoring frame has to carry the
+    columns the model was fitted on; dropping one because this particular build has one date would
+    make every scoring run a schema mismatch.
 
     The report is returned and written whatever happens. A build whose checks found an error writes
     `build_report.json` and nothing else: there is no dataset, and the report is what the user reads.
@@ -964,11 +973,12 @@ def build_dataset(
                 )
             )
         )
-        checks.extend(
-            _phase_one_checks(
-                frame, config, dataset_id=dataset_id, target=target, mode=mode, periodic=periodic
+        if sample_entities is None:
+            checks.extend(
+                _phase_one_checks(
+                    frame, config, dataset_id=dataset_id, target=target, mode=mode, periodic=periodic
+                )
             )
-        )
         stats = tuple(
             FeatureStat(
                 name=name,

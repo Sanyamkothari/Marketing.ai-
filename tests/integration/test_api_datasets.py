@@ -8,26 +8,24 @@ The fixtures below build the smallest app that serves all four M8/M12 routers to
 exactly as the endpoints depend on each other (clients -> sources -> mappings -> datasets), and read
 `app.state.config_root`/`data_dir` the same way `api.main.create_app` would set them.
 
-`engine.onboarding.mapping` and `engine.onboarding.validate` have landed, so every test here now
-runs for real against them rather than skipping; the `importorskip` guards stay because the fixtures
-are layered and a module that is being rewritten should skip this file, not fail it.
+`engine.onboarding.mapping`, `engine.onboarding.validate` and `engine.onboarding.build` have all
+landed, so every test here runs for real against them rather than skipping; the `importorskip` guards
+stay because the fixtures are layered and a module being rewritten beside this branch should skip
+this file, not fail it.
 
-`engine.onboarding.build` has *not* landed, and `api/routes/datasets.py` reaches
-`build_dataset` through its own `_build_callable()` indirection rather than a bare import precisely
-so everything up to and including a `POST /datasets` job submission is still exercised without it.
-The two tests that would otherwise need it - the preview and the poll-to-terminal build - each accept
-exactly two outcomes: the real one, or the honestly-reported `BUILD_ENGINE_NOT_AVAILABLE` refusal, and
-they assert the *same* invariants in both cases (a preview leaves no dataset directory behind either
-way; a build reaches a terminal state either way). Neither accepts silence, a fabricated row or a
-poll that never moves. Both were also run green against a scratch `engine/onboarding/build.py` stub
-matching the signature `api/routes/datasets.py` documents, so the happy branch is exercised code, not
-an untested `else`.
+Two tests stub `engine.onboarding.build.build_dataset` through `monkeypatch`, and only those two:
+they are about what this route does when the build engine *stops without saying so*, which is a
+state no real build can be asked to produce on demand and which - left unhandled - leaves the Build
+screen polling "queued" for ever. Everything else, including the preview and the full build, runs
+the real engine end to end.
 """
 
 from __future__ import annotations
 
+import json
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
+from datetime import date, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +35,13 @@ from fastapi.testclient import TestClient
 
 from api.main import config_error_handler
 from api.routes.clients import router as clients_router
+from api.routes.datasets import PREVIEW_SAMPLE_ENTITIES
 from engine.config import ConfigError
+from engine.contracts import RunState
+from engine.onboarding import build
+from engine.onboarding.specs import BuildStage, BuildStatus
 from engine.storage import LocalStorage
+from engine.utils.time import utc_now
 from tests.integration.test_api_clients import (
     PLANNED_ID,
     TELCO_CHURN,
@@ -50,6 +53,13 @@ from tests.integration.test_api_clients import (
 pytestmark = pytest.mark.integration
 
 ENTITY_CSV = "customer_id,name,signup_date\nC-1,Ann,2026-01-01\nC-2,Bea,2026-01-02\nC-3,Cid,2026-01-03\n"
+BUILD_TIMEOUT_S = 90.0
+"""How long a poll waits for a build. Generous on purpose: a timeout here must mean "the job never
+finished", never "this machine was slow", or the suite reports a route bug that is not there."""
+
+EVENTS_START = date(2026, 1, 1)
+"""First event date of the generated fixtures; the span after it is what `TOO_LITTLE_HISTORY` reads."""
+
 COMPLAINTS_CSV = (
     "customer_id,complaint_date,category\n"
     "C-1,2026-02-01,billing\n"
@@ -175,6 +185,53 @@ def _save_mapping(client: TestClient, client_id: str, suggestion: dict[str, Any]
     assert response.status_code == 200, response.text
     body: dict[str, Any] = response.json()
     return body
+
+
+def _big_csvs(entities: int = 1_200, span_days: int = 150) -> tuple[str, str]:
+    """Two CSVs large enough for a build to *finish* rather than stop on Phase 1's own checks.
+
+    The small fixtures above are right for every test about refusals, which never read a row; a
+    build that reaches `done` needs more than a thousand rows and months of history, because
+    `ROWS_TOO_FEW` and `TOO_LITTLE_HISTORY` are errors and an error means no dataset is written. The
+    numbers come from the shipped config, not from taste: 1,000 rows and 90 days are what
+    `configs/` asks for, and these clear both with room to spare rather than sitting on the line.
+    """
+    people = "".join(
+        f"C-{index},Person{index},2025-0{index % 9 + 1}-01\n" for index in range(1, entities + 1)
+    )
+    events = "".join(
+        f"C-{index},{EVENTS_START + timedelta(days=(index + offset * 37) % span_days)},billing\n"
+        for index in range(1, entities + 1)
+        for offset in range(3)
+    )
+    return f"customer_id,name,signup_date\n{people}", f"customer_id,complaint_date,category\n{events}"
+
+
+BIG_ENTITY_CSV, BIG_COMPLAINTS_CSV = _big_csvs()
+
+
+def _buildable_client(client: TestClient) -> dict[str, str]:
+    """`_mapped_client`, on data a build can finish on. Used only by the tests that build for real."""
+    client_id = create_client_via_api(client)["client_id"]
+    entity = upload_source(client, client_id, BIG_ENTITY_CSV.encode(), name="customers.csv", role="entity")
+    assert entity.status_code == 201, entity.text
+    complaints = upload_source(client, client_id, BIG_COMPLAINTS_CSV.encode(), name="complaints.csv")
+    assert complaints.status_code == 201, complaints.text
+    complaints_id = complaints.json()["source_id"]
+    _confirm_role(client, client_id, complaints_id, "complaints")
+    ctx = {
+        "client_id": client_id,
+        "entity_source_id": entity.json()["source_id"],
+        "complaints_source_id": complaints_id,
+    }
+    for key, source_id in (
+        ("entity_mapping_id", ctx["entity_source_id"]),
+        ("complaints_mapping_id", complaints_id),
+    ):
+        ctx[key] = _save_mapping(client, client_id, _suggest_mapping(client, client_id, source_id))[
+            "mapping_id"
+        ]
+    return ctx
 
 
 def _mapped_client(client: TestClient) -> dict[str, str]:
@@ -585,26 +642,48 @@ def test_list_onboarding_specs_of_an_unknown_client_is_404(full_client: TestClie
 # POST /clients/{id}/onboarding-specs/{sid}/preview
 # ---------------------------------------------------------------------------
 def test_preview_returns_rows_and_per_snapshot_stats(full_client: TestClient, storage: LocalStorage) -> None:
-    """Rows, snapshot stats and null rates when the build engine is there; a `503` naming the one
-    reason it is not when it is not. Never a `200` carrying invented numbers."""
+    """A real 200-entity build on the request thread: rows, one stat per snapshot, a null rate per
+    feature, and every one of them measured by the build rather than shaped by this route."""
     ctx = _mapped_client(full_client)
     spec = _create_spec(full_client, ctx)
     response = full_client.post(f"/clients/{ctx['client_id']}/onboarding-specs/{spec['spec_id']}/preview")
-    if response.status_code == 503:
-        assert response.json()["detail"]["code"] == "BUILD_ENGINE_NOT_AVAILABLE"
-    else:
-        assert response.status_code == 200, response.text
-        body = response.json()
-        assert isinstance(body["rows"], list)
-        assert isinstance(body["per_snapshot"], list)
-        assert isinstance(body["feature_null_rates"], dict)
-        assert isinstance(body["checks"], list)
-    # Either way: a preview builds under a real dataset id and must take it with it when it goes,
-    # so no dataset directory survives a preview - and `GET /datasets` never learns of one.
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert isinstance(body["rows"], list)
+    assert isinstance(body["per_snapshot"], list)
+    assert isinstance(body["feature_null_rates"], dict)
+    assert isinstance(body["checks"], list)
+    assert all(isinstance(value, str) for row in body["rows"] for value in row.values())
+    assert all(0.0 <= rate <= 1.0 for rate in body["feature_null_rates"].values())
+    # A preview builds under a real dataset id and must take it with it when it goes, so no dataset
+    # directory survives a preview - and `GET /datasets` never learns of one.
     assert storage.list_keys("datasets/") == ()
     listed = full_client.get("/datasets", params={"client_id": ctx["client_id"]})
     assert listed.status_code == 200, listed.text
     assert listed.json()["datasets"] == []
+
+
+def test_preview_samples_rather_than_building_everything_and_answers_inside_its_budget(
+    full_client: TestClient,
+) -> None:
+    """Plan §9, M12 gives the preview a budget - it exists so a user sees the effect of a window or a
+    filter before committing, and a preview that takes as long as the build is no use. It reads
+    `PREVIEW_SAMPLE_ENTITIES` entities out of a client with far more, so what is asserted is both
+    halves of that: it is bounded by the sample, and it comes back inside the budget.
+
+    The bound is deliberately looser than the plan's ten seconds, because a slow CI box must not read
+    as a broken route; what it catches is the thing worth catching, a preview that quietly builds the
+    whole dataset."""
+    ctx = _buildable_client(full_client)
+    spec = _create_spec(full_client, ctx)
+    started = time.monotonic()
+    response = full_client.post(f"/clients/{ctx['client_id']}/onboarding-specs/{spec['spec_id']}/preview")
+    elapsed = time.monotonic() - started
+    assert response.status_code == 200, response.text
+    assert elapsed < 30.0, f"the preview took {elapsed:.1f}s; it is meant to sample, not build"
+    entities = {row["entity_key"] for row in response.json()["rows"] if "entity_key" in row}
+    assert entities, "a preview of a buildable recipe has rows"
+    assert len(entities) <= PREVIEW_SAMPLE_ENTITIES
 
 
 def test_preview_of_a_recipe_with_a_blocking_check_answers_200_with_the_checks_and_no_rows(
@@ -706,10 +785,18 @@ def test_create_dataset_with_a_deliberately_broken_spec_returns_409_with_the_cod
 
 
 def test_create_dataset_with_a_good_spec_returns_202_and_a_pollable_id(full_client: TestClient) -> None:
-    ctx = _mapped_client(full_client)
+    """The whole path, on data a build can finish: `202` with a `Location`, a first poll that already
+    finds something true, and a manifest once the job is done.
+
+    Scoring mode because these two files carry no outcome to learn from, and a recipe with no
+    `label_spec` is a scoring-only recipe by `OnboardingSpec`'s own definition - asking for `train`
+    here would be asking the engine to derive a label this data cannot support, which is a fact about
+    the fixture and not about the route.
+    """
+    ctx = _buildable_client(full_client)
     spec = _create_spec(full_client, ctx)
     response = full_client.post(
-        "/datasets", json={"client_id": ctx["client_id"], "spec_id": spec["spec_id"], "mode": "train"}
+        "/datasets", json={"client_id": ctx["client_id"], "spec_id": spec["spec_id"], "mode": "score"}
     )
     assert response.status_code == 202, response.text
     dataset_id = response.json()["dataset_id"]
@@ -719,43 +806,24 @@ def test_create_dataset_with_a_good_spec_returns_202_and_a_pollable_id(full_clie
     first = full_client.get(f"/datasets/{dataset_id}")
     assert first.status_code == 200, first.text
     assert first.json()["status"]["dataset_id"] == dataset_id
+    assert first.json()["manifest"] is None, "nothing is built yet, so nothing is claimed"
 
-    final = _poll_until_finished(full_client, dataset_id)
-    assert final["status"]["state"] in {"done", "failed"}
-    if final["status"]["state"] == "failed":
-        # engine.onboarding.build is not required to exist for this test to run (see module
-        # docstring); when it has not landed yet the job must still resolve, honestly, to this one
-        # named code rather than hang at "queued" forever.
-        assert final["status"]["error"] == "BUILD_ENGINE_NOT_AVAILABLE"
-        assert final["manifest"] is None
-    else:
-        assert final["manifest"] is not None
-        assert final["manifest"]["dataset_id"] == dataset_id
+    final = _poll_until_finished(full_client, dataset_id, timeout=BUILD_TIMEOUT_S)
+    assert final["status"]["state"] == "done", final["status"]
+    assert final["manifest"] is not None
+    assert final["manifest"]["dataset_id"] == dataset_id
+    assert final["manifest"]["spec_id"] == spec["spec_id"]
+    assert final["manifest"]["n_rows"] > 0
 
 
-def test_create_dataset_restricted_to_a_file_the_recipe_does_not_read_is_409(
-    full_client: TestClient,
+@pytest.mark.parametrize("subset", [[], ["src_anything"]])
+def test_create_dataset_restricted_to_some_files_is_refused_not_silently_widened(
+    full_client: TestClient, subset: list[str]
 ) -> None:
-    """`source_ids` narrows a build to some of the recipe's own files. An id it never reads cannot
-    narrow anything, so accepting it would build something other than what the user asked for."""
-    ctx = _mapped_client(full_client)
-    spec = _create_spec(full_client, ctx)
-    stray = upload_source(full_client, ctx["client_id"], ENTITY_CSV.encode(), name="other.csv")
-    assert stray.status_code == 201, stray.text
-    response = full_client.post(
-        "/datasets",
-        json={
-            "client_id": ctx["client_id"],
-            "spec_id": spec["spec_id"],
-            "mode": "train",
-            "source_ids": [stray.json()["source_id"]],
-        },
-    )
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["code"] == "SOURCE_NOT_IN_SPEC"
-
-
-def test_create_dataset_restricted_to_no_files_at_all_is_409(full_client: TestClient) -> None:
+    """`engine.onboarding.build.build_dataset` reads every file the recipe names and hands all of
+    them to `build_manifest`, which refuses a manifest that does not cover the recipe - so there is
+    no narrowed build to run. The request says so rather than building the whole recipe under a name
+    the caller would read as "only these files", and nothing is queued."""
     ctx = _mapped_client(full_client)
     spec = _create_spec(full_client, ctx)
     response = full_client.post(
@@ -764,11 +832,108 @@ def test_create_dataset_restricted_to_no_files_at_all_is_409(full_client: TestCl
             "client_id": ctx["client_id"],
             "spec_id": spec["spec_id"],
             "mode": "train",
-            "source_ids": [],
+            "source_ids": subset,
         },
     )
-    assert response.status_code == 409, response.text
-    assert response.json()["detail"]["code"] == "DATASET_SOURCES_EMPTY"
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "DATASET_SOURCE_SUBSET_NOT_AVAILABLE"
+    assert full_client.get("/datasets", params={"client_id": ctx["client_id"]}).json()["datasets"] == []
+
+
+# ---------------------------------------------------------------------------
+# A build engine that stops without saying so
+# ---------------------------------------------------------------------------
+def _stub_build(monkeypatch: pytest.MonkeyPatch, build_dataset: Callable[..., Any]) -> None:
+    """Replace `engine.onboarding.build.build_dataset` for one test.
+
+    `api/routes/datasets.py` calls it through the module rather than by name, for the reason
+    `api/routes/uploads.py` records about `engine.stages.ingest`: one seam to stub, and no test
+    reaching into the route's own globals. `monkeypatch` puts the real function back afterwards.
+    """
+    monkeypatch.setattr(build, "build_dataset", build_dataset)
+
+
+@pytest.fixture
+def crashing_build_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `build_dataset` that dies before it writes anything at all."""
+
+    def build_dataset(**_kwargs: Any) -> None:
+        raise RuntimeError("customer C-0042 broke the join")
+
+    _stub_build(monkeypatch, build_dataset)
+
+
+@pytest.fixture
+def self_reporting_build_engine(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A `build_dataset` that records its own failure on `build_status.json`, then raises."""
+
+    def build_dataset(**kwargs: Any) -> None:
+        spec = kwargs["spec"]
+        registry = kwargs["registry"]
+        dataset_id = kwargs["dataset_id"]
+        registry.write_status(
+            dataset_id,
+            BuildStatus(
+                dataset_id=dataset_id,
+                client_id=spec.client_id,
+                spec_id=spec.spec_id,
+                state=RunState.FAILED,
+                updated_at=utc_now(),
+                stages=(
+                    BuildStage(
+                        key="apply_mappings",
+                        title="Apply mappings",
+                        group_label="Build",
+                        state=RunState.FAILED,
+                        detail="Two rows of the subscriber table share one id.",
+                    ),
+                ),
+                progress_pct=0,
+                detail="Two rows of the subscriber table share one id.",
+                error="ENTITY_DUPLICATE_KEYS",
+            ),
+        )
+        raise RuntimeError("stopped at apply_mappings")
+
+    _stub_build(monkeypatch, build_dataset)
+
+
+def _build_and_poll(client: TestClient, ctx: dict[str, str], *, mode: str = "train") -> dict[str, Any]:
+    spec = _create_spec(client, ctx)
+    created = client.post(
+        "/datasets", json={"client_id": ctx["client_id"], "spec_id": spec["spec_id"], "mode": mode}
+    )
+    assert created.status_code == 202, created.text
+    return _poll_until_finished(client, created.json()["dataset_id"], timeout=BUILD_TIMEOUT_S)
+
+
+def test_a_build_that_dies_settles_as_failed_instead_of_polling_queued_for_ever(
+    full_client: TestClient, crashing_build_engine: None
+) -> None:
+    """`POST /datasets` writes the `queued` status itself, so until the build takes that document
+    over this route still owns it. A build engine that raises on its first line must not leave that
+    "queued" standing as the last word - the Build screen would poll it until the user gave up."""
+    final = _build_and_poll(full_client, _mapped_client(full_client))
+    assert final["status"]["state"] == "failed"
+    assert final["status"]["error"] == "DATASET_BUILD_FAILED"
+    assert final["status"]["detail"]
+    assert final["manifest"] is None
+    # Nothing was measured, so nothing is claimed: no progress figure, no invented stage list.
+    assert final["status"]["progress_pct"] == 0
+    assert len(final["status"]["stages"]) == 1
+    # And the engine's own exception text - which can quote a row - never reaches the screen.
+    assert "C-0042" not in json.dumps(final)
+
+
+def test_a_build_that_reported_its_own_failure_keeps_that_reason(
+    full_client: TestClient, self_reporting_build_engine: None
+) -> None:
+    """The fallback above must not overwrite the better answer: a build that recorded the stage it
+    failed at, and why, keeps both."""
+    final = _build_and_poll(full_client, _mapped_client(full_client))
+    assert final["status"]["state"] == "failed"
+    assert final["status"]["error"] == "ENTITY_DUPLICATE_KEYS"
+    assert final["status"]["stages"][0]["key"] == "apply_mappings"
 
 
 def test_create_dataset_of_an_unknown_client_is_404(full_client: TestClient) -> None:
@@ -816,26 +981,75 @@ def test_read_features_sql_of_an_unknown_dataset_is_404(full_client: TestClient)
 
 
 @pytest.mark.parametrize("artefact", ["report", "sample", "features.sql"])
-def test_an_artefact_of_an_unfinished_build_is_409_not_404(full_client: TestClient, artefact: str) -> None:
-    """A dataset whose build has not produced this artefact exists: it has a directory, a status and
-    an id the Build screen is polling. Answering "no dataset with id ..." would tell a user that the
+def test_an_artefact_of_a_build_that_produced_nothing_is_409_not_404(
+    full_client: TestClient, crashing_build_engine: None, artefact: str
+) -> None:
+    """A dataset whose build produced no artefacts still exists: it has a directory, a status and an
+    id the Build screen is polling. Answering "no dataset with id ..." would tell a user that the
     build they are watching is not there - so the answer is a `409` that says what is actually true."""
-    ctx = _mapped_client(full_client)
-    spec = _create_spec(full_client, ctx)
-    created = full_client.post(
-        "/datasets", json={"client_id": ctx["client_id"], "spec_id": spec["spec_id"], "mode": "train"}
-    )
-    assert created.status_code == 202, created.text
-    dataset_id = created.json()["dataset_id"]
-    final = _poll_until_finished(full_client, dataset_id)
-    if final["status"]["state"] == "done":
-        pytest.skip("the build engine landed and produced every artefact, so none is missing")
+    final = _build_and_poll(full_client, _mapped_client(full_client))
+    dataset_id = final["status"]["dataset_id"]
 
     response = full_client.get(f"/datasets/{dataset_id}/{artefact}")
     assert response.status_code == 409, response.text
     detail = response.json()["detail"]
     assert detail["code"] == "DATASET_NOT_BUILT"
     assert detail["message"]
+
+
+def test_a_build_stopped_by_its_own_checks_still_serves_the_report_but_has_no_sample(
+    full_client: TestClient,
+) -> None:
+    """ "A build whose checks found an error writes `build_report.json` and nothing else: there is no
+    dataset, and the report is what the user reads" - `build_dataset`'s own words. So the report is a
+    `200` and the sample, which was never produced, is the `409` rather than an empty list of rows
+    that would read as "we built it and it came out empty"."""
+    final = _build_and_poll(full_client, _mapped_client(full_client))
+    dataset_id = final["status"]["dataset_id"]
+    assert final["status"]["state"] == "failed"
+    assert final["manifest"] is None
+
+    report = full_client.get(f"/datasets/{dataset_id}/report")
+    assert report.status_code == 200, report.text
+    body = report.json()
+    assert body["passed"] is False
+    assert any(check["severity"] == "error" for check in body["checks"])
+
+    sample = full_client.get(f"/datasets/{dataset_id}/sample")
+    assert sample.status_code == 409, sample.text
+    assert sample.json()["detail"]["code"] == "DATASET_NOT_BUILT"
+
+
+def test_every_artefact_of_a_finished_build_is_served_from_what_the_build_wrote(
+    full_client: TestClient,
+) -> None:
+    """The three artefact endpoints and the dataset list, on a build that actually finished. Each
+    serves the document the build wrote - this route computes none of it - so the assertions are
+    about shape and identity, which is all an API contract can honestly promise about numbers it did
+    not produce."""
+    ctx = _buildable_client(full_client)
+    final = _build_and_poll(full_client, ctx, mode="score")
+    assert final["status"]["state"] == "done", final["status"]
+    dataset_id = final["status"]["dataset_id"]
+    assert final["manifest"]["dataset_id"] == dataset_id
+
+    report = full_client.get(f"/datasets/{dataset_id}/report")
+    assert report.status_code == 200, report.text
+    assert report.json()["dataset_id"] == dataset_id
+
+    sample = full_client.get(f"/datasets/{dataset_id}/sample")
+    assert sample.status_code == 200, sample.text
+    rows = sample.json()["rows"]
+    assert isinstance(rows, list)
+    assert all(isinstance(value, str) for row in rows for value in row.values())
+
+    features_sql = full_client.get(f"/datasets/{dataset_id}/features.sql")
+    assert features_sql.status_code == 200, features_sql.text
+    assert features_sql.headers["content-type"].startswith("text/plain")
+
+    listed = full_client.get("/datasets", params={"client_id": ctx["client_id"]})
+    assert listed.status_code == 200, listed.text
+    assert dataset_id in {row["dataset_id"] for row in listed.json()["datasets"]}
 
 
 # ---------------------------------------------------------------------------

@@ -6,12 +6,12 @@
 // failure is a coded error too" rule - so a screen that already knows how to unwrap `ui/api.js`'s
 // errors unwraps these identically. The two never need to agree on more than that shape.
 //
-// The client/source endpoints below are live in this API today (`api/routes/clients.py`,
-// `api/routes/sources.py`). The mapping/spec/dataset endpoints are the sibling M12 routers built in
-// the same parallel batch as this panel (Phase 2 plan §9): written against the paths and shapes that
-// spec documents, not against a running server. Until those routers are mounted a call to one of them
-// answers 404 like any other unknown route, and the panel renders that the same way it renders every
-// other `ApiError` - there is nothing here to special-case.
+// Every endpoint below is declared by a router in this repository today - `api/routes/clients.py`,
+// `sources.py`, `mappings.py`, `datasets.py` - and `tests/unit/test_onboarding_ui.py` checks each
+// path here against those routers' own OpenAPI surface rather than against a transcript of them.
+// Mounting them into `api.main.create_app` is the orchestrator's step (`PARALLEL_WORK_PROTOCOL.md`
+// §4), and until it happens a call answers 404 like any other unknown route: the panel renders that
+// the same way it renders every other `ApiError`, so there is nothing here to special-case.
 
 const API_BASE = (window.MARKETING_AI_API || window.location.origin).replace(/\/+$/, "");
 
@@ -50,9 +50,41 @@ async function request(path, options = {}) {
   const body = await parse(response);
   if (response.ok) return body;
   const detail = body && body.detail;
+  if (Array.isArray(detail)) throw fieldError(response.status, detail, body);
   const code = (detail && detail.code) || `HTTP_${response.status}`;
   const message = (detail && detail.message) || `The API answered ${response.status}.`;
   throw new ApiError(response.status, code, message, body);
+}
+
+/**
+ * FastAPI's own request-validation answer, turned into a message a person can act on.
+ *
+ * Every route in this API hand-writes the house envelope (`{detail: {code, message}}`), but the one
+ * failure no route gets to write is a body that never reached it: a request FastAPI rejects answers
+ * `422` with `detail` as a *list* of field errors, and the generic unwrapping above would render
+ * that as "The API answered 422." - a status code read aloud, which is neither business language
+ * nor something to do about it (house rule 3).
+ *
+ * Only `loc` is read - the field path, which is schema vocabulary - and never `input`, which is the
+ * rejected value itself and may be a client's own data (house rule 4 in the browser: a data value
+ * has no business in a message either).
+ */
+function fieldError(status, problems, body) {
+  const fields = [
+    ...new Set(
+      problems
+        .map((problem) => (problem.loc || []).filter((part) => typeof part === "string").pop())
+        .filter(Boolean),
+    ),
+  ];
+  const named = fields.length ? `: ${fields.join(", ")}` : "";
+  return new ApiError(
+    status,
+    "REQUEST_REJECTED",
+    `The engine could not accept this request - ${problems.length} setting(s) were missing or of ` +
+      `the wrong kind${named}. Check those settings on this screen and try again.`,
+    body,
+  );
 }
 
 const json = (path, method, payload) =>

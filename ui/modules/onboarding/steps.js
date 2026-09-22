@@ -27,6 +27,10 @@
 
 import { EM_DASH, barTrack, dash, errorBox, esc, fmtInt, fmtPct, present, table } from "../../dom.js";
 
+/** The two standard types `StandardColumn` allows `value_aliases` on; any other type has no value
+ * map to edit (`engine.config.StandardColumn._shape` refuses one outright). */
+const VALUE_MAPPABLE = ["categorical", "boolean"];
+
 const LABEL_TYPE_PHRASE = {
   event_presence: "any activity",
   event_absence: "no activity",
@@ -123,8 +127,16 @@ function confidencePill(decided, suggested) {
   return `<span class="pill ${cls}">${fmtPct(measured.confidence, 0)}</span>`;
 }
 
-/** `checks` rendered the same way the Phase 1 Setup form renders a validation report (`.vlist`). */
-function checksList(checks) {
+/**
+ * `checks` rendered the same way the Phase 1 Setup form renders a validation report (`.vlist`).
+ *
+ * `counts` is `{error_count, warning_count}` when the response carrying these checks also carried
+ * its own tally - a `BuildReport` does, and its numbers are not the same as counting the list here:
+ * `error_count` is documented as "blocking errors, *excluding acknowledged ones*". Where the API
+ * counted, that count is shown; where it did not (a mapping save, a spec create - neither returns a
+ * tally), the length of the list the API sent is the only number in play and is shown as such.
+ */
+function checksList(checks, counts) {
   const list = checks || [];
   if (!list.length) return "";
   const items = list
@@ -137,9 +149,14 @@ function checksList(checks) {
         }</div></div>`,
     )
     .join("");
-  const errors = list.filter((c) => c.severity === "error").length;
+  const counted = counts && present(counts.error_count);
+  const errors = counted ? counts.error_count : list.filter((c) => c.severity === "error").length;
+  const warnings = counted
+    ? counts.warning_count
+    : list.filter((c) => c.severity === "warning").length;
+  const also = warnings ? `, and ${warnings} warning${warnings === 1 ? "" : "s"} were found` : "";
   const head = errors
-    ? `${errors} ${errors === 1 ? "problem" : "problems"} must be fixed before this can be built.`
+    ? `${errors} ${errors === 1 ? "problem" : "problems"} must be fixed before this can be built${also}.`
     : "Warnings were found - review before building.";
   return `<div class="vlist" role="alert"><div class="vhead">${esc(head)}</div>${items}</div>`;
 }
@@ -148,6 +165,16 @@ function checksList(checks) {
 // Step 1: Sources
 // ---------------------------------------------------------------------------------------------
 
+/**
+ * The role `<select>`, preselected to the detector's top candidate, plus a Confirm button while the
+ * role is still only a proposal.
+ *
+ * The button is not decoration. `change` fires only when the user picks a *different* option, so a
+ * user who agrees with the detection - the common case, and the one the ranking exists to produce -
+ * has no way to say so: the row would sit showing "Bills" while `SourceSpec.role` stayed null, and
+ * every later step would keep refusing a source the screen appeared to have settled. Detection
+ * proposes and the user confirms (plan §6.1), which needs something to confirm *with*.
+ */
 function roleSelect(state, sourceId, currentRole, candidates) {
   const roles = state.schema.roles.roles;
   const topCandidate = (candidates || [])[0];
@@ -158,9 +185,14 @@ function roleSelect(state, sourceId, currentRole, candidates) {
       return `<option value="${esc(id)}"${selected ? " selected" : ""}>${esc(humanizeId(id))}</option>`;
     })
     .join("");
+  const confirm = currentRole
+    ? ""
+    : `<button type="button" class="linkbtn" data-act="confirm-role" data-source="${esc(
+        sourceId,
+      )}">Confirm</button>`;
   return `<div class="control sel"><select data-act="set-role" data-source="${esc(
     sourceId,
-  )}" aria-label="Role">${options}</select></div>`;
+  )}" aria-label="Role">${options}</select></div>${confirm}`;
 }
 
 function roleHintLine(state) {
@@ -172,9 +204,12 @@ function roleHintLine(state) {
   return `<p class="fhint">${esc(line)}</p>`;
 }
 
-function coverageBadge(entityConfirmed, role, isEntityRole, keyCandidates) {
-  if (isEntityRole) return EM_DASH;
-  if (!entityConfirmed) return EM_DASH;
+/** The share of this table's keys found in the entity table - measured server-side on every role
+ * change (`api.routes.sources.resync_join_coverage`) and an em dash until it has been. There is
+ * nothing to measure against before an entity source is confirmed, and nothing to measure for the
+ * entity source itself. */
+function coverageBadge(entityConfirmed, isEntityRole, keyCandidates) {
+  if (isEntityRole || !entityConfirmed) return EM_DASH;
   const top = (keyCandidates || [])[0];
   return dash(top && top.coverage, (v) => fmtPct(v, 0));
 }
@@ -190,7 +225,7 @@ function sourceRow(state, entry, entityConfirmed, entityRole) {
     <td>${roleSelect(state, source.source_id, source.role, profile.role_candidates)}</td>
     <td>${esc(dash(keyTop && keyTop.column))}</td>
     <td>${esc(dash(timeTop && timeTop.column))}</td>
-    <td>${coverageBadge(entityConfirmed, source.role, isEntityRole, profile.key_candidates)}</td>
+    <td>${coverageBadge(entityConfirmed, isEntityRole, profile.key_candidates)}</td>
     <td><button type="button" class="linkbtn" data-act="delete-source" data-source="${esc(
       source.source_id,
     )}">Remove</button></td>
@@ -290,14 +325,20 @@ function columnTargetOf(mapping, rawName) {
   return found ? found.standard : "";
 }
 
-function valueMapRow(state, sourceId, standardName, standardColumn, rawValue, current) {
+/** `mapped` says whether this raw value has a decision at all; `current` is that decision, which may
+ * legitimately be `null` ("blank it out"). The two are separate arguments because they are separate
+ * facts: "nobody has decided" and "someone decided to blank it" are both falsy, and collapsing them
+ * marks two of these options selected at once. */
+function valueMapRow(sourceId, standardName, standardColumn, rawValue, mapped, current) {
   const aliasTargets = Object.keys(standardColumn.value_aliases || {});
   const options = [
-    `<option value="__keep__"${!present(current) ? " selected" : ""}>Keep as-is</option>`,
-    `<option value="__null__"${current === null ? " selected" : ""}>Set null</option>`,
+    `<option value="__keep__"${!mapped ? " selected" : ""}>Keep as-is</option>`,
+    `<option value="__null__"${mapped && current === null ? " selected" : ""}>Set null</option>`,
     ...aliasTargets.map(
       (target) =>
-        `<option value="${esc(target)}"${current === target ? " selected" : ""}>${esc(target)}</option>`,
+        `<option value="${esc(target)}"${
+          mapped && current === target ? " selected" : ""
+        }>${esc(target)}</option>`,
     ),
   ].join("");
   return `<div class="frow"><span class="colchip">${esc(rawValue)}</span><div class="control sel"><select data-act="set-value-map" data-source="${esc(
@@ -307,13 +348,22 @@ function valueMapRow(state, sourceId, standardName, standardColumn, rawValue, cu
   )}">${options}</select></div></div>`;
 }
 
-function valueMapEditor(state, sourceId, standardName, standardColumn, mapping, column) {
-  if (!["categorical", "boolean"].includes(standardColumn.type)) return "";
+function valueMapEditor(sourceId, standardName, standardColumn, mapping, column) {
+  if (!VALUE_MAPPABLE.includes(standardColumn.type)) return "";
   const known = mapping.value_maps && mapping.value_maps[standardName] ? mapping.value_maps[standardName] : {};
   const values = new Set([...(column.top_categories || []).map((c) => c.value), ...Object.keys(known)]);
   if (!values.size) return "";
   const rows = [...values]
-    .map((value) => valueMapRow(state, sourceId, standardName, standardColumn, value, known[value]))
+    .map((value) =>
+      valueMapRow(
+        sourceId,
+        standardName,
+        standardColumn,
+        value,
+        Object.prototype.hasOwnProperty.call(known, value),
+        known[value],
+      ),
+    )
     .join("");
   return `<details class="adv-wrap"><summary>Value map<span class="n">${values.size} value${
     values.size === 1 ? "" : "s"
@@ -340,7 +390,7 @@ function mappingRow(state, sourceId, mapping, role, column) {
     <td>${esc(dash(column.inferred_type))}</td>
     <td>${esc(dash(sample))}</td>
     <td>${confidencePill(decided, state.mappingSuggested[sourceId])}</td>
-    <td>${standardColumn ? valueMapEditor(state, sourceId, current, standardColumn, mapping, column) : ""}</td>
+    <td>${standardColumn ? valueMapEditor(sourceId, current, standardColumn, mapping, column) : ""}</td>
   </tr>`;
 }
 
@@ -551,7 +601,7 @@ function snapshotSettings(state) {
         ? `<div class="field"><span class="sub">Frequency</span><div class="control sel"><select data-act="set-snapshot" data-field="frequency" aria-label="Frequency">${freqOptions}</select></div></div>
     <div class="field xs"><span class="sub">Max snapshots</span><div class="control"><input type="number" data-act="set-snapshot" data-field="max_snapshots"${numericBounds(
       ss.maxSnapshots,
-    )} value="${esc(dash(snap.max_snapshots))}" aria-label="Max snapshots"></div></div>`
+    )} value="${esc(present(snap.max_snapshots) ? snap.max_snapshots : "")}" aria-label="Max snapshots"></div></div>`
         : ""
     }
   </div>`;
@@ -600,21 +650,65 @@ function previewResults(state) {
   </div>`;
 }
 
+/**
+ * What still stands between this recipe and a spec the API will accept, in business language.
+ *
+ * `POST /clients/{id}/onboarding-specs` requires a real `entity_source_id` and mapping ids it can
+ * load; sending it a null entity source, or the id of a suggestion nobody saved, answers with
+ * FastAPI's own field-level `422` (or a `404` on the mapping), neither of which is a message a user
+ * can act on. House rule 3 says a failure is a code, a business-language message and a suggestion -
+ * so the Preview and Build buttons refuse locally, and say what to do, rather than firing a request
+ * whose only possible answer is one this panel would have to apologise for.
+ */
+function recipeBlockers(state) {
+  const reasons = [];
+  if (!state.schema) return ["The standard schema has not loaded yet."];
+  const entityRole = entityRoleId(state.schema);
+  if (!state.sources.some((entry) => entry.source.role === entityRole)) {
+    reasons.push("Confirm one source as the entity table in step 1.");
+  }
+  const unsaved = state.sources.filter(
+    (entry) => entry.source.role && !state.mappingSaved[entry.source.source_id],
+  );
+  if (unsaved.length) {
+    // Every source with a confirmed role goes into the recipe, so every one of them needs a saved
+    // mapping - `OnboardingSpec.mapping_ids` is "one per source", and a spec that names a source
+    // with no mapping is one `POST /datasets` can only refuse.
+    reasons.push(
+      `Save the mapping for ${unsaved.map((entry) => entry.source.file_name).join(", ")} in step 2.`,
+    );
+  }
+  if (!state.snapshot) reasons.push("The snapshot settings have not loaded yet.");
+  return reasons;
+}
+
+/** A disabled action's reason line, in the same `.reason` the Build step already uses. */
+const blockerLine = (reasons) =>
+  reasons.length ? `<span class="reason">${esc(reasons.join(" "))}</span>` : "";
+
 export function featuresStep(state) {
   const pending = schemaPending(state, "features", 3, "Features & label", "What the model reads, and what it predicts.");
   if (pending) return pending;
-  const done = !!state.preview && !state.previewError;
+  // A preview that came back carrying a blocking check did not succeed, whatever its HTTP status:
+  // `POST .../preview` answers 200 with empty rows and the refusal in `checks` when the recipe is
+  // structurally wrong. A green tick there would be this screen telling the user something the API
+  // did not.
+  const blocked = (checks) => (checks || []).some((c) => c.severity === "error");
+  const blockers = recipeBlockers(state);
+  const done =
+    !!state.preview &&
+    !state.previewError &&
+    !blocked(state.specChecks) &&
+    !blocked(state.preview.checks);
   const body = `
     ${state.features.length ? featuresByRole(state) : `<div class="empty">No suggested features for the mapped sources yet.</div>`}
     ${addFeatureForm(state)}
-    <h4 style="margin-top:16px">Label</h4>
-    ${labelSentence(state)}
-    <h4 style="margin-top:16px">Snapshots</h4>
-    ${snapshotSettings(state)}
+    <div class="card"><h4>Label</h4>${labelSentence(state)}</div>
+    <div class="card"><h4>Snapshots</h4>${snapshotSettings(state)}</div>
     ${checksList(state.specChecks)}
     <div class="actions" style="border-top:0"><button type="button" class="run" data-act="preview"${
-      state.previewLoading ? " disabled" : ""
-    }>${state.previewLoading ? "Building preview…" : "Preview"}</button></div>
+      state.previewLoading || blockers.length ? " disabled" : ""
+    }>${state.previewLoading ? "Building preview…" : "Preview"}</button>${blockerLine(blockers)}</div>
     ${previewResults(state)}
   `;
   return stepShell(
@@ -649,7 +743,12 @@ function buildProgress(state) {
 }
 
 function coverageTable(report) {
-  const rows = (report.sources || []).map((s) => [s.source_id, humanizeId(s.role), fmtInt(s.rows), dash(s.join_coverage, (v) => fmtPct(v))]);
+  const rows = (report.sources || []).map((s) => [
+    dash(s.source_id),
+    dash(s.role, humanizeId),
+    dash(s.rows, fmtInt),
+    dash(s.join_coverage, (v) => fmtPct(v)),
+  ]);
   return table(["source", "role", "rows", "coverage"], rows);
 }
 
@@ -657,13 +756,15 @@ function snapshotBars(report) {
   const snaps = report.snapshots || [];
   if (!snaps.length) return `<div class="empty">No snapshots produced.</div>`;
   return `<div class="bars">${snaps
-    .map((s) => {
-      const pct = present(s.positive_rate) ? s.positive_rate * 100 : 0;
-      return `<div class="brow"><span class="lab">${esc(s.date)}${s.censored ? " (censored)" : ""}</span>${barTrack(
-        pct,
-        `${s.date} ${dash(s.positive_rate, (v) => fmtPct(v))} positive`,
-      )}<span class="pct">${dash(s.positive_rate, (v) => fmtPct(v))}</span></div>`;
-    })
+    .map(
+      (s) =>
+        `<div class="brow"><span class="lab">${esc(dash(s.date))}${
+          s.censored ? " (censored)" : ""
+        }</span>${rateBar(s.positive_rate, `${s.date} positive rate`)}<span class="pct">${dash(
+          s.positive_rate,
+          (v) => fmtPct(v),
+        )}</span></div>`,
+    )
     .join("")}</div>`;
 }
 
@@ -672,8 +773,33 @@ function droppedFeatures(report) {
   if (!dropped.length) return `<div class="empty">No features were dropped.</div>`;
   return table(
     ["feature", "null rate", "reason"],
-    dropped.map((f) => [f.name, fmtPct(f.null_fraction), f.reason || EM_DASH]),
+    dropped.map((f) => [dash(f.name), dash(f.null_fraction, fmtPct), dash(f.reason)]),
   );
+}
+
+/**
+ * A build that stopped, as a coded, business-language message with something to do about it
+ * (house rule 3). Without this a failure shows only as red dots on the progress list: the engine
+ * writes its reason into `BuildStatus.error`, and a screen that polls that document and then drops
+ * the one field explaining what happened leaves the user with nothing to act on.
+ */
+function buildFailure(state) {
+  const status = state.dataset && state.dataset.status;
+  if (!status || (status.state !== "failed" && status.state !== "cancelled")) return "";
+  const cancelled = status.state === "cancelled";
+  const reason = status.error || status.detail || "";
+  return `${errorBox({
+    code: cancelled ? "DATASET_BUILD_CANCELLED" : "DATASET_BUILD_FAILED",
+    message:
+      reason ||
+      (cancelled
+        ? "This build was stopped before it finished, so no dataset was produced."
+        : "This build stopped before it finished, so no dataset was produced."),
+  })}<p class="fhint">${esc(
+    cancelled
+      ? "Start the build again when you are ready; nothing about the recipe was changed."
+      : "Review the checks below, fix what they name, then build again.",
+  )}</p>`;
 }
 
 function buildReview(state) {
@@ -682,7 +808,7 @@ function buildReview(state) {
   return `<div class="card"><h3>Sources &amp; coverage</h3>${coverageTable(report)}</div>
     <div class="card"><h3>Snapshots</h3>${snapshotBars(report)}</div>
     <div class="card"><h3>Dropped features</h3>${droppedFeatures(report)}</div>
-    ${checksList(report.checks)}
+    ${checksList(report.checks, report)}
     <div class="actions" style="border-top:0">
       <button type="button" class="run" data-act="use-dataset"${report.passed ? "" : " disabled"}>Use this dataset</button>
       ${!report.passed ? `<span class="reason">Resolve the errors above first.</span>` : ""}
@@ -691,11 +817,19 @@ function buildReview(state) {
 
 export function buildStep(state) {
   const done = !!(state.buildReport && state.buildReport.passed);
+  const blockers = recipeBlockers(state);
   const body = `
-    ${!state.datasetId ? `<div class="actions" style="border-top:0"><button type="button" class="run" data-act="build"${state.building ? " disabled" : ""}>${state.building ? "Starting…" : "Build dataset"}</button></div>` : ""}
+    ${
+      !state.datasetId
+        ? `<div class="actions" style="border-top:0"><button type="button" class="run" data-act="build"${
+            state.building || blockers.length ? " disabled" : ""
+          }>${state.building ? "Starting…" : "Build dataset"}</button>${blockerLine(blockers)}</div>`
+        : ""
+    }
     ${state.buildError ? errorBox(state.buildError) : ""}
     ${checksList(state.buildChecks)}
     ${buildProgress(state)}
+    ${buildFailure(state)}
     ${buildReview(state)}
   `;
   return stepShell("build", 4, "Build & review", "Run the recipe and check what it produced.", done, state.open === "build", body);

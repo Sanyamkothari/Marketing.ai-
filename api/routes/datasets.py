@@ -39,26 +39,25 @@ of it). The consequence is worth stating plainly: what `POST /datasets` refuses 
 sources or features than the use case allows - and the data-shaped findings arrive in the build
 report, where they were actually measured.
 
-`engine.onboarding.build` is landing in parallel (`PARALLEL_WORK_PROTOCOL.md`) and did not exist when
-this module was written, so `build_dataset` gets the `_build_callable()` indirection the task calls
-for by name: it is called from inside a background job body where an unhandled `ImportError` would
-surface as an opaque failed job rather than the coded, business-language refusal
-`BuildEngineUnavailableError` gives instead. This branch's assumed signature -
-`build_dataset(spec, *, mode, dataset_id, registry, sources, mappings, source_ids=None,
-sample_entities=None, cancel=None) -> BuildReport`, writing through the given `DatasetRegistry` as it
-runs and returning the finished report - is documented on `_build_callable` and on
-`tests/integration/test_api_datasets.py`'s module docstring; if the real signature differs, the fix
-is at these call sites.
+`engine.onboarding.build` landed after this module did, and with a different signature from the one
+an earlier draft here guessed at: it is keyword-only throughout, it takes a `UseCaseConfig` and a
+`SourceReader` and reads the files itself, it takes its sources and mappings as sequences, and it has
+no way to build from a *subset* of a recipe's files - `build_manifest` refuses a manifest whose
+sources do not cover the recipe. `run_build` is the single call site that adapts to it, and
+`reject_source_subset` is what the endpoint table's `source_ids?` honestly amounts to until the
+engine can narrow a build. The module is referenced through `engine.onboarding.build` rather than by
+name, for the reason `api/routes/uploads.py` gives about `engine.stages.ingest`: one seam to stub,
+and `mypy --strict` checking every argument of the call - which is what would have caught the guessed
+signature on the day it was written instead of at the first `POST /datasets`.
 """
 
 from __future__ import annotations
 
 import secrets
-from collections.abc import Callable, Iterable, Mapping
+from collections.abc import Iterable, Mapping
 from datetime import datetime
-from importlib import import_module
 from pathlib import Path
-from typing import Annotated, Final, cast
+from typing import Annotated, Final
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
@@ -67,13 +66,14 @@ from pydantic import ValidationError
 from api.deps import ConfigRootDep, JobsDep, StorageDep
 from api.routes.clients import ClientStoreDep, load_client
 from api.routes.mappings import check_params, facts_for, load_mapping
-from api.routes.sources import load_profile, load_source
+from api.routes.sources import load_source
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
 from engine.clients import ClientStore, ClientStoreError
 from engine.config import RunMode, StrictBase, UseCaseConfig, get_roles
 from engine.contracts import RunState, Severity
 from engine.jobs import CancelToken, JobCancelledError, JobFn
+from engine.onboarding import build
 from engine.onboarding.datasets import (
     DATASET_FEATURES_SQL_FILENAME,
     DatasetError,
@@ -81,6 +81,7 @@ from engine.onboarding.datasets import (
     LocalDatasetRegistry,
     dataset_key,
 )
+from engine.onboarding.sources import FileSourceReader, SourceReader
 from engine.onboarding.specs import (
     BuildReport,
     BuildStage,
@@ -93,17 +94,19 @@ from engine.onboarding.specs import (
     OnboardingSpec,
     SnapshotSpec,
     SnapshotStat,
-    SourceProfile,
     SourceSpec,
 )
 from engine.onboarding.validate import run_onboarding_checks
-from engine.storage import Storage, StorageError
+from engine.storage import StorageError
 from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
 
 router: APIRouter = APIRouter(tags=["datasets"])
 
 _LOGGER = get_logger(__name__)
+
+_SETTLED_STATES: Final[frozenset[RunState]] = frozenset({RunState.DONE, RunState.FAILED, RunState.CANCELLED})
+"""States a `build_status.json` is finished in: `settle_unfinished_build` leaves these alone."""
 
 PREVIEW_SAMPLE_ENTITIES: Final[int] = 200
 """Entities (and everything that joins to them) a preview build reads - plan §9, M12: enough for the
@@ -115,12 +118,12 @@ ClientIdQuery = Annotated[str | None, Query(description="Keep only datasets of t
 
 _SPEC_ERRORS: dict[int | str, dict[str, object]] = {
     404: {"model": ErrorResponse},
+    409: {"model": ErrorResponse},
     422: {"model": ErrorResponse},
 }
 _PREVIEW_ERRORS: dict[int | str, dict[str, object]] = {
     404: {"model": ErrorResponse},
     422: {"model": ErrorResponse},
-    503: {"model": ErrorResponse},
 }
 _ARTEFACT_ERRORS: dict[int | str, dict[str, object]] = {
     404: {"model": ErrorResponse},
@@ -311,25 +314,23 @@ def preview_onboarding_spec(
     if blocking_errors(structural):
         return PreviewResponse(rows=(), per_snapshot=(), feature_null_rates={}, checks=structural)
 
-    profiles = load_profiles(storage, client_id, source_ids)
     registry = LocalDatasetRegistry(storage)
     preview_id = registry.new_dataset_id(client_id, spec.use_case)
     try:
         report = run_build(
             spec,
+            config=config,
             mode=build_mode(spec),
             dataset_id=preview_id,
             registry=registry,
-            sources=profiles,
+            reader=FileSourceReader(storage, config),
+            sources=sources,
             mappings=mappings,
             sample_entities=PREVIEW_SAMPLE_ENTITIES,
         )
-        rows = tuple(registry.read_sample(preview_id))
-    except BuildEngineUnavailableError as exc:
-        # 503, not 422: the recipe this request named is fine and re-sending it unchanged is exactly
-        # what the user should do once the engine can build. A 422 would tell them to go and fix a
-        # request that has nothing wrong with it.
-        raise http_error(503, exc.code, exc.message) from exc
+        # A build the engine's own checks stopped writes its report and nothing else, so there is no
+        # sample to read and none is invented: the checks it found *are* the preview's answer.
+        rows = tuple(registry.read_sample(preview_id)) if report.passed else ()
     except DatasetError as exc:
         raise http_error(422, exc.code, exc.message) from exc
     except Exception as exc:  # the engine's own failure; a code and a message, never a raw traceback
@@ -373,19 +374,21 @@ def create_dataset(
     `build_status.json` already written, and a job submitted against it, before this call returns -
     so the very first `GET /datasets/{id}` the Build screen issues, which can land microseconds after
     the `202`, always finds something true to render.
+
+    The `422` is `reject_source_subset`: the endpoint table's `source_ids?` is a narrowing this
+    engine cannot perform yet, and a request for one is refused rather than honoured in name only.
     """
     load_client(store, body.client_id)
     spec = load_spec(store, body.client_id, body.spec_id)
     config = use_case_config(spec.use_case, root)
     source_ids = (spec.entity_source_id, *spec.event_source_ids)
-    require_spec_sources(store, body.client_id, spec=spec, source_ids=body.source_ids)
+    reject_source_subset(body.source_ids)
     sources = load_source_specs(store, body.client_id, source_ids)
     mappings = load_mappings(store, body.client_id, spec.mapping_ids)
     checks = spec_checks(config, root, sources=sources, mappings=mappings, spec=spec)
     if blocking_errors(checks):
         return dataset_checks_conflict(checks)
 
-    profiles = load_profiles(storage, body.client_id, source_ids)
     registry = LocalDatasetRegistry(storage)
     dataset_id = registry.new_dataset_id(body.client_id, spec.use_case)
     registry.write_status(dataset_id, queued_status(dataset_id, body.client_id, spec.spec_id))
@@ -396,10 +399,11 @@ def create_dataset(
             registry,
             dataset_id=dataset_id,
             spec=spec,
+            config=config,
             mode=body.mode,
-            sources=profiles,
+            reader=FileSourceReader(storage, config),
+            sources=sources,
             mappings=mappings,
-            source_ids=body.source_ids,
         ),
     )
     response.headers["Location"] = f"/datasets/{dataset_id}"
@@ -488,10 +492,11 @@ def build_m12_job(
     *,
     dataset_id: str,
     spec: OnboardingSpec,
+    config: UseCaseConfig,
     mode: RunMode,
-    sources: Mapping[str, SourceProfile],
+    reader: SourceReader,
+    sources: Mapping[str, SourceSpec],
     mappings: Mapping[str, MappingSpec],
-    source_ids: tuple[str, ...] | None,
 ) -> JobFn:
     """The background job `POST /datasets` submits: call the build engine, then register the result.
 
@@ -502,35 +507,57 @@ def build_m12_job(
     body does the one thing it cannot: register the finished manifest with the client's own index,
     which is not part of the dataset directory `DatasetRegistry` writes.
 
-    A `JobCancelledError` is left to propagate, exactly as `build_score_job`'s does, so
-    `ThreadJobRunner` records the job as cancelled rather than failed; `build_dataset` is expected to
-    leave `build_status.json` saying so too, since it is the one writing that document.
+    A `JobCancelledError` is re-raised rather than swallowed, exactly as `build_score_job`'s is, so
+    `ThreadJobRunner` records the job as cancelled rather than failed.
+
+    What this body does *not* delegate is the one thing `build_dataset` cannot do for itself: leave a
+    terminal `build_status.json` behind when it dies before writing one. `POST /datasets` writes the
+    `queued` status before this job exists, so until the build takes that document over, this route
+    still owns it - and a build that raised on its first line would otherwise leave "queued" standing
+    as the last word, with the Build screen polling it for ever. `settle_unfinished_build` writes only
+    when what is stored is not already terminal, so a `build_dataset` that did record its own failure,
+    on the stage it happened at, keeps that better answer.
     """
 
     def job(cancel: CancelToken) -> None:
         try:
             report = run_build(
                 spec,
+                config=config,
                 mode=mode,
                 dataset_id=dataset_id,
                 registry=registry,
+                reader=reader,
                 sources=sources,
                 mappings=mappings,
-                source_ids=source_ids,
                 cancel=cancel,
             )
         except JobCancelledError:
-            raise
-        except BuildEngineUnavailableError as exc:
-            write_build_failed(
+            settle_unfinished_build(
                 registry,
                 dataset_id=dataset_id,
                 client_id=spec.client_id,
                 spec_id=spec.spec_id,
-                code=exc.code,
-                message=exc.message,
+                state=RunState.CANCELLED,
+                code=None,
+                message="This build was cancelled, so no dataset was produced.",
             )
-            return
+            raise
+        except Exception as exc:  # the build engine's own failure, whatever it turns out to be
+            log_failure(_LOGGER, f"dataset build dataset_id={dataset_id}", exc)
+            settle_unfinished_build(
+                registry,
+                dataset_id=dataset_id,
+                client_id=spec.client_id,
+                spec_id=spec.spec_id,
+                state=RunState.FAILED,
+                code="DATASET_BUILD_FAILED",
+                message=(
+                    "This dataset could not be built, so no rows and no numbers were produced. "
+                    "Check the mapping, feature and snapshot settings and build it again."
+                ),
+            )
+            raise
         if not report.passed:
             return
         try:
@@ -541,11 +568,12 @@ def build_m12_job(
             # costs a status the build already wrote; leaving it would show a Build screen a green
             # tick for a dataset the Datasets screen will never list.
             log_failure(_LOGGER, f"dataset registration dataset_id={dataset_id}", exc)
-            write_build_failed(
+            write_build_status(
                 registry,
                 dataset_id=dataset_id,
                 client_id=spec.client_id,
                 spec_id=spec.spec_id,
+                state=RunState.FAILED,
                 code="DATASET_NOT_REGISTERED",
                 message=(
                     "This dataset was built but could not be added to the client's list of datasets, "
@@ -558,112 +586,72 @@ def build_m12_job(
 
 
 # ---------------------------------------------------------------------------
-# The build engine indirection (see module docstring)
+# The one call into the build engine
 # ---------------------------------------------------------------------------
-BuildDatasetFn = Callable[..., BuildReport]
-"""The assumed shape of `engine.onboarding.build.build_dataset`; see the module docstring for the
-full call this branch makes against it. Typed loosely on its parameters (mypy does not check
-keyword arguments against `...`) so a signature this branch guessed slightly wrong is a runtime
-`TypeError` at the one call site (`run_build`), not a wall of unrelated type errors here."""
-
-
-class BuildEngineUnavailableError(Exception):
-    """`engine.onboarding.build` has not landed yet.
-
-    Carries the same `(code, message)` shape as every other coded exception in this codebase
-    (`engine.clients.ClientStoreError`, `engine.onboarding.datasets.DatasetError`, ...), so
-    `run_build`'s callers translate it exactly like any other engine failure - a code, a
-    business-language message, no Python traceback (house rule 3) - rather than needing a special
-    case for "the module this branch depends on does not exist yet".
-    """
-
-    def __init__(self) -> None:
-        self.code: str = "BUILD_ENGINE_NOT_AVAILABLE"
-        self.message: str = (
-            "This engine cannot build datasets yet, so nothing was built and no numbers were "
-            "produced. Ask whoever installed it to finish setting up the dataset build step, then "
-            "start the build again."
-        )
-        super().__init__(self.message)
-
-
-def _build_callable() -> BuildDatasetFn:
-    """`engine.onboarding.build.build_dataset`, imported lazily so `api/routes/datasets.py` imports
-    cleanly whether or not that module exists yet (`PARALLEL_WORK_PROTOCOL.md`: another agent is
-    writing it in parallel, and the task for this milestone asks for exactly this indirection).
-    Raises `BuildEngineUnavailableError` rather than letting a bare `ImportError` reach `run_build`'s
-    caller as an unhandled 500 or a silently failed background job. Looked up through
-    `importlib.import_module` rather than a function-level `from ... import`, because the module
-    genuinely may not exist: a static import of a missing module is a `mypy --strict` failure that
-    would have to be silenced with an ignore comment, and that comment would itself become a
-    `warn_unused_ignores` failure the day the module lands.
-    """
-    try:
-        module = import_module("engine.onboarding.build")
-    except ImportError as exc:
-        raise BuildEngineUnavailableError() from exc
-    build_dataset = getattr(module, "build_dataset", None)
-    if build_dataset is None:
-        # The module landed but under a different entry point: the same situation for a caller as
-        # no module at all, and the same honest answer, rather than an AttributeError in a job body.
-        raise BuildEngineUnavailableError()
-    # `cast`: looked up by name at runtime, so mypy sees `Any`; the cast asserts the contract
-    # `run_build` is written against and is the one place a wrong assumption would show up.
-    return cast(BuildDatasetFn, build_dataset)
-
-
 def run_build(
     spec: OnboardingSpec,
     *,
+    config: UseCaseConfig,
     mode: RunMode,
     dataset_id: str,
     registry: DatasetRegistry,
-    sources: Mapping[str, SourceProfile],
+    reader: SourceReader,
+    sources: Mapping[str, SourceSpec],
     mappings: Mapping[str, MappingSpec],
-    source_ids: tuple[str, ...] | None = None,
     sample_entities: int | None = None,
     cancel: CancelToken | None = None,
 ) -> BuildReport:
-    """The one call site every build - preview or real - makes against the engine, so a signature
-    mismatch is a `TypeError` here and nowhere else."""
-    build = _build_callable()
-    return build(
-        spec,
-        mode=mode,
-        dataset_id=dataset_id,
+    """The one call site every build - preview or real - makes against the engine.
+
+    `engine.onboarding.build` is referenced through the module rather than by name, for the reason
+    `api/routes/uploads.py` records about `engine.stages.ingest`: it gives every test one seam to
+    stub without reaching into this route's own globals, and unlike a runtime lookup it leaves
+    `mypy --strict` checking this call against the real signature - which is what a milestone whose
+    callee landed after its caller most needs.
+
+    The engine takes the sources and their mappings as sequences and does its own reading through
+    `reader`, so this route hands it the registry rows it already loaded and no file contents at all.
+    """
+    return build.build_dataset(
+        spec=spec,
+        config=config,
+        sources=tuple(sources.values()),
+        mappings=tuple(mappings.values()),
+        reader=reader,
         registry=registry,
-        sources=sources,
-        mappings=mappings,
-        source_ids=source_ids,
-        sample_entities=sample_entities,
+        dataset_id=dataset_id,
+        mode=mode,
         cancel=cancel or CancelToken(),
+        sample_entities=sample_entities,
     )
 
 
-def write_build_failed(
+def write_build_status(
     registry: DatasetRegistry,
     *,
     dataset_id: str,
     client_id: str,
     spec_id: str,
-    code: str,
+    state: RunState,
+    code: str | None,
     message: str,
 ) -> None:
-    """Overwrite `build_status.json` as failed, so a poller sees a plain-language reason instead of a
-    build that silently never moves past "queued" or reports a "done" nothing can use (the M2
-    `STAGE_NOT_IMPLEMENTED` precedent in `api.routes.runs.build_m2_job`).
+    """Overwrite `build_status.json` with one terminal state, so a poller sees a plain-language
+    reason instead of a build that silently never moves past "queued" or reports a "done" nothing can
+    use (the M2 `STAGE_NOT_IMPLEMENTED` precedent in `api.routes.runs.build_m2_job`).
 
     One honest stage, not an invented list: this function knows the build stopped and why, and
-    nothing about the stages a real build would have had, so it claims only the first (house rule 2).
+    nothing about the stages a real build would have had, so it claims only the one (house rule 2).
+    `progress_pct` is 0 for the same reason - not a guess at how far the build got before it stopped.
     """
-    stage = BuildStage(key="build", title="Build", group_label="Build", state=RunState.FAILED, detail=message)
+    stage = BuildStage(key="build", title="Build", group_label="Build", state=state, detail=message)
     registry.write_status(
         dataset_id,
         BuildStatus(
             dataset_id=dataset_id,
             client_id=client_id,
             spec_id=spec_id,
-            state=RunState.FAILED,
+            state=state,
             updated_at=utc_now(),
             stages=(stage,),
             current_stage=None,
@@ -671,6 +659,42 @@ def write_build_failed(
             detail=message,
             error=code,
         ),
+    )
+
+
+def settle_unfinished_build(
+    registry: DatasetRegistry,
+    *,
+    dataset_id: str,
+    client_id: str,
+    spec_id: str,
+    state: RunState,
+    code: str | None,
+    message: str,
+) -> None:
+    """`write_build_status`, but only when the stored status has not already settled the build.
+
+    `build_dataset` owns `build_status.json` while it runs and records a failure on the stage it
+    happened at, which is always the more useful answer; this exists for the case that document
+    cannot cover - a build that stopped before it wrote anything at all. Reading before writing is
+    what keeps the better answer when there is one, and a status that cannot even be read back is
+    treated as "nothing settled it", because an unreadable status is exactly the case a poller would
+    otherwise sit on for ever.
+    """
+    try:
+        stored: BuildStatus | None = registry.read_status(dataset_id)
+    except DatasetError:
+        stored = None
+    if stored is not None and stored.state in _SETTLED_STATES:
+        return
+    write_build_status(
+        registry,
+        dataset_id=dataset_id,
+        client_id=client_id,
+        spec_id=spec_id,
+        state=state,
+        code=code,
+        message=message,
     )
 
 
@@ -741,36 +765,27 @@ def build_mode(spec: OnboardingSpec) -> RunMode:
     return RunMode.TRAIN if spec.label_spec is not None else RunMode.SCORE
 
 
-def require_spec_sources(
-    store: ClientStore, client_id: str, *, spec: OnboardingSpec, source_ids: tuple[str, ...] | None
-) -> None:
-    """`source_ids` narrows a build to some of the recipe's own sources, or it is refused.
+def reject_source_subset(source_ids: tuple[str, ...] | None) -> None:
+    """`422` when a request asks to build from only some of a recipe's files.
 
-    An id the recipe never reads cannot narrow anything, so accepting one would mean either building
-    everything the recipe names while the user believes they restricted it, or building nothing at
-    all - `api.routes.runs.create_run_endpoint` refuses the same class of request for the same
-    reason: "accepting a request and quietly ignoring half of it is how a user comes to believe their
-    rows were joined on two columns when they were joined on one".
+    The endpoint table carries `source_ids?`, and `engine.onboarding.build.build_dataset` has no
+    parameter for it: it reads every file the recipe names and hands all of them to
+    `engine.onboarding.datasets.build_manifest`, which refuses a manifest whose sources do not cover
+    the recipe (`DATASET_SOURCE_MISSING`). So a narrowed build is not something this engine can do
+    yet - and a request for one is refused rather than honoured in name only, exactly as
+    `api.routes.runs._reject_unimplemented_onboarding` refuses the `RunRequest` fields Phase 1
+    cannot honour: "accepting a request and quietly ignoring half of it is how a user comes to
+    believe their rows were joined on two columns when they were joined on one".
     """
     if source_ids is None:
         return
-    named = {spec.entity_source_id, *spec.event_source_ids}
-    if not source_ids:
-        raise http_error(
-            409,
-            "DATASET_SOURCES_EMPTY",
-            "This build was restricted to no files at all, so there would be nothing to build from. "
-            "Name at least one of the recipe's files, or leave the list out to build from all of them.",
-        )
-    for source_id in source_ids:
-        load_source(store, client_id, source_id)
-        if source_id not in named:
-            raise http_error(
-                409,
-                "SOURCE_NOT_IN_SPEC",
-                f"{source_id!r} is not one of the files this recipe reads, so restricting the build "
-                "to it would build nothing. Choose a file the recipe names, or leave the list out.",
-            )
+    raise http_error(
+        422,
+        "DATASET_SOURCE_SUBSET_NOT_AVAILABLE",
+        "This engine builds a dataset from every file its recipe names; it cannot yet build from "
+        "only some of them. Leave the file list out to build the whole recipe, or save a recipe "
+        "that names only the files you want.",
+    )
 
 
 def blocking_errors(checks: Iterable[OnboardingCheck]) -> tuple[OnboardingCheck, ...]:
@@ -825,15 +840,6 @@ def load_source_specs(store: ClientStore, client_id: str, source_ids: Iterable[s
     profile document to be read back off disk.
     """
     return {source_id: load_source(store, client_id, source_id) for source_id in source_ids}
-
-
-def load_profiles(storage: Storage, client_id: str, source_ids: Iterable[str]) -> dict[str, SourceProfile]:
-    """Every named source's stored profile, keyed by id, for the build engine.
-
-    Loaded only on the paths that actually build - preview and `POST /datasets` - so a screen that
-    merely saves or validates a recipe never reads a document it has no use for.
-    """
-    return {source_id: load_profile(storage, client_id, source_id) for source_id in source_ids}
 
 
 def load_mappings(store: ClientStore, client_id: str, mapping_ids: Iterable[str]) -> dict[str, MappingSpec]:
