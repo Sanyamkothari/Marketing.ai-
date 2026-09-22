@@ -11,8 +11,9 @@ The dataset is CC BY-NC-SA 4.0 - **non-commercial**. See LICENSE.txt before runn
 WHAT IT DOES
 ------------
 1. Streams the 311 MB gzip in chunks; 13,979,592 rows do not need to be held in memory.
-2. Takes a seeded sample of at most `SAMPLE_ROWS` rows (1,000,000, the brief's ceiling), by
-   reservoir-free chunk-proportional sampling so the treated/control ratio is preserved.
+2. Takes a seeded sample of at most `SAMPLE_ROWS` rows (1,000,000, the brief's ceiling) by keeping
+   the same proportion of every chunk, so the treated/control ratio is preserved and no chunk is
+   ever held in full.
 3. Adds `impression_id`, the 1-based row number in the published order: the file ships no key and
    the data contract needs one.
 4. Writes `data/prepared.csv` and a 5,000-row `sample.csv`.
@@ -86,26 +87,41 @@ def prepare(sample_rows: int) -> pd.DataFrame:
 
     Sampling is per chunk and proportional, not global-uniform: every chunk contributes the same
     share of its rows, so the treated/control ratio and the conversion rate of the sample match the
-    file's. The row number is assigned over the **whole** file before sampling, so a sampled row
-    keeps the identity it has in the published order.
+    file's, and the whole 13.98 M rows are never resident at once. The row number is assigned over
+    the **whole** file before any row is dropped, so a sampled row keeps the identity it has in the
+    published order.
     """
     kept: list[pd.DataFrame] = []
     offset = 0
     total = 0
+    # The share of each chunk to keep, so the sample is proportional and the treated/control ratio
+    # survives. EXPECTED_ROWS is the published row count; verify() has already refused a file whose
+    # schema moved, and a file whose LENGTH moved only makes this share slightly off, which the
+    # final trim below corrects.
+    share = min(1.0, sample_rows / EXPECTED_ROWS)
+
     reader = pd.read_csv(RAW, compression="gzip", chunksize=CHUNK_ROWS)
     for index, chunk in enumerate(reader):
         if index == 0:
             verify(chunk)
         chunk = chunk.copy()
+        # The key is the row number in the PUBLISHED order, so it is assigned before any row is
+        # dropped: a sampled row keeps the identity it has in the full file.
         chunk.insert(0, PRIMARY_KEY, range(offset + 1, offset + len(chunk) + 1))
         offset += len(chunk)
         total += len(chunk)
+        if share < 1.0:
+            # Sample HERE, not after concatenating: 13,979,592 rows never have to be held at once.
+            # The seed varies with the chunk so two chunks do not draw the same row positions.
+            keep = min(len(chunk), max(1, round(len(chunk) * share)))
+            chunk = chunk.sample(n=keep, random_state=SAMPLE_SEED + index)
         kept.append(chunk)
 
     frame = pd.concat(kept, ignore_index=True)
+    # Rounding per chunk can overshoot by a few rows; trim uniformly from what is now a small frame.
     if len(frame) > sample_rows:
-        frame = frame.sample(n=sample_rows, random_state=SAMPLE_SEED).sort_values(PRIMARY_KEY)
-    frame = frame.reset_index(drop=True)
+        frame = frame.sample(n=sample_rows, random_state=SAMPLE_SEED)
+    frame = frame.sort_values(PRIMARY_KEY).reset_index(drop=True)
 
     # The published column order, with the key first.
     frame = frame[[PRIMARY_KEY, *EXPECTED_COLUMNS]]

@@ -38,8 +38,9 @@ needs three dates and one rule, and `fetch.py` fixes all four:
 
 ```
 SNAPSHOT        2011-09-10     the day the campaign would be planned
-LAPSE WINDOW    90 days        a shopper is in the audience when their last purchase was
-                               on or before 2011-06-12
+LAPSE WINDOW    90 days        a shopper is in the audience when their last purchase was at
+                               least 90 whole days earlier, i.e. at or before 2011-06-12 00:00
+                               (a purchase later that day counts as 89 days and is excluded)
 OUTCOME WINDOW  90 days        reactivated_90d is 1 when they bought again in
                                (2011-09-10, 2011-12-09]
 ```
@@ -48,7 +49,8 @@ The snapshot is **the last date in the log minus 90 days**, so the outcome windo
 every shopper in the file. Nobody is labelled "did not come back" merely because the data ran out —
 which is the single most common way a derived churn or win-back label goes wrong.
 
-The audience is the lapsed one, not everybody: 1,463 of the 4,338 identifiable customers. That is
+The audience is the lapsed one, not everybody: 1,463 of the 4,338 customers who have at least one
+non-cancelled, positively-priced purchase (the log names 4,372 distinct `CustomerID`s in all). That is
 the population a win-back budget is actually spent on, and it is why the positive rate is 41 %
 rather than the few per cent a whole-base model would show.
 

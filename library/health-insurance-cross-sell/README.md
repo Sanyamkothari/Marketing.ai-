@@ -44,7 +44,7 @@ outcome column, so `prepared.csv` is a copy. [`mapping.yaml`](mapping.yaml) has 
 ## Known quirks
 
 **Two columns are category codes wearing float clothes.** `Region_Code` (53 distinct values, 0.0 to
-52.0) and `Policy_Sales_Channel` (144 distinct values, 1.0 to 163.0) are identifiers, not
+52.0) and `Policy_Sales_Channel` (155 distinct values, 1.0 to 163.0) are identifiers, not
 quantities: region 52 is not twice region 26. They are **left as published**, because re-typing
 them to strings is a modelling decision. A gradient-boosted tree can split on a numeric code and
 recover most of the signal; what it cannot do is treat two codes as similar because they are
@@ -60,7 +60,7 @@ is essentially never interested in another one. It is legitimate — it is known
 made, not after — but it means a large part of the model's apparent skill is one obvious rule, and
 the run report says how much.
 
-**`Annual_Premium` has a long tail.** The median is 31,619 and the maximum is 540,165. The engine's
+**`Annual_Premium` has a long tail.** The median is 31,669 and the maximum is 540,165. The engine's
 default outlier handling clips to the 1st–99th percentile, fitted on the training split only.
 
 **`Vintage` is a day count, not a date.** It is how long the policyholder has been on the books (10

@@ -30,8 +30,8 @@ LIBRARY_CONFIGS = LIBRARY / "configs"
 
 #: How far below its own logistic-regression baseline a one-minute search is allowed to land.
 #: Not a fudge factor, and not a number chosen to make a test pass: across the four datasets that
-#: use it, the largest shortfall ever measured is 0.0035 ROC-AUC, so this is roughly six times the
-#: observed noise. `online-retail` does not use it — its worst run lands 0.0484 below, which is why
+#: use it, the largest shortfall ever measured is 0.0054 ROC-AUC, so this is roughly four times the
+#: observed noise. `online-retail` does not use it — its worst run lands 0.0627 below, which is why
 #: that dataset asserts no score at all. DEC-410 records every run, and each test's docstring
 #: repeats the ones for its own dataset.
 BASELINE_TOLERANCE: float = 0.02

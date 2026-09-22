@@ -28,7 +28,7 @@ Four checks that could plausibly have fired and did not:
   — nearly constant, not constant — so it survives into training and contributes nothing
   measurable. It does not appear on the importance chart below at all.
 * **`HIGH_CARDINALITY_ID_LIKE`** would flag a non-key column unique in every row. `id` is the key
-  and is never a candidate; `Annual_Premium` has 41,561 distinct values across 381,109 rows, so it
+  and is never a candidate; `Annual_Premium` has 48,838 distinct values across 381,109 rows, so it
   repeats and is not flagged.
 * **`PII_DETECTED`** found nothing. `Gender` and `Age` are attributes; nothing matches the email,
   phone, PAN, Aadhaar or name detectors.
@@ -143,7 +143,7 @@ Someone who has had a claim-worthy incident and no cover is the person who says 
 columns together are almost three quarters of the model, and both are already in every insurer's
 CRM.
 
-**Half the book is not worth a call.** Deciles 6 to 10 — 28,585 policyholders in this hold-out —
+**Half the book is not worth a call.** Deciles 6 to 10 — 28,581 policyholders in this hold-out —
 contain almost no interested customers. Working the top three deciles reaches 79.7 % of the
 opportunity at 30 % of the contact cost.
 

@@ -10,7 +10,8 @@ this exact budget against the engine as it stands today:
     beats          yes     yes     yes
 
 Six for six across both engines, and the smallest margin ever measured here (+0.0452) is more than
-ten times the largest shortfall seen on the three datasets that flip. The full-data run agrees:
+eight times the largest shortfall on the datasets that share its tolerance (0.0054, on
+health-insurance). The full-data run agrees:
 0.7957 against 0.7279, the widest gap in the library. See DEC-410.
 
 FLOOR has 0.06 of headroom below the lowest of the three.
