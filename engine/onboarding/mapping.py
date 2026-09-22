@@ -362,9 +362,15 @@ def _targets(schema: StandardSchemaConfig, role: RoleSpec) -> dict[str, Standard
     column like `amount` - is still a target; it simply has fewer signals to be recognised by.
     """
     names = [*role.required_columns]
-    names += [*role.typical_columns] if role.is_event else [*schema.column_names]
+    names += [*role.typical_names] if role.is_event else [*schema.column_names]
     names += [*role.optional_columns]
-    return {name: schema.by_name(name) for name in dict.fromkeys(names)}
+    # A role-typical column's definition lives on the ROLE, not on the use case: `amount` means the
+    # same thing, and is spelled `AMT` or `bill_amt` just as often, whichever client's bills these
+    # are. Falling back to the use case's schema keeps an entity source reading its own columns.
+    return {
+        name: (role.typical(name) if role.is_event else None) or schema.by_name(name)
+        for name in dict.fromkeys(names)
+    }
 
 
 @dataclass(frozen=True)

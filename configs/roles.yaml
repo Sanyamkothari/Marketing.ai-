@@ -27,56 +27,80 @@ roles:
     kind: event
     description: One row per invoice.
     required_columns: [entity_key, event_time]
-    typical_columns: [amount, due_date, paid_date, status]
+    typical_columns:
+      - {name: amount,        type: numeric,     aliases: [amt, bill_amt, invoice_amount, value, total, net_amount, charge], description: "What the invoice is for.", range: [0, 100000000]}
+      - {name: due_date,      type: date,        aliases: [due_dt, duedate, payment_due, due_on], description: "When the invoice must be paid."}
+      - {name: paid_date,     type: date,        aliases: [paid_dt, payment_date, settled_on, pay_dt], description: "When it was actually paid; blank when it never was."}
+      - {name: status,        type: categorical, aliases: [bill_status, state, invoice_status], description: "The client's own status vocabulary for an invoice."}
     name_tokens: [bill, bills, billing, invoice, invoices, statement]
 
   payments:
     kind: event
     description: One row per payment.
     required_columns: [entity_key, event_time]
-    typical_columns: [amount, method, days_late]
+    typical_columns:
+      - {name: amount,        type: numeric,     aliases: [amt, paid_amount, pay_amt, value, total], description: "What was paid.", range: [0, 100000000]}
+      - {name: method,        type: categorical, aliases: [pay_method, mode, channel, payment_mode, instrument], description: "How it was paid."}
+      - {name: days_late,     type: numeric,     aliases: [late_days, delay_days, dpd, days_past_due, overdue_days], description: "Days after the due date the payment arrived; 0 or below is on time.", range: [-365, 3650]}
     name_tokens: [payment, payments, pay, receipt, remittance, txn, transaction]
 
   complaints:
     kind: event
     description: One row per complaint or support ticket.
     required_columns: [entity_key, event_time]
-    typical_columns: [category, resolved_time, severity, text]
+    typical_columns:
+      - {name: category,      type: categorical, aliases: [type, complaint_type, issue_type, reason, cat, subject], description: "What the complaint was about."}
+      - {name: resolved_time, type: date,        aliases: [resolved_dt, closed_at, closure_date, resolved_on, close_dt], description: "When it was closed; blank while it is still open."}
+      - {name: severity,      type: categorical, aliases: [priority, sev, urgency, impact], description: "How serious the client judged it."}
+      - {name: text,          type: text,        aliases: [remarks, notes, description, comments, narrative, ticket_text, details], description: "What the customer said, in their own words. Carried through untouched; PII in it is redacted at profiling time."}
     name_tokens: [complaint, complaints, ticket, tickets, case, cases, grievance, support]
 
   usage:
     kind: event
     description: One row per usage record.
     required_columns: [entity_key, event_time]
-    typical_columns: [data_mb, minutes, sessions]
+    typical_columns:
+      - {name: data_mb,       type: numeric,     aliases: [mb, data_usage, data_vol, volume_mb, gb_used, usage_mb], description: "Data consumed.", range: [0, 100000000]}
+      - {name: minutes,       type: numeric,     aliases: [mins, call_minutes, voice_mins, talk_time, mou], description: "Voice minutes consumed.", range: [0, 1000000]}
+      - {name: sessions,      type: numeric,     aliases: [session_count, sess, logins, visits, hits], description: "How many separate sessions.", range: [0, 10000000]}
     name_tokens: [usage, cdr, consumption, traffic, session, sessions]
 
   campaign_events:
     kind: event
     description: One row per campaign touch (sent, opened, clicked, converted).
     required_columns: [entity_key, event_time]
-    typical_columns: [campaign_id, event_type, treatment]   # `treatment` is kept for Phase 3 uplift (plan section 14)
+    typical_columns:
+      - {name: campaign_id,   type: categorical, aliases: [campaign, camp_id, offer_id, promo_id, campaign_code], description: "Which campaign this touch belongs to."}
+      - {name: event_type,    type: categorical, aliases: [type, action, status, touch_type, outcome], description: "What happened: sent, opened, clicked, converted.", value_aliases: {sent: ["send", "delivered", "dispatched"], opened: ["open", "viewed"], clicked: ["click", "clickthrough"], converted: ["conversion", "accepted", "purchased", "redeemed"]}}
+      - {name: treatment,     type: boolean,     aliases: [is_treated, treated, test_group, variant, arm], description: "Whether this customer was in the treated arm. Kept as a standard column because uplift modelling in Phase 3 needs exactly this.", value_aliases: {"true": ["y", "yes", "1", "test", "treatment"], "false": ["n", "no", "0", "control", "holdout"]}}
     name_tokens: [campaign, campaigns, marketing, offer, offers, promo, touch]
 
   orders:
     kind: event
     description: One row per order.
     required_columns: [entity_key, event_time]
-    typical_columns: [order_value, promised_date, delivered_date]
+    typical_columns:
+      - {name: order_value,   type: numeric,     aliases: [value, amount, amt, gmv, total, order_amt, net_value], description: "What the order is worth.", range: [0, 100000000]}
+      - {name: promised_date, type: date,        aliases: [promise_dt, sla_date, eta, committed_date, promised_on], description: "The date the customer was promised."}
+      - {name: delivered_date,type: date,        aliases: [delivered_dt, delivery_date, fulfilled_on, actual_delivery], description: "When it actually arrived; blank while it is in flight."}
     name_tokens: [order, orders, shipment, shipments, delivery, deliveries, fulfilment, fulfillment]
 
   plan_changes:
     kind: event
     description: One row per plan, tariff or package change.
     required_columns: [entity_key, event_time]
-    typical_columns: [plan, previous_plan, reason]
+    typical_columns:
+      - {name: plan,          type: categorical, aliases: [new_plan, plan_name, tariff, package, to_plan], description: "The plan the customer moved to."}
+      - {name: previous_plan, type: categorical, aliases: [old_plan, from_plan, prior_plan, prev_tariff], description: "The plan they were on before."}
+      - {name: reason,        type: categorical, aliases: [change_reason, reason_code, cause], description: "Why the plan changed."}
     name_tokens: [plan, plans, tariff, package, subscription, upgrade, downgrade]
 
   activity:
     kind: event
     description: Any "the customer did something" log.
     required_columns: [entity_key, event_time]
-    typical_columns: [event_type]
+    typical_columns:
+      - {name: event_type,    type: categorical, aliases: [type, action, activity_type, event, channel], description: "What the customer did."}
     name_tokens: [activity, activities, event, events, login, logins, visit, visits, interaction]
 
   other_event:

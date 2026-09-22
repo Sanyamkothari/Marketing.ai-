@@ -235,7 +235,7 @@ def _filename_hits(file_name: str, role: RoleSpec) -> tuple[str, ...]:
 
 def _typical_column_hits(columns: Sequence[str], role: RoleSpec) -> tuple[str, ...]:
     lowered = {name.lower() for name in columns}
-    return tuple(token for token in role.typical_columns if token.lower() in lowered)
+    return tuple(name for name in role.typical_names if name.lower() in lowered)
 
 
 def _score_role(profile: SourceProfile, role_name: str, role: RoleSpec) -> RoleCandidate | None:
@@ -248,11 +248,11 @@ def _score_role(profile: SourceProfile, role_name: str, role: RoleSpec) -> RoleC
         reasons.append(f"file name contains {filename_hits[0]!r}")
 
     typical_hits: tuple[str, ...] = ()
-    if role.typical_columns:
+    if role.typical_names:
         column_names = tuple(column.name for column in profile.profile.columns)
         typical_hits = _typical_column_hits(column_names, role)
         if typical_hits:
-            share = len(typical_hits) / len(role.typical_columns)
+            share = len(typical_hits) / len(role.typical_names)
             score += _TYPICAL_COLUMNS_WEIGHT * share
             reasons.append(f"has typical column(s) {', '.join(typical_hits)}")
 

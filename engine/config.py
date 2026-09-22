@@ -3269,12 +3269,28 @@ class RoleSpec(_Base):
     description: str = ""
     required_columns: tuple[str, ...] = ()
     optional_columns: tuple[str, ...] = ()
-    typical_columns: tuple[str, ...] = ()
+    typical_columns: tuple[StandardColumn, ...] = ()
     name_tokens: tuple[str, ...] = ()
 
     @property
     def is_event(self) -> bool:
         return self.kind is RoleKind.EVENT
+
+    @property
+    def typical_names(self) -> tuple[str, ...]:
+        """Just the names of `typical_columns`, for detection and for messages.
+
+        The definitions themselves carry the aliases that let a mapper recognise `AMT` as `amount`;
+        role *detection* only needs to know which vocabulary a table speaks, so it reads this.
+        """
+        return tuple(column.name for column in self.typical_columns)
+
+    def typical(self, name: str) -> StandardColumn | None:
+        """The definition of one role-typical column, or None when this role has no such column."""
+        for column in self.typical_columns:
+            if column.name == name:
+                return column
+        return None
 
 
 class RoleCatalogue(_Base):

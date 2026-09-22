@@ -66,7 +66,25 @@ def test_the_plan_s_roles_are_all_present(roles) -> None:
 
 def test_campaign_events_keeps_treatment_for_phase_three(roles) -> None:
     """Plan section 14: uplift modelling needs a treatment flag; keep it a standard column."""
-    assert "treatment" in roles.roles["campaign_events"].typical_columns
+    treatment = roles.roles["campaign_events"].typical("treatment")
+    assert treatment is not None
+    # It has to survive a client spelling it "control"/"test", or Phase 3 gets an unusable column.
+    assert set(treatment.value_aliases) == {"true", "false"}
+    assert "control" in treatment.value_aliases["false"]
+
+
+def test_every_role_typical_column_carries_aliases(roles) -> None:
+    """A bare name is not a mapping signal.
+
+    `AMT` reaches `amount` only because `amount` lists it, exactly as `TNR_MNTHS` reaches
+    `tenure_months` through the use case's own schema. A role-typical column defined as a name and
+    nothing else is one the suggester can only match by luck - which is how an end-to-end build
+    failed with "Values list has no column named amount" before these definitions existed.
+    """
+    for name in roles.event_roles:
+        for column in roles.roles[name].typical_columns:
+            assert column.aliases, f"{name}.{column.name} has no aliases, so nothing will match it"
+            assert column.description, f"{name}.{column.name} has no description for the mapping UI"
 
 
 def test_an_unknown_role_names_the_ones_that_exist(roles) -> None:
