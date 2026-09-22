@@ -746,7 +746,7 @@ export function createController(uc, rerender) {
     s.validation = null;
     rerender();
     try {
-      const result = await postUpload(file, uc.id);
+      const result = await postUpload(file, uc.id, s.mode);
       s.upload = result;
       const profile = result.profile;
       s.pk = (profile.primary_key_candidates || [])[0] || "";

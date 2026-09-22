@@ -223,16 +223,48 @@ runs is reported in `status.json` and on the Running screen, so it is visible pe
 A control point at 250,000 rows on the same machine — ingest 16.1 s (15,531 rows/sec), score 65.8 s
 (3,798 rows/sec), peak 1,705 MB — puts both paths at roughly linear scaling up to a million.
 
-Two honest caveats. This was measured on 4 CPUs, 15.7 GiB RAM, Python 3.11.15, Linux — **a
-container, not the laptop plan §11 names**. And the machine has to be quiet: a third attempt at the
-same row count was killed at a 45-minute cap while several other jobs held the same four cores, so on
-a busy box expect far worse than the table. Only the CSV path was exercised; the Parquet ingest path
-has not been measured.
+### Parquet against CSV, measured
+
+A later run of the same script with `--format both` builds one frame, writes it to both formats and
+reads each back, so the two ingests cover identical rows, back to back, in one process on one machine:
+
+| ingest (read + profile, whole-file fingerprint) | rows | seconds | rows/sec | file on disk |
+| --- | --- | --- | --- | --- |
+| Parquet | 1,000,000 | 67.1 | 14,913 | 9.8 MB |
+| CSV | 1,000,000 | 67.7 | 14,774 | 57.8 MB |
+
+Parquet costs **0.99× the seconds** off a file **0.17× the size**. Streaming ingest is not where the
+two formats differ. The engine's own stage log says why: `profile_dataset` took 31.6 s on the CSV
+frame and 32.6 s on the Parquet frame, which leaves the read half at about 36.1 s CSV against 34.5 s
+Parquet — Parquet reads roughly 4% faster, and the format-independent profiling and whole-file
+fingerprint swamp that. The Parquet file is the one `pandas.to_parquet` writes with pyarrow defaults
+(snappy, default row-group size), not one tuned for fast reads.
+
+Two things from that run are **not** results about the formats, and are recorded here so they are not
+read as if they were. The scoring stages took 896.7 s (Parquet) against 930.1 s (CSV) — about 3.8×
+the 245 s the table above records for the same stage — because the box was saturated while they ran
+(load average 4.03 on 4 CPUs). That is contention, not format. The ingest pair is the trustworthy half
+of the run: the two ingests are adjacent, they agree to within 1%, and both land within 2% of the
+68.5 / 68.7 s already recorded for CSV on a quiet machine. Peak resident memory was 6,313 MB for a
+process that ran both paths, so it is one high-water mark belonging to neither format alone; a
+per-format peak needs a run per format.
+
+One property of the formats, not of the benchmark: Parquet carries its own types, while the CSV frame
+is inferred from text, so an empty CSV field arrives as null where an empty Parquet string stays an
+empty string. Both files scored end to end without error, but the two paths do not produce identical
+profiles.
+
+Two honest caveats over everything above. It was measured on 4 CPUs, 15.7 GiB RAM, Python 3.11.15,
+Linux — **a container, not the laptop plan §11 names**. And the machine has to be quiet: a third
+attempt at a million rows was killed at a 45-minute cap while several other jobs held the same four
+cores, and the `--format both` scoring figures are the same effect caught in the act, so on a busy box
+expect far worse than the tables.
 
 Re-run it with:
 
 ```bash
-.venv/bin/python -m scripts.bench_large_file --rows 1000000
+.venv/bin/python -m scripts.bench_large_file --rows 1000000                # CSV, the first table
+.venv/bin/python -m scripts.bench_large_file --rows 1000000 --format both  # adds the Parquet half
 ```
 
 ---
@@ -243,11 +275,40 @@ Re-run it with:
 |---|---|---|---|
 | M1 | Skeleton + configs | Repo layout, `pyproject`, configs load and validate, contracts defined, `make setup` works on a clean machine | **done** |
 | M2 | Ingest + validate | All validation checks implemented with tests; `POST /uploads` and `POST /runs` return proper 409 payloads on the broken fixtures | **done** |
-| M3 | Train flow | Full train on synthetic data produces every artefact; leaderboard, evaluation, decile lift, SHAP reasons are real; registry with champion rule | **done** |
+| M3 | Train flow | Full train on synthetic data produces every artefact; leaderboard, evaluation, decile lift, SHAP reasons are real; registry with champion rule | **done in the engine** — `Pipeline.run_train` and its tests are real, but `POST /runs` never calls it; see the acceptance test below |
 | M4 | Score flow | Champion scores a new file; schema mismatch reported by column name; drift computed; bands, suppression, control group applied; `scores.csv` downloadable | **done** |
-| M5 | UI wired | Prototype screens run against the API end to end with no simulated values; Data/Model/Output pages render from artefacts | **done** |
+| M5 | UI wired | Prototype screens run against the API end to end with no simulated values; Data/Model/Output pages render from artefacts | **partial** — every page renders from real artefacts with nothing simulated, but in a browser the journey does not complete; see the acceptance test below |
 | M6 | Config-only reuse | `payment_propensity` and the Telco churn mapping work by adding YAML only; documented in README | **done** — both are config only and tested; the end-to-end run on the downloaded Kaggle file stays a manual step by design (plan §10) |
 | M7 | Hardening | Cancel, error states, large-file handling (streaming, 1M rows in under the time limit on a laptop), logging, `docs/` complete | **partial** — see below |
+
+**Plan §11's overall Phase 1 acceptance test does not pass.** That criterion is a sentence about a
+person rather than an API call — a non-technical user "uploads it, keeps every default, clicks Run,
+and receives a scored file with reasons and actions for a second upload" — and until now nothing in
+the suite performed it. `tests/integration/test_acceptance.py` now does: it starts the real app under
+uvicorn, opens `/ui` in Chromium and walks Overview → Targeted Advertisement → the Setup screen's own
+template link → the file input → Run → the Running screen → Results → the Data / Model / Output pages
+→ "Score new data" → the `scores.csv` download, clicking only what a user would click; Advanced
+settings is asserted closed, so every default really is kept (DEC-075).
+
+**It stops at the Run button**, on the product's own words: *"✕ Run failed · Preparing features is
+not built yet."* The Data tile reads Failed; Model and Output read Not reached. Two defects, neither of
+them in `engine/`, stand between the screens and that sentence:
+
+- `api/routes/runs.py` submits `build_m2_job` for every run whose request carries no model version —
+  which is every *training* run — so a Run click replays ingest and validate and then writes
+  `STAGE_NOT_IMPLEMENTED`, "Preparing features is not built yet.", onto `prepare`. That job is DEC-060's
+  M2 placeholder, the one its own entry says "M3 replaces wholesale"; M3 shipped the train flow and left
+  the route pointing at the placeholder, so nothing a user can click reaches it.
+- `ui/api.js`'s `postUpload` sends the file and the use case but never `mode`, so `POST /uploads` takes
+  its default of `train` and a "Score new data" upload is then refused by `POST /runs` with
+  `UPLOAD_MODE_MISMATCH` — advice the user cannot act on, because the same screen repeats the same
+  upload.
+
+The test is left asserting the plan and failing rather than trimmed to what the product does — trimming
+it would turn a defect into a documented feature. Its 13 cases share one module-scoped journey fixture,
+so the walk is paid for once and a stop anywhere in it reports as 13 errors, in about ten seconds. It is
+marked `@slow` and skips cleanly where playwright or a browser is missing, so `ci.yml` stays green on a
+machine with no browser and `nightly.yml` is where it actually runs.
 
 M7 in detail. Done:
 
@@ -265,14 +326,49 @@ M7 in detail. Done:
 - **`docs/` complete.** `DECISIONS.md`, `DATA_CONTRACT.md`, the generated `API.md`, and `AWS_DEPLOYMENT.md`.
 - **CI.** `.github/workflows/` (below), which plan §10 asks for.
 
-- **Large-file handling, measured.** `scripts/bench_large_file.py` was run at 1,000,000 rows and the
-  numbers are recorded above, not projected. Two qualifications keep M7 short of done on this line:
-  it was measured on a 4-CPU container rather than the laptop plan §11 names, and only the CSV
-  ingest path was exercised — the Parquet path is still untimed.
+- **Large-file handling, measured.** `scripts/bench_large_file.py` was run at 1,000,000 rows, in CSV
+  and now in Parquet, and every number above was printed by it rather than projected. One qualification
+  keeps M7 short of done on this line: it was measured on a 4-CPU container rather than the laptop
+  plan §11 names.
 
-Not done: **deletion**, the one data-protection control with no seam yet (`docs/AWS_DEPLOYMENT.md` §7),
-and the nine advisory settings of DEC-074, which the form records and the engine does not act on. Both
-are stated where a reader meets them rather than left to be discovered.
+### What is left, and whose phase it belongs to
+
+DEC-074 parked nine settings that the form records and no stage reads. Listing them as one block of
+"not done" implied they were all Phase 1 debt. Checked against plan §12, which names the later phases,
+they are not the same kind of thing at all.
+
+**Phase 1 work genuinely outstanding:**
+
+- **The two defects above**, which keep plan §11's acceptance criterion from passing. They are the
+  largest single gap in Phase 1: the train flow exists and cannot be reached from the product.
+- **The `features` block** — `auto_feature_engineering`, `categorical_encoding`, `numeric_scaling`,
+  `text_columns`, `selection` and `max_features`, six of DEC-074's nine. These are neither parked
+  Phase 1 work nor deferred Phase 4 work: **`plan.md` does not ask for them anywhere.** Nothing in it
+  mentions feature engineering, encoding, scaling or feature selection, in §12's later phases or
+  outside them. They are scope the implementation invented, offered on the Setup screen, and never
+  built. DEC-074 made them inert and said so on the control, which was the right repair for a promise
+  the engine could not keep; what it did not settle is whether they should exist at all, and that is
+  still open.
+- **The laptop.** Plan §11 asks for a million rows under the time limit *on a laptop*, and the numbers
+  above were measured on a 4-CPU container. The Parquet half of that line is now measured, so the
+  format gap is closed and the machine gap is not.
+
+**Parked for Phase 4 by plan §12, not Phase 1 debt** — §12 defers "drift monitoring schedule,
+retraining triggers … DPDP controls (retention, consent, deletion)" by name:
+
+- **`governance.retention_days`** and **deletion**. Retention is recorded with the run and not enforced;
+  deletion has no seam at all (`docs/AWS_DEPLOYMENT.md` §7). The seam is worth calling out because §12
+  closes by asking that Phase 4 be implementations behind the `Storage` / `JobRunner` / `ModelRegistry`
+  protocols rather than rewrites, and a per-entity deletion path reaching across the upload, the run
+  artefacts and the metadata row is not yet one of those. The consent *filter* plan §6 asks for is built
+  and shipped; it is the data-protection control of the same name that §12 defers.
+- **`monitoring.retraining`** and **`monitoring.performance_alert_drop_pct`**. Per-run drift is Phase 1
+  and shipped — PSI against `drift_baseline.json`, written to `drift.json`, warned on above the
+  threshold. What these two settings would need is monitoring *between* runs, a schedule and an alert,
+  which is exactly the half §12 names.
+
+Those three settings being disabled and recorded is the correct state for work the plan defers, not a
+shortfall against Phase 1. Each is stated where a reader meets it rather than left to be discovered.
 
 ---
 
@@ -366,7 +462,7 @@ case is named anywhere under `engine/` or `api/`.
 ## Decisions
 
 Every choice that `plan.md` does not make is recorded in [`docs/DECISIONS.md`](docs/DECISIONS.md) as a
-`DEC-` entry with its context, decision and consequences. The log runs DEC-001 … DEC-079: M1 opened it
+`DEC-` entry with its context, decision and consequences. The log runs DEC-001 … DEC-081: M1 opened it
 with DEC-001 … DEC-040, each milestone since has appended its own, and DEC-075 … DEC-079 are the shared
 surface the phase branches build on. DEC-059, DEC-064 and DEC-071 are unused — no code cites them.
 Numbers from DEC-100 up are allocated per phase — 100…199 for Phase 2, 200…299 for Phase 3a, 300…399
