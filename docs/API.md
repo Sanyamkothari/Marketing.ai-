@@ -51,7 +51,7 @@ A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explana
 | `upload_id` | string | yes | Id of the upload this run consumed. |
 | `file_name` | string | yes | The user's original file name, shown in the Results bar and run history. |
 | `row_count` | integer \| null | no | Rows in the upload, taken from the dataset profile. |
-| `primary_key` | string | yes | Column identifying each entity. |
+| `primary_key` | string \| list[string] | yes | Column, or columns, identifying each entity. |
 | `target` | string \| null | no | Target column; set for training runs only. |
 | `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Problem type resolved for this run, detected or overridden. |
 | `model_choice` | string | yes | Step-3 choice: the AutoML sentinel or a single model family value. |
@@ -965,7 +965,7 @@ One per-row reason behind a score.
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `use_case_id` | string | yes | Use case the schema belongs to. |
 | `model_version_id` | string | yes | Model version the schema was saved with. |
-| `primary_key` | string | yes | Primary-key column. |
+| `primary_key` | string \| list[string] | yes | Primary-key column, or columns. |
 | `target` | string \| null | yes | Target column; null for scoring-only schemas. |
 | `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Problem type the model was fitted for. |
 | `columns` | list[FeatureSchemaColumn] | yes | Columns in the exact order used at fit time. |
@@ -995,6 +995,9 @@ One column of the schema a scoring file must match.
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `run_id` | string | yes | Run this manifest describes. |
+| `primary_key` | string \| list[string] | yes | Column, or columns, that identified a row. |
+| `dataset_id` | string \| null | no | Onboarded dataset the run consumed; null for a direct upload. |
+| `client_id` | string \| null | no | Client the dataset belongs to; null when no client was named. |
 | `recipe` | Recipe \| null | no | Training choices; null for a scoring run that did not fit a model. |
 | `dataset_fingerprint` | DatasetFingerprint | yes | Identity of the data the run consumed. |
 | `seed` | integer | yes | Seed that made the run reproducible. |
@@ -1002,6 +1005,8 @@ One column of the schema a scoring file must match.
 | `leaderboard_path` | string \| null | no | Storage key of leaderboard.json; null when no search was run. |
 | `duration_s` | number | yes | Wall-clock seconds from run start to final state. |
 | `cost_estimate` | CostEstimate | yes | What the run cost to produce. |
+| `llm_usage` | LLMUsage \| null | no | Language-model usage; null when the run called no model. |
+| `compute` | ComputeInfo \| null | no | Where the run ran and what it cost; null when nothing recorded it. |
 | `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the manifest was written. |
 
 #### Recipe
@@ -1013,7 +1018,7 @@ Every choice that determines a trained model, and nothing else.  `train(recipe)`
 | `use_case_id` | string | yes | Use case this recipe belongs to. |
 | `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Learning task the model is fitted for. |
 | `target` | string | yes | Column the model learns to predict. |
-| `primary_key` | string | yes | Row identifier; never used as a feature. |
+| `primary_key` | string \| list[string] | yes | Row identifier; never used as a feature. |
 | `feature_columns` | list[string] | yes | Exact ordered feature list handed to training, after exclusions. |
 | `prepare` | PrepareConfig | yes | Cleaning and exclusion choices applied before fitting. |
 | `split` | SplitConfig | yes | How rows are partitioned into train, validation and test. |
@@ -1031,6 +1036,32 @@ What a run cost to produce.  `estimated_usd` is null for a local run rather than
 | `compute_seconds` | number | yes | Wall-clock seconds of compute the run consumed. |
 | `estimated_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
 | `basis` | string | yes | How the estimate was derived, in plain words. |
+
+#### LLMUsage
+
+What a run spent on language models.  Counted, never estimated: `calls`, `input_tokens` and `output_tokens` are what the client was told by the provider, and `cost_estimate_usd` is `None` unless a real billed figure exists - the same rule `CostEstimate.estimated_usd` follows, because a fabricated zero cannot be told apart from a measurement of something free. A run that called no model carries `None` for the whole object rather than a zeroed one.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `calls` | integer | yes | Completion and embedding requests the run made. |
+| `input_tokens` | integer | yes | Tokens sent, totalled over every call. |
+| `output_tokens` | integer | yes | Tokens returned, totalled over every call. |
+| `cost_estimate_usd` | number \| null | no | Billed cost when the provider reports one; null when nothing was billed. |
+| `model_ids` | list[string] | no | Every model the run used, sorted, so a manifest names its sources. |
+
+#### ComputeInfo
+
+Where a run actually ran, and what that cost.  `job_arn` and `instance_type` are null for a local run because a local run has neither; the fields are not padded with a placeholder. `cost_estimate_usd` follows `CostEstimate`: null unless something was billed.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `backend` | ComputeBackend ("local" \| "sagemaker") | yes | Which compute carried the run: local or sagemaker. |
+| `job_arn` | string \| null | no | ARN of the managed job; null for a local run. |
+| `instance_type` | string \| null | no | Instance the managed job ran on; null for a local run. |
+| `duration_s` | number | yes | Wall-clock seconds the compute was occupied. |
+| `cost_estimate_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
 
 ## Tabular artefacts
 

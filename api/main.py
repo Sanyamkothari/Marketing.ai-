@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final
 
-from fastapi import FastAPI, Request
+from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -31,6 +31,14 @@ NOT_FOUND_CODES: Final[frozenset[str]] = frozenset(
 
 UI_DIR: Final[Path] = Path(__file__).resolve().parent.parent / "ui"
 """The prototype screens, wired to this same app and served from `/ui` (plan §9)."""
+
+PHASE_ROUTERS: Final[list[APIRouter]] = []
+"""Routers the phase branches mount, appended from their own blocks at the foot of this module.
+
+`ALL_ROUTERS` is the Phase 1 set and its tuple stays closed; a branch appends here instead, so
+three branches can each add a router without any of them editing a line another branch wrote.
+Mounted after `ALL_ROUTERS`, in the order the blocks appear.
+"""
 
 
 async def config_error_handler(_request: Request, exc: Exception) -> JSONResponse:
@@ -63,7 +71,7 @@ def create_app(*, config_root: Path | None = None, data_dir: Path | None = None)
         allow_headers=["*"],
     )
     app.add_exception_handler(ConfigError, config_error_handler)
-    for router in ALL_ROUTERS:
+    for router in (*ALL_ROUTERS, *PHASE_ROUTERS):
         app.include_router(router)
     if UI_DIR.is_dir():
         # The UI is plain HTML and ES modules: a module cannot be fetched over `file://`, so the
@@ -77,5 +85,24 @@ def create_app(*, config_root: Path | None = None, data_dir: Path | None = None)
 
     return app
 
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file.
+# A router goes in `PHASE_ROUTERS` (defined above), not in `ALL_ROUTERS`:
+#     from api.routes.onboarding import router as onboarding_router
+#     PHASE_ROUTERS.append(onboarding_router)
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----
 
 app: FastAPI = create_app()

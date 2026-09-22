@@ -8,7 +8,6 @@ import difflib
 import hashlib
 import importlib.util
 import json
-import os
 import re
 from collections.abc import Iterator, Mapping, Sequence
 from datetime import UTC, datetime
@@ -28,6 +27,8 @@ from pydantic import (
     field_validator,
     model_validator,
 )
+
+from engine.settings import DEFAULT_CONFIG_DIR, ENV_VARS, settings
 
 
 class ConfigError(Exception):
@@ -54,6 +55,49 @@ class _Base(BaseModel):
 
 # Public alias: engine.contracts and api.schemas inherit from it so there is one definition.
 StrictBase = _Base
+
+
+# ---------------------------------------------------------------------------
+# The primary key: one column in Phase 1, possibly several from Phase 2 on
+# ---------------------------------------------------------------------------
+PrimaryKey = str | list[str]
+"""A row identifier: one column name, or several that identify a row together.
+
+The wide type is here from the start, on every contract the value travels through, because those
+contracts live in shared append-only files: a branch that needed to widen them later could not.
+Phase 1 only ever sets a single column, and `str` stays a legal value forever, so nothing in this
+phase changes shape.
+
+This is the one place the codebase's "collections are tuples" rule yields (`engine/contracts.py`
+docstring). The cross-branch contract spells the type `str | list[str]`, three branches are written
+against that spelling, and the serialised form is a JSON array either way. Read the value through
+:func:`key_columns` rather than an `isinstance` check and the distinction stops mattering.
+"""
+
+
+def key_columns(primary_key: PrimaryKey) -> tuple[str, ...]:
+    """The key's columns, in order, whether it was spelled as one name or as several."""
+    return (primary_key,) if isinstance(primary_key, str) else tuple(primary_key)
+
+
+def sole_key(primary_key: PrimaryKey, *, what: str = "This") -> str:
+    """The single column of `primary_key`, or a `ConfigError` when it names several.
+
+    Composite keys are Phase 2 behaviour. Until the stages that join, deduplicate and export on the
+    key can carry more than one column, a composite key is refused here - at the boundary, with a
+    message saying what to do - rather than silently reduced to its first column, which would join
+    the wrong rows and report success.
+    """
+    columns = key_columns(primary_key)
+    if len(columns) == 1:
+        return columns[0]
+    joined = ", ".join(columns) if columns else "(none)"
+    raise ConfigError(
+        "COMPOSITE_KEY_NOT_SUPPORTED",
+        f"{what} needs a single primary-key column and was given {len(columns)}: {joined}. "
+        "Combine them into one column before uploading, or pick the one that identifies a row on its own.",
+        path="primary_key",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1113,20 +1157,22 @@ class EngineConfig(_Base):
 # ---------------------------------------------------------------------------
 # 4.5 Loaders, merge and overrides
 # ---------------------------------------------------------------------------
-DEFAULT_CONFIG_ROOT: Final[Path] = Path(__file__).resolve().parent.parent / "configs"
-CONFIG_DIR_ENV_VAR: Final[str] = "MARKETING_AI_CONFIG_DIR"
+DEFAULT_CONFIG_ROOT: Final[Path] = DEFAULT_CONFIG_DIR
+CONFIG_DIR_ENV_VAR: Final[str] = ENV_VARS["config_dir"]
 
 _ENGINE_CACHE: dict[Path, EngineConfig] = {}
 
 
 def config_root(root: Path | None = None) -> Path:
-    """`root` argument, else env `MARKETING_AI_CONFIG_DIR`, else `DEFAULT_CONFIG_ROOT`."""
+    """`root` argument, else env `MARKETING_AI_CONFIG_DIR`, else `DEFAULT_CONFIG_ROOT`.
+
+    The environment is read through `engine.settings` rather than directly, so every variable the
+    engine honours is listed in one place; `Settings.from_env` resolves a directory it was given
+    and leaves the default alone, which is what this function did before.
+    """
     if root is not None:
         return Path(root).resolve()
-    from_env = os.environ.get(CONFIG_DIR_ENV_VAR)
-    if from_env:
-        return Path(from_env).resolve()
-    return DEFAULT_CONFIG_ROOT
+    return settings().config_dir or DEFAULT_CONFIG_ROOT
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
@@ -2570,7 +2616,7 @@ class Recipe(_Base):
     use_case_id: str = Field(description="Use case this recipe belongs to.")
     problem_type: ProblemType = Field(description="Learning task the model is fitted for.")
     target: str = Field(description="Column the model learns to predict.")
-    primary_key: str = Field(description="Row identifier; never used as a feature.")
+    primary_key: PrimaryKey = Field(description="Row identifier; never used as a feature.")
     feature_columns: tuple[str, ...] = Field(
         description="Exact ordered feature list handed to training, after exclusions."
     )
@@ -2608,7 +2654,7 @@ class Recipe(_Base):
 def recipe_from_config(
     config: UseCaseConfig,
     *,
-    primary_key: str,
+    primary_key: PrimaryKey,
     feature_columns: Sequence[str],
     seed: int,
     target: str | None = None,
@@ -2637,3 +2683,21 @@ def recipe_from_config(
         model_search=config.model_search,
         seed=seed,
     )
+
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file - run `black` on
+# what you paste, not on the file, if the formatter would reflow other lines.
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----

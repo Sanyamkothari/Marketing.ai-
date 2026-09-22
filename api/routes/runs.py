@@ -50,7 +50,15 @@ from api.schemas import (
     ValidationErrorResponse,
 )
 from engine import __version__
-from engine.config import Catalog, ResolvedConfig, RunMode, UseCaseConfig, get_catalog, resolve_config
+from engine.config import (
+    Catalog,
+    ResolvedConfig,
+    RunMode,
+    UseCaseConfig,
+    get_catalog,
+    resolve_config,
+    sole_key,
+)
 from engine.contracts import (
     ARTEFACT_REGISTRY,
     TABULAR_SCHEMAS,
@@ -149,6 +157,29 @@ _RUN_ERRORS: dict[int | str, dict[str, object]] = {
 # ---------------------------------------------------------------------------
 # 4.3 POST /runs
 # ---------------------------------------------------------------------------
+_ONBOARDING_FIELDS: Final[tuple[str, ...]] = ("dataset_id", "client_id")
+"""`RunRequest` fields whose shape exists for Phase 2 and whose behaviour does not exist yet."""
+
+
+def _reject_unimplemented_onboarding(body: RunRequest) -> None:
+    """`422` when a request names an onboarded dataset, which nothing in this phase can resolve.
+
+    The fields are on `RunRequest` because the contract they belong to is shared and append-only,
+    so it had to be settled before the branches started. Until the onboarding work lands there is
+    nothing behind them, and a run started from a `dataset_id` would silently score the upload the
+    request also carried - a different file from the one the caller asked for.
+    """
+    named = [name for name in _ONBOARDING_FIELDS if getattr(body, name) is not None]
+    if not named:
+        return
+    fields = " and ".join(named)
+    raise http_error(
+        422,
+        "DATASET_ONBOARDING_NOT_AVAILABLE",
+        f"This engine cannot start a run from {fields} yet. Upload the file and run against upload_id.",
+    )
+
+
 @router.post(
     "/runs",
     response_model=RunCreatedResponse,
@@ -164,8 +195,16 @@ def create_run_endpoint(
     jobs: JobsDep,
     response: Response,
 ) -> RunCreatedResponse | JSONResponse:
-    """Validate synchronously; `409` with the full report, or `202` with a run that is already pollable."""
+    """Validate synchronously; `409` with the full report, or `202` with a run that is already pollable.
+
+    `RunRequest` carries three fields Phase 2 will use and this phase cannot honour: a composite
+    `primary_key`, `dataset_id` and `client_id`. They are refused here rather than dropped -
+    accepting a request and quietly ignoring half of it is how a user comes to believe their rows
+    were joined on two columns when they were joined on one.
+    """
     use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
+    primary_key = sole_key(body.primary_key, what="A run")
+    _reject_unimplemented_onboarding(body)
     upload = load_upload(storage, body.upload_id)
     if upload.mode is not body.mode:
         raise http_error(
@@ -183,7 +222,7 @@ def create_run_endpoint(
         report = validate.validate_for_training(
             read_frame(storage, upload, profile_row_cap(config)),
             config,
-            primary_key=body.primary_key,
+            primary_key=primary_key,
             target=body.target or "",
             acknowledged=config.validation.acknowledged,
             upload_id=body.upload_id,
@@ -197,7 +236,7 @@ def create_run_endpoint(
         report = validate.validate_against_schema(
             read_frame(storage, upload, profile_row_cap(config)),
             storage.read_model(version.schema_key, FeatureSchema),
-            primary_key=body.primary_key,
+            primary_key=primary_key,
             config=config,
             acknowledged=config.validation.acknowledged,
             upload_id=body.upload_id,
@@ -217,7 +256,7 @@ def create_run_endpoint(
         profile=profile,
         report=report,
         mode=body.mode,
-        primary_key=body.primary_key,
+        primary_key=primary_key,
         target=body.target,
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
@@ -496,7 +535,7 @@ def build_score_job(
                 storage=storage,
                 registry=registry,
                 cancel=cancel,
-                primary_key=record.primary_key,
+                primary_key=sole_key(record.primary_key, what="A scoring run"),
                 target=record.target,
                 upload_key=upload.source_key,
                 model_version_id=record.model_version_id,

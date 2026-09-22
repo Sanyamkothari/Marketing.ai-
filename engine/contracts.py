@@ -23,6 +23,7 @@ from engine.config import (
     ColumnType,
     Metric,
     ModelFamily,
+    PrimaryKey,
     ProblemType,
     Recipe,
     ResolvedConfig,
@@ -31,6 +32,8 @@ from engine.config import (
     StrictBase,
     ThresholdMode,
     UseCaseConfig,
+    key_columns,
+    sole_key,
 )
 
 __all__ = [
@@ -50,6 +53,8 @@ __all__ = [
     "CalibrationSummary",
     "CategoryCount",
     "ColumnProfile",
+    "ComputeBackend",
+    "ComputeInfo",
     "ConfusionMatrix",
     "CostEstimate",
     "DatasetFingerprint",
@@ -72,12 +77,14 @@ __all__ = [
     "FeatureSchemaColumn",
     "HistogramBin",
     "KpiValue",
+    "LLMUsage",
     "Leaderboard",
     "LeaderboardEntry",
     "MetricValue",
     "ModelStatus",
     "ModelVersion",
     "PrepareReport",
+    "PrimaryKey",
     "Reason",
     "RowExplanation",
     "RowRemoval",
@@ -99,8 +106,10 @@ __all__ = [
     "ValidationReport",
     "artefact_model",
     "dump_artefact",
+    "key_columns",
     "load_artefact",
     "scores_csv_columns",
+    "sole_key",
 ]
 
 
@@ -160,6 +169,13 @@ class Direction(StrEnum):
     UP = "up"
     DOWN = "down"
     NONE = "none"
+
+
+class ComputeBackend(StrEnum):
+    """What carried a run: this process, or a managed SageMaker job (Phase 4a)."""
+
+    LOCAL = "local"
+    SAGEMAKER = "sagemaker"
 
 
 class ReasonMethod(StrEnum):
@@ -226,7 +242,7 @@ class RunRecord(Artefact):
     row_count: int | None = Field(
         default=None, description="Rows in the upload, taken from the dataset profile."
     )
-    primary_key: str = Field(description="Column identifying each entity.")
+    primary_key: PrimaryKey = Field(description="Column, or columns, identifying each entity.")
     target: str | None = Field(default=None, description="Target column; set for training runs only.")
     problem_type: ProblemType = Field(
         description="Problem type resolved for this run, detected or overridden."
@@ -1083,7 +1099,7 @@ class FeatureSchema(Artefact):
 
     use_case_id: str = Field(description="Use case the schema belongs to.")
     model_version_id: str = Field(description="Model version the schema was saved with.")
-    primary_key: str = Field(description="Primary-key column.")
+    primary_key: PrimaryKey = Field(description="Primary-key column, or columns.")
     target: str | None = Field(description="Target column; null for scoring-only schemas.")
     problem_type: ProblemType = Field(description="Problem type the model was fitted for.")
     columns: tuple[FeatureSchemaColumn, ...] = Field(
@@ -1113,6 +1129,46 @@ class CostEstimate(Artefact):
     basis: str = Field(description="How the estimate was derived, in plain words.")
 
 
+class LLMUsage(Artefact):
+    """What a run spent on language models.
+
+    Counted, never estimated: `calls`, `input_tokens` and `output_tokens` are what the client was
+    told by the provider, and `cost_estimate_usd` is `None` unless a real billed figure exists -
+    the same rule `CostEstimate.estimated_usd` follows, because a fabricated zero cannot be told
+    apart from a measurement of something free. A run that called no model carries `None` for the
+    whole object rather than a zeroed one.
+    """
+
+    calls: int = Field(description="Completion and embedding requests the run made.")
+    input_tokens: int = Field(description="Tokens sent, totalled over every call.")
+    output_tokens: int = Field(description="Tokens returned, totalled over every call.")
+    cost_estimate_usd: float | None = Field(
+        default=None, description="Billed cost when the provider reports one; null when nothing was billed."
+    )
+    model_ids: tuple[str, ...] = Field(
+        default=(), description="Every model the run used, sorted, so a manifest names its sources."
+    )
+
+
+class ComputeInfo(Artefact):
+    """Where a run actually ran, and what that cost.
+
+    `job_arn` and `instance_type` are null for a local run because a local run has neither; the
+    fields are not padded with a placeholder. `cost_estimate_usd` follows `CostEstimate`: null
+    unless something was billed.
+    """
+
+    backend: ComputeBackend = Field(description="Which compute carried the run: local or sagemaker.")
+    job_arn: str | None = Field(default=None, description="ARN of the managed job; null for a local run.")
+    instance_type: str | None = Field(
+        default=None, description="Instance the managed job ran on; null for a local run."
+    )
+    duration_s: float = Field(description="Wall-clock seconds the compute was occupied.")
+    cost_estimate_usd: float | None = Field(
+        default=None, description="Billed cost when the platform reports one; null when nothing was billed."
+    )
+
+
 class RunManifest(Artefact):
     """`run_manifest.json` - one flat record per run, written for every run.
 
@@ -1123,6 +1179,13 @@ class RunManifest(Artefact):
     """
 
     run_id: str = Field(description="Run this manifest describes.")
+    primary_key: PrimaryKey = Field(description="Column, or columns, that identified a row.")
+    dataset_id: str | None = Field(
+        default=None, description="Onboarded dataset the run consumed; null for a direct upload."
+    )
+    client_id: str | None = Field(
+        default=None, description="Client the dataset belongs to; null when no client was named."
+    )
     recipe: Recipe | None = Field(
         default=None,
         description="Training choices; null for a scoring run that did not fit a model.",
@@ -1138,6 +1201,12 @@ class RunManifest(Artefact):
     )
     duration_s: float = Field(description="Wall-clock seconds from run start to final state.")
     cost_estimate: CostEstimate = Field(description="What the run cost to produce.")
+    llm_usage: LLMUsage | None = Field(
+        default=None, description="Language-model usage; null when the run called no model."
+    )
+    compute: ComputeInfo | None = Field(
+        default=None, description="Where the run ran and what it cost; null when nothing recorded it."
+    )
     created_at: AwareDatetime = Field(description="UTC time the manifest was written.")
 
 
@@ -1250,3 +1319,21 @@ def dump_artefact(model: BaseModel) -> str:
 def load_artefact(filename: str, payload: str | bytes) -> BaseModel:
     """Validate a serialised artefact against the model registered for its filename."""
     return artefact_model(filename).model_validate_json(payload)
+
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file - run `black` on
+# what you paste, not on the file, if the formatter would reflow other lines.
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----

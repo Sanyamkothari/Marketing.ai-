@@ -55,3 +55,19 @@ run: ## serve the API on :8000
 
 clean:
 	rm -rf $(VENV) .pytest_cache .mypy_cache .ruff_cache
+
+# ==========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4). Add targets inside your own
+# block: `onboarding-test`, `generative-test`, `aws-test`. Declare them in a
+# `.PHONY:` line of your own and give each a `## help text` comment so it
+# appears in `make help`. Do not change setup, test, test-all or lint.
+# ==========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----

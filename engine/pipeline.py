@@ -47,13 +47,22 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Final, TypeVar, cast
 
 from engine import __version__
-from engine.config import ModelFamily, ResolvedConfig, RunMode, UseCaseConfig, recipe_from_config
+from engine.config import (
+    ModelFamily,
+    PrimaryKey,
+    ResolvedConfig,
+    RunMode,
+    UseCaseConfig,
+    recipe_from_config,
+)
 from engine.contracts import (
     MODEL_DIRECTORY,
+    ComputeInfo,
     CostEstimate,
     DatasetFingerprint,
     FeatureImportance,
     FeatureSchema,
+    LLMUsage,
     ModelStatus,
     RunError,
     RunManifest,
@@ -372,6 +381,7 @@ class _ManifestBuilder:
     """
 
     run_id: str
+    primary_key: PrimaryKey
     seed: int
     started: float
     fingerprint: DatasetFingerprint | None = None
@@ -379,6 +389,10 @@ class _ManifestBuilder:
     metrics: dict[str, float] = field(default_factory=dict)
     leaderboard_path: str | None = None
     seconds: dict[str, float] = field(default_factory=dict)
+    dataset_id: str | None = None
+    client_id: str | None = None
+    llm_usage: LLMUsage | None = None
+    compute: ComputeInfo | None = None
 
     def record(self, key: StageKey, seconds: float) -> None:
         """Remember what a stage cost, whether it finished, failed or was cancelled."""
@@ -392,6 +406,9 @@ class _ManifestBuilder:
         """The manifest as it stands; `fingerprint` is the fallback when ingest never produced one."""
         return RunManifest(
             run_id=self.run_id,
+            primary_key=self.primary_key,
+            dataset_id=self.dataset_id,
+            client_id=self.client_id,
             recipe=self.recipe,
             dataset_fingerprint=self.fingerprint if self.fingerprint is not None else fingerprint,
             seed=self.seed,
@@ -403,6 +420,8 @@ class _ManifestBuilder:
                 estimated_usd=None,
                 basis=COST_BASIS,
             ),
+            llm_usage=self.llm_usage,
+            compute=self.compute,
             created_at=utc_now(),
         )
 
@@ -513,7 +532,9 @@ class _TrainFlow:
         self._started = perf_counter()
         self._status = _StatusWriter(ctx.storage, pipeline.initial_status(ctx.run_id, ctx.mode))
         self._run = _RunWriter(ctx)
-        self._manifest = _ManifestBuilder(run_id=ctx.run_id, seed=self._seed, started=self._started)
+        self._manifest = _ManifestBuilder(
+            run_id=ctx.run_id, primary_key=ctx.primary_key, seed=self._seed, started=self._started
+        )
         self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
         for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
             # The three documents the pipeline itself owns; the manifest is written in the `finally`
@@ -1050,7 +1071,9 @@ class _ScoreFlow:
         self._started = perf_counter()
         self._status = _StatusWriter(ctx.storage, pipeline.initial_status(ctx.run_id, ctx.mode))
         self._run = _RunWriter(ctx)
-        self._manifest = _ManifestBuilder(run_id=ctx.run_id, seed=self._seed, started=self._started)
+        self._manifest = _ManifestBuilder(
+            run_id=ctx.run_id, primary_key=ctx.primary_key, seed=self._seed, started=self._started
+        )
         self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
         for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
             self._artefacts.setdefault(name, run_key(ctx.run_id, name))
@@ -1538,3 +1561,21 @@ class Pipeline:
         out. See `_ScoreFlow` for why the prepare stage writes nothing of its own.
         """
         return _ScoreFlow(self, ctx).execute()
+
+
+# ===========================================================================
+# Shared file (PARALLEL_WORK_PROTOCOL.md §4): three branches edit it at once.
+# Add code only inside your own block, at its end. Never edit above your
+# block, never reorder, never reformat the rest of the file - run `black` on
+# what you paste, not on the file, if the formatter would reflow other lines.
+# `tests/unit/test_shared_file_markers.py` fails if a block goes missing.
+# ===========================================================================
+
+# ---- PHASE-2 (onboarding) — append only below this line ----
+# ---- END PHASE-2 ----
+
+# ---- PHASE-3A (generative) — append only below this line ----
+# ---- END PHASE-3A ----
+
+# ---- PHASE-4A (aws) — append only below this line ----
+# ---- END PHASE-4A ----
