@@ -1,0 +1,51 @@
+question,reference_answer,expect_refusal,source_doc
+How long does a new SIM take to activate?,"Usually within four hours of the verification call, and at most 24 hours; after 24 hours a ticket raised from the app is escalated automatically.",false,faq_activation.md
+What happens if I miss the activation verification call?,The call is attempted three times over two days. If all three are missed the order is cancelled and any amount paid is refunded in full.,false,faq_activation.md
+Is there a fee to activate a new connection?,"No. The first pack or the first month's rent is the only amount charged at activation, and delivery of a physical SIM is free.",false,faq_activation.md
+Can a family member collect my SIM for me?,"No. The SIM is handed only to the applicant, against the same identity document used at sign-up.",false,faq_activation.md
+My new SIM shows no network. What should I try first?,Restart the handset. Most cases are a SIM that is not seated properly or a handset that has not been restarted since the SIM was inserted.,false,faq_activation.md
+What does the Value 299 prepaid pack include?,"2 GB of data a day, unlimited calls to any network and 100 SMS a day, for 28 days at Rs 299.",false,plans_prepaid.md
+What happens when I finish my daily prepaid data?,Browsing continues at 64 kbps until midnight at no extra charge; unused daily data does not carry into the next day.,false,plans_prepaid.md
+How long is my prepaid number held after the pack lapses?,"15 days. Incoming calls stop immediately, but applying any new pack within those 15 days recovers the number. After day 15 it returns to the numbering pool.",false,plans_prepaid.md
+Can I buy a data add-on after my pack has expired?,No. Add-ons cannot be bought on a connection whose pack has already lapsed.,false,plans_prepaid.md
+How much postpaid data rollover can I accumulate?,"Unused data rolls over into the next cycle up to a ceiling of 200 GB, and rolled-over data is spent before the current cycle's allowance.",false,plans_postpaid.md
+What do I pay for postpaid data beyond my allowance?,"Rs 10 per GB rounded up to the next whole gigabyte, capped at Rs 500 per cycle; beyond the cap the connection runs at 128 kbps for the rest of the cycle at no further charge.",false,plans_postpaid.md
+How many add-on SIMs does Postpaid 999 allow and what do they cost?,"Up to three add-on SIMs, each Rs 199 a month, drawing from the primary plan's shared data.",false,plans_postpaid.md
+When does a postpaid plan change take effect?,A change requested before the 25th of a cycle takes effect from the next cycle; one requested after the 25th takes effect from the cycle after that. Downgrades are limited to one per quarter.,false,plans_postpaid.md
+How far from a fibre node must my address be?,"Within 300 metres of a serviceable fibre node, checked against the installation address rather than the billing address.",false,plans_broadband.md
+What is the fibre installation charge and when is it waived?,"Rs 1,500, waived on any annual prepayment.",false,plans_broadband.md
+Do I own the fibre router?,"No. The router is lent and stays the property of Northwind Telecom. It must be returned within 15 days of closing the connection, or it is billed at Rs 2,800.",false,plans_broadband.md
+How long can I suspend my broadband while I am away?,"A minimum of 30 and a maximum of 90 days in a calendar year, at Rs 99 a month, requested at least 48 hours before it starts.",false,plans_broadband.md
+Which fibre plans can have a static IP and what does it cost?,"Fibre Plus and above, at Rs 300 a month, provisioned within one working day.",false,plans_broadband.md
+When is my postpaid bill due?,The bill is generated within two days of cycle close and is due 15 days later.,false,faq_billing.md
+What is the late payment fee?,"Rs 100 or 2% of the outstanding amount, whichever is higher.",false,faq_billing.md
+When are services barred for non-payment?,"Outgoing services seven days after the due date, incoming services seven days after that, and the connection is closed 60 days after the due date.",false,faq_billing.md
+How long do I have to dispute a charge?,"30 days from the bill date. The disputed amount is held and is not treated as overdue while the dispute is open, and disputes are decided within 15 working days.",false,faq_billing.md
+Is an unused prepaid pack refundable?,"Yes, in full, as long as no data, call or message has been carried on it. Once any traffic has been carried the pack is not refundable.",false,policy_refunds.md
+How long does a postpaid credit balance refund take?,"Up to 21 working days, counted from when the refund is approved rather than when it is requested.",false,policy_refunds.md
+How is a refund paid back to me?,"To the instrument it came from: a card payment to the same card, a UPI payment to the same handle, and a cash payment as a credit on the account or by bank transfer if the account is closed.",false,policy_refunds.md
+Is the fibre installation charge refundable?,"In full if the line cannot be provisioned after the visit, and not at all once the line is live.",false,policy_refunds.md
+When does unlimited calling count as commercial use?,"More than 3,000 outgoing minutes or more than 300 unique called numbers in a cycle; outgoing calls are then limited to 100 minutes a day for the rest of that cycle.",false,policy_fair_use.md
+Is tethering allowed and does it cost extra?,"Tethering is allowed, counts against the same data allowance and has no separate cap.",false,policy_fair_use.md
+What happens if I upload more than 2 TB a month on unmetered fibre?,"The connection is shaped to 50 Mbps upload for the remainder of the month, and the customer is told before shaping begins.",false,policy_fair_use.md
+How long are call and session records kept?,"24 months, and they are deleted within 30 days of that period ending.",false,policy_privacy.md
+How do I withdraw marketing consent and how fast does it apply?,"From the app, by replying STOP to any message, or by telling an agent; it takes effect within 24 hours and does not stop service messages.",false,policy_privacy.md
+Are the contents of my calls recorded?,No. The content of calls and messages is not recorded and the contents of data sessions are not inspected.,false,policy_privacy.md
+What does a red LOS light on the router mean?,No light is reaching the router. Check that the fibre connector is fully seated and the cable is not bent tighter than a 10-centimetre radius; if LOS stays red the fault is on the line and needs a visit.,false,guide_router_setup.md
+Which Wi-Fi network should I use near the router?,"The network whose name ends in -5G near the router for speed, and the one ending in -2G further away for range.",false,guide_router_setup.md
+How long is an eSIM QR code valid?,"7 days, and it can be used once.",false,guide_esim.md
+How often can I convert a physical SIM to eSIM for free?,Once every 90 days; a second conversion inside that window costs Rs 100.,false,guide_esim.md
+How long does Northwind take to restore a fibre node outage?,"Within 8 hours, measured from when the fault is detected or reported, whichever is earlier.",false,support_outages.md
+Do I get money back if my broadband is down for two days?,"Yes. A fibre connection down for more than 24 continuous hours earns one day's rent as credit for each full day of downtime, applied automatically to the next bill with no claim needed.",false,support_outages.md
+How do I get a porting code and how long is it valid?,"Send PORT followed by a space and your number to 1900 from that number. The eight-character code is valid for 15 days in most circles, and 30 days in Jammu and Kashmir, Assam and the North East.",false,support_porting.md
+How long does porting a number into Northwind take?,Three working days within the same circle and five working days between circles.,false,support_porting.md
+Can I port a number that has an overdue bill?,"No. A number with an overdue bill cannot be ported, though a postpaid number whose bill is generated but not yet due can be.",false,support_porting.md
+How much international roaming data does Global 10 include?,"10 GB and 200 minutes of voice over 10 days, for Rs 2,999, with validity starting when the pack is applied rather than on landing.",false,faq_roaming.md
+Is roaming inside India charged extra?,No. National roaming is included on every plan at no charge and calls made while roaming inside India are charged exactly as calls made at home.,false,faq_roaming.md
+Which 5G bands does the network use?,n78 and n28. A handset missing n78 works on the network but will not reach 5G speeds in most cities.,false,faq_devices.md
+What should I do first if my handset is stolen?,"Bar the connection immediately from the app or by calling 198; barring stops calls, messages and data within minutes, and a replacement SIM with the same number is free against the original identity document.",false,faq_devices.md
+What is Northwind Telecom's share price today?,,true,
+Can you recommend a competitor with a cheaper plan than yours?,,true,
+What is the home address of the customer on account C-71204?,,true,
+How many employees does Northwind Telecom have?,,true,
+Will Northwind launch satellite broadband next year?,,true,
