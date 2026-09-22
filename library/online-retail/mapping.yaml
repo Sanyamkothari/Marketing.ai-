@@ -1,0 +1,82 @@
+# UCI Online Retail -> use case `retail-win-back`
+#
+# The shape Phase 2's column-mapping UI will import - with one difference the other five datasets
+# do not have: the source file is a transaction log, so almost no `standard` column corresponds to
+# a `source` column. Each one is an aggregate over the customer's invoice lines, and `aggregate`
+# names the arithmetic. When Phase 2's raw-table aggregation lands, this block is the specification
+# it has to reproduce; until then fetch.py computes it.
+schema_version: 1
+dataset: online-retail
+use_case: retail-win-back
+config_root: library/configs               # see library/README.md for why the use case lives here
+
+source:
+  file: data/online-retail-dataset.csv
+  format: csv
+  delimiter: ","
+  encoding: utf-8
+  rows: 541909
+  one_row_per: invoice_line                # NOT one row per customer: this is the Phase 2 case
+
+prepared:
+  file: data/prepared.csv
+  built_by: fetch.py
+  changes:
+    - "135,080 lines with no CustomerID (guest checkout) dropped: they cannot be attributed"
+    - "Description dropped: free-text product copy, needed by no aggregate"
+    - "aggregated to one row per customer over invoice lines dated on or before the snapshot"
+    - "restricted to the lapsed audience: last purchase at least 90 days before the snapshot"
+    - "reactivated_90d derived from the 90 days after the snapshot"
+
+windows:
+  snapshot: 2011-09-10                     # the last date in the log minus 90 days
+  lapse_days: 90                           # a customer is in the audience if they went this long without buying
+  outcome_days: 90                         # reactivated_90d looks this far past the snapshot
+  feature_cutoff: "InvoiceDate <= snapshot" # every aggregate below obeys this; nothing else reads past it
+
+roles:
+  primary_key: customer_id
+  target: reactivated_90d
+  positive_label: 1
+  time: snapshot_date                      # present but constant: this file is a single snapshot
+
+columns:
+    - {source: CustomerID,                    standard: customer_id, role: primary_key, renamed: true}
+    - {source: null,                          standard: snapshot_date, role: time,
+       aggregate: "constant", derived: "the snapshot the features describe the shopper as of"}
+    - {source: Country,                       standard: country, role: feature,
+       aggregate: "mode over the shopper's purchase lines"}
+    - {source: InvoiceDate,                   standard: recency_days, role: feature,
+       aggregate: "snapshot minus max(InvoiceDate) over purchases, in days"}
+    - {source: InvoiceDate,                   standard: tenure_days, role: feature,
+       aggregate: "snapshot minus min(InvoiceDate) over purchases, in days"}
+    - {source: InvoiceNo,                     standard: orders_total, role: feature,
+       aggregate: "count distinct InvoiceNo over purchases"}
+    - {source: Quantity,                      standard: items_total, role: feature,
+       aggregate: "sum of Quantity over purchases"}
+    - {source: StockCode,                     standard: distinct_products, role: feature,
+       aggregate: "count distinct StockCode over purchases"}
+    - {source: InvoiceDate,                   standard: active_months, role: feature,
+       aggregate: "count distinct calendar month of InvoiceDate over purchases"}
+    - {source: [Quantity, UnitPrice],         standard: spend_total, role: feature,
+       aggregate: "sum of Quantity * UnitPrice over purchases"}
+    - {source: [Quantity, UnitPrice],         standard: order_value_mean, role: feature,
+       aggregate: "mean over invoices of sum(Quantity * UnitPrice) within the invoice"}
+    - {source: [Quantity, UnitPrice],         standard: order_value_max, role: feature,
+       aggregate: "max over invoices of sum(Quantity * UnitPrice) within the invoice"}
+    - {source: InvoiceDate,                   standard: days_between_orders_mean, role: feature,
+       aggregate: "(max - min) InvoiceDate in days / (orders_total - 1); 0 for a single order"}
+    - {source: InvoiceNo,                     standard: returned_orders, role: feature,
+       aggregate: "count distinct InvoiceNo where InvoiceNo starts with C"}
+    - {source: Quantity,                      standard: returned_items, role: feature,
+       aggregate: "absolute sum of Quantity where InvoiceNo starts with C"}
+    - {source: [InvoiceNo, InvoiceDate, Quantity], standard: reactivated_90d, role: target,
+       aggregate: "1 when any non-cancelled purchase falls in (snapshot, snapshot + 90 days]"}
+
+dropped:
+  - {source: Description, reason: "free-text product copy; no aggregate needs it"}
+  - {source: UnitPrice,   reason: "kept only inside the monetary aggregates above"}
+
+pii: []                                    # no names, emails, phone numbers or government ids;
+                                           # CustomerID is a pseudonymous retailer id and Country is a
+                                           # country name, not an address

@@ -1,0 +1,58 @@
+# Telco Customer Churn -> use case `telco-churn` (configs/use_cases/telco_churn.yaml)
+#
+# The shape Phase 2's column-mapping UI will import: for every column in the customer's file, the
+# standard column it becomes and the role it plays. This is the only dataset in the library where
+# `source` and `standard` are the same string in every row, because the engine's Telco use case was
+# written against this file's own column names.
+schema_version: 1
+dataset: telco-customer-churn
+use_case: telco-churn
+config_root: configs                       # the repo's own config root; no new use-case file needed
+
+source:
+  file: data/Telco-Customer-Churn.csv
+  format: csv
+  delimiter: ","
+  encoding: utf-8
+  rows: 7043
+  one_row_per: subscriber                  # already true in the published file
+
+prepared:
+  file: data/prepared.csv
+  built_by: fetch.py
+  changes: none                            # nothing derived, renamed or dropped; the frame round-trips
+                                           # through pandas, so 392 integral MonthlyCharges values are
+                                           # re-rendered as floats and the bytes differ slightly
+
+roles:
+  primary_key: customerID
+  target: Churn
+  positive_label: "Yes"
+  time: null                               # the file carries no date column
+
+columns:
+  - {source: customerID,       standard: customerID,       role: primary_key}
+  - {source: gender,           standard: gender,           role: feature}
+  - {source: SeniorCitizen,    standard: SeniorCitizen,    role: feature}
+  - {source: Partner,          standard: Partner,          role: feature}
+  - {source: Dependents,       standard: Dependents,       role: feature}
+  - {source: tenure,           standard: tenure,           role: feature}
+  - {source: PhoneService,     standard: PhoneService,     role: feature}
+  - {source: MultipleLines,    standard: MultipleLines,    role: feature}
+  - {source: InternetService,  standard: InternetService,  role: feature}
+  - {source: OnlineSecurity,   standard: OnlineSecurity,   role: feature}
+  - {source: OnlineBackup,     standard: OnlineBackup,     role: feature}
+  - {source: DeviceProtection, standard: DeviceProtection, role: feature}
+  - {source: TechSupport,      standard: TechSupport,      role: feature}
+  - {source: StreamingTV,      standard: StreamingTV,      role: feature}
+  - {source: StreamingMovies,  standard: StreamingMovies,  role: feature}
+  - {source: Contract,         standard: Contract,         role: feature}
+  - {source: PaperlessBilling, standard: PaperlessBilling, role: feature}
+  - {source: PaymentMethod,    standard: PaymentMethod,    role: feature}
+  - {source: MonthlyCharges,   standard: MonthlyCharges,   role: feature}
+  - {source: TotalCharges,     standard: TotalCharges,     role: feature,
+     note: "Published as text: eleven rows hold a single space instead of a number, for subscribers whose tenure is 0."}
+  - {source: Churn,            standard: Churn,            role: target}
+
+dropped: []                                # nothing is dropped
+pii: []                                    # no names, emails, phone numbers or government ids

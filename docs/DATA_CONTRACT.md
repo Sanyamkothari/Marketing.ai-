@@ -631,3 +631,94 @@ which is why `details.model_version_id` is in every mismatch finding.
 The stored `categories`, `minimum` and `maximum` are the fitted levels and ranges. They are what
 lets the engine tell a genuinely new category from a typo later, and they are the baseline the
 drift report compares a scoring file against.
+
+---
+
+## 8. What a generative use case uploads instead (Phase 3a)
+
+Everything above describes a **flat table with one row per entity**, which is what a predictive use
+case is trained and scored on. A generative use case is not trained on a table at all, so it
+uploads two different things and neither goes through the validation table above. Both are read by
+`engine/generative/`, and the codes below are the literal ones that module raises.
+
+### 8.1 The knowledge base
+
+The documents the assistant answers **from**, and the only thing it is allowed to answer from.
+
+- Accepted types: **PDF, DOCX, Markdown, plain text** (`generative.knowledge_base.accepted_types`).
+  Anything else is refused per file, not per upload.
+- At most **200 documents** and **200 MB in total** (`max_docs`, `max_mb`). The megabyte limit is
+  the whole knowledge base rather than one file, and it is checked before a byte is parsed.
+- **Headings matter more than formatting.** Chunking never crosses a heading, so a heading is what
+  a citation names when it says *where* in a document an answer came from, and it is embedded in
+  front of the passage because the words a question uses are very often in the heading and nowhere
+  in the prose beneath it (DEC-217). A document with no headings still indexes; it is recorded with
+  `DOCUMENT_NO_HEADINGS` and every citation into it can only name the file.
+
+| Code | When | Message |
+|---|---|---|
+| `DOCUMENT_TYPE_UNSUPPORTED` | Extension is not in `accepted_types` | "{name} is a {extension} file, which this knowledge base does not accept." |
+| `DOCUMENT_EMPTY` | The parser found no text | "{name} has no text in it, so there is nothing to index." |
+| `DOCUMENT_UNREADABLE` | Corrupt, or password-protected | "{name} could not be read; the file may be corrupt or password-protected." |
+| `KNOWLEDGE_BASE_TOO_LARGE` | Past `max_docs` or `max_mb` | "This knowledge base would hold {documents} documents and {megabytes} MB." |
+| `INDEX_EMPTY` | **Every** document failed | "The {index_id} index holds no chunks, so no question can be answered from it." |
+
+**One bad document does not fail the build.** A corrupt PDF among two hundred costs that PDF and
+nothing else: the failure is recorded against its own entry in the index manifest with the code
+that explains it, and the build carries on. Only a build where *every* document failed raises, and
+it raises `INDEX_EMPTY`, because an index with no chunks can answer nothing.
+
+**PII in a knowledge document is warned about, never redacted.** This is the opposite of the rule
+for the uploaded table, where `PII_DETECTED` is a finding about a customer's data. These are the
+client's **own published documents**, and the support address or escalation number printed in one is
+frequently the very thing a question is about - redacting it would damage the answer that address is
+the point of. So the manifest carries `PII_IN_DOCS` naming the kinds found, never a value, and the
+text is indexed exactly as written. The difference is whose data it is (DEC-216). A document that
+genuinely should not have been published is the operator's to withdraw; the engine tells them, and
+does not decide it for them.
+
+### 8.2 The reference set
+
+An optional Q&A file the index is **graded** against, and the only reason a faithfulness or
+correctness number exists. Without one an index still answers questions; it just has no score.
+
+| Column | Default name | Required | What it holds |
+|---|---|---|---|
+| Question | `question` | yes | What a customer would ask. Configurable via `generative.reference_set.question_column`. |
+| Reference answer | `reference_answer` | yes | The answer a correct reply is graded against. Configurable. |
+| Refusal flag | `expect_refusal` | yes | True where the documents genuinely do not answer the question. Configurable. |
+| Source document | `source_doc` | yes | Which document should have been retrieved. **Not configurable.** |
+
+`source_doc` is fixed where the other three are renameable, because it is the evaluation's own
+bookkeeping rather than a client-facing field: the other three are things a client might reasonably
+call something else, and this one exists only so retrieval can be graded at all.
+
+Two things about it are worth stating plainly, because both have caused real bugs:
+
+- It is matched on the document's **stem**, so `faq_billing.md`, `faq_billing.pdf` and `faq_billing`
+  all name the same document. A reference set written against one export of a corpus still grades a
+  differently-formatted export of it.
+- A row marked `expect_refusal` is **not** graded on retrieval, whether or not its `source_doc` cell
+  happens to be filled in. It has no document it ought to have found, and folding it into the
+  retrieval hit rate would measure retrieval against rows nobody wanted retrieval for.
+
+| Code | HTTP | When | Message |
+|---|---|---|---|
+| `REFERENCE_SET_INVALID` | 422 | A required column is absent | "The reference set is missing the {column} column." |
+
+The header is checked **on the request**, before the build is queued, so a reference set the grader
+would reject is refused immediately rather than twenty seconds later inside a status document the
+caller has to go and poll for.
+
+### 8.3 What is never uploaded
+
+The hybrid capabilities - root-cause summaries and campaign copy - upload **nothing at all**. They
+read a finished predictive run's own artefacts, which already passed everything above. That is what
+"hybrid" means here, and the dependency runs one way (DEC-210): the predictive engine produces the
+numbers, the generative engine explains or acts on them, and no generative module is imported by
+`engine.pipeline` or anything under `engine.stages`.
+
+Complaint text is the one customer-written field either of them reads, and it is **always redacted**
+before it reaches a prompt - the mirror of the knowledge-base rule above, and for the same reason
+stated the other way round: those are a customer's own words, never published, and they reach a
+model only as evidence.

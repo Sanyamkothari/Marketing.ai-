@@ -30,3 +30,9 @@ build/
 
 # node dependencies (prototype tests and screenshot tooling)
 node_modules/
+
+# Phase 4a
+.venv-infra/
+infra/cdk.out/
+infra/.cdk.staging/
+.image-digest

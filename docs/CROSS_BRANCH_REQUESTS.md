@@ -98,6 +98,219 @@ on everything up to the pipeline boundary with no ruling at all. The smallest ch
 it is one line in §3: add `engine/pipeline.py`'s `StageContext` and its `sole_key()` call sites to
 Phase 2's pre-approved exception list.
 
+### 2026-09-22 — library-datasets → whoever owns `tests/unit/test_config_loading.py`: two assertions forbid a second industry
+
+**What is needed.** Two assertions relaxed, so that a second industry and a further use case can be
+added to `configs/` without turning the suite red. The library's whole purpose is to show that a
+second, third and fourth industry need configuration and nothing else, and adding
+`configs/industries/banking.yaml` fails `test_industries_list_and_telecom_loads`
+(`assert list_industries() == ("telecom",)`, line 109); adding
+`configs/use_cases/bank_term_deposit.yaml` fails
+`test_industry_available_entries_have_files_and_matching_stage_names`
+(`assert sorted(available) == sorted(list_use_case_ids())`, line 137), which pins the telecom
+industry file to listing *every* shipped use case. A third would follow:
+`tests/unit/test_generated_files.py::test_templates_are_up_to_date` needs a generated pair in
+`templates/` for each new use case, and `templates/` is not this branch's either. Re-confirmed
+against the merged tree on 2026-09-22, after `ai-onboarding-assistant` was promoted to available:
+both assertions are unchanged and both still fail.
+
+The smallest change is to make each assertion about the telecom industry rather than about the
+whole config directory: `assert "telecom" in list_industries()`, and in the second test drop the
+`== sorted(list_use_case_ids())` line (the loop above it already checks that every id telecom lists
+has a file and a matching stage name) or narrow it to the ids telecom actually owns. Nothing in
+`engine/` needs to change — `load_industry`, `list_industries` and every loader already take a
+config root and already validate each file on its own (DEC-038). The engine is happy with four
+industries; two test assertions are not.
+
+**What I did meanwhile.** The library's four industry files, four use-case files and their
+generated templates went into `library/configs/`, a second config root the engine already supports
+(`MARKETING_AI_CONFIG_DIR`, or `root=` on every loader). Its `engine.yaml` is a **symlink** to
+`configs/engine.yaml`, so there is exactly one copy of the defaults and nothing to drift, and
+`library/run_engine.py` takes `--config-root`. Nothing under `configs/`, `templates/`, `engine/`,
+`api/`, `ui/` or `tests/` was touched and no test broke. The five datasets ran end to end against
+that root; the telco dataset runs against the repository's own `configs/`, because it reuses the
+shipped `telco-churn` use case, and proves the same point inside the product. When the two
+assertions are relaxed, moving the configs is `git mv library/configs/industries/*.yaml
+configs/industries/`, the same for `use_cases/`, then `make generate`. Recorded as DEC-400.
+
+### 2026-09-22 — library-datasets → whoever owns `engine/stages/prepare.py`: two PII detectors that disagree
+
+**What is needed.** One PII detector, not two. `engine/stages/validate.py:390` says "PII detection
+has exactly **one** definition in the engine - `engine.stages.ingest.detect_pii`". It does not:
+`engine/stages/prepare.py:511` has a second, `_detect_pii`, with its own `_PII_VALUE_PATTERNS`, and
+the two differ in three ways — ingest skips FLOAT, BOOLEAN, DATE and DATETIME columns
+(`_PII_TYPES`, line 824) and prepare examines every column; ingest uses `fullmatch` and prepare
+`search`; ingest applies a per-detector match rate *and* a distinct-value ratio, prepare a flat
+50 %.
+
+The phone-number pattern is `\+?\d[\d\s().-]{7,17}\d`, and an ISO date matches it:
+`re.compile(r'\+?\d[\d\s().-]{7,17}\d').fullmatch('2011-09-10')` is a match. On the
+`library/online-retail` win-back file, whose `snapshot_date` is `2011-09-10` in every row, one run
+produced `validation.json` with a single `CONSTANT_COLUMN` finding and no `PII_DETECTED` — ingest's
+type gate correctly skipped a DATE column — while `prepare.json` for the same run carries
+`pii_columns: ["snapshot_date"]` and a `redact` transform replacing its values with `[REDACTED]`.
+The engine told the user one thing and did another.
+
+Here it changes nothing: the column was constant and headed for the bin anyway. On a file with
+several snapshot dates — the shape `split.type: time_based` exists for — a live date column would
+be silently redacted with nothing in the validation report to say so. The smallest change is to
+delete `prepare._detect_pii` and `_PII_VALUE_PATTERNS` and call `ingest.detect_pii` per column,
+which is what the validate docstring already claims happens; failing that, give prepare ingest's
+type gate, the one line `if inferred not in _PII_TYPES: return ()`.
+
+**What I did meanwhile.** Nothing was blocked. The run finished, and the discrepancy is reported in
+full in `library/online-retail/run_report.md` under "A discrepancy worth recording", with the
+artefact keys quoted, so the next reader meets it as a known issue rather than a surprise.
+
+### 2026-09-22 — library-datasets → whoever owns `engine/config.py`: a template column name cannot contain a dot
+
+**What is needed.** Either a widened pattern or one line in the data contract.
+`TemplateColumn.name` is `Annotated[str, Field(..., pattern=r"^[A-Za-z_][A-Za-z0-9_]*$")]`
+(`engine/config.py:1144`, as of the merge of 2026-09-22). Two of the six public datasets publish dotted column names, and one of
+them is a target: UCI Bank Marketing has `emp.var.rate`, `cons.price.idx`, `cons.conf.idx` and
+`nr.employed`, and UCI Default of Credit Card Clients has `default.payment.next.month`. A dotted
+name is legal in a CSV header, in pandas and in AutoGluon; the engine accepts it as an ordinary
+feature. Only the template refuses it, and `_check_template` then rejects the whole use case with
+`TEMPLATE_TARGET_MISMATCH` when the target is one of them. The only workaround inside the schema is
+to leave `template.columns` empty, which costs the use case its generated template and its
+`TARGET_MISSING` hint.
+
+Either widen the pattern to allow interior dots (`^[A-Za-z_][A-Za-z0-9_.]*$` — the name is used as
+a CSV header and a dictionary key), or add a line to `docs/DATA_CONTRACT.md` §7 saying template
+column names are identifiers, so a file with dotted headers is expected to need a mapping step. The
+second is cheaper and probably the better answer.
+
+**What I did meanwhile.** Renamed the five columns to their underscored form in each dataset's
+`fetch.py` and recorded every rename in its `mapping.yaml`, which is what a mapping layer is for
+and what Phase 2's column-mapping UI will absorb. Both use cases carry full templates and the
+source names are not lost. Recorded as DEC-404.
+
+### 2026-09-22 — library-datasets → whoever owns `engine/stages/evaluate.py`: `threshold.mode: auto` can call every row positive
+
+**What is needed.** A guard in the `auto` threshold search. `auto` maximises F1 on the validation
+split, and on a weak model over a base rate near 50 % that maximum really can be at "predict
+everything positive". On `library/online-retail` it was: threshold 0.3148, recall 1.0, specificity
+0.0, precision 0.4110 — exactly the test-split positive rate — and accuracy 0.4110.
+
+Nothing is mis-computed, and the score ranking, the bands and the decile chart are unaffected
+because those read the score rather than the threshold. But the Model page would report 100 %
+recall, which reads as a triumph and means the model made no decision at all. The smallest change
+is to skip candidate thresholds whose confusion matrix has no predicted negatives (or no predicted
+positives) and take the best remaining one; if none qualifies, fall back to 0.5 and say so in
+`threshold_detail`, which already exists to carry exactly that sentence.
+
+**What I did meanwhile.** Nothing was blocked. The numbers are reported as measured in
+`library/online-retail/run_report.md`, with a paragraph explaining why 100 % recall is not good
+news, so nobody quotes it as a result.
+
+
+### 2026-09-22 — library-datasets → human reviewer: `README.md` has no block a non-phase branch may write in
+
+**What is needed.** A ruling, and if it goes the obvious way, one line in `README.md`. The protocol
+gives `README.md` three marked blocks — PHASE-2, PHASE-3A, PHASE-4A — and this branch is none of
+them, so there is nowhere it may legally append. The result is that `docs/LIBRARY.md`, the six
+public datasets, the four extra industries and the demo script are not reachable from the
+repository's front door: `README.md` §"Where things are written down" lists `DECISIONS.md`,
+`DATA_CONTRACT.md`, `API.md`, `AWS_DEPLOYMENT.md` and `CROSS_BRANCH_REQUESTS.md`, and a reader who
+never opens `library/` will not know the library exists.
+
+Either add a fourth marker block for work that is not one of the three phases, or paste this line
+into the existing list yourself:
+
+> [`docs/LIBRARY.md`](docs/LIBRARY.md) is the public dataset library: six public datasets across
+> five industries, run through the engine on configuration alone, with what each run actually
+> scored and what needed a code change.
+
+**What I did meanwhile.** Did not touch `README.md`. Every library document cross-links to the
+others — `docs/LIBRARY.md` ↔ `library/README.md` ↔ `library/DEMO_SCRIPT.md` ↔ each dataset's
+`README.md` and `run_report.md` — so the set is navigable from any one of them, and
+`docs/DECISIONS.md` (DEC-400 … DEC-411) names `docs/LIBRARY.md`. Only the entry point from
+`README.md` is missing.
+
+
+### 2026-09-22 — phase-4a-aws → whoever owns `engine/stages/train.py`: one line, after `predictor.save()`
+
+**What is needed.** Nothing from anybody; this is the announcement §3 asks for when a branch has to
+touch a frozen file. `engine/stages/train.py` is on §3's frozen list and it has gained exactly one
+statement — `publish_local_path(storage, predictor_key)` — plus the comment above it, immediately
+after `predictor.save()` and before the leaderboard.
+
+The reason is the one problem Phase 4a could not solve at the seam. `Storage.local_path()` hands a
+caller a `Path`, and AutoGluon writes a whole directory tree through it. A `Path` has no close
+event, so a remote store has no moment at which it can know the caller is finished and upload what
+was written: `local_path` on S3 can only be a *mirror*, and a mirror that is never published is a
+model that exists on a container's disk until the container is destroyed. Widening the `Storage`
+protocol was not an option — §2 freezes its member list and four fakes implement it — so the write
+direction became `SupportsLocalMirror.publish_local_path()`, an additive capability protocol with a
+free-function dispatcher that **no-ops** for a store that does not implement it (DEC-312).
+
+`LocalStorage` does not implement it, so on a laptop the added line does nothing at all: the same
+files, in the same place, at the same moment. On S3 it is what makes the model survive.
+
+The placement is not arbitrary and is the part worth reviewing. It is immediately after `save()`
+and *before* the leaderboard, the scorer fit and everything else that can raise, so a run that
+fails later still has its predictor. AutoGluon 1.6.3 was measured not to write into the directory
+again after `save()` — a 14-file snapshot taken at this line is byte-identical to one taken after a
+later `load()` + `predict()` — so nothing is missed by publishing early.
+
+**What I did meanwhile.** Nothing was blocked, and nothing else in the file was touched: the diff
+against the frozen version is the one statement and its comment. If the ruling is that a frozen
+file may not take even this, the alternative is a wrapper in `engine/pipeline.py` that calls
+`publish_local_path` after `run_train` returns — which is strictly worse, because the artefact is
+then unpublished across every line of the stage that can fail, which is most of them.
+### 2026-09-22 — reviewer → phase-4a-aws and human reviewer: `make test-all` will bill Bedrock once AWS credentials exist
+
+**What is needed.** A one-line change before Phase 4a puts AWS credentials anywhere CI can see them.
+`tests/integration/test_bedrock_smoke.py` calls Bedrock for real. `pyproject.toml` declares the
+marker as *"costs money, needs credentials, opt-in with `-m bedrock`"* and the module carries
+`pytestmark = [..., pytest.mark.bedrock]` — but nothing implements the opt-in: `addopts` is
+`-q --strict-markers` with no marker filter, `make test-all` is plain `pytest`, and
+`.github/workflows/nightly.yml` runs `make test-all`.
+
+The suite skips today only because the three Bedrock env vars and AWS credentials are absent. Both
+gates are configuration, not intent, so the protection inverts exactly where it matters: the machine
+most likely to carry both is the Phase 4a agent's, and the nightly runner as soon as Phase 4a adds
+credentials to CI — which is that branch's natural next step. From then on every nightly makes paid
+calls nobody asked for, and the first signal is the invoice.
+
+`make test` already deselects with `-m "not slow"`, so the pattern exists. Either `make test-all`
+becomes `pytest -m "not bedrock"` or `addopts` carries it; `-m bedrock` then genuinely opts in.
+`Makefile` and `pyproject.toml` are both Shared files (§3), so this is a human call rather than a
+branch's to take unilaterally.
+
+**What I did meanwhile.** Did not run the suite — the standing instruction is never to run `-m aws`
+or `-m bedrock`. Verified the rest by reading: the double gate is correct and both skips are loud and
+well written, so nothing is wrong with the suite itself; the exposure is only in how `test-all`
+selects. Confirmed `make test` is unaffected, and that the 7 skips in tonight's full run are exactly
+this module. Recorded as E-1 in `reports/2026-09-22.md`, with E-2 (the library sits outside §3's
+ownership map and uses an unreserved `DEC-400…499` band) and E-3 (no input-side prompt-injection
+boundary and no test for it) in the same pass.
+
+**Phase 4a's answer, 2026-09-22 — the finding stands and the trap is not yet armed.** Measured
+rather than assumed, against this branch's merged tree:
+
+* `.github/workflows/ci.yml` runs no credentials step at all. Its three jobs — `lint-test`, `infra`
+  and `image` — install, lint, test, synthesise and build; none of them authenticates to AWS.
+  `make infra-synth` and `make infra-nag` need node, not an account.
+* `.github/workflows/deploy-dev.yml` is the one workflow that authenticates. It is
+  `workflow_dispatch` only, it assumes a role by OIDC with no long-lived secret, and it runs
+  `scripts/build_push_image.sh` and `cdk deploy`. It runs **no** pytest at all.
+* `.github/workflows/nightly.yml` is the workflow that runs `make test-all`, and it has no
+  credentials step.
+
+So the two halves — the runner that runs the paid suite and the runner that holds credentials — are
+different workflows on this branch, and Phase 4a's natural next step does not join them: a
+deployment needs a role, not a test run. The exposure the entry describes is real and would arm the
+moment anybody adds a credentials step to `nightly.yml`, which is precisely why the one-word fix is
+worth making *before* that rather than after.
+
+Phase 4a did not make it. `Makefile`'s `test-all` and `pyproject.toml`'s `addopts` are both Shared
+(§3) and outside this branch's PHASE-4A marker block, and the entry is right that changing what the
+whole repository's `make test-all` selects is not a branch's call. `.github/workflows/nightly.yml`
+is a Phase 1 file; §3 gives this branch `deploy*.yml` only. So this stays open, with the above as
+the measurement a reviewer needs to price it: today it costs nothing, and the day it costs
+something there will have been no warning.
+
 ## Resolved
 
 ### 2026-09-22 — reviewer → human reviewer: `main` is missing four of the seven contracts-first items, and the protocol itself
@@ -157,7 +370,6 @@ protocol-conforming `primary_key: str | list[str]`, `PARALLEL_WORK_PROTOCOL.md` 
 the 17-hunk conflict measured against `04c76da` no longer exists anywhere. The phase branches can
 be cut from `main` safely. The three phase plans (still open above) continue to gate
 `engine/onboarding/specs.py`, which is the one §2 item `main` carries only as a stub.
-
 
 ### 2026-09-22 — contracts-first → human reviewer: the Phase 3a half of "the three phase plans"
 

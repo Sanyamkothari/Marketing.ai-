@@ -467,6 +467,25 @@ details.cite summary:hover{border-color:var(--c);color:var(--c)}
 details.cite[open] summary{border-color:var(--c);color:var(--c)}
 details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(--c);background:var(--surface);border-radius:0 8px 8px 0;font-size:12px;color:var(--muted);line-height:1.55}
 .costline{padding:12px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
+/* shapes the built generative screens settled on (ui/modules/generative) */
+.gusage{font-size:12px;color:var(--ink2)}
+.gusage b{color:var(--ink);font-weight:600}
+.gchecks{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
+.gchecks li{display:flex;gap:8px;align-items:baseline;font-size:11px;color:var(--muted)}
+.gchecks .pill{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}
+.gcounts{display:inline-flex;gap:6px;flex-wrap:wrap}
+.bubble.a.refused{border-color:var(--warn);background:var(--warn-t)}
+.gmeta{margin-top:8px;font-size:11px;color:var(--faint);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.gsim{font-weight:400;color:var(--faint)}
+.askrow{display:flex;gap:10px;margin-top:14px}
+.askrow input{flex:1;height:40px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;padding:0 14px}
+.askrow input:focus-visible{outline:2px solid var(--brand-blue);outline-offset:1px}
+.askrow button{height:40px;padding:0 18px;border:0;border-radius:8px;background:var(--stage);color:var(--stage-ink);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.holdout{font-size:12px;color:var(--muted);padding:0 20px 14px}
+.holdout b{color:var(--ink);font-weight:600}
+.approver{padding:0 20px 14px}
+.approver .field{width:280px;max-width:100%}
+.segshare{font-size:12px;color:var(--muted)}
 .docrow{display:grid;grid-template-columns:minmax(150px,1fr) 88px 96px;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line);font-size:12px}
 .docrow:first-child{border-top:0}
 .docrow .dn{font-weight:500;color:var(--ink);overflow-wrap:anywhere}
@@ -926,15 +945,29 @@ const WORST10=[
  ["Where do I find my customer ID?","0.64","Cited the right page but listed the steps out of order."],
  ["How do I change my billing date?","0.68","Correct for postpaid only. The question did not say which plan."]];
 const REFUSAL="I could not find this in the product documents. I will pass you to a person.";
+const ASSISTANT_USAGE={calls:"2,204",tokens:"1,284,600",cost:"$1.83",cached:"312"};
 const TRYIT=[
  {q:"My new router has a red light. What do I do?",
   a:"A steady red light means the router cannot reach the network. Switch it off at the wall, wait thirty seconds and switch it back on. If it is still red after two minutes, the line is not active yet — activation can take up to four hours after installation.",
-  cites:[["router_troubleshooting.pdf · p. 11","A steady red WAN light indicates the router cannot reach the network. Power-cycle the unit: switch off at the wall, wait 30 seconds, switch on. Allow 2 minutes for the light to turn white."],
-         ["broadband_setup_guide.pdf · p. 6","After installation, activation can take up to 4 hours. The router shows a red WAN light until the line is active."]]},
+  cites:[["router_troubleshooting.pdf · p. 11",0.91,"A steady red WAN light indicates the router cannot reach the network. Power-cycle the unit: switch off at the wall, wait 30 seconds, switch on. Allow 2 minutes for the light to turn white."],
+         ["broadband_setup_guide.pdf · p. 6",0.84,"After installation, activation can take up to 4 hours. The router shows a red WAN light until the line is active."]],
+  retrieved:5,ms:1240,
+  guards:[["pii_in_output","passed","No personal data in the answer"],["faithfulness","passed","Every claim is in a retrieved extract"]]},
  {q:"How much is the unlimited plan?",
   a:"Unlimited broadband is ₹999 a month on a twelve-month contract, or ₹1,199 a month with no contract. The router is included either way.",
-  cites:[["plans_and_pricing.html · Broadband","Unlimited — ₹999/month on a 12-month contract, ₹1,199/month with no contract. Router included on both."]]},
- {q:"Can I get a refund for last month?",a:REFUSAL,cites:[]}];
+  cites:[["plans_and_pricing.html · Broadband",0.88,"Unlimited — ₹999/month on a 12-month contract, ₹1,199/month with no contract. Router included on both."]],
+  retrieved:5,ms:980,
+  guards:[["pii_in_output","passed","No personal data in the answer"],["faithfulness","passed","Every claim is in a retrieved extract"]]},
+ {q:"Can I get a refund for last month?",a:REFUSAL,cites:[],refused:true,retrieved:0,ms:210,
+  guards:[["pii_in_output","passed","No personal data in the answer"]]}];
+let ASKED=[];
+
+const causeConf=l=>`<span class="pill ${l==="high"?"ok":l==="medium"?"warn":"bad"}">${esc(l)} confidence</span>`;
+const guardCounts=ch=>{const n=o=>ch.filter(c=>c[1]===o).length;
+  return `<span class="gcounts"><span class="pill ok">${n("passed")} passed</span>${n("warned")?`<span class="pill warn">${n("warned")} warned</span>`:""}${n("blocked")?`<span class="pill bad">${n("blocked")} blocked</span>`:""}</span>`;};
+const guardList=ch=>!ch||!ch.length?"":`<ul class="gchecks">${ch.map(([rule,out,detail])=>
+  `<li><span class="pill ${out==="passed"?"ok":out==="warned"?"warn":"bad"}">${esc(rule)}</span><span>${esc(detail)}</span></li>`).join("")}</ul>`;
+const usageLine=u=>`<div class="gusage"><b>${esc(u.calls)}</b> calls · <b>${esc(u.tokens)}</b> tokens · <b>${esc(u.cost)}</b>${u.cached?` · ${esc(u.cached)} cache hits`:""}</div>`;
 
 function docList(){return `<div class="doclist">${DOCS.map(([n,p,c])=>`<div class="docrow"><span class="dn">${esc(n)}</span><span class="dv">${p} pages</span><span class="dv">${c} chunks</span></div>`).join("")}</div>`;}
 function assistantResults(u){const s=st(u);
@@ -945,32 +978,41 @@ function assistantResults(u){const s=st(u);
   const bar=`<div class="evalbar"><div class="ebv">${EVAL.pass}% passed</div>
     <div class="eb"><i style="width:${w}%"></i><span class="ebm" style="left:${tm}%"></span></div>
     <div class="ebl"><span>${QA_FILE.pairs} reference questions</span><span>Threshold ${tm}%</span></div></div>`;
-  const chat=`<div class="chatpanel">${TRYIT.map(x=>`<div class="bubble q">${esc(x.q)}</div>
-    <div class="bubble a">${esc(x.a)}${x.cites.length?`<div class="cites">${x.cites.map(([l,q])=>`<details class="cite"><summary>${esc(l)}</summary><div class="quote">${esc(q)}</div></details>`).join("")}</div>`:`<div class="cites"><span class="evchip">no document matched</span></div>`}</div>`).join("")}</div>
-    <p class="caption">Three saved questions. Click a citation to read the exact passage the answer used.</p>`;
+  const bubble=x=>`<div class="bubble q">${esc(x.q)}</div>
+    <div class="bubble a${x.refused?" refused":""}">${esc(x.a)}
+      ${x.cites.length?`<div class="cites">${x.cites.map(([l,sim,q])=>`<details class="cite"><summary>${esc(l)} <span class="gsim">sim ${sim.toFixed(2)}</span></summary><div class="quote">${esc(q)}</div></details>`).join("")}</div>`:`<div class="cites"><span class="evchip">no document matched</span></div>`}
+      ${x.refused?`<div class="gmeta"><span>The similarity floor refused the question — one embedding call, no generation.</span></div>`:""}
+      ${guardList(x.guards)}
+      <div class="gmeta"><span>${x.retrieved} chunk${x.retrieved===1?"":"s"} retrieved</span><span>${x.ms} ms</span><span>prompt v1</span>${x.refused?'<span style="color:var(--warn)">Refused</span>':""}</div></div>`;
+  const chat=`<div class="chatpanel">${[...TRYIT,...ASKED].map(bubble).join("")}</div>
+    <form class="askrow" id="g-ask"><input type="text" id="g-question" placeholder="Ask a question…" autocomplete="off" aria-label="Ask the assistant"><button type="submit">Ask</button></form>
+    <p class="caption">Three saved questions, and anything else you type. Click a citation to read the exact passage the answer used; a question the documents do not cover gets the refusal message, never a guess.</p>`;
   return `<span class="cap">Assistant</span>
    <div class="row" style="margin-top:8px">
      <section class="card"><h3>Evaluation</h3>${bar}${table(["question","score","what went wrong"],WORST10)}<p class="caption">The ten weakest answers. Everything else scored above 0.68.</p></section>
-     <section class="card"><h3>Index</h3>${kvs(idx)}<div class="spacer"></div><div class="costline">LLM cost this run: —</div></section>
+     <section class="card"><h3>Index</h3>${kvs(idx)}<div class="spacer"></div><h4>Cost</h4><div class="costline">${usageLine(ASSISTANT_USAGE)}</div></section>
    </div>
    <section class="card" style="margin-top:24px"><h3>Try it</h3>${chat}</section>`;}
 
 /* ===== Phase 3a §9 D — RCA root causes ===== */
 const RCA_SEGS=[
  {band:"High risk",n:"2,180 customers",head:"Network problems first, then a bill nobody explained.",
+  share:32.1,notes:1840,guards:[["pii_in_output","passed","Complaint text redacted before the call"],["faithfulness","passed","Every cause names evidence it was built from"],["grounded_refs","passed","6 of 6 causes carry an evidence id"]],
   causes:[
-   {t:"Repeated outages in the last 90 days",chips:[["reason","outages_90d ↑ 3x"],["quote","“Third time this month the line is down before 9am.”"]]},
-   {t:"A price change they were not told about",chips:[["reason","billing_disputes_90d ↑"],["quote","“My bill went up ₹240 and nobody told me why.”"]]},
-   {t:"Complaints still open at the snapshot",chips:[["reason","complaints_open_now = 1"],["quote","“Raised a ticket two weeks ago, still no update.”"]]}],
+   {t:"Repeated outages in the last 90 days",conf:"high",chips:[["reason","outages_90d ↑ 3x"],["quote","“Third time this month the line is down before 9am.”"]]},
+   {t:"A price change they were not told about",conf:"high",chips:[["reason","billing_disputes_90d ↑"],["quote","“My bill went up ₹240 and nobody told me why.”"]]},
+   {t:"Complaints still open at the snapshot",conf:"medium",chips:[["reason","complaints_open_now = 1"],["quote","“Raised a ticket two weeks ago, still no update.”"]]}],
   actions:["Call before the next bill is issued.","Credit the disputed amount without asking them to chase it.","Close the open ticket first — an offer on top of an open complaint reads badly."],
   caveat:"Built from 1,840 complaint notes across 2,180 customers. 18% of this segment has no complaint text, so those causes rest on the model drivers alone."},
  {band:"Medium risk",n:"3,410 customers",head:"Quietly using less, with no complaint to explain it.",
+  share:50.1,notes:1260,guards:[["pii_in_output","passed","Complaint text redacted before the call"],["faithfulness","passed","Every cause names evidence it was built from"],["grounded_refs","warned","1 of 3 causes rests on model drivers alone"]],
   causes:[
-   {t:"Usage falling for two months running",chips:[["reason","usage_drop_30d ↓ 38%"],["quote","“Moved most of my data to the office wifi.”"]]},
-   {t:"A price increase with no contact since",chips:[["reason","price_change_flag = 1"],["quote","“The new plan costs more for the same thing.”"]]},
-   {t:"No contact from us in four months",chips:[["reason","days_since_last_contact ↑ 112"],["quote","“Nobody has called me since the day I joined.”"]]}],
+   {t:"Usage falling for two months running",conf:"high",chips:[["reason","usage_drop_30d ↓ 38%"],["quote","“Moved most of my data to the office wifi.”"]]},
+   {t:"A price increase with no contact since",conf:"medium",chips:[["reason","price_change_flag = 1"],["quote","“The new plan costs more for the same thing.”"]]},
+   {t:"No contact from us in four months",conf:"low",chips:[["reason","days_since_last_contact ↑ 112"],["quote","“Nobody has called me since the day I joined.”"]]}],
   actions:["Send usage tips, not a discount.","Check the plan still fits what they actually use.","Reach out before the renewal date, not after."],
   caveat:"Built from 1,260 complaint notes across 3,410 customers. 63% of this segment has no complaint text, so these causes lean more on the model drivers."}];
+const RCA_USAGE={calls:"14",tokens:"38,200",cost:"$0.0412"};
 let RCA_ON=false;
 function rcaBlock(){
   if(!RCA_ON) return `<section class="card"><h3>Root causes</h3><div class="genbox">
@@ -978,88 +1020,111 @@ function rcaBlock(){
     <span class="gb2">We take the top drivers for each risk segment and the complaint notes behind them, and write three causes per segment. Nothing is sent to anyone.</span>
     <button type="button" class="run sm" id="rca-gen">Generate root causes</button></div></section>`;
   const segs=RCA_SEGS.map(s=>`<div class="rcseg">
-    <div class="rs"><span class="rsh">${esc(s.band)}</span><span class="rsn">${esc(s.n)}</span></div>
+    <div class="rs"><span class="rsh">${esc(s.band)}</span><span class="rsn">${esc(s.n)} · <span class="segshare">${pc1(s.share)}% of customers at risk</span></span></div>
     <div class="rline">${esc(s.head)}</div>
-    ${s.causes.map(c=>`<div class="cause"><div class="ct">${esc(c.t)}</div>
+    ${s.causes.map(c=>`<div class="cause"><div class="ct" style="display:flex;justify-content:space-between;gap:10px;align-items:baseline"><span>${esc(c.t)}</span>${causeConf(c.conf)}</div>
       <div class="evchips">${c.chips.map(([k,v])=>`<span class="evchip ${k}">${esc(v)}</span>`).join("")}</div></div>`).join("")}
     <div class="rcfoot"><div class="fl">What to do</div><ul>${s.actions.map(a=>`<li>${esc(a)}</li>`).join("")}</ul>
-      <div class="cav">${esc(s.caveat)}</div></div></div>`).join("");
+      <div class="cav">${esc(s.caveat)}</div>
+      <div class="gseg-row" style="display:flex;justify-content:space-between;flex-wrap:wrap;gap:10px;align-items:center;margin-top:10px"><span class="cav" style="margin:0">Built from ${esc(String(s.notes))} complaint notes.</span>${guardCounts(s.guards)}</div>
+      ${guardList(s.guards)}</div></div>`).join("");
+  const all=RCA_SEGS.flatMap(x=>x.guards);
   return `<section class="card"><h3>Root causes</h3>${segs}
-    <p class="caption">Written from the model drivers and the complaint notes. Read the caveat before acting on a segment.</p></section>`;}
+    <p class="caption">Written from the model drivers and the complaint notes. Read the caveat before acting on a segment.</p></section>
+    <section class="card"><h3>Cost &amp; guardrails</h3><div style="padding:16px 20px">${usageLine(RCA_USAGE)}
+      <div style="margin-top:8px">${guardCounts(all)} <span style="font-size:12px;color:var(--muted)">across ${RCA_SEGS.length} generated summaries</span></div></div></section>`;}
 
 /* ===== Phase 3a §9 E — win-back campaign copy ===== */
 const COPY_SEED=[
- {band:"High",offer:"30% off for 3 months",ch:"Email",v:"A",status:"Approved",
+ {band:"High",offer:"30% off for 3 months",ch:"Email",v:"A",status:"Approved",by:"A. Iyer",at:"21 Sept 2026, 16:40",
   text:"Your area is on the upgraded network now. Come back and pay 30% less for three months.",
-  scores:"Brand 0.95 · Clarity 0.93 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"The network in your area has been upgraded. Come back for 30% off your first three months."},
  {band:"High",offer:"30% off for 3 months",ch:"Email",v:"B",status:"Pending review",
   text:"We fixed what made you leave. Come back this month and pay 30% less for three months.",
-  scores:"Brand 0.88 · Clarity 0.90 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"We have fixed the problem in your area. Come back this month for 30% off for three months."},
- {band:"High",offer:"30% off for 3 months",ch:"SMS",v:"A",status:"Approved",
+ {band:"High",offer:"30% off for 3 months",ch:"SMS",v:"A",status:"Approved",by:"A. Iyer",at:"21 Sept 2026, 16:40",
   text:"Your area is upgraded. Come back for 30% off for 3 months. Reply YES.",
-  scores:"Brand 0.92 · Clarity 0.95 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"Network upgraded in your area. 30% off for 3 months if you return. Reply YES."},
- {band:"High",offer:"30% off for 3 months",ch:"SMS",v:"B",status:"Blocked",
+ {band:"High",offer:"30% off for 3 months",ch:"SMS",v:"B",status:"Pending review",
   text:"We have upgraded the whole network in your area since you left us, and we would really like you to come back, so here is 30% off your bill for the first three months if you return this month. Reply YES.",
-  scores:"Brand 0.90 · Clarity 0.86 · Compliance 1.00",why:"Exceeds 160 characters.",
+  tox:0.01,why:"",
   alt:"Your area is upgraded. Return this month for 30% off for 3 months. Reply YES."},
- {band:"High",offer:"30% off for 3 months",ch:"WhatsApp",v:"A",status:"Approved",
+ {band:"High",offer:"30% off for 3 months",ch:"WhatsApp",v:"A",status:"Approved",by:"A. Iyer",at:"21 Sept 2026, 16:40",
   text:"Hi {first_name}, your area is now on the upgraded network. 30% off for three months if you come back. Want the details?",
-  scores:"Brand 0.94 · Clarity 0.92 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"Hi {first_name}, the network where you live has been upgraded. Come back for 30% off for three months."},
  {band:"High",offer:"30% off for 3 months",ch:"WhatsApp",v:"B",status:"Pending review",
   text:"Hi {first_name}, we have missed you. Come back this month and pay 30% less for three months.",
-  scores:"Brand 0.87 · Clarity 0.91 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"Hi {first_name}, there is 30% off for three months waiting if you come back this month."},
- {band:"Medium",offer:"Free upgrade",ch:"Email",v:"A",status:"Approved",
+ {band:"Medium",offer:"Free upgrade",ch:"Email",v:"A",status:"Approved",by:"A. Iyer",at:"21 Sept 2026, 16:40",
   text:"Your old plan, now with double the data. Free for the first three months.",
-  scores:"Brand 0.93 · Clarity 0.94 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"The plan you had now comes with double the data, free for three months."},
- {band:"Medium",offer:"Free upgrade",ch:"Email",v:"B",status:"Approved",
+ {band:"Medium",offer:"Free upgrade",ch:"Email",v:"B",status:"Approved",by:"A. Iyer",at:"21 Sept 2026, 16:40",
   text:"Same plan, twice the data, nothing extra to pay for three months.",
-  scores:"Brand 0.91 · Clarity 0.96 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"Twice the data on the same plan, at no extra cost for three months."},
- {band:"Medium",offer:"Free upgrade",ch:"SMS",v:"A",status:"Approved",
+ {band:"Medium",offer:"Free upgrade",ch:"SMS",v:"A",status:"Approved",by:"A. Iyer",at:"21 Sept 2026, 16:40",
   text:"Your old plan now has double data, free for 3 months. Reply YES.",
-  scores:"Brand 0.90 · Clarity 0.95 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"Double data on your old plan, free for 3 months. Reply YES."},
  {band:"Medium",offer:"Free upgrade",ch:"SMS",v:"B",status:"Pending review",
   text:"Double data, free for 3 months. Reply YES to come back.",
-  scores:"Brand 0.84 · Clarity 0.93 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"Come back to double data, free for 3 months. Reply YES."},
- {band:"Medium",offer:"Free upgrade",ch:"WhatsApp",v:"A",status:"Approved",
+ {band:"Medium",offer:"Free upgrade",ch:"WhatsApp",v:"A",status:"Approved",by:"A. Iyer",at:"21 Sept 2026, 16:40",
   text:"Hi {first_name}, your old plan now comes with double the data. Free for three months.",
-  scores:"Brand 0.92 · Clarity 0.94 · Compliance 1.00",why:"",
+  tox:0.01,why:"",
   alt:"Hi {first_name}, double the data on the plan you had, free for three months."},
- {band:"Medium",offer:"Free upgrade",ch:"WhatsApp",v:"B",status:"Blocked",
+ {band:"Medium",offer:"Free upgrade",ch:"WhatsApp",v:"B",status:"Pending review",
   text:"Hi {first_name}, come back for double data and 50% off your first bill.",
-  scores:"Brand 0.89 · Clarity 0.90 · Compliance 0.40",why:"Promises a 50% discount that is not in this offer.",
+  tox:0.02,why:"Names a 50% discount that is not in this offer.",
   alt:"Hi {first_name}, come back to double data, free for three months."}];
 let COPY_CARDS=null;
+let COPY_APPROVER="";
 const copyCards=()=>COPY_CARDS||(COPY_CARDS=COPY_SEED.map(c=>({...c})));
-const SMS_LIMIT=160;
-const blockWhy=c=>c.status!=="Blocked"?"":(c.ch==="SMS"&&c.text.length>SMS_LIMIT?`Exceeds ${SMS_LIMIT} characters (${c.text.length}).`:c.why);
+const CH_LIMIT={Email:1000,SMS:160,WhatsApp:1024};
+const HOLDOUT={eligible:"14,500",control:"1,450",suppressed:"1,850",sent:"11,200"};
+/* The guardrails a template passes or fails, read off the message rather than stored beside it,
+   so the status, the block reason and the judge scores can never disagree with the copy above. */
+function tplGuards(c){const lim=CH_LIMIT[c.ch],over=c.text.length-lim;
+  return [["allowed_fields_only","passed","Only whitelisted fields used"],
+    over>0?["max_length","blocked",`${over} characters over the ${lim}-character limit`]
+          :["max_length","passed",`${c.text.length} of ${lim} characters`],
+    c.why?["judge_compliance","blocked",c.why]:["judge_compliance","passed","No claim outside the offer"],
+    ["judge_toxicity","passed",`Scored ${c.tox.toFixed(2)}, under the 0.20 ceiling`]];}
+const tplStatus=c=>tplGuards(c).some(g=>g[1]==="blocked")?"Blocked":c.status;
+const judgeLine=c=>`Compliance ${(c.why?0.40:1).toFixed(2)} · Toxicity ${c.tox.toFixed(2)} · ${c.text.length} characters`;
 const statusPill=s=>`<span class="pill ${s==="Approved"?"ok":s==="Blocked"?"bad":"warn"}">${esc(s)}</span>`;
 function copyBlock(){const cards=copyCards();
-  const counts=["Approved","Pending review","Blocked"].map(s=>[s,cards.filter(c=>c.status===s).length]);
+  const counts=["Approved","Pending review","Blocked"].map(s=>[s,cards.filter(c=>tplStatus(c)===s).length]);
   const bands=[...new Set(cards.map(c=>c.band))];
+  const named=COPY_APPROVER.trim();
   const grid=bands.map(b=>`<div class="ccgrouphd">${esc(b)} band · ${esc(cards.find(c=>c.band===b).offer)}</div>
-    ${cards.map((c,i)=>[c,i]).filter(([c])=>c.band===b).map(([c,i])=>`<div class="cccard ${c.status==="Blocked"?"blocked":""}">
-      <div class="cch"><span class="cct">${esc(c.ch)} · Variant ${esc(c.v)}</span>${statusPill(c.status)}</div>
+    ${cards.map((c,i)=>[c,i]).filter(([c])=>c.band===b).map(([c,i])=>{const st=tplStatus(c),g=tplGuards(c);
+      const blocked=g.find(x=>x[1]==="blocked");
+      return `<div class="cccard ${st==="Blocked"?"blocked":""}">
+      <div class="cch"><span class="cct">${esc(c.ch)} · Variant ${esc(c.v)}</span>${statusPill(st)}</div>
       <div class="ccb">${esc(c.text)}</div>
-      <div class="ccm">${esc(c.scores)} · ${c.text.length} characters</div>
-      ${blockWhy(c)?`<div class="ccwhy">${esc(blockWhy(c))}</div>`:""}
-      <div class="ccact"><button type="button" class="ccbtn" data-cc-ok="${i}" ${c.status==="Approved"?"disabled":""}>Approve</button>
-        <button type="button" class="ccbtn" data-cc-re="${i}">Regenerate</button></div></div>`).join("")}`).join("");
+      <div class="ccm">${esc(judgeLine(c))}</div>
+      ${blocked?`<div class="ccwhy">${esc(blocked[2])}</div>`:""}
+      ${guardList(g)}
+      ${st==="Approved"?`<div class="ccm">Approved by ${esc(c.by||"—")} · ${esc(c.at||"—")}</div>`:""}
+      <div class="ccact">${st==="Approved"?"":`<button type="button" class="ccbtn" data-cc-ok="${i}" ${st==="Pending review"&&named?"":"disabled"}>Approve</button>`}
+        <button type="button" class="ccbtn" data-cc-re="${i}">Regenerate</button></div></div>`;}).join("")}`).join("");
   return `<section class="card"><h3>Campaign copy</h3>
     <div class="banner"><span aria-hidden="true">⚑</span><span>Nothing is sent from here. Approved messages are exported for your campaign tool.</span></div>
+    <p class="holdout">Holds back <b>${HOLDOUT.control}</b> of <b>${HOLDOUT.eligible}</b> eligible customers as a control group and suppresses <b>${HOLDOUT.suppressed}</b> more by consent or recent contact, leaving <b>${HOLDOUT.sent}</b> to write to.</p>
     <div class="ccbar"><span>${cards.length} templates · ${bands.length} bands × 3 channels × 2 variants</span>
       <span>${counts.map(([s,n])=>`${n} ${s.toLowerCase()}`).join(" · ")}</span>
       <button type="button" class="run sm ghost" id="cc-dl">Download messages</button></div>
+    <div class="approver"><div class="field"><span class="sub">Your name, for the approval record</span><div class="control"><input type="text" id="cc-approver" value="${esc(COPY_APPROVER)}" placeholder="Required to approve"></div><span class="sub" style="color:var(--faint)">Approving records who accepted the message. It still sends nothing.</span></div></div>
     <div class="ccgrid">${grid}</div>
-    <p class="caption">Scores come from the copy judge. A blocked message is never exported, whatever its scores.</p></section>`;}
+    <p class="caption">Scores come from the copy judges. A blocked message is never exported, whatever its scores.</p></section>`;}
 
 /* ===== Phase 2 §10 F — lineage ===== */
 function lineageBlock(u){const s=st(u);
@@ -1101,7 +1166,7 @@ const SETUP = {
 const AUTO="AutoML (recommended)";
 const STATE = {};
 function defaultAdv(cfg){return cfg.gen
-  ? {pii:"Redact",chunk:512,overlap:50,embed:"Titan Text Embeddings v2",topk:5,hybrid:true,temp:0.2,maxtok:600,guard:true,refusal:REFUSAL,metric:cfg.metrics[0],judge:"LLM judge + human sample"}
+  ? {pii:"Redact",chunk:512,overlap:50,embed:"Titan Text Embeddings v2",topk:5,minsim:0.25,hybrid:true,temp:0.2,maxtok:600,guard:true,refusal:REFUSAL,metric:cfg.metrics[0],judge:"LLM judge + human sample"}
   : {missing:"Auto",outliers:"Clip (1st–99th pct)",dedupe:true,leakage:true,pii:"Redact",minpos:500,excl:[],
      split:cfg.timeSplit?"Time-based":"Random (stratified)",test:15,val:15,timeCol:"",groupCol:"",
      autofeat:true,encoding:"Auto",scaling:"Auto",text:"Ignore",fsel:"Importance-based",maxfeat:100,
@@ -1203,7 +1268,7 @@ function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
   const stage=(i,title,summ,body)=>`<details class="stage-d"><summary><span class="sn">${i}</span><span><div class="st">${esc(title)}</div><div class="ss">${esc(summ)}</div></span><span class="sc">Configure</span></summary>${body}</details>`;
   if(cfg.gen) return `<div class="stages">
     ${stage(1,"Documents",`${a.chunk}-token chunks · ${a.overlap} overlap · PII: ${a.pii}`,`<div class="frow">${num("chunk","Chunk size (tokens)",64,128,2048)}${num("overlap","Overlap (tokens)",10,0,200)}${sel("pii",["Redact","Drop rows","Keep"],"PII handling")}</div>`)}
-    ${stage(2,"Retrieval",`${a.embed} · top-${a.topk}${a.hybrid?" · hybrid search":""}`,`<div class="frow">${sel("embed",["Titan Text Embeddings v2","Cohere Embed v3"],"Embedding model")}${num("topk","Top-k chunks",1,1,20)}${chk("hybrid","Hybrid (keyword + vector) search")}</div>`)}
+    ${stage(2,"Retrieval",`${a.embed} · top-${a.topk}${a.hybrid?" · hybrid search":""} · floor ${a.minsim}`,`<div class="frow">${sel("embed",["Titan Text Embeddings v2","Cohere Embed v3"],"Embedding model")}${num("topk","Top-k chunks",1,1,20)}${num("minsim","Minimum similarity",0.05,0,1)}${chk("hybrid","Hybrid (keyword + vector) search")}</div><p class="obhint" style="padding:0 16px 4px 52px">Below the minimum similarity nothing is retrieved and the answer is the refusal message instead of a guess.</p>`)}
     ${stage(3,"Generation",`temperature ${a.temp} · ${a.maxtok} tokens${a.guard?" · guardrails on":""} · refusal message set`,`<div class="frow">${num("temp","Temperature",0.1,0,1)}${num("maxtok","Max answer tokens",50,100,2000)}${chk("guard","Bedrock Guardrails (PII, topics, tone)")}${txt("refusal","When nothing relevant is found, reply","Sent instead of a guess. Keep it short and say what happens next.")}</div>`)}
     ${stage(4,"Evaluation",`${a.metric} · ${a.judge}`,`<div class="frow">${sel("metric",cfg.metrics,"Primary metric")}${sel("judge",["LLM judge + human sample","LLM judge only","Human review only"],"Grading method")}</div>`)}
   </div>`;
@@ -1425,6 +1490,17 @@ function bindDetail(u){
     setTimeout(()=>{mark(bs.length-1,"done",bs[bs.length-1][1]);
       o.building=false;o.built=true;rerender(u);},bs.length*dt);});
   on("ob-use","click",()=>{useDataset(u);rerender(u);});
+  /* Phase 3a §9 C: the Try it box answers from the saved questions and refuses the rest,
+     which is the same choice the built screen's similarity floor makes. */
+  on("g-ask","submit",e=>{e.preventDefault();
+    const box=document.getElementById("g-question"),q=(box&&box.value||"").trim();
+    if(!q)return;
+    const asked=q.toLowerCase();
+    const hit=TRYIT.find(x=>!x.refused&&((x.q.toLowerCase().match(/[a-z]{4,}/g)||[])
+      .filter(w=>asked.includes(w)).length>=2));
+    ASKED.push(hit?{...hit,q}:{q,a:s.adv.refusal||REFUSAL,cites:[],refused:true,retrieved:0,ms:180,
+      guards:[["pii_in_output","passed","No personal data in the answer"]]});
+    rerender(u);});
   on("f-setup","submit",e=>{
     e.preventDefault(); if(blocker(u)) return;
     s.view="running"; rerender(u);
@@ -1489,7 +1565,7 @@ function mock(u, kind){
   </main>`;
 }
 
-function downloadMessages(){const rows=copyCards().filter(c=>c.status==="Approved");
+function downloadMessages(){const rows=copyCards().filter(c=>tplStatus(c)==="Approved");
   const csv=["band,channel,variant,offer,message",...rows.map(c=>[c.band,c.ch,c.v,c.offer,c.text]
     .map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","))].join("\n");
   try{const b=new Blob([csv],{type:"text/csv"}),a=document.createElement("a");
@@ -1500,10 +1576,18 @@ function bindGlobal(){
   if(c)c.addEventListener("change",e=>{if(e.target.value==="__new")e.target.value=CLIENT;else CLIENT=e.target.value;});
   const g=document.getElementById("rca-gen");
   if(g)g.addEventListener("click",()=>{RCA_ON=true;render();});
+  const appr=document.getElementById("cc-approver");
+  if(appr)appr.addEventListener("input",e=>{COPY_APPROVER=e.target.value;
+    const named=COPY_APPROVER.trim();
+    document.querySelectorAll("[data-cc-ok]").forEach(b=>{
+      const c=copyCards()[+b.dataset.ccOk];b.disabled=!(named&&tplStatus(c)==="Pending review");});});
   document.querySelectorAll("[data-cc-ok]").forEach(b=>b.addEventListener("click",()=>{
-    const c=copyCards()[+b.dataset.ccOk];c.status="Approved";c.why="";render();}));
+    const c=copyCards()[+b.dataset.ccOk];
+    if(!COPY_APPROVER.trim()||tplStatus(c)!=="Pending review")return;
+    c.status="Approved";c.by=COPY_APPROVER.trim();c.at=nowStamp();render();}));
   document.querySelectorAll("[data-cc-re]").forEach(b=>b.addEventListener("click",()=>{
-    const c=copyCards()[+b.dataset.ccRe],t=c.text;c.text=c.alt;c.alt=t;c.status="Pending review";c.why="";render();}));
+    const c=copyCards()[+b.dataset.ccRe],t=c.text;c.text=c.alt;c.alt=t;
+    c.status="Pending review";c.why="";c.by="";c.at="";render();}));
   const d=document.getElementById("cc-dl");
   if(d)d.addEventListener("click",downloadMessages);}
 

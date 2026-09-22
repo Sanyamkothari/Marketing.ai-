@@ -52,6 +52,28 @@ def freeze(repo_root: Path) -> dict[str, str]:
     return versions
 
 
+def test_a_package_declared_twice_is_declared_at_one_version(pyproject: dict[str, Any]) -> None:
+    """A name in two groups at two versions is a pin that pip resolves and nobody reviewed.
+
+    `boto3` is the live case: Phase 3a needs it at runtime for Bedrock and Phase 4a declares it in
+    the `aws` extra so a deployment that installs only that extra still pins it. `declared_pins`
+    builds a dict, so the second declaration silently overwrites the first and the mismatch would
+    never reach an assertion - which is exactly how it stayed invisible until this test existed.
+    """
+    project = pyproject["project"]
+    groups = {"dependencies": project["dependencies"]}
+    groups.update(project["optional-dependencies"])
+    seen: dict[str, dict[str, str]] = {}
+    for group, requirements in groups.items():
+        for requirement in requirements:
+            match = PIN_RE.match(requirement.strip())
+            if match is None:
+                continue
+            seen.setdefault(normalise(match.group("name")), {})[group] = match.group("version")
+    disagreeing = {name: where for name, where in seen.items() if len(set(where.values())) > 1}
+    assert not disagreeing, f"declared at more than one version: {disagreeing}"
+
+
 def declared_pins(pyproject: dict[str, Any]) -> dict[str, str]:
     """The `==` pins of `[project].dependencies` plus the `dev` extra, by normalised name."""
     project = pyproject["project"]
@@ -123,8 +145,10 @@ def test_mypy_is_globally_strict_over_engine_api_and_scripts(pyproject: dict[str
         "engine",
         "api",
         "scripts",
+        "alembic",  # the migrations own the Postgres schema, so they are held to the same bar
         "tests/fixtures/make_data.py",
         "tests/fixtures/make_docs.py",
+        "tests/fakes",  # FakeSageMaker stands in for a service; DEC-041 and DEC-206's precedent
     ]
     assert mypy["python_version"] == "3.11"
 
@@ -170,9 +194,44 @@ def test_pytest_finds_the_packages_without_an_editable_install(pyproject: dict[s
     ini = pyproject["tool"]["pytest"]["ini_options"]
     assert ini["pythonpath"] == ["."]
     assert ini["testpaths"] == ["tests"]
-    assert {marker.split(":")[0] for marker in ini["markers"]} == {"slow", "integration", "bedrock"}
+    assert {marker.split(":")[0] for marker in ini["markers"]} == {
+        "slow",
+        "integration",
+        "bedrock",
+        "postgres",
+        "docker",
+        "aws",
+    }
+    assert "-rs" in ini["addopts"], "a skip must always print its reason (DEC-344)"
 
 
 def test_the_nn_extra_is_torch_only(pyproject: dict[str, Any]) -> None:
     """DEC-011: the NeuralNet family is opt-in; torch is multi-GB and off by default."""
     assert pyproject["project"]["optional-dependencies"]["nn"] == ["torch>=2.10,<2.14"]
+
+
+def test_the_phase_4a_extras_are_pinned_and_optional(pyproject: dict[str, Any]) -> None:
+    """DEC-306: a laptop install stays exactly as heavy as it was; the AWS packages are opt-in."""
+    extras = pyproject["project"]["optional-dependencies"]
+    for name in ("aws", "deploy"):
+        assert extras[name], f"the {name} extra is empty"
+        for requirement in extras[name]:
+            assert PIN_RE.match(requirement.strip()), f"unpinned {name} requirement: {requirement!r}"
+    runtime = {
+        normalise(requirement.split("[")[0].split("=")[0])
+        for requirement in pyproject["project"]["dependencies"]
+    }
+    # boto3 and botocore are deliberately absent from this list. Phase 3a calls Bedrock from the
+    # engine, so they became runtime dependencies when that branch merged; the `aws` extra declares
+    # them too, which pins them for a deployment that installs only that extra. What must stay
+    # optional is everything no engine code path imports: the Postgres driver, the migration tool,
+    # and the whole CDK toolchain, which pulls jsii and a node bridge (DEC-306, DEC-364).
+    for name in ("psycopg", "alembic", "aws-cdk-lib", "cdk-nag", "constructs"):
+        assert name not in runtime, f"{name} must stay optional, not a runtime dependency"
+
+
+def test_cdk_nag_is_pinned_below_3(pyproject: dict[str, Any]) -> None:
+    """Measured (DEC-366): cdk-nag 3.0.2 against aws-cdk-lib 2.270.0 dies inside `cdk synth` with
+    `TypeError: aspectApplication.aspect.visit is not a function`. 2.38.2 synthesises and reports."""
+    deploy = pyproject["project"]["optional-dependencies"]["deploy"]
+    assert "cdk-nag==2.38.2" in deploy

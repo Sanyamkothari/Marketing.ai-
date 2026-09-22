@@ -35,7 +35,7 @@ dependencies = [
   # ---- PHASE-3A (generative) — append only below this line ----
   # Phase 3a, the generative features. No orchestration framework: chunking, retrieval and the
   # vector store are forty lines each and a framework would hide them (Phase 3a plan §2.2).
-  "boto3==1.43.98",                     # Bedrock Converse + embeddings; the only LLM client
+  "boto3==1.43.99",                     # Bedrock Converse + embeddings; the only LLM client
   "jinja2==3.1.6",                      # sandboxed rendering of prompts and of copy templates
   "pypdf==6.19.0",                      # reads PDFs; it does not write them (DEC-207)
   "python-docx==1.2.0",                 # reads DOCX
@@ -48,6 +48,17 @@ dependencies = [
 
 [project.optional-dependencies]
 nn = ["torch>=2.10,<2.14"]              # enables the NeuralNet family (NN_TORCH); multi-GB; off by default (DEC-011)
+aws = [                                 # Phase 4a: what an AWS deployment needs and a laptop does not (DEC-306)
+  "boto3==1.43.99",                     # already resolved transitively by autogluon-common; declared so it is pinned here too
+  "botocore==1.43.99",
+  "psycopg[binary]==3.3.6",             # metadata_backend=postgres only
+  "alembic==1.20.0",                    # owns the Postgres schema from 0001 on (DEC-338)
+]
+deploy = [                              # Phase 4a: synthesising infra/, never imported by engine/ or api/ (DEC-364)
+  "aws-cdk-lib==2.270.0",
+  "constructs==10.8.1",
+  "cdk-nag==2.38.2",                    # 3.0.2 is incompatible with aws-cdk-lib 2.270.0; measured, see DEC-366
+]
 dev = [
   "pytest==9.1.1",
   "hypothesis==6.168.0",
@@ -63,6 +74,17 @@ dev = [
                                         # and a bump needs a matching `playwright install`. Absent it, that
                                         # module skips rather than fails.
   "boto3-stubs[bedrock-runtime]==1.43.99",   # boto3 ships no py.typed; the other four Phase 3a deps do
+  # Phase 4a. The fast suite exercises the AWS backends offline, so everything the `aws` extra
+  # declares is also a dev dependency, plus the fakes and the stubs that keep mypy --strict clean.
+  # `types-boto3` is the same project as `boto3-stubs` under its newer name; the two sets of service
+  # stubs live in different module namespaces (`types_boto3_s3` and `mypy_boto3_bedrock_runtime`),
+  # so both are declared rather than one being made to cover the other's services.
+  "boto3==1.43.99",
+  "botocore==1.43.99",
+  "psycopg[binary]==3.3.6",
+  "alembic==1.20.0",
+  "moto[s3,ssm,secretsmanager,sagemaker,sts,kms,logs]==5.2.3",
+  "types-boto3[s3,ssm,secretsmanager,sagemaker,cloudwatch]==1.43.99",
 ]
 
 [project.scripts]
@@ -101,11 +123,17 @@ target-version = ["py311"]
 [tool.mypy]
 python_version = "3.11"
 strict = true                           # engine, api AND scripts (plan §13.6 minimum is engine/; DEC-013)
-files = ["engine", "api", "scripts", "tests/fixtures/make_data.py", "tests/fixtures/make_docs.py"]
-                                        # source dirs, plus the two synthetic generators: test infrastructure every later
-                                        # milestone builds on, so they are held to the same bar (DEC-041, DEC-206). Other
-                                        # tests are not type-checked; no per-module `strict` anywhere (it is not a
-                                        # per-module option).
+files = [
+  "engine",
+  "api",
+  "scripts",
+  "alembic",                            # the migrations own the Postgres schema, so they are held to the same bar
+  "tests/fixtures/make_data.py",
+  "tests/fixtures/make_docs.py",
+  "tests/fakes",                        # FakeSageMaker stands in for a service (DEC-041, DEC-206's precedent)
+]                                       # source dirs, plus the synthetic generators and the service fakes: test
+                                        # infrastructure every later milestone builds on. Other tests are not
+                                        # type-checked; no per-module `strict` anywhere (it is not a per-module option).
 warn_unreachable = true
 warn_unused_configs = true
 show_error_codes = true
@@ -117,9 +145,13 @@ ignore_missing_imports = true
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["."]                      # import engine/api/scripts from the checkout, with or without an editable install
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers -rs"     # `-rs` prints every skip WITH ITS REASON: a test that is not
+                                        # running must say so out loud, never silently (DEC-344)
 markers = [
   "slow: takes more than a few seconds (AutoGluon training); excluded from `make test`",
   "integration: exercises several modules, the filesystem or the API together",
   "bedrock: calls Amazon Bedrock for real; costs money, needs credentials, opt-in with `-m bedrock`",
+  "postgres: needs a PostgreSQL server (`make postgres-up`); skips with a reason when there is none",
+  "docker: needs a working Docker daemon and a pullable base image; skips with a reason when there is none",
+  "aws: talks to a real AWS account; never selected by default, run by hand against a dev account",
 ]

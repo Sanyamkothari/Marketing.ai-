@@ -511,7 +511,7 @@ implements and the illustrative numbers they share.
 
 ```bash
 open marketing-ai-prototype.html   # no build step, no server needed
-make prototype-test                # 37 jsdom tests in tests/prototype/
+make prototype-test                # 38 jsdom tests in tests/prototype/
 make prototype-screenshots         # docs/prototype/*.png, desktop and mobile
 ```
 
@@ -540,6 +540,73 @@ tests are listed under Phase 2 above.
 
 ### Phase 4a — AWS and production
 
-_Nothing merged yet._
+**What it is.** Phase 1 put storage, jobs and the model registry behind protocols so that AWS would
+be a set of new *implementations* rather than a rewrite (plan §12). Phase 4a writes those
+implementations, packages the product in a container, and describes the infrastructure that runs it
+in a customer's own AWS account in `ap-south-1`.
+
+Three rules shaped every line of it, and each is enforced by something mechanical rather than by
+anybody remembering:
+
+* **No protocol changed.** `Storage`, `JobRunner` and `ModelRegistry` have the same members they had
+  in Phase 1, and the same four test fakes still satisfy them. What a remote backend needs that a
+  local one does not is an *additive capability protocol* — `SupportsLocalMirror`,
+  `SupportsPresignedDownload`, `ReconcilingJobRunner` — reached through a free function that no-ops
+  for a store or runner that does not implement it.
+* **Local behaviour does not change.** Every `Settings` default reproduces Phase 1 exactly: the
+  local filesystem, SQLite, a two-worker thread pool, the same directory, the same two environment
+  variable names. `tests/unit/test_settings.py` asserts each default, so a later edit cannot drift
+  them.
+* **The same suite runs against AWS with only `Settings` changed.** `tests/unit/test_storage_contract.py`
+  is one conformance suite parametrised over `LocalStorage` and `S3Storage`-on-moto; the registry and
+  metadata suites work the same way. A backend that passes is a backend that behaves like the other
+  one.
+
+**Where to read about it.**
+
+* [`docs/AWS_DEPLOYMENT.md`](docs/AWS_DEPLOYMENT.md) — the deployment walk-through, read once per
+  account: what to create, in what order, what each stack costs in *shape* and what it is for. Its
+  cost tables ship with every cell holding the literal marker `NOT YET MEASURED`, beside the exact
+  commands that fill them — no AWS account exists behind this repository, and plan §13.3 forbids
+  writing a number nobody measured (DEC-397).
+* [`docs/RUNBOOK.md`](docs/RUNBOOK.md) — day-two operations, organised by symptom, for the moment an
+  alarm fires rather than the moment the account is created (DEC-398).
+* [`infra/README.md`](infra/README.md) — the CDK app: seven stacks, what each owns, and the
+  first-deployment checklist.
+* [`docs/DECISIONS.md`](docs/DECISIONS.md) — DEC-300 … DEC-399, allocated by area so entries written
+  in parallel could not collide.
+
+**What is in the tree** (none of it reachable from the paths listed higher up this file, which
+predate the branch):
+
+```
+engine/
+├── settings.py                   # one frozen model describing a deployment; the only place os.environ is read
+├── runs.py                       # create_run, the job bodies, and JobSpec <-> closure
+└── aws/                          # nothing here imports boto3 at module scope (DEC-306)
+    ├── s3_storage.py             # Storage over S3: ranged GETs, multipart, SSE-KMS, content-diff
+    ├── postgres.py, run_index.py # the model registry and the run index over Postgres
+    ├── s3_registry.py            # published models as objects, for a reader with no database
+    ├── sagemaker_jobs.py         # JobRunner as a SageMaker job, plus reconcile and a queue
+    ├── sagemaker_registry.py     # the optional model-package mirror
+    ├── prices.py                 # a published list price, never a bill
+    ├── secrets.py, metrics.py    # SSM + Secrets Manager; CloudWatch EMF
+alembic/                          # the migrations; `make migrate`
+infra/                            # the CDK app, in its own venv (DEC-364)
+scripts/run_job_entrypoint.py     # what the container runs
+Dockerfile, docker-compose.yml    # the image, and a local Postgres to test against
+```
+
+**Make targets.** `make aws-test` runs every Phase 4a suite offline — moto for S3, fakes for
+SageMaker, a docker-compose Postgres for the metadata tests, which skip *with a reason* when no
+server is there. `make infra-setup`, `infra-lint`, `infra-test`, `infra-synth` and `infra-nag` are
+the infrastructure's own chain; `make image` and `image-test` build the container and run the fast
+suite *inside* it, which is the only thing that catches a missing system library before a
+deployment does. `make aws-deploy` and `aws-bootstrap` are the two that need credentials.
+
+**Milestones.** M21 settings and `S3Storage`; M22 the container and its entrypoint; M23
+`SageMakerJobRunner`; M24 Postgres, Alembic and `S3ModelRegistry`; M25 the CDK infrastructure; M26
+observability and the two documents. The milestone table higher up this file stops at M7 because it
+is Phase 1's table; this paragraph is Phase 4a's.
 
 <!-- ---- END PHASE-4A ---- -->

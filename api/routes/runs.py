@@ -1,4 +1,4 @@
-"""The run lifecycle: `POST /runs`, the history, one run, its artefacts and cancel (plan §8).
+"""The run lifecycle: `POST /runs`, the history, one run, its artefacts and cancel (design §4.3-§4.7).
 
 `POST /runs` validates **synchronously** (plan §8) and answers `409` with the whole
 `ValidationReport` beside M1's error envelope when a blocking error remains, so the Setup screen's
@@ -6,32 +6,39 @@ inline list renders from one response. A run that passes gets its directory and 
 documents written before the job is submitted, so the very first `GET /runs/{id}` the Running screen
 issues - which can land microseconds after the `202` - always finds something true to render.
 
-Both flows are the real thing. A **scoring** run resolves the model version through the engine's
-one resolver, validates the upload against *that* version's saved schema, pins the resolved id on
-`run.json`, and submits `Pipeline.run_score`. A **training** run submits `Pipeline.run_train`. The
-choice is made on `body.mode` and on nothing else: it used to be made on whether a model version
-had been resolved, which is only ever true on the score path, so every training run fell to
-DEC-060's M2 placeholder and stopped at `prepare` with `STAGE_NOT_IMPLEMENTED` long after M3 had
-made the flow work (DEC-081). Either way the pipeline owns `status.json` and `run_manifest.json`
-from the moment the job starts, so no stage on the Running screen ever shows a number nobody
-measured.
+Both flows are now the real thing. A **scoring** run resolves the model version through the
+engine's one resolver, validates the upload against *that* version's saved schema and pins the
+resolved id on `run.json`; a **training** run runs `Pipeline.run_train`. Since M2 a training run
+submitted `build_m2_job` instead - two real stages and an honest stop at `prepare` - so training
+through this API could not succeed even though the flow behind it was complete; `engine.runs`
+routes it to `build_train_job` now (DEC-326).
 
-Run creation belongs in its own module, `engine/runs.py`, which is not part of this change;
-`create_run`, `update_run`, `cancel_run` and `build_m2_job` live here until it lands, and move
-unchanged when it does. Likewise, `Pipeline` is built from the three existing dependencies here
-rather than from a `get_pipeline` provider in `api/deps.py`, which does not exist yet.
+Design §5.3's `engine/runs.py` has landed, so `create_run`, `update_run`, `update_stage`,
+`cancel_run` and the job bodies live there and are re-exported from here: this module is a router
+again. What it gained instead is the job *spec*. `POST /runs` writes `job_spec.json` beside
+`run.json` and submits `build_job_fn(spec, …)`, so the runner it hands the job to may be a thread
+pool that calls the closure or a SageMaker runner that ships the spec's key to a container and
+ignores it (DEC-324). `GET /runs/{id}` gives a runner that can lose a job the chance to say so
+before the status document is read (DEC-325).
+
+`RunRequest` also carries three fields Phase 2 will use and this phase cannot honour: a composite
+`primary_key`, `dataset_id` and `client_id`. They are refused here rather than dropped - accepting
+a request and quietly ignoring half of it is how a user comes to believe their rows were joined on
+two columns when they were joined on one.
+
+`Pipeline` is still built from the three existing dependencies here rather than from the
+`get_pipeline` provider design §4.8 adds to `api/deps.py`.
 """
 
 from __future__ import annotations
 
 import re
-from datetime import datetime
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 
-from api.deps import ConfigRootDep, JobsDep, RegistryDep, StorageDep
+from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep
 from api.routes.uploads import (
     UPLOAD_VALIDATION_FILENAME,
     http_error,
@@ -52,33 +59,39 @@ from api.schemas import (
     UploadRecord,
     ValidationErrorResponse,
 )
-from engine import __version__
-from engine.config import (
-    Catalog,
-    ResolvedConfig,
-    RunMode,
-    UseCaseConfig,
-    get_catalog,
-    resolve_config,
-    sole_key,
-)
+from engine.config import RunMode, UseCaseConfig, get_catalog, resolve_config, sole_key
 from engine.contracts import (
     ARTEFACT_REGISTRY,
     TABULAR_SCHEMAS,
-    DatasetProfile,
     FeatureSchema,
     ModelVersion,
-    RunError,
     RunRecord,
     RunState,
     RunStatus,
-    StageKey,
-    StageStatus,
     ValidationReport,
 )
-from engine.jobs import CancelToken, JobCancelledError, JobFn, JobRunner
-from engine.pipeline import STATUS_FILENAME, Pipeline, StageContext
+from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
+from engine.jobs import JobRunner, ReconcilingJobRunner
+from engine.pipeline import STATUS_FILENAME, Pipeline
 from engine.registry import ModelRegistry
+from engine.runs import (
+    CREATED_ARTEFACTS,
+    PROFILE_FILENAME,
+    RUN_CONFIG_FILENAME,
+    RUN_FILENAME,
+    RUN_MANIFEST_FILENAME,
+    VALIDATION_FILENAME,
+    build_job_fn,
+    build_m2_job,
+    build_score_job,
+    build_train_job,
+    cancel_run,
+    create_run,
+    job_spec_for,
+    update_run,
+    update_stage,
+    write_job_spec,
+)
 from engine.stages import ingest, validate
 from engine.stages.score import (
     CHAMPION_NOT_FOUND,
@@ -88,32 +101,38 @@ from engine.stages.score import (
     resolve_model_version,
 )
 from engine.storage import Storage, StorageError, run_key, upload_key
-from engine.utils.ids import new_run_id
-from engine.utils.logging import get_logger
-from engine.utils.time import utc_now
+from engine.utils.logging import get_logger, log_failure
 
 router: APIRouter = APIRouter(tags=["runs"])
 
 _LOGGER = get_logger(__name__)
 
-RUN_FILENAME: Final[str] = "run.json"
-RUN_CONFIG_FILENAME: Final[str] = "run_config.json"
-PROFILE_FILENAME: Final[str] = "profile.json"
-VALIDATION_FILENAME: Final[str] = "validation.json"
-RUN_MANIFEST_FILENAME: Final[str] = "run_manifest.json"
-"""Reserved here and written by M3 (DEC-067); the artefact route serves it the moment it is registered."""
+__all__ = [
+    "CREATED_ARTEFACTS",
+    "PROFILE_FILENAME",
+    "RUN_CONFIG_FILENAME",
+    "RUN_FILENAME",
+    "RUN_MANIFEST_FILENAME",
+    "VALIDATION_FILENAME",
+    "build_job_fn",
+    "build_m2_job",
+    "build_score_job",
+    "build_train_job",
+    "cancel_run",
+    "create_run",
+    "job_spec_for",
+    "router",
+    "update_run",
+    "update_stage",
+    "write_job_spec",
+]
+"""The router, plus the `engine.runs` names this module re-exports.
 
-CREATED_ARTEFACTS: Final[tuple[str, ...]] = (
-    RUN_FILENAME,
-    STATUS_FILENAME,
-    RUN_CONFIG_FILENAME,
-    PROFILE_FILENAME,
-    VALIDATION_FILENAME,
-)
-"""What a run directory holds at creation. `RunRecord.artefacts` is a map, so M3 only adds to it."""
-
-STAGE_NOT_IMPLEMENTED: Final[str] = "STAGE_NOT_IMPLEMENTED"
-PREPARE_NOT_IMPLEMENTED_MESSAGE: Final[str] = "Preparing features is not built yet."
+They are re-exported rather than merely moved because `api.routes.runs.create_run` is the name four
+test modules and every reader of design §5.3 already know, and because a monkeypatch of a job body
+has to address the module the route looks it up in. Listing them here says the imports are the
+public surface of this module and not leftovers (DEC-327).
+"""
 
 SCORE_ERROR_STATUS: Final[dict[str, int]] = {
     CHAMPION_NOT_FOUND: 409,
@@ -134,7 +153,7 @@ UNMAPPED_STATUS: Final[int] = 500
 """A code this router has not been taught is a server fault, not the caller's; reported as one."""
 
 ARTEFACT_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-z_]+\.(json|csv|parquet)$")
-"""Shape a URL segment must have before it is even looked up in the registry."""
+"""Shape a URL segment must have before it is even looked up in the registry (design §4.6)."""
 
 MEDIA_TYPES: Final[dict[str, str]] = {"json": "application/json", "csv": "text/csv"}
 DEFAULT_MEDIA_TYPE: Final[str] = "application/octet-stream"
@@ -196,14 +215,14 @@ def create_run_endpoint(
     storage: StorageDep,
     registry: RegistryDep,
     jobs: JobsDep,
+    settings: SettingsDep,
     response: Response,
 ) -> RunCreatedResponse | JSONResponse:
     """Validate synchronously; `409` with the full report, or `202` with a run that is already pollable.
 
-    `RunRequest` carries three fields Phase 2 will use and this phase cannot honour: a composite
-    `primary_key`, `dataset_id` and `client_id`. They are refused here rather than dropped -
-    accepting a request and quietly ignoring half of it is how a user comes to believe their rows
-    were joined on two columns when they were joined on one.
+    The run directory, including `job_spec.json`, is complete before anything is submitted: the spec
+    is what a remote runner ships to a container, so writing it after the submit would be a race
+    against a job that has already started looking for it (DEC-324).
     """
     use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
     primary_key = sole_key(body.primary_key, what="A run")
@@ -264,17 +283,9 @@ def create_run_endpoint(
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
     )
-    # The mode decides the flow, not whether a model version happened to be resolved: `version` is
-    # only ever set on the score path, so testing it here sent every training run to the M2 stub
-    # and stopped it at `prepare` (DEC-081).
-    jobs.submit(
-        record.run_id,
-        (
-            build_score_job(storage, registry, jobs, resolved=resolved, record=record, upload=upload)
-            if body.mode is RunMode.SCORE
-            else build_train_job(storage, registry, jobs, resolved=resolved, record=record, upload=upload)
-        ),
-    )
+    spec = job_spec_for(record, upload=upload, client_id=settings.client_id)
+    write_job_spec(storage, spec)
+    jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
     response.headers["Location"] = f"/runs/{record.run_id}"
     return RunCreatedResponse(run_id=record.run_id)
 
@@ -315,9 +326,15 @@ def list_runs(
     responses=_NOT_FOUND,
     summary="One run: its record and the status the Running screen polls",
 )
-def read_run(run_id: str, storage: StorageDep) -> RunDetailResponse:
-    """`run.json` + `status.json` (plan §8). Both exist from the moment the `202` is returned."""
+def read_run(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunDetailResponse:
+    """`run.json` + `status.json` (plan §8). Both exist from the moment the `202` is returned.
+
+    A runner whose jobs can end without this process hearing about it is asked to reconcile first
+    (DEC-325). `ThreadJobRunner` is not one of those and is not asked; a remote runner is, and this
+    is the poll that turns "running for ever" into the failure it has been since the container died.
+    """
     record = load_run(storage, run_id)
+    reconcile_run(jobs, run_id)
     try:
         status = storage.read_model(run_key(run_id, STATUS_FILENAME), RunStatus)
     except StorageError as exc:
@@ -332,8 +349,20 @@ def read_run(run_id: str, storage: StorageDep) -> RunDetailResponse:
     summary="One artefact of a run, whitelisted against the artefact registry",
 )
 def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
-    """A whitelist, not a path join: no segment of the URL ever reaches the filesystem."""
-    if not ARTEFACT_NAME.fullmatch(name) or not (name in ARTEFACT_REGISTRY or name in TABULAR_SCHEMAS):
+    """A whitelist, not a path join: no segment of the URL ever reaches the filesystem.
+
+    The whitelist is the union of the predictive registry and the generative one (DEC-210): a
+    root-cause or campaign-copy job writes `root_cause_summary.json`, `copy_batch.json` and the rest
+    into the *run's own* directory rather than inventing a second artefact route, so this is the one
+    place both maps are checked together. `GENERATIVE_ARTEFACTS`/`GENERATIVE_TABULAR_SCHEMAS` also
+    name a knowledge index's own files (`doc_index_manifest.json`, `chunks.parquet`, ...), which this
+    run never wrote; whitelisting them here costs nothing beyond a normal `ARTEFACT_NOT_FOUND` for a
+    name this run's directory does not hold, the same 404 an unproduced predictive artefact already
+    answers with.
+    """
+    known = name in ARTEFACT_REGISTRY or name in TABULAR_SCHEMAS
+    known = known or name in GENERATIVE_ARTEFACTS or name in GENERATIVE_TABULAR_SCHEMAS
+    if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     load_run(storage, run_id)
     try:
@@ -367,275 +396,6 @@ def cancel_run_endpoint(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunC
         return RunCancelResponse(run_id=run_id, cancelled=False, state=record.state)
     cancelled = cancel_run(storage, run_id)
     return RunCancelResponse(run_id=run_id, cancelled=True, state=cancelled.state)
-
-
-# ---------------------------------------------------------------------------
-# The run directory (moves to `engine/runs.py` when that module lands)
-# ---------------------------------------------------------------------------
-def create_run(
-    storage: Storage,
-    pipeline: Pipeline,
-    *,
-    resolved: ResolvedConfig,
-    catalog: Catalog,
-    upload: UploadRecord,
-    profile: DatasetProfile,
-    report: ValidationReport,
-    mode: RunMode,
-    primary_key: str,
-    target: str | None,
-    model_choice: str,
-    model_version_id: str | None,
-    now: datetime | None = None,
-) -> RunRecord:
-    """Write the whole run directory, in this order, then return. Nothing is submitted here.
-
-    `status.json` is written before `run.json` and both before the caller submits, so a poller can
-    never observe a run that exists but has nothing to show.
-    """
-    moment = now or utc_now()
-    run_id = new_run_id(moment)
-    config = resolved.config
-    artefacts = {name: run_key(run_id, name) for name in CREATED_ARTEFACTS}
-    storage.write_model(artefacts[RUN_CONFIG_FILENAME], resolved)
-    storage.write_model(artefacts[PROFILE_FILENAME], profile)
-    storage.write_model(artefacts[VALIDATION_FILENAME], report.model_copy(update={"run_id": run_id}))
-    storage.write_model(artefacts[STATUS_FILENAME], pipeline.initial_status(run_id, mode))
-    metric = config.model_search.metric
-    record = RunRecord(
-        run_id=run_id,
-        use_case_id=config.id,
-        use_case_name=config.name,
-        mode=mode,
-        state=RunState.PENDING,
-        created_at=moment,
-        started_at=None,
-        finished_at=None,
-        upload_id=upload.upload_id,
-        file_name=upload.file_name,
-        row_count=profile.row_count,
-        primary_key=primary_key,
-        target=target,
-        problem_type=config.problem_type,
-        model_choice=model_choice,
-        model_version_id=model_version_id,
-        best_model=None,
-        headline_metric=metric,
-        headline_metric_label=catalog.metric_label(metric),
-        headline_score=None,
-        champion=False,
-        beat_previous_champion=False,
-        overrides=dict(resolved.overrides_applied),
-        artefacts=artefacts,
-        error=None,
-        engine_version=__version__,
-    )
-    storage.write_model(artefacts[RUN_FILENAME], record)
-    return record
-
-
-def update_run(storage: Storage, run_id: str, **fields: Any) -> RunRecord:
-    """Read, `model_copy` and write `run.json`; the only writer of that document after creation."""
-    key = run_key(run_id, RUN_FILENAME)
-    record = storage.read_model(key, RunRecord).model_copy(update=fields)
-    storage.write_model(key, record)
-    return record
-
-
-def update_stage(
-    storage: Storage,
-    run_id: str,
-    stage: StageKey,
-    *,
-    state: RunState,
-    detail: str | None = None,
-    error: RunError | None = None,
-    now: datetime | None = None,
-) -> RunStatus:
-    """Move one stage, recompute the run-level state and progress, and rewrite `status.json` in full."""
-    moment = now or utc_now()
-    key = run_key(run_id, STATUS_FILENAME)
-    status = storage.read_model(key, RunStatus)
-    stages = tuple(
-        _moved(row, moment, state=state, detail=detail, error=error) if row.key is stage else row
-        for row in status.stages
-    )
-    updated = status.model_copy(
-        update={
-            "stages": stages,
-            "state": _run_state(stages),
-            "current_stage": stage if state is RunState.RUNNING else None,
-            "progress_pct": _progress(stages),
-            "updated_at": moment,
-        }
-    )
-    storage.write_model(key, updated)
-    return updated
-
-
-def cancel_run(storage: Storage, run_id: str, *, now: datetime | None = None) -> RunRecord:
-    """Rewrite both documents as cancelled: every unfinished stage stops, and the record is terminal."""
-    moment = now or utc_now()
-    key = run_key(run_id, STATUS_FILENAME)
-    status = storage.read_model(key, RunStatus)
-    stages = tuple(
-        (
-            row.model_copy(update={"state": RunState.CANCELLED, "ended_at": moment})
-            if row.state in _UNFINISHED
-            else row
-        )
-        for row in status.stages
-    )
-    storage.write_model(
-        key,
-        status.model_copy(
-            update={
-                "stages": stages,
-                "state": RunState.CANCELLED,
-                "current_stage": None,
-                "progress_pct": _progress(stages),
-                "updated_at": moment,
-            }
-        ),
-    )
-    return update_run(storage, run_id, state=RunState.CANCELLED, finished_at=moment)
-
-
-def build_score_job(
-    storage: Storage,
-    registry: ModelRegistry,
-    jobs: JobRunner,
-    *,
-    resolved: ResolvedConfig,
-    record: RunRecord,
-    upload: UploadRecord,
-) -> JobFn:
-    """The score flow of plan §6.2, off the request thread: `Pipeline.run_score` and nothing else.
-
-    The pipeline owns both documents from here on. It rewrites `status.json` at every stage
-    transition, records a failure or a cancellation *on the stage it happened at* with the detail
-    line that stage had earned, and writes `run_manifest.json` whatever the outcome - so this body
-    adds nothing to either path. In particular a `JobCancelledError` is left to propagate: the
-    runner reads it as "cancelled", and calling `cancel_run` here as the M2 body does would
-    overwrite the stage the pipeline stopped at with a blanket cancellation.
-
-    The model version is the one the request resolved and pinned on `run.json`
-    (`record.model_version_id`), never "the champion" again. The upload was validated against that
-    version's schema, so that version is the one that must score it.
-    """
-    pipeline = Pipeline(storage, registry, jobs)
-
-    def job(cancel: CancelToken) -> None:
-        pipeline.run_score(
-            StageContext(
-                run_id=record.run_id,
-                mode=RunMode.SCORE,
-                config=resolved.config,
-                resolved=resolved,
-                storage=storage,
-                registry=registry,
-                cancel=cancel,
-                primary_key=sole_key(record.primary_key, what="A scoring run"),
-                target=record.target,
-                upload_key=upload.source_key,
-                model_version_id=record.model_version_id,
-            )
-        )
-
-    return job
-
-
-def build_train_job(
-    storage: Storage,
-    registry: ModelRegistry,
-    jobs: JobRunner,
-    *,
-    resolved: ResolvedConfig,
-    record: RunRecord,
-    upload: UploadRecord,
-) -> JobFn:
-    """The train flow of plan §6.1, off the request thread: `Pipeline.run_train` and nothing else.
-
-    The mirror of :func:`build_score_job`, and for the same reasons: the pipeline owns `status.json`
-    and `run_manifest.json` from here on, records a failure on the stage it happened at, and a
-    `JobCancelledError` is left to propagate so the runner reads it as "cancelled" rather than this
-    body overwriting the stage the pipeline stopped at.
-
-    This is what DEC-060's `build_m2_job` was a placeholder for, and what DEC-081 replaced it with:
-    until then every training run submitted through the API stopped at `prepare` with
-    `STAGE_NOT_IMPLEMENTED`, although `Pipeline.run_train` had worked since M3.
-    """
-    pipeline = Pipeline(storage, registry, jobs)
-
-    def job(cancel: CancelToken) -> None:
-        pipeline.run_train(
-            StageContext(
-                run_id=record.run_id,
-                mode=RunMode.TRAIN,
-                config=resolved.config,
-                resolved=resolved,
-                storage=storage,
-                registry=registry,
-                cancel=cancel,
-                # Composite keys are Phase 2 behaviour and the train stages cannot carry one yet,
-                # so refuse at the boundary with a message rather than silently using one column.
-                primary_key=sole_key(record.primary_key, what="A training run"),
-                target=record.target,
-                upload_key=upload.source_key,
-                model_version_id=None,
-            )
-        )
-
-    return job
-
-
-def build_m2_job(
-    storage: Storage,
-    *,
-    run_id: str,
-    profile: DatasetProfile,
-    report: ValidationReport,
-    mode: RunMode,
-) -> JobFn:
-    """The M2 job body (DEC-060): ingest and validate for real, then an honest stop at `prepare`.
-
-    Both stages have already done their work on the request thread - the job replays them onto the
-    status document so the Running screen shows real detail lines - and `prepare` fails with a named
-    error instead of an unhandled `NotImplementedError`.
-
-    **Nothing in the product calls this any more** (DEC-081): `POST /runs` submits
-    :func:`build_train_job` for a training run and :func:`build_score_job` for a scoring one. It is
-    kept because its tests are the only place the coded-stop behaviour is exercised, and a future
-    stage that has to stop honestly should stop like this rather than raising.
-    """
-    checked = StageKey.VALIDATE if mode is RunMode.TRAIN else StageKey.VALIDATE_AGAINST_SCHEMA
-
-    def job(cancel: CancelToken) -> None:
-        try:
-            update_run(storage, run_id, state=RunState.RUNNING, started_at=utc_now())
-            update_stage(storage, run_id, StageKey.INGEST, state=RunState.RUNNING)
-            cancel.raise_if_cancelled()
-            update_stage(
-                storage, run_id, StageKey.INGEST, state=RunState.DONE, detail=ingest.ingest_detail(profile)
-            )
-            update_stage(storage, run_id, checked, state=RunState.RUNNING)
-            cancel.raise_if_cancelled()
-            update_stage(
-                storage, run_id, checked, state=RunState.DONE, detail=validate.validation_detail(report)
-            )
-            cancel.raise_if_cancelled()
-            failure = RunError(
-                code=STAGE_NOT_IMPLEMENTED,
-                message=PREPARE_NOT_IMPLEMENTED_MESSAGE,
-                stage=StageKey.PREPARE,
-            )
-            update_stage(storage, run_id, StageKey.PREPARE, state=RunState.FAILED, error=failure)
-            update_run(storage, run_id, state=RunState.FAILED, finished_at=utc_now(), error=failure)
-        except JobCancelledError:
-            cancel_run(storage, run_id)
-            raise
-
-    return job
 
 
 # ---------------------------------------------------------------------------
@@ -711,46 +471,18 @@ def media_type_for(name: str) -> str:
     return MEDIA_TYPES.get(name.rsplit(".", 1)[-1], DEFAULT_MEDIA_TYPE)
 
 
-def _moved(
-    row: StageStatus,
-    moment: datetime,
-    *,
-    state: RunState,
-    detail: str | None,
-    error: RunError | None,
-) -> StageStatus:
-    """One stage row after a transition; `started_at` is kept once set so durations stay honest."""
-    started = moment if state is RunState.RUNNING else row.started_at
-    ended = None if state in _UNFINISHED else moment
-    changes: dict[str, Any] = {
-        "state": state,
-        "started_at": started,
-        "ended_at": ended,
-        "duration_seconds": None if started is None or ended is None else (ended - started).total_seconds(),
-    }
-    if detail is not None:
-        changes["detail"] = detail
-    if error is not None:
-        changes["error"] = error
-    return row.model_copy(update=changes)
+def reconcile_run(jobs: JobRunner, run_id: str) -> None:
+    """Let a runner that can lose a job write the ending it never got to write.
 
-
-def _run_state(stages: tuple[StageStatus, ...]) -> RunState:
-    """The run-level state implied by its stages: failure wins, then completion, then progress."""
-    states = {row.state for row in stages}
-    if RunState.FAILED in states:
-        return RunState.FAILED
-    if RunState.CANCELLED in states:
-        return RunState.CANCELLED
-    if states <= _FINISHED:
-        return RunState.DONE
-    if states & {RunState.RUNNING, RunState.DONE}:
-        return RunState.RUNNING
-    return RunState.PENDING
-
-
-def _progress(stages: tuple[StageStatus, ...]) -> int:
-    """Done stages over total, as whole percent."""
-    if not stages:
-        return 0
-    return round(100 * sum(1 for row in stages if row.state in _FINISHED) / len(stages))
+    A no-op for every runner that is not a `ReconcilingJobRunner`, which is how `ThreadJobRunner`
+    pays nothing for a capability it does not need (DEC-325). A reconciliation that fails must not
+    fail the read: the status document is still the answer to this request, and a runner that
+    cannot reach its control plane has not made the stored documents any less true. The failure is
+    logged by the exception's class, never its message (plan §13.7).
+    """
+    if not isinstance(jobs, ReconcilingJobRunner):
+        return
+    try:
+        jobs.reconcile(run_id)
+    except Exception as exc:  # a read must not fail because a control plane did
+        log_failure(_LOGGER, "runs.reconcile", exc)

@@ -1,0 +1,40 @@
+UCI Online Retail — licence record
+==================================
+
+Dataset      Online Retail (541,909 invoice lines, 8 columns, 2010-12-01 to 2011-12-09)
+Upstream     https://archive.ics.uci.edu/dataset/352/online+retail
+Copy fetched https://raw.githubusercontent.com/databricks/Spark-The-Definitive-Guide/master/
+             data/retail-data/all/online-retail-dataset.csv
+
+LICENCE
+-------
+Creative Commons Attribution 4.0 International (CC BY 4.0), the licence the UCI Machine Learning
+Repository applies to this dataset. CC BY 4.0 permits commercial use, redistribution and
+modification, provided the source is credited.
+
+The copy actually fetched is the one shipped with Databricks' "Spark: The Definitive Guide"
+(github.com/databricks/Spark-The-Definitive-Guide), whose repository carries its own licence for
+the book's code; the data file in it is this UCI dataset.
+
+ATTRIBUTION / CITATION
+----------------------
+Chen, D. (2015). Online Retail [Dataset].
+UCI Machine Learning Repository. https://doi.org/10.24432/C5BW33
+
+The accompanying paper:
+  Chen, D., Sain, S.L., and Guo, K. "Data mining for the online retail industry: A case study of
+  RFM model-based customer segmentation using data mining." Journal of Database Marketing and
+  Customer Strategy Management, 19(3):197-208, 2012.
+
+WHICH ONLINE RETAIL THIS IS
+---------------------------
+This is **Online Retail**, the 2010-2011 log (541,909 lines), not **Online Retail II**, the
+2009-2011 log (1,067,371 lines). Online Retail II is published as an .xlsx on the same UCI host,
+which is unreachable from the environment this library was built in. The two have the same shape
+and the same aggregation story; only the date range differs. See README.md.
+
+NOT VERIFIED HERE
+-----------------
+archive.ics.uci.edu is blocked by the egress policy of the environment this library was built in,
+so the dataset page was not opened to re-read the licence banner. CC BY 4.0 is the licence the UCI
+repository states for this dataset; re-confirm on the page before any redistribution.

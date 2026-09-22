@@ -1,0 +1,8 @@
+{
+  "app": "python3 app.py",
+  "output": "cdk.out",
+  "versionReporting": false,
+  "pathMetadata": true,
+  "requireApproval": "broadening",
+  "context": {}
+}

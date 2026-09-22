@@ -1,0 +1,66 @@
+{
+  "generated_by": "python -m scripts.gen_dashboard",
+  "namespace": "MarketingAI",
+  "placeholders": {
+    "${Env}": "Settings.env of the deployment this dashboard watches.",
+    "${ClientId}": "Settings.client_id, or the literal engine.aws.metrics.UNSET_CLIENT_ID when the deployment does not name a client.",
+    "${StageDurationSecondsAlarmThresholdSeconds}": "Seconds a stage may take before the alarm fires. No default is committed: nothing in this repository has measured a stage against real data, and an invented number would read like a measurement (plan section 13.3).",
+    "${JobCostUsdDailyBudgetUsd}": "Dollars of compute per day before the alarm fires. No default is committed: a budget is a business decision, and nobody here has been told what it is."
+  },
+  "alarms": [
+    {
+      "name": "marketing-ai-${Env}-runs-failed",
+      "metric_name": "RunsFailed",
+      "namespace": "MarketingAI",
+      "dimensions": {
+        "Env": "${Env}",
+        "ClientId": "${ClientId}"
+      },
+      "statistic": "Sum",
+      "period_seconds": 300,
+      "evaluation_periods": 1,
+      "datapoints_to_alarm": 1,
+      "comparison_operator": "GreaterThanOrEqualToThreshold",
+      "threshold": 1,
+      "threshold_source": "literal",
+      "treat_missing_data": "notBreaching",
+      "rationale": "POLICY, chosen before this product has served any traffic. The threshold is 1 because a failed run is an event, not a rate: with no history there is no rate to compare it against, and the only statement anyone can defend today is 'say something the first time this happens'. One period of five minutes and one datapoint follow from that - waiting for a trend would be waiting for a trend nobody has measured. Missing data is not breaching: a deployment with no runs is idle, not broken."
+    },
+    {
+      "name": "marketing-ai-${Env}-stage-duration",
+      "metric_name": "StageDurationSeconds",
+      "namespace": "MarketingAI",
+      "dimensions": {
+        "Env": "${Env}",
+        "ClientId": "${ClientId}"
+      },
+      "statistic": "Average",
+      "period_seconds": 300,
+      "evaluation_periods": 3,
+      "datapoints_to_alarm": 3,
+      "comparison_operator": "GreaterThanThreshold",
+      "threshold": "${StageDurationSecondsAlarmThresholdSeconds}",
+      "threshold_source": "substitution",
+      "treat_missing_data": "notBreaching",
+      "rationale": "The threshold is deliberately NOT committed: how long a stage should take is a measurement, this repository has never run one against real customer data, and a number written here would be read as though it had been (plan section 13.3). The deployment supplies it. Everything else is POLICY, chosen before this product has served any traffic. Three of three periods, because one slow stage is a big dataset and three in a row is a problem."
+    },
+    {
+      "name": "marketing-ai-${Env}-job-cost",
+      "metric_name": "JobCostUsd",
+      "namespace": "MarketingAI",
+      "dimensions": {
+        "Env": "${Env}",
+        "ClientId": "${ClientId}"
+      },
+      "statistic": "Sum",
+      "period_seconds": 86400,
+      "evaluation_periods": 1,
+      "datapoints_to_alarm": 1,
+      "comparison_operator": "GreaterThanThreshold",
+      "threshold": "${JobCostUsdDailyBudgetUsd}",
+      "threshold_source": "substitution",
+      "treat_missing_data": "notBreaching",
+      "rationale": "The threshold is a budget, which is a business decision nobody has stated to this repository, so it is left as a substitution rather than invented. The one-day period is POLICY, chosen before this product has served any traffic. A budget is stated per day, so the alarm evaluates per day. Note that the metric is derived from AWS *list* prices, never from a bill, so this alarm is a tripwire on estimated spend and not on invoiced spend."
+    }
+  ]
+}

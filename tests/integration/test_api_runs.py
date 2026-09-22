@@ -12,6 +12,14 @@ never come back as a 422; and that a follow-up run carrying the suggestion is ac
 
 The parametrised sweep over `tests/fixtures/make_data.VARIANTS` at the bottom needs the real ingest
 and validate modules and skips until they land.
+
+Phase 4a moved the job body behind a document. `POST /runs` writes `job_spec.json` and submits
+`build_job_fn(spec, ...)`, which for a training run is now `Pipeline.run_train` rather than the M2
+stub (DEC-324, DEC-326) - the real flow, which needs a real frame and a real AutoGluon, and which
+every test here has stubbed out from under it. So what used to be a monkeypatch of `build_m2_job`
+is a monkeypatch of `build_job_fn`: `install_m2_job_stub` puts the same M2 body back, which is
+still the honest way to move a run through the real status machine in milliseconds. The real flow
+reaching `done` through this same API is `tests/integration/test_jobs_as_sagemaker.py`.
 """
 
 from __future__ import annotations
@@ -27,6 +35,7 @@ from fastapi.testclient import TestClient
 from api.main import create_app
 from api.routes import runs
 from api.schemas import RunDetailResponse, RunListResponse
+from engine import runs as engine_runs_module
 from engine.config import (
     ColumnRole,
     ColumnType,
@@ -262,6 +271,29 @@ def install_validate_stub(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(validate, "validation_detail", stub_validation_detail, raising=False)
 
 
+def install_m2_job_stub(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Submit the M2 body for every run, in place of the flow the spec names.
+
+    The route derives its closure from `job_spec.json` now, so this replaces `build_job_fn` rather
+    than a job body: the spec is still written, still submitted and still the only description of
+    the work - only what that description is *rendered into* changes, which is exactly the seam
+    DEC-324 introduced. Everything the M2 body needs is read back out of the run directory the
+    route has already written, so the stub knows nothing the container would not know.
+    """
+
+    def build(spec: Any, *, storage: Any, registry: Any) -> Any:
+        del registry
+        return runs.build_m2_job(
+            storage,
+            run_id=spec.run_id,
+            profile=storage.read_model(run_key(spec.run_id, runs.PROFILE_FILENAME), DatasetProfile),
+            report=storage.read_model(run_key(spec.run_id, runs.VALIDATION_FILENAME), ValidationReport),
+            mode=spec.mode,
+        )
+
+    monkeypatch.setattr(runs, "build_job_fn", build)
+
+
 # ---------------------------------------------------------------------------
 # Fixtures and helpers
 # ---------------------------------------------------------------------------
@@ -302,7 +334,7 @@ def install_stub_train_job(monkeypatch: pytest.MonkeyPatch) -> None:
 def client(config_root: Path, data_dir: Path, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
     install_ingest_stub(monkeypatch)
     install_validate_stub(monkeypatch)
-    install_stub_train_job(monkeypatch)
+    install_m2_job_stub(monkeypatch)
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as test_client:
         yield test_client
 
@@ -315,8 +347,9 @@ def blocked_client(
     install_ingest_stub(monkeypatch)
     install_validate_stub(monkeypatch)
 
-    # `build_train_job(storage, registry, jobs, *, ...)` — three positional arguments, like
-    # `build_score_job`, so the stub must accept them (DEC-081).
+    # `build_job_fn(spec, *, storage, registry)` is what the route submits now, so that is the seam
+    # (DEC-324). A training run really does reach the train flow (DEC-081), which is why it has to be
+    # blocked here rather than allowed to fit an AutoGluon model in the fast suite.
     def blocking(*_args: Any, **_kwargs: Any) -> Any:
         def job(cancel: CancelToken) -> None:
             cancel.wait(10)
@@ -324,8 +357,7 @@ def blocked_client(
 
         return job
 
-    # DEC-081: a training run submits the train flow, so that is what must block here.
-    monkeypatch.setattr(runs, "build_train_job", blocking)
+    monkeypatch.setattr(runs, "build_job_fn", blocking)
     app = create_app(config_root=config_root, data_dir=data_dir)
     app.state.jobs = ThreadJobRunner(max_workers=1)
     with TestClient(app) as test_client:
@@ -452,7 +484,9 @@ def test_clean_upload_starts_a_run_that_is_pollable_immediately(
     assert detail.status.run_id == run_id
     assert 0 <= detail.status.progress_pct <= 100
     assert {stage.state for stage in detail.status.stages} <= {RunState.PENDING, RunState.RUNNING}
-    assert len(storage.list_keys(f"runs/{run_id}/")) == 5
+    assert set(storage.list_keys(f"runs/{run_id}/")) == {
+        f"runs/{run_id}/{name}" for name in (*runs.CREATED_ARTEFACTS, "job_spec.json")
+    }
 
 
 def test_run_record_at_creation_matches_the_design_document(blocked_client: TestClient) -> None:
@@ -478,13 +512,15 @@ def test_run_record_at_creation_matches_the_design_document(blocked_client: Test
     }
 
 
-def test_run_directory_holds_exactly_the_five_m2_artefacts(
+def test_run_directory_holds_the_five_created_artefacts_and_the_job_spec(
     blocked_client: TestClient, storage: LocalStorage
 ) -> None:
+    """The spec is beside them and not one of them: it is what the run was handed (DEC-324)."""
     run_id = start_run(blocked_client).json()["run_id"]
     assert set(storage.list_keys(f"runs/{run_id}/")) == {
-        f"runs/{run_id}/{name}" for name in runs.CREATED_ARTEFACTS
+        f"runs/{run_id}/{name}" for name in (*runs.CREATED_ARTEFACTS, "job_spec.json")
     }
+    assert "job_spec.json" not in runs.CREATED_ARTEFACTS
 
 
 def test_a_training_run_submits_the_train_flow(
@@ -512,9 +548,15 @@ def test_a_training_run_submits_the_train_flow(
 
         return build
 
-    monkeypatch.setattr(runs, "build_train_job", spy("train"))
-    monkeypatch.setattr(runs, "build_score_job", spy("score"))
-    monkeypatch.setattr(runs, "build_m2_job", spy("m2"))
+    # The route derives its closure from `job_spec.json` now (DEC-324), so the entrypoint recorded
+    # on the spec is what decides the flow. DEC-081's property is unchanged and still worth pinning:
+    # a training run must reach the train flow, not the M2 stub.
+    def spy_build(spec: Any, **kwargs: Any) -> Any:
+        del kwargs
+        built.append(spec.entrypoint.value)
+        return lambda _cancel: None
+
+    monkeypatch.setattr(runs, "build_job_fn", spy_build)
     app = create_app(config_root=config_root, data_dir=data_dir)
     with TestClient(app) as test_client:
         run_id = start_run(test_client).json()["run_id"]
@@ -523,10 +565,17 @@ def test_a_training_run_submits_the_train_flow(
 
 
 def test_the_m2_stub_is_no_longer_reachable_from_the_route() -> None:
-    """It is kept for its own tests (below) and called by nothing (DEC-081)."""
+    """It is kept for its own tests (below) and called by nothing (DEC-081, DEC-324).
+
+    `build_m2_job` and the two flow builders live in `engine/runs.py` now and are re-exported from
+    the route, so the reachability question is asked of the module that does the submitting: the
+    route builds a `JobSpec` and calls `build_job_fn`, and nothing on that path names the stub.
+    """
     source = Path(runs.__file__).read_text(encoding="utf-8")
-    body = source.split("def build_m2_job", 1)[0]
-    assert "build_m2_job(" not in body, "the route still submits the M2 stub"
+    assert "build_m2_job(" not in source, "the route still submits the M2 stub"
+    assert "build_job_fn(" in source, "the route no longer derives its job from the spec"
+    engine_runs = Path(engine_runs_module.__file__).read_text(encoding="utf-8")
+    body = engine_runs.split("def build_m2_job", 1)[0]
     assert "build_train_job(" in body and "build_score_job(" in body
 
 
@@ -937,6 +986,59 @@ def test_cancel_an_unknown_run_is_404(client: TestClient) -> None:
 
 
 # ---------------------------------------------------------------------------
+# Reconciliation: a runner that can lose a job gets to say so first (DEC-325)
+# ---------------------------------------------------------------------------
+class _Reconciling:
+    """A `JobRunner` whose jobs can end without this process hearing about it."""
+
+    def __init__(self, *, raising: bool = False) -> None:
+        self.reconciled: list[str] = []
+        self._raising = raising
+
+    def submit(self, job_id: str, fn: Any) -> Any:  # pragma: no cover - the run already exists
+        raise AssertionError("this runner is swapped in after the run was created")
+
+    def status(self, job_id: str) -> Any:  # pragma: no cover - never asked
+        raise KeyError(job_id)
+
+    def cancel(self, job_id: str) -> bool:  # pragma: no cover - never asked
+        return False
+
+    def shutdown(self, *, wait: bool = True) -> None:
+        del wait
+
+    def reconcile(self, job_id: str) -> None:
+        self.reconciled.append(job_id)
+        if self._raising:
+            raise RuntimeError("the control plane could not be reached")
+
+
+def test_reading_a_run_lets_the_runner_write_an_ending_it_never_got_to_write(
+    client: TestClient,
+) -> None:
+    """`ThreadJobRunner` is not asked at all; a remote runner is, on every poll."""
+    run_id = start_run(client).json()["run_id"]
+    await_job(client, run_id)
+    runner = _Reconciling()
+    client.app.state.jobs = runner
+
+    assert client.get(f"/runs/{run_id}").status_code == 200
+    assert runner.reconciled == [run_id]
+
+
+def test_a_reconciliation_that_fails_does_not_fail_the_read(client: TestClient) -> None:
+    """The stored documents are still the answer; a runner that cannot reach AWS has not changed them."""
+    run_id = start_run(client).json()["run_id"]
+    await_job(client, run_id)
+    client.app.state.jobs = _Reconciling(raising=True)
+
+    response = client.get(f"/runs/{run_id}")
+
+    assert response.status_code == 200
+    assert RunDetailResponse.model_validate(response.json()).run.run_id == run_id
+
+
+# ---------------------------------------------------------------------------
 # The acceptance sweep over the committed generator, once ingest and validate land
 # ---------------------------------------------------------------------------
 TRAIN_VARIANTS = [name for name, code in VARIANTS.items() if VARIANT_SPECS[name].has_target]
@@ -963,11 +1065,12 @@ def test_broken_fixture_returns_409_with_the_validation_payload(
 ) -> None:
     """Design §6.9: every error-severity variant is refused with its code; warnings never block.
 
-    The train job is stubbed for the same reason the `client` fixture stubs it: a warning-only
-    variant is accepted with a 202, and since DEC-081 that really does start the train flow, which
-    would fit an AutoGluon model per variant in the fast suite.
+    The job body is stood in for even though ingest and validate are real here: what this sweep is
+    about is the verdict `POST /runs` returns, and a variant that passes would otherwise fit an
+    AutoGluon model per variant, because a training run really does reach the train flow now
+    (DEC-081, DEC-326).
     """
-    install_stub_train_job(monkeypatch)
+    install_m2_job_stub(monkeypatch)
     use_case = use_case_for(variant)
     frame = generate(GenerationSpec(use_case, variant=variant, config_root=config_root))
     payload = frame.to_csv(index=False, lineterminator="\n").encode()

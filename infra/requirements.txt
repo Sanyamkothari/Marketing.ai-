@@ -1,0 +1,8 @@
+# Installed into `.venv-infra` on top of the `deploy` extra (aws-cdk-lib, constructs, cdk-nag),
+# which `make infra-setup` installs from pyproject.toml. Only the tools the infrastructure suite
+# runs with go here; the library pins stay in one place, next to every other pin in the project.
+#
+# ruff and black are NOT here on purpose: `make infra-lint` runs those from the main `.venv`, so
+# infra/ and engine/ are formatted by one version of one formatter rather than two that drift.
+pytest==9.1.1
+mypy==2.3.1

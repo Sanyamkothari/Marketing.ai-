@@ -9,6 +9,9 @@ Contract schema version: 1.
 | Method | Path | Summary | Response model |
 |---|---|---|---|
 | GET | `/healthz` | Liveness probe | HealthResponse |
+| GET | `/indexes/{index_id}` | One index in full: its status, its manifest and, once graded, its evaluation | IndexDetailResponse |
+| POST | `/indexes/{index_id}/ask` | Answer one question from an index, grounded in its documents or refused | AssistantAnswer |
+| POST | `/indexes/{index_id}/evaluate` | Re-grade an already-built index against a reference set, without rebuilding it | IndexJobStartedResponse |
 | GET | `/industries` | Every industry journey with its stages and use-case cards | IndustriesResponse |
 | GET | `/models` | Registered model versions, newest first, with the champion flagged | ModelListResponse |
 | POST | `/models/{model_id}/approve` | Approve a version that is waiting for a human, making it champion | ModelVersionResponse |
@@ -17,11 +20,19 @@ Contract schema version: 1.
 | POST | `/runs` | Validate an upload and, when it passes, start a run | RunCreatedResponse |
 | GET | `/runs/{run_id}` | One run: its record and the status the Running screen polls | RunDetailResponse |
 | GET | `/runs/{run_id}/artefacts/{name}` | One artefact of a run, whitelisted against the artefact registry | - |
+| POST | `/runs/{run_id}/campaign-copy` | Start campaign-copy generation over a finished scoring run | GenerativeJobStartedResponse |
+| POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/approve` | Record that a person approved one campaign-copy template | CopyTemplate |
+| POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate` | Re-run generation for one campaign-copy template in place | CopyTemplate |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
+| GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
+| POST | `/runs/{run_id}/root-cause` | Start a root-cause summary over a finished scoring run | GenerativeJobStartedResponse |
 | GET | `/runs/{run_id}/scores.csv` | The scored rows of a scoring run as CSV | - |
 | POST | `/uploads` | Store a CSV or Parquet file, profile it and return everything the Setup screen renders | UploadResponse |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
+| GET | `/use-cases/{use_case_id}/indexes` | Every index this use case has built or graded, newest first | IndexListResponse |
+| POST | `/use-cases/{use_case_id}/indexes` | Start a knowledge-index build, and grade it when a reference set is given | IndexJobStartedResponse |
+| POST | `/use-cases/{use_case_id}/reference-sets` | Profile an uploaded reference-question file | ReferenceSetResponse |
 | GET | `/use-cases/{use_case_id}/template.csv` | The upload template of one use case as CSV | - |
 | GET | `/use-cases/{use_case_id}/template_README.md` | The upload template's README of one use case as Markdown | - |
 
@@ -77,6 +88,29 @@ The failure attached to a failed run or stage.
 | `code` | string | yes | Machine-readable failure code, from the validation table or the engine. |
 | `message` | string | yes | Business-language explanation of what went wrong. |
 | `stage` | StageKey ("ingest" \| "validate" \| "prepare" \| "split" \| "train" \| "evaluate" \| "explain" \| "register" \| "validate_against_schema" \| "predict" \| "explain_rows" \| "actions" \| "export") \| null | yes | Stage that failed, when one was running. |
+
+### `job_spec.json`
+
+`job_spec.json` - the declarative description of the work a run's job has to do (DEC-324).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `job_id` | string | yes | Job id in the runner's vocabulary; the run id today. |
+| `run_id` | string | yes | Run this job produces. |
+| `entrypoint` | JobEntrypoint ("train" \| "score") | yes | Which pipeline flow to run. |
+| `mode` | RunMode ("train" \| "score") | yes | train or score; the same distinction the run record carries. |
+| `use_case_id` | string | yes | Use case the run belongs to. |
+| `run_config_key` | string | yes | Storage key of run_config.json, the resolved configuration. |
+| `upload_key` | string | yes | Storage key of the uploaded file the run consumes. |
+| `upload_format` | "csv" \| "parquet" | yes | Format of the uploaded file. |
+| `primary_key` | string | yes | Column identifying each entity. |
+| `target` | string \| null | no | Target column; set for a training job only. |
+| `model_version_id` | string \| null | no | Model version to score with; set for a scoring job only. |
+| `engine_version` | string | yes | Engine version that wrote this spec. |
+| `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the spec was written. |
+| `backend` | string | no | Where this job is meant to run; filled in by the runner. |
+| `tags` | object of string -> string | no | Cost-allocation tags the job carries: product, client, use_case, run_id. |
 
 ### `status.json`
 
@@ -1141,13 +1175,13 @@ Every choice that determines a trained model, and nothing else.  `train(recipe)`
 
 #### CostEstimate
 
-What a run cost to produce.  `estimated_usd` is null for a local run rather than zero: nothing was billed, and a fabricated zero would be indistinguishable from a real measurement of free compute (plan section 13.3).
+What a run cost to produce.  `estimated_usd` is null for a local run rather than zero: nothing was billed, and a fabricated zero would be indistinguishable from a real measurement of free compute (plan section 13.3).  It is null again whenever the number cannot be stated honestly: no billable time reported, no published rate for that instance in that region, or no price table at all. When it *is* set it is billable seconds multiplied by a **published AWS list price**, and `basis` says so in those words, naming the rate, the offer version and the date it was published. A list price is not a bill - it ignores savings plans, spot, free tier, tax and any negotiated discount - so `basis` is the field that keeps the number honest and must always be read with it (DEC-330).
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `compute_seconds` | number | yes | Wall-clock seconds of compute the run consumed. |
-| `estimated_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
+| `estimated_usd` | number \| null | no | Billable time at the published list rate named in `basis`; null when it cannot be stated. |
 | `basis` | string | yes | How the estimate was derived, in plain words. |
 
 #### LLMUsage
@@ -1175,6 +1209,13 @@ Where a run actually ran, and what that cost.  `job_arn` and `instance_type` are
 | `instance_type` | string \| null | no | Instance the managed job ran on; null for a local run. |
 | `duration_s` | number | yes | Wall-clock seconds the compute was occupied. |
 | `cost_estimate_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
+| `entrypoint` | JobEntrypoint ("train" \| "score") \| null | no | Container entrypoint the managed job ran; null for a local run. |
+| `job_name` | string \| null | no | Name of the managed job; null for a local run. |
+| `instance_count` | integer \| null | no | Instances the managed job ran on; null for a local run. |
+| `region` | string \| null | no | Region the managed job ran in; null for a local run. |
+| `image_uri` | string \| null | no | Container image the managed job ran; null for a local run. |
+| `billable_seconds` | number \| null | no | Seconds per instance the platform reports as billable; null when it reports none. |
+| `billable_seconds_source` | string \| null | no | API field `billable_seconds` was read from; null when there is no such number. |
 
 ## Tabular artefacts
 

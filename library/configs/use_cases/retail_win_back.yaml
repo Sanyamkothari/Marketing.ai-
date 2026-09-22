@@ -1,0 +1,67 @@
+id: retail-win-back
+name: Retail Win-back
+description: Ranks customers who have stopped buying by how likely they are to order again, so a win-back budget goes to the ones an offer can actually move.
+lifecycle_stage: Win-back
+entity: shopper                            # the engine's copy says "one row per shopper"
+
+# UCI Online Retail, a 541,909-line invoice log from a UK gift retailer, aggregated to one row per
+# lapsed customer by library/online-retail/fetch.py. Every feature below is an aggregate of that
+# customer's own invoices on or before the 2011-09-10 snapshot; `reactivated_90d` is the only thing
+# read from after it. When Phase 2's aggregation lands, that script becomes a mapping file.
+
+target:
+  column: reactivated_90d
+  positive_label: 1
+  definition: The shopper placed another order in the 90 days after the snapshot
+  label_source: UCI Online Retail invoice log, derived (see library/online-retail/fetch.py)
+
+primary_key_hints: [customer_id, shopper_id, id]
+
+# The file is a single snapshot, so `snapshot_date` is the same date in every row and the split
+# stays random_stratified (the engine default). A file with several snapshots would set
+# split.type: time_based and split.time_column: snapshot_date instead.
+
+model_search:
+  metric: pr_auc                           # 41% of this audience comes back, but the business question is
+                                           # "who is worth an offer", so ranking quality on the positives is
+                                           # what the search optimises
+
+actions:
+  score_field: winback_prob
+  bands:
+    - {name: High,   min_score: 0.80, action: "Best offer + free delivery"}
+    - {name: Medium, min_score: 0.50, action: "Standard offer"}
+    - {name: Low,    min_score: 0.00, action: "Newsletter only"}
+  suppression:
+    opt_out_column: null                   # the public log carries no consent or contact history
+    recently_contacted_column: null
+
+output:
+  kpi:
+    label: "Shoppers worth an offer"
+    formula: 'count_where_band_in(["High","Medium"])'
+
+ui:
+  pages:
+    data: "Purchase history at the snapshot"
+    model: "Win-back Propensity Model"
+    output: "Win-back List / Offers"
+
+template:
+  columns:
+    - {name: customer_id,              role: primary_key, type: string,  description: "Unique shopper identifier from the invoice log. Never used as a feature.",  examples: ["12346","12839","13047","15311","17850"]}
+    - {name: snapshot_date,            role: time,        type: date,    description: "Date the features describe the shopper as of. Nothing after it may be used.", examples: ["2011-09-10","2011-09-10","2011-09-10","2011-09-10","2011-09-10"]}
+    - {name: country,                  role: feature,     type: string,  description: "Country the shopper usually orders from",                                     examples: ["United Kingdom","United Kingdom","France","Germany","EIRE"]}
+    - {name: recency_days,             role: feature,     type: integer, description: "Days between the shopper's last order and the snapshot. At least 90 by construction - this file is the lapsed audience.", examples: ["91","118","164","203","282"]}
+    - {name: tenure_days,              role: feature,     type: integer, description: "Days between the shopper's first order and the snapshot",                      examples: ["91","172","215","260","282"]}
+    - {name: orders_total,             role: feature,     type: integer, description: "Distinct orders placed on or before the snapshot",                             examples: ["1","2","3","6","12"]}
+    - {name: items_total,              role: feature,     type: integer, description: "Items bought on or before the snapshot, summed over every order",              examples: ["12","74","168","430","2104"]}
+    - {name: distinct_products,        role: feature,     type: integer, description: "Distinct product codes bought on or before the snapshot",                      examples: ["1","8","19","52","134"]}
+    - {name: active_months,            role: feature,     type: integer, description: "Calendar months in which the shopper placed at least one order",               examples: ["1","1","2","4","7"]}
+    - {name: spend_total,              role: feature,     type: float,   description: "Total order value on or before the snapshot",                                   examples: ["25.50","148.20","318.70","961.44","5310.28"]}
+    - {name: order_value_mean,         role: feature,     type: float,   description: "Mean value of the shopper's orders",                                            examples: ["25.50","74.10","246.98","320.48","442.52"]}
+    - {name: order_value_max,          role: feature,     type: float,   description: "Value of the shopper's largest order",                                          examples: ["25.50","96.80","287.89","512.30","1840.75"]}
+    - {name: days_between_orders_mean, role: feature,     type: float,   description: "Mean days between consecutive orders; 0 when the shopper ever placed only one", examples: ["0.0","0.0","31.5","47.25","184.0"]}
+    - {name: returned_orders,          role: feature,     type: integer, description: "Orders the shopper cancelled or returned on or before the snapshot",            examples: ["0","0","1","2","5"]}
+    - {name: returned_items,           role: feature,     type: integer, description: "Items returned on or before the snapshot",                                      examples: ["0","0","3","24","180"]}
+    - {name: reactivated_90d,          role: target,      type: integer, description: "Target: 1 when the shopper ordered again within 90 days of the snapshot, else 0. Leave blank when scoring.", examples: ["0","1","0","1","1"]}

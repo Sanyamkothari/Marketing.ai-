@@ -1,0 +1,23 @@
+schema_version: 1
+id: insurance
+name: Insurance
+journey_label: Policyholder Lifecycle
+
+# One public dataset carries this industry today: the Kaggle Health Insurance Cross-Sell set, at
+# Awareness. The renewal stage is planned; no use-case file exists for it, so it carries its own
+# name and description.
+
+stages:
+  - id: awareness
+    name: Awareness
+    ai_type: predictive
+    use_cases:
+      - {id: insurance-cross-sell, status: available}
+  - id: renewal
+    name: Renewal
+    ai_type: hybrid
+    use_cases:
+      - id: policy-lapse-prevention
+        status: planned
+        name: Policy Lapse Prevention
+        description: Predicts which policies will lapse at renewal and drafts the retention offer the policyholder is most likely to accept.

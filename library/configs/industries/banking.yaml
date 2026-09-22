@@ -1,0 +1,37 @@
+schema_version: 1
+id: banking
+name: Banking
+journey_label: Client Lifecycle            # str; overview subtitle and breadcrumb root
+
+# Two public datasets carry this industry today, one at each end of the lifecycle: UCI Bank
+# Marketing at Awareness and UCI Default of Credit Card Clients at Service / Payments. The planned
+# entries are the stages the library has no public dataset for yet; they carry their own copy
+# because no use-case file exists for them.
+
+stages:                                    # ordered; the overview renders them left to right
+  - id: awareness
+    name: Awareness
+    ai_type: predictive                    # -> "P"
+    use_cases:
+      - {id: bank-term-deposit, status: available}
+  - id: onboarding
+    name: Onboarding
+    ai_type: generative                    # -> "G"
+    use_cases:
+      - id: account-opening-assistant
+        status: planned
+        name: Account Opening Assistant
+        description: A chat assistant grounded in product terms and KYC rules that walks a new client through opening an account.
+  - id: service_payments
+    name: Service / Payments
+    ai_type: predictive                    # -> "P"
+    use_cases:
+      - {id: card-default-propensity, status: available}
+  - id: attrition
+    name: Attrition
+    ai_type: hybrid                        # -> "H"
+    use_cases:
+      - id: primary-bank-attrition
+        status: planned
+        name: Primary Bank Attrition
+        description: Predicts which clients are moving their salary or direct debits to another bank, and drafts the retention conversation.

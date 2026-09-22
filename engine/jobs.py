@@ -76,7 +76,19 @@ JobFn = Callable[[CancelToken], None]
 
 @runtime_checkable
 class JobRunner(Protocol):
-    """Runs pipeline work off the request thread; a SageMaker-backed implementation lands in Phase 4."""
+    """Runs pipeline work off the request thread; `ThreadJobRunner` here, `SageMakerJobRunner` on AWS.
+
+    **This member list is frozen.** `_NoJobs` fakes in four test modules implement exactly these
+    four methods and `tests/unit/test_jobs.py` asserts `isinstance(runner, JobRunner)`, so adding a
+    member would break them all. A capability only some runners have goes in its own protocol -
+    see `ReconcilingJobRunner` - which is how Phase 4a adds reconciliation without a protocol
+    change (DEC-325).
+
+    Note that `submit` takes a *callable*. That is right for a thread pool and impossible for a
+    container, and the resolution is not to change this signature: `engine.contracts.JobSpec`
+    becomes the declarative description of the work and the callable is derived from it, so a
+    remote runner ships the spec and ignores the closure (DEC-324).
+    """
 
     def submit(self, job_id: str, fn: JobFn) -> JobInfo: ...
 
@@ -85,6 +97,22 @@ class JobRunner(Protocol):
     def cancel(self, job_id: str) -> bool: ...
 
     def shutdown(self, *, wait: bool = True) -> None: ...
+
+
+@runtime_checkable
+class ReconcilingJobRunner(Protocol):
+    """A runner whose jobs can end without this process ever hearing about it.
+
+    `ThreadJobRunner` always knows: the job ran on one of its own threads, so `status()` is the
+    truth. A remote job is different - the container can be killed, the instance can fail to start,
+    the job can be stopped from the console - and in every one of those cases `status.json` is left
+    saying "running" forever because nothing in this process was there to write the ending.
+
+    A runner that knows this about itself implements `reconcile`, and `GET /runs/{id}` calls it
+    before it reads the status document. Everything else stays as it was (DEC-325).
+    """
+
+    def reconcile(self, job_id: str) -> JobInfo | None: ...
 
 
 class ThreadJobRunner:
@@ -179,3 +207,38 @@ class ThreadJobRunner:
                 return
             self._jobs[job_id] = current.model_copy(update=dict(changes))
             self._done[job_id].set()
+
+
+class NullJobRunner:
+    """A `JobRunner` for a process that submits nothing.
+
+    Two callers need one. `Pipeline.__init__` requires a runner even in the flows that never submit
+    anything - four test modules define a private `_NoJobs` class for exactly this - and the
+    SageMaker container is already *inside* the job, so submitting another would be a bug worth an
+    exception rather than a silent recursion.
+
+    `submit` raises, because a process that reaches it has misunderstood where it is. The other
+    three answer the way an empty runner honestly can.
+    """
+
+    def submit(self, job_id: str, fn: JobFn) -> JobInfo:
+        """Always raises: this process runs jobs, it does not hand them out."""
+        del fn
+        raise RuntimeError(f"This process submits no jobs; {job_id!r} was not queued.")
+
+    def status(self, job_id: str) -> JobInfo:
+        """Always raises `KeyError`, which is what `JobRunner.status` promises for an unknown id."""
+        raise KeyError(job_id)
+
+    def cancel(self, job_id: str) -> bool:
+        """False: there is nothing here to cancel."""
+        del job_id
+        return False
+
+    def shutdown(self, *, wait: bool = True) -> None:
+        """Nothing to shut down."""
+        del wait
+
+
+_: type[JobRunner] = NullJobRunner
+"""`NullJobRunner` must satisfy the protocol; mypy checks this line so no test has to."""

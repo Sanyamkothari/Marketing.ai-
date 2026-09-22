@@ -1,0 +1,74 @@
+# Criteo Uplift Prediction Dataset v2.1 -> use case `criteo-uplift` (PLANNED, Phase 3b)
+#
+# The shape Phase 2's column-mapping UI will import. Written against the published schema; the
+# file itself was never fetched in the environment this library was built in, so `rows` below is
+# Criteo's published figure and not a count this library made. fetch.py's verify() re-checks the
+# column list against this block on the first real download.
+schema_version: 1
+dataset: criteo-uplift
+use_case: criteo-uplift
+config_root: null                          # the use case is NOT installed; see use_case.yaml here
+status: planned                            # reserved for Phase 3b uplift (plan section 12)
+
+licence: CC-BY-NC-SA-4.0                   # non-commercial; see LICENSE.txt before any use
+
+source:
+  file: data/criteo-research-uplift-v2.1.csv.gz
+  format: csv
+  compression: gzip
+  delimiter: ","
+  encoding: utf-8
+  rows: 13979592                           # Criteo's published figure
+  one_row_per: impression                  # one row per randomised user-impression
+
+prepared:
+  file: data/prepared.csv
+  built_by: fetch.py
+  changes:
+    - "sampled to at most 1,000,000 rows, seeded, proportional per chunk so the treated/control ratio holds"
+    - "impression_id added: the 1-based row number in the published order, assigned before sampling"
+  note: "NEVER RUN in this environment - go.criteo.net and huggingface.co are both blocked here."
+
+experiment:                                # what makes this dataset different from the other five
+  randomised_lever: treatment              # 1 = eligible to be shown the ad, 0 = held out. Randomised.
+  treated_share: 0.85                      # Criteo's published figure
+  outcome_primary: conversion
+  outcome_secondary: visit
+  not_a_lever: exposure                    # whether the ad was ACTUALLY shown: an outcome, see below
+
+roles:
+  primary_key: impression_id
+  target: conversion                       # for Phase 3b: the OUTCOME, with `treatment` as the lever
+  positive_label: 1
+  treatment: treatment                     # no role for this in the Phase 1 schema; Phase 3b needs one
+  time: null                               # the file carries no timestamps
+
+columns:
+    - {source: null,       standard: impression_id, role: primary_key,
+       derived: "1-based row number in the published order; the file ships no key of its own"}
+    - {source: f0,         standard: f0,         role: feature, note: "anonymised dense float; Criteo publishes no meaning"}
+    - {source: f1,         standard: f1,         role: feature}
+    - {source: f2,         standard: f2,         role: feature}
+    - {source: f3,         standard: f3,         role: feature}
+    - {source: f4,         standard: f4,         role: feature}
+    - {source: f5,         standard: f5,         role: feature}
+    - {source: f6,         standard: f6,         role: feature}
+    - {source: f7,         standard: f7,         role: feature}
+    - {source: f8,         standard: f8,         role: feature}
+    - {source: f9,         standard: f9,         role: feature}
+    - {source: f10,        standard: f10,        role: feature}
+    - {source: f11,        standard: f11,        role: feature}
+    - {source: treatment,  standard: treatment,  role: treatment,
+       note: "Randomised. The lever. Phase 1's schema has no `treatment` role, which is one reason this use case is not installed."}
+    - {source: conversion, standard: conversion, role: target,
+       note: "About 0.29% positive overall: read PR-AUC, and expect TARGET_IMBALANCE_SEVERE on every run."}
+    - {source: visit,      standard: visit,      role: target_alternative,
+       note: "About 4.7% positive. The easier label; uplift work usually reports both."}
+    - {source: exposure,   standard: exposure,   role: excluded,
+       note: "NOT A FEATURE AND NOT A TREATMENT. Whether the ad was actually rendered, which happens after
+              randomisation and is correlated with everything about the user. Using it as a feature, or
+              conditioning on it, turns a clean randomised experiment into an observational one with an
+              obvious confound."}
+
+dropped: []                                # nothing is dropped; `exposure` is carried but excluded from features
+pii: []                                    # twelve anonymised floats and four binary flags; nothing identifies a person

@@ -33,6 +33,27 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30                 # the fast suite is minutes; this only catches a hang or a wedged install
 
+    # Phase 4a: the metadata tests skip with a reason when there is no server. Here there is one, so
+    # MARKETING_AI_REQUIRE_POSTGRES turns that skip into a failure - a test that silently stopped
+    # running is worse than one that fails (DEC-344).
+    services:
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: marketing
+          POSTGRES_PASSWORD: marketing
+          POSTGRES_DB: marketing
+        ports: ["55432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U marketing -d marketing"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 30
+
+    env:
+      MARKETING_AI_REQUIRE_POSTGRES: "1"
+      MARKETING_AI_TEST_DATABASE_URL: postgresql+psycopg://marketing:marketing@localhost:55432/marketing
+
     steps:
       - uses: actions/checkout@v5
 
@@ -76,3 +97,60 @@ jobs:
 
       - name: make test
         run: make test
+
+  # --- Phase 4a -------------------------------------------------------------
+  # Two jobs the main gate cannot do. `infra` needs node and a second virtualenv; `image` needs a
+  # Docker daemon. Both are still credential-free: nothing here deploys anything, and
+  # `deploy-dev.yml` is the only workflow that touches an account.
+  infra:
+    name: cdk synth + snapshots
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: make infra-setup
+        run: make infra-setup
+
+      - name: make infra-lint
+        run: make infra-lint
+
+      - name: make infra-test
+        run: make infra-test
+
+      # Synthesising for real is a separate step from the in-process assertions because it catches a
+      # different class of mistake: the assertions prove the template says what it should, `cdk synth`
+      # proves the app runs at all.
+      - name: make infra-synth
+        run: make infra-synth
+
+      - name: make infra-nag
+        run: make infra-nag
+
+  image:
+    name: the image builds and passes its own suite
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+      - uses: docker/setup-buildx-action@v3
+
+      # This is the step that catches a missing system library - libgomp1, say - before a deployment
+      # does. Running the suite on the runner cannot catch it: the runner has a full distribution and
+      # the image does not.
+      - name: make image-test
+        run: make image-test
+
+      - name: make image
+        run: make image
+
+      - name: Measure the image against its budget
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m scripts.check_image_size --ref marketing-ai:local
