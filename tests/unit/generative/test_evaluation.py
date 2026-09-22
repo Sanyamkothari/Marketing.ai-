@@ -563,3 +563,24 @@ def test_a_row_the_reference_set_says_should_refuse_gets_no_retrieval_verdict(
     assert question.passed is True
     assert question.retrieval_hit is None
     assert result.aggregates.retrieval_hit_rate is None
+
+
+@pytest.mark.parametrize("literal", ["NaN", "Infinity", "-Infinity"])
+def test_a_non_finite_judge_score_grades_as_the_worst_answer(literal: str) -> None:
+    """`min(1.0, nan)` is 1.0, so the clamp alone wrote a fabricated mean into `rag_eval.json`.
+
+    `_parse_score` mirrors `guardrails._parse_verdict`, and it has to mirror this half too: a reply
+    nobody can read scores as the worst answer, never as a perfect one, because the mean of these
+    is what `meets_threshold` is decided on.
+    """
+    from engine.generative.evaluation import _parse_score
+
+    assert _parse_score(f'{{"score": {literal}}}') == 0.0
+
+
+def test_a_readable_score_is_untouched() -> None:
+    from engine.generative.evaluation import _parse_score
+
+    assert _parse_score('{"score": 0.82}') == 0.82
+    assert _parse_score('{"score": 4}') == 1.0
+    assert _parse_score("not json at all") == 0.0

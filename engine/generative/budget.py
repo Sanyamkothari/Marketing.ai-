@@ -228,6 +228,15 @@ class Meter:
         return max(0, self._budget.max_calls_per_run - self._calls)
 
     # -- the calls ----------------------------------------------------------
+    @property
+    def backend(self) -> str:
+        """Which client this meter calls through: `fake` or `bedrock`.
+
+        Read from the same `LlmConfig` every call is made against, so an artefact that records
+        it records what actually produced it rather than what a caller believed was configured.
+        """
+        return str(self._llm.backend.value)
+
     def complete(self, rendered: RenderedPrompt, purpose: GenerativePurpose) -> LLMCompletion:
         """Answer `rendered` with the generating model, from the cache when it can.
 

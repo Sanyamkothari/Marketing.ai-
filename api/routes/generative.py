@@ -53,7 +53,6 @@ from typing import Annotated, Any, Final, Literal, TypeVar
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
-from tests.fixtures.make_docs import DOCS_DIR, REFERENCE_QA_FILENAME, SOURCE_DIR
 
 from api.deps import ConfigRootDep, JobsDep, StorageDep
 from api.routes.runs import load_run, read_artefact
@@ -142,6 +141,20 @@ from engine.stages.export import SCORES_CSV
 from engine.storage import Storage, StorageError, index_key, run_key
 from engine.utils.ids import new_index_id
 from engine.utils.time import utc_now
+
+SAMPLE_DOCS_DIR: Final[Path] = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "docs"
+"""The bundled Northwind Telecom corpus and its reference set, found by path and never by import.
+
+This module used to import them from `tests.fixtures.make_docs`, and the production image ships no
+`tests/` package - so `api.main`, which imports this module, raised `ModuleNotFoundError` at start-up
+and the whole API, predictive routes included, could not serve a request. CI never saw it: the test
+image is built *on top of* the API image with `tests/` copied back in. A path costs nothing when the
+directory is absent, and a sample request on a deployment then gets `SAMPLES_UNAVAILABLE` instead of
+taking the server down with it. `tests/integration/test_api_starts_without_tests.py` pins these
+names against `make_docs`' own, so the two cannot drift apart.
+"""
+SAMPLE_SOURCE_DIR: Final[Path] = SAMPLE_DOCS_DIR / "source"
+SAMPLE_REFERENCE_QA_FILENAME: Final[str] = "reference_qa.csv"
 
 router: APIRouter = APIRouter(tags=["generative"])
 
@@ -637,11 +650,26 @@ def _sample_document_paths() -> tuple[Path, ...]:
     a rebuild into every format `build_knowledge_base` also writes would only cost time to prove a
     parser this route does not need proved again (`tests/unit/generative/test_index.py` already does).
     """
-    return tuple(sorted(SOURCE_DIR.glob("*.md")))
+    paths = tuple(sorted(SAMPLE_SOURCE_DIR.glob("*.md")))
+    if not paths:
+        raise _samples_unavailable()
+    return paths
 
 
 def _sample_reference_set_path() -> Path:
-    return DOCS_DIR / REFERENCE_QA_FILENAME
+    path = SAMPLE_DOCS_DIR / SAMPLE_REFERENCE_QA_FILENAME
+    if not path.is_file():
+        raise _samples_unavailable()
+    return path
+
+
+def _samples_unavailable() -> HTTPException:
+    """What a deployment says when asked for the sample corpus it does not ship."""
+    return http_error(
+        409,
+        "SAMPLES_UNAVAILABLE",
+        "The sample documents and questions are not part of this deployment. Upload your own.",
+    )
 
 
 def _resolve_reference_set_path(
@@ -1013,7 +1041,9 @@ async def create_evaluation(
 
     started = utc_now()
     label = (
-        REFERENCE_QA_FILENAME if use_sample_questions else _reference_set_filename(storage, reference_set_id)
+        SAMPLE_REFERENCE_QA_FILENAME
+        if use_sample_questions
+        else _reference_set_filename(storage, reference_set_id)
     )
     _write_owner(
         storage,

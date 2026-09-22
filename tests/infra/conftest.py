@@ -13,27 +13,36 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from importlib.util import find_spec
 from typing import Any, Final
 
 import pytest
 
-# aws-cdk-lib is in the `deploy` extra, which `make setup` does not install - `.[dev]` carries the
-# `aws` extra's packages but not this one - and a module-level import of it makes `make test` fail
-# at COLLECTION for everyone without it, CI included. The same guard `tests/unit/test_aws_secrets.py`
-# uses for boto3 and moto. The reason names the fix that actually works: this suite has its own venv
-# (DEC-364), and `pip install -e '.[dev,aws]'` would leave it skipping.
+# `aws-cdk-lib` is the `deploy` extra. It lives in `.venv-infra`, which `make infra-setup` builds
+# and `make infra-test` runs from - deliberately, so a laptop and the main gate never pay for CDK
+# (DEC-364). But `testpaths` is `["tests"]`, so the main venv's `make test` walks this directory
+# too, and the import below then died with a bare ModuleNotFoundError: one collection error that
+# took the entire fast suite down with it, on CI and on every machine that had not run
+# `make infra-setup`.
 #
-# A guard in a conftest skips cleanly when pytest *discovers* this directory, which is what
-# `make test` does. Named as an initial argument - `pytest tests/infra` in a venv without aws-cdk -
-# the Skipped escapes instead; `make infra-test` only ever runs it in `.venv-infra`, where it cannot.
-pytest.importorskip(
-    "aws_cdk",
-    reason="the infrastructure suite runs in its own venv: `make infra-setup && make infra-test`",
-)
+# `collect_ignore_glob` is the fix rather than `importorskip`. Both were written, by two sessions,
+# and they differ in exactly one case. `pytest.importorskip("aws_cdk")` raises `Skipped` while the
+# *conftest* is being imported: when pytest reached this directory by walking `tests/` - which is
+# what `make test` does - that is reported as one skip and the run exits 0; when the directory is
+# named on the command line (`pytest tests/infra`), the same Skipped escapes and the run exits 1.
+# Both were measured on this tree. `collect_ignore_glob`, set before the imports, tells pytest
+# there is nothing here to collect in either case, so it is the robust one - and `make infra-test`,
+# which has the extra, still collects everything.
+#
+# The extra is `deploy`, not `aws`: `aws` carries boto3 for the runtime, `deploy` carries
+# aws-cdk-lib for synthesising infra/, so `pip install -e '.[dev,aws]'` does not fix this.
+_HAS_CDK: Final[bool] = find_spec("aws_cdk") is not None
+collect_ignore_glob: Final[list[str]] = [] if _HAS_CDK else ["*.py"]
 
-from aws_cdk.assertions import Template
-from infra.app import STACK_ORDER, Deployment, build_app
-from infra.context import AppContext
+if _HAS_CDK:
+    from aws_cdk.assertions import Template
+    from infra.app import STACK_ORDER, Deployment, build_app
+    from infra.context import AppContext
 
 ACCOUNT: Final[str] = "123456789012"
 """A syntactically valid account id; the tests never talk to it."""

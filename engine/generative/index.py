@@ -45,6 +45,7 @@ from engine.generative.contracts import (
     IndexedDocument,
 )
 from engine.generative.errors import (
+    DOCUMENT_NAME_CLASH,
     DOCUMENT_TYPE_UNSUPPORTED,
     INDEX_EMPTY,
     KNOWLEDGE_BASE_TOO_LARGE,
@@ -120,6 +121,7 @@ def build_index(
     started = utc_now()
     generative = use_case.generative
     _check_size(paths, generative)
+    _check_names(paths)
     reusable = _reusable_chunks(store, previous) if previous is not None else {}
 
     documents: list[IndexedDocument] = []
@@ -323,6 +325,32 @@ def _existing_vectors(store: VectorStore, previous: DocIndexManifest) -> dict[st
         chunk.chunk_id: tuple(float(value) for value in row)
         for chunk, row in zip(chunks, matrix, strict=True)
     }
+
+
+def _check_names(paths: Sequence[Path]) -> None:
+    """Refuse a knowledge base whose documents do not have distinct names, before a byte is parsed.
+
+    `_index_one` takes `doc_id` from `path.stem`, and `chunking.chunk_document` builds `chunk_id` as
+    f"{doc_id}-{ordinal:05d}" from an ordinal local to that document. `accepted_types` is four
+    extensions wide, so `policy.pdf` and `policy.md` are two different documents whose first chunks
+    both claim `policy-00000`. `_computed` is keyed on `chunk_id`, so one document's vector
+    overwrote the other's and both chunks were then written carrying it: a grounded answer quoting
+    one file against the other's embedding, under a citation that looks entirely real. On a rebuild
+    the same stem also handed one manifest entry both documents' chunks.
+
+    It is refused rather than disambiguated. Widening `doc_id` to include the extension would fix
+    the collision too, but `chunk_id` is stored in the index, quoted in every citation and pinned by
+    tests, so changing its shape would strand every index already built. A clash is rare, it is the
+    user's to resolve in one rename, and the error says which files clash - which is a better answer
+    than a silently renamed identifier. This is the same duplicate identity DEC-221 forbids, reached
+    by a second route.
+    """
+    by_stem: dict[str, list[str]] = {}
+    for path in paths:
+        by_stem.setdefault(path.stem, []).append(path.name)
+    for stem, names in sorted(by_stem.items()):
+        if len(names) > 1:
+            raise generative_error(DOCUMENT_NAME_CLASH, stem=stem, names=", ".join(sorted(names)))
 
 
 def _check_size(paths: Sequence[Path], generative: GenerativeConfig) -> None:

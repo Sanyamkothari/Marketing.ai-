@@ -30,12 +30,14 @@ one - so a report cannot claim a text was checked for something nobody checked i
 from __future__ import annotations
 
 import json
+import math
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
 from typing import Any, Final
+from urllib.parse import urlsplit
 
 import yaml
 
@@ -106,7 +108,26 @@ JUDGE_PROMPTS: Final[Mapping[str, GenerativePurpose]] = {
 """Judge name in the configuration -> the purpose its calls are metered under."""
 
 _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
-_URL: Final[re.Pattern[str]] = re.compile(r"https?://([A-Za-z0-9.\-]+)")
+_URL: Final[re.Pattern[str]] = re.compile(r"https?://\S+", re.IGNORECASE)
+"""A whole URL token, case-insensitively.
+
+Two things this spelling exists to avoid, both of which the previous one - a lower-case scheme and
+a capture of `([A-Za-z0-9.\\-]+)` - let through silently.
+
+`@` was outside the character class, so the capture stopped at it and returned the *userinfo*
+rather than the host: `https://acme.com@phish.example/x` captured `acme.com`, which a whitelist
+for `acme.com` then allowed, while every mail client navigates to `phish.example`.
+
+Without `IGNORECASE`, `HTTPS://phish.example/x` matched nothing at all, and a rule whose loop body
+never runs returns "nothing found" - which reads as PASSED. That defeated the rule in its shipped
+default state, where `allowed_url_domains` is empty and means no link may appear in any output.
+
+The host is taken from `urlsplit().hostname`, which strips userinfo, lower-cases, and drops the
+port, so the comparison below sees a host and only a host.
+"""
+_URL_TRAILING: Final[str] = ".,;:!?'\")]}>"
+"""Characters that end a sentence but never a URL; stripped before the host is read."""
+
 _WORD_BOUNDARY: Final[str] = r"(?<![A-Za-z0-9]){phrase}(?![A-Za-z0-9])"
 _LATIN: Final[re.Pattern[str]] = re.compile(r"[A-Za-z]")
 _LETTER: Final[re.Pattern[str]] = re.compile(r"[^\W\d_]")
@@ -264,8 +285,13 @@ def _pii_in_output(text: str, context: CheckContext, policy: GuardrailPolicy) ->
 
 def _url_whitelist(text: str, context: CheckContext, policy: GuardrailPolicy) -> str | None:
     del context
-    for host in _URL.findall(text):
-        if not any(host == domain or host.endswith(f".{domain}") for domain in policy.allowed_url_domains):
+    for token in _URL.findall(text):
+        host = urlsplit(token.rstrip(_URL_TRAILING)).hostname
+        if host is None:
+            # A link the engine cannot resolve to a host is not a link it can vouch for.
+            return "a link whose domain could not be read"
+        allowed = (domain.lower().lstrip(".") for domain in policy.allowed_url_domains)
+        if not any(host == domain or host.endswith(f".{domain}") for domain in allowed):
             return "a link to a domain that is not on the allowed list"
     return None
 
@@ -438,11 +464,19 @@ def _parse_verdict(text: str) -> tuple[float, str]:
 
     A judge that does not answer in JSON scores 0: a verdict nobody can read is not a pass, and
     treating it as one would turn a broken judge into a silently disabled guardrail.
+
+    `NaN` is the same failure wearing a number. `json.loads` accepts the bare `NaN` literal, and
+    `min(1.0, nan)` returns 1.0 rather than nan - `nan < 1.0` is False, so `min` keeps its first
+    argument - so a clamp alone turned an unreadable verdict into a *perfect* one. It scores 0 for
+    the reason the docstring already gives, and so does an infinity.
     """
     try:
         payload = json.loads(text)
         score = float(payload["score"])
     except (ValueError, KeyError, TypeError):
+        _LOGGER.warning("guardrail.judge_unreadable")
+        return 0.0, "the judge did not answer in the shape its prompt asked for"
+    if not math.isfinite(score):
         _LOGGER.warning("guardrail.judge_unreadable")
         return 0.0, "the judge did not answer in the shape its prompt asked for"
     reason = str(payload.get("reason", "")) if isinstance(payload, dict) else ""

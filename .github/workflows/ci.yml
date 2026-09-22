@@ -115,6 +115,12 @@ jobs:
         with:
           node-version: "22"
 
+      # Everything this job runs comes from `.venv-infra`, including ruff and black: `make infra-lint`
+      # used to borrow them from the main `.venv`, which this job never built, and died with exit 127
+      # before `infra-test` could run (reviewer finding G-1). Building the main venv here as well
+      # would fix that by installing all of AutoGluon, uncached, inside a 20-minute timeout, for two
+      # linters. `infra/requirements.txt` pins them instead, at the same versions as pyproject's
+      # `dev` extra, and `tests/unit/test_container_files.py` fails if the two ever differ.
       - name: make infra-setup
         run: make infra-setup
 

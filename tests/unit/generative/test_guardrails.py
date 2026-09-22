@@ -371,3 +371,67 @@ def test_the_name_detector_is_deliberately_not_run_over_prose() -> None:
     redacted, kinds = redact("Northwind Telecom restored the line on Monday in Chennai.")
     assert "name" not in kinds
     assert redacted.startswith("Northwind Telecom")
+
+
+# ---------------------------------------------------------------------------
+# Two bypasses the URL whitelist had, and a judge verdict that scored itself perfect
+# ---------------------------------------------------------------------------
+def test_userinfo_does_not_pass_a_link_off_as_an_allowed_domain() -> None:
+    """`https://allowed.test@phish.test/x` navigates to phish.test; the host is what must be read.
+
+    The rule used to capture `([A-Za-z0-9.\\-]+)` after the scheme. `@` is outside that class, so
+    the capture stopped at it and returned the *userinfo* - the allowed domain - while every mail
+    client sends the reader to the host after it.
+    """
+    policy = GuardrailPolicy(
+        deterministic={URL_WHITELIST: GuardrailAction.BLOCK}, allowed_url_domains=("example.test",)
+    )
+    result = Guardrails(policy).check("see https://example.test@phish.test/win", context())
+    assert not result.passed
+    assert result.blocked_by == URL_WHITELIST
+
+
+def test_an_uppercase_scheme_does_not_skip_the_rule_entirely() -> None:
+    """A rule whose loop body never runs reports "nothing found", which reads as PASSED.
+
+    This is the shipped default's failure mode: `allowed_url_domains` is empty, meaning no link may
+    appear in any output, so a link the pattern cannot see is a link nothing stops.
+    """
+    policy = GuardrailPolicy(deterministic={URL_WHITELIST: GuardrailAction.BLOCK})
+    assert not Guardrails(policy).check("see HTTPS://phish.test/x", context()).passed
+    assert not Guardrails(policy).check("see HtTpS://phish.test/x", context()).passed
+
+
+def test_an_allowed_link_still_passes_whatever_punctuation_follows_it() -> None:
+    """The fix must not cost the ordinary case: a URL at the end of a sentence is still that URL."""
+    policy = GuardrailPolicy(
+        deterministic={URL_WHITELIST: GuardrailAction.BLOCK}, allowed_url_domains=("example.test",)
+    )
+    subject = Guardrails(policy)
+    for text in (
+        "see https://example.test/a.",
+        "see (https://help.example.test/a)",
+        "see https://example.test/a, then go",
+    ):
+        assert subject.check(text, context()).passed, text
+
+
+@pytest.mark.parametrize("literal", ["NaN", "-NaN", "Infinity", "-Infinity"])
+def test_a_judge_that_answers_with_a_non_finite_score_scores_zero(literal: str) -> None:
+    """`json.loads` accepts these, and `min(1.0, nan)` returns 1.0 - the clamp made a broken judge perfect.
+
+    `nan < 1.0` is False, so `min` keeps its first argument. A judge nobody can read is not a pass,
+    which is the rule `_parse_verdict` already states for a reply that is not JSON at all.
+    """
+    from engine.generative.guardrails import _parse_verdict
+
+    score, _ = _parse_verdict(f'{{"score": {literal}}}')
+    assert score == 0.0
+
+
+def test_a_readable_judge_verdict_is_untouched() -> None:
+    from engine.generative.guardrails import _parse_verdict
+
+    assert _parse_verdict('{"score": 0.9, "reason": "grounded"}') == (0.9, "grounded")
+    assert _parse_verdict('{"score": 7}')[0] == 1.0, "a real number still clamps"
+    assert _parse_verdict('{"score": -3}')[0] == 0.0
