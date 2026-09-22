@@ -1,9 +1,11 @@
 """`engine.onboarding.datasets`: the dataset registry and the lineage helpers (Phase 2 plan §4, §8, M12).
 
-A dataset is immutable and traceable, so what this file is really pinning is two promises: every
-artefact `LocalDatasetRegistry` writes comes back byte-for-byte identical (the round trips), and
+A dataset is immutable and traceable, so what this file is really pinning is three promises: every
+artefact `LocalDatasetRegistry` writes comes back byte-for-byte identical (the round trips),
 `build_manifest`/`lineage` refuse to describe a build they were not handed the whole story of (the
-`DatasetError` cases) rather than silently drawing an incomplete picture.
+`DatasetError` cases) rather than silently drawing an incomplete picture, and every number that
+leaves this module for a screen is one that was measured - the sample rows show the digits that are
+in the parquet, and a lineage card never counts something nobody counted.
 """
 
 from __future__ import annotations
@@ -48,7 +50,7 @@ from engine.onboarding.specs import (
     SourceProfile,
     StandardType,
 )
-from engine.stages.ingest import REDACTED, dataset_fingerprint
+from engine.stages.ingest import MAX_CELL_CHARS, REDACTED, dataset_fingerprint
 from engine.storage import LocalStorage
 from engine.utils.time import utc_now
 
@@ -360,12 +362,31 @@ def test_write_frame_round_trips_the_rows(registry: LocalDatasetRegistry) -> Non
 def test_read_frame_respects_max_rows(registry: LocalDatasetRegistry) -> None:
     registry.write_frame("ds_1", _frame(10))
     assert len(registry.read_frame("ds_1", max_rows=3)) == 3
+    assert len(registry.read_frame("ds_1", max_rows=0)) == 0
     assert len(registry.read_frame("ds_1")) == 10
 
 
-def test_write_frame_returns_the_frames_own_fingerprint(registry: LocalDatasetRegistry) -> None:
+def test_read_frame_refuses_a_negative_row_limit(registry: LocalDatasetRegistry) -> None:
+    """`DataFrame.head(-2)` means "all but the last two", so a caller that computed a limit and got
+    a negative would silently be handed a frame missing its tail instead of an error."""
+    registry.write_frame("ds_1", _frame(10))
+    with pytest.raises(DatasetError) as excinfo:
+        registry.read_frame("ds_1", max_rows=-2)
+    assert excinfo.value.code == "DATASET_MAX_ROWS_INVALID"
+
+
+def test_write_frame_returns_the_ingest_fingerprint_of_what_it_stored(
+    registry: LocalDatasetRegistry,
+) -> None:
+    """The returned fingerprint is `engine.stages.ingest`'s - the one Phase 1 already trusts, not a
+    second scheme - and it still describes the table after the parquet round trip. That second half
+    is the immutability promise itself: a fingerprint a caller records but that no longer matches
+    what `read_frame` hands back would make a manifest's `fingerprint` field a claim about a file
+    nobody can reproduce."""
     frame = _frame(5)
-    assert registry.write_frame("ds_1", frame) == dataset_fingerprint_of(frame)
+    returned = registry.write_frame("ds_1", frame)
+    assert returned == dataset_fingerprint(frame)
+    assert returned == dataset_fingerprint_of(registry.read_frame("ds_1"))
 
 
 def test_fingerprint_changes_when_a_cell_changes(registry: LocalDatasetRegistry) -> None:
@@ -415,6 +436,54 @@ def test_sample_is_shorter_than_fifty_when_the_frame_is(registry: LocalDatasetRe
     assert all(row["email"] != REDACTED for row in sample)
 
 
+def test_sample_shows_a_large_integer_id_with_the_digits_it_was_built_with(
+    registry: LocalDatasetRegistry,
+) -> None:
+    """A customer id past 2**53 beside a float amount is the ordinary shape of a built dataset, and
+    it is exactly the shape that a row-wise read of the frame would ruin: a row is a `Series`, so it
+    has one dtype, and the id comes back as a float with different digits. The review screen would
+    then show an id that is in no file anywhere, which is the worst kind of invented number because
+    it still looks like an id."""
+    frame = pd.DataFrame(
+        {
+            "entity_key": pd.Series([9007199254740993, 123456789012345678], dtype="int64"),
+            "total_spend": pd.Series([1.5, 2.5], dtype="float64"),
+        }
+    )
+    registry.write_frame("ds_1", frame)
+    sample = registry.read_sample("ds_1")
+    assert [row["entity_key"] for row in sample] == ["9007199254740993", "123456789012345678"]
+    assert [row["total_spend"] for row in sample] == ["1.5", "2.5"]
+
+
+def test_sample_keeps_each_columns_own_type(registry: LocalDatasetRegistry) -> None:
+    """Booleans stay words and dates stay ISO whatever else is in the row, for the same reason."""
+    frame = pd.DataFrame(
+        {
+            "entity_key": ["c0"],
+            "active": pd.Series([True], dtype="bool"),
+            "signed_up": pd.to_datetime(pd.Series(["2026-01-31"])),
+            "visits": pd.Series([3], dtype="int64"),
+        }
+    )
+    registry.write_frame("ds_1", frame)
+    assert registry.read_sample("ds_1") == [
+        {"entity_key": "c0", "active": "true", "signed_up": "2026-01-31", "visits": "3"}
+    ]
+
+
+def test_sample_cuts_a_cell_at_the_same_length_every_other_review_surface_does(
+    registry: LocalDatasetRegistry,
+) -> None:
+    """`sample.json` is rendered straight onto the review screen, so one 50 kB free-text cell would
+    be 50 kB of screen; `MAX_CELL_CHARS` is the length the Setup preview already cuts at, imported
+    rather than repeated so the two surfaces cannot cut the same value at different places."""
+    registry.write_frame("ds_1", pd.DataFrame({"entity_key": ["c0"], "notes": ["x" * 5_000]}))
+    cell = registry.read_sample("ds_1")[0]["notes"]
+    assert len(cell) == MAX_CELL_CHARS
+    assert cell.endswith("…")
+
+
 # ---------------------------------------------------------------------------
 # features.sql
 # ---------------------------------------------------------------------------
@@ -458,6 +527,55 @@ def test_reading_a_missing_dataset_raises_a_coded_error_naming_the_id(
     assert excinfo.value.code == "DATASET_NOT_FOUND"
     assert excinfo.value.dataset_id == "ds_missing"
     assert "ds_missing" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# An id that cannot name a directory
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("dataset_id", "code"),
+    [
+        ("", "DATASET_ID_BLANK"),
+        ("   ", "DATASET_ID_BLANK"),
+        ("ds_1/dataset.parquet", "DATASET_ID_INVALID"),
+        ("..", "DATASET_ID_INVALID"),
+        ("../runs", "DATASET_ID_INVALID"),
+    ],
+)
+@pytest.mark.parametrize(
+    "call",
+    [
+        lambda r, dataset_id: r.read_status(dataset_id),
+        lambda r, dataset_id: r.read_manifest(dataset_id),
+        lambda r, dataset_id: r.read_sample(dataset_id),
+        lambda r, dataset_id: r.read_frame(dataset_id),
+        lambda r, dataset_id: r.write_status(dataset_id, _status(dataset_id)),
+        lambda r, dataset_id: r.write_frame(dataset_id, _frame(2)),
+        lambda r, dataset_id: r.write_features_sql(dataset_id, "select 1"),
+        lambda r, dataset_id: r.exists(dataset_id),
+        lambda r, dataset_id: r.delete(dataset_id),
+    ],
+)
+def test_an_id_that_cannot_name_a_directory_is_a_coded_error(
+    registry: LocalDatasetRegistry, call, dataset_id: str, code: str
+) -> None:
+    """A path parameter that arrived empty, or carrying a separator, must fail in this module's own
+    vocabulary. Left to `engine.storage.validate_key` it would be a `StorageError('KEY_INVALID')` -
+    which every write path here lets straight through, so the API would answer a bad dataset id with
+    a 500 and no wording rather than a plain-language 404."""
+    with pytest.raises(DatasetError) as excinfo:
+        call(registry, dataset_id)
+    assert excinfo.value.code == code
+    assert excinfo.value.dataset_id == dataset_id
+
+
+def test_an_unreadable_sample_file_is_a_coded_error(registry: LocalDatasetRegistry) -> None:
+    registry.write_frame("ds_1", _frame(3))
+    registry.storage.write_text(dataset_key("ds_1", "sample.json"), "{not json")
+    with pytest.raises(DatasetError) as excinfo:
+        registry.read_sample("ds_1")
+    assert excinfo.value.code == "DATASET_SAMPLE_UNREADABLE"
+    assert excinfo.value.dataset_id == "ds_1"
 
 
 # ---------------------------------------------------------------------------
@@ -578,6 +696,28 @@ def test_build_manifest_refuses_a_periodic_spec_missing_its_snapshot_column() ->
     assert excinfo.value.code == "DATASET_SNAPSHOT_COLUMN_MISSING"
 
 
+def test_build_manifest_refuses_a_snapshot_value_it_cannot_read_as_a_date() -> None:
+    """`snapshot_dates` is what the Lineage card and the Build review count snapshots from. Coercing
+    an unreadable value to `NaT` and dropping it would quietly report one snapshot fewer than the
+    dataset has - a count nobody measured, presented as one that was."""
+    frame = _periodic_frame(5).assign(snapshot_date=["2026-01-31", "last tuesday", "2026-02-28", "", ""])
+    with pytest.raises(DatasetError) as excinfo:
+        build_manifest(
+            "ds_bad",
+            _spec("sp_bad", mode=SnapshotMode.PERIODIC),
+            mappings={"map_1": _mapping("map_1", "src_1")},
+            sources={"src_1": _source_profile("src_1")},
+            frame=frame,
+            columns=_periodic_columns(),
+            entity_key="entity_key",
+            snapshot_column="snapshot_date",
+            target=None,
+        )
+    assert excinfo.value.code == "DATASET_SNAPSHOT_VALUE_INVALID"
+    assert "snapshot_date" in str(excinfo.value)
+    assert "last tuesday" not in str(excinfo.value)  # house rule 4: count the rows, never quote one
+
+
 def test_a_periodic_manifest_with_a_one_column_key_is_refused() -> None:
     """The invariant `build_manifest` exists to get right: `DatasetManifest`'s own validator refuses
     a periodic dataset whose primary key does not also carry the snapshot column."""
@@ -633,6 +773,94 @@ def test_lineage_builds_the_sources_mappings_spec_dataset_tree() -> None:
     assert tree.dataset.id == "ds_7"
     assert tree.dataset.parents == ("sp_7",)
     assert tree.dataset_id == "ds_7"
+    # Every parent id is a node that is actually in the tree: `parents` is what the UI draws an
+    # edge from, so an id with no card behind it is a broken diagram.
+    drawn = {node.id for node in (*tree.sources, *tree.mappings, tree.spec, tree.dataset)}
+    for node in (*tree.sources, *tree.mappings, tree.spec, tree.dataset):
+        assert set(node.parents) <= drawn
+
+
+def test_lineage_never_tells_a_single_snapshot_dataset_it_has_none() -> None:
+    """A single-snapshot manifest deliberately records no dates - there is one snapshot and the
+    build did not date it - so counting `snapshot_dates` would put "0 snapshot(s)" on the card of a
+    dataset that has exactly one. The mode is the measured fact; the count is only a fact when the
+    dataset is periodic."""
+    mapping, source = _mapping("map_1", "src_1"), _source_profile("src_1")
+    manifest = build_manifest(
+        "ds_single",
+        _spec("sp_single"),
+        mappings={"map_1": mapping},
+        sources={"src_1": source},
+        frame=_frame(5),
+        columns=_single_columns(),
+        entity_key="entity_key",
+        snapshot_column="snapshot_date",
+        target=None,
+    )
+    detail = lineage(manifest, mappings={"map_1": mapping}, sources={"src_1": source}).dataset.detail
+    assert "0 snapshot" not in detail
+    assert "5 row(s)" in detail and "5 entities" in detail
+
+
+def test_lineage_counts_the_snapshots_a_periodic_dataset_actually_has() -> None:
+    mapping, source = _mapping("map_1", "src_1"), _source_profile("src_1")
+    manifest = build_manifest(
+        "ds_periodic",
+        _spec("sp_periodic", mode=SnapshotMode.PERIODIC),
+        mappings={"map_1": mapping},
+        sources={"src_1": source},
+        frame=_periodic_frame(5),
+        columns=_periodic_columns(),
+        entity_key="entity_key",
+        snapshot_column="snapshot_date",
+        target=None,
+    )
+    detail = lineage(manifest, mappings={"map_1": mapping}, sources={"src_1": source}).dataset.detail
+    assert "2 snapshot(s)" in detail
+
+
+def test_lineage_shows_an_em_dash_for_a_role_nobody_settled() -> None:
+    """`ui/dom.js` renders an em dash where nothing was measured; these cards are pre-formatted
+    here, so the em dash has to be written here. A word like "unconfirmed" in its place would be a
+    stand-in this module invented and the screen would read it as a finding."""
+    mapping = _mapping("map_1", "src_1")
+    source = _source_profile("src_1", role=None)
+    manifest = build_manifest(
+        "ds_role",
+        _spec("sp_role"),
+        mappings={"map_1": mapping},
+        sources={"src_1": source},
+        frame=_frame(3),
+        columns=_single_columns(),
+        entity_key="entity_key",
+        snapshot_column="snapshot_date",
+        target=None,
+    )
+    tree = lineage(manifest, mappings={"map_1": mapping}, sources={"src_1": source})
+    assert tree.sources[0].detail.endswith("role —")
+
+
+def test_lineage_refuses_a_mapping_that_reads_a_source_the_dataset_does_not_record() -> None:
+    """The mapping was supplied, so neither "missing" check fires - but its `source_id` is not one
+    of the manifest's sources, so its node's only parent would be an id no card in the tree carries.
+    A dangling edge is the same gap as a blank card, wearing a different shape."""
+    mapping, source = _mapping("map_1", "src_1"), _source_profile("src_1")
+    manifest = build_manifest(
+        "ds_dangling",
+        _spec("sp_dangling"),
+        mappings={"map_1": mapping},
+        sources={"src_1": source},
+        frame=_frame(3),
+        columns=_single_columns(),
+        entity_key="entity_key",
+        snapshot_column="snapshot_date",
+        target=None,
+    )
+    stray = _mapping("map_1", "src_elsewhere")
+    with pytest.raises(DatasetError) as excinfo:
+        lineage(manifest, mappings={"map_1": stray}, sources={"src_1": source})
+    assert excinfo.value.code == "DATASET_LINEAGE_INCOMPLETE"
+    assert "map_1" in str(excinfo.value)
 
 
 def test_lineage_refuses_a_mapping_it_was_not_handed() -> None:
