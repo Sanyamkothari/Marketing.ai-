@@ -352,7 +352,7 @@ def _progress_pct(stages: Sequence[StageStatus]) -> int:
     Only `done` counts: a skipped stage is work that will never happen, so counting it would let a
     run that failed in its first stage report almost complete. With eight train stages the sequence
     is 12, 25, 38, 50, 62, 75, 88, 100 - Python's `round` is half-even, so the two exact halves
-    (12.5 and 62.5) round down; the M3 design's "13 … 63" assumed half-up.
+    (12.5 and 62.5) round down rather than up to the 13 and 63 half-up rounding would give.
     """
     if not stages:
         return 0
@@ -850,9 +850,9 @@ class _TrainFlow:
         parts = _require(self._parts, "the split partitions")
         model_id, version = register.next_version_id(ctx)
         # `schema.json` and `drift_baseline.json` describe the columns the model was FITTED ON, in
-        # fit order (design §7.1), so the frame handed to them is narrowed to the recipe's feature
-        # list plus the target. The prepared training split still carries the reserved columns - the
-        # key, the snapshot date, the consent flag - because the score flow needs them, but a model
+        # fit order, so the frame handed to them is narrowed to the recipe's feature list plus the
+        # target. The prepared training split still carries the reserved columns - the key, the
+        # snapshot date, the consent flag - because the score flow needs them, but a model
         # that never saw a column must not claim it in its schema, and M4 checks a scoring file
         # against exactly this list.
         fitted = parts["train"]
@@ -1000,7 +1000,7 @@ def _row_phase_detail(plan: prepare.RowPlan, rows: int) -> str:
 
 
 def _evaluate_detail(report: EvaluationReport, fairness: FairnessReport) -> str:
-    """The Running line for evaluate (M3 design §5.10): headline, optimisation and calibration."""
+    """The Running line for evaluate (plan §6): headline, optimisation and calibration."""
     calibration = "no" if report.calibration is None else report.calibration.method.value
     line = (
         f"{report.primary_metric_label} {report.headline_score:.2f} · optimised for "
@@ -1012,7 +1012,7 @@ def _evaluate_detail(report: EvaluationReport, fairness: FairnessReport) -> str:
 
 
 def _register_detail(config: UseCaseConfig, status: ModelStatus) -> str:
-    """The Running line for register (M3 design §7.5), including the honest `kept as candidate`."""
+    """The Running line for register (plan §6), including the honest `kept as candidate`."""
     reasons = f"top {config.evaluation.reasons_per_row} SHAP reasons · " if config.evaluation.shap else ""
     return f"{reasons}{_PROMOTION_WORDS[status]} · drift baseline stored"
 

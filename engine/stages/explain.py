@@ -3,7 +3,7 @@
 Explanation is **measurement, never selection**. Nothing this module computes changes the model,
 the decision threshold, the calibrator or the feature set: the model is already chosen and already
 fitted when the first line here runs, and the artefacts it writes are read by the UI and by nothing
-else in the engine (design section 6, plan section 6.3).
+else in the engine (plan section 6.3).
 
 > **THE TEST SPLIT IS FINAL-DECISION-ONLY.** :func:`global_importance` reads the hold-out, and may:
 > it MEASURES an already-chosen model rather than choosing anything. AutoGluon shuffles one feature
@@ -40,8 +40,8 @@ config and in no column, so rendering it would be invention (plan section 13.3, 
 
 `shap`, `pandas`, `numpy` and `pyarrow` are imported inside function bodies, so importing the
 engine stays free of them. That is also why the parquet schema is :func:`row_explanation_schema`, a
-cached function, rather than the module-level constant the design sketched: a `pa.Schema` object
-cannot exist before `pyarrow` is imported.
+cached function, rather than a module-level constant: a `pa.Schema` object cannot exist before
+`pyarrow` is imported.
 """
 
 from __future__ import annotations
@@ -236,8 +236,8 @@ class _TreeModel(Protocol):
 class RowReasons:
     """The per-row reasons and the tier that produced them.
 
-    `row_reasons` returns the explanations alone, as the design's signature says; the pipeline calls
-    :func:`reasons_for` instead when it needs `method` for the Running screen's detail line.
+    `row_reasons` returns the explanations alone, which is all most callers need; the pipeline
+    calls :func:`reasons_for` instead when it needs `method` for the Running screen's detail line.
 
     `method` is the **primary** tier: the first one that produced contributions for any row.
     Individual rows may carry a later tier's reasons, or general ones, when the primary tier
@@ -729,7 +729,7 @@ def _general_reason(feature: str, value: object) -> Reason:
 
 
 def explain_detail(importance: FeatureImportance, reasons: RowReasons | None) -> str:
-    """The Running-screen line for the explain stage (design section 6.5)."""
+    """The Running-screen line for the explain stage (plan section 6)."""
     if reasons is None:
         return f"top {len(importance.items)} features · per-row reasons turned off"
     return (
@@ -1098,10 +1098,11 @@ def _reason(feature: str, value: object, contribution: float) -> Reason:
 def reason_text(
     feature: str, value: str, direction: Direction, *, numeric: bool, missing: bool = False
 ) -> str:
-    """The sentence a reason renders as (design section 6.3, DEC-070).
+    """The sentence a reason renders as (plan section 6.3, DEC-070).
 
-    `missing` is the one addition to the design's signature: a categorical level spelled `"missing"`
-    is a value, not an absent one, and the two must not render the same way.
+    `missing` is the one parameter beyond the feature, its value and the direction: a categorical
+    level spelled `"missing"` is a value, not an absent one, and the two must not render the same
+    way.
 
     `Direction.NONE` marks a general reason (DEC-056). It carries no arrow, because no direction was
     measured on this row, and ends in :const:`GENERAL_SUFFIX` so a reader can tell the two apart at

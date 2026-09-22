@@ -1,4 +1,4 @@
-"""The run lifecycle: `POST /runs`, the history, one run, its artefacts and cancel (design §4.3-§4.7).
+"""The run lifecycle: `POST /runs`, the history, one run, its artefacts and cancel (plan §8).
 
 `POST /runs` validates **synchronously** (plan §8) and answers `409` with the whole
 `ValidationReport` beside M1's error envelope when a blocking error remains, so the Setup screen's
@@ -13,10 +13,10 @@ on. A **training** run still runs the M2 job body, which executes the two stages
 owns for real and then fails at `prepare` with a named error (DEC-060): no stage on the Running
 screen ever shows a number nobody measured.
 
-Design §5.3 gives run creation its own module, `engine/runs.py`, which is not part of this change;
+Run creation belongs in its own module, `engine/runs.py`, which is not part of this change;
 `create_run`, `update_run`, `cancel_run` and `build_m2_job` live here until it lands, and move
 unchanged when it does. Likewise, `Pipeline` is built from the three existing dependencies here
-rather than from the `get_pipeline` provider design §4.8 adds to `api/deps.py`.
+rather than from a `get_pipeline` provider in `api/deps.py`, which does not exist yet.
 """
 
 from __future__ import annotations
@@ -123,7 +123,7 @@ UNMAPPED_STATUS: Final[int] = 500
 """A code this router has not been taught is a server fault, not the caller's; reported as one."""
 
 ARTEFACT_NAME: Final[re.Pattern[str]] = re.compile(r"^[a-z_]+\.(json|csv|parquet)$")
-"""Shape a URL segment must have before it is even looked up in the registry (design §4.6)."""
+"""Shape a URL segment must have before it is even looked up in the registry."""
 
 MEDIA_TYPES: Final[dict[str, str]] = {"json": "application/json", "csv": "text/csv"}
 DEFAULT_MEDIA_TYPE: Final[str] = "application/octet-stream"
@@ -293,7 +293,7 @@ def read_run(run_id: str, storage: StorageDep) -> RunDetailResponse:
     summary="One artefact of a run, whitelisted against the artefact registry",
 )
 def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
-    """A whitelist, not a path join: no segment of the URL ever reaches the filesystem (design §4.6)."""
+    """A whitelist, not a path join: no segment of the URL ever reaches the filesystem."""
     if not ARTEFACT_NAME.fullmatch(name) or not (name in ARTEFACT_REGISTRY or name in TABULAR_SCHEMAS):
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     load_run(storage, run_id)
@@ -331,7 +331,7 @@ def cancel_run_endpoint(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunC
 
 
 # ---------------------------------------------------------------------------
-# 5.3-5.4 the run directory (design §5.3: `engine/runs.py` when that module lands)
+# The run directory (moves to `engine/runs.py` when that module lands)
 # ---------------------------------------------------------------------------
 def create_run(
     storage: Storage,
@@ -662,7 +662,7 @@ def _run_state(stages: tuple[StageStatus, ...]) -> RunState:
 
 
 def _progress(stages: tuple[StageStatus, ...]) -> int:
-    """Done stages over total, as whole percent (design §5.4)."""
+    """Done stages over total, as whole percent."""
     if not stages:
         return 0
     return round(100 * sum(1 for row in stages if row.state in _FINISHED) / len(stages))

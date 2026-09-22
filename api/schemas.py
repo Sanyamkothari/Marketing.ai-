@@ -1,4 +1,4 @@
-"""Response models of the M1 API (design §7.4).
+"""Response models of the M1 API (plan §8).
 
 Every model is frozen and forbids extra keys because it inherits `engine.config.StrictBase`, the one
 `_Base` definition in the codebase. Engine models appear in a response only where the response *is*
@@ -192,15 +192,15 @@ class HealthResponse(StrictBase):
 
 
 # ---------------------------------------------------------------------------
-# M2: uploads and runs (design §4.0)
+# M2: uploads and runs
 # ---------------------------------------------------------------------------
 class UploadRecord(Artefact):
     """`upload.json` - what `POST /uploads` stored, so a later run needs no request context.
 
-    Design §5.2 gives this record its own module, `engine/uploads.py`, which is not part of this
-    change; it lives here, beside the models of the two routers that read it, until that module
-    lands. It deliberately stays out of `ARTEFACT_REGISTRY`, which documents *run directory*
-    artefacts only (DEC-061).
+    This record belongs in `engine/uploads.py`, a module that is not part of this change; it lives
+    here, beside the models of the two routers that read it, until that module lands. It
+    deliberately stays out of `ARTEFACT_REGISTRY`, which documents *run directory* artefacts only
+    (DEC-061).
     """
 
     upload_id: str = Field(description="Id of the upload this record describes.")

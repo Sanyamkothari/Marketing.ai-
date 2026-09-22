@@ -303,8 +303,9 @@ case is named anywhere under `engine/` or `api/`.
 ## Decisions
 
 Every choice that `plan.md` does not make is recorded in [`docs/DECISIONS.md`](docs/DECISIONS.md) as a
-`DEC-` entry with its context, decision and consequences. The log runs DEC-001 … DEC-058: M1 opened it
-with DEC-001 … DEC-040 and each milestone since has appended its own. Entries are never rewritten in
+`DEC-` entry with its context, decision and consequences. The log runs DEC-001 … DEC-074: M1 opened it
+with DEC-001 … DEC-040 and each milestone since has appended its own. DEC-059, DEC-064 and DEC-071 are
+unused — no code cites them. Entries are never rewritten in
 place — a decision that is reversed gets a new entry naming the one it supersedes (plan §13.2). See also
 [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md) for the shape of the upload and
 [`docs/AWS_DEPLOYMENT.md`](docs/AWS_DEPLOYMENT.md) for the Phase 4 notes.

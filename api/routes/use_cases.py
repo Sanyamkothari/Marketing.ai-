@@ -1,4 +1,4 @@
-"""`GET /use-cases/{id}` and the two template downloads (design §7.2, §7.3).
+"""`GET /use-cases/{id}` and the two template downloads (plan §8, DEC-024).
 
 The use-case body is a projection of one merged `UseCaseConfig`: nothing here invents a default, a
 label or a copy string, and no branch inspects the use-case id.

@@ -72,6 +72,7 @@ from engine.registry import LocalModelRegistry
 from engine.stages import ingest
 from engine.storage import LocalStorage, run_key, upload_key
 from engine.utils.ids import new_run_id
+from engine.utils.logging import configure_logging
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
@@ -213,6 +214,11 @@ class Measurement:
     def rows_per_second(self) -> float:
         """Rows divided by seconds; zero when the stage was too fast to have divided by."""
         return self.rows / self.seconds if self.seconds > 0 else 0.0
+
+
+def measurement_line(item: Measurement) -> str:
+    """One measurement as a single line, for the progress log and for the table's row."""
+    return f"{item.name} {item.seconds:,.1f} s · {item.rows_per_second:,.0f} rows/sec · {item.rows:,} rows"
 
 
 def measure_ingest(storage: LocalStorage, key: str, resolved: ResolvedConfig) -> Measurement:
@@ -402,6 +408,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         print("--rows must be at least 1", file=sys.stderr)
         return 2
 
+    # plan §13 rule 7 has every stage log its rows and its seconds at INFO, and the pipeline does;
+    # a benchmark with no handler attached would throw exactly that breakdown away, leaving two
+    # totals and no way to see which stage of plan §6.2 spent them.
+    configure_logging("INFO")
+
     out_dir: Path = args.out_dir if args.out_dir is not None else Path(tempfile.gettempdir())
     out_dir.mkdir(parents=True, exist_ok=True)
     workspace = Path(tempfile.mkdtemp(prefix=f"bench-large-file-{rows}-", dir=out_dir))
@@ -426,8 +437,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         _, train_seconds = train_champion(storage, registry, train_config, rows=train_rows, jobs=jobs)
         print("measuring    : ingest …", flush=True)
         ingest_measurement = measure_ingest(storage, key, score_config)
+        # Each measurement is printed the moment it is taken, not only in the table below. A run
+        # at a size this machine cannot finish is stopped in the middle of the score stage - by a
+        # `timeout`, by an operator, by the OOM killer - and the ingest number it *did* measure is
+        # a real result that must not die with it (plan §13.3: report what was measured).
+        print(f"measured     : {measurement_line(ingest_measurement)}", flush=True)
         print("measuring    : score …", flush=True)
         score_measurement = measure_score(storage, registry, score_config, key=key, jobs=jobs)
+        print(f"measured     : {measurement_line(score_measurement)}", flush=True)
         print()
         print_report(
             rows=rows,

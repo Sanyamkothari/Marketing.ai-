@@ -22,8 +22,8 @@ therefore two functions with an explicit seam between them, and the split runs i
 `prepare` keeps its old signature and behaviour: the two phases back to back with *every* surviving
 row used as a fit row. That is the right answer only when the frame really is all training data (or
 when there is no split at all), and it is the wrong answer for a training file, so the train pipeline
-calls the two phases instead. Nothing was removed; `prepare`, `replay` and `split_dataset` are
-imported by `engine.pipeline` and the M3 design under those names.
+calls the two phases instead. Nothing was removed; `engine.pipeline` still imports `prepare`,
+`replay` and `split_dataset` under those names.
 
 Why `fit_index` and not two frames
 ----------------------------------

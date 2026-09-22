@@ -13,8 +13,8 @@ and `autogluon_fit_kwargs`, so what was asked for can be read off without runnin
 > `TEST_SPLIT_LEAKED_INTO_FIT` when the frames headed for `fit()` share an index label with the
 > test split, so the invariant is enforced and not merely documented.
 
-**Honest determinism (design section 4.1, D18).** Every seed AutoGluon exposes is pinned from the
-recipe (`ag_args_fit={"random_seed": recipe.seed}`, and a bagged fold *k* then uses
+**Honest determinism (D18).** Every seed AutoGluon exposes is pinned from the recipe
+(`ag_args_fit={"random_seed": recipe.seed}`, and a bagged fold *k* then uses
 `recipe.seed + k`), and every other choice - families, presets, bagging, the tuning data, the
 imbalance handling, the feature list - is a projection of the recipe. The wall-clock `time_limit` is
 not something a seed can control: which candidates finish inside the budget depends on machine load,
@@ -26,8 +26,8 @@ the recipe, so two runs with different budgets are different recipes and hash di
 `Leaderboard.models_trained` with each entry's `fit_time_seconds` records what the budget bought.
 
 Where AutoGluon 1.6.3 differs from the plan's assumptions, the installed library wins (plan section
-13.8) and the difference is marked `D<n>` at the line that handles it; the table lives in the M3
-design document, section 1.3.
+13.8) and the difference is marked `D<n>` at the line that handles it. There is no separate table:
+each marker is defined where it appears, in the comment or docstring that carries it.
 
 `autogluon`, `sklearn`, `imblearn`, `pandas` and `numpy` are imported inside function bodies, so
 importing the engine stays free of heavy libraries.
@@ -307,7 +307,7 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     """`predictor.fit(train_data=..., tuning_data=..., **this)`. Pure, and complete on purpose.
 
     Every preset field the engine cares about is passed explicitly, because a preset that quietly
-    turns something on would take over a responsibility the design assigns elsewhere:
+    turns something on would take over a responsibility that lives elsewhere in the engine:
 
     * `auto_stack` / `dynamic_stacking` - `good_quality` and `best_quality` set both; stacking would
       multiply the fit time and break plan section 10's one-minute budget for no benefit the
@@ -707,9 +707,9 @@ def train(
 ) -> TrainResult:
     """Fit the candidates, save the predictor and return the leaderboard, the winner and the scorer.
 
-    THE TEST SPLIT IS FINAL-DECISION-ONLY (design section 3.9). `parts["train"]` becomes
-    `train_data` and `parts["validation"]` becomes `tuning_data`, so AutoGluon never re-splits and
-    never sees `parts["test"]`. The hold-out is read once, below, to fill the leaderboard's reported
+    THE TEST SPLIT IS FINAL-DECISION-ONLY (DEC-045). `parts["train"]` becomes `train_data` and
+    `parts["validation"]` becomes `tuning_data`, so AutoGluon never re-splits and never sees
+    `parts["test"]`. The hold-out is read once, below, to fill the leaderboard's reported
     `score_test` column; the ranking and `predictor.model_best` both come from the validation score.
 
     The threshold and the calibrator are fitted afterwards by `scorer.fit_scorer`, on validation, and
