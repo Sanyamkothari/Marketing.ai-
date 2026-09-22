@@ -9,8 +9,8 @@ config        ENGINE DEFAULTS, no overrides at all
 file          data/prepared.csv    (1,463 rows, 16 columns — aggregated by fetch.py)
 primary key   customer_id
 target        reactivated_90d, positive label 1
-run           r_20260922_15645399
-wall clock    269.8 s
+run           r_20260922_2242a2cc
+wall clock    910.4 s   (of the 30-minute default budget), 106 models
 ```
 
 ## Validation
@@ -22,7 +22,7 @@ wall clock    269.8 s
 > *Suggestion: "It will be dropped before training."*
 
 Correct, and expected: this file is a single snapshot, so `2011-09-10` appears in all 1,463 rows.
-The column did not reach training — the feature list below has 13 entries, not 14.
+The column did not reach training — the feature list has 13 entries, not 14.
 
 ### A discrepancy worth recording
 
@@ -31,7 +31,7 @@ for the same run says something else:
 
 ```
 pii_columns: ["snapshot_date"]
-transforms[1]: {kind: "redact", columns: ["snapshot_date"], parameters: {replacement: "[REDACTED]"}}
+transforms: {kind: "redact", columns: ["snapshot_date"], parameters: {replacement: "[REDACTED]"}}
 ```
 
 The column was **redacted as personal data**, not dropped as constant — because
@@ -42,8 +42,8 @@ validation report uses, skips DATE columns entirely and so said nothing.
 Here it changes nothing — the column was headed for the bin either way. On a file with several
 snapshot dates it would silently redact a live date column with no validation finding to say so.
 Filed in [`docs/CROSS_BRANCH_REQUESTS.md`](../../docs/CROSS_BRANCH_REQUESTS.md) as *two PII
-detectors that disagree*; not fixed here, because
-`engine/stages/prepare.py` is not this branch's to edit.
+detectors that disagree*; not fixed here, because `engine/stages/prepare.py` is not this branch's
+to edit.
 
 ## Preparation and split
 
@@ -56,10 +56,7 @@ detectors that disagree*; not fixed here, because
 | Split | `random_stratified` — train 1,025 / validation 219 / test 219 |
 | Positive rate | 41.37 % train, 41.10 % validation, 41.10 % test |
 
-Outlier clipping ran on every numeric feature, fitted on the 1,025 training rows only —
-`recency_days` to [92, 282], `orders_total` to [1, 6], `items_total` to [4, 2389.24], and so on.
-
-## Leaderboard — top 3 of 5
+## Leaderboard — top 3 of 106
 
 Ranked on the **validation** score, which for this use case is **PR-AUC**, not ROC-AUC
 (`model_search.metric: pr_auc` — the question is who is worth an offer, so ranking quality on the
@@ -67,36 +64,35 @@ positives is what the search optimises).
 
 | # | Model | Family | Validation PR-AUC | Test PR-AUC | Fit |
 |---|---|---|---|---|---|
-| 1 | `LinearModel_BAG_L1` | Logistic Regression | 0.5495 | 0.5423 | 0.5 s |
-| 2 | `WeightedEnsemble_L2` | ensemble | 0.5495 | 0.5423 | 0.7 s |
-| 3 | `XGBoost_BAG_L1` | XGBoost | 0.4910 | 0.5127 | 15.4 s |
+| 1 | `WeightedEnsemble_L2` | ensemble | 0.6033 | 0.5368 | 12.3 s |
+| 2 | `LinearModel_BAG_L1/T1` | Logistic Regression | 0.5560 | 0.5509 | 1.3 s |
+| 3 | `LinearModel_BAG_L1/T10` | Logistic Regression | 0.5481 | 0.5242 | 0.9 s |
 
-**Winner:** "Ensemble (Logistic Regression)" — an ensemble of exactly one model, because the
-weighted ensemble gave all its weight to the logistic regression. Neither gradient booster beat it.
-On 1,025 training rows and thirteen correlated RFM aggregates, there is not enough signal for a
-tree ensemble to find.
+**Winner:** Ensemble (XGBoost + Random Forest), 13 features, 1,025 training rows.
+
+**Look at rows 1 and 2 together.** The ensemble wins on validation by 0.047 and *loses* on test by
+0.014. On a 219-row hold-out that is what overfitting the validation split looks like, and it is
+the clearest signal in this report that there is not enough data here to choose a model with.
 
 ## Test metrics
 
-Measured once, on the 219-row hold-out, at the auto-chosen threshold **0.3148**.
+Measured once, on the 219-row hold-out, at the auto-chosen threshold **0.35**.
 
 | Metric | Value |
 |---|---|
-| ROC-AUC | 0.6177 |
-| **PR-AUC** (primary) | **0.4982** |
-| F1 | 0.5825 |
-| Recall | **1.0000** |
-| Precision | 0.4110 |
-| Accuracy | 0.4110 |
-| Specificity | **0.0000** |
-| Brier score | 0.2376 |
+| ROC-AUC | 0.6237 |
+| **PR-AUC** (primary) | **0.4975** |
+| F1 | 0.5749 |
+| Recall | 0.7889 |
+| Precision | 0.4522 |
+| Accuracy | 0.5205 |
+| Specificity | 0.3333 |
+| Brier score | 0.2469 |
 
-**Recall 1.0 and specificity 0.0 mean the model called every shopper positive.** The auto threshold
-maximises F1 on the validation split, and with a 41 % base rate and a weak model the maximum really
-is at "say yes to everyone" — accuracy 0.411 is exactly the positive rate. Nothing is
-mis-computed, and the ranking, the bands and the decile chart are unaffected because they read the
-score rather than the threshold. But a Model page reporting 100 % recall reads as a triumph and
-means no decision was made. Filed in
+Recall 0.79 against specificity 0.33 means the model says "yes" to most of the audience. The auto
+threshold maximises F1 on validation, and with a 41 % base rate and a weak model that optimum sits
+close to "say yes to everyone" — an earlier run of this same configuration reached it exactly,
+with recall 1.0 and specificity 0.0. Filed in
 [`docs/CROSS_BRANCH_REQUESTS.md`](../../docs/CROSS_BRANCH_REQUESTS.md) as *`threshold.mode: auto`
 can call every row positive*.
 
@@ -104,31 +100,32 @@ can call every row positive*.
 
 | Metric | Model | Baseline | Δ |
 |---|---|---|---|
-| ROC-AUC | 0.6177 | 0.6282 | **−0.0105** |
-| PR-AUC | 0.4982 | 0.5027 | **−0.0045** |
-| F1 | 0.5825 | 0.5855 | −0.0030 |
-| Recall | 1.0000 | 0.9889 | +0.0111 |
-| Precision | 0.4110 | 0.4159 | −0.0049 |
+| **PR-AUC** (primary) | 0.4975 | 0.4985 | **−0.0010** |
+| ROC-AUC | 0.6237 | 0.5910 | +0.0327 |
+| F1 | 0.5749 | 0.5886 | −0.0137 |
+| Recall | 0.7889 | 0.9778 | −0.1889 |
+| Precision | 0.4522 | 0.4211 | +0.0311 |
 
-`model_beats_baseline: false`. The winning model is a logistic regression and so is the baseline;
-they are the same class of model fitted twice, and the baseline came out marginally ahead on the
-hold-out. The differences — 0.01 ROC-AUC on 219 rows — are inside the noise of a test split this
-small, but the honest summary is: **the whole AutoML search bought nothing on this dataset.**
+`model_beats_baseline: false`. The verdict is taken on the **primary metric**, PR-AUC, which this
+use case sets deliberately — and there the ensemble loses by a thousandth. It is ahead on ROC-AUC
+and behind on F1 and recall. Sixteen minutes and 106 candidates bought a result that cannot be
+distinguished from a logistic regression fitted in a second, on a 219-row hold-out where a
+thousandth of PR-AUC is a fraction of one row.
 
 ## Decile lift
 
-Base rate 41.10 %. Decile 1 holds the 22 highest-scoring shoppers.
+Base rate 41.10 %. Each decile holds 22 shoppers.
 
 | Decile | Rows | Reactivated | Rate | Lift |
 |---|---|---|---|---|
-| **D1** | 22 | 13 | **59.09 %** | **1.44×** |
-| D2 | 22 | 14 | 63.64 % | 1.55× |
-| D3 | 22 | 8 | 36.36 % | 0.88× |
+| **D1** | 22 | 12 | **54.55 %** | **1.33×** |
+| D2 | 22 | 13 | 59.09 % | 1.44× |
+| D3 | 22 | 13 | 59.09 % | 1.44× |
 
-D1→D10: 1.44, 1.55, 0.88, 1.22, 0.77, 0.66, 0.66, 0.55, 1.22, 1.04.
+D1→D10: 1.33, 1.44, 1.44, 1.11, 1.44, 0.55, 0.55, 0.88, 0.66, 0.58.
 
-**The curve is not monotonic and barely slopes.** D2 outranks D1, D9 outranks D3, and the whole
-range sits between 0.55× and 1.55×. Compare the bank campaign's 5.83× top decile. On 22 rows a
+**The curve is not monotonic and barely slopes.** D2, D3 and D5 all outrank D1, and the whole top
+half sits between 1.11× and 1.44×. Compare the bank campaign's 4.52× top decile. On 22 rows a
 decile is not a measurement, and this chart should not be shown to a customer as evidence of
 anything.
 
@@ -138,33 +135,31 @@ Permutation importance on the test split.
 
 | # | Feature | Share |
 |---|---|---|
-| 1 | `recency_days` | 44.7 % |
-| 2 | `returned_orders` | 34.0 % |
-| 3 | `orders_total` | 8.7 % |
-| 4 | `order_value_max` | 5.9 % |
-| 5 | `country` | 2.9 % |
-| 6 | `order_value_mean` | 2.2 % |
-| 7 | `days_between_orders_mean` | 1.0 % |
-| 8 | `tenure_days` | 0.3 % |
-| 9 | `active_months` | 0.3 % |
-| 10 | `spend_total` | **−0.0 %** (importance −0.0016) |
+| 1 | `distinct_products` | 48.7 % |
+| 2 | `days_between_orders_mean` | 21.5 % |
+| 3 | `order_value_mean` | 11.9 % |
+| 4 | `orders_total` | 11.7 % |
+| 5 | `active_months` | 4.0 % |
+| 6 | `tenure_days` | 2.0 % |
+| 7 | `returned_orders` | 0.2 % |
+| 8 | `order_value_max` | 0.0 % (importance −0.0025) |
+| 9 | `country` | 0.0 % (importance −0.0031) |
+| 10 | `returned_items` | 0.0 % (importance −0.0049) |
 
-A negative permutation importance means shuffling the column *improved* the score — noise, not
-signal. On a 219-row test split, several of these numbers are noise.
+Three of the ten have **negative** importance: shuffling them improved the score, which is noise,
+not signal. And `recency_days` — which an earlier run of this same configuration put first, at
+45 % — does not appear in the top ten at all. A feature ranking that reorders itself between runs
+is not a finding about shoppers; it is a measurement of how little signal there is to find.
 
 ## What a business user should take from this
 
-**This dataset does not support a win-back model, and the engine said so correctly.** The
-best model the search could build loses to a plain logistic regression on the hold-out, and the
-decile curve is flat. The right conclusion is not "tune it harder" — it is that fourteen months of
-invoices for 1,463 lapsed shoppers, with no campaign history, no contact log and no offer data,
-does not contain enough to predict who comes back. The engine ran the whole path, produced every
-artefact, and handed back an honest negative. That is the system working.
-
-**What little signal there is, is recency and returns.** `recency_days` (45 %) and
-`returned_orders` (34 %) carry four fifths of what the model found. Shoppers who lapsed recently
-and who never sent anything back are the ones who come back. Both are things you can sort a list by
-without a model at all.
+**This dataset does not support a win-back model, and the engine said so correctly.** The best
+model a sixteen-minute, 106-candidate search could build ties with a plain logistic regression on
+the primary metric, the decile curve is flat and out of order, and the feature ranking is unstable
+between runs. The right conclusion is not "tune it harder" — it is that fourteen months of invoices
+for 1,463 lapsed shoppers, with no campaign history, no contact log and no offer data, does not
+contain enough to predict who comes back. The engine ran the whole path, produced every artefact,
+and handed back an honest negative. That is the system working.
 
 **What would make this work.** Not a better algorithm — more columns. Campaign history (who was
 offered what, and when), a contact log, offer type and discount depth, and email engagement are the
@@ -182,4 +177,4 @@ python -m library.run_engine \
   --primary-key customer_id --target reactivated_90d
 ```
 
-Artefacts: `library/.runs/online-retail/r_20260922_15645399.results.json`.
+Artefacts: `library/.runs/online-retail/r_20260922_2242a2cc.results.json`.
