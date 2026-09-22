@@ -510,3 +510,62 @@ def test_the_library_skips_functions_needing_a_column_the_role_lacks() -> None:
     assert "complaints_days_since_last" in generated  # generated once, not once per window
     assert not [f for f in features if f.role == "complaints" and f.column is not None]
     assert "bills_mean_amount_90d" in {f.name for f in features}
+
+
+def test_two_builds_of_the_same_data_agree_only_to_a_tolerance() -> None:
+    """Why the leak probe may not compare floats exactly.
+
+    DuckDB aggregates in parallel, so the order it sums a column in is not fixed between runs. Two
+    builds of identical, untouched tables therefore return floats that differ in their last bits -
+    measured here, not assumed. `engine.onboarding.build._moved` compares floats to a tolerance
+    because of this; an exact comparison made every float feature look like it had moved as soon as
+    a build was large enough for DuckDB to use a second thread, and FUTURE_EVENTS_LEAKED is the one
+    finding a user may never acknowledge, so large builds became impossible.
+
+    If this test ever starts passing with `equals`, the tolerance in `_moved` can go - but only
+    then, and only with a measurement like this one to show it.
+    """
+    import duckdb
+    import numpy as np
+
+    from engine.onboarding.build import _moved
+
+    rng = np.random.default_rng(7)
+    entities, events = 4_000, 400_000
+    snapshots = pd.DataFrame(
+        {
+            "entity_key": np.repeat([f"E{i}" for i in range(entities)], 2),
+            "snapshot_date": pd.to_datetime(np.tile(["2026-01-31", "2026-02-28"], entities)),
+        }
+    )
+    bills = pd.DataFrame(
+        {
+            "entity_key": [f"E{i}" for i in rng.integers(0, entities, events)],
+            "event_time": pd.to_datetime("2025-06-01")
+            + pd.to_timedelta(rng.integers(0, 330, events), unit="D"),
+            "amount": rng.normal(500.0, 180.0, events),
+        }
+    )
+    spec = FeatureSpec(
+        features=(
+            FeatureDef(name="avg_bill", role="bills", function="mean", column="amount", window_days=180),
+            FeatureDef(name="bills_180d", role="bills", function="count", window_days=180),
+        )
+    )
+    con = duckdb.connect()
+    try:
+        con.register("snapshots", snapshots)
+        con.register("bills", bills)
+        first = build_features(con, spec, inclusive=True)
+        second = build_features(con, spec, inclusive=True)
+    finally:
+        con.close()
+
+    # The count is exact on both runs; only the float moves, and only in its last bits.
+    assert first["bills_180d"].equals(second["bills_180d"])
+    assert not _moved(first["avg_bill"], second["avg_bill"])
+    assert not _moved(first["bills_180d"], second["bills_180d"])
+    # And a real change is still a change: one extra event in a window moves the count by a whole 1.
+    bumped = second["bills_180d"] + 1
+    assert _moved(first["bills_180d"], bumped)
+    assert _moved(first["avg_bill"], second["avg_bill"] * 1.0001)

@@ -15,6 +15,30 @@ branch to hit the same wall should find the ruling, not the silence.
 
 ## Open
 
+### 2026-09-22 — phase-2-onboarding → human reviewer: PII inside free text is not detected
+
+**What is needed.** A decision, not a patch. `engine.stages.ingest.detect_pii` and
+`engine.stages.prepare._detect_pii` both match a WHOLE CELL (`pattern.fullmatch(value)`), so a phone
+number or an email that is the entire value is caught and one buried in a sentence is not. Measured
+on a synthetic complaints table: the shipped email pattern is found by `.search` in 363 of 1,105
+free-text rows and the phone pattern in 400, and `detect_pii` returns `()` for the column.
+
+That is defensible for the columns Phase 1 sees - a `phone` column holds phone numbers - and it is
+exactly wrong for the free-text column Phase 2 introduces, because `complaints.text` is where
+customers type "call me back on 0400 123 456". Phase 3 will read that column to write summaries.
+
+Switching to `.search` is not a change this branch should make alone: `min_value_match_rate` and
+`min_distinct_ratio` are calibrated for whole-cell matching, and loosening the match would start
+redacting columns that are not redacted today, in every existing use case, changing what Phase 1
+trains on.
+
+**What I did meanwhile.** Corrected the claim rather than the code. `configs/roles.yaml` used to
+promise that PII in `complaints.text` "is redacted at profiling time"; it now says the detectors
+match whole cells and that the column should be treated as unredacted free text.
+`tests/fixtures/raw/make_raw.py` plants contacts in the exact shapes the shipped patterns
+recognise, so whoever takes the decision has something to test against.
+
+
 ### 2026-09-22 — phase-2-onboarding → phase-3a, phase-4a: four fields added to `UseCaseConfig`
 
 **What is needed.** Nothing from you; this is the announcement `PARALLEL_WORK_PROTOCOL.md` §3

@@ -557,11 +557,53 @@ def _leak_probe(
 
     role_of = {feature.name: feature.role for feature in spec.features}
     moved = {
-        role_of[name]
-        for name in features.columns
-        if name in role_of and not features[name].equals(probed[name])
+        role_of[name] for name in features.columns if name in role_of and _moved(features[name], probed[name])
     }
     return {role: rows for role, rows in injected.items() if role in moved}
+
+
+_PROBE_RTOL: Final[float] = 1e-9
+"""How far a float feature may differ between two builds of the same data and still be the same.
+
+DuckDB aggregates in parallel, so the order it sums a column in is not fixed between runs: building
+the same features twice over identical, untouched tables returns floats that differ in their last
+bits. Measured at 240,000 rows over 3,000,000 events, the largest such difference was 5.5e-12 on a
+sum of order 500 - about 1e-15 relative, which is arithmetic noise and not a leak.
+
+An exact comparison therefore reports every float feature as moved as soon as a build is large
+enough for DuckDB to use more than one thread, and FUTURE_EVENTS_LEAKED is the one finding a user
+may never acknowledge - so it would make large builds impossible and blame the engine's own
+correctness check for it. This tolerance is a thousand times the observed noise and still many
+orders of magnitude below any real leak: an event that should not have been counted moves a count
+by a whole 1 and a mean by a real amount, never by a part in a billion.
+"""
+
+
+def _moved(built: pd.Series[Any], probed: pd.Series[Any]) -> bool:
+    """Did a feature change when events dated after the last snapshot were added?
+
+    Counts, dates and categories are compared exactly - a count that changes at all has counted
+    something it should not have. Floats are compared to `_PROBE_RTOL`, for the reason recorded
+    there. A value that appears or disappears is a change whatever its type, so the null positions
+    are compared exactly in both cases.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if built.isna().to_numpy().tolist() != probed.isna().to_numpy().tolist():
+        return True
+    if not pd.api.types.is_float_dtype(built) or not pd.api.types.is_float_dtype(probed):
+        return not built.equals(probed)
+    present = built.notna().to_numpy()
+    return not bool(
+        np.allclose(
+            built.to_numpy(dtype=float)[present],
+            probed.to_numpy(dtype=float)[present],
+            rtol=_PROBE_RTOL,
+            atol=0.0,
+            equal_nan=True,
+        )
+    )
 
 
 # ---------------------------------------------------------------------------

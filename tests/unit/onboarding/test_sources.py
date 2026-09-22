@@ -13,6 +13,7 @@ use-case-independent `.catalog`.
 
 from __future__ import annotations
 
+import inspect
 from pathlib import Path
 
 import pandas as pd
@@ -607,3 +608,20 @@ def test_profile_source_defaults_to_the_shipped_role_catalogue(config: UseCaseCo
     )
     assert profile.role_candidates
     assert profile.role_candidates[0].role in get_roles().names
+
+
+def test_a_build_read_is_never_capped_at_the_profiling_cap(tmp_path: Path) -> None:
+    """The regression for a truncation that only appears above two million rows.
+
+    `read_upload` defaults `row_cap` to the profiling cap, and `FileSourceReader.read` used to
+    inherit it. A profile of a capped prefix is correct by design; a *build* from one is not - it
+    aggregates whatever rows it was given and reports success. The benchmark caught it at 200,000
+    customers, where every event table came back exactly 2,000,000 rows long. Nothing smaller than
+    the cap can catch it, so this test works on the cap itself rather than on a real file.
+    """
+    from engine.onboarding.sources import UNBOUNDED_ROWS
+    from engine.stages.ingest import DEFAULT_PROFILE_ROW_CAP
+
+    assert UNBOUNDED_ROWS > DEFAULT_PROFILE_ROW_CAP
+    source = inspect.getsource(FileSourceReader.read)
+    assert "row_cap=UNBOUNDED_ROWS" in source, "FileSourceReader.read must lift the profiling cap"

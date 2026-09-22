@@ -52,7 +52,7 @@ roles:
       - {name: category,      type: categorical, aliases: [type, complaint_type, issue_type, reason, cat, subject], description: "What the complaint was about."}
       - {name: resolved_time, type: date,        aliases: [resolved_dt, closed_at, closure_date, resolved_on, close_dt], description: "When it was closed; blank while it is still open."}
       - {name: severity,      type: categorical, aliases: [priority, sev, urgency, impact], description: "How serious the client judged it."}
-      - {name: text,          type: text,        aliases: [remarks, notes, description, comments, narrative, ticket_text, details], description: "What the customer said, in their own words. Carried through untouched; PII in it is redacted at profiling time."}
+      - {name: text,          type: text,        aliases: [remarks, notes, description, comments, narrative, ticket_text, details], description: "What the customer said, in their own words, carried through untouched so a summary can read it. Note that the PII detectors match a whole cell, so a phone number that IS the cell is caught and one buried in a sentence is not: treat this column as unredacted free text."}
     name_tokens: [complaint, complaints, ticket, tickets, case, cases, grievance, support]
 
   usage:

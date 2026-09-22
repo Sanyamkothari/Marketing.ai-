@@ -68,6 +68,7 @@ from typing import TYPE_CHECKING, Final
 from tests.fixtures.raw.make_raw import DATA_END, DEFAULT_SEED, USAGE_FILE, make_raw
 
 from engine.config import RunMode, StandardType, get_roles, load_use_case
+from engine.contracts import Severity
 from engine.onboarding.build import build_dataset
 from engine.onboarding.datasets import LocalDatasetRegistry
 from engine.onboarding.features import suggested_features
@@ -398,6 +399,11 @@ def print_report(
     print(f"machine      : {machine_line()}")
     print(f"client tables: {len(report.sources)} CSV · {table_bytes / 1_000_000:.1f} MB · seed {seed}")
     print(f"use case     : {USE_CASE} · passed={report.passed} · errors={report.error_count}")
+    if not report.passed:
+        # Codes only. A blocking build is still a measured build, and the codes are what turns
+        # "it failed" into something a reader can act on without re-running it.
+        codes = sorted({check.code for check in report.checks if check.severity is Severity.ERROR})
+        print(f"blocked by   : {', '.join(codes)}")
     print()
     print("setup (NOT part of the measured result)")
     print(f"  generate + profile + map : {setup_seconds:8.1f} s   (separate process; excluded from peak)")

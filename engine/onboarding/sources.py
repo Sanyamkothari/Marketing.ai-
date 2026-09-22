@@ -31,6 +31,7 @@ that turns out to be an event table is only useful once its key actually joins t
 from __future__ import annotations
 
 import re
+import sys
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
@@ -463,6 +464,10 @@ class SourceReader(Protocol):
     def profile(self, source: SourceSpec) -> SourceProfile: ...
 
 
+UNBOUNDED_ROWS: Final[int] = sys.maxsize
+"""`row_cap` for a read that must return the whole table: a build may never see a truncated source."""
+
+
 class FileSourceReader:
     """`SourceReader` over an uploaded CSV/Parquet file, reusing `engine.stages.ingest` unchanged.
 
@@ -479,9 +484,25 @@ class FileSourceReader:
         self._use_case = use_case
 
     def read(self, source: SourceSpec, *, max_rows: int | None = None) -> pd.DataFrame:
-        from engine.stages.ingest import read_table
+        """Every row of the source, unless the caller asks for a bounded preview.
 
-        return read_table(self._storage, source.storage_key, max_rows=max_rows)
+        `read_upload` defaults `row_cap` to the *profiling* cap, which is right for profiling - a
+        profile of two million rows describes a file as well as a profile of ten million, and
+        `DatasetProfile.row_count` stays exact either way (DEC-046). It is wrong here. A build
+        aggregates these rows, so a source read short produces feature values computed from part of
+        the history, for a subset of the entities, with nothing anywhere saying so: at 200,000
+        customers the benchmark read exactly 2,000,000 of each event table and the build failed
+        seven checks it should have passed. The cap is lifted explicitly rather than by accident.
+        """
+        from engine.stages.ingest import read_upload
+
+        return read_upload(
+            self._storage,
+            source.storage_key,
+            file_format=source.file_format,
+            max_rows=max_rows,
+            row_cap=UNBOUNDED_ROWS,
+        ).frame
 
     def profile(self, source: SourceSpec) -> SourceProfile:
         from engine.stages.ingest import read_upload
