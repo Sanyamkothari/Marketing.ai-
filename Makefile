@@ -49,17 +49,11 @@ endif
 # (DEC-358).
 PAID_MARKERS := not bedrock and not aws
 
-# tests/infra is not collected here: it runs in its own venv through `make infra-test` and its own CI
-# job (DEC-364). `make setup` installs `.[dev]`, which does not carry aws-cdk-lib, so collecting it
-# here would be a conftest ImportError - and pytest aborts the whole run on one, not just that
-# directory. An explicitly named path overrides --ignore, so `make infra-test` still collects all of it.
-NOT_THIS_VENV := --ignore=tests/infra
-
 test: ## fast tests (excludes @slow and the two markers that bill a real account)
-	$(BIN)/python -m pytest $(NOT_THIS_VENV) -m "not slow and $(PAID_MARKERS)"
+	$(BIN)/python -m pytest -m "not slow and $(PAID_MARKERS)"
 
 test-all: ## every test that costs nothing; `pytest -m bedrock` or `-m aws` opts in to the paid ones
-	$(BIN)/python -m pytest $(NOT_THIS_VENV) -m "$(PAID_MARKERS)"
+	$(BIN)/python -m pytest -m "$(PAID_MARKERS)"
 
 lint: check-generated ## ruff + black --check + mypy --strict + generated-file drift check
 	$(BIN)/ruff check engine api scripts tests
@@ -160,9 +154,9 @@ infra-setup: ## create .venv-infra and install the deploy extra
 	$(INFRA_BIN)/python -m pip install -q --upgrade pip
 	$(INFRA_BIN)/python -m pip install -q -e ".[deploy]" -r infra/requirements.txt
 
-infra-lint: ## ruff + black --check + mypy --strict over infra/ and tests/infra/
-	$(BIN)/ruff check infra tests/infra
-	$(BIN)/black --check infra tests/infra
+infra-lint: ## ruff + black --check + mypy --strict over infra/ and tests/infra/ (needs only .venv-infra)
+	$(INFRA_BIN)/ruff check infra tests/infra
+	$(INFRA_BIN)/black --check infra tests/infra
 	$(INFRA_BIN)/mypy --strict infra tests/infra
 
 infra-test: ## the offline CDK assertions and snapshots (no AWS account needed)

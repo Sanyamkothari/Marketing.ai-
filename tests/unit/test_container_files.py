@@ -241,20 +241,36 @@ def test_the_default_targets_still_select_the_free_suites(repo_root: Path) -> No
     assert _selects(_makefile_selection(repo_root, "test-all"), {"postgres"})
 
 
-@pytest.mark.parametrize("target", ["test", "test-all"])
-def test_the_default_targets_leave_the_infra_suite_to_its_own_venv(repo_root: Path, target: str) -> None:
-    """`make setup` installs `.[dev]`, with no aws-cdk-lib; `tests/infra/conftest.py` imports it.
+def test_the_infra_venv_lints_with_the_same_tool_versions_as_the_main_one(repo_root: Path) -> None:
+    """`.venv-infra` carries its own ruff, black and mypy so CI's `infra` job needs nothing else.
 
-    Collected from the product venv, that conftest is an ImportError, and pytest aborts the entire
-    run on one - so CI's main job would go red over a directory it was never meant to run. The infra
-    suite has its own venv, target and CI job (DEC-364); an explicitly named path overrides
-    `--ignore`, so `make infra-test` is unaffected.
+    It used to borrow ruff and black from the main `.venv`, which that job never builds: `make
+    infra-lint` exited 127 and the infrastructure suite behind it never ran in CI (reviewer finding
+    G-1). A second copy of a tool is only safe if it is the same version, so every pin in
+    `infra/requirements.txt` must equal that tool's pin in pyproject's `dev` extra.
     """
-    text = (repo_root / "Makefile").read_text(encoding="utf-8")
-    variables = dict(re.findall(r"^([A-Z_]+)\s*:=\s*(.+)$", text, re.MULTILINE))
-    recipe = re.search(rf"^{re.escape(target)}:.*\n((?:\t.*\n)+)", text, re.MULTILINE)
-    assert recipe is not None
-    line = re.sub(
-        r"\$\(([A-Z_]+)\)", lambda m: variables.get(m.group(1), m.group(0)).strip(), recipe.group(1)
+    infra = dict(
+        re.findall(
+            r"^([A-Za-z0-9_.-]+)==(\S+)$", (repo_root / "infra" / "requirements.txt").read_text(), re.M
+        )
     )
-    assert "--ignore=tests/infra" in line, f"`make {target}` would collect tests/infra without aws-cdk-lib"
+    dev = dict(
+        re.findall(r'^\s*"([A-Za-z0-9_.-]+)==([^"]+)"', (repo_root / "pyproject.toml").read_text(), re.M)
+    )
+    for tool in ("ruff", "black", "mypy"):
+        assert tool in infra, f"infra/requirements.txt has no {tool}; `make infra-lint` needs it"
+    for tool, version in infra.items():
+        assert (
+            dev.get(tool) == version
+        ), f"{tool}=={version} in infra/requirements.txt, {dev.get(tool)} in pyproject"
+
+
+def test_the_infra_targets_need_nothing_from_the_main_venv(repo_root: Path) -> None:
+    """The four targets CI's `infra` job runs, read for any use of the main venv's `$(BIN)`."""
+    text = (repo_root / "Makefile").read_text(encoding="utf-8")
+    for target in ("infra-setup", "infra-lint", "infra-test", "infra-synth", "infra-nag"):
+        recipe = re.search(rf"^{re.escape(target)}:.*\n((?:\t.*\n)+)", text, re.MULTILINE)
+        assert recipe is not None, f"the Makefile has no {target!r} target"
+        assert "$(BIN)" not in recipe.group(
+            1
+        ), f"`make {target}` uses the main venv, which CI's infra job lacks"

@@ -5,7 +5,10 @@
 import fs from "node:fs";
 import { JSDOM, VirtualConsole } from "jsdom";
 
-export const FILE = new URL("../../marketing-ai-prototype.html", import.meta.url);
+export const ROOT = new URL("../../", import.meta.url);
+export const FILE = new URL("marketing-ai-prototype.html", ROOT);
+/** A file from the repository, as text: lets a test pin the prototype to the product. */
+export const repoText = (rel) => fs.readFileSync(new URL(rel, ROOT), "utf8");
 export const HTML = fs.readFileSync(FILE, "utf8");
 
 export function load(hash = "#/") {
@@ -19,6 +22,17 @@ export function load(hash = "#/") {
     virtualConsole: vc,
   });
   dom.window.scrollTo = () => {};
+  // Every browser has Blob.prototype.text(); jsdom does not. Same contract, over FileReader.
+  if (!dom.window.Blob.prototype.text) {
+    dom.window.Blob.prototype.text = function text() {
+      return new Promise((resolve, reject) => {
+        const reader = new dom.window.FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsText(this);
+      });
+    };
+  }
   // Every animation in the prototype collapses when reduced motion is on,
   // which keeps the timed build and run flows inside a test's patience.
   dom.window.matchMedia = () => ({ matches: true, addListener() {}, removeListener() {} });
@@ -58,3 +72,20 @@ export function set(dom, sel, value) {
 }
 
 export const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Choose a real file in a file input, as a user would, and wait until the page has read it.
+ *  Reading is asynchronous (Blob.text), so this waits for the re-render the read ends in -
+ *  the page swaps its <main> element - rather than guessing how long a read takes. */
+export async function upload(dom, sel, name, content, timeoutMs = 3000) {
+  const input = $(dom, sel);
+  if (!input) throw new Error(`no file input: ${sel}`);
+  const before = $(dom, "#app main");
+  const file = new dom.window.File([content], name, { type: "text/csv" });
+  Object.defineProperty(input, "files", { value: [file], configurable: true });
+  input.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
+  const started = Date.now();
+  while ($(dom, "#app main") === before) {
+    if (Date.now() - started > timeoutMs) throw new Error(`the page never re-rendered after ${name}`);
+    await wait(10);
+  }
+}

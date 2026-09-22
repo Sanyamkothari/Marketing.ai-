@@ -185,6 +185,50 @@ truncated sha256. It does not appear for a run from a prepared file.
 
 ---
 
+## Revision 3 — the reference set the API accepts, and the threshold it grades at
+
+The Phase 3a API review made the assistant's reference set strict (`DATA_CONTRACT.md` §8.2): four
+columns, and a 422 naming the first one missing, checked on upload. The prototype still showed three
+columns keyed on `question_id`, so it described a flow the API now refuses.
+
+- **The sample reference set is the product's template**, column for column —
+  `question, expect_refusal, source_doc, reference_answer` — and its first column is the key, as the
+  built Setup screen assumes. `question_id` no longer appears anywhere in the prototype.
+- **Step 2 names the four columns before anything is uploaded**, each with what it holds. The built
+  screen shows the error only after an upload fails; here it is avoidable. *The build should adopt
+  this.*
+- **A real upload is checked on arrival, the way the API checks it**: same columns, same order as
+  `api/routes/generative.py`, same wording — "The reference set is missing the expect_refusal
+  column." A rejected file fills in nothing, and because the set is optional the build stays
+  runnable, unscored. Evaluate mode checks its test questions the same way (it previously went
+  through the predictive file handler, which never cleared its blocker for a real upload).
+- **The pass threshold is a setting** in Advanced → Evaluation, default **75%** — the product's
+  `generative.reference_set.pass_threshold: 0.75`, not the 85% the prototype had invented.
+- **The result says which side of the threshold the run landed**, and a failing run is drawn red.
+  The built bar is always green, so a 60% run against a 75% threshold reads as a pass. *The build
+  should adopt this too.*
+
+`tests/prototype/consistency.test.mjs` now reads the product's own files — `configs/engine.yaml`,
+`api/routes/generative.py`, the template CSV and `DATA_CONTRACT.md` — so the prototype fails its
+tests the day the product changes and it does not.
+
+**Phase 2's panel against the prototype.** `ui/modules/onboarding/` on `phase-2-onboarding` covers
+nearly every element here, down to the value map, "Accept all suggestions" and "Use this dataset".
+Two differences, left as they are pending a decision:
+
+- *Label sentence.* The panel reads "An **entity** counts as…" with only the day count editable. The
+  prototype reads "A **customer** counts as…" with the name, condition and days editable. The
+  product already substitutes the entity's name elsewhere (DEC-022), so "customer" should win; how
+  much of the sentence is editable is a design call.
+- *Snapshot cap.* The product allows 1–120 with a default of 12 (`configs/engine.yaml`). The
+  prototype says "max 12", as the original brief did; without the Phase 2 plan it is not clear
+  which is intended.
+
+The panel is not reachable from the app yet, and a built dataset cannot start a run; both are
+logged in `docs/CROSS_BRANCH_REQUESTS.md`.
+
+---
+
 ## What did not change
 
 The lifecycle overview, the seven use-case definitions, the eight advanced-settings
@@ -214,7 +258,7 @@ Anything the product would have to invent is still `—`.
 
 ```bash
 open marketing-ai-prototype.html          # no build step, no server needed
-make prototype-test                       # 38 jsdom tests
+make prototype-test                       # 42 jsdom tests
 make prototype-screenshots                # docs/prototype/*.png, desktop and mobile
 ```
 

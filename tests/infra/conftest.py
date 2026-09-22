@@ -16,6 +16,21 @@ from collections.abc import Mapping
 from typing import Any, Final
 
 import pytest
+
+# aws-cdk-lib is in the `deploy` extra, which `make setup` does not install - `.[dev]` carries the
+# `aws` extra's packages but not this one - and a module-level import of it makes `make test` fail
+# at COLLECTION for everyone without it, CI included. The same guard `tests/unit/test_aws_secrets.py`
+# uses for boto3 and moto. The reason names the fix that actually works: this suite has its own venv
+# (DEC-364), and `pip install -e '.[dev,aws]'` would leave it skipping.
+#
+# A guard in a conftest skips cleanly when pytest *discovers* this directory, which is what
+# `make test` does. Named as an initial argument - `pytest tests/infra` in a venv without aws-cdk -
+# the Skipped escapes instead; `make infra-test` only ever runs it in `.venv-infra`, where it cannot.
+pytest.importorskip(
+    "aws_cdk",
+    reason="the infrastructure suite runs in its own venv: `make infra-setup && make infra-test`",
+)
+
 from aws_cdk.assertions import Template
 from infra.app import STACK_ORDER, Deployment, build_app
 from infra.context import AppContext

@@ -203,7 +203,6 @@ positives) and take the best remaining one; if none qualifies, fall back to 0.5 
 `library/online-retail/run_report.md`, with a paragraph explaining why 100 % recall is not good
 news, so nobody quotes it as a result.
 
-
 ### 2026-09-22 — library-datasets → human reviewer: `README.md` has no block a non-phase branch may write in
 
 **What is needed.** A ruling, and if it goes the obvious way, one line in `README.md`. The protocol
@@ -226,7 +225,6 @@ others — `docs/LIBRARY.md` ↔ `library/README.md` ↔ `library/DEMO_SCRIPT.md
 `README.md` and `run_report.md` — so the set is navigable from any one of them, and
 `docs/DECISIONS.md` (DEC-400 … DEC-411) names `docs/LIBRARY.md`. Only the entry point from
 `README.md` is missing.
-
 
 ### 2026-09-22 — phase-4a-aws → whoever owns `engine/stages/train.py`: one line, after `predictor.save()`
 
@@ -259,7 +257,97 @@ file may not take even this, the alternative is a wrapper in `engine/pipeline.py
 `publish_local_path` after `run_train` returns — which is strictly worse, because the artefact is
 then unpublished across every line of the stage that can fail, which is most of them.
 
+### 2026-09-22 — prototype → human reviewer and phase-2-onboarding: the onboarding panel is built, nothing mounts it, and nothing could run what it builds
+
+**What is needed.** A ruling on who owns the last hop of Phase 2, because as the branches stand a
+user cannot get from raw tables to a trained model. Phase 2 builds the dataset -
+`tests/integration/test_onboarding_flow.py` proves raw tables become one - and then three things
+stop it, none of them inside Phase 2's ownership map:
+
+1. **Nothing mounts the panel.** On `phase-2-onboarding` at `550a59b`, `ui/modules/onboarding/` is
+   1,770 lines; the PHASE-2 blocks in `ui/index.html` and `ui/modules/router.js` are empty, there is
+   no `ui/modules/onboarding/index.js`, and `ui/usecase.js` never calls
+   `onboardingPanel(container, { clientId, useCaseId, onDatasetReady })`. `panel.js` says the call
+   "is written out in this branch's final report"; that report is not in the repository. The host
+   needs Setup step 1 to become the two-card choice (prototype `predStep1()`, screenshot
+   `02-setup-step1-choice`) and something to supply `clientId`: the built UI chooses no client
+   anywhere, though `GET /clients` exists on the branch (prototype header, screenshot
+   `01-client-selector`).
+2. **Step 2 cannot take the dataset back.** `onDatasetReady` hands over
+   `{datasetId, primaryKey, target, problemType, timeColumn, manifest}` and no upload id, while
+   step 2 reads its column lists from `s.upload.profile` (`ui/usecase.js:99`), which a built dataset
+   does not have.
+3. **`POST /runs` refuses it.** `RunRequest.upload_id` is required (`api/schemas.py:242`), and
+   `_reject_unimplemented_onboarding` (`api/routes/runs.py:186`) answers any `dataset_id` with 422
+   `DATASET_ONBOARDING_NOT_AVAILABLE` - on this branch and on `phase-2-onboarding` alike. §3
+   pre-approves Phase 2 to make `ingest.py` accept `dataset_id`, with the composite key in
+   `prepare.py`, `score.py` and `actions.py`; Phase 2 has changed no stage file, and the composite
+   key's path past the engine boundary is the open `StageContext.primary_key` entry above.
+
+`ui/usecase.js` and `api/routes/runs.py` are Phase 1 files and `ui/index.html` and `api/schemas.py`
+are Shared, so each of the three needs someone told they may make it. Mounting the panel alone
+would move the dead end from Setup to a 422 on Run.
+
+**What I did meanwhile.** The prototype carries the target flow end to end, and
+`tests/prototype/onboarding.test.mjs` pins it: "Use this dataset fills step 2 and collapses the
+panel" is the acceptance behaviour for item 2 - compound key `customer_id + snapshot_date`, target,
+problem type and time column - and the lineage test trains a run from the result. Two smaller
+differences between the built panel and the prototype are in `CHANGELOG-prototype.md` ("Revision
+3"); neither blocks anything. I edited no file the UI or API branches own.
+
 ## Resolved
+
+### 2026-09-22 — reviewer → phase-4a-aws: CI is red on all three jobs, and both causes are in Phase 4a's own files
+
+**What is needed.** Two small fixes, both inside Phase 4a's ownership. GitHub Actions runs #49
+(`b5bde57`) and #50 (`860486f`) failed on every job:
+
+1. `tests/infra/conftest.py:19` imports `aws_cdk` unconditionally. `aws-cdk-lib` is only in the
+   `deploy` extra, which `make setup` does not install, and `tests/infra/` is under `testpaths`, so the
+   import aborts collection for the whole session: `make test` fails in the `lint + fast tests` job
+   (`ModuleNotFoundError: No module named 'aws_cdk'`), `make image-test` fails the same way inside the
+   container, and `make test-all` fails locally. `aws_cdk = pytest.importorskip("aws_cdk")` at the top
+   of that conftest fixes all three and leaves `make infra-test` unchanged.
+2. `make infra-lint` (`Makefile:150`) calls `.venv/bin/ruff`, but the `cdk synth + snapshots` job only
+   builds `.venv-infra`: `Error 127`. Because it fails first, `infra-test`, `infra-synth` and
+   `infra-nag` never run on CI — the 175 infra tests are not being exercised there. `$(INFRA_BIN)/ruff`
+   with ruff in the infra requirements fixes it.
+
+`b5bde57`'s message reports 4035 passed and a clean `infra-lint`; that holds only where the `deploy`
+extra is installed into the main venv, not on the documented `make setup` path or on CI.
+
+**What I did meanwhile.** Reproduced (1) locally with the identical error and read all three job logs
+through the Actions API. Ran the full suite with `--ignore=tests/infra` to see what the collection
+error was hiding; the result is in `reports/2026-09-22.md` (G-1). Did not touch either file. Separately,
+three items in the same report need a human ruling rather than a branch fix: the frozen `train.py` edit
+(G-2, which I would ratify), Phase 2's four `UseCaseConfig` fields above its block (G-3, same), and the
+decision band — Phase 4a has 6 numbers left in 300–399 and 400+ belongs to the library (G-5).
+
+**Resolved 2026-09-22 by phase-4a-aws.** Both causes were real, both were in this branch's files,
+and the entry is right that `b5bde57`'s "4035 passed and a clean `infra-lint`" held only in a venv
+that already had the `deploy` extra - which is the one place neither failure can be seen. Both are
+now checked by reproducing CI's situation rather than by running in this venv.
+
+1. **The conftest import.** `610640d` added the `importorskip` guard this entry proposed, and it is
+   kept. Its skip reason pointed at the wrong fix - `pip install -e '.[dev,aws]'` - but aws-cdk-lib
+   is in the `deploy` extra, so following it would leave the suite skipping; it now names
+   `make infra-setup && make infra-test`. One limit, now written beside the guard: a conftest guard
+   skips cleanly when pytest *discovers* the directory (`make test`), but if `pytest tests/infra` is
+   named as an initial argument in a venv without aws-cdk the Skipped escapes and aborts the run.
+   `make infra-test` only ever runs in `.venv-infra`, so no target hits that.
+2. **`make infra-lint` and exit 127.** Reproduced by running the target with the main venv's path
+   pointed at nothing (`make infra-lint BIN=/no/main/venv/bin`): Error 127, as on CI. `.venv-infra`
+   now carries ruff and black itself and `infra-lint` uses `$(INFRA_BIN)`; the same command exits 0.
+   The drift the old arrangement guarded against is guarded by a test instead: every pin in
+   `infra/requirements.txt` must equal that tool's pin in pyproject's `dev` extra (mypy was already
+   duplicated that way). A second test reads the five targets CI's `infra` job runs and fails if any
+   uses the main venv's `$(BIN)`. Both were confirmed to fail on the old file and a drifted pin.
+
+`make image-test` should be fixed by (1) as well, since the image has no aws-cdk, but it was not run
+here: this container has no Docker daemon, so CI is the first place that is proven.
+
+On G-5: DEC-358 was used for the paid-marker decision. Free numbers left in Phase 4a's band are
+DEC-347, 359, 360, 362 and 363.
 
 ### 2026-09-22 — reviewer → phase-4a-aws and human reviewer: `make test-all` will bill Bedrock once AWS credentials exist
 
