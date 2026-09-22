@@ -78,6 +78,29 @@ The failure attached to a failed run or stage.
 | `message` | string | yes | Business-language explanation of what went wrong. |
 | `stage` | StageKey ("ingest" \| "validate" \| "prepare" \| "split" \| "train" \| "evaluate" \| "explain" \| "register" \| "validate_against_schema" \| "predict" \| "explain_rows" \| "actions" \| "export") \| null | yes | Stage that failed, when one was running. |
 
+### `job_spec.json`
+
+`job_spec.json` - the declarative description of the work a run's job has to do (DEC-324).
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `job_id` | string | yes | Job id in the runner's vocabulary; the run id today. |
+| `run_id` | string | yes | Run this job produces. |
+| `entrypoint` | JobEntrypoint ("train" \| "score") | yes | Which pipeline flow to run. |
+| `mode` | RunMode ("train" \| "score") | yes | train or score; the same distinction the run record carries. |
+| `use_case_id` | string | yes | Use case the run belongs to. |
+| `run_config_key` | string | yes | Storage key of run_config.json, the resolved configuration. |
+| `upload_key` | string | yes | Storage key of the uploaded file the run consumes. |
+| `upload_format` | "csv" \| "parquet" | yes | Format of the uploaded file. |
+| `primary_key` | string | yes | Column identifying each entity. |
+| `target` | string \| null | no | Target column; set for a training job only. |
+| `model_version_id` | string \| null | no | Model version to score with; set for a scoring job only. |
+| `engine_version` | string | yes | Engine version that wrote this spec. |
+| `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the spec was written. |
+| `backend` | string | no | Where this job is meant to run; filled in by the runner. |
+| `tags` | object of string -> string | no | Cost-allocation tags the job carries: product, client, use_case, run_id. |
+
 ### `status.json`
 
 `status.json` - everything the Running screen polls.
@@ -1001,6 +1024,7 @@ One column of the schema a scoring file must match.
 | `leaderboard_path` | string \| null | no | Storage key of leaderboard.json; null when no search was run. |
 | `duration_s` | number | yes | Wall-clock seconds from run start to final state. |
 | `cost_estimate` | CostEstimate | yes | What the run cost to produce. |
+| `compute` | ComputeInfo \| null | no | Where the compute ran; null when the backend reported nothing about it. |
 | `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the manifest was written. |
 
 #### Recipe
@@ -1022,14 +1046,32 @@ Every choice that determines a trained model, and nothing else.  `train(recipe)`
 
 #### CostEstimate
 
-What a run cost to produce.  `estimated_usd` is null for a local run rather than zero: nothing was billed, and a fabricated zero would be indistinguishable from a real measurement of free compute (plan section 13.3).
+What a run cost to produce.  `estimated_usd` is null for a local run rather than zero: nothing was billed, and a fabricated zero would be indistinguishable from a real measurement of free compute (plan section 13.3).  It is null again whenever the number cannot be stated honestly: no billable time reported, no published rate for that instance in that region, or no price table at all. When it *is* set it is billable seconds multiplied by a **published AWS list price**, and `basis` says so in those words, naming the rate, the offer version and the date it was published. A list price is not a bill - it ignores savings plans, spot, free tier, tax and any negotiated discount - so `basis` is the field that keeps the number honest and must always be read with it (DEC-330).
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `compute_seconds` | number | yes | Wall-clock seconds of compute the run consumed. |
-| `estimated_usd` | number \| null | no | Billed cost when the platform reports one; null when nothing was billed. |
+| `estimated_usd` | number \| null | no | Billable time at the published list rate named in `basis`; null when it cannot be stated. |
 | `basis` | string | yes | How the estimate was derived, in plain words. |
+
+#### ComputeInfo
+
+Where a run's compute actually ran (DEC-329).  Written by whatever executed the run: the thread pool fills `backend` and the wall clock and nothing else, a SageMaker job fills the job name, the instance and - for a training job only - the billable seconds AWS itself reports. Every field past `backend` is optional because a backend that does not report something must leave it null rather than have a number invented for it (plan section 13.3).  `billable_seconds` means what AWS means by it and is set only where AWS says it: `DescribeTrainingJob.BillableTimeInSeconds`. A processing job reports start and end times, which are wall clock, so those go in `wall_clock_seconds` and `billable_seconds` stays null. `billable_seconds_source` names the API field the number came from, so a reader never has to guess which of the two they are looking at.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `backend` | string | yes | What ran the job: thread, sagemaker-training or sagemaker-processing. |
+| `job_name` | string \| null | no | Platform job name, when the platform names jobs. |
+| `job_arn` | string \| null | no | Platform job ARN, when the platform has one. |
+| `instance_type` | string \| null | no | Instance the job ran on. |
+| `instance_count` | integer \| null | no | How many of them. |
+| `region` | string \| null | no | Region the job ran in. |
+| `image_uri` | string \| null | no | Container image the job ran. |
+| `wall_clock_seconds` | number \| null | no | Seconds from job start to job end, as the platform reports them. |
+| `billable_seconds` | number \| null | no | Seconds the platform says are billable; null when it does not say. |
+| `billable_seconds_source` | string \| null | no | The API field `billable_seconds` was read from; null when it is null. |
 
 ## Tabular artefacts
 

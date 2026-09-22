@@ -115,9 +115,7 @@ class AwsParameterSource:
             # A deliberate local import: boto3 is an optional dependency (DEC-306).
             import boto3
 
-            self._secrets = cast(
-                "_SecretsClient", boto3.client("secretsmanager", region_name=self._region)
-            )
+            self._secrets = cast("_SecretsClient", boto3.client("secretsmanager", region_name=self._region))
         return self._secrets
 
     def parameters(self, prefix: str) -> dict[str, str]:

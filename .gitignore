@@ -27,3 +27,9 @@ build/
 
 # generated synthetic test data (make_data.py defaults to a temp dir; this covers --out-dir .)
 *_synthetic_*.csv
+
+# Phase 4a
+.venv-infra/
+infra/cdk.out/
+infra/.cdk.staging/
+.image-digest

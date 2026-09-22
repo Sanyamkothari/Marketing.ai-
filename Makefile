@@ -56,13 +56,15 @@ format: ## apply ruff --fix and black
 	$(BIN)/ruff check --fix engine api scripts tests
 	$(BIN)/black engine api scripts tests
 
-generate: ## regenerate templates/ and docs/API.md from configs and contracts
+generate: ## regenerate templates/, docs/API.md and infra/observability/ from configs and contracts
 	$(BIN)/python -m scripts.gen_templates
 	$(BIN)/python -m scripts.gen_api_docs
+	$(BIN)/python -m scripts.gen_dashboard
 
-check-generated: ## fail if templates/ or docs/API.md are stale
+check-generated: ## fail if templates/, docs/API.md or infra/observability/ are stale
 	$(BIN)/python -m scripts.gen_templates --check
 	$(BIN)/python -m scripts.gen_api_docs --check
+	$(BIN)/python -m scripts.gen_dashboard --check
 
 run: ## serve the API on :8000
 	$(BIN)/uvicorn api.main:app --reload --port 8000

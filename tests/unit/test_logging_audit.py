@@ -21,11 +21,29 @@ verbatim. So each stage is driven into failure as well as through success, and
 :class:`~engine.utils.logging.RedactingFormatter` - which `configure_logging` installs - is asserted
 directly: it keeps a traceback's frames, which are this repository's code, and withholds every
 exception message, which is not.
+
+Phase 4a adds a second rendering, and the rule for this file is that **it earns no exemption**.
+`RedactingJsonFormatter` is a subclass of `RedactingFormatter`, so :func:`renderings` formats every
+captured record with *both* and every `assert_no_values_logged` in this file therefore proves the
+same thing about the JSON path that it proves about the text one - by the same assertions, not by a
+parallel set that could drift. The three formatter tests are parametrised over both for the same
+reason. Two further properties are asserted directly, because they are what makes the guarantee
+structural rather than a habit: that the subclass does not override ``formatException`` (so there is
+still exactly one code path that turns an exception into text), and that its payload comes from a
+closed allow-list (so an attribute attached to a record by anybody cannot be serialised).
+
+The run identity a record carries is audited here too. It reaches the record through a `ContextVar`
+and a `logging.Filter`, and a `ContextVar` is **not** inherited by a `ThreadPoolExecutor` worker, so
+the tests at the end of this file drive a real `ThreadJobRunner` to prove both halves of that: a
+binding made inside the job body reaches the log, a binding wrapped around the submit does not, and
+two jobs running at the same time never see each other's run.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import threading
 from typing import TYPE_CHECKING, Any
 
 import pandas as pd
@@ -39,10 +57,16 @@ from engine.stages import validate as validate_stage
 from engine.stages.actions import apply_actions
 from engine.stages.ingest import profile_dataset, read_upload
 from engine.storage import LocalStorage
+from engine.utils import logging as engine_logging
 from engine.utils.logging import (
+    CONTEXT_FIELDS,
+    JSON_FIELDS,
     WITHHELD,
     RedactingFormatter,
+    RedactingJsonFormatter,
+    bind_log_context,
     configure_logging,
+    install_context_filter,
     log_failure,
     log_stage,
 )
@@ -61,6 +85,13 @@ RUN_ID = "r_20260901_abcdef01"
 UPLOAD_ID = "u_20260901_abcdef01"
 
 _FORMATTER = RedactingFormatter("%(asctime)s %(levelname)s %(name)s %(message)s")
+_JSON_FORMATTER = RedactingJsonFormatter()
+
+#: Both renderings the engine can install. Every formatter assertion below runs against each.
+FORMATTERS = pytest.mark.parametrize("formatter", [_FORMATTER, _JSON_FORMATTER], ids=["text", "json"])
+
+#: The logger the job-runner tests write on, so their records are easy to pick out of the capture.
+JOB_LOGGER = "engine.audit.jobs"
 
 
 # ---------------------------------------------------------------------------
@@ -72,6 +103,9 @@ class _Capture(logging.Handler):
     def __init__(self) -> None:
         super().__init__(level=logging.DEBUG)
         self.records: list[logging.LogRecord] = []
+        # The same filter `configure_logging` puts on the real handler, because a capture that did
+        # not stamp the context would be auditing a record shape the engine never actually writes.
+        install_context_filter(self)
 
     def emit(self, record: logging.LogRecord) -> None:
         self.records.append(record)
@@ -92,15 +126,42 @@ def captured() -> Iterator[_Capture]:
         root.setLevel(previous_level)
 
 
+@pytest.fixture
+def pristine_root(monkeypatch: pytest.MonkeyPatch) -> Iterator[logging.Logger]:
+    """A root logger `configure_logging` has never touched, restored afterwards.
+
+    `configure_logging` is idempotent by remembering the one handler it owns in a module global.
+    A test that swaps the root logger's handler list out from under it would leave that global
+    pointing at a handler nobody can reach, so the global is reset here as well - otherwise the
+    first such test would quietly break every later one.
+    """
+    root = logging.getLogger()
+    handlers, level = list(root.handlers), root.level
+    monkeypatch.setattr(engine_logging, "_handler", None)
+    try:
+        yield root
+    finally:
+        root.handlers = handlers
+        root.setLevel(level)
+
+
 def renderings(record: logging.LogRecord) -> list[str]:
     """Everything this record could put in front of a reader.
 
     The interpolated message, the line the engine's handler writes (which is the message plus any
-    traceback), and each argument on its own - an argument the current format string happens not to
-    use is still a value handed to the logger.
+    traceback), **both** renderings that handler can be wearing, and each argument on its own - an
+    argument the current format string happens not to use is still a value handed to the logger.
+
+    The JSON rendering is in this list rather than in tests of its own, so that every
+    `assert_no_values_logged` in this file audits it too: whatever the text path is proved not to
+    leak, the JSON path is proved not to leak by the very same assertion.
     """
     texts: list[str] = []
-    for render in (record.getMessage, lambda: _FORMATTER.format(record)):
+    for render in (
+        record.getMessage,
+        lambda: _FORMATTER.format(record),
+        lambda: _JSON_FORMATTER.format(record),
+    ):
         try:
             texts.append(render())
         except (TypeError, ValueError):
@@ -190,14 +251,17 @@ def test_log_failure_names_the_exception_class_and_never_its_message(captured: _
 # ---------------------------------------------------------------------------
 # The sink: what the engine's handler writes when an exception is logged
 # ---------------------------------------------------------------------------
-def test_the_formatter_keeps_the_frames_and_withholds_the_message(captured: _Capture) -> None:
+@FORMATTERS
+def test_the_formatter_keeps_the_frames_and_withholds_the_message(
+    captured: _Capture, formatter: logging.Formatter
+) -> None:
     try:
         raise ValueError(f"could not convert string to float: '{SENTINEL}-key-0001'")
     except ValueError:
         logging.getLogger("engine.audit").exception("stage=prepare failed")
 
     (record,) = captured.records
-    rendered = _FORMATTER.format(record)
+    rendered = formatter.format(record)
     assert SENTINEL not in rendered
     assert "ValueError" in rendered
     assert WITHHELD in rendered
@@ -205,7 +269,10 @@ def test_the_formatter_keeps_the_frames_and_withholds_the_message(captured: _Cap
     assert_no_values_logged(captured.records)
 
 
-def test_the_formatter_withholds_the_message_of_every_exception_in_a_chain(captured: _Capture) -> None:
+@FORMATTERS
+def test_the_formatter_withholds_the_message_of_every_exception_in_a_chain(
+    captured: _Capture, formatter: logging.Formatter
+) -> None:
     try:
         try:
             raise ValueError(f"bad cell {SENTINEL}-key-0001")
@@ -214,7 +281,7 @@ def test_the_formatter_withholds_the_message_of_every_exception_in_a_chain(captu
     except RuntimeError:
         logging.getLogger("engine.audit").exception("stage=prepare failed")
 
-    rendered = _FORMATTER.format(captured.records[0])
+    rendered = formatter.format(captured.records[0])
     assert SENTINEL not in rendered
     assert rendered.count(WITHHELD) == 2, "both links of the chain carry a message"
     assert "ValueError" in rendered
@@ -222,7 +289,10 @@ def test_the_formatter_withholds_the_message_of_every_exception_in_a_chain(captu
     assert "the direct cause" in rendered
 
 
-def test_the_formatter_ignores_a_rendering_another_formatter_cached(captured: _Capture) -> None:
+@FORMATTERS
+def test_the_formatter_ignores_a_rendering_another_formatter_cached(
+    captured: _Capture, formatter: logging.Formatter
+) -> None:
     try:
         raise ValueError(f"could not convert string to float: '{SENTINEL}-key-0001'")
     except ValueError:
@@ -232,21 +302,95 @@ def test_the_formatter_ignores_a_rendering_another_formatter_cached(captured: _C
     logging.Formatter().format(record)
     assert SENTINEL in (record.exc_text or ""), "the stock formatter caches the full traceback"
 
-    assert SENTINEL not in _FORMATTER.format(record)
+    assert SENTINEL not in formatter.format(record)
 
 
-def test_configure_logging_installs_the_redacting_formatter() -> None:
-    root = logging.getLogger()
-    handlers = list(root.handlers)
-    level = root.level
-    try:
-        configure_logging("INFO")
-        assert any(
-            isinstance(handler.formatter, RedactingFormatter) for handler in root.handlers
-        ), "the console handler must be the one that withholds exception messages"
-    finally:
-        root.handlers = handlers
-        root.setLevel(level)
+# ---------------------------------------------------------------------------
+# The JSON rendering: the same guarantee, made structural rather than repeated
+# ---------------------------------------------------------------------------
+def test_the_json_formatter_inherits_the_one_path_that_redacts_an_exception() -> None:
+    """The guarantee is a class, not a convention.
+
+    If `RedactingJsonFormatter` ever defines its own `formatException` - "just to put the traceback
+    in a field of its own" - then this repository has two ways of turning an exception into text and
+    only one of them is audited. `vars()` rather than `getattr`, because an inherited attribute
+    would make the second assertion pass no matter what.
+    """
+    assert issubclass(RedactingJsonFormatter, RedactingFormatter)
+    assert "formatException" not in vars(RedactingJsonFormatter), (
+        "the JSON formatter must NOT override formatException: the inherited one is the only code "
+        "path in this repository that turns an exception into text, and it withholds the message"
+    )
+    assert RedactingJsonFormatter.formatException is RedactingFormatter.formatException
+
+
+def test_the_json_formatter_serialises_no_attribute_anyone_attached_to_the_record(
+    captured: _Capture,
+) -> None:
+    """A closed allow-list, proved by attaching to a record exactly what a leak would look like."""
+    logging.getLogger("engine.audit").info(
+        "stage=prepare rows=40 seconds=1.500",
+        extra={"offending_cell": f"{SENTINEL}-key-0001", "sample": {"email": SENTINEL}},
+    )
+
+    (record,) = captured.records
+    assert record.offending_cell.startswith(SENTINEL), "the value really is on the record"
+
+    payload = json.loads(_JSON_FORMATTER.format(record))
+    assert set(payload) <= set(JSON_FIELDS), f"an unexpected key was serialised: {sorted(payload)}"
+    assert "offending_cell" not in payload
+    assert_no_values_logged(captured.records)
+
+
+def test_the_json_formatter_writes_the_bound_identity_and_the_same_message(captured: _Capture) -> None:
+    with bind_log_context(run_id=RUN_ID, stage="prepare", client_id="acme"):
+        log_stage(logging.getLogger("engine.audit"), "prepare", rows=40, seconds=1.5)
+
+    (record,) = captured.records
+    payload = json.loads(_JSON_FORMATTER.format(record))
+    assert payload["message"] == record.getMessage(), "both renderings say the same thing"
+    assert payload["run_id"] == RUN_ID
+    assert payload["stage"] == "prepare"
+    assert payload["client_id"] == "acme"
+    assert "exception" not in payload, "a line with no exception carries no empty exception key"
+    assert_no_values_logged(captured.records)
+
+
+def test_configure_logging_installs_the_redacting_formatter(pristine_root: logging.Logger) -> None:
+    configure_logging("INFO")
+    assert any(
+        isinstance(handler.formatter, RedactingFormatter) for handler in pristine_root.handlers
+    ), "the console handler must be the one that withholds exception messages"
+
+
+def test_configure_logging_json_installs_the_json_formatter_without_a_second_handler(
+    pristine_root: logging.Logger,
+) -> None:
+    """The format is a choice about one handler, not a reason to grow a second one."""
+    configure_logging("INFO")
+    before = len(pristine_root.handlers)
+
+    configure_logging("INFO", log_format="json")
+
+    assert len(pristine_root.handlers) == before
+    # Only the handler this module owns is asserted on: pytest puts handlers of its own on the root
+    # logger, and this test is about the engine's, not about everyone else's.
+    assert isinstance(engine_logging._handler.formatter, RedactingJsonFormatter)
+    assert engine_logging._handler in pristine_root.handlers
+
+
+def test_configure_logging_installs_exactly_one_context_filter(pristine_root: logging.Logger) -> None:
+    configure_logging("INFO")
+    configure_logging("DEBUG", log_format="json")
+    configure_logging("INFO")
+
+    stamping = [
+        filter_
+        for handler in pristine_root.handlers
+        for filter_ in handler.filters
+        if isinstance(filter_, engine_logging.ContextFilter)
+    ]
+    assert len(stamping) == 1, "repeated calls must not leave a filter each, stamping the same record"
 
 
 # ---------------------------------------------------------------------------
@@ -459,3 +603,114 @@ def test_a_failing_job_writes_no_value_to_the_log(captured: _Capture) -> None:
 
     assert info.state.value == "failed"
     assert_no_values_logged(captured.records)
+
+
+# ---------------------------------------------------------------------------
+# A run's identity, and the thread boundary it does not cross by itself
+# ---------------------------------------------------------------------------
+def _job_that_logs(run_id: str | None, barrier: threading.Barrier | None = None) -> Any:
+    """A job body that logs one stage line, optionally binding a run inside itself first."""
+
+    def run(token: CancelToken) -> None:
+        token.raise_if_cancelled()
+        if run_id is None:
+            if barrier is not None:
+                barrier.wait(timeout=10)
+            log_stage(logging.getLogger(JOB_LOGGER), "train", rows=None, seconds=0.0)
+            return
+        with bind_log_context(run_id=run_id, stage="train"):
+            if barrier is not None:
+                # Both jobs are inside their own binding at the same instant, which is the only
+                # arrangement under which one leaking into the other would be visible.
+                barrier.wait(timeout=10)
+            log_stage(logging.getLogger(JOB_LOGGER), "train", rows=None, seconds=0.0)
+
+    return run
+
+
+def _job_records(captured: _Capture) -> list[logging.LogRecord]:
+    return [record for record in captured.records if record.name == JOB_LOGGER]
+
+
+def test_a_binding_made_inside_the_job_body_reaches_the_log(captured: _Capture) -> None:
+    runner = ThreadJobRunner(max_workers=1)
+    try:
+        runner.submit("job_ctx_inside", _job_that_logs(RUN_ID))
+        info = runner.wait("job_ctx_inside", timeout=10)
+    finally:
+        runner.shutdown()
+
+    assert info.state.value == "done"
+    (record,) = _job_records(captured)
+    assert record.run_id == RUN_ID
+    assert record.stage == "train"
+    assert record.client_id is None, "an unbound field is None, never a stale value"
+    assert_no_values_logged(captured.records)
+
+
+def test_a_binding_wrapped_around_the_submit_does_not_reach_the_worker(captured: _Capture) -> None:
+    """The reason `bind_log_context` has to be the job body's first statement.
+
+    `ThreadPoolExecutor` does not copy the submitting context into its workers, so this is not a
+    style preference: a binding around the submit is silently lost, and the run whose log lines it
+    was supposed to identify writes them anonymously.
+    """
+    runner = ThreadJobRunner(max_workers=1)
+    try:
+        with bind_log_context(run_id=RUN_ID, client_id="acme"):
+            runner.submit("job_ctx_outside", _job_that_logs(None))
+        runner.wait("job_ctx_outside", timeout=10)
+    finally:
+        runner.shutdown()
+
+    (record,) = _job_records(captured)
+    assert record.run_id is None, (
+        "if this ever passes with the run id set, ThreadPoolExecutor has started copying "
+        "contextvars and the binding may move back around the submit - until then it may not"
+    )
+    assert_no_values_logged(captured.records)
+
+
+def test_two_concurrent_jobs_never_see_each_others_run_id(captured: _Capture) -> None:
+    runner = ThreadJobRunner(max_workers=2)
+    barrier = threading.Barrier(2)
+    first, second = "r_20260901_aaaaaaaa", "r_20260901_bbbbbbbb"
+    try:
+        runner.submit("job_ctx_first", _job_that_logs(first, barrier))
+        runner.submit("job_ctx_second", _job_that_logs(second, barrier))
+        states = {
+            runner.wait("job_ctx_first", timeout=10).state.value,
+            runner.wait("job_ctx_second", timeout=10).state.value,
+        }
+    finally:
+        runner.shutdown()
+
+    assert states == {"done"}, "both jobs must have reached the barrier and logged"
+    records = _job_records(captured)
+    assert len(records) == 2
+    assert {record.run_id for record in records} == {first, second}
+    assert all(record.stage == "train" for record in records)
+    assert_no_values_logged(captured.records)
+
+
+def test_the_binding_is_restored_when_a_nested_block_leaves() -> None:
+    """Nesting merges and unwinds; a stage cannot clear the run it belongs to by not naming it."""
+    assert engine_logging.current_log_context() == {}
+    with bind_log_context(run_id=RUN_ID, client_id="acme"):
+        with bind_log_context(stage="prepare"):
+            assert engine_logging.current_log_context() == {
+                "run_id": RUN_ID,
+                "client_id": "acme",
+                "stage": "prepare",
+            }
+        assert engine_logging.current_log_context() == {"run_id": RUN_ID, "client_id": "acme"}
+    assert engine_logging.current_log_context() == {}
+
+
+def test_the_context_filter_overwrites_an_identity_the_caller_attached(captured: _Capture) -> None:
+    """One mechanism, not two: the ContextVar is the only source of a run's identity."""
+    logging.getLogger("engine.audit").info("stage=prepare rows=40 seconds=1.500", extra={"run_id": "forged"})
+
+    (record,) = captured.records
+    assert record.run_id is None
+    assert set(CONTEXT_FIELDS) <= set(vars(record)), "every field is stamped, present or None"

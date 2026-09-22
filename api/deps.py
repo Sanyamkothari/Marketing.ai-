@@ -35,6 +35,8 @@ from engine.storage import LocalStorage, Storage
 if TYPE_CHECKING:  # imported lazily below so the local path never loads a driver or a table module
     from engine.aws.run_index import RunIndex
 
+from engine.aws.metrics import MetricSink, metric_sink_for
+
 _LOCK: threading.Lock = threading.Lock()
 
 
@@ -184,9 +186,30 @@ def get_run_index(request: Request) -> RunIndex | None:
     return existing
 
 
+def get_metrics(request: Request) -> MetricSink:
+    """Where this deployment's metrics go; `NullMetricSink` unless it asked for otherwise.
+
+    Built here for the same reason the other three are: one per process, cached on `app.state`, and
+    replaceable by a test through `dependency_overrides`. `metric_sink_for` returns the null sink
+    for every local deployment, so measuring costs a laptop nothing and changes nothing.
+    """
+    state = request.app.state
+    cached: MetricSink | None = getattr(state, "metrics", None)
+    if cached is not None:
+        return cached
+    fresh = metric_sink_for(get_settings(request))
+    with _LOCK:
+        existing: MetricSink | None = getattr(state, "metrics", None)
+        if existing is None:
+            state.metrics = fresh
+            return fresh
+    return existing
+
+
 ConfigRootDep = Annotated[Path, Depends(get_config_root)]
 SettingsDep = Annotated[Settings, Depends(get_settings)]
 StorageDep = Annotated[Storage, Depends(get_storage)]
 RegistryDep = Annotated[ModelRegistry, Depends(get_registry)]
 JobsDep = Annotated[JobRunner, Depends(get_jobs)]
 RunIndexDep = Annotated["RunIndex | None", Depends(get_run_index)]
+MetricsDep = Annotated[MetricSink, Depends(get_metrics)]

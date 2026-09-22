@@ -19,6 +19,7 @@ from api.schemas import ErrorBody, ErrorResponse, HealthResponse
 from engine import __version__
 from engine.config import ConfigError
 from engine.settings import Settings, SettingsError
+from engine.utils.logging import configure_logging
 
 NOT_FOUND_CODES: Final[frozenset[str]] = frozenset(
     {"USE_CASE_NOT_FOUND", "USE_CASE_PLANNED", "INDUSTRY_NOT_FOUND"}
@@ -84,6 +85,12 @@ def create_app(
             f"storage_backend={settings.storage_backend.value}.",
             field="storage_backend",
         )
+    # Phase 1 never called this, so the API inherited whatever logging uvicorn had set up and the
+    # `RedactingFormatter` guarantee - that no line the engine writes can carry an exception's
+    # message - applied only to processes that configured it themselves. It is called here so the
+    # guarantee holds for the API too, and so a deployment can ask for JSON without a code change.
+    if settings is not None:
+        configure_logging(settings.log_level, log_format=settings.log_format)
     app = FastAPI(title="Marketing AI", version=__version__)
     app.state.config_root = config_root
     app.state.data_dir = data_dir
@@ -92,6 +99,7 @@ def create_app(
     app.state.registry = None
     app.state.jobs = None
     app.state.run_index = None
+    app.state.metrics = None
     app.add_middleware(
         CORSMiddleware,
         allow_origins=list(settings.cors_origins) if settings is not None else ["*"],
