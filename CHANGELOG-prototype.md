@@ -35,6 +35,63 @@ repository so it can be diffed and tested.
 | D | **RCA root causes** per risk segment | Phase 3a §9 D | `rcaBlock()` |
 | E | **Win-back campaign copy** | Phase 3a §9 E | `copyBlock()` |
 | F | **Lineage block** on the Data page | Phase 2 §10 F | `lineageBlock()` |
+| R | **Reconciled against the built screens** | — | see below |
+
+---
+
+## Revision 2 — reconciled against `ui/modules/generative`
+
+Phase 3a built the three generative screens from this prototype (its modules cite these
+screenshots by name: "prototypes 09-11", "prototype 12-13", "prototype 14"). Building them
+taught the product things the prototype did not yet show, so the prototype has been brought
+back level with the code. Everything below is a change to a screen this file already added;
+no Phase 1 screen moved.
+
+**Assistant (Phase 3a §9 C)**
+
+- **Ask box.** "Try it" is no longer three fixed exchanges. You can type a question: one the
+  saved set covers comes back grounded with its citations, and anything else gets the refusal
+  message — the same choice `min_similarity` makes in `engine/generative/retrieval.py`.
+- **Minimum similarity** joins top-k and chunk size in Advanced → Retrieval, with its hint. It
+  is a real field (`configs/engine.yaml` → `generative.retrieval.min_similarity`, default 0.25).
+- **Citations carry their similarity** (`sim 0.91`), as `gdom.js`'s `citationCard` does.
+- **Every answer says what it did**: chunks retrieved, latency, prompt version, and `Refused`
+  where it refused, plus its guardrail checks — matching `assistant.js`'s `messageHtml`.
+- **The cost line became a usage line.** The brief specified `LLM cost this run: —`, which was
+  right while nothing computed a cost. `engine/generative` now writes `llm_usage.json`, so the
+  prototype shows the shape the product shows: `2,204 calls · 1,284,600 tokens · $1.83`.
+
+**RCA (Phase 3a §9 D)**
+
+- **A confidence pill per cause** (`high` / `medium` / `low` confidence), as `RootCause.confidence`
+  is rendered by `gdom.js`'s `confidencePill`.
+- **Guardrail outcomes per segment** — counts and the checks behind them, so a warning is never
+  silent. The Medium segment carries a real `warned`, because one of its causes rests on model
+  drivers alone.
+- **Each segment's share** of the customers at risk, beside its row count.
+- **A Cost & guardrails card**, as `rca.js`'s `usageCard`.
+
+**Win-back (Phase 3a §9 E)**
+
+- **The judge names were wrong.** The prototype showed Brand / Clarity / Compliance. The engine
+  runs two judges on copy — `_TEMPLATE_JUDGES = ("compliance", "toxicity")` in
+  `engine/generative/win_back.py` — so the line now reads `Compliance 1.00 · Toxicity 0.01 · 86
+  characters`.
+- **Status, block reason and guardrails are now derived from the message**, not stored beside it.
+  `tplGuards()` measures the copy against its channel's limit and returns the same four checks
+  the engine does; a card is Blocked because a guardrail blocked it, and the reason is that
+  guardrail's own wording (`42 characters over the 160-character limit`, matching
+  `guardrails.py`). Regenerating into shorter copy clears the block by itself.
+- **An approval record.** Approve is disabled until you name yourself, and an approved card says
+  who accepted it and when — `DEC-055`'s unverified-claim pattern, as `copy.js` implements it.
+  Seeded approvals carry their own name, not the one you type.
+- **The control holdout is a number on screen**: 1,450 of 14,500 held back, 1,850 suppressed by
+  consent or recent contact, 11,200 written to.
+
+Two differences were left as they are, because the prototype is the design here and the build
+should follow it rather than the other way round: the card header reads `Email · Variant A`
+rather than the build's uppercased `EMAIL · Variant A`, and the block reason is repeated once
+above the guardrail list so it is readable without parsing the list.
 
 ---
 
@@ -147,7 +204,9 @@ use one consistent set, checked by `tests/prototype/consistency.test.mjs`:
   **14,160 positive examples**
 - 5 documents, **122 pages**, **1,600 chunks**, 300 reference questions, 91% pass rate
   against an 85% threshold
-- 12 message templates: 7 approved, 3 pending review, 2 blocked
+- 12 message templates: 7 approved, 3 pending review, 2 blocked; the holdout adds up
+  (1,450 control + 1,850 suppressed + 11,200 written to = 14,500 eligible)
+- RCA segments: 2,180 (32.1%) high, 3,410 (50.1%) medium, of the 6,800 at risk
 
 Anything the product would have to invent is still `—`.
 
@@ -155,7 +214,7 @@ Anything the product would have to invent is still `—`.
 
 ```bash
 open marketing-ai-prototype.html          # no build step, no server needed
-make prototype-test                       # 37 jsdom tests
+make prototype-test                       # 38 jsdom tests
 make prototype-screenshots                # docs/prototype/*.png, desktop and mobile
 ```
 

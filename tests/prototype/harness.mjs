@@ -52,6 +52,7 @@ export function set(dom, sel, value) {
   if (!el) throw new Error(`no control: ${sel}`);
   if (el.type === "checkbox") el.checked = value;
   else el.value = value;
+  el.dispatchEvent(new dom.window.Event("input", { bubbles: true }));
   el.dispatchEvent(new dom.window.Event("change", { bubbles: true }));
   return el;
 }

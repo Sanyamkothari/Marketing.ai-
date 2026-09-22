@@ -85,6 +85,25 @@ const STATES = [
     await p.click("details.cite >> nth=0");
     await p.waitForTimeout(150);
   }],
+  ["16-assistant-ask", async (p) => {
+    await open(p, "#/uc/ai-onboarding-assistant");
+    await click(p, "#f-sampledocs");
+    await click(p, "#f-sampleqa");
+    await click(p, "#f-run");
+    await p.waitForSelector("#g-ask", { timeout: 20000 });
+    await p.fill("#g-question", "Why is the light on my router red?");
+    await p.click("#g-ask button");
+    await p.fill("#g-question", "Can you waive my late fee?");
+    await p.click("#g-ask button");
+    await p.waitForTimeout(150);
+  }],
+  ["17-winback-approved", async (p) => {
+    await open(p, "#/uc/win-back-campaign/output");
+    await p.fill("#cc-approver", "R. Menon");
+    await p.click("[data-cc-ok]:not([disabled])");
+    await p.click(".cccard.blocked [data-cc-re]");
+    await p.waitForTimeout(120);
+  }],
   ["12-rca-before-generation", async (p) => { await open(p, "#/uc/rca/output"); }],
   ["13-rca-root-causes", async (p) => {
     await open(p, "#/uc/rca/output");
