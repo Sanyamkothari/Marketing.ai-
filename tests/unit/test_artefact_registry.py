@@ -55,6 +55,7 @@ BEYOND_PLAN_SECTION_7 = {
     "schema.json",  # plan section 4.4: the feature schema saved with every model
     "run_config.json",  # plan section 5: the merged configuration a run resolved to
     "run_manifest.json",  # DEC-042: one flat, queryable record per run
+    "job_spec.json",  # DEC-324: the declarative description a remote job is handed
 }
 
 
@@ -74,6 +75,18 @@ def test_run_config_is_the_config_module_s_resolved_config() -> None:
 def test_model_version_is_not_a_run_artefact() -> None:
     assert ModelVersion not in set(ARTEFACT_REGISTRY.values())
     assert ModelVersion not in set(TABULAR_SCHEMAS.values())
+
+
+def test_the_job_spec_is_registered_but_is_not_something_a_flow_writes() -> None:
+    """DEC-324: the route hands the spec to the run; `run_train`/`run_score` never write it.
+
+    `TRAIN_ARTEFACTS` and `SCORE_ARTEFACTS` mean "everything the flow writes", and the integration
+    tests assert real run directories against them. Adding `job_spec.json` to either would make the
+    pipeline responsible for a document it is given, which is the opposite of what it is.
+    """
+    assert "job_spec.json" in ARTEFACT_REGISTRY
+    assert "job_spec.json" not in TRAIN_ARTEFACTS
+    assert "job_spec.json" not in SCORE_ARTEFACTS
 
 
 def test_mode_artefact_sets_are_known_names() -> None:

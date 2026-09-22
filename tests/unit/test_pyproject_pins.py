@@ -119,7 +119,14 @@ def test_mypy_is_globally_strict_over_engine_api_and_scripts(pyproject: dict[str
     """DEC-013: one flag, no per-module strictness games."""
     mypy = pyproject["tool"]["mypy"]
     assert mypy["strict"] is True
-    assert mypy["files"] == ["engine", "api", "scripts", "tests/fixtures/make_data.py"]
+    assert mypy["files"] == [
+        "engine",
+        "api",
+        "scripts",
+        "alembic",                  # the migrations own the Postgres schema, so they are held to the same bar
+        "tests/fixtures/make_data.py",
+        "tests/fakes",              # FakeSageMaker stands in for a service; DEC-041's precedent
+    ]
     assert mypy["python_version"] == "3.11"
 
 
@@ -164,9 +171,35 @@ def test_pytest_finds_the_packages_without_an_editable_install(pyproject: dict[s
     ini = pyproject["tool"]["pytest"]["ini_options"]
     assert ini["pythonpath"] == ["."]
     assert ini["testpaths"] == ["tests"]
-    assert {marker.split(":")[0] for marker in ini["markers"]} == {"slow", "integration"}
+    assert {marker.split(":")[0] for marker in ini["markers"]} == {
+        "slow",
+        "integration",
+        "postgres",
+        "docker",
+        "aws",
+    }
+    assert "-rs" in ini["addopts"], "a skip must always print its reason (DEC-344)"
 
 
 def test_the_nn_extra_is_torch_only(pyproject: dict[str, Any]) -> None:
     """DEC-011: the NeuralNet family is opt-in; torch is multi-GB and off by default."""
     assert pyproject["project"]["optional-dependencies"]["nn"] == ["torch>=2.10,<2.14"]
+
+
+def test_the_phase_4a_extras_are_pinned_and_optional(pyproject: dict[str, Any]) -> None:
+    """DEC-306: a laptop install stays exactly as heavy as it was; the AWS packages are opt-in."""
+    extras = pyproject["project"]["optional-dependencies"]
+    for name in ("aws", "deploy"):
+        assert extras[name], f"the {name} extra is empty"
+        for requirement in extras[name]:
+            assert PIN_RE.match(requirement.strip()), f"unpinned {name} requirement: {requirement!r}"
+    runtime = {normalise(requirement.split("[")[0].split("=")[0]) for requirement in pyproject["project"]["dependencies"]}
+    for name in ("boto3", "botocore", "psycopg", "alembic", "aws-cdk-lib", "cdk-nag", "constructs"):
+        assert name not in runtime, f"{name} must stay optional, not a runtime dependency"
+
+
+def test_cdk_nag_is_pinned_below_3(pyproject: dict[str, Any]) -> None:
+    """Measured (DEC-366): cdk-nag 3.0.2 against aws-cdk-lib 2.270.0 dies inside `cdk synth` with
+    `TypeError: aspectApplication.aspect.visit is not a function`. 2.38.2 synthesises and reports."""
+    deploy = pyproject["project"]["optional-dependencies"]["deploy"]
+    assert "cdk-nag==2.38.2" in deploy

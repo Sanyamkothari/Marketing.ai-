@@ -50,6 +50,7 @@ __all__ = [
     "CalibrationSummary",
     "CategoryCount",
     "ColumnProfile",
+    "ComputeInfo",
     "ConfusionMatrix",
     "CostEstimate",
     "DatasetFingerprint",
@@ -71,6 +72,8 @@ __all__ = [
     "FeatureSchema",
     "FeatureSchemaColumn",
     "HistogramBin",
+    "JobEntrypoint",
+    "JobSpec",
     "KpiValue",
     "Leaderboard",
     "LeaderboardEntry",
@@ -172,6 +175,13 @@ class StageKey(StrEnum):
     EXPLAIN_ROWS = "explain_rows"
     ACTIONS = "actions"
     EXPORT = "export"
+
+
+class JobEntrypoint(StrEnum):
+    """Which pipeline flow a job runs. The declarative half of `JobSpec` (DEC-324)."""
+
+    TRAIN = "train"
+    SCORE = "score"
 
 
 # ---------------------------------------------------------------------------
@@ -1061,17 +1071,59 @@ class FeatureSchema(Artefact):
 # ---------------------------------------------------------------------------
 # run_manifest.json: one flat, queryable record per run (DEC-042)
 # ---------------------------------------------------------------------------
+class ComputeInfo(Artefact):
+    """Where a run's compute actually ran (DEC-329).
+
+    Written by whatever executed the run: the thread pool fills `backend` and the wall clock and
+    nothing else, a SageMaker job fills the job name, the instance and - for a training job only -
+    the billable seconds AWS itself reports. Every field past `backend` is optional because a
+    backend that does not report something must leave it null rather than have a number invented
+    for it (plan section 13.3).
+
+    `billable_seconds` means what AWS means by it and is set only where AWS says it:
+    `DescribeTrainingJob.BillableTimeInSeconds`. A processing job reports start and end times, which
+    are wall clock, so those go in `wall_clock_seconds` and `billable_seconds` stays null.
+    `billable_seconds_source` names the API field the number came from, so a reader never has to
+    guess which of the two they are looking at.
+    """
+
+    backend: str = Field(description="What ran the job: thread, sagemaker-training or sagemaker-processing.")
+    job_name: str | None = Field(default=None, description="Platform job name, when the platform names jobs.")
+    job_arn: str | None = Field(default=None, description="Platform job ARN, when the platform has one.")
+    instance_type: str | None = Field(default=None, description="Instance the job ran on.")
+    instance_count: int | None = Field(default=None, description="How many of them.")
+    region: str | None = Field(default=None, description="Region the job ran in.")
+    image_uri: str | None = Field(default=None, description="Container image the job ran.")
+    wall_clock_seconds: float | None = Field(
+        default=None, description="Seconds from job start to job end, as the platform reports them."
+    )
+    billable_seconds: float | None = Field(
+        default=None, description="Seconds the platform says are billable; null when it does not say."
+    )
+    billable_seconds_source: str | None = Field(
+        default=None, description="The API field `billable_seconds` was read from; null when it is null."
+    )
+
+
 class CostEstimate(Artefact):
     """What a run cost to produce.
 
     `estimated_usd` is null for a local run rather than zero: nothing was billed,
     and a fabricated zero would be indistinguishable from a real measurement of
     free compute (plan section 13.3).
+
+    It is null again whenever the number cannot be stated honestly: no billable time reported, no
+    published rate for that instance in that region, or no price table at all. When it *is* set it
+    is billable seconds multiplied by a **published AWS list price**, and `basis` says so in those
+    words, naming the rate, the offer version and the date it was published. A list price is not a
+    bill - it ignores savings plans, spot, free tier, tax and any negotiated discount - so `basis`
+    is the field that keeps the number honest and must always be read with it (DEC-330).
     """
 
     compute_seconds: float = Field(description="Wall-clock seconds of compute the run consumed.")
     estimated_usd: float | None = Field(
-        default=None, description="Billed cost when the platform reports one; null when nothing was billed."
+        default=None,
+        description="Billable time at the published list rate named in `basis`; null when it cannot be stated.",
     )
     basis: str = Field(description="How the estimate was derived, in plain words.")
 
@@ -1101,13 +1153,56 @@ class RunManifest(Artefact):
     )
     duration_s: float = Field(description="Wall-clock seconds from run start to final state.")
     cost_estimate: CostEstimate = Field(description="What the run cost to produce.")
+    compute: ComputeInfo | None = Field(
+        default=None, description="Where the compute ran; null when the backend reported nothing about it."
+    )
     created_at: AwareDatetime = Field(description="UTC time the manifest was written.")
+
+
+class JobSpec(Artefact):
+    """`job_spec.json` - the declarative description of the work a run's job has to do (DEC-324).
+
+    `JobRunner.submit` takes a Python callable, which is exactly right for a thread pool and
+    impossible for a container: a closure cannot cross a process boundary. Rather than change the
+    protocol, this document becomes the source and the callable becomes something *derived* from it.
+    `engine.runs.build_job_fn` turns a spec into the closure `ThreadJobRunner` runs in this process;
+    `SageMakerJobRunner` ships the spec's storage key to a container that reads it back and calls
+    the same pipeline function. Local and remote runs are then two renderings of one description,
+    and there is no second definition of the work to drift.
+
+    It is written by whoever creates the run, beside `run.json` and `status.json`, and is
+    deliberately **not** a member of `TRAIN_ARTEFACTS` or `SCORE_ARTEFACTS`: those sets mean
+    "everything the flow writes", and the flow does not write this - it is handed it.
+    """
+
+    job_id: str = Field(description="Job id in the runner's vocabulary; the run id today.")
+    run_id: str = Field(description="Run this job produces.")
+    entrypoint: JobEntrypoint = Field(description="Which pipeline flow to run.")
+    mode: RunMode = Field(description="train or score; the same distinction the run record carries.")
+    use_case_id: str = Field(description="Use case the run belongs to.")
+    run_config_key: str = Field(description="Storage key of run_config.json, the resolved configuration.")
+    upload_key: str = Field(description="Storage key of the uploaded file the run consumes.")
+    upload_format: Literal["csv", "parquet"] = Field(description="Format of the uploaded file.")
+    primary_key: str = Field(description="Column identifying each entity.")
+    target: str | None = Field(default=None, description="Target column; set for a training job only.")
+    model_version_id: str | None = Field(
+        default=None, description="Model version to score with; set for a scoring job only."
+    )
+    engine_version: str = Field(description="Engine version that wrote this spec.")
+    created_at: AwareDatetime = Field(description="UTC time the spec was written.")
+    backend: str = Field(
+        default="local-thread", description="Where this job is meant to run; filled in by the runner."
+    )
+    tags: dict[str, str] = Field(
+        default_factory=dict, description="Cost-allocation tags the job carries: product, client, use_case, run_id."
+    )
 
 
 # ---------------------------------------------------------------------------
 ARTEFACT_REGISTRY: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
     {
         "run.json": RunRecord,
+        "job_spec.json": JobSpec,
         "status.json": RunStatus,
         "run_config.json": ResolvedConfig,
         "profile.json": DatasetProfile,
