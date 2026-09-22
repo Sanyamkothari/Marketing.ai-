@@ -15,7 +15,7 @@ be dishonest.
 | Mirror | <https://huggingface.co/datasets/criteo/criteo-uplift> |
 | Licence | **CC BY-NC-SA 4.0 — non-commercial.** See [LICENCE](LICENSE.txt) |
 | Rows | 13,979,592 (v2.1) |
-| Columns | 15 — 12 anonymised features, `treatment`, `visit`, `exposure`, `conversion` |
+| Columns | 16 — 12 anonymised features, `treatment`, `visit`, `exposure`, `conversion` |
 | Status in this library | **mapped, not fetched, not trained** |
 
 ## Reason one: the question is Phase 3b, not Phase 1
@@ -57,9 +57,10 @@ network that allows it; what it produces is described below.
 
 ## What `fetch.py` would produce
 
-It downloads the gzip, streams it (13.98 M rows do not need to be held in memory), takes a seeded
-sample of at most **1,000,000 rows** as the brief asks, adds the primary key the file lacks, and
-writes `data/prepared.csv` plus a 5,000-row `sample.csv`.
+It downloads the gzip and streams it in 500,000-row chunks, keeping the same proportion of each
+chunk so that the 13.98 M rows are never resident at once and the 85/15 treated/control ratio
+survives. It takes at most **1,000,000 rows** as the brief asks, adds the primary key the file
+lacks, and writes `data/prepared.csv` plus a 5,000-row `sample.csv`.
 
 The one derived column is `impression_id`: the file ships no key, and the data contract needs one.
 It is the row number in the published order, exactly as `client_id` is for the bank dataset.
@@ -95,9 +96,8 @@ Uplift work on this dataset usually reports both.
 ## Non-commercial licence
 
 CC BY-NC-SA 4.0. This dataset may not be used in a commercial demo, a sales deck, a customer pilot
-or a shipped product. That is why it does not appear in the demo script in
-[`docs/LIBRARY.md`](../../docs/LIBRARY.md), and why the ad-tech industry file has nothing available
-under it. See [`LICENSE.txt`](LICENSE.txt).
+or a shipped product. That is why it appears in [`library/DEMO_SCRIPT.md`](../DEMO_SCRIPT.md) only
+as a do-not-demo entry, and why the ad-tech industry file has nothing available under it. See [`LICENSE.txt`](LICENSE.txt).
 
 ## Files here
 

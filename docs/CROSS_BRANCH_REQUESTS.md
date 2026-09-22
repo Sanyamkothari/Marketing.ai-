@@ -100,7 +100,7 @@ Phase 2's pre-approved exception list.
 
 ### 2026-09-22 — library-datasets → whoever owns `tests/unit/test_config_loading.py`: two assertions forbid a second industry
 
-**What is needed.** Two assertions relaxed, so that a second industry and a seventh use case can be
+**What is needed.** Two assertions relaxed, so that a second industry and a further use case can be
 added to `configs/` without turning the suite red. The library's whole purpose is to show that a
 second, third and fourth industry need configuration and nothing else, and adding
 `configs/industries/banking.yaml` fails `test_industries_list_and_telecom_loads`

@@ -20,7 +20,9 @@ source:
 prepared:
   file: data/prepared.csv
   built_by: fetch.py
-  changes: none                            # a byte-identical copy; this dataset needs no preparation
+  changes: none                            # nothing derived, renamed or dropped; the frame round-trips
+                                           # through pandas, so 392 integral MonthlyCharges values are
+                                           # re-rendered as floats and the bytes differ slightly
 
 roles:
   primary_key: customerID

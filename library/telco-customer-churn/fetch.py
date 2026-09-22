@@ -2,9 +2,10 @@
 
 The source file is **already** in the data contract's shape: one row per subscriber, a unique
 `customerID`, and a `Churn` column holding the outcome. Nothing is derived, nothing is renamed and
-no column is dropped, so `prepared.csv` is a byte-for-byte copy of the download apart from the line
-terminator pandas writes. That is the point of this dataset in the library: it is the one that
-needed no preparation at all.
+no column is dropped. `prepared.csv` is the download round-tripped through pandas, so the parsed
+frame is identical while the bytes are not quite: 392 integral `MonthlyCharges` values are
+re-rendered as floats (`70` becomes `70.0`) and the line terminator is normalised. That is the
+point of this dataset in the library: it is the one that needed no preparation at all.
 
     python library/telco-customer-churn/fetch.py            # download + prepare + sample
     python library/telco-customer-churn/fetch.py --no-download
