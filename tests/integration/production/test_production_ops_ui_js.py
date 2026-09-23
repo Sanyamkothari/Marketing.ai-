@@ -40,6 +40,7 @@ from engine.contracts import RunState
 from engine.runs import update_run
 from engine.scheduling.scheduler import LocalScheduler
 from engine.storage import run_key
+from tests.fixtures.node import skip_without_jsdom
 from tests.integration.production.schedules_support import Api, build_api
 from tests.integration.production.test_monitoring_api import MATURE, backwards_outcomes
 from tests.integration.production.test_privacy_erasure_api import Api as ErasureApi
@@ -356,17 +357,15 @@ def test_the_ops_fixtures_are_what_the_ui_expects(
     assert _read(out, "privacy_not_configured")["detail"]["code"] == "PRIVACY_NOT_CONFIGURED"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_privacy_and_monitoring_screens_in_jsdom(
     tmp_path: Path, config_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if not (NODE_DIR / "node_modules" / "jsdom").is_dir():
-        pytest.skip(f"jsdom is not installed: cd {NODE_DIR} && npm install --no-audit --no-fund")
+    node = skip_without_jsdom(NODE_DIR)
     out = write_ops_fixtures(tmp_path, config_root, monkeypatch)
     tests = sorted(str(p) for p in OPS_DIR.glob("*.test.mjs"))
     assert tests, "no jsdom test was found"
     result = subprocess.run(
-        ["node", "--test", *tests],
+        [node, "--test", *tests],
         cwd=NODE_DIR,
         env={**os.environ, "PB_FIXTURES": str(out)},
         capture_output=True,

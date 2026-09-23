@@ -6,7 +6,7 @@
    header; the use case's own Setup (#/uc/win-back-campaign) is Phase 1's. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, body, click, set, wait, upload, repoText } from "./harness.mjs";
+import { load, go, ev, $, $$, body, click, set, settle, upload, repoText } from "./harness.mjs";
 
 const WB = "win-back-campaign";
 const PTYPE = "Uplift (who changes because of your action)";
@@ -47,7 +47,7 @@ async function trainUplift(dom, { targeted = false } = {}) {
   click(dom, targeted ? "#f-sampletargeted" : "#f-samplecampaign");
   if (targeted) set(dom, "#f-ack", true);
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   assert.ok($(dom, ".results"), "the uplift run reaches its results");
 }
 async function scoreUplift(dom) {
@@ -55,7 +55,7 @@ async function scoreUplift(dom) {
   click(dom, '.seg button[data-mode="score"]');
   click(dom, "#f-sample");
   submit(dom);
-  await wait(1100);
+  await settle(dom);
   assert.ok($(dom, ".results"), "the scoring run reaches its results");
 }
 
@@ -89,12 +89,12 @@ test("the treatment picker appears only when a column looks like a treatment", a
   assert.equal($(dom, ".ptype .pill").textContent, PTYPE);
   // the use case's own Setup is Phase 1's: its plain sample has no treatment column, and no picker
   go(dom, `#/uc/${WB}`);
-  await wait(30);
+  await settle(dom);
   click(dom, "#f-sample");
   assert.equal($(dom, "#f-treat"), null);
   // another use case's sample has no such column, so no picker
   go(dom, "#/uc/payment-propensity");
-  await wait(30); // let the hashchange render land before a file read starts
+  await settle(dom); // let the hashchange render land before a file read starts
   click(dom, "#f-sample");
   assert.equal($(dom, "#f-treat"), null);
 });
@@ -142,7 +142,7 @@ test("DEC-608: Phase 1's change… never offers Uplift, not even for a file with
   const link = $(dom, ".uentry a");
   assert.equal(link.getAttribute("href"), UP);
   click(dom, link);
-  await wait(30);
+  await settle(dom);
   assert.equal(dom.window.location.hash, UP);
   assert.equal($(dom, "h1").textContent, "Win-back Campaign · Uplift");
 });
@@ -259,7 +259,7 @@ test("the uplift run checks the treatment, trains the learner and measures on th
     "Checking the treatment", "Preparing features", "Training the X-learner",
     "Measuring uplift on the hold-out (200 resamples)", "Segmenting and saving",
   ]);
-  await wait(1300);
+  await settle(dom);
   const done = ev(dom, `STATE['${WB}'].runs.at(-1)`);
   assert.equal(done.ptype, "Uplift");
   assert.equal(done.score, "AUUC 0.0125");
@@ -483,11 +483,11 @@ test("the other use cases, and win-back before an uplift run, get no uplift UI",
   }
   // a classification run on win-back stays a classification run, even on a file with a treatment column
   go(dom, `#/uc/${WB}`);
-  await wait(30);
+  await settle(dom);
   await upload(dom, "#f-file", "offers.csv", campaignCsv(2400));
   assert.match($(dom, ".ptype .pill").textContent, /^Classification/);
   submit(dom);
-  await wait(1200);
+  await settle(dom);
   assert.equal(ev(dom, `STATE['${WB}'].current.ptype`), "Classification");
   go(dom, `#/uc/${WB}/output`);
   assert.equal($(dom, ".segrow"), null);
@@ -514,7 +514,7 @@ test("the plain win-back sample is the Phase 1 path: no treatment column, a prop
   assert.equal($(dom, ".uentry a").getAttribute("href"), UP, "uplift is an explicit opt-in, on its own screen");
   submit(dom);
   assert.equal($$(dom, ".progress .pt")[0].textContent === "Checking the treatment", false);
-  await wait(1300);
+  await settle(dom);
   const summary = $(dom, ".summary").textContent;
   assert.match(summary, /Best model LightGBM \+ Claude copy · ROC-AUC 0\.78/);
   assert.match(summary, /Set as champion/);
@@ -531,7 +531,7 @@ test("the plain win-back sample is the Phase 1 path: no treatment column, a prop
 test("uplift never leaks into another use case: a treatment-like column there is an ordinary column", async () => {
   const dom = winback();
   go(dom, "#/uc/payment-propensity");
-  await wait(30);
+  await settle(dom);
   await upload(dom, "#f-file", "offers.csv",
     "account_id,late_payments_6m,contacted,late_or_missed_payment\nA1,2,1,0\nA2,0,0,1\n");
   set(dom, "#f-target", "late_or_missed_payment");
@@ -540,7 +540,7 @@ test("uplift never leaks into another use case: a treatment-like column there is
   assert.ok(![...$(dom, "#f-ptype").options].some((o) => o.textContent === PTYPE));
   assert.ok($$(dom, "#f-target option").some((o) => o.textContent === "contacted"), "contacted stays a column");
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   assert.notEqual(ev(dom, "STATE['payment-propensity'].current.ptype"), "Uplift");
   for (const page of ["model", "output"]) {
     go(dom, `#/uc/payment-propensity/${page}`);
@@ -586,9 +586,9 @@ test("the no-measurable-uplift example belongs to the page it was opened on", as
   click(dom, "#up-null");
   assert.match($(dom, "#up-auuc h3").textContent, /example with no measurable uplift/);
   go(dom, `${UP}/data`);
-  await wait(20);
+  await settle(dom);
   go(dom, `${UP}/model`);
-  await wait(20);
+  await settle(dom);
   assert.equal($(dom, "#up-auuc h3").textContent, "AUUC", "back on Model, the real run again");
   assert.match($(dom, "[data-up-summary]").textContent, /^Targeting by predicted uplift beats random targeting/);
   assert.equal($(dom, "#up-null").textContent, "What a model with no measurable uplift looks like");
@@ -621,12 +621,12 @@ test("Campaign results for a Phase 1 scoring run counts that run's customers, no
   const dom = winback();
   click(dom, "#f-sample");
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   click(dom, "#f-again");
   click(dom, '.seg button[data-mode="score"]');
   click(dom, "#f-sample");
   submit(dom);
-  await wait(1100);
+  await settle(dom);
   assert.match($(dom, ".summary").textContent, /12,480 rows scored/);
   click(dom, "#f-campaign");
   go(dom, `#/uc/${WB}/campaign`);
@@ -655,7 +655,7 @@ test("the plain sample after the campaign file with treatment None is Phase 1 ag
   // DEC-608: the plain sample is the use case's own Setup, whose form the uplift screen never touches
   assert.equal($(dom, "#f-sample"), null, "no plain sample on the uplift screen");
   go(dom, `#/uc/${WB}`);
-  await wait(30);
+  await settle(dom);
   assert.equal($(dom, ".fname").textContent, "Upload CSV or Parquet", "the Phase 1 form is its own");
   click(dom, "#f-sample");
   assert.equal($(dom, ".ptype .pill").textContent, "Classification (yes / no)");
@@ -691,7 +691,7 @@ test("the hold-out share in stage 5 sizes the hold-out Model and Output report",
   set(dom, '[data-up-num="upTest"]', "50");
   assert.match($$(dom, ".stage-d .ss")[4].textContent, /50% hold-out/);
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   const run = JSON.parse(ev(dom, `JSON.stringify(UPSTATE['${WB}'].current)`));
   assert.equal(run.upTest, 50);
   assert.equal(run.score, "AUUC 0.0125", "the rates are the sample's; only the hold-out grows");
@@ -736,7 +736,7 @@ test("an emptied uplift setting the config cannot leave empty goes back to its d
   assert.equal($$(dom, ".progress .pt").length, 0);
   submit(dom);
   assert.equal($$(dom, ".progress .pt")[3].textContent, "Measuring uplift on the hold-out (200 resamples)");
-  await wait(1300);
+  await settle(dom);
   go(dom, `${UP}/model`);
   assert.equal(kv(dom, "Bootstrap resamples"), "200");
   go(dom, `${UP}/output`);
@@ -784,7 +784,7 @@ async function scoreUpload(dom, name, csv) {
   await upload(dom, "#f-file", name, csv);
   assert.equal($(dom, "#f-run").disabled, false, "the scoring run can start");
   submit(dom);
-  await wait(1100);
+  await settle(dom);
   assert.ok($(dom, ".results"), "the scoring run reaches its results");
 }
 
@@ -834,7 +834,7 @@ test("an uplift run trained on an uploaded file reports that file's hold-out, no
   await upload(dom, "#f-file", "offers.csv", campaignCsv(2400));
   assert.equal($(dom, "#f-run").disabled, false);
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   go(dom, `${UP}/model`);
   // 2,400 rows × 30%
   assert.match(kv(dom, "Hold-out"), /^720 rows/);
@@ -852,7 +852,7 @@ test("an uplift run trained on an uploaded file reports that file's hold-out, no
   click(dom, "#f-again");
   set(dom, '[data-up-num="upTest"]', "50");
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   go(dom, `${UP}/model`);
   assert.match(kv(dom, "Hold-out"), /^1,200 rows/);
   assert.doesNotMatch(body(dom), /160,000/);
@@ -891,12 +891,12 @@ test("Campaign results for a run with a 0% control group says the effect cannot 
   click(dom, "#f-sample");
   set(dom, '[data-adv="control"]', "0");
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   click(dom, "#f-again");
   click(dom, '.seg button[data-mode="score"]');
   click(dom, "#f-sample");
   submit(dom);
-  await wait(1100);
+  await settle(dom);
   assert.equal(ev(dom, `STATE['${WB}'].current.adv.control`), 0);
   go(dom, `#/uc/${WB}/campaign`);
   click(dom, "#cr-sample");
@@ -921,7 +921,7 @@ async function trainPhase1(dom, control) {
   click(dom, "#f-sample");
   set(dom, '[data-adv="control"]', String(control));
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   assert.ok($(dom, ".results"), "the Phase 1 run reaches its results");
 }
 
@@ -962,7 +962,7 @@ test("the run picker's hint mentions a control group only for a run that held on
   click(dom, '.seg button[data-mode="score"]');
   click(dom, "#f-sample");
   submit(dom);
-  await wait(1100);
+  await settle(dom);
   go(dom, `#/uc/${WB}/campaign`);
   click(dom, "#cr-sample");
   const hint = () => $(dom, "#cr-run").closest(".field").querySelector(".uphint").textContent;
@@ -982,26 +982,26 @@ test("uplift restores the engine's fixed control share, and its no-control advic
   set(dom, '[data-adv="control"]', "0");
   // the uplift screen, from the link under the header: a 0% share set on Phase 1's stage 6 does not reach it
   go(dom, UP);
-  await wait(30);
+  await settle(dom);
   click(dom, "#f-samplecampaign");
   assert.equal($(dom, "[data-up-control]").textContent, `${pct}% · fixed`);
   assert.match($$(dom, ".stage-d .ss")[5].textContent, new RegExp(` · ${pct}% control group$`));
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   assert.equal(ev(dom, `UPSTATE['${WB}'].current.adv.control`), pct, "the uplift run holds out the engine's share");
   // back on Phase 1 training, the share the user set there is theirs again
   go(dom, `#/uc/${WB}`);
-  await wait(30);
+  await settle(dom);
   assert.equal($(dom, '[data-adv="control"]').value, "0");
   click(dom, "#f-sample");
   assert.equal($(dom, '[data-adv="control"]').value, "0");
   // an uplift list too small for its fixed share: the advice is to score a larger list, not a setting uplift locks
   go(dom, UP);
-  await wait(30);
+  await settle(dom);
   click(dom, "#f-again");
   click(dom, "#f-samplecampaign");
   submit(dom);
-  await wait(1300);
+  await settle(dom);
   await scoreUpload(dom, "week.csv", weekCsv(3));
   assert.equal(ev(dom, `UPSTATE['${WB}'].current.adv.control`), pct);
   go(dom, `${UP}/campaign`);
@@ -1036,7 +1036,7 @@ test("an uploaded file's uplift Output labels the sample's rows and segment mean
   const dom2 = upliftScreen();
   await upload(dom2, "#f-file", "offers.csv", campaignCsv(2400));
   submit(dom2);
-  await wait(1300);
+  await settle(dom2);
   go(dom2, `${UP}/output`);
   const cap2 = $$(dom2, ".caption").find((c) => /scores\.csv/.test(c.textContent)).textContent;
   assert.match(cap2, /^Illustrative sample rows, not rows of offers\.csv: the prototype does not train on the file/);
@@ -1076,7 +1076,7 @@ test("DEC-608: win-back's Setup links to its uplift screen, the product's entry 
   click(dom, "#f-sample");
   submit(dom);
   assert.ok($(dom, ".progress") && entry(), "Running keeps the link");
-  await wait(1300);
+  await settle(dom);
   assert.ok($(dom, ".results") && entry(), "Results keeps the link");
   // nowhere else: no other use case has uplift sample content, and the Data / Model / Output pages
   // (screenshots 14 and 17) are drawn as before
@@ -1136,7 +1136,7 @@ test("DEC-608: the uplift screen has its own form and shares the use case's runs
   // one registry: the use case's own Setup lists the uplift runs, but never offers an uplift model to
   // Phase 1 scoring, and its form, its current run and its pages are untouched
   go(dom, `#/uc/${WB}`);
-  await wait(30);
+  await settle(dom);
   assert.ok($$(dom, ".runrow .r1").some((e) => /^X-learner · AutoGluon fast/.test(e.textContent)), "the uplift run is in the use case's runs");
   assert.ok(!$$(dom, ".runrow .r1").some((e) => /Uplift champion/.test(e.textContent)), "as a candidate, not a champion");
   assert.equal(ev(dom, `STATE['${WB}'].current`), null);

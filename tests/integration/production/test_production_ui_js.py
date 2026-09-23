@@ -13,15 +13,15 @@ read through `PB_FIXTURES`. A change to the policy table, a refusal sentence or 
 reaches these tests the same day, instead of drifting from a hand-written copy.
 
 Node and jsdom are a development dependency of this one directory (as `tests/prototype/` is of the
-prototype's tests): without them this test is skipped with the command that installs them, and the
-static checks in `test_production_ui.py` still run.
+prototype's tests): without them this test is skipped with the command that installs them - or,
+under `REQUIRE_JSDOM=1` as CI sets it, fails (`tests/fixtures/node.py`) - and the static checks in
+`test_production_ui.py` still run.
 """
 
 from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Final
@@ -30,6 +30,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from engine.access.roles import Role
+from tests.fixtures.node import skip_without_jsdom
 from tests.integration.production.access_support import PASSWORD, bearer, local_app, make_user
 
 pytestmark = pytest.mark.integration
@@ -114,15 +115,13 @@ def test_the_fixtures_are_what_the_ui_expects(tmp_path: Path) -> None:
     assert all(p["allowed"] for p in off["permissions"]), "with sign-in off nothing may be gated"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_production_ui_modules_in_jsdom(tmp_path: Path) -> None:
-    if not (NODE_DIR / "node_modules" / "jsdom").is_dir():
-        pytest.skip(f"jsdom is not installed: cd {NODE_DIR} && npm install --no-audit --no-fund")
+    node = skip_without_jsdom(NODE_DIR)
     out = write_fixtures(tmp_path)
     tests = sorted(str(p) for p in NODE_DIR.glob("*.test.mjs"))
     assert tests, "no jsdom test was found"
     result = subprocess.run(
-        ["node", "--test", *tests],
+        [node, "--test", *tests],
         cwd=NODE_DIR,
         env={**os.environ, "PB_FIXTURES": str(out)},
         capture_output=True,
