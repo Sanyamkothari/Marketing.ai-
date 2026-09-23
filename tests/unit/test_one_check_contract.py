@@ -15,6 +15,7 @@ from pydantic import ValidationError
 
 from engine.contracts import (
     CHECK_CODES,
+    EXTENSION_VALIDATION_CODES,
     ONBOARDING_VALIDATION_CODES,
     VALIDATION_CODES,
     Severity,
@@ -34,7 +35,8 @@ def test_the_build_report_carries_the_phase_one_contract() -> None:
 
 
 def test_the_known_codes_are_both_tables_and_the_phase_one_table_has_not_grown() -> None:
-    assert CHECK_CODES == VALIDATION_CODES | ONBOARDING_VALIDATION_CODES
+    # Plan A M36 added a third table beside the Phase 1 one (DEC-095); the union takes all three.
+    assert CHECK_CODES == VALIDATION_CODES | ONBOARDING_VALIDATION_CODES | EXTENSION_VALIDATION_CODES
     assert len(VALIDATION_CODES) == 19
     assert not (VALIDATION_CODES & ONBOARDING_VALIDATION_CODES)
 

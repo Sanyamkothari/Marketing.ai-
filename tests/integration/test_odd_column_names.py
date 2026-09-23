@@ -47,6 +47,7 @@ pytestmark = [pytest.mark.slow, pytest.mark.integration]
 
 REPO = Path(__file__).resolve().parents[2]
 LIBRARY = REPO / "library"
+# The library\'s use cases ship in the repository\'s configs/ since Plan A M38 (DEC-085).
 USE_CASE = "card-default-propensity"
 TARGET = "default.payment.next.month"
 KEY = "ID"
@@ -127,7 +128,7 @@ def runs(tmp_path_factory: pytest.TempPathFactory) -> Runs:
     root = tmp_path_factory.mktemp("odd-names")
     storage = LocalStorage(root / "data")
     registry = LocalModelRegistry(root / "registry.db")
-    resolved = resolve_config(USE_CASE, OVERRIDES, root=LIBRARY / "configs")
+    resolved = resolve_config(USE_CASE, OVERRIDES, root=LIBRARY.parent / "configs")
     pipeline = Pipeline(storage, registry, _NoJobs())
 
     frame = pd.read_csv(LIBRARY / "uci-credit-default" / "sample.csv").rename(columns=ODD_HEADERS)

@@ -43,6 +43,7 @@ from tests.fixtures.raw.make_raw import RawTables, make_raw
 
 REPO = Path(__file__).resolve().parents[2]
 LIBRARY = REPO / "library"
+# The library\'s use cases ship in the repository\'s configs/ since Plan A M38 (DEC-085).
 
 #: The five library samples, with the key and target each run reserved.
 LIBRARY_SAMPLES: dict[str, tuple[str, str]] = {
@@ -402,7 +403,7 @@ def test_the_library_samples_get_identical_or_stricter_flags(dataset: str) -> No
 def test_online_retail_no_longer_redacts_its_snapshot_date() -> None:
     """The exact run the library reported: `prepare.json` said `pii_columns: ["snapshot_date"]`."""
     frame = pd.read_csv(LIBRARY / "online-retail" / "sample.csv")
-    config = resolve_config("retail-win-back", {}, root=LIBRARY / "configs").config
+    config = resolve_config("retail-win-back", {}, root=LIBRARY.parent / "configs").config
     _, plan = prepare.prepare_rows(frame, config, primary_key="customer_id", target="reactivated_90d")
     assert plan.pii_columns == ()
     assert not [transform for transform in plan.transforms if transform.kind == "redact"]

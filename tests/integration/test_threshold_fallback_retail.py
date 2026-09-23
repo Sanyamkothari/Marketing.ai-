@@ -25,6 +25,7 @@ from engine.storage import LocalStorage, run_key
 pytestmark = [pytest.mark.slow, pytest.mark.integration]
 
 LIBRARY = Path(__file__).resolve().parents[2] / "library"
+# The library\'s use cases ship in the repository\'s configs/ since Plan A M38 (DEC-085).
 FAST: dict[str, object] = {"model_search.time_limit_minutes": 1, "model_search.strategy": "fast"}
 
 
@@ -36,7 +37,7 @@ def test_the_retail_model_no_longer_calls_every_shopper_positive(tmp_path: Path)
         primary_key="customer_id",
         target="reactivated_90d",
         overrides=dict(FAST),
-        config_root=LIBRARY / "configs",
+        config_root=LIBRARY.parent / "configs",
         runs_dir=tmp_path,
     )
     assert outcome.state == RunState.DONE.value, outcome.error

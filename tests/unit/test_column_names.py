@@ -58,6 +58,7 @@ from engine.utils.time import utc_now
 
 REPO = Path(__file__).resolve().parents[2]
 LIBRARY = REPO / "library"
+# The library\'s use cases ship in the repository\'s configs/ since Plan A M38 (DEC-085).
 
 #: The published headers the library renamed by hand, and the names its `fetch.py` chose.
 LIBRARY_RENAMES: dict[str, str] = {
@@ -170,7 +171,7 @@ def test_lightgbm_and_xgboost_refuse_the_published_headers_and_take_the_internal
 
 def test_a_configured_safe_name_finds_the_published_header(credit_default: pd.DataFrame) -> None:
     """The unchanged library use case offers the client's dotted header as the target."""
-    config = resolve_config("card-default-propensity", {}, root=LIBRARY / "configs").config
+    config = resolve_config("card-default-propensity", {}, root=LIBRARY.parent / "configs").config
     assert config.target.column == "default_payment_next_month"
     profile = ingest.profile_dataset(
         credit_default,

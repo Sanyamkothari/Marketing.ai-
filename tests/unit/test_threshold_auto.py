@@ -50,6 +50,7 @@ from engine.stages.scorer import (
 from engine.stages.train import class_labels
 
 LIBRARY = Path(__file__).resolve().parents[2] / "library"
+# The library\'s use cases ship in the repository\'s configs/ since Plan A M38 (DEC-085).
 CEILING = ThresholdConfig(max_flagged_rate=0.30)
 
 
@@ -194,7 +195,7 @@ class Retail:
 @pytest.fixture(scope="module")
 def retail() -> Retail:
     """online-retail through the engine's own prepare and split, as the library's run did."""
-    config = resolve_config("retail-win-back", {}, root=LIBRARY / "configs").config
+    config = resolve_config("retail-win-back", {}, root=LIBRARY.parent / "configs").config
     frame = pd.read_csv(LIBRARY / "online-retail" / "sample.csv")
     target = "reactivated_90d"
     rows, plan = prepare.prepare_rows(frame, config, primary_key="customer_id", target=target)
