@@ -686,17 +686,158 @@ test("an uploaded file's checks panel lists all six checks, TREATMENT_NOT_BINARY
   assert.equal(nb.querySelector("span:last-child").textContent, "Every treatment value is 0 or 1.");
 });
 
-test("a run's stamp spells the month as every other date does ('Sep', never 'Sept')", async () => {
+test("Campaign results spells the month as its other dates do ('Sep', never 'Sept')", async () => {
   const dom = winback();
   await trainUplift(dom);
   await scoreUplift(dom);
-  const at = ev(dom, `STATE['${WB}'].current.at`);
-  assert.doesNotMatch(at, /Sept/);
-  assert.match(at, /^\d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2}$/, "the seeded stamps' form: 14 Sep 2026, 10:20");
-  assert.match(at, /Sep 2026/);
-  assert.doesNotMatch(body(dom), /Sept/);
   go(dom, `#/uc/${WB}/campaign`);
-  assert.match($(dom, "#cr-run").selectedOptions[0].textContent, /Sep 2026/);
+  // the run select dates the run as the send line does, from the page's one month table, not the run stamp
+  assert.equal($(dom, "#cr-run").selectedOptions[0].textContent, "Scored 14,500 rows · 23 Sep 2026, 10:00 UTC");
   assert.match($(dom, ".cw2").textContent, /^Sent 23 Sep 2026\./);
+  assert.equal([...$(dom, "#cr-run").options].at(-1).textContent, "Scored 14,500 rows · 1 May 2026");
   assert.doesNotMatch(body(dom), /Sept/);
+});
+
+/* ---------- Review round 3 ---------- */
+
+/** A scoring file of `rows` customers, no outcome and no treatment. */
+function weekCsv(rows) {
+  const out = ["customer_id,snapshot_date,months_since_churn"];
+  for (let i = 0; i < rows; i++) out.push(`W${i},2026-09-21,${i % 12}`);
+  return out.join("\n") + "\n";
+}
+async function scoreUpload(dom, name, csv) {
+  click(dom, "#f-again");
+  click(dom, '.seg button[data-mode="score"]');
+  await upload(dom, "#f-file", name, csv);
+  assert.equal($(dom, "#f-run").disabled, false, "the scoring run can start");
+  submit(dom);
+  await wait(1100);
+  assert.ok($(dom, ".results"), "the scoring run reaches its results");
+}
+
+test("an uplift scoring run on an uploaded file counts that file's customers, not the sample list's", async () => {
+  const dom = winback();
+  await trainUplift(dom);
+  await scoreUpload(dom, "week.csv", weekCsv(3));
+  const summary = $(dom, ".summary").textContent;
+  assert.match(summary, /3 rows scored/);
+  const n = Number(summary.match(/Recommended to contact: ([\d,]+)/)[1].replace(/,/g, ""));
+  assert.ok(n <= 3, `never more contacts than the file has customers (${n})`);
+  const pol = JSON.parse(ev(dom, `JSON.stringify(upliftPolicy(STATE['${WB}'].current))`));
+  assert.equal(pol.rows, 3);
+  assert.equal(Object.values(pol.segs).reduce((a, b) => a + b, 0), 3, "the four segments add up to the file");
+  assert.equal(pol.n, n);
+  const arms = JSON.parse(ev(dom, `JSON.stringify(campaignArms(STATE['${WB}'].current))`));
+  assert.equal(arms.eligible, 3);
+  assert.ok(arms.treated + arms.control <= 3, JSON.stringify(arms));
+  const rep = JSON.parse(ev(dom, `JSON.stringify(campaignReport(STATE['${WB}'].current,{},today()))`));
+  assert.ok(rep.rows_suppressed_or_untreated >= 0, `rows outside ${rep.rows_suppressed_or_untreated}`);
+  go(dom, `#/uc/${WB}/output`);
+  assert.match($(dom, "[data-up-computed]").textContent, /Computed on every one of the 3 scored customers\./);
+  assert.equal(Number(kpiMap(dom)["Recommended to contact"]), n);
+  // every count on the uplift output is within the file (the budget setting, 4,000, is a setting, not a count)
+  const counts = () => [...Object.values(kpiMap(dom)), $(dom, "[data-up-n]").textContent, kv(dom, "Eligible persuadables"),
+    ...$$(dom, "[data-up-seg] .sc2").map((e) => e.textContent)];
+  assert.ok(counts().every((v) => v === "—" || Number(v.replace(/,/g, "")) <= 3), counts().join(" | "));
+  go(dom, `#/uc/${WB}/campaign`);
+  click(dom, "#cr-sample");
+  assert.doesNotMatch(body(dom), /4518|4,518/);
+  // a list the page could not count: no count is claimed anywhere
+  go(dom, `#/uc/${WB}`);
+  await scoreUpload(dom, "big_week.csv", weekCsv(20000));
+  const run = JSON.parse(ev(dom, `JSON.stringify(STATE['${WB}'].current)`));
+  assert.match(run.rows, /^~/);
+  assert.match($(dom, ".summary").textContent, /Recommended to contact: —/);
+  go(dom, `#/uc/${WB}/output`);
+  assert.equal(kpiMap(dom)["Recommended to contact"], "—");
+  assert.equal(kpiMap(dom).Persuadables, "—");
+  assert.deepEqual(counts().filter((v) => v !== "—"), [], "no count at all");
+  assert.match($(dom, "[data-up-computed]").textContent, /could not count/);
+  assert.equal($(dom, "#up-dl").disabled, true, "no list to download from rows the page never counted");
+});
+
+test("an uplift run trained on an uploaded file reports that file's hold-out, not the sample's 96,000", async () => {
+  const dom = winback();
+  await upload(dom, "#f-file", "offers.csv", campaignCsv(2400));
+  assert.equal($(dom, "#f-run").disabled, false);
+  submit(dom);
+  await wait(1300);
+  go(dom, `#/uc/${WB}/model`);
+  // 2,400 rows × 30%
+  assert.match(kv(dom, "Hold-out"), /^720 rows/);
+  assert.match($(dom, ".qini").closest("section").querySelector(".caption").textContent, /Measured on the 720-customer hold-out/);
+  assert.doesNotMatch(body(dom), /96,000|86,400|9,600/);
+  go(dom, `#/uc/${WB}/output`);
+  assert.match($(dom, "[data-up-computed]").textContent, /Computed on the 720-customer hold-out of the training run/);
+  const k = kpiMap(dom);
+  assert.ok(Number(k.Persuadables.replace(/,/g, "")) <= 720, k.Persuadables);
+  assert.ok(Number(k["Recommended to contact"].replace(/,/g, "")) <= 720, k["Recommended to contact"]);
+  assert.ok(Number(kv(dom, "Eligible persuadables").replace(/,/g, "")) <= 720);
+  assert.doesNotMatch(body(dom), /96,000|57,600/);
+  // at a 50% hold-out the same file holds out 1,200, not 160,000
+  go(dom, `#/uc/${WB}`);
+  click(dom, "#f-again");
+  set(dom, '[data-up-num="upTest"]', "50");
+  submit(dom);
+  await wait(1300);
+  go(dom, `#/uc/${WB}/model`);
+  assert.match(kv(dom, "Hold-out"), /^1,200 rows/);
+  assert.doesNotMatch(body(dom), /160,000/);
+});
+
+test("approving a template keeps the approval stamp's form: the seeded cards' flow is unchanged", () => {
+  const dom = load(`#/uc/${WB}/output`);
+  set(dom, "#cc-approver", "R. Rao");
+  const idx = $$(dom, ".cccard").findIndex((c) => c.querySelector(".pill").textContent === "Pending review");
+  $$(dom, ".cccard")[idx].querySelector("[data-cc-ok]").click();
+  const line = [...$$(dom, ".cccard")[idx].querySelectorAll(".ccm")].find((e) => /^Approved by/.test(e.textContent));
+  const stamp = line.textContent.replace(/^Approved by R\. Rao · /, "");
+  // the same en-IN stamp as before the uplift screens (8f0d358), not a new 24-hour form
+  const was = ev(dom, `new Date().toLocaleString("en-IN",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}).replace(/(\\d{4}),?\\s*/,"$1, ")`);
+  assert.match(stamp, /\d{1,2}:\d{2}\s?(am|pm)$/i, stamp);
+  assert.equal(stamp.replace(/\d{2}:\d{2}/, ""), was.replace(/\d{2}:\d{2}/, ""));
+  assert.equal(ev(dom, "nowStamp()").replace(/\d{2}:\d{2}/, ""), was.replace(/\d{2}:\d{2}/, ""));
+});
+
+test("using the sample dataset again keeps a problem type set by hand, on every Phase 1 use case", () => {
+  const dom = load("#/uc/payment-propensity");
+  click(dom, "#f-sample");
+  set(dom, "#f-ptype", "Regression (a number)");
+  assert.match($(dom, ".ptype").textContent, /Regression \(a number\)\s*set manually/);
+  click(dom, "#f-sample");
+  assert.match($(dom, ".ptype").textContent, /Regression \(a number\)\s*set manually/);
+  go(dom, `#/uc/${WB}`);
+  click(dom, "#f-sample");
+  set(dom, "#f-ptype", "Regression (a number)");
+  click(dom, "#f-sample");
+  assert.match($(dom, ".ptype").textContent, /Regression \(a number\)\s*set manually/);
+});
+
+test("Campaign results for a run with a 0% control group says the effect cannot be measured, in the engine's words", async () => {
+  const dom = winback();
+  click(dom, "#f-sample");
+  set(dom, '[data-adv="control"]', "0");
+  submit(dom);
+  await wait(1300);
+  click(dom, "#f-again");
+  click(dom, '.seg button[data-mode="score"]');
+  click(dom, "#f-sample");
+  submit(dom);
+  await wait(1100);
+  assert.equal(ev(dom, `STATE['${WB}'].current.adv.control`), 0);
+  go(dom, `#/uc/${WB}/campaign`);
+  click(dom, "#cr-sample");
+  const noControl = ev(dom, "INC_TEXT.noControl");
+  assert.equal($(dom, "[data-up-summary]").textContent, noControl);
+  assert.doesNotMatch(body(dom), /treated and control customers/);
+  const rep = JSON.parse(ev(dom, `JSON.stringify(campaignReport(STATE['${WB}'].current,{},today()))`));
+  assert.equal(rep.causal, false, "IncrementalityReport.causal is has_control_group");
+  assert.equal(rep.summary, noControl);
+  assert.equal(rep.control_rows, 0);
+  assert.doesNotMatch(body(dom), /every scoring run keeps one/);
+  assert.doesNotMatch(body(dom), /The lift below is still causal/);
+  // the seeded 1 May run kept its 10% control group and is measured as before
+  set(dom, "#cr-run", "r0501");
+  assert.equal(kpiMap(dom).Lift, "+3.48 pts");
 });

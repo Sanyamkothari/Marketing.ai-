@@ -249,9 +249,9 @@ column), trains *LightGBM + Claude copy · ROC-AUC 0.78 · Set as champion*, and
 Results, Data, Model and Output markup as 8f0d358 — checked byte for byte in jsdom for Win-back and
 for every other use case, and pinned by a test. The one thing a Phase 1 user gains is the plan B §8
 page itself: a win-back **scoring** run keeps a control group, so its summary line links to
-**Campaign results** and its pages carry a fourth tab. The screenshots 01–18 are unchanged, except
-the run stamp in 11 and 16 (review round 2: *23 Sep 2026, 10:33*, the seeded stamps' form, no longer
-*22 Sept 2026, 05:54 pm*).
+**Campaign results** and its pages carry a fourth tab. The screenshots 01–18 are unchanged, byte for
+byte against 8f0d358: review round 2 had changed the run stamp in 11 and 16 to a 24-hour *23 Sep 2026,
+10:33*; review round 3 put the stamp back (below) and restored those four PNGs.
 
 **Setup**
 
@@ -286,8 +286,10 @@ the run stamp in 11 and 16 (review round 2: *23 Sep 2026, 10:33*, the seeded sta
   the page and shows no panel.
 - **Blocked reasons.** Uplift with no treatment column: *"Choose the treatment column"*. Clearing the
   column keeps the problem type on Uplift (the choice was the user's) rather than silently switching
-  to Classification. Loading another file — an upload or any sample link — detects the problem type
-  afresh, so the plain sample after that is Classification again and runs.
+  to Classification. An upload detects the problem type afresh, as it always did; a sample link clears
+  a manual **Uplift** (and the campaign file, the uplift opt-in, detects afresh), so the plain sample
+  after that is Classification again and runs. Any other type set by hand survives *use the sample
+  dataset*, exactly as at 8f0d358 (Regression stays *set manually*).
 - **Step 3 for uplift** offers the meta-learners (X-learner recommended, T-learner, S-learner as the
   baseline) and the base model (AutoGluon fast, LightGBM), each with a hint.
 - **Advanced**: stage 5 carries bootstrap resamples and the hold-out share; stage 6 swaps the
@@ -300,7 +302,11 @@ the run stamp in 11 and 16 (review round 2: *23 Sep 2026, 10:33*, the seeded sta
   the config's range (`bootstrap_samples` 10..5000, `test_fraction` 0.1..0.5, cuts −1..1) is brought
   inside it. The **hold-out share** sizes the hold-out the Model and Output pages report: at 50% it is
   160,000 rows (144,000 treated, 16,000 control), each decile keeps its rates, and the stored
-  bootstrap intervals scale by √(30 / share). A run keeps the share it was trained with.
+  bootstrap intervals scale by √(30 / share). A run keeps the share it was trained with. A run trained
+  on an **uploaded** file reports that file's hold-out — the rows the page counted × the share (2,400
+  rows at 30%: **720**, ten deciles of 72), not the sample's 96,000 — and says the rates, curve and
+  intervals are the sample's (*"The prototype does not train on offers.csv…"*); the arm split is not
+  claimed. A file too big to count in the page gives no row count at all.
   `uplift.time_limit_minutes` (AutoGluon's budget) is deliberately not exposed: it tunes the build's
   compute, not a result the user reads. The eight stage titles are unchanged.
 - **Non-random treatment (the 409).** *use a sample where offers were targeted* loads a file whose
@@ -330,6 +336,11 @@ the run stamp in 11 and 16 (review round 2: *23 Sep 2026, 10:33*, the seeded sta
   promoted.
 - The flow keeps three blocks; the Output block reads *Recommended to contact: 4,000*. A win-back
   scoring run adds a **Campaign results** link to the summary line instead of a fourth block.
+- **Counts are the run's own.** Segments, *Recommended to contact* and the treat list are the
+  sample's shares applied to the rows the run counted: every scored row (the sample list: 14,500; a
+  3-row upload: 3 rows, 1 to contact) or the training run's hold-out. A list the page only estimated
+  (*~120K*) shows **—** for every count, and its treat list cannot be downloaded. The scoring step's
+  *held out as control* is the run's own control share of its rows.
 
 **Results → Model** (`upliftModelBlock`): four KPIs (learner, AUUC, Qini coefficient, uplift in the
 top 10%); `uplift_at` in full — the top 10%, 20% and 30%, each with its interval — with a one-line
@@ -360,11 +371,20 @@ window>"** and measures nothing. The seeded 1 May 2026 campaign, once measured, 
 control n and rate, the absolute lift with its Newcombe interval, relative lift, incremental
 conversions with their interval, the p-value, the row accounting (still inside the window, without
 an outcome, suppressed or not treated) and a summary sentence — all computed in the page from the
-counts. Every date and run stamp uses one fixed month table (`MONTHS`): en-IN ICU spells September
-"Sept" in Node and in the bundled Chromium alike, which put *23 Sept 2026* in the run select beside
-*Sent 23 Sep 2026* until review round 2. The treated and control counts are the run's own: a Phase 1
-scoring run of 12,480 rows is 1,248 control, 1,592 suppressed and 9,640 sent (10,888 in the IMMATURE
-sentence), not the 14,500-row seed list's 12,650; a row count the page only estimated gives no count. **The summary sentence is the engine's**: `engine/uplift/incrementality.py::
+counts. Every date on the page uses one fixed month table (`MONTHS`): en-IN ICU spells September
+"Sept" in Node and in the bundled Chromium alike, so the run select dates a run from its send day and
+time (*Scored 14,500 rows · 23 Sep 2026, 10:00 UTC*), never from the run stamp, beside *Sent 23 Sep
+2026*. The run stamp itself (`nowStamp`, the run history and the copy approval record) is 8f0d358's
+en-IN stamp, untouched: review round 2 had switched it to a 24-hour *Sep* form, which moved the mix
+to the Output page (*23 Sep 2026, 10:42* beside the seeded *21 Sept 2026, 16:40*). The treated and
+control counts are the run's own: a Phase 1 scoring run of 12,480 rows is 1,248 control, 1,592
+suppressed and 9,640 sent (10,888 in the IMMATURE sentence), not the 14,500-row seed list's 12,650;
+an uplift run treats its own list (3 rows: at most 3 customers, never the sample's 4,000 + 518); a
+row count the page only estimated gives no count. A run that held **no control group** back (Control
+group holdout 0%, which `control_group_fraction` allows) gets the engine's `has_control_group`
+sentence — *"This run held no control group back, so there is nothing to compare the treated
+customers with and the campaign's effect cannot be measured."* — with `causal` false, and the run
+hint no longer claims every scoring run keeps one. **The summary sentence is the engine's**: `engine/uplift/incrementality.py::
 _summary` branch for branch (`incSummary()`, templates in `INC_TEXT`) — *"Treated customers converted
 at 11.0% against 7.5% for the control group: a lift of +3.5 points (95% CI +1.9 points to +4.9 points;
 p < 0.001), about 390 extra conversions caused by the campaign."* — and, while the window is open,
@@ -395,7 +415,7 @@ class is `.ncbanner`, not `.banner`, so the copy block's banner tests are unaffe
 - *Campaign results is shown on Win-back only.* The page applies to any scoring run with a control
   group; the prototype shows it where plan B's acceptance test puts it.
 
-`tests/prototype/uplift.test.mjs` (26 tests) drives all of this. `consistency.test.mjs` adds eight:
+`tests/prototype/uplift.test.mjs` (31 tests) drives all of this. `consistency.test.mjs` adds eight:
 the label, thresholds and defaults (the sure-thing cut too) against the yaml `uplift:` block; the
 control share against `control_group_fraction`; `SEG_LABELS`, `SEG_ACTIONS` and `NOT_CAUSAL_NOTE`
 against `engine/uplift/contracts.py`; the four AUUC sentences against `metrics.py`; the check
@@ -403,7 +423,7 @@ findings against `checks.py` and the Campaign results summary against `increment
 ways (every template the page carries is the engine's, and every sentence those engine functions
 write is carried), so a wording change on either side fails a test; and the internal arithmetic. The
 five that read Phase 3b files **skip**, with the reason, on a branch that does not have them yet, and
-`PRODUCT_ROOT=<checkout>` points them at another checkout (all 76 pass against the Phase 3b tree).
+`PRODUCT_ROOT=<checkout>` points them at another checkout (all 81 pass against the Phase 3b tree).
 
 **Review round 1** fixed: the plain win-back sample had become an uplift run (uplift is now the
 opt-in above); uplift reached other use cases with win-back's numbers (now Win-back only, and a
@@ -423,7 +443,20 @@ uploaded file's run step claimed *6 checks passed · AUC 0.52*, the sample's (no
 the hold-out share was ignored and Model and Output always said 96,000 (now sized by it); emptying a
 non-nullable uplift number stored `null` and showed it (now its default); the upload checks panel
 dropped TREATMENT_NOT_BINARY when it passed (now six rows); run stamps spelled *Sept* beside *Sep*
-(now one month table).
+(round 2 changed the stamp itself; round 3 replaced that fix, see below).
+
+**Review round 3** fixed, each with a test that fails without the fix: an uplift scoring run on an
+uploaded file counted the sample list (a 3-row file read *Recommended to contact: 4,000*, and Campaign
+results 4,518 treated and control customers with −4,515 suppressed; now the file's own rows, and
+**—** for an estimated count); an uplift run trained on an uploaded 2,400-row file reported the
+sample's 96,000-row hold-out, 57,600 persuadables and 4,000 to contact (now 720 rows and counts
+within it); round 2's stamp fix changed the existing approval stamp and every run stamp to a 24-hour
+form (the stamp is 8f0d358's again, and Campaign results dates runs itself); round 2's sample fix
+discarded a manually chosen problem type on every use case (now only a manual Uplift is cleared);
+Campaign results for a run with a 0% control group said its results were pending for its "treated
+and control customers" (now the engine's no-control sentence, `causal` false). The uplift policy
+check in `consistency.test.mjs` now names the sample list's 14,500 rows, since a policy is sized by
+its run's rows.
 
 ---
 
@@ -459,6 +492,9 @@ use one consistent set, checked by `tests/prototype/consistency.test.mjs`:
   9,523 / 96,000 = **0.099**, the default sure-thing cut.
   At another hold-out share the deciles scale (50%: 160,000 rows, deciles of 16,000; AUUC still 0.0125,
   interval 0.0104 to 0.0145). Null example: AUUC 0.0006 (−0.0021 to 0.0034). TREATMENT_NOT_RANDOM: AUC 0.52 random, 0.74 targeted.
+- **Uploads** are sized by the rows the page counted: 2,400 training rows at a 30% hold-out → **720**
+  (1,200 at 50%); a 3-row scoring file → 3 rows in four segments, 1 to contact, and no control
+  customer (10% of 3 rounds to 0), so Campaign results says it cannot be measured.
 - **Segments** of the 14,500 scored: 5,220 persuadables, 2,610 sure things, 5,510 lost causes, 1,160
   sleeping dogs; of the hold-out: 57,600 / 9,600 / 17,600 / 11,200. Budget **4,000** → N = 4,000
   (stop: budget) of 4,032 eligible persuadables, about **405** expected incremental conversions.
@@ -474,7 +510,7 @@ Anything the product would have to invent is still `—`.
 
 ```bash
 open marketing-ai-prototype.html          # no build step, no server needed
-make prototype-test                       # 76 jsdom tests (5 skip until Phase 3b's engine/uplift is present)
+make prototype-test                       # 81 jsdom tests (5 skip until Phase 3b's engine/uplift is present)
 make prototype-screenshots                # docs/prototype/*.png, desktop and mobile
 ```
 
@@ -486,7 +522,9 @@ Screenshots of every new state, desktop (1440px) and mobile (390px), are in
 `docs/prototype/`, plus three dark-mode shots. Revision 4 added `19-uplift-setup-treatment` to
 `24-campaign-results-mature` (and `22-uplift-output-desktop-dark`); review round 1 reshot 19–22 and
 24, whose screens changed (23 did not); review round 2 reshot 11, 16 and 23, whose run stamps
-changed (19–22 were reshot too and came out byte-identical); `ONLY=19,20 node
+changed (19–22 were reshot too and came out byte-identical); review round 3 reshot 23 and 24 (the run
+select's date and hint), reshot 21 and 22 byte-identical, and restored 11 and 16 to their 8f0d358
+PNGs, whose stamp form is back; `ONLY=19,20 node
 scripts/prototype_screenshots.mjs` reshoots just those. The script is an ES module, so `NODE_PATH`
 does not reach it: `playwright` must resolve from a `node_modules` above the checkout. They were captured in a sandbox with no
 outbound access to Google Fonts, so they render in the stylesheet's fallback stack

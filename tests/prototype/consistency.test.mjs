@@ -372,19 +372,21 @@ test("the uplift numbers add up", () => {
   assert.ok(Object.values(M).every(([u, pt, pc]) => Math.abs(u - (pt - pc)) < 1e-9));
   assert.ok(M.persuadable[0] >= 0.02 && M.sleeping_dog[0] <= -0.01);
   assert.ok(M.sure_thing[1] > M.lost_cause[1], "sure things convert anyway, lost causes do not");
-  // the policy: N within the eligible persuadables and within the budget
+  // the policy: N within the eligible persuadables and within the budget. A scoring run is sized by its
+  // own row count (the sample list: 14,500); a sample training run by its hold-out (96,000)
+  const R = "rows:'14,500'";
   for (const mode of ["score", "train"]) {
-    const p = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'${mode}',adv:${a},causal:true}))`));
+    const p = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'${mode}',adv:${a},causal:true,${R}}))`));
     assert.equal(p.n, 4000);
     assert.equal(p.stop_reason, "budget");
     assert.ok(p.n <= p.eligible_persuadables && p.n <= p.segs.persuadable && p.n <= p.budget);
     assert.ok(p.expected.ci_low > 0 && p.expected.ci_low < p.expected.value && p.expected.value < p.expected.ci_high);
   }
-  const ps = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'score',adv:${a},causal:true}))`));
+  const ps = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'score',adv:${a},causal:true,${R}}))`));
   assert.equal(ps.eligible_persuadables, 5220 * 11200 / 14500, "persuadables outside the control group and suppression");
   assert.equal(Math.round(ps.expected.value), 405);
   // with no budget every eligible persuadable is chosen, and never more
-  const nb = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'score',adv:{...${a},upBudget:null},causal:true}))`));
+  const nb = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'score',adv:{...${a},upBudget:null},causal:true,${R}}))`));
   assert.equal(nb.n, nb.eligible_persuadables);
   assert.equal(nb.stop_reason, "all_persuadables");
 });
