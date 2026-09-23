@@ -1249,6 +1249,19 @@ const UPLIFT_NULL={value:0.0006,ci_low:-0.0021,ci_high:0.0034,confidence_level:0
 /* segments.json: every scored row of the sample list (14,500), and the 96,000-row hold-out of the training run */
 const UPLIFT_SEGS={persuadable:5220,sure_thing:2610,lost_cause:5510,sleeping_dog:1160};
 const UPLIFT_SEGS_TEST={persuadable:57600,sure_thing:9600,lost_cause:17600,sleeping_dog:11200};
+/* Stage 5's "Hold-out share (%)" (uplift.test_fraction) sizes the hold-out every uplift metric is measured
+   on. The sample's deciles are the 30% hold-out; another share keeps each decile's rates and treated share
+   and scales its counts, and the stored bootstrap intervals narrow or widen with 1/√rows around the value. */
+const UP_TRAIN_ROWS=UPLIFT_EVAL.treated+UPLIFT_EVAL.control, UP_BASE_TEST=Math.round(UPLIFT_DEFAULTS.testFraction*100);
+const holdoutPct=run=>run&&run.upTest!=null?run.upTest:run&&run.adv&&run.adv.upTest!=null?run.adv.upTest:UP_BASE_TEST;
+function holdoutDeciles(pct=UP_BASE_TEST){if(pct===UP_BASE_TEST)return UPLIFT_DECILES;
+  const rows=Math.round(UP_TRAIN_ROWS*pct/100/UPLIFT_DECILES.length);
+  return UPLIFT_DECILES.map(x=>{const nt=Math.round(rows*x.treated_rows/x.rows),nc=rows-nt;
+    return {...x,rows,treated_rows:nt,control_rows:nc,treated_conv:Math.round(x.treated_conv*nt/x.treated_rows),control_conv:Math.round(x.control_conv*nc/x.control_rows)};});}
+function holdoutSegs(pct=UP_BASE_TEST){if(pct===UP_BASE_TEST)return UPLIFT_SEGS_TEST;
+  const b=UPLIFT_SEGS_TEST,n=armTotals(holdoutDeciles(pct)).n,k=n/SEG_IDS.reduce((a,s)=>a+b[s],0);
+  const o={persuadable:Math.round(b.persuadable*k),sure_thing:Math.round(b.sure_thing*k),sleeping_dog:Math.round(b.sleeping_dog*k)};
+  return {...o,lost_cause:n-o.persuadable-o.sure_thing-o.sleeping_dog};}
 const UPLIFT_SEG_MEANS={persuadable:[0.071,0.121,0.050],sure_thing:[0.008,0.196,0.188],lost_cause:[0.004,0.021,0.017],sleeping_dog:[-0.019,0.052,0.071]};
 /* The policy runs on the rows that are neither suppressed nor held out (engine/uplift/actions.py). */
 const UPLIFT_POLICY={budgetWinback:4000};
@@ -1262,7 +1275,7 @@ const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov",
 let AS_OF=null, UP_NULL_VIEW=false, UP_NULL_HASH="";
 const today=()=>AS_OF?new Date(AS_OF):new Date();
 const isoDay=d=>new Date(d).toISOString().slice(0,10);
-/* A fixed month table, not toLocaleString: ICU spells September "Sept" in Node and "Sep" elsewhere. */
+/* A fixed month table, not toLocaleString: en-IN ICU spells September "Sept" (Node and Chromium alike). nowStamp uses it too. */
 const fmtDay=d=>{const x=new Date(d);return `${x.getUTCDate()} ${MONTHS[x.getUTCMonth()]} ${x.getUTCFullYear()}`;};
 const addDays=(d,n)=>{const x=new Date(isoDay(d)+"T00:00:00Z");x.setUTCDate(x.getUTCDate()+n);return x;};
 const fmtI=n=>n==null?"—":Math.round(n).toLocaleString("en-US");
@@ -1270,6 +1283,11 @@ const f4=v=>v==null?"—":(t=>t==="-0.0000"?"0.0000":t)(v.toFixed(4));
 const pts2=v=>v==null?"—":`${v>=0?"+":"−"}${Math.abs(v*100).toFixed(2)} pts`;
 const pct1=v=>v==null?"—":`${(v*100).toFixed(v<0.1?2:1)}%`;
 const hnum=k=>Number(String(HOLDOUT[k]).replace(/,/g,""));
+/* A run's exact row count: counted when the page read the whole file, or a sample's stated count.
+   An estimate ("~120K", "12K") is not a count, so it gives null. */
+const exactRows=v=>/^\d{1,3}(,\d{3})*$|^\d+$/.test(String(v??""))?Number(String(v).replace(/,/g,"")):null;
+const runRowCount=r=>r.n!=null?r.n:exactRows(r.rows);
+const rowCount=s=>s.upRows&&!(s.file&&s.file.sample)?s.upRows.length:s.file?exactRows(s.file.rows):null;
 
 function detectTreatment(cols){const low=cols.map(c=>String(c).toLowerCase());
   for(const h of TREAT_HINTS){const i=low.indexOf(h);if(i>=0)return cols[i];}return "";}
@@ -1295,9 +1313,15 @@ function qiniPoints(d=UPLIFT_DECILES){const n=armTotals(d).n;let Yt=0,Yc=0,Nt=0,
     out.push({fraction:(Nt+Nc)/n,qini:(Yt-(Nc?Yc*Nt/Nc:0))/n,uplift_curve:(Nt&&Nc?Yt/Nt-Yc/Nc:0)*(Nt+Nc)/n});});
   const end=out[out.length-1].qini;out.forEach(p=>{p.random=p.fraction*end;});return out;}
 const trapz=(p,f)=>p.slice(1).reduce((a,q,i)=>a+(f(q)+f(p[i]))/2*(q.fraction-p[i].fraction),0);
-function auucOf(p=qiniPoints()){const ate=ateOf();return trapz(p,q=>q.uplift_curve-q.fraction*ate);}
+function auucOf(d=UPLIFT_DECILES){const p=qiniPoints(d),ate=ateOf(d);return trapz(p,q=>q.uplift_curve-q.fraction*ate);}
 const qiniCoefOf=(p=qiniPoints())=>trapz(p,q=>q.qini-q.random);
-const auucCI=()=>({value:auucOf(),...UPLIFT_EVAL.auuc,confidence_level:0.95});
+/* A stored interval around the value measured on a hold-out of pct%: the sample's offsets, scaled by √(30/pct). */
+function scaledCI(value,stored,base,pct){const w=Math.sqrt(UP_BASE_TEST/pct);
+  return {ci_low:value-(base-stored.ci_low)*w,ci_high:value+(stored.ci_high-base)*w};}
+function auucCI(pct=UP_BASE_TEST){const v=auucOf(holdoutDeciles(pct));
+  return {value:v,...(pct===UP_BASE_TEST?UPLIFT_EVAL.auuc:scaledCI(v,UPLIFT_EVAL.auuc,auucOf(),pct)),confidence_level:0.95};}
+function qiniCI(pct=UP_BASE_TEST){const v=qiniCoefOf(qiniPoints(holdoutDeciles(pct)));
+  return {value:v,...(pct===UP_BASE_TEST?UPLIFT_EVAL.qini:scaledCI(v,UPLIFT_EVAL.qini,qiniCoefOf(),pct))};}
 /* UpliftEvaluation.summary: engine/uplift/metrics.py::_summary, template for template */
 function upliftSummary(ci,causal=true){const lv=`${Math.round((ci.confidence_level||0.95)*100)}%`;let s;
   if(ci.ci_low==null||ci.ci_high==null)s=`No measurable uplift: the AUUC (${f4(ci.value)}) has no ${lv} interval, so this model cannot be shown to target better than random.`;
@@ -1322,7 +1346,7 @@ function topShare(f,d=UPLIFT_DECILES){let left=Math.ceil(f*armTotals(d).n-1e-9);
   for(const x of d){if(left<=0)break;const k=Math.min(left,x.rows),w=k/x.rows;left-=k;
     o.rows+=k;o.nt+=x.treated_rows*w;o.yt+=x.treated_conv*w;o.nc+=x.control_rows*w;o.yc+=x.control_conv*w;o.pred+=x.predicted_uplift*k;}
   o.pred=o.rows?o.pred/o.rows:0;return o;}
-function upliftAt(f){const o=topShare(f);if(!o.nt||!o.nc)return null;const [lo,hi]=newcombe(o.yt,o.nt,o.yc,o.nc);
+function upliftAt(f,d=UPLIFT_DECILES){const o=topShare(f,d);if(!o.nt||!o.nc)return null;const [lo,hi]=newcombe(o.yt,o.nt,o.yc,o.nc);
   return {value:o.yt/o.nt-o.yc/o.nc,ci_low:lo,ci_high:hi};}
 /* Predicted uplift against population share: straight lines through the decile means. */
 function predCurve(d=UPLIFT_DECILES){const m=d.map(x=>x.predicted_uplift),n=m.length;
@@ -1331,7 +1355,7 @@ function predAt(f){const c=predCurve();for(let i=1;i<c.length;i++)if(f<=c[i][0])
 function shareAbove(x){const c=predCurve();if(x>=c[0][1])return 0;if(x<=c[c.length-1][1])return 1;
   for(let i=1;i<c.length;i++)if(x>=c[i][1]){const [f0,v0]=c[i-1],[f1,v1]=c[i];return f0+(f1-f0)*(v0-x)/(v0-v1);}return 1;}
 /* segments.json for a run: the sample counts at the default cuts, moved with the cuts in Advanced. */
-function segCounts(kind,a){const b=kind==="scored"?UPLIFT_SEGS:UPLIFT_SEGS_TEST,tot=SEG_IDS.reduce((x,k)=>x+b[k],0);
+function segCounts(kind,a,pct=UP_BASE_TEST){const b=kind==="scored"?UPLIFT_SEGS:holdoutSegs(pct),tot=SEG_IDS.reduce((x,k)=>x+b[k],0);
   const rp=shareAbove(a.upPers)/shareAbove(UPLIFT_DEFAULTS.persuadable),rd=(1-shareAbove(a.upSleep))/(1-shareAbove(UPLIFT_DEFAULTS.sleepingDog));
   const p=Math.min(tot,Math.round(b.persuadable*rp)),d=Math.min(tot-p,Math.round(b.sleeping_dog*rd)),rest=tot-p-d;
   /* Between the cuts: sure thing at P(convert untreated) ≥ the cut, the training base rate when unset.
@@ -1343,18 +1367,18 @@ function segCounts(kind,a){const b=kind==="scored"?UPLIFT_SEGS:UPLIFT_SEGS_TEST,
 function sureBaseRate(d=UPLIFT_DECILES){const t=armTotals(d);return (t.yt+t.yc)/t.n;}
 const sureCutText=a=>a.upSure==null?`${sureBaseRate().toFixed(3)}, the training base rate`:String(a.upSure);
 /* policy_recommendation.json: top N by uplift within budget, among eligible persuadables only. */
-function upliftPolicy(run){const a=run.adv,scored=run.mode==="score",segs=segCounts(scored?"scored":"test",a);
+function upliftPolicy(run){const a=run.adv,scored=run.mode==="score",pct=holdoutPct(run),d=holdoutDeciles(pct),segs=segCounts(scored?"scored":"test",a,pct);
   const rows=SEG_IDS.reduce((x,k)=>x+segs[k],0);
   const eligShare=scored?(hnum("eligible")-hnum("control")-hnum("suppressed"))/hnum("eligible"):1;
   const cand=Math.round(segs.persuadable*eligShare);let n=cand,reason=cand?"all_persuadables":"no_persuadables";
   const money=a.upCost!=null&&a.upValue!=null&&a.upValue>0;
   if(money&&cand){const pay=Math.round(cand*Math.min(1,shareAbove(a.upCost/a.upValue)/shareAbove(a.upPers)));if(pay<n){n=pay;reason="value_below_cost";}}
   if(a.upBudget!=null&&a.upBudget<n){n=a.upBudget;reason="budget";}
-  const at=n?upliftAt(n/rows):{value:0,ci_low:0,ci_high:0};
+  const at=n?upliftAt(n/rows,d):{value:0,ci_low:0,ci_high:0};
   const exp=at?{value:n*at.value,ci_low:n*at.ci_low,ci_high:n*at.ci_high}:null;
   const cost=a.upCost!=null?n*a.upCost:null,value=exp&&a.upValue!=null?exp.value*a.upValue:null;
   return {computed_on:scored?"scored":"test",rows,segs,eligible_persuadables:cand,n,stop_reason:reason,budget:a.upBudget,
-    predicted:n?n*topShare(n/rows).pred:0,expected:exp,cost_per_contact:a.upCost,value_per_conversion:a.upValue,
+    predicted:n?n*topShare(n/rows,d).pred:0,expected:exp,cost_per_contact:a.upCost,value_per_conversion:a.upValue,
     expected_cost:cost,expected_value:value,expected_net_value:cost!=null&&value!=null?value-cost:null,causal:run.causal!==false};}
 /* engine/uplift/incrementality.py::_summary and _points templates, verbatim */
 const INC_TEXT={
@@ -1382,16 +1406,24 @@ function incSummary(r,hasControl=true){const T=INC_TEXT,when=r.results_available
   if(r.rows_immature)out+=pyfmt(T.stillOpen,{rows_immature:r.rows_immature,when});
   return out;}
 /* incrementality_report.json for a scoring run, from its counts and the outcomes file */
+/* The treated and control customers of a scoring run, from its own row count. A Phase 1 run holds out
+   its control share (stage 6) at random and suppresses the sample's share (1,850 of 14,500); every other
+   row is sent. An uplift run sends its treat list and holds out the same control share of it. A row count
+   the page only estimated (a large upload) gives no counts: nothing is claimed about customers it did not count. */
+function campaignArms(run){const N=runRowCount(run);if(N==null)return null;
+  const ctl=run.adv&&run.adv.control!=null?run.adv.control:Math.round(100*hnum("control")/hnum("eligible"));
+  if(run.ptype==="Uplift"){const t=upliftPolicy(run).n;return {treated:t,control:Math.round(t*hnum("control")/hnum("sent")),eligible:N};}
+  const c=Math.round(N*ctl/100),sup=Math.round(N*hnum("suppressed")/hnum("eligible"));
+  return {treated:N-c-sup,control:c,eligible:N};}
 function campaignReport(run,outcomes,asOf,cr=st(UC.find(x=>x.id==="win-back-campaign")).cr){
   const win=cr.window,avail=addDays(run.date,win),mature=avail<=new Date(isoDay(asOf)+"T00:00:00Z");
-  const up=run.ptype==="Uplift";
-  const tRows=up?upliftPolicy(run).n:hnum("sent"),cRows=up?Math.round(tRows*hnum("control")/hnum("sent")):hnum("control");
+  const arms=campaignArms(run),tRows=arms?arms.treated:null,cRows=arms?arms.control:null;
   const base={run_id:run.id,outcome_column:cr.outcome,outcome_window_days:win,as_of:isoDay(asOf),
     results_available_on:mature?null:isoDay(avail),status:mature?"mature":"immature",causal:true,
-    rows_suppressed_or_untreated:hnum("eligible")-tRows-cRows,rows_without_outcome:0,rows_immature:0};
+    rows_suppressed_or_untreated:arms?arms.eligible-tRows-cRows:null,rows_without_outcome:0,rows_immature:0};
   const nil={treated_rows:0,treated_conversions:0,treated_rate:null,control_rows:0,control_conversions:0,control_rate:null,
     absolute_lift:null,relative_lift:null,incremental_conversions:null,p_value:null};
-  if(!outcomes)return {...base,...nil,measured:false,rows_immature:mature?0:tRows+cRows};
+  if(!outcomes||!arms)return {...base,...nil,measured:false,rows_immature:mature||!arms?0:tRows+cRows};
   if(!mature){const r={...base,...nil,measured:true,rows_immature:tRows+cRows};r.summary=incSummary(r);return r;}
   if(!outcomes.treated)return {...base,...nil,measured:false};
   const [nt,yt]=outcomes.treated,[nc,yc]=outcomes.control,tr=yt/nt,ctl=yc/nc,d=tr-ctl,[lo,hi]=newcombe(yt,nt,yc,nc),p=zTest(yt,nt,yc,nc);
@@ -1434,13 +1466,13 @@ function segmentChart(segs,run){const tot=SEG_IDS.reduce((a,k)=>a+segs[k],0);
     <div class="segrows">${SEG_IDS.map(k=>`<div class="segrow sg-${k}" data-up-seg="${k}"><span class="sw"></span>
       <span class="sn">${esc(SEG_LABELS[k])}<small>mean predicted uplift ${pts2(UPLIFT_SEG_MEANS[k][0])}</small></span>
       <span class="sc2">${fmtI(segs[k])}</span><span class="sp">${(100*segs[k]/tot).toFixed(1)}%</span><span class="sa">${esc(SEG_ACTIONS[k])}</span></div>`).join("")}</div>`;}
-function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),p=qiniPoints(),a=run.adv,t=armTotals(),causal=run.causal!==false;
-  const auuc=auucCI(),qc=qiniCoefOf(p),u10=upliftAt(0.1),ci=UP_NULL_VIEW?UPLIFT_NULL:auuc,good=ci.ci_low>0;
+function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),pct=holdoutPct(run),d=holdoutDeciles(pct),p=qiniPoints(d),a=run.adv,t=armTotals(d),causal=run.causal!==false;
+  const auuc=auucCI(pct),qci=qiniCI(pct),qc=qci.value,u10=upliftAt(0.1,d),ci=UP_NULL_VIEW?UPLIFT_NULL:auuc,good=ci.ci_low>0;
   const [alo,ahi]=newcombe(t.yt,t.nt,t.yc,t.nc);
   const verdict=UP_NULL_VIEW?`<span class="pill bad">Not promoted</span>Its AUUC interval includes zero, so it can never become the uplift champion.`
     :!causal?`<span class="pill bad">Not promoted</span>The treatment was not random, so this model can never become the uplift champion.`
     :run.upChampion?`<span class="pill ok">Uplift champion</span>Its AUUC interval lies above zero.`:`<span class="pill warn">Not promoted</span>It did not beat the uplift champion on the same hold-out.`;
-  const tbl=table(["decile","n","treated rate","control rate","observed uplift","predicted uplift"],UPLIFT_DECILES.map(x=>[`D${x.decile}`,fmtI(x.rows),
+  const tbl=table(["decile","n","treated rate","control rate","observed uplift","predicted uplift"],d.map(x=>[`D${x.decile}`,fmtI(x.rows),
     pct1(x.treated_conv/x.treated_rows),pct1(x.control_conv/x.control_rows),f4(x.treated_conv/x.treated_rows-x.control_conv/x.control_rows),f4(x.predicted_uplift)]));
   return `${causal?"":ncBanner()}
     ${kpis([["Learner",run.learner],["AUUC",f4(auuc.value)],["Qini coefficient",f4(qc)],["Uplift in the top 10%",pts2(u10.value)]])}
@@ -1450,15 +1482,15 @@ function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),p=qiniPoints()
         <p class="upverdict" data-up-summary>${esc(upliftSummary(ci,causal))}</p>
         <p class="upverdict">${verdict}</p>
         ${kvs([["Learner",`${run.learner} · ${run.baseModel}`],["Hold-out",`${fmtI(t.n)} rows · ${fmtI(t.nt)} treated · ${fmtI(t.nc)} control`],
-          ["Treated rate · control rate",`${pct1(t.yt/t.nt)} · ${pct1(t.yc/t.nc)}`],["Treating everyone gains",`${pts2(ateOf())} (95% CI ${(alo*100).toFixed(2)} to ${(ahi*100).toFixed(2)})`],
-          ["Qini coefficient",`${f4(qc)} (95% CI ${f4(UPLIFT_EVAL.qini.ci_low)} to ${f4(UPLIFT_EVAL.qini.ci_high)})`],
+          ["Treated rate · control rate",`${pct1(t.yt/t.nt)} · ${pct1(t.yc/t.nc)}`],["Treating everyone gains",`${pts2(ateOf(d))} (95% CI ${(alo*100).toFixed(2)} to ${(ahi*100).toFixed(2)})`],
+          ["Qini coefficient",`${f4(qc)} (95% CI ${f4(qci.ci_low)} to ${f4(qci.ci_high)})`],
           /* UpliftEvaluation.uplift_at: the top 10%, 20% and 30% */
-          ...[0.1,0.2,0.3].map(f=>{const x=upliftAt(f);return [`Uplift in the top ${Math.round(f*100)}%`,`${pts2(x.value)} (95% CI ${(x.ci_low*100).toFixed(2)} to ${(x.ci_high*100).toFixed(2)})`];}),
+          ...[0.1,0.2,0.3].map(f=>{const x=upliftAt(f,d);return [`Uplift in the top ${Math.round(f*100)}%`,`${pts2(x.value)} (95% CI ${(x.ci_low*100).toFixed(2)} to ${(x.ci_high*100).toFixed(2)})`];}),
           ["Bootstrap resamples",String(a.upBoot)]])}
         <p class="caption" data-up-at>Uplift in the top k%: the treated rate minus the control rate among the k% of the hold-out with the highest predicted uplift.</p>
         <div class="updl"><button type="button" class="linkbtn" id="up-null">${UP_NULL_VIEW?"Back to this model":"What a model with no measurable uplift looks like"}</button></div></section>
     </div>
-    <section class="card"><h3>Uplift by decile</h3>${decileBars(UPLIFT_DECILES)}
+    <section class="card"><h3>Uplift by decile</h3>${decileBars(d)}
       <p class="caption">Treated conversion rate minus control conversion rate in each tenth of the hold-out (top bar), against the model's prediction (thin bar). D1 is the highest predicted uplift; the bottom deciles are the sleeping dogs.</p>${tbl}</section>`;}
 function treatListRows(u){const run=upliftRun(u);if(!run||run.mode!=="score")return [];
   const pol=upliftPolicy(run),top=pol.n/pol.rows,R=["months_since_churn ↓ (2)","offers_accepted ↑ (3)","churn_reason = Network","avg_monthly_spend ↑ (₹640)","preferred_channel = SMS"];
@@ -1547,7 +1579,8 @@ function upliftChecks(u){const s=st(u),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
   if(bad){const message=pyfmt(UP_CHECK_TEXT.notBinary,{column:s.treatment,"_n(bad)":pyN(bad),"_n(rows)":pyN(rows),share:bad/rows});
     add("TREATMENT_NOT_BINARY","bad",message,{message,suggestion:UP_CHECK_TEXT.notBinaryFix});
     ["TREATMENT_ARM_TOO_SMALL","TREATMENT_NOT_RANDOM"].forEach(c=>add(c,"skip","Not run: the treatment column has to be 0 or 1 first."));}
-  else{const y=s.upRows.map(r=>TREAT_CODE(r[yi])),yOk=yi>=0&&y.every(v=>v!=null);
+  else{add("TREATMENT_NOT_BINARY","pass","Every treatment value is 0 or 1.");
+    const y=s.upRows.map(r=>TREAT_CODE(r[yi])),yOk=yi>=0&&y.every(v=>v!=null);
     const arms=[["treated group",1],["control group",0]].map(([arm,k])=>({arm,rows:t.filter(v=>v===k).length,positives:yOk?y.filter((v,i)=>t[i]===k&&v===1).length:null}));
     /* no treatment date column, so no row is left out as immature */
     const short=[],rowsExcluded=0;arms.forEach(a=>{
@@ -1571,8 +1604,14 @@ function upChecksHtml(u){const s=st(u),checks=upliftChecks(u),errs=upErrors(u);i
     ${checks.map(li).join("")}</ul>
     ${errs.map(c=>`<div class="upmsg" data-up-fix="${c.code}"><b>${c.code}</b> ${esc(c.finding.suggestion)}</div>`).join("")}
     ${ackable?`<label class="check"><input type="checkbox" id="f-ack" ${s.ack?"checked":""}><span>Train anyway, and label every output not causal.<span class="uphint" style="display:block">The model can never become the uplift champion, and every page it feeds carries a not-causal banner.</span></span></label>`:""}</div>`;}
+/* The uplift settings configs/engine.yaml does not allow to be null: emptying one restores its default. */
+const UP_REQUIRED={upBoot:UPLIFT_DEFAULTS.bootstrap,upTest:UP_BASE_TEST,upPers:UPLIFT_DEFAULTS.persuadable,upSleep:UPLIFT_DEFAULTS.sleepingDog};
+const UP_INT=["upBoot","upBudget"];
+/* An Advanced uplift number as stored: empty is null only where the config allows it, and the value is kept inside the input's bounds. */
+function upNumValue(key,raw,min,max){if(raw===""||raw==null||isNaN(+raw))return key in UP_REQUIRED?UP_REQUIRED[key]:null;
+  let v=Math.min(max,Math.max(min,+raw));if(UP_INT.includes(key))v=Math.round(v);return v;}
 const unum=(key,label,step,min,max,hint,cls="sm")=>{const v=st(CUR).adv[key];
-  return `<div class="field ${cls}"><span class="sub">${esc(label)}</span><div class="control"><input type="number" data-up-num="${key}" step="${step}" min="${min}" max="${max}" value="${v==null?"":v}" placeholder="—"></div><span class="uphint">${esc(hint)}</span></div>`;};
+  return `<div class="field ${cls}"><span class="sub">${esc(label)}</span><div class="control"><input type="number" data-up-num="${key}" step="${step}" min="${min}" max="${max}" value="${v==null?"":v}" placeholder="${key in UP_REQUIRED?UP_REQUIRED[key]:"—"}"${key in UP_REQUIRED?" required":""}></div><span class="uphint">${esc(hint)}</span></div>`;};
 function upStage5(a){return [`AUUC · ${a.upBoot} bootstrap resamples · ${a.upTest}% hold-out${a.shap?` · top ${a.reasons} SHAP reasons on uplift`:""} · champion if +${a.champ}%`,
   `<div class="frow">${unum("upBoot","Bootstrap resamples",10,10,5000,"Resamples behind every confidence interval. More is steadier and slower.")}${unum("upTest","Hold-out share (%)",5,10,50,"Customers kept back to measure uplift. The learners never see them.")}${num("reasons","Reasons per row",1,1,5)}${num("champ","Replace uplift champion if better by (%)",0.5,0,20)}${chk("shap","Explain the uplift of every row (SHAP)")}</div>`];}
 function upStage6(a){return [`Persuadable ≥ ${a.upPers} · sleeping dog ≤ ${a.upSleep} · sure thing P ≥ ${a.upSure==null?"base rate":a.upSure} · budget ${a.upBudget==null?"—":fmtI(a.upBudget)}${a.supOpt?" · skip opted-out":""}${a.supRecent?` · skip contacted <${a.recentDays}d`:""} · ${a.control}% control group`,
@@ -1668,7 +1707,9 @@ function st(u){
 const fmtSize = b => b<1024?`${b} B`:b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(1)} MB`;
 const fmtN = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${Math.round(n/1e3)}K`:String(n);
 function parseLine(line){const out=[];let cur="",q=false;for(const ch of line){if(ch==='"'){q=!q;}else if(ch===","&&!q){out.push(cur.trim());cur="";}else cur+=ch;}out.push(cur.trim());return out;}
-const nowStamp=()=>new Date().toLocaleString("en-IN",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}).replace(/(\d{4}),?\s*/,"$1, ");
+/* The fixed month table (MONTHS), not toLocaleString: en-IN ICU spells September "Sept" in Node and in
+   Chromium, beside the "Sep" of every seeded stamp and of fmtDay. Same form as the seeds: 14 Sep 2026, 10:20. */
+const nowStamp=()=>{const d=today(),z=n=>String(n).padStart(2,"0");return `${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}, ${z(d.getHours())}:${z(d.getMinutes())}`;};
 function modeLabels(cfg){return cfg.modes||{train:"Train a model",score:"Score new data"};}
 function modeHelp(cfg,mode){if(cfg.help)return cfg.help[mode];return mode==="train"?"Upload historical data where the outcome is already known. The best model is trained and saved.":"Upload new records without the outcome. The saved model scores every row and recommends an action.";}
 function blocker(u){const s=st(u),cfg=SETUP[u.id];
@@ -1702,6 +1743,8 @@ function sampleFile(u,campaign=false){const s=st(u),cfg=SETUP[u.id];const feats=
   s.file={name:`${u.id.replace(/-/g,"_")}_${campaign?"with_control":s.mode==="train"?"history":"this_week"}.csv`,size:"Sample dataset",rows:s.mode==="train"?u.data.kp[0][1]:upScore?HOLDOUT.eligible:"12,480",sample:true};
   s.pk=idc;s.target=s.mode==="train"?cfg.target:"";s.preview=null;s.adv.timeCol="snapshot_date";
   s.treatment=campaign?detectTreatment(s.cols):"";s.targeted=false;s.ack=false;s.upRows=null;
+  /* a new file re-detects its problem type, as an upload does: a manual Uplift must not outlive the treatment column */
+  s.ptype="";
 }
 function sampleTargeted(u){const s=st(u);sampleFile(u,true);s.targeted=true;s.ack=false;
   s.file.name=`${u.id.replace(/-/g,"_")}_targeted.csv`;}
@@ -1861,14 +1904,19 @@ function flowBlocks(u,run){
   return items.map(([slug,lab,val,meta],i)=>`${i?'<div class="arrow" aria-hidden="true">→</div>':""}<a class="block" href="#/uc/${u.id}/${slug}"><div><div class="lab"><span>${String(i+1).padStart(2,"0")}&nbsp;&nbsp;${lab}</span><span class="bstate">✓ Done</span></div><div class="val">${esc(val)}</div><div class="meta">${esc(meta)}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`).join("");
 }
 function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
-  if(s.mode==="train"&&isUplift(u)){const nr=s.targeted,ci=auucCI(),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
-    return [["Checking the treatment",nr?`6 checks · TREATMENT_NOT_RANDOM acknowledged: AUC ${E.targetedAuc.toFixed(2)} > ${D.randomAucMax.toFixed(2)}`:`6 checks passed · random assignment: AUC ${E.randomAuc.toFixed(2)} ≤ ${D.randomAucMax.toFixed(2)}`],
+  if(s.mode==="train"&&isUplift(u)){const nr=s.targeted,ci=auucCI(a.upTest),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
+    /* Only the sample campaign files carry a measured randomness AUC; an upload reports what the page ran. */
+    const checks=upliftChecks(u)||[],passed=checks.filter(c=>c.state==="pass").length,notRun=checks.filter(c=>c.state==="skip").map(c=>c.code);
+    const checked=s.file&&s.file.sample?(nr?`6 checks · TREATMENT_NOT_RANDOM acknowledged: AUC ${E.targetedAuc.toFixed(2)} > ${D.randomAucMax.toFixed(2)}`:`6 checks passed · random assignment: AUC ${E.randomAuc.toFixed(2)} ≤ ${D.randomAucMax.toFixed(2)}`)
+      :checks.length?`${passed} of 6 checks passed${notRun.length?` · not run in the prototype: ${notRun.join(", ")}`:""}`
+      :"The 6 checks run on the whole file in the engine; the prototype read only its first 256 KB, so none is shown";
+    return [["Checking the treatment",checked],
       ["Preparing features",`${E.features} features · ${a.upTest}% hold-out, stratified on treatment and outcome`],
       [`Training the ${a.upLearner.split(" (")[0]}`,`${a.upBase} · a model per arm, then the effect models`],
       [`Measuring uplift on the hold-out (${a.upBoot} resamples)`,`AUUC ${f4(ci.value)} (95% CI ${f4(ci.ci_low)} to ${f4(ci.ci_high)})`],
       ["Segmenting and saving",`4 segments · ${nr?"not promoted: not causal":s.runs.some(r=>r.upChampion)?"not promoted: no better than the uplift champion":"set as uplift champion"}`]];}
   const upBase=s.mode==="score"&&!cfg.gen?s.runs.find(r=>r.id===s.scoreRun):null;
-  if(upBase&&upBase.ptype==="Uplift"){const pol=upliftPolicy({mode:"score",adv:a,causal:upBase.causal});
+  if(upBase&&upBase.ptype==="Uplift"){const pol=upliftPolicy({mode:"score",adv:a,causal:upBase.causal,upTest:holdoutPct(upBase)});
     return [["Validating columns","All expected features present"],["Loading uplift model",upBase.best],["Scoring rows",`${s.file.rows} rows · uplift, P(treated), P(control)`],
       ["Segmenting and choosing who to contact",`Recommended to contact: ${fmtI(pol.n)} · ${HOLDOUT.control} held out as control`]];}
   if(s.mode==="train") return cfg.gen
@@ -1916,7 +1964,7 @@ function bindDetail(u){
     if(!s.treatment)s.ack=false;rerender(u);});
   on("f-ack","change",e=>{s.ack=e.target.checked;rerender(u);});
   document.querySelectorAll("[data-up-num]").forEach(el=>el.addEventListener("change",()=>{
-    const k=el.dataset.upNum;s.adv[k]=el.value===""?null:+el.value;rerender(u);}));
+    const k=el.dataset.upNum;s.adv[k]=upNumValue(k,el.value,+el.min,+el.max);rerender(u);}));
   on("f-file","change",e=>{const f=e.target.files[0];if(!f)return;
     s.file={name:f.name,size:fmtSize(f.size),rows:"—",sample:false};s.cols=[];s.preview=null;s.target="";s.pk="";s.ptype="";s.treatment="";s.targeted=false;s.ack=false;s.upRows=null;
     if(/\.csv$/i.test(f.name)){
@@ -2054,9 +2102,9 @@ function bindDetail(u){
       const base=s.mode==="score"?s.runs.find(r=>r.id===s.scoreRun)||s.runs[0]:null;
       const upTrain=s.mode==="train"&&isUplift(u),learner=(s.adv.upLearner||"").split(" (")[0];
       const run={id:"r"+(s.runs.length+1),at:nowStamp(),mode:s.mode,file:s.file.name,rows:s.file.rows,pk:s.pk,ptype:s.mode==="train"?(s.ptype||detectType(u)||"").split(" (")[0]:(base.ptype||""),model:s.mode==="train"?(upTrain?learner:s.model):base.model,
-        best:s.mode==="train"?(upTrain?`${learner} · ${s.adv.upBase}`:s.model===AUTO?cfg.best:s.model):base.best,score:s.mode==="train"?(upTrain?`AUUC ${f4(auucOf())}`:cfg.score):base.score,target:s.mode==="train"?s.target:base.target,champion:s.mode==="train"&&!upTrain,beat:false,lineage:!!s.builtFrom,
+        best:s.mode==="train"?(upTrain?`${learner} · ${s.adv.upBase}`:s.model===AUTO?cfg.best:s.model):base.best,score:s.mode==="train"?(upTrain?`AUUC ${f4(auucOf(holdoutDeciles(s.adv.upTest)))}`:cfg.score):base.score,target:s.mode==="train"?s.target:base.target,champion:s.mode==="train"&&!upTrain,beat:false,lineage:!!s.builtFrom,
         date:isoDay(today()),adv:{...s.adv},causal:s.mode==="train"?!(upTrain&&s.targeted):base.causal!==false,from:base?base.id:null,
-        learner:upTrain?learner:base&&base.learner,baseModel:upTrain?s.adv.upBase:base&&base.baseModel,treatment:upTrain?s.treatment:""};
+        learner:upTrain?learner:base&&base.learner,baseModel:upTrain?s.adv.upBase:base&&base.baseModel,treatment:upTrain?s.treatment:"",upTest:upTrain?s.adv.upTest:base&&base.upTest!=null?base.upTest:null,n:rowCount(s)};
       if(upTrain)run.upChampion=run.causal&&!s.runs.some(r=>r.upChampion);
       if(run.champion){run.beat=s.runs.some(r=>r.champion);s.runs.forEach(r=>r.champion=false);}
       s.runs.push(run); s.current=run; if(run.mode==="train")s.scoreRun=run.id;

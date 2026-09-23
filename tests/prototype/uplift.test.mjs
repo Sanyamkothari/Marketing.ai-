@@ -542,3 +542,161 @@ test("Campaign results: an uploaded outcomes file is not measured with the sampl
   click(dom, "#cr-sample");
   assert.equal(kpiMap(dom).Lift, "+3.48 pts");
 });
+
+/* ---------- Review round 2 ---------- */
+
+/** A win-back upload with a random-looking treatment: 1,200 rows per arm, 20% converted in each. */
+function campaignCsv(rows) {
+  const out = ["customer_id,months_since_churn,treatment,reactivated_90d"];
+  for (let i = 0; i < rows; i++) out.push(`C${i},${i % 12},${i % 2},${i % 20 < 4 ? 1 : 0}`);
+  return out.join("\n") + "\n";
+}
+
+test("Campaign results for a Phase 1 scoring run counts that run's customers, not the seed list's", async () => {
+  const dom = winback();
+  click(dom, "#f-sample");
+  submit(dom);
+  await wait(1300);
+  click(dom, "#f-again");
+  click(dom, '.seg button[data-mode="score"]');
+  click(dom, "#f-sample");
+  submit(dom);
+  await wait(1100);
+  assert.match($(dom, ".summary").textContent, /12,480 rows scored/);
+  click(dom, "#f-campaign");
+  go(dom, `#/uc/${WB}/campaign`);
+  click(dom, "#cr-sample");
+  // 12,480 rows: a 10% control group (1,248), the sample's suppressed share (1,592), the rest sent (9,640)
+  const m = $(dom, "[data-up-summary]").textContent.match(/for any of the (\d+) treated and control customers\.$/);
+  assert.ok(m, "the engine's IMMATURE sentence");
+  assert.equal(Number(m[1]), 10888);
+  assert.ok(Number(m[1]) <= 12480, "never more customers than the run scored");
+  const rep = JSON.parse(ev(dom, `JSON.stringify(campaignReport(STATE['${WB}'].current,{},today()))`));
+  assert.equal(rep.rows_immature, 9640 + 1248);
+  assert.equal(rep.rows_suppressed_or_untreated, 1592);
+  // the seeded 1 May run is 14,500 rows and keeps its own counts
+  set(dom, "#cr-run", "r0501");
+  set(dom, "#cr-window", "180");
+  assert.match($(dom, "[data-up-summary]").textContent, /for any of the 12650 treated and control customers\.$/);
+  // a row count the page only estimated is not counted
+  assert.equal(ev(dom, "campaignArms({rows:'~120K',mode:'score',ptype:''})"), null);
+});
+
+test("the plain sample after the campaign file with treatment None is Phase 1 again, runnable", () => {
+  const dom = winback();
+  click(dom, "#f-samplecampaign");
+  set(dom, "#f-treat", "");
+  assert.equal($(dom, ".reason").textContent, "Choose the treatment column");
+  click(dom, "#f-sample");
+  assert.equal($(dom, ".ptype .pill").textContent, "Classification (yes / no)");
+  assert.doesNotMatch($(dom, ".ptype").textContent, /set manually/);
+  assert.equal($(dom, "#f-treat"), null);
+  assert.equal($(dom, ".reason").textContent, "");
+  assert.equal($(dom, "#f-run").disabled, false);
+  assert.ok($(dom, "#f-model"), "the Phase 1 model step");
+});
+
+test("an uploaded file's uplift run reports the checks it got, not the sample's randomness AUC", async () => {
+  const dom = winback();
+  await upload(dom, "#f-file", "offers.csv", campaignCsv(2400));
+  assert.equal($(dom, ".ptype .pill").textContent, PTYPE);
+  assert.equal($(dom, "#f-run").disabled, false);
+  const step = () => ev(dom, `runSteps(UC.find(u=>u.id==='${WB}'))[0][1]`);
+  assert.equal(step(), "3 of 6 checks passed · not run in the prototype: TREATMENT_NOT_RANDOM, " +
+    "OUTCOME_WINDOW_IMMATURE, FEATURE_AFTER_TREATMENT");
+  assert.doesNotMatch(step(), /AUC|^6 checks passed/);
+  // a file too big to read in the page: no check is claimed at all
+  await upload(dom, "#f-file", "big.csv", campaignCsv(25000));
+  assert.match(ev(dom, `STATE['${WB}'].file.rows`), /^~/);
+  assert.equal(ev(dom, `upliftChecks(UC.find(u=>u.id==='${WB}'))`), null);
+  assert.equal(step(), "The 6 checks run on the whole file in the engine; the prototype read only its first 256 KB, so none is shown");
+  // the sample campaign files keep their measured AUC
+  click(dom, "#f-samplecampaign");
+  assert.equal(step(), "6 checks passed · random assignment: AUC 0.52 ≤ 0.60");
+});
+
+test("the hold-out share in stage 5 sizes the hold-out Model and Output report", async () => {
+  const dom = winback();
+  click(dom, "#f-samplecampaign");
+  set(dom, '[data-up-num="upTest"]', "50");
+  assert.match($$(dom, ".stage-d .ss")[4].textContent, /50% hold-out/);
+  submit(dom);
+  await wait(1300);
+  const run = JSON.parse(ev(dom, `JSON.stringify(STATE['${WB}'].current)`));
+  assert.equal(run.upTest, 50);
+  assert.equal(run.score, "AUUC 0.0125", "the rates are the sample's; only the hold-out grows");
+  go(dom, `#/uc/${WB}/model`);
+  // 320K × 0.50
+  assert.equal(kv(dom, "Hold-out"), "160,000 rows · 144,000 treated · 16,000 control");
+  assert.match($(dom, ".qini").closest("section").querySelector(".caption").textContent, /Measured on the 160,000-customer hold-out/);
+  assert.deepEqual($$(dom, ".dbars ~ .tbl-wrap tbody tr").map((r) => r.children[1].textContent), Array(10).fill("16,000"));
+  // a bigger hold-out, a narrower interval than the 30% one (0.0098 to 0.0151)
+  const [lo, hi] = $(dom, "#up-auuc .civ small").textContent.match(/-?\d\.\d{4}/g).map(Number);
+  assert.ok(lo > 0.0098 && hi < 0.0151, `interval ${lo} to ${hi}`);
+  go(dom, `#/uc/${WB}/output`);
+  assert.match($(dom, "[data-up-computed]").textContent, /Computed on the 160,000-customer hold-out of the training run/);
+  assert.equal(kpiMap(dom).Persuadables, "96,000");
+  assert.doesNotMatch(body(dom), /96,000-customer/);
+  // the run keeps its hold-out: a later change to the setting does not rewrite it
+  go(dom, `#/uc/${WB}`);
+  ev(dom, `STATE['${WB}'].adv.upTest=20`);
+  go(dom, `#/uc/${WB}/model`);
+  assert.equal(kv(dom, "Hold-out"), "160,000 rows · 144,000 treated · 16,000 control");
+});
+
+test("an emptied uplift setting the config cannot leave empty goes back to its default", async () => {
+  const dom = winback();
+  click(dom, "#f-samplecampaign");
+  for (const k of ["upBoot", "upTest", "upPers", "upSleep"]) set(dom, `[data-up-num="${k}"]`, "");
+  const val = (k) => $(dom, `[data-up-num="${k}"]`).value;
+  assert.deepEqual(["upBoot", "upTest", "upPers", "upSleep"].map(val), ["200", "30", "0.02", "-0.01"]);
+  assert.equal($(dom, '[data-up-num="upBoot"]').placeholder, "200", "the placeholder is the default, not —");
+  assert.equal($(dom, '[data-up-num="upBudget"]').placeholder, "—", "a nullable setting may be empty");
+  const summ = $$(dom, ".stage-d .ss").map((e) => e.textContent);
+  assert.match(summ[4], /AUUC · 200 bootstrap resamples · 30% hold-out/);
+  assert.match(summ[5], /^Persuadable ≥ 0\.02 · sleeping dog ≤ -0\.01 ·/);
+  assert.doesNotMatch(summ.join(" "), /null/);
+  // outside the config's range is brought inside it
+  set(dom, '[data-up-num="upTest"]', "90");
+  assert.equal(val("upTest"), "50");
+  set(dom, '[data-up-num="upBoot"]', "2");
+  assert.equal(val("upBoot"), "10");
+  set(dom, '[data-up-num="upTest"]', "");
+  set(dom, '[data-up-num="upBoot"]', "");
+  assert.equal($$(dom, ".progress .pt").length, 0);
+  submit(dom);
+  assert.equal($$(dom, ".progress .pt")[3].textContent, "Measuring uplift on the hold-out (200 resamples)");
+  await wait(1300);
+  go(dom, `#/uc/${WB}/model`);
+  assert.equal(kv(dom, "Bootstrap resamples"), "200");
+  go(dom, `#/uc/${WB}/output`);
+  assert.match($(dom, "[data-up-computed]").textContent, /Persuadable at predicted uplift ≥ 0\.02;/);
+  assert.equal(kpiMap(dom).Persuadables, "57,600");
+});
+
+test("an uploaded file's checks panel lists all six checks, TREATMENT_NOT_BINARY passing", async () => {
+  const dom = winback();
+  await upload(dom, "#f-file", "tiny.csv",
+    "customer_id,months_since_churn,treatment,reactivated_90d\nC1,2,1,0\nC2,5,0,1\n");
+  const checks = $$(dom, ".upchecks .checks li");
+  assert.deepEqual(checks.map((li) => li.dataset.upCheck), ["TREATMENT_COLUMN_MISSING", "TREATMENT_NOT_BINARY",
+    "TREATMENT_ARM_TOO_SMALL", "TREATMENT_NOT_RANDOM", "OUTCOME_WINDOW_IMMATURE", "FEATURE_AFTER_TREATMENT"]);
+  const nb = $(dom, '[data-up-check="TREATMENT_NOT_BINARY"]');
+  assert.equal(nb.className, "", "a pass, neither bad nor skipped");
+  assert.equal(nb.querySelector("span:last-child").textContent, "Every treatment value is 0 or 1.");
+});
+
+test("a run's stamp spells the month as every other date does ('Sep', never 'Sept')", async () => {
+  const dom = winback();
+  await trainUplift(dom);
+  await scoreUplift(dom);
+  const at = ev(dom, `STATE['${WB}'].current.at`);
+  assert.doesNotMatch(at, /Sept/);
+  assert.match(at, /^\d{1,2} [A-Z][a-z]{2} \d{4}, \d{2}:\d{2}$/, "the seeded stamps' form: 14 Sep 2026, 10:20");
+  assert.match(at, /Sep 2026/);
+  assert.doesNotMatch(body(dom), /Sept/);
+  go(dom, `#/uc/${WB}/campaign`);
+  assert.match($(dom, "#cr-run").selectedOptions[0].textContent, /Sep 2026/);
+  assert.match($(dom, ".cw2").textContent, /^Sent 23 Sep 2026\./);
+  assert.doesNotMatch(body(dom), /Sept/);
+});
