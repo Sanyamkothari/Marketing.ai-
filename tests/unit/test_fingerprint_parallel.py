@@ -64,10 +64,10 @@ def test_the_pool_gives_the_in_process_fingerprint_byte_for_byte(monkeypatch: py
 
 
 def test_a_failed_worker_costs_time_and_never_changes_the_fingerprint(
-    monkeypatch: pytest.MonkeyPatch, in_process: None
+    monkeypatch: pytest.MonkeyPatch, in_process: None, caplog: pytest.LogCaptureFixture
 ) -> None:
-    """A pool whose every future fails: each chunk falls back to the in-process render, and the pool
-    is retired so no later chunk is sent to it."""
+    """A pool whose every future fails: each chunk falls back to the in-process render, the pool is
+    retired so no later chunk is sent to it, and the failure is logged once, not once per chunk."""
     frame = _mixed_frame()
     expected = _fingerprint(frame)
 
@@ -82,13 +82,22 @@ def test_a_failed_worker_costs_time_and_never_changes_the_fingerprint(
 
     broken = BrokenPool()
     retired: list[bool] = []
+
+    def retire() -> None:
+        retired.append(True)
+        monkeypatch.setattr(ingest, "_pool_disabled", True)
+
+    monkeypatch.setattr(ingest, "_pool_disabled", False)
     monkeypatch.setattr(ingest, "_render_pool", lambda: None if retired else broken)
-    monkeypatch.setattr(ingest, "_disable_render_pool", lambda: retired.append(True))
+    monkeypatch.setattr(ingest, "_disable_render_pool", retire)
     monkeypatch.setattr(ingest, "_render_workers", lambda: 3)
 
-    assert _fingerprint(frame) == expected
+    with caplog.at_level("WARNING"):
+        assert _fingerprint(frame) == expected
     assert retired, "a failed worker must retire the pool"
-    assert BrokenPool.submitted >= 1
+    assert BrokenPool.submitted >= 2, "the test needs several chunks in flight when the pool fails"
+    warnings = [r for r in caplog.records if "render worker failed" in r.getMessage()]
+    assert len(warnings) == 1, [r.getMessage() for r in warnings]
 
 
 def test_one_core_never_starts_a_pool(monkeypatch: pytest.MonkeyPatch) -> None:

@@ -768,7 +768,10 @@ class _ContentDigest:
         try:
             rendered = future.result()
         except Exception as exc:  # any worker failure falls back to the in-process render
-            _LOG.warning("fingerprint: a render worker failed (%s); rendering in-process", type(exc).__name__)
+            if not _pool_disabled:  # once: every chunk still in flight fails the same way
+                _LOG.warning(
+                    "fingerprint: a render worker failed (%s); rendering in-process", type(exc).__name__
+                )
             _disable_render_pool()
             rendered = canonical_chunk_bytes(chunk)
         self._content.update(rendered)

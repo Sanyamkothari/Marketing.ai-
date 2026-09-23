@@ -576,28 +576,26 @@ one-row-per-entity dataset Phase 1 already knows how to train and score on.
 #### Build performance, measured
 
 `scripts/bench_onboarding.py` generates the raw tables and times a real `build_dataset` — no stage
-stubbed, every onboarding and Phase 1 check run, `dataset.parquet` on disk at the end. One run at
-the plan's own target, on **4 CPUs · 15.7 GiB RAM · Python 3.11.15 · Linux** (a container, not a
-laptop):
+stubbed, every onboarding and Phase 1 check run, `dataset.parquet` on disk at the end. At the plan's
+own target, on **4 CPUs · 15.7 GiB RAM · Python 3.11.15 · Linux** (a container, not a laptop), three
+builds of the same tables, back to back:
 
 | | |
 |---|---|
-| Input | 200,000 customers · 5,000,000 usage rows · 6 CSVs · 1,377 MB |
+| Input | 200,000 customers · 5,000,000 usage rows · 6 CSVs · 1,377 MB (37.7M event rows) |
 | Output | 2,400,000 rows · 200,000 entities · 12 snapshots · 60 features (3 dropped, all-null) |
-| Build | **828.9 s** · peak RSS 10,975 MB · `passed=True`, 0 blocking checks |
+| Before Plan A M37 | 763.5 s · peak RSS 10,863 MB (the M14 run, on other tables: 828.9 s) |
+| After M37 | **275.9 s** · peak RSS 8,300 MB, plus about 1,000 MB in three render workers |
 | Target | the same shape in under 300 s |
-| Verdict | **not met** — correct at this size, about 2.8× slower than the plan asks |
+| Verdict | **met** — 2.8× faster, the same dataset (identical cells; floats within 4 × 10⁻¹⁶) |
 
-Where the time goes: `write` 386 s, `apply_mappings` 209 s, `validate` 112 s, all five feature
-queries together 81 s. The DuckDB aggregation the plan worried about is the cheapest part of the
-build; parquet writing and the per-source cast-and-rename pass are the expensive ones, and neither
-is something the plan anticipated. Nothing here has been optimised — the target is missed by a
-factor small enough that the two obvious fixes (writing the frame in row-group chunks, and casting
-in DuckDB rather than pandas) plausibly close it, but neither has been tried and neither should be
-assumed.
-
-Smaller runs, same script: 5,000 customers · 120,000 usage rows builds in **26.1 s**; 400 customers
-· 6,000 usage rows in **4.8 s**.
+M37 profiled first (`docs/PERFORMANCE.md`). The plan expected Parquet writing and column renaming
+to dominate; they did not (writing was under 1% of the build). The build did work twice: the dataset
+fingerprinted twice, every source read and fingerprinted twice, and the leak probe re-ran a full
+aggregation. Removing that brought it to 369.1 s (DEC-096, DEC-097). The rest was the fingerprint
+canonicaliser rendering every cell on one core, which now renders chunks in worker processes and
+hashes them in order, so every fingerprint is byte-identical (DEC-097's addendum). The before/after
+pairs at one tenth of the size, and the profiles, are in `docs/PERFORMANCE.md` §1–§5.
 
 Two defects were found by running this and could not have been found any other way. The build was
 reading only the first 2,000,000 rows of each source, having inherited the *profiling* row cap; and
@@ -653,7 +651,7 @@ what building them found is DEC-090…099.
 | M34 | Two-column keys through every stage | A periodic dataset trains and scores on `(entity_key, snapshot_date)`; no entity in two splits; control and suppression per entity; `scores.csv` round-trips the client's ids | **done** — DEC-083 |
 | M35 | Onboarding wired into Setup | Setup step 1 builds from raw tables; client picker; "Use this dataset"; next month's tables replayed through the saved recipe; lineage on the Data page; the browser journey | **done** — DEC-090, DEC-091 |
 | M36 | Engine issues the library found | One PII detector; odd column names; `threshold.mode: auto` under a flagged-rate ceiling; free-text PII | **done** — DEC-092…095 |
-| M37 | Dataset build speed | 200k customers, 5M events, 12 snapshots, 60 features in ≤ 300 s; profile recorded | **built** — the build does its work once (DEC-096, DEC-097); 86.0 s → 52.9 s at one tenth of the target size; the full-size timing is not yet measured (`docs/PERFORMANCE.md` §6) |
+| M37 | Dataset build speed | 200k customers, 5M events, 12 snapshots, 60 features in ≤ 300 s; profile recorded | **done** — 275.9 s at the target size, from 763.5 s on the same tables and machine; DEC-096, DEC-097 |
 | M38 | Configuration and settings cleanup | Several industries; inactive settings "Coming later"; the `train.py` line; one fake LLM client, one check type | **done** — DEC-098 |
 | M39 | Docs, CI and housekeeping | README current; plans under `docs/plans/`; nightly on `main`; the library job; the README check | **done** — DEC-099; the nightly waits on the default-branch switch above |
 

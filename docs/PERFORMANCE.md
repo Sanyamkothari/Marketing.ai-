@@ -158,7 +158,7 @@ report, `sample.json` and `features.sql` are unchanged (§4).
   gives byte-identical output. On a 100,000 × 64 dataset-shaped chunk it was 5–25 % faster, which
   was measured and is within the noise of this machine. The canonicaliser defines the identity of
   every Phase 1 upload and every dataset, and a small uncertain gain did not justify changing it.
-  A bigger gain would come from rendering chunks in parallel processes, which is an open item.
+  A bigger gain would come from rendering chunks in parallel processes; that was done afterwards, keeping every fingerprint byte-identical, and measured in §6.
 
 ## 4. Results at one tenth of the target size
 
@@ -219,23 +219,52 @@ Most of the remaining time is Phase 1 work that the build reuses: fingerprinting
 every source and of the dataset rendered as text), profiling and type inference. DuckDB aggregation
 is a small part of it.
 
-## 6. The target size: not measured here
+## 6. The target size, measured
 
-**No full-size number is recorded, and the 300 s target is neither met nor missed in this
-document.** The 828.9 s from M14 is the old code on an idle machine. Some things can be said
-without measuring it:
+Three builds of the **same tables**, back to back on one idle machine: 4 CPUs · 15.7 GiB RAM ·
+Python 3.11.15 · Linux, a container rather than the laptop the plan names. The tables are the
+plan's target shape, generated once with `scripts/bench_onboarding.py --customers 200000
+--usage-rows 5000000 --workspace <dir>` and reused by every run: 6 CSVs, 1,376.8 MB, 37.7 million
+event rows (activity 18.7M, bills 5.0M, usage 5.0M, payments 4.8M, complaints 3.0M). Each build
+produces 2,400,000 rows: 200,000 entities × 12 snapshots, 60 features (3 dropped as all-null).
 
-* Everything removed at one tenth of the size grows with the data at full size. That is the
-  second fingerprint of a 2.4-million-row dataset, the second parse and fingerprint of every
-  source (1.4 GB of CSV), and the leak probe's second full aggregation over 5 million usage rows.
-* Some of what remains is bounded by the profiling row cap (2,000,000 rows) and grows less than
-  linearly: the source profiles and their type inference. The source reads and fingerprints and
-  the dataset fingerprint grow linearly and will be most of the build at full size.
+| Code | Build (`build_dataset`) | `apply_mappings` | `validate` | `write` | Peak RSS |
+|---|---:|---:|---:|---:|---:|
+| Before M37 (`main` @ `d37fc72`) | 763.5 s | 201.5 s | 93.9 s | 371.6 s | 10,863 MB |
+| M37 (§2) | 369.1 s | 156.3 s | 17.8 s | 116.9 s | 8,312 MB |
+| M37 + parallel rendering (below) | **275.9 s** | 113.1 s | 18.3 s | 63.7 s | 8,300 MB + ~1,000 MB in 3 workers |
 
-Whether that brings 828.9 s under 300 s depends on how these parts scale on the laptop-class
-machine the plan names, and that has to be measured, not extrapolated. If the full-size run is
-still over the target, the next step is the fingerprint canonicaliser (§3). It is Phase 1 code
-and defines the identity of every upload, so the next change there needs its own decision.
+**The target (≤ 300 s) is met: 275.9 s, 2.8 times faster than before M37.** The feature queries
+(59–62 s in all three runs), snapshots, labels and assembly are unchanged.
+
+* **The "before" run** used the pre-M37 code with this document's benchmark harness (the same
+  `build_dataset` calls; the old script cannot reuse a workspace). A 9-second test run shared the
+  machine during it, so its time is a few seconds high, not low. The M14 figure of 828.9 s was the
+  same code on different, freshly generated tables.
+* **Parallel rendering** is the fix §3 left open. `canonical_chunk_bytes` renders each 100,000-row
+  chunk to CSV text on one core, and at this size that is about 40 million source rows and the
+  2.4-million-row dataset. `_ContentDigest` now renders chunks in a spawned process pool (every core
+  but one) and feeds the bytes to its one sha256 in arrival order, so the bytes hashed are the same
+  bytes in the same order: every fingerprint is identical by construction. On this dataset,
+  fingerprinting took 114.4 s in-process and 56.0 s with the pool.
+* **The fingerprint was checked at full size**: the fingerprint the parallel build recorded
+  (`sha256:v1:f79d0551…`) equals the in-process fingerprint of the same `dataset.parquet`.
+* **The dataset did not change.** Each run's `dataset.parquet` has the same 66 columns, in the
+  same order, with the same types; every non-float value is identical and the largest float
+  difference is 3.8 × 10⁻¹⁶ relative, the last bit of DuckDB's parallel summation (DEC-109). That
+  is why the three fingerprints differ from each other.
+* **Peak RSS** is the build process's high-water mark (`ru_maxrss`), as before. The render workers
+  are separate processes: sampled every 0.2 s while fingerprinting this dataset, each peaked at
+  about 330 MB, 996 MB together. The build's real peak is therefore about 9.3 GB, still below the
+  10.9 GB before M37.
+* **Where a pool is not started.** A digest reaches for the pool only at its second chunk, so a file
+  under 100,000 rows never starts it. A machine with fewer than three cores never starts it. A
+  pool that cannot start, or a worker that fails (for example, a parent whose main module a
+  spawned child cannot import, such as a script piped in on stdin), falls back to in-process
+  rendering with one warning: slower, never different.
+
+What remains on this path is still Phase 1's fingerprint and type inference, now spread over the
+cores, and the source reads: `apply_mappings` is 113.1 s of 275.9 s.
 
 ## 7. Correctness gates run for M37
 
@@ -249,4 +278,6 @@ and checks that the probe's control entities catch a cross-entity leak that the 
 alone miss, and that a `derive` feature over an event table is reported as a leak (it once raised
 `IndexError` instead). `test_onboarding_flow.py` builds that `derive` recipe end to end and
 checks the build fails with FUTURE_EVENTS_LEAKED and writes no dataset. `tests/integration/test_onboarding_build_reads.py` fails if a build reads any source
-twice.
+twice. `tests/unit/test_fingerprint_parallel.py` holds the parallel rendering of §6 to equality with the
+in-process fingerprint: on a mixed-type frame of five chunks, with a pool whose workers fail, on
+one core, and for a single chunk.

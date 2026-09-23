@@ -166,7 +166,11 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/test_column_names.py",
         "tests/unit/test_threshold_auto.py",
     ),
-    "M37": ("tests/unit/onboarding/test_build_speed.py", "tests/integration/test_onboarding_build_reads.py"),
+    "M37": (
+        "tests/unit/onboarding/test_build_speed.py",
+        "tests/integration/test_onboarding_build_reads.py",
+        "tests/unit/test_fingerprint_parallel.py",
+    ),
     "M38": (
         "tests/unit/test_inactive_settings.py",
         "tests/integration/test_inactive_settings_ui.py",
