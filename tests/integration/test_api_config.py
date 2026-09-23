@@ -278,6 +278,22 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         # Phase 3a: which AWS identity Bedrock is called as - chosen by name, never a key
         "/connection/aws",
         "/connection/aws/test",
+        # Phase 2: clients, their raw sources, mappings, and the datasets built from them
+        "/clients",
+        "/clients/{client_id}",
+        "/use-cases/{use_case_id}/standard-schema",
+        "/clients/{client_id}/sources",
+        "/clients/{client_id}/sources/{source_id}",
+        "/clients/{client_id}/mappings",
+        "/clients/{client_id}/mappings/suggest",
+        "/clients/{client_id}/mappings/{mapping_id}",
+        "/clients/{client_id}/onboarding-specs",
+        "/clients/{client_id}/onboarding-specs/{spec_id}/preview",
+        "/datasets",
+        "/datasets/{dataset_id}",
+        "/datasets/{dataset_id}/features.sql",
+        "/datasets/{dataset_id}/report",
+        "/datasets/{dataset_id}/sample",
     }
 
 

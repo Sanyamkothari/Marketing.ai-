@@ -38,3 +38,52 @@ template:
     - {name: marketing_opt_in,  role: consent,     type: boolean, description: "Customer agreed to marketing contact. Rows that are false are suppressed.", examples: ["true","true","false","true","true"]}
     - {name: last_contacted_at, role: contact,     type: date,    description: "Date of the last marketing contact (blank if never)",                 examples: ["2026-07-20","2026-06-02","","2026-07-29","2026-05-14"]}
     - {name: converted_30d,     role: target,      type: integer, description: "Target: 1 if the customer purchased within 30 days of ad exposure, else 0. Leave blank when scoring.", examples: ["1","0","0","1","0"]}
+
+# --- Phase 2: onboarding from raw tables ---------------------------------------------------------
+
+standard_schema:
+  entity_key: customer_id
+  columns:
+    - name: tenure_months
+      type: numeric
+      aliases: [tenure, tnr_mnths, months_active, customer_age_months, tenure_mths, vintage_months]
+      description: Months since the customer signed up, as of the snapshot date.
+      range: [0, 600]
+      derivable: {from_role: entity, expression: "months_between(signup_date, snapshot_date)"}
+    - name: signup_date
+      type: date
+      aliases: [signup_dt, start_date, activation_date, joined_on, acct_open_dt]
+      description: When the customer joined. Used to derive tenure and to exclude pre-signup snapshots.
+    - name: plan_tier
+      type: categorical
+      aliases: [tier, plan, segment, plan_tier_cd, value_band]
+      description: The value tier the customer sits in.
+    - name: region
+      type: categorical
+      aliases: [circle, zone, state, geo, area]
+      description: Where the customer is, as the client's own geography names it.
+    - name: marketing_opt_in
+      type: boolean
+      aliases: [opt_in, consent, marketing_consent, dnd_flag, do_not_disturb, dnd]
+      description: The customer agreed to marketing contact. A DND-style flag means the opposite and is mapped with negate.
+      value_aliases: {"true": ["y", "yes", "1", "t", "allowed", "opted_in"], "false": ["n", "no", "0", "f", "blocked", "opted_out"]}
+    - name: last_contacted_at
+      type: date
+      aliases: [last_contact_dt, last_contacted, last_touch_date, lst_cntct_dt]
+      description: Date of the last outbound contact, so recently-contacted rows can be suppressed.
+
+label:
+  name: converted_30d
+  type: event_presence
+  role: campaign_events
+  horizon_days: 30
+  where: {column: event_type, op: eq, value: converted}
+  description: The customer converted on a campaign within 30 days of the snapshot.
+
+suggested_features:
+  - {name: campaign_touches_90d,     role: campaign_events, function: count, window_days: 90, description: "Campaign messages sent in the last 90 days."}
+  - {name: conversions_365d,         role: campaign_events, function: count, window_days: 365, where: {column: event_type, op: eq, value: converted}, description: "Times the customer converted in the last year."}
+  - {name: days_since_last_touch,    role: campaign_events, function: days_since_last, description: "Days since the customer was last contacted by a campaign."}
+  - {name: avg_bill_6m,              role: bills,           function: mean,  column: amount, window_days: 180, description: "Average bill over six months; spend is the best proxy for headroom."}
+  - {name: usage_mb_30d,             role: usage,           function: sum,   column: data_mb, window_days: 30, description: "Data used in the last 30 days."}
+  - {name: days_since_last_activity, role: activity,        function: days_since_last, description: "Days since the customer last did anything."}

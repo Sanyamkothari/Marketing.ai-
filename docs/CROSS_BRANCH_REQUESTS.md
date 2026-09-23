@@ -295,6 +295,11 @@ problem type and time column - and the lineage test trains a run from the result
 differences between the built panel and the prototype are in `CHANGELOG-prototype.md` ("Revision
 3"); neither blocks anything. I edited no file the UI or API branches own.
 
+**Update 2026-09-23 (integration into `main`).** Item 3 is closed: `POST /runs` takes a
+`dataset_id`, `_reject_unimplemented_onboarding` is gone, and a dataset run goes through the same
+`engine/runs.py` job path as an upload (see the Resolved entry below). Items 1 and 2 - mounting the
+panel and letting step 2 read a built dataset - are still open and are Phase 2's M13.
+
 ### 2026-09-22 — audit → phase-3a-generative: four defects fixed in files §3 assigns to you
 
 **What is needed.** An owner's review of four changes made inside `engine/generative/**`, which
@@ -329,6 +334,60 @@ wrong, revert it and say so here — I would rather be reverted than have you in
 disagree with. The one judgement call worth your attention is (3): refusing a name clash is a
 behaviour change for a knowledge base that has one, and the alternative (a wider `doc_id`) trades
 that for breaking every existing index.
+
+### 2026-09-22 — phase-2-onboarding → human reviewer: PII inside free text is not detected
+
+**What is needed.** A decision, not a patch. `engine.stages.ingest.detect_pii` and
+`engine.stages.prepare._detect_pii` both match a WHOLE CELL (`pattern.fullmatch(value)`), so a phone
+number or an email that is the entire value is caught and one buried in a sentence is not. Measured
+on a synthetic complaints table: the shipped email pattern is found by `.search` in 363 of 1,105
+free-text rows and the phone pattern in 400, and `detect_pii` returns `()` for the column.
+
+That is defensible for the columns Phase 1 sees - a `phone` column holds phone numbers - and it is
+exactly wrong for the free-text column Phase 2 introduces, because `complaints.text` is where
+customers type "call me back on 0400 123 456". Phase 3 will read that column to write summaries.
+
+Switching to `.search` is not a change this branch should make alone: `min_value_match_rate` and
+`min_distinct_ratio` are calibrated for whole-cell matching, and loosening the match would start
+redacting columns that are not redacted today, in every existing use case, changing what Phase 1
+trains on.
+
+**What I did meanwhile.** Corrected the claim rather than the code. `configs/roles.yaml` used to
+promise that PII in `complaints.text` "is redacted at profiling time"; it now says the detectors
+match whole cells and that the column should be treated as unredacted free text.
+`tests/fixtures/raw/make_raw.py` plants contacts in the exact shapes the shipped patterns
+recognise, so whoever takes the decision has something to test against.
+
+### 2026-09-22 — phase-2-onboarding → phase-3a, phase-4a: four fields added to `UseCaseConfig`
+
+**What is needed.** Nothing from you; this is the announcement `PARALLEL_WORK_PROTOCOL.md` §3
+requires the day a pre-approved shared-file change lands. `engine/config.py`'s `UseCaseConfig` now
+declares `standard_schema`, `suggested_features`, `label` and `onboarding`, four lines above this
+branch's §4 block. They had to go there: `_Base` sets `extra="forbid"`, so a use-case YAML cannot
+carry the sections §3's ownership table assigns to Phase 2 until the model has fields for them, and
+the contracts-first task could not add them without the Phase 2 plan. All four are optional with
+defaults, so every existing config validates unchanged and no behaviour of yours can move. Their
+types live in the PHASE-2 block at the foot of the same file and are resolved by a
+`model_rebuild()` there.
+
+**What I did meanwhile.** Nothing is stubbed — the change is in. Everything else that would have
+needed room above the block went to `engine/onboarding/roles.py` instead (DEC-104), so this is the
+only such edit this branch makes to `engine/config.py`. If either of you would rather these four
+fields were moved into a reviewed change on `main`, say so and I will rebase onto it.
+
+### 2026-09-22 — phase-2-onboarding → human reviewer: unify `OnboardingCheck` with `ValidationCheck`
+
+**What is needed.** A reviewed change on `main` that lets `engine.contracts.ValidationCheck` accept
+the onboarding code table as well as the Phase 1 one — `_known_code` consulting a registry the
+phases add to, rather than `VALIDATION_CODES` alone. Phase 2 plan §7 gives the onboarding checks the
+same contract as the Phase 1 checks and then re-runs the full Phase 1 validation on the assembled
+dataset, appending its findings to the same list, so one type really does have to carry both.
+`_known_code` sits above this branch's §4 block, which §4 forbids me to edit.
+
+**What I did meanwhile.** `OnboardingCheck` in `engine/onboarding/specs.py`: same five fields plus
+`source_id`, its own code table, and `from_validation_check()` to carry a Phase 1 finding across
+unchanged (DEC-101). Nothing is lost while the request is open — the field contract is identical —
+but it is a duplicated field list, so it should not stay open indefinitely.
 
 ## Resolved
 
@@ -613,3 +672,43 @@ there. `Recipe` already carried `primary_key` and was widened in place. `RunReco
 `FeatureSchema` were widened too, though §2 lists neither: the same column name is serialised into
 both, and both live in an append-only file, so leaving them narrow would have stopped the key at the
 first artefact it reaches with no way for Phase 2 to fix it. See DEC-077.
+
+### 2026-09-22 — the Phase 2 half of "the three phase plans" (asked 2026-09-22)
+
+**Answer.** `MARKETING_AI_PHASE2_PLAN.md` is available to the `phase-2-onboarding` branch, and
+`engine/onboarding/specs.py` is now §8 of it realised: `SourceProfile`, `SourceSpec`, `ClientRecord`,
+`MappingSpec`, `FeatureSpec`, `LabelSpec`, `SnapshotSpec`, `OnboardingSpec`, `DatasetManifest`,
+`BuildReport` and `BuildStatus`, with the fields §8 lists. The module is no longer empty and the
+blocker it recorded is closed. The vocabulary those models are built from lives in the PHASE-2 block
+of `engine/config.py` rather than in `specs.py`, for the cycle reason recorded in DEC-100; `specs.py`
+re-exports all of it, so `from engine.onboarding.specs import ...` still gets the whole contract.
+
+The Phase 3a and Phase 4a halves of the original request are **still open** — those plans are not in
+the repository and nothing here supplies them.
+
+### 2026-09-23 — integration → every branch: `phase-2-onboarding` and the trunk are one tree on `main`
+
+**Answer.** `phase-2-onboarding` (`9a05d5f`) was merged into `claude/gracious-lovelace-c344tl`
+(`73526b1`, Phase 3a + 4a + library) with a merge commit, and the result is `main`. What had to be
+decided rather than merged:
+
+- **One run lifecycle.** Phase 4a had moved `create_run`, the job specs and the job builders into
+  `engine/runs.py` (DEC-327); Phase 2 had extended the old copies in `api/routes/runs.py`. The old
+  copies are gone. A built dataset now satisfies `UploadInfo` (`_DatasetSource`), and its provenance
+  travels as `DatasetLineage` into `create_run`, so a dataset run gets a job spec and can run on
+  SageMaker like any upload. `RunRecord.upload_id` is null for such a run and `dataset_id`,
+  `client_id` and `dataset_fingerprint` are set.
+- **Reading a run's rows back.** The win-back and root-cause modules re-read a run's upload after the
+  pipeline and assumed there always was one; they now ask `engine.onboarding.datasets.run_source_key`,
+  which answers the dataset frame for a dataset run. The Phase 4a run index stores the dataset id in
+  `upload_id` for such a run rather than needing a migration.
+- **Routers.** The PHASE-2 block of `api/main.py` mounts `clients`, `sources`, `mappings` and
+  `datasets`; no path collides with a trunk route.
+- **Documents.** `docs/DATA_CONTRACT.md` had two §8s: schema memory stays §8, generative is §9, raw
+  tables are §10 (citations updated). Decision numbers are now allocated by hundreds per workstream,
+  in the table in `PARALLEL_WORK_PROTOCOL.md` §4.
+
+**Still open after the merge**, each with its own entry above: the onboarding panel is not mounted
+(M13), `StageContext.primary_key` (composite keys are still refused with 501), the phase plans, and
+the library-datasets requests. The GitHub default branch is still `claude/gracious-noether-y0njma`,
+so `nightly.yml` is not scheduled until the repository owner points it at `main`.

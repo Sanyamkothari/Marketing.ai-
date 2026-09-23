@@ -80,6 +80,7 @@ __all__ = [
     "STAGE_NOT_IMPLEMENTED",
     "STATUS_FILENAME",
     "VALIDATION_FILENAME",
+    "DatasetLineage",
     "JobBody",
     "SpecUpload",
     "UploadInfo",
@@ -181,6 +182,23 @@ class SpecUpload:
     file_format: Literal["csv", "parquet"]
 
 
+@dataclass(frozen=True, slots=True)
+class DatasetLineage:
+    """What a run read from a built dataset carries that a run read from an upload does not.
+
+    Phase 2's dataset and Phase 4a's job path meet here. The bytes, the format and the display name
+    reach `create_run` through `UploadInfo` like any upload's do - a dataset differs from an upload
+    in provenance, not in what a run needs from it (DEC-107) - so the job spec, the thread runner and
+    the SageMaker container all run a dataset with no code of their own. This is the provenance:
+    which dataset, whose, and which exact build, so `run.json` can say so and `upload_id` can stay
+    honestly null.
+    """
+
+    dataset_id: str
+    client_id: str | None
+    fingerprint: str
+
+
 # ---------------------------------------------------------------------------
 # The run directory (design section 5.3)
 # ---------------------------------------------------------------------------
@@ -191,6 +209,7 @@ def create_run(
     resolved: ResolvedConfig,
     catalog: Catalog,
     upload: UploadInfo,
+    dataset: DatasetLineage | None = None,
     profile: DatasetProfile,
     report: ValidationReport,
     mode: RunMode,
@@ -223,7 +242,12 @@ def create_run(
         created_at=moment,
         started_at=None,
         finished_at=None,
-        upload_id=upload.upload_id,
+        # Exactly one of upload_id and dataset_id is set (RunRecord's own contract). For a dataset
+        # run, `upload` is the dataset seen through `UploadInfo`, so its id is not an upload's id.
+        upload_id=upload.upload_id if dataset is None else None,
+        dataset_id=dataset.dataset_id if dataset is not None else None,
+        client_id=dataset.client_id if dataset is not None else None,
+        dataset_fingerprint=dataset.fingerprint if dataset is not None else None,
         file_name=upload.file_name,
         row_count=profile.row_count,
         primary_key=primary_key,
@@ -457,7 +481,9 @@ def _inputs(spec: JobSpec, storage: Storage) -> tuple[RunRecord, ResolvedConfig,
     record = storage.read_model(run_key(spec.run_id, RUN_FILENAME), RunRecord)
     resolved = storage.read_model(spec.run_config_key, ResolvedConfig)
     upload = SpecUpload(
-        upload_id=record.upload_id,
+        # A dataset run records `upload_id=None` and its `dataset_id` instead; the same fallback
+        # `engine.pipeline` uses when it names the source a profile was taken from.
+        upload_id=record.upload_id or record.dataset_id or record.run_id,
         file_name=record.file_name,
         source_key=spec.upload_key,
         file_format=spec.upload_format,

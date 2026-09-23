@@ -73,7 +73,18 @@ Each shared file gets three marked blocks, added by the contracts-first task:
 
 - Add code **only inside your block**, at its end. Never edit above your block, never reorder, never reformat the file (run `black` on your block's content before pasting rather than on the whole file if the formatter would reflow other lines).
 - `pyproject.toml`: add dependencies in your block; pin versions; never bump a shared pin (pandas, pydantic, FastAPI, AutoGluon). If you need a bump, request it.
-- `README.md` and `docs/DECISIONS.md`: append a section per milestone under your phase heading; decision numbers are allocated per phase to avoid clashes: Phase 2 uses DEC-100…199, Phase 3a DEC-200…299, Phase 4a DEC-300…399.
+- `README.md` and `docs/DECISIONS.md`: append a section per milestone under your phase heading. Decision numbers are allocated per workstream so that parallel branches cannot claim the same one:
+
+  | Range | Workstream | State at integration (2026-09-23) |
+  |---|---|---|
+  | DEC-001…099 | trunk (Phase 1 and the contracts-first change) | used to DEC-082 |
+  | DEC-100…199 | Phase 2 — onboarding | used to DEC-110 |
+  | DEC-200…299 | Phase 3a — generative | used to DEC-232 |
+  | DEC-300…399 | Phase 4a — AWS | **exhausted** at DEC-399 |
+  | DEC-400…499 | public dataset library (`library/`) | used to DEC-411; allocated after the fact |
+  | DEC-500 up | unallocated | — |
+
+  A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.
 - `docs/API.md` is generated; never hand-edit. Run `gen_api_docs` after adding models.
 - `ui/index.html` / `router.js`: register your module in your block only; all screens live in your `ui/modules/<phase>/`.
 - `Makefile`: add targets in your block (`make onboarding-test`, `make generative-test`, `make aws-test`); do not change `setup`, `test`, `test-all`, `lint`.

@@ -19,6 +19,11 @@ IDENTITY_PREFIXES = (
     "template",
     "ui.pages",
     "output.kpi",
+    # `label` is the Phase 2 spelling of `target`: it says what the outcome IS for this use case,
+    # derived from events rather than read from a column. Like `target` it is per-use-case identity
+    # with no engine default to differ from - `engine.yaml` carries `label: null`, because a use
+    # case that has not been onboarded has no outcome definition at all.
+    "label",
 )
 
 

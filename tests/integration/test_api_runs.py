@@ -1123,9 +1123,15 @@ def test_a_single_primary_key_sent_as_a_list_is_accepted(client: TestClient) -> 
 
 @pytest.mark.parametrize("field", ["dataset_id", "client_id"])
 def test_an_onboarded_dataset_is_refused_rather_than_ignored(client: TestClient, field: str) -> None:
-    """The request also carries an upload_id, so ignoring this would score a different file."""
+    """The request also carries an upload_id, so ignoring this would score a different file.
+
+    Onboarded datasets are implemented now, and `tests/integration/test_runs_from_dataset.py` covers
+    running from one. What survives from when they were not is the reason this test was written: a
+    field that is quietly ignored is how a caller comes to believe a run read one thing when it read
+    another. `dataset_id` beside an `upload_id` is two answers to "which data produced this score",
+    and `client_id` without a dataset scopes a run to nothing. Both are refused by the request model
+    rather than dropped.
+    """
     response = start_run(client, **{field: "anything"})
     assert response.status_code == 422
-    detail = response.json()["detail"]
-    assert detail["code"] == "DATASET_ONBOARDING_NOT_AVAILABLE"
-    assert field in detail["message"]
+    assert field in response.text

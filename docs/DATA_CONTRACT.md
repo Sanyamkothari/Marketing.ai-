@@ -634,14 +634,14 @@ drift report compares a scoring file against.
 
 ---
 
-## 8. What a generative use case uploads instead (Phase 3a)
+## 9. What a generative use case uploads instead (Phase 3a)
 
 Everything above describes a **flat table with one row per entity**, which is what a predictive use
 case is trained and scored on. A generative use case is not trained on a table at all, so it
 uploads two different things and neither goes through the validation table above. Both are read by
 `engine/generative/`, and the codes below are the literal ones that module raises.
 
-### 8.1 The knowledge base
+### 9.1 The knowledge base
 
 The documents the assistant answers **from**, and the only thing it is allowed to answer from.
 
@@ -677,7 +677,7 @@ text is indexed exactly as written. The difference is whose data it is (DEC-216)
 genuinely should not have been published is the operator's to withdraw; the engine tells them, and
 does not decide it for them.
 
-### 8.2 The reference set
+### 9.2 The reference set
 
 An optional Q&A file the index is **graded** against, and the only reason a faithfulness or
 correctness number exists. Without one an index still answers questions; it just has no score.
@@ -710,7 +710,7 @@ The header is checked **on the request**, before the build is queued, so a refer
 would reject is refused immediately rather than twenty seconds later inside a status document the
 caller has to go and poll for.
 
-### 8.3 What is never uploaded
+### 9.3 What is never uploaded
 
 The hybrid capabilities - root-cause summaries and campaign copy - upload **nothing at all**. They
 read a finished predictive run's own artefacts, which already passed everything above. That is what
@@ -722,3 +722,75 @@ Complaint text is the one customer-written field either of them reads, and it is
 before it reaches a prompt - the mirror of the knowledge-base rule above, and for the same reason
 stated the other way round: those are a customer's own words, never published, and they reach a
 model only as evidence.
+
+## 10. Raw tables
+
+Everything above describes the **prepared** file: one flat table, one row per entity, our column
+names, the target already in it. That is what the engine trains and scores on, and it is what a
+client with a data team usually sends.
+
+A client without one sends what their systems actually hold — a customer master, a billing table
+with one row per invoice, a complaints table with one row per ticket — and no target column at all,
+because churn is a definition their business makes rather than a field their billing system stores.
+Those are **raw tables**, and onboarding (plan §4–7, [`engine/onboarding/`](../engine/onboarding/))
+turns a set of them into exactly the prepared file this document specifies. The contract above is
+not relaxed for them; it is what they are built *up to*, and the assembled dataset is put through
+the same validation table before anything is trained on it.
+
+What a raw table may look like is therefore much weaker than section 1, and worth stating.
+
+### What a raw table must have
+
+Each uploaded table is given a **role** from [`configs/roles.yaml`](../configs/roles.yaml). There
+are two kinds, and the requirement is different for each.
+
+| Kind | Roles | Required columns |
+|---|---|---|
+| `entity` | `entity` | `entity_key` |
+| `event` | `bills`, `payments`, `complaints`, `usage`, `campaign_events`, `orders`, `plan_changes`, `activity`, `other_event` | `entity_key`, `event_time` |
+
+- **Exactly one** table may be the `entity` table: one row per entity, with its attributes. Two is
+  `MULTIPLE_ENTITY_SOURCES`, none is `NO_ENTITY_SOURCE`, and duplicated ids in it are
+  `ENTITY_DUPLICATE_KEYS` — all three errors.
+- **Every event table needs a key and a date and nothing else.** Every other column a role mentions
+  — `amount` on `bills`, `severity` on `complaints`, `data_mb` on `usage` — is role-typical and
+  optional, used as an alias hint when mapping and as something to aggregate when it is present.
+- The required names above are *standard* names, not the client's. `entity_key` and `event_time` are
+  settled from the shape of the data (which column is unique and rarely null, which column parses as
+  a date), never from an alias list, because no alias list covers `CUST_ID`, `ACCT_NO` and `MSISDN`.
+- No target column, on any table. The outcome is derived (plan §5.2): from an existing column, from
+  the presence or absence of events in a window after each snapshot date, or from a threshold on
+  them.
+- Same formats and the same size limits as section 1: CSV (UTF-8, header row) or Parquet, and the
+  ingest refusals in section 3 apply per file. Two further limits are onboarding's own, both from
+  `onboarding.limits` in [`configs/engine.yaml`](../configs/engine.yaml): `SOURCE_TOO_LARGE` above
+  `max_source_rows` (default 50,000,000) and `TOO_MANY_SOURCES` above `max_sources` (default 10).
+
+### What a raw table may have that a prepared file may not
+
+- **Any column names, in any case, with any punctuation.** A mapping records what each one means.
+- **Any date format**, including one that reads two ways. `03/04/2024` is `DATE_FORMAT_AMBIGUOUS`,
+  an error, answered by pinning an explicit format on the mapping rather than by the engine guessing.
+- **Any value vocabulary.** `PRE`/`PPD`/`POST`, `Y`/`N`, `1`/`0`, `allowed`/`blocked` are all read
+  through a value map. A value the map does not cover is `VALUE_UNMAPPED`, a warning listing it.
+- **Flags that mean the opposite of ours.** `DND_FLAG` and `marketing_opt_in` are one fact stated in
+  two directions; the mapping carries a `negate` transform and the values are flipped on the way in.
+- **Keys written differently from table to table** — leading zeros, stray spaces, a difference of
+  case. Below `onboarding` thresholds this is `JOIN_KEY_COVERAGE_LOW`, and when one transform would
+  fix it, `KEY_FORMAT_MISMATCH` names that transform.
+- **Columns nobody needs.** An unmapped column is dropped: the mapped table is built from the
+  mapping rather than by renaming the input, so there is no path by which it reaches the dataset.
+- **Many rows per entity** — in an event table, where it is the point, and where every one of those
+  rows carries its own date. In the `entity` table it is `ENTITY_DUPLICATE_KEYS` until the mapping
+  collapses it (the `dedupe` transform keeps the latest row per entity by a column you name) or the
+  client sends one row each.
+
+### What comes out
+
+One row per entity per snapshot date: `entity_key`, `snapshot_date`, the mapped attributes, the
+features computed strictly as of that date, and the derived target. That is a section 1 file — the
+primary key is `(entity_key, snapshot_date)` for a periodic build and `entity_key` for a single one
+— and it is validated as one.
+
+[`ONBOARDING.md`](ONBOARDING.md) is the guide a business user reads for how the roles, the mapping,
+the features, the outcome and the snapshot dates are decided, and what each build-report check means.

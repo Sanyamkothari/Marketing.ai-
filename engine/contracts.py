@@ -244,7 +244,32 @@ class RunRecord(Artefact):
     finished_at: AwareDatetime | None = Field(
         default=None, description="UTC time the run reached a final state."
     )
-    upload_id: str = Field(description="Id of the upload this run consumed.")
+    upload_id: str | None = Field(
+        default=None,
+        description=(
+            "Id of the upload this run consumed; null when the run read a built dataset instead. "
+            "Exactly one of upload_id and dataset_id is set."
+        ),
+    )
+    # --- Phase 2 (onboarding) ------------------------------------------------------------------
+    # Plan section 6.5 change 4: a run reads an upload or a built dataset, and `run.json` has to say
+    # which, or the Results bar and `GET /runs?client_id=` have nothing to read. These three are
+    # optional and defaulted, and `RunManifest` already carries the same three from the
+    # contracts-first change, so nothing outside this branch moves. Announced in
+    # `docs/CROSS_BRANCH_REQUESTS.md` (DEC-107).
+    dataset_id: str | None = Field(
+        default=None, description="Id of the built dataset this run consumed; null for an upload."
+    )
+    client_id: str | None = Field(
+        default=None, description="Client the dataset belongs to; null for an upload."
+    )
+    dataset_fingerprint: str | None = Field(
+        default=None,
+        description=(
+            "Fingerprint of the built dataset, from its manifest; null for an upload, whose own "
+            "fingerprint stays on the dataset profile where Phase 1 put it."
+        ),
+    )
     file_name: str = Field(
         description="The user's original file name, shown in the Results bar and run history."
     )

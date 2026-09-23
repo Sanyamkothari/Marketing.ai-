@@ -187,7 +187,7 @@ truncated sha256. It does not appear for a run from a prepared file.
 
 ## Revision 3 — the reference set the API accepts, and the threshold it grades at
 
-The Phase 3a API review made the assistant's reference set strict (`DATA_CONTRACT.md` §8.2): four
+The Phase 3a API review made the assistant's reference set strict (`DATA_CONTRACT.md` §9.2): four
 columns, and a 422 naming the first one missing, checked on upload. The prototype still showed three
 columns keyed on `question_id`, so it described a flow the API now refuses.
 

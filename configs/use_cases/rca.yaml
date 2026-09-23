@@ -52,3 +52,59 @@ template:
     - {name: marketing_opt_in,     role: consent,     type: boolean, description: "Customer agreed to retention contact. Rows that are false are suppressed.", examples: ["true","true","true","false","true"]}
     - {name: last_contacted_at,    role: contact,     type: date,    description: "Date of the last retention contact (blank if never)",                examples: ["2026-07-02","","2026-07-19","","2026-06-28"]}
     - {name: churn_next_60d,       role: target,      type: integer, description: "Target: 1 if the customer disconnected within 60 days, else 0. Leave blank when scoring.", examples: ["1","1","0","0","1"]}
+
+# --- Phase 2: onboarding from raw tables ---------------------------------------------------------
+# A hybrid use case: the predictive half is onboarded exactly like any other, and `complaint_text`
+# passes through mapping untouched as type `text` so the Phase 3 generative half can read it
+# (Phase 2 plan section 14).
+
+standard_schema:
+  entity_key: customer_id
+  columns:
+    - name: tenure_months
+      type: numeric
+      aliases: [tenure, tnr_mnths, months_active, customer_age_months, tenure_mths, vintage_months]
+      description: Months since the customer signed up, as of the snapshot date.
+      range: [0, 600]
+      derivable: {from_role: entity, expression: "months_between(signup_date, snapshot_date)"}
+    - name: signup_date
+      type: date
+      aliases: [signup_dt, start_date, activation_date, joined_on, acct_open_dt]
+      description: When the customer joined. Used to derive tenure and to exclude pre-signup snapshots.
+    - name: price_change_flag
+      type: boolean
+      aliases: [price_change, tariff_changed, rate_revised, price_rev_flag]
+      description: Whether the customer's price changed recently, which is the most common root cause of a complaint.
+      value_aliases: {"true": ["y", "yes", "1"], "false": ["n", "no", "0"]}
+    - name: complaint_text
+      type: text
+      aliases: [remarks, notes, description, comments, ticket_text, narrative]
+      description: What the customer actually said, in their own words. Carried through untouched so a summary can read it; PII in it is redacted at profiling time.
+    - name: region
+      type: categorical
+      aliases: [circle, zone, state, geo, area]
+      description: Where the customer is, as the client's own geography names it.
+    - name: marketing_opt_in
+      type: boolean
+      aliases: [opt_in, consent, marketing_consent, dnd_flag, do_not_disturb, dnd]
+      description: The customer agreed to marketing contact. A DND-style flag means the opposite and is mapped with negate.
+      value_aliases: {"true": ["y", "yes", "1", "t", "allowed", "opted_in"], "false": ["n", "no", "0", "f", "blocked", "opted_out"]}
+    - name: last_contacted_at
+      type: date
+      aliases: [last_contact_dt, last_contacted, last_touch_date, lst_cntct_dt]
+      description: Date of the last outbound contact, so recently-contacted rows can be suppressed.
+
+label:
+  name: churn_next_60d
+  type: event_absence
+  role: activity
+  horizon_days: 60
+  description: No activity of any kind in the 60 days after the snapshot date.
+
+suggested_features:
+  - {name: complaints_90d,            role: complaints, function: count, window_days: 90, description: "Complaints raised in the last 90 days."}
+  - {name: complaints_open_30d,       role: complaints, function: count, window_days: 30, where: {column: resolved_time, op: is_null}, description: "Complaints from the last 30 days still unresolved."}
+  - {name: complaint_categories_180d, role: complaints, function: nunique, column: category, window_days: 180, description: "How many different things the customer has complained about."}
+  - {name: days_since_last_complaint, role: complaints, function: days_since_last, description: "Days since the customer last complained."}
+  - {name: bill_trend_3m_vs_6m,       role: bills,      function: ratio, of: {function: mean, column: amount, window_days: 90}, over: {function: mean, column: amount, window_days: 180}, description: "Recent bills against the six-month average."}
+  - {name: days_since_last_activity,  role: activity,   function: days_since_last, description: "Days since the customer last did anything."}

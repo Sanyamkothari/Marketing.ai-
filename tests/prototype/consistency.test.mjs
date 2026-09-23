@@ -63,7 +63,7 @@ test("the reference set and its threshold are the product's, not the prototype's
   click(dom2, "#f-sampleqa");
   assert.deepEqual(JSON.parse(ev(dom2, "JSON.stringify(STATE['ai-onboarding-assistant'].cols)")), template);
   assert.equal(ev(dom, "refInvalid('source_doc')"), "The reference set is missing the source_doc column.",
-    "the wording of REFERENCE_SET_INVALID in DATA_CONTRACT.md §8.2");
+    "the wording of REFERENCE_SET_INVALID in DATA_CONTRACT.md §9.2");
   assert.ok(repoText("docs/DATA_CONTRACT.md").includes("The reference set is missing the {column} column."));
 });
 

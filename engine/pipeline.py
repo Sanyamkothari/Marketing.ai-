@@ -717,7 +717,7 @@ class _TrainFlow:
         profile = ingest.profile_dataset(
             read.frame,
             ctx.config,
-            upload_id=record.upload_id,
+            upload_id=record.upload_id or record.dataset_id or record.run_id,
             file_name=record.file_name,
             file_format=read.file_format,
             file_size_bytes=self._storage.size_bytes(ctx.upload_key),
@@ -1297,7 +1297,7 @@ class _ScoreFlow:
         profile = ingest.profile_dataset(
             read.frame,
             ctx.config,
-            upload_id=record.upload_id,
+            upload_id=record.upload_id or record.dataset_id or record.run_id,
             file_name=record.file_name,
             file_format=read.file_format,
             file_size_bytes=self._storage.size_bytes(ctx.upload_key),

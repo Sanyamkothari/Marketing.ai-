@@ -33,7 +33,8 @@ two columns when they were joined on one.
 from __future__ import annotations
 
 import re
-from typing import Annotated, Any, Final
+from dataclasses import dataclass
+from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
@@ -59,10 +60,11 @@ from api.schemas import (
     UploadRecord,
     ValidationErrorResponse,
 )
-from engine.config import RunMode, UseCaseConfig, get_catalog, resolve_config, sole_key
+from engine.config import PrimaryKey, RunMode, UseCaseConfig, get_catalog, resolve_config, sole_key
 from engine.contracts import (
     ARTEFACT_REGISTRY,
     TABULAR_SCHEMAS,
+    DatasetProfile,
     FeatureSchema,
     ModelVersion,
     RunRecord,
@@ -72,6 +74,7 @@ from engine.contracts import (
 )
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
 from engine.jobs import JobRunner, ReconcilingJobRunner
+from engine.onboarding.specs import DatasetManifest
 from engine.pipeline import STATUS_FILENAME, Pipeline
 from engine.registry import ModelRegistry
 from engine.runs import (
@@ -81,6 +84,8 @@ from engine.runs import (
     RUN_FILENAME,
     RUN_MANIFEST_FILENAME,
     VALIDATION_FILENAME,
+    DatasetLineage,
+    UploadInfo,
     build_job_fn,
     build_m2_job,
     build_score_job,
@@ -179,27 +184,125 @@ _RUN_ERRORS: dict[int | str, dict[str, object]] = {
 # ---------------------------------------------------------------------------
 # 4.3 POST /runs
 # ---------------------------------------------------------------------------
-_ONBOARDING_FIELDS: Final[tuple[str, ...]] = ("dataset_id", "client_id")
-"""`RunRequest` fields whose shape exists for Phase 2 and whose behaviour does not exist yet."""
+DATASET_NOT_FOUND: Final[str] = "DATASET_NOT_FOUND"
+DATASET_NOT_BUILT: Final[str] = "DATASET_NOT_BUILT"
+DATASET_USE_CASE_MISMATCH: Final[str] = "DATASET_USE_CASE_MISMATCH"
+DATASET_COMPOSITE_KEY_NOT_WIRED: Final[str] = "DATASET_COMPOSITE_KEY_NOT_WIRED"
+DATASET_CLIENT_MISMATCH: Final[str] = "DATASET_CLIENT_MISMATCH"
 
 
-def _reject_unimplemented_onboarding(body: RunRequest) -> None:
-    """`422` when a request names an onboarded dataset, which nothing in this phase can resolve.
+@dataclass(frozen=True, slots=True)
+class _DatasetSource:
+    """A built dataset, in the shape the upload path already consumes.
 
-    The fields are on `RunRequest` because the contract they belong to is shared and append-only,
-    so it had to be settled before the branches started. Until the onboarding work lands there is
-    nothing behind them, and a run started from a `dataset_id` would silently score the upload the
-    request also carried - a different file from the one the caller asked for.
+    A dataset and an upload differ in provenance, not in what a run needs from them: a storage key
+    holding one row per entity, a profile of it, and a row count. Reducing the dataset to those
+    three lets the whole validate-create-submit path below stay exactly as it was, which is the
+    difference between Phase 2 reaching the engine and Phase 2 forking it (DEC-107).
     """
-    named = [name for name in _ONBOARDING_FIELDS if getattr(body, name) is not None]
-    if not named:
-        return
-    fields = " and ".join(named)
-    raise http_error(
-        422,
-        "DATASET_ONBOARDING_NOT_AVAILABLE",
-        f"This engine cannot start a run from {fields} yet. Upload the file and run against upload_id.",
+
+    manifest: DatasetManifest
+    profile: DatasetProfile
+    source_key: str
+
+    @property
+    def primary_key(self) -> str:
+        return str(self.manifest.primary_key[0])
+
+    # --- `engine.runs.UploadInfo`, so the job path runs a dataset with no code of its own -------
+    # Phase 4a's job spec, thread runner and SageMaker container read a run's source through that
+    # four-property protocol. A dataset satisfies it as it stands; `lineage` carries the rest.
+    @property
+    def upload_id(self) -> str:
+        return self.manifest.dataset_id
+
+    @property
+    def file_name(self) -> str:
+        """What the Results bar calls a run's data when it came from a build rather than a file."""
+        return f"{self.manifest.dataset_id} (built)"
+
+    @property
+    def file_format(self) -> Literal["csv", "parquet"]:
+        return "parquet"
+
+    @property
+    def lineage(self) -> DatasetLineage:
+        return DatasetLineage(
+            dataset_id=self.manifest.dataset_id,
+            client_id=self.manifest.client_id,
+            fingerprint=self.manifest.fingerprint.hash,
+        )
+
+
+def _dataset_source(
+    storage: Storage, dataset_id: str, *, config: UseCaseConfig, client_id: str | None
+) -> _DatasetSource:
+    """Resolve `dataset_id` into something a run can consume, or refuse it by name.
+
+    Everything this checks is a question the user can act on: does the dataset exist, did its build
+    actually finish, was it built for this use case, and is its key one the stages can carry. A run
+    that started on a half-built dataset would train on whatever rows happened to be written.
+    """
+    from engine.onboarding.datasets import dataset_key
+
+    manifest_key = dataset_key(dataset_id, "dataset_manifest.json")
+    try:
+        manifest = storage.read_model(manifest_key, DatasetManifest)
+    except StorageError as exc:
+        raise http_error(
+            404,
+            DATASET_NOT_FOUND,
+            f"No dataset with id {dataset_id!r}. Build one from your tables first.",
+        ) from exc
+
+    frame_key = dataset_key(dataset_id, "dataset.parquet")
+    if not storage.exists(frame_key):
+        # A build that found a blocking check writes its report and no dataset, on purpose.
+        raise http_error(
+            409,
+            DATASET_NOT_BUILT,
+            f"Dataset {dataset_id!r} has a manifest but no rows: its build did not finish. "
+            "Open the build report to see what stopped it.",
+        )
+    if manifest.use_case != config.id:
+        raise http_error(
+            409,
+            DATASET_USE_CASE_MISMATCH,
+            f"Dataset {dataset_id!r} was built for {manifest.use_case!r}, not {config.id!r}.",
+        )
+    if client_id is not None and manifest.client_id != client_id:
+        raise http_error(
+            409,
+            DATASET_CLIENT_MISMATCH,
+            f"Dataset {dataset_id!r} belongs to client {manifest.client_id!r}, not {client_id!r}.",
+        )
+    if len(manifest.primary_key) > 1:
+        # Plan section 6.5 change 1 widens the key on the contracts, which is done; teaching
+        # prepare, split, explain, actions and export to carry more than one column is the half of
+        # that change still outstanding. Refusing here is the honest stop: a run that silently took
+        # the first column would join on the customer and lose the snapshot date, training one row
+        # per customer out of twelve and reporting success.
+        raise http_error(
+            501,
+            DATASET_COMPOSITE_KEY_NOT_WIRED,
+            f"Dataset {dataset_id!r} has one row per {' and '.join(manifest.primary_key)}, and a run "
+            "still takes a single key column. Build it with a single snapshot to train on it now.",
+        )
+
+    read = ingest.read_upload(storage, frame_key, file_format="parquet")
+    profile = ingest.profile_dataset(
+        read.frame,
+        config,
+        upload_id=dataset_id,
+        file_name=f"{dataset_id}.parquet",
+        file_format="parquet",
+        file_size_bytes=storage.size_bytes(frame_key),
+        delimiter=None,
+        encoding=read.encoding,
+        row_count=read.row_count,
+        fingerprint=read.fingerprint,
     )
+    return _DatasetSource(manifest=manifest, profile=profile, source_key=frame_key)
 
 
 @router.post(
@@ -225,29 +328,45 @@ def create_run_endpoint(
     against a job that has already started looking for it (DEC-324).
     """
     use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
-    primary_key = sole_key(body.primary_key, what="A run")
-    _reject_unimplemented_onboarding(body)
-    upload = load_upload(storage, body.upload_id)
-    if upload.mode is not body.mode:
-        raise http_error(
-            409,
-            "UPLOAD_MODE_MISMATCH",
-            f"This file was uploaded for {upload.mode.value}. Upload it again for {body.mode.value}.",
-        )
-    profile = load_upload_profile(storage, body.upload_id)
     resolved = resolve_config(body.use_case, body.overrides, root=root)
     config = resolved.config
     catalog = get_catalog(root)
 
+    upload: UploadRecord | None = None
+    dataset: _DatasetSource | None = None
+    file_format: Literal["csv", "parquet"]
+    if body.dataset_id is not None:
+        dataset = _dataset_source(storage, body.dataset_id, config=config, client_id=body.client_id)
+        profile = dataset.profile
+        source_key, file_format = dataset.source_key, "parquet"
+        # The manifest knows what a row is and what the outcome is called; a request that repeats
+        # them is honoured, a request that omits them is answered rather than refused.
+        primary_key = sole_key(body.primary_key, what="A run") if body.primary_key else dataset.primary_key
+        target = body.target or dataset.manifest.target
+    else:
+        upload_id = _require_upload_id(body.upload_id)
+        primary_key = sole_key(_require_primary_key(body.primary_key), what="A run")
+        upload = load_upload(storage, upload_id)
+        if upload.mode is not body.mode:
+            raise http_error(
+                409,
+                "UPLOAD_MODE_MISMATCH",
+                f"This file was uploaded for {upload.mode.value}. Upload it again for {body.mode.value}.",
+            )
+        profile = load_upload_profile(storage, upload_id)
+        source_key, file_format = upload.source_key, upload.file_format
+        target = body.target
+    source_id: str = dataset.manifest.dataset_id if dataset is not None else upload_id
+
     version: ModelVersion | None = None
     if body.mode is RunMode.TRAIN:
         report = validate.validate_for_training(
-            read_frame(storage, upload, profile_row_cap(config)),
+            read_frame(storage, source_key, file_format, profile_row_cap(config)),
             config,
             primary_key=primary_key,
-            target=body.target or "",
+            target=target or "",
             acknowledged=config.validation.acknowledged,
-            upload_id=body.upload_id,
+            upload_id=source_id,
             row_count=profile.row_count,
         )
     else:
@@ -256,34 +375,41 @@ def create_run_endpoint(
         # while the job waits in the queue.
         version = score_version(registry, config=config, version_id=body.model_version_id)
         report = validate.validate_against_schema(
-            read_frame(storage, upload, profile_row_cap(config)),
+            read_frame(storage, source_key, file_format, profile_row_cap(config)),
             storage.read_model(version.schema_key, FeatureSchema),
             primary_key=primary_key,
             config=config,
             acknowledged=config.validation.acknowledged,
-            upload_id=body.upload_id,
+            upload_id=source_id,
             row_count=profile.row_count,
         )
 
-    storage.write_model(upload_key(body.upload_id, UPLOAD_VALIDATION_FILENAME), report)
+    if upload is not None:
+        # A dataset's checks travel on its run, not back onto the dataset: a dataset is immutable
+        # and several runs can read one, so writing there would have each run overwrite the last.
+        storage.write_model(upload_key(upload.upload_id, UPLOAD_VALIDATION_FILENAME), report)
     if not report.passed:
         return validation_conflict(report)
 
+    # One source for the job path whichever the run read: an upload is an `UploadInfo` already, and
+    # a dataset is one through `_DatasetSource`. Everything below is then the same for both.
+    source: UploadInfo = upload if upload is not None else _require_dataset(dataset)
     record = create_run(
         storage,
         Pipeline(storage, registry, jobs),
         resolved=resolved,
         catalog=catalog,
-        upload=upload,
+        upload=source,
+        dataset=dataset.lineage if dataset is not None else None,
         profile=profile,
         report=report,
         mode=body.mode,
         primary_key=primary_key,
-        target=body.target,
+        target=target,
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
     )
-    spec = job_spec_for(record, upload=upload, client_id=settings.client_id)
+    spec = job_spec_for(record, upload=source, client_id=settings.client_id)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
     response.headers["Location"] = f"/runs/{record.run_id}"
@@ -401,12 +527,37 @@ def cancel_run_endpoint(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunC
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
-def read_frame(storage: Storage, upload: UploadRecord, row_cap: int) -> Any:
-    """The upload's rows, capped, for the checks that need values rather than statistics (DEC-045)."""
+def _require_upload_id(upload_id: str | None) -> str:
+    """Narrow the id `RunRequest` has already made non-null; only a wiring slip reaches it."""
+    if upload_id is None:  # pragma: no cover - RunRequest refuses this shape before the route sees it
+        raise http_error(422, "RUN_REQUEST_INCOMPLETE", "upload_id is required for this kind of run.")
+    return upload_id
+
+
+def _require_primary_key(primary_key: PrimaryKey | None) -> PrimaryKey:
+    """Same narrowing for the key an upload-driven run cannot do without."""
+    if primary_key is None:  # pragma: no cover - RunRequest refuses this shape before the route sees it
+        raise http_error(422, "RUN_REQUEST_INCOMPLETE", "primary_key is required with an uploaded file.")
+    return primary_key
+
+
+def _require_dataset(dataset: _DatasetSource | None) -> _DatasetSource:
+    """Narrow the source a run read; one of the upload and the dataset is always present."""
+    if dataset is None:  # pragma: no cover - the endpoint sets one of the two on every path
+        raise http_error(422, "RUN_REQUEST_INCOMPLETE", "A run needs an upload or a dataset.")
+    return dataset
+
+
+def read_frame(
+    storage: Storage, source_key: str, file_format: Literal["csv", "parquet"], row_cap: int
+) -> Any:
+    """The source's rows, capped, for the checks that need values rather than statistics (DEC-045).
+
+    Takes a key and a format rather than an `UploadRecord` so that a built dataset - which has no
+    upload record and never will - reaches the same checks through the same call.
+    """
     try:
-        return ingest.read_upload(
-            storage, upload.source_key, file_format=upload.file_format, row_cap=row_cap
-        ).frame
+        return ingest.read_upload(storage, source_key, file_format=file_format, row_cap=row_cap).frame
     except ingest.IngestError as exc:
         raise ingest_http(exc.code, exc.message) from exc
 

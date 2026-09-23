@@ -83,11 +83,12 @@ from engine.generative.errors import (
 from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, prompt_hashes, prompt_versions, render
 from engine.generative.redaction import redact
+from engine.onboarding.datasets import run_source_key
 from engine.stages.actions import BAND_COLUMN
 from engine.stages.explain import ROW_EXPLANATIONS_FILENAME, read_row_explanations
 from engine.stages.export import SCORES_CSV
 from engine.stages.ingest import read_upload
-from engine.storage import Storage, run_key, upload_key
+from engine.storage import Storage, run_key
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.time import utc_now
 
@@ -175,7 +176,7 @@ def _read_complaints(
     if column is None:
         return None, None
     profile = storage.read_model(run.artefacts[_PROFILE_FILENAME], DatasetProfile)
-    source = upload_key(run.upload_id, f"source.{profile.file_format}")
+    source = run_source_key(run, profile.file_format)
     frame = read_upload(storage, source, file_format=profile.file_format).frame
     if column not in frame.columns:
         raise generative_error(COMPLAINT_COLUMN_MISSING, column=column, run_id=run.run_id)

@@ -98,10 +98,11 @@ from engine.generative.errors import (
 )
 from engine.generative.guardrails import MAX_LENGTH, CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, prompt_hashes, prompt_versions, render
+from engine.onboarding.datasets import run_source_key
 from engine.stages.actions import BAND_COLUMN, CONTROL_GROUP_COLUMN, SUPPRESSED_REASON_COLUMN
 from engine.stages.explain import ROW_EXPLANATIONS_FILENAME, read_row_explanations
 from engine.stages.export import SCORES_CSV
-from engine.storage import Storage, run_key, upload_key
+from engine.storage import Storage, run_key
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.time import utc_now
 
@@ -573,7 +574,7 @@ def _read_source_fields(
     """
     import pandas as pd
 
-    key = upload_key(record.upload_id, f"source.{profile.file_format}")
+    key = run_source_key(record, profile.file_format)
     if profile.file_format == "parquet":
         with storage.open_read(key) as handle:
             raw = pd.read_parquet(handle)

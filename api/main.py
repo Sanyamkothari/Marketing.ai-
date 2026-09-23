@@ -149,6 +149,16 @@ def create_app(
 # ===========================================================================
 
 # ---- PHASE-2 (onboarding) — append only below this line ----
+# The four onboarding routers: clients, their raw sources, the mappings onto a use case's standard
+# schema, and the datasets built from them. Written and tested on `phase-2-onboarding` against a
+# bare app of their own, and never mounted here - so the whole onboarding API answered 404 in the
+# served process while its tests passed. Mounted at integration, in dependency order.
+from api.routes.clients import router as clients_router  # noqa: E402
+from api.routes.datasets import router as datasets_router  # noqa: E402
+from api.routes.mappings import router as mappings_router  # noqa: E402
+from api.routes.sources import router as sources_router  # noqa: E402
+
+PHASE_ROUTERS.extend((clients_router, sources_router, mappings_router, datasets_router))
 # ---- END PHASE-2 ----
 
 # ---- PHASE-3A (generative) — append only below this line ----

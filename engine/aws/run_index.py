@@ -81,7 +81,9 @@ class RunIndexEntry(StrictBase):
     created_at: datetime = Field(description="UTC time the run record was created; the sort key.")
     started_at: datetime | None = Field(default=None, description="UTC time the first stage started.")
     finished_at: datetime | None = Field(default=None, description="UTC time the run reached a final state.")
-    upload_id: str = Field(description="Upload the run consumed.")
+    upload_id: str = Field(
+        description="Upload the run consumed, or the built dataset's id for a dataset run."
+    )
     file_name: str = Field(description="The user's original file name, as the Results bar shows it.")
     row_count: int | None = Field(default=None, description="Rows in the upload; null when unknown.")
     model_version_id: str | None = Field(default=None, description="Model produced (train) or used (score).")
@@ -158,7 +160,7 @@ def index_entry(record: RunRecord, manifest: RunManifest | None = None) -> RunIn
         created_at=record.created_at,
         started_at=record.started_at,
         finished_at=record.finished_at,
-        upload_id=record.upload_id,
+        upload_id=record.upload_id or record.dataset_id or record.run_id,
         file_name=record.file_name,
         row_count=record.row_count,
         model_version_id=record.model_version_id,

@@ -65,13 +65,14 @@ marketing-ai/
 │   │   ├── score.py              # batch scoring with the champion, schema check and drift
 │   │   ├── actions.py            # risk bands, suppression, control group, action mapping
 │   │   └── export.py             # scores.csv and the output summary
-│   ├── onboarding/               # Phase 2's package; specs.py awaits the Phase 2 plan
-│   ├── generative/               # Phase 3a's package; contracts.py awaits the Phase 3a plan
+│   ├── onboarding/               # Phase 2: raw tables -> mappings -> features/labels -> a built dataset
+│   ├── generative/               # Phase 3a: the assistant, root-cause summaries and win-back copy
 │   └── utils/                    # ids, time, text, logging
 ├── api/
 │   ├── main.py                   # create_app, the module-level app, and the /ui mount
 │   ├── deps.py                   # config root, storage, registry and job-runner dependencies
-│   ├── routes/                   # industries, use_cases, uploads, runs, models
+│   ├── routes/                   # industries, use_cases, uploads, runs, models, generative, connection,
+│   │                             #   and Phase 2's clients, sources, mappings, datasets
 │   └── schemas.py                # response models
 ├── ui/                           # plain HTML + ES modules, no build step, served at /ui
 │   ├── index.html                # the adapted prototype: markup and stylesheet
@@ -463,11 +464,12 @@ case is named anywhere under `engine/` or `api/`.
 ## Decisions
 
 Every choice that `plan.md` does not make is recorded in [`docs/DECISIONS.md`](docs/DECISIONS.md) as a
-`DEC-` entry with its context, decision and consequences. The log runs DEC-001 … DEC-081: M1 opened it
-with DEC-001 … DEC-040, each milestone since has appended its own, and DEC-075 … DEC-079 are the shared
-surface the phase branches build on. DEC-059, DEC-064 and DEC-071 are unused — no code cites them.
-Numbers from DEC-100 up are allocated per phase — 100…199 for Phase 2, 200…299 for Phase 3a, 300…399
-for Phase 4a — so three branches cannot claim the same one. Entries are never rewritten in place — a
+`DEC-` entry with its context, decision and consequences. The trunk's own entries run DEC-001 … DEC-082:
+M1 opened the log with DEC-001 … DEC-040, each milestone since has appended its own, and DEC-075 …
+DEC-079 are the shared surface the phase branches build on. DEC-059, DEC-064 and DEC-071 are unused — no
+code cites them. From DEC-100 up, numbers are allocated a hundred per workstream — Phase 2 100…, Phase 3a
+200…, Phase 4a 300… (exhausted), the dataset library 400… — and the table in `PARALLEL_WORK_PROTOCOL.md`
+§4 is where the next phase claims DEC-500 up before its first entry. Entries are never rewritten in place — a
 decision that is reversed gets a new entry naming the one it supersedes (plan §13.2). See also
 [`docs/DATA_CONTRACT.md`](docs/DATA_CONTRACT.md) for the shape of the upload and
 [`docs/AWS_DEPLOYMENT.md`](docs/AWS_DEPLOYMENT.md) for the Phase 4 notes.
@@ -500,6 +502,69 @@ every rebase.
 <!-- ---- PHASE-2 (onboarding) — append only below this line ---- -->
 
 ### Phase 2 — Data onboarding
+
+Phase 2 turns a client's *raw* tables — a customer master, a billing table with one row per invoice,
+a complaints table with one row per ticket, and usually no target column at all — into the
+one-row-per-entity dataset Phase 1 already knows how to train and score on.
+
+| # | Milestone | Definition of done | Status |
+|---|---|---|---|
+| — | Onboarding contracts | `configs/roles.yaml`, the spec vocabulary, `engine/onboarding/specs.py`, the `onboarding` defaults block; Phase 1 suites green and unedited | **done** |
+| M8 | Clients, sources, roles, standard schema | `ClientStore`; source upload with profiling and role detection; `standard_schema` for the predictive use cases; `GET /use-cases/{id}/standard-schema` | pending |
+| M9 | Mapping | Heuristic suggester, transforms, value maps, mapping checks; an entity-only source maps to a Phase 1-shaped table | pending |
+| M10 | Aggregation engine | `FeatureSpec` → DuckDB; the function library; the golden and point-in-time tests; `features.sql` written | pending |
+| M11 | Labels, snapshots, composite keys | All four label types; censoring; periodic snapshots; the stages taught composite keys | pending |
+| M12 | Datasets, lineage, run integration | `DatasetRegistry`, the build job, `POST /runs` with `dataset_id`, build-then-score | pending |
+| M13 | UI | The four-step onboarding panel inside Setup, the client selector, preview, lineage | pending |
+| M14 | Hardening and docs | Build benchmark, cancel and error states, `docs/ONBOARDING.md` | **done** — benchmark recorded below |
+
+#### Build performance, measured
+
+`scripts/bench_onboarding.py` generates the raw tables and times a real `build_dataset` — no stage
+stubbed, every onboarding and Phase 1 check run, `dataset.parquet` on disk at the end. One run at
+the plan's own target, on **4 CPUs · 15.7 GiB RAM · Python 3.11.15 · Linux** (a container, not a
+laptop):
+
+| | |
+|---|---|
+| Input | 200,000 customers · 5,000,000 usage rows · 6 CSVs · 1,377 MB |
+| Output | 2,400,000 rows · 200,000 entities · 12 snapshots · 60 features (3 dropped, all-null) |
+| Build | **828.9 s** · peak RSS 10,975 MB · `passed=True`, 0 blocking checks |
+| Target | the same shape in under 300 s |
+| Verdict | **not met** — correct at this size, about 2.8× slower than the plan asks |
+
+Where the time goes: `write` 386 s, `apply_mappings` 209 s, `validate` 112 s, all five feature
+queries together 81 s. The DuckDB aggregation the plan worried about is the cheapest part of the
+build; parquet writing and the per-source cast-and-rename pass are the expensive ones, and neither
+is something the plan anticipated. Nothing here has been optimised — the target is missed by a
+factor small enough that the two obvious fixes (writing the frame in row-group chunks, and casting
+in DuckDB rather than pandas) plausibly close it, but neither has been tried and neither should be
+assumed.
+
+Smaller runs, same script: 5,000 customers · 120,000 usage rows builds in **26.1 s**; 400 customers
+· 6,000 usage rows in **4.8 s**.
+
+Two defects were found by running this and could not have been found any other way. The build was
+reading only the first 2,000,000 rows of each source, having inherited the *profiling* row cap; and
+the leak probe compared floats exactly, so DuckDB's parallel summation order made every float
+feature look like it had moved and raised `FUTURE_EVENTS_LEAKED` — the one finding a user may never
+acknowledge. Both are fixed, both have regression tests, and both are described in
+`docs/DECISIONS.md`.
+
+The contracts landed first, as `PARALLEL_WORK_PROTOCOL.md` §2 asks: `configs/roles.yaml` (what an
+uploaded table *is*), the spec vocabulary in the PHASE-2 block of `engine/config.py`, the artefact
+models in `engine/onboarding/specs.py`, and the `onboarding` defaults in `engine.yaml`. They fill
+the blocker the contracts-first task recorded against `engine/onboarding/specs.py`, which was empty
+because the Phase 2 plan was not in the repository when that task ran. Nothing executes them yet.
+
+Two rules in this package are absolute and are worth knowing before reading it. **Point-in-time
+correctness:** a feature for snapshot date *T* may read only events at or before *T*, a label only
+events after it; `FUTURE_EVENTS_LEAKED` is a bug, and `OnboardingCheck` refuses to mark it
+acknowledgeable. **Suggest, never decide silently:** roles, mappings and features are proposed with
+a confidence and confirmed by the user, and an auto-accepted item is still shown and still
+reversible.
+
+#### The reference prototype
 
 **The reference prototype is in the repository.** `marketing-ai-prototype.html` is the design
 source of truth named in `plan.md` §9 — one HTML file, hash routing, dark mode, mobile layout,
