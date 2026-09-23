@@ -294,6 +294,10 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/datasets/{dataset_id}/features.sql",
         "/datasets/{dataset_id}/report",
         "/datasets/{dataset_id}/sample",
+        # Plan A M35: the header's default client, score mode's replay, and the Data page's lineage
+        "/clients/default",
+        "/clients/{client_id}/onboarding-specs/{spec_id}/replay",
+        "/datasets/{dataset_id}/lineage",
     }
 
 

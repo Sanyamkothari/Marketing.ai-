@@ -3,13 +3,11 @@
 // owns everything the pure render functions do not - the fetches, the working edits, the polling and
 // the event wiring.
 //
-// This module never claims a hash route. Step 1 of the Phase 1 Setup form is meant to become a
-// choice between "Upload a prepared file" (unchanged) and "Build from raw tables" (this panel,
-// rendered inline, not a separate page - see plan §10), and that choice lives in `ui/usecase.js`,
-// which this branch may not edit (`PARALLEL_WORK_PROTOCOL.md` §3: not in this milestone's file list).
-// So `onboardingPanel(container, options)` is a plain mount function a host calls once it has decided
-// to show this path, exactly the shape the task names; the exact call the orchestrator needs to add
-// to `usecase.js` is written out in this branch's final report, not in code here.
+// This module never claims a hash route. Step 1 of the Phase 1 Setup form is a choice between
+// "Upload a prepared file" (unchanged) and "Build from raw tables" (this panel, rendered inline, not
+// a separate page - see plan §10). `onboardingPanel(container, options)` is a plain mount function;
+// `setup.js` calls it when `ui/usecase.js` asks the registered setup source to mount (Plan A M35),
+// and keeps the panel alive across the Setup form's repaints.
 //
 // One departure from `ui/usecase.js`'s own `bind(root)` pattern is deliberate: `usecase.js` re-binds
 // after every render because `app.js` tears its whole `<main>` down and rebuilds it on each route
@@ -27,9 +25,12 @@ import {
   deleteSource,
   getDataset,
   getDatasetReport,
+  getDatasetSample,
   getStandardSchema,
+  listMappings,
   listSources,
   previewOnboardingSpec,
+  replayOnboardingSpec,
   saveMapping,
   schemaEnum,
   schemaProperty,
@@ -41,11 +42,19 @@ import { present } from "../../dom.js";
 
 const POLL_MS = 2000;
 
-function initialState(clientId, useCaseId) {
+function initialState(clientId, useCaseId, replay) {
   return {
     clientId,
     useCaseId,
     open: "sources",
+
+    // Score mode (Plan A M35): this month's files through a saved recipe. `null` in train mode.
+    // `spec` is the saved `OnboardingSpec`; `uploadedIds` the files uploaded on this panel;
+    // `settledIds` the mappings the user saved after a replay reopened them; `response` the last
+    // `POST .../replay` answer, whose `spec_id` is what the build runs once nothing is missing.
+    replay: replay
+      ? { spec: replay.spec, uploadedIds: [], settledIds: [], response: null, running: false, error: null }
+      : null,
 
     schema: null,
     schemaError: null,
@@ -86,6 +95,7 @@ function initialState(clientId, useCaseId) {
     buildError: null,
     buildChecks: [],
     buildReport: null,
+    inUse: false,
   };
 }
 
@@ -97,10 +107,16 @@ function initialState(clientId, useCaseId) {
  * `problemType` is a best-effort read of the target column's standard type (`boolean` -> binary
  * classification, `numeric` -> regression); it is `null`, never guessed further, when the manifest
  * carries no target or a type this panel cannot map with confidence - Step 2 already lets the host
- * choose a problem type by hand, exactly as it does today for an uploaded file.
+ * choose a problem type by hand, exactly as it does today for an uploaded file. The payload also
+ * carries `sample` (the dataset's own redacted `sample.json` rows) for the host's preview.
+ *
+ * `replay` (score mode, Plan A M35) is `{spec}`, a saved `OnboardingSpec`: the panel then takes this
+ * month's files, replays the recipe onto them (`POST .../replay`), reopens the mapping step only for
+ * a file missing a column last month's mapping read, and builds for scoring. Nothing else about the
+ * recipe is asked again.
  */
-export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady }) {
-  const state = initialState(clientId, useCaseId);
+export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady, replay = null }) {
+  const state = initialState(clientId, useCaseId, replay);
   let pollTimer = null;
 
   function rerender() {
@@ -218,12 +234,17 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     rerender();
     try {
       const result = await listSources(clientId);
-      state.sources = result.sources.map((source) => ({
+      // In score mode the panel is about this month's files only; last month's are the recipe's,
+      // and showing them here would offer to map again what the replay exists to reuse.
+      const shown = state.replay
+        ? result.sources.filter((source) => state.replay.uploadedIds.includes(source.source_id))
+        : result.sources;
+      state.sources = shown.map((source) => ({
         source,
         profile: result.profiles[source.source_id],
       }));
       state.sourcesError = null; // a read that succeeded answers the failure the last one reported
-      syncFeatures();
+      if (!state.replay) syncFeatures();
     } catch (error) {
       state.sourcesError = error;
     }
@@ -259,13 +280,73 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       state.uploading = [...state.uploading, file.name];
       rerender();
       try {
-        await createSource(clientId, file);
+        const created = await createSource(clientId, file);
+        if (state.replay) state.replay.uploadedIds = [...state.replay.uploadedIds, created.source_id];
       } catch (error) {
         state.sourcesError = error;
       }
       state.uploading = state.uploading.filter((name) => name !== file.name);
     }
+    if (state.replay) await runReplay();
+    else await loadSources();
+  }
+
+  // --- score mode: replaying the saved recipe ------------------------------------------------------
+
+  /**
+   * Ask the API to point the saved recipe at this month's files, then show what it decided.
+   *
+   * The replay confirms each file's role from the recipe, so the sources are re-read afterwards for
+   * the same reason `setRoleFor` re-reads them. A file the replay reports as missing a column gets
+   * its replayed mapping loaded into the mapping step, which opens on it; when nothing is missing the
+   * panel goes straight to Build, because the recipe has already answered every other question.
+   */
+  async function runReplay() {
+    const replay = state.replay;
+    replay.running = true;
+    replay.error = null;
+    rerender();
+    try {
+      replay.response = replay.uploadedIds.length
+        ? await replayOnboardingSpec(clientId, replay.spec.spec_id, replay.uploadedIds, replay.settledIds)
+        : null;
+    } catch (error) {
+      replay.response = null;
+      replay.error = error;
+    }
+    replay.running = false;
     await loadSources();
+    await loadReopenedMappings();
+    const response = replay.response;
+    if (response && response.spec_id) state.open = "build";
+    else if (response && reopened().length) state.open = "mapping";
+    rerender();
+  }
+
+  /** This month's files whose replayed mapping is missing a column - the only ones to review. */
+  function reopened() {
+    const response = state.replay && state.replay.response;
+    return response ? response.sources.filter((entry) => entry.missing_columns.length) : [];
+  }
+
+  async function loadReopenedMappings() {
+    const entries = reopened();
+    if (!entries.length) return;
+    try {
+      const { mappings } = await listMappings(clientId, useCaseId);
+      for (const entry of entries) {
+        const saved = mappings.find((mapping) => mapping.mapping_id === entry.mapping_id);
+        if (!saved) continue;
+        // The replayed copy is both what the table edits and what its confidence pills read: its
+        // numbers are last month's decisions, carried across unchanged (never re-measured here).
+        state.mappingSuggested[entry.source_id] = saved;
+        state.mappings[entry.source_id] = saved;
+        state.mappingSaved[entry.source_id] = false;
+        state.mappingError[entry.source_id] = null;
+      }
+    } catch (error) {
+      for (const entry of entries) state.mappingError[entry.source_id] = error;
+    }
   }
 
   /**
@@ -318,6 +399,11 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       rerender();
       return;
     }
+    if (state.replay) {
+      state.replay.uploadedIds = state.replay.uploadedIds.filter((id) => id !== sourceId);
+      await runReplay();
+      return;
+    }
     await loadSources();
   }
 
@@ -325,6 +411,8 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
 
   async function ensureMapping(entry) {
     const id = entry.source.source_id;
+    // Score mode never suggests: a file's mapping is last month's, replayed (`loadReopenedMappings`).
+    if (state.replay) return;
     if (!entry.source.role || state.mappings[id] || state.mappingLoading[id]) return;
     state.mappingLoading[id] = true;
     state.mappingError[id] = null;
@@ -429,11 +517,22 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       const result = await saveMapping(clientId, mapping.mapping_id, mapping);
       state.mappingSaved[sourceId] = true;
       state.mappingError[sourceId] = null;
-      state.mappingChecks[sourceId] = result.checks || [];
+      // In score mode these checks would be about every mapping the client ever saved - last
+      // month's included - so they are not this file's to show; the replay answers instead.
+      state.mappingChecks[sourceId] = state.replay ? [] : result.checks || [];
     } catch (error) {
       state.mappingError[sourceId] = error;
     }
     state.mappingSaving[sourceId] = false;
+    if (state.replay && state.mappingSaved[sourceId]) {
+      // A saved answer to a reopened mapping is this month's decision for that file: the replay is
+      // asked again with it, and uses it as it stands.
+      if (!state.replay.settledIds.includes(mapping.mapping_id)) {
+        state.replay.settledIds = [...state.replay.settledIds, mapping.mapping_id];
+      }
+      await runReplay();
+      return;
+    }
     rerender();
   }
 
@@ -589,10 +688,13 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     state.buildChecks = [];
     rerender();
     try {
-      const spec = await createOnboardingSpec(clientId, specBody());
-      state.specId = spec.spec_id;
-      state.specChecks = spec.checks || [];
-      const created = await createDataset({ client_id: clientId, spec_id: spec.spec_id, mode: "train" });
+      // Score mode builds the recipe the replay already saved; train mode saves this screen's.
+      const specId = state.replay ? state.replay.response.spec_id : await saveRecipe();
+      const created = await createDataset({
+        client_id: clientId,
+        spec_id: specId,
+        mode: state.replay ? "score" : "train",
+      });
       state.datasetId = created.dataset_id;
     } catch (error) {
       if (error instanceof ApiError && error.status === 409 && error.body && error.body.checks) {
@@ -607,6 +709,14 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     state.building = false;
     await pollOnce();
     scheduleNextPoll();
+  }
+
+  /** Save this screen's recipe (`POST .../onboarding-specs`) and return its id. */
+  async function saveRecipe() {
+    const spec = await createOnboardingSpec(clientId, specBody());
+    state.specId = spec.spec_id;
+    state.specChecks = spec.checks || [];
+    return spec.spec_id;
   }
 
   /** One poll, and whatever it settles. Returns `true` while the build is still going. */
@@ -661,10 +771,25 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     return null;
   }
 
-  function useDataset() {
+  /**
+   * Hand the built dataset to the Setup form, and fold the four steps away (prototype `07`).
+   *
+   * The sample is read first so the host can preview the rows it is about to run on; a sample that
+   * cannot be read is an empty preview, never a reason to withhold a dataset that built and passed.
+   */
+  async function useDataset() {
     const report = state.buildReport;
     const manifest = state.dataset && state.dataset.manifest;
     if (!report || !report.passed || !manifest || typeof onDatasetReady !== "function") return;
+    let sample = [];
+    try {
+      sample = (await getDatasetSample(state.datasetId)).rows || [];
+    } catch {
+      sample = [];
+    }
+    state.inUse = true;
+    state.open = null;
+    rerender();
     onDatasetReady({
       datasetId: state.datasetId,
       primaryKey: manifest.primary_key,
@@ -672,6 +797,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       problemType: inferProblemType(manifest),
       timeColumn: manifest.snapshot_mode === "periodic" ? state.schema.standard_schema.snapshot_column : null,
       manifest,
+      sample,
     });
   }
 

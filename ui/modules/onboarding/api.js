@@ -9,9 +9,9 @@
 // Every endpoint below is declared by a router in this repository today - `api/routes/clients.py`,
 // `sources.py`, `mappings.py`, `datasets.py` - and `tests/unit/test_onboarding_ui.py` checks each
 // path here against those routers' own OpenAPI surface rather than against a transcript of them.
-// Mounting them into `api.main.create_app` is the orchestrator's step (`PARALLEL_WORK_PROTOCOL.md`
-// §4), and until it happens a call answers 404 like any other unknown route: the panel renders that
-// the same way it renders every other `ApiError`, so there is nothing here to special-case.
+// `api.main.create_app` mounts all four (its PHASE-2 block); an installation without them answers
+// 404 like any other unknown route, and the panel renders that the same way it renders every other
+// `ApiError`, so there is nothing here to special-case.
 
 const API_BASE = (window.MARKETING_AI_API || window.location.origin).replace(/\/+$/, "");
 
@@ -133,6 +133,15 @@ export async function schemaProperty(model, property) {
   return prop;
 }
 
+// --- clients (the header's picker, Plan A M35) ---------------------------------------------------
+
+/** The client every installation starts with ("Demo"), created by the API the first time. */
+export const ensureDefaultClient = () => request("/clients/default", { method: "POST" });
+
+export const listClients = () => request("/clients");
+
+export const createClient = (name, industry) => json("/clients", "POST", { name, industry });
+
 // --- sources -------------------------------------------------------------------------------------
 
 export const listSources = (clientId) => request(`/clients/${encodeURIComponent(clientId)}/sources`);
@@ -181,10 +190,34 @@ export const saveMapping = (clientId, mappingId, mapping) =>
     value_maps: mapping.value_maps,
   });
 
+/** One client's saved mappings for one use case - how a replayed mapping is read back for review. */
+export const listMappings = (clientId, useCaseId) =>
+  request(
+    `/clients/${encodeURIComponent(clientId)}/mappings?use_case=${encodeURIComponent(useCaseId)}`,
+  );
+
 // --- the onboarding spec and its preview ------------------------------------------------------------
 
 export const createOnboardingSpec = (clientId, body) =>
   json(`/clients/${encodeURIComponent(clientId)}/onboarding-specs`, "POST", body);
+
+export const listOnboardingSpecs = (clientId, useCaseId) =>
+  request(
+    `/clients/${encodeURIComponent(clientId)}/onboarding-specs?use_case=${encodeURIComponent(useCaseId)}`,
+  );
+
+/**
+ * Point a saved recipe at this month's files (score mode). `sourceIds` are the files just uploaded;
+ * `mappingIds` are mappings the user saved for some of them after the replay reopened their mapping
+ * step - the replay then uses those as they stand. `spec_id` in the answer is null until nothing is
+ * missing.
+ */
+export const replayOnboardingSpec = (clientId, specId, sourceIds, mappingIds) =>
+  json(
+    `/clients/${encodeURIComponent(clientId)}/onboarding-specs/${encodeURIComponent(specId)}/replay`,
+    "POST",
+    { source_ids: sourceIds, mapping_ids: mappingIds },
+  );
 
 /** Synchronous by contract (<=10s, a 200-entity sample) - no polling, unlike a dataset build. */
 export const previewOnboardingSpec = (clientId, specId) =>
@@ -201,3 +234,6 @@ export const createDataset = (body) => json("/datasets", "POST", body);
 export const getDataset = (datasetId) => request(`/datasets/${encodeURIComponent(datasetId)}`);
 
 export const getDatasetReport = (datasetId) => request(`/datasets/${encodeURIComponent(datasetId)}/report`);
+
+/** The stringified, PII-redacted rows `sample.json` holds - Step 1's preview of a built dataset. */
+export const getDatasetSample = (datasetId) => request(`/datasets/${encodeURIComponent(datasetId)}/sample`);

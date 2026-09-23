@@ -283,12 +283,7 @@ def update_source_role(
     load_source(store, client_id, source_id)
     roles = get_roles(root)
     require_role(roles, body.role)
-    updated = store.set_source_role(source_id, body.role)
-    profile = load_profile(storage, client_id, source_id)
-    storage.write_model(
-        source_profile_key(client_id, source_id),
-        profile.model_copy(update={"role": body.role, "role_decided_by": DecidedBy.USER}),
-    )
+    updated = record_role(storage, store, client_id=client_id, source_id=source_id, role=body.role)
     resync_join_coverage(storage, store, root=root, roles=roles, client_id=client_id)
     return updated
 
@@ -416,6 +411,25 @@ def load_profile(storage: Storage, client_id: str, source_id: str) -> SourceProf
 
 def source_not_found(source_id: str) -> HTTPException:
     return http_error(404, "SOURCE_NOT_FOUND", f"No source with id {source_id!r}.")
+
+
+def record_role(
+    storage: Storage, store: ClientStore, *, client_id: str, source_id: str, role: str
+) -> SourceSpec:
+    """Write a settled role onto both documents that carry it, as a user decision.
+
+    Shared by the role `PATCH` above and by replaying a saved recipe onto this month's files
+    (`api.routes.datasets.replay_onboarding_spec`), where the recipe the user saved last month is
+    the decision. Coverage is left to the caller, which knows whether one role or several changed
+    and so how many times the client's tables need re-reading.
+    """
+    updated = store.set_source_role(source_id, role)
+    profile = load_profile(storage, client_id, source_id)
+    storage.write_model(
+        source_profile_key(client_id, source_id),
+        profile.model_copy(update={"role": role, "role_decided_by": DecidedBy.USER}),
+    )
+    return updated
 
 
 # ---------------------------------------------------------------------------

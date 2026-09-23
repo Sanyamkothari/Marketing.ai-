@@ -95,4 +95,10 @@ export async function getArtefacts(runId, names) {
 
 export const scoresUrl = (runId) => url(`/runs/${encodeURIComponent(runId)}/scores.csv`);
 
+/**
+ * Where a built dataset came from - its sources, mappings and recipe, each card already worded by
+ * the engine (Plan A M35). A run that read an uploaded file has no dataset and never asks.
+ */
+export const getDatasetLineage = (datasetId) => request(`/datasets/${encodeURIComponent(datasetId)}/lineage`);
+
 export const getModels = (useCaseId) => request(`/models?use_case=${encodeURIComponent(useCaseId)}`);

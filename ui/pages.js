@@ -9,6 +9,7 @@ import {
   barTrack,
   columnBar,
   dash,
+  errorBox,
   esc,
   fmtDate,
   fmtInt,
@@ -115,7 +116,47 @@ function leakageLine(validation, config) {
   return "Passed";
 }
 
-function dataPage(uc, run, art, byPath) {
+/** One column of the lineage block: a heading and the cards under it, worded by the engine. */
+function lineageColumn(title, cards) {
+  return `<div class="lin"><div class="lt">${esc(title)}</div>${cards
+    .map(
+      (card) =>
+        `<div class="li">${esc(card.id)}</div><div class="ld">${esc(card.label)}${
+          card.detail ? ` · ${esc(card.detail)}` : ""
+        }</div>`,
+    )
+    .join("")}</div>`;
+}
+
+/**
+ * "Where this dataset came from" (Plan A M35; prototype screenshot `15-data-lineage`): sources ->
+ * mapping -> recipe -> dataset -> this run, left to right. Every card but the last is the engine's
+ * own `GET /datasets/{id}/lineage` node, already worded; the last is this run's record. A run that
+ * read an uploaded file has no lineage and shows no card.
+ */
+function lineageCard(run, extra) {
+  if (extra.lineageError) {
+    return `<section class="card"><h3>Where this dataset came from</h3><div style="padding:0 20px 20px">${errorBox(
+      extra.lineageError,
+    )}</div></section>`;
+  }
+  const lineage = extra.lineage;
+  if (!lineage) return "";
+  const runCard = {
+    id: run.run_id,
+    label: run.mode === "train" ? "Training run" : "Scoring run",
+    detail: fmtStamp(run.created_at),
+  };
+  return `<section class="card"><h3>Where this dataset came from</h3><div class="lineage">${[
+    lineageColumn("Sources", lineage.sources),
+    lineageColumn("Mapping", lineage.mappings),
+    lineageColumn("Recipe", [lineage.spec]),
+    lineageColumn("Dataset", [lineage.dataset]),
+    lineageColumn("Run", [runCard]),
+  ].join("")}</div><p class="caption">Built from raw tables. Every id is stored with the run, so the same recipe can be replayed on next month's tables.</p></section>`;
+}
+
+function dataPage(uc, run, art, byPath, extra) {
   const profile = art["profile.json"];
   const prepare = art["prepare.json"];
   const split = art["split.json"];
@@ -198,6 +239,7 @@ function dataPage(uc, run, art, byPath) {
     : "";
 
   return `${tiles}
+    ${lineageCard(run, extra)}
     <div class="row">
       <section class="card"><h3>Input dataset</h3>${kvs(fileRows).replace(
         'class="kv"',
@@ -510,11 +552,12 @@ function outputPage(uc, run, art, byPath, scoresHref) {
 
 // --- entry point --------------------------------------------------------------------------------
 
-export function renderPage(kind, uc, run, art, scoresHref) {
+/** `extra` carries what is not a run artefact: the Data page's `lineage` (or `lineageError`). */
+export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
   const byPath = indexSchema(uc.advanced_settings || { stages: [] });
   const body =
     kind === "data"
-      ? dataPage(uc, run, art, byPath)
+      ? dataPage(uc, run, art, byPath, extra)
       : kind === "model"
         ? modelPage(uc, run, art, byPath)
         : outputPage(uc, run, art, byPath, scoresHref);
