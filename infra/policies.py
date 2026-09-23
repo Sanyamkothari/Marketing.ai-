@@ -29,10 +29,18 @@ from typing import Final
 
 from aws_cdk import aws_iam as iam
 
-from infra.naming import JOB_NAME_PREFIX, METRIC_NAMESPACE, OBJECT_PREFIXES, SSM_ROOT
+from infra.naming import (
+    JOB_NAME_PREFIX,
+    METRIC_NAMESPACE,
+    OBJECT_PREFIXES,
+    ROW_LEVEL_PREFIXES,
+    SSM_ROOT,
+)
 
 __all__ = [
     "RESOURCE_WILDCARD_ALLOW_LIST",
+    "alert_publish_statement",
+    "audit_export_write_statement",
     "bedrock_statements",
     "ec2_network_interface_statement",
     "ecr_pull_statements",
@@ -40,8 +48,11 @@ __all__ = [
     "log_write_statement",
     "metrics_statement",
     "pass_role_statement",
+    "retention_statements",
+    "run_job_task_statements",
     "s3_artefact_statements",
     "sagemaker_job_statements",
+    "schedule_management_statement",
     "settings_read_statements",
 ]
 
@@ -200,14 +211,16 @@ def sagemaker_job_statements(
     ]
 
 
-def pass_role_statement(role_arn: str, *, service: str = "sagemaker.amazonaws.com") -> iam.PolicyStatement:
+def pass_role_statement(
+    role_arn: str, *, service: str = "sagemaker.amazonaws.com", sid: str = "PassJobRole"
+) -> iam.PolicyStatement:
     """Hand exactly one role to exactly one service.
 
     `iam:PassRole` without the `iam:PassedToService` condition is the classic privilege-escalation
     hole: it lets the holder attach that role to anything that will assume it.
     """
     return iam.PolicyStatement(
-        sid="PassJobRole",
+        sid=sid,
         effect=iam.Effect.ALLOW,
         actions=["iam:PassRole"],
         resources=[role_arn],
@@ -332,3 +345,158 @@ def statement_actions(statement: Mapping[str, object]) -> list[str]:
     if isinstance(action, list):
         return [item for item in action if isinstance(item, str)]
     return []
+
+
+# --- Phase 4b ------------------------------------------------------------------------------------
+# What the running API needs for sign-in, the audit trail, DPDP retention and erasure, scheduling
+# and alerts (plan M46-M49), written in the same shape as everything above: one function per
+# capability, every resource named, and a docstring that says why each action is there and why the
+# obvious neighbouring action is not.
+
+
+def audit_export_write_statement(bucket_arn: str, prefix: str) -> iam.PolicyStatement:
+    """Write audit exports under one prefix of the Object Lock bucket, and do nothing else there.
+
+    `PutObjectRetention` is not optional: `S3AuditExportSink` sends `ObjectLockMode=COMPLIANCE` and
+    a retain-until date *on the PutObject itself*, and S3 authorises those two headers against
+    `s3:PutObjectRetention` - without it every export is `AccessDenied`.
+
+    Deliberately absent: every `Delete*` (an audit trail its writer can delete is not one), every
+    `Get*` and `ListBucket` (the export is evidence for somebody else to read; the API reads the
+    audit table, never the export), and `BypassGovernanceRetention` (compliance mode has no bypass,
+    and granting it would only matter if somebody quietly switched the bucket to governance mode).
+    """
+    return iam.PolicyStatement(
+        sid="WriteAuditExports",
+        effect=iam.Effect.ALLOW,
+        actions=["s3:PutObject", "s3:PutObjectRetention"],
+        resources=[f"{bucket_arn}/{prefix.strip('/')}/*"],
+    )
+
+
+def alert_publish_statement(topic_arn: str) -> iam.PolicyStatement:
+    """Publish to the application's alert topic, and to no other topic.
+
+    Not the CloudWatch alarm topic. That topic's messages are CloudWatch's, and a role that could
+    publish there could forge an "OK" for an alarm that is firing. Two topics, one email address:
+    the recipient sees both, and only CloudWatch can speak on the alarm channel.
+    """
+    return iam.PolicyStatement(
+        sid="PublishAlerts",
+        effect=iam.Effect.ALLOW,
+        actions=["sns:Publish"],
+        resources=[topic_arn],
+    )
+
+
+def schedule_management_statement(*, account: str, region: str, group_name: str) -> iam.PolicyStatement:
+    """Create, change, read and delete schedules in this deployment's group only.
+
+    A schedule ARN is `schedule/<group>/<name>`, so the group is the boundary and the `*` is the
+    schedule name, which the application generates. `ListSchedules` is absent: the application
+    keeps its own schedule table and only ever addresses a schedule it created, and a list call
+    would show this role every other group's schedules in the account.
+    """
+    return iam.PolicyStatement(
+        sid="ManageSchedules",
+        effect=iam.Effect.ALLOW,
+        actions=[
+            "scheduler:CreateSchedule",
+            "scheduler:UpdateSchedule",
+            "scheduler:DeleteSchedule",
+            "scheduler:GetSchedule",
+        ],
+        resources=[f"arn:aws:scheduler:{region}:{account}:schedule/{group_name}/*"],
+    )
+
+
+def retention_statements(
+    bucket_arn: str, *, prefixes: Sequence[str] = ROW_LEVEL_PREFIXES
+) -> list[iam.PolicyStatement]:
+    """What the DPDP retention job and erasure requests need beyond the ordinary artefact grant.
+
+    Three things, each for a reason `s3_artefact_statements` does not cover:
+
+    * **Lifecycle configuration on the artefact bucket.** Plan M48 puts S3 lifecycle rules per
+      client prefix behind the retention job as a backstop, and `PutLifecycleConfiguration`
+      replaces the bucket's *whole* configuration - so the job reads it first
+      (`GetLifecycleConfiguration`) and keeps every rule it does not own, including the
+      `abort-incomplete-multipart-uploads` rule `infra/storage.py` created.
+    * **Deleting object versions under the row-level prefixes.** The bucket is versioned, so a
+      plain delete leaves the customer's bytes behind as a noncurrent version. Erasure has to be
+      able to remove the version itself - on `uploads/` and `runs/` only; see
+      `infra/naming.ROW_LEVEL_PREFIXES`.
+    * **Listing versions** so the job can find them. Bucket-level, like `ListBucket`, and for the
+      same reason it carries no prefix condition.
+    """
+    return [
+        iam.PolicyStatement(
+            sid="RetentionLifecycle",
+            effect=iam.Effect.ALLOW,
+            actions=[
+                "s3:GetLifecycleConfiguration",
+                "s3:PutLifecycleConfiguration",
+                "s3:ListBucketVersions",
+            ],
+            resources=[bucket_arn],
+        ),
+        iam.PolicyStatement(
+            sid="EraseObjectVersions",
+            effect=iam.Effect.ALLOW,
+            actions=["s3:DeleteObjectVersion"],
+            resources=[f"{bucket_arn}/{prefix}*" for prefix in prefixes],
+        ),
+    ]
+
+
+def run_job_task_statements(
+    *,
+    account: str,
+    region: str,
+    cluster_arn: str,
+    cluster: str,
+    family: str,
+    task_role_arns: Sequence[str],
+) -> list[iam.PolicyStatement]:
+    """What EventBridge Scheduler's role needs to start the scheduled-job task, and nothing more.
+
+    * `ecs:RunTask` on one task-definition *family*, and only in this deployment's cluster - the
+      `ecs:cluster` condition is what stops the role running the job task somewhere else. Two
+      spellings of the one family: `:*` is any revision (CloudFormation picks a new one on every
+      deployment), and the bare family ARN is what a schedule that names no revision - the
+      recommended shape, see `infra/naming.job_task_family` - is authorised against. Which of the
+      two IAM evaluates for a revision-less `RunTask` is not documented clearly enough to bet a
+      deployment's schedules on, and both name the same family.
+    * `ecs:TagResource` on tasks in that cluster, and only as part of `RunTask`: a schedule that
+      propagates the cost-allocation tags needs it, and the `ecs:CreateAction` condition means it
+      cannot retag anything that already exists.
+    * `iam:PassRole` on the task's two roles, to ECS tasks only. `RunTask` passes both the task
+      role and the execution role, so both must be passable; the condition stops either being
+      handed to any other service.
+    """
+    return [
+        iam.PolicyStatement(
+            sid="RunJobTask",
+            effect=iam.Effect.ALLOW,
+            actions=["ecs:RunTask"],
+            resources=[
+                f"arn:aws:ecs:{region}:{account}:task-definition/{family}",
+                f"arn:aws:ecs:{region}:{account}:task-definition/{family}:*",
+            ],
+            conditions={"ArnEquals": {"ecs:cluster": cluster_arn}},
+        ),
+        iam.PolicyStatement(
+            sid="TagJobTask",
+            effect=iam.Effect.ALLOW,
+            actions=["ecs:TagResource"],
+            resources=[f"arn:aws:ecs:{region}:{account}:task/{cluster}/*"],
+            conditions={"StringEquals": {"ecs:CreateAction": "RunTask"}},
+        ),
+        iam.PolicyStatement(
+            sid="PassJobTaskRoles",
+            effect=iam.Effect.ALLOW,
+            actions=["iam:PassRole"],
+            resources=list(task_role_arns),
+            conditions={"StringEquals": {"iam:PassedToService": "ecs-tasks.amazonaws.com"}},
+        ),
+    ]

@@ -42,7 +42,10 @@ from fastapi.testclient import TestClient
 import api.routes.connection as connection_routes
 from api.main import create_app
 from engine import aws_connection
+from engine.access.roles import Role
+from engine.access.users import SqlUserStore
 from engine.aws_connection import AwsConnection, CredentialSource, connection_path, load_connection
+from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.settings import Settings
 
 pytestmark = pytest.mark.integration
@@ -504,15 +507,27 @@ def prod_environment(monkeypatch: pytest.MonkeyPatch, data_dir: Path) -> None:
     planted.chmod(0o600)
 
 
-def test_the_connection_screen_answers_on_prod(prod_environment: None, config_root: Path) -> None:
-    """On prod the routes use the deployment's own settings, so GET says `deployed` instead of 503."""
-    settings = Settings(env="prod", cors_origins=("https://marketing.example.com",))
+def test_the_connection_screen_answers_on_prod(
+    prod_environment: None, config_root: Path, data_dir: Path
+) -> None:
+    """On prod the routes use the deployment's own settings, so GET says `deployed` instead of 503.
+
+    Phase 4b (DEC-702): a prod deployment answers a non-public route only with sign-in configured,
+    so this deployment has `auth_mode=local` and the screen is read by a signed-in Viewer.
+    """
+    settings = Settings(env="prod", auth_mode="local", cors_origins=("https://marketing.example.com",))
     app = create_app(config_root=config_root)
     # Set after construction: `create_app(settings=...)` would also reconfigure the process's logging,
     # and that would leak into every test that runs after this one.
     app.state.settings = settings
+    users = SqlUserStore(
+        sqlite_engine(data_dir / PLATFORM_DB_FILENAME), session_ttl_seconds=3600, iterations=300
+    )
+    app.state.user_store = users
+    viewer = users.create_user("viewer", "a long enough password", roles=[Role.VIEWER], created_by="test")
+    signed_in = {"Authorization": f"Bearer {users.create_session(viewer.user_id).token}"}
     with TestClient(app, client=("10.0.0.5", 1)) as deployed:
-        response = deployed.get("/connection/aws")
+        response = deployed.get("/connection/aws", headers=signed_in)
     assert response.status_code == 200
     assert response.json()["locked_reason"] == "deployed"
     assert response.json()["connection"] == {"source": "default_chain", "profile": None}

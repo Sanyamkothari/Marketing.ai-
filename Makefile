@@ -202,4 +202,17 @@ aws-test: infra-test ## every Phase 4a suite: the AWS backends, the container fi
 # ---- END PHASE-4A ----
 
 # ---- PHASE-4B (production) — append only below this line ----
+.PHONY: production-test production-test-fast
+
+# Every Phase 4b suite: access, audit, privacy, scheduling and their screens (M46-M49). Slow tests
+# are included (two train a real model through a schedule), the paid markers are not. The jsdom
+# screen tests run through pytest, which writes their fixtures from the real app; without node and
+# jsdom they skip and say so (`cd tests/integration/production/ui && npm install` once).
+production-test: ## every Phase 4b suite (M46-M49), slow ones included; no AWS account needed
+	$(BIN)/python -m pytest -m "$(PAID_MARKERS)" tests/unit/production tests/integration/production \
+		tests/unit/test_alembic_migrations.py tests/unit/test_postgres_metadata.py
+
+production-test-fast: ## the Phase 4b suites without the two that train a model
+	$(BIN)/python -m pytest -m "not slow and $(PAID_MARKERS)" tests/unit/production tests/integration/production \
+		tests/unit/test_alembic_migrations.py tests/unit/test_postgres_metadata.py
 # ---- END PHASE-4B ----

@@ -603,4 +603,390 @@ class ConnectionTestRequest(StrictBase):
 # ---- END PHASE-4A ----
 
 # ---- PHASE-4B (production) — append only below this line ----
+# --- M46/M47 (access control and audit): api/routes/auth.py and api/routes/audit.py -------------
+from pydantic import ConfigDict  # noqa: E402
+
+from engine.access.roles import Role  # noqa: E402
+from engine.audit.events import AuditEvent  # noqa: E402
+from engine.audit.export import AuditExportResult  # noqa: E402
+
+AuditExportResponse = AuditExportResult
+"""`POST /audit/exports` answers with the engine's own record of what was written."""
+
+
+class _SecretBase(StrictBase):
+    """A request that carries a password: whitespace is part of a password, so it is never stripped."""
+
+    model_config = ConfigDict(str_strip_whitespace=False)
+
+
+class PrincipalView(StrictBase):
+    """Who the caller is, as the UI shows it. Never a credential."""
+
+    user_id: str = Field(description="Stable id; what the audit log records.")
+    username: str = Field(description="What the person signs in with.")
+    display_name: str | None = Field(default=None, description="How the person is shown, when known.")
+    roles: tuple[Role, ...] = Field(description="Roles held, Viewer implied, sorted.")
+    kind: str = Field(description="`user`, `local_operator` (sign-in is off) or `system`.")
+
+
+class PermissionView(StrictBase):
+    """Whether the caller may use one route, and the sentence to show when not."""
+
+    method: str = Field(description="HTTP method.")
+    path: str = Field(description="Route template, e.g. `/models/{model_id}/approve`.")
+    action: str = Field(description="Audit action name, e.g. `models.approve`.")
+    role: Role | None = Field(description="Role required; null for a public route.")
+    allowed: bool = Field(description="Whether the caller holds that role.")
+    reason: str | None = Field(
+        default=None, description='Why not, when not: "Only an Approver can approve a champion."'
+    )
+
+
+class MeResponse(StrictBase):
+    """`GET /auth/me`: who the caller is and what they may do, so the UI can hide and explain actions."""
+
+    principal: PrincipalView
+    auth_mode: str = Field(description="`off` (everyone is the local operator) or `local`.")
+    permissions: tuple[PermissionView, ...] = Field(description="One entry per declared route, sorted.")
+
+
+class LoginRequest(_SecretBase):
+    """Body of `POST /auth/login`."""
+
+    username: str = Field(min_length=1, max_length=64, description="Case-insensitive.")
+    password: str = Field(min_length=1, max_length=1024, description="Never logged, never audited.")
+
+
+class LoginResponse(StrictBase):
+    """A new sign-in. `token` is shown once; send it as `Authorization: Bearer <token>`."""
+
+    token: str = Field(description="Bearer token. Stored by the server only as its SHA-256.")
+    token_type: Literal["bearer"] = "bearer"
+    expires_at: AwareDatetime = Field(description="When the sign-in lapses, UTC.")
+    principal: PrincipalView
+
+
+class UserView(StrictBase):
+    """A user as an Admin sees one. There is no password field."""
+
+    user_id: str
+    username: str
+    display_name: str
+    roles: tuple[Role, ...] = Field(description="Roles granted, sorted.")
+    disabled: bool
+    created_at: AwareDatetime
+    created_by: str
+    updated_at: AwareDatetime
+
+
+class UserListResponse(StrictBase):
+    """`GET /users`."""
+
+    users: tuple[UserView, ...]
+
+
+class UserCreateRequest(_SecretBase):
+    """Body of `POST /users`."""
+
+    username: str = Field(min_length=3, max_length=64, description="Unique, case-insensitive.")
+    password: str = Field(min_length=1, max_length=1024, description="At least 12 characters.")
+    display_name: str | None = Field(default=None, max_length=120)
+    roles: tuple[Role, ...] = Field(min_length=1, description="At least one role.")
+
+
+class UserUpdateRequest(StrictBase):
+    """Body of `PATCH /users/{user_id}`. Omitted fields are left as they are."""
+
+    display_name: str | None = Field(default=None, max_length=120)
+    roles: tuple[Role, ...] | None = Field(
+        default=None, description="The complete new set; revokes the user's sign-ins."
+    )
+    disabled: bool | None = Field(default=None, description="True signs the user out everywhere.")
+
+
+class PasswordChangeRequest(_SecretBase):
+    """Body of `POST /users/{user_id}/password`."""
+
+    password: str = Field(min_length=1, max_length=1024, description="The new password, 12+ characters.")
+    current_password: str | None = Field(
+        default=None,
+        max_length=1024,
+        description="Required when changing your own password; an Admin resetting someone else's omits it.",
+    )
+
+
+class AuditEventPage(StrictBase):
+    """`GET /audit/events`: one page of events, newest first, and the total that match."""
+
+    events: tuple[AuditEvent, ...]
+    total: int = Field(description="Events matching the filters, across all pages.")
+    limit: int
+    offset: int
+
+
+class AuditExportRequest(StrictBase):
+    """Body of `POST /audit/exports`: the window to export. Empty exports everything up to now."""
+
+    since: AwareDatetime | None = Field(default=None, description="Inclusive lower bound.")
+    until: AwareDatetime | None = Field(default=None, description="Exclusive upper bound; defaults to now.")
+    action: str | None = Field(
+        default=None, max_length=120, description="Exact action or a prefix ending in `.`."
+    )
+
+
+# --- end M46/M47 ---------------------------------------------------------------------------------
+# --- M48 (DPDP controls): api/routes/privacy.py --------------------------------------------------
+# A data principal's id arrives only in a request *body* (never a path or a query string, which the
+# access log and every proxy record), is hashed on arrival, and appears in no response below: every
+# model here names a person by `principal_hash` or not at all (DEC-746).
+from engine.privacy.contracts import (  # noqa: E402
+    ConsentImportReport,
+    ConsentRecord,
+    ConsentReport,
+    ConsentStatus,
+    ErasureOutcome,
+    ErasureRequestRecord,
+    RetentionPlan,
+    RetentionResult,
+    RetrainFlag,
+)
+
+ConsentRecordResponse = ConsentRecord
+"""`POST /privacy/consent` answers with the ledger row as stored: the principal as a hash."""
+
+ConsentImportResponse = ConsentImportReport
+"""`POST /privacy/consent/imports`: rows read, rows written, and every problem by row and column."""
+
+ErasureResponse = ErasureOutcome
+"""`POST /privacy/erasure`: what was erased, where, and which models were flagged for retraining."""
+
+ConsentReportResponse = ConsentReport
+"""`GET /privacy/runs/{run_id}/consent-report`: how the consent ledger gated one scoring run."""
+
+_PRINCIPAL_ID_DESCRIPTION = (
+    "The data principal's id exactly as the client's files spell it (e.g. a customer id). Hashed on "
+    "arrival; never stored, logged, audited or echoed back."
+)
+_CLIENT_ID_DESCRIPTION = "Client whose data this is; defaults to the deployment's `client_id`."
+
+
+class PurposeView(StrictBase):
+    """One purpose a data principal may consent to (`configs/privacy.yaml`)."""
+
+    purpose_id: str = Field(description="Id used in consent records, e.g. `marketing_communication`.")
+    label: str = Field(description="How the purpose is named to a person.")
+    description: str = Field(description="One sentence on what processing it covers.")
+
+
+class PrivacyPolicyResponse(StrictBase):
+    """`GET /privacy/purposes`: the purposes, which use case is gated by which, and the erasure policy."""
+
+    purposes: tuple[PurposeView, ...] = Field(description="Every declared purpose, by id.")
+    use_case_purposes: dict[str, str] = Field(description="Use-case id -> purpose id; unlisted = ungated.")
+    erasure_mode: str = Field(description="`delete` or `tombstone`.")
+    consent_history: str = Field(
+        description="`keep` or `delete`: what erasure does to the hashed ledger rows."
+    )
+
+
+class ConsentRecordRequest(StrictBase):
+    """Body of `POST /privacy/consent`: one consent given or withdrawn."""
+
+    principal_id: str = Field(min_length=1, max_length=256, description=_PRINCIPAL_ID_DESCRIPTION)
+    purpose: str = Field(min_length=1, max_length=64, description="Purpose id from `GET /privacy/purposes`.")
+    status: ConsentStatus = Field(description="`granted` or `withdrawn`.")
+    source: str = Field(
+        default="api", min_length=1, max_length=64, description="Where the consent was captured."
+    )
+    recorded_at: AwareDatetime | None = Field(
+        default=None, description="When the person gave or withdrew consent; defaults to now."
+    )
+    expires_at: AwareDatetime | None = Field(default=None, description="When a grant lapses; null = never.")
+    client_id: str | None = Field(default=None, max_length=128, description=_CLIENT_ID_DESCRIPTION)
+
+
+class ConsentLookupRequest(StrictBase):
+    """Body of `POST /privacy/consent/lookup`."""
+
+    principal_id: str = Field(min_length=1, max_length=256, description=_PRINCIPAL_ID_DESCRIPTION)
+    client_id: str | None = Field(default=None, max_length=128, description=_CLIENT_ID_DESCRIPTION)
+    as_of: AwareDatetime | None = Field(
+        default=None, description="Answer as of this moment; defaults to now."
+    )
+
+
+class PurposeConsent(StrictBase):
+    """Whether the principal may be processed for one purpose, as of the lookup's moment."""
+
+    purpose: str = Field(description="Purpose id.")
+    state: Literal["valid", "withdrawn", "expired", "none"] = Field(
+        description="`valid` (an unexpired grant decides), `withdrawn`, `expired`, or `none` (no record)."
+    )
+
+
+class ConsentLookupResponse(StrictBase):
+    """`POST /privacy/consent/lookup`: one principal's consent, per purpose, and their ledger rows."""
+
+    lookup_id: str = Field(description="This lookup's id; the audit event's object id.")
+    principal_hash: str = Field(description="Salted hash of the principal's id.")
+    client_id: str = Field(description="Client whose ledger was read.")
+    as_of: AwareDatetime = Field(description="The moment the states were decided as of.")
+    purposes: tuple[PurposeConsent, ...] = Field(description="One state per declared purpose.")
+    records: tuple[ConsentRecord, ...] = Field(description="Every ledger row of the principal, oldest first.")
+
+
+class RetentionPlanResponse(StrictBase):
+    """`GET /privacy/retention/plan`: the dry run. Applying it needs `plan_id`, `planned_at` and `plan_hash`."""
+
+    plan: RetentionPlan = Field(description="Every key that would be deleted or stripped, and why.")
+    plan_hash: str = Field(description="SHA-256 of `planned_at` and the items; the apply checks it.")
+    counts: dict[str, int] = Field(description="Items per category.")
+
+
+class RetentionApplyRequest(StrictBase):
+    """Body of `POST /privacy/retention/apply`: the reviewed plan, identified by what the dry run returned."""
+
+    plan_id: str = Field(pattern=r"^ret_[0-9a-f]{16}$", description="`plan.plan_id` of the reviewed dry run.")
+    planned_at: AwareDatetime = Field(description="`plan.planned_at` of the reviewed dry run.")
+    plan_hash: str = Field(pattern=r"^[0-9a-f]{64}$", description="`plan_hash` of the reviewed dry run.")
+
+
+class RetentionApplyResponse(StrictBase):
+    """`POST /privacy/retention/apply`: what the job deleted and stripped."""
+
+    plan_id: str = Field(description="The plan that was applied.")
+    plan_hash: str = Field(description="Its hash, equal to the reviewed dry run's.")
+    result: RetentionResult
+
+
+class ErasureRequestBody(StrictBase):
+    """Body of `POST /privacy/erasure`."""
+
+    principal_id: str = Field(min_length=1, max_length=256, description=_PRINCIPAL_ID_DESCRIPTION)
+    client_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Client the request came from; recorded, and scopes the consent-history deletion. "
+        "Every store is searched whatever it is.",
+    )
+
+
+class ErasureRequestList(StrictBase):
+    """`GET /privacy/erasure`: the erasure register, newest first."""
+
+    requests: tuple[ErasureRequestRecord, ...]
+
+
+class AccessRequestBody(StrictBase):
+    """Body of `POST /privacy/access-requests`: whose data to export."""
+
+    principal_id: str = Field(min_length=1, max_length=256, description=_PRINCIPAL_ID_DESCRIPTION)
+    client_id: str | None = Field(
+        default=None, max_length=128, description="Limits the consent history included to this client."
+    )
+
+
+class RetrainFlagList(StrictBase):
+    """`GET /privacy/retrain-flags`: model versions due for retraining because of an erasure."""
+
+    flags: tuple[RetrainFlag, ...]
+
+
+# --- end M48 -------------------------------------------------------------------------------------
+# --- M49 (scheduling, monitoring, outcomes): api/routes/schedules.py and api/routes/monitoring.py --
+# A schedule, a firing, an alert, an outcome report and the incrementality input are answered as the
+# engine's own documents (`engine.scheduling`): each already holds ids, codes, counts and business
+# language only (DEC-769, DEC-770, DEC-771), so a second API shape would be a copy to keep in step.
+from engine.scheduling.alerts import Alert  # noqa: E402
+from engine.scheduling.cron import DEFAULT_TIMEZONE  # noqa: E402
+from engine.scheduling.outcomes import IncrementalityInput, OutcomeReport  # noqa: E402
+from engine.scheduling.schedules import (  # noqa: E402
+    Schedule,
+    ScheduleFiring,
+    ScheduleKind,
+    ScheduleParameters,
+)
+
+ScheduleResponse = Schedule
+"""`POST/GET/PATCH /schedules/{schedule_id}` and the enable/disable actions answer with the stored row."""
+
+FiringResponse = ScheduleFiring
+"""`POST /schedules/{schedule_id}/fire`: the firing as recorded (usually `running`, with its run id)."""
+
+AlertResponse = Alert
+"""`POST /monitoring/alerts/{alert_id}/acknowledge`: the alert as stored after acknowledgement."""
+
+OutcomeReportResponse = OutcomeReport
+"""`POST/GET /runs/{run_id}/outcomes`: real-world performance of one scoring run (schema version 1)."""
+
+IncrementalityInputResponse = IncrementalityInput
+"""`GET /runs/{run_id}/incrementality-input`: what Plan B's incrementality report consumes (v1)."""
+
+_CADENCE_DESCRIPTION = (
+    "`daily`, `weekly` or `monthly` (02:00 in the schedule's timezone), or a five-field cron line "
+    "(minute hour day-of-month month day-of-week) that EventBridge can also run."
+)
+
+
+class ScheduleCreateRequest(StrictBase):
+    """Body of `POST /schedules`: one recurring piece of work for one client and one use case."""
+
+    use_case_id: str = Field(min_length=1, max_length=128, description="Use case the work is for.")
+    kind: ScheduleKind = Field(description="`score`, `drift_check` or `retrain`.")
+    cadence: str = Field(min_length=1, max_length=120, description=_CADENCE_DESCRIPTION)
+    client_id: str | None = Field(
+        default=None,
+        max_length=128,
+        description="Client the work is for. Defaults to the client of `parameters.onboarding_spec_id`.",
+    )
+    timezone: str = Field(
+        default=DEFAULT_TIMEZONE, min_length=1, max_length=64, description="IANA zone the cadence is read in."
+    )
+    parameters: ScheduleParameters = Field(
+        default_factory=ScheduleParameters,
+        description="Ids the work reads: a recipe to rebuild or a fixed dataset (a score needs one).",
+    )
+    enabled: bool = Field(default=True, description="Create it paused with `false`.")
+
+
+class ScheduleUpdateRequest(StrictBase):
+    """Body of `PATCH /schedules/{schedule_id}`. Omitted fields are left as they are."""
+
+    cadence: str | None = Field(default=None, min_length=1, max_length=120, description=_CADENCE_DESCRIPTION)
+    timezone: str | None = Field(default=None, min_length=1, max_length=64, description="IANA zone.")
+    enabled: bool | None = Field(default=None, description="Pause (`false`) or resume (`true`).")
+    parameters: ScheduleParameters | None = Field(
+        default=None, description="The complete new set of ids the work reads."
+    )
+
+
+class ScheduleListResponse(StrictBase):
+    """`GET /schedules`: matching schedules, oldest first."""
+
+    schedules: tuple[Schedule, ...]
+
+
+class FiringListResponse(StrictBase):
+    """`GET /schedules/{schedule_id}/firings` and `GET /monitoring/missed-firings`: newest first."""
+
+    firings: tuple[ScheduleFiring, ...]
+
+
+class RetrainingSyncResponse(StrictBase):
+    """`POST /schedules/retraining/sync`: the managed schedules `monitoring.retraining` now implies."""
+
+    targets: int = Field(description="Client x use case pairs with a training recipe that were checked.")
+    created: tuple[str, ...] = Field(description="Managed schedule ids created.")
+    updated: tuple[str, ...] = Field(description="Managed schedule ids whose cadence changed.")
+    removed: tuple[str, ...] = Field(description="Managed schedule ids removed (the setting became manual).")
+
+
+class AlertListResponse(StrictBase):
+    """`GET /monitoring/alerts`: matching alerts, newest first."""
+
+    alerts: tuple[Alert, ...]
+
+
+# --- end M49 -------------------------------------------------------------------------------------
 # ---- END PHASE-4B ----

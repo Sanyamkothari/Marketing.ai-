@@ -428,9 +428,29 @@ def test_exactly_the_parked_settings_are_marked_advisory() -> None:
         "features.selection",
         "features.max_features",
         "monitoring.retraining",
-        "monitoring.performance_alert_drop_pct",
-        "governance.retention_days",
     }
+
+
+def test_the_settings_phase_4b_shipped_are_live_controls_that_change_no_recipe() -> None:
+    """DEC-795: retention and the performance-alert level are enforced from each run's own config
+    now, so the form offers them as live controls; neither is part of a recipe, so moving them
+    still leaves the recipe hash alone."""
+    shipped = {"monitoring.performance_alert_drop_pct", "governance.retention_days"}
+    marked = {field.path for stage in FIELD_TABLE for field in stage.fields if field.advisory}
+    assert shipped.isdisjoint(marked)
+    base = resolve_config("targeted-advertisement", {})
+    moved = resolve_config(
+        "targeted-advertisement",
+        {"governance.retention_days": 30, "monitoring.performance_alert_drop_pct": 20},
+    )
+    assert moved.config.governance.retention_days == 30
+
+    def recipe(resolved):
+        return recipe_from_config(
+            resolved.config, primary_key="customer_id", feature_columns=("a", "b"), seed=1
+        )
+
+    assert recipe(base).recipe_hash == recipe(moved).recipe_hash
 
 
 def test_every_advisory_field_says_on_screen_why_it_is_disabled() -> None:

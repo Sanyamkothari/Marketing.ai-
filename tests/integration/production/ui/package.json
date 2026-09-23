@@ -1,0 +1,12 @@
+{
+  "name": "marketing-ai-production-ui-tests",
+  "private": true,
+  "type": "module",
+  "description": "jsdom tests for ui/modules/production (Phase 4b M46/M47); run through test_production_ui_js.py, which writes the real API fixtures they read",
+  "scripts": {
+    "test": "node --test"
+  },
+  "devDependencies": {
+    "jsdom": "^26.0.0"
+  }
+}

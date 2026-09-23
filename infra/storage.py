@@ -32,9 +32,9 @@ from aws_cdk import aws_s3 as s3
 from constructs import Construct
 
 from infra.context import AppContext
-from infra.naming import PRODUCT
+from infra.naming import PRODUCT, audit_bucket_name
 
-__all__ = ["ABORT_INCOMPLETE_UPLOAD_DAYS", "StorageStack"]
+__all__ = ["ABORT_INCOMPLETE_UPLOAD_DAYS", "AUDIT_ACCESS_LOG_PREFIX", "StorageStack"]
 
 ABORT_INCOMPLETE_UPLOAD_DAYS: Final[int] = 7
 """How long a half-finished multipart upload may sit before S3 abandons it.
@@ -47,6 +47,13 @@ upload is never cut off and short enough that the bill notices; no run in this p
 
 TLS_VERSION_FLOOR: Final[float] = 1.2
 """The oldest TLS version the bucket answers. 1.0 and 1.1 are deprecated by the IETF (RFC 8996)."""
+
+AUDIT_ACCESS_LOG_PREFIX: Final[str] = "s3-access-audit/"
+"""Where the Phase 4b audit bucket's server access logs land in the access-log bucket.
+
+A prefix of its own, because who read an audit export is itself audit evidence and an operator
+should be able to find it without filtering the artefact bucket's traffic out.
+"""
 
 IMAGE_TAG_HISTORY: Final[int] = 20
 """How many untagged image versions ECR keeps. Chosen: enough to roll back a few deployments."""
@@ -129,6 +136,7 @@ class StorageStack(Stack):
             ],
         )
         self._deny_wrong_encryption_headers()
+        self._allow_audit_bucket_access_logs()
 
         self.repository = ecr.Repository(
             self,
@@ -162,6 +170,33 @@ class StorageStack(Stack):
             "RepositoryUri",
             value=self.repository.repository_uri,
             description="ECR_REGISTRY/ECR_REPOSITORY for scripts/build_push_image.sh",
+        )
+
+    def _allow_audit_bucket_access_logs(self) -> None:
+        """Let S3 deliver the Phase 4b audit bucket's access logs here - that bucket and no other.
+
+        Written out here rather than left to CDK. The audit bucket lives in the operations stack,
+        and when a bucket names a log bucket in *another* stack, CDK adds the delivery grant to this
+        bucket's policy by itself and - because it cannot reference the source bucket without a
+        dependency cycle - adds it with no condition at all. This statement is the same grant with
+        both conditions AWS documents: the source bucket, named by its (deterministic) name rather
+        than by a reference, and this account. The operations stack hands CDK an imported
+        reference to this bucket, which is what stops CDK adding its own.
+        """
+        audit_bucket = audit_bucket_name(self.context.bucket_name_prefix, self.context.env_name, self.account)
+        audit_bucket_arn = f"arn:aws:s3:::{audit_bucket}"
+        self.log_bucket.add_to_resource_policy(
+            iam.PolicyStatement(
+                sid="AuditBucketAccessLogDelivery",
+                effect=iam.Effect.ALLOW,
+                principals=[iam.ServicePrincipal("logging.s3.amazonaws.com")],
+                actions=["s3:PutObject"],
+                resources=[self.log_bucket.arn_for_objects(f"{AUDIT_ACCESS_LOG_PREFIX}*")],
+                conditions={
+                    "ArnLike": {"aws:SourceArn": audit_bucket_arn},
+                    "StringEquals": {"aws:SourceAccount": self.account},
+                },
+            )
         )
 
     def _deny_wrong_encryption_headers(self) -> None:

@@ -20,10 +20,12 @@ from alembic import command
 from alembic.autogenerate import compare_metadata
 from alembic.config import Config
 from alembic.migration import MigrationContext
+from alembic.script import ScriptDirectory
 from sqlalchemy import Engine, create_engine, text
 from sqlmodel import SQLModel
 
 from engine.aws.postgres import METADATA_TABLES, PostgresConfig, postgres_engine
+from engine.platform_db import PLATFORM_TABLES
 from engine.registry import ModelVersionRow
 from tests.fixtures.postgres import (  # noqa: F401 - imported so pytest can resolve them by name
     alembic_upgrade,
@@ -90,10 +92,23 @@ def test_the_ini_names_no_database() -> None:
     assert not [line for line in settings if "://" in line], settings
 
 
-def test_there_is_exactly_one_migration_and_it_is_the_first() -> None:
-    """One linear history. A branch is a thing somebody has to merge, and nothing here needs one."""
+def test_the_migrations_are_one_linear_history_from_the_first() -> None:
+    """One linear history. A branch is a thing somebody has to merge, and nothing here needs one.
+
+    Phase 4b adds revisions after `0001` (`0002_access_audit`, ...), so "exactly one" became "one
+    chain": the first file is still `0001_initial.py` with no parent, and every later file names the
+    one before it as its `down_revision` - no gap, no fork, no second root (DEC-721).
+    """
     revisions = sorted(path.name for path in VERSIONS.glob("*.py"))
-    assert revisions == ["0001_initial.py"]
+    assert revisions[0] == "0001_initial.py"
+    config = Config(str(ALEMBIC_INI))
+    config.set_main_option("script_location", str(REPO_ROOT / "alembic"))
+    script = ScriptDirectory.from_config(config)
+    assert script.get_bases() == ["0001"]
+    assert len(script.get_heads()) == 1
+    chain = [revision.revision for revision in script.walk_revisions()]  # head first, down to the base
+    assert len(chain) == len(revisions)
+    assert [name.split("_", 1)[0] for name in revisions] == chain[::-1]
 
 
 # ---------------------------------------------------------------------------
@@ -110,7 +125,7 @@ def test_the_x_argument_decides_where_the_migration_goes(tmp_path: Path) -> None
                 row[0]
                 for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             }
-        assert names == {*METADATA_TABLES, "alembic_version"}
+        assert names == {*METADATA_TABLES, *PLATFORM_TABLES, "alembic_version"}
     finally:
         engine.dispose()
 
@@ -206,6 +221,6 @@ def test_the_migration_is_reversible(tmp_path: Path) -> None:
                 row[0]
                 for row in connection.execute(text("SELECT name FROM sqlite_master WHERE type='table'"))
             }
-        assert names & set(METADATA_TABLES) == set()
+        assert names & {*METADATA_TABLES, *PLATFORM_TABLES} == set()
     finally:
         engine.dispose()

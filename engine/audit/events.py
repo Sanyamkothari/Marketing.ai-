@@ -58,6 +58,16 @@ DETAIL_KEYS: Final[frozenset[str]] = frozenset(
         "reason_code",
         "export_key",
         "trigger",
+        # M49 (DEC-769): a scheduled firing's own ids, so its one audit event can be joined to the
+        # firing history and the dataset it built without a free-text field.
+        "firing_id",
+        "schedule_kind",
+        "dataset_id",
+        # DEC-724: the X-Request-ID an anonymous caller sent, kept beside the id the server minted.
+        "client_request_id",
+        # DEC-726: an audit export's window and the chain position it covered.
+        "window_start",
+        "window_end",
     }
 )
 """The only keys `AuditEvent.details` accepts. A new key is a reviewed change to this set, never a

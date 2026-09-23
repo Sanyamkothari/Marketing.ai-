@@ -14,11 +14,15 @@ here is a step towards one.
 Section 6 contains no cost figure. That is deliberate, it is explained where it happens, and it is
 enforced by `tests/unit/test_docs_honesty.py`.
 
-> **What is in the tree.** Everything this document tells you to run is in the repository, with two
-> exceptions, both named where they come up: `scripts/smoke_deployment.py`, which
-> `.github/workflows/deploy-dev.yml` invokes as its last step (§4.4), and `infra/README.md`, which
-> `infra/network.py` and `infra/database.py` point at (§10.6). Where this document would otherwise
-> describe something that is not here, it says so instead.
+> **What is in the tree.** Everything this document tells you to run is in the repository. Where it
+> would otherwise describe something that is not here, it says so instead.
+>
+> **How it was checked.** M50 (Phase 4b) walked this document step by step as a first-time operator
+> would, before any AWS account existed: every command that can run offline was run, and every
+> command that cannot was checked against the code it names. §12 lists what that walk found and
+> where each finding was fixed. What still needs the account is in `docs/M50_CHECKLIST.md`, the
+> ordered list for the day it exists. §11 covers what Phase 4b adds to a deployment: sign-in,
+> the audit trail, privacy controls and schedules.
 
 ---
 
@@ -62,11 +66,16 @@ The API and the training job run **the same image**; only the first argument dif
 recognise it execs as a command. So what runs inside a SageMaker job is what runs on a laptop under
 `docker compose`, and there is no second build to keep in step.
 
-Seven CloudFormation stacks deploy in one direction, declared in `infra/app.py`:
+Eight CloudFormation stacks deploy in one direction, declared in `infra/app.py`:
 
 ```
-network -> storage -> observability -> database -> sagemaker -> compute -> budgets
+network -> storage -> observability -> database -> sagemaker -> compute -> operations -> budgets
 ```
+
+`operations` is Phase 4b's (`infra/operations.py`, §11): the audit-export bucket with Object Lock,
+the EventBridge Scheduler group, role and job task, the application alert topic, the API task
+role's Phase 4b grants and the Parameter Store values that switch those features on. It adds
+nothing to a Phase 4a stack.
 
 Two of those edges are invisible in the resources. **Observability before database**, because RDS
 creates `/aws/rds/instance/<id>/postgresql` itself with no retention the first time it exports a
@@ -82,11 +91,12 @@ deployment that cannot be performed.
 | | What | Why |
 |---|---|---|
 | Account | One AWS account for this deployment, region `ap-south-1` | The tenancy boundary is the account, not a row filter |
-| Toolchain | Python 3.11, Node 22, Docker with buildx, GNU make | `infra/` drives the CDK CLI through `npx`; the image is built with `docker buildx` |
+| Toolchain | Python 3.11, Node 22, Docker with buildx, GNU make, AWS CLI v2 | `infra/` drives the CDK CLI through `npx`; the image is built with `docker buildx`; every verification command below is `aws ...` |
+| Two virtualenvs | `make setup` (`.venv`: the product, for the helper scripts and the tests) and `make infra-setup` (`.venv-infra`: the CDK app, §4.1) | `scripts/run_in_deployment.py`, `make aws-bootstrap`, `make migrate` and the paid tests run from `.venv`; nothing in §4 works with only one of them |
 | CDK | CLI `aws-cdk@2.1142.0` (pinned in the Makefile), `aws-cdk-lib==2.270.0` and `cdk-nag==2.38.2` (pinned in `pyproject.toml`) | §10.1 is why cdk-nag is held back |
-| Bootstrap | `cdk bootstrap aws://<account>/ap-south-1`, once per account and region | CDK needs its own staging bucket and roles before any stack can deploy |
+| Bootstrap | Once per account and region, from `infra/`: `PATH="$PWD/../.venv-infra/bin:$PATH" npx --yes aws-cdk@2.1142.0 bootstrap aws://<account>/ap-south-1` | CDK needs its own staging bucket and roles before any stack can deploy. Run it from `infra/` with the pinned CLI, so the bootstrap template version is the one this CLI expects |
 | ECR | One repository named `marketing-ai` | `infra/storage.py` creates it; `scripts/build_push_image.sh` pushes into it. §2.2 is the ordering problem that creates |
-| Bedrock | Nothing to do. Model access is **reserved, not used** | §3.4 |
+| Bedrock | Only if `-c bedrock_enabled=true`: request model access in `ap-south-1` for every model in `-c bedrock_model_ids` (plan prerequisite P2). The request has a lead time | §3.4; the paid smoke test is §6.5 |
 | TLS | For `env_name=prod`: an ACM certificate in `ap-south-1` and a domain name | `AppContext.validate` refuses a prod synthesis without both |
 
 Versions matter in one direction only: the CDK CLI, `aws-cdk-lib` and `cdk-nag` are pinned together
@@ -110,6 +120,13 @@ have derived one; it is Phase 4b.
 deployment, and it is `workflow_dispatch` only — a push to a branch has no business changing
 somebody's infrastructure.
 
+**The first deployment of an account is made from a terminal, not from CI.** `make aws-deploy`
+passes `--require-approval broadening`, and the CDK CLI cannot ask for that approval without a
+terminal: in CI it stops with an error instead of deploying. Every stack's first deployment creates
+IAM roles and security groups, so every first deployment is "broadening". That is the review
+working, not a defect: a person reads the IAM prompt once, and CI then deploys only changes that do
+not widen access. The same applies later to any change that adds a permission.
+
 ### 2.2 The one ordering problem, and the way round it
 
 `scripts/build_push_image.sh` pushes to an ECR repository, and `infra/storage.py` is what creates
@@ -120,7 +137,10 @@ cd infra && PATH="$PWD/../.venv-infra/bin:$PATH" npx --yes aws-cdk@2.1142.0 \
   deploy marketing-ai-dev-storage -c env_name=dev
 ```
 
-Its `RepositoryUri` output is the value of `ECR_REGISTRY/ECR_REPOSITORY`. After that one command,
+Its `RepositoryUri` output is the value of `ECR_REGISTRY/ECR_REPOSITORY`:
+`<account>.dkr.ecr.ap-south-1.amazonaws.com/marketing-ai`, where everything before the `/` is
+`ECR_REGISTRY` and `marketing-ai` is `ECR_REPOSITORY`. The storage stack references no other
+stack, so this deploys it alone. After that one command,
 `make aws-deploy ENV=dev` is the whole loop forever, because the repository already exists — which
 is also why the repository is `RETAIN` even in a dev deployment (§8.2).
 
@@ -158,7 +178,8 @@ the other side.
 `/marketing-ai/<env>/<field>`, and the leaf may also be spelled as the environment-variable name
 (`S3_BUCKET` or `MARKETING_AI_S3_BUCKET` both resolve to `s3_bucket`). "Needed by" names the backend
 that refuses to start without it. "Written by `cdk deploy`" marks the parameters
-`infra/compute.py` publishes for you — everything else is a default you may override.
+`infra/compute.py` publishes for you — and, for the twelve Phase 4b rows at the foot of the table,
+`infra/operations.py` (§11) — and everything else is a default you may override.
 
 | Field | Environment variable | SSM parameter | Default | Needed by | Written by `cdk deploy` |
 |---|---|---|---|---|---|
@@ -195,6 +216,18 @@ that refuses to start without it. "Written by `cdk deploy`" marks the parameters
 | `metrics_backend` | `MARKETING_AI_METRICS_BACKEND` | `metrics_backend` | `none` | CloudWatch metrics need `emf` | yes, `emf` |
 | `client_id` | `MARKETING_AI_CLIENT_ID` | `client_id` | none | cost-allocation tags and metric dimensions | only when given |
 | `cors_origins` | `MARKETING_AI_CORS_ORIGINS` | `cors_origins` | `*` | refused on prod, §3.5 | yes |
+| `auth_mode` | `MARKETING_AI_AUTH_MODE` | `auth_mode` | `off` | — but a prod deployment with `off` answers 503, §11.3 | yes, `local` unless `-c auth_mode=off` (refused for prod) |
+| `auth_session_ttl_seconds` | `MARKETING_AI_AUTH_SESSION_TTL_SECONDS` | `auth_session_ttl_seconds` | `28800`, between 300 and 86400 | `auth_mode=local` | no |
+| `audit_export_bucket` | `MARKETING_AI_AUDIT_EXPORT_BUCKET` | `audit_export_bucket` | none, meaning an export is written to local disk | an S3 audit export | yes, the Object Lock bucket |
+| `audit_export_prefix` | `MARKETING_AI_AUDIT_EXPORT_PREFIX` | `audit_export_prefix` | `audit` | — it is also the IAM boundary | yes, `audit` |
+| `audit_retention_days` | `MARKETING_AI_AUDIT_RETENTION_DAYS` | `audit_retention_days` | `2555`, between 1 and 3650 | an S3 audit export | yes: 1 in dev, 2555 in prod, or `-c audit_retention_days` |
+| `scheduler_backend` | `MARKETING_AI_SCHEDULER_BACKEND` | `scheduler_backend` | `none` | always | yes, `eventbridge` |
+| `scheduler_tick_seconds` | `MARKETING_AI_SCHEDULER_TICK_SECONDS` | `scheduler_tick_seconds` | `60`, between 1 and 3600 | `scheduler_backend=local` only | no |
+| `scheduler_group_name` | `MARKETING_AI_SCHEDULER_GROUP_NAME` | `scheduler_group_name` | `marketing-ai` | eventbridge — it is also the IAM boundary | yes, `marketing-ai-<env>` |
+| `scheduler_target_arn` | `MARKETING_AI_SCHEDULER_TARGET_ARN` | `scheduler_target_arn` | none | eventbridge | yes, the ECS cluster |
+| `scheduler_role_arn` | `MARKETING_AI_SCHEDULER_ROLE_ARN` | `scheduler_role_arn` | none | eventbridge | yes, `marketing-ai-<env>-scheduler` |
+| `alert_backend` | `MARKETING_AI_ALERT_BACKEND` | `alert_backend` | `log` | always | yes, `sns` |
+| `alert_sns_topic_arn` | `MARKETING_AI_ALERT_SNS_TOPIC_ARN` | `alert_sns_topic_arn` | none | `alert_backend=sns` | yes, `marketing-ai-<env>-alerts` |
 
 Three fields are tuples filled from one comma-separated value: `sagemaker_subnet_ids`,
 `sagemaker_security_group_ids` and `cors_origins`.
@@ -258,7 +291,7 @@ An empty list with `-c bedrock_enabled=true`, or `bedrock_enabled=false`, synthe
 `Deny` rather than an absent `Allow` (DEC-371). Requesting model access is a per-account, per-model
 request with a lead time; it is in §2 so an operator who plans ahead knows that.
 
-### 3.5 The three refusals
+### 3.5 The refusals
 
 A deployment that is described wrongly fails at startup, loudly, rather than at the first request.
 
@@ -266,10 +299,16 @@ A deployment that is described wrongly fails at startup, loudly, rather than at 
 |---|---|---|
 | An incomplete backend | `SETTING_REQUIRED` | `storage_backend=s3` with no `s3_bucket` or no `aws_region`; `metadata_backend=postgres` with no `postgres_dsn`; `job_backend=sagemaker` without the role, the image, the instance type and the region; `llm_backend=bedrock` without `bedrock_model_id` |
 | `job_backend=sagemaker` without `storage_backend=s3` | `SETTING_REQUIRED` | A remote job cannot read a local disk, so this combination is a deployment that would fail at its first run (DEC-302) |
+| `scheduler_backend=eventbridge` without `scheduler_target_arn`, `scheduler_role_arn` and `aws_region`; `alert_backend=sns` without `alert_sns_topic_arn` and `aws_region` | `SETTING_REQUIRED` | Phase 4b's two AWS backends, refused the same way as Phase 4a's (DEC-701) |
 | `cors_origins` containing `*` when `env=prod` | `SETTING_REQUIRED` | DEC-024 left CORS open for a UI opened as a local file. That is a statement about a laptop, not about an internet-facing load balancer, so a prod deployment that never mentions `cors_origins` is refused rather than inheriting the laptop's answer (DEC-307) |
 | A value the field cannot hold | `SETTING_INVALID` | `MARKETING_AI_JOB_MAX_WORKERS=nine`, a `download_url_ttl_seconds` outside 60…3600, an `s3_prefix` containing a `..` segment |
 
 The message always names the environment variable to export and never its value (DEC-303).
+
+`auth_mode=off` on `env=prod` is deliberately **not** a fifth refusal. The application starts, logs
+an error, and answers every route except the health probe and sign-in with 503
+`AUTH_NOT_CONFIGURED` (DEC-702, §11.3): it fails closed per request rather than failing to boot.
+`infra/context.py` refuses the same combination one layer up, at synth time.
 
 A `MARKETING_AI_*` variable that matches no field is **ignored** by the application rather than
 refused: a deployment must not fail to start because some other tool on the host exported a name in
@@ -284,7 +323,8 @@ happily and quietly uses the default (DEC-365).
 
 ## 4. Deploy
 
-Three commands, in this order. `ENV` is `dev` or `prod`.
+Three steps, in this order — set up, deploy, bootstrap from inside — and, after the very first
+deployment, one service restart (§4.2). `ENV` is `dev` or `prod`.
 
 ### 4.1 `make infra-setup`
 
@@ -314,6 +354,24 @@ synth and is not normal during a deployment**: `make aws-deploy` always passes a
 synthesis also warns, in capitals, that the load balancer is HTTP-only when no certificate was
 given. Both warnings are there to be read rather than suppressed.
 
+The complete list a bare `make infra-synth ENV=dev` printed on the M50 walk, every one of them
+expected until you supply what it asks for:
+
+| Warning | Goes away when |
+|---|---|
+| `Unknown option(s): --all. These will be ignored.` | Never; `cdk synth` synthesises every stack anyway, and the flag is harmless |
+| `No alert_email: this deployment raises alarms that nobody is told about` (and the operations stack's equivalent for application alerts) | `-c alert_email=...` is set (§4.2, persisted) |
+| `Alarm 'marketing-ai-${Env}-stage-duration' is NOT created` and the same for `job-cost` | `-c alarm_thresholds=...` names a threshold from this deployment's own history (§10.6) |
+| `No cross-stack-reference strength configured, defaulting to "strong"` | Never; a CDK feature-flag notice, and strong references are what the stacks rely on |
+| `No image_digest: this synthesis names the repository's latest tag` | `make aws-deploy` passes the digest |
+| `HTTP-ONLY LOAD BALANCER` | `-c certificate_arn=... -c domain_name=...` |
+| `81 feature flags are not configured` | Never; informational |
+
+It ends with `Successfully synthesized to .../infra/cdk.out`. If the first synthesis in a fresh
+`.venv-infra` fails with `ModuleNotFoundError: No module named 'cdk_nag'` while
+`.venv-infra/bin/pip show cdk-nag` reports it installed, run it again: the M50 walk saw that once,
+while another process was writing to the same venv, and not on any rerun.
+
 ### 4.2 `make aws-deploy ENV=dev`
 
 Point the shell at the registry first, and log Docker into it:
@@ -324,6 +382,29 @@ export ECR_REPOSITORY=marketing-ai
 aws ecr get-login-password --region ap-south-1 \
   | docker login --username AWS --password-stdin "$ECR_REGISTRY"
 ```
+
+**Persist the context keys that describe this deployment before the first deploy.** `make aws-deploy`
+passes `env_name` and `image_digest` and nothing else, and CDK context given with `-c` on one
+command line is not remembered by the next. A key given once by hand — `alert_email`,
+`monthly_budget_usd`, `certificate_arn`, `alarm_thresholds` — therefore **disappears on the next
+`make aws-deploy`**, and CloudFormation removes what it created: the email subscriptions, the budget,
+the HTTPS listener. The CDK CLI reads `infra/cdk.context.json` on every command, `make aws-deploy`
+included, so put them there once:
+
+```bash
+cat > infra/cdk.context.json <<'EOF'
+{
+  "marketing-ai:alert_email": "<you@example.com>",
+  "marketing-ai:monthly_budget_usd": "<your amount>"
+}
+EOF
+```
+
+The `marketing-ai:` spelling is the namespaced form `infra/context.py` accepts, so a key this
+application does not know is still an error rather than a silent default. The file names an
+account's resources, so it is in `.gitignore` and is never committed; keep one per checkout per
+deployment. The M50 walk confirmed offline that `make infra-synth` picks it up: with the file above,
+the synthesised observability template carries the email subscription and the budgets stack a budget.
 
 ```bash
 make aws-deploy ENV=dev
@@ -357,6 +438,7 @@ and the deployment prints one block per stack, in the order of §1, ending with 
 | database | `EndpointAddress`, `ApplicationSecretArn` | The private endpoint, and the one secret the task may read |
 | sagemaker | `ExecutionRoleArn`, `JobsSecurityGroupId` | What a job runs as, and what it attaches to |
 | compute | `ServiceUrl`, `ImageReference` | **Where the API answers**, and the digest it is running |
+| operations | `AuditBucketName`, `AlertTopicArn`, `ScheduleGroupName`, `SchedulerRoleArn`, `JobTaskDefinitionArn` | Phase 4b's resources, §11 |
 | budgets | `Budget` | The budget, or a sentence saying none was asked for — §6.4 |
 
 `--require-approval broadening` means CDK stops and asks before any change that widens an IAM policy
@@ -366,50 +448,108 @@ or a security group. Read what it prints. That prompt is the review.
 `-c domain_name=...`. That is not a missing feature: an HTTP-only load balancer puts every upload and
 every pre-signed download URL on the public internet in clear text.
 
-### 4.3 `make aws-bootstrap ENV=dev`
+**After the first deployment, restart the service once.** The compute stack starts the API's tasks
+*before* the operations stack writes the Phase 4b parameters (`auth_mode`, `scheduler_backend`,
+`alert_backend` and the rest), and `Settings` is read once, when a task starts (§7.3). So the tasks
+of a first deployment run with every Phase 4b default: sign-in off, no scheduler, alerts to the log
+only. One forced deployment picks the parameters up:
 
 ```bash
-make aws-bootstrap ENV=dev
+aws ecs update-service --cluster marketing-ai-dev --service marketing-ai-dev-api \
+  --force-new-deployment --region ap-south-1
+aws ecs wait services-stable --cluster marketing-ai-dev --services marketing-ai-dev-api --region ap-south-1
+```
+
+The same applies after any deployment that changes a value the operations stack writes. A one-off
+task (§4.3) always starts fresh, so it never needs this.
+
+### 4.3 Bootstrap the deployment, from inside it
+
+```bash
+.venv/bin/python -m scripts.run_in_deployment --env dev -- python -m scripts.aws_bootstrap
 ```
 
 `cdk deploy` creates the database; it does not create the schema. And it cannot tell you whether the
 task role can actually do what its policy appears to allow — a policy is a document, not a
-demonstration. This command applies the Alembic migrations and probes every permission with one real
-call each, reporting the whole list rather than stopping at the first failure.
+demonstration. `scripts/aws_bootstrap.py` applies the Alembic migrations and probes every permission
+with one real call each, reporting the whole list rather than stopping at the first failure.
 
-Working output:
+**It has to run inside the deployment**, and that is what `scripts/run_in_deployment.py` is for. The
+database is in isolated subnets that admit the service's and the jobs' security groups and nothing
+else, so from a laptop or a CI runner the database probe and the migrations cannot connect at all.
+And the probes run as whoever runs them: from a laptop that is your own, usually administrator,
+credentials, and a storage probe that passes as an administrator says nothing about the task role.
+`run_in_deployment` reads the running service's task definition, subnets and security groups, starts
+**that** task definition once with its command replaced, waits for it to stop, prints what it
+logged, and exits with its exit code. It passes no environment variables: the task reads its
+settings from Parameter Store like the service does. It needs your credentials for
+`ecs:DescribeServices`, `ecs:RunTask`, `ecs:DescribeTasks`, `iam:PassRole` on the two task roles and
+`logs:GetLogEvents` — nothing inside the task uses them.
+
+Working output (the task's own lines, then one line from `run_in_deployment` on stderr):
 
 ```
-python -m scripts.aws_bootstrap: env=dev region=ap-south-1 storage_backend=s3 metadata_backend=postgres job_backend=sagemaker log_format=json metrics_backend=emf
+python -m scripts.aws_bootstrap: env=dev aws_region=ap-south-1 storage_backend=s3 metadata_backend=postgres job_backend=sagemaker llm_backend=fake log_format=json metrics_backend=emf
 
-  [     ok] configuration: 7 use cases load
+  [     ok] configuration: <n> use cases load
   [     ok] storage: wrote, read and deleted s3://<bucket>/_bootstrap/permission-probe.txt
   [     ok] database: PostgreSQL 16.x
   [     ok] migrations: schema at head
   [     ok] jobs: may describe training jobs
 
 5/5 checks passed; this deployment is ready
+python -m scripts.run_in_deployment: task stopped (Essential container in task exited), exit code 0
 ```
 
-A failure prints `FAILED` with the exception's class — never its message, which routinely quotes the
-resource and the principal — and a `fix:` line naming the IAM actions to grant. The process exits
-non-zero. `--dry-run` says what it would check and stops; `--no-migrate` probes without touching the
-schema.
+`<n>` is the number of use-case configs in the image (eight in this tree). Around the report you may also
+see the migration's own log lines. A failure prints `FAILED` with the exception's
+class — never its message, which routinely quotes the resource and the principal — and a `fix:` line
+naming the IAM actions to grant; the task, and so `run_in_deployment`, exits non-zero. A task that
+never started (an image it could not pull, a subnet with no route) has no log and exits 125, with
+ECS's stop reason on the last line. `--no-migrate` probes without touching the schema; the image's
+own `migrate` entrypoint applies the schema without probing:
+
+```bash
+.venv/bin/python -m scripts.run_in_deployment --env dev -- migrate
+```
 
 The `jobs` probe describes a training job that does not exist. A role allowed to look gets
 `ValidationException`, which is a pass; a role that is not gets `AccessDeniedException`, which is a
 failure. Describing a job that does not exist is the only way to test the permission without
 creating one and paying for it.
 
-The first line is `engine.settings.summary()`, rendered from an allow-list of non-secret fields. It cannot
-print the database URL.
+The first line is `engine.settings.summary()`, rendered from an allow-list of non-secret fields. It
+cannot print the database URL. Migrations go into `postgres_schema` (`marketing_ai`, written by the
+compute stack): the bootstrap hands Alembic the URL and the schema together.
 
-### 4.4 The same three steps in CI
+**`make aws-bootstrap ENV=dev`** runs the same script where you are, as you. That is useful for
+`--dry-run` and on a machine that really sits inside the VPC; anywhere else it is the wrong tool. It
+reads the deployment only when `MARKETING_AI_SETTINGS_SOURCE=aws` and `MARKETING_AI_AWS_REGION` are
+exported; without them the settings come from your shell, every backend is at its laptop default,
+and the script now says so and fails (`deployment: FAILED`), where it used to report "ready" having
+checked nothing.
 
-`.github/workflows/deploy-dev.yml` runs `make infra-setup`, `make aws-deploy`, `make aws-bootstrap`
-and then a smoke test, under `workflow_dispatch` only, with a role assumed by OIDC and no long-lived
-key anywhere. Its last step invokes `scripts/smoke_deployment.py`, **which is not in this repository
-yet**. Until it is, run §5 by hand after a deployment, or dispatch the workflow with `skip_smoke`.
+### 4.4 The same steps in CI
+
+`.github/workflows/deploy-dev.yml` runs `make infra-setup`, then `make aws-deploy` (which builds,
+pushes and deploys, with the ECR variables from `aws-actions/amazon-ecr-login`), then the bootstrap
+of §4.3 through `scripts/run_in_deployment.py`, then `scripts/smoke_deployment.py`, under
+`workflow_dispatch` only, with a role assumed by OIDC and no long-lived key anywhere.
+
+Three things about it, all found by the M50 walk:
+
+- **It cannot make a first deployment**, nor any deployment that widens IAM or a security group:
+  `--require-approval broadening` needs a terminal to ask in, and CI has none, so the deploy step
+  stops with an error. Make those deployments from a terminal (§2.1); CI then deploys the rest.
+- **The deploying role needs more than CloudFormation.** Besides everything in §2.1, the bootstrap
+  step starts a task: `ecs:DescribeServices`, `ecs:RunTask`, `ecs:DescribeTasks`, `iam:PassRole` on
+  `marketing-ai-<env>-task` and `marketing-ai-<env>-task-execution`, and `logs:GetLogEvents` on the
+  API log group. The smoke step reads the compute stack's outputs (`cloudformation:DescribeStacks`).
+- **The smoke test is deliberately small.** It reads `ServiceUrl` from the compute stack, checks
+  `GET /healthz`, and asks `GET /auth/me` with no token which sign-in state the deployment is in:
+  `401` is `auth_mode=local` and passes; `200` is sign-in off, a warning on dev and a failure
+  anywhere else; `503 AUTH_NOT_CONFIGURED` is a prod deployment failing closed, and fails. It sends
+  no credential and starts no run, so it is safe against any deployment; §5 is still a person's job.
 
 ---
 
@@ -424,9 +564,30 @@ export SERVICE_URL=$(aws cloudformation describe-stacks --stack-name marketing-a
 curl -fsS "$SERVICE_URL/healthz"
 ```
 
+**Sign in first.** A deployment built from this tree has `auth_mode=local` (§11.1), so every route
+except the health probe and sign-in answers `401` until you sign in, and nobody can sign in until
+the first Admin exists: create it now (§11.2). In the UI, sign in on the first screen. From a shell,
+fetch a token once — the password is read without echo and never lands in the shell history — and
+send it with every request:
+
+```bash
+read -r -p "username: " MA_USER; read -r -s -p "password: " MA_PASSWORD; echo
+export TOKEN=$(MA_USER="$MA_USER" MA_PASSWORD="$MA_PASSWORD" python3 - "$SERVICE_URL" <<'EOF'
+import json, os, sys, urllib.request
+body = json.dumps({"username": os.environ["MA_USER"], "password": os.environ["MA_PASSWORD"]}).encode()
+request = urllib.request.Request(sys.argv[1] + "/auth/login", data=body, headers={"Content-Type": "application/json"})
+print(json.load(urllib.request.urlopen(request))["token"])
+EOF
+)
+unset MA_PASSWORD
+```
+
+Each `curl` below carries `-H "Authorization: Bearer $TOKEN"`. The token lasts
+`auth_session_ttl_seconds` (eight hours by default).
+
 1. **Open the URL.** `GET /healthz` answers `{"status": "ok", "version": "..."}` and deliberately
    carries no other detail. The load balancer's target group uses the same route, so a task that
-   answers it is a task receiving traffic.
+   answers it is a task receiving traffic. It is public; everything else is not.
 2. **Pick a use case.** Telecom → a lifecycle stage → a use case. The Setup screen is rendered from
    the merged config, so a use case that loads is a use case that works.
 3. **Download the template.** The button on the Setup screen, or
@@ -453,8 +614,8 @@ aws sagemaker list-training-jobs --name-contains marketing-ai --max-results 5 \
   --sort-by CreationTime --sort-order Descending \
   --query 'TrainingJobSummaries[].[TrainingJobName,TrainingJobStatus]' --output table --region ap-south-1
 
-curl -s "$SERVICE_URL/runs/$RUN_ID/artefacts/run_manifest.json" \
-  | python -c 'import json,sys; print(json.load(sys.stdin)["compute"])'
+curl -s -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/runs/$RUN_ID/artefacts/run_manifest.json" \
+  | python3 -c 'import json,sys; print(json.load(sys.stdin)["compute"])'
 ```
 
 `compute.backend` reads `sagemaker-training` rather than `thread`, and it carries the job name, the
@@ -472,8 +633,8 @@ above runs with your own credentials.
 It carries `compute` (`ComputeInfo`) and `cost_estimate` (`CostEstimate`):
 
 ```bash
-curl -s "$SERVICE_URL/runs/$RUN_ID/artefacts/run_manifest.json" \
-  | python -c 'import json,sys; m=json.load(sys.stdin); print(m["compute"]); print(m["cost_estimate"])'
+curl -s -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/runs/$RUN_ID/artefacts/run_manifest.json" \
+  | python3 -c 'import json,sys; m=json.load(sys.stdin); print(m["compute"]); print(m["cost_estimate"])'
 ```
 
 `ComputeInfo.billable_seconds` is filled only from `DescribeTrainingJob.BillableTimeInSeconds`, and
@@ -582,7 +743,11 @@ Without the tags, drop the `Tags` clauses and group the whole account by service
 ### 6.2 Per-run cost
 
 What one run adds: the training job, the processing job, the S3 writes, and the storage the
-artefacts then occupy.
+artefacts then occupy. The last five rows are the ones plan M50 asks for to settle the "cost tiers"
+question: one training run per strategy on the same file, scoring normalised to 100,000 rows, and
+the assistant normalised to 1,000 questions. `docs/M50_CHECKLIST.md` says how each is produced and
+where the figure is recorded; for the assistant row the "billable seconds" and "instance type"
+cells are not meaningful and are recorded as the model id and the token counts instead.
 
 #### Per-run cost
 
@@ -591,12 +756,17 @@ artefacts then occupy.
 | Train, template-sized file | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
 | Train, Telco Churn (7,043 rows) | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
 | Score, same file | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| Train, Telco Churn, strategy `fast` | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| Train, Telco Churn, strategy `balanced` | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| Train, Telco Churn, strategy `exhaustive` | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| Score, per 100,000 rows | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| Assistant, per 1,000 questions (Bedrock) | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
 
 The first three columns come from the run itself, not from a spreadsheet:
 
 ```bash
-curl -s "$SERVICE_URL/runs/$RUN_ID/artefacts/run_manifest.json" \
-  | python -c 'import json,sys; m=json.load(sys.stdin); print(m["compute"]); print(m["cost_estimate"])'
+curl -s -H "Authorization: Bearer $TOKEN" "$SERVICE_URL/runs/$RUN_ID/artefacts/run_manifest.json" \
+  | python3 -c 'import json,sys; m=json.load(sys.stdin); print(m["compute"]); print(m["cost_estimate"])'
 ```
 
 The last column is Cost Explorer narrowed to the day and the service, and it is the one that is a
@@ -623,7 +793,10 @@ aws cloudwatch get-metric-statistics --namespace MarketingAI \
 ```
 
 `JobCostUsd` is emitted only where a real figure exists — never a zero standing in for a null.
-`LlmCostUsd` will stay empty: the generative phase is not in this repository (§3.4).
+`LlmCostUsd` will stay empty: the generative phase is in this repository now (§3.4), but nothing
+calls `engine.aws.metrics.record_llm_cost` yet and `configs/llm_prices.yaml` ships empty on purpose,
+so the assistant's cost comes from Cost Explorer, grouped by the Bedrock usage type, and from the
+token counts the generative screens report — not from this metric.
 
 ### 6.3 Why a list price is not a bill
 
@@ -656,14 +829,34 @@ cd infra && PATH="$PWD/../.venv-infra/bin:$PATH" npx --yes aws-cdk@2.1142.0 depl
   --require-approval broadening
 ```
 
-`make aws-deploy` passes `env_name` and `image_digest` and nothing else, so any other context key is
-supplied by calling `cdk deploy` directly, as above. The budget stack always writes
+`make aws-deploy` passes `env_name` and `image_digest` and nothing else. A key given only on one
+`cdk deploy` command line, as above, is gone at the next `make aws-deploy`, which then deletes the
+budget: keep `monthly_budget_usd` and `alert_email` in `infra/cdk.context.json` (§4.2) so every
+deployment carries them. The budget stack always writes
 `/marketing-ai/cost/<env>/monthly-budget-usd`, holding either the amount or the word `none`, so the
 answer to "did anyone set a budget here" does not depend on reading a console.
 
 A budget given without `alert_email` is refused at synth time: a budget nobody is told about is a
 number in a console, not a control. Its two notification thresholds are percentages of the
 operator's own amount, so they carry no claim about what anything costs.
+
+### 6.5 The paid tests
+
+Two pytest markers bill a real account, and neither runs unless it is selected by name: `make test`
+and `make test-all` both exclude them (DEC-358).
+
+| Marker | What it calls | Selected with |
+|---|---|---|
+| `bedrock` | Amazon Bedrock, from `tests/integration/test_bedrock_smoke.py`: one `Converse` call capped at 32 output tokens, one `CountTokens` call and four short embeddings | `.venv/bin/python -m pytest -m bedrock tests/integration/test_bedrock_smoke.py` |
+| `aws` | Reserved for tests against a real deployment. **No test in this tree carries it yet**; the deployment is exercised by §4.3, §4.4 and §5 instead | `.venv/bin/python -m pytest -m aws` (collects nothing today) |
+
+The Bedrock test self-skips unless three variables are exported — `BEDROCK_SMOKE_REGION`,
+`BEDROCK_SMOKE_GENERATION_MODEL_ID` and `BEDROCK_SMOKE_EMBEDDING_MODEL_ID`, plus the optional
+`BEDROCK_SMOKE_EMBEDDING_DIMENSIONS` — and boto3 finds credentials. Those are test variables read
+straight from the environment, not `Settings` fields, which is why they do not start with the
+product's prefix. The models must have Bedrock model access in that region (§2). Run it with your
+own credentials, from `.venv`, after the budget of §6.4 exists: a budget is the cap, and the test's
+own design (one completion, nothing repeated) is what keeps it small.
 
 ---
 
@@ -673,14 +866,27 @@ The unit of a deployment is an image digest and a schema revision. Roll them one
 
 ### 7.1 Migrate the database
 
+The deployment's database is reachable only from inside its VPC, so a migration runs as a one-off
+task with the image's `migrate` entrypoint (`alembic -c /app/alembic.ini upgrade head`), which reads
+the URL and the schema from the deployment's own settings:
+
 ```bash
-MARKETING_AI_POSTGRES_DSN="postgresql://...?sslmode=require" make migrate
+.venv/bin/python -m scripts.run_in_deployment --env dev -- migrate
 ```
 
-That is `alembic upgrade head`. From inside the deployment, the same thing runs as a one-off task
-with the image's `migrate` entrypoint (`alembic -c /app/alembic.ini upgrade head`).
-`make aws-bootstrap` also applies migrations, which is why it runs after `cdk deploy` and before the
-smoke test.
+The bootstrap of §4.3 applies migrations too, which is why it runs after `cdk deploy` and before
+the smoke test. To read the DDL before it is applied, render it offline — no connection, nothing
+executed; the URL only chooses the dialect, so use a placeholder, never the real one:
+
+```bash
+.venv/bin/alembic -x url=postgresql://placeholder@localhost/marketing -x schema=marketing_ai upgrade head --sql
+```
+
+With a schema, the script begins by creating it and putting it on the `search_path`, exactly as an
+online migration does. `make migrate` is `alembic upgrade head` against whatever `Settings` describes
+in your shell; it is for a database you can reach, such as the local stack's. Pointed at a Postgres
+by hand, export both `MARKETING_AI_POSTGRES_DSN` and `MARKETING_AI_POSTGRES_SCHEMA=marketing_ai`:
+with the URL alone the tables land in `public`, and a deployment reads `marketing_ai` first.
 
 Write migrations so that the **old** code can run against the **new** schema: add a column, deploy
 the image that uses it, drop the old column in a later migration. ECS replaces tasks one at a time,
@@ -734,6 +940,7 @@ with `POST /runs/{run_id}/cancel`.
 | Artefacts | S3 object versioning on the artefact bucket | on | `infra/storage.py` |
 | Artefacts | Incomplete multipart uploads abandoned after 7 days | on | `ABORT_INCOMPLETE_UPLOAD_DAYS` |
 | Access logs | Expired after `log_retention_days` — 30 in dev, 365 in prod | on | `infra/context.py` |
+| Audit exports | A copy of the audit table, Object Lock COMPLIANCE for `audit_retention_days` | 1 day in dev, 2555 in prod | `-c audit_retention_days=`, §11.4 |
 
 `db_backup_retention_days` may not be set to zero. Zero disables automated backups, and a deployment
 holding a customer's data has no business doing that silently.
@@ -761,6 +968,8 @@ the parameters are marked `DESTROY`. On **prod** they are `RETAIN` and survive t
 | SSM parameters | Deleted | Retained |
 | Secrets | Deleted after the recovery window | Retained |
 | ECR repository | **Retained always**, dev included | Retained |
+| Audit-export bucket (Phase 4b) | **Retained always**; a locked version cannot be deleted by anyone until its date passes | Retained |
+| Scheduler group, alert topic, job task definition (Phase 4b) | Deleted | Group retained; the rest deleted |
 | CloudWatch log groups | Deleted with the observability stack | Retained |
 
 Three of those are deliberate and are worth knowing before the command is typed.
@@ -806,9 +1015,9 @@ aws kms schedule-key-deletion --key-id <key arn> --pending-window-in-days 7 --re
 A versioned bucket is **not** emptied by `aws s3 rm --recursive`: that writes delete markers and
 leaves every version in place, still stored and still billed.
 
-`governance.retention_days` is recorded per run and is **not enforced** by anything here. There is
-no S3 lifecycle rule on `uploads/` and no per-entity deletion path. A DPDP deletion request today is
-the sequence above, narrowed by hand. That is Phase 4b work and §9.2 says so again.
+`governance.retention_days` is enforced by Phase 4b's retention job, and a DPDP erasure request has
+its own route; §11.7 and §11.8 are how to run them on a deployment. The commands above are for
+deleting a whole deployment's data, not one person's.
 
 ---
 
@@ -836,6 +1045,11 @@ the sequence above, narrowed by hand. That is Phase 4b work and §9.2 says so ag
 | `secretsmanager:GetSecretValue` on exactly one ARN; the task can never read the database credential | `infra/compute.py` |
 | Parameter Store reads scoped to `/marketing-ai/<env>` and its children | `infra/policies.py` |
 | The container runs as uid 10001, not root | `Dockerfile` |
+| Sign-in on every route but the probe and sign-in itself; a route with no declared role is refused, not open | `api/access.py`, `api/access_policy.py`; `auth_mode=local` written by `infra/operations.py` |
+| Audit exports locked in COMPLIANCE mode, and a bucket policy denying every principal `DeleteObject` and `DeleteObjectVersion` | `infra/operations.py`, `engine/audit/export.py` |
+| The task may only put objects under `audit/` in the audit bucket: no read, no list, no delete | `infra/policies.py` `audit_export_write_statement` |
+| EventBridge Scheduler's role can start one task family in one cluster, and only a schedule in this deployment's group may assume it | `infra/operations.py`, `infra/policies.py` `run_job_task_statements` |
+| The task publishes to the application alert topic only, never to the CloudWatch alarm topic | `infra/policies.py` `alert_publish_statement` |
 
 **The wildcard grants, enumerated.** `RESOURCE_WILDCARD_ALLOW_LIST` in `infra/policies.py` is the
 complete set of actions allowed to appear in an `Allow` whose `Resource` is `"*"`, and
@@ -858,28 +1072,27 @@ would fail closed — turning every absent artefact into a 403 that looks like a
 
 ### 9.2 What is not enforced
 
-- **There is no authentication.** Every route is open to anyone who can reach the load balancer. In
-  a dev deployment that is the internet, over HTTP, unless a certificate was supplied. Put the
-  deployment behind something — a VPN, an IP allow-list on the ALB, an authenticating proxy — or
-  treat the URL as public. This is the single largest gap in Phase 4a.
-- **`approved_by` is a caller-supplied claim, not an identity** (DEC-055).
-  `POST /models/{id}/approve` and `POST /models/{id}/promote` require a non-blank string and store
-  it verbatim; nothing verifies it, and the API never substitutes one of its own. Approval decides
-  which model scores the customer's base, so it is the first route that needs a verified identity
-  behind the name. Until there is one, the audit trail records what the caller *claimed* — which is
-  the honest version of an unauthenticated deployment — and it must not be presented anywhere as
-  evidence of who acted.
+- **Sign-in is the built-in user store, not an identity provider.** `auth_mode` is `off` or `local`;
+  the client's SSO or Cognito (plan prerequisite P5) is a third value that does not exist yet. The
+  local store hashes passwords with PBKDF2 and stores only a digest of each session token, but it
+  has no multi-factor authentication, no lockout or rate limit on failed sign-ins, and no
+  federation. Until P5 is decided and built, keep a dev deployment's URL to the people testing it,
+  and treat HTTP-only dev (no certificate) as sending passwords in clear text — because it does.
+- **The first Admin's password crosses the ECS API** on a deployment (§11.2). That is acceptable
+  for dev with an immediate password change and not for prod.
+- **With `auth_mode=off`, nothing is enforced**: every request is the all-roles local operator, and
+  `approved_by` is again a caller-supplied claim rather than an identity (DEC-055). A dev deployment
+  can be switched to `off` with `-c auth_mode=off`; `infra/context.py` refuses it for prod, and a prod
+  task that nevertheless reads `off` answers 503 (§11.3).
 - **There is no per-tenant isolation inside a deployment.** The tenancy boundary is the AWS account.
   Storage keys carry no tenant, which is exactly why `Storage` must not grow a "read any key"
-  method.
-- **DPDP controls are recorded, not enforced.** `governance.retention_days` is stored and nothing
-  acts on it; there is no consent audit record and no per-entity deletion path. `consent_column` and
-  `pii_handling` do work today, in the prepare stage, and are the exception.
+  method. Plan M51 decides whether that stays so (prerequisite P4).
+- **DPDP controls support compliance; they are not a legal opinion.** Retention, erasure, consent
+  and access exports exist (§11.7, §11.8), and Minfy's legal or compliance team must review them.
+  Erasure flags models trained on the person's data for retraining at the next cycle rather than
+  retraining at once.
 - **`cors_origins` defaults to `*` in dev**, and is refused only on prod. An allow-list is not an
   authorisation mechanism either way.
-
-All of the above is Phase 4b. None of it is a configuration mistake to be corrected by changing a
-setting.
 
 ---
 
@@ -989,8 +1202,8 @@ composed at deploy time, so the application document now holds the previous pass
 **Fix.**
 
 ```bash
-# (a) ask the deployment what it can actually reach; the `database` check prints a `fix:` line
-.venv/bin/python -m scripts.aws_bootstrap --env dev --no-migrate
+# (a) ask the deployment, from inside it, what it can actually reach; the `database` check prints a `fix:` line
+.venv/bin/python -m scripts.run_in_deployment --env dev -- python -m scripts.aws_bootstrap --no-migrate
 
 # (b) recompose the application document by deploying the database stack again
 cd infra && PATH="$PWD/../.venv-infra/bin:$PATH" npx --yes aws-cdk@2.1142.0 \
@@ -1024,10 +1237,304 @@ deliberately long, rather than to a number that sounds diligent and pages somebo
 - **The budget reports nothing.** Cost-allocation tags have not been activated yet. §6.1.
 - **There is no cost in the UI.** Nothing under `ui/` reads `cost_estimate` and no route returns it;
   §5.2 is where the number is.
-- **`infra/README.md` does not exist yet**, although `infra/network.py` and `infra/database.py` name
-  it. The egress shape it would describe is §10.2 and the rotation shape is §10.5.
+- **`infra/README.md`** is the reference for every context key and every cdk-nag suppression; this
+  document is the walk-through. Where the two describe the same thing, the code is the tiebreaker.
 - **`make infra-synth` warns about `latest`.** Normal without `-c image_digest`; not normal during a
   deployment.
+
+---
+
+## 11. Phase 4b: sign-in, audit, privacy and schedules
+
+Phase 4b (plan M46–M49) adds sign-in and roles, an append-only audit trail, the DPDP retention,
+erasure and consent controls, and scheduled scoring, monitoring and retraining with alerts. Every one
+of them was built to run on a laptop first, and every `Settings` default reproduces the behaviour
+before Phase 4b. On a deployment, the `operations` stack (`infra/operations.py`) supplies the AWS
+half and writes the parameters that switch each feature on, so a deployment made from this tree has
+all of them without a hand-edited parameter.
+
+### 11.1 The settings, and where a deployment gets them
+
+The twelve Phase 4b rows of §3.2 are the whole configuration surface. On a deployment:
+
+| Setting | Value on a deployment | Chosen with |
+|---|---|---|
+| `auth_mode` | `local` | `-c auth_mode=off` is accepted for dev only; there is no identity-provider value until plan P5 is decided (§11.9) |
+| `auth_session_ttl_seconds` | `28800` (eight hours), the default | Not written by any stack; §11.1 below |
+| `audit_export_bucket`, `audit_export_prefix` | the Object Lock bucket, `audit` | Fixed; §11.4 |
+| `audit_retention_days` | `1` in dev, `2555` in prod | `-c audit_retention_days=` (1 to 3650), **before** the first export — §11.4 |
+| `scheduler_backend`, `scheduler_group_name`, `scheduler_target_arn`, `scheduler_role_arn` | `eventbridge`, `marketing-ai-<env>`, the ECS cluster, `marketing-ai-<env>-scheduler` | Fixed; §11.5 |
+| `scheduler_tick_seconds` | unused | Only `scheduler_backend=local` reads it |
+| `alert_backend`, `alert_sns_topic_arn` | `sns`, `marketing-ai-<env>-alerts` | Fixed; the recipient is `-c alert_email=`, §11.6 |
+
+Two context keys size the scheduled-job task: `-c job_cpu=` and `-c job_memory=`, 1024 and 4096 by
+default — chosen, not measured, and checked against Fargate's size table at synth time.
+
+To see what a deployment actually reads:
+
+```bash
+aws ssm get-parameters-by-path --path /marketing-ai/dev/ --region ap-south-1 \
+  --query 'Parameters[].[Name,Value]' --output table
+```
+
+A value the stacks do not write — `auth_session_ttl_seconds`, say — is set by writing the parameter
+by hand and restarting the service (§4.2):
+
+```bash
+aws ssm put-parameter --name /marketing-ai/dev/auth_session_ttl_seconds --type String \
+  --value 3600 --overwrite --region ap-south-1
+```
+
+**Never hand-write a parameter a stack writes.** The next deployment either overwrites your value
+without a word, or, if you created it before the stack did, fails with "already exists". The
+`put-parameter` above is safe because no stack owns that name; the list of names a stack owns is the
+right-hand column of §3.2.
+
+### 11.2 The first Admin
+
+With `auth_mode=local` every route except `GET /healthz` and `POST /auth/login` needs a signed-in
+user, and the API cannot create the first one: an Admin creates users, and there is no Admin yet. The
+first Admin comes from `scripts/create_user.py`, run inside the deployment because the users table is
+in the deployment's database.
+
+1. **The schema is at head** — §4.3. The user, session and audit tables are migrations `0002` on.
+2. **Create the Admin.** The script never takes a password on its command line (DEC-722): it prompts,
+   or reads the first line of standard input with `--password-stdin`. A one-off ECS task has no
+   terminal and no standard input, and the service has ECS Exec switched off, so on a deployment the
+   password has to be written into the command that feeds it to standard input:
+
+   ```bash
+   .venv/bin/python -m scripts.run_in_deployment --env dev -- \
+     sh -c 'printf "%s\n" "<one-time password, at least 12 characters>" | python -m scripts.create_user --username <admin> --role admin --password-stdin'
+   ```
+
+   It prints `created user <user id> with roles admin` and writes a `users.create` audit event by
+   `system:bootstrap`. Exit code 2 is a refusal the message explains (a username already taken, a
+   password under twelve characters); 3 is a settings problem, and nothing was written.
+
+   **That password is not a secret after this command.** The command line is part of the `RunTask`
+   request: `aws ecs describe-tasks` shows it for as long as ECS lists the stopped task, and
+   CloudTrail records the request. So it is a one-time password. Sign in with it at once and change
+   it — in the UI, or `POST /users/{user_id}/password` with `current_password` — which also revokes
+   every session it opened. This is acceptable for dev; **do not use it for prod.** The real fix is
+   for `create_user.py` to read the password from a Secrets Manager secret the task role may read,
+   and §12 lists it as open.
+3. **Create the other users** from the Admin screen or with `POST /users`. Roles are a set, and
+   Admin does not include Approver or Analyst (DEC-703): an Admin who is also the person who approves
+   champions is given both roles, deliberately. Plan prerequisite P6 names who approves per client.
+4. **Recovery.** If the last Admin is locked out, create another Admin the same way; that Admin can
+   reset the first one's password. The API refuses to disable or demote the last active Admin
+   (DEC-712), so this is the only way to reach a deployment with none.
+
+### 11.3 A prod deployment answers 503 until sign-in is configured
+
+If a task on `env=prod` reads `auth_mode=off`, it starts, logs an error, and answers every route
+except `GET /healthz` and `POST /auth/login` with **503 `AUTH_NOT_CONFIGURED`** (DEC-702). The
+health probe still passes, so ECS does not roll the deployment back and the load balancer keeps
+routing to it: the symptom is a deployment that looks healthy and refuses everybody. That is
+deliberate — `off` means every request acts as the all-roles local operator, which on a public load
+balancer is no access control at all, so the product fails closed rather than open.
+
+A deployment built from this tree cannot get there by accident: the operations stack writes
+`auth_mode=local`, and `infra/context.py` refuses `-c auth_mode=off` for prod. It happens when a
+task reads its settings before the operations stack has written them — the first deployment, until
+the restart of §4.2 — or when somebody edits the parameter by hand. The fix is the parameter at
+`local`, a restart, and an Admin (§11.2). `scripts/smoke_deployment.py` reports the state in one
+line either way; on dev, `off` is a warning in the log and a warning from the smoke test.
+
+### 11.4 The audit-export bucket, with Object Lock
+
+The audit table in the database is the record, append-only (DEC-714). An export is a copy of a
+window of it, as JSON lines, written where a compromise of the database cannot reach it: the bucket
+`<bucket_name_prefix>-<env>-<account>-audit` (output `AuditBucketName`), created with **S3 Object Lock
+in COMPLIANCE mode**. Each export is written with a retain-until date `audit_retention_days` ahead,
+and the bucket's default retention is the same number of days. In COMPLIANCE mode *nobody*, the root
+user included, can delete a locked version or shorten its lock until the date passes, and the bucket
+policy additionally denies every principal `DeleteObject` and `DeleteObjectVersion`, so a delete
+marker cannot hide an export either. The task role may put objects under `audit/` and do nothing
+else there: it cannot read, list or delete an export.
+
+**Decide `audit_retention_days` before the first prod export**, with Minfy's legal or compliance
+team: it is permanent for every object written under it. The prod default, 2555 days, is the
+setting's own default rather than a legal answer. Dev defaults to one day, the minimum S3 accepts,
+because a dev account is torn down and rebuilt.
+
+An Admin exports with `POST /audit/exports`; the export is itself an audited event carrying the
+file's SHA-256. Check the lock with your own credentials:
+
+```bash
+aws s3api get-object-lock-configuration --bucket <audit bucket> --region ap-south-1
+aws s3api list-objects-v2 --bucket <audit bucket> --prefix audit/ --region ap-south-1 --query 'Contents[].Key'
+aws s3api get-object-retention --bucket <audit bucket> --key <key> --region ap-south-1
+```
+
+The first reports `ObjectLockEnabled: Enabled` with a `COMPLIANCE` default rule; the last reports
+`Mode: COMPLIANCE` and a `RetainUntilDate`. The bucket is retained by `cdk destroy` at every
+`env_name` (§8.2): removing a dev one means waiting out the lock, deleting the bucket policy that
+denies deletion, deleting every version, then the bucket.
+
+### 11.5 Schedules: EventBridge Scheduler and the job task
+
+With `scheduler_backend=eventbridge`, saving a schedule in the product creates an EventBridge
+Scheduler schedule in the group `marketing-ai-<env>`. When it fires, the scheduler assumes
+`marketing-ai-<env>-scheduler` and runs one ECS task in the deployment's cluster from the task
+family `marketing-ai-<env>-job` — the product's own image and the API's own task role, container
+`job`, command `python -m scripts.fire_schedule` with the schedule's arguments. The schedule names
+the family, never a revision, so it keeps firing across deployments. The scheduler's role can start
+that one family in that one cluster and nothing else, and its trust policy admits only schedules in
+this deployment's group.
+
+Scheduled work runs as the system scheduler principal, which holds the Analyst role only: a
+scheduled retraining produces a challenger, and the champion rule and a person's approval still
+decide what is promoted.
+
+Check what exists and what fired, with your own credentials (the task role has no `List` action):
+
+```bash
+aws scheduler list-schedules --group-name marketing-ai-dev --region ap-south-1 \
+  --query 'Schedules[].[Name,State]' --output table
+aws scheduler get-schedule --group-name marketing-ai-dev --name <schedule> --region ap-south-1 \
+  --query '{expression:ScheduleExpression,timezone:ScheduleExpressionTimezone,cluster:Target.Arn,role:Target.RoleArn,family:Target.EcsParameters.TaskDefinitionArn}'
+aws logs tail /marketing-ai/dev/api --log-stream-name-prefix job/ --since 2h --region ap-south-1
+```
+
+A firing logs to the API log group under the `job/` stream prefix, so a failed firing is counted by
+the same error metric filter as the API. `scheduler_group_name` must be `marketing-ai-<env>`: it is
+the IAM boundary, and a schedule created in any other group is refused.
+
+### 11.6 Alerts, and confirming the email subscription
+
+There are two SNS topics, deliberately. `marketing-ai-<env>-alarms` carries CloudWatch alarms and
+only CloudWatch publishes to it. `marketing-ai-<env>-alerts` carries the application's own alerts —
+drift above its threshold, a performance drop beyond the setting, a failed scheduled job — and only
+the task role publishes to it, so the application can never forge an alarm's "OK". `-c alert_email=`
+subscribes the same address to both (plan prerequisite P3).
+
+**Each subscription sends a confirmation email, and nothing is delivered until its link is
+clicked.** A publish to a topic whose only subscription is pending still succeeds, so an
+unconfirmed subscription looks exactly like a quiet week. Check both after the first deployment:
+
+```bash
+for topic in alarms alerts; do
+  aws sns list-subscriptions-by-topic --region ap-south-1 \
+    --topic-arn "arn:aws:sns:ap-south-1:<account>:marketing-ai-dev-$topic" \
+    --query 'Subscriptions[].[Endpoint,SubscriptionArn]' --output table
+done
+```
+
+A confirmed subscription shows an ARN; an unconfirmed one shows `PendingConfirmation`. Confirmation
+links expire. A new `make aws-deploy` does not resend one, because nothing changed; removing
+`alert_email` from `infra/cdk.context.json`, deploying, restoring it and deploying again does. To see the path work end to end,
+publish once with your own credentials:
+
+```bash
+aws sns publish --region ap-south-1 --topic-arn "<AlertTopicArn>" \
+  --subject "marketing-ai dev: delivery test" --message "Test of the alert path. No action needed."
+```
+
+### 11.7 The retention job
+
+`governance.retention_days` is enforced by `scripts/run_retention.py`: it deletes uploads, datasets
+and row-level artefacts older than each use case's setting, and keeps models and aggregate reports.
+A dry run is the default, and it is the plan the real run executes, key for key (DEC-736). Run it
+inside the deployment, dry first:
+
+```bash
+.venv/bin/python -m scripts.run_in_deployment --env dev -- python -m scripts.run_retention
+.venv/bin/python -m scripts.run_in_deployment --env dev -- python -m scripts.run_retention --apply
+```
+
+`--json` prints the plan as JSON for a ticket. `--apply` writes one `privacy.retention.apply` audit
+event carrying counts, never a key or a value. Retention is measured in days, so daily is often
+enough; read the dry run before the first `--apply` on any deployment holding a customer's data.
+
+**A delete on the artefact bucket is not yet the end of the bytes.** The bucket is versioned (§8.1),
+so the job's delete — an ordinary `DeleteObject` through the storage layer — lays a delete marker and
+leaves the object behind as a noncurrent version. Two mechanisms exist to remove it: the task role
+may delete object *versions* under `uploads/` and `runs/` and nowhere else (`infra/policies.py`,
+`EraseObjectVersions`), and `engine/privacy/lifecycle.py` builds per-client-prefix lifecycle rules
+that expire noncurrent versions `grace_days` (`configs/privacy.yaml`) after the job's own deadline, as
+a backstop. On the M50 walk (2026-09-23) nothing in the tree yet called either one: no code deleted
+a version, and nothing applied the lifecycle rules. Until that changes, after an `--apply` check
+what is left and treat every noncurrent version under those prefixes as data still held:
+
+```bash
+aws s3api list-object-versions --bucket <BucketName> --prefix uploads/ --region ap-south-1 \
+  --query '{versions:length(Versions[?IsLatest==`false`] || `[]`),markers:length(DeleteMarkers || `[]`)}'
+aws s3api get-bucket-lifecycle-configuration --bucket <BucketName> --region ap-south-1 \
+  --query 'Rules[].ID'
+```
+
+### 11.8 Erasure, access requests and consent
+
+A DPDP erasure request (`POST /privacy/erasure`, plan M48), an access request and the consent ledger need
+nothing on a deployment beyond what §11.1 switches on, and erasure records the request and its
+outcome in the audit log without the data principal's id in the clear. On the M50 walk the engine
+side (`engine/privacy/erasure.py`, `access_export.py`, `consent.py`) was in the tree and the HTTP
+routes were not yet; before the acceptance step of `docs/M50_CHECKLIST.md` §6.2, confirm the route is
+in the deployment's `/openapi.json`. What §11.7 says about noncurrent versions applies to an erasure
+too: until a version delete or the lifecycle backstop runs, the erased bytes survive as old versions. Models trained on the person's data are flagged for retraining at the
+next scheduled cycle, not retrained at once. The breach runbook is in `docs/RUNBOOK.md`.
+
+### 11.9 What still needs a decision
+
+| Prerequisite | What waits on it |
+|---|---|
+| P1, a dev account | Everything in `docs/M50_CHECKLIST.md` |
+| P2, Bedrock model access | `-c bedrock_enabled=true` and the assistant's cost row (§6.2) |
+| P3, a budget and an alert email | `infra/cdk.context.json` (§4.2), §6.4 and §11.6 |
+| P4, single-tenant or multi-tenant | Plan M51. This document builds one deployment per client account |
+| P5, the identity provider | A third `auth_mode` value. Until then sign-in is the built-in store |
+| P6, who approves champions | Which users §11.2 gives the Approver role |
+| Legal review | `audit_retention_days` for prod (§11.4) and the DPDP controls (§9.2) |
+
+---
+
+## 12. What the M50 walk found
+
+M50 walked this document from §1 to §11 as a first-time operator would, on 2026-09-23, with no AWS
+account: every command that runs offline was run (`make infra-synth`, `make infra-test`, every
+script's `--help` and `--dry-run`, settings loading with the documented variables, Alembic's offline
+`--sql` mode) and every command that needs an account was checked against the code it names. What it
+found, and where each finding was fixed:
+
+| # | Where | What a first-time operator would have hit | Fixed in |
+|---|---|---|---|
+| 1 | Top of the document | It said `scripts/smoke_deployment.py` and `infra/README.md` did not exist; the README did, and the smoke test did not | This document; `scripts/smoke_deployment.py` written |
+| 2 | §2 | The AWS CLI, the `.venv` that `make aws-bootstrap` and the helper scripts run from, and the exact `cdk bootstrap` command were not listed | §2 |
+| 3 | §2, §6.2 | Bedrock was "reserved, not used" and `LlmCostUsd` "not in this repository"; the generative phase is here, and the paid Bedrock test pointed at this document for variables it did not mention | §2, §6.2, §6.5 |
+| 4 | §4.1 | A bare synthesis prints five warnings the document did not list | §4.1 |
+| 5 | §4.2, §6.4 | Context given with `-c` by hand (`alert_email`, the budget, the certificate) is dropped by the next `make aws-deploy`, which then deletes the subscriptions, the budget and the HTTPS listener | §4.2 (`infra/cdk.context.json`, confirmed with a synthesis) and `.gitignore` |
+| 6 | §4.2 | The first deployment's tasks start before the operations stack writes the Phase 4b parameters, so they run with sign-in off until restarted | §4.2 (restart step) |
+| 7 | §4.3 | `make aws-bootstrap ENV=dev`, as written, read the laptop's settings, skipped every probe, and printed "4/4 checks passed; this deployment is ready" | `scripts/aws_bootstrap.py`: skipped is not passed, and a named deployment with nothing probed fails |
+| 8 | §4.3 | With the AWS loader and no credentials, it died with a traceback | `scripts/aws_bootstrap.py` |
+| 9 | §4.3 | Its database probe used the composed `postgresql://` URL directly, which asks for psycopg 2 — not in the image — so it could never pass | `scripts/aws_bootstrap.py` uses the application's engine factory |
+| 10 | §4.3, §7.1 | Its migrations dropped `postgres_schema` and would have created the tables in `public`, while the image's `migrate` reads `marketing_ai` | `scripts/aws_bootstrap.py` passes URL and schema together |
+| 11 | §4.3, §7.1, §10.5 | The database is in isolated subnets, so the bootstrap, `make migrate` and the probes cannot run from a laptop or a CI runner, and from there the probes test the operator's credentials rather than the task role | `scripts/run_in_deployment.py` (one-off task with the service's own definition and network); §4.3, §7.1, §10.5 |
+| 12 | §4.3 | The sample output named `region=` (it is `aws_region=`), omitted `llm_backend`, and counted seven use cases (there are eight) | §4.3 |
+| 13 | §4.4 | CI built and pushed the image, then `make aws-deploy` built it again without the ECR variables and failed; the bootstrap ran from a `.venv` CI never creates; the smoke module did not exist; and `--require-approval broadening` cannot prompt in CI, so a first deployment there cannot succeed | `.github/workflows/deploy-dev.yml`; §2.1, §4.4 |
+| 14 | §5 | With sign-in on, every `curl` needs a token and the walk-through needs a user | §5, §11.2 |
+| 15 | §6.2 | Plan M50's cost questions — per strategy, per 100,000 scored rows, per 1,000 assistant questions — had no row to record into | §6.2 (rows added, unmeasured) |
+| 16 | §7.1 | `alembic upgrade --sql` with a schema produced DDL that referenced a schema it never created | `alembic/env.py` |
+| 17 | §8.3, §9.2 | Retention, erasure and authentication were described as absent | §8.3, §9.2, §11 |
+
+Still open, because each is a change to code this milestone does not own, or needs the account:
+
+- `scripts/create_user.py` cannot receive a password on a deployment except through the `RunTask`
+  command line (§11.2). It should read one from a Secrets Manager secret the task role may read.
+- The `migrate` target's help text in the Makefile names a prefixed `DATABASE_URL` variable that is
+  not a setting; the variable it means is `MARKETING_AI_POSTGRES_DSN`.
+- `infra/README.md` says the application refuses to start on an unknown `MARKETING_AI_*` variable;
+  it ignores one (§3.5), and the refusal is the deployment test's.
+- `make aws-bootstrap` still runs the probes where it is invoked; running it through
+  `scripts/run_in_deployment.py` would make the target mean what §4.3 needs.
+- Retention and erasure delete objects on a versioned bucket without removing the noncurrent
+  version, and the lifecycle backstop that would expire it is built but applied by nothing (§11.7,
+  §11.8). The IAM for both is deployed; the code that uses it is Phase 4b M48's to write.
+- The erasure and access-request HTTP routes were not in `api/routes/` on the walk (§11.8). §11 was
+  written against Phase 4b's code as it stood that day; re-read it against the final code before the
+  checklist's §6.2.
+- Everything that needs the account: `docs/M50_CHECKLIST.md`.
 
 ---
 

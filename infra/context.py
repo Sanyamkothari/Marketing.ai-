@@ -41,6 +41,7 @@ from dataclasses import dataclass, field, fields
 from typing import Any, Final
 
 __all__ = [
+    "AUTH_MODES",
     "CDK_CONTEXT_ENV_VAR",
     "FARGATE_CPU_MEMORY",
     "KNOWN_KEYS",
@@ -61,6 +62,29 @@ CDK_CONTEXT_ENV_VAR: Final[str] = "CDK_CONTEXT_JSON"
 DEV: Final[str] = "dev"
 PROD: Final[str] = "prod"
 ENV_NAMES: Final[tuple[str, ...]] = (DEV, PROD)
+
+AUTH_MODES: Final[tuple[str, ...]] = ("off", "local")
+"""Mirrors `engine.settings.AuthMode`. `tests/infra/test_phase4b_context.py` asserts they agree."""
+
+PROD_AUDIT_RETENTION_DAYS: Final[int] = 2555
+"""Object Lock retention on a prod audit export: `Settings.audit_retention_days`'s own default.
+
+Not chosen here. It is the number Phase 4b's audit export already uses when nothing overrides it
+(seven years, a common records-retention period), and the bucket's default retention and the
+setting written to Parameter Store are the same number so that an object written without an
+explicit date and one written with it are locked for the same time. The legal retention period for
+a client's audit trail is Minfy's legal team's number (plan, legal note); `-c audit_retention_days`
+is where it goes.
+"""
+
+DEV_AUDIT_RETENTION_DAYS: Final[int] = 1
+"""Object Lock retention on a dev audit export: the minimum S3 accepts.
+
+COMPLIANCE mode means *nobody* - the root user included - can delete a locked object version
+until its date passes, and a dev deployment is torn down and rebuilt. Seven years of undeletable
+test exports in a dev account is a bill and a clutter nobody can clean up, for evidence nobody
+will ever need. One day still exercises every code path the prod lock does.
+"""
 
 FARGATE_CPU_MEMORY: Final[Mapping[int, tuple[int, int, int]]] = {
     256: (512, 2048, 512),
@@ -136,6 +160,11 @@ def _as_str(key: str, raw: object) -> str:
     return text
 
 
+def _as_lower(key: str, raw: object) -> str:
+    """A non-empty string, lower-cased: an enumerated value such as `auth_mode`."""
+    return _as_str(key, raw).lower()
+
+
 def _as_tuple(key: str, raw: object) -> tuple[str, ...]:
     """A list, or a comma-separated string - the only spelling `-c` can carry."""
     if isinstance(raw, (list, tuple)):
@@ -165,9 +194,19 @@ class AppContext:
     | `https_only` | false unless `certificate_arn` is given | always; a deployment without a certificate is refused |
     | `log_retention_days` | 30 | 365 |
     | `cors_origins` (written to SSM) | `*` unless `domain_name` is given | always `https://<domain_name>`, because prod requires one |
+    | `audit_retention_days` (default, Phase 4b) | 1 | 2555 |
+    | `auth_mode` | `local` by default; `off` may be asked for | always `local`; `off` is refused |
 
-    Nothing else is conditional on the name. `db_multi_az` is the only one of the five that can be
-    overridden, because a dev deployment that wants to rehearse a failover should be able to.
+    Nothing else is conditional on the name. `db_multi_az` and `audit_retention_days` are the only
+    defaults that can be overridden, because a dev deployment that wants to rehearse a failover
+    should be able to, and because the legal retention period is somebody else's number.
+
+    `auth_mode` defaults to `local` at *both* names. The Phase 4b `Settings` default is `off`, which
+    is right for a laptop and wrong for anything behind this stack's load balancer: every
+    deployment here is internet-facing, and `off` makes every request the all-roles local operator.
+    A prod deployment with `off` would not even be usable - `api/access.py` answers every
+    non-public route with 503 `AUTH_NOT_CONFIGURED` (DEC-702) - so it is refused at synth time,
+    where the fix is one `-c` flag, rather than discovered after a deployment.
     """
 
     env_name: str = DEV
@@ -204,6 +243,16 @@ class AppContext:
 
     alert_email: str | None = None
     monthly_budget_usd: float | None = None
+
+    # --- Phase 4b (see infra/operations.py) ---------------------------------------------------
+    auth_mode: str = "local"
+    audit_retention_days: int = 0  # defaulted from env_name: 1 in dev, 2555 in prod
+    # The scheduled-job task only starts a firing: with job_backend=sagemaker the training or
+    # scoring it asks for runs as a SageMaker job, not in this task. Chosen, not measured - the
+    # figure is the smallest Fargate size with room for the image's heavy import graph
+    # (see compute.START_PERIOD_SECONDS); the first real deployment should replace it.
+    job_cpu: int = 1024
+    job_memory: int = 4096
     alarm_thresholds: tuple[str, ...] = ()
 
     domain_name: str | None = None
@@ -278,6 +327,9 @@ class AppContext:
         built["db_deletion_protection"] = is_prod
         built["removal_policy_destroy"] = not is_prod
         built["https_only"] = bool(built.get("certificate_arn"))
+        built.setdefault(
+            "audit_retention_days", PROD_AUDIT_RETENTION_DAYS if is_prod else DEV_AUDIT_RETENTION_DAYS
+        )
 
         context = cls(**built)
         context.validate()
@@ -340,6 +392,7 @@ class AppContext:
             )
         if self.max_concurrent_jobs < 1:
             raise ContextError("max_concurrent_jobs: must be at least 1.")
+        self._validate_phase_4b()
         self.alarm_threshold_values  # noqa: B018  - parses and raises on a malformed entry
         if self.monthly_budget_usd is not None:
             if self.monthly_budget_usd <= 0:
@@ -354,6 +407,36 @@ class AppContext:
                 "image_digest: expected the full image reference `<registry>/<repository>@sha256:...` "
                 "that scripts/build_push_image.sh writes to .image-digest. A tag can be moved after "
                 "it was tested; a digest cannot."
+            )
+
+    def _validate_phase_4b(self) -> None:
+        """The Phase 4b keys: sign-in, the audit lock and the scheduled-job task size."""
+        if self.auth_mode not in AUTH_MODES:
+            raise ContextError(f"auth_mode: must be one of {', '.join(AUTH_MODES)}, got {self.auth_mode!r}.")
+        if self.is_prod and self.auth_mode == "off":
+            raise ContextError(
+                "auth_mode: a prod deployment cannot run with sign-in off. Every request would act "
+                "as the all-roles local operator on a public load balancer, and api/access.py "
+                "answers every non-public route with 503 AUTH_NOT_CONFIGURED to stop exactly that "
+                "(DEC-702) - so the deployment would be unusable anyway. Leave auth_mode at its "
+                "default (local), or deploy this as -c env_name=dev."
+            )
+        if not 1 <= self.audit_retention_days <= 3650:
+            raise ContextError(
+                "audit_retention_days: must be between 1 and 3650, the range Settings accepts. It "
+                "is an Object Lock COMPLIANCE period: nobody, the root user included, can shorten "
+                "it or delete a locked export before it ends, so a typo here is permanent."
+            )
+        if self.job_cpu not in FARGATE_CPU_MEMORY:
+            raise ContextError(
+                f"job_cpu: {self.job_cpu} is not a Fargate CPU size; "
+                f"choose one of {', '.join(str(cpu) for cpu in sorted(FARGATE_CPU_MEMORY))}."
+            )
+        low, high, step = FARGATE_CPU_MEMORY[self.job_cpu]
+        if not (low <= self.job_memory <= high and (self.job_memory - low) % step == 0):
+            raise ContextError(
+                f"job_memory: {self.job_memory} MiB is not valid for job_cpu={self.job_cpu}; "
+                f"Fargate allows {low}-{high} MiB in steps of {step}."
             )
 
     def tags(self) -> dict[str, str]:
@@ -453,6 +536,10 @@ _CONVERTERS: Final[Mapping[str, Any]] = {
     "certificate_arn": _as_str,
     "image_digest": _as_str,
     "cdk_nag": _as_bool,
+    "auth_mode": _as_lower,
+    "audit_retention_days": _as_int,
+    "job_cpu": _as_int,
+    "job_memory": _as_int,
 }
 """Every context key except `env_name`, and how to read its value. `env_name` is read first because
 the defaults of the others depend on it."""

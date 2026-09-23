@@ -1,0 +1,51 @@
+# configs/privacy.yaml
+# India DPDP engineering controls (Phase 4b M48). Read by engine/privacy/config.py.
+#
+# NOT LEGAL ADVICE. These are engineering controls that support compliance with the Digital Personal
+# Data Protection Act 2023 and the DPDP Rules; Minfy's legal or compliance team must review the
+# purposes, the mapping and the erasure mode before a client relies on them.
+#
+# Engine data, like configs/roles.yaml: never merged into a use case. The engine never names a use
+# case (plan section 2.1, principle 1), so the ONLY place a use case is tied to a purpose is the
+# `use_case_purposes` table below. A use case that is not listed has no consent purpose, and its
+# scoring runs behave exactly as they did in Phase 1.
+
+schema_version: 1
+
+purposes:                               # the purposes a consent record may be given for
+  marketing_communication:
+    label: Marketing communication
+    description: Contacting a customer with offers, campaigns or retention messages.
+  account_servicing:
+    label: Account servicing
+    description: Reminders and notices about a customer's own account, such as a payment falling due.
+
+use_case_purposes:                      # use-case id -> purpose; a use case listed here is gated by the
+  targeted-advertisement: marketing_communication   # consent ledger whenever one exists for the run's
+  win-back-campaign: marketing_communication        # client and this purpose (DEC-731)
+  telco-churn: marketing_communication
+  rca: marketing_communication
+  payment-propensity: account_servicing
+
+retention:
+  # Run artefacts that hold one row per customer. Deleted once the run is older than the use case's
+  # governance.retention_days. Models, run.json, manifests and aggregate reports are kept (DEC-736).
+  row_level_run_artefacts:
+    - scores.csv
+    - scores.parquet
+    - row_explanations.parquet
+    - copy_messages.csv
+  # Aggregate reports that nevertheless carry a handful of example rows. They are kept, and the
+  # listed fields are emptied instead: a list becomes empty, anything else becomes null. A path is
+  # dotted; `*` stands for every element of a list.
+  sample_fields:
+    profile.json: [columns.*.sample_values, preview_rows]
+    scoring_summary.json: [sample_rows]
+  lifecycle:                            # S3 lifecycle rules: a backstop to the retention job (DEC-740)
+    rule_id_prefix: marketing-ai-retention-
+    grace_days: 7                       # the backstop fires this many days AFTER the job would have
+
+erasure:
+  mode: delete                          # delete | tombstone (DEC-742)
+  tombstone: "[erased]"                 # what a tombstoned identifier or masked cell becomes
+  consent_history: keep                 # keep | delete: the hashed consent ledger rows of an erased principal
