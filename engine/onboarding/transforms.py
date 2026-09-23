@@ -151,11 +151,31 @@ def cast_series(
         else:
             values = pd.to_datetime(series, errors="coerce", format="mixed")
     else:  # StandardType.CATEGORICAL, StandardType.TEXT - the schema tells them apart, not the cast
-        values = _map_non_null(series, str)
+        values = _as_text(series)
 
     total = int(series.notna().sum())
     failed = int((series.notna() & values.isna()).sum())
     return TransformResult(values=values, failed=failed, total=total, unmapped=())
+
+
+def _as_text(series: pd.Series[Any]) -> pd.Series[Any]:
+    """`str()` of every non-null cell, nulls left as they were - `_map_non_null(series, str)`.
+
+    Two shapes of column get the same answer without a Python call per cell, because for them the
+    answer is known: a column of integers has no nulls and `astype(str)` spells each one exactly as
+    `str()` does, and a column read from a CSV whose every value is already text is its own answer,
+    since `str()` of a string is that string. They are the common case - an id column, a plan code,
+    a region - and on a five-million-row event table the per-cell call was most of the mapping
+    stage's own time (docs/PERFORMANCE.md). Anything else takes the per-cell path it always took.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if isinstance(series.dtype, np.dtype) and series.dtype.kind in "iu":
+        return series.astype(str).astype(object)
+    if series.dtype == object and pd.api.types.infer_dtype(series, skipna=True) == "string":
+        return series.copy()
+    return _map_non_null(series, str)
 
 
 # ---------------------------------------------------------------------------

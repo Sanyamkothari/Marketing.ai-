@@ -242,6 +242,15 @@ class ReadResult:
     truncated: bool
     fingerprint: DatasetFingerprint | None = None
     """Covers every row of the file, including rows above the cap; `None` on a bounded preview read."""
+    all_rows: pd.DataFrame | None = None
+    """Every row of the file, when the caller asked for them with `keep_all_rows`; else `None`.
+
+    `frame` and `fingerprint` are unchanged by asking: they are still exactly what the same read
+    returns without it. This exists for the onboarding build, which needs both a profile of a source
+    (made from the capped rows, like any profile) and every row of it (to aggregate), and used to
+    read each file twice to get them - the second pass re-parsing and re-fingerprinting the whole
+    file for a frame the first pass had already had in its hands (docs/PERFORMANCE.md).
+    """
 
 
 def file_format_for(key: str) -> Literal["csv", "parquet"]:
@@ -363,19 +372,28 @@ def read_upload(
     max_rows: int | None = None,
     row_cap: int = DEFAULT_PROFILE_ROW_CAP,
     chunk_rows: int = CHUNK_ROWS,
+    keep_all_rows: bool = False,
 ) -> ReadResult:
     """Read `key` once: the profiled rows, the exact row count and the dataset fingerprint.
 
     `max_rows` asks for a cheap bounded preview instead: the tail is not read, so the row count is
     extrapolated (`row_count_estimated`) and no fingerprint is computed. `POST /uploads` never uses
     that path.
+
+    `keep_all_rows` also returns every row of the file as `ReadResult.all_rows`, from the same pass;
+    it is ignored on a bounded preview, which by definition does not read them all.
     """
     resolved = file_format if file_format is not None else file_format_for(key)
     if storage.size_bytes(key) == 0:
         raise IngestError("UPLOAD_EMPTY", "The file is empty.")
+    keep = keep_all_rows and max_rows is None
     if resolved == "parquet":
-        return _read_parquet(storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows)
-    return _read_csv(storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows)
+        return _read_parquet(
+            storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows, keep_all_rows=keep
+        )
+    return _read_csv(
+        storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows, keep_all_rows=keep
+    )
 
 
 def _read_csv(
@@ -385,6 +403,7 @@ def _read_csv(
     max_rows: int | None,
     row_cap: int,
     chunk_rows: int,
+    keep_all_rows: bool,
 ) -> ReadResult:
     size = storage.size_bytes(key)
     with storage.open_read(key) as handle:
@@ -407,6 +426,7 @@ def _read_csv(
                 max_rows=max_rows,
                 row_cap=row_cap,
                 chunk_rows=chunk_rows,
+                keep_all_rows=keep_all_rows,
             )
         except UnicodeDecodeError:
             _LOG.info("ingest.encoding_retry encoding=%s", encoding)
@@ -428,6 +448,7 @@ def _read_csv_once(
     max_rows: int | None,
     row_cap: int,
     chunk_rows: int,
+    keep_all_rows: bool,
 ) -> ReadResult:
     """One decoded pass. Raises `UnicodeDecodeError` so the caller can try the next codec."""
     import pandas as pd
@@ -435,6 +456,7 @@ def _read_csv_once(
     bounded = max_rows is not None
     cap = max_rows if max_rows is not None else row_cap
     kept: list[pd.DataFrame] = []
+    every: list[pd.DataFrame] = []
     empty: pd.DataFrame | None = None
     rows_kept = 0
     row_count = 0
@@ -466,6 +488,8 @@ def _read_csv_once(
                 row_count += len(chunk)
                 if not bounded:
                     digest.update(chunk)
+                if keep_all_rows:
+                    every.append(chunk)
                 if rows_kept < cap:
                     take = chunk if rows_kept + len(chunk) <= cap else chunk.iloc[: cap - rows_kept]
                     kept.append(take)
@@ -496,7 +520,21 @@ def _read_csv_once(
         row_count_estimated=bounded,
         truncated=row_count > len(frame),
         fingerprint=None if bounded else digest.finish(frame, n_rows=row_count),
+        all_rows=_all_rows(frame, every) if keep_all_rows else None,
     )
+
+
+def _all_rows(frame: pd.DataFrame, every: list[pd.DataFrame]) -> pd.DataFrame:
+    """Every chunk of the file as one frame; the capped frame itself when the cap took them all.
+
+    Reusing `frame` when nothing was cut is not only cheaper, it is the guarantee that a file under
+    the cap reads back as the very frame an uncapped read would build - same chunks, same `concat`.
+    """
+    import pandas as pd
+
+    if sum(len(chunk) for chunk in every) == len(frame):
+        return frame
+    return pd.concat(every, ignore_index=True)
 
 
 def _read_parquet(
@@ -506,6 +544,7 @@ def _read_parquet(
     max_rows: int | None,
     row_cap: int,
     chunk_rows: int,
+    keep_all_rows: bool,
 ) -> ReadResult:
     import pyarrow as pa
 
@@ -517,7 +556,9 @@ def _read_parquet(
         _check_header(names)
         if row_count == 0:
             raise IngestError("UPLOAD_NO_ROWS", "The file has a header row but no data rows.")
-        frame, digest = _parquet_frame(parquet_file, cap=cap, chunk_rows=chunk_rows, bounded=max_rows)
+        frame, digest, every = _parquet_frame(
+            parquet_file, cap=cap, chunk_rows=chunk_rows, bounded=max_rows, keep_all_rows=keep_all_rows
+        )
     except pa.ArrowInvalid as exc:
         raise IngestError("UPLOAD_UNREADABLE", _UNREADABLE_MESSAGE.format(format="Parquet")) from exc
     return ReadResult(
@@ -529,17 +570,27 @@ def _read_parquet(
         row_count_estimated=False,
         truncated=row_count > len(frame),
         fingerprint=None if max_rows is not None else digest.finish(frame, n_rows=row_count),
+        all_rows=_all_rows(frame, every) if keep_all_rows else None,
     )
 
 
 def _parquet_frame(
-    parquet_file: _ParquetReader, *, cap: int, chunk_rows: int, bounded: int | None
-) -> tuple[pd.DataFrame, _ContentDigest]:
-    """Row groups up to `cap`, folding every row of the file into the digest on the unbounded path."""
+    parquet_file: _ParquetReader,
+    *,
+    cap: int,
+    chunk_rows: int,
+    bounded: int | None,
+    keep_all_rows: bool = False,
+) -> tuple[pd.DataFrame, _ContentDigest, list[pd.DataFrame]]:
+    """Row groups up to `cap`, folding every row of the file into the digest on the unbounded path.
+
+    The third element is every batch read, when `keep_all_rows` asks for them, else empty.
+    """
     import pandas as pd
 
     digest = _ContentDigest()
     kept: list[pd.DataFrame] = []
+    every: list[pd.DataFrame] = []
     empty: pd.DataFrame | None = None
     rows_kept = 0
     for batch in parquet_file.iter_batches(batch_size=max(1, min(chunk_rows, cap) if cap else 1)):
@@ -548,6 +599,8 @@ def _parquet_frame(
             empty = chunk.iloc[0:0]
         if bounded is None:
             digest.update(chunk)
+        if keep_all_rows:
+            every.append(chunk)
         if rows_kept < cap:
             take = chunk if rows_kept + len(chunk) <= cap else chunk.iloc[: cap - rows_kept]
             kept.append(take)
@@ -557,7 +610,7 @@ def _parquet_frame(
     if empty is None:
         empty = parquet_file.schema_arrow.empty_table().to_pandas()
     frame = kept[0] if len(kept) == 1 else pd.concat(kept, ignore_index=True) if kept else empty
-    return frame.reset_index(drop=True), digest
+    return frame.reset_index(drop=True), digest, every
 
 
 def read_table(storage: Storage, key: str, *, max_rows: int | None = None) -> pd.DataFrame:

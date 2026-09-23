@@ -81,6 +81,8 @@ if TYPE_CHECKING:
     import datetime
     from collections.abc import Mapping, Sequence
 
+    import numpy as np
+    import numpy.typing as npt
     import pandas as pd
     from duckdb import DuckDBPyConnection
 
@@ -121,6 +123,14 @@ _PROBE_ROWS: Final[int] = 500
 selective - it leaks for every row of every entity - so a few hundred genuine rows, carrying values
 that satisfy whatever `where` filters the features use, are as decisive as a copy of the whole table
 and do not double a client's extract in memory to prove it."""
+
+_PROBE_CONTROL_ENTITIES: Final[int] = 500
+"""Entities given *no* future row whose snapshot rows the leak probe rebuilds anyway, beside every
+entity that was given one (`_probe_rows`). A time bound that is missing leaks within each entity and
+the injected entities alone would show it; these are there for a query that reads across entities,
+which would move a feature of an entity that had nothing added. Five hundred is the same order as
+`_PROBE_ROWS`: a join that lost its entity condition moves every entity, so any few hundred are
+decisive."""
 
 _STANDARD_TYPES: Final[Mapping[ColumnType, StandardType]] = {
     ColumnType.INTEGER: StandardType.NUMERIC,
@@ -326,15 +336,22 @@ def _apply_mappings(
     entity_role: str,
     dataset_id: str,
     sample_entities: int | None,
-) -> tuple[tuple[_Mapped, ...], tuple[OnboardingCheck, ...]]:
+) -> tuple[tuple[_Mapped, ...], tuple[OnboardingCheck, ...], dict[str, SourceProfile]]:
     """Read every source, apply its mapping, and measure how well each event table joins.
 
     Join coverage is measured before any sampling, on the whole of both tables: a preview that
     sampled first would compare an event table against a fraction of the customers it belongs to and
     report a coverage collapse the client's data does not have.
+
+    Each source is read once, with its profile (`SourceReader.read_profiled`), and the profiles are
+    returned for the write stage - which needs them for the manifest's source fingerprints and for
+    which columns are personal data. It used to ask `reader.profile` for them there, which read and
+    fingerprinted every source a second time: 30 of the 152 seconds of a profiled build at 20,000
+    customers (docs/PERFORMANCE.md).
     """
     by_source = {mapping.source_id: mapping for mapping in mappings}
     checks: list[OnboardingCheck] = []
+    profiles: dict[str, SourceProfile] = {}
     read: list[tuple[SourceSpec, MappingSpec, int, pd.DataFrame]] = []
     for source in sources:
         mapping = by_source.get(source.source_id)
@@ -345,7 +362,9 @@ def _apply_mappings(
                 "columns mean, so it cannot be read. Map it on the mapping screen and build again.",
                 dataset_id=dataset_id,
             )
-        raw = reader.read(source)
+        profiled = reader.read_profiled(source)
+        raw = profiled.frame
+        profiles[source.source_id] = profiled.profile
         result = apply_mapping(
             raw,
             mapping,
@@ -371,6 +390,7 @@ def _apply_mappings(
         None,
     )
     keep = _sampled_keys(entity_keys, sample_entities)
+    universe = None if entity_keys is None else _key_universe(entity_keys)
     tables: list[_Mapped] = []
     for source, mapping, rows, frame in read:
         if ENTITY_KEY not in frame.columns and mapping.role != entity_role:
@@ -385,12 +405,22 @@ def _apply_mappings(
                 table=_castable(sampled, mapping),
                 coverage=(
                     None
-                    if mapping.role == entity_role or entity_keys is None
-                    else join_coverage(frame[ENTITY_KEY], entity_keys)
+                    if mapping.role == entity_role or universe is None
+                    else join_coverage(frame[ENTITY_KEY], universe)
                 ),
             )
         )
-    return tuple(tables), tuple(checks)
+    return tuple(tables), tuple(checks), profiles
+
+
+def _key_universe(entity_keys: pd.Series[Any]) -> pd.Series[Any]:
+    """The entity keys once, distinct and non-null, for every event table's coverage to be read against.
+
+    `join_coverage` reduces its second argument to the set of its distinct keys as text, so handing
+    it this instead of the whole entity column answers exactly the same question - and the reduction
+    is paid once per build rather than once per event table.
+    """
+    return entity_keys.dropna().drop_duplicates()
 
 
 def _sampled_keys(keys: pd.Series[Any] | None, sample_entities: int | None) -> set[object] | None:
@@ -535,31 +565,94 @@ def _leak_probe(
     as satisfiable in the future as it was in the past. A feature that moves is attributed to its
     role, and the count reported is the number of future rows that role was given - the events that
     were counted when they should not have been.
+
+    Two things keep the probe from costing a second build (docs/PERFORMANCE.md, DEC-096). The future
+    rows are stacked onto the client's table inside DuckDB (`_stack_future_rows`) rather than with
+    `pd.concat`, which copied every event table whole - five million usage rows, to add five
+    hundred - only for DuckDB to read the copy. And the features are rebuilt only for the snapshot
+    rows that can tell: those of the entities the future rows belong to, plus as many again that
+    were given none (`_probe_rows`). Every feature query joins an event to its own entity, so a
+    value can only move for an entity that was given a future row, and those rows are all probed -
+    the verdict for a broken time bound, a `derive` over the whole history or a widened snapshot
+    frame is the one the whole spine would give. The entities given nothing are there for the leak
+    no feature query was written to have: one that reads *other* entities' events would move them,
+    and a probe of only the injected entities could not see it.
     """
     import duckdb
     import pandas as pd
 
     after = pd.Timestamp(snapshots[SNAPSHOT_COLUMN].max()) + pd.Timedelta(days=1)
     injected: dict[str, int] = {}
+    witnesses: list[pd.Series[Any]] = []
     con = duckdb.connect()
     try:
-        con.register(SNAPSHOT_VIEW, snapshots)
         for role, frame in views.items():
             if role == entity_role or EVENT_TIME not in frame.columns or frame.empty:
                 con.register(role, frame)
                 continue
             extra = frame.head(_PROBE_ROWS).assign(**{EVENT_TIME: after})
             injected[role] = len(extra)
-            con.register(role, pd.concat([frame, extra], ignore_index=True))
+            if ENTITY_KEY in extra.columns:
+                witnesses.append(extra[ENTITY_KEY])
+            _stack_future_rows(con, role, frame, extra)
+        rows = _probe_rows(snapshots[ENTITY_KEY], witnesses)
+        con.register(SNAPSHOT_VIEW, snapshots.loc[rows].reset_index(drop=True))
         probed = build_features(con, spec, inclusive=inclusive)
     finally:
         con.close()
 
+    built = features.loc[rows].reset_index(drop=True)
     role_of = {feature.name: feature.role for feature in spec.features}
-    moved = {
-        role_of[name] for name in features.columns if name in role_of and _moved(features[name], probed[name])
-    }
-    return {role: rows for role, rows in injected.items() if role in moved}
+    moved = {role_of[name] for name in built.columns if name in role_of and _moved(built[name], probed[name])}
+    return {role: count for role, count in injected.items() if role in moved}
+
+
+def _probe_rows(keys: pd.Series[Any], witnesses: Sequence[pd.Series[Any]]) -> npt.NDArray[np.bool_]:
+    """Which snapshot rows the leak probe rebuilds: every row of an entity given a future event, and
+    every row of up to `_PROBE_CONTROL_ENTITIES` entities that were given none.
+
+    Should no snapshot row match an entity a future row was given - keys the pandas comparison here
+    reads differently from DuckDB's join, say - the answer is every row: the probe is never allowed
+    to become weaker than the one that rebuilt the whole spine, only cheaper than it.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if not witnesses:
+        return np.ones(len(keys), dtype=bool)
+    injected = keys.isin(pd.concat(witnesses, ignore_index=True).dropna().unique())
+    if not bool(injected.any()):
+        return np.ones(len(keys), dtype=bool)
+    control = keys[~injected].drop_duplicates().head(_PROBE_CONTROL_ENTITIES)
+    return (injected | keys.isin(control)).to_numpy(dtype=bool)
+
+
+def _stack_future_rows(con: DuckDBPyConnection, role: str, frame: pd.DataFrame, extra: pd.DataFrame) -> None:
+    """Make `role` a view of `frame`'s rows followed by `extra`'s, without copying `frame`.
+
+    Registering a pandas frame costs nothing - DuckDB scans it where it lies - so the only question
+    is the column types. DuckDB infers an object column's type from its values, and `extra` is five
+    hundred rows of the same frame: a text column that happens to be empty in those rows reads as
+    INTEGER there, and a stack of two differently typed halves is a different table from the one
+    the build queried. So every column of the future rows is cast to the type DuckDB gave the
+    client's own table, and the stacked view has the types the build's own queries saw.
+    """
+    past, future = f"_probe_past_{role}", f"_probe_future_{role}"
+    con.register(past, frame)
+    con.register(future, extra)
+    described = con.execute(f"DESCRIBE {_quoted(past)}").fetchall()
+    casts = ", ".join(
+        f"CAST({_quoted(str(row[0]))} AS {row[1]}) AS {_quoted(str(row[0]))}" for row in described
+    )
+    con.execute(
+        f"CREATE VIEW {_quoted(role)} AS "
+        f"SELECT * FROM {_quoted(past)} UNION ALL SELECT {casts} FROM {_quoted(future)}"
+    )
+
+
+def _quoted(name: str) -> str:
+    """A DuckDB identifier, double-quoted with any embedded quote doubled."""
+    return '"' + name.replace('"', '""') + '"'
 
 
 _PROBE_RTOL: Final[float] = 1e-9
@@ -688,14 +781,23 @@ def _phase_one_checks(
     )
 
 
-def _standard_type(series: pd.Series[Any]) -> StandardType:
+def _column_types(frame: pd.DataFrame) -> dict[str, ColumnType]:
+    """Every column's Phase 1 type, inferred once for the write stage.
+
+    Two things there need it - the manifest's column types, and the dataset fingerprint, whose
+    schema line is exactly these types - and each used to infer them for itself: over a
+    60-feature dataset `infer_column_type` is a numeric parse of every value of every column, and
+    doing it twice was a tenth of the write stage (docs/PERFORMANCE.md). Same function, same frame,
+    so the same answer, once.
+    """
     from engine.stages.ingest import infer_column_type
 
-    return _STANDARD_TYPES[infer_column_type(series)]
+    return {str(name): infer_column_type(frame[name]) for name in frame.columns}
 
 
 def _dataset_columns(
     frame: pd.DataFrame,
+    types: Mapping[str, ColumnType],
     *,
     keys: Sequence[str],
     mapped: Sequence[str],
@@ -710,7 +812,7 @@ def _dataset_columns(
     if target is not None:
         origins[target] = "label"
     return tuple(
-        DatasetColumn(name=str(name), type=_standard_type(frame[name]), origin=origins[str(name)])
+        DatasetColumn(name=str(name), type=_STANDARD_TYPES[types[str(name)]], origin=origins[str(name)])
         for name in frame.columns
     )
 
@@ -838,7 +940,7 @@ def build_dataset(
         began = perf_counter()
         status.start("apply_mappings")
         _cancelled(cancel)
-        tables, mapping_checks = _apply_mappings(
+        tables, mapping_checks, profiles = _apply_mappings(
             config=config,
             sources=sources,
             mappings=mappings,
@@ -1053,8 +1155,10 @@ def build_dataset(
         began = perf_counter()
         status.start("write")
         _cancelled(cancel)
-        profiles = {source.source_id: reader.profile(source) for source in sources}
-        registry.write_frame(dataset_id, frame, pii_columns=_pii_columns(tables, profiles))
+        types = _column_types(frame)
+        fingerprint = registry.write_frame(
+            dataset_id, frame, pii_columns=_pii_columns(tables, profiles), types=types
+        )
         registry.write_manifest(
             dataset_id,
             build_manifest(
@@ -1065,6 +1169,7 @@ def build_dataset(
                 frame=frame,
                 columns=_dataset_columns(
                     frame,
+                    types,
                     keys=[ENTITY_KEY, *([SNAPSHOT_COLUMN] if periodic else [])],
                     mapped=attributes,
                     derived=derived,
@@ -1074,6 +1179,7 @@ def build_dataset(
                 entity_key=ENTITY_KEY,
                 snapshot_column=SNAPSHOT_COLUMN,
                 target=target,
+                fingerprint=fingerprint,
             ),
         )
         registry.write_report(dataset_id, report)

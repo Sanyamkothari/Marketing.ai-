@@ -15,8 +15,8 @@ redaction. The candidate finders it calls (:func:`key_candidates`, :func:`time_c
 catalogue) rather than a `Storage`, so a test can drive them with an in-memory frame and never touch
 a filesystem.
 
-:class:`SourceReader` is the seam Phase 4 needs: it names two operations (`read`, `profile`) without
-saying where the bytes come from, so an S3 or warehouse reader can be dropped in later beside
+:class:`SourceReader` is the seam Phase 4 needs: it names three operations (`read`, `profile`, and
+`read_profiled`, which is both in one pass for the build) without saying where the bytes come from, so an S3 or warehouse reader can be dropped in later beside
 :class:`FileSourceReader` without a single line of onboarding logic - mapping, role detection,
 build - changing to accommodate it.
 
@@ -32,6 +32,7 @@ from __future__ import annotations
 
 import re
 import sys
+from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
@@ -50,12 +51,14 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from engine.contracts import DatasetFingerprint, DatasetProfile
+    from engine.stages.ingest import ReadResult
     from engine.storage import Storage
 
 __all__ = [
     "JOIN_COVERAGE_OK",
     "MIN_TIME_PARSE_RATE",
     "FileSourceReader",
+    "ProfiledRead",
     "SourceReader",
     "detect_roles",
     "join_coverage",
@@ -412,9 +415,37 @@ def join_coverage(event_keys: pd.Series[Any], entity_keys: pd.Series[Any]) -> fl
     non_null = event_keys.dropna()
     if len(non_null) == 0:
         return 1.0
-    universe = set(entity_keys.dropna().astype(str))
-    matched = non_null.astype(str).isin(universe).sum()
+    entities = entity_keys.dropna()
+    if _integer_keys(non_null) and non_null.dtype == entities.dtype:
+        matched = non_null.isin(entities.unique()).sum()
+    else:
+        matched = _as_key_text(non_null).isin(set(_as_key_text(entities))).sum()
     return round(float(matched) / len(non_null), 4)
+
+
+def _integer_keys(keys: pd.Series[Any]) -> bool:
+    """Whether `keys` is a plain numpy integer column - which can hold no null, and no text."""
+    import numpy as np
+
+    return isinstance(keys.dtype, np.dtype) and keys.dtype.kind in "iu"
+
+
+def _as_key_text(keys: pd.Series[Any]) -> pd.Series[Any]:
+    """`keys.astype(str)`, without the copy when every key already is text.
+
+    Keys are compared as text so that `7` and `"7"` join the way a client means them to. Two
+    shortcuts give that same answer without turning every key into a string, and a build asks for a
+    coverage about five times per event table - once when the tables are mapped and again by both
+    key checks, before and after the features are built (docs/PERFORMANCE.md): `str()` of a string
+    is that string, so a text column is its own text; and two integer columns hold the same text
+    exactly when they hold the same integers, so `join_coverage` compares two integer columns of
+    one dtype directly (one dtype, so that nothing is widened to a float on the way).
+    """
+    import pandas as pd
+
+    if keys.dtype == object and pd.api.types.infer_dtype(keys, skipna=False) == "string":
+        return keys
+    return keys.astype(str)
 
 
 _KEY_TRANSFORMS: Final[dict[str, Callable[[str], str]]] = {
@@ -453,7 +484,7 @@ def key_format_mismatch(event_keys: pd.Series[Any], entity_keys: pd.Series[Any])
 class SourceReader(Protocol):
     """Everything onboarding needs from wherever a source's bytes live.
 
-    Naming only `read` and `profile` - never a storage backend, a connection string or a file
+    Naming only `read`, `profile` and `read_profiled` - never a storage backend, a connection string or a file
     format - is what lets Phase 4 add `S3SourceReader` or `AthenaSourceReader` beside
     `FileSourceReader` without a single line of mapping, role-detection or build logic changing to
     accommodate it; every caller in this package already holds a `SourceReader`, not a `Storage`.
@@ -462,6 +493,23 @@ class SourceReader(Protocol):
     def read(self, source: SourceSpec, *, max_rows: int | None = None) -> pd.DataFrame: ...
 
     def profile(self, source: SourceSpec) -> SourceProfile: ...
+
+    def read_profiled(self, source: SourceSpec) -> ProfiledRead: ...
+
+
+@dataclass(frozen=True)
+class ProfiledRead:
+    """Every row of one source and its profile, from one pass over the file.
+
+    What a build needs from a source is both: every row, to aggregate, and the profile, for its
+    fingerprint and for which columns are personal data. Asking `read` and then `profile` answers
+    the same question with two passes over the same bytes - at the M14 benchmark size that second
+    pass was a third of the whole build (docs/PERFORMANCE.md) - so a reader answers it with one.
+    `profile` must be exactly what `SourceReader.profile` returns for the same source.
+    """
+
+    frame: pd.DataFrame
+    profile: SourceProfile
 
 
 UNBOUNDED_ROWS: Final[int] = sys.maxsize
@@ -507,7 +555,30 @@ class FileSourceReader:
     def profile(self, source: SourceSpec) -> SourceProfile:
         from engine.stages.ingest import read_upload
 
-        result = read_upload(self._storage, source.storage_key, file_format=source.file_format)
+        return self._profile_of(
+            source, read_upload(self._storage, source.storage_key, file_format=source.file_format)
+        )
+
+    def read_profiled(self, source: SourceSpec) -> ProfiledRead:
+        """Every row, as `read` returns them, and the profile, as `profile` returns it - in one pass.
+
+        The read is `profile`'s own read - same default row cap, so the same profiled rows and the
+        same fingerprint - asked to keep the rows above the cap as well. The profile is therefore
+        not "a profile of the whole table", which would differ from the one the Sources screen showed
+        the user for any file past the cap; it is the same profile, arrived at without reading the
+        file a second time. The rows are every row: the cap is still never a build's cap (DEC-108).
+        """
+        from engine.stages.ingest import read_upload
+
+        result = read_upload(
+            self._storage, source.storage_key, file_format=source.file_format, keep_all_rows=True
+        )
+        # `keep_all_rows` on an unbounded read always sets `all_rows`; this narrows the Optional.
+        if result.all_rows is None:  # pragma: no cover
+            raise RuntimeError(f"the read of {source.source_id} returned no rows beyond its profile")
+        return ProfiledRead(frame=result.all_rows, profile=self._profile_of(source, result))
+
+    def _profile_of(self, source: SourceSpec, result: ReadResult) -> SourceProfile:
         return profile_source(
             result.frame,
             self._use_case,

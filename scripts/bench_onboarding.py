@@ -46,15 +46,44 @@ reads them back and builds. The child's resident set never enters this process's
 allocated through Python's allocator, which misses the pandas, Arrow and DuckDB buffers that hold
 nearly all of a build.
 
+Where the time goes, and whether the answer changed (M37)
+--------------------------------------------------------
+The per-stage breakdown says which stage is slow; `--profile PATH` says why, by running the same
+build under `cProfile`, saving the stats to PATH and printing the engine functions that spent the
+most time. The profiler slows Python-heavy code far more than code that runs in DuckDB or numpy, so
+a profiled total is never the result - it is only ever read for proportions, and the verdict is
+taken from an unprofiled run.
+
+A speed change is only worth having if the dataset it builds is the one that was built before, so
+the report prints the dataset's fingerprint - the Phase 1 content hash `dataset_manifest.json`
+records. Two builds of the same tables, before and after a change, must print the same one.
+`--workspace DIR` makes that comparison possible: the tables are generated into DIR once, kept, and
+reused by every later run pointed at the same DIR, so a before-and-after pair times two builds of
+byte-identical inputs rather than two builds of two generations.
+
+`--json PATH` writes the whole measurement - machine, load, every stage, total, fingerprint - as one
+document, which is what `docs/PERFORMANCE.md` is built from.
+
+The machine line names the CPUs this process may use, its RAM and its Python; the load line beside
+it is the one-, five- and fifteen-minute load average when the build started and when it ended. A
+number measured on a machine that was also running other work is still a measurement, but it is a
+measurement of a shared machine, and the load average is how a reader knows which kind they have.
+
 Run it with::
 
     .venv/bin/python -m scripts.bench_onboarding --customers 200000 --usage-rows 5000000
+    .venv/bin/python -m scripts.bench_onboarding --customers 20000 --usage-rows 500000 \\
+        --workspace /tmp/bench-20k --json before.json          # then again, after the change
 """
 
 from __future__ import annotations
 
 import argparse
+import cProfile
+import json
 import multiprocessing
+import os
+import pstats
 import shutil
 import sys
 import tempfile
@@ -70,7 +99,7 @@ from tests.fixtures.raw.make_raw import DATA_END, DEFAULT_SEED, USAGE_FILE, make
 from engine.config import RunMode, StandardType, get_roles, load_use_case
 from engine.contracts import Severity
 from engine.onboarding.build import build_dataset
-from engine.onboarding.datasets import LocalDatasetRegistry
+from engine.onboarding.datasets import DatasetError, LocalDatasetRegistry
 from engine.onboarding.features import suggested_features
 from engine.onboarding.mapping import suggested_mapping_spec
 from engine.onboarding.sources import FileSourceReader
@@ -120,6 +149,9 @@ TARGET_SNAPSHOTS: Final[int] = 12
 TARGET_FEATURES: Final[int] = 60
 TARGET_SECONDS: Final[float] = 300.0
 """plan section 11's M14 numbers: the size and the time the definition of done names."""
+
+PROFILE_TOP: Final[int] = 25
+"""Engine functions printed from a `--profile` run, by cumulative time."""
 
 PEAK_MEMORY_BASIS: Final[str] = (
     "resource.getrusage(RUSAGE_SELF).ru_maxrss - the high-water mark of this process's resident "
@@ -300,6 +332,10 @@ class Measurement:
     report: BuildReport
     status: BuildStatus
     spec: OnboardingSpec
+    fingerprint: str | None = None
+    """The built dataset's content hash, from its manifest; `None` when the build wrote no dataset."""
+    load: tuple[tuple[float, float, float] | None, tuple[float, float, float] | None] = (None, None)
+    """The load average when the build started and when it ended (see the module docstring)."""
 
     @property
     def snapshots_built(self) -> int:
@@ -323,28 +359,67 @@ def measure_build(
     spec: OnboardingSpec,
     sources: Sequence[SourceSpec],
     mappings: Sequence[MappingSpec],
+    profiler: cProfile.Profile | None = None,
 ) -> Measurement:
     """Time one `build_dataset`, then read back the status document it wrote.
 
     The status is read rather than re-timed because the build already recorded each stage's
     `duration_seconds` as it ran; a second stopwatch around the same stages would be a different
     number pretending to be the same one.
+
+    `profiler`, when given, is enabled around the build call and nothing else.
     """
     registry = LocalDatasetRegistry(storage)
     dataset_id = registry.new_dataset_id(CLIENT, USE_CASE)
+    load_before = load_average()
     started = perf_counter()
-    report = build_dataset(
-        spec=spec,
-        config=config,
-        sources=tuple(sources),
-        mappings=tuple(mappings),
-        reader=FileSourceReader(storage, config),
-        registry=registry,
-        dataset_id=dataset_id,
-        mode=RunMode.TRAIN,
-    )
+    if profiler is not None:
+        profiler.enable()
+    try:
+        report = build_dataset(
+            spec=spec,
+            config=config,
+            sources=tuple(sources),
+            mappings=tuple(mappings),
+            reader=FileSourceReader(storage, config),
+            registry=registry,
+            dataset_id=dataset_id,
+            mode=RunMode.TRAIN,
+        )
+    finally:
+        if profiler is not None:
+            profiler.disable()
     seconds = perf_counter() - started
-    return Measurement(seconds, report, registry.read_status(dataset_id), spec)
+    load_after = load_average()
+    try:
+        fingerprint: str | None = registry.read_manifest(dataset_id).fingerprint.hash
+    except DatasetError:
+        fingerprint = None
+    return Measurement(
+        seconds,
+        report,
+        registry.read_status(dataset_id),
+        spec,
+        fingerprint=fingerprint,
+        load=(load_before, load_after),
+    )
+
+
+def load_average() -> tuple[float, float, float] | None:
+    """The one-, five- and fifteen-minute load average, where the platform reports one."""
+    try:
+        return os.getloadavg()
+    except (AttributeError, OSError):
+        return None
+
+
+def load_line(measurement: Measurement) -> str:
+    """The load average either side of the build, in one line (see the module docstring)."""
+    parts = [
+        f"{when} " + ("unknown" if load is None else " / ".join(f"{value:.1f}" for value in load))
+        for when, load in zip(("start", "end"), measurement.load, strict=True)
+    ]
+    return f"{', '.join(parts)} (1/5/15-minute load average; {os.cpu_count() or 0} CPUs on the host)"
 
 
 # ---------------------------------------------------------------------------
@@ -384,7 +459,7 @@ def verdict_lines(measurement: Measurement) -> tuple[str, str]:
 def print_report(
     *,
     measurement: Measurement,
-    setup_seconds: float,
+    setup_seconds: float | None,
     table_bytes: int,
     seed: int,
     peak_mb: float,
@@ -397,6 +472,7 @@ def print_report(
     print("Onboarding build benchmark (Phase 2 plan §11, milestone M14)")
     print(rule)
     print(f"machine      : {machine_line()}")
+    print(f"load         : {load_line(measurement)}")
     print(f"client tables: {len(report.sources)} CSV · {table_bytes / 1_000_000:.1f} MB · seed {seed}")
     print(f"use case     : {USE_CASE} · passed={report.passed} · errors={report.error_count}")
     if not report.passed:
@@ -406,7 +482,10 @@ def print_report(
         print(f"blocked by   : {', '.join(codes)}")
     print()
     print("setup (NOT part of the measured result)")
-    print(f"  generate + profile + map : {setup_seconds:8.1f} s   (separate process; excluded from peak)")
+    if setup_seconds is None:
+        print("  generate + profile + map : reused from --workspace; nothing generated by this run")
+    else:
+        print(f"  generate + profile + map : {setup_seconds:8.1f} s   (separate process; excluded from peak)")
     print()
     print("sources read")
     print(f"  {'source':<18}{'role':<14}{'rows':>14}{'coverage':>12}")
@@ -422,6 +501,7 @@ def print_report(
     print(f"  {'total (build_dataset)':<26}{measurement.seconds:>12.1f}")
     print()
     print(f"rows out     : {report.rows_out:,}")
+    print(f"dataset      : {measurement.fingerprint or '- (no dataset was written)'}")
     print(f"entities out : {report.entities_out:,}")
     censored = len(report.snapshots) - measurement.snapshots_built
     print(f"snapshots    : {measurement.snapshots_built} built, {censored} censored")
@@ -433,6 +513,63 @@ def print_report(
     print(f"target       : {target}")
     print(f"verdict      : {verdict}")
     print(rule)
+
+
+def print_profile(stats: pstats.Stats, *, path: Path) -> None:
+    """The engine functions that spent the most time, by cumulative seconds, under the profiler.
+
+    Restricted to `engine/` on purpose: what a reader of this can change is the engine, and the
+    library frames under it (pandas' CSV writer, DuckDB's `execute`) are what the engine's own
+    frames are made of - `path` holds the whole profile for anyone who needs them.
+    """
+    print(f"profile      : {path} (cProfile; read for proportions only - see the module docstring)")
+    stats.sort_stats("cumulative")
+    rows = [
+        (key, stat)
+        for key, stat in stats.stats.items()  # type: ignore[attr-defined]
+        if f"{os.sep}engine{os.sep}" in key[0]
+    ]
+    rows.sort(key=lambda item: item[1][3], reverse=True)
+    print(f"  {'cumulative s':>12}  {'calls':>7}  function")
+    for (file_name, line, function), (_, calls, _, cumulative, _) in rows[:PROFILE_TOP]:
+        where = file_name[file_name.rfind(f"{os.sep}engine{os.sep}") + 1 :]
+        print(f"  {cumulative:12.1f}  {calls:7d}  {where}:{line}({function})")
+
+
+def record(
+    measurement: Measurement,
+    *,
+    customers: int,
+    usage_rows: int,
+    setup_seconds: float | None,
+    peak_mb: float,
+) -> dict[str, object]:
+    """The measurement as one JSON document: every number `print_report` prints, and nothing else."""
+    report = measurement.report
+    target, verdict = verdict_lines(measurement)
+    return {
+        "command": COMMAND,
+        "machine": machine_line(),
+        "load_average": {"start": measurement.load[0], "end": measurement.load[1]},
+        "customers": customers,
+        "usage_rows": usage_rows,
+        "snapshots_built": measurement.snapshots_built,
+        "features": len(report.features),
+        "setup_seconds": None if setup_seconds is None else round(setup_seconds, 3),
+        "stages": {stage.key: stage.duration_seconds for stage in measurement.status.stages},
+        "total_seconds": round(measurement.seconds, 3),
+        "rows_out": report.rows_out,
+        "passed": report.passed,
+        "dataset_fingerprint": measurement.fingerprint,
+        "peak_memory_mb": round(peak_mb, 1),
+        "target": target,
+        "verdict": verdict,
+    }
+
+
+def prepared_workspace(storage: LocalStorage) -> bool:
+    """Whether a `--workspace` already holds a generation's source and mapping documents."""
+    return any(key.endswith(SOURCE_FILENAME) for key in storage.list_keys(SOURCES_PREFIX))
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +614,24 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--keep", action="store_true", help="keep the generated tables and the built dataset afterwards"
     )
+    parser.add_argument(
+        "--workspace",
+        type=Path,
+        default=None,
+        help=(
+            "generate the tables into this directory, or reuse the ones a previous run left there; "
+            "it is never deleted (for timing a before-and-after pair on identical inputs)"
+        ),
+    )
+    parser.add_argument(
+        "--profile",
+        type=Path,
+        default=None,
+        help="run the build under cProfile, save the stats here and print the slowest engine functions",
+    )
+    parser.add_argument(
+        "--json", type=Path, default=None, help="also write the measurement to this file as JSON"
+    )
     return parser
 
 
@@ -499,16 +654,27 @@ def main(argv: Sequence[str] | None = None) -> int:
     # leaving a long silence and no way to see which stage is spending the time.
     configure_logging("INFO")
 
-    out_dir: Path = args.out_dir if args.out_dir is not None else Path(tempfile.gettempdir())
-    out_dir.mkdir(parents=True, exist_ok=True)
-    workspace = Path(tempfile.mkdtemp(prefix=f"bench-onboarding-{customers}-", dir=out_dir))
+    if args.workspace is not None:
+        workspace: Path = args.workspace
+        workspace.mkdir(parents=True, exist_ok=True)
+    else:
+        out_dir: Path = args.out_dir if args.out_dir is not None else Path(tempfile.gettempdir())
+        out_dir.mkdir(parents=True, exist_ok=True)
+        workspace = Path(tempfile.mkdtemp(prefix=f"bench-onboarding-{customers}-", dir=out_dir))
+    keep = args.keep or args.workspace is not None
     storage = LocalStorage(workspace / "data")
     config = load_use_case(USE_CASE)
     roles = get_roles()
     try:
         print(f"workspace    : {workspace}")
-        print(f"generating   : {customers:,} customers · {usage_rows:,} usage rows …", flush=True)
-        setup_seconds = prepare_sources(storage, customers=customers, usage_rows=usage_rows, seed=seed)
+        setup_seconds: float | None = None
+        if prepared_workspace(storage):
+            # The sizes are the ones the workspace was generated at, not the flags: say so rather
+            # than print a size nobody generated.
+            print("generating   : skipped - reusing the tables already in --workspace", flush=True)
+        else:
+            print(f"generating   : {customers:,} customers · {usage_rows:,} usage rows …", flush=True)
+            setup_seconds = prepare_sources(storage, customers=customers, usage_rows=usage_rows, seed=seed)
         sources, mappings = read_specs(storage)
         table_bytes = sum(storage.size_bytes(source.storage_key) for source in sources)
         spec = onboarding_spec(
@@ -524,18 +690,36 @@ def main(argv: Sequence[str] | None = None) -> int:
             f"{spec.snapshot_spec.max_snapshots} snapshots …",
             flush=True,
         )
-        measurement = measure_build(storage, config, spec=spec, sources=sources, mappings=mappings)
+        profiler = cProfile.Profile() if args.profile is not None else None
+        measurement = measure_build(
+            storage, config, spec=spec, sources=sources, mappings=mappings, profiler=profiler
+        )
         print(f"measured     : {measurement.seconds:,.1f} s · {measurement.report.rows_out:,} rows out")
         print()
+        peak_mb = peak_memory_mb()
         print_report(
             measurement=measurement,
             setup_seconds=setup_seconds,
             table_bytes=table_bytes,
             seed=seed,
-            peak_mb=peak_memory_mb(),
+            peak_mb=peak_mb,
         )
+        if profiler is not None and args.profile is not None:
+            profiler.dump_stats(args.profile)
+            print_profile(pstats.Stats(profiler), path=args.profile)
+        if args.json is not None:
+            # The sizes are the ones the build read, not the flags, which a reused workspace ignores.
+            document = record(
+                measurement,
+                customers=measurement.rows_from(spec.entity_source_id),
+                usage_rows=measurement.rows_from(USAGE_SOURCE_ID),
+                setup_seconds=setup_seconds,
+                peak_mb=peak_mb,
+            )
+            args.json.write_text(json.dumps(document, indent=2) + "\n", encoding="utf-8")
+            print(f"recorded     : {args.json}")
     finally:
-        if args.keep:
+        if keep:
             print(f"kept         : {workspace}")
         else:
             shutil.rmtree(workspace, ignore_errors=True)
