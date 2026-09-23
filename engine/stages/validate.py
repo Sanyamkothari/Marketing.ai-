@@ -27,7 +27,16 @@ import re
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
-from engine.config import ColumnRole, ColumnType, PiiHandling, ProblemType, RunMode, SplitType
+from engine.config import (
+    ColumnRole,
+    ColumnType,
+    PiiHandling,
+    PrimaryKey,
+    ProblemType,
+    RunMode,
+    SplitType,
+    key_columns,
+)
 from engine.contracts import Severity, ValidationCheck, ValidationReport
 from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger
@@ -269,6 +278,9 @@ class CheckParams:
 
     # --- column roles (names only; the frame supplies the values) ---------------
     primary_key: str | None = None
+    # A composite key (DEC-083): every column, in order, with `primary_key` left None. A one-column
+    # key keeps using `primary_key` alone, so every Phase 1 check reads exactly what it read before.
+    key_columns: tuple[str, ...] = ()
     target: str | None = None
     time_column: str | None = None
     group_column: str | None = None
@@ -440,6 +452,14 @@ def derive_facts(frame: pd.DataFrame) -> FrameFacts:
 def facts_for(frame: pd.DataFrame, params: CheckParams) -> FrameFacts:
     """`params.facts` when the caller already computed them, else `derive_facts(frame)`."""
     return params.facts if params.facts is not None else derive_facts(frame)
+
+
+def key_names(params: CheckParams) -> frozenset[str]:
+    """Every column of the key, one or several: none of them is ever reported as a feature."""
+    names = set(params.key_columns)
+    if params.primary_key:
+        names.add(params.primary_key)
+    return frozenset(names)
 
 
 # ---------------------------------------------------------------------------
@@ -685,10 +705,101 @@ def _finding(
 # ---------------------------------------------------------------------------
 # 2.6 - 2.24 The checks
 # ---------------------------------------------------------------------------
+# A composite key (DEC-083) is checked as the tuple it is: present if every column is, unique if no
+# two rows share all of its values, and complete only when no part of it is empty. These three are
+# the same codes as the one-column checks, so a report reads the same whichever key a run carries.
+def _composite_pk_missing(facts: FrameFacts, params: CheckParams) -> CheckResult:
+    columns = params.key_columns
+    missing = [name for name in columns if name not in facts.columns]
+    if not missing:
+        return CheckResult(code="PK_MISSING")
+    return CheckResult(
+        code="PK_MISSING",
+        findings=(
+            _finding(
+                "PK_MISSING",
+                Severity.ERROR,
+                f"Each row is identified by {' and '.join(columns)}, and this table has no "
+                f"{', '.join(repr(name) for name in missing)} column.",
+                "Rebuild the dataset, or choose columns this table has.",
+                details={"selected": list(columns), "missing": missing, "present": False},
+            ),
+        ),
+    )
+
+
+def _composite_pk_not_unique(frame: pd.DataFrame, facts: FrameFacts, params: CheckParams) -> CheckResult:
+    columns = list(params.key_columns)
+    if any(name not in facts.columns for name in columns) or any(
+        name not in frame.columns for name in columns
+    ):
+        return CheckResult(code="PK_NOT_UNIQUE", skipped=True, skip_reason="no primary key column")
+    complete = frame[columns].dropna()
+    duplicates = int(complete.duplicated().sum())
+    if duplicates == 0:
+        return CheckResult(code="PK_NOT_UNIQUE")
+    rows = len(frame.index)
+    return CheckResult(
+        code="PK_NOT_UNIQUE",
+        findings=(
+            _finding(
+                "PK_NOT_UNIQUE",
+                Severity.ERROR,
+                f"{duplicates:,} rows repeat another row's {' and '.join(columns)}. "
+                f"The model needs one row per {params.entity} per {columns[-1]}.",
+                f"Combine the rows so each {params.entity} appears once at each {columns[-1]}, "
+                "or rebuild the dataset.",
+                details={
+                    "columns": columns,
+                    "rows": rows,
+                    "distinct_keys": len(complete.index) - duplicates,
+                    "duplicate_rows": duplicates,
+                    "sampled": params.row_count is not None and params.row_count > rows,
+                },
+            ),
+        ),
+    )
+
+
+def _composite_pk_nulls(frame: pd.DataFrame, facts: FrameFacts, params: CheckParams) -> CheckResult:
+    columns = list(params.key_columns)
+    if any(name not in facts.columns for name in columns) or any(
+        name not in frame.columns for name in columns
+    ):
+        return CheckResult(code="PK_NULLS", skipped=True, skip_reason="no primary key column")
+    empty = frame[columns].isna()
+    nulls = int(empty.any(axis=1).sum())
+    rows = len(frame.index)
+    if nulls == 0 or rows == 0:
+        return CheckResult(code="PK_NULLS")
+    by_column = {name: int(empty[name].sum()) for name in columns}
+    named = ", ".join(f"'{name}'" for name, count in by_column.items() if count)
+    return CheckResult(
+        code="PK_NULLS",
+        findings=(
+            _finding(
+                "PK_NULLS",
+                Severity.ERROR,
+                f"{nulls:,} rows are missing part of their identifier ({named}), so their predictions "
+                "could not be joined back to your systems.",
+                f"Fill in the missing {named} values, or remove those rows, and build again.",
+                details={
+                    "null_count": nulls,
+                    "null_rate": round(nulls / rows, 4),
+                    "rows": rows,
+                    "null_count_by_column": by_column,
+                },
+            ),
+        ),
+    )
+
+
 @check("PK_MISSING", severity=Severity.ERROR, modes=_BOTH_MODES)
 def check_pk_missing(frame: pd.DataFrame, params: CheckParams) -> CheckResult:
     """The primary key was not chosen, or the chosen name is not in the file."""
     facts = facts_for(frame, params)
+    if len(params.key_columns) > 1:
+        return _composite_pk_missing(facts, params)
     key = params.primary_key
     if key and key in facts.columns:
         return CheckResult(code="PK_MISSING")
@@ -719,6 +830,8 @@ def check_pk_missing(frame: pd.DataFrame, params: CheckParams) -> CheckResult:
 def check_pk_not_unique(frame: pd.DataFrame, params: CheckParams) -> CheckResult:
     """The key repeats, so the file holds more than one row per entity."""
     facts = facts_for(frame, params)
+    if len(params.key_columns) > 1:
+        return _composite_pk_not_unique(frame, facts, params)
     key = params.primary_key
     if not key or key not in facts.columns:
         return CheckResult(code="PK_NOT_UNIQUE", skipped=True, skip_reason="no primary key column")
@@ -756,6 +869,8 @@ def check_pk_not_unique(frame: pd.DataFrame, params: CheckParams) -> CheckResult
 def check_pk_nulls(frame: pd.DataFrame, params: CheckParams) -> CheckResult:
     """Rows with no identifier cannot be joined back to the customer's systems."""
     facts = facts_for(frame, params)
+    if len(params.key_columns) > 1:
+        return _composite_pk_nulls(frame, facts, params)
     key = params.primary_key
     if not key or key not in facts.columns:
         return CheckResult(code="PK_NULLS", skipped=True, skip_reason="no primary key column")
@@ -1108,7 +1223,7 @@ def check_high_null_column(frame: pd.DataFrame, params: CheckParams) -> CheckRes
         return CheckResult(code="HIGH_NULL_COLUMN", skipped=True, skip_reason="empty frame")
     findings: list[ValidationCheck] = []
     for name in facts.columns:
-        if name == params.primary_key:
+        if name in key_names(params):
             continue
         rows, nulls, _distinct, _unique = column_stats(frame, params, name, facts)
         if rows == 0:
@@ -1142,7 +1257,7 @@ def check_constant_column(frame: pd.DataFrame, params: CheckParams) -> CheckResu
     facts = facts_for(frame, params)
     findings: list[ValidationCheck] = []
     for name in facts.columns:
-        if name in (params.primary_key, params.target):
+        if name in key_names(params) or name == params.target:
             continue
         if facts.distinct_counts.get(name, 0) != 1:
             continue
@@ -1168,7 +1283,7 @@ def check_high_cardinality_id_like(frame: pd.DataFrame, params: CheckParams) -> 
     rows = facts.row_count
     findings: list[ValidationCheck] = []
     for name in facts.columns:
-        if name in (params.primary_key, params.target) or not looks_like_id(facts, name):
+        if name in key_names(params) or name == params.target or not looks_like_id(facts, name):
             continue
         distinct = facts.distinct_counts.get(name, 0)
         findings.append(
@@ -1324,7 +1439,7 @@ def check_schema_mismatch(frame: pd.DataFrame, params: CheckParams) -> CheckResu
         for column in schema.columns
         if column.required and column.name not in present and column.name != schema.target
     ]
-    extra = [name for name in facts.columns if name not in expected and name != params.primary_key]
+    extra = [name for name in facts.columns if name not in expected and name not in key_names(params)]
     type_changed = [
         {
             "name": column.name,
@@ -1395,8 +1510,7 @@ def leakage_exempt_names(params: CheckParams) -> frozenset[str]:
     if params.target:
         names.add(params.target)
     names |= set(params.target_aliases)
-    if params.primary_key:
-        names.add(params.primary_key)
+    names |= key_names(params)
     if params.time_column:
         names.add(params.time_column)
     if params.group_column:
@@ -1844,10 +1958,20 @@ def validate_frame(
     )
 
 
+def _key_fields(primary_key: PrimaryKey | None) -> tuple[str | None, tuple[str, ...]]:
+    """`(primary_key, key_columns)` for `CheckParams`: a one-column key stays a bare `str`."""
+    if primary_key is None or primary_key == "":
+        return None, ()
+    columns = key_columns(primary_key)
+    if len(columns) == 1:
+        return columns[0], ()
+    return None, columns
+
+
 def params_from_config(
     config: UseCaseConfig,
     *,
-    primary_key: str | None = None,
+    primary_key: PrimaryKey | None = None,
     target: str | None = None,
     seed: int = 0,
     row_count: int | None = None,
@@ -1867,8 +1991,10 @@ def params_from_config(
     for column in config.template.columns:
         if column.role is ColumnRole.TARGET and column.name not in aliases:
             aliases.append(column.name)
+    key, composite = _key_fields(primary_key)
     return CheckParams(
-        primary_key=primary_key,
+        primary_key=key,
+        key_columns=composite,
         target=target,
         time_column=config.split.time_column,
         group_column=config.split.group_column,
@@ -1909,7 +2035,7 @@ def validate_for_training(
     frame: pd.DataFrame,
     config: UseCaseConfig,
     *,
-    primary_key: str | None,
+    primary_key: PrimaryKey | None,
     target: str | None,
     acknowledged: Iterable[str] = (),
     upload_id: str,
@@ -1940,7 +2066,7 @@ def validate_against_schema(
     frame: pd.DataFrame,
     schema: FeatureSchema,
     *,
-    primary_key: str | None,
+    primary_key: PrimaryKey | None,
     config: UseCaseConfig | None = None,
     acknowledged: Iterable[str] = (),
     upload_id: str,
@@ -1950,8 +2076,10 @@ def validate_against_schema(
 ) -> ValidationReport:
     """Layer 3, score mode: the scoring file against the schema the model was fitted with."""
     if config is None:
+        key, composite = _key_fields(primary_key)
         params = CheckParams(
-            primary_key=primary_key,
+            primary_key=key,
+            key_columns=composite,
             seed=seed_from(upload_id),
             row_count=row_count,
             schema=schema,

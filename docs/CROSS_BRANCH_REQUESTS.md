@@ -72,32 +72,6 @@ The models themselves are **not** guessed: a branch that starts against an inven
 has to rename its fields when the real plan lands, and §2 forbids renaming a field of a shared
 contract. Sending the three plans unblocks both modules with no change to anything already built.
 
-### 2026-09-22 — contracts-first → human reviewer: `StageContext.primary_key` and the ownership map
-
-**What is needed.** A ruling on who may widen `StageContext.primary_key` in `engine/pipeline.py`.
-
-The composite key now reaches the engine's boundary: `RunRequest`, `Recipe`, `RunRecord`,
-`FeatureSchema` and `RunManifest` all take `str | list[str]`. It stops there. `StageContext`, the
-object the stages actually read, still carries a single `str`, and `POST /runs` narrows to it
-through `sole_key()`, which refuses a composite key with `COMPOSITE_KEY_NOT_SUPPORTED`.
-
-Phase 2 §6.5 is pre-approved to thread the composite key through `prepare.py`, `score.py`,
-`actions.py` and `ingest.py`. To do that it must also widen `StageContext.primary_key` and change
-the `sole_key()` call sites that feed those four stages — and `engine/pipeline.py` is a **shared,
-append-only** file (§4), so on a literal reading Phase 2 cannot make the change its own task
-requires.
-
-Widening `StageContext` here instead was rejected: it is behaviour, not surface, and it would push
-`sole_key()` into ~15 call sites across stages that Phase 2 does not own and that §3 freezes
-(`train.py`, `evaluate.py`, `explain.py`). Better one explicit exception than a shared file
-rewritten by the branch that needs the least of it.
-
-**What I did meanwhile.** The narrowing is in one place per flow and is honest: a composite key
-gets a named error saying what to do, never a silent join on the first column. Phase 2 can start
-on everything up to the pipeline boundary with no ruling at all. The smallest change that unblocks
-it is one line in §3: add `engine/pipeline.py`'s `StageContext` and its `sole_key()` call sites to
-Phase 2's pre-approved exception list.
-
 ### 2026-09-22 — library-datasets → whoever owns `tests/unit/test_config_loading.py`: two assertions forbid a second industry
 
 **What is needed.** Two assertions relaxed, so that a second industry and a further use case can be
@@ -390,6 +364,38 @@ unchanged (DEC-101). Nothing is lost while the request is open — the field con
 but it is a duplicated field list, so it should not stay open indefinitely.
 
 ## Resolved
+
+### 2026-09-22 — contracts-first → human reviewer: `StageContext.primary_key` and the ownership map
+
+**What is needed.** A ruling on who may widen `StageContext.primary_key` in `engine/pipeline.py`.
+
+The composite key now reaches the engine's boundary: `RunRequest`, `Recipe`, `RunRecord`,
+`FeatureSchema` and `RunManifest` all take `str | list[str]`. It stops there. `StageContext`, the
+object the stages actually read, still carries a single `str`, and `POST /runs` narrows to it
+through `sole_key()`, which refuses a composite key with `COMPOSITE_KEY_NOT_SUPPORTED`.
+
+Phase 2 §6.5 is pre-approved to thread the composite key through `prepare.py`, `score.py`,
+`actions.py` and `ingest.py`. To do that it must also widen `StageContext.primary_key` and change
+the `sole_key()` call sites that feed those four stages — and `engine/pipeline.py` is a **shared,
+append-only** file (§4), so on a literal reading Phase 2 cannot make the change its own task
+requires.
+
+Widening `StageContext` here instead was rejected: it is behaviour, not surface, and it would push
+`sole_key()` into ~15 call sites across stages that Phase 2 does not own and that §3 freezes
+(`train.py`, `evaluate.py`, `explain.py`). Better one explicit exception than a shared file
+rewritten by the branch that needs the least of it.
+
+**What I did meanwhile.** The narrowing is in one place per flow and is honest: a composite key
+gets a named error saying what to do, never a silent join on the first column. Phase 2 can start
+on everything up to the pipeline boundary with no ruling at all. The smallest change that unblocks
+it is one line in §3: add `engine/pipeline.py`'s `StageContext` and its `sole_key()` call sites to
+Phase 2's pre-approved exception list.
+
+**Resolved 2026-09-23 by Plan A M34 (DEC-083).** Ruling D1: `StageContext.primary_key` is
+`list[str]`, a single string normalised at the edge. `engine/keys.py` carries the key as its columns
+(what is excluded from features) and one row key (what identifies a row); `validate`, `prepare`,
+`register`, `actions` and `export` take the composite key, `train.py`, `evaluate.py` and
+`explain.py` are unchanged, and `POST /runs` no longer answers a periodic dataset with 501.
 
 ### 2026-09-22 — audit → phase-4a-aws and whoever owns CI: the gate has been red for hours
 

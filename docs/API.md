@@ -131,7 +131,7 @@ The failure attached to a failed run or stage.
 | `run_config_key` | string | yes | Storage key of run_config.json, the resolved configuration. |
 | `upload_key` | string | yes | Storage key of the uploaded file the run consumes. |
 | `upload_format` | "csv" \| "parquet" | yes | Format of the uploaded file. |
-| `primary_key` | string | yes | Column identifying each entity. |
+| `primary_key` | string \| list[string] | yes | Column, or columns, identifying each row. |
 | `target` | string \| null | no | Target column; set for a training job only. |
 | `model_version_id` | string \| null | no | Model version to score with; set for a scoring job only. |
 | `engine_version` | string | yes | Engine version that wrote this spec. |
@@ -1466,7 +1466,8 @@ Row schema of `scores.csv` and `scores.parquet`.
 Header of `scores.csv` / `scores.parquet`, in order.
 
 `(<primary_key>, <actions.score_field>, "band", "action", "reason_1".."reason_n",
-"suppressed_reason", "control_group")`, where `n` is `evaluation.reasons_per_row`.
+"suppressed_reason", "control_group")`, where `n` is `evaluation.reasons_per_row`. A composite
+key contributes each of its columns, in key order, as a column of its own (DEC-083).
 ```
 
 ## Registry record

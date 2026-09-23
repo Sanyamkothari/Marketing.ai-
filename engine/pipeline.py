@@ -46,7 +46,7 @@ from dataclasses import dataclass, field
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, TypeVar, cast
 
-from engine import __version__
+from engine import __version__, keys
 from engine.aws.metrics import (
     MetricSink,
     NullMetricSink,
@@ -251,7 +251,13 @@ def running_rows(mode: RunMode) -> tuple[str, ...]:
 
 @dataclass(frozen=True)
 class StageContext:
-    """Everything a stage needs; a frozen dataclass because it holds protocol instances."""
+    """Everything a stage needs; a frozen dataclass because it holds protocol instances.
+
+    `primary_key` is the list of the key's columns (DEC-083). A single string is still accepted and
+    normalised to a one-item list here, at the edge, so a caller written for Phase 1 needs no
+    change. Stages never read the list directly: they read `key` (what artefacts store),
+    `key_columns` (what is excluded from features) or `row_key` (the one column naming a row).
+    """
 
     run_id: str
     mode: RunMode
@@ -260,10 +266,48 @@ class StageContext:
     storage: Storage
     registry: ModelRegistry
     cancel: CancelToken
-    primary_key: str
+    primary_key: list[str]
     target: str | None
     upload_key: str
     model_version_id: str | None
+
+    def __post_init__(self) -> None:
+        columns = list(keys.key_columns(cast("PrimaryKey", self.primary_key)))
+        object.__setattr__(self, "primary_key", columns)
+        if len(columns) > 1:
+            # A composite key splits by entity (or by snapshot date). The API applies this before it
+            # writes run_config.json; it is applied again here, idempotently, so a pipeline driven
+            # directly - a test, a script - splits exactly as one started by the API does. `config`
+            # and `resolved.config` are adjusted separately because a caller may pass them apart.
+            own = self.resolved.model_copy(update={"config": self.config})
+            object.__setattr__(self, "resolved", keys.split_config_for_key(self.resolved, columns))
+            object.__setattr__(self, "config", keys.split_config_for_key(own, columns).config)
+
+    @property
+    def key(self) -> PrimaryKey:
+        """The key as artefacts store it: a bare `str` for one column, a list for several."""
+        return keys.normalise_key(self.primary_key)
+
+    @property
+    def key_columns(self) -> tuple[str, ...]:
+        """Every key column: none of them is ever a feature."""
+        return tuple(self.primary_key)
+
+    @property
+    def row_key(self) -> str:
+        """The one column naming a row: the key itself, or the joined `_row_key` of a composite key."""
+        return keys.row_key_column(self.primary_key)
+
+    @property
+    def entity_key(self) -> str | None:
+        """The entity column of a composite key, which control and suppression decide by; else `None`."""
+        return keys.entity_column(self.primary_key) if keys.is_composite(self.primary_key) else None
+
+    @property
+    def carried_columns(self) -> tuple[str, ...]:
+        """The key columns plus the row key: what prepare must carry through untouched."""
+        extra = (keys.ROW_KEY_COLUMN,) if keys.is_composite(self.primary_key) else ()
+        return (*self.primary_key, *extra)
 
 
 def _require(value: _T | None, what: str) -> _T:
@@ -491,7 +535,7 @@ class _RunWriter:
             created_at=utc_now(),
             upload_id=upload[0],
             file_name=upload[1],
-            primary_key=ctx.primary_key,
+            primary_key=ctx.key,
             target=ctx.target,
             problem_type=config.problem_type,
             model_choice=config.catalog.automl_choice.value,
@@ -544,7 +588,7 @@ class _TrainFlow:
         self._index = pipeline.run_index
         self._metrics = pipeline.metrics
         self._manifest = _ManifestBuilder(
-            run_id=ctx.run_id, primary_key=ctx.primary_key, seed=self._seed, started=self._started
+            run_id=ctx.run_id, primary_key=ctx.key, seed=self._seed, started=self._started
         )
         self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
         for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
@@ -739,7 +783,7 @@ class _TrainFlow:
         report = validate.validate_for_training(
             _require(self._frame, "the uploaded rows"),
             ctx.config,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.key,
             target=ctx.target,
             acknowledged=ctx.config.validation.acknowledged,
             upload_id=profile.upload_id,
@@ -750,6 +794,9 @@ class _TrainFlow:
         if not report.passed:
             # `POST /runs` refuses with 409 before a run is created; this is the defensive twin.
             raise engine_error(RUN_BLOCKED_BY_VALIDATION, stage=StageKey.VALIDATE)
+        # After the checks, never before: the joined row key is the engine's, not the user's, and
+        # no check should report on it. A one-column key adds nothing (DEC-083).
+        self._frame = keys.with_row_key(_require(self._frame, "the uploaded rows"), ctx.key_columns)
         return _StageOutcome(validate.validation_detail(report), profile.row_count)
 
     def _prepare(self) -> _StageOutcome:
@@ -765,7 +812,7 @@ class _TrainFlow:
         rows, plan = prepare.prepare_rows(
             _require(self._frame, "the uploaded rows"),
             ctx.config,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.carried_columns,
             target=ctx.target,
         )
         self._rows = rows
@@ -773,7 +820,7 @@ class _TrainFlow:
         # The feature list is settled by phase 1, so the recipe exists even if the split fails.
         self._recipe = recipe_from_config(
             ctx.config,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.key,
             feature_columns=plan.feature_columns,
             seed=self._seed,
             target=ctx.target,
@@ -895,7 +942,7 @@ class _TrainFlow:
                 result.model,
                 test,
                 ctx.config,
-                primary_key=ctx.primary_key,
+                primary_key=ctx.row_key,
                 seed=self._seed,
                 importance=importance,
             )
@@ -927,7 +974,7 @@ class _TrainFlow:
         schema = register.feature_schema(
             train_frame,
             ctx.config,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.key,
             target=ctx.target,
             model_version_id=model_id,
         )
@@ -937,7 +984,7 @@ class _TrainFlow:
             ctx.config,
             run_id=ctx.run_id,
             model_version_id=model_id,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.key,
         )
         self._write(register.DRIFT_BASELINE_FILENAME, baseline)
         champion = self._rescore_champion(recipe.model_search.metric, parts["test"])
@@ -1119,7 +1166,7 @@ class _ScoreFlow:
         self._index = pipeline.run_index
         self._metrics = pipeline.metrics
         self._manifest = _ManifestBuilder(
-            run_id=ctx.run_id, primary_key=ctx.primary_key, seed=self._seed, started=self._started
+            run_id=ctx.run_id, primary_key=ctx.key, seed=self._seed, started=self._started
         )
         self._artefacts: dict[str, str] = dict(self._run.record.artefacts)
         for name in (RUN_FILENAME, STATUS_FILENAME, MANIFEST_FILENAME):
@@ -1335,7 +1382,7 @@ class _ScoreFlow:
         report = validate.validate_against_schema(
             _require(self._frame, "the uploaded rows"),
             schema,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.key,
             config=ctx.config,
             acknowledged=ctx.config.validation.acknowledged,
             upload_id=profile.upload_id,
@@ -1346,6 +1393,7 @@ class _ScoreFlow:
         if not report.passed:
             # `POST /runs` refuses with 409 before a run is created; this is the defensive twin.
             raise engine_error(RUN_BLOCKED_BY_VALIDATION, stage=StageKey.VALIDATE_AGAINST_SCHEMA)
+        self._frame = keys.with_row_key(_require(self._frame, "the uploaded rows"), ctx.key_columns)
         _LOGGER.info(
             "validate_against_schema: %d columns checked against model %s (v%d)",
             len(schema.columns),
@@ -1444,7 +1492,7 @@ class _ScoreFlow:
             result.scorer,
             result.prepared,
             ctx.config,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.row_key,
             seed=self._seed,
             importance=self._training_importance(),
             max_rows=None,
@@ -1456,7 +1504,7 @@ class _ScoreFlow:
             reasons.explanations,
             _require(self._scored, "the scored rows"),
             ctx.config,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.row_key,
         )
         return _StageOutcome(_reasons_detail(reasons), len(reasons.explanations))
 
@@ -1493,7 +1541,8 @@ class _ScoreFlow:
             _require(self._scored, "the scored rows"),
             ctx.config,
             run_id=ctx.run_id,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.row_key,
+            entity_key=ctx.entity_key,
         )
         self._scored = banded
         return _StageOutcome(_actions_detail(banded), len(banded.index))
@@ -1512,7 +1561,12 @@ class _ScoreFlow:
         version = _require(self._version, "the model version")
         frame = _require(self._scored, "the scored rows")
         files = export.write_scores(
-            frame, ctx.config, run_id=ctx.run_id, primary_key=ctx.primary_key, storage=self._storage
+            frame,
+            ctx.config,
+            run_id=ctx.run_id,
+            primary_key=ctx.key,
+            storage=self._storage,
+            key_source=_require(self._frame, "the uploaded rows"),
         )
         self._artefacts.update(files)
         summary = export.summarise(
@@ -1521,7 +1575,7 @@ class _ScoreFlow:
             run_id=ctx.run_id,
             model_version_id=version.model_id,
             model_display_name=version.model_display_name,
-            primary_key=ctx.primary_key,
+            primary_key=ctx.row_key,
             drift=_require(self._result, "the output of the predict stage").drift,
             files=files,
             kpi_source=_require(self._frame, "the uploaded rows"),
