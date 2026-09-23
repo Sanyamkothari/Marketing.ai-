@@ -1544,7 +1544,9 @@ Defined here rather than in `engine.onboarding.specs` (which re-exports it) beca
 has to accept these codes and `engine.onboarding.specs` imports this module, not the other way round.
 """
 
-CHECK_CODES: Final[frozenset[str]] = VALIDATION_CODES | ONBOARDING_VALIDATION_CODES | EXTENSION_VALIDATION_CODES
+CHECK_CODES: Final[frozenset[str]] = (
+    VALIDATION_CODES | ONBOARDING_VALIDATION_CODES | EXTENSION_VALIDATION_CODES
+)
 """Every code a `ValidationCheck` may carry: the Phase 1 table, the onboarding table and the codes later
 milestones added beside the Phase 1 table (`EXTENSION_VALIDATION_CODES`, DEC-095)."""
 
