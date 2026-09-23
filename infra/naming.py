@@ -115,6 +115,19 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "metrics_backend",
     "client_id",
     "cors_origins",
+    # Phase 4b (docs/PHASE4B_PLAN.md): access control, the audit export, the scheduler and alerts.
+    "auth_mode",
+    "auth_session_ttl_seconds",
+    "audit_export_bucket",
+    "audit_export_prefix",
+    "audit_retention_days",
+    "scheduler_backend",
+    "scheduler_tick_seconds",
+    "scheduler_group_name",
+    "scheduler_target_arn",
+    "scheduler_role_arn",
+    "alert_backend",
+    "alert_sns_topic_arn",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 
