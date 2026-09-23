@@ -11,13 +11,13 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Any, Final
 
 import pytest
 
+from tests.fixtures.node import skip_without_jsdom
 from tests.integration.production.test_approvals import CHALLENGER, World
 
 pytestmark = pytest.mark.integration
@@ -68,15 +68,13 @@ def test_the_fixtures_are_what_the_screen_needs(tmp_path: Path) -> None:
     assert read("approve_ok")["is_champion"] is True
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_approvals_screen_in_jsdom(tmp_path: Path) -> None:
-    if not (NODE_DIR / "node_modules" / "jsdom").is_dir():
-        pytest.skip(f"jsdom is not installed: cd {NODE_DIR} && npm install --no-audit --no-fund")
+    node = skip_without_jsdom(NODE_DIR)  # REQUIRE_JSDOM=1 (CI) turns a skip into a failure
     out = write_approval_fixtures(tmp_path)
     tests = sorted(str(p) for p in TESTS_DIR.glob("*.test.mjs"))
     assert tests, "no jsdom test was found"
     result = subprocess.run(
-        ["node", "--test", *tests],
+        [node, "--test", *tests],
         cwd=NODE_DIR,
         env={**os.environ, "PB_FIXTURES": str(out)},
         capture_output=True,

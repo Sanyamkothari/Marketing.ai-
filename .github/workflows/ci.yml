@@ -147,6 +147,7 @@ jobs:
           .venv/bin/python -m scripts.check_no_skips --junit ${{ runner.temp }}/junit-fast.xml
           --id 'test_production_ui_js::test_the_production_ui_modules_in_jsdom$'
           --id 'test_production_ops_ui_js::test_the_privacy_and_monitoring_screens_in_jsdom$'
+          --id 'test_approvals_ui_js::test_the_approvals_screen_in_jsdom$'
           --id '^tests\.integration\.test_inactive_settings_ui::'
           --id '^tests\.integration\.test_ui_journey::'
           --id '^tests\.unit\.uplift\.test_uplift_ui::test_(every_module_file_parses|node_suite_passes)'
