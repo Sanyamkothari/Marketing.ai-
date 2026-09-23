@@ -60,7 +60,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Final
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import Field, ValidationError
 
@@ -68,6 +68,7 @@ from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, JobsDep, StorageDep
 from api.routes.clients import ClientStoreDep, load_client
 from api.routes.mappings import check_params, facts_for, load_mapping, new_mapping_id
+from api.routes.schedules import sync_recipe_retraining
 from api.routes.sources import (
     load_profile,
     load_source,
@@ -304,6 +305,7 @@ class ReplayResponse(StrictBase):
 def create_onboarding_spec(
     client_id: str,
     body: OnboardingSpecCreateRequest,
+    request: Request,
     root: ConfigRootDep,
     store: ClientStoreDep,
 ) -> OnboardingSpecCreateResponse:
@@ -316,6 +318,10 @@ def create_onboarding_spec(
     `OnboardingSpec` documents `mapping_ids` as "one per source", the build has nothing to apply such
     a mapping to, and a recipe that silently drops half of what it was given is how a user comes to
     believe a table was included when it was not.
+
+    A saved recipe with a label then has its use case's managed retraining schedule synced at once
+    (`api.routes.schedules.sync_recipe_retraining`, DEC-867), best-effort: a failed sync is logged
+    and the save still answers `201`.
     """
     load_client(store, client_id)
     config = use_case_config(body.use_case, root)
@@ -332,6 +338,7 @@ def create_onboarding_spec(
             )
     spec = build_onboarding_spec(new_spec_id(), client_id, body)
     saved = store.save_spec(spec)
+    sync_recipe_retraining(request, saved)
     return OnboardingSpecCreateResponse(
         spec_id=saved.spec_id,
         checks=spec_checks(config, root, sources=sources, mappings=mappings, spec=saved),
@@ -435,6 +442,7 @@ def replay_onboarding_spec(
     client_id: str,
     spec_id: str,
     body: ReplayRequest,
+    request: Request,
     root: ConfigRootDep,
     storage: StorageDep,
     store: ClientStoreDep,
@@ -506,6 +514,7 @@ def replay_onboarding_spec(
             spec_id=None, sources=plan.sources, unmatched=plan.unmatched, unused_source_ids=unused, checks=()
         )
     saved = store.save_spec(replayed_spec(spec, plan, spec_id=new_spec_id()))
+    sync_recipe_retraining(request, saved)
     sources = load_source_specs(store, client_id, (saved.entity_source_id, *saved.event_source_ids))
     mappings = load_mappings(store, client_id, saved.mapping_ids)
     return ReplayResponse(

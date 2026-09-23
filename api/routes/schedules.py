@@ -46,10 +46,10 @@ end. The local scheduler settles on every tick; with no local scheduler nothing 
 `GET /schedules/{id}/firings` settles first. Settling writes only what the run already decided
 (and the `scheduled_job_failed` alert for a failed run); it is never audited as the reader's act.
 
-**The managed retraining schedules are synced on demand as well as at startup (DEC-783).** Saving an
-onboarding recipe is Phase 2's route, which this branch does not edit, so `POST
-/schedules/retraining/sync` is how a person makes a new recipe's `monitoring.retraining` schedule
-exist now rather than at the next restart. It is idempotent, and it never touches a person's own
+**The managed retraining schedules are synced on demand as well as at startup (DEC-783).** `POST
+/schedules/retraining/sync` syncs every recipe's; saving a labelled recipe syncs its own client and
+use case through `sync_recipe_retraining` (DEC-867), so its `monitoring.retraining` schedule exists
+at once rather than at the next restart. Both are idempotent, and neither touches a person's own
 schedules.
 """
 
@@ -84,6 +84,7 @@ from api.schemas import (
 from engine.access.roles import Role
 from engine.audit.events import content_hash
 from engine.clients import ClientStore, ClientStoreError
+from engine.onboarding.specs import OnboardingSpec
 from engine.platform_db import platform_engine
 from engine.scheduling.alerts import AlertSink, AlertStore, build_alert_sink
 from engine.scheduling.firing import FiringServices, ScheduleFirer, firing_audit_details
@@ -356,13 +357,48 @@ def schedule_error(exc: ScheduleError) -> Exception:
 # The scheduler's life in the API process (DEC-782)
 # ---------------------------------------------------------------------------
 def _sync_managed(
-    request: Request, scheduler: Scheduler
+    request: Request, scheduler: Scheduler, *, only: tuple[str, str] | None = None
 ) -> tuple[int, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Sync the managed retraining schedules; `only` narrows it to one `(client_id, use_case_id)`."""
     targets = retraining_targets(get_client_store(request), get_config_root(request))
+    if only is not None:
+        targets = tuple(target for target in targets if (target.client_id, target.use_case_id) == only)
     result = sync_retraining_schedules(
         get_schedule_store(request), scheduler, targets, now=scheduling_clock(request)()
     )
     return len(targets), result.created, result.updated, result.removed
+
+
+def sync_recipe_retraining(request: Request, spec: OnboardingSpec) -> None:
+    """After a recipe is saved: its client x use case's managed retraining schedules, now (DEC-867).
+
+    Phase 2's save routes (`POST /clients/{id}/onboarding-specs` and `.../replay`) call this, so a
+    labelled recipe's `monitoring.retraining` schedule exists at once rather than at the next start
+    (DEC-783). It is the code `POST /schedules/retraining/sync` runs, narrowed to the recipe's own
+    client and use case, so saving one recipe pushes nothing for anybody else's.
+
+    Nothing to do for a recipe with no label (it trains nothing, so `retraining_targets` never lists
+    it) or for `scheduler_backend=none`, where startup syncs nothing either and saving a recipe
+    touches no scheduling table (DEC-782). Best-effort: a failure is logged with its class name only
+    and the save stands; the next start or `POST /schedules/retraining/sync` repairs it.
+    """
+    if spec.label_spec is None:
+        return
+    try:
+        if get_settings(request).scheduler_backend == "none":
+            return
+        targets, created, updated, removed = _sync_managed(
+            request, get_scheduler(request), only=(spec.client_id, spec.use_case)
+        )
+        _LOGGER.info(
+            "scheduling.recipe_retraining_sync targets=%d created=%d updated=%d removed=%d",
+            targets,
+            len(created),
+            len(updated),
+            len(removed),
+        )
+    except Exception as exc:  # never fails the save; retried by the next start or by the sync route
+        log_failure(_LOGGER, "scheduling.recipe_retraining_sync", exc, level=logging.ERROR)
 
 
 def start_scheduling(app: FastAPI) -> None:

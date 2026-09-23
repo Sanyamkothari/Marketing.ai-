@@ -10,6 +10,7 @@ submitted, and a run's end is written by the test. The one test that trains is i
 
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -430,6 +431,89 @@ def test_retraining_sync_creates_the_managed_schedule_which_can_be_paused_not_ed
     assert paused.status_code == 200 and paused.json()["enabled"] is False
     (event,) = api.events("schedules.retraining_sync")[-1:]
     assert event.details["count"] == 1
+
+
+def recipe_body(api: Api, *, labelled: bool) -> dict[str, Any]:
+    """`POST /clients/{id}/onboarding-specs`'s body for the world's recipe, with or without its label."""
+    spec = api.world.spec.model_dump(mode="json")
+    body = {
+        field: spec[field]
+        for field in (
+            "use_case",
+            "entity_source_id",
+            "event_source_ids",
+            "mapping_ids",
+            "feature_spec",
+            "label_spec",
+            "snapshot_spec",
+        )
+    }
+    if not labelled:
+        body["label_spec"] = None
+    return body
+
+
+def save_recipe(api: Api, *, labelled: bool) -> Any:
+    return api.client.post(
+        f"/clients/{api.world.client_id}/onboarding-specs",
+        json=recipe_body(api, labelled=labelled),
+        headers=api.as_("analyst"),
+    )
+
+
+def managed_schedules(api: Api) -> list[Schedule]:
+    return list(api.world.store.list(managed_by=MANAGED_BY_RETRAINING))
+
+
+@pytest.fixture
+def local_api(tmp_path: Path, config_root: Path) -> Api:
+    """A `local` backend whose startup never ran (no `with TestClient`), so nothing synced before the save."""
+    return build_api(tmp_path, config_root, scheduler_backend="local", scheduler_tick_seconds=3600)
+
+
+def test_saving_a_labelled_recipe_creates_its_retraining_schedule_at_once(local_api: Api) -> None:
+    assert managed_schedules(local_api) == [], "startup did not run, so nothing is synced yet"
+    unlabelled = save_recipe(local_api, labelled=False)
+    assert unlabelled.status_code == 201, unlabelled.text
+    assert (
+        managed_schedules(local_api) == []
+    ), "a recipe with no label trains nothing, so asks for no schedule"
+
+    labelled = save_recipe(local_api, labelled=True)
+    assert labelled.status_code == 201, labelled.text
+    (managed,) = managed_schedules(local_api)
+    assert (managed.client_id, managed.use_case_id) == (local_api.world.client_id, USE_CASE)
+    assert managed.kind.value == "drift_check" and managed.enabled
+
+    again = save_recipe(local_api, labelled=True)
+    assert again.status_code == 201, again.text
+    assert [schedule.schedule_id for schedule in managed_schedules(local_api)] == [managed.schedule_id]
+    synced = local_api.client.post("/schedules/retraining/sync", headers=local_api.as_("analyst")).json()
+    assert (synced["created"], synced["updated"], synced["removed"]) == ([], [], []), "same as the route"
+
+
+def test_a_failed_sync_is_logged_and_does_not_fail_the_save(
+    local_api: Api, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("customer value that must never reach the log")
+
+    monkeypatch.setattr("api.routes.schedules.sync_retraining_schedules", broken)
+    with caplog.at_level(logging.ERROR, logger="api.routes.schedules"):
+        response = save_recipe(local_api, labelled=True)
+    assert response.status_code == 201, response.text
+    saved = {spec.spec_id for spec in local_api.world.client_store.list_specs(local_api.world.client_id)}
+    assert response.json()["spec_id"] in saved, "the recipe was saved all the same"
+    messages = [record.getMessage() for record in caplog.records]
+    assert "scheduling.recipe_retraining_sync error=RuntimeError" in messages
+    assert not any("customer value" in message for message in messages)
+    assert managed_schedules(local_api) == []
+
+
+def test_backend_none_saves_a_labelled_recipe_without_touching_the_schedules(api: Api) -> None:
+    response = save_recipe(api, labelled=True)
+    assert response.status_code == 201, response.text
+    assert managed_schedules(api) == [], "startup syncs nothing for none, and neither does a save"
 
 
 # ---------------------------------------------------------------------------
