@@ -190,3 +190,6 @@ aws-test: infra-test ## every Phase 4a suite: the AWS backends, the container fi
 		tests/unit/test_job_entrypoint.py tests/unit/test_metrics.py tests/unit/test_container_files.py \
 		tests/unit/test_docs_honesty.py tests/integration/test_jobs_as_sagemaker.py -q
 # ---- END PHASE-4A ----
+
+# ---- PHASE-4B (production) — append only below this line ----
+# ---- END PHASE-4B ----

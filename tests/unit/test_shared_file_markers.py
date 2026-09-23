@@ -42,7 +42,7 @@ SHARED_FILES: Final[tuple[str, ...]] = (
 Phase 3a outright, and a file with one owner needs no blocks. The same goes for
 `engine/onboarding/specs.py`, which belongs to Phase 2."""
 
-PHASES: Final[tuple[str, ...]] = ("PHASE-2", "PHASE-3A", "PHASE-4A")
+PHASES: Final[tuple[str, ...]] = ("PHASE-2", "PHASE-3A", "PHASE-4A", "PHASE-4B")
 
 OPEN: Final[str] = "---- {phase} ("
 CLOSE: Final[str] = "---- END {phase} ----"

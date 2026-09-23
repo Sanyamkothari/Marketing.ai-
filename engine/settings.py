@@ -80,6 +80,18 @@ LogFormat = Literal["text", "json"]
 MetricsBackend = Literal["none", "emf"]
 """Where measurements go: nowhere, or CloudWatch embedded-metric log lines (Phase 4a)."""
 
+AuthMode = Literal["off", "local"]
+"""Who a request is (Phase 4b): nobody checks (`off`, a laptop) or the built-in user store (`local`).
+
+The identity provider of plan P5 (Cognito or the client's SSO) is a third value added by M50, when
+the decision exists; until then there is nothing to name (DEC-702)."""
+
+SchedulerBackend = Literal["none", "local", "eventbridge"]
+"""What fires schedules (Phase 4b): nothing, an in-process thread (dev) or EventBridge Scheduler."""
+
+AlertBackend = Literal["log", "sns"]
+"""Where alerts go (Phase 4b): the log and the alert history only, or also an SNS topic (email)."""
+
 ENV_PREFIX: Final[str] = "MARKETING_AI_"
 """Every variable this module reads starts with it; nothing outside the prefix is consulted."""
 
@@ -128,6 +140,19 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "metrics_backend": f"{ENV_PREFIX}METRICS_BACKEND",
     "client_id": f"{ENV_PREFIX}CLIENT_ID",
     "cors_origins": f"{ENV_PREFIX}CORS_ORIGINS",
+    # --- Phase 4b. Extensions again; nothing above changes meaning (DEC-701).
+    "auth_mode": f"{ENV_PREFIX}AUTH_MODE",
+    "auth_session_ttl_seconds": f"{ENV_PREFIX}AUTH_SESSION_TTL_SECONDS",
+    "audit_export_bucket": f"{ENV_PREFIX}AUDIT_EXPORT_BUCKET",
+    "audit_export_prefix": f"{ENV_PREFIX}AUDIT_EXPORT_PREFIX",
+    "audit_retention_days": f"{ENV_PREFIX}AUDIT_RETENTION_DAYS",
+    "scheduler_backend": f"{ENV_PREFIX}SCHEDULER_BACKEND",
+    "scheduler_tick_seconds": f"{ENV_PREFIX}SCHEDULER_TICK_SECONDS",
+    "scheduler_group_name": f"{ENV_PREFIX}SCHEDULER_GROUP_NAME",
+    "scheduler_target_arn": f"{ENV_PREFIX}SCHEDULER_TARGET_ARN",
+    "scheduler_role_arn": f"{ENV_PREFIX}SCHEDULER_ROLE_ARN",
+    "alert_backend": f"{ENV_PREFIX}ALERT_BACKEND",
+    "alert_sns_topic_arn": f"{ENV_PREFIX}ALERT_SNS_TOPIC_ARN",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -141,6 +166,9 @@ _REQUIRED_FOR: Final[Mapping[tuple[str, str], tuple[str, ...]]] = {
     ),
     ("metadata_backend", "postgres"): ("postgres_dsn",),
     ("llm_backend", "bedrock"): ("bedrock_model_id", "aws_region"),
+    # Phase 4b (DEC-701).
+    ("scheduler_backend", "eventbridge"): ("scheduler_target_arn", "scheduler_role_arn", "aws_region"),
+    ("alert_backend", "sns"): ("alert_sns_topic_arn", "aws_region"),
 }
 """Which fields a non-default backend cannot work without. Checked once, at construction."""
 
@@ -256,6 +284,48 @@ class Settings(BaseModel):
         default=("*",),
         description="Origins the API answers. The default is DEC-024's; refused on a prod deployment.",
     )
+
+    # --- Phase 4b ------------------------------------------------------------------------
+    # Added fields only, as Phase 4a did above (PARALLEL_WORK_PROTOCOL.md section 2). Every default
+    # reproduces the behaviour before Phase 4b: nobody signs in, nothing fires on its own, an alert
+    # is a log line. `auth_mode=off` is NOT refused here on a prod deployment - Phase 4a's prod
+    # contexts predate the field - it is refused per request by `api/access.py`, which answers every
+    # non-public route with 503 until sign-in is configured: fail closed, not fail to boot (DEC-702).
+    auth_mode: AuthMode = Field(
+        default="off",
+        description="`off` (every request acts as the local operator) or `local` (built-in users). Off fails closed in prod.",
+    )
+    auth_session_ttl_seconds: int = Field(
+        default=28800,
+        ge=300,
+        le=86400,
+        description="How long a sign-in lasts. A policy choice, not a measurement.",
+    )
+    audit_export_bucket: str | None = Field(
+        default=None,
+        description="Bucket with Object Lock that audit exports are written to; null exports locally.",
+    )
+    audit_export_prefix: str = Field(default="audit", description="Key prefix of audit exports.")
+    audit_retention_days: int = Field(
+        default=2555, ge=1, le=3650, description="Object Lock retention on an exported audit file (days)."
+    )
+    scheduler_backend: SchedulerBackend = Field(
+        default="none", description="`none`, `local` (in-process, dev) or `eventbridge`."
+    )
+    scheduler_tick_seconds: int = Field(
+        default=60, ge=1, le=3600, description="How often the local scheduler looks for due schedules."
+    )
+    scheduler_group_name: str = Field(
+        default="marketing-ai", description="EventBridge Scheduler group every schedule is created in."
+    )
+    scheduler_target_arn: str | None = Field(
+        default=None, description="What EventBridge Scheduler invokes when a schedule fires."
+    )
+    scheduler_role_arn: str | None = Field(
+        default=None, description="Role EventBridge Scheduler assumes to invoke the target."
+    )
+    alert_backend: AlertBackend = Field(default="log", description="`log`, or `sns` to also publish alerts.")
+    alert_sns_topic_arn: str | None = Field(default=None, description="Topic alerts are published to.")
 
     @field_validator("sagemaker_subnet_ids", "sagemaker_security_group_ids", "cors_origins", mode="before")
     @classmethod
@@ -611,3 +681,6 @@ def build_services(config: Settings) -> tuple[Any, Any]:
 
 
 # ---- END PHASE-4A ----
+
+# ---- PHASE-4B (production) — append only below this line ----
+# ---- END PHASE-4B ----

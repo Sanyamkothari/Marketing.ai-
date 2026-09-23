@@ -11,6 +11,7 @@ serves.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from pathlib import Path
 from typing import Final
 
@@ -40,6 +41,14 @@ PHASE_ROUTERS: Final[list[APIRouter]] = []
 `ALL_ROUTERS` is the Phase 1 set and its tuple stays closed; a branch appends here instead, so
 three branches can each add a router without any of them editing a line another branch wrote.
 Mounted after `ALL_ROUTERS`, in the order the blocks appear.
+"""
+
+PHASE_APP_HOOKS: Final[list[Callable[[FastAPI], None]]] = []
+"""Functions a phase block registers to shape every app `create_app` builds (Phase 4b, DEC-700).
+
+Each is called with the new app **before** any router is included, so a hook can add a dependency
+that every route - Phase 1's and every branch's alike - inherits, and middleware that wraps them
+all. Access control and the audit trail are the reason it exists: neither can be a router.
 """
 
 
@@ -123,6 +132,8 @@ def create_app(
     )
     app.add_exception_handler(ConfigError, config_error_handler)
     app.add_exception_handler(SettingsError, settings_error_handler)
+    for hook in PHASE_APP_HOOKS:
+        hook(app)
     for router in (*ALL_ROUTERS, *PHASE_ROUTERS):
         app.include_router(router)
     if UI_DIR.is_dir():
@@ -173,5 +184,8 @@ PHASE_ROUTERS.append(connection_router)
 
 # ---- PHASE-4A (aws) — append only below this line ----
 # ---- END PHASE-4A ----
+
+# ---- PHASE-4B (production) — append only below this line ----
+# ---- END PHASE-4B ----
 
 app: FastAPI = create_app()
