@@ -370,6 +370,34 @@ def test_future_events_never_move_a_feature_but_past_ones_do(con) -> None:
     assert _cell(after.loc[("e03", S1), "complaints_30d"]) == 0  # still after the first snapshot
 
 
+def test_the_golden_fixture_passes_the_full_leak_check(con) -> None:
+    """Ruling R1: the golden tests run the full future-data leak check (DEC-870, DEC-873).
+
+    The build's own probe, over the golden tables as the build would register them (pandas frames),
+    with every snapshot row rebuilt rather than the narrowed rows: nothing moves, and every row was
+    looked at. The test above proves the builder in both directions; this one proves the probe a
+    build runs agrees with it on the same data.
+    """
+    from engine.onboarding import build as build_module
+
+    views = {role: con.execute(f'SELECT * FROM "{role}"').df() for role in ("entity", "complaints", "bills")}
+    snapshots = con.execute("SELECT * FROM snapshots").df()
+    frames = duckdb.connect()
+    try:
+        for role, frame in views.items():
+            frames.register(role, frame)
+        frames.register("snapshots", snapshots)
+        features = build_features(frames, SPEC, inclusive=True)
+    finally:
+        frames.close()
+
+    probe = build_module._run_leak_probe(
+        views, snapshots, SPEC, features, entity_role="entity", inclusive=True, full=True
+    )
+    assert probe.leaked == {}
+    assert probe.rows_probed == probe.rows_total == len(snapshots) == 20
+
+
 # ---------------------------------------------------------------------------
 # 3. Every compiled query carries the guard, and the assertion is not vacuous
 # ---------------------------------------------------------------------------

@@ -25,7 +25,7 @@ from __future__ import annotations
 import datetime
 import hashlib
 import json
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from types import MappingProxyType
 from typing import Any, Final, Literal
 
@@ -88,6 +88,9 @@ __all__ = [
     "LabelDefinition",
     "LabelSpec",
     "LabelType",
+    "LeakCheckReason",
+    "LeakCheckRecord",
+    "LeakCheckScope",
     "MappingColumn",
     "MappingSpec",
     "OnboardingCheck",
@@ -113,6 +116,7 @@ __all__ = [
     "WhereClause",
     "WhereOp",
     "dataset_artefact_model",
+    "recipe_hash",
     "spec_hash",
 ]
 
@@ -144,6 +148,57 @@ def spec_hash(model: BaseModel, *, exclude: frozenset[str] | None = None) -> str
     )
     body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
     digest = hashlib.sha256(_HASH_HEADER + body.encode("utf-8")).hexdigest()
+    return f"{HASH_PREFIX}{digest}"
+
+
+_RECIPE_HASH_HEADER: Final[bytes] = b"marketing-ai/recipe/v1\n"
+"""Domain separator for `recipe_hash`, so it can never equal a `spec_hash` of the same recipe."""
+
+
+def recipe_hash(spec: OnboardingSpec, mappings: Iterable[MappingSpec]) -> str:
+    """What "the same recipe" means for ruling R1's first-build rule (DEC-871).
+
+    Two builds are of the same recipe when they would run the same logic: the same use case, the
+    same feature spec, label spec and snapshot rule, and, for every mapped role, the same column
+    decisions (which client column feeds which standard column, through which transform). That is
+    everything that decides which events a feature query reads and how it reads them.
+
+    Left out, because a monthly replay (`engine.onboarding.replay`) or a scheduled rebuild changes
+    them without changing any of that logic: every id (spec, mapping, source, client, dataset),
+    every timestamp, a mapping's suggester confidence and who decided a column, the file's unmapped
+    and missing columns, and `value_maps` (a copy of what the transforms already say). A replay that
+    had to drop a column changes the recipe, and its next build runs the full check again.
+
+    `spec_hash` cannot serve: it hashes the spec's source and mapping ids, which change every month.
+    """
+    decisions = sorted(
+        (
+            {
+                "role": mapping.role,
+                "columns": [
+                    {
+                        "source": column.source,
+                        "standard": column.standard,
+                        "transform": (
+                            None if column.transform is None else column.transform.model_dump(mode="json")
+                        ),
+                    }
+                    for column in mapping.columns
+                ],
+            }
+            for mapping in mappings
+        ),
+        key=lambda decision: json.dumps(decision, sort_keys=True),
+    )
+    payload = {
+        "use_case": spec.use_case,
+        "feature_spec": spec.feature_spec.model_dump(mode="json"),
+        "label_spec": None if spec.label_spec is None else spec.label_spec.model_dump(mode="json"),
+        "snapshot_spec": spec.snapshot_spec.model_dump(mode="json"),
+        "mappings": decisions,
+    }
+    body = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    digest = hashlib.sha256(_RECIPE_HASH_HEADER + body.encode("utf-8")).hexdigest()
     return f"{HASH_PREFIX}{digest}"
 
 
@@ -543,6 +598,10 @@ class DatasetManifest(Artefact):
     fingerprint: DatasetFingerprint = Field(description="Identity of the built table itself.")
     built_at: AwareDatetime = Field(description="UTC time the build finished.")
     engine_version: str = Field(description="Version of the engine package that built it.")
+    recipe_hash: str | None = Field(
+        default=None,
+        description="`recipe_hash` of the recipe and mappings built; null for a dataset built before M55.",
+    )
 
     @model_validator(mode="after")
     def _key_matches_mode(self) -> DatasetManifest:
@@ -594,6 +653,40 @@ class FeatureStat(Artefact):
     reason: str | None = Field(default=None, description="Why it was dropped, when it was.")
 
 
+LeakCheckScope = Literal["full", "narrow"]
+"""Which snapshot rows the future-data leak probe rebuilt (DEC-096, ruling R1, DEC-870):
+
+* `full` - every snapshot row the build produced features for;
+* `narrow` - the rows of every entity given a future-dated event, plus up to 500 entities given none.
+"""
+
+LeakCheckReason = Literal["option", "first_build_of_recipe", "default"]
+"""Why that scope was used (DEC-871):
+
+* `first_build_of_recipe` - no earlier build of the same recipe (`recipe_hash`) is registered for
+  this client, so the full check is forced whatever was asked;
+* `option` - the build was asked for the full check (`full_leak_check: true`);
+* `default` - neither, so the narrowed check ran.
+"""
+
+
+class LeakCheckRecord(Artefact):
+    """Which future-data leak check a build ran and why: the full one or the narrowed one (DEC-870)."""
+
+    scope: LeakCheckScope = Field(
+        description="`full`: every snapshot row was rebuilt; `narrow`: entities given future events plus controls."
+    )
+    reason: LeakCheckReason = Field(
+        description="`first_build_of_recipe`, `option` (full_leak_check was asked for) or `default`."
+    )
+    recipe_hash: str = Field(
+        description="Hash of the recipe's logic without ids or times; what 'the same recipe' means."
+    )
+    rows_total: int = Field(description="Snapshot rows the build computed features for.")
+    rows_probed: int = Field(description="Snapshot rows the probe rebuilt against future-dated events.")
+    summary: str = Field(description="One sentence for the build review screen, already worded.")
+
+
 class BuildReport(Artefact):
     """`build_report.json` - everything the build review screen shows, already computed."""
 
@@ -617,6 +710,10 @@ class BuildReport(Artefact):
     warning_count: int = Field(description="Warnings.")
     passed: bool = Field(description="True when no blocking error remains, so the dataset is usable.")
     built_at: AwareDatetime = Field(description="UTC time the report was written.")
+    leak_check: LeakCheckRecord | None = Field(
+        default=None,
+        description="Which future-data leak check ran and why; null when the build stopped before it.",
+    )
 
 
 class BuildStage(Artefact):

@@ -272,8 +272,11 @@ def open_step(screen: sync_api.Page, step: str) -> sync_api.Locator:
     return details
 
 
-def build_and_use(screen: sync_api.Page, log: Path) -> None:
-    """Build step: start the build, wait for its report, and take the dataset into Step 2."""
+def build_and_use(screen: sync_api.Page, log: Path) -> str:
+    """Build step: start the build, wait for its report, and take the dataset into Step 2.
+
+    Returns the build review's future-data check line (ruling R1, DEC-870), read before the dataset
+    is taken into Step 2."""
     build = open_step(screen, "build")
     button = build.locator('[data-act="build"]')
     sync_api.expect(button).to_be_enabled(timeout=UPLOAD_TIMEOUT_MS)
@@ -283,8 +286,10 @@ def build_and_use(screen: sync_api.Page, log: Path) -> None:
         sync_api.expect(use).to_be_enabled(timeout=BUILD_TIMEOUT_MS)
     except AssertionError:
         pytest.fail(f"the dataset build did not pass:\n{screen_report(screen, log)}")
+    leak_check = (screen.locator("#f-onboarding [data-leak-check]").first.text_content() or "").strip()
     use.click()
     sync_api.expect(screen.locator("#f-pk")).to_have_value(KEY_LABEL, timeout=ACTION_TIMEOUT_MS)
+    return leak_check
 
 
 def selected_text(screen: sync_api.Page, selector: str) -> str:
@@ -302,6 +307,7 @@ class Journey:
     chosen_client: str = ""
     roles: list[str] = field(default_factory=list)
     pk_after_use: str = ""
+    build_leak_check: str = ""
     target_after_use: str = ""
     problem_type: str = ""
     split_after_use: str = ""
@@ -380,7 +386,7 @@ def journey(
     at = mark("mapping", at)
 
     # Suggested features and the default churn definition are kept: step 3 is left as it opened.
-    build_and_use(page, log)
+    seen.build_leak_check = build_and_use(page, log)
     seen.pk_after_use = selected_text(page, "#f-pk")
     seen.target_after_use = selected_text(page, "#f-target")
     seen.problem_type = page.locator(".ptype .pill").inner_text().strip()
@@ -464,6 +470,14 @@ def test_the_header_starts_on_the_default_client_and_a_new_one_can_be_created(jo
     created from it is the one every later step builds for."""
     assert journey.default_client == DEFAULT_CLIENT
     assert journey.chosen_client == CLIENT_NAME
+
+
+def test_the_first_build_of_the_new_recipe_ran_the_full_leak_check(journey: Journey) -> None:
+    """Ruling R1 (DEC-871): a new client's first build of its recipe runs the full future-data check,
+    and the build review says so in the engine's words."""
+    assert journey.build_leak_check.startswith("Future-data check"), journey.build_leak_check
+    assert "Full future-data check" in journey.build_leak_check
+    assert "first build of this recipe" in journey.build_leak_check
 
 
 def test_every_raw_table_got_its_proposed_role(journey: Journey) -> None:

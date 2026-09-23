@@ -365,6 +365,7 @@ def build_manifest(
     built_at: datetime | None = None,
     engine_version: str = __version__,
     fingerprint: DatasetFingerprint | None = None,
+    recipe_hash: str | None = None,
 ) -> DatasetManifest:
     """Assemble a `DatasetManifest` from the recipe that ran, what it read, and what it produced.
 
@@ -385,6 +386,9 @@ def build_manifest(
     time here for an answer the caller is already holding was a quarter of the whole write stage at
     the benchmark size (docs/PERFORMANCE.md). Without one it is computed from `frame`, as it always
     was.
+
+    `recipe_hash` is `specs.recipe_hash` of the recipe and mappings that ran, recorded so that the
+    next build of the same recipe can tell it is not the first (ruling R1, DEC-871).
     """
     missing_mappings = sorted(set(spec.mapping_ids) - set(mappings))
     if missing_mappings:
@@ -454,6 +458,7 @@ def build_manifest(
         fingerprint=fingerprint if fingerprint is not None else dataset_fingerprint_of(frame),
         built_at=built_at or utc_now(),
         engine_version=engine_version,
+        recipe_hash=recipe_hash,
     )
 
 

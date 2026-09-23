@@ -492,6 +492,12 @@ def build_dataset_from_spec(
             dataset_id=dataset_id,
             mode=mode,
             cancel=cancel or CancelToken(),
+            # Ruling R1 (DEC-871): a recipe never built for this client gets the full leak check.
+            first_build_of_recipe=build.is_first_build_of_recipe(
+                inputs.spec,
+                inputs.mappings,
+                client_store.list_datasets(spec.client_id, spec.use_case),
+            ),
         )
         if not report.passed:
             raise FiringError(

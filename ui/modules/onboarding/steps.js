@@ -955,12 +955,26 @@ function buildFailure(state) {
   )}</p>`;
 }
 
+/**
+ * Which future-data leak check the build ran - the full one or the narrowed one - and why (ruling
+ * R1, DEC-870). The sentence is the engine's own (`LeakCheckRecord.summary`); this only places it.
+ * A report from a build that stopped before the check, or from before M55, has none and shows none.
+ */
+function leakCheck(report) {
+  const check = report.leak_check;
+  if (!check) return "";
+  return `<div class="card" data-leak-check="${esc(check.scope)}"><h3>Future-data check</h3><p class="fhint">${esc(
+    check.summary,
+  )}</p></div>`;
+}
+
 function buildReview(state) {
   const report = state.buildReport;
   if (!report) return "";
   return `<div class="card"><h3>Sources &amp; coverage</h3>${coverageTable(report)}</div>
     <div class="card"><h3>Snapshots</h3>${snapshotBars(report)}</div>
     <div class="card"><h3>Dropped features</h3>${droppedFeatures(report)}</div>
+    ${leakCheck(report)}
     ${checksList(report.checks, report)}
     <div class="actions" style="border-top:0">
       <button type="button" class="run" data-act="use-dataset"${report.passed ? "" : " disabled"}>Use this dataset</button>

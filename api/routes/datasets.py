@@ -211,12 +211,19 @@ class PreviewResponse(StrictBase):
 
 
 class DatasetBuildRequest(StrictBase):
-    """Body of `POST /datasets`."""
+    """Body of `POST /datasets`.
+
+    `full_leak_check` asks for the full future-data leak check, which rebuilds every snapshot row,
+    instead of the narrowed one (ruling R1, DEC-870). The first build of a recipe for a client runs
+    the full check whether or not this is set (DEC-871); the build report's `leak_check` says which
+    ran and why.
+    """
 
     client_id: str
     spec_id: str
     mode: RunMode = RunMode.TRAIN
     source_ids: tuple[str, ...] | None = None
+    full_leak_check: bool = False
 
 
 class DatasetCreatedResponse(StrictBase):
@@ -390,6 +397,7 @@ def preview_onboarding_spec(
             sources=sources,
             mappings=mappings,
             sample_entities=PREVIEW_SAMPLE_ENTITIES,
+            first_build_of_recipe=first_build_of_recipe(store, spec, mappings),
         )
         # A build the engine's own checks stopped writes its report and nothing else, so there is no
         # sample to read and none is invented: the checks it found *are* the preview's answer.
@@ -567,6 +575,8 @@ def create_dataset(
             reader=FileSourceReader(storage, config),
             sources=sources,
             mappings=mappings,
+            full_leak_check=body.full_leak_check,
+            first_build_of_recipe=first_build_of_recipe(store, spec, mappings),
         ),
     )
     response.headers["Location"] = f"/datasets/{dataset_id}"
@@ -695,6 +705,8 @@ def build_m12_job(
     reader: SourceReader,
     sources: Mapping[str, SourceSpec],
     mappings: Mapping[str, MappingSpec],
+    full_leak_check: bool = False,
+    first_build_of_recipe: bool = False,
 ) -> JobFn:
     """The background job `POST /datasets` submits: call the build engine, then register the result.
 
@@ -729,6 +741,8 @@ def build_m12_job(
                 sources=sources,
                 mappings=mappings,
                 cancel=cancel,
+                full_leak_check=full_leak_check,
+                first_build_of_recipe=first_build_of_recipe,
             )
         except JobCancelledError:
             settle_unfinished_build(
@@ -798,6 +812,8 @@ def run_build(
     mappings: Mapping[str, MappingSpec],
     sample_entities: int | None = None,
     cancel: CancelToken | None = None,
+    full_leak_check: bool = False,
+    first_build_of_recipe: bool = False,
 ) -> BuildReport:
     """The one call site every build - preview or real - makes against the engine.
 
@@ -821,6 +837,19 @@ def run_build(
         mode=mode,
         cancel=cancel or CancelToken(),
         sample_entities=sample_entities,
+        full_leak_check=full_leak_check,
+        first_build_of_recipe=first_build_of_recipe,
+    )
+
+
+def first_build_of_recipe(
+    store: ClientStore, spec: OnboardingSpec, mappings: Mapping[str, MappingSpec]
+) -> bool:
+    """Whether the client has no registered build of this recipe yet, which forces the full leak
+    check (ruling R1, DEC-871). Decided when the build is requested, from the datasets registered at
+    that moment; `engine.onboarding.build.is_first_build_of_recipe` says what counts."""
+    return build.is_first_build_of_recipe(
+        spec, mappings.values(), store.list_datasets(spec.client_id, spec.use_case)
     )
 
 

@@ -60,6 +60,7 @@ from engine.onboarding.specs import (
     TransformKind,
     WhereClause,
     WhereOp,
+    recipe_hash,
 )
 from engine.stages.ingest import dataset_fingerprint
 from engine.storage import LocalStorage
@@ -369,7 +370,12 @@ def _onboarding_spec(mappings: tuple[MappingSpec, ...]) -> OnboardingSpec:
     ).with_hash()
 
 
-def _run(root: Path, *, entity_columns: tuple[MappingColumn, ...]) -> Flow:
+def _run(root: Path, *, entity_columns: tuple[MappingColumn, ...], full_leak_check: bool = True) -> Flow:
+    """Build the flow's tables once.
+
+    With the full future-data leak check by default: ruling R1 (DEC-870) has the golden end-to-end
+    builds run the full check, every snapshot row rebuilt, rather than the narrowed default.
+    """
     config = load_use_case(USE_CASE)
     storage = LocalStorage(root)
     sources = _source_specs(storage, _raw_tables())
@@ -387,6 +393,7 @@ def _run(root: Path, *, entity_columns: tuple[MappingColumn, ...]) -> Flow:
         registry=registry,
         dataset_id=dataset_id,
         mode=RunMode.TRAIN,
+        full_leak_check=full_leak_check,
     )
     return Flow(report, registry, dataset_id, spec, sources, mappings, config, reader)
 
@@ -469,6 +476,17 @@ def test_features_sql_was_written_and_every_query_carries_the_point_in_time_guar
     for role in ("activity", "bills", "complaints"):
         assert f"-- role: {role}" in sql
     assert sql.count(feature_engine.POINT_IN_TIME_MARKER) >= 3
+
+
+def test_the_golden_build_ran_the_full_leak_check_over_every_snapshot_row(flow: Flow) -> None:
+    """Ruling R1: the golden build runs the full check, and its report and manifest say so."""
+    check = flow.report.leak_check
+    assert check is not None
+    assert (check.scope, check.reason) == ("full", "option")
+    assert check.rows_probed == check.rows_total == ENTITIES * len(EXPECTED_DATES)
+    assert check.summary.startswith("Full future-data check")
+    assert "FUTURE_EVENTS_LEAKED" not in {c.code for c in flow.report.checks}
+    assert flow.manifest.recipe_hash == check.recipe_hash == recipe_hash(flow.spec, flow.mappings)
 
 
 def test_the_status_document_names_one_stage_per_mapped_event_table(flow: Flow) -> None:
