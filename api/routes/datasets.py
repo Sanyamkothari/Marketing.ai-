@@ -3,9 +3,10 @@
     POST /clients/{id}/onboarding-specs            save a recipe, return the checks it implies
     GET  /clients/{id}/onboarding-specs             a client's recipes
     POST /clients/{id}/onboarding-specs/{sid}/preview   build the recipe on a 200-entity sample
+    POST /clients/{id}/onboarding-specs/{sid}/replay    point a saved recipe at this month's files
     POST /datasets                                  validate, then submit the real build as a job
     GET  /datasets/{id}                             manifest + build status
-    GET  /datasets/{id}/report | /sample | /features.sql
+    GET  /datasets/{id}/report | /sample | /features.sql | /lineage
     GET  /datasets                                  dataset manifests, newest first
 
 Two different relationships with `engine.onboarding.build.build_dataset` live in this module, and
@@ -61,12 +62,18 @@ from typing import Annotated, Final
 
 from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
-from pydantic import ValidationError
+from pydantic import Field, ValidationError
 
 from api.deps import ConfigRootDep, JobsDep, StorageDep
 from api.routes.clients import ClientStoreDep, load_client
-from api.routes.mappings import check_params, facts_for, load_mapping
-from api.routes.sources import load_source
+from api.routes.mappings import check_params, facts_for, load_mapping, new_mapping_id
+from api.routes.sources import (
+    load_profile,
+    load_source,
+    record_role,
+    resync_join_coverage,
+    source_profile_key,
+)
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
 from engine.clients import ClientStore, ClientStoreError
@@ -78,9 +85,12 @@ from engine.onboarding.datasets import (
     DATASET_FEATURES_SQL_FILENAME,
     DatasetError,
     DatasetRegistry,
+    Lineage,
     LocalDatasetRegistry,
     dataset_key,
+    lineage,
 )
+from engine.onboarding.replay import ReplayedSource, UnmatchedSource, plan_replay, replayed_spec
 from engine.onboarding.sources import FileSourceReader, SourceReader
 from engine.onboarding.specs import (
     BuildReport,
@@ -94,6 +104,7 @@ from engine.onboarding.specs import (
     OnboardingSpec,
     SnapshotSpec,
     SnapshotStat,
+    SourceProfile,
     SourceSpec,
 )
 from engine.onboarding.validate import run_onboarding_checks
@@ -219,6 +230,34 @@ class DatasetListResponse(StrictBase):
     """Body of `GET /datasets`."""
 
     datasets: tuple[DatasetManifest, ...]
+
+
+class ReplayRequest(StrictBase):
+    """Body of `POST /clients/{id}/onboarding-specs/{sid}/replay`: this month's files.
+
+    `mapping_ids` names mappings the user has already saved for some of those files - the answer a
+    reopened mapping step gave - which the replay then uses as they stand rather than copying last
+    month's mapping over them again.
+    """
+
+    source_ids: tuple[str, ...] = Field(min_length=1)
+    mapping_ids: tuple[str, ...] = ()
+
+
+class ReplayResponse(StrictBase):
+    """Body of the `200` from `POST /clients/{id}/onboarding-specs/{sid}/replay`.
+
+    `spec_id` is the re-pointed recipe, ready for `POST /datasets` - or null while something still
+    needs a person: a file of last month's that this month's upload has no copy of (`unmatched`), or
+    a file missing a column last month's mapping read (a `sources` row with `missing_columns`). Only
+    those files need a decision; every other file is already mapped exactly as last time.
+    """
+
+    spec_id: str | None
+    sources: tuple[ReplayedSource, ...]
+    unmatched: tuple[UnmatchedSource, ...]
+    unused_source_ids: tuple[str, ...]
+    checks: tuple[OnboardingCheck, ...]
 
 
 # ---------------------------------------------------------------------------
@@ -352,6 +391,106 @@ def preview_onboarding_spec(
 
 
 # ---------------------------------------------------------------------------
+# POST /clients/{id}/onboarding-specs/{sid}/replay
+# ---------------------------------------------------------------------------
+@router.post(
+    "/clients/{client_id}/onboarding-specs/{spec_id}/replay",
+    response_model=ReplayResponse,
+    responses=_SPEC_ERRORS,
+    summary="Point a saved recipe at this month's files, reopening only what no longer fits",
+)
+def replay_onboarding_spec(
+    client_id: str,
+    spec_id: str,
+    body: ReplayRequest,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    store: ClientStoreDep,
+) -> ReplayResponse:
+    """Next month's tables through last month's recipe (Plan A M35; `docs/ONBOARDING.md` section 8).
+
+    `engine.onboarding.replay.plan_replay` does the matching and the copying and reads no row; this
+    route loads what it needs, then writes what the plan decided: the recipe's role onto each
+    matched file (the recipe *is* the user's decision, made last month), a copy of last month's
+    mapping for each file, and - only when nothing is missing - a new recipe naming this month's
+    files, returned as `spec_id` for `POST /datasets` to build in score mode.
+
+    A file missing a column still has its mapping saved, with that column taken out, so the mapping
+    step can reopen on exactly that file and the user's fix is saved with the ordinary
+    `PUT /clients/{id}/mappings/{mid}`. The replay is then asked again with that mapping id in
+    `mapping_ids`, and it stands. Every refusal before anything is written is a `404` or a `409` on
+    the codes the other recipe routes already use.
+    """
+    load_client(store, client_id)
+    spec = load_spec(store, client_id, spec_id)
+    config = use_case_config(spec.use_case, root)
+    roles = get_roles(root)
+    recipe_sources = load_source_specs(store, client_id, (spec.entity_source_id, *spec.event_source_ids))
+    recipe_mappings = load_mappings(store, client_id, spec.mapping_ids)
+    new_sources = load_source_specs(store, client_id, body.source_ids)
+    reused = sorted(set(new_sources) & set(recipe_sources))
+    if reused:
+        names = ", ".join(new_sources[source_id].file_name for source_id in reused)
+        raise http_error(
+            409,
+            "REPLAY_SOURCE_ALREADY_IN_RECIPE",
+            f"{names} is one of the files this recipe was built from, not a new month's copy. "
+            "Upload this month's files and replay the recipe onto those.",
+        )
+    settled = load_mappings(store, client_id, body.mapping_ids)
+    for mapping in settled.values():
+        if mapping.source_id not in new_sources:
+            raise http_error(
+                409,
+                "MAPPING_NOT_FOR_SPEC",
+                f"Mapping {mapping.mapping_id!r} describes a file this replay does not read, so there "
+                "would be nothing to apply it to. Remove it, or add its file to the replay.",
+            )
+    plan = plan_replay(
+        spec,
+        recipe_sources=recipe_sources,
+        recipe_mappings=tuple(recipe_mappings.values()),
+        new_sources=tuple(new_sources.values()),
+        detected_roles={
+            source_id: detected_role(load_profile(storage, client_id, source_id)) for source_id in new_sources
+        },
+        settled={mapping.source_id: mapping for mapping in settled.values()},
+        schema=config.standard_schema,
+        roles=roles,
+        new_mapping_id=new_mapping_id,
+    )
+    for replayed in plan.sources:
+        if new_sources[replayed.source_id].role != replayed.role:
+            record_role(storage, store, client_id=client_id, source_id=replayed.source_id, role=replayed.role)
+    for mapping in plan.mappings:
+        if mapping.mapping_id not in settled:
+            store.save_mapping(mapping)
+    if plan.sources:
+        resync_join_coverage(storage, store, root=root, roles=roles, client_id=client_id)
+
+    unused = tuple(source.source_id for source in plan.unused)
+    if not plan.ready:
+        return ReplayResponse(
+            spec_id=None, sources=plan.sources, unmatched=plan.unmatched, unused_source_ids=unused, checks=()
+        )
+    saved = store.save_spec(replayed_spec(spec, plan, spec_id=new_spec_id()))
+    sources = load_source_specs(store, client_id, (saved.entity_source_id, *saved.event_source_ids))
+    mappings = load_mappings(store, client_id, saved.mapping_ids)
+    return ReplayResponse(
+        spec_id=saved.spec_id,
+        sources=plan.sources,
+        unmatched=(),
+        unused_source_ids=unused,
+        checks=spec_checks(config, root, sources=sources, mappings=mappings, spec=saved),
+    )
+
+
+def detected_role(profile: SourceProfile) -> str | None:
+    """The detector's first-ranked role for a file, or `None` when it had nothing to go on."""
+    return profile.role_candidates[0].role if profile.role_candidates else None
+
+
+# ---------------------------------------------------------------------------
 # POST /datasets
 # ---------------------------------------------------------------------------
 @router.post(
@@ -471,6 +610,41 @@ def read_dataset_features_sql(dataset_id: str, storage: StorageDep) -> Response:
     except StorageError as exc:
         raise missing_artefact(registry, dataset_id, what="feature SQL") from exc
     return Response(content=text, media_type="text/plain")
+
+
+@router.get(
+    "/datasets/{dataset_id}/lineage",
+    response_model=Lineage,
+    responses=_ARTEFACT_ERRORS,
+    summary="Where one built dataset came from: its sources, mappings and recipe, already worded",
+)
+def read_dataset_lineage(dataset_id: str, storage: StorageDep, store: ClientStoreDep) -> Lineage:
+    """The Data page's lineage block (Plan A M35): `engine.onboarding.datasets.lineage` over the
+    manifest and the rows it names.
+
+    Every card is worded by the engine, so the page renders it and computes nothing. The profiles
+    and mappings are the stored rows the manifest names; one that has since been deleted makes the
+    tree incomplete, and that is answered as the `409` it is rather than drawn with a blank card.
+    """
+    registry = LocalDatasetRegistry(storage)
+    try:
+        manifest = registry.read_manifest(dataset_id)
+    except DatasetError as exc:
+        raise missing_artefact(registry, dataset_id, what="manifest") from exc
+    try:
+        mappings = {mapping_id: store.get_mapping(mapping_id) for mapping_id in manifest.mapping_hashes}
+        profiles = {
+            source_id: storage.read_model(source_profile_key(manifest.client_id, source_id), SourceProfile)
+            for source_id in manifest.source_fingerprints
+        }
+        return lineage(manifest, mappings=mappings, sources=profiles)
+    except (ClientStoreError, DatasetError, StorageError) as exc:
+        raise http_error(
+            409,
+            "DATASET_LINEAGE_INCOMPLETE",
+            "Some of the files or mappings this dataset was built from have since been removed, so "
+            "where it came from can no longer be shown in full. The dataset itself is unchanged.",
+        ) from exc
 
 
 # ---------------------------------------------------------------------------

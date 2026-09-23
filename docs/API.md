@@ -10,6 +10,7 @@ Contract schema version: 1.
 |---|---|---|---|
 | GET | `/clients` | Every client, newest first | ClientListResponse |
 | POST | `/clients` | Register a client whose data will be onboarded | ClientCreateResponse |
+| POST | `/clients/default` | The client every installation starts with, created the first time it is asked for | ClientRecord |
 | GET | `/clients/{client_id}` | One client | ClientRecord |
 | GET | `/clients/{client_id}/mappings` | A client's saved mappings, newest first | MappingListResponse |
 | POST | `/clients/{client_id}/mappings/suggest` | Suggest a mapping of one source against one use case's standard schema; nothing is saved | MappingSpec |
@@ -17,6 +18,7 @@ Contract schema version: 1.
 | GET | `/clients/{client_id}/onboarding-specs` | A client's saved onboarding recipes, newest first | OnboardingSpecListResponse |
 | POST | `/clients/{client_id}/onboarding-specs` | Save a client's onboarding recipe and return the checks it implies | OnboardingSpecCreateResponse |
 | POST | `/clients/{client_id}/onboarding-specs/{spec_id}/preview` | Build this recipe on a 200-entity sample, synchronously, to preview its effect | PreviewResponse |
+| POST | `/clients/{client_id}/onboarding-specs/{spec_id}/replay` | Point a saved recipe at this month's files, reopening only what no longer fits | ReplayResponse |
 | GET | `/clients/{client_id}/sources` | A client's sources and their stored profiles | SourceListResponse |
 | POST | `/clients/{client_id}/sources` | Store a client's raw table, profile it and propose its role | SourceCreateResponse |
 | DELETE | `/clients/{client_id}/sources/{source_id}` | Remove one source | - |
@@ -29,6 +31,7 @@ Contract schema version: 1.
 | POST | `/datasets` | Validate a recipe and, when it passes, start building a dataset from it | DatasetCreatedResponse |
 | GET | `/datasets/{dataset_id}` | One dataset: its manifest, once built, and the status the Build screen polls | DatasetGetResponse |
 | GET | `/datasets/{dataset_id}/features.sql` | The compiled feature SQL of one built dataset, for debugging and Phase 4 porting | - |
+| GET | `/datasets/{dataset_id}/lineage` | Where one built dataset came from: its sources, mappings and recipe, already worded | Lineage |
 | GET | `/datasets/{dataset_id}/report` | The build review screen's report for one dataset | BuildReport |
 | GET | `/datasets/{dataset_id}/sample` | A stringified, PII-redacted sample of one built dataset | DatasetSampleResponse |
 | GET | `/healthz` | Liveness probe | HealthResponse |

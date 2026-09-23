@@ -586,6 +586,69 @@ def _fiscal_week(iso: str) -> str:
     return f"FY{parsed.strftime('%y')}-W{parsed.isocalendar().week:02d}"
 
 
+# ---------------------------------------------------------------------------
+# The same client, one month on
+# ---------------------------------------------------------------------------
+#: How far "next month" moves the extract: every event table gains this many days of rows.
+NEXT_MONTH_DAYS: Final[int] = 30
+
+#: Every dated column of every event table, first one first - the one that says when the row happened.
+EVENT_DATES: Final[Mapping[str, tuple[str, ...]]] = MappingProxyType(
+    {
+        BILLS_FILE: ("BILL_DT", "DUE_DT", "PAID_DT"),
+        PAYMENTS_FILE: ("PAY_DT",),
+        COMPLAINTS_FILE: ("TICKET_DT", "RESOLVED_DT"),
+        USAGE_FILE: ("USAGE_DT",),
+        ACTIVITY_FILE: ("EVENT_DT",),
+    }
+)
+
+
+def make_next_month(tables: RawTables, out_dir: Path, *, days: int = NEXT_MONTH_DAYS) -> RawTables:
+    """`tables` as the client would send them `days` later: the same files, a month longer.
+
+    The customer master is copied unchanged - the same customers, under the same ids, which is the
+    point of scoring next month's tables with last month's model. Every event table keeps all of its
+    rows and gains the rows of its own last `days` days again, every date moved `days` forward, so
+    the extract ends `days` later and each customer's recent behaviour carries on as it was: a busy
+    customer stays busy, and a churner whose activity log went quiet stays quiet.
+
+    Derived from a written extract rather than regenerated, so the new file is the old one plus rows
+    - the shape a monthly export has - and the column names, date formats and codes are exactly the
+    ones the saved mapping was built on. Deterministic: no draw, no clock.
+    """
+    if days < 1:
+        raise ValueError(f"days must be >= 1, got {days}")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    written: dict[str, Path] = {}
+    for path in tables.paths:
+        frame = pd.read_csv(path, dtype=str, keep_default_na=False)
+        dated = EVENT_DATES.get(path.name)
+        if dated is not None:
+            frame = pd.concat([frame, _shifted_tail(frame, dated, days)], ignore_index=True)
+        written[path.name] = _write(frame, out_dir / path.name)
+    return RawTables(
+        root=out_dir,
+        customers=written[CUSTOMERS_FILE],
+        bills=written[BILLS_FILE],
+        payments=written[PAYMENTS_FILE],
+        complaints=written[COMPLAINTS_FILE],
+        usage=written[USAGE_FILE],
+        activity=written[ACTIVITY_FILE],
+    )
+
+
+def _shifted_tail(frame: pd.DataFrame, dated: tuple[str, ...], days: int) -> pd.DataFrame:
+    """The rows of the last `days` days of `frame` (by its first date column), every date moved on."""
+    when = pd.to_datetime(frame[dated[0]], format="%Y-%m-%d")
+    tail = frame.loc[when > when.max() - pd.Timedelta(days=days)].copy()
+    for column in dated:
+        parsed = pd.to_datetime(tail[column].replace("", None), format="%Y-%m-%d")
+        moved = (parsed + pd.Timedelta(days=days)).dt.strftime("%Y-%m-%d")
+        tail[column] = moved.fillna("")
+    return tail
+
+
 BrokenMaker = Callable[..., RawTables]
 
 BROKEN: Final[Mapping[str, BrokenMaker]] = MappingProxyType(

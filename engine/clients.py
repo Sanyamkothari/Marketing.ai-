@@ -33,13 +33,20 @@ import sqlite3
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol, runtime_checkable
+from typing import Final, Protocol, runtime_checkable
 
 from engine.contracts import dump_artefact
 from engine.onboarding.specs import ClientRecord, DatasetManifest, MappingSpec, OnboardingSpec, SourceSpec
 from engine.utils.time import utc_now
 
-__all__ = ["ClientStore", "ClientStoreError", "LocalClientStore"]
+__all__ = ["DEFAULT_CLIENT_ID", "DEFAULT_CLIENT_NAME", "ClientStore", "ClientStoreError", "LocalClientStore"]
+
+DEFAULT_CLIENT_ID: Final[str] = "c_demo"
+"""The id of the client every installation starts with (Plan A M35). Fixed rather than minted, so
+`ensure_client` can find it again; it never collides with a minted id, which always ends `_<n>`."""
+
+DEFAULT_CLIENT_NAME: Final[str] = "Demo"
+"""What the header's client picker shows before anyone has added a client of their own (Plan A M35)."""
 
 
 class ClientStoreError(Exception):
@@ -66,6 +73,8 @@ class ClientStore(Protocol):
     """Where client, source, mapping, spec and dataset metadata live; SQLite now, Postgres in Phase 4a."""
 
     def create_client(self, name: str, industry: str, notes: str = "") -> ClientRecord: ...
+
+    def ensure_client(self, client_id: str, name: str, industry: str) -> ClientRecord: ...
 
     def get_client(self, client_id: str) -> ClientRecord: ...
 
@@ -201,6 +210,30 @@ class LocalClientStore:
             record = ClientRecord(
                 client_id=client_id, name=name, industry=industry, notes=notes, created_at=now
             )
+            self._conn.execute(
+                "INSERT INTO clients (client_id, created_at, document) VALUES (?, ?, ?)",
+                (client_id, _iso_utc(now), dump_artefact(record)),
+            )
+        return record
+
+    def ensure_client(self, client_id: str, name: str, industry: str) -> ClientRecord:
+        """The client stored under a fixed `client_id`, created with `name` the first time it is asked for.
+
+        `create_client` mints a fresh id on every call, which is right for a client a person adds
+        and wrong for the one every installation starts with (the header's default client, Plan A
+        M35): opening the product twice must not leave two of it. So the default is looked up by an
+        id the caller fixes, and inserted inside the same transaction as the lookup when it is not
+        there - two first requests racing each other can only ever produce one row. An existing row
+        is returned as it stands; `name` and `industry` are not rewritten over it.
+        """
+        now = utc_now()
+        with self._lock, self._conn:
+            row = self._conn.execute(
+                "SELECT document FROM clients WHERE client_id = ?", (client_id,)
+            ).fetchone()
+            if row is not None:
+                return ClientRecord.model_validate_json(row[0])
+            record = ClientRecord(client_id=client_id, name=name, industry=industry, notes="", created_at=now)
             self._conn.execute(
                 "INSERT INTO clients (client_id, created_at, document) VALUES (?, ?, ?)",
                 (client_id, _iso_utc(now), dump_artefact(record)),

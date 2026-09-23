@@ -1,12 +1,21 @@
 // The router. Every screen is built from a response the API just gave us; nothing is cached
 // across a reload and nothing is rendered from a value the API did not send.
 
-import { ApiError, getArtefacts, getIndustries, getRun, getRuns, scoresUrl, getUseCase } from "./api.js";
+import {
+  ApiError,
+  getArtefacts,
+  getDatasetLineage,
+  getIndustries,
+  getRun,
+  getRuns,
+  scoresUrl,
+  getUseCase,
+} from "./api.js";
 import { backLink, errorBox, esc, pageHead } from "./dom.js";
 import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
 import { PAGE_ARTEFACTS, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
-import { resolveRoute } from "./modules/router.js";
+import { MODULES_CHANGED, resolveRoute } from "./modules/router.js";
 
 const app = document.getElementById("app");
 const PAGES = ["data", "model", "output"];
@@ -93,6 +102,7 @@ async function showUseCase(id, runId) {
   const controller = controllerFor(uc);
   controller.stop();
   await controller.refreshLists();
+  controller.sync();
   if (runId) {
     await controller.loadRun(runId);
   }
@@ -124,10 +134,25 @@ async function showPage(id, kind, runId) {
   loading(uc.pages[kind]);
   const detail = await getRun(chosen);
   const art = await getArtefacts(chosen, PAGE_ARTEFACTS[kind]);
-  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen)));
+  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), await lineageOf(kind, detail.run)));
 }
 
-async function render() {
+/**
+ * The Data page's lineage block (sources -> mapping -> recipe -> dataset -> run) for a run that read
+ * a built dataset; nothing for a run that read an uploaded file, which has no such history. A
+ * lineage that cannot be read is shown as its error, not as a page that failed to load.
+ */
+async function lineageOf(kind, run) {
+  if (kind !== "data" || !run.dataset_id) return {};
+  try {
+    return { lineage: await getDatasetLineage(run.dataset_id) };
+  } catch (error) {
+    if (error instanceof ApiError) return { lineageError: error };
+    throw error;
+  }
+}
+
+async function renderNow() {
   const parts = window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   try {
     // A phase branch registers whole screens of its own through `modules/router.js`; nothing is
@@ -159,5 +184,35 @@ async function render() {
   }
 }
 
+let rendering = null;
+let renderAgain = false;
+
+/**
+ * Draw the current route - one draw at a time, and once more if anything asked meanwhile.
+ *
+ * Draws used to overlap freely, which was harmless while only a hash change started one. Phase
+ * modules now ask for a redraw too (`MODULES_CHANGED`, below), and two overlapping draws of two
+ * different routes can finish out of order: the overview a picker change asked for landing on top of
+ * the use case the user had just clicked into. Every draw reads the hash when it starts, so the one
+ * extra draw after a busy spell is always of the route the user is actually on.
+ */
+function render() {
+  if (rendering) {
+    renderAgain = true;
+    return rendering;
+  }
+  rendering = (async () => {
+    do {
+      renderAgain = false;
+      await renderNow();
+    } while (renderAgain);
+    rendering = null;
+  })();
+  return rendering;
+}
+
 window.addEventListener("hashchange", render);
+// A phase module that registers after the first paint - or whose state the current screen shows,
+// like the client picked in the header - asks for the current route to be drawn again.
+window.addEventListener(MODULES_CHANGED, render);
 render();

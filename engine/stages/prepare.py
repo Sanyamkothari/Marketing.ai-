@@ -127,7 +127,7 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from engine.config import MissingValues, Outliers, PiiHandling, ProblemType, SplitType
 from engine.contracts import (
@@ -771,7 +771,7 @@ def _apply_outliers(
         lower = float(observed.quantile(_LOWER_QUANTILE))
         upper = float(observed.quantile(_UPPER_QUANTILE))
         if config.prepare.outliers is Outliers.CLIP:
-            frame[column] = series.clip(lower=lower, upper=upper)
+            frame[column] = _widened(series).clip(lower=lower, upper=upper)
             order += 1
             out.append(
                 Transform(
@@ -837,7 +837,8 @@ def _apply_missing_values(
                 )
             )
             continue
-        frame[column] = series.fillna(value=_fill_object(value, value_kind))
+        filled = _widened(series) if value_kind == "number" else series
+        frame[column] = filled.fillna(value=_fill_object(value, value_kind))
         out.append(
             Transform(
                 order=order,
@@ -892,6 +893,25 @@ def _fill_object(value: float | str | bool, value_kind: _ValueKind) -> float | s
     if value_kind == "number":
         return float(value)
     return str(value)
+
+
+def _widened(series: pd.Series[Any]) -> pd.Series[Any]:
+    """A nullable-integer column (`Int64` and its kin) as `float64`; any other column unchanged.
+
+    A dataset built from raw tables (`engine.onboarding.build`) writes its count features as
+    pandas' nullable integers, because a count can be missing for a customer with no rows in a
+    window, and Parquet reads them back as `Int64`. A clip bound or a fill median is a float, and
+    `Int64` refuses to hold one (`TypeError: Invalid value '2.5' for dtype 'Int64'`), so the run
+    failed at the split stage on the first built dataset it met (DEC-091). A NumPy `int64` column
+    from a CSV upload is upcast by pandas itself and is left exactly as it was, so a Phase 1 run's
+    transforms and recipe are unchanged.
+    """
+    import pandas as pd
+
+    dtype = series.dtype
+    if isinstance(dtype, pd.api.extensions.ExtensionDtype) and pd.api.types.is_integer_dtype(dtype):
+        return series.astype("float64")
+    return series
 
 
 def _is_numeric_feature(frame: pd.DataFrame, column: str) -> bool:
@@ -982,14 +1002,15 @@ def replay(df: pd.DataFrame, report: PrepareReport) -> pd.DataFrame:
                         "stage=replay transform=clip_percentile column=%s skipped=not_numeric", column
                     )
                     continue
-                frame[column] = frame[column].clip(
+                frame[column] = _widened(frame[column]).clip(
                     lower=float(transform.parameters["lower"]),
                     upper=float(transform.parameters["upper"]),
                 )
             elif transform.kind in ("fill_median", "fill_mode"):
                 value = transform.parameters["value"]
-                kind = str(transform.parameters.get("value_kind", "text"))
-                frame[column] = frame[column].fillna(value=_fill_object(value, _value_kind(kind)))
+                kind = _value_kind(str(transform.parameters.get("value_kind", "text")))
+                target = _widened(frame[column]) if kind == "number" else frame[column]
+                frame[column] = target.fillna(value=_fill_object(value, kind))
     return frame
 
 
