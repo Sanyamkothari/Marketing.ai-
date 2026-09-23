@@ -1255,6 +1255,8 @@ all of them without a hand-edited parameter.
 
 ### 11.1 The settings, and where a deployment gets them
 
+What each setting does for an operator (sign-in, the first Admin, roles, audit export, retention, schedules and alerts) is explained in [`docs/PRODUCTION.md`](PRODUCTION.md).
+
 The twelve Phase 4b rows of §3.2 are the whole configuration surface. On a deployment:
 
 | Setting | Value on a deployment | Chosen with |

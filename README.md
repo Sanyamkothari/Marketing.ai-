@@ -36,11 +36,31 @@ nightly (`make test-all`, which adds the `@slow` AutoGluon and browser journeys)
 - **Uplift modelling.** From *Uplift modelling ›* on the overview: train S-, T- or X-learners on a
   past randomised campaign, read the Qini curve and AUUC, get a budgeted treat list that leaves the
   sleeping dogs alone, and measure a campaign's incremental conversions once its outcomes mature
-  (Phase 3b; `tests/integration/uplift/`). Single-column keys only.
+  (Phase 3b; `tests/integration/uplift/`). Since M53 an uplift file may hold each customer at
+  several snapshot dates, keyed by customer + snapshot date: treatment must be the same for a
+  customer across a campaign's snapshots (`TREATMENT_VARIES_WITHIN_ENTITY`), the hold-out keeps each
+  customer on one side, and scoring and campaign results read both key columns
+  (`tests/integration/uplift/test_uplift_two_column_keys.py`).
+- **Uplift runs on Phase 1's pages, with drift.** An uplift run opened in the Data, Model and Output
+  pages shows treatment and control with the randomness check, the Qini curve and AUUC, and the
+  segments and treat list — never propensity wording, never a request for an artefact the run does
+  not write. Every uplift scoring run writes `uplift_drift.json`: Phase 1's feature PSI against a
+  baseline the uplift training run stores, and whether the file's treated share is within
+  `uplift.drift_treated_share_tolerance` (0.05) of training's, or honestly `not_applicable` when the
+  file has no treatment column. `POST /runs` refuses an uplift *training* run with
+  `UPLIFT_REQUIRES_UPLIFT_ROUTE` (M53; `tests/unit/uplift/test_phase1_pages_uplift.py`,
+  `tests/unit/uplift/test_uplift_drift.py`).
 - **Production controls, off by default.** Sign-in with four roles, an append-only audit trail, DPDP
   consent, retention, erasure and access requests, and schedules with alerts and outcome ingestion,
   all on local backends; with every setting at its default nothing changes (Phase 4b Part 1,
-  `docs/PRODUCTION.md`). The first AWS deployment (Part 2) waits on an account.
+  `docs/PRODUCTION.md`). Since Plan D M54: sign-in is rate limited per account and per address, the
+  principal-hash salt is a secret with no default, an Approver decides on a challenger from a
+  head-to-head screen and can never approve a model they trained, and erasure runs as a background
+  job with per-store progress and retry. The first AWS deployment (Part 2) waits on an account.
+- **Leak checking follows ruling R1.** A dataset build runs the narrowed future-data leak check by
+  default (DEC-096), the **full** check on a client's first build of a recipe or when
+  `full_leak_check: true` is sent, and the build report says which ran (Plan D M55;
+  `tests/unit/onboarding/test_leak_check.py`).
 - **AWS as a set of implementations:** S3 storage, SageMaker jobs, Postgres metadata, the container
   and the CDK infrastructure, all tested offline (Phase 4a).
 - **Guard rails the library found missing:** one PII detector for profiling and preparation,
@@ -49,8 +69,8 @@ nightly (`make test-all`, which adds the `@slow` AutoGluon and browser journeys)
   (Plan A M36).
 
 What is not done yet is listed where it belongs: the Phase 1 items under *What is left*, the build's
-full-size timing under *Build performance, measured*, and each open request in
-`docs/CROSS_BRANCH_REQUESTS.md`.
+full-size timing under *Build performance, measured*, the laptop measurement and the Criteo run
+under *Plan D*, and each open request in `docs/CROSS_BRANCH_REQUESTS.md`.
 
 ---
 
@@ -220,8 +240,9 @@ carries the request and response shapes; this table is the index.
 | `GET` | `/runs/{id}/scores.csv` | the scored rows of a scoring run, as CSV |
 | `POST` | `/runs/{id}/cancel` | asks a pending or running run to stop |
 | `GET` | `/models` | registered model versions, newest first, with the champion flagged |
-| `POST` | `/models/{id}/approve` | approves a version waiting for a human, making it champion |
-| `POST` | `/models/{id}/promote` | makes a version champion by hand, recording who did it and why |
+| `POST` | `/models/{id}/approve` | approves a version waiting for a human, making it champion; `403 SEPARATION_OF_DUTIES` for the person who started its training run (Plan D, DEC-862) |
+| `POST` | `/models/{id}/promote` | makes a version champion by hand, recording who did it and why; the same separation-of-duties refusal |
+| `POST` | `/models/{id}/reject` | archives a version waiting for approval, with a required reason (Plan D, DEC-862) |
 
 `GET /use-cases/{id}` accepts optional `columns`, `primary_key` and `target` query parameters so the
 column widgets in the advanced settings can be populated from the uploaded file.
@@ -419,7 +440,9 @@ they are not the same kind of thing at all.
 - **The laptop.** Plan §11 asks for a million rows under the time limit *on a laptop*, and the numbers
   above were measured on a 4-CPU container, most recently after Plan A (*Re-measured after Plan A*,
   below the large-file tables). The format gap is closed; the machine gap is not, because no laptop
-  is available to this repository's runs.
+  is available to this repository's runs. Since Plan D M57, `python -m scripts.bench_1m --kind laptop
+  --label "<laptop>" --record` measures and records it in `docs/PERFORMANCE.md` (DEC-866); running it on a laptop is an
+  owner action, and no laptop row has been recorded.
 
 **Parked for Phase 4 by plan §12, not Phase 1 debt** — §12 defers "drift monitoring schedule,
 retraining triggers … DPDP controls (retention, consent, deletion)" by name. *Since Phase 4b, two of
@@ -469,6 +492,12 @@ cannot pass or fail for reasons the Makefile does not know about:
   mapping is `MILESTONE_TESTS` in the script; a milestone adds its own tests there when it merges
   (DEC-099). Locally, `make check-readme` runs only the pending milestones' tests, and
   `make check-readme JUNIT=report.xml` reads an existing report.
+- **The jsdom and Postgres tests run, not skip (Plan D M56).** `ci.yml`'s `lint-test` job sets up
+  node 22, runs `npm ci` in every `tests/` directory with a lockfile, runs `make prototype-test`, and
+  sets `REQUIRE_JSDOM=1`, so a missing node or jsdom fails the job (DEC-877). The Postgres tests run
+  in `make test` against the job's Postgres service under `MARKETING_AI_REQUIRE_POSTGRES=1`
+  (DEC-879). After `make check-readme`, `scripts/check_no_skips.py` reads the same JUnit report and
+  fails if a must-run node, jsdom or Postgres test was skipped or did not run (DEC-878).
 
 ---
 
@@ -662,7 +691,7 @@ implements and the illustrative numbers they share.
 
 ```bash
 open marketing-ai-prototype.html   # no build step, no server needed
-make prototype-test                # 42 jsdom tests in tests/prototype/
+make prototype-test                # 89 jsdom tests in tests/prototype/ (npm ci; in CI since Plan D M56)
 make prototype-screenshots         # docs/prototype/*.png, desktop and mobile
 ```
 
@@ -855,7 +884,7 @@ Approver or Analyst (DEC-703).
 |---|---|
 | Viewer | read every screen and report |
 | Analyst | upload, onboard, build, train, score, generate copy, create and fire schedules, upload outcomes, acknowledge alerts |
-| Approver | approve or promote a champion, approve campaign copy |
+| Approver | approve, reject or promote a challenger (never one from a training run they started, since Plan D, DEC-862), approve campaign copy |
 | Admin | users, AWS connection settings, the audit log and exports, every privacy route |
 
 Every route declares its role in `api/access_policy.py`, a route without one is refused, and a test
@@ -867,7 +896,8 @@ action disabled with the server's reason — "Only an Approver can approve a cha
 **Audit trail and export.** Every mutating request, and every row-level download, writes exactly one
 event — succeeded, failed or refused — with who, when, the action, the object, before/after hashes
 and the request id, and no data values: details are a closed set of identifier keys and a data
-principal appears only as a salted hash (DEC-705, DEC-718). Database triggers refuse UPDATE and
+principal appears only as a salted hash (DEC-705, DEC-718; since Plan D the salt is a deployment
+secret with no default in code, DEC-860). Database triggers refuse UPDATE and
 DELETE on the table (DEC-714). Admins export a window as JSON lines, locally or to S3 with Object
 Lock in COMPLIANCE mode (DEC-715).
 
@@ -886,7 +916,8 @@ Lock in COMPLIANCE mode (DEC-715).
 - *Erasure:* `POST /privacy/erasure` removes a person from every artefact (scanned, rewritten,
   re-scanned), records the outcome in the audit log, and flags models trained on their data for
   retraining at the next scheduled cycle — not immediately, and never straight to champion (DEC-741,
-  DEC-743, DEC-768).
+  DEC-743, DEC-768). Since Plan D it answers `202` and a background job does the work store by
+  store, with progress and retry (DEC-863; see *Plan D* below).
 - *Access requests:* `POST /privacy/access-requests` returns one zip of everything held (DEC-745).
 - *Breach runbook:* `docs/RUNBOOK.md` §12.
 
@@ -915,8 +946,9 @@ make production-test-fast   # the same without those two
 ```
 
 The same tests also run in the main gates: the fast ones in `make test`, all of them in
-`make test-all`. The screen tests run in jsdom through pytest
-and skip, saying so, until `npm install` has been run once in `tests/integration/production/ui`.
+`make test-all`. The screen tests run in jsdom through pytest. Locally they skip, saying so, until
+`npm ci` has been run once in `tests/integration/production/ui`; in CI (`REQUIRE_JSDOM=1`, Plan D
+M56, DEC-877) node and `npm ci` are set up and a missing jsdom fails the run instead of skipping.
 
 **What is left for Part 2 (M50–M52).** Each needs an AWS account and owner decisions P1–P6
 (`docs/PHASE4B_PLAN.md` §0):
@@ -928,9 +960,9 @@ and skip, saying so, until `npm install` has been run once in `tests/integration
   `docs/M50_CHECKLIST.md` sequences the day.
 - **M51 — client isolation** (P4: single-tenant per account, or multi-tenant SaaS).
 - **M52 — hardening:** backup and restore drill, load test, security review.
-- Also open from Part 1: login rate limiting, a secret consent salt (DEC-733), running erasure and
-  "Run now" as background jobs rather than inside the request, alert deduplication, and the champion
-  approve/promote screens (the gate table is ready for them, DEC-792).
+- Also open from Part 1: "Run now" as a background job rather than inside the request, and alert
+  deduplication. Login rate limiting, the secret consent salt, erasure as a background job and the
+  approve/reject screen were done by Plan D M54 (DEC-860 … DEC-864; see *Plan D* below).
 
 <!-- ---- END PHASE-4B ---- -->
 <!-- ---- PHASE-3B (uplift) — append only below this line ---- -->
@@ -953,7 +985,7 @@ the experiment checks before the run exists.
 
 | # | Milestone | Definition of done | Status |
 |---|---|---|---|
-| M40 | Contracts, checks, problem type | Data contract, the six checks, `uplift` registered, config schema, artefact models | **done** |
+| M40 | Contracts, checks, problem type | Data contract, the seven checks, `uplift` registered, config schema, artefact models | **done** |
 | M41 | Learners and evaluation | S/T/X learners; Qini, AUUC, deciles with bootstrap intervals; uplift champion rule; planted-effect and null tests green | **done** |
 | M42 | Segments, policy, explanations | Four segments, budgeted policy, SHAP on the uplift, actions use segments | **done** |
 | M43 | Incrementality and OPE | Campaign results with maturity, for uplift and Phase 1 scoring runs; IPS, SNIPS (when defined) and DR with tests | **done** |
@@ -966,8 +998,9 @@ the experiment checks before the run exists.
 `engine/uplift/contracts.py` (every artefact model, served from their own registry, DEC-602),
 `engine/uplift/data.py` (what may be a feature, DEC-633 to DEC-635) and `engine/uplift/checks.py`:
 treatment column missing or not 0/1, an arm too small, treatment predictable from the features, the
-outcome window not yet elapsed, and a feature dated after the treatment. `POST /uplift/runs` runs
-Phase 1's validation and these six synchronously and answers `409` with both reports (DEC-654).
+outcome window not yet elapsed, a feature dated after the treatment, and (since Plan D M53) a customer
+treated at one snapshot and held out at another. `POST /uplift/runs` runs
+Phase 1's validation and these seven synchronously and answers `409` with both reports (DEC-654).
 `TREATMENT_NOT_RANDOM` can be acknowledged, never loosened per run (DEC-607). An acknowledged run is
 marked not causal in every artefact.
 
@@ -1050,10 +1083,10 @@ make run                       # then open http://localhost:8000/ui/#/uplift
 #### M45 — Documentation, Criteo and hardening
 
 [`docs/UPLIFT.md`](docs/UPLIFT.md) is the guide for marketers and reviewers: uplift against
-propensity, the data contract, the six checks, the segments, how to read the Qini chart and AUUC,
+propensity, the data contract, the seven checks, the segments, how to read the Qini chart and AUUC,
 targeting, campaign results, OPE, the champion rule, what "not causal" means, how to run it, and the
-limits. These include binary treatment and outcome only, and a single-column primary key until Plan
-A's two-column keys reach `main`. The Criteo Uplift use case in
+limits. These include binary treatment and outcome only; the single-column-key limit listed here
+before is gone since Plan D M53, which keys uplift by customer + snapshot date (DEC-853). The Criteo Uplift use case in
 [`library/criteo-uplift/`](library/criteo-uplift/) is now written for this problem type, but the
 dataset could not be downloaded from this environment, so it stays uninstalled and has no run report
 numbers (DEC-656).
@@ -1066,7 +1099,7 @@ make lint test                 # the gate, as for every phase
 ```
 engine/uplift/
 ├── config.py, contracts.py       # the `uplift:` block and every artefact model (DEC-601 … DEC-603)
-├── data.py, checks.py            # data preparation and the six checks
+├── data.py, checks.py            # data preparation and the seven checks
 ├── learners.py, explain.py       # S/T/X meta-learners; TreeSHAP of the predicted uplift
 ├── metrics.py, champion.py       # Qini, AUUC, deciles, bootstrap; the uplift champion rule
 ├── segments.py, policy.py        # the four segments; the budgeted targeting recommendation
@@ -1251,3 +1284,152 @@ Decisions are DEC-900 … DEC-912 in [`docs/DECISIONS.md`](docs/DECISIONS.md). W
 above its blocks is announced in [`docs/CROSS_BRANCH_REQUESTS.md`](docs/CROSS_BRANCH_REQUESTS.md).
 
 <!-- ---- END PLAN-E ---- -->
+
+<!-- ---- PLAN-D (hardening) — append only below this line ---- -->
+
+## Plan D — leftovers and hardening (M53–M58)
+
+[`docs/plans/MARKETING_AI_PLAN_D_HARDENING.md`](docs/plans/MARKETING_AI_PLAN_D_HARDENING.md) closes
+the open items of the 23 Sep 2026 status report that need no AWS account. It adds no new capability:
+every item was already named in an earlier plan or in `docs/CROSS_BRANCH_REQUESTS.md`. Its three
+rulings are recorded as DEC-850 (R1, the narrowed leak check), DEC-851 (R3, the secret salt) and
+DEC-852 (R2, Criteo for internal validation only); its decisions are DEC-850 … DEC-899 in
+[`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+| # | Milestone | Definition of done | Status | Tests that prove it |
+|---|---|---|---|---|
+| M53 | Uplift on two-column keys, and uplift across the product | Uplift keyed by customer + snapshot date, one arm per customer per campaign, hold-out grouped by customer; Phase 1's pages render uplift runs; uplift drift; the uplift codes in `docs/DATA_CONTRACT.md` | **done** | `tests/unit/uplift/test_uplift_two_column_keys.py`, `tests/integration/uplift/test_uplift_two_column_keys.py`, `tests/unit/uplift/test_phase1_pages_uplift.py`, `tests/unit/uplift/test_uplift_drift.py` |
+| M54 | Phase 4b leftovers | Sign-in rate limiting; a secret privacy salt (R3); the approve/reject screen with separation of duties; erasure as a background job; migration `0005` | **done** | `tests/integration/production/test_login_rate_limit.py`, `tests/unit/production/test_login_throttle.py`, `tests/unit/production/test_privacy_config.py`, `tests/integration/production/test_approvals.py`, `tests/integration/production/test_approvals_ui_js.py`, `tests/integration/production/test_privacy_erasure_api.py`, `tests/unit/production/test_plan_d_migration.py` |
+| M55 | Leak-check conditions (R1) | `full_leak_check`; the full check forced on a recipe's first build and shown in the build report; nightly and golden full checks; a leak the narrowed check misses | **done**; the full check at the full M14 size is a manual measurement not yet run (DEC-873) | `tests/unit/onboarding/test_leak_check.py`, `tests/integration/test_onboarding_leak_check.py` |
+| M56 | Test reliability and CI coverage | The two timing-sensitive uplift prototype tests fixed and passing 50 times under load; jsdom and Postgres tests run, not skip, in CI | **done** | `tests/unit/test_check_no_skips.py`, `tests/unit/test_container_files.py` |
+| M57 | Measurements that need a laptop or another network | 1M rows on a stated laptop recorded in `docs/PERFORMANCE.md`; the Criteo run, or a record that the network stayed blocked | **partial** — tooling done; laptop measurement is an owner action; Criteo network blocked, skipped | `tests/unit/test_bench_1m.py` (the tooling only; no test can prove a measurement) |
+| M58 | Documentation and repository hygiene | Missing plans committed; every cross-branch request closed or re-filed; README current and covered by the honesty check; merged branches deleted | **partial** — README, decisions and the cross-branch log are current; the missing plans (DEC-885) and deleting merged branches are owner actions | documentation; `tests/unit/test_check_readme.py` covers the table's mapping |
+
+`scripts/check_readme.py` maps M53 … M56 to the tests above, so a "pending" in this table with those
+tests green fails CI. M57 and M58 are left unmapped: what is left of them is a measurement and an
+owner's action, which no test can prove.
+
+### M53 — Uplift on two-column keys, and uplift across the product
+
+What changed is in *What works today* at the top of this README (the uplift bullets) and in DEC-853
+… DEC-859. In short: an uplift file may hold each customer at several snapshot dates; treatment is
+per customer per campaign (`TREATMENT_VARIES_WITHIN_ENTITY`, error, not acknowledgeable); the uplift
+hold-out is grouped by customer; `GET /runs/{id}/artefacts/{name}` serves the uplift artefacts;
+Phase 1's Data, Model and Output pages render an uplift run; every uplift scoring run writes
+`uplift_drift.json`; and `POST /runs` refuses an uplift training run with `422
+UPLIFT_REQUIRES_UPLIFT_ROUTE`. The uplift codes are in `docs/DATA_CONTRACT.md` §11, kept in step with
+`UPLIFT_VALIDATION_CODES` by a test. Remaining limit (`docs/UPLIFT.md` §15): `POST /uplift/runs`
+takes an upload, not a `dataset_id`, so a multi-snapshot scoring file goes through a dataset.
+
+### M54 — Phase 4b leftovers
+
+M54 closes four items Phase 4b Part 1 left open: login rate limiting, a secret privacy salt (ruling
+R3), the approve/reject screen, and erasure as a background job. It also adds migration `0005` and
+M57's measurement tooling. None of it needs an AWS account. Decisions are DEC-860 … DEC-866.
+
+| Area | Code | Routes | Screens |
+|---|---|---|---|
+| Sign-in rate limiting | `engine/access/throttle.py`, `api/access.py` (`client_address`), `api/routes/auth.py` | `POST /auth/login` → 429 `LOGIN_LOCKED` + `Retry-After` | sign-in shows the refusal |
+| Secret privacy salt | `engine/privacy/config.py` (`privacy_salt`, `check_privacy_salt`), `engine/settings.py`, `infra/database.py` (`PrivacySalt`) | — (a prod API does not start without it) | — |
+| Approvals and separation of duties | `engine/approvals.py`, `api/routes/approvals.py`, `api/routes/models.py` | `GET /approvals`, `POST /models/{id}/approve`, `/promote`, `/reject` | Approvals (`#/approvals`) |
+| Background erasure | `engine/privacy/erasure.py`, `engine/privacy/erasure_jobs.py`, `api/routes/privacy.py` | `POST /privacy/erasure` → 202, `GET /privacy/erasure/{id}/progress`, `POST /privacy/erasure/{id}/retry`, `GET /privacy/erasure/{id}` | Privacy (Admin) |
+| Schema | `alembic/versions/0005_plan_d.py`: `model_decision`, `erasure_progress`; autogenerate covers the platform tables (DEC-865, DEC-888) | — | — |
+| 1M-row measurement | `scripts/bench_1m.py`, `scripts/bench_large_file.py` | — | — |
+
+- *Sign-in limits (DEC-861):* failed sign-ins are counted per username (case-folded, known or not)
+  and per client address in a sliding window. Either one locks when it reaches its limit, and while
+  it is locked the password is not checked at all. A successful sign-in clears only the account's
+  count. The failure that locks, and every refused attempt, is audited with `lockout`. Counts are
+  in memory in each process and a restart clears them. Behind a load balancer, set
+  `MARKETING_AI_TRUSTED_PROXY_HOPS` so the address is read from `X-Forwarded-For`.
+- *Privacy salt (DEC-860):* `MARKETING_AI_PRIVACY_SALT` must be at least 16 characters and has no
+  default in code. On a laptop (SQLite platform database) one is generated once into
+  `privacy_salt` (0600) beside `platform.db`. On `env=prod` the API refuses to start without it.
+  With Postgres on dev or staging, a privacy route or gated scoring run fails with `SETTING_REQUIRED`
+  until it is set. The database stack generates `marketing-ai/<env>/privacy-salt` once, keeps it
+  through `cdk destroy`, never rotates it, and passes it in through the application secret.
+  Changing a salt makes every existing hash unmatchable.
+- *Approvals (DEC-862, DEC-864):* each waiting challenger is shown against the champion it was
+  measured against, on the challenger's own test split, with every metric the training run recorded
+  for both models, the difference, and which model each favours. Nothing is re-scored or estimated.
+  Runs trained before Plan D show the headline metric only and say so, and a comparison whose
+  champion has since changed is flagged. Approve and reject need a reason on the screen and are
+  recorded in `model_decision`. The person who started the training run (`run.json` `requested_by`)
+  gets 403 `SEPARATION_OF_DUTIES`, and the screen shows the button disabled with that reason. With
+  sign-in on, `approved_by`/`promoted_by` is the signed-in username. With sign-in off the rule
+  cannot be enforced, and the screen says so.
+- *Erasure (DEC-863):* the request is queued and answered 202. One background worker, holding the
+  store rewrite lock, rewrites store by store and retries a failing store up to three times with
+  backoff. The Privacy screen shows each store's progress, then the completion report. A request
+  that ends `failed` can be retried by giving the id again, which is checked against the stored
+  hash. The audit trail records the start (`privacy.erasure`) and the end
+  (`privacy.erasure.complete`).
+
+**New settings** (all optional except the salt on prod): `MARKETING_AI_PRIVACY_SALT`,
+`MARKETING_AI_LOGIN_MAX_FAILURES_PER_ACCOUNT` (5), `MARKETING_AI_LOGIN_MAX_FAILURES_PER_ADDRESS` (20),
+`MARKETING_AI_LOGIN_FAILURE_WINDOW_SECONDS` (900), `MARKETING_AI_LOGIN_LOCKOUT_SECONDS` (900),
+`MARKETING_AI_TRUSTED_PROXY_HOPS` (0).
+
+**Upgrading.** Run `alembic upgrade head` (`0004` → `0005`) on Postgres. Set
+`MARKETING_AI_PRIVACY_SALT` everywhere except a laptop, before starting the API. A local ledger or
+erasure register written before M54 was hashed with the client id or `local`, and its hashes do not
+match the new salt; nothing re-hashes them.
+
+### M55 — Leak-check conditions (ruling R1)
+
+- Leak checking follows ruling R1. A dataset build runs the narrowed future-data leak check by default (DEC-096). The **full** check rebuilds every snapshot row. It runs when `POST /datasets` is sent `full_leak_check: true`, and always on a client's first build of a recipe. "The same recipe" is `recipe_hash`: the recipe's logic without ids or times, so monthly replays and scheduled rebuilds of an unchanged recipe count as the same one (DEC-870, DEC-871).
+- The build report (`GET /datasets/{id}/report`, and a "Future-data check" card on the Build step) records which check ran, why, and how many snapshot rows it rebuilt. The manifest records the `recipe_hash` (DEC-874).
+- A test builds a join-key leak that the SQL guard and the narrowed check both miss: the build passes and writes the dataset. The full check catches it with FUTURE_EVENTS_LEAKED (DEC-872). The full check runs nightly (`make test-all`) on the 20,000-customer benchmark tables and in the golden end-to-end tests (DEC-873). `python -m scripts.bench_onboarding --full-leak-check` measures it at any size.
+
+The measured cost is in `docs/PERFORMANCE.md` §8.
+
+### M56 — Test reliability and CI coverage
+
+- The two uplift prototype tests that failed about one run in three on a busy machine are fixed at
+  the cause: `tests/prototype/harness.mjs`'s `settle(dom)` waits until the page has no file read or
+  timer left, instead of the first re-render or a fixed sleep, and every fixed wait in the prototype
+  suites was replaced by it. No assertion changed (DEC-875).
+- `scripts/loop_prototype_tests.sh COUNT TEST_FILE` runs a suite COUNT times, with `LOOP_LOAD=N`
+  busy loops beside it (DEC-876).
+- CI runs the node and jsdom suites and the prototype suite, and fails, rather than skips, when node
+  or jsdom is missing; `scripts/check_no_skips.py` fails CI when a must-run node, jsdom or Postgres
+  test was skipped or never ran (DEC-877, DEC-878). The Postgres tests already ran in CI's
+  `make test`; that was verified, not changed (DEC-879).
+
+Measured on 4 vCPUs shared with other test runs (load average 9–25), with
+`LOOP_LOAD=N scripts/loop_prototype_tests.sh COUNT tests/prototype/uplift.test.mjs` (38 tests in
+the file):
+
+| Harness | Load | Runs | Passed | Failing tests |
+|---|---|---|---|---|
+| before (first-swap `upload()`, fixed sleeps), snapshot of `2248cd0` | 4 busy loops | 6 | **0** | the two reported tests, in all 6 runs |
+| intermediate (read tracking only, fixed sleeps kept) | 2 × (2 busy loops + a loop) | 6 (stopped) | 4 | "0% control group…" (`wait(1300)` too short), "DEC-608…" (`wait(30)` after a link click) |
+| after (DEC-875 `settle()`) | 2 × (2 busy loops + a loop), concurrent | 50 | **50** | none (25/25 and 25/25) |
+
+The "after" row is two copies of the script running at once, 25 runs each, each with `LOOP_LOAD=2`:
+four busy loops and two node suites on four cores, which is harsher than the single-loop "before".
+
+### M57 — Measurements that need a laptop or another network
+
+- **The one-million-row laptop measurement is an owner action and has not been made.** On an idle
+  laptop, from a checkout that has run `make setup`, run
+  `.venv/bin/python -m scripts.bench_1m --kind laptop --label "<make and model, RAM>" --record`.
+  It appends a row to `docs/PERFORMANCE.md`. No laptop number has been measured, so plan §11's
+  laptop criterion is not met; the container figures under *Large-file handling* are the only
+  one-million-row measurements. `bench_large_file.py` now reports peak memory correctly on macOS
+  (DEC-866).
+- **The Criteo uplift run was skipped.** From this environment the Criteo and mirror hosts answered
+  403, so no row was read (`library/criteo-uplift/run_report.md`, `docs/LIBRARY.md`). It needs a
+  machine with open internet, and its report is internal validation only, under the non-commercial
+  licence (R2, DEC-852).
+
+### M58 — Documentation and repository hygiene
+
+- `docs/plans/` holds Plan D's text; the Phase 2, 3a and 4a plans, Plan B, the Phase 5 design and
+  Plans E and F were not available to the branch and are listed as missing in
+  [`docs/plans/README.md`](docs/plans/README.md) (DEC-885).
+- Every open entry in `docs/CROSS_BRANCH_REQUESTS.md` was either resolved, with the date and the
+  decision that closed it, or re-filed to the person who must act.
+- Deleting the merged branches is an owner action.
+
+<!-- ---- END PLAN-D ---- -->

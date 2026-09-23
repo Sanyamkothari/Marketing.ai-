@@ -15,10 +15,9 @@ import subprocess
 from pathlib import Path
 from typing import Final
 
-import pytest
-
 from engine.contracts import ARTEFACT_REGISTRY, TABULAR_SCHEMAS
 from engine.uplift.contracts import UPLIFT_ARTEFACTS
+from tests.fixtures.node import skip_without_node
 
 REPO: Final[Path] = Path(__file__).resolve().parents[3]
 HERE: Final[Path] = Path(__file__).resolve().parent
@@ -54,11 +53,10 @@ def test_the_uplift_pages_read_the_uplift_artefacts_m53_names() -> None:
     assert {"scoring_summary.json", "segments.json", "uplift_drift.json"} <= set(pages["output"])
 
 
-@pytest.mark.skipif(NODE is None, reason="node is not installed; the JS checks need it")
 def test_node_suite_passes() -> None:
-    assert NODE is not None
+    node = skip_without_node()  # REQUIRE_JSDOM=1 (CI) turns a missing node into a failure
     result = subprocess.run(
-        [NODE, "--test", str(HERE / "phase1_pages_uplift.test.mjs")],
+        [node, "--test", str(HERE / "phase1_pages_uplift.test.mjs")],
         capture_output=True,
         text=True,
         timeout=120,

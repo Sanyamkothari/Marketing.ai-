@@ -320,7 +320,7 @@ def create_onboarding_spec(
     believe a table was included when it was not.
 
     A saved recipe with a label then has its use case's managed retraining schedule synced at once
-    (`api.routes.schedules.sync_recipe_retraining`, DEC-867), best-effort: a failed sync is logged
+    (`api.routes.schedules.sync_recipe_retraining`, DEC-880), best-effort: a failed sync is logged
     and the save still answers `201`.
     """
     load_client(store, client_id)

@@ -48,7 +48,7 @@ end. The local scheduler settles on every tick; with no local scheduler nothing 
 
 **The managed retraining schedules are synced on demand as well as at startup (DEC-783).** `POST
 /schedules/retraining/sync` syncs every recipe's; saving a labelled recipe syncs its own client and
-use case through `sync_recipe_retraining` (DEC-867), so its `monitoring.retraining` schedule exists
+use case through `sync_recipe_retraining` (DEC-880), so its `monitoring.retraining` schedule exists
 at once rather than at the next restart. Both are idempotent, and neither touches a person's own
 schedules.
 """
@@ -370,7 +370,7 @@ def _sync_managed(
 
 
 def sync_recipe_retraining(request: Request, spec: OnboardingSpec) -> None:
-    """After a recipe is saved: its client x use case's managed retraining schedules, now (DEC-867).
+    """After a recipe is saved: its client x use case's managed retraining schedules, now (DEC-880).
 
     Phase 2's save routes (`POST /clients/{id}/onboarding-specs` and `.../replay`) call this, so a
     labelled recipe's `monitoring.retraining` schedule exists at once rather than at the next start

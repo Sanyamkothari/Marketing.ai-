@@ -151,6 +151,7 @@ jobs:
           --id '^tests\.integration\.test_inactive_settings_ui::'
           --id '^tests\.integration\.test_ui_journey::'
           --id '^tests\.unit\.uplift\.test_uplift_ui::test_(every_module_file_parses|node_suite_passes)'
+          --id '^tests\.unit\.uplift\.test_phase1_pages_uplift::test_node_suite_passes$'
           --id '\[postgres\]$'
           --id '^tests\.unit\.test_postgres_metadata::'
           --id 'test_alembic_migrations::test_the_migrations_match_the_models_on_postgres$'
