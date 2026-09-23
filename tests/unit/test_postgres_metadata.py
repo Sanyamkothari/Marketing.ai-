@@ -29,6 +29,7 @@ from engine.aws.postgres import (
     postgres_run_index,
     postgres_store,
 )
+from engine.platform_db import PLATFORM_TABLES
 from engine.registry import (
     MODEL_VERSION_TABLE,
     LocalModelRegistry,
@@ -238,6 +239,31 @@ def test_every_timestamp_column_really_is_timestamptz(
         ("run", "finished_at"): "timestamp with time zone",
         ("run", "indexed_at"): "timestamp with time zone",
         ("run", "started_at"): "timestamp with time zone",
+        # Phase 4b, 0002_access_audit (DEC-721)
+        ("audit_events", "occurred_at"): "timestamp with time zone",
+        ("auth_session", "created_at"): "timestamp with time zone",
+        ("auth_session", "expires_at"): "timestamp with time zone",
+        ("auth_session", "revoked_at"): "timestamp with time zone",
+        ("platform_user", "created_at"): "timestamp with time zone",
+        ("platform_user", "updated_at"): "timestamp with time zone",
+        # Phase 4b, 0003_privacy (DEC-733)
+        ("consent_record", "created_at"): "timestamp with time zone",
+        ("consent_record", "expires_at"): "timestamp with time zone",
+        ("consent_record", "recorded_at"): "timestamp with time zone",
+        ("erasure_request", "completed_at"): "timestamp with time zone",
+        ("erasure_request", "requested_at"): "timestamp with time zone",
+        ("model_retrain_flag", "cleared_at"): "timestamp with time zone",
+        ("model_retrain_flag", "created_at"): "timestamp with time zone",
+        # Phase 4b, 0004_scheduling (DEC-774)
+        ("alert", "acknowledged_at"): "timestamp with time zone",
+        ("alert", "created_at"): "timestamp with time zone",
+        ("schedule", "created_at"): "timestamp with time zone",
+        ("schedule", "last_fired_at"): "timestamp with time zone",
+        ("schedule", "next_due_at"): "timestamp with time zone",
+        ("schedule", "updated_at"): "timestamp with time zone",
+        ("schedule_firing", "finished_at"): "timestamp with time zone",
+        ("schedule_firing", "fired_at"): "timestamp with time zone",
+        ("schedule_firing", "scheduled_for"): "timestamp with time zone",
     }
 
 
@@ -266,4 +292,4 @@ def test_the_migrated_schema_holds_exactly_this_products_tables(
                 {"schema": postgres_schema},
             )
         }
-    assert names == {*METADATA_TABLES, "alembic_version"}
+    assert names == {*METADATA_TABLES, *PLATFORM_TABLES, "alembic_version"}

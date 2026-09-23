@@ -1,4 +1,4 @@
-"""The application as a whole: seven stacks, one direction, and a tag on everything."""
+"""The application as a whole: eight stacks, one direction, and a tag on everything."""
 
 from __future__ import annotations
 
@@ -8,8 +8,9 @@ from infra.app import FEATURE_FLAGS, STACK_ORDER, Deployment
 from infra.naming import stack_name
 
 
-def test_seven_stacks_named_for_the_deployment(dev: Deployment) -> None:
-    assert len(STACK_ORDER) == 7
+def test_eight_stacks_named_for_the_deployment(dev: Deployment) -> None:
+    """Seven in Phase 4a; Phase 4b's `operations` stack is the eighth (infra/operations.py says why)."""
+    assert len(STACK_ORDER) == 8
     assert [stack.stack_name for stack in dev.stacks()] == [
         stack_name("dev", component) for component in STACK_ORDER
     ]
@@ -30,6 +31,13 @@ def test_observability_is_deployed_before_the_database(dev: Deployment) -> None:
     assert STACK_ORDER.index("observability") < STACK_ORDER.index("database")
     names = {dependency.stack_name for dependency in dev.database.dependencies}
     assert dev.observability.stack_name in names
+
+
+def test_compute_is_deployed_before_operations(dev: Deployment) -> None:
+    """Phase 4b attaches its grants to the task role and runs its job in compute's cluster."""
+    assert STACK_ORDER.index("compute") < STACK_ORDER.index("operations")
+    names = {dependency.stack_name for dependency in dev.operations.dependencies}
+    assert dev.compute.stack_name in names
 
 
 def test_sagemaker_is_deployed_before_compute(dev: Deployment) -> None:

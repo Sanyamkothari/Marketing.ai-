@@ -389,6 +389,134 @@ dataset, appending its findings to the same list, so one type really does have t
 unchanged (DEC-101). Nothing is lost while the request is open — the field contract is identical —
 but it is a duplicated field list, so it should not stay open indefinitely.
 
+### 2026-09-23 — phase-4b-production → phase-4a-aws: `tests/unit/test_alembic_migrations.py` asserts a chain, not "exactly one migration"
+
+**What is needed.** Review only; the edit is made. Phase 4b adds revisions `0002_access_audit`,
+`0003_privacy` and `0004_scheduling` after `0001`, which made "exactly one migration" fail. The test
+now asserts one linear chain from `0001` through Alembic's `ScriptDirectory` (a single base `0001`,
+a single head, and a file count equal to the chain length), and its table-set assertions include
+`engine.platform_db.PLATFORM_TABLES` (DEC-721). Nothing was loosened: a branch in the chain, a
+second base or a stray file still fails.
+
+**What I did meanwhile.** Made the edit; the file passes.
+
+### 2026-09-23 — phase-4b-production → phase-4a-aws: `tests/unit/test_postgres_metadata.py` knows the Phase 4b tables
+
+**What is needed.** Review only; the edit is made. The migrated-schema test now expects
+`METADATA_TABLES ∪ PLATFORM_TABLES`, and the timestamptz test lists the 22 timestamp columns of the
+nine Phase 4b tables (`platform_user`, `auth_session`, `audit_events`, `consent_record`,
+`erasure_request`, `model_retrain_flag`, `schedule`, `schedule_firing`, `alert`), every one
+`timestamp with time zone` per DEC-339. Both tests run only against a real server.
+
+**What I did meanwhile.** Made the edit, and ran `make test-postgres`'s selection
+(`MARKETING_AI_REQUIRE_POSTGRES=1 pytest -m postgres`) against a local PostgreSQL 16 on port 55432:
+every `postgres` test passes, including these two and a new one that pins 0002's append-only
+trigger (UPDATE, DELETE and TRUNCATE refused).
+
+### 2026-09-23 — phase-4b-production → trunk: `tests/integration/test_api_config.py` gained 32 paths
+
+**What is needed.** Review only; the edit is made. The exact OpenAPI path set in
+`test_openapi_builds_and_documents_every_route` gained the paths Phase 4b mounts: 9 for sign-in,
+users and audit (M46/M47), 11 under `/privacy` (M48) and 12 for schedules, outcomes and alerts
+(M49), as each earlier phase did for its own routes. Nothing else in the test changed.
+
+**What I did meanwhile.** Made the edit; the test passes.
+
+### 2026-09-23 — phase-4b-production → phase-4a-aws: `test_the_connection_screen_answers_on_prod` signs in
+
+**What is needed.** Review only; the edit is made. A prod app with sign-in off now answers 503
+`AUTH_NOT_CONFIGURED` on every non-public route by design (DEC-702), so
+`tests/integration/test_api_connection_security.py::test_the_connection_screen_answers_on_prod`
+now builds its prod app with `auth_mode="local"` and calls as a signed-in Viewer. Its assertions are
+unchanged.
+
+**What I did meanwhile.** Made the edit; the test passes.
+
+### 2026-09-23 — phase-4b-production → phase-4a-aws: `docs/RUNBOOK.md` §12, personal data breach
+
+**What is needed.** Review only. Plan M48 item 5 asks for a breach section in the runbook, so §12
+"Personal data breach (DPDP)" was appended; no other section was touched. Every notification
+timeline in it is a placeholder pending Minfy's legal review.
+
+**What I did meanwhile.** Appended the section; `test_docs_honesty.py` passes over the file.
+
+### 2026-09-23 — phase-4b-production → trunk: two parked settings ship (`ADVISORY_PATHS`)
+
+**What is needed.** Review of a two-line edit above the block in `engine/config.py`, and of the
+matching change to a pinned test. `governance.retention_days` and
+`monitoring.performance_alert_drop_pct` are removed from `ADVISORY_PATHS`: the retention job and
+outcome ingestion now read each run's own value, so the Setup form's "Coming later" note beside
+them had become false. `monitoring.retraining` stays parked on the form (it is read from the use
+case, not the run). `tests/unit/test_advanced_settings_schema.py::test_exactly_the_parked_settings_are_marked_advisory`
+now pins the seven remaining paths, and a new test pins that the two shipped settings are live
+controls and leave the recipe hash unchanged (a `Recipe` never carried monitoring or governance)
+(DEC-795). README's "What is left" note about these settings is superseded by the Phase 4b block
+rather than edited.
+
+**What I did meanwhile.** Made the edit; the schema tests pass.
+
+### 2026-09-23 — phase-4b-production → phase-4a-aws: let autogenerate see the Phase 4b tables
+
+**What is needed.** `alembic/env.py` limits `make revision` to `METADATA_TABLES`, so autogenerate
+ignores the nine Phase 4b tables. Two changes together, in this order: import
+`engine.access.users`, `engine.audit.store`, `engine.privacy.tables` and
+`engine.scheduling.schedules` for their table registrations, then widen `include_name` to
+`METADATA_TABLES | PLATFORM_TABLES`. Widening the filter alone would be harmful: a table in the
+filter but not in the metadata is one autogenerate proposes to drop (DEC-797).
+
+**What I did meanwhile.** Nothing in `env.py`. Phase 4b's drift is checked by its own migration
+tests (`tests/unit/production/test_platform_migration.py`, `test_scheduling_migration.py`), and its
+migrations are written by hand.
+
+### 2026-09-23 — phase-4b-production → phase-4a-aws: point the settings table at `docs/PRODUCTION.md`
+
+**What is needed.** Nothing to add to `docs/AWS_DEPLOYMENT.md`'s settings table: its rows for the
+twelve Phase 4b settings are already there. A one-line pointer from §11.3 (or the table's intro) to
+`docs/PRODUCTION.md`, which explains what each does for an operator (sign-in, the first Admin,
+roles, audit export, retention, schedules and alerts), would save a reader the search.
+
+**What I did meanwhile.** Wrote `docs/PRODUCTION.md` and linked it from README's Phase 4b block.
+
+### 2026-09-23 — phase-4b-production → phase-2-onboarding: sync retraining schedules when a recipe is saved
+
+**What is needed.** When an onboarding spec with a label is saved, call
+`engine.scheduling.retraining.sync_retraining_schedules(store, scheduler, retraining_targets(client_store, config_root))`
+(or `POST /schedules/retraining/sync`), so the recipe's `monitoring.retraining` schedule exists at
+once rather than at the next API restart (DEC-783).
+
+**What I did meanwhile.** `POST /schedules/retraining/sync` (Analyst) and a "Sync retraining
+schedules" button on the Monitoring screen; the API also syncs at startup.
+
+### 2026-09-23 — phase-4b-production → phase-2-onboarding and trunk: one dataset run path
+
+**What is needed.** `engine.scheduling.firing.start_dataset_run` repeats the dataset branch of
+`api/routes/runs.py::create_run_endpoint` call for call, so a scheduled run and a clicked run behave
+the same (DEC-766). Two copies can drift; the route's dataset branch could call
+`start_dataset_run` instead.
+
+**What I did meanwhile.** Kept the copy; the scheduling tests and `test_runs_from_dataset.py` both
+pass, and `api/routes/runs.py` was not edited by Phase 4b.
+
+### 2026-09-23 — phase-4b-production → trunk: tie `approved_by` / `promoted_by` to the signed-in person
+
+**What is needed.** `POST /models/{id}/approve` and `/promote` still take `approved_by` /
+`promoted_by` from the request body. The route is now Approver-only and the audit event records the
+real actor, but the registry field can still name someone else. With sign-in on, the field should
+come from `api.access.current_principal(request)` (the typed value kept only when sign-in is off).
+
+**What I did meanwhile.** Nothing in `api/routes/models.py`; the audit trail is the reliable record
+of who approved.
+
+### 2026-09-23 — phase-4b-production → trunk: link a run's outcomes and consent report from the Output page
+
+**What is needed.** Phase 1's Output page (`ui/pages.js`) could link a finished scoring run to
+`#/monitoring/runs/<run_id>`, where its outcome upload, real-world performance, incrementality input
+and consent report live (DEC-758), and could draw champion approve/promote buttons carrying
+`data-action="models.approve"` / `"models.promote"`, which the role gate already maps (DEC-792).
+
+**What I did meanwhile.** The outcomes screen is reachable from Monitoring → Outcomes, a firing's
+run link and an alert's run link.
+
 ## Resolved
 
 ### 2026-09-22 — audit → phase-4a-aws and whoever owns CI: the gate has been red for hours

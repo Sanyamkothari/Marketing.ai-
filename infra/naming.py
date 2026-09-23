@@ -23,23 +23,30 @@ from typing import Final
 from aws_cdk import aws_logs as logs
 
 __all__ = [
+    "AUDIT_EXPORT_PREFIX",
     "BOOTSTRAP_PREFIX",
+    "JOB_CONTAINER_NAME",
     "JOB_NAME_PREFIX",
     "METRIC_NAMESPACE",
     "MODELS_PREFIX",
     "NON_FIELD_ENV_VARS",
     "OBJECT_PREFIXES",
     "PRODUCT",
+    "ROW_LEVEL_PREFIXES",
     "RUNS_PREFIX",
     "SETTINGS_ENV_VARS",
     "SETTINGS_FIELDS",
     "SSM_ROOT",
     "UPLOADS_PREFIX",
     "api_log_group_name",
+    "audit_bucket_name",
+    "cluster_name",
     "db_instance_identifier",
+    "job_task_family",
     "jobs_log_group_name",
     "log_retention",
     "rds_log_group_name",
+    "schedule_group_name",
     "secret_name",
     "ssm_parameter_name",
     "ssm_path_prefix",
@@ -81,6 +88,31 @@ contents instead would be one character shorter and would also grant every prefi
 invents.
 """
 
+ROW_LEVEL_PREFIXES: Final[tuple[str, ...]] = (UPLOADS_PREFIX, RUNS_PREFIX)
+"""The prefixes that can hold one row per customer, and so the only ones a *version* may be deleted in.
+
+Phase 4b's retention job and erasure requests (plan M48) remove customer rows from uploads and from
+row-level run artefacts. The artefact bucket is versioned, so a plain `DeleteObject` only lays a
+delete marker over the data - the bytes are still there as a noncurrent version, which is not what
+"erased" means to a data principal. `s3:DeleteObjectVersion` is therefore granted, and granted on
+these two prefixes only: `models/` is kept by design (a model is an aggregate, and erasure flags it
+for retraining rather than deleting it), and `_bootstrap/` holds no customer data.
+"""
+
+AUDIT_EXPORT_PREFIX: Final[str] = "audit"
+"""Mirrors the default of `Settings.audit_export_prefix`: where audit exports land in the audit bucket.
+
+It is also the IAM boundary - the task may put objects under `audit/` and nowhere else in that
+bucket - so `tests/infra/test_settings_contract.py`'s Phase 4b companion asserts the two agree.
+"""
+
+JOB_CONTAINER_NAME: Final[str] = "job"
+"""The container name in the scheduled-job task definition.
+
+EventBridge Scheduler starts that task with `containerOverrides`, and an override names the
+container it overrides; a schedule created with any other name is refused by `RunTask`.
+"""
+
 SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "storage_backend",
     "job_backend",
@@ -115,6 +147,19 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "metrics_backend",
     "client_id",
     "cors_origins",
+    # Phase 4b (DEC-701): added fields only, in `engine.settings.ENV_VARS` order.
+    "auth_mode",
+    "auth_session_ttl_seconds",
+    "audit_export_bucket",
+    "audit_export_prefix",
+    "audit_retention_days",
+    "scheduler_backend",
+    "scheduler_tick_seconds",
+    "scheduler_group_name",
+    "scheduler_target_arn",
+    "scheduler_role_arn",
+    "alert_backend",
+    "alert_sns_topic_arn",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 
@@ -189,6 +234,35 @@ def api_log_group_name(env_name: str) -> str:
 def jobs_log_group_name(env_name: str) -> str:
     """Where SageMaker job containers write, when the runner points them at a group of our own."""
     return f"/{PRODUCT}/{env_name}/jobs"
+
+
+def cluster_name(env_name: str) -> str:
+    """The ECS cluster both the API service and the scheduled jobs run in."""
+    return f"{PRODUCT}-{env_name}"
+
+
+def job_task_family(env_name: str) -> str:
+    """The task-definition family EventBridge Scheduler runs for a scheduled job (Phase 4b).
+
+    A schedule names the family, never a revision: CloudFormation registers a new revision on
+    every image change and deregisters the old one, and a schedule pinned to a deregistered
+    revision would fail on its next firing. `RunTask` given a family runs its latest ACTIVE revision.
+    """
+    return f"{PRODUCT}-{env_name}-job"
+
+
+def schedule_group_name(env_name: str) -> str:
+    """The EventBridge Scheduler group every schedule of this deployment is created in.
+
+    Per deployment, because the group is the IAM boundary: the task role may create and delete
+    schedules in this group only, so a dev deployment in a shared account cannot touch prod's.
+    """
+    return f"{PRODUCT}-{env_name}"
+
+
+def audit_bucket_name(bucket_name_prefix: str, env_name: str, account: str) -> str:
+    """The Object Lock bucket audit exports are written to; beside the artefact bucket's name."""
+    return f"{bucket_name_prefix}-{env_name}-{account}-audit"
 
 
 def db_instance_identifier(env_name: str) -> str:

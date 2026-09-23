@@ -69,4 +69,8 @@ export function resolveRoute(parts) {
 // ---- END PHASE-4A ----
 
 // ---- PHASE-4B (production) — append only below this line ----
+// Side effects only, and deliberately not `index.js`: boot.js must run before app.js's first render
+// (the bearer token on the very first call) and must not import this file back (DEC-790). The screens
+// register themselves from index.html's Phase 4b block once this file has finished evaluating.
+import "./production/boot.js";
 // ---- END PHASE-4B ----

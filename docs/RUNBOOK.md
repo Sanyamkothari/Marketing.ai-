@@ -596,3 +596,77 @@ is established it is honestly absent rather than quietly guessed:
 
 When one of these becomes known, write the number down **with the command that produced it and the
 date it was produced**, or do not write it down at all.
+
+---
+
+## 12. Personal data breach (DPDP)
+
+> **Not legal advice.** This section lists the engineering steps and the evidence this system can
+> produce. Who must be told, in what form and by when is a legal decision under the Digital Personal
+> Data Protection Act 2023 and the DPDP Rules (notified 13 Nov 2025). **Minfy legal must review this
+> section before it is relied on**, and every timeline below is a placeholder until they confirm it.
+
+A personal data breach is any unauthorised processing of, or accidental disclosure, acquisition,
+sharing, use, alteration, destruction of or loss of access to, personal data that this deployment
+holds for a client: customer files in `uploads/`, onboarding sources under `clients/`, built
+`datasets/`, scores, row explanations and generated copy under `runs/`, and the LLM cache.
+
+### Detection signals
+
+| Signal | Where it shows | What it can mean |
+|---|---|---|
+| Audit events with `outcome=denied` in a burst, or from one actor across many objects | `GET /audit/events?outcome=denied` | Credential stuffing, a stolen session probing for data |
+| Reads of many runs' `scores.csv` / artefacts by one actor in a short window | `GET /audit/events?action=runs.` filtered by actor and time | Bulk exfiltration through the product itself |
+| A login from an unusual actor or at an unusual time, or a role change nobody requested | `GET /audit/events?action=auth.` and `?action=users.` | Account takeover, privilege escalation |
+| `s3:GetObject` from a principal other than the task role, or a bucket policy / public-access change | CloudTrail (data events on the artefact bucket), S3 access logs | Direct access around the application |
+| An `erasure_request` in `failed` or `completed_with_exceptions` | `erasure_request` table; the `privacy.erasure` audit event | Personal data that should be gone is still held |
+| Retention job not run (no `privacy.retention.apply` event for longer than its schedule) | `GET /audit/events?action=privacy.retention.` | Data kept beyond the promised period |
+| A secret, key or database dump found outside the account | External report, secrets scanner | Loss of confidentiality at rest |
+
+### First three things to do
+
+```bash
+# 1. Preserve the evidence BEFORE changing anything: export the audit log for the window in question.
+#    The export is written with Object Lock in AWS, so it cannot be altered afterwards.
+curl -s -X POST "$SERVICE_URL/audit/exports" -H 'content-type: application/json' \
+  -d '{"since": "<ISO start>", "until": "<ISO end>"}'
+# 2. Contain: revoke the affected sessions / disable the user (Admin), rotate any exposed secret,
+#    and block the path used (security group, bucket policy). Record each step with its time.
+# 3. Scope: who and what. Pull every event of the suspected actor, and the objects they touched.
+curl -s "$SERVICE_URL/audit/events.csv?actor_id=<user id>&since=<ISO start>" > actor-events.csv
+```
+
+### Who to notify
+
+Placeholders until Minfy legal confirms each one. The client is the Data Fiduciary; Minfy, as the
+operator of this deployment, is acting for the client and notifies **the client first**.
+
+| Who | What | By when (PLACEHOLDER - to be confirmed by legal) |
+|---|---|---|
+| The client's named privacy contact / Data Protection Officer | Everything known so far, and this section's evidence | `<T0 + ? hours>` after detection |
+| The **Data Protection Board of India** (by the Data Fiduciary, with our evidence) | Intimation of the breach: nature, extent, timing, location, likely impact; a detailed report with mitigation and the persons responsible follows | `<without delay>` for the intimation; `<T0 + ? hours>` for the detailed report |
+| **Each affected Data Principal** (by the Data Fiduciary) | What happened, the likely consequences, what is being done, what they can do, and a contact | `<without delay>` |
+| Minfy internal: security lead, legal, account owner | Incident opened, severity, owner | Immediately |
+
+### The evidence the audit log provides
+
+The audit log records who did what to which object and when, with before/after hashes, and never a
+customer value; a data principal appears only as a salted `principal_hash` (DEC-705). What to pull:
+
+- **The window**: `GET /audit/events?since=...&until=...` (JSON) or `/audit/events.csv` for a
+  spreadsheet; `POST /audit/exports` for an immutable copy to hand to legal.
+- **The actor**: `?actor_id=<user id>` - every login, read of an audited artefact, run, approval,
+  setting and role change they made, with `outcome` (success, denied, failed) and `request_id`.
+- **The objects**: `?object_type=run&object_id=<run id>` - who read or changed one run; use the run's
+  `run.json` (`upload_id`, `dataset_id`, `client_id`) to see whose data it held.
+- **Which customers**: the `principal_hash` of a customer id is recomputable by anyone holding the id
+  (`engine.audit.events.principal_hash(id, salt=<client id or "local">)`); search
+  `?action=privacy.` for their erasure or access requests.
+- **What privacy controls did**: `privacy.erasure` (request id, counts per store, models flagged),
+  `privacy.retention.apply` (keys deleted per category), and each scoring run's
+  `consent_report.json` (how many principals were excluded for missing or withdrawn consent).
+- **What it cannot show**: a read that bypassed the application (direct S3 or database access) is in
+  CloudTrail and the S3 access logs, not here; the audit log shows only what went through the API.
+
+Record, in the incident ticket: detection time, containment time, each notification sent with its
+time and recipient, and the audit export's key and checksum.

@@ -109,6 +109,29 @@
     "JobLogs4F84869B": "AWS::Logs::LogGroup",
     "JobsErrorsFilterCBD4AA05": "AWS::Logs::MetricFilter"
   },
+  "operations": {
+    "Alerts91F83244": "AWS::SNS::Topic",
+    "AlertsPolicy425C338D": "AWS::SNS::TopicPolicy",
+    "Alertsopsexamplecom487C7FF2": "AWS::SNS::Subscription",
+    "ApiOperationsPolicyA91419F2": "AWS::IAM::Policy",
+    "AuditExportKey0B66B666": "AWS::KMS::Key",
+    "AuditExports88738ECD": "AWS::S3::Bucket",
+    "AuditExportsPolicy59187A5D": "AWS::S3::BucketPolicy",
+    "JobTaskDefinition94800248": "AWS::ECS::TaskDefinition",
+    "ParameterAlertBackend6A80F18D": "AWS::SSM::Parameter",
+    "ParameterAlertSnsTopicArn3A46F07E": "AWS::SSM::Parameter",
+    "ParameterAuditExportBucketCE0EAB12": "AWS::SSM::Parameter",
+    "ParameterAuditExportPrefixBA41B209": "AWS::SSM::Parameter",
+    "ParameterAuditRetentionDays0F0F49E7": "AWS::SSM::Parameter",
+    "ParameterAuthMode5A0C2B5E": "AWS::SSM::Parameter",
+    "ParameterSchedulerBackend09234283": "AWS::SSM::Parameter",
+    "ParameterSchedulerGroupName158BCD49": "AWS::SSM::Parameter",
+    "ParameterSchedulerRoleArnA82FC847": "AWS::SSM::Parameter",
+    "ParameterSchedulerTargetArn1D4A8F28": "AWS::SSM::Parameter",
+    "ScheduleGroup": "AWS::Scheduler::ScheduleGroup",
+    "SchedulerRole59E73443": "AWS::IAM::Role",
+    "SchedulerRoleDefaultPolicy66F774B8": "AWS::IAM::Policy"
+  },
   "sagemaker": {
     "ExecutionRole605A040B": "AWS::IAM::Role",
     "ExecutionRoleDefaultPolicyA5B92313": "AWS::IAM::Policy"

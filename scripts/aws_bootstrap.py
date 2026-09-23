@@ -13,6 +13,32 @@ Every probe is read-only or cleans up after itself, so it is safe to run against
 and `--dry-run` runs the whole thing against nothing at all. It exits non-zero when any probe fails,
 and it names what failed rather than stopping at the first one: an operator wants the whole list,
 not a sequence of one-at-a-time fixes.
+
+**Where it runs matters as much as what it checks** (M50). The probes run as whoever runs the
+script, and the database is in isolated subnets. Run from a laptop, the storage and jobs probes
+test the *operator's* credentials - which prove nothing about the task role - and the database
+probe cannot reach the instance at all. So `docs/AWS_DEPLOYMENT.md` runs it inside the deployment,
+as a one-off ECS task with the service's own task definition, role and network
+(`scripts/run_in_deployment.py`); the laptop invocation remains for `--dry-run` and for a machine
+that genuinely sits inside the VPC.
+
+Three things the first walk of the deployment guide found, and which this module now refuses to
+get wrong:
+
+* **Skipped is not passed.** A deployment named on the command line (`--env dev`) whose settings
+  were read from the process environment rather than from Parameter Store has every backend at its
+  laptop default, so every AWS probe is skipped - and the old summary counted a skip as a pass and
+  printed "this deployment is ready" having checked nothing. A named deployment on which *every*
+  AWS probe was skipped is now a failure that says which two variables select the AWS loader.
+* **The database probe connects the way the application does**, through `postgres_engine`: the
+  URL the stack composes is a bare `postgresql://`, which SQLAlchemy reads as psycopg 2 - a
+  package the image does not carry - so a raw `create_engine` failed with `ModuleNotFoundError` on
+  every deployment (DEC-343 is why the application never did).
+* **Migrations go into `postgres_schema`.** Handing Alembic the URL alone dropped the schema the
+  deployment configures, so this script created the tables in `public` while the image's own
+  `migrate` entrypoint - which reads the schema from the settings - would create a second set in
+  `marketing_ai`. The URL and the schema are now passed together as `-x` arguments, the one path in
+  `alembic/env.py` that keeps them paired.
 """
 
 from __future__ import annotations
@@ -20,12 +46,24 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+from argparse import Namespace
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
-from typing import Final
+from typing import TYPE_CHECKING, Final
 
+from engine.aws.secrets import SecretsError
 from engine.config import list_use_case_ids, load_use_case
-from engine.settings import ENV_VARS, Settings, SettingsError, load_settings, summary
+from engine.settings import (
+    ENV_VARS,
+    SETTINGS_SOURCE_ENV_VAR,
+    Settings,
+    SettingsError,
+    load_settings,
+    summary,
+)
+
+if TYPE_CHECKING:
+    from alembic.config import Config
 
 COMMAND: Final[str] = "python -m scripts.aws_bootstrap"
 PROBE_KEY: Final[str] = "_bootstrap/permission-probe.txt"
@@ -34,6 +72,12 @@ PROBE_KEY: Final[str] = "_bootstrap/permission-probe.txt"
 OK: Final[str] = "ok"
 FAILED: Final[str] = "FAILED"
 SKIPPED: Final[str] = "skipped"
+
+AWS_PROBES: Final[frozenset[str]] = frozenset({"storage", "metadata", "jobs"})
+"""The probes that only mean something against AWS; all three skipped on a named deployment is a failure."""
+
+LOCAL_ENV: Final[str] = "local"
+"""The one deployment name on which every backend being local is the expected answer."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -111,15 +155,21 @@ def check_metadata(settings: Settings, *, migrate: bool) -> list[Check]:
     """The database is reachable, and the schema is at head."""
     if settings.metadata_backend != "postgres":
         return [Check("metadata", SKIPPED, f"metadata_backend={settings.metadata_backend}")]
-    url = settings.postgres_dsn.get_secret_value() if settings.postgres_dsn else ""
 
     def connect() -> str:
-        from sqlalchemy import create_engine, text
+        # The application's own engine factory: the URL normalised to psycopg 3, the schema on the
+        # search path and bound parameters hidden from exception text (DEC-343). A plain
+        # `create_engine` on the composed `postgresql://` URL asks for psycopg 2 and fails.
+        from sqlalchemy import text
 
-        engine = create_engine(url, pool_pre_ping=True)
-        with engine.connect() as connection:
-            version = connection.execute(text("select version()")).scalar_one()
-        engine.dispose()
+        from engine.aws.postgres import PostgresConfig, postgres_engine
+
+        engine = postgres_engine(PostgresConfig.from_settings(settings))
+        try:
+            with engine.connect() as connection:
+                version = connection.execute(text("select version()")).scalar_one()
+        finally:
+            engine.dispose()
         return str(version).split(" on ")[0]
 
     checks = [
@@ -136,11 +186,8 @@ def check_metadata(settings: Settings, *, migrate: bool) -> list[Check]:
 
     def upgrade() -> str:
         from alembic import command
-        from alembic.config import Config
 
-        config = Config("alembic.ini")
-        config.set_main_option("sqlalchemy.url", url)
-        command.upgrade(config, "head")
+        command.upgrade(alembic_config(settings), "head")
         return "schema at head"
 
     checks.append(_probe("migrations", "run `make migrate` by hand and read the traceback", upgrade))
@@ -185,6 +232,48 @@ def check_jobs(settings: Settings) -> list[Check]:
     ]
 
 
+def alembic_config(settings: Settings) -> Config:
+    """The Alembic config for this deployment: the URL and its schema as `-x` arguments, together.
+
+    `-x url=` is the first thing `alembic/env.py` looks at, and `-x schema=` is honoured only beside
+    it, so the two cannot come from different places. Setting `sqlalchemy.url` instead - what this
+    function replaced - dropped `postgres_schema` and put the tables in `public`.
+    """
+    from alembic.config import Config
+
+    from engine.aws.postgres import PostgresConfig
+
+    database = PostgresConfig.from_settings(settings)
+    arguments = [f"url={database.url}"]
+    if database.schema_name is not None:
+        arguments.append(f"schema={database.schema_name}")
+    return Config("alembic.ini", cmd_opts=Namespace(x=arguments))
+
+
+def check_something_was_probed(settings: Settings, checks: Sequence[Check]) -> list[Check]:
+    """A named deployment on which every AWS probe was skipped has checked nothing; say so.
+
+    This is the shape of the most likely mistake with this script: `--env dev` run in a shell that
+    never exported `MARKETING_AI_SETTINGS_SOURCE=aws`, so the settings came from the environment,
+    every backend is at its laptop default, and there was nothing for the probes to probe.
+    """
+    if settings.env == LOCAL_ENV:
+        return []
+    aws = [check for check in checks if check.name in AWS_PROBES or check.name == "database"]
+    if aws and all(check.status == SKIPPED for check in aws):
+        return [
+            Check(
+                "deployment",
+                FAILED,
+                f"env={settings.env} but every backend is local, so nothing about AWS was checked",
+                f"export {SETTINGS_SOURCE_ENV_VAR}=aws and {ENV_VARS['aws_region']}=<region> so the "
+                "settings are read from Parameter Store, or run this inside the deployment with "
+                "scripts/run_in_deployment.py",
+            )
+        ]
+    return []
+
+
 def run(settings: Settings, *, migrate: bool = True) -> tuple[list[Check], int]:
     """Every check, and the exit code: 0 when nothing failed."""
     checks = [
@@ -193,6 +282,7 @@ def run(settings: Settings, *, migrate: bool = True) -> tuple[list[Check], int]:
         *check_metadata(settings, migrate=migrate),
         *check_jobs(settings),
     ]
+    checks.extend(check_something_was_probed(settings, checks))
     return checks, int(any(check.status == FAILED for check in checks))
 
 
@@ -201,9 +291,12 @@ def report(settings: Settings, checks: Sequence[Check]) -> str:
     lines = [f"{COMMAND}: {summary(settings)}", ""]
     lines.extend(check.line() for check in checks)
     failed = [check.name for check in checks if check.status == FAILED]
+    passed = sum(1 for check in checks if check.status == OK)
+    skipped = sum(1 for check in checks if check.status == SKIPPED)
     lines.append("")
     lines.append(
-        f"{len(checks) - len(failed)}/{len(checks)} checks passed"
+        f"{passed}/{len(checks)} checks passed"
+        + (f", {skipped} skipped" if skipped else "")
         + (f"; still to fix: {', '.join(failed)}" if failed else "; this deployment is ready")
     )
     return "\n".join(lines)
@@ -224,7 +317,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     environ: Mapping[str, str] = {**os.environ, ENV_VARS["env"]: args.env} if args.env else os.environ
     try:
         settings = load_settings(environ)
-    except SettingsError as exc:
+    except (SettingsError, SecretsError) as exc:
+        # `SecretsError` is Parameter Store or Secrets Manager refusing (no credentials, access
+        # denied, a malformed document); its message names the path, never a value.
         print(f"{COMMAND}: {exc.message}", file=sys.stderr)
         return 1
     if args.dry_run:

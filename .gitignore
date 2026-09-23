@@ -36,3 +36,7 @@ node_modules/
 infra/cdk.out/
 infra/.cdk.staging/
 .image-digest
+# M50: one deployment's own CDK context (alert email, budget, certificate ARN). It is read by every
+# `cdk` command, `make aws-deploy` included, and it names an account's resources, so it is never
+# committed (PARALLEL_WORK_PROTOCOL.md §5 rule 5); docs/AWS_DEPLOYMENT.md §4.2 shows its shape.
+infra/cdk.context.json

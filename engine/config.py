@@ -2201,8 +2201,6 @@ ADVISORY_PATHS: Final[frozenset[str]] = frozenset(
         "features.selection",
         "features.max_features",
         "monitoring.retraining",
-        "monitoring.performance_alert_drop_pct",
-        "governance.retention_days",
     }
 )
 """Settings the schema still carries but no stage reads yet (DEC-074).
@@ -2215,6 +2213,14 @@ two identical models look like different recipes.
 
 **Adding a path here is how a setting is parked; removing one is how it ships.** Nothing else needs
 to change in either direction - the form, the documentation and the hash all read this set.
+
+Phase 4b shipped two of the original nine (DEC-795): `governance.retention_days` is enforced by the
+retention job and `monitoring.performance_alert_drop_pct` by outcome ingestion, both reading the
+value in the run's own `run_config.json`, so the control on a run's form is now what applies.
+`monitoring.retraining` stays parked on the form: it is live, but read from the use case's
+configuration by the managed retraining schedules, not from a run, so a value moved on one run's
+form still changes nothing. Neither shipped setting is part of a `Recipe` (monitoring and governance
+never were), so shipping them changes no recipe hash.
 """
 
 ADVISORY_NOTE: Final[str] = "Coming later — recorded with the run, not yet applied."

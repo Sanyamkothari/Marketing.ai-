@@ -26,10 +26,30 @@ from sqlmodel import SQLModel, create_engine
 
 from engine.settings import Settings
 
-__all__ = ["PLATFORM_DB_FILENAME", "create_tables", "platform_engine", "sqlite_engine"]
+__all__ = ["PLATFORM_DB_FILENAME", "PLATFORM_TABLES", "create_tables", "platform_engine", "sqlite_engine"]
 
 PLATFORM_DB_FILENAME: Final[str] = "platform.db"
 """The SQLite file's name, inside the data directory."""
+
+PLATFORM_TABLES: Final[tuple[str, ...]] = (
+    # 0002_access_audit (M46/M47)
+    "platform_user",
+    "auth_session",
+    "audit_events",
+    # 0003_privacy (M48) - `engine.privacy.tables.PRIVACY_TABLES`
+    "consent_record",
+    "erasure_request",
+    "model_retrain_flag",
+    # 0004_scheduling (M49) - `engine.scheduling.schedules.SCHEDULING_TABLES` and `alerts.ALERT_TABLE`
+    "schedule",
+    "schedule_firing",
+    "alert",
+)
+"""Every Phase 4b table a migration creates, beside `engine.aws.postgres.METADATA_TABLES`.
+
+The definite answer to "which tables does `alembic upgrade head` make", for the same reason
+`METADATA_TABLES` exists (DEC-340): `SQLModel.metadata` holds whatever has been imported. A Phase 4b
+migration that creates a table adds its name here, in the migration's order (DEC-721)."""
 
 _ENGINES: dict[str, Engine] = {}
 _LOCK: Final[threading.Lock] = threading.Lock()

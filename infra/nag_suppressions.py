@@ -39,7 +39,14 @@ from typing import TYPE_CHECKING, Final, NamedTuple
 
 from cdk_nag import NagPackSuppression, NagSuppressions, RegexAppliesTo
 
-from infra.naming import JOB_NAME_PREFIX, OBJECT_PREFIXES
+from infra.naming import (
+    AUDIT_EXPORT_PREFIX,
+    JOB_CONTAINER_NAME,
+    JOB_NAME_PREFIX,
+    OBJECT_PREFIXES,
+    PRODUCT,
+    ROW_LEVEL_PREFIXES,
+)
 
 if TYPE_CHECKING:
     from infra.app import Deployment
@@ -121,6 +128,30 @@ _JOB_NAME_FINDINGS: Final[str] = (
 )
 """Jobs whose name starts with the product's prefix."""
 
+_ROW_LEVEL_PREFIX_ALTERNATION: Final[str] = "|".join(prefix.rstrip("/") for prefix in ROW_LEVEL_PREFIXES)
+"""`uploads|runs`: the two prefixes an object *version* may be deleted in (Phase 4b)."""
+
+_ROW_LEVEL_VERSION_FINDINGS: Final[str] = (
+    rf"/^Resource::{_cross_stack_ref('Artefacts')}\/({_ROW_LEVEL_PREFIX_ALTERNATION})\/\*$/"
+)
+"""A row-level artefact prefix, for `s3:DeleteObjectVersion` only."""
+
+_AUDIT_PREFIX_FINDINGS: Final[str] = rf"/^Resource::<AuditExports[0-9A-F]*\.Arn>\/{AUDIT_EXPORT_PREFIX}\/\*$/"
+"""Every object under the audit prefix of the audit bucket, which lives in the same stack."""
+
+_SCHEDULE_FINDINGS: Final[str] = (
+    rf"/^Resource::arn:aws:scheduler:[a-z0-9-]+:.*:schedule\/{PRODUCT}-[a-z]+\/\*$/"
+)
+"""Every schedule in this deployment's schedule group, and no other group's."""
+
+_JOB_TASK_FINDINGS: Final[str] = (
+    rf"/^Resource::arn:aws:ecs:[a-z0-9-]+:.*:task-definition\/{PRODUCT}-[a-z]+-job:\*$/"
+)
+"""Every *revision* of the scheduled-job task-definition family."""
+
+_JOB_TASK_TAG_FINDINGS: Final[str] = rf"/^Resource::arn:aws:ecs:[a-z0-9-]+:.*:task\/{PRODUCT}-[a-z]+\/\*$/"
+"""Every task in this deployment's cluster - for `ecs:TagResource` during `RunTask` only."""
+
 _WILDCARD_FINDING: Final[str] = "Resource::*"
 """The literal finding for an `Allow` on every resource. Exact, never a pattern."""
 
@@ -176,12 +207,27 @@ _WILDCARD_IS_UNAVOIDABLE: Final[str] = (
     "a VpcConfig requires because the service creates the ENIs and their ids do not exist when the "
     "policy is written. This is not taken on trust: infra/policies.py freezes the set as "
     "RESOURCE_WILDCARD_ALLOW_LIST with the reason beside each entry, and "
-    "tests/infra/test_iam.py walks every Allow in all seven synthesised stacks - dev and prod - "
+    "tests/infra/test_iam.py walks every Allow in all eight synthesised stacks - dev and prod - "
     'and fails on any `Resource: "*"` whose actions are not all on that list, including one that '
     "arrives inside a construct nobody read. That test is narrower than this rule and it is what "
     "actually holds the line; a second test fails if the allow-list grows an entry nothing uses."
 )
 
+
+_OPERATIONS_TASK_POLICY_REASON: Final[str] = (
+    "Each `*` in this policy is the last segment of a name that is itself the boundary. "
+    f"`<audit bucket>/{AUDIT_EXPORT_PREFIX}/*` is every export under the one prefix "
+    "engine/audit/export.py writes, with PutObject and PutObjectRetention only - no read, no "
+    "delete, and the bucket's own policy denies deletion to every principal; an export's key is "
+    "the timestamp of the export, so it cannot be named in advance. "
+    f"`schedule/{PRODUCT}-<env>/*` is every schedule in this deployment's own EventBridge Scheduler "
+    "group - a schedule ARN is group/name, the name is generated per schedule by the application, "
+    "and ListSchedules is deliberately not granted, so this role cannot even see another group. "
+    "`<artefact bucket>/uploads/*` and `/runs/*` carry s3:DeleteObjectVersion alone: the DPDP "
+    "erasure and retention paths (plan M48) must remove the noncurrent version of a customer's "
+    "rows, because on a versioned bucket a plain delete leaves the bytes behind, and models/ and "
+    "_bootstrap/ are excluded because neither holds a customer row (infra/naming.ROW_LEVEL_PREFIXES)."
+)
 
 SUPPRESSIONS: Final[tuple[Suppression, ...]] = (
     Suppression(
@@ -201,7 +247,7 @@ SUPPRESSIONS: Final[tuple[Suppression, ...]] = (
         rule="AwsSolutions-ECS2",
         reason=(
             "The rule asks for no plain environment variables. The three this task definition "
-            "carries are MARKETING_AI_SETTINGS_SOURCE, MARKETING_AI_ENV and MARKETING_AI_REGION: "
+            "carries are MARKETING_AI_SETTINGS_SOURCE, MARKETING_AI_ENV and MARKETING_AI_AWS_REGION: "
             "which deployment this is and where to read it from. They are not credentials and they "
             "are already public in the stack name. Every value that is a secret is fetched by the "
             "task itself from one Secrets Manager ARN, and no secret is rendered into this task "
@@ -283,6 +329,43 @@ SUPPRESSIONS: Final[tuple[Suppression, ...]] = (
             "out by hand precisely to avoid the managed AmazonECSTaskExecutionRolePolicy, which "
             f"grants ecr:* against every repository in the account and logs:CreateLogGroup. "
             f"{_LOG_STREAM_IS_THE_BOUNDARY} {_WILDCARD_IS_UNAVOIDABLE}"
+        ),
+    ),
+    Suppression(
+        stack="operations",
+        path="JobTaskDefinition/Resource",
+        rule="AwsSolutions-ECS2",
+        reason=(
+            f"The scheduled-job container (`{JOB_CONTAINER_NAME}`) carries exactly the three "
+            "environment variables the API task does - MARKETING_AI_SETTINGS_SOURCE, "
+            "MARKETING_AI_ENV and MARKETING_AI_AWS_REGION - for the same reason: they say which "
+            "deployment this is and where to read it from, are not credentials, and are already "
+            "public in the stack name. Everything else, secrets included, is read by the task "
+            "itself from Parameter Store and one Secrets Manager ARN (DEC-377), and a variable here "
+            "would override the parameter of the same name for ever."
+        ),
+    ),
+    Suppression(
+        stack="operations",
+        path="ApiOperationsPolicy/Resource",
+        rule="AwsSolutions-IAM5",
+        applies_to_regex=(_AUDIT_PREFIX_FINDINGS, _SCHEDULE_FINDINGS, _ROW_LEVEL_VERSION_FINDINGS),
+        reason=_OPERATIONS_TASK_POLICY_REASON,
+    ),
+    Suppression(
+        stack="operations",
+        path="SchedulerRole/DefaultPolicy/Resource",
+        rule="AwsSolutions-IAM5",
+        applies_to_regex=(_JOB_TASK_FINDINGS, _JOB_TASK_TAG_FINDINGS),
+        reason=(
+            "EventBridge Scheduler's role may start one task-definition family and nothing else. "
+            f"`task-definition/{PRODUCT}-<env>-job:*` - the `*` is the revision number, which "
+            "CloudFormation assigns on every deployment, and a schedule names the family so it keeps "
+            "working after one; the ecs:cluster condition confines RunTask to this deployment's "
+            f"cluster. `task/{PRODUCT}-<env>/*` - the `*` is a task id ECS generates at RunTask "
+            "time, and the grant is ecs:TagResource under an ecs:CreateAction=RunTask condition, "
+            "so it can tag the task it is starting and cannot retag anything that already exists. "
+            "The trust policy pins aws:SourceAccount and the schedule group's ARN."
         ),
     ),
     Suppression(

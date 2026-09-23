@@ -417,6 +417,7 @@ class S3Storage:
         except Exception as exc:  # mapped below; the botocore exception types are an optional import
             raise _s3_error(exc, key, writing=True) from exc
         self._known.pop(key, None)
+        self._forget_mirror(key)
 
     def _head(self, key: str) -> tuple[int, str] | None:
         """`(length, stored digest)` for `key`, or `None` when it is absent. Raises on 403."""
@@ -461,6 +462,54 @@ class S3Storage:
         """
         with self._open_write(key, metadata=None) as handle:
             yield handle
+        self._refresh_mirror(key)
+
+    # PHASE-4B (cross-branch, DEC-707): a write or delete through the store reaches the mirror too.
+    # An erasure rewrites an object in place; a mirror copy hydrated earlier in the same process
+    # would otherwise keep serving the erased person's bytes to every later `local_path` reader.
+    def _refresh_mirror(self, key: str) -> None:
+        """Replace this process's mirror copy of `key`, if it has one, with what was just stored."""
+        if self._mirror is None:
+            return
+        path = self._mirror / key
+        if path.is_file():
+            self._download(self._object_key(key), key, path)
+
+    def purge_noncurrent_versions(self, key: str) -> int:
+        """Delete every noncurrent version of `key` (and old delete markers); the latest one stays.
+
+        PHASE-4B (cross-branch, DEC-708): the bucket is versioned, so an erasure's rewrite or a
+        retention delete would otherwise leave the person's bytes behind as an old version. The
+        deployment grants `s3:DeleteObjectVersion` under the row-level prefixes only
+        (`infra.naming.ROW_LEVEL_PREFIXES`); the caller keeps to them. Returns how many went.
+        """
+        object_key = self._object_key(key)
+        client = self._client()
+        removed = 0
+        request: dict[str, Any] = {"Bucket": self._bucket, "Prefix": object_key}
+        try:
+            while True:
+                response = client.list_object_versions(**request)
+                entries = [*response.get("Versions", []), *response.get("DeleteMarkers", [])]
+                for entry in entries:
+                    if entry.get("Key") != object_key or entry.get("IsLatest"):
+                        continue
+                    client.delete_object(Bucket=self._bucket, Key=object_key, VersionId=entry["VersionId"])
+                    removed += 1
+                if not response.get("IsTruncated"):
+                    break
+                request["KeyMarker"] = response.get("NextKeyMarker")
+                request["VersionIdMarker"] = response.get("NextVersionIdMarker")
+        except Exception as exc:  # mapped below; the botocore exception types are an optional import
+            raise _s3_error(exc, key, writing=True) from exc
+        return removed
+
+    def _forget_mirror(self, key: str) -> None:
+        """Drop this process's mirror copy of a deleted `key`, and its hydration mark."""
+        if self._mirror is None:
+            return
+        (self._mirror / key).unlink(missing_ok=True)
+        self._hydrated.discard(key)
 
     @contextmanager
     def _open_write(self, key: str, *, metadata: Mapping[str, str] | None) -> Iterator[BinaryIO]:
