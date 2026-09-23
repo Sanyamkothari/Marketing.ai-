@@ -273,6 +273,38 @@ def test_a_rejection_needs_a_reason_archives_the_challenger_and_is_recorded(worl
     assert (event.object_id, event.actor_id) == (CHALLENGER, world.approver_id)
 
 
+class ApprovedMeanwhile(LocalModelRegistry):
+    """A registry on which another Approver approves `CHALLENGER` just after the reject route read it.
+
+    The route reads the version (`pending_approval`), then the champion, then archives. The approval
+    is slipped in at the champion read - the window a concurrent `POST /approve` has in production.
+    """
+
+    def get_champion(self, use_case_id: str) -> ModelVersion | None:
+        champion = super().get_champion(use_case_id)
+        if self.get(CHALLENGER).status is ModelStatus.PENDING_APPROVAL:
+            self.approve(CHALLENGER, by="another approver")
+        return champion
+
+
+def test_a_reject_that_loses_the_race_to_an_approval_leaves_the_new_champion_alone(world: World) -> None:
+    """DEC-873: the status is checked again under the registry's lock; the champion is not archived."""
+    world.app.state.registry = ApprovedMeanwhile(world.root / REGISTRY_FILENAME)
+    response = world.client.post(
+        f"/models/{CHALLENGER}/reject", json={"reason": "worse on PR-AUC"}, headers=world.approver
+    )
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "INVALID_TRANSITION"
+    champion = world.registry.get_champion(USE_CASE)
+    assert champion is not None and champion.model_id == CHALLENGER, "the use case still has a champion"
+    assert decisions_for(sqlite_engine(world.root / PLATFORM_DB_FILENAME), [CHALLENGER]) in (
+        {},
+        {CHALLENGER: []},
+    ), "no rejection is recorded for a model that was not rejected"
+    (event,) = world.events("models.reject")
+    assert (event.outcome, event.details["reason_code"]) == ("failed", "INVALID_TRANSITION")
+
+
 def test_the_trainer_may_withdraw_their_own_challenger(world: World) -> None:
     response = world.client.post(
         f"/models/{CHALLENGER}/reject", json={"reason": "I found a leak"}, headers=world.trainer

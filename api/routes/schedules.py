@@ -8,8 +8,10 @@ and owns the one thing an engine module cannot: the scheduler's life inside the 
 **Who (DEC-780).** Reading schedules and their history is Viewer, like every other result. Creating,
 changing, pausing, deleting and firing one is Analyst: a schedule is recurring scoring or training,
 and starting that work by hand is `POST /runs`, which is Analyst (DEC-716). No schedule route is
-Approver or Admin - a firing acts as `SYSTEM_SCHEDULER`, which holds Analyst only and can never
-approve what it trains (DEC-760), so scheduling a retrain grants nothing the Analyst did not have.
+Approver or Admin - a scheduled firing acts as `SYSTEM_SCHEDULER`, which holds Analyst only and can
+never approve what it trains (DEC-760), so scheduling a retrain grants nothing the Analyst did not
+have. A "fire now" acts as the person who asked (DEC-872): they are the challenger's `requested_by`,
+so the separation of duties that stops a trainer approving their own model stops them too.
 
 **"Fire now" runs in the request, and is audited once (DEC-781).** `POST /schedules/{id}/fire` calls
 `ScheduleFirer.fire(trigger=manual)` in FastAPI's worker thread and answers `201` with the firing as
@@ -18,8 +20,8 @@ finished, or `failed` with its `error_code` (the request itself succeeded - the 
 firing, which also raised its `scheduled_job_failed` alert). The dataset build of a score or retrain
 happens inside the request; the run itself goes to the job runner like any other. The firer is given
 `audit_log=None`, so the engine writes no event of its own and the middleware's one event for the
-request carries `firing_audit_details` through `set_audit_context` - one request, one event (M47).
-Firings the scheduler starts on its own are audited by the engine as `system:scheduler`.
+request carries `firing_audit_details` through `set_audit_context` - one request, one event (M47),
+whose actor is the caller, as is the firing's principal (DEC-872). Firings the scheduler starts on its own are audited by the engine as `system:scheduler`.
 
 **The scheduler's life (DEC-782).** `install_scheduling` is a `PHASE_APP_HOOKS` entry that adds a
 startup and a shutdown handler. At startup it reads `settings.scheduler_backend`:
@@ -66,7 +68,7 @@ from typing import Annotated, Any, Final
 from fastapi import APIRouter, FastAPI, Query, Request, Response
 from sqlalchemy.engine import Engine
 
-from api.access import PrincipalDep, get_audit_log, set_audit_context
+from api.access import PrincipalDep, current_principal, get_audit_log, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import get_config_root, get_jobs, get_registry, get_settings, get_storage
 from api.routes.clients import get_client_store
@@ -315,8 +317,16 @@ def get_firer(request: Request) -> ScheduleFirer:
 
 
 def _manual_firer(request: Request) -> ScheduleFirer:
-    """The firer "fire now" uses: the scheduler's services without the engine's own audit event."""
-    return ScheduleFirer(replace(get_firer(request).services, audit_log=None))
+    """The firer "fire now" uses: the scheduler's services, acting as the caller, without its own audit event.
+
+    The firing acts as the person who clicked, not as `SYSTEM_SCHEDULER`: a retrain records them as
+    `requested_by` on the challenger's `run.json`, so separation of duties keeps them from approving
+    the model they started (DEC-872). The audit actor is theirs too, through the middleware's one
+    event (`audit_log=None`, DEC-781). Only a firing nobody started acts as the scheduler.
+    """
+    return ScheduleFirer(
+        replace(get_firer(request).services, audit_log=None, principal=current_principal(request))
+    )
 
 
 def get_scheduler(request: Request) -> Scheduler:

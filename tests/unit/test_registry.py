@@ -322,6 +322,30 @@ def test_archive_retires_a_version(registry: SqlRegistryStore) -> None:
     assert registry.get_champion(USE_CASE) is None
 
 
+def test_a_champion_is_not_archived_by_an_archive_that_expected_it_to_be_waiting(
+    registry: SqlRegistryStore,
+) -> None:
+    """A reject that read `pending_approval` loses to an approval that landed since (DEC-873)."""
+    registry.register(make_version("m_1", 1, status=ModelStatus.PENDING_APPROVAL))
+    registry.approve("m_1", by="ops@telco")
+    with pytest.raises(RegistryError) as excinfo:
+        registry.archive("m_1", expected_status=ModelStatus.PENDING_APPROVAL)
+    assert excinfo.value.code == "INVALID_TRANSITION"
+    assert excinfo.value.model_id == "m_1"
+    assert registry.get("m_1").status is ModelStatus.CHAMPION, "nothing was written"
+    champion = registry.get_champion(USE_CASE)
+    assert champion is not None and champion.model_id == "m_1"
+
+
+def test_an_archive_whose_expected_status_holds_retires_the_version(registry: SqlRegistryStore) -> None:
+    registry.register(make_version("m_1", 1, status=ModelStatus.PENDING_APPROVAL))
+    archived = registry.archive("m_1", expected_status=ModelStatus.PENDING_APPROVAL)
+    assert archived.status is ModelStatus.ARCHIVED
+    with pytest.raises(RegistryError) as excinfo:
+        registry.archive("m_1", expected_status=ModelStatus.PENDING_APPROVAL)
+    assert excinfo.value.code == "INVALID_TRANSITION", "an archived version is not waiting either"
+
+
 def test_the_row_projection_round_trips(registry: SqlRegistryStore) -> None:
     version = make_version("m_1", 1)
     assert ModelVersionRow.from_contract(version).to_contract() == version

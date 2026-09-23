@@ -14,7 +14,9 @@ API does, not a scheduler's private imitation of it (DEC-766):
   run's register stage applies the champion rule and `governance.approval_required` exactly as for a
   run a person started, so with approval required a retrain yields a `candidate` or a
   `pending_approval` version and **never** a champion. Nothing here promotes or approves anything,
-  and the firing acts as `SYSTEM_SCHEDULER`, which could not approve if it tried.
+  and a scheduled firing acts as `SYSTEM_SCHEDULER`, which could not approve if it tried. A "fire
+  now" acts as the person who asked (`FiringServices.principal`, DEC-872), who is then the run's
+  `requested_by` and so cannot approve its challenger either (DEC-862).
 * **drift_check** - take the latest finished scoring run of the client and use case, and compare its
   data with the *champion's* training baseline: reuse the run's own `drift.json` when the champion
   scored it, otherwise re-measure with the champion's recorded preparation (`prepare.replay`) and
@@ -193,6 +195,8 @@ class FiringServices:
     job_client_tag: str | None = None
     """`Settings.client_id`: the `client` cost-allocation tag every job carries (DEC-324)."""
     principal: Principal = SYSTEM_SCHEDULER
+    """Who the firing acts as: a run's `requested_by` and the engine's audit actor. The scheduler for a
+    firing nobody started; the caller for the API's "fire now" (DEC-872)."""
 
 
 @dataclass(frozen=True, slots=True)

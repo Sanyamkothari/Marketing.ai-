@@ -10,7 +10,9 @@ what is waiting is not deciding it.
 `POST /models/{model_id}/reject` is the Approver's "no", with a required reason: the version is
 archived and the decision recorded. Only a version waiting for approval can be rejected
 (`409 INVALID_TRANSITION` otherwise) - a champion is replaced by promoting another, never by
-rejecting it, which would leave the use case with no model. The trainer may reject their own
+rejecting it, which would leave the use case with no model. The status is checked again by the
+registry under its lock as the version is archived (`archive(expected_status=...)`), so an approval
+that lands between this route's read and its write is not undone by the reject (DEC-873). The trainer may reject their own
 challenger: withdrawing a model needs no second person, approving one does.
 
 Approve and promote stay in `api/routes/models.py`, which records their decisions in the same table.
@@ -119,7 +121,12 @@ def reject_model(
             f"Only a version waiting for approval can be rejected; {model_id} is {version.status.value}.",
         )
     champion = registry.get_champion(version.use_case_id)
-    archived = registry.archive(model_id)
+    try:
+        archived = registry.archive(model_id, expected_status=ModelStatus.PENDING_APPROVAL)
+    except RegistryError as exc:
+        # Approved or promoted since the read above: the registry refused under its lock (DEC-873).
+        set_audit_context(request, details={"reason_code": exc.code})
+        raise registry_http(exc) from exc
     decision = record_decision(
         get_platform_engine(request),
         archived,
