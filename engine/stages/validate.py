@@ -24,9 +24,10 @@ section 13.7). Heavy libraries are imported inside function bodies so ``import e
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import TYPE_CHECKING, Final, Protocol, TypeAlias, cast
 
+from engine import pii
 from engine.config import (
     ColumnRole,
     ColumnType,
@@ -60,6 +61,8 @@ __all__ = [
     "CHECK_ORDER",
     "CHECK_REGISTRY",
     "DATETIME_PARSE_RATE",
+    "EXTENSION_CHECK_ORDER",
+    "EXTENSION_REGISTRY",
     "ID_DISTINCT_RATIO",
     "ID_LIKE_PATTERN",
     "ID_MIN_ROWS",
@@ -89,6 +92,7 @@ __all__ = [
     "check_high_null_column",
     "check_leakage_suspected",
     "check_pii_detected",
+    "check_pii_in_free_text",
     "check_pk_missing",
     "check_pk_not_unique",
     "check_pk_nulls",
@@ -105,6 +109,8 @@ __all__ = [
     "checks_for",
     "column_stats",
     "derive_facts",
+    "extension_check",
+    "extension_checks_for",
     "facts_for",
     "key_candidates",
     "leakage_exempt_names",
@@ -175,6 +181,9 @@ PII_KIND_LABELS: Final[Mapping[str, str]] = {
     "pan": "PAN numbers",
     "aadhaar": "Aadhaar numbers",
     "name": "personal names",
+    "address": "addresses",
+    "ssn": "social security numbers",
+    "passport": "passport numbers",
 }
 
 POSITIVE_TOKENS: Final[tuple[str, ...]] = (
@@ -213,6 +222,11 @@ CHECK_ORDER: Final[tuple[str, ...]] = (
     "CONSENT_COLUMN_MISSING",
     "SUPPRESSION_COLUMN_MISSING",
 )
+
+#: Codes later milestones added, in the order they sort after the table above. They live in
+#: `engine.contracts.EXTENSION_VALIDATION_CODES`, never in `CHECK_ORDER` or `CHECK_REGISTRY`: the
+#: plan section 6.3 table is the Phase 1 contract and stays exactly nineteen codes (DEC-095).
+EXTENSION_CHECK_ORDER: Final[tuple[str, ...]] = ("PII_IN_FREE_TEXT",)
 
 _NUMERIC_TYPES: Final[frozenset[ColumnType]] = frozenset(
     {ColumnType.INTEGER, ColumnType.FLOAT, ColumnType.BOOLEAN}
@@ -270,6 +284,9 @@ class FrameFacts:
     distinct_counts: Mapping[str, int]
     is_unique: Mapping[str, bool]
     pii_kinds: Mapping[str, tuple[str, ...]]
+    # Kinds found *inside* a free-text column that is not itself PII (DEC-095). Defaulted, so a
+    # caller that builds facts by hand, as the Phase 1 tests do, need not know it exists.
+    free_text_pii_kinds: Mapping[str, tuple[str, ...]] = field(default_factory=dict)
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,6 +377,7 @@ class CheckSpec:
 
 
 _REGISTRY: list[CheckSpec] = []
+_EXTENSION_REGISTRY: list[CheckSpec] = []
 
 
 def check(
@@ -387,6 +405,46 @@ def check(
         return fn
 
     return decorate
+
+
+def extension_check(
+    code: str,
+    *,
+    severity: Severity,
+    modes: frozenset[RunMode],
+    acknowledgeable: bool = False,
+    needs_target: bool = False,
+) -> Callable[[CheckFn], CheckFn]:
+    """`check`, for a code of `EXTENSION_CHECK_ORDER`: registered beside the Phase 1 table, not in it.
+
+    The Phase 1 registry is pinned to the plan's nineteen codes, and a later check must not be able
+    to change what `CHECK_REGISTRY`, `CHECK_ORDER` or `checks_for` return. `run_checks` runs both
+    registries, the Phase 1 one first, and every finding sorts by severity and then by its place in
+    `CHECK_ORDER + EXTENSION_CHECK_ORDER`.
+    """
+
+    def decorate(fn: CheckFn) -> CheckFn:
+        _EXTENSION_REGISTRY.append(
+            CheckSpec(
+                code=code,
+                fn=fn,
+                severity=severity,
+                modes=modes,
+                order=len(CHECK_ORDER) + EXTENSION_CHECK_ORDER.index(code),
+                acknowledgeable=acknowledgeable,
+                needs_target=needs_target,
+            )
+        )
+        return fn
+
+    return decorate
+
+
+def _order_of(code: str) -> int:
+    """A code's place in the one combined table order: Phase 1 first, then the extensions."""
+    if code in CHECK_ORDER:
+        return CHECK_ORDER.index(code)
+    return len(CHECK_ORDER) + EXTENSION_CHECK_ORDER.index(code)
 
 
 # ---------------------------------------------------------------------------
@@ -427,7 +485,8 @@ def derive_facts(frame: pd.DataFrame) -> FrameFacts:
     nulls: dict[str, int] = {}
     distincts: dict[str, int] = {}
     unique: dict[str, bool] = {}
-    pii: dict[str, tuple[str, ...]] = {}
+    pii_found: dict[str, tuple[str, ...]] = {}
+    free_text: dict[str, tuple[str, ...]] = {}
     for name in columns:
         series = frame[name]
         inferred = infer(series)
@@ -437,7 +496,8 @@ def derive_facts(frame: pd.DataFrame) -> FrameFacts:
         nulls[name] = null_count
         distincts[name] = distinct
         unique[name] = distinct == rows - null_count and null_count < rows
-        pii[name] = detect(series, name, inferred)
+        pii_found[name] = detect(series, name, inferred)
+        free_text[name] = () if pii_found[name] else pii.free_text_pii(series, inferred)
     return FrameFacts(
         columns=columns,
         row_count=rows,
@@ -445,7 +505,8 @@ def derive_facts(frame: pd.DataFrame) -> FrameFacts:
         null_counts=nulls,
         distinct_counts=distincts,
         is_unique=unique,
-        pii_kinds=pii,
+        pii_kinds=pii_found,
+        free_text_pii_kinds=free_text,
     )
 
 
@@ -590,12 +651,18 @@ def sample_values(
     facts: FrameFacts,
     limit: int = 5,
 ) -> tuple[str, ...]:
-    """Up to `limit` stringified non-null values in file order, or `[REDACTED]` for a PII column."""
+    """Up to `limit` stringified non-null values in file order, or `[REDACTED]` for a PII column.
+
+    A free-text column that mentions personal data keeps its values with each mention replaced by
+    its marker, masked before the cell is cut to length so no half of a number survives (DEC-095).
+    """
     if name not in facts.columns:
         return ()
     kept = frame[name].dropna().head(limit)
     if facts.pii_kinds.get(name):
         return (REDACTED,) * len(kept)
+    if facts.free_text_pii_kinds.get(name):
+        return tuple(_cell_str(pii.redact_text(str(value))[0]) for value in kept.tolist())
     return tuple(_cell_str(value) for value in kept.tolist())
 
 
@@ -1339,6 +1406,37 @@ def check_pii_detected(frame: pd.DataFrame, params: CheckParams) -> CheckResult:
     return CheckResult(code="PII_DETECTED", findings=tuple(findings))
 
 
+@extension_check("PII_IN_FREE_TEXT", severity=Severity.WARNING, modes=_BOTH_MODES, acknowledgeable=True)
+def check_pii_in_free_text(frame: pd.DataFrame, params: CheckParams) -> CheckResult:
+    """A free-text column that mentions personal data somewhere inside it (ruling D5, DEC-095).
+
+    A warning and never an error: the column is not personal data the way an e-mail column is, so
+    nothing about training changes (DEC-087) - but a customer who typed a phone number into a
+    complaint did not consent to it reaching a screen, so every preview, sample and reason shows
+    the text with the number replaced by a marker, and this finding says so. Never records a value.
+    """
+    facts = facts_for(frame, params)
+    findings: list[ValidationCheck] = []
+    for name in facts.columns:
+        kinds = facts.free_text_pii_kinds.get(name, ())
+        if not kinds:
+            continue
+        labels = [PII_KIND_LABELS.get(kind, kind) for kind in kinds]
+        findings.append(
+            _finding(
+                "PII_IN_FREE_TEXT",
+                Severity.WARNING,
+                f"'{name}' is free text, and some of it contains {_join_labels(labels)}.",
+                "They are hidden wherever this text is shown. The column itself is used as it is; "
+                "exclude it in Data preparation if this text should not reach the model.",
+                column=name,
+                details={"pii_kinds": list(kinds)},
+                acknowledgeable=True,
+            )
+        )
+    return CheckResult(code="PII_IN_FREE_TEXT", findings=tuple(findings))
+
+
 @check("CONSENT_COLUMN_MISSING", severity=Severity.ERROR, modes=_BOTH_MODES)
 def check_consent_column_missing(frame: pd.DataFrame, params: CheckParams) -> CheckResult:
     """A consent column is configured but the file does not carry it."""
@@ -1867,11 +1965,19 @@ def _leakage_finding(
 # ---------------------------------------------------------------------------
 CHECK_REGISTRY: Final[tuple[CheckSpec, ...]] = tuple(sorted(_REGISTRY, key=lambda spec: spec.order))
 CHECKS_BY_CODE: Final[Mapping[str, CheckSpec]] = {spec.code: spec for spec in CHECK_REGISTRY}
+EXTENSION_REGISTRY: Final[tuple[CheckSpec, ...]] = tuple(
+    sorted(_EXTENSION_REGISTRY, key=lambda spec: spec.order)
+)
 
 
 def checks_for(mode: RunMode) -> tuple[CheckSpec, ...]:
     """The checks that run in `mode`, in plan section 6.3 table order."""
     return tuple(spec for spec in CHECK_REGISTRY if mode in spec.modes)
+
+
+def extension_checks_for(mode: RunMode) -> tuple[CheckSpec, ...]:
+    """The extension checks that run in `mode`, in `EXTENSION_CHECK_ORDER`."""
+    return tuple(spec for spec in EXTENSION_REGISTRY if mode in spec.modes)
 
 
 # ---------------------------------------------------------------------------
@@ -1891,7 +1997,7 @@ def run_checks(
     facts = facts_for(frame, params)
     resolved = replace(params, facts=facts)
     collected: list[ValidationCheck] = []
-    for spec in checks_for(mode):
+    for spec in (*checks_for(mode), *extension_checks_for(mode)):
         if spec.needs_target and not resolved.target:
             continue
         try:
@@ -1905,7 +2011,7 @@ def run_checks(
     def sort_key(item: ValidationCheck) -> tuple[int, int, int, str]:
         return (
             SEVERITY_RANK[item.severity],
-            CHECK_ORDER.index(item.code),
+            _order_of(item.code),
             -1 if item.column is None else positions.get(item.column, -1),
             item.column or "",
         )

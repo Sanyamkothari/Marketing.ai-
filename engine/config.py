@@ -714,6 +714,12 @@ class ModelSearchConfig(_Base):
 class ThresholdConfig(_Base):
     mode: ThresholdMode = ThresholdMode.AUTO
     value: Annotated[float, Field(ge=0.01, le=0.99)] = 0.50
+    # The share of validation rows `auto` may flag before it falls back to the top decile and says
+    # so with THRESHOLD_FALLBACK (DEC-094). `configs/engine.yaml` sets the product default, 0.30, so
+    # every shipped use case has it; `None` - what a bare `ThresholdConfig()` built in code gets -
+    # is no ceiling, the rule `auto` followed before the ceiling existed. Config-only: not a form
+    # control and not a per-run override. Only `auto` reads it.
+    max_flagged_rate: Annotated[float, Field(ge=0.01, le=1.0)] | None = None
 
     @model_validator(mode="after")
     def _fixed_is_half(self) -> Self:

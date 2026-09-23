@@ -43,11 +43,12 @@ import json
 import math
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import Field
 
-from engine import __version__
+from engine import __version__, pii
+from engine.config import ColumnType
 from engine.contracts import Artefact, DatasetFingerprint, RunRecord
 from engine.onboarding.specs import (
     DATASET_ARTEFACTS,
@@ -480,7 +481,7 @@ def _snapshot_dates(frame: pd.DataFrame, snapshot_column: str, *, dataset_id: st
 # ---------------------------------------------------------------------------
 # Sample rows: stringified, PII-redacted, exactly as the review screen shows them
 # ---------------------------------------------------------------------------
-def _stringify_cell(value: object) -> str:
+def _stringify_cell(value: object, *, mask_free_text: bool = False) -> str:
     """One sample cell as the review screen shows it: empty for null, ISO for a date, `str()` else.
 
     A local twin of `engine.stages.ingest._cell_str`, which answers the same question for the Setup
@@ -507,9 +508,20 @@ def _stringify_cell(value: object) -> str:
         rendered = value.isoformat()
     else:
         rendered = str(value)
+    if mask_free_text:
+        rendered = pii.redact_text(rendered)[0]
     if len(rendered) > MAX_CELL_CHARS:
         return rendered[: MAX_CELL_CHARS - 1] + "…"
     return rendered
+
+
+def _is_free_text(column: pd.Series[Any]) -> bool:
+    """Whether a built column is prose: text-typed, and `engine.pii`'s free-text rule says so."""
+    import pandas as pd
+
+    if not (pd.api.types.is_object_dtype(column.dtype) or pd.api.types.is_string_dtype(column.dtype)):
+        return False
+    return pii.is_free_text(column, ColumnType.STRING)
 
 
 def _sample_rows(frame: pd.DataFrame, *, pii_columns: frozenset[str]) -> list[dict[str, str]]:
@@ -521,15 +533,25 @@ def _sample_rows(frame: pd.DataFrame, *, pii_columns: frozenset[str]) -> list[di
     reaches the review screen with different digits than went into the parquet, which is a fabricated
     number on a screen (house rule 2) and the hardest kind to notice, because it still looks like an
     id. Reading each column in its own dtype is what makes `sample.json` show what was built.
+
+    A free-text column that is not PII as a whole (a complaint carried through as an attribute) is
+    shown with every contact inside it replaced by its marker, as the Setup preview shows it (DEC-095).
     """
     head = frame.head(SAMPLE_ROWS)
+    masked = [
+        str(name) not in pii_columns and _is_free_text(frame.iloc[:, position])
+        for position, name in enumerate(frame.columns)
+    ]
     rendered: list[tuple[str, list[str]]] = [
         (
             str(name),
             (
                 [REDACTED] * len(head)
                 if str(name) in pii_columns
-                else [_stringify_cell(value) for value in head.iloc[:, position].tolist()]
+                else [
+                    _stringify_cell(value, mask_free_text=masked[position])
+                    for value in head.iloc[:, position].tolist()
+                ]
             ),
         )
         for position, name in enumerate(head.columns)

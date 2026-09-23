@@ -124,10 +124,12 @@ the finding, so the UI can offer the change rather than describe it.
 ## 5. The validation table
 
 Nineteen codes: the eighteen of plan §6.3 plus `SUPPRESSION_COLUMN_MISSING` (DEC-030, DEC-031).
-`engine.contracts.VALIDATION_CODES` is the closed set a run's validation draws on. `ValidationCheck`
-also accepts the onboarding codes of `ONBOARDING_VALIDATION_CODES`, because a dataset's build report
-carries both in one list (Plan A ruling D7); a check with any other code is rejected before it can
-reach a user.
+`engine.contracts.VALIDATION_CODES` is the closed set of the Phase 1 table. Later milestones add codes
+beside it, never inside it: `engine.contracts.EXTENSION_VALIDATION_CODES` holds them, currently
+`PII_IN_FREE_TEXT` (below the table). `ValidationCheck` also accepts the onboarding codes of
+`ONBOARDING_VALIDATION_CODES`, because a dataset's build report carries both in one list (Plan A ruling
+D7). `engine.contracts.CHECK_CODES` is the union of the three, and a check with any other code is
+rejected before it can reach a user.
 
 | Code | Severity | Mode | Triggered when |
 |---|---|---|---|
@@ -493,6 +495,42 @@ for the action list, not for the model, and the default handling reflects that.
 `details`: `pii_kinds`, `handling`. **The finding never records a matched value** — not the address,
 not the number — only the kind and the column name (plan §13.7).
 
+**One detector** (DEC-092). This finding and the redaction `prepare` applies come from the same
+function, `engine.pii.detect_pii`, so a column is redacted or dropped exactly when this check names
+it. A header that names personal data is enough on its own, whatever the column's type or values:
+`email`/`mail`, `phone`/`mobile`/`msisdn`/`telephone`, `name`/`surname`, `pan`, `aadhaar`, and
+`address`/`street`/`postcode`/`zipcode`, `ssn`, `passport` - so a `phone` column read as decimals
+because a value is missing, or a hashed `email` column, is still reported and redacted. Without such
+a header only the values can speak, and FLOAT, BOOLEAN, DATE and DATETIME columns are never examined
+by value, so a date column is never read as a phone number.
+
+A column named like one of the use case's `time_column_hints` (`snapshot_date`, `as_of_date`...)
+whose values are dates is kept with the rows and never trained on; `prepare.json` names it under
+`carried_columns` (reason `snapshot_date`) and the Data preparation page lists it.
+
+---
+
+### `PII_IN_FREE_TEXT` — warning, train and score, acknowledgeable (extension code)
+
+**Triggered when** a free-text column — TEXT, or text averaging at least three words a value — that
+is not personal data as a whole contains an email address, a phone number, a PAN or an Aadhaar
+number somewhere *inside* its text: "call me back on 0400 123 456" in a complaint (ruling D5,
+DEC-095). One finding per column.
+
+> 'REMARKS' is free text, and some of it contains email addresses and phone numbers.
+
+**Suggestion.** *"They are hidden wherever this text is shown. The column itself is used as it is;
+exclude it in Data preparation if this text should not reach the model."*
+
+**What changes.** Nothing about training: the column is not redacted or dropped for this (DEC-087).
+Every surface that *shows* a cell of it — the profile's sample values and preview rows, the sample
+values a validation message quotes, a built dataset's review sample, the reasons in `scores.csv` —
+shows the text with each contact replaced by a marker such as `[REDACTED:phone]`, and the root-cause
+evidence pack sent to a language model is redacted by the same function. The profile records the
+kinds found in `ColumnProfile.free_text_pii_kinds`.
+
+`details`: `pii_kinds`. Like `PII_DETECTED`, it never records a matched value.
+
 ---
 
 ### `SCHEMA_MISMATCH` — error or warning, score only
@@ -611,6 +649,15 @@ primary keys) a config-load error rather than a surprise at upload time. It is a
 **The example rows are illustrative column values so that the shape is obvious.** They are not
 measurements, they are not real customers, and nothing derived from them is ever shown as a result
 (plan §13.3).
+
+**Template column names are identifiers** (`^[A-Za-z_][A-Za-z0-9_]*$`); a file's headers need not
+be (DEC-093). Ingest gives every header a safe internal name — the header itself when it is already
+an identifier, otherwise its transliterated, underscored form (`default.payment.next.month` becomes
+`default_payment_next_month`, suffixed `_2`, `_3` on a clash) — and a configured name matches a
+header through that form, so a template that says `default_payment_next_month` finds a file that
+says `default.payment.next.month`. The internal names are used only inside the model, which is
+stored with the mapping (`model/column_names.json`); every report, `scores.csv` and every reason
+names each column exactly as the uploaded file did.
 
 ---
 

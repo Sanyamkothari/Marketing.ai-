@@ -423,6 +423,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 |---|---|---|---|
 | `mode` | ThresholdMode ("auto" \| "fixed" \| "manual") | no |  |
 | `value` | number | no |  |
+| `max_flagged_rate` | number \| null | no |  |
 
 #### Band
 
@@ -729,6 +730,7 @@ Everything ingest learned about one column of the uploaded file.
 | `looks_like_id` | boolean | yes | Distinct count is close to the row count and this is not the primary key. |
 | `looks_like_time` | boolean | yes | Name matches the time-like pattern or values parse as dates. |
 | `pii_kinds` | list[string] | no | Names of the PII detectors that matched; never the matched values. |
+| `free_text_pii_kinds` | list[string] | no | Kinds of personal data found inside this free-text column's values, such as a phone number in a complaint. Every shown cell has each match replaced by a marker; the column itself is kept as it is (DEC-095). |
 
 #### DatasetFingerprint
 
@@ -803,6 +805,7 @@ One row of a validation table, already interpolated for the user.  `validation.j
 | `row_removals` | list[RowRemoval] | yes | Row removals grouped by reason. |
 | `transforms` | list[Transform] | yes | Transforms in replay order. |
 | `pii_columns` | list[string] | no | Columns the PII detectors matched. |
+| `carried_columns` | list[CarriedColumn] | no | Columns kept with the rows but not trained on, with reasons. |
 | `consent_column` | string \| null | no | Consent column applied, when configured. |
 | `consent_rows_removed` | integer | no | Rows removed because consent was not given. |
 | `detail` | string | yes | Pre-formatted Running-screen line for the preparation step. |
@@ -840,6 +843,17 @@ One transform fitted on the training data and replayed at score time.
 | `kind` | "fill_median" \| "fill_mode" \| "clip_percentile" \| "redact" \| "cast" \| "dedupe" \| "consent_filter" | yes | Kind of transform applied. |
 | `columns` | list[string] | yes | Columns the transform was applied to. |
 | `parameters` | object of string -> number \| string \| boolean | no | Fitted parameters, so scoring replays the transform identically. |
+
+#### CarriedColumn
+
+One column kept with the rows but never trained on, and why (DEC-092).  Not a dropped column: it stays in the prepared frame and in the scoring file, so replay leaves it alone. It is recorded so the Data preparation page can say why a column the user uploaded is not a feature, instead of saying nothing.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `name` | string | yes | Name of the carried column. |
+| `reason` | "snapshot_date" | yes | Why the column is not trained on: `snapshot_date` is the use case's as-of date. |
+| `detail` | string | no | One line of extra context for the Data preparation page. |
 
 ### `split.json`
 
@@ -1634,6 +1648,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `model_search.candidate_pool` | list[enum catalog.model_families]; offered in the grid, in this order |
 | `evaluation` | [UI 5] Evaluation & explainability |
 | `evaluation.threshold` | DEC-006 |
+| `evaluation.threshold.max_flagged_rate` | float 0.01..1 \| null (config-only); auto falls back to the top decile (THRESHOLD_FALLBACK) above this share flagged |
 | `actions` | [UI 6] Actions & output |
 | `actions.score_field` | str; score column name in scores.csv |
 | `actions.bands` | list[Band]; strictly descending min_score, last must be 0.0, unique names (DEC-008) |

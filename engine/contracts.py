@@ -39,6 +39,7 @@ from engine.config import (
 __all__ = [
     "ARTEFACT_REGISTRY",
     "CHECK_CODES",
+    "EXTENSION_VALIDATION_CODES",
     "MODEL_DIRECTORY",
     "NO_CHAMPION_AT_DECISION",
     "ONBOARDING_VALIDATION_CODES",
@@ -53,6 +54,7 @@ __all__ = [
     "BaselineMetric",
     "BestModel",
     "CalibrationSummary",
+    "CarriedColumn",
     "CategoryCount",
     "ColumnProfile",
     "ComputeBackend",
@@ -381,6 +383,14 @@ class ColumnProfile(Artefact):
     pii_kinds: tuple[str, ...] = Field(
         default=(), description="Names of the PII detectors that matched; never the matched values."
     )
+    free_text_pii_kinds: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Kinds of personal data found inside this free-text column's values, such as a phone "
+            "number in a complaint. Every shown cell has each match replaced by a marker; the column "
+            "itself is kept as it is (DEC-095)."
+        ),
+    )
 
 
 class DatasetFingerprint(Artefact):
@@ -457,6 +467,14 @@ VALIDATION_CODES: Final[frozenset[str]] = frozenset(
     }
 )
 """The plan section 6.3 validation codes plus `SUPPRESSION_COLUMN_MISSING` (warning; DEC-030)."""
+
+EXTENSION_VALIDATION_CODES: Final[frozenset[str]] = frozenset({"PII_IN_FREE_TEXT"})
+"""Codes later milestones added beside the Phase 1 table rather than into it (DEC-095).
+
+`VALIDATION_CODES` is the Phase 1 contract and stays nineteen codes; a report may carry these too,
+and `ValidationCheck` accepts both. `PII_IN_FREE_TEXT` is ruling D5's warning: a free-text column
+that mentions a contact somewhere inside it.
+"""
 
 
 # The one check contract (Plan A ruling D7). Phase 2 once kept a twin of this model, `OnboardingCheck`,
@@ -536,6 +554,21 @@ class DroppedColumn(Artefact):
     detail: str = Field(default="", description="One line of extra context, for example the null rate.")
 
 
+class CarriedColumn(Artefact):
+    """One column kept with the rows but never trained on, and why (DEC-092).
+
+    Not a dropped column: it stays in the prepared frame and in the scoring file, so replay leaves it
+    alone. It is recorded so the Data preparation page can say why a column the user uploaded is
+    not a feature, instead of saying nothing.
+    """
+
+    name: str = Field(description="Name of the carried column.")
+    reason: Literal["snapshot_date"] = Field(
+        description="Why the column is not trained on: `snapshot_date` is the use case's as-of date."
+    )
+    detail: str = Field(default="", description="One line of extra context for the Data preparation page.")
+
+
 class RowRemoval(Artefact):
     """Rows removed by one prepare rule."""
 
@@ -571,6 +604,9 @@ class PrepareReport(Artefact):
     row_removals: tuple[RowRemoval, ...] = Field(description="Row removals grouped by reason.")
     transforms: tuple[Transform, ...] = Field(description="Transforms in replay order.")
     pii_columns: tuple[str, ...] = Field(default=(), description="Columns the PII detectors matched.")
+    carried_columns: tuple[CarriedColumn, ...] = Field(
+        default=(), description="Columns kept with the rows but not trained on, with reasons."
+    )
     consent_column: str | None = Field(default=None, description="Consent column applied, when configured.")
     consent_rows_removed: int = Field(default=0, description="Rows removed because consent was not given.")
     detail: str = Field(description="Pre-formatted Running-screen line for the preparation step.")
@@ -1508,8 +1544,9 @@ Defined here rather than in `engine.onboarding.specs` (which re-exports it) beca
 has to accept these codes and `engine.onboarding.specs` imports this module, not the other way round.
 """
 
-CHECK_CODES: Final[frozenset[str]] = VALIDATION_CODES | ONBOARDING_VALIDATION_CODES
-"""Every code a `ValidationCheck` may carry: the Phase 1 table and the onboarding table together."""
+CHECK_CODES: Final[frozenset[str]] = VALIDATION_CODES | ONBOARDING_VALIDATION_CODES | EXTENSION_VALIDATION_CODES
+"""Every code a `ValidationCheck` may carry: the Phase 1 table, the onboarding table and the codes later
+milestones added beside the Phase 1 table (`EXTENSION_VALIDATION_CODES`, DEC-095)."""
 
 _NEVER_ACKNOWLEDGEABLE: Final[frozenset[str]] = frozenset({"FUTURE_EVENTS_LEAKED"})
 """Codes no user may acknowledge, whatever the producer asks for (Phase 2 plan section 7)."""

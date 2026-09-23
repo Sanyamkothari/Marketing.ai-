@@ -15,7 +15,10 @@ estimated quantity in the module - the row count of a caller-bounded preview rea
 *No data value ever leaves the column it came from* (plan §13.7). ``log_stage`` is the only logging
 call that carries numbers, PII detectors return detector *names* and never matched values, and every
 surface that would otherwise show a PII column's content - ``sample_values``, ``top_categories`` and
-``preview_rows`` - carries :data:`REDACTED` instead.
+``preview_rows`` - carries :data:`REDACTED` instead. A free-text column that merely *mentions* a
+contact (a phone number typed into a complaint) is shown on the same surfaces with each mention
+replaced by a marker such as ``[REDACTED:phone]``, and records the kinds it found in
+``free_text_pii_kinds`` (DEC-095); the detectors themselves are :mod:`engine.pii` (DEC-092).
 
 *Bad data is never an exception.* Only a genuinely unreadable *file* raises :class:`IngestError`;
 everything about the data's fitness for training is a ``ValidationCheck`` raised by the validate
@@ -42,8 +45,10 @@ from pathlib import PurePosixPath
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
+from engine import pii
 from engine.config import ColumnType, ProblemType
 from engine.contracts import CategoryCount, ColumnProfile, DatasetFingerprint, DatasetProfile
+from engine.pii import PiiDetector
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.text import humanise_count
 from engine.utils.time import utc_now
@@ -126,7 +131,7 @@ ID_MIN_ROWS: Final[int] = 20
 NUMERIC_PARSE_RATE: Final[float] = 0.99
 DATETIME_PARSE_RATE: Final[float] = 0.95
 TEXT_MEAN_LENGTH: Final[float] = 50.0
-PII_SAMPLE_VALUES: Final[int] = 1_000
+PII_SAMPLE_VALUES: Final[int] = pii.PII_SAMPLE_VALUES
 REDACTED: Final[str] = "[REDACTED]"
 MAX_CELL_CHARS: Final[int] = 200
 """Longest stringified cell any profile surface carries; longer values end in an ellipsis."""
@@ -739,123 +744,38 @@ def infer_column_type(series: pd.Series[Any]) -> ColumnType:
 # ---------------------------------------------------------------------------
 # 1.5 PII detection
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class PiiDetector:
-    """One PII shape: what its values look like, what its column is usually called, and how sure.
+# The detector table lives in `engine.pii`, the one definition (DEC-092); these names are
+# re-exported because validate, the generative redaction and the tests have always read them here.
+NAME_MIN_DISTINCT_RATIO: Final[float] = pii.NAME_MIN_DISTINCT_RATIO
 
-    `min_distinct_ratio` guards the *values alone* branch: the share of the sampled values that
-    must be distinct before the value pattern may fire on its own. It stays 0 for a shape no
-    ordinary column wears by accident (an e-mail address, an Aadhaar number) and rises above 0 for
-    a shape that is also the shape of a perfectly innocent category level. It never touches the
-    name-assisted branch, so a column whose *name* says it holds names is judged exactly as before.
-    """
+PII_DETECTORS: Final[tuple[PiiDetector, ...]] = pii.VALUE_DETECTORS
+"""The value-shaped detectors, in the order `detect_pii` reports them.
 
-    kind: str
-    value_pattern: re.Pattern[str] | None
-    name_pattern: re.Pattern[str] | None
-    min_value_match_rate: float
-    name_assisted_rate: float = 0.20
-    min_distinct_ratio: float = 0.0
-
-
-NAME_MIN_DISTINCT_RATIO: Final[float] = 0.40
-"""How much of a sampled column must be distinct before its values alone may be read as names.
-
-Well above any ordinary categorical column (a handful of levels over hundreds of rows) and well
-below a real roster of people (near one distinct value per row, even when a few names repeat).
+The name-only detectors (address, SSN, passport) are `engine.pii.NAME_ONLY_DETECTORS`; `detect_pii`
+runs both, and this tuple keeps its long-standing meaning - the detectors with a value pattern - for
+the free-text redaction and the fixture tests that read their patterns.
 """
 
 
-PII_DETECTORS: Final[tuple[PiiDetector, ...]] = (
-    PiiDetector(
-        kind="email",
-        value_pattern=re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
-        name_pattern=re.compile(r"(?i)(^|_)(e?mail|email_address)($|_)"),
-        min_value_match_rate=0.60,
-    ),
-    PiiDetector(
-        kind="phone",
-        # An earlier version of this pattern allowed exactly two digit groups after the country
-        # code, so the three-group NANP shape `+1-555-555-0001` - what `tests/fixtures/make_data.py`'s
-        # `pii_column` variant writes, and the commonest international format there is - did not
-        # match. The trailing group repeats one to two times instead; the guard that matters is
-        # unchanged (at least seven digits), so a short integer column still cannot look like a phone.
-        value_pattern=re.compile(
-            r"(?:\+|00)?\d{1,3}[ \-]?(?:\(\d{2,4}\)[ \-]?)?\d{3,5}(?:[ \-]?\d{3,5}){1,2}"
-        ),
-        name_pattern=re.compile(r"(?i)(^|_)(phone|mobile|msisdn|contact_number|telephone)($|_)"),
-        min_value_match_rate=0.80,
-    ),
-    PiiDetector(
-        kind="pan",
-        value_pattern=re.compile(r"(?i)[A-Z]{5}\d{4}[A-Z]"),
-        name_pattern=re.compile(r"(?i)(^|_)pan(_no|_number)?($|_)"),
-        min_value_match_rate=0.60,
-    ),
-    PiiDetector(
-        kind="aadhaar",
-        value_pattern=re.compile(r"[2-9]\d{3}[ \-]?\d{4}[ \-]?\d{4}"),
-        name_pattern=re.compile(r"(?i)(^|_)aadhaa?r(_no|_number)?($|_)"),
-        min_value_match_rate=0.80,
-    ),
-    PiiDetector(
-        kind="name",
-        # The value pattern is "one to four capitalised words", which is what a personal name looks
-        # like - and also what a great many category levels look like: `Female`/`Male`, `Yes`/`No`,
-        # `Basic`/`Premium` all full-match at a 100 % rate. Redacting such a column would silently
-        # drop a model input, and a column like `gender` is exactly the one a fairness report wants.
-        # What really separates the two is vocabulary size: names are open-ended and near-unique,
-        # a category is a small fixed set repeated over and over. So on values alone the detector
-        # also demands an open vocabulary (`min_distinct_ratio`); a column whose name says `name`
-        # still fires through the name-assisted branch however few distinct values it carries.
-        value_pattern=re.compile(r"[A-Z][a-z]+(?:[ '\-][A-Z][a-z]+){0,3}"),
-        name_pattern=re.compile(
-            r"(?i)(^|_)(name|first_name|last_name|full_name|given_name|surname|"
-            r"customer_name|account_name|contact_name|holder_name)($|_)"
-        ),
-        min_value_match_rate=0.90,
-        min_distinct_ratio=NAME_MIN_DISTINCT_RATIO,
-    ),
-)
-
-_DIGIT_DETECTOR_KINDS: Final[frozenset[str]] = frozenset({"phone", "pan", "aadhaar"})
-"""The only detectors an INTEGER column is examined for: a 10-digit mobile read as `int64`."""
-
-_PII_TYPES: Final[frozenset[ColumnType]] = frozenset({ColumnType.STRING, ColumnType.TEXT, ColumnType.INTEGER})
-"""FLOAT, BOOLEAN, DATE and DATETIME columns are never examined for PII."""
-
-
 def detect_pii(series: pd.Series[Any], name: str, inferred: ColumnType) -> tuple[str, ...]:
-    """Detector kinds that fired, in `PII_DETECTORS` order. Never returns, stores or logs a value."""
-    if inferred not in _PII_TYPES:
-        return ()
-    textual = inferred is not ColumnType.INTEGER
-    sample = [str(value).strip() for value in series.dropna().head(PII_SAMPLE_VALUES)]
-    if not sample:
-        return ()
-    distinct_ratio = len(set(sample)) / len(sample)
-    fired: list[str] = []
-    for detector in PII_DETECTORS:
-        if not textual and detector.kind not in _DIGIT_DETECTOR_KINDS:
-            continue
-        pattern = detector.value_pattern
-        if pattern is None:
-            continue
-        matches = sum(1 for value in sample if pattern.fullmatch(value) is not None)
-        rate = matches / len(sample)
-        named = detector.name_pattern is not None and detector.name_pattern.search(name) is not None
-        by_values = rate >= detector.min_value_match_rate and distinct_ratio >= detector.min_distinct_ratio
-        by_name = named and rate >= detector.name_assisted_rate
-        if by_values or by_name:
-            fired.append(detector.kind)
-    return tuple(fired)
+    """Detector kinds that fired. Never returns, stores or logs a value.
+
+    The one detector (`engine.pii.detect_pii`), under the name validate and every test have always
+    called; `engine.stages.prepare` calls the same function, so the report and the redaction agree.
+    """
+    return pii.detect_pii(series, name, inferred)
 
 
 # ---------------------------------------------------------------------------
 # 1.6 Per-column profiling
 # ---------------------------------------------------------------------------
-def _cell_str(value: object) -> str:
-    """One cell as the UI shows it: empty for a null, ISO for a date, no `repr` artefacts."""
+def _cell_str(value: object, *, mask_free_text: bool = False) -> str:
+    """One cell as the UI shows it: empty for a null, ISO for a date, no `repr` artefacts.
+
+    `mask_free_text` replaces every contact inside the text with its marker *before* the cell is cut
+    to `MAX_CELL_CHARS`: cutting first could leave half a phone number - too short for the pattern
+    to recognise, long enough for a person to (DEC-095).
+    """
     import pandas as pd
 
     if value is None or value is pd.NaT or value is pd.NA:
@@ -872,6 +792,8 @@ def _cell_str(value: object) -> str:
         rendered = value.isoformat()
     else:
         rendered = str(value)
+    if mask_free_text:
+        rendered = pii.redact_text(rendered)[0]
     if len(rendered) > MAX_CELL_CHARS:
         return rendered[: MAX_CELL_CHARS - 1] + "…"
     return rendered
@@ -894,10 +816,12 @@ def _numeric_summary(series: pd.Series[Any]) -> tuple[float | None, float | None
     )
 
 
-def _top_categories(series: pd.Series[Any], *, non_null: int) -> tuple[CategoryCount, ...]:
+def _top_categories(
+    series: pd.Series[Any], *, non_null: int, mask_free_text: bool = False
+) -> tuple[CategoryCount, ...]:
     counts = series.value_counts(dropna=True)
     ordered = sorted(
-        ((_cell_str(value), int(count)) for value, count in counts.items()),
+        ((_cell_str(value, mask_free_text=mask_free_text), int(count)) for value, count in counts.items()),
         key=lambda item: (-item[1], item[0]),
     )
     return tuple(
@@ -917,14 +841,24 @@ def profile_column(
     distinct_count = int(series.nunique(dropna=True))
     is_unique = distinct_count == non_null and null_count < profiled_rows
     pii_kinds = detect_pii(series, name, inferred)
+    # A column that IS personal data is hidden whole; a free-text column that only MENTIONS some is
+    # shown with each mention replaced by a marker, and is otherwise untouched (DEC-095).
+    free_text = not pii_kinds and pii.is_free_text(series, inferred)
+    free_text_kinds = pii.free_text_pii(series, inferred) if free_text else ()
 
     if pii_kinds:
         sample_values: tuple[str, ...] = (REDACTED,) * min(SAMPLE_VALUES, max(non_null, 0))
         top_categories: tuple[CategoryCount, ...] = ()
     else:
-        sample_values = tuple(_cell_str(value) for value in series.dropna().head(SAMPLE_VALUES))
+        sample_values = tuple(
+            _cell_str(value, mask_free_text=free_text) for value in series.dropna().head(SAMPLE_VALUES)
+        )
         wanted = inferred in _CATEGORICAL_TYPES or distinct_count <= TOP_CATEGORIES_MAX_DISTINCT
-        top_categories = _top_categories(series, non_null=non_null) if wanted and non_null else ()
+        top_categories = (
+            _top_categories(series, non_null=non_null, mask_free_text=free_text)
+            if wanted and non_null
+            else ()
+        )
 
     minimum, maximum, mean = _numeric_summary(series) if inferred in _NUMERIC_TYPES else (None, None, None)
     looks_like_id = (
@@ -952,6 +886,7 @@ def profile_column(
         looks_like_id=looks_like_id,
         looks_like_time=bool(time_like.search(name)) or inferred in _TEMPORAL_TYPES,
         pii_kinds=pii_kinds,
+        free_text_pii_kinds=free_text_kinds,
     )
 
 
@@ -959,14 +894,21 @@ def profile_column(
 # 1.7 Whole-table profiling
 # ---------------------------------------------------------------------------
 def _preview_rows(df: pd.DataFrame, columns: Sequence[ColumnProfile]) -> tuple[tuple[str, ...], ...]:
+    """The first rows as the Setup preview shows them: PII columns hidden, free-text PII masked."""
     redact = tuple(bool(column.pii_kinds) for column in columns)
+    free_text = tuple(
+        not column.pii_kinds and pii.is_free_text(df.iloc[:, position], column.inferred_type)
+        for position, column in enumerate(columns)
+    )
     head = df.head(PREVIEW_ROWS)
+
+    def shown(row: int, position: int) -> str:
+        if redact[position]:
+            return REDACTED
+        return _cell_str(head.iat[row, position], mask_free_text=free_text[position])
+
     return tuple(
-        tuple(
-            REDACTED if redact[position] else _cell_str(head.iat[row, position])
-            for position in range(len(head.columns))
-        )
-        for row in range(len(head))
+        tuple(shown(row, position) for position in range(len(head.columns))) for row in range(len(head))
     )
 
 
@@ -1039,10 +981,24 @@ def _id_like_pattern(config: UseCaseConfig) -> re.Pattern[str]:
     return re.compile(pattern, re.IGNORECASE)
 
 
+def _identifier_of(name: str) -> str:
+    """The name a configuration can use for a header: itself, or its safe internal form (DEC-093).
+
+    A use case's template and hints are identifiers, so a config can only say
+    `default_payment_next_month`; the published file says `default.payment.next.month`. Matching on
+    the safe form lets the configured name find the client's header - and the header, not the
+    configured name, is what is offered, so every later stage still sees the file's own columns.
+    """
+    from engine.column_names import is_safe_name, safe_base
+
+    return name if is_safe_name(name) else safe_base(name)
+
+
 def _hint_rank(name: str, hints: Sequence[str]) -> int | None:
     lowered = name.lower()
+    identifier = _identifier_of(name).lower()
     for index, hint in enumerate(hints):
-        if hint.lower() == lowered:
+        if hint.lower() in {lowered, identifier}:
             return index
     return None
 
@@ -1088,6 +1044,8 @@ def target_candidate(columns: Sequence[ColumnProfile], config: UseCaseConfig) ->
     if configured in names:
         return configured
     matches = [name for name in names if name.lower() == configured.lower()]
+    if not matches:
+        matches = [name for name in names if _identifier_of(name).lower() == configured.lower()]
     return matches[0] if len(matches) == 1 else None
 
 
