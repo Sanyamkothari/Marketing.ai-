@@ -1,7 +1,7 @@
 """Fail when README.md calls a milestone "pending" that the test suite says is built.
 
 The README's milestone tables are the first thing a reader trusts and the last thing anybody
-updates. On 23 Sep 2026 six Phase 2 milestones (M8 ... M13) still read "pending" a day after they
+updates. On 23 Sep 2026 five Phase 2 milestones (M8 ... M12) still read "pending" a day after they
 were merged with their tests green: the table was written when the branch opened and nothing ever
 asked it again. Plan A M39 makes the question mechanical, the same way `test_docs_honesty.py` made
 the deployment guide's cost tables mechanical: a claim in a document that rots silently is checked
@@ -100,7 +100,10 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_api_datasets.py",
         "tests/integration/test_runs_from_dataset.py",
     ),
-    "M13": ("tests/unit/test_onboarding_ui.py", "tests/integration/test_onboarding_flow.py"),
+    # M13 is deliberately absent. Its definition of done is the panel *inside Setup*, and the
+    # standalone panel's tests (test_onboarding_ui.py, test_onboarding_flow.py) pass whether or not
+    # Setup mounts it - so they would call M13 built while it is not. Mounting it is Plan A M35;
+    # map M13 to the tests M35 writes (the Setup-mounted panel, the browser acceptance) when it merges.
     "M14": ("tests/fixtures/raw/test_make_raw.py",),
     # --- Phase 3a (generative) ---------------------------------------------------------------
     "M15": (
@@ -153,8 +156,10 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
 Taken from the commits that delivered each milestone. A milestone may be absent - Phase 4b's M46
-... M52 are, and so is anything planned but not started - and an absent milestone is reported,
-never flagged. Paths are relative to the repository root, the way pytest's node ids spell them."""
+... M52 are, so is M13 until the panel is mounted in Setup, and so is anything planned but not
+started - and an absent milestone is reported, never flagged. A mapping must name tests that fail
+when the milestone's definition of done is not met; tests of a part that passes on its own are not
+evidence for the whole. Paths are relative to the repository root, the way pytest's node ids spell them."""
 
 PENDING: Final[re.Pattern[str]] = re.compile(
     r"^(pending|not (yet )?(started|begun|built|done)|to ?do|tbd|planned)\b"

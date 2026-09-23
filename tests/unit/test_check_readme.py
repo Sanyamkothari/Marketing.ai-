@@ -269,3 +269,15 @@ def test_every_mapped_path_exists(repo_root: Path) -> None:
 
 def test_every_mapped_key_is_a_milestone_id() -> None:
     assert all(check_readme.MILESTONE_ID.match(key) for key in check_readme.MILESTONE_TESTS)
+
+
+def test_m13_is_never_proved_by_the_standalone_panel_tests_alone() -> None:
+    """M13's definition of done is the onboarding panel mounted inside Setup (Plan A M35).
+
+    The standalone panel's tests pass whether or not Setup mounts it, so a mapping made only of them
+    would turn M13's truthful "pending" into a demand to mark it done. M13 stays unmapped until M35
+    merges and adds tests that fail while the panel is not mounted.
+    """
+    standalone = {"tests/unit/test_onboarding_ui.py", "tests/integration/test_onboarding_flow.py"}
+    mapped = check_readme.MILESTONE_TESTS.get("M13")
+    assert mapped is None or not set(mapped) <= standalone
