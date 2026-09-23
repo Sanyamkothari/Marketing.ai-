@@ -15,7 +15,8 @@ these rows (the hold-out), so no row grades its own fit.
 * **IPS** (inverse propensity scoring) `= mean(w·y)`: unbiased whenever the logging propensities
   are right - which they are by construction under random assignment.
 * **SNIPS** (self-normalised IPS) `= Σ w·y / Σ w`: slightly biased, usually less variable, and it
-  never leaves `[0, 1]` for a binary outcome.
+  never leaves `[0, 1]` for a binary outcome. When no logged row took an action the policy would
+  take (`Σ w = 0`) the ratio is 0/0 and SNIPS is left out of the report, never reported as 0.
 * **DR** (doubly robust) `= mean(q̂π + w·(y − q̂(A)))`, with `q̂(A) = μ_A(x)` and
   `q̂π = π(1|x)·μ1(x) + π(0|x)·μ0(x)`: the outcome model's prediction of the policy's value, corrected
   by the weighted residuals. It stays unbiased if *either* the propensities or the outcome model are
@@ -74,6 +75,8 @@ def evaluate_policy(
 ) -> OpeReport:
     """IPS, SNIPS and DR estimates of `policy_treat`'s outcome rate on the logged rows.
 
+    SNIPS is omitted from `estimates` when it is undefined (`Σ w = 0`); IPS and DR always appear.
+
     Raises `ValueError` when the arrays differ in length or are empty, `t` or `y` is not 0/1,
     `policy_treat` leaves `[0, 1]`, a logging propensity is not strictly inside `(0, 1)` (a row that
     could only ever get one action carries no information about the other) or an outcome prediction
@@ -99,9 +102,10 @@ def evaluate_policy(
             "action says nothing about the other."
         )
 
+    snips = _snips(treatment, outcome, pi1, logged)
     estimates = (
         OpeEstimate(method="ips", value=_ips(treatment, outcome, pi1, logged)),
-        OpeEstimate(method="snips", value=_snips(treatment, outcome, pi1, logged)),
+        *(() if snips is None else (OpeEstimate(method="snips", value=snips),)),
         OpeEstimate(method="dr", value=_dr(treatment, outcome, pi1, logged, mu1, mu0)),
     )
     ones = np.ones(rows, dtype=np.float64)
@@ -189,14 +193,17 @@ def _ips(t: FloatArray, y: FloatArray, pi1: FloatArray, e: FloatArray) -> Confid
     return _mean_interval(_weights(t, pi1, e) * y)
 
 
-def _snips(t: FloatArray, y: FloatArray, pi1: FloatArray, e: FloatArray) -> ConfidenceValue:
-    """`Σ w·y / Σ w` with a delta-method interval."""
+def _snips(t: FloatArray, y: FloatArray, pi1: FloatArray, e: FloatArray) -> ConfidenceValue | None:
+    """`Σ w·y / Σ w` with a delta-method interval; `None` when `Σ w = 0`.
+
+    With `Σ w = 0` no logged row took an action the policy would take, so the ratio is 0/0: there
+    is no estimate, and the report leaves SNIPS out rather than print a made-up 0 (an
+    `OpeEstimate.value` cannot be null).
+    """
     weights = _weights(t, pi1, e)
     mean_weight = float(weights.mean())
     if mean_weight <= 0.0:
-        # No logged row took an action the policy would take: the ratio is 0/0. Report the IPS
-        # value (0) without an interval rather than inventing one.
-        return ConfidenceValue(value=0.0, confidence_level=CONFIDENCE_LEVEL)
+        return None
     ratio = float((weights * y).sum() / weights.sum())
     rows = len(weights)
     if rows < 2:

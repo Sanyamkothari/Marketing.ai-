@@ -8,7 +8,8 @@
 // The line and bar charts use a `viewBox` and scale as a picture: they carry axis labels, and a
 // chart whose text reflowed with the card width would need a layout engine this UI does not have.
 // The segment bars use percentage widths instead, like `ui/dom.js`'s `barTrack`, so their rounded
-// ends stay round at any width.
+// ends stay round at any width. Scaled down to a phone the 11-unit tick labels would print at about
+// 5px, so `styles.js` enlarges `.tk` (and the axis title, `.tt`) in user units below 560px.
 
 import { EM_DASH, esc, fmtNum, present } from "../../dom.js";
 import { fmtPts, fmtRate } from "./format.js";
@@ -100,7 +101,7 @@ export function qiniChart(curve) {
     <polyline class="rand" points="${random}"/>
     <polyline class="model" points="${model}"/>
     ${xTicks}
-    <text class="tk" x="${(PAD.left + W - PAD.right) / 2}" y="${H - 4}" text-anchor="middle">Share of customers targeted, highest predicted uplift first</text>
+    <text class="tk tt" x="${(PAD.left + W - PAD.right) / 2}" y="${H - 4}" text-anchor="middle">Share of customers targeted, highest predicted uplift first</text>
   </svg></div><div class="ulegend"><span><i></i>This model</span><span><i class="r"></i>Random targeting</span><span>y: incremental conversions, % of hold-out customers</span></div>`;
 }
 
@@ -159,7 +160,7 @@ export function decileChart(deciles) {
     ${grid}
     <line class="zero" x1="${PAD.left}" x2="${W - PAD.right}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>
     ${bars}
-    <text class="tk" x="${(PAD.left + W - PAD.right) / 2}" y="${H - 4}" text-anchor="middle">Decile of predicted uplift (1 = highest)</text>
+    <text class="tk tt" x="${(PAD.left + W - PAD.right) / 2}" y="${H - 4}" text-anchor="middle">Decile of predicted uplift (1 = highest)</text>
   </svg></div><div class="ulegend"><span><i class="sq"></i>Observed uplift (treated − control, pts)</span><span><i class="sq n"></i>Negative</span><span><i class="dot"></i>Predicted uplift</span></div>`;
 }
 

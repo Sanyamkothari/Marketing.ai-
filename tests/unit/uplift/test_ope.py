@@ -89,6 +89,34 @@ def test_hand_worked_log() -> None:
     assert OpeReport.model_validate_json(report.model_dump_json()) == report
 
 
+def test_undefined_snips_is_left_out_not_reported_as_zero() -> None:
+    """Regression (oracle conformance, `snips_undefined_sum_w_zero`): with `Σ w = 0` SNIPS is 0/0.
+
+    The policy treats exactly the rows the log left untreated and vice versa, so no logged row took
+    an action the policy would take. The engine used to report SNIPS = 0.0 here; it is now omitted,
+    while IPS (a mean of zeros, legitimately 0) and DR are still reported.
+    """
+    t = np.array([1, 1, 0, 0])
+    y = np.array([1, 0, 1, 1])
+    report = evaluate_policy(
+        t,
+        y,
+        np.array([0.0, 0.0, 1.0, 1.0]),
+        p_treated=np.full(4, 0.5),
+        p_control=np.full(4, 0.3),
+        propensity=0.5,
+        run_id=RUN_ID,
+        description="the opposite of the log",
+        causal=True,
+        now=NOW,
+    )
+    assert [item.method for item in report.estimates] == ["ips", "dr"]
+    assert estimate(report, "ips")[0] == 0.0
+    # DR terms: q̂π = [0.3, 0.3, 0.5, 0.5], weights are 0 → mean 0.4
+    assert estimate(report, "dr")[0] == pytest.approx(0.4)
+    assert OpeReport.model_validate_json(report.model_dump_json()) == report
+
+
 def test_per_row_propensity_is_accepted() -> None:
     t = np.array([1, 0, 1, 0])
     y = np.array([1, 1, 0, 0])

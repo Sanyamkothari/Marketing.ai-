@@ -256,7 +256,12 @@ class UpliftEvaluation(Artefact):
         description="Area between the Qini curve and the random line, per customer in the hold-out."
     )
     uplift_at: tuple[UpliftAtK, ...] = Field(description="Observed uplift in the top 10%, 20% and 30%.")
-    deciles: tuple[UpliftDecile, ...] = Field(description="Ten rows, highest predicted uplift first.")
+    deciles: tuple[UpliftDecile, ...] = Field(
+        description=(
+            "Ten rows, highest predicted uplift first; fewer only on a hold-out of under ten rows, "
+            "where the empty groups are left out."
+        )
+    )
     bootstrap_samples: int = Field(description="Resamples behind every interval.")
     measurable_uplift: bool = Field(description="True when the AUUC interval lies entirely above zero.")
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
@@ -449,7 +454,12 @@ class OpeReport(Artefact):
     rows: int = Field(description="Logged rows used.")
     policy_treat_share: float = Field(description="Share of rows the candidate policy would treat.")
     propensity: float = Field(description="Logged P(treated); constant under random assignment.")
-    estimates: tuple[OpeEstimate, ...] = Field(description="IPS, SNIPS and DR, in that order.")
+    estimates: tuple[OpeEstimate, ...] = Field(
+        description=(
+            "IPS, SNIPS and DR, in that order. SNIPS is left out when it is undefined: no logged row "
+            "took an action the policy would take, so its ratio is 0/0."
+        )
+    )
     logged_value: float = Field(description="Observed outcome rate under the logging policy.")
     treat_all_value: ConfidenceValue = Field(description="DR estimate of treating everyone.")
     treat_none_value: ConfidenceValue = Field(description="DR estimate of treating no one.")

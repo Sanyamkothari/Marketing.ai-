@@ -19,9 +19,16 @@ const open = async (page, hash) => {
   await page.waitForTimeout(120);
 };
 const click = async (page, sel) => { await page.click(sel); await page.waitForTimeout(80); };
-const trainUplift = async (p) => {
+/* DEC-608: uplift is not a Phase 1 Setup choice. Its screens are reached from the "Uplift for this use
+   case" link under win-back's header, so every uplift recipe starts by following that link. */
+const openUplift = async (p) => {
   await open(p, "#/uc/win-back-campaign");
-  await click(p, "#f-samplecampaign"); // uplift is an opt-in: the plain sample is Phase 1's
+  await click(p, ".uentry a");
+  await p.waitForSelector('main[data-module="uplift"] #f-samplecampaign', { timeout: 10000 });
+};
+const trainUplift = async (p) => {
+  await openUplift(p);
+  await click(p, "#f-samplecampaign"); // the uplift screen's sample: a past campaign with a control group
   await click(p, "#f-run");
   await p.waitForSelector(".results", { timeout: 20000 });
 };
@@ -132,29 +139,29 @@ const STATES = [
   }],
   /* Phase 3b §8 — uplift. Runs are driven through the router so the in-memory run survives. */
   ["19-uplift-setup-treatment", async (p) => {
-    await open(p, "#/uc/win-back-campaign");
+    await openUplift(p);
     await click(p, "#f-samplecampaign");
   }],
   ["20-uplift-not-random-acknowledge", async (p) => {
-    await open(p, "#/uc/win-back-campaign");
+    await openUplift(p);
     await click(p, "#f-sampletargeted");
     await click(p, "#f-ack");
   }],
   ["21-uplift-model", async (p) => {
     await trainUplift(p);
-    await p.evaluate(() => { location.hash = "#/uc/win-back-campaign/model"; });
+    await p.evaluate(() => { location.hash = "#/uplift/win-back-campaign/model"; });
     await p.waitForSelector(".qini", { timeout: 10000 });
   }],
   ["22-uplift-output", async (p) => {
     await trainUplift(p);
     await scoreUplift(p);
-    await p.evaluate(() => { location.hash = "#/uc/win-back-campaign/output"; });
+    await p.evaluate(() => { location.hash = "#/uplift/win-back-campaign/output"; });
     await p.waitForSelector(".segrow", { timeout: 10000 });
   }],
   ["23-campaign-results-immature", async (p) => {
     await trainUplift(p);
     await scoreUplift(p);
-    await p.evaluate(() => { location.hash = "#/uc/win-back-campaign/campaign"; });
+    await p.evaluate(() => { location.hash = "#/uplift/win-back-campaign/campaign"; });
     await p.waitForSelector("[data-up-wait]", { timeout: 10000 });
   }],
   ["24-campaign-results-mature", async (p) => {

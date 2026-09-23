@@ -498,6 +498,17 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .doclist{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;margin-top:10px}
 
 /* uplift (Phase 3b §8) */
+/* DEC-608's entry link under a use case's header, and the #/uplift index: ui/modules/uplift/styles.js */
+.uentry{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin:-8px 0 20px;font-size:12px;color:var(--muted)}
+.uentry a{display:inline-flex;align-items:center;gap:6px;padding:5px 12px;border:1px solid var(--line2);border-radius:999px;color:var(--ink2);font-weight:500;text-decoration:none}
+.uentry a:hover{border-color:var(--ink2);color:var(--ink)}
+.uentry a b{font-weight:600;color:var(--ink)}
+.uindex{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
+.uindex>a,.uindex>.off{display:flex;justify-content:space-between;gap:12px;padding:12px 20px;border-top:1px solid var(--line);font-size:13px;color:var(--ink);text-decoration:none}
+.uindex>:first-child{border-top:0}
+.uindex>a:hover{background:var(--soft)}
+.uindex>.off{color:var(--muted)}
+.uindex .s{font-size:12px;color:var(--muted);text-align:right}
 .upwhy{flex-basis:100%;color:var(--ink2)}
 .ptype select{max-width:88px}
 .uphint{font-size:12px;color:var(--faint)}
@@ -1222,6 +1233,8 @@ function lineageBlock(u){const s=st(u);
 /* catalog.problem_types.uplift.label in configs/engine.yaml, verbatim */
 const UPLIFT_PTYPE="Uplift (who changes because of your action)";
 const UPLIFT_WHY="Predicts who changes behaviour because of your action.";
+/* ui/modules/uplift/views.js UPLIFT_EXPLANATION: the one line the product's uplift screens and entry links use */
+const UPLIFT_EXPLANATION="predicts who changes behaviour because of your action";
 /* uplift.treatment_column_hints, in the order detection tries them */
 const TREAT_HINTS=["treatment","treated","contacted","is_treated"];
 /* the uplift: block of configs/engine.yaml (learner x_learner, base_model autogluon_fast, ...) */
@@ -1306,16 +1319,33 @@ const rowCount=s=>s.upRows&&!(s.file&&s.file.sample)?s.upRows.length:s.file?exac
 
 function detectTreatment(cols){const low=cols.map(c=>String(c).toLowerCase());
   for(const h of TREAT_HINTS){const i=low.indexOf(h);if(i>=0)return cols[i];}return "";}
-/* Uplift is offered only on a use case with uplift sample content (SETUP[id].treatment: Win-back).
-   Everywhere else a column named like a treatment is an ordinary column and the Phase 1 path runs,
-   so no other use case can end up showing the win-back sample's uplift numbers. */
-const hasUplift=u=>!!(SETUP[u.id]&&SETUP[u.id].treatment&&!SETUP[u.id].gen);
+/* DEC-608: uplift is not a Phase 1 Setup choice. The catalog marks it enabled: false, so the use case's
+   own Setup (#/uc/<id>) never offers it, and uplift runs start from their own screen, #/uplift/<id>,
+   reached from the "Uplift for this use case" link under the use case's header (ui/modules/uplift/index.js).
+   That screen works on an uplift view of the use case, upView(u): the same use case with up:true. Its
+   Setup form is its own (UPSTATE), as the product's uplift Setup controller is; the runs (one registry
+   per use case) and the Campaign results form are shared with the Phase 1 screen. */
+const UPSTATE={}, UPV={};
+const upView=u=>u.up?u:(UPV[u.id]||(UPV[u.id]=Object.assign(Object.create(u),{up:true})));
+const baseUC=u=>u.up?Object.getPrototypeOf(u):u;
+/* Where a use-case page lives: the uplift screens under #/uplift/<id>, Phase 1's under #/uc/<id>. */
+const pageHref=(u,slug)=>`#/${u.up?"uplift":"uc"}/${u.id}${slug?"/"+slug:""}`;
+/* Uplift is offered only on a use case with uplift sample content (SETUP[id].treatment: Win-back), and
+   only on its uplift screen. Everywhere else a column named like a treatment is an ordinary column and
+   the Phase 1 path runs, so no other use case can end up showing the win-back sample's uplift numbers. */
+const upliftOffered=u=>!!(SETUP[u.id]&&SETUP[u.id].treatment&&!SETUP[u.id].gen);
+const hasUplift=u=>!!(u&&u.up&&upliftOffered(u));
 const treatCandidates=(s,u=CUR)=>u&&hasUplift(u)?s.cols.filter(c=>TREAT_HINTS.includes(String(c).toLowerCase())):[];
-const ptypesFor=s=>s.treatment||s.ptype===UPLIFT_PTYPE?[...PTYPES,UPLIFT_PTYPE]:PTYPES;
-function isUplift(u){const s=st(u);return hasUplift(u)&&s.mode==="train"&&(s.ptype||detectType(u))===UPLIFT_PTYPE;}
-/* The run the uplift screens render from: the current run when it is an uplift run. A scoring run
-   carries its model's problem type, so scoring with an uplift model counts too. */
-function upliftRun(u){const r=st(u).current;return r&&r.ptype==="Uplift"?r:null;}
+/* On the uplift screen a training run is an uplift run: the problem type is the screen's, not detected. */
+function isUplift(u){return hasUplift(u)&&st(u).mode==="train";}
+/* The models each screen can score with: uplift versions on the uplift screen, the rest on Phase 1's. */
+const trainRunsOf=u=>st(u).runs.filter(r=>r.mode==="train"&&(r.ptype==="Uplift")===!!u.up);
+function scoreBase(u){const s=st(u);if(!u.up)return s.runs.find(r=>r.id===s.scoreRun)||s.runs[0];
+  const t=trainRunsOf(u);return t.find(r=>r.id===s.scoreRun)||t[t.length-1]||null;}
+/* The run the uplift screens render from: the uplift screen's current run when it is an uplift run. A
+   scoring run carries its model's problem type, so scoring with an uplift model counts too. Phase 1's
+   pages never render uplift content. */
+function upliftRun(u){if(!u.up)return null;const r=st(u).current;return r&&r.ptype==="Uplift"?r:null;}
 /* The training run behind an uplift run: itself, or the model a scoring run used. */
 function modelRunOf(u,r){return r&&r.from?st(u).runs.find(x=>x.id===r.from)||r:r;}
 
@@ -1758,12 +1788,16 @@ function defaultAdv(cfg){return cfg.gen
      retention:90,consentCol:"",approval:true,
      upLearner:UP_LEARNERS[0],upBase:UPLIFT_DEFAULTS.base,upBoot:UPLIFT_DEFAULTS.bootstrap,upTest:Math.round(UPLIFT_DEFAULTS.testFraction*100),
      upPers:UPLIFT_DEFAULTS.persuadable,upSleep:UPLIFT_DEFAULTS.sleepingDog,upSure:UPLIFT_DEFAULTS.sureThing,upBudget:cfg.budget??null,upCost:null,upValue:null};}
-function st(u){
-  if(!STATE[u.id]){const c=SETUP[u.id];
-    STATE[u.id]={mode:"train",file:null,cols:[],preview:null,pk:"",target:"",ptype:"",model:AUTO,adv:defaultAdv(c),advOpen:false,view:"setup",current:null,scoreRun:"r1",
+function newState(u){const c=SETUP[u.id];
+    return {mode:"train",file:null,cols:[],preview:null,pk:"",target:"",ptype:"",model:AUTO,adv:defaultAdv(c),advOpen:false,view:"setup",current:null,scoreRun:"r1",
       source:"file",docs:null,qa:null,pkExtra:"",pkParts:null,builtFrom:false,recipe:RECIPE,treatment:"",ack:false,targeted:false,upRows:null,
       cr:{run:"",outcomes:false,sample:false,file:"",window:90,dateCol:"treatment_date",outcome:c.target},
       runs:[{id:"r1",at:"14 Sep 2026, 10:20",mode:"train",file:`${u.id.replace(/-/g,"_")}_history.csv`,rows:u.data.kp[0][1],model:AUTO,best:c.best,score:c.score,target:c.target,pk:c.gen?"question":"customer_id",champion:true}]};}
+function st(u){
+  /* the uplift screen's form (DEC-608), sharing the use case's runs and Campaign results form */
+  if(u.up){if(!UPSTATE[u.id]){const p=st(baseUC(u));UPSTATE[u.id]=Object.assign(newState(u),{runs:p.runs,cr:p.cr,scoreRun:""});}
+    return UPSTATE[u.id];}
+  if(!STATE[u.id])STATE[u.id]=newState(u);
   return STATE[u.id];
 }
 const fmtSize = b => b<1024?`${b} B`:b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(1)} MB`;
@@ -1773,9 +1807,14 @@ function parseLine(line){const out=[];let cur="",q=false;for(const ch of line){i
    (today(): AS_OF when pinned). en-IN ICU spells September "Sept", so the Campaign results page, whose
    dates use MONTHS, never shows it (crStamp). */
 const nowStamp=(d=today())=>d.toLocaleString("en-IN",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}).replace(/(\d{4}),?\s*/,"$1, ");
-function modeLabels(cfg){return cfg.modes||{train:"Train a model",score:"Score new data"};}
-function modeHelp(cfg,mode){if(cfg.help)return cfg.help[mode];return mode==="train"?"Upload historical data where the outcome is already known. The best model is trained and saved.":"Upload new records without the outcome. The saved model scores every row and recommends an action.";}
+function modeLabels(cfg,u){if(u&&u.up)return {train:"Train uplift model",score:"Score new data"};return cfg.modes||{train:"Train a model",score:"Score new data"};}
+function modeHelp(cfg,mode,u){if(u&&u.up)return mode==="train"?`Uplift ${UPLIFT_EXPLANATION}. It needs a past campaign where the action was given at random.`:"Scoring writes the treat list: persuadables within budget are Treat, sleeping dogs never are, and a control group is held out.";
+  if(cfg.help)return cfg.help[mode];return mode==="train"?"Upload historical data where the outcome is already known. The best model is trained and saved.":"Upload new records without the outcome. The saved model scores every row and recommends an action.";}
 function blocker(u){const s=st(u),cfg=SETUP[u.id];
+  /* the uplift screen's own reasons, as ui/modules/uplift/views.js setupBlocker words them */
+  if(u.up){if(!s.file)return "Upload a dataset to continue";if(!s.pk)return "Choose the primary key column";
+    if(s.mode==="score")return trainRunsOf(u).length?"":"Train an uplift model first";
+    if(!s.target)return "Choose the outcome column";}
   if(cfg.gen){
     if(s.mode==="score"){
       if(!s.runs.some(r=>r.mode==="train"))return "Build an assistant first";
@@ -1791,24 +1830,22 @@ function blocker(u){const s=st(u),cfg=SETUP[u.id];
   if(s.mode==="train"&&!s.target)return `Choose the ${cfg.tlabel?"reference answer":"target"} column`;
   if(s.mode==="score"&&!s.runs.some(r=>r.mode==="train"))return "Train a model first";
   if(isUplift(u)&&!s.treatment)return "Choose the treatment column";
+  if(isUplift(u)&&s.treatment===s.target)return "The treatment and the outcome must be different columns";
   if(isUplift(u)){const errs=upErrors(u),hard=errs.filter(c=>!c.finding.acknowledgeable);
     if(hard.length)return hard[0].code==="TREATMENT_ARM_TOO_SMALL"?"Too few customers to measure what the campaign changed (TREATMENT_ARM_TOO_SMALL)":"The treatment column is not 0 or 1 (TREATMENT_NOT_BINARY)";
     if(errs.length&&!s.ack)return "The treatment was not randomly assigned (TREATMENT_NOT_RANDOM). Acknowledge it to continue";}
   return "";}
 function sampleFile(u,campaign=false){const s=st(u),cfg=SETUP[u.id];const feats=u.data.ft.map(f=>f[0]);
   const idc=cfg.gen?"question":"customer_id";
-  /* Phase 3b: only the sample campaign file (an opt-in, on a use case with uplift sample content)
-     carries a treatment column and its send date. The plain sample is Phase 1's, column for column. */
-  campaign=!!(campaign&&cfg.treatment&&s.mode==="train");
+  /* Phase 3b: only the sample campaign file (offered on the uplift screen of a use case with uplift
+     sample content) carries a treatment column and its send date. The plain sample is Phase 1's. */
+  campaign=!!(campaign&&hasUplift(u)&&s.mode==="train");
   const treat=campaign?[cfg.treatment,"treatment_date"]:[];
-  const base=s.mode==="score"?s.runs.find(r=>r.id===s.scoreRun):null,upScore=!!(base&&base.ptype==="Uplift");
+  const base=s.mode==="score"?scoreBase(u):null,upScore=!!(base&&base.ptype==="Uplift");
   s.cols=s.mode==="train"?[idc,"snapshot_date",...feats,...treat,cfg.target]:[idc,"snapshot_date",...feats];
   s.file={name:`${u.id.replace(/-/g,"_")}_${campaign?"with_control":s.mode==="train"?"history":"this_week"}.csv`,size:"Sample dataset",rows:s.mode==="train"?u.data.kp[0][1]:upScore?HOLDOUT.eligible:"12,480",sample:true};
   s.pk=idc;s.target=s.mode==="train"?cfg.target:"";s.preview=null;s.adv.timeCol="snapshot_date";
   s.treatment=campaign?detectTreatment(s.cols):"";s.targeted=false;s.ack=false;s.upRows=null;
-  /* A manual Uplift must not outlive the treatment column, and the campaign file is the uplift opt-in, so
-     both detect the type afresh. Any other manual type is the user's and stays, as it did before uplift. */
-  if(campaign||s.ptype===UPLIFT_PTYPE)s.ptype="";
 }
 function sampleTargeted(u){const s=st(u);sampleFile(u,true);s.targeted=true;s.ack=false;
   s.file.name=`${u.id.replace(/-/g,"_")}_targeted.csv`;}
@@ -1835,15 +1872,24 @@ function useDataset(u){const s=st(u),o=onb(u);
   s.adv.timeCol="snapshot_date";s.adv.split="Time-based";
   o.used=true;o.open=0;}
 function predStep1(u){const s=st(u),o=onb(u),train=s.mode==="train";
+  if(u.up)return upStep1(u);
   const card=(id,t,h)=>`<button type="button" class="pickcard ${s.source===id?"on":""}" data-src="${id}"><span class="pt1">${esc(t)}</span><span class="pt2">${esc(h)}</span>${s.source===id?'<span class="ptag">Selected</span>':""}</button>`;
   const pick=`<div class="pick">${card("file","Upload a prepared file",`One row per customer${train?", including the outcome column":""}. CSV or Parquet.`)}
     ${card("raw",train?"Build from raw tables":"Upload this month's tables",train?"Bring the tables you already have. We map them, build the features and the label, and write the dataset.":`The saved recipe ${RECIPE.name} v${RECIPE.version} maps and builds them exactly as last time.`)}</div>`;
   const body=s.source==="raw"
     ? `${obPanel(u)}${o.used?previewHtml(u):""}`
-    : `<div class="orline" style="margin-top:12px"><label class="control file ${s.file?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.file?esc(s.file.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sample">use the sample dataset</button></span>${SETUP[u.id].treatment&&train?'<span>or <button type="button" class="linkbtn" id="f-samplecampaign">use the sample campaign file (with a control group)</button></span><span>or <button type="button" class="linkbtn" id="f-sampletargeted">use a sample where offers were targeted</button></span>':""}</div>${previewHtml(u)}`;
+    : `<div class="orline" style="margin-top:12px"><label class="control file ${s.file?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.file?esc(s.file.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sample">use the sample dataset</button></span></div>${previewHtml(u)}`;
   return `<div class="fstep ${s.file?"done":""}"><div class="stepno">1</div><div>
     <div class="flabel">Dataset</div><div class="fhint">Start from a file you have already prepared, or from the raw tables as they come out of your systems.</div>
     ${pick}${body}</div></div>`;}
+/* The uplift screen's step 1: one file of a past campaign (training) or the customers to score, as the
+   product's uplift Setup asks for it; the samples are the campaign files, and this week's list to score. */
+function upStep1(u){const s=st(u),train=s.mode==="train";
+  const samples=train?'<span>or <button type="button" class="linkbtn" id="f-samplecampaign">use the sample campaign file (with a control group)</button></span><span>or <button type="button" class="linkbtn" id="f-sampletargeted">use a sample where offers were targeted</button></span>'
+    :'<span>or <button type="button" class="linkbtn" id="f-sample">use the sample dataset</button></span>';
+  return `<div class="fstep ${s.file?"done":""}"><div class="stepno">1</div><div>
+    <div class="flabel">Dataset</div><div class="fhint">${train?"One row per customer of a past campaign: the features, whether they were treated (0/1, assigned at random) and the outcome.":"The customers to score. The trained uplift model ranks them by how much the action changes their outcome."}</div>
+    <div class="orline" style="margin-top:12px"><label class="control file ${s.file?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet"><span class="fname">${s.file?esc(s.file.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label>${samples}</div>${previewHtml(u)}</div></div>`;}
 function genStep1(u){const s=st(u);
   if(s.mode!=="train") return `<div class="fstep ${s.qa?"done":""}"><div class="stepno">1</div><div>
     <div class="flabel">Test questions</div><div class="fhint">New questions to run through a saved assistant. One row per question.</div>
@@ -1911,30 +1957,31 @@ function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
 }
 const PTYPES=["Classification (yes / no)","Regression (a number)","Forecasting (a number over time)","Clustering (no target)"];
 function detectType(u){const s=st(u),cfg=SETUP[u.id];if(cfg.gen)return "";if(!s.target)return "";
-  if(s.treatment&&s.mode==="train"&&hasUplift(u))return UPLIFT_PTYPE;
+  if(isUplift(u))return UPLIFT_PTYPE;
   if(s.file&&s.file.sample)return PTYPES[0];
   const i=s.cols.indexOf(s.target);const vals=(s.preview||[]).map(r=>r[i]).filter(v=>v!==undefined&&v!=="");
   const uniq=new Set(vals.map(v=>String(v).toLowerCase()));const numeric=vals.length&&vals.every(v=>!isNaN(parseFloat(v)));
   if(uniq.size<=2)return PTYPES[0];
   if(numeric)return s.cols.some(c=>/date|time|month|week|day|ts$/i.test(c))?PTYPES[2]:PTYPES[1];
   return PTYPES[0];}
-/* Uplift holds out the engine's control share, whatever stage 6 said for Phase 1: switching to uplift
-   restores it (keeping the Phase 1 share aside), and switching back to Phase 1 training returns that share. */
-function syncUpliftControl(u){const s=st(u);if(!s.adv||SETUP[u.id].gen)return;
-  if(isUplift(u)){if(s.adv.control!==ENGINE_CONTROL_PCT){s.p1Control=s.adv.control;s.adv.control=ENGINE_CONTROL_PCT;}}
-  else if(s.mode==="train"&&s.p1Control!=null){s.adv.control=s.p1Control;s.p1Control=null;}}
-function setupHtml(u){syncUpliftControl(u);const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg),train=s.mode==="train",why=blocker(u);
+/* Uplift holds out the engine's control share (actions.control_group_fraction) and nothing else: the uplift
+   screen's form is its own, so a share set on Phase 1's stage 6 never reaches it, and it never changes that one. */
+function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg,u),train=s.mode==="train",why=blocker(u);
   const detected=detectType(u), ptype=s.ptype||detected;
-  const upl=ptype===UPLIFT_PTYPE;
-  const ptypeHtml = train&&!cfg.gen&&s.target ? `<div class="ptype"><span>Problem type</span><span class="pill">${esc(ptype)}</span><span>${s.ptype&&s.ptype!==detected?"set manually":upl?"detected from the treatment column":"detected from the target column"}</span><select id="f-ptype" aria-label="Change problem type"><option value="">change…</option>${ptypesFor(s).map(t=>`<option ${t===ptype?"disabled":""}>${esc(t)}</option>`).join("")}</select>${upl?`<span class="upwhy">${esc(UPLIFT_WHY)}</span>`:ptype!==PTYPES[0]?`<span style="flex-basis:100%;color:var(--warn)">${ptype.startsWith("Clustering")?"Clustering ignores the target and groups similar rows.":"Metrics and models will switch to "+ptype.split(" (")[0].toLowerCase()+" defaults."}</span>`:""}</div>${upChecksHtml(u)}` : "";
+  /* The uplift screen's problem type is the screen's: Uplift, the catalog label, with no change… (DEC-608).
+     Phase 1's change… lists the Phase 1 types only, as it did before Phase 3b. */
+  const ptypeHtml = u.up ? (train&&s.target ? `<div class="ptype"><span>Problem type</span><span class="pill">${esc(UPLIFT_PTYPE)}</span><span class="upwhy">${esc(UPLIFT_WHY)}</span></div>${upChecksHtml(u)}` : "")
+    : train&&!cfg.gen&&s.target ? `<div class="ptype"><span>Problem type</span><span class="pill">${esc(ptype)}</span><span>${s.ptype&&s.ptype!==detected?"set manually":"detected from the target column"}</span><select id="f-ptype" aria-label="Change problem type"><option value="">change…</option>${PTYPES.map(t=>`<option ${t===ptype?"disabled":""}>${esc(t)}</option>`).join("")}</select>${ptype!==PTYPES[0]?`<span style="flex-basis:100%;color:var(--warn)">${ptype.startsWith("Clustering")?"Clustering ignores the target and groups similar rows.":"Metrics and models will switch to "+ptype.split(" (")[0].toLowerCase()+" defaults."}</span>`:""}</div>` : "";
   const cands=train&&!cfg.gen?treatCandidates(s,u):[];
+  /* ui/modules/uplift/views.js's note for a file with no 0/1 column named like a treatment */
+  const noTreat=u.up&&train&&s.cols.length&&!cands.length?`<p class="seg-help" data-up-notreat>No 0/1 column in this file looks like a treatment. Uplift needs one: 1 for customers who got the action, 0 for the randomly held-out control group.</p>`:"";
   const treatField=cands.length?`<div class="field"><span class="sub">Treatment column</span><div class="control sel"><select id="f-treat">${opt(cands,s.treatment,"None")}</select></div><span class="uphint">1 means the customer received the action, 0 means held out. It must be randomly assigned.</span><span class="uphint" data-up-share>Treated share: ${s.treatment&&s.file&&s.file.sample?`${Math.round(100*UPLIFT_EVAL.treated/(UPLIFT_EVAL.treated+UPLIFT_EVAL.control))}% treated`:"—"}</span></div>`:"";
-  const trainRuns=s.runs.filter(r=>r.mode==="train");
+  const trainRuns=trainRunsOf(u);
   const step1 = cfg.gen?genStep1(u):predStep1(u);
   const step2 = cfg.gen?genStep2(u):`<div class="fstep ${s.file?"":"locked"} ${s.pk&&(!train||s.target)?"done":""}"><div class="stepno">2</div><div>
-        <div class="flabel">Columns</div><div class="fhint">${train?`The primary key identifies each row and is never used as a feature. The ${cfg.tlabel?"reference answer":"target"} is what the model learns to predict.`:"The primary key identifies each row so scores can be joined back to your systems."}</div>
+        <div class="flabel">Columns</div><div class="fhint">${u.up?(train?"Which column identifies a customer, which one says whether they were treated, and which one is the outcome.":"Which column identifies a customer."):train?`The primary key identifies each row and is never used as a feature. The ${cfg.tlabel?"reference answer":"target"} is what the model learns to predict.`:"The primary key identifies each row so scores can be joined back to your systems."}</div>
         <div class="frow"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${opt(s.pkExtra?[s.pkExtra,...s.cols]:s.cols,s.pk,"Select a column…")}</select></div></div>
-        ${train?`<div class="field"><span class="sub">${esc(cfg.tlabel||"Target column")}</span><div class="control sel"><select id="f-target">${opt(s.cols.filter(c=>c!==s.pk&&c!==s.treatment),s.target,"Select a column…")}</select></div></div>`:""}${treatField}</div>${ptypeHtml}</div></div>`;
+        ${train?`<div class="field"><span class="sub">${esc(u.up?"Outcome column":cfg.tlabel||"Target column")}</span><div class="control sel"><select id="f-target">${opt(s.cols.filter(c=>c!==s.pk&&c!==s.treatment),s.target,"Select a column…")}</select></div></div>`:""}${treatField}</div>${noTreat}${ptypeHtml}</div></div>`;
   const step3 = train&&isUplift(u)
    ? `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
         <div class="flabel">Model</div><div class="fhint">A meta-learner estimates each customer's chance of converting with the action and without it. The difference is the uplift.</div>
@@ -1945,24 +1992,24 @@ function setupHtml(u){syncUpliftControl(u);const s=st(u),cfg=SETUP[u.id],ml=mode
         <div class="flabel">Model</div><div class="fhint">AutoML tries every selected ${cfg.gen?"LLM":"algorithm"} and keeps the best. Pick one only if you need to.</div>
         <div class="frow"><div class="field"><div class="control sel"><select id="f-model">${opt([AUTO,...cfg.models],s.model)}</select></div></div></div></div></div>`
    : `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
-        <div class="flabel">Trained model</div><div class="fhint">The saved model that will score the uploaded rows.</div>
-        <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun">${trainRuns.map(r=>`<option value="${r.id}" ${r.id===s.scoreRun?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}${r.upChampion?" · Uplift champion":""}</option>`).join("")}</select></div></div></div></div></div>`;
+        <div class="flabel">${u.up?"Trained uplift model":"Trained model"}</div><div class="fhint">${u.up?"The saved uplift model that will rank the uploaded customers.":"The saved model that will score the uploaded rows."}</div>
+        <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun">${trainRuns.length||!u.up?trainRuns.map(r=>`<option value="${r.id}" ${r.id===(scoreBase(u)||{}).id?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}${r.upChampion?" · Uplift champion":""}</option>`).join(""):'<option value="">No trained uplift model yet</option>'}</select></div></div></div></div></div>`;
   const adv = train ? `<details class="adv-wrap" id="f-adv" ${s.advOpen?"open":""}><summary>Advanced settings<span class="n">Each ${cfg.gen?"pipeline":"AutoML"} stage can be configured · defaults work for most data</span></summary>${stagesHtml(u)}</details>` : "";
   return `<div class="setup-grid">
     <section class="card"><div class="form-body">
       <div class="seg" role="group" aria-label="Mode"><button type="button" data-mode="train" class="${train?"on":""}">${esc(ml.train)}</button><button type="button" data-mode="score" class="${train?"":"on"}">${esc(ml.score)}</button></div>
-      <p class="seg-help">${esc(modeHelp(cfg,s.mode))}</p>
+      <p class="seg-help">${esc(modeHelp(cfg,s.mode,u))}</p>
       <form id="f-setup" novalidate style="margin-top:18px">
         ${step1}
         ${step2}${step3}${adv}
-        <div class="actions"><button type="submit" class="run" id="f-run" ${why?"disabled":""}>${train?(cfg.gen?"Build assistant":"Run training"):(cfg.gen?"Run evaluation":"Score data")}</button><span class="reason">${esc(why)}</span></div>
+        <div class="actions"><button type="submit" class="run" id="f-run" ${why?"disabled":""}>${u.up?(train?"Train uplift model":"Score customers"):train?(cfg.gen?"Build assistant":"Run training"):(cfg.gen?"Run evaluation":"Score data")}</button><span class="reason">${esc(why)}</span></div>
       </form></div></section>
     ${runsCard(u)}
   </div>
-  <p class="next">After the run, this page shows the pipeline: Data → Model → Output.</p>`;
+  <p class="next">${u.up?"After the run: Model (Qini curve, AUUC) → Output (segments, treat list) → Campaign results.":"After the run, this page shows the pipeline: Data → Model → Output."}</p>`;
 }
-function runsCard(u){const s=st(u);
-  return `<section class="card"><h3>Previous runs</h3><div class="runs-list">${s.runs.length?s.runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}${r.upChampion?'<span class="champ">Uplift champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">No runs yet.</div>`}</div></section>`;
+function runsCard(u){const s=st(u),runs=u.up?s.runs.filter(r=>r.ptype==="Uplift"):s.runs;
+  return `<section class="card"><h3>${u.up?"Previous uplift runs":"Previous runs"}</h3><div class="runs-list">${runs.length?runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}${r.upChampion?'<span class="champ">Uplift champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">${u.up?"No uplift runs yet.":"No runs yet."}</div>`}</div></section>`;
 }
 function flowBlocks(u,run){
   const items = [
@@ -1970,7 +2017,7 @@ function flowBlocks(u,run){
     ["model","Model",run.best,run.mode==="train"?(run.model===AUTO?`Selected by AutoML · ${run.score}`:run.score):`${run.ptype==="Uplift"?"Uplift model":"Champion model"} · ${run.score}`],
     ["output","Output",run.mode==="train"?u.o:`${run.rows} rows scored`,run.ptype==="Uplift"?`Recommended to contact: ${fmtI(upliftPolicy(run).n)}`:`${u.out.kp[0][0]}: ${u.out.kp[0][1]}${run.mode==="train"?"":" · reasons + actions"}`]
   ];
-  return items.map(([slug,lab,val,meta],i)=>`${i?'<div class="arrow" aria-hidden="true">→</div>':""}<a class="block" href="#/uc/${u.id}/${slug}"><div><div class="lab"><span>${String(i+1).padStart(2,"0")}&nbsp;&nbsp;${lab}</span><span class="bstate">✓ Done</span></div><div class="val">${esc(val)}</div><div class="meta">${esc(meta)}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`).join("");
+  return items.map(([slug,lab,val,meta],i)=>`${i?'<div class="arrow" aria-hidden="true">→</div>':""}<a class="block" href="${pageHref(u,slug)}"><div><div class="lab"><span>${String(i+1).padStart(2,"0")}&nbsp;&nbsp;${lab}</span><span class="bstate">✓ Done</span></div><div class="val">${esc(val)}</div><div class="meta">${esc(meta)}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`).join("");
 }
 function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
   if(s.mode==="train"&&isUplift(u)){const nr=s.targeted,ci=auucCI(a.upTest),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
@@ -1984,7 +2031,7 @@ function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
       [`Training the ${a.upLearner.split(" (")[0]}`,`${a.upBase} · a model per arm, then the effect models`],
       [`Measuring uplift on the hold-out (${a.upBoot} resamples)`,`AUUC ${f4(ci.value)} (95% CI ${f4(ci.ci_low)} to ${f4(ci.ci_high)})`],
       ["Segmenting and saving",`4 segments · ${nr?"not promoted: not causal":s.runs.some(r=>r.upChampion)?"not promoted: no better than the uplift champion":"set as uplift champion"}`]];}
-  const upBase=s.mode==="score"&&!cfg.gen?s.runs.find(r=>r.id===s.scoreRun):null;
+  const upBase=s.mode==="score"&&!cfg.gen?scoreBase(u):null;
   if(upBase&&upBase.ptype==="Uplift"){const N=rowCount(s),pol=upliftPolicy({mode:"score",adv:a,causal:upBase.causal,upTest:holdoutPct(upBase),n:N,rows:s.file.rows});
     return [["Validating columns","All expected features present"],["Loading uplift model",upBase.best],["Scoring rows",`${s.file.rows} rows · uplift, P(treated), P(control)`],
       ["Segmenting and choosing who to contact",`Recommended to contact: ${fmtI(pol.n)} · ${N==null?"—":fmtI(runArms({adv:a},N).c)} held out as control`]];}
@@ -2003,34 +2050,47 @@ function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
 }
 function runningHtml(u){return `<div class="setup-grid"><section class="card"><h3>Running…</h3><ol class="progress" id="prog">${runSteps(u).map(([t],i)=>`<li id="ps-${i}"><span class="dot">${i+1}</span><div><div class="pt">${esc(t)}</div><div class="pd"></div></div></li>`).join("")}</ol></section>${runsCard(u)}</div>`;}
 function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id];
-  return `<div class="results"><div class="summary"><span class="ok">✓ ${r.mode==="train"?(cfg.gen?"Assistant built":"Training complete"):(cfg.gen?"Evaluation complete":"Scoring complete")}</span>
+  return `<div class="results"><div class="summary"><span class="ok">✓ ${r.mode==="train"?(cfg.gen?"Assistant built":u.up?"Uplift model trained":"Training complete"):(cfg.gen?"Evaluation complete":"Scoring complete")}</span>
     <span>${r.mode==="train"?`Best model <b>${esc(r.best)}</b> · ${esc(r.score)}`:`<b>${esc(r.rows)}</b> rows scored with ${esc(r.best)}${r.ptype==="Uplift"?` · Recommended to contact: <b>${fmtI(upliftPolicy(r).n)}</b>`:""}`}</span>
-    ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}${r.mode==="train"&&r.ptype==="Uplift"?`<span class="muted">${r.upChampion?"Set as uplift champion":r.causal===false?"Not promoted: not causal":"Not promoted"}</span>`:""}${r.mode==="score"&&u.id==="win-back-campaign"?`<a class="linkbtn" id="f-campaign" href="#/uc/${u.id}/campaign">Campaign results</a>`:""}
+    ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}${r.mode==="train"&&r.ptype==="Uplift"?`<span class="muted">${r.upChampion?"Set as uplift champion":r.causal===false?"Not promoted: not causal":"Not promoted"}</span>`:""}${r.mode==="score"&&u.id==="win-back-campaign"?`<a class="linkbtn" id="f-campaign" href="${pageHref(u,"campaign")}">Campaign results</a>`:""}
     <span class="muted">${esc(r.file)} · ${esc(r.at)}</span><button class="again" id="f-again">Run again / change settings</button></div>
-    <span class="cap">AI pipeline</span><div class="flow">${flowBlocks(u,r)}</div>
+    <span class="cap">${u.up?"Uplift pipeline":"AI pipeline"}</span><div class="flow">${flowBlocks(u,r)}</div>
     ${cfg.gen?assistantResults(u):""}
     <div class="runs-below">${runsCard(u)}</div></div>`;
 }
+/* DEC-608's entry point, under the use case's header, as ui/modules/uplift/index.js inserts it after the
+   rule: one link to the use case's uplift screen. Only a use case with uplift sample content has one. */
+const upEntry=u=>upliftOffered(u)?`<nav class="uentry" aria-label="Uplift"><a href="${pageHref(upView(u))}">Uplift for <b>this use case</b> ›</a><span>${esc(UPLIFT_EXPLANATION)}</span></nav>`:"";
+const upChip=()=>`<span class="chip type">Uplift</span>`;
 function detail(u){const s=st(u);
   const body = s.view==="running"?runningHtml(u):s.view==="results"?resultsHtml(u):setupHtml(u);
+  /* the uplift screen's header is ui/modules/uplift/views.js upliftScreenHtml's */
+  if(u.up)return `<main class="screen t-${u.k}" data-module="uplift">
+    ${pageHead(`<a class="back" href="${pageHref(baseUC(u))}">‹&nbsp; ${esc(u.name)}</a><h1 class="h1">${esc(u.name)} · Uplift</h1><p class="desc">Uplift ${esc(UPLIFT_EXPLANATION)}.</p><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}${upChip()}</div>`)}
+    ${body}
+  </main>`;
   return `<main class="screen t-${u.k}">
-    ${pageHead(`<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">${esc(u.name)}</h1><p class="desc">${esc(u.desc)}</p><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}</div>`)}
+    ${pageHead(`<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">${esc(u.name)}</h1><p class="desc">${esc(u.desc)}</p><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}</div>`)}${upEntry(u)}
     ${body}
   </main>`;
 }
+/* #/uplift: every use case, as the product's upliftIndexHtml lists them. The prototype has uplift sample
+   content for Win-back only, so the others are listed without a link rather than with win-back's numbers. */
+function upliftIndex(){
+  const rows=UC.map(u=>upliftOffered(u)?`<a href="${pageHref(upView(u))}"><span>${esc(u.name)}</span><span class="s">${esc(u.stage)} ›</span></a>`
+    :`<div class="off"><span>${esc(u.name)}</span><span class="s">${esc(u.stage)} · no uplift sample in this prototype</span></div>`).join("");
+  return `<main class="screen" data-module="uplift">${pageHead(`<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">Uplift modelling</h1><p class="desc">Uplift ${esc(UPLIFT_EXPLANATION)}: it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.</p>`)}
+    <div class="uindex">${rows}</div><p class="hint">Pick a use case to train an uplift model on a campaign with a random control group.</p></main>`;}
 function rerender(u){const m=document.querySelector("#app main");if(!m)return;const open=[...document.querySelectorAll(".stage-d[open]")].map(d=>d.querySelector(".st").textContent);m.outerHTML=detail(u);document.querySelectorAll(".stage-d").forEach(d=>{if(open.includes(d.querySelector(".st").textContent))d.open=true;});bindDetail(u);}
 function bindDetail(u){
   const s=st(u), cfg=SETUP[u.id], $=id=>document.getElementById(id);
   const on=(id,ev,fn)=>{const el=$(id);if(el)el.addEventListener(ev,fn);};
-  document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{if(s.mode!==b.dataset.mode){s.mode=b.dataset.mode;s.file=null;s.cols=[];s.preview=null;s.target="";s.pk="";s.treatment="";s.targeted=false;s.ack=false;if(s.ptype===UPLIFT_PTYPE)s.ptype="";rerender(u);}}));
+  document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{if(s.mode!==b.dataset.mode){s.mode=b.dataset.mode;s.file=null;s.cols=[];s.preview=null;s.target="";s.pk="";s.treatment="";s.targeted=false;s.ack=false;rerender(u);}}));
   on("f-sample","click",()=>{sampleFile(u);rerender(u);});
   /* Phase 3b §8: treatment column, the targeted sample and its acknowledgement */
   on("f-samplecampaign","click",()=>{sampleFile(u,true);rerender(u);});
   on("f-sampletargeted","click",()=>{sampleTargeted(u);rerender(u);});
-  on("f-treat","change",e=>{const was=isUplift(u);s.treatment=e.target.value;
-    if(!s.treatment&&was&&!s.ptype)s.ptype=UPLIFT_PTYPE;
-    if(s.treatment&&s.ptype===UPLIFT_PTYPE)s.ptype="";
-    if(!s.treatment)s.ack=false;rerender(u);});
+  on("f-treat","change",e=>{s.treatment=e.target.value;if(!s.treatment)s.ack=false;rerender(u);});
   on("f-ack","change",e=>{s.ack=e.target.checked;rerender(u);});
   document.querySelectorAll("[data-up-num]").forEach(el=>el.addEventListener("change",()=>{
     const k=el.dataset.upNum;s.adv[k]=upNumValue(k,el.value,+el.min,+el.max);rerender(u);}));
@@ -2168,7 +2228,7 @@ function bindDetail(u){
     steps.forEach((_,i)=>setTimeout(()=>{mark(i,"active","");if(i>0)mark(i-1,"done",steps[i-1][1]);},i*dt));
     setTimeout(()=>{
       mark(steps.length-1,"done",steps[steps.length-1][1]);
-      const base=s.mode==="score"?s.runs.find(r=>r.id===s.scoreRun)||s.runs[0]:null;
+      const base=s.mode==="score"?scoreBase(u):null;
       const upTrain=s.mode==="train"&&isUplift(u),learner=(s.adv.upLearner||"").split(" (")[0];
       const run={id:"r"+(s.runs.length+1),at:nowStamp(),mode:s.mode,file:s.file.name,rows:s.file.rows,pk:s.pk,ptype:s.mode==="train"?(s.ptype||detectType(u)||"").split(" (")[0]:(base.ptype||""),model:s.mode==="train"?(upTrain?learner:s.model):base.model,
         best:s.mode==="train"?(upTrain?`${learner} · ${s.adv.upBase}`:s.model===AUTO?cfg.best:s.model):base.best,score:s.mode==="train"?(upTrain?`AUUC ${f4(auucOf(holdoutDeciles(s.adv.upTest)))}`:cfg.score):base.score,target:s.mode==="train"?s.target:base.target,champion:s.mode==="train"&&!upTrain,beat:false,lineage:!!s.builtFrom,
@@ -2186,14 +2246,16 @@ function bindDetail(u){
 function mock(u, kind){
   const NAMES = {data:"Data",model:"Model",output:"Output",campaign:"Campaign results"};
   const K = NAMES[kind], up = upliftRun(u), cur = st(u).current;
-  const title = kind==="model"&&up ? `${u.name} uplift model` : {data:u.d,model:u.m,output:u.o,campaign:"Campaign results"}[kind];
+  const title = kind==="model"&&(up||u.up) ? `${u.name} uplift model` : {data:u.d,model:u.m,output:u.o,campaign:"Campaign results"}[kind];
   /* Phase 3b: a fourth tab once a scoring run is current (one that held no control group back says so there) */
   const camp = u.id==="win-back-campaign"&&(kind==="campaign"||!!(cur&&cur.mode==="score"));
-  const tabs = ["data","model","output",...(camp?["campaign"]:[])].map((t,i)=>`${i?'<span class="arr" aria-hidden="true">→</span>':""}<a class="tab ${t===kind?"on":""}" href="#/uc/${u.id}/${t}" ${t===kind?'aria-current="page"':""}><span class="n">0${i+1}</span>${NAMES[t]}</a>`).join("");
+  const tabs = ["data","model","output",...(camp?["campaign"]:[])].map((t,i)=>`${i?'<span class="arr" aria-hidden="true">→</span>':""}<a class="tab ${t===kind?"on":""}" href="${pageHref(u,t)}" ${t===kind?'aria-current="page"':""}><span class="n">0${i+1}</span>${NAMES[t]}</a>`).join("");
   let body = "";
   if(kind==="campaign"){ body = campaignPage(u); }
   else if(kind==="model"&&up){ body = upliftModelBlock(u); }
   else if(kind==="output"&&up){ body = `${upliftOutputBlock(u)}${u.id==="win-back-campaign"?copyBlock():""}`; }
+  /* an uplift page before any uplift run: nothing to show, and never Phase 1's figures under an uplift header */
+  else if(u.up&&kind!=="data"){ body = `<section class="card"><div class="empty" data-up-empty>No uplift run yet. <a class="linkbtn" href="${pageHref(u)}">Train an uplift model</a> to see ${kind==="model"?"its Qini curve and AUUC":"its segments and who to contact"}.</div></section>`; }
   else if(kind==="data"){const x=u.data;
     body = `${kpis(x.kp)}
     ${lineageBlock(u)}
@@ -2227,9 +2289,9 @@ function mock(u, kind){
     ${u.id==="rca"?rcaBlock():""}${u.id==="win-back-campaign"?copyBlock():""}
     <section class="card"><h3>${esc(x.tt)}</h3>${table(x.cols,x.rows,"",x.band)}</section>`;
   }
-  return `<main class="screen t-${u.k}">
-    ${pageHead(`<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Customer Lifecycle</a><span class="sep">›</span><a href="#/uc/${u.id}">${esc(u.name)}</a><span class="sep">›</span><span class="cur">${K}</span></nav>
-      <span class="over" style="color:var(--c)">${K}</span><h1 class="h1">${esc(title)}</h1><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}</div>`)}
+  return `<main class="screen t-${u.k}"${u.up?' data-module="uplift"':""}>
+    ${pageHead(`<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Customer Lifecycle</a><span class="sep">›</span><a href="#/uc/${u.id}">${esc(u.name)}</a><span class="sep">›</span>${u.up?`<a href="${pageHref(u)}">Uplift</a><span class="sep">›</span>`:""}<span class="cur">${K}</span></nav>
+      <span class="over" style="color:var(--c)">${K}</span><h1 class="h1">${esc(title)}</h1><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}${u.up?upChip():""}</div>`)}
     <div class="tabs-bar"><nav class="tabs" aria-label="Pipeline">${tabs}</nav><span class="note">Illustrative sample, AWS reference stack</span></div>
     <div class="stack">${body}</div>
   </main>`;
@@ -2261,7 +2323,8 @@ function bindGlobal(){
   const d=document.getElementById("cc-dl");
   if(d)d.addEventListener("click",downloadMessages);
   /* Phase 3b §8: uplift output and the campaign results page */
-  const u=UC.find(x=>location.hash.startsWith(`#/uc/${x.id}/`));if(!u)return;
+  const m=location.hash.match(/^#\/(uc|uplift)\/([^/]+)\//),u0=m&&UC.find(x=>x.id===m[2]);if(!u0)return;
+  const u=m[1]==="uplift"?upView(u0):u0;
   const s=st(u),$i=id=>document.getElementById(id),on=(id,ev,fn)=>{const el=$i(id);if(el)el.addEventListener(ev,fn);};
   on("up-dl","click",()=>downloadTreatList(u));
   on("up-null","click",()=>{UP_NULL_VIEW=!UP_NULL_VIEW;UP_NULL_HASH=location.hash;render();});
@@ -2282,6 +2345,12 @@ function render(){
     else if(["data","model","output"].includes(parts[2])){ html = mock(u,parts[2]); t = `${u.name} · ${parts[2][0].toUpperCase()+parts[2].slice(1)} · Marketing AI`; }
     else if(parts[2]==="campaign"&&u.id==="win-back-campaign"){ html = mock(u,"campaign"); t = `${u.name} · Campaign results · Marketing AI`; }
     else { html = detail(u); t = `${u.name} · Marketing AI`; after = () => bindDetail(u); }
+  } else if(parts[0]==="uplift"){
+    /* DEC-608: the uplift screens, reached from the use case's "Uplift for this use case" link */
+    const b = UC.find(x=>x.id===parts[1]), u = b&&upliftOffered(b)?upView(b):null;
+    if(!u){ html = upliftIndex(); t = "Uplift · Marketing AI"; }
+    else if(["data","model","output","campaign"].includes(parts[2])){ html = mock(u,parts[2]); t = `${u.name} · Uplift · ${{data:"Data",model:"Model",output:"Output",campaign:"Campaign results"}[parts[2]]} · Marketing AI`; }
+    else { html = detail(u); t = `${u.name} · Uplift · Marketing AI`; after = () => bindDetail(u); }
   } else html = overview();
   app.style.animation="none"; void app.offsetWidth; app.style.animation="";
   app.innerHTML = html; document.title = t; if(after) after(); bindGlobal(); window.scrollTo(0,0);

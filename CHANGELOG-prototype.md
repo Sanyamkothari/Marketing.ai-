@@ -36,7 +36,8 @@ repository so it can be diffed and tested.
 | E | **Win-back campaign copy** | Phase 3a §9 E | `copyBlock()` |
 | F | **Lineage block** on the Data page | Phase 2 §10 F | `lineageBlock()` |
 | R | **Reconciled against the built screens** | — | see below |
-| U1 | **Setup → Uplift problem type**, treatment-column picker, meta-learner step | Phase 3b §8 (plan B) | `setupHtml()`, `ptypesFor()`, `detectTreatment()` |
+| U0 | **Uplift entry point** (DEC-608): *Uplift for this use case ›* under Win-back's header; the uplift screen `#/uplift/win-back-campaign`; the `#/uplift` index | Phase 3b §8, DEC-608 | `upEntry()`, `upView()`, `detail()`, `upliftIndex()`, `render()` |
+| U1 | **Uplift screen Setup**: the Uplift problem type, treatment-column picker, meta-learner step | Phase 3b §8 (plan B) | `setupHtml()`, `upStep1()`, `detectTreatment()` |
 | U2 | **Setup → TREATMENT_NOT_RANDOM**: the six checks inline, acknowledge to run | Phase 3b §8, plan B §4 | `upChecksHtml()`, `sampleTargeted()` |
 | U3 | **Advanced → uplift settings** inside stages 5 and 6 | Phase 3b §8, plan B §6 | `upStage5()`, `upStage6()` |
 | U4 | **Running → uplift training and uplift scoring** | Phase 3b §8 | `runSteps()` |
@@ -253,12 +254,60 @@ page itself: a win-back **scoring** run keeps a control group, so its summary li
 byte against 8f0d358: review round 2 had changed the run stamp in 11 and 16 to a 24-hour *23 Sep 2026,
 10:33*; review round 3 put the stamp back (below) and restored those four PNGs.
 
-**Setup**
+**Where uplift starts (DEC-608, reconciled after review round 4).** Uplift is **not** a Phase 1 Setup
+choice. The product's catalog marks `uplift` `enabled: false` (`configs/engine.yaml`), because
+choosing it in Phase 1's Setup started a run through `POST /runs` with no treatment picker and none of
+the synchronous checks behind `POST /uplift/runs` (DEC-608 in `docs/DECISIONS.md`). The prototype had
+it the other way round — the campaign files, the treatment picker and an *Uplift* problem type inside
+Win-back's own Setup — and now follows the product:
 
-- **Uplift is an opt-in.** Win-back's step 1 offers *use the sample campaign file (with a control
-  group)* (`#f-samplecampaign`, `win_back_campaign_with_control.csv`: the Phase 1 columns plus
-  `treatment` and `treatment_date`) next to the unchanged *use the sample dataset*, and *use a sample
-  where offers were targeted* for the non-random case.
+- **Win-back's Setup (`#/uc/win-back-campaign`) is Phase 1's again**, markup for markup as at 8f0d358
+  in every state (Setup, a sample, a changed problem type, Running, Results, Data / Model / Output,
+  score mode — checked in jsdom against 8f0d358 for all seven use cases). `change…` lists the four
+  Phase 1 types only, even for an uploaded file with a `treatment` column, which is then an ordinary
+  column. The one Revision 4 difference that stays is Phase 1's own: a win-back scoring run links to
+  **Campaign results**.
+- **The entry point is ui/modules/uplift/index.js's**: a link under the use case's header, after the
+  rule, `<nav class="uentry" aria-label="Uplift">` — **Uplift for this use case ›** and *predicts who
+  changes behaviour because of your action* (`UPLIFT_EXPLANATION`, verbatim). It is on Win-back's
+  Setup, Running and Results, the one use case with uplift sample content.
+- **The uplift screen is `#/uplift/win-back-campaign`**, with the product's header (*‹ Win-back
+  Campaign*, **Win-back Campaign · Uplift**, *Uplift predicts who changes behaviour because of your
+  action.*, an **Uplift** chip) and the product's words for its modes and button (*Train uplift model* /
+  *Score new data*, **Train uplift model** / **Score customers**), step hints, *Outcome column*,
+  *Previous uplift runs*, *Trained uplift model*, *Train an uplift model first* and *Uplift pipeline*.
+  Everything this revision describes below for uplift Setup, Running, Results, Model, Output and
+  Campaign results is unchanged in content; it now lives on that screen and its pages,
+  `#/uplift/win-back-campaign/{data,model,output,campaign}` (crumbs *Customer Lifecycle › Win-back
+  Campaign › Uplift › Model*). The problem type there is the screen's — the catalog label as a pill with
+  its one line, no *detected from…* and no `change…`. Step 1 offers an upload and the two campaign
+  samples, not Phase 1's plain sample (it has no treatment column) nor the raw-table builder; a file
+  with no column named like a treatment gets the product's note (*No 0/1 column in this file looks like
+  a treatment. …*).
+- **Its form is its own** (`UPSTATE`, as the product's uplift Setup controller is), so nothing typed on
+  one screen appears on the other, and Phase 1's stage 6 control share never reaches uplift (the old
+  `syncUpliftControl` swap is gone). **The runs are shared** — one registry per use case: Win-back's
+  *Previous runs* lists uplift runs too, but Phase 1's score mode offers only Phase 1 models and the
+  uplift screen only uplift models, and Phase 1's pages never render an uplift run. Before any uplift
+  run, the uplift Model and Output pages say so rather than show Phase 1's figures.
+- **`#/uplift`** is the product's index (*Uplift modelling*, its description and hint): all seven use
+  cases, Win-back the one with a link, the others marked *no uplift sample in this prototype*.
+  `#/uplift/<another use case>` shows the index, never an uplift Setup with win-back's numbers.
+- **Not drawn, deliberately: the Overview link.** The product also adds *Uplift modelling ›* under the
+  Overview's header. The Overview is screenshot 01, which stays byte for byte 8f0d358's, as do the
+  Data / Model / Output pages in 14 and 17, which the product also decorates with the use-case link.
+  `#/uplift` is therefore reachable by URL only in the prototype. *To confirm:* whether the prototype
+  should carry the Overview link (and reshoot 01) now that DEC-608 makes it the product's main way in.
+- **Still to reconcile (not DEC-608):** the *Uplift champion* label below predates DEC-609 and DEC-649,
+  under which an uplift run on Win-back — a use case configured for classification, whose slot holds a
+  propensity champion — stays a candidate until a person promotes it on the Models page.
+
+**Setup** (on the uplift screen since the DEC-608 reconciliation)
+
+- **Uplift is an opt-in.** The uplift screen's step 1 offers *use the sample campaign file (with a
+  control group)* (`#f-samplecampaign`, `win_back_campaign_with_control.csv`: the Phase 1 columns plus
+  `treatment` and `treatment_date`) and *use a sample where offers were targeted* for the non-random
+  case; the use case's own Setup keeps the unchanged *use the sample dataset*.
 - **Only Win-back has uplift** (round 1 decision). The prototype has uplift sample numbers for
   Win-back alone, so uplift is offered only where `SETUP[id].treatment` is set (`hasUplift()`).
   Elsewhere a column named like a treatment (`contacted` on Payment Propensity, say) is an ordinary
@@ -266,10 +315,10 @@ byte against 8f0d358: review round 2 had changed the run stamp in 11 and 16 to a
   itself detects a treatment column on any use case; the prototype simply has nothing honest to show
   there.
 - **Uplift is a problem type**, `Uplift (who changes because of your action)` — the
-  `catalog.problem_types.uplift.label` of `configs/engine.yaml`, verbatim — detected when a treatment
-  column is chosen, with the one-line explanation *"Predicts who changes behaviour because of your
-  action."* in place of the generic "Metrics and models will switch…" warning. `change…` offers it
-  only when there is a treatment column; `PTYPES` itself is untouched (Classification stays first).
+  `catalog.problem_types.uplift.label` of `configs/engine.yaml`, verbatim — with the one-line
+  explanation *"Predicts who changes behaviour because of your action."*. Since DEC-608 it is the uplift
+  screen's type, not detected and not in any `change…`; `PTYPES` itself is untouched (Classification
+  stays first).
 - **Treatment column picker**, a field in step 2 shown only when a column matches
   `uplift.treatment_column_hints` (`treatment, treated, contacted, is_treated`), with a **None**
   option and the detected column pre-selected, as `GET /uploads/{id}/treatment-candidates` returns
@@ -285,11 +334,10 @@ byte against 8f0d358: review round 2 had changed the run stamp in 11 and 16 to a
   TREATMENT_NOT_BINARY, so the panel always lists the six checks. A bigger upload cannot be checked in
   the page and shows no panel.
 - **Blocked reasons.** Uplift with no treatment column: *"Choose the treatment column"*. Clearing the
-  column keeps the problem type on Uplift (the choice was the user's) rather than silently switching
-  to Classification. An upload detects the problem type afresh, as it always did; a sample link clears
-  a manual **Uplift** (and the campaign file, the uplift opt-in, detects afresh), so the plain sample
-  after that is Classification again and runs. Any other type set by hand survives *use the sample
-  dataset*, exactly as at 8f0d358 (Regression stays *set manually*).
+  column keeps the screen on Uplift. (Before DEC-608 a manual **Uplift** had to be cleared by the plain
+  sample link; with separate screens there is nothing to clear, and the plain sample on the use case's
+  Setup is Classification and runs.) Any type set by hand survives *use the sample dataset*, exactly as
+  at 8f0d358 (Regression stays *set manually*).
 - **Step 3 for uplift** offers the meta-learners (X-learner recommended, T-learner, S-learner as the
   baseline) and the base model (AutoGluon fast, LightGBM), each with a hint.
 - **Advanced**: stage 5 carries bootstrap resamples and the hold-out share; stage 6 swaps the
@@ -435,7 +483,8 @@ class is `.ncbanner`, not `.banner`, so the copy block's banner tests are unaffe
 - *Campaign results is shown on Win-back only.* The page applies to any scoring run with a control
   group; the prototype shows it where plan B's acceptance test puts it.
 
-`tests/prototype/uplift.test.mjs` (31 tests) drives all of this. `consistency.test.mjs` adds eight:
+`tests/prototype/uplift.test.mjs` (38 tests since the DEC-608 reconciliation) drives all of this.
+`consistency.test.mjs` adds nine:
 the label, thresholds and defaults (the sure-thing cut too) against the yaml `uplift:` block; the
 control share against `control_group_fraction`; `SEG_LABELS`, `SEG_ACTIONS` and `NOT_CAUSAL_NOTE`
 against `engine/uplift/contracts.py`; the four AUUC sentences against `metrics.py`; the check
@@ -444,6 +493,20 @@ ways (every template the page carries is the engine's, and every sentence those 
 write is carried), so a wording change on either side fails a test; and the internal arithmetic. The
 five that read Phase 3b files **skip**, with the reason, on a branch that does not have them yet, and
 `PRODUCT_ROOT=<checkout>` points them at another checkout (all 81 pass against the Phase 3b tree).
+
+**DEC-608 reconciliation** (after review round 4), each with a test that fails against the round-4 page:
+the label test now asserts `catalog.problem_types.uplift.enabled` is `false` — no longer ignored — and
+that it holds in the page: no Phase 1 Setup offers Uplift or an uplift sample, on any use case, and the
+type is reached from Win-back's link, on the uplift screen. A new consistency test pins the entry link,
+its route and the uplift screen's words to `ui/modules/uplift/views.js` and `index.js` (skipped where
+that module is absent). `uplift.test.mjs` moves every uplift flow to the uplift screen (the assertions
+are the same, the route and the state object are the uplift screen's), turns *"change… offers Uplift
+only when there is a treatment column"* into *"Phase 1's change… never offers Uplift, not even for a
+file with a treatment column"*, turns the round-1 check that Win-back's Setup carries `#f-samplecampaign`
+into a check that it does not and links to the uplift screen instead, and adds two: the entry point in
+the product's words (and nowhere else: no other use case, no Data / Model / Output page, not the
+Overview), and the uplift screen's own form over the shared runs. 89 tests pass against the Phase 3b
+tree.
 
 **Review round 1** fixed: the plain win-back sample had become an uplift run (uplift is now the
 opt-in above); uplift reached other use cases with win-back's numbers (now Win-back only, and a
@@ -490,6 +553,12 @@ customers as *"Sample rows of scores.csv"* and the sample's segment means (now l
 and **—** for the means); Campaign results dated runs in UTC and Results in local time, so the same run
 showed different days east or west of UTC (now local on both; test in Asia/Kolkata). Screenshot 23 was
 re-shot for its local run time; 19–22 and 24 are unchanged, and 01–18 are byte for byte 8f0d358's.
+The DEC-608 reconciliation re-shot 19–23, whose screens moved to `#/uplift/win-back-campaign` (new
+header, crumbs and Setup words; 23 also carries the shooting time); 24 (a Phase 1 run's campaign page)
+came out byte-identical, and 01, 02 and 12–14 were re-shot as a check and came out byte-identical. 17
+cannot be reproduced byte for byte by anyone — its approval stamp is the time of shooting, before and
+after this change alike — so its 8f0d358 PNGs were kept. The entry link itself is on Win-back's Setup,
+which no screenshot shows.
 
 ---
 
@@ -543,7 +612,7 @@ Anything the product would have to invent is still `—`.
 
 ```bash
 open marketing-ai-prototype.html          # no build step, no server needed
-make prototype-test                       # 81 jsdom tests (5 skip until Phase 3b's engine/uplift is present)
+make prototype-test                       # 89 jsdom tests (6 skip until Phase 3b's engine/uplift and ui/modules/uplift are present)
 make prototype-screenshots                # docs/prototype/*.png, desktop and mobile
 ```
 
@@ -557,7 +626,7 @@ Screenshots of every new state, desktop (1440px) and mobile (390px), are in
 24, whose screens changed (23 did not); review round 2 reshot 11, 16 and 23, whose run stamps
 changed (19–22 were reshot too and came out byte-identical); review round 3 reshot 23 and 24 (the run
 select's date and hint), reshot 21 and 22 byte-identical, and restored 11 and 16 to their 8f0d358
-PNGs, whose stamp form is back; `ONLY=19,20 node
+PNGs, whose stamp form is back; the DEC-608 reconciliation reshot 19–23, whose screens moved to `#/uplift/win-back-campaign`; `ONLY=19,20 node
 scripts/prototype_screenshots.mjs` reshoots just those. The script is an ES module, so `NODE_PATH`
 does not reach it: `playwright` must resolve from a `node_modules` above the checkout. They were captured in a sandbox with no
 outbound access to Google Fonts, so they render in the stylesheet's fallback stack

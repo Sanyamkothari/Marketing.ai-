@@ -20,6 +20,28 @@ const POLL_MS = 2000;
 
 const isUplift = (run) => run && run.problem_type === "uplift";
 
+/** Artefacts written on request after a run finished (`POST .../uplift/ope`), so never in its record. */
+const ON_REQUEST = new Set(["ope_report.json", "incrementality_report.json"]);
+
+/**
+ * The artefacts of `names` worth asking for. `run.json`'s `artefacts` map lists every file the run's
+ * own flow wrote, so a name absent from it would only come back `404` - which the screen already
+ * renders as "—", but which the browser also logs as a console error on every visit (a scoring run
+ * writes no `uplift_validation.json`, for one). Files written on request are always asked for, and a
+ * record without the map (an older run) gets every name asked for, as before.
+ */
+function producedBy(run, names) {
+  const listed = run && run.artefacts;
+  if (!listed || typeof listed !== "object") return names;
+  return names.filter((name) => ON_REQUEST.has(name) || Object.prototype.hasOwnProperty.call(listed, name));
+}
+
+/** `names` keyed by file name: fetched when the run produced them, `null` otherwise. */
+async function artefactsOf(runId, run, names) {
+  const fetched = await getUpliftArtefacts(runId, producedBy(run, names));
+  return Object.fromEntries(names.map((name) => [name, name in fetched ? fetched[name] : null]));
+}
+
 /** An uplift use case's runs, newest first as the API lists them. Errors leave the list empty. */
 async function upliftRuns(useCaseId) {
   try {
@@ -313,8 +335,9 @@ export function createModelController(runId, rerender) {
   const s = { run: null, art: null, ope: { report: null, topSharePct: "", submitting: false, error: null } };
 
   async function load() {
-    const [detail, art] = await Promise.all([getRun(runId), getUpliftArtefacts(runId, MODEL_ARTEFACTS)]);
+    const detail = await getRun(runId);
     s.run = detail.run;
+    const art = await artefactsOf(runId, s.run, MODEL_ARTEFACTS);
     s.art = art;
     s.ope.report = art["ope_report.json"];
   }
@@ -354,13 +377,9 @@ export function createOutputController(uc, runId) {
   const s = { run: null, art: null, scoreRuns: [], scoresHref: scoresUrl(runId) };
 
   async function load() {
-    const [detail, art, runs] = await Promise.all([
-      getRun(runId),
-      getUpliftArtefacts(runId, OUTPUT_ARTEFACTS),
-      upliftRuns(uc.id),
-    ]);
+    const [detail, runs] = await Promise.all([getRun(runId), upliftRuns(uc.id)]);
     s.run = detail.run;
-    s.art = art;
+    s.art = await artefactsOf(runId, s.run, OUTPUT_ARTEFACTS);
     s.scoreRuns = runs.filter((r) => r.mode === "score");
   }
 
@@ -368,6 +387,14 @@ export function createOutputController(uc, runId) {
 }
 
 // --- Campaign results page -----------------------------------------------------------------------
+
+/** `YYYY-MM-DD` from a date input -> the UTC instant of 23:59:59 on that day in the browser's zone. */
+export function endOfLocalDay(day) {
+  const [year, month, date] = String(day).split("-").map(Number);
+  const end = new Date(year, month - 1, date, 23, 59, 59);
+  if (Number.isNaN(end.getTime())) return `${day}T23:59:59Z`;
+  return end.toISOString().replace(/\.\d{3}Z$/, "Z");
+}
 
 export function createCampaignController(uc, runId, rerender) {
   const s = {
@@ -414,9 +441,12 @@ export function createCampaignController(uc, runId, rerender) {
     if (f.positive_label) body.positive_label = f.positive_label;
     if (f.outcome_window_days) body.outcome_window_days = Number(f.outcome_window_days);
     if (f.treatment_date_column) body.treatment_date_column = f.treatment_date_column;
-    // A date picked on screen means "judged at the end of that day", in UTC like every stamp the
-    // engine writes; the API needs an aware datetime, not a bare date.
-    if (f.as_of) body.as_of = `${f.as_of}T23:59:59Z`;
+    // A date picked on screen means "judged at the end of that day" - the end of the day where the
+    // user is, since that is the day they picked. The API needs an aware datetime, so the local
+    // 23:59:59 is sent as its UTC instant. (Sending `<date>T23:59:59Z` instead made the page read
+    // "as of 02 Jun, 5:29 am" in India for a user who picked 1 June, because stamps are shown in
+    // local time.)
+    if (f.as_of) body.as_of = endOfLocalDay(f.as_of);
     return body;
   }
 

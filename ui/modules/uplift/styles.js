@@ -21,6 +21,7 @@ const CSS = `
 .uchart .grid{stroke:var(--line);stroke-width:1}
 .uchart .zero{stroke:var(--line2);stroke-width:1}
 .uchart .tk{fill:var(--muted);font-size:11px;font-family:inherit}
+@media (max-width:560px){.uchart{padding:12px 8px 4px}.uchart .tk{font-size:19px}.uchart .tt{font-size:16px}main[data-module="uplift"] th,main[data-module="uplift"] td{padding-left:12px;padding-right:12px}}
 .uchart .model{fill:none;stroke:var(--c);stroke-width:2.25;stroke-linejoin:round;stroke-linecap:round}
 .uchart .area{fill:var(--t);stroke:none}
 .uchart .rand{fill:none;stroke:var(--faint);stroke-width:1.5;stroke-dasharray:5 4}

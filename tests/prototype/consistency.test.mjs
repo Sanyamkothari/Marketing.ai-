@@ -168,6 +168,25 @@ test("the uplift label, defaults and thresholds are the product's", (t) => {
   const dom = load("#/uc/win-back-campaign");
   // "uplift:" appears three times in the file; the label is the problem-type catalogue's
   assert.equal(ev(dom, "UPLIFT_PTYPE"), yaml.match(/^\s+uplift:\s+\{label: "([^"]+)"/m)[1]);
+  // DEC-608: the catalogue entry is enabled: false, so Phase 1's Setup never offers the type, on any use
+  // case; it is chosen on the uplift screen, which the use case's own Setup links to
+  const enabled = (yaml.match(/^\s+uplift:\s+\{label: "[^"]+",\s*enabled:\s*(\w+)\s*\}/m) || [])[1];
+  assert.equal(enabled, "false", "catalog.problem_types.uplift.enabled (DEC-608)");
+  for (const id of JSON.parse(ev(dom, "JSON.stringify(UC.filter(u=>!SETUP[u.id].gen).map(u=>u.id))"))) {
+    go(dom, `#/uc/${id}`);
+    click(dom, "#f-sample");
+    const offered = [...$(dom, "#f-ptype").options].map((o) => o.textContent);
+    assert.ok(!offered.includes(ev(dom, "UPLIFT_PTYPE")), `${id}'s Phase 1 Setup offers Uplift`);
+    assert.equal($(dom, "#f-samplecampaign"), null, `${id}'s Phase 1 Setup offers an uplift sample`);
+  }
+  go(dom, "#/uc/win-back-campaign");
+  const link = $(dom, ".uentry a");
+  assert.ok(link, "and it is reachable elsewhere: the uplift screen, linked from the use case's Setup");
+  go(dom, link.getAttribute("href"));
+  click(dom, "#f-samplecampaign");
+  assert.equal($(dom, ".ptype .pill").textContent, ev(dom, "UPLIFT_PTYPE"));
+  assert.equal($(dom, "#f-ptype"), null);
+  go(dom, "#/uc/win-back-campaign");
   const next = yaml.slice(start + 1).search(/^  \w/m); // the block may be the file's last
   const block = yaml.slice(start, next < 0 ? undefined : start + 1 + next);
   const val = (k) => (block.match(new RegExp(`^\\s+${k}:\\s*([^#\\n]+?)\\s*(#|$)`, "m")) || [])[1];
@@ -192,6 +211,38 @@ test("the uplift label, defaults and thresholds are the product's", (t) => {
   assert.equal(val("budget_contacts"), "null");
   assert.equal(ev(dom, "defaultAdv(SETUP['payment-propensity']).upBudget"), null);
   assert.equal(ev(dom, "defaultAdv(SETUP['payment-propensity']).upCost"), null);
+});
+
+test("the uplift entry point and its words are ui/modules/uplift's (DEC-608)", (t) => {
+  const views = productText("ui/modules/uplift/views.js");
+  const index = productText("ui/modules/uplift/index.js");
+  if (!views || !index) return t.skip("ui/modules/uplift is not on this branch yet");
+  const dom = load("#/uc/win-back-campaign");
+  const explanation = views.match(/export const UPLIFT_EXPLANATION = "([^"]+)";/)[1];
+  assert.equal(ev(dom, "UPLIFT_EXPLANATION"), explanation);
+  // the link under a use case's header, and the route it leads to
+  assert.ok(index.includes("`<a href=\"${esc(routes.setup(ucId))}\">Uplift for <b>this use case</b> ›</a><span>${esc(\n      UPLIFT_EXPLANATION,\n    )}</span>`"),
+    "index.js's entry link markup moved: update the prototype's upEntry()");
+  assert.equal($(dom, ".uentry").innerHTML, `<a href="#/uplift/win-back-campaign">Uplift for <b>this use case</b> ›</a><span>${explanation}</span>`);
+  assert.match(views, /setup: \(ucId\) => `#\/uplift\/\$\{encodeURIComponent\(ucId\)\}`/);
+  assert.match(views, /index: \(\) => "#\/uplift"/);
+  // the uplift screen's header, mode and button labels, and the index page
+  assert.match(views, /\$\{esc\(\s*uc\.name,\s*\)\} · Uplift<\/h1><p class="desc">Uplift \$\{esc\(UPLIFT_EXPLANATION\)\}\.<\/p>/);
+  for (const words of ["Train uplift model", "Score customers", "Previous uplift runs", "No uplift runs yet.",
+    "Train an uplift model first", "Trained uplift model", "The saved uplift model that will rank the uploaded customers.",
+    "No trained uplift model yet", "Uplift pipeline", "Uplift modelling",
+    "Which column identifies a customer, which one says whether they were treated, and which one is the outcome.",
+    "One row per customer of a past campaign: the features, whether they were treated (0/1, assigned at random) and the outcome.",
+    "The customers to score. The trained uplift model ranks them by how much the action changes their outcome.",
+    "It needs a past campaign where the action was given at random.",
+    "Scoring writes the treat list: persuadables within budget are Treat, sleeping dogs never are, and a control group is held out.",
+    "After the run: Model (Qini curve, AUUC) → Output (segments, treat list) → Campaign results.",
+    "No 0/1 column in this file looks like a treatment. Uplift needs one: 1 for customers who got the action, 0 for the randomly held-out control group.",
+    ": it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.",
+    "Pick a use case to train an uplift model on a campaign with a random control group."]) {
+    assert.ok(views.includes(words), `views.js no longer says: ${words}`);
+    assert.ok(HTML.includes(words), `the prototype does not say: ${words}`);
+  }
 });
 
 test("the uplift control group is Phase 1's, and it is the holdout the copy block shows", () => {
