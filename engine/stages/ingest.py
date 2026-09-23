@@ -34,11 +34,15 @@ Heavy libraries (pandas, pyarrow) are imported inside the function bodies, never
 
 from __future__ import annotations
 
+import atexit
 import csv
 import hashlib
 import io
 import math
+import os
 import re
+import threading
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import PurePosixPath
@@ -55,6 +59,7 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
+    from concurrent.futures import Future, ProcessPoolExecutor
 
     import pandas as pd
 
@@ -653,16 +658,124 @@ def canonical_chunk_bytes(chunk: pd.DataFrame) -> bytes:
     return rendered.encode("utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Rendering chunks in parallel (Plan A M37, DEC-097)
+# ---------------------------------------------------------------------------
+# `canonical_chunk_bytes` is the single most expensive thing a large build does: every cell of every
+# source and of the dataset rendered as text, on one core. The digest itself is cheap and inherently
+# sequential - one sha256 over the chunks in order - so the chunks are *rendered* in worker processes
+# and *hashed* here, in the order they arrived. The bytes fed to sha256 are the same bytes in the same
+# order as the in-process path, so every fingerprint is identical by construction, not by tolerance.
+#
+# Worker processes, not threads: pandas' CSV writer holds the GIL. Spawned, not forked: a build runs
+# on the API's job thread, and forking a process that has other threads can deadlock on a lock one
+# of them held. A digest only reaches for the pool at its second chunk, so a file under one chunk
+# (every test fixture, most uploads) never starts it and behaves exactly as it always did.
+_PARALLEL_FROM_CHUNK: Final[int] = 2
+"""The chunk at which a digest starts rendering in the pool; the first is always rendered here."""
+
+_MAX_RENDER_WORKERS: Final[int] = 8
+
+
+def _render_workers() -> int:
+    """Worker processes for rendering: every core but one, which keeps parsing and hashing."""
+    return min(_MAX_RENDER_WORKERS, (os.cpu_count() or 1) - 1)
+
+
+_pool: ProcessPoolExecutor | None = None
+_pool_disabled = False
+_pool_lock = threading.Lock()
+
+
+def _render_pool() -> ProcessPoolExecutor | None:
+    """The one process pool, started on first use; `None` where parallel rendering cannot help or run."""
+    global _pool, _pool_disabled
+    if _pool is not None or _pool_disabled:
+        return _pool
+    with _pool_lock:
+        if _pool is None and not _pool_disabled:
+            workers = _render_workers()
+            if workers < 2:
+                _pool_disabled = True
+                return None
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+
+            try:
+                _pool = ProcessPoolExecutor(
+                    max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+                )
+            except (OSError, ValueError, NotImplementedError) as exc:
+                _LOG.warning(
+                    "fingerprint: parallel rendering unavailable (%s); rendering in-process",
+                    type(exc).__name__,
+                )
+                _pool_disabled = True
+                return None
+            atexit.register(_shutdown_render_pool)
+            _LOG.info("fingerprint: rendering chunks in %d worker processes", workers)
+    return _pool
+
+
+def _shutdown_render_pool() -> None:
+    global _pool
+    if _pool is not None:
+        _pool.shutdown(wait=False, cancel_futures=True)
+        _pool = None
+
+
+def _disable_render_pool() -> None:
+    """Stop using a pool that has failed; every later chunk is rendered in-process."""
+    global _pool_disabled
+    _pool_disabled = True
+    _shutdown_render_pool()
+
+
 class _ContentDigest:
-    """Streams `canonical_chunk_bytes` into one sha256 and seals it with the schema at the end."""
+    """Streams `canonical_chunk_bytes` into one sha256 and seals it with the schema at the end.
+
+    From its second chunk on, a chunk is rendered in the render pool and hashed here in arrival
+    order, with at most two chunks per worker in flight so memory stays bounded. Each pending chunk
+    is kept with its future: if a worker fails, that chunk is rendered in-process and the pool is
+    retired, so a broken pool costs time and never changes a fingerprint.
+    """
 
     def __init__(self) -> None:
         self._content = hashlib.sha256()
         self._rows = 0
+        self._chunks = 0
+        self._pending: deque[tuple[Future[bytes], pd.DataFrame]] = deque()
 
     def update(self, chunk: pd.DataFrame) -> None:
-        self._content.update(canonical_chunk_bytes(chunk))
         self._rows += len(chunk)
+        self._chunks += 1
+        pool = _render_pool() if self._chunks >= _PARALLEL_FROM_CHUNK else None
+        if pool is None:
+            self._drain()
+            self._content.update(canonical_chunk_bytes(chunk))
+            return
+        try:
+            self._pending.append((pool.submit(canonical_chunk_bytes, chunk), chunk))
+        except RuntimeError:  # the pool was shut down under us (interpreter exit, a failed worker)
+            self._drain()
+            self._content.update(canonical_chunk_bytes(chunk))
+            return
+        while len(self._pending) > 2 * _render_workers():
+            self._hash_next()
+
+    def _hash_next(self) -> None:
+        future, chunk = self._pending.popleft()
+        try:
+            rendered = future.result()
+        except Exception as exc:  # any worker failure falls back to the in-process render
+            _LOG.warning("fingerprint: a render worker failed (%s); rendering in-process", type(exc).__name__)
+            _disable_render_pool()
+            rendered = canonical_chunk_bytes(chunk)
+        self._content.update(rendered)
+
+    def _drain(self) -> None:
+        while self._pending:
+            self._hash_next()
 
     def finish(
         self,
@@ -671,6 +784,7 @@ class _ContentDigest:
         types: Mapping[str, ColumnType] | None = None,
         n_rows: int | None = None,
     ) -> DatasetFingerprint:
+        self._drain()
         resolved = types if types is not None else _inferred_types(frame)
         outer = hashlib.sha256()
         outer.update(FINGERPRINT_HEADER)
