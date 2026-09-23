@@ -1,6 +1,6 @@
 """`engine.generative.index`: the three decisions its own docstring names, proved against real builds.
 
-Every test here runs the real parsers, the real chunker and `GroundedFakeLLMClient`'s real lexical
+Every test here runs the real parsers, the real chunker and the grounded `FakeLLMClient`'s real lexical
 embedding over a two- or three-document slice of the synthetic Northwind corpus - never a hand-built
 `Chunk` or a stubbed vector - because the property this module exists for is what happens *between*
 those steps, and stubbing any one of them would leave it unreachable. The corpus is sliced to two or
@@ -29,7 +29,7 @@ with that address still in the chunk text a citation would quote, and the manife
 `PII_IN_DOCS:email` naming what was seen - both halves are asserted together, because a warning with
 no text-unchanged assertion beside it would not catch a change that quietly started redacting.
 
-One cost is accepted throughout: `GroundedFakeLLMClient`'s embedding is a lexical hash, not a real
+One cost is accepted throughout: the grounded `FakeLLMClient`'s embedding is a lexical hash, not a real
 model's, so a cosine near zero here is two texts with almost no shared vocabulary and not a claim
 about semantic distance - which is exactly the comparison the stale-vector test needs and no more.
 """
@@ -55,7 +55,7 @@ from engine.generative.errors import (
 )
 from engine.generative.index import PII_IN_DOCS, BuildResult, build_index, read_manifest
 from engine.generative.vectorstore import LocalVectorStore, cosine
-from engine.llm import GroundedFakeLLMClient, LLMCall
+from engine.llm import FakeLLMClient, FakeLLMMode, LLMCall
 from engine.storage import LocalStorage
 from engine.utils.ids import new_index_id
 from tests.fixtures.make_docs import build_knowledge_base
@@ -98,7 +98,7 @@ def use_case_with(**overrides: object) -> UseCaseConfig:
     return BASE.model_copy(update={"generative": BASE.generative.model_copy(update=overrides)})
 
 
-def meter_for(client: GroundedFakeLLMClient, *, use_case: UseCaseConfig = BASE) -> Meter:
+def meter_for(client: FakeLLMClient, *, use_case: UseCaseConfig = BASE) -> Meter:
     """A meter carrying `use_case`'s own LLM and budget settings, so `ChunkConfig` records what ran."""
     generative = use_case.generative
     return Meter(client, job_id=new_index_id(), llm=generative.llm, budget=generative.budget)
@@ -111,14 +111,14 @@ def build(
     storage: LocalStorage,
     use_case: UseCaseConfig = BASE,
     previous: DocIndexManifest | None = None,
-) -> tuple[GroundedFakeLLMClient, BuildResult]:
+) -> tuple[FakeLLMClient, BuildResult]:
     """Build once against `store`, handing back the client so its call log can be read afterwards.
 
     A fresh client every time, never a shared one, because what each test reads off `.calls` is what
     *this* build asked of a model - a client carried over from an earlier build would answer that
     question about the wrong build.
     """
-    client = GroundedFakeLLMClient()
+    client = FakeLLMClient(mode=FakeLLMMode.GROUNDED)
     result = build_index(
         list(paths),
         index_id=new_index_id(),
@@ -131,12 +131,12 @@ def build(
     return client, result
 
 
-def embed_calls(client: GroundedFakeLLMClient) -> tuple[LLMCall, ...]:
+def embed_calls(client: FakeLLMClient) -> tuple[LLMCall, ...]:
     """Every call this build made to embed something, in call order."""
     return tuple(call for call in client.calls if call.kind == "embed")
 
 
-def embedded_texts(client: GroundedFakeLLMClient) -> tuple[str, ...]:
+def embedded_texts(client: FakeLLMClient) -> tuple[str, ...]:
     """Every text this build actually sent to be embedded, across every call it made."""
     return tuple(text for call in embed_calls(client) for text in call.texts)
 
@@ -250,7 +250,7 @@ def test_a_rewritten_documents_stored_vector_is_the_vector_of_its_new_text_and_n
     new_vector = vector_for(store, second.manifest.index_id, target)
     assert new_chunk.text != old_chunk.text
 
-    (fresh_vector,) = GroundedFakeLLMClient().embed([embedding_text(new_chunk)])
+    (fresh_vector,) = FakeLLMClient(mode=FakeLLMMode.GROUNDED).embed([embedding_text(new_chunk)])
     assert cosine(new_vector, fresh_vector) == pytest.approx(1.0)
     assert cosine(old_vector, new_vector) < 0.5
 

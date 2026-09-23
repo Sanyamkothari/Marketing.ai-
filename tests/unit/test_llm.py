@@ -10,7 +10,19 @@ from __future__ import annotations
 
 import pytest
 
-from engine.llm import APPROX_CHARS_PER_TOKEN, FAKE_MODEL_ID, FakeLLMClient, LLMClient, LLMError, usage_from
+from engine import llm
+from engine.config import LlmConfig
+from engine.llm import (
+    APPROX_CHARS_PER_TOKEN,
+    FAKE_MODEL_ID,
+    GROUNDED_FAKE_MODEL_ID,
+    FakeLLMClient,
+    FakeLLMMode,
+    LLMClient,
+    LLMError,
+    build_client,
+    usage_from,
+)
 
 
 def test_the_fake_satisfies_the_protocol() -> None:
@@ -127,3 +139,78 @@ def test_usage_names_every_model_it_used_once_and_sorted() -> None:
     client.complete("two", model_id="alpha")
     client.complete("three", model_id="zulu")
     assert usage_from(client.calls).model_ids == ("alpha", "zulu")
+
+
+# ---------------------------------------------------------------------------
+# One fake, with modes (Plan A ruling D7)
+# ---------------------------------------------------------------------------
+def test_there_is_one_fake_and_it_has_modes() -> None:
+    """D7: the grounded behaviour is a mode of `FakeLLMClient`, not a second class beside it."""
+    clients = {name for name in llm.__all__ if name.endswith("LLMClient")}
+    assert clients == {"LLMClient", "FakeLLMClient", "BedrockLLMClient"}
+    assert not hasattr(llm, "GroundedFakeLLMClient")
+
+
+def test_the_default_mode_is_the_digest_and_its_bytes_have_not_moved() -> None:
+    """Folding the second fake in must not change one byte of what the first one returns.
+
+    The pinned values were produced by the digest fake before the fold, so a stored completion or a
+    cached embedding from before it is still the answer the same request gets now.
+    """
+    client = FakeLLMClient()
+    assert client.mode is FakeLLMMode.DIGEST
+    assert client.model_id == FAKE_MODEL_ID
+    assert client.complete("summarise this").text == "[fake completion ba68ff370a1ec4f1]"
+    (vector,) = client.embed(["anything"])
+    assert len(vector) == 16
+    assert vector[:3] == pytest.approx((0.21656430205889515, -0.05167829358601638, 0.2672229832807897))
+
+
+def test_every_other_mode_reports_the_grounded_model_id() -> None:
+    for mode in FakeLLMMode:
+        expected = FAKE_MODEL_ID if mode is FakeLLMMode.DIGEST else GROUNDED_FAKE_MODEL_ID
+        assert FakeLLMClient(mode=mode).model_id == expected
+    assert FakeLLMClient("named", mode=FakeLLMMode.GROUNDED).model_id == "named"
+
+
+@pytest.mark.parametrize("mode", list(FakeLLMMode))
+def test_every_mode_is_deterministic_and_records_every_call(mode: FakeLLMMode) -> None:
+    """The two properties the seam promised hold in every mode, not only the default one."""
+    client = FakeLLMClient(mode=mode)
+    assert isinstance(client, LLMClient)
+    first = client.complete("How long is a QR code valid?", system="s")
+    vectors = client.embed(["a QR code", "a late fee"])
+    client.count_tokens("four")
+    again = FakeLLMClient(mode=mode)
+    assert again.complete("How long is a QR code valid?", system="s") == first
+    assert again.embed(["a QR code", "a late fee"]) == vectors
+    assert [call.kind for call in client.calls] == ["complete", "embed", "count_tokens"]
+    assert client.calls[0].prompt == "How long is a QR code valid?"
+    assert client.calls[1].texts == ("a QR code", "a late fee")
+
+
+def test_a_lexical_mode_embeds_shared_vocabulary_close_together() -> None:
+    """What the digest cannot do and the grounded modes exist for (DEC-214)."""
+    question, answer, unrelated = FakeLLMClient(mode=FakeLLMMode.GROUNDED).embed(
+        ["how long is the qr code valid", "the qr code is valid for 7 days", "a late fee applies to bills"]
+    )
+
+    def cosine(left: tuple[float, ...], right: tuple[float, ...]) -> float:
+        return sum(a * b for a, b in zip(left, right, strict=True))
+
+    assert cosine(question, answer) > cosine(question, unrelated)
+
+
+def test_the_generative_backend_is_the_one_fake_in_grounded_mode() -> None:
+    client = build_client(LlmConfig())
+    assert isinstance(client, FakeLLMClient)
+    assert client.mode is FakeLLMMode.GROUNDED
+    digest = build_client(LlmConfig(), fake_mode=FakeLLMMode.DIGEST)
+    assert isinstance(digest, FakeLLMClient)
+    assert digest.mode is FakeLLMMode.DIGEST
+
+
+def test_too_few_dimensions_are_refused_in_every_mode() -> None:
+    for mode in (FakeLLMMode.DIGEST, FakeLLMMode.GROUNDED):
+        with pytest.raises(ValueError, match="at least 8"):
+            FakeLLMClient(mode=mode, dimensions=4)

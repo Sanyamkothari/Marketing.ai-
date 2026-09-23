@@ -53,7 +53,7 @@ from engine.aws_connection import (
     valid_region,
 )
 from engine.config import LlmBackend, LlmConfig
-from engine.llm import BedrockLLMClient, GroundedFakeLLMClient, LLMError, build_client
+from engine.llm import BedrockLLMClient, FakeLLMClient, LLMError, build_client
 from engine.settings import Settings
 
 ACCOUNT = "123456789012"
@@ -573,7 +573,7 @@ def test_a_profile_that_has_gone_is_an_llm_error_not_a_botocore_one(monkeypatch:
 
 def test_the_fake_backend_ignores_a_profile() -> None:
     """A profile names an AWS identity, and the fake calls nothing on AWS."""
-    assert isinstance(build_client(LlmConfig(), profile="alice"), GroundedFakeLLMClient)
+    assert isinstance(build_client(LlmConfig(), profile="alice"), FakeLLMClient)
 
 
 def test_a_chosen_profile_without_keys_is_told_the_exact_command_for_that_profile() -> None:

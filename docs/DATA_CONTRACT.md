@@ -122,8 +122,10 @@ the finding, so the UI can offer the change rather than describe it.
 ## 5. The validation table
 
 Nineteen codes: the eighteen of plan §6.3 plus `SUPPRESSION_COLUMN_MISSING` (DEC-030, DEC-031).
-`engine.contracts.VALIDATION_CODES` is the closed set — a `ValidationCheck` with any other code is
-rejected before it can reach a user.
+`engine.contracts.VALIDATION_CODES` is the closed set a run's validation draws on. `ValidationCheck`
+also accepts the onboarding codes of `ONBOARDING_VALIDATION_CODES`, because a dataset's build report
+carries both in one list (Plan A ruling D7); a check with any other code is rejected before it can
+reach a user.
 
 | Code | Severity | Mode | Triggered when |
 |---|---|---|---|

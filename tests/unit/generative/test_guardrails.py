@@ -51,7 +51,7 @@ from engine.generative.guardrails import (
     summarise,
 )
 from engine.generative.redaction import contains_pii, find, marker_for, redact
-from engine.llm import GroundedFakeLLMClient, GroundedFakeMode
+from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.stages.ingest import PII_DETECTORS
 from tests.fixtures.make_docs import COMPLAINT_PII_KINDS, generate_complaints
 
@@ -75,10 +75,8 @@ def guardrails(*, meter: Meter | None = None) -> Guardrails:
     return Guardrails(load_policy(), meter=meter)
 
 
-def meter(mode: GroundedFakeMode = GroundedFakeMode.GROUNDED) -> Meter:
-    return Meter(
-        GroundedFakeLLMClient(mode=mode), job_id="r_1", llm=LlmConfig(), budget=BudgetConfig(cache=False)
-    )
+def meter(mode: FakeLLMMode = FakeLLMMode.GROUNDED) -> Meter:
+    return Meter(FakeLLMClient(mode=mode), job_id="r_1", llm=LlmConfig(), budget=BudgetConfig(cache=False))
 
 
 # ---------------------------------------------------------------------------
@@ -261,7 +259,7 @@ def test_a_passing_text_is_judged_and_the_verdict_is_recorded() -> None:
 
 
 def test_a_judge_below_its_threshold_blocks_the_text() -> None:
-    result = Guardrails(load_policy(), meter=meter(GroundedFakeMode.FAILING_JUDGE)).check(
+    result = Guardrails(load_policy(), meter=meter(FakeLLMMode.FAILING_JUDGE)).check(
         CLEAN, context(judges=("toxicity",), judge_values={})
     )
     assert result.outcome is GuardrailOutcome.BLOCKED
@@ -271,7 +269,7 @@ def test_a_judge_below_its_threshold_blocks_the_text() -> None:
 
 def test_a_judge_that_does_not_answer_in_json_scores_zero() -> None:
     """A verdict nobody can read is not a pass; treating it as one would disable the guardrail."""
-    result = Guardrails(load_policy(), meter=meter(GroundedFakeMode.MALFORMED)).check(
+    result = Guardrails(load_policy(), meter=meter(FakeLLMMode.MALFORMED)).check(
         CLEAN, context(judges=("toxicity",), judge_values={})
     )
     assert result.judge_scores[0].score == 0.0

@@ -82,7 +82,7 @@ from engine.generative.win_back import (
     placeholders_in,
     render_message,
 )
-from engine.llm import GroundedFakeLLMClient, GroundedFakeMode
+from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.stages.actions import BAND_COLUMN, CONTROL_GROUP_COLUMN, SUPPRESSED_REASON_COLUMN
 from engine.storage import LocalStorage, run_key
 from engine.utils.time import utc_now
@@ -107,7 +107,7 @@ run any larger than that."""
 def _copy_config(**overrides: object) -> CampaignCopyConfig:
     """A small, fast campaign: two channels, one variant, two bands - never email.
 
-    SMS and WhatsApp share one opt-out phrasing that `GroundedFakeLLMClient` recognises from the
+    SMS and WhatsApp share one opt-out phrasing that the grounded `FakeLLMClient` recognises from the
     prompt; email's phrasing does not match the fake's own regular expression, which would block
     every email variant on `required_lines` regardless of what this module does and would be
     testing the fake, not `win_back`.
@@ -133,9 +133,9 @@ def _use_case_with(base: UseCaseConfig, **overrides: object) -> UseCaseConfig:
 
 
 def _client_and_meter(
-    mode: GroundedFakeMode = GroundedFakeMode.GROUNDED,
-) -> tuple[GroundedFakeLLMClient, Meter]:
-    client = GroundedFakeLLMClient(mode=mode)
+    mode: FakeLLMMode = FakeLLMMode.GROUNDED,
+) -> tuple[FakeLLMClient, Meter]:
+    client = FakeLLMClient(mode=mode)
     return client, Meter(client, job_id="wb_test", llm=LlmConfig(), budget=BudgetConfig(cache=False))
 
 
@@ -149,8 +149,8 @@ def _generate(
     run_id: str,
     config_root: Path,
     *,
-    mode: GroundedFakeMode = GroundedFakeMode.GROUNDED,
-) -> tuple[CampaignCopyResult, GroundedFakeLLMClient, Meter]:
+    mode: FakeLLMMode = FakeLLMMode.GROUNDED,
+) -> tuple[CampaignCopyResult, FakeLLMClient, Meter]:
     client, meter = _client_and_meter(mode)
     result = generate_campaign_copy(
         run_id=run_id,
@@ -254,10 +254,10 @@ def test_a_template_naming_a_placeholder_outside_allowed_fields_is_rejected_befo
 def test_a_model_that_keeps_inventing_an_unlisted_placeholder_is_retried_and_then_gives_up(
     config_root: Path,
 ) -> None:
-    """`GroundedFakeMode.UNGROUNDED` always appends a placeholder outside the allowed list, so every
+    """`FakeLLMMode.UNGROUNDED` always appends a placeholder outside the allowed list, so every
     one of `guardrails.retries + 1` attempts must fail the same way, through the full pipeline."""
     config = _copy_config(allowed_fields=("band",), channels=(Channel.SMS,))
-    client, meter = _client_and_meter(GroundedFakeMode.UNGROUNDED)
+    client, meter = _client_and_meter(FakeLLMMode.UNGROUNDED)
     guardrails = _guardrails(meter, config_root)
 
     templates = _generate_for_band_channel(

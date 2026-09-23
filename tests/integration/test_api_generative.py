@@ -1,7 +1,7 @@
 """`api.routes.generative` end to end through `TestClient` (docs/generative-ui-endpoints.md).
 
-Every job runs against the fake backend (`GroundedFakeLLMClient`, the shipped use cases' default),
-so a test that waits for a job polls `GET /indexes/{id}` or a run's own `*_status.json` artefact
+Every job runs against the fake backend (`FakeLLMClient` in `GROUNDED` mode, the shipped use cases'
+default), so a test that waits for a job polls `GET /indexes/{id}` or a run's own `*_status.json` artefact
 until it reaches `done` or `failed`, exactly as the UI does. `tests.fixtures.make_run.write_run`
 fabricates a finished scoring run in milliseconds - no AutoGluon model is ever fitted here - and
 `tests.fixtures.make_docs`'s committed sample corpus and reference set are what `use_sample_documents`
