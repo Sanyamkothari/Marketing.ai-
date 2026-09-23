@@ -2,7 +2,7 @@
 
 The same approach as `test_scheduling_migration.py`: upgrade an empty SQLite database to head and ask
 `compare_metadata` what it would still change for `model_decision`, `erasure_progress`,
-`platform_setting` and the column 0005 adds to `erasure_request` (DEC-870, DEC-871). The
+`platform_setting` and the column 0005 adds to `erasure_request` (DEC-882, DEC-883). The
 timestamp-with-time-zone half of DEC-339 needs a real Postgres server and is asserted in
 `tests/unit/test_postgres_metadata.py`.
 """
@@ -151,7 +151,7 @@ def test_a_request_from_before_0005_did_not_ask_for_every_clients_history(tmp_pa
 
 
 def test_a_phase_4b_sqlite_file_gets_the_new_column(tmp_path: Path) -> None:
-    """`create_all` never adds a column, so `create_privacy_tables` does, on SQLite only (DEC-870)."""
+    """`create_all` never adds a column, so `create_privacy_tables` does, on SQLite only (DEC-882)."""
     path = tmp_path / "platform.db"
     command.upgrade(_config(path), "0004")  # the table exactly as Phase 4b made it
     engine = create_engine(f"sqlite:///{path}")

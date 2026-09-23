@@ -307,7 +307,7 @@ def erase(
     re-queued a failed one with `requeue_failed`): it is moved to `in_progress` rather than inserted,
     and must belong to the same principal. The models are flagged before any file is rewritten, so a
     run that fails half way has flagged them already - a retry could no longer find the person in the
-    stores this one erased (DEC-870).
+    stores this one erased (DEC-882).
 
     Raises `PrivacyError` - `PRINCIPAL_ID_INVALID`, `ERASURE_RUNS_IN_PROGRESS`, `ERASURE_INCOMPLETE`
     when a rewritten file still holds the id, `ERASURE_STORE_FAILED` - after recording the request as
@@ -421,7 +421,7 @@ def queue_request(
 ) -> None:
     """Write the register row of a request before any work starts (DEC-752, DEC-863).
 
-    `history_all_clients` is recorded so a retry deletes the same consent history (DEC-870).
+    `history_all_clients` is recorded so a retry deletes the same consent history (DEC-882).
     """
     create_privacy_tables(engine)
     with Session(engine) as session:
@@ -454,7 +454,7 @@ def fail_if_unfinished(engine: Engine, request_id: str, code: str) -> None:
 def fail_interrupted(engine: Engine) -> int:
     """Mark every request left `queued` or `in_progress` as failed with `ERASURE_INTERRUPTED`.
 
-    Called when the API starts (`api.routes.privacy.install_privacy_checks`, DEC-869). The jobs live in
+    Called when the API starts (`api.routes.privacy.install_privacy_checks`, DEC-881). The jobs live in
     the API process's memory, so a request still unfinished at start-up belongs to a process that has
     stopped and will never finish on its own; `failed` makes it retryable. Safe because a deployment
     runs one API process (DEC-861's premise): no other live process can own a running job. Returns how
@@ -476,7 +476,7 @@ def fail_interrupted(engine: Engine) -> int:
 def requeue_failed(engine: Engine, request_id: str) -> bool:
     """Move a `failed` request back to `queued` in one statement; False when it was not `failed`.
 
-    The retry route's claim on the request (DEC-869): of two retries at once only one changes the row,
+    The retry route's claim on the request (DEC-881): of two retries at once only one changes the row,
     and the progress route reads `queued` from the moment the retry is answered.
     """
     statement = (
@@ -490,7 +490,7 @@ def requeue_failed(engine: Engine, request_id: str) -> bool:
 
 
 def _reopen_row(engine: Engine, request_id: str, hashed: str) -> None:
-    """Move a `queued` request of this person to `in_progress`; refuse anything else (DEC-869)."""
+    """Move a `queued` request of this person to `in_progress`; refuse anything else (DEC-881)."""
     statement = (
         update(ErasureRequestRow)
         .where(col(ErasureRequestRow.request_id) == request_id)
@@ -595,7 +595,7 @@ def _erase(
             "already read it would write it back after the erasure. Nothing was changed; ask again "
             "once they have finished.",
         )
-    # Flag first (DEC-870): once a store is rewritten the person can no longer be found there, so a
+    # Flag first (DEC-882): once a store is rewritten the person can no longer be found there, so a
     # run that fails after it - and the retry that follows - would never flag its models.
     flags, flagged = _flag_models(engine, layout, findings, request_id, started)
     _record_flags(engine, request_id, tuple(flags))
@@ -752,7 +752,7 @@ def _flag_models(
     """Flag the models `findings` names: `(every flag of this request -> reason, the ones added now)`.
 
     A retry of the same request flags nothing twice (DEC-863); the first return value holds the flags
-    earlier runs of the request recorded as well, which is what the outcome reports (DEC-870).
+    earlier runs of the request recorded as well, which is what the outcome reports (DEC-882).
     """
     flagged: list[str] = []
     with Session(engine) as session:

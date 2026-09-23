@@ -217,7 +217,7 @@ skip, saying so, until `npm install` has been run once in `tests/integration/pro
 
 - Sign-in rate limiting (§1.1) is in memory, per API process: a restart forgets every lock, and
   several processes or tasks each count on their own (DEC-861).
-- The consent salt is the client id, which is not secret (DEC-733); a secret salt is recommended.
+- The principal-hash salt is a secret, `MARKETING_AI_PRIVACY_SALT` (DEC-860): a production API does not start without it, the database stack generates and retains it, and a changed salt is refused rather than silently orphaning every stored hash (DEC-883). Hashes written before Plan D used the client id (DEC-733) and must be re-imported once.
 - Erasure and access exports run inside the request; a very large store makes a long request.
   Erasure cannot reach downloaded copies, database backups or S3 noncurrent versions.
 - "Run now" builds the scheduled dataset inside the request (DEC-781).

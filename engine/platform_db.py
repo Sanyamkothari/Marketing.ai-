@@ -67,7 +67,7 @@ The definite answer to "which tables does `alembic upgrade head` make", for the 
 migration that creates a table adds its name here, in the migration's order (DEC-721)."""
 
 PLATFORM_SETTING_TABLE: Final[str] = "platform_setting"
-"""A tiny key/value table of facts about the platform database itself (Plan D, DEC-871).
+"""A tiny key/value table of facts about the platform database itself (Plan D, DEC-883).
 
 Its first key is the privacy salt's fingerprint (`engine.privacy.config.privacy_salt`): which salt
 the hashes in this database were made with, so a changed salt is refused instead of silently

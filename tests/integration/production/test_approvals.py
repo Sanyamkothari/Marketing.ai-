@@ -288,7 +288,7 @@ class ApprovedMeanwhile(LocalModelRegistry):
 
 
 def test_a_reject_that_loses_the_race_to_an_approval_leaves_the_new_champion_alone(world: World) -> None:
-    """DEC-873: the status is checked again under the registry's lock; the champion is not archived."""
+    """DEC-869: the status is checked again under the registry's lock; the champion is not archived."""
     world.app.state.registry = ApprovedMeanwhile(world.root / REGISTRY_FILENAME)
     response = world.client.post(
         f"/models/{CHALLENGER}/reject", json={"reason": "worse on PR-AUC"}, headers=world.approver

@@ -308,7 +308,7 @@ def test_a_mirror_is_offered_every_write(store: SqlRegistryStore, storage: Local
 def test_an_archive_expecting_another_status_is_the_stores_refusal_and_mirrors_nothing(
     store: SqlRegistryStore, storage: LocalStorage
 ) -> None:
-    """`expected_status` reaches the store, whose lock decides it (DEC-873)."""
+    """`expected_status` reaches the store, whose lock decides it (DEC-869)."""
     write_run_artefacts(storage)
     mirror = RecordingMirror()
     registry = S3ModelRegistry(store, storage, mirror=mirror)

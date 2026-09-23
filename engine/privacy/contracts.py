@@ -346,7 +346,7 @@ class ErasureRequestRecord(_Doc):
     error_code: str | None = None
     # Plan D M54 (DEC-863): an added, defaulted field - a background erasure's progress per store.
     progress: tuple[StoreProgress, ...] = Field(default=(), description="Per-store progress, in store order.")
-    # Plan D (DEC-870): an added, defaulted field - kept so a retry deletes the same consent history.
+    # Plan D (DEC-882): an added, defaulted field - kept so a retry deletes the same consent history.
     history_all_clients: bool = Field(
         default=False,
         description="Whether the consent history is deleted under every client (no client was named).",

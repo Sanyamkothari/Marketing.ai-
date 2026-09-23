@@ -335,7 +335,7 @@ def _failed_request(api: Api, body: dict[str, str] | None = None) -> tuple[str, 
 
 
 def test_a_retry_is_claimed_at_once_and_a_second_retry_is_refused(api: Api) -> None:
-    """DEC-869: the row reads `queued` as soon as the retry is answered, so a double submit starts one job."""
+    """DEC-881: the row reads `queued` as soon as the retry is answered, so a double submit starts one job."""
     request_id, storage = _failed_request(api)
     storage.failures = 0
     with _STORE_REWRITE_LOCK:  # the job cannot start until the test lets it
@@ -361,7 +361,7 @@ def test_a_retry_is_claimed_at_once_and_a_second_retry_is_refused(api: Api) -> N
 def test_a_retry_deletes_the_consent_history_the_request_was_made_for(
     api: Api, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """DEC-870: no client named means every client's history - on the retry too, though `client_id` is set."""
+    """DEC-882: no client named means every client's history - on the retry too, though `client_id` is set."""
     jobs = api.app.state.erasure_jobs
     assert isinstance(jobs, ErasureJobs)
     submitted: list[bool] = []
@@ -386,7 +386,7 @@ def test_a_retry_deletes_the_consent_history_the_request_was_made_for(
 
 
 def test_a_request_a_stopped_process_left_running_is_failed_at_startup_and_can_be_retried(api: Api) -> None:
-    """DEC-869: the jobs live in the API process; one that stopped leaves rows nothing would finish."""
+    """DEC-881: the jobs live in the API process; one that stopped leaves rows nothing would finish."""
     engine = sqlite_engine(api.root / PLATFORM_DB_FILENAME)
     for request_id, status in (("er_orphan_running", "in_progress"), ("er_orphan_queued", "queued")):
         queue_request(
@@ -432,7 +432,7 @@ class CrashingStorage(FlakyStorage):
 
 
 def test_a_job_that_crashes_mid_rewrite_has_flagged_the_models_already(api: Api) -> None:
-    """DEC-870: flagged before any rewrite, so the retry - which cannot find the person any more in the
+    """DEC-882: flagged before any rewrite, so the retry - which cannot find the person any more in the
     stores the first run erased - does not lose the flag."""
     storage = CrashingStorage(LocalStorage(api.root), "uploads/", failures=1)
     api.app.state.storage = storage

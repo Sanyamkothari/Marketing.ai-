@@ -119,7 +119,7 @@ class S3ModelRegistry:
     def archive(self, model_id: str, *, expected_status: ModelStatus | None = None) -> ModelVersion:
         """Retire a version. The published files are left alone: a lifecycle rule owns their end.
 
-        `expected_status` is the store's check, made under the store's lock (DEC-873).
+        `expected_status` is the store's check, made under the store's lock (DEC-869).
         """
         archived = self._store.archive(model_id, expected_status=expected_status)
         self._mirror(archived)

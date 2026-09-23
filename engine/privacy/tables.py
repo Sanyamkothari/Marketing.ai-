@@ -112,7 +112,7 @@ class ErasureRequestRow(SQLModel, table=True):
         sa_column=Column("history_all_clients", Boolean(), nullable=False, server_default=false()),
     )
     """Whether the consent history goes under every client (the Admin named none), kept so a retry
-    does what the request asked (Plan D, DEC-870). Added by `0005_plan_d`."""
+    does what the request asked (Plan D, DEC-882). Added by `0005_plan_d`."""
 
 
 class ErasureProgressRow(SQLModel, table=True):
@@ -157,7 +157,7 @@ def create_privacy_tables(engine: Engine) -> None:
     """Create this package's tables if missing (SQLite only; Alembic owns Postgres, DEC-340).
 
     On SQLite, a column a later revision added (`_ADDED_COLUMNS`) is added to a table an earlier
-    version of this code created without it, so a laptop's `platform.db` keeps working (DEC-870).
+    version of this code created without it, so a laptop's `platform.db` keeps working (DEC-882).
     """
     create_tables(engine, (*PRIVACY_TABLES, ERASURE_PROGRESS_TABLE))
     if engine.dialect.name != "sqlite":

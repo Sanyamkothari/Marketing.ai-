@@ -69,7 +69,7 @@ MIN_SALT_LENGTH: Final[int] = 16
 """A salt shorter than this is refused: it would be guessable, which is what R3 exists to prevent."""
 
 SALT_FINGERPRINT_KEY: Final[str] = "privacy_salt_fingerprint"
-"""The `platform_setting` key the salt's fingerprint is kept under (DEC-871)."""
+"""The `platform_setting` key the salt's fingerprint is kept under (DEC-883)."""
 
 _FINGERPRINT_DOMAIN: Final[bytes] = b"marketing-ai/privacy-salt-fingerprint\x00"
 
@@ -237,7 +237,7 @@ def privacy_salt(settings: Settings, *, engine: Engine | None = None) -> str:
     * anywhere else (Postgres on `dev`/`staging`), `SettingsError`: there is no local file to keep a
       generated salt in, and a salt that changed with every container would orphan every hash.
 
-    **A changed salt is refused** (DEC-871). With an `engine`, the salt's fingerprint - a domain-
+    **A changed salt is refused** (DEC-883). With an `engine`, the salt's fingerprint - a domain-
     separated SHA-256 of it (`salt_fingerprint`), never the salt - is kept in that database's
     `platform_setting` table the first time, and compared every time after: a different salt raises
     `SettingsError` `SETTING_INVALID` naming `MARKETING_AI_PRIVACY_SALT`, because every consent record

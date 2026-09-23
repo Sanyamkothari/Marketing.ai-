@@ -292,7 +292,7 @@ def get_privacy_engine(request: Request) -> Engine:
 
 def install_privacy_checks(app: FastAPI) -> None:
     """`PHASE_APP_HOOKS` entry: a production API does not start without its privacy salt (R3, DEC-860),
-    and an erasure a stopped process left unfinished is marked failed when it starts (DEC-869).
+    and an erasure a stopped process left unfinished is marked failed when it starts (DEC-881).
 
     With settings given to `create_app`, the salt refusal is immediate - `create_app` raises. The
     deployed `api.main:app` is built with none, so the check runs at startup, where a `SettingsError`
@@ -802,8 +802,8 @@ def retry_erasure(
     (**409 `ERASURE_NOT_RETRYABLE`**): a finished one has nothing left to do and a running one is
     already doing it. The request is claimed by one conditional update (`failed` -> `queued`) before
     the job is submitted, so the progress route reads `queued` as soon as this answers and a second
-    retry sent meanwhile gets the 409 instead of a second job (DEC-869). The retry deletes the consent
-    history the request was made to delete - every client's when no client was named (DEC-870).
+    retry sent meanwhile gets the 409 instead of a second job (DEC-881). The retry deletes the consent
+    history the request was made to delete - every client's when no client was named (DEC-882).
     """
     _privacy_config(root)
     engine = get_privacy_engine(request)

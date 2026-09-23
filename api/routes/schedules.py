@@ -10,7 +10,7 @@ changing, pausing, deleting and firing one is Analyst: a schedule is recurring s
 and starting that work by hand is `POST /runs`, which is Analyst (DEC-716). No schedule route is
 Approver or Admin - a scheduled firing acts as `SYSTEM_SCHEDULER`, which holds Analyst only and can
 never approve what it trains (DEC-760), so scheduling a retrain grants nothing the Analyst did not
-have. A "fire now" acts as the person who asked (DEC-872): they are the challenger's `requested_by`,
+have. A "fire now" acts as the person who asked (DEC-889): they are the challenger's `requested_by`,
 so the separation of duties that stops a trainer approving their own model stops them too.
 
 **"Fire now" runs in the request, and is audited once (DEC-781).** `POST /schedules/{id}/fire` calls
@@ -21,7 +21,7 @@ firing, which also raised its `scheduled_job_failed` alert). The dataset build o
 happens inside the request; the run itself goes to the job runner like any other. The firer is given
 `audit_log=None`, so the engine writes no event of its own and the middleware's one event for the
 request carries `firing_audit_details` through `set_audit_context` - one request, one event (M47),
-whose actor is the caller, as is the firing's principal (DEC-872). Firings the scheduler starts on its own are audited by the engine as `system:scheduler`.
+whose actor is the caller, as is the firing's principal (DEC-889). Firings the scheduler starts on its own are audited by the engine as `system:scheduler`.
 
 **The scheduler's life (DEC-782).** `install_scheduling` is a `PHASE_APP_HOOKS` entry that adds a
 startup and a shutdown handler. At startup it reads `settings.scheduler_backend`:
@@ -321,7 +321,7 @@ def _manual_firer(request: Request) -> ScheduleFirer:
 
     The firing acts as the person who clicked, not as `SYSTEM_SCHEDULER`: a retrain records them as
     `requested_by` on the challenger's `run.json`, so separation of duties keeps them from approving
-    the model they started (DEC-872). The audit actor is theirs too, through the middleware's one
+    the model they started (DEC-889). The audit actor is theirs too, through the middleware's one
     event (`audit_log=None`, DEC-781). Only a firing nobody started acts as the scheduler.
     """
     return ScheduleFirer(

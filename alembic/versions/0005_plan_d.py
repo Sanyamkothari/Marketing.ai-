@@ -15,13 +15,13 @@ far it has got, store by store, with the attempts each store took and why one fa
 (request, store); counts and codes only, never the principal - the request row already holds the
 salted hash and nothing here needs more.
 
-WHY `erasure_request.history_all_clients` (DEC-870): whether an erasure deletes the consent history
+WHY `erasure_request.history_all_clients` (DEC-882): whether an erasure deletes the consent history
 under every client or only the request's is decided when the request is made (the Admin named no
 client) and cannot be inferred later from `client_id`, which then holds the deployment's id. A retry
 must do what the request asked, so the choice is stored. `NOT NULL DEFAULT false`: a row written
 before this revision behaves as it did.
 
-WHY `platform_setting` (DEC-871): a key/value table of facts about the database itself; its first
+WHY `platform_setting` (DEC-883): a key/value table of facts about the database itself; its first
 key is the privacy salt's fingerprint, so a deployment that changes its salt is refused rather than
 silently orphaning every stored hash. The fingerprint is a hash of the salt, never the salt.
 

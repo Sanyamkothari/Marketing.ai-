@@ -1,4 +1,4 @@
-"""Retrying an erasure request (Plan D, DEC-869, DEC-870): the claim, the restart, the flags, the report.
+"""Retrying an erasure request (Plan D, DEC-881, DEC-882): the claim, the restart, the flags, the report.
 
 A background erasure can end `failed` part way - a store that would not take a write, a crash - and
 be run again under the same request id. These tests pin what a retry must not lose: a request left
@@ -87,7 +87,7 @@ def _flags(engine: Any, request_id: str) -> list[tuple[str, str]]:
         return [(row.model_id, row.reason) for row in rows]
 
 
-# --- DEC-869: the restart and the claim ---------------------------------------------------------------
+# --- DEC-881: the restart and the claim ---------------------------------------------------------------
 def test_requests_a_stopped_process_left_unfinished_are_marked_failed(tmp_path: Path) -> None:
     engine = sqlite_engine(tmp_path / "platform.db")
     for request_id, status in (
@@ -154,7 +154,7 @@ def test_a_job_starts_only_a_queued_request(tmp_path: Path, config_root: Path) -
         assert record is not None and record.status == status, "the row is left as it was"
 
 
-# --- DEC-870: flags before rewrites, and the retry's report -------------------------------------------
+# --- DEC-882: flags before rewrites, and the retry's report -------------------------------------------
 @pytest.fixture
 def planted(tmp_path: Path, config_root: Path, monkeypatch: pytest.MonkeyPatch) -> Planted:
     return plant(tmp_path / "data", config_root, monkeypatch)

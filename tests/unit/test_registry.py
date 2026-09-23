@@ -325,7 +325,7 @@ def test_archive_retires_a_version(registry: SqlRegistryStore) -> None:
 def test_a_champion_is_not_archived_by_an_archive_that_expected_it_to_be_waiting(
     registry: SqlRegistryStore,
 ) -> None:
-    """A reject that read `pending_approval` loses to an approval that landed since (DEC-873)."""
+    """A reject that read `pending_approval` loses to an approval that landed since (DEC-869)."""
     registry.register(make_version("m_1", 1, status=ModelStatus.PENDING_APPROVAL))
     registry.approve("m_1", by="ops@telco")
     with pytest.raises(RegistryError) as excinfo:

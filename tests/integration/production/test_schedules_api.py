@@ -408,7 +408,7 @@ def test_a_manual_retrain_starts_a_training_run_and_never_touches_the_champion(a
 
 
 def test_whoever_fires_a_retrain_by_hand_trained_its_challenger_and_cannot_approve_it(api: Api) -> None:
-    """DEC-872: "fire now" acts as the caller, so separation of duties (DEC-862) holds for it too.
+    """DEC-889: "fire now" acts as the caller, so separation of duties (DEC-862) holds for it too.
 
     A person holding Analyst and Approver fires a retrain; the run records them as `requested_by`
     (not `system:scheduler`), and the challenger it produces - registered here as the register stage

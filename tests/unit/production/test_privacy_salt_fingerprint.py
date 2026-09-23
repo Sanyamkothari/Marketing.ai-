@@ -1,4 +1,4 @@
-"""The privacy salt's fingerprint (Plan D, DEC-871): a changed salt is refused, not silently used.
+"""The privacy salt's fingerprint (Plan D, DEC-883): a changed salt is refused, not silently used.
 
 Every consent record and erasure request stores a hash salted with `privacy_salt`. A deployment that
 switches salt - from Phase 4b's client id, or to a different secret - would otherwise go on working

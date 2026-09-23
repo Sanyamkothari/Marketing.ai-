@@ -262,7 +262,7 @@ def test_a_rewrite_that_leaves_the_id_fails_the_request_and_records_it(
     stored = erasure_request(engine, "er_test_failed")
     assert stored is not None and (stored.status, stored.error_code) == ("failed", "ERASURE_INCOMPLETE")
     assert log.events[0].outcome == "failed"
-    # the models are flagged before any file is rewritten (DEC-870): their training data held the
+    # the models are flagged before any file is rewritten (DEC-882): their training data held the
     # person whether or not the rewrite then succeeded, and a retry may no longer find them
     assert models_flagged_for_retraining(engine) == tuple(sorted((MODEL_ON_UPLOAD, MODEL_ON_DATASET)))
     assert stored.models_flagged == (MODEL_ON_UPLOAD, MODEL_ON_DATASET)

@@ -420,7 +420,7 @@ class SqlRegistryStore:
         a version whose status is anything else is refused with `INVALID_TRANSITION` and left as it
         is. Rejecting a challenger passes `PENDING_APPROVAL`, so an approval that crowned it a
         moment earlier cannot be undone by the reject that read it as still waiting - which would
-        archive the champion and leave the use case with none (DEC-873).
+        archive the champion and leave the use case with none (DEC-869).
         """
         with self._lock, Session(self._engine) as session:
             row = self._require(session, model_id)
