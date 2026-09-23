@@ -13,8 +13,9 @@
 // `docs/generative-ui-endpoints.md` states that line verbatim rather than this branch editing the
 // shared file itself (the same reason `ui/modules/router.js` is not edited here either).
 
-import { getUseCase } from "../../api.js";
+import { getIndustries, getUseCase } from "../../api.js";
 import { errorBox, esc, pageHead } from "../../dom.js";
+import { journeyFor } from "../../overview.js";
 import { registerModule } from "../router.js";
 import { assistantHtml, createAssistantController } from "./assistant.js";
 import { connectionHtml, createConnectionController } from "./connection.js";
@@ -41,8 +42,15 @@ function failure(app, error) {
   );
 }
 
+/** The use case plus the journey its back link and breadcrumb return to, as `app.js` resolves it. */
+async function useCase(useCaseId) {
+  const [uc, payload] = await Promise.all([getUseCase(useCaseId), getIndustries()]);
+  const journey = journeyFor(payload, uc.id);
+  return journey ? { ...uc, journey } : uc;
+}
+
 async function renderAssistant(app, useCaseId, indexId) {
-  const uc = await getUseCase(useCaseId);
+  const uc = await useCase(useCaseId);
   if (!assistantControllers.has(useCaseId)) {
     assistantControllers.set(
       useCaseId,
@@ -65,7 +73,7 @@ async function renderAssistant(app, useCaseId, indexId) {
 }
 
 async function renderRca(app, useCaseId, runId) {
-  const uc = await getUseCase(useCaseId);
+  const uc = await useCase(useCaseId);
   const key = runId;
   if (!rcaControllers.has(key)) {
     rcaControllers.set(
@@ -95,7 +103,7 @@ async function renderConnection(app) {
 }
 
 async function renderCopy(app, useCaseId, runId) {
-  const uc = await getUseCase(useCaseId);
+  const uc = await useCase(useCaseId);
   const key = runId;
   if (!copyControllers.has(key)) {
     copyControllers.set(

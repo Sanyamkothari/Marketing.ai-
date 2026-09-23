@@ -11,7 +11,7 @@ this file.
 
     python -m library.run_engine \
         --dataset uci-bank-marketing \
-        --use-case bank-term-deposit --config-root library/configs \
+        --use-case bank-term-deposit \
         --csv library/uci-bank-marketing/data/prepared.csv \
         --primary-key client_id --target y
 
@@ -334,7 +334,10 @@ def main(argv: list[str] | None = None) -> int:
         "--config-root",
         type=Path,
         default=None,
-        help="config root to load the use case from; defaults to the repo's configs/",
+        help=(
+            "config root to load the use case from; defaults to the repo's configs/, where every "
+            "library use case ships (DEC-085)"
+        ),
     )
     parser.add_argument(
         "--override",

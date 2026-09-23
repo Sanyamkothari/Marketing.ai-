@@ -4,7 +4,7 @@ Every number below came out of one real training run. This is the largest file i
 381,109 rows.
 
 ```
-use case      insurance-cross-sell   (library/configs/use_cases/insurance_cross_sell.yaml)
+use case      insurance-cross-sell   (configs/use_cases/insurance_cross_sell.yaml)
 config        ENGINE DEFAULTS, no overrides at all
 file          data/prepared.csv      (381,109 rows, 12 columns — a copy of the download)
 primary key   id
@@ -156,7 +156,7 @@ would overstate it; treating it as a call-list ordering is exactly right.
 ```bash
 python library/health-insurance-cross-sell/fetch.py
 python -m library.run_engine \
-  --dataset health-insurance-cross-sell --use-case insurance-cross-sell --config-root library/configs \
+  --dataset health-insurance-cross-sell --use-case insurance-cross-sell \
   --csv library/health-insurance-cross-sell/data/prepared.csv \
   --primary-key id --target Response
 ```

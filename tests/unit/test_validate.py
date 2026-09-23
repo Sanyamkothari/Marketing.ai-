@@ -69,7 +69,25 @@ ROWS: int = 2_000
 #: The three variants that are scoring files and are therefore judged against a schema.
 SCHEMA_VARIANTS: tuple[str, ...] = ("renamed_column", "missing_column", "type_changed_column")
 
-USE_CASE_IDS: tuple[str, ...] = predictive_use_case_ids()
+
+def _reference_first(use_case_ids: tuple[str, ...]) -> tuple[str, ...]:
+    """`use_case_ids` with the first one whose template has a consent and a time column moved first.
+
+    The single-use-case checks below run on `USE_CASE_IDS[0]` and need both roles. Sorted order
+    gave them that until the library's use cases, whose public files lack a consent column
+    (DEC-407), moved into `configs/` and sorted ahead (DEC-085). Over the telecom use cases alone
+    this is the identity, so every assertion below still runs on the use case it always did.
+    """
+    roles = (ColumnRole.CONSENT, ColumnRole.TIME)
+    reference = next(
+        use_case_id
+        for use_case_id in use_case_ids
+        if all(load_use_case(use_case_id).template.by_role(role) for role in roles)
+    )
+    return (reference, *(use_case_id for use_case_id in use_case_ids if use_case_id != reference))
+
+
+USE_CASE_IDS: tuple[str, ...] = _reference_first(predictive_use_case_ids())
 BROKEN_VARIANTS: tuple[str, ...] = tuple(name for name, code in VARIANTS.items() if code is not None)
 
 #: Every (use case, broken variant) pair that means something, derived from the templates.

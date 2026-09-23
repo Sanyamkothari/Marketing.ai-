@@ -460,9 +460,21 @@ def numeric_hint(column: TemplateColumn) -> NumericHint:
     spread = max(highest - lowest, abs(mean) * 0.5, 1e-9)
     decimals = _decimals(column)
     integer = column.type is ColumnType.INTEGER
+    # However wide the shape above is drawn, no value strays further from the examples than they
+    # justify: two example ranges below the lowest, four above the highest. Every draw of the
+    # telecom templates already sat inside that band, so for them this clip changes nothing; the
+    # library's templates (DEC-085) are what showed the need - a flag whose five examples are all
+    # 1 read as a count up to 8, and a price index of 92-95 read as a spend from 0 to 140.
+    width = max(highest - lowest, 1.0)
+    floor, ceiling = lowest - 2.0 * width, highest + 4.0 * width
     if integer and lowest >= 0.0 and highest <= 20.0:
         return NumericHint(
-            mean=max(mean, 0.5), sd=0.0, low=0.0, high=highest * 4.0 + 4.0, decimals=0, is_count=True
+            mean=max(mean, 0.5),
+            sd=0.0,
+            low=0.0,
+            high=min(highest * 4.0 + 4.0, ceiling),
+            decimals=0,
+            is_count=True,
         )
     if not integer and lowest >= 0.0 and highest <= 1.0:
         return NumericHint(mean=mean, sd=spread / 2.0, low=0.0, high=1.0, decimals=decimals, is_count=False)
@@ -470,8 +482,8 @@ def numeric_hint(column: TemplateColumn) -> NumericHint:
     return NumericHint(
         mean=mean,
         sd=spread / 2.0,
-        low=low,
-        high=highest + spread,
+        low=max(low, floor),
+        high=min(highest + spread, ceiling),
         decimals=decimals,
         is_count=False,
         is_lognormal=lowest > 0.0,

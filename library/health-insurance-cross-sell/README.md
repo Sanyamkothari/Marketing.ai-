@@ -16,7 +16,7 @@ policy. The largest file in the library, and the second of the two that need no 
 | Primary key | `id` |
 | Target | `Response`, 0/1; 46,710 positive (12.3 %) |
 | Time column | none |
-| Config root | `library/configs` |
+| Config root | `configs`, the repository's own (DEC-085) |
 
 ## Read the licence first
 

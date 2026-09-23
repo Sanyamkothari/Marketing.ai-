@@ -35,7 +35,7 @@ and the leaderboard would look respectable, and the result would be worse than u
 
 So `configs/industries/ad_tech.yaml` lists `criteo-uplift` as **planned**. The use-case file is
 drafted in [`use_case.yaml`](use_case.yaml) next to this README rather than installed in
-`library/configs/use_cases/`, so the engine does not offer a model it cannot yet make honest.
+`configs/use_cases/`, so the engine does not offer a model it cannot yet make honest.
 
 ## Reason two: the data could not be fetched here
 

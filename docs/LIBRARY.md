@@ -67,7 +67,7 @@ sceptically. Five entries were written in
 
 | Entry (2026-09-22, from `library-datasets`) | What | Owner | Blocked the library? |
 |---|---|---|---|
-| *two assertions forbid a second industry* | `test_industries_list_and_telecom_loads` pins the config directory to exactly one industry, and `test_industry_available_entries_have_files_and_matching_stage_names` pins the telecom file to listing every shipped use case. So no second industry and no further use case can be added to `configs/`. | `tests/` | **Yes** — see DEC-400 |
+| *two assertions forbid a second industry* | `test_industries_list_and_telecom_loads` pins the config directory to exactly one industry, and `test_industry_available_entries_have_files_and_matching_stage_names` pins the telecom file to listing every shipped use case. So no second industry and no further use case can be added to `configs/`. | `tests/` | **Yes** — see DEC-400; resolved by DEC-085 |
 | *two PII detectors that disagree* | `prepare` has a second, looser PII detector than `ingest`; its phone-number regex matches ISO dates, so `snapshot_date` was redacted with nothing in the validation report to say so. | `engine/` | No |
 | *a template column name cannot contain a dot* | `emp.var.rate` and `default.payment.next.month` must be renamed before a use case can carry a template. | `engine/` | No |
 | *`threshold.mode: auto` can call every row positive* | On a weak model at a ~50 % base rate the F1-maximising threshold gives recall 1.0 and specificity 0.0, which reads as a triumph and is no decision at all. | `engine/` | No |
@@ -83,10 +83,17 @@ sixth, Criteo Uplift, was not run for reasons that have nothing to do with the e
 
 **The one blocker is a test, not the engine.** `load_industry`, `list_industries` and every loader
 already take a config root and already validate each file on its own (DEC-038). The engine is
-perfectly happy with four industries; two test assertions are not. Until they are relaxed, the
-library's configs sit in `library/configs/` — a second root the engine already supports, with
-`engine.yaml` symlinked so there is nothing to drift — and moving them afterwards is `git mv` plus
-`make generate`. See DEC-400.
+perfectly happy with four industries; two test assertions were not. Until they were relaxed, the
+library's configs sat in `library/configs/` — a second root the engine already supports, with
+`engine.yaml` symlinked so there was nothing to drift (DEC-400).
+
+**Resolved in Plan A M38 (DEC-085, ruling D3).** The two tests now validate every industry file
+instead of asserting there is exactly one, and the move was exactly what was promised: `git mv` of
+the four industry files into `configs/industries/` and the four use-case files into
+`configs/use_cases/`, then `python -m scripts.gen_templates`, which wrote the same eight template
+files byte for byte into `templates/`. No engine or use-case file changed. `library/configs/` is
+gone — its `engine.yaml` symlink had nothing left to serve — and the overview has an industry
+selector that opens on Telecom.
 
 **Three preparation steps were needed, and none of them was modelling.** Re-writing a
 semicolon-separated file as comma CSV; adding a primary key to a file that ships none; renaming
@@ -137,7 +144,7 @@ reproduce.
 # one dataset, end to end
 python library/uci-bank-marketing/fetch.py
 python -m library.run_engine \
-  --dataset uci-bank-marketing --use-case bank-term-deposit --config-root library/configs \
+  --dataset uci-bank-marketing --use-case bank-term-deposit \
   --csv library/uci-bank-marketing/data/prepared.csv --primary-key client_id --target y
 
 # the library's own tests: validate + a one-minute train on each committed sample

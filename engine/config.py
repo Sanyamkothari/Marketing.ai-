@@ -1542,6 +1542,12 @@ def get_catalog(root: Path | None = None) -> Catalog:
     return load_engine_config(root).catalog
 
 
+#: The industry the overview opens on and `load_industry` reads when given no id. One file per
+#: industry sits in `configs/industries/` (DEC-085); telecom is the product's own journey and stays
+#: the default, so adding an industry adds a choice rather than changing what a user first sees.
+DEFAULT_INDUSTRY: Final[str] = "telecom"
+
+
 def list_industries(root: Path | None = None) -> tuple[str, ...]:
     base = config_root(root) / "industries"
     if not base.is_dir():
@@ -1616,7 +1622,7 @@ def load_all_use_cases(root: Path | None = None) -> dict[str, UseCaseConfig]:
     return {use_case_id: load_use_case(use_case_id, root) for use_case_id in list_use_case_ids(root)}
 
 
-def load_industry(industry_id: str = "telecom", root: Path | None = None) -> IndustryConfig:
+def load_industry(industry_id: str = DEFAULT_INDUSTRY, root: Path | None = None) -> IndustryConfig:
     """Validates the file AND the cross-file rules of the industry document."""
     base = config_root(root)
     path = base / "industries" / f"{industry_id}.yaml"

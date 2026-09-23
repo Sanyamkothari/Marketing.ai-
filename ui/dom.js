@@ -95,6 +95,28 @@ export const steps = (arr) =>
     )
     .join("")}</ol>`;
 
+/**
+ * The root a use-case screen goes back to: `uc.journey`, the `{ href, label }` of the industry
+ * journey that lists it, which the router resolves from `GET /industries` (`journeyFor` in
+ * `overview.js`). The label is that industry's own `journey_label` - its file calls it the
+ * "overview subtitle and breadcrumb root" - so a Banking use case reads "Client Lifecycle" and goes
+ * back to Banking, not to the Telecom journey the bare `#/` opens. With no journey (no industry file
+ * is configured) it is the bare overview, under the heading that screen then carries.
+ */
+const journeyOf = (uc) => (uc && uc.journey) || { href: "#/", label: "Marketing AI" };
+
+/** The "‹ journey" link above a use case's title. */
+export function backLink(uc) {
+  const { href, label } = journeyOf(uc);
+  return `<a class="back" href="${esc(href)}">‹&nbsp; ${esc(label)}</a>`;
+}
+
+/** The first link of a use case's breadcrumb. */
+export function journeyCrumb(uc) {
+  const { href, label } = journeyOf(uc);
+  return `<a href="${esc(href)}">${esc(label)}</a>`;
+}
+
 export const pageHead = (inner) =>
   `<div class="head"><div class="titles">${inner}</div>${LOGO}</div><div class="rule"></div>`;
 

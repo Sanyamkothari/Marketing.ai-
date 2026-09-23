@@ -4,7 +4,7 @@ Every number below came out of one real training run. **This is the one that doe
 that is reported as plainly as the four that do.
 
 ```
-use case      retail-win-back      (library/configs/use_cases/retail_win_back.yaml)
+use case      retail-win-back      (configs/use_cases/retail_win_back.yaml)
 config        ENGINE DEFAULTS, no overrides at all
 file          data/prepared.csv    (1,463 rows, 16 columns — aggregated by fetch.py)
 primary key   customer_id
@@ -172,7 +172,7 @@ within 90 days *with no intervention at all*, which sets the bar any campaign ha
 ```bash
 python library/online-retail/fetch.py
 python -m library.run_engine \
-  --dataset online-retail --use-case retail-win-back --config-root library/configs \
+  --dataset online-retail --use-case retail-win-back \
   --csv library/online-retail/data/prepared.csv \
   --primary-key customer_id --target reactivated_90d
 ```
