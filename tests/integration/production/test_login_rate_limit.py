@@ -6,6 +6,9 @@ tested without sleeping.
 
 from __future__ import annotations
 
+import threading
+import time
+from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -17,7 +20,14 @@ from engine.access.roles import Role
 from engine.access.throttle import LoginThrottle
 from engine.audit.events import AuditQuery
 from engine.settings import Settings
-from tests.integration.production.access_support import PASSWORD, audit_log_at, local_app, make_user
+from tests.integration.production.access_support import (
+    PASSWORD,
+    audit_log_at,
+    bearer,
+    local_app,
+    make_user,
+    store_of,
+)
 
 pytestmark = pytest.mark.integration
 
@@ -178,3 +188,139 @@ def test_the_limits_are_settings() -> None:
     ) == (7, 70, 120, 1800, 1)
     defaults = Settings()
     assert (defaults.login_max_failures_per_account, defaults.login_lockout_seconds) == (5, 900)
+
+
+# ---------------------------------------------------------------------------
+# DEC-867: every X-Forwarded-For line; parallel attempts; a reset or re-enable lifts the lock
+# ---------------------------------------------------------------------------
+def test_every_forwarded_for_line_is_read_and_the_proxy_entry_counts(tmp_path: Path, clock: Clock) -> None:
+    """Behind one proxy, a client's own X-Forwarded-For line comes first and the proxy's last.
+
+    Reading only the first line would count whatever the client wrote - a fresh value per request,
+    so the address limit would never trip.
+    """
+    app = local_app(tmp_path, trusted_proxy_hops=1)
+    app.state.login_throttle = LoginThrottle(
+        max_failures_per_account=100,
+        max_failures_per_address=2,
+        window_seconds=900,
+        lockout_seconds=60,
+        clock=clock,
+    )
+    client = TestClient(app)
+
+    def spray(index: int) -> int:
+        headers = [
+            ("X-Forwarded-For", f"198.51.100.{index}, 192.0.2.{index}"),  # the client's own line
+            ("X-Forwarded-For", "203.0.113.5"),  # the line the load balancer added
+        ]
+        response = client.post(
+            "/auth/login",
+            json={"username": f"user{index}", "password": "wrong password!"},
+            headers=headers,
+        )
+        return response.status_code
+
+    assert [spray(index) for index in range(3)] == [401, 401, 429]
+    throttle = app.state.login_throttle
+    assert throttle.failures("address", "203.0.113.5") == 2
+    assert throttle.failures("address", "198.51.100.0") == 0
+
+
+def test_parallel_wrong_passwords_get_no_more_401s_than_the_limit(
+    app: FastAPI, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    make_user(app, "Asha", [Role.ANALYST])
+    store = store_of(app)
+    check = store.check_credentials
+
+    def slow_check(username: str, password: str) -> object:
+        time.sleep(0.05)  # a real password hash is slower still; this is the window the race needs
+        return check(username, password)
+
+    monkeypatch.setattr(store, "check_credentials", slow_check)
+    attempts = 10
+    barrier = threading.Barrier(attempts)
+
+    def one(index: int) -> int:
+        client = TestClient(app)
+        barrier.wait()
+        response = attempt(client, "asha", "wrong password!", address=f"10.0.0.{index}")
+        return int(response.status_code)  # type: ignore[attr-defined]
+
+    with ThreadPoolExecutor(max_workers=attempts) as pool:
+        codes = sorted(pool.map(one, range(attempts)))
+    assert codes == [401] * 3 + [429] * (attempts - 3)
+
+
+def lock_out(client: TestClient, username: str) -> None:
+    for _ in range(3):
+        attempt(client, username, "wrong password!")
+    assert attempt(client, username, PASSWORD).status_code == 429  # type: ignore[attr-defined]
+
+
+def test_an_admin_password_reset_lifts_the_lock(app: FastAPI) -> None:
+    admin = make_user(app, "Root", [Role.ADMIN])
+    asha = make_user(app, "Asha", [Role.ANALYST])
+    client = TestClient(app)
+    lock_out(client, "asha")
+    reset = client.post(
+        f"/users/{asha}/password", json={"password": "reset by the admin"}, headers=bearer(app, admin)
+    )
+    assert reset.status_code == 204, reset.text
+    assert attempt(client, "Asha", "reset by the admin").status_code == 200  # type: ignore[attr-defined]
+
+
+def test_changing_your_own_password_does_not_lift_a_lock_on_someone_else(app: FastAPI) -> None:
+    bob = make_user(app, "Bob", [Role.ANALYST])
+    make_user(app, "Asha", [Role.ANALYST])
+    client = TestClient(app)
+    lock_out(client, "asha")
+    own = client.post(
+        f"/users/{bob}/password",
+        json={"password": "a new password for bob", "current_password": PASSWORD},
+        headers=bearer(app, bob),
+    )
+    assert own.status_code == 204, own.text
+    assert attempt(client, "asha", PASSWORD).status_code == 429  # type: ignore[attr-defined]
+
+
+def test_re_enabling_a_user_lifts_the_lock(app: FastAPI) -> None:
+    admin = make_user(app, "Root", [Role.ADMIN])
+    asha = make_user(app, "Asha", [Role.ANALYST])
+    client = TestClient(app)
+    lock_out(client, "asha")
+    disabled = client.patch(f"/users/{asha}", json={"disabled": True}, headers=bearer(app, admin))
+    assert disabled.status_code == 200, disabled.text
+    assert attempt(client, "asha", PASSWORD).status_code == 429, "disabling alone lifts nothing"  # type: ignore[attr-defined]
+    enabled = client.patch(f"/users/{asha}", json={"disabled": False}, headers=bearer(app, admin))
+    assert enabled.status_code == 200, enabled.text
+    assert attempt(client, "asha", PASSWORD).status_code == 200  # type: ignore[attr-defined]
+
+
+def test_an_unrelated_change_does_not_lift_the_lock(app: FastAPI) -> None:
+    admin = make_user(app, "Root", [Role.ADMIN])
+    asha = make_user(app, "Asha", [Role.ANALYST])
+    client = TestClient(app)
+    lock_out(client, "asha")
+    renamed = client.patch(f"/users/{asha}", json={"display_name": "Asha K"}, headers=bearer(app, admin))
+    assert renamed.status_code == 200, renamed.text
+    assert attempt(client, "asha", PASSWORD).status_code == 429  # type: ignore[attr-defined]
+
+
+def test_the_address_lock_does_not_promise_that_a_reset_helps(tmp_path: Path, clock: Clock) -> None:
+    app = local_app(tmp_path)
+    app.state.login_throttle = LoginThrottle(
+        max_failures_per_account=100,
+        max_failures_per_address=2,
+        window_seconds=900,
+        lockout_seconds=60,
+        clock=clock,
+    )
+    client = TestClient(app)
+    for index in range(2):
+        attempt(client, f"user{index}", "wrong password!")
+    refused = attempt(client, "user9", "wrong password!")
+    assert refused.status_code == 429  # type: ignore[attr-defined]
+    message = refused.json()["detail"]["message"]  # type: ignore[attr-defined]
+    assert "reset" not in message and "1 minute" in message

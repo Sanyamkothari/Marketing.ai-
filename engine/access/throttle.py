@@ -12,7 +12,22 @@ address**, and locks whichever reaches its limit for `lockout_seconds` (DEC-861)
 While either is locked, a sign-in is refused with **429 `LOGIN_LOCKED`** *before* the password is
 checked - checking it would keep answering the attacker's question - and with `Retry-After`. A
 successful sign-in clears its account's failures; the address's are kept, so a sprayer that guesses
-one account right does not reset its count against the others.
+one account right does not reset its count against the others. An Admin resetting a user's password
+or re-enabling the user clears that account's count and lock (`clear`, DEC-867): the new password
+makes every earlier guess moot, and the 429 tells the person to ask for exactly that.
+
+**One attempt per account at a time** (DEC-867). `attempt(account)` holds a mutex for that account
+key while the route checks the lock, checks the password and records the outcome, so N parallel
+wrong passwords for one account cannot all pass the lock check before any of them is counted: at
+most `max_failures_per_account` of them are ever answered 401, the rest 429. The mutexes live in a
+map that holds only keys somebody is currently inside, so it is bounded by the requests in flight,
+not by the usernames ever typed. Addresses are not serialised: a client spraying many usernames in
+parallel can overshoot its address limit by at most the number of requests it has in flight.
+
+**The memory bound never lifts a lock** (DEC-867). Past `_MAX_TRACKED` keys per scope the entry
+forgotten is the least recently failed one *that is not locked*; only when every tracked key is
+locked is the oldest locked one dropped. A flood of distinct usernames therefore cannot push a
+locked account out of the table and so unlock it.
 
 State is in memory, per process, like `AnonymousEventLimiter` (DEC-724). One API process per
 deployment is what `scripts/entrypoint.sh` runs (`--workers 1`); with several, each counts on its
@@ -27,7 +42,8 @@ from __future__ import annotations
 
 import threading
 from collections import deque
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from typing import Final, Literal
@@ -64,6 +80,23 @@ class _Entry:
     failures: deque[datetime] = field(default_factory=deque)
     locked_until: datetime | None = None
 
+    def is_locked(self, now: datetime) -> bool:
+        return self.locked_until is not None and self.locked_until > now
+
+
+@dataclass
+class _KeyMutex:
+    """The mutex of one account key and how many requests hold or wait for it."""
+
+    mutex: threading.Lock = field(default_factory=threading.Lock)
+    holders: int = 0
+
+
+def _evict_one(table: dict[str, _Entry], now: datetime) -> None:
+    """Forget the least recently failed key that is not locked; the oldest of all if every one is."""
+    victim = next((key for key, entry in table.items() if not entry.is_locked(now)), None)
+    table.pop(next(iter(table)) if victim is None else victim)
+
 
 class LoginThrottle:
     """Failed sign-ins per account and per address in a sliding window, with a fixed lock-out."""
@@ -88,6 +121,28 @@ class LoginThrottle:
         self._clock = clock
         self._lock = threading.Lock()
         self._entries: dict[LockScope, dict[str, _Entry]] = {"account": {}, "address": {}}
+        self._account_mutexes: dict[str, _KeyMutex] = {}
+
+    @contextmanager
+    def attempt(self, account: str) -> Iterator[None]:
+        """Serialise sign-in attempts on one account key: check, verify and record inside this block.
+
+        Other accounts are not held up. The mutex is dropped from the map when its last holder
+        leaves, so the map never holds more keys than there are attempts in flight.
+        """
+        with self._lock:
+            slot = self._account_mutexes.get(account)
+            if slot is None:
+                slot = self._account_mutexes[account] = _KeyMutex()
+            slot.holders += 1
+        try:
+            with slot.mutex:
+                yield
+        finally:
+            with self._lock:
+                slot.holders -= 1
+                if slot.holders == 0:
+                    del self._account_mutexes[account]
 
     def locked(self, account: str, address: str) -> LoginLock | None:
         """The lock that refuses a sign-in for `account` from `address` now, or None.
@@ -126,11 +181,18 @@ class LoginThrottle:
                     entry.locked_until = now + self._lockout
                     started.append(scope)
                 while len(table) > _MAX_TRACKED:
-                    table.pop(next(iter(table)))
+                    _evict_one(table, now)
         return tuple(started)
 
     def record_success(self, account: str) -> None:
         """A correct sign-in clears the account's failures. The address's count is kept on purpose."""
+        self.clear(account)
+
+    def clear(self, account: str) -> None:
+        """Forget the account's failures and lift its lock (an Admin reset its password or re-enabled it).
+
+        Addresses are untouched: an address lock is about the client, not about this account.
+        """
         with self._lock:
             self._entries["account"].pop(account, None)
 

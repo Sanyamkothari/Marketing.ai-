@@ -41,6 +41,45 @@ changing their password signs them out everywhere at once (DEC-711).
 startup logs an ERROR; the service stays up and says why (DEC-702). Single sign-on (Cognito or the
 client's SAML/OIDC) is M50 and waits for decision P5.
 
+### 1.1 Sign-in rate limiting
+
+`POST /auth/login` is rate limited (Plan D M54, DEC-861, DEC-867). Failed sign-ins are counted in a
+sliding window, separately **per account** (the username as typed, case-folded, so an unknown
+username locks exactly like a real one and a lock-out confirms nothing) and **per client address**.
+When either reaches its limit it is locked: every sign-in for that username, or from that address,
+is refused with **429 `LOGIN_LOCKED`** and a `Retry-After` header, *without the password being
+checked*, until the lock-out ends. The failure that starts a lock-out and every refused attempt are
+in the audit trail (`auth.login`, `reason_code: LOGIN_LOCKED`, `lockout: account|address`); the
+username and the address are not.
+
+| Setting | Variable | Default | What it does |
+|---|---|---|---|
+| `login_max_failures_per_account` | `MARKETING_AI_LOGIN_MAX_FAILURES_PER_ACCOUNT` | `5` | failures for one username, within the window, that lock it |
+| `login_max_failures_per_address` | `MARKETING_AI_LOGIN_MAX_FAILURES_PER_ADDRESS` | `20` | failures from one client address, within the window, that lock it |
+| `login_failure_window_seconds` | `MARKETING_AI_LOGIN_FAILURE_WINDOW_SECONDS` | `900` | how far back failures are counted |
+| `login_lockout_seconds` | `MARKETING_AI_LOGIN_LOCKOUT_SECONDS` | `900` | how long a locked username or address is refused |
+| `trusted_proxy_hops` | `MARKETING_AI_TRUSTED_PROXY_HOPS` | `0` | proxies in front of the API whose `X-Forwarded-For` entries are trusted |
+
+- **Behind a load balancer, set `trusted_proxy_hops` to the number of proxies.** With `0` the
+  address counted is the TCP peer. Behind the AWS deployment's ALB that peer is the ALB's own
+  private address for *every* request, so twenty wrong passwords from anyone would lock sign-in for
+  everyone. The CDK deployment therefore publishes `trusted_proxy_hops=1` (`infra/compute.py`): the
+  ALB is the only way in (the tasks' security group admits the ALB's group only), and the ALB
+  appends the real client's address as the last `X-Forwarded-For` entry. With `N` hops the API uses
+  the N-th entry from the right, reading every `X-Forwarded-For` header line; entries further left
+  are whatever the client wrote and are never used. Do not set it higher than the real number of
+  proxies, or a client can choose its own address; leave it `0` when clients connect directly.
+- **A successful sign-in clears that username's failures**, not the address's.
+- **An Admin can lift an account lock**: resetting the user's password (**Admin → Users**, or
+  `POST /users/{id}/password`) or re-enabling a disabled user clears that username's failures and
+  lock. An address lock is not lifted that way; it ends when its lock-out ends, and its 429 says so.
+- **Parallel attempts on one username are taken one at a time**, so a burst of simultaneous guesses
+  gets no more 401s than the account limit before the 429s start. The address limit is not
+  serialised: a burst across many usernames can overshoot it by the number of requests in flight.
+- **The counts are in memory, per API process.** A restart forgets every lock, and with several API
+  processes or tasks each counts on its own, so the effective limit is multiplied by their number -
+  weaker, never a lock-out of the wrong person. The container runs one process (`--workers 1`).
+
 ## 2. Roles
 
 Roles are a set, not a ladder (DEC-703). Every role includes Viewer; **Admin does not include
@@ -155,6 +194,11 @@ is on **Monitoring** (`#/monitoring/...`).
 | `scheduler_role_arn` | `MARKETING_AI_SCHEDULER_ROLE_ARN` | none (required for `eventbridge`) |
 | `alert_backend` | `MARKETING_AI_ALERT_BACKEND` | `log` |
 | `alert_sns_topic_arn` | `MARKETING_AI_ALERT_SNS_TOPIC_ARN` | none (required for `sns`) |
+| `login_max_failures_per_account` | `MARKETING_AI_LOGIN_MAX_FAILURES_PER_ACCOUNT` | `5` (§1.1) |
+| `login_max_failures_per_address` | `MARKETING_AI_LOGIN_MAX_FAILURES_PER_ADDRESS` | `20` (§1.1) |
+| `login_failure_window_seconds` | `MARKETING_AI_LOGIN_FAILURE_WINDOW_SECONDS` | `900` (§1.1) |
+| `login_lockout_seconds` | `MARKETING_AI_LOGIN_LOCKOUT_SECONDS` | `900` (§1.1) |
+| `trusted_proxy_hops` | `MARKETING_AI_TRUSTED_PROXY_HOPS` | `0`; the AWS deployment writes `1` (§1.1) |
 
 The deployment view of the same settings (what the CDK stacks set per environment) is in
 `docs/AWS_DEPLOYMENT.md`'s settings table.
@@ -171,7 +215,8 @@ skip, saying so, until `npm install` has been run once in `tests/integration/pro
 
 ## 8. Known limits (Part 1)
 
-- No login rate limiting or lockout yet (DEC-720).
+- Sign-in rate limiting (§1.1) is in memory, per API process: a restart forgets every lock, and
+  several processes or tasks each count on their own (DEC-861).
 - The consent salt is the client id, which is not secret (DEC-733); a secret salt is recommended.
 - Erasure and access exports run inside the request; a very large store makes a long request.
   Erasure cannot reach downloaded copies, database backups or S3 noncurrent versions.

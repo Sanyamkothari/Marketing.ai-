@@ -29,6 +29,7 @@
     "ParameterSagemakerSecurityGroupIds6E0F1A37": "AWS::SSM::Parameter",
     "ParameterSagemakerSubnetIds6388485D": "AWS::SSM::Parameter",
     "ParameterStorageBackend090084A6": "AWS::SSM::Parameter",
+    "ParameterTrustedProxyHopsEB477D23": "AWS::SSM::Parameter",
     "ServiceD69D759B": "AWS::ECS::Service",
     "ServiceTaskCountTarget23E25614": "AWS::ApplicationAutoScaling::ScalableTarget",
     "ServiceTaskCountTargetCpuScalingCC8A5DF6": "AWS::ApplicationAutoScaling::ScalingPolicy",

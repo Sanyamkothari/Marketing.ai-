@@ -276,13 +276,21 @@ def client_address(request: Request, settings: Settings) -> str:
     the API: then the N-th `X-Forwarded-For` entry from the right, the one the outermost trusted proxy
     appended. Entries further left are whatever the client wrote and are never used. A request with
     fewer entries than trusted hops did not come through the proxies and is counted by its peer.
+
+    Every `X-Forwarded-For` header line is read, in order, and joined before splitting (DEC-867): a
+    client may send its own line, and a proxy may add a second line rather than extend the first, so
+    reading only the first line would count the client's forged value instead of the proxy's.
+    The deployed ALB is one trusted hop; `infra/compute.py` publishes `trusted_proxy_hops=1`.
     """
     peer = request.client.host if request.client is not None else "unknown"
     hops = settings.trusted_proxy_hops
     if hops == 0:
         return peer
     forwarded = [
-        part.strip() for part in request.headers.get("x-forwarded-for", "").split(",") if part.strip()
+        part.strip()
+        for line in request.headers.getlist("x-forwarded-for")
+        for part in line.split(",")
+        if part.strip()
     ]
     return forwarded[-hops] if len(forwarded) >= hops else peer
 
