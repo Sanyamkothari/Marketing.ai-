@@ -57,6 +57,7 @@ from datetime import UTC, datetime
 from statistics import NormalDist
 from typing import TYPE_CHECKING, Final
 
+from engine.config import PrimaryKey, key_columns
 from engine.uplift.contracts import ConfidenceValue, IncrementalityReport, IncrementalityStatus
 from engine.utils.logging import get_logger, log_stage
 
@@ -151,7 +152,7 @@ def measure_incrementality(
     outcomes: pd.DataFrame,
     *,
     run_id: str,
-    primary_key: str,
+    primary_key: PrimaryKey,
     outcome_column: str,
     positive_label: str | None = None,
     intended_column: str | None = None,
@@ -167,12 +168,16 @@ def measure_incrementality(
     See the module docstring for the population, maturity and statistics. Raises `ValueError` for a
     missing column, duplicate primary keys, a non-binary outcome or a negative outcome window; the
     messages carry counts and column names, never data values.
+
+    `primary_key` may name several columns (customer + snapshot date, DEC-083): the two files are
+    then joined on all of them, each read as text the way `scores.csv` writes it (M53).
     """
     import pandas as pd
 
     started = time.perf_counter()
-    _require_columns(scores, (primary_key, _CONTROL_COLUMN), what="The run's scores")
-    _require_columns(outcomes, (primary_key, outcome_column), what="The outcomes file")
+    columns = key_columns(primary_key)
+    _require_columns(scores, (*columns, _CONTROL_COLUMN), what="The run's scores")
+    _require_columns(outcomes, (*columns, outcome_column), what="The outcomes file")
     if intended_column is not None:
         _require_columns(scores, (intended_column,), what="The run's scores")
     if intended_column is None and bands is not None:
@@ -184,8 +189,8 @@ def measure_incrementality(
     as_of_utc = _aware(as_of)
     treatment_utc = _aware(treatment_time)
 
-    score_keys = _keys(scores[primary_key])
-    outcome_keys = _keys(outcomes[primary_key])
+    score_keys = _joined_keys(scores, columns)
+    outcome_keys = _joined_keys(outcomes, columns)
     _require_unique(score_keys, what="The run's scores")
     _require_unique(outcome_keys, what="The outcomes file")
 
@@ -365,6 +370,23 @@ def _parse_dates(values: pd.Series) -> pd.Series:
 def _keys(values: pd.Series) -> pd.Series:
     """Primary keys as trimmed text, so `1` from one file matches `"1"` from the other."""
     return values.astype("string").str.strip().reset_index(drop=True)
+
+
+def _joined_keys(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    """One text key per row: :func:`_keys` for one column; for several, each part through
+    `engine.keys.key_text` (a date as the date, a whole-number id without `.0`), trimmed and joined
+    by `engine.keys.KEY_SEPARATOR`, so a Parquet timestamp matches the CSV's `2026-01-31`."""
+    import pandas as pd
+
+    from engine.keys import KEY_SEPARATOR, key_text
+
+    if len(columns) == 1:
+        return _keys(frame[columns[0]])
+    parts = [key_text(frame[name]).str.strip().reset_index(drop=True) for name in columns]
+    joined = parts[0].astype("object")
+    for part in parts[1:]:
+        joined = joined + KEY_SEPARATOR + part.astype("object")
+    return pd.Series(joined, dtype="string")
 
 
 def _flag(values: pd.Series) -> pd.Series:

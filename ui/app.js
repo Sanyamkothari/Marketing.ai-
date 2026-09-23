@@ -13,7 +13,7 @@ import {
 } from "./api.js";
 import { backLink, errorBox, esc, pageHead } from "./dom.js";
 import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
-import { PAGE_ARTEFACTS, renderPage } from "./pages.js";
+import { isUplift, pageArtefacts, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
 import { MODULES_CHANGED, resolveRoute } from "./modules/router.js";
 
@@ -133,8 +133,24 @@ async function showPage(id, kind, runId) {
   }
   loading(uc.pages[kind]);
   const detail = await getRun(chosen);
-  const art = await getArtefacts(chosen, PAGE_ARTEFACTS[kind]);
-  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), await lineageOf(kind, detail.run)));
+  const art = await getArtefacts(chosen, pageArtefacts(kind, detail.run));
+  const extra = { ...(await lineageOf(kind, detail.run)), ...(await upliftChartsFor(kind, detail.run)) };
+  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), extra));
+}
+
+/**
+ * An uplift run's Model page draws its Qini curve with the uplift module's own chart, so the two
+ * screens show one picture. Loaded on demand: a Phase 1 run never asks, and without that module the
+ * page lists the curve's points instead (M53).
+ */
+async function upliftChartsFor(kind, run) {
+  if (kind !== "model" || !isUplift(run)) return {};
+  try {
+    const charts = await import("./modules/uplift/charts.js");
+    return { qiniChart: charts.qiniChart };
+  } catch {
+    return {};
+  }
 }
 
 /**

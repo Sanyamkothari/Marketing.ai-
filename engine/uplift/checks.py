@@ -11,6 +11,7 @@ reports to pass.
 |----------------------------|----------|--------|-------------------------------------------------------------------|
 | TREATMENT_COLUMN_MISSING   | error    | yes    | no experiment to learn from                                       |
 | TREATMENT_NOT_BINARY       | error    | yes    | a row in neither arm, or in some third arm, cannot be compared    |
+| TREATMENT_VARIES_WITHIN_ENTITY | error | yes    | a customer in both arms of one campaign is compared with itself   |
 | TREATMENT_ARM_TOO_SMALL    | error    | yes    | an effect measured on a handful of customers is noise             |
 | TREATMENT_NOT_RANDOM       | error    | unless acknowledged | a targeted campaign's "effect" is who was targeted   |
 | OUTCOME_WINDOW_IMMATURE    | warning  | no     | a customer treated yesterday has not had time to convert          |
@@ -26,6 +27,18 @@ acknowledge that (`TREATMENT_NOT_RANDOM`, or `TREATMENT_NOT_RANDOM:<treatment co
 goes ahead with `causal: false`, and every uplift output carries `NOT_CAUSAL_NOTE`. The threshold is
 deliberately not agent-editable (plan B §12). An error inside the model fit is *not* swallowed: a
 check that silently skipped here would let a targeted campaign be called causal.
+
+**Two-column keys (M53, DEC-853, DEC-854).** With a key of customer + snapshot date (DEC-083) a
+customer appears once per snapshot, but treatment and control are assigned **per customer**: a
+customer treated at one snapshot and held out at another, within one campaign (the configured
+`uplift.campaign_id_column`, when the file has it), would be compared with itself, so
+`TREATMENT_VARIES_WITHIN_ENTITY` refuses such a file. The entity is the key's first column
+(`engine.keys.entity_column`), the same entity Phase 1's grouped split and control group use. The
+arms are then counted in customers rather than rows, the randomness classifier is cross-validated
+with whole customers per fold (a customer's snapshots in two folds would let it recognise the
+customer rather than the targeting), and the snapshot date is one of the columns
+`FEATURE_AFTER_TREATMENT` compares with the treatment date - a snapshot taken after the campaign
+already contains its effect.
 
 **Skipped, not failed twice.** A check that cannot run because an earlier one failed (no treatment
 column, so no arms) adds nothing; the report carries the one finding that explains the problem.
@@ -46,6 +59,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Final
 
+from engine.config import PrimaryKey
 from engine.contracts import Severity
 from engine.uplift.contracts import UpliftCheck, UpliftValidationReport
 from engine.uplift.data import (
@@ -90,12 +104,13 @@ _LOGGER = get_logger(__name__)
 CHECK_ORDER: Final[tuple[str, ...]] = (
     "TREATMENT_COLUMN_MISSING",
     "TREATMENT_NOT_BINARY",
+    "TREATMENT_VARIES_WITHIN_ENTITY",
     "TREATMENT_ARM_TOO_SMALL",
     "TREATMENT_NOT_RANDOM",
     "OUTCOME_WINDOW_IMMATURE",
     "FEATURE_AFTER_TREATMENT",
 )
-"""Plan B §4 table order; findings are listed errors first, then in this order."""
+"""Plan B §4 table order, with M53's entity check after the binary one; errors first, then this order."""
 
 RANDOMNESS_FOLDS: Final[int] = 3
 RANDOMNESS_MIN_ARM_ROWS: Final[int] = 30
@@ -267,8 +282,72 @@ def _arm_too_small(
     )
 
 
+def _varies_within_entity(
+    entity: str, treatment: str, *, mixed: int, entities: int, campaign: str | None
+) -> UpliftCheck:
+    share = mixed / entities if entities else 0.0
+    within = f" within one campaign ('{campaign}')" if campaign is not None else ""
+    return _finding(
+        "TREATMENT_VARIES_WITHIN_ENTITY",
+        Severity.ERROR,
+        f"{_n(mixed)} of {_n(entities)} customers ({share:.1%}) are treated in some snapshots and "
+        f"held out in others{within}, according to '{treatment}'. Treatment and control are "
+        f"assigned per customer ('{entity}'), so such a customer would be compared with itself.",
+        "Give each customer the same treatment value in every snapshot of a campaign, or upload one "
+        "campaign's snapshots at a time.",
+        column=treatment,
+        details={
+            "entity_column": entity,
+            "campaign_column": campaign,
+            "mixed_entities": mixed,
+            "entities": entities,
+            "mixed_rate": round(share, 4),
+        },
+    )
+
+
+def _mixed_entities(frame: pd.DataFrame, t: IntArray, entity: str, campaign: str | None) -> tuple[int, int]:
+    """`(entities in both arms, entities)`, per entity and campaign when a campaign column is given."""
+    import pandas as pd
+
+    groupers: list[pd.Series] = [frame[entity].reset_index(drop=True)]
+    if campaign is not None:
+        groupers.append(frame[campaign].reset_index(drop=True))
+    arms = pd.Series(t).groupby(groupers, dropna=False).nunique()
+    entities = int(frame[entity].nunique(dropna=False))
+    both = arms[arms > 1]
+    if both.empty:
+        return 0, entities
+    names = both.index.get_level_values(0) if campaign is not None else both.index
+    return int(pd.Index(names).nunique(dropna=False)), entities
+
+
+def _entity_arm_counts(
+    entities: pd.Series, t: IntArray, y: IntArray | None
+) -> tuple[int, int, int | None, int | None]:
+    """`(treated, control, treated converters, control converters)`, counted in distinct entities."""
+    import numpy as np
+
+    ids = entities.reset_index(drop=True)
+    treated = np.asarray(t) == 1
+    treated_count, control_count = int(ids[treated].nunique()), int(ids[~treated].nunique())
+    if y is None:
+        return treated_count, control_count, None, None
+    positive = np.asarray(y) == 1
+    return (
+        treated_count,
+        control_count,
+        int(ids[treated & positive].nunique()),
+        int(ids[~treated & positive].nunique()),
+    )
+
+
 def treatment_predictability(
-    features: pd.DataFrame, t: IntArray, *, seed: int
+    features: pd.DataFrame,
+    t: IntArray,
+    *,
+    seed: int,
+    groups: npt.NDArray[Any] | None = None,
 ) -> tuple[float, tuple[str, ...], int] | None:
     """`(out-of-fold AUC, strongest features, rows used)` of a classifier predicting treatment.
 
@@ -277,11 +356,15 @@ def treatment_predictability(
     and only those carrying at least :data:`SIGNAL_MIN_GAIN_SHARE` of it are named. `None` when
     there is no feature or either arm has fewer than :data:`RANDOMNESS_MIN_ARM_ROWS` rows. At most
     :data:`RANDOMNESS_SAMPLE_ROWS` rows are used, sampled per arm with `np.random.default_rng(seed)`.
+
+    With `groups` (one entity per row, for a two-column key) the folds are `StratifiedGroupKFold`:
+    every snapshot of a customer is in one fold, so the out-of-fold AUC measures targeting, not the
+    classifier recognising a customer it was fitted on (M53).
     """
     import numpy as np
     from lightgbm import LGBMClassifier
     from sklearn.metrics import roc_auc_score
-    from sklearn.model_selection import StratifiedKFold
+    from sklearn.model_selection import StratifiedGroupKFold, StratifiedKFold
 
     treatment = np.asarray(t, dtype=np.int_)
     if features.shape[1] == 0:
@@ -301,8 +384,16 @@ def treatment_predictability(
     y = treatment[positions]
     oof = np.zeros(len(y), dtype=np.float64)
     gains = np.zeros(x.shape[1], dtype=np.float64)
-    folds = StratifiedKFold(n_splits=RANDOMNESS_FOLDS, shuffle=True, random_state=seed)
-    for train_idx, test_idx in folds.split(np.zeros(len(y)), y):
+    if groups is None:
+        splits = StratifiedKFold(n_splits=RANDOMNESS_FOLDS, shuffle=True, random_state=seed).split(
+            np.zeros(len(y)), y
+        )
+    else:
+        members = np.asarray(groups, dtype=object)[positions]
+        splits = StratifiedGroupKFold(n_splits=RANDOMNESS_FOLDS, shuffle=True, random_state=seed).split(
+            np.zeros(len(y)), y, groups=members
+        )
+    for train_idx, test_idx in splits:
         model: Any = LGBMClassifier(random_state=seed, **_RANDOMNESS_PARAMS)
         model.fit(x.iloc[train_idx], y[train_idx])
         oof[test_idx] = np.asarray(model.predict_proba(x.iloc[test_idx]))[:, 1]
@@ -468,7 +559,7 @@ def run_uplift_checks(
     frame: pd.DataFrame,
     config: UseCaseConfig,
     *,
-    primary_key: str,
+    primary_key: PrimaryKey,
     target: str,
     upload_id: str,
     run_id: str | None = None,
@@ -482,8 +573,13 @@ def run_uplift_checks(
     acknowledged. `passed` is true when no error is left unacknowledged. `causal` is false whenever
     `TREATMENT_NOT_RANDOM` fired - acknowledged, it lets the run go ahead labelled not causal;
     unacknowledged, it blocks the run anyway.
+
+    `primary_key` may name two columns (customer + snapshot date); see the module docstring for
+    what changes then.
     """
     import numpy as np
+
+    from engine import keys
 
     started = time.perf_counter()
     moment = now or utc_now()
@@ -495,6 +591,16 @@ def run_uplift_checks(
     rows_immature = 0
     randomness_auc: float | None = None
     causal = True
+    entity = keys.entity_column(primary_key) if keys.is_composite(primary_key) else None
+    if entity is not None and entity not in frame.columns:
+        entity = None  # Phase 1's PK_MISSING reports the absent key column.
+    campaign = uplift.campaign_id_column
+    if campaign is not None and campaign not in frame.columns:
+        campaign = None
+    treated_rows: int | None = None
+    control_rows: int | None = None
+    treated_entities: int | None = None
+    control_entities: int | None = None
 
     # OUTCOME_WINDOW_IMMATURE first in time: the arm sizes are counted on the rows it keeps.
     date_column = uplift.treatment_date_column
@@ -523,23 +629,51 @@ def run_uplift_checks(
                     y = y_all[mask]
                 except ValueError:
                     y = None  # Phase 1's TARGET_* checks report an unusable outcome.
-            too_small = _arm_too_small(
-                target=target,
-                treated_rows=int((t == 1).sum()),
-                control_rows=int((t == 0).sum()),
-                treated_positives=None if y is None else int(y[t == 1].sum()),
-                control_positives=None if y is None else int(y[t == 0].sum()),
-                min_rows=uplift.min_arm_rows,
-                min_positives=uplift.min_arm_positives,
-                rows_excluded=rows_immature,
-            )
-            if too_small is not None:
-                findings.append(too_small)
+            treated_rows, control_rows = int((t == 1).sum()), int((t == 0).sum())
             kept = frame.loc[mask]
-            spec = fit_feature_spec(
-                kept, config, primary_key=primary_key, target=target, treatment_column=treatment_column
-            )
-            measured = treatment_predictability(apply_feature_spec(kept, spec), t, seed=seed)
+            mixed = 0
+            if entity is not None:
+                mixed, entities = _mixed_entities(frame, t_all, entity, campaign)
+                if mixed:
+                    findings.append(
+                        _varies_within_entity(
+                            entity, treatment_column, mixed=mixed, entities=entities, campaign=campaign
+                        )
+                    )
+            measured: tuple[float, tuple[str, ...], int] | None = None
+            # With a customer in both arms there are no per-customer arms to count or to predict.
+            if not mixed:
+                if entity is None:
+                    arm_counts = (
+                        treated_rows,
+                        control_rows,
+                        None if y is None else int(y[t == 1].sum()),
+                        None if y is None else int(y[t == 0].sum()),
+                    )
+                else:
+                    arm_counts = _entity_arm_counts(kept[entity], t, y)
+                    treated_entities, control_entities = arm_counts[0], arm_counts[1]
+                too_small = _arm_too_small(
+                    target=target,
+                    treated_rows=arm_counts[0],
+                    control_rows=arm_counts[1],
+                    treated_positives=arm_counts[2],
+                    control_positives=arm_counts[3],
+                    min_rows=uplift.min_arm_rows,
+                    min_positives=uplift.min_arm_positives,
+                    rows_excluded=rows_immature,
+                )
+                if too_small is not None:
+                    findings.append(too_small)
+                spec = fit_feature_spec(
+                    kept, config, primary_key=primary_key, target=target, treatment_column=treatment_column
+                )
+                measured = treatment_predictability(
+                    apply_feature_spec(kept, spec),
+                    t,
+                    seed=seed,
+                    groups=None if entity is None else kept[entity].to_numpy(dtype=object),
+                )
             if measured is not None:
                 auc, signals, rows_used = measured
                 randomness_auc = round(auc, 4)
@@ -564,6 +698,12 @@ def run_uplift_checks(
             config, primary_key=primary_key, target=target, treatment_column=treatment_column
         )
         candidates = [str(c) for c in frame.columns if str(c) not in reserved]
+        if keys.is_composite(primary_key):
+            # The snapshot date says when the features were captured: after the treatment date they
+            # already contain the campaign's effect (M53).
+            snapshot = keys.key_columns(primary_key)[-1]
+            if snapshot in frame.columns and snapshot != date_column:
+                candidates.append(snapshot)
         findings.extend(_features_after_treatment(frame, date_column, date_like_columns(frame, candidates)))
 
     ordered = sorted(findings, key=lambda item: (_SEVERITY_RANK[item.severity], CHECK_ORDER.index(item.code)))
@@ -579,6 +719,11 @@ def run_uplift_checks(
         rows_checked=rows,
         rows_immature=rows_immature,
         checked_at=moment,
+        treated_rows=treated_rows,
+        control_rows=control_rows,
+        entity_column=entity,
+        treated_entities=treated_entities,
+        control_entities=control_entities,
     )
     log_stage(_LOGGER, "uplift_checks", rows=rows, seconds=time.perf_counter() - started)
     _LOGGER.info(

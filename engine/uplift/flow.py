@@ -23,6 +23,8 @@ not a copy of it. `engine.pipeline.uplift_flow_for` is the one-line lookup that 
   outcome, so deciding it before the split leaks nothing the hold-out could be scored on.
 * *split* is the stratified hold-out of `split_holdout`; `split.json` is written with a zero-row
   validation part, because an uplift learner is fitted without one and saying so is the truth.
+  With a two-column key (customer + snapshot date) the hold-out is drawn by customer, so every
+  snapshot of a customer is on one side (M53, DEC-855).
 * *train* fits the configured meta-learner into the run's `model/` directory through
   `Storage.local_path` and publishes it, exactly as `engine/stages/train.py` does for AutoGluon,
   then writes `model/uplift_model.json`: everything a scoring run needs to replay the model.
@@ -36,8 +38,16 @@ not a copy of it. `engine.pipeline.uplift_flow_for` is the one-line lookup that 
   champion on **this** hold-out; decides with the uplift champion rule; and honours
   `governance.approval_required` exactly as Phase 1 does.
 
+**Two-column keys (M53, DEC-853).** Keys are read the way Phase 1's stages read them
+(`engine.keys`, DEC-083): every key column is reserved from the features, rows are *identified* by
+`StageContext.row_key` (the key itself, or the joined `_row_key` of a composite key), and treatment,
+the hold-out, the control group and suppression are decided per *entity*, the key's first column.
+`scores.csv` writes each key column separately, as Phase 1's does.
+
 The score flow keeps Phase 1's ingest and schema validation untouched, replays the recorded feature
-spec, predicts, explains every row, and replaces bands with segments through
+spec, predicts - and measures drift against the training data, feature PSI through Phase 1's own
+`compute_drift` plus the treated-share check, into `uplift_drift.json` - explains every row, and
+replaces bands with segments through
 `engine.uplift.actions.apply_uplift_actions` - which in turn reuses Phase 1's suppression and control
 group rules unchanged.
 
@@ -66,7 +76,7 @@ from __future__ import annotations
 import io
 from typing import TYPE_CHECKING, Final
 
-from engine import __version__
+from engine import __version__, keys
 from engine.config import Metric, ProblemType, SplitType, recipe_from_config
 from engine.contracts import (
     MODEL_DIRECTORY,
@@ -106,6 +116,7 @@ from engine.uplift.contracts import (
     SEGMENT_ACTIONS,
     SEGMENT_LABELS,
     SEGMENTS_FILENAME,
+    UPLIFT_DRIFT_FILENAME,
     UPLIFT_EVALUATION_FILENAME,
     UPLIFT_MODEL_CARD_FILENAME,
     UPLIFT_VALIDATION_FILENAME,
@@ -125,8 +136,8 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     import pandas as pd
 
-    from engine.config import ResolvedConfig, UseCaseConfig
-    from engine.contracts import ScoringSummary, ValidationReport
+    from engine.config import PrimaryKey, ResolvedConfig, UseCaseConfig
+    from engine.contracts import DriftReport, ScoringSummary, ValidationReport
     from engine.storage import Storage
     from engine.uplift.champion import UpliftChampionDecision
     from engine.uplift.contracts import (
@@ -134,6 +145,7 @@ if TYPE_CHECKING:
         PolicyRecommendation,
         SegmentReport,
         SegmentThresholds,
+        UpliftDriftReport,
         UpliftEvaluation,
     )
     from engine.uplift.data import FeatureSpec
@@ -186,7 +198,6 @@ UPLIFT_OUTCOME_UNUSABLE: Final[str] = "UPLIFT_OUTCOME_UNUSABLE"
 UPLIFT_TRAIN_FAILED: Final[str] = "UPLIFT_TRAIN_FAILED"
 UPLIFT_MODEL_REQUIRED: Final[str] = "UPLIFT_MODEL_REQUIRED"
 UPLIFT_FEATURE_MISSING: Final[str] = "UPLIFT_FEATURE_MISSING"
-COMPOSITE_KEY_NOT_SUPPORTED: Final[str] = "COMPOSITE_KEY_NOT_SUPPORTED"
 
 LEARNER_LABELS: Final[dict[UpliftLearner, str]] = {
     UpliftLearner.S_LEARNER: "S-learner",
@@ -229,10 +240,10 @@ def model_card_key(predictor_key: str) -> str:
     return f"{predictor_key}/{UPLIFT_MODEL_CARD_FILENAME}"
 
 
-def scores_columns(primary_key: str, reason_columns: tuple[str, ...]) -> tuple[str, ...]:
-    """Header of an uplift run's `scores.csv` and `scores.parquet`, in order."""
+def scores_columns(primary_key: PrimaryKey, reason_columns: tuple[str, ...]) -> tuple[str, ...]:
+    """Header of an uplift run's `scores.csv` and `scores.parquet`, in order: every key column first."""
     return (
-        primary_key,
+        *keys.key_columns(primary_key),
         UPLIFT_COLUMN,
         P_TREATED_COLUMN,
         P_CONTROL_COLUMN,
@@ -304,23 +315,13 @@ def _not_causal_suffix(causal: bool) -> str:
     return "" if causal else " · not causal"
 
 
-def _customer_key(ctx: StageContext, stage: StageKey) -> str:
-    """The one column naming a customer. Uplift runs on a single-column key.
+def _entity(ctx: StageContext) -> str:
+    """The column naming the customer: the key itself, or the first column of a composite key.
 
-    `StageContext.primary_key` is a list since Plan A (DEC-083), so indexing a frame with it would
-    return a one-column frame rather than the column; `ctx.key_columns` is read instead. A composite
-    key is refused by name rather than reduced to its first column: an uplift model ranks
-    customers, and one row per customer per snapshot is a question plan B does not ask (DEC-800).
+    Treatment is assigned per customer, so this is what the hold-out is grouped by and what the
+    control group and suppression decide by (M53, DEC-853) - never the snapshot date.
     """
-    columns = ctx.key_columns
-    if len(columns) != 1:
-        raise EngineError(
-            COMPOSITE_KEY_NOT_SUPPORTED,
-            f"An uplift run needs one primary-key column and was given {len(columns)}: {', '.join(columns)}.",
-            suggestion="Run uplift on a file with one row per customer and a single key column.",
-            stage=stage,
-        )
-    return columns[0]
+    return keys.entity_column(ctx.primary_key)
 
 
 # ---------------------------------------------------------------------------
@@ -372,7 +373,7 @@ class UpliftTrainFlow(_TrainFlow):
         checked = run_uplift_checks(
             frame,
             ctx.config,
-            primary_key=_customer_key(ctx, StageKey.VALIDATE),
+            primary_key=ctx.key,
             target=target,
             upload_id=profile.upload_id,
             run_id=ctx.run_id,
@@ -390,7 +391,9 @@ class UpliftTrainFlow(_TrainFlow):
         # A row with no recorded outcome did not fail to convert; Phase 1's prepare drops it too.
         known = kept[target].notna().to_numpy(dtype=bool)
         self._rows_set_aside = checked.report.rows_immature + int((~known).sum())
-        self._kept = kept.loc[known]
+        # After the checks, as in Phase 1: the joined row key of a composite key is the engine's, and
+        # no check reports on it. A one-column key adds nothing (DEC-083).
+        self._kept = keys.with_row_key(kept.loc[known], ctx.key_columns)
         detail = (
             f"{validate.validation_detail(report)} · treatment column {self._treatment}"
             f"{_not_causal_suffix(self._causal)}"
@@ -429,7 +432,7 @@ class UpliftTrainFlow(_TrainFlow):
         spec = fit_feature_spec(
             kept,
             ctx.config,
-            primary_key=_customer_key(ctx, StageKey.PREPARE),
+            primary_key=ctx.key,
             target=target,
             treatment_column=treatment,
             validation=self._validation_report,
@@ -463,19 +466,31 @@ class UpliftTrainFlow(_TrainFlow):
         return _StageOutcome(" · ".join(segments), len(kept.index))
 
     def _split_and_fit(self) -> _StageOutcome:
-        """The hold-out, stratified on treatment and outcome, and an honest `split.json`."""
+        """The hold-out, stratified on treatment and outcome, and an honest `split.json`.
+
+        With a composite key the hold-out is drawn by customer (`group_column` is the entity), so
+        no customer has a snapshot on each side (M53, DEC-855).
+        """
         from engine.uplift.data import split_holdout
 
         ctx = self._ctx
         t, y = _require(self._t, "the treatment array"), _require(self._y, "the outcome array")
         fraction = ctx.config.uplift.test_fraction
-        train_rows, test_rows = split_holdout(t, y, test_fraction=fraction, seed=self._seed)
+        group_column = _entity(ctx) if keys.is_composite(ctx.primary_key) else None
+        groups = (
+            None
+            if group_column is None
+            else _require(self._kept, "the validated rows")[group_column].to_numpy(dtype=object)
+        )
+        train_rows, test_rows = split_holdout(t, y, test_fraction=fraction, seed=self._seed, groups=groups)
         self._train_rows, self._test_rows = train_rows, test_rows
         total = len(t)
         detail = (
             f"train {humanise_count(len(train_rows))} · test {humanise_count(len(test_rows))} · "
             f"stratified on treatment and outcome"
         )
+        if group_column is not None:
+            detail += f" · grouped by {group_column}"
 
         def part(name: Literal["train", "validation", "test"], rows: IntArray | None) -> SplitPart:
             if rows is None or len(rows) == 0:
@@ -493,7 +508,7 @@ class UpliftTrainFlow(_TrainFlow):
             run_id=ctx.run_id,
             type=SplitType.RANDOM_STRATIFIED,
             time_column=None,
-            group_column=None,
+            group_column=group_column,
             parts=(part("train", train_rows), part("validation", None), part("test", test_rows)),
             validation_fraction=0.0,
             test_fraction=fraction,
@@ -650,9 +665,10 @@ class UpliftTrainFlow(_TrainFlow):
         return _StageOutcome(detail, evaluation.rows_evaluated)
 
     def _holdout_keys(self, rows: IntArray) -> list[str]:
-        """The hold-out rows' primary keys as text: what `holdout_fingerprint` hashes (DEC-670)."""
+        """The hold-out rows' keys as text (the row key of a composite key): what
+        `holdout_fingerprint` hashes (DEC-670)."""
         kept = _require(self._kept, "the validated rows")
-        return [str(key) for key in kept[_customer_key(self._ctx, StageKey.EVALUATE)].iloc[rows].tolist()]
+        return [str(key) for key in kept[self._ctx.row_key].iloc[rows].tolist()]
 
     def _write_holdout(self, rows: IntArray, t: IntArray, y: IntArray, prediction: UpliftPrediction) -> None:
         """`uplift_holdout.parquet`: the logged data OPE and every expected-conversions figure use."""
@@ -661,10 +677,7 @@ class UpliftTrainFlow(_TrainFlow):
         kept = _require(self._kept, "the validated rows")
         frame = pd.DataFrame(
             {
-                "primary_key": kept[_customer_key(self._ctx, StageKey.EVALUATE)]
-                .iloc[rows]
-                .astype(str)
-                .to_numpy(),
+                "primary_key": kept[self._ctx.row_key].iloc[rows].astype(str).to_numpy(),
                 "t": t,
                 "y": y,
                 "uplift": prediction.uplift,
@@ -711,14 +724,12 @@ class UpliftTrainFlow(_TrainFlow):
         self._write(FEATURE_IMPORTANCE_FILENAME, importance)
         if not ctx.config.evaluation.shap:
             return _StageOutcome(f"{method} · {REASONS_OFF_DETAIL}", 0)
-        keys = _require(self._kept, "the validated rows")[_customer_key(ctx, StageKey.EXPLAIN)].iloc[
-            rows[positions]
-        ]
+        row_keys = _require(self._kept, "the validated rows")[ctx.row_key].iloc[rows[positions]]
         reasons = uplift_reasons(
             contributions,
             frame,
             prediction.uplift[positions],
-            [str(key) for key in keys.tolist()],
+            [str(key) for key in row_keys.tolist()],
             top_n=ctx.config.evaluation.reasons_per_row,
         )
         key = explain.write_row_explanations(reasons, run_id=ctx.run_id, storage=self._storage)
@@ -750,6 +761,17 @@ class UpliftTrainFlow(_TrainFlow):
             model_version_id=model_id,
         )
         self._write(register.SCHEMA_FILENAME, schema)
+        # The training distribution of the same raw columns, so a scoring run can measure drift
+        # with Phase 1's own PSI (M53, DEC-856): raw on both sides, because the uplift feature spec
+        # is replayed on the raw scoring columns, not through Phase 1's prepare.
+        baseline = register.drift_baseline(
+            kept.iloc[train_rows][list(spec.feature_columns)],
+            ctx.config,
+            run_id=ctx.run_id,
+            model_version_id=model_id,
+            primary_key=ctx.key,
+        )
+        self._write(register.DRIFT_BASELINE_FILENAME, baseline)
         champion = ctx.registry.get_champion(ctx.config.id)
         champion_evaluation, unavailable = self._rescore_uplift_champion(champion)
         decision: UpliftChampionDecision | None = None
@@ -853,6 +875,7 @@ class UpliftTrainFlow(_TrainFlow):
             UPLIFT_EVALUATION_FILENAME: run_key(ctx.run_id, UPLIFT_EVALUATION_FILENAME),
             UPLIFT_HOLDOUT_FILENAME: run_key(ctx.run_id, UPLIFT_HOLDOUT_FILENAME),
             UPLIFT_MODEL_CARD_FILENAME: model_card_key(predictor_key),
+            register.DRIFT_BASELINE_FILENAME: run_key(ctx.run_id, register.DRIFT_BASELINE_FILENAME),
             MODEL_DIRECTORY: predictor_key,
         }
         candidate = ModelVersion(
@@ -870,7 +893,7 @@ class UpliftTrainFlow(_TrainFlow):
             schema_key=schema_key,
             run_config_key=run_config_key,
             predictor_key=predictor_key,
-            drift_baseline_key=None,
+            drift_baseline_key=run_key(ctx.run_id, register.DRIFT_BASELINE_FILENAME),
             artefact_keys=keys,
             engine_version=__version__,
             autogluon_version=_autogluon_version(card.base_model),
@@ -962,6 +985,7 @@ class UpliftScoreFlow(_ScoreFlow):
         self._model: UpliftModel | None = None
         self._prediction: UpliftPrediction | None = None
         self._recommendation: PolicyRecommendation | None = None
+        self._drift: UpliftDriftReport | None = None
 
     def _validate_against_schema(self) -> _StageOutcome:
         """Phase 1's stage, unchanged; then `run.json` says what kind of run this turned out to be.
@@ -1012,7 +1036,9 @@ class UpliftScoreFlow(_ScoreFlow):
         )
 
     def _predict(self) -> _StageOutcome:
-        """Load the model once and predict both counterfactual probabilities and the uplift."""
+        """Load the model once, predict both counterfactual probabilities and the uplift, and
+        measure drift against the training data (`uplift_drift.json`, M53)."""
+        from engine.uplift.drift import measure_uplift_drift
         from engine.uplift.learners import load_model
 
         version = _require(self._version, "the model version")
@@ -1026,12 +1052,30 @@ class UpliftScoreFlow(_ScoreFlow):
         self._model, self._prediction, self._scored = model, prediction, scored
         rows = len(scored.index)
         self._manifest.add_metrics({"mean_predicted_uplift": float(prediction.uplift.mean())} if rows else {})
+        card = _require(self._card, "the model card")
+        drift = measure_uplift_drift(
+            _require(self._frame, "the uploaded rows"),
+            self._ctx.config,
+            version=version,
+            card=card,
+            run_id=self._ctx.run_id,
+            storage=self._storage,
+        )
+        self._drift = drift
+        self._write(UPLIFT_DRIFT_FILENAME, drift)
+        if drift.features is not None:
+            self._manifest.add_metrics({"max_psi": drift.features.max_psi}, prefix="drift_")
         _LOGGER.info(
-            "predict: %d rows scored by uplift model %s (v%d)", rows, version.model_id, version.version
+            "predict: %d rows scored by uplift model %s (v%d) drift=%s treated_share=%s",
+            rows,
+            version.model_id,
+            version.version,
+            "not measured" if drift.features is None else drift.features.status.value,
+            drift.treatment.status,
         )
         return _StageOutcome(
             f"{humanise_count(rows)} rows scored · {version.model_display_name} (v{version.version})"
-            f"{_not_causal_suffix(_require(self._card, 'the model card').causal)}",
+            f" · {drift.summary}{_not_causal_suffix(card.causal)}",
             rows,
         )
 
@@ -1052,14 +1096,12 @@ class UpliftScoreFlow(_ScoreFlow):
             contributions,
             features,
             prediction.uplift,
-            [str(key) for key in scored[_customer_key(ctx, StageKey.EXPLAIN_ROWS)].tolist()],
+            [str(key) for key in scored[ctx.row_key].tolist()],
             top_n=ctx.config.evaluation.reasons_per_row,
         )
         key = explain.write_row_explanations(reasons, run_id=ctx.run_id, storage=self._storage)
         self._artefacts[explain.ROW_EXPLANATIONS_FILENAME] = key
-        self._scored = explain.with_reason_columns(
-            reasons, scored, ctx.config, primary_key=_customer_key(ctx, StageKey.EXPLAIN_ROWS)
-        )
+        self._scored = explain.with_reason_columns(reasons, scored, ctx.config, primary_key=ctx.row_key)
         return _StageOutcome(
             f"{_method_words(model)} · reasons for {humanise_count(len(reasons))} rows", len(reasons)
         )
@@ -1074,7 +1116,8 @@ class UpliftScoreFlow(_ScoreFlow):
             _require(self._scored, "the scored rows"),
             ctx.config,
             run_id=ctx.run_id,
-            primary_key=_customer_key(ctx, StageKey.ACTIONS),
+            primary_key=ctx.row_key,
+            entity_key=ctx.entity_key,
             causal=card.causal,
             prediction_columns=PREDICTION_COLUMNS,
             thresholds=card.segment_thresholds,
@@ -1129,7 +1172,7 @@ class UpliftScoreFlow(_ScoreFlow):
             frame,
             ctx.config,
             run_id=ctx.run_id,
-            primary_key=_customer_key(ctx, StageKey.EXPORT),
+            primary_key=ctx.key,
             storage=self._storage,
         )
         self._artefacts.update(files)
@@ -1138,8 +1181,9 @@ class UpliftScoreFlow(_ScoreFlow):
             ctx.config,
             run_id=ctx.run_id,
             version=version,
-            primary_key=_customer_key(ctx, StageKey.EXPORT),
+            primary_key=ctx.row_key,
             files=files,
+            drift=None if self._drift is None else self._drift.features,
             thresholds=card.segment_thresholds,
             treat=_require(self._recommendation, "the policy recommendation").contacts_recommended,
         )
@@ -1181,14 +1225,24 @@ def _reason_text(cell: object) -> str | None:
 
 
 def _write_scores(
-    frame: pd.DataFrame, config: UseCaseConfig, *, run_id: str, primary_key: str, storage: Storage
+    frame: pd.DataFrame, config: UseCaseConfig, *, run_id: str, primary_key: PrimaryKey, storage: Storage
 ) -> dict[str, str]:
-    """The uplift `scores.csv` and `scores.parquet`: the same table, in :func:`scores_columns` order."""
+    """The uplift `scores.csv` and `scores.parquet`: the same table, in :func:`scores_columns` order.
+
+    A one-column key is written as the frame holds it, as it always was. Each column of a composite
+    key is written separately as text (`engine.keys.key_text`), as Phase 1's `scores.csv` does, so an
+    id keeps its leading zeros and a snapshot date reads as the date (DEC-083).
+    """
     import pandas as pd
 
     reason_names = explain.reason_column_names(config)
-    data: dict[str, pd.Series] = {
-        primary_key: frame[primary_key],
+    columns = keys.key_columns(primary_key)
+    data: dict[str, pd.Series] = (
+        {columns[0]: frame[columns[0]]}
+        if len(columns) == 1
+        else {name: keys.key_text(frame[name]).astype("object") for name in columns}
+    )
+    data |= {
         UPLIFT_COLUMN: frame[UPLIFT_COLUMN].astype("float64"),
         P_TREATED_COLUMN: frame[P_TREATED_COLUMN].astype("float64"),
         P_CONTROL_COLUMN: frame[P_CONTROL_COLUMN].astype("float64"),
@@ -1251,6 +1305,7 @@ def _scoring_summary(
     files: dict[str, str],
     thresholds: SegmentThresholds,
     treat: int,
+    drift: DriftReport | None = None,
 ) -> ScoringSummary:
     """Phase 1's `ScoringSummary`, filled truthfully for segments.
 
@@ -1275,7 +1330,7 @@ def _scoring_summary(
         model_version_id=version.model_id,
         model_display_name=version.model_display_name,
         primary_key=primary_key,
-        drift=None,
+        drift=drift,
         files=files,
     )
     return summary.model_copy(

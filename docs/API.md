@@ -500,6 +500,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `bootstrap_samples` | integer | no |  |
 | `test_fraction` | number | no |  |
 | `time_limit_minutes` | integer | no |  |
+| `drift_treated_share_tolerance` | number | no |  |
 | `segments` | UpliftSegmentsConfig | no | Where the four segments are cut. A Phase 5 agent may propose new cuts. |
 | `policy` | UpliftPolicyConfig | no | The budget the targeting recommendation works within. A Phase 5 agent may propose budgets. |
 
@@ -1878,6 +1879,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `uplift.bootstrap_samples` | int 10..5000; resamples behind every uplift confidence interval |
 | `uplift.test_fraction` | float 0.1..0.5; hold-out share the uplift metrics are measured on |
 | `uplift.time_limit_minutes` | int 1..240; AutoGluon budget across all base models (autogluon_fast only) |
+| `uplift.drift_treated_share_tolerance` | float 0..0.5; uplift_drift.json flags a scoring file whose treated share differs from training's by more than this (absolute; M53) |
 | `uplift.segments` | agent_editable: true (plan B §12) |
 | `uplift.segments.persuadable_min_uplift` | float; predicted uplift at or above this = persuadable |
 | `uplift.segments.sleeping_dog_max_uplift` | float; predicted uplift at or below this = sleeping dog (never treated) |

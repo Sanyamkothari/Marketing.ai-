@@ -308,6 +308,7 @@ defaults:
     bootstrap_samples: 200              # int 10..5000; resamples behind every uplift confidence interval
     test_fraction: 0.30                 # float 0.1..0.5; hold-out share the uplift metrics are measured on
     time_limit_minutes: 10              # int 1..240; AutoGluon budget across all base models (autogluon_fast only)
+    drift_treated_share_tolerance: 0.05 # float 0..0.5; uplift_drift.json flags a scoring file whose treated share differs from training's by more than this (absolute; M53)
     segments:                           # agent_editable: true (plan B §12)
       persuadable_min_uplift: 0.02      # float; predicted uplift at or above this = persuadable
       sleeping_dog_max_uplift: -0.01    # float; predicted uplift at or below this = sleeping dog (never treated)

@@ -45,7 +45,40 @@ export const PAGE_ARTEFACTS = {
   output: ["decile_lift.json", "scoring_summary.json", "drift.json", "run_config.json", "prepare.json"],
 };
 
+/**
+ * What an uplift run's pages read instead (DEC-651: `run.problem_type === "uplift"`). An uplift run
+ * writes no `prepare.json`, `drift.json`, `decile_lift.json` or ROC-style evaluation, so asking for
+ * them would only log 404s; it writes the uplift artefacts, which `GET /runs/{id}/artefacts/{name}`
+ * serves since M53.
+ */
+export const UPLIFT_PAGE_ARTEFACTS = {
+  data: [
+    "profile.json",
+    "split.json",
+    "validation.json",
+    "uplift_validation.json",
+    "uplift_drift.json",
+    "run_config.json",
+  ],
+  model: ["run_config.json", "uplift_evaluation.json", "qini_curve.json", "feature_importance.json"],
+  output: [
+    "scoring_summary.json",
+    "segments.json",
+    "policy_recommendation.json",
+    "uplift_drift.json",
+    "run_config.json",
+  ],
+};
+
+export const isUplift = (run) => !!run && run.problem_type === "uplift";
+
+/** The artefacts one page of this run reads: Phase 1's list, or the uplift one. */
+export const pageArtefacts = (kind, run) => (isUplift(run) ? UPLIFT_PAGE_ARTEFACTS : PAGE_ARTEFACTS)[kind];
+
 const TAB_LABEL = { data: "Data", model: "Model", output: "Output" };
+
+/** The key as the user named it: one column, or its columns joined by " + " for a two-column key. */
+const keyText = (pk) => (Array.isArray(pk) ? pk.join(" + ") : dash(pk));
 
 /** A choice label from the advanced-settings schema, so enum wording matches the Setup screen. */
 function choiceLabel(byPath, path, value) {
@@ -347,19 +380,7 @@ function modelPage(uc, run, art, byPath) {
         )
       : `<div class="empty">This run has not produced evaluation.json yet.</div>`;
 
-  const items = (importance && importance.items) || [];
-  const maxShare = items.length ? Math.max(...items.map((i) => i.share_pct)) : 0;
-  const bars = items.length
-    ? `<div class="bars">${items
-        .map(
-          (item) =>
-            `<div class="brow"><span class="lab">${esc(item.feature)}</span>${barTrack(
-              maxShare ? (100 * item.share_pct) / maxShare : 0,
-              `${item.feature} ${fmtNum(item.share_pct, 1)} percent`,
-            )}<span class="pct">${fmtNum(item.share_pct, 1)}%</span></div>`,
-        )
-        .join("")}</div><p class="caption">${esc(importance.caption)}</p>`
-    : `<div class="empty">This run has not produced feature_importance.json yet.</div>`;
+  const bars = importanceBars(importance);
   const importanceTitle = importance ? `Feature importance (${importance.method})` : "Feature importance";
 
   const matrixCard = matrix
@@ -423,6 +444,23 @@ function modelPage(uc, run, art, byPath) {
       <section class="card"><h3>Confusion matrix</h3>${matrixCard}</section>
     </div>
     ${boardCard}${fairnessCard}`;
+}
+
+/** Feature importance as the Model page draws it, for both kinds of run. */
+function importanceBars(importance) {
+  const items = (importance && importance.items) || [];
+  const maxShare = items.length ? Math.max(...items.map((i) => i.share_pct)) : 0;
+  return items.length
+    ? `<div class="bars">${items
+        .map(
+          (item) =>
+            `<div class="brow"><span class="lab">${esc(item.feature)}</span>${barTrack(
+              maxShare ? (100 * item.share_pct) / maxShare : 0,
+              `${item.feature} ${fmtNum(item.share_pct, 1)} percent`,
+            )}<span class="pct">${fmtNum(item.share_pct, 1)}%</span></div>`,
+        )
+        .join("")}</div><p class="caption">${esc(importance.caption)}</p>`
+    : `<div class="empty">This run has not produced feature_importance.json yet.</div>`;
 }
 
 // --- Output ------------------------------------------------------------------------------------
@@ -529,7 +567,7 @@ function outputPage(uc, run, art, byPath, scoresHref) {
   const sample = (summary && summary.sample_rows) || [];
   const sampleTable = sample.length
     ? table(
-        [run.primary_key, summary.score_field, "band", "top reason", "action"],
+        [keyText(run.primary_key), summary.score_field, "band", "top reason", "action"],
         sample.map((row) => [
           row.primary_key,
           fmtNum(row.score, 4),
@@ -560,16 +598,318 @@ function outputPage(uc, run, art, byPath, scoresHref) {
     <section class="card"><h3>Prediction output (sample rows)</h3>${sampleTable}${downloadLink}</section>`;
 }
 
+// --- Uplift runs (M53) ----------------------------------------------------------------------------
+//
+// The same three tabs for a run whose problem type is uplift: treatment and control instead of the
+// feature pipeline, the Qini curve and AUUC instead of ROC and lift, segments instead of bands. Every
+// figure is read from an uplift artefact; a missing one is an em dash or a card that says so.
+
+const NOT_CAUSAL =
+  "Not causal: the treatment was not randomly assigned, so these numbers describe who was contacted, not what contacting them changed.";
+
+const fmtShare = (v) => dash(v, (x) => fmtPct(x, 1));
+
+/** A `ConfidenceValue` as "0.0123 (95% CI 0.0041 to 0.0205)"; a missing interval stays visible. */
+function fmtConfidence(cv, places = 4) {
+  if (!cv || !present(cv.value)) return EM_DASH;
+  const interval =
+    present(cv.ci_low) && present(cv.ci_high)
+      ? `${fmtNum(cv.ci_low, places)} to ${fmtNum(cv.ci_high, places)}`
+      : EM_DASH;
+  const level = present(cv.confidence_level) ? `${fmtNum(cv.confidence_level * 100, 0)}% CI` : "CI";
+  return `${fmtNum(cv.value, places)} (${level} ${interval})`;
+}
+
+/** Treated or control: in customers and rows for a two-column key, in rows otherwise. */
+function armLine(report, arm) {
+  if (!report || !present(report[`${arm}_rows`])) return EM_DASH;
+  const rows = fmtInt(report[`${arm}_rows`]);
+  const entities = report[`${arm}_entities`];
+  return present(entities) ? `${fmtInt(entities)} customers (${rows} rows)` : `${rows} rows`;
+}
+
+/** The arm count a tile shows: customers for a two-column key, rows otherwise. */
+function armCount(report, arm) {
+  if (!report) return EM_DASH;
+  return present(report[`${arm}_entities`])
+    ? fmtInt(report[`${arm}_entities`])
+    : dash(report[`${arm}_rows`], fmtInt);
+}
+
+function treatedShare(report) {
+  if (!report || !present(report.treated_rows) || !present(report.control_rows)) return EM_DASH;
+  const total = report.treated_rows + report.control_rows;
+  return total ? fmtPct(report.treated_rows / total) : EM_DASH;
+}
+
+/** The randomness check in words: its AUC against the limit, and whether a failure was acknowledged. */
+function randomnessLine(report, config) {
+  if (!report) return EM_DASH;
+  const limit = config ? readPath(config, "uplift.randomness_auc_max") : null;
+  const finding = (report.checks || []).find((c) => c.code === "TREATMENT_NOT_RANDOM");
+  if (!present(report.randomness_auc)) return finding ? "Failed" : "Not measured";
+  const auc = `AUC ${fmtNum(report.randomness_auc, 2)}${present(limit) ? `, limit ${fmtNum(limit, 2)}` : ""}`;
+  if (!finding) return `Passed (${auc})`;
+  return finding.acknowledged ? `Targeted, acknowledged (${auc})` : `Targeted (${auc})`;
+}
+
+function driftRows(drift) {
+  const t = drift.treatment || {};
+  const features = drift.features
+    ? `${humanise(drift.features.status)} · max PSI ${fmtNum(drift.features.max_psi, 3)}`
+    : dash(drift.features_reason);
+  const share =
+    t.status === "not_applicable"
+      ? dash(t.reason)
+      : `${fmtShare(t.current_treated_share)} now, ${fmtShare(t.training_treated_share)} in training · ${humanise(
+          t.status,
+        )} (tolerance ${fmtNum(t.tolerance, 2)})`;
+  return [
+    ["Feature drift", features],
+    ["Treated share", share],
+  ];
+}
+
+/** `uplift_drift.json`, on a scoring run's Data and Output pages; nothing on a training run. */
+function driftCard(drift, scoring) {
+  if (!scoring && !drift) return "";
+  const drifted = drift && drift.features ? drift.features.drifted_features || [] : [];
+  const body = drift
+    ? `${kvs(driftRows(drift))}${
+        drifted.length ? `<p class="caption">Drifted: ${esc(drifted.join(", "))}</p>` : ""
+      }`
+    : `<div class="empty">This run has not produced uplift_drift.json yet.</div>`;
+  return `<section class="card"><h3>Drift against the training data</h3>${body}</section>`;
+}
+
+function upliftDataPage(uc, run, art, byPath, extra) {
+  const profile = art["profile.json"];
+  const split = art["split.json"];
+  const uv = art["uplift_validation.json"];
+  const drift = art["uplift_drift.json"];
+  const config = art["run_config.json"] && art["run_config.json"].config;
+  const scoring = run.mode !== "train";
+
+  const tiles = kpis([
+    ["Rows", dash(profile && profile.row_count, fmtN)],
+    ["Treated", armCount(uv, "treated")],
+    ["Control", armCount(uv, "control")],
+    ["Randomness", uv && present(uv.randomness_auc) ? `AUC ${fmtNum(uv.randomness_auc, 2)}` : EM_DASH],
+  ]);
+
+  const fileRows = profile
+    ? [
+        ["File", profile.file_name],
+        ["Rows", fmtInt(profile.row_count)],
+        ["Columns", String(profile.column_count)],
+        ["Key", keyText(run.primary_key)],
+        [uc.target.label || "Outcome column", dash(run.target)],
+      ]
+    : [["File", EM_DASH]];
+
+  const parts = ((split && split.parts) || []).filter((p) => p.rows);
+  const experimentRows = [
+    ["Treatment column", dash(uv && uv.treatment_column)],
+    ["Treated", armLine(uv, "treated")],
+    ["Control", armLine(uv, "control")],
+    ["Treated share", treatedShare(uv)],
+    ["Randomness check", randomnessLine(uv, config)],
+    ["Causal", uv ? (uv.causal ? "Yes" : "No") : EM_DASH],
+    ["Rows set aside (outcome not final)", dash(uv && uv.rows_immature, fmtInt)],
+    [
+      "Train / test",
+      parts.length
+        ? `${parts.map((p) => `${p.name} ${fmtInt(p.rows)}`).join(" · ")}${
+            split.group_column ? ` · grouped by ${split.group_column}` : ""
+          }`
+        : EM_DASH,
+    ],
+  ];
+
+  const checks = (uv && uv.checks) || [];
+  const checksCard = uv
+    ? checks.length
+      ? table(
+          ["check", "severity", "message"],
+          checks.map((c) => [c.code, `${c.severity}${c.acknowledged ? " (acknowledged)" : ""}`, c.message]),
+        )
+      : `<div class="empty">Every uplift check passed.</div>`
+    : `<div class="empty">${
+        scoring
+          ? "A scoring run is not checked as an experiment; its treated share is compared with training's in the drift card."
+          : "This run has not produced uplift_validation.json yet."
+      }</div>`;
+
+  return `${tiles}
+    ${lineageCard(run, extra)}
+    <div class="row">
+      <section class="card"><h3>Input dataset</h3>${kvs(fileRows)}</section>
+      <section class="card"><h3>Treatment &amp; control</h3>${kvs(experimentRows)}${
+        uv && uv.causal === false ? `<p class="caption">${esc(NOT_CAUSAL)}</p>` : ""
+      }</section>
+    </div>
+    <section class="card"><h3>Uplift checks</h3>${checksCard}</section>
+    ${driftCard(drift, scoring)}`;
+}
+
+/**
+ * The Qini curve. The chart is the uplift module's own (`extra.qiniChart`, which `app.js` loads), so
+ * both screens draw one picture; without that module the curve's points are listed instead.
+ */
+function qiniBlock(curve, extra) {
+  if (!curve || !(curve.points || []).length) {
+    return `<div class="empty">This run has not produced qini_curve.json yet.</div>`;
+  }
+  if (typeof extra.qiniChart === "function") return extra.qiniChart(curve);
+  const tenths = curve.points.filter((p) => Math.abs(p.fraction * 10 - Math.round(p.fraction * 10)) < 1e-9);
+  return table(
+    ["share targeted", "model", "random"],
+    tenths.map((p) => [fmtPct(p.fraction, 0), fmtPct(p.qini, 2), fmtPct(p.random, 2)]),
+  );
+}
+
+function upliftModelPage(uc, run, art, byPath, extra) {
+  const evaluation = art["uplift_evaluation.json"];
+  const curve = art["qini_curve.json"];
+  const importance = art["feature_importance.json"];
+  const cv = (name) => (evaluation && evaluation[name]) || null;
+
+  const tiles = kpis([
+    ["Algorithm", dash(run.best_model)],
+    ["AUUC", dash(cv("auuc") && cv("auuc").value, (v) => fmtNum(v, 4))],
+    ["Qini coefficient", dash(cv("qini_coefficient") && cv("qini_coefficient").value, (v) => fmtNum(v, 4))],
+    ["Last trained", dash(run.finished_at, fmtStamp)],
+  ]);
+
+  const evalCard = evaluation
+    ? `${kvs([
+        ["AUUC", fmtConfidence(evaluation.auuc)],
+        ["Qini coefficient", fmtConfidence(evaluation.qini_coefficient)],
+        ["Average treatment effect", fmtConfidence(evaluation.average_treatment_effect)],
+        ...(evaluation.uplift_at || []).map((u) => [`Uplift in the top ${fmtPct(u.fraction, 0)}`, fmtConfidence(u.uplift)]),
+        ["Treated (hold-out)", `${fmtInt(evaluation.treated_rows)} rows · rate ${fmtPct(evaluation.treated_rate)}`],
+        ["Control (hold-out)", `${fmtInt(evaluation.control_rows)} rows · rate ${fmtPct(evaluation.control_rate)}`],
+        ["Measurable uplift", evaluation.measurable_uplift ? "Yes" : "No"],
+      ])}<p class="caption">${esc(evaluation.summary)}${evaluation.causal === false ? ` ${esc(NOT_CAUSAL)}` : ""}</p>`
+    : `<div class="empty">${
+        run.mode === "train"
+          ? "This run has not produced uplift_evaluation.json yet."
+          : "A scoring run measures nothing on a hold-out; open this model's training run for its Qini curve and AUUC."
+      }</div>`;
+
+  const setupRows = [
+    ["Problem type", problemTypeLabel(uc, run.problem_type)],
+    ["Outcome", dash(run.target)],
+    ["Algorithm", dash(run.best_model)],
+    ["Bootstrap resamples", dash(evaluation && evaluation.bootstrap_samples, fmtInt)],
+    ["Hold-out rows", dash(evaluation && evaluation.rows_evaluated, fmtInt)],
+    ["Engine", `Marketing AI ${run.engine_version}`],
+  ];
+  const importanceTitle = importance ? `Feature importance (${importance.method})` : "Feature importance";
+
+  return `${tiles}
+    <div class="row rev">
+      <section class="card"><h3>Training setup</h3>${kvs(setupRows)}</section>
+      <section class="card"><h3>Evaluation (hold-out test set)</h3>${evalCard}</section>
+    </div>
+    <div class="row">
+      <section class="card"><h3>Qini curve</h3>${qiniBlock(curve, extra)}</section>
+      <section class="card"><h3>${esc(importanceTitle)}</h3>${importanceBars(importance)}</section>
+    </div>`;
+}
+
+function upliftOutputPage(uc, run, art, byPath, scoresHref) {
+  const summary = art["scoring_summary.json"];
+  const segments = art["segments.json"];
+  const policy = art["policy_recommendation.json"];
+  const drift = art["uplift_drift.json"];
+  const scoring = run.mode !== "train";
+  const expected = policy ? policy.expected_incremental_conversions : null;
+  const kpi = summary && summary.kpi;
+
+  const tiles = kpis([
+    [dash(kpi && kpi.label), dash(kpi && kpi.display)],
+    ["Rows scored", dash(summary && summary.rows_scored, fmtInt)],
+    ["Control group", dash(summary && summary.control_group_rows, fmtInt)],
+    ["Expected extra conversions", dash(expected && expected.value, (v) => fmtNum(v, 1))],
+  ]);
+
+  const segmentRows = summary
+    ? (summary.bands || []).map((b) => [b.name, b.action, fmtInt(b.rows), `${fmtNum(b.share_pct, 1)}%`])
+    : ((segments && segments.segments) || []).map((g) => [g.label, g.action, fmtInt(g.rows), `${fmtNum(g.share_pct, 1)}%`]);
+  const segmentNote = segments
+    ? `<p class="caption">Computed on the ${segments.computed_on === "test" ? "hold-out" : "scored rows"}.${
+        segments.causal === false ? ` ${esc(NOT_CAUSAL)}` : ""
+      }</p>`
+    : "";
+  const segmentCard = segmentRows.length
+    ? `${table(["segment", "action", "rows", "share"], segmentRows)}${segmentNote}`
+    : `<div class="empty">This run has not produced segments.json yet.</div>`;
+
+  const policyRows = policy
+    ? [
+        ["Contacts recommended", fmtInt(policy.contacts_recommended)],
+        ["Eligible persuadables", fmtInt(policy.eligible_persuadables)],
+        ["Why not more", humanise(policy.stop_reason)],
+        ["Budget", dash(policy.budget_contacts, fmtInt)],
+        ["Predicted extra conversions", fmtNum(policy.predicted_incremental_conversions, 1)],
+        ["Expected extra conversions", fmtConfidence(expected, 1)],
+      ]
+    : [["Contacts recommended", EM_DASH]];
+
+  const sample = (summary && summary.sample_rows) || [];
+  const sampleTable = sample.length
+    ? table(
+        [keyText(run.primary_key), summary.score_field, "segment", "top reason", "action"],
+        sample.map((row) => [
+          row.primary_key,
+          fmtNum(row.score, 4),
+          row.band,
+          (row.reasons || []).length ? row.reasons[0].text || row.reasons[0].feature : EM_DASH,
+          row.suppressed_reason ? `Suppressed (${humanise(row.suppressed_reason)})` : row.action,
+        ]),
+      )
+    : `<div class="empty">${
+        scoring
+          ? "This run has not produced scoring_summary.json yet."
+          : "Scored rows come from a scoring run. Score new data with this model to get a treat list."
+      }</div>`;
+  const downloadLink = sample.length
+    ? `<p class="caption"><a class="linkbtn" href="${esc(scoresHref)}">Download all scored rows (CSV)</a></p>`
+    : "";
+
+  return `${tiles}
+    <div class="row">
+      <section class="card"><h3>Segments &amp; actions</h3>${segmentCard}</section>
+      <section class="card"><h3>Targeting recommendation</h3>${kvs(policyRows)}</section>
+    </div>
+    ${driftCard(drift, scoring)}
+    <section class="card"><h3>Treat list (sample rows)</h3>${sampleTable}${downloadLink}</section>`;
+}
+
+/** A problem type's label: the use case's own, a Setup choice's, or the id in words. */
+export function problemTypeLabel(uc, value) {
+  if (!present(value)) return EM_DASH;
+  if (uc && value === uc.problem_type && uc.problem_type_label) return uc.problem_type_label;
+  const choices = (uc && uc.setup && uc.setup.problem_type_choices) || [];
+  const choice = choices.find((c) => c.value === value);
+  return choice && choice.label ? choice.label : humanise(value);
+}
+
 // --- entry point --------------------------------------------------------------------------------
 
-/** `extra` carries what is not a run artefact: the Data page's `lineage` (or `lineageError`). */
+/**
+ * `extra` carries what is not a run artefact: the Data page's `lineage` (or `lineageError`), and for
+ * an uplift run's Model page the uplift module's `qiniChart`.
+ */
 export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
   const byPath = indexSchema(uc.advanced_settings || { stages: [] });
+  const uplift = isUplift(run);
   const body =
     kind === "data"
-      ? dataPage(uc, run, art, byPath, extra)
+      ? (uplift ? upliftDataPage : dataPage)(uc, run, art, byPath, extra)
       : kind === "model"
-        ? modelPage(uc, run, art, byPath)
-        : outputPage(uc, run, art, byPath, scoresHref);
+        ? (uplift ? upliftModelPage : modelPage)(uc, run, art, byPath, extra)
+        : (uplift ? upliftOutputPage : outputPage)(uc, run, art, byPath, scoresHref);
   return shell(uc, kind, run, body);
 }

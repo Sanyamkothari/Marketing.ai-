@@ -1092,7 +1092,12 @@ class UpliftRunRequest(StrictBase):
 
     use_case: str = Field(description="Use case the run belongs to.")
     upload_id: str = Field(description="Upload uploaded in train mode.")
-    primary_key: str = Field(description="Column that identifies a customer.")
+    primary_key: PrimaryKey = Field(
+        description=(
+            "Column that identifies a customer, or two columns - the customer and the snapshot date - "
+            "for a file with one row per customer per snapshot. Treatment is assigned per customer."
+        )
+    )
     target: str = Field(description="Binary outcome column.")
     treatment_column: str | None = Field(
         default=None,

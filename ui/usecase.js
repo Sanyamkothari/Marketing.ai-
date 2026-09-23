@@ -48,6 +48,7 @@ import {
   writePath,
 } from "./settings.js";
 import { setupSource } from "./modules/router.js";
+import { problemTypeLabel } from "./pages.js";
 
 const AUTOML = "__automl__";
 const FILE = "file";
@@ -419,7 +420,7 @@ function runsCard(uc, s) {
       <div><div class="r1">${esc(headline)}${run.champion ? '<span class="champ">Champion</span>' : ""}</div>
       <div class="r2">${esc(run.file_name)} · ${esc(fmtStamp(run.created_at))}</div></div>
       <div class="r3"><b>${esc(right)}</b><span style="font-size:12px;color:var(--muted)">${esc(
-        run.mode,
+        `${run.mode} · ${problemTypeLabel(uc, run.problem_type)}`,
       )}</span></div></a>`;
   });
   return `<section class="card"><h3>Previous runs</h3><div class="runs-list">${
@@ -625,7 +626,7 @@ function flowBlocks(uc, s, run) {
       "Data",
       run.file_name,
       `${dash(run.row_count, fmtN)} rows · key ${dash(keyLabel(run.primary_key))}${
-        train ? ` · target ${dash(run.target)} · ${uc.problem_type_label.toLowerCase()}` : ""
+        train ? ` · target ${dash(run.target)} · ${problemTypeLabel(uc, run.problem_type).toLowerCase()}` : ""
       }`,
     ],
     [
