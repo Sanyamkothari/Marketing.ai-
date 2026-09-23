@@ -152,26 +152,23 @@ REDACTION: Final[str] = "[REDACTED]"
 _LOWER_QUANTILE: Final[float] = 0.01
 _UPPER_QUANTILE: Final[float] = 0.99
 _ID_LIKE_DISTINCT_SHARE: Final[float] = 0.99
-_PII_SAMPLE_ROWS: Final[int] = 1000
-_PII_VALUE_SHARE: Final[float] = 0.5
 _SEED_MODULUS: Final[int] = 2**32
 
 _TRUTHY_TEXT: Final[frozenset[str]] = frozenset({"true", "t", "yes", "y", "1"})
 
 _ID_LIKE_NAME: Final[re.Pattern[str]] = re.compile(r"(^|_)(id|uuid|guid|ref)(_|$)", re.IGNORECASE)
 
-_PII_NAME: Final[re.Pattern[str]] = re.compile(
-    r"(^|_)(e?mail|phone|mobile|msisdn|telephone|name|surname|address|street|postcode|zipcode"
-    r"|aadhaar|aadhar|pan|ssn|passport)(_|$)",
-    re.IGNORECASE,
-)
-
-_PII_VALUE_PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
-    ("email", re.compile(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}")),
-    ("phone number", re.compile(r"\+?\d[\d\s().-]{7,17}\d")),
-    ("PAN", re.compile(r"[A-Z]{5}\d{4}[A-Z]")),
-    ("Aadhaar", re.compile(r"\d{4}\s?\d{4}\s?\d{4}")),
-)
+_PII_LABELS: Final[dict[str, str]] = {
+    "email": "email",
+    "phone": "phone number",
+    "pan": "PAN",
+    "aadhaar": "Aadhaar",
+    "name": "personal name",
+    "address": "address",
+    "ssn": "SSN",
+    "passport": "passport number",
+}
+"""How a `DroppedColumn.detail` names the detector that matched; the kinds are `engine.pii`'s."""
 
 _ROW_LEVEL_KINDS: Final[frozenset[str]] = frozenset({"dedupe", "consent_filter"})
 
@@ -323,8 +320,13 @@ def prepare_rows(
         if duplicates:
             removals.append(RowRemoval(reason="duplicate", rows=duplicates))
 
+    snapshot_dates = _snapshot_date_columns(frame, config, reserved=reserved)
+    if snapshot_dates:
+        _LOG.info("prepare: %d snapshot-date column(s) carried, not trained on", len(snapshot_dates))
     feature_columns = tuple(
-        column for column in frame.columns if column not in reserved and column not in redacted
+        column
+        for column in frame.columns
+        if column not in reserved and column not in redacted and column not in snapshot_dates
     )
 
     missing_rows_dropped = 0
@@ -515,13 +517,46 @@ def _reserved_columns(
     return tuple(reserved)
 
 
-def _detect_pii(frame: pd.DataFrame, reserved: Sequence[str]) -> dict[str, str]:
-    """Columns that look like personal data, mapped to the detector that matched.
+def _snapshot_date_columns(
+    frame: pd.DataFrame, config: UseCaseConfig, *, reserved: Sequence[str]
+) -> frozenset[str]:
+    """The use case's as-of date, when the file carries one: carried with the rows, never learned from.
 
-    A column matches on its **name** whatever its dtype, or on its **values** when it holds text and
-    the majority of the first `_PII_SAMPLE_ROWS` observed values match one of the value patterns.
-    Value matching is limited to text columns on purpose: a twelve-digit integer is an Aadhaar number
-    only in a column that says so, and treating every long number as PII would redact real features.
+    A column named like one of `time_column_hints` (`snapshot_date`, `as_of_date`...) whose values
+    are dates says *when* a row was observed, not anything about the customer, and every scoring
+    file carries a date the model has never seen. Until M36 no such column ever reached a model, but
+    by accident: the old prepare-only PII table read an ISO date as a phone number and redacted it
+    (DEC-092). With that table gone the column would have become a feature of every shipped use
+    case - and a `SCHEMA_MISMATCH` error at scoring time, since the scoring file's dates are new - so
+    the rule it was silently following is now stated here. A constant snapshot date is still dropped
+    as constant first (step 1), which is what `CONSTANT_COLUMN` tells the user; the configured time
+    column of a time-based split is reserved and never reaches this function.
+    """
+    from engine.config import ColumnType
+    from engine.stages.ingest import infer_column_type
+
+    hints = {hint.lower() for hint in config.time_column_hints}
+    found: set[str] = set()
+    for column in frame.columns:
+        name = str(column)
+        if name in reserved or name.lower() not in hints:
+            continue
+        if infer_column_type(frame[name]) in {ColumnType.DATE, ColumnType.DATETIME}:
+            found.add(name)
+    return frozenset(found)
+
+
+def _detect_pii(frame: pd.DataFrame, reserved: Sequence[str]) -> dict[str, str]:
+    """Columns that look like personal data, mapped to the label of the first detector that matched.
+
+    THE ONE DETECTOR (DEC-092). This used to be a second, looser table of its own, which examined
+    every column whatever its type and whose phone shape matched an ISO date, so on the library's
+    online-retail file it redacted `snapshot_date` while the validation report - which reads
+    `engine.stages.ingest.detect_pii` - said nothing about it. It now asks `engine.pii.detect_pii`,
+    column by column, with the type `ingest.infer_column_type` gives the same column: the same
+    function, the same type and the same values the validate stage uses, so a column is redacted
+    here exactly when `PII_DETECTED` named it there.
+
     Reserved columns are never matched - the primary key is meant to identify a customer, and
     redacting it would make the scores unusable.
 
@@ -529,24 +564,18 @@ def _detect_pii(frame: pd.DataFrame, reserved: Sequence[str]) -> dict[str, str]:
     personal data or it is not, whichever partition a row lands in, and the answer has to be the same
     for all three (see step 1 of the order above).
     """
+    from engine.pii import detect_pii
+    from engine.stages.ingest import infer_column_type
+
     found: dict[str, str] = {}
     for column in frame.columns:
         name = str(column)
         if name in reserved:
             continue
-        if _PII_NAME.search(name):
-            found[name] = "column name"
-            continue
-        if not _is_texty(frame, name):
-            continue
-        sampled = [str(value) for value in frame[name].dropna().head(_PII_SAMPLE_ROWS).tolist()]
-        if not sampled:
-            continue
-        needed = max(1, int(len(sampled) * _PII_VALUE_SHARE))
-        for label, pattern in _PII_VALUE_PATTERNS:
-            if sum(1 for value in sampled if pattern.fullmatch(value)) >= needed:
-                found[name] = label
-                break
+        series = frame[name]
+        kinds = detect_pii(series, name, infer_column_type(series))
+        if kinds:
+            found[name] = _PII_LABELS.get(kinds[0], kinds[0])
     return found
 
 

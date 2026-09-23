@@ -423,6 +423,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 |---|---|---|---|
 | `mode` | ThresholdMode ("auto" \| "fixed" \| "manual") | no |  |
 | `value` | number | no |  |
+| `max_flagged_rate` | number \| null | no |  |
 
 #### Band
 
@@ -729,6 +730,7 @@ Everything ingest learned about one column of the uploaded file.
 | `looks_like_id` | boolean | yes | Distinct count is close to the row count and this is not the primary key. |
 | `looks_like_time` | boolean | yes | Name matches the time-like pattern or values parse as dates. |
 | `pii_kinds` | list[string] | no | Names of the PII detectors that matched; never the matched values. |
+| `free_text_pii_kinds` | list[string] | no | Kinds of personal data found inside this free-text column's values, such as a phone number in a complaint. Every shown cell has each match replaced by a marker; the column itself is kept as it is (DEC-095). |
 
 #### DatasetFingerprint
 
@@ -1633,6 +1635,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `model_search.candidate_pool` | list[enum catalog.model_families]; offered in the grid, in this order |
 | `evaluation` | [UI 5] Evaluation & explainability |
 | `evaluation.threshold` | DEC-006 |
+| `evaluation.threshold.max_flagged_rate` | float 0.01..1 \| null (config-only); auto falls back to the top decile (THRESHOLD_FALLBACK) above this share flagged |
 | `actions` | [UI 6] Actions & output |
 | `actions.score_field` | str; score column name in scores.csv |
 | `actions.bands` | list[Band]; strictly descending min_score, last must be 0.0, unique names (DEC-008) |

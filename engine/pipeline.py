@@ -42,11 +42,11 @@ from __future__ import annotations
 
 import hashlib
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from time import perf_counter
 from typing import TYPE_CHECKING, Final, TypeVar, cast
 
-from engine import __version__, keys
+from engine import __version__, keys, pii
 from engine.aws.metrics import (
     MetricSink,
     NullMetricSink,
@@ -56,6 +56,14 @@ from engine.aws.metrics import (
     record_stage_duration,
 )
 from engine.aws.run_index import RunIndex, mirror_run
+from engine.column_names import (
+    ColumnNames,
+    internal_importance,
+    load_for_model,
+    present_explanations,
+    restore_importance,
+    save_for_model,
+)
 from engine.config import (
     ModelFamily,
     PrimaryKey,
@@ -609,6 +617,11 @@ class _TrainFlow:
         self._parts: dict[str, pd.DataFrame] | None = None
         self._split: SplitReport | None = None
         self._result: train.TrainResult | None = None
+        # The model's view of the column names (DEC-093): identity unless ingest had to rename.
+        self._names = ColumnNames()
+        # The trained model and baseline as everything outside the model boundary sees them.
+        self._model: AutoGluonScorer | None = None
+        self._baseline: BaselineScorer | None = None
         self._evaluation: EvaluationReport | None = None
         self._importance: FeatureImportance | None = None
         self._reasons: explain.RowReasons | None = None
@@ -774,6 +787,11 @@ class _TrainFlow:
         self._frame = read.frame
         self._profile = profile
         self._manifest.fingerprint = profile.fingerprint
+        # Every header gets a safe internal name now; the frame keeps the client's headers, and
+        # only what crosses into the model is renamed (DEC-093). A count, never a header or value.
+        self._names = ColumnNames.for_columns(read.frame.columns)
+        if not self._names.is_identity:
+            _LOGGER.info("ingest: %d column name(s) get a safe internal name", len(self._names.renamed))
         return _StageOutcome(ingest.ingest_detail(profile), len(read.frame.index))
 
     def _validate(self) -> _StageOutcome:
@@ -870,15 +888,25 @@ class _TrainFlow:
         ctx = self._ctx
         recipe = _require(self._recipe, "the training recipe")
         parts = _require(self._parts, "the split partitions")
+        names = self._names
+        # THE MODEL BOUNDARY (DEC-093). The train stage sees the recipe and the partitions in safe
+        # internal names, so no model family can refuse a header; everything after it is handed
+        # scorers that take and report the client's own names.
         result = train.train(
-            recipe,
-            parts,
+            names.recipe_for_model(recipe),
+            {name: names.to_internal(part) for name, part in parts.items()},
             ctx.config.evaluation,
             run_id=ctx.run_id,
             storage=self._storage,
             cancel=ctx.cancel,
         )
         self._result = result
+        save_for_model(self._storage, result.predictor_key, names)
+        self._model = result.model.with_column_names(names.renamed) if not names.is_identity else result.model
+        baseline = result.baseline
+        if baseline is not None and not names.is_identity:
+            baseline = baseline.with_column_names(names.renamed)
+        self._baseline = baseline
         self._write(LEADERBOARD_FILENAME, result.leaderboard)
         self._write(BEST_MODEL_FILENAME, result.best)
         self._artefacts[MODEL_DIRECTORY] = result.predictor_key
@@ -895,13 +923,13 @@ class _TrainFlow:
     def _evaluate(self) -> _StageOutcome:
         """Measure the model on the hold-out once, and the baseline on the same frame."""
         ctx = self._ctx
-        result = _require(self._result, "the trained model")
         # TEST IS FINAL-DECISION-ONLY: this is the measurement the run is decided on. Nothing here
         # chooses a threshold, a calibrator, a model or a feature - the scorer arrived with all of
         # those settled on the validation split at train time.
         test = _require(self._parts, "the split partitions")["test"]
+        model = _require(self._model, "the trained model")
         report, matrix, lift, fairness = evaluate.evaluate(
-            _as_scorer(result.model), test, ctx.config.evaluation, run_id=ctx.run_id
+            _as_scorer(model), test, ctx.config.evaluation, run_id=ctx.run_id
         )
         self._evaluation = report
         self._write(EVALUATION_FILENAME, report)
@@ -910,15 +938,15 @@ class _TrainFlow:
         self._write(DECILE_LIFT_FILENAME, lift)
         self._write(FAIRNESS_FILENAME, fairness)
         self._manifest.add_metrics(_metric_values(report))
-        if result.baseline is not None:
+        if self._baseline is not None:
             baseline_report, _, _, _ = evaluate.evaluate(
-                _as_scorer(result.baseline), test, ctx.config.evaluation, run_id=ctx.run_id
+                _as_scorer(self._baseline), test, ctx.config.evaluation, run_id=ctx.run_id
             )
             comparison = evaluate.compare_to_baseline(
                 report,
                 baseline_report,
-                baseline_name=result.baseline.display_name,
-                baseline_family=_baseline_family(result.baseline.family),
+                baseline_name=self._baseline.display_name,
+                baseline_family=_baseline_family(self._baseline.family),
             )
             self._write(BASELINE_FILENAME, comparison)
             self._manifest.add_metrics(_metric_values(baseline_report), prefix="baseline_")
@@ -930,10 +958,14 @@ class _TrainFlow:
         result = _require(self._result, "the trained model")
         # TEST IS FINAL-DECISION-ONLY: explaining a model that was already chosen selects nothing -
         # no feature is dropped, no model re-ranked and no threshold moved by what comes back.
-        test = _require(self._parts, "the split partitions")["test"]
-        importance = explain.global_importance(
+        # The explain stage drives the predictor itself, so it runs inside the model boundary, on
+        # internal names; its output is translated back before anything is written (DEC-093).
+        names = self._names
+        test = names.to_internal(_require(self._parts, "the split partitions")["test"])
+        measured = explain.global_importance(
             result.predictor_key, test, ctx.config, run_id=ctx.run_id, storage=self._storage
         )
+        importance = restore_importance(measured, names)
         self._importance = importance
         self._write(FEATURE_IMPORTANCE_FILENAME, importance)
         rows = 0
@@ -942,9 +974,12 @@ class _TrainFlow:
                 result.model,
                 test,
                 ctx.config,
-                primary_key=ctx.row_key,
+                primary_key=names.internal(ctx.row_key),
                 seed=self._seed,
-                importance=importance,
+                importance=measured,
+            )
+            reasons = _presented(
+                reasons, names, _free_text_columns(_require(self._frame, "the uploaded rows"), self._profile)
             )
             self._reasons = reasons
             key = explain.write_row_explanations(
@@ -1024,6 +1059,9 @@ class _TrainFlow:
             return None
         try:
             scorer = load_scorer(champion.predictor_key, self._storage)
+            stored = load_for_model(self._storage, champion.predictor_key)
+            if not stored.is_identity:
+                scorer = scorer.with_column_names(stored.renamed)
         except Exception as exc:
             return _unavailable(champion, f"its saved model could not be loaded ({_reason(exc)})")
         usable, why = scorer.can_score(test)
@@ -1059,6 +1097,31 @@ class _TrainFlow:
         if evaluation.primary_metric is not best.metric:
             return best
         return best.model_copy(update={"test_score": evaluation.headline_score})
+
+
+def _free_text_columns(frame: pd.DataFrame, profile: DatasetProfile | None) -> frozenset[str]:
+    """The uploaded columns that are free text rather than personal data as a whole (DEC-095).
+
+    Every one of them has its reasons masked, not only those the profile found a contact in: the
+    profile looked at a sample, and a reason quotes whichever row it explains.
+    """
+    if profile is None:
+        return frozenset()
+    return frozenset(
+        column.name
+        for column in profile.columns
+        if not column.pii_kinds
+        and column.name in frame.columns
+        and (column.free_text_pii_kinds or pii.is_free_text(frame[column.name], column.inferred_type))
+    )
+
+
+def _presented(reasons: explain.RowReasons, names: ColumnNames, masked: frozenset[str]) -> explain.RowReasons:
+    """`reasons` as a person reads them: the client's column names, free-text contacts masked."""
+    if names.is_identity and not masked:
+        return reasons
+    explanations = present_explanations(reasons.explanations, names, masked_features=masked)
+    return replace(reasons, explanations=explanations)
 
 
 def _as_scorer(model: AutoGluonScorer | BaselineScorer) -> evaluate.Scorer:
@@ -1488,14 +1551,20 @@ class _ScoreFlow:
         if not ctx.config.evaluation.shap:
             _LOGGER.info("explain_rows: per-row reasons are switched off for this use case")
             return _StageOutcome(REASONS_OFF_DETAIL, 0)
+        # Inside the model boundary, as in the train flow: the predictor's own names in, the
+        # client's names (and masked free text) out (DEC-093, DEC-095).
+        names = load_for_model(self._storage, result.model_version.predictor_key)
         reasons = explain.reasons_for(
-            result.scorer,
-            result.prepared,
+            result.scorer if names.is_identity else result.scorer.with_column_names({}),
+            names.to_internal(result.prepared),
             ctx.config,
-            primary_key=ctx.row_key,
+            primary_key=names.internal(ctx.row_key),
             seed=self._seed,
-            importance=self._training_importance(),
+            importance=internal_importance(self._training_importance(), names),
             max_rows=None,
+        )
+        reasons = _presented(
+            reasons, names, _free_text_columns(_require(self._frame, "the uploaded rows"), self._profile)
         )
         self._fallback_rows = reasons.fallback_rows
         key = explain.write_row_explanations(reasons.explanations, run_id=ctx.run_id, storage=self._storage)

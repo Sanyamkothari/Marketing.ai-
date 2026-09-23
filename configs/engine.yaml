@@ -119,8 +119,9 @@ defaults:
   evaluation:                           # [UI 5] Evaluation & explainability
     calibration: isotonic               # enum: isotonic | platt | none
     threshold:                          # DEC-006
-      mode: auto                        # enum: auto | fixed | manual  (auto = maximise F1 on validation; fixed = 0.5)
+      mode: auto                        # enum: auto | fixed | manual  (auto = maximise the metric on validation, DEC-094; fixed = 0.5)
       value: 0.50                       # float 0.01..0.99 step 0.01; used only when mode == manual; must be 0.50 when mode == fixed
+      max_flagged_rate: 0.30            # float 0.01..1 | null (config-only); auto falls back to the top decile (THRESHOLD_FALLBACK) above this share flagged
     shap: true                          # bool; per-row SHAP reasons
     reasons_per_row: 3                  # int 1..5 step 1
     fairness_column: null               # str | null; report-only, never blocks

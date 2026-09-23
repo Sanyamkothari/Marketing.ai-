@@ -38,6 +38,7 @@ from engine.config import (
 
 __all__ = [
     "ARTEFACT_REGISTRY",
+    "EXTENSION_VALIDATION_CODES",
     "MODEL_DIRECTORY",
     "NO_CHAMPION_AT_DECISION",
     "SCORE_ARTEFACTS",
@@ -379,6 +380,14 @@ class ColumnProfile(Artefact):
     pii_kinds: tuple[str, ...] = Field(
         default=(), description="Names of the PII detectors that matched; never the matched values."
     )
+    free_text_pii_kinds: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Kinds of personal data found inside this free-text column's values, such as a phone "
+            "number in a complaint. Every shown cell has each match replaced by a marker; the column "
+            "itself is kept as it is (DEC-095)."
+        ),
+    )
 
 
 class DatasetFingerprint(Artefact):
@@ -456,6 +465,14 @@ VALIDATION_CODES: Final[frozenset[str]] = frozenset(
 )
 """The plan section 6.3 validation codes plus `SUPPRESSION_COLUMN_MISSING` (warning; DEC-030)."""
 
+EXTENSION_VALIDATION_CODES: Final[frozenset[str]] = frozenset({"PII_IN_FREE_TEXT"})
+"""Codes later milestones added beside the Phase 1 table rather than into it (DEC-095).
+
+`VALIDATION_CODES` is the Phase 1 contract and stays nineteen codes; a report may carry these too,
+and `ValidationCheck` accepts both. `PII_IN_FREE_TEXT` is ruling D5's warning: a free-text column
+that mentions a contact somewhere inside it.
+"""
+
 
 class ValidationCheck(Artefact):
     """One row of the validation table, already interpolated for the user."""
@@ -477,13 +494,13 @@ class ValidationCheck(Artefact):
 
     @model_validator(mode="after")
     def _known_code(self) -> ValidationCheck:
-        if self.code not in VALIDATION_CODES:
+        if self.code not in VALIDATION_CODES | EXTENSION_VALIDATION_CODES:
             raise ValueError(f"unknown validation code {self.code!r}; known codes: {_known_codes()}")
         return self
 
 
 def _known_codes() -> str:
-    return ", ".join(sorted(VALIDATION_CODES))
+    return ", ".join(sorted(VALIDATION_CODES | EXTENSION_VALIDATION_CODES))
 
 
 class ValidationReport(Artefact):

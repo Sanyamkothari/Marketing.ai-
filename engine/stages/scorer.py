@@ -37,13 +37,26 @@ What the scorer exposes, and to whom:
 | `can_score` | the champion rule, before it re-scores a stored model on a new frame |
 | `model_name`, `display_name`, `family`, `feature_columns`, `recipe_hash` | artefacts and log lines |
 
+A scorer is also **the model boundary for column names** (DEC-093). The train stage fits on safe
+internal names; `with_column_names` gives back a scorer whose `feature_columns` and `target_column`
+are the client's own headers and which renames a frame's feature columns on the way into the
+predictor. The mapping itself is stored beside `scorer.json` (`engine.column_names`), so
+`scorer.json` stays exactly what the train stage wrote.
+
+`auto`'s threshold is defined in :func:`choose_operating_point` (DEC-094): the configured metric's
+optimum on validation, refused for the top decile - with a `THRESHOLD_FALLBACK` record in
+`scorer.json` and a sentence in `threshold_detail` - when it flags more rows than
+`evaluation.threshold.max_flagged_rate` allows, or every row.
+
 `sklearn`, `numpy` and `autogluon` are imported inside function bodies: importing the engine must
 not pull a heavy library in (`tests/integration/test_engine_imports.py`).
 """
 
 from __future__ import annotations
 
+import copy
 from abc import ABC, abstractmethod
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Final, Literal, Self
 
@@ -55,7 +68,7 @@ from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Mapping, Sequence
 
     import numpy as np
     import numpy.typing as npt
@@ -68,6 +81,7 @@ if TYPE_CHECKING:
 
     FloatArray = npt.NDArray[np.float64]
     BoolArray = npt.NDArray[np.bool_]
+    IntArray = npt.NDArray[np.int64]
 
 
 __all__ = [
@@ -77,18 +91,23 @@ __all__ = [
     "MIN_CALIBRATION_ROWS",
     "SCORER_FILENAME",
     "SCORER_SCHEMA_VERSION",
+    "THRESHOLD_FALLBACK",
     "AutoGluonScorer",
     "BaselineScorer",
     "CalibratorState",
     "ScorerState",
+    "ThresholdChoice",
+    "ThresholdFallback",
     "TrainError",
     "apply_calibrator",
     "brier_score",
+    "choose_operating_point",
     "choose_threshold",
     "fit_baseline_scorer",
     "fit_calibrator",
     "fit_scorer",
     "load_scorer",
+    "threshold_metric",
     "to_numpy_dtypes",
 ]
 
@@ -114,6 +133,22 @@ BASELINE_DISPLAY_NAME: Final[str] = "baseline (logistic regression)"
 BASELINE_REGRESSION_DISPLAY_NAME: Final[str] = "baseline (linear regression)"
 
 REGRESSION_THRESHOLD_DETAIL: Final[str] = "Not applicable to a regression model."
+
+THRESHOLD_FALLBACK: Final[str] = "THRESHOLD_FALLBACK"
+"""The code `auto` records when its optimum was refused and the top decile was used instead (DEC-094)."""
+
+FALLBACK_FLAGGED_RATE: Final[float] = 0.10
+"""The fallback operating point: the top decile of the validation scores."""
+
+_THRESHOLD_METRICS: Final[frozenset[Metric]] = frozenset({Metric.F1, Metric.RECALL, Metric.PRECISION})
+"""The configurable metrics a threshold can change. ROC-AUC and PR-AUC read the ranking alone, so
+a use case optimising either has its threshold chosen for F1, as `auto` always did."""
+
+_METRIC_LABELS: Final[dict[Metric, str]] = {
+    Metric.F1: "F1",
+    Metric.RECALL: "recall",
+    Metric.PRECISION: "precision",
+}
 
 LabelValue = bool | int | float | str
 """A class label as it survives a JSON round trip. Numpy scalars are coerced before they get here."""
@@ -163,6 +198,27 @@ class CalibratorState(BaseModel):
         return self
 
 
+class ThresholdFallback(BaseModel):
+    """Why `auto` did not use its own optimum, in numbers: the `THRESHOLD_FALLBACK` record (DEC-094).
+
+    Written into `scorer.json` beside the threshold it explains, and summarised in one sentence in
+    `threshold_detail`, which is what `evaluation.json` and the Model page carry. Every number is a
+    count over the validation split; none of them is a customer's value.
+    """
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    code: Literal["THRESHOLD_FALLBACK"] = "THRESHOLD_FALLBACK"
+    reason: str
+    metric: Metric
+    optimum_threshold: float
+    optimum_flagged_rate: float
+    max_flagged_rate: float | None
+    fallback_threshold: float
+    fallback_flagged_rate: float
+    validation_rows: int
+
+
 class ScorerState(BaseModel):
     """`model/scorer.json`: everything a fitted model carries that AutoGluon does not store.
 
@@ -191,6 +247,9 @@ class ScorerState(BaseModel):
     recipe_hash: str
     autogluon_version: str = ""
     trained_at: datetime
+    # Present only when `auto` fell back (DEC-094); absent from the file otherwise, so a scorer that
+    # did not fall back writes exactly the `scorer.json` it always did.
+    threshold_fallback: ThresholdFallback | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -324,56 +383,224 @@ def _format_threshold(value: float) -> str:
     return f"{value:.2f}" if round(value, 2) == round(value, THRESHOLD_DECIMALS) else f"{value:.4f}"
 
 
-def _best_f1_threshold(scores: FloatArray, actual: BoolArray) -> float | None:
-    """The smallest threshold maximising F1 for the rule `positive iff score >= threshold`.
+def _as_threshold(score: float) -> float:
+    """`score` at `THRESHOLD_DECIMALS` places, never above it.
+
+    The cut is the score of the last row it is meant to flag, and the rule is `score >= threshold`.
+    Rounding half up can lift the cut above that very score - an isotonic step at 10/11 becomes
+    0.9091 - and the rows the sweep counted as flagged are then not flagged at all, so the number
+    reported and the rule applied disagree. Rounding down in that one case keeps them the same.
+    """
+    import math
+
+    rounded = round(score, THRESHOLD_DECIMALS)
+    if rounded <= score:
+        return rounded
+    scale = float(10**THRESHOLD_DECIMALS)
+    return math.floor(score * scale) / scale
+
+
+def _metric_values(metric: Metric, hits: IntArray, above: IntArray, positives: int) -> FloatArray:
+    """`metric` at every cut of the descending sweep, from the running true-positive count alone."""
+    import numpy as np
+
+    if metric is Metric.RECALL:
+        return np.asarray(hits / positives, dtype=np.float64)
+    if metric is Metric.PRECISION:
+        return np.asarray(hits / above, dtype=np.float64)
+    return np.asarray(2.0 * hits / (above + positives), dtype=np.float64)
+
+
+def _sweep(scores: FloatArray, actual: BoolArray) -> tuple[FloatArray, IntArray, IntArray, IntArray]:
+    """The candidate cuts of a descending sweep: sorted scores, hits, rows flagged, candidate indices.
+
+    Only the last row of a run of equal scores is a candidate, because a cut inside a tie is not a
+    rule the `>=` comparison can express; at candidate `i` exactly `i + 1` rows are flagged.
+    """
+    import numpy as np
+
+    order = np.argsort(-scores, kind="stable")
+    sorted_scores = scores[order]
+    hits = np.cumsum(actual[order].astype(np.int64))
+    above = np.arange(1, scores.size + 1, dtype=np.int64)
+    last_of_run = np.ones(scores.size, dtype=np.bool_)
+    last_of_run[:-1] = sorted_scores[:-1] != sorted_scores[1:]
+    return sorted_scores, hits, above, np.flatnonzero(last_of_run)
+
+
+def _best_threshold(scores: FloatArray, actual: BoolArray, metric: Metric) -> tuple[float, int] | None:
+    """`(threshold, rows flagged)` maximising `metric` for the rule `positive iff score >= threshold`.
 
     One descending sweep: with `TP + FP` the number of rows above the cut and `TP + FN` the number
-    of positives, `F1 = 2 TP / ((TP + FP) + (TP + FN))`, so no confusion matrix has to be rebuilt
-    per candidate. Only the last row of a run of equal scores is a candidate, because a cut inside
-    a tie is not a rule the `>=` comparison can express. Among equal maxima the smallest threshold
+    of positives, F1, recall and precision are all functions of the running true-positive count, so
+    no confusion matrix has to be rebuilt per candidate. Among equal maxima the smallest threshold
     wins, which is the higher-recall end: one deterministic rule, and reach is the marketing default.
+    Recall is the exception: equal recall at a lower cut only adds false positives, so its ties go
+    to the highest threshold instead.
     """
     import numpy as np
 
     positives = int(np.count_nonzero(actual))
     if positives == 0 or positives == actual.size:
         return None
-    order = np.argsort(-scores, kind="stable")
-    sorted_scores = scores[order]
-    hits = np.cumsum(actual[order].astype(np.int64))
-    above = np.arange(1, scores.size + 1, dtype=np.int64)
-    f1 = 2.0 * hits / (above + positives)
-    last_of_run = np.ones(scores.size, dtype=np.bool_)
-    last_of_run[:-1] = sorted_scores[:-1] != sorted_scores[1:]
-    candidates = np.flatnonzero(last_of_run)
-    best = float(np.max(f1[candidates]))
-    # The last candidate at the maximum is the lowest threshold, because the sweep descends.
-    chosen = int(candidates[np.flatnonzero(f1[candidates] == best)][-1])
-    return round(float(sorted_scores[chosen]), THRESHOLD_DECIMALS)
+    sorted_scores, hits, above, candidates = _sweep(scores, actual)
+    values = _metric_values(metric, hits, above, positives)[candidates]
+    best = float(np.max(values))
+    at_best = candidates[np.flatnonzero(values == best)]
+    # The sweep descends, so the last candidate at the maximum is the lowest threshold.
+    chosen = int(at_best[0] if metric is Metric.RECALL else at_best[-1])
+    value = _as_threshold(float(sorted_scores[chosen]))
+    return value, _flagged_at(sorted_scores, value)
 
 
-def choose_threshold(
-    scores: FloatArray, actual: BoolArray, threshold: ThresholdConfig
-) -> tuple[float, ThresholdMode, str]:
-    """`(threshold, mode, detail)` for a classification model, decided on the validation split.
+def _flagged_at(sorted_scores: FloatArray, value: float) -> int:
+    """Rows the rule `score >= value` flags, counted at the stored (rounded) threshold itself.
+
+    Rounding to `THRESHOLD_DECIMALS` can take in a tie block a hair below the one a cut was chosen
+    at, so the count is taken at the number that is actually stored and applied, never assumed.
+    """
+    return int((sorted_scores >= value).sum())
+
+
+def _top_decile_threshold(scores: FloatArray, actual: BoolArray) -> tuple[float, int] | None:
+    """The cut flagging the most rows without passing `FALLBACK_FLAGGED_RATE`, and how many it flags.
+
+    When the highest-scoring tie alone is larger than a tenth of the rows, that tie is the smallest
+    group the model can single out, and it is taken; when it is every row the model ranks nobody
+    above anybody, and there is no top decile to fall back to (`None`).
+    """
+    import math
+
+    sorted_scores, _, _, candidates = _sweep(scores, actual)
+    limit = max(1, math.floor(FALLBACK_FLAGGED_RATE * scores.size))
+    best: tuple[float, int] | None = None
+    for index in candidates:
+        value = _as_threshold(float(sorted_scores[int(index)]))
+        count = _flagged_at(sorted_scores, value)
+        if best is None or count <= limit:
+            best = (value, count)
+        if count >= limit:
+            break
+    if best is None or best[1] == scores.size:
+        return None
+    return best
+
+
+@dataclass(frozen=True)
+class ThresholdChoice:
+    """What `choose_operating_point` decided: the threshold, its mode, its sentence and any fallback."""
+
+    threshold: float
+    mode: ThresholdMode
+    detail: str
+    fallback: ThresholdFallback | None = None
+
+
+def threshold_metric(metric: Metric | None) -> Metric:
+    """The metric `auto` maximises: the configured one when a threshold can move it, else F1."""
+    return metric if metric is not None and metric in _THRESHOLD_METRICS else Metric.F1
+
+
+def _fallback_reason(label: str, flagged: int, rows: int, ceiling: float | None) -> str:
+    if flagged == rows or ceiling is None:
+        return f"maximising {label} flags every validation row, which decides nothing"
+    return (
+        f"maximising {label} flags {flagged / rows:.0%} of validation rows, above the {ceiling:.0%} ceiling"
+    )
+
+
+def choose_operating_point(
+    scores: FloatArray,
+    actual: BoolArray,
+    threshold: ThresholdConfig,
+    *,
+    metric: Metric | None = None,
+) -> ThresholdChoice:
+    """The decision threshold for a classification model, decided on the validation split.
 
     `scores` are the **calibrated** validation scores, so the threshold and the probabilities that
     will be compared against it mean the same thing. `fixed` is 0.5 by config validation and
     `manual` is whatever the user set; only `auto` looks at the data, and only ever at this data.
+
+    **`auto`, precisely (DEC-094).** Take the threshold that maximises the configured metric on
+    validation (`threshold_metric`: F1, recall or precision; F1 for a ranking metric). If that
+    optimum flags more than `threshold.max_flagged_rate` of the validation rows, or flags every row,
+    it is refused, the top decile of the validation scores is used instead, and the choice carries a
+    `THRESHOLD_FALLBACK` record saying why. On a weak model over a base rate near a half the F1
+    optimum really is "call everybody positive" - recall 1.0, specificity 0.0 on the library's
+    online-retail file - which reads as a triumph on the Model page and is no decision at all. The
+    ceiling is a policy, not a statistic: the share of an audience a campaign can act on.
     """
     if threshold.mode is ThresholdMode.FIXED:
-        return FIXED_THRESHOLD, ThresholdMode.FIXED, f"Fixed: {FIXED_THRESHOLD:.2f}"
+        return ThresholdChoice(FIXED_THRESHOLD, ThresholdMode.FIXED, f"Fixed: {FIXED_THRESHOLD:.2f}")
     if threshold.mode is ThresholdMode.MANUAL:
         value = round(float(threshold.value), THRESHOLD_DECIMALS)
-        return value, ThresholdMode.MANUAL, f"Manual: {_format_threshold(value)}"
-    chosen = _best_f1_threshold(scores, actual)
-    if chosen is None:
-        return (
+        return ThresholdChoice(value, ThresholdMode.MANUAL, f"Manual: {_format_threshold(value)}")
+    maximised = threshold_metric(metric)
+    label = _METRIC_LABELS[maximised]
+    best = _best_threshold(scores, actual, maximised)
+    if best is None:
+        return ThresholdChoice(
             FIXED_THRESHOLD,
             ThresholdMode.AUTO,
             f"Auto (validation had one class only): {FIXED_THRESHOLD:.2f}",
         )
-    return chosen, ThresholdMode.AUTO, f"Auto (maximises F1 on validation): {_format_threshold(chosen)}"
+    chosen, flagged = best
+    rows = int(scores.size)
+    ceiling = threshold.max_flagged_rate
+    if flagged < rows and (ceiling is None or flagged / rows <= ceiling):
+        detail = f"Auto (maximises {label} on validation): {_format_threshold(chosen)}"
+        return ThresholdChoice(chosen, ThresholdMode.AUTO, detail)
+    reason = _fallback_reason(label, flagged, rows, ceiling)
+    decile = _top_decile_threshold(scores, actual)
+    if decile is None:
+        reason += "; every validation row has the same score, so there is no top decile to use"
+        fallback_value = FIXED_THRESHOLD
+        fallback_flagged = int((scores >= FIXED_THRESHOLD).sum())
+        where = f"{FIXED_THRESHOLD:.2f}"
+    else:
+        fallback_value, fallback_flagged = decile
+        where = f"the top {FALLBACK_FLAGGED_RATE:.0%} of validation scores"
+    record = ThresholdFallback(
+        reason=reason,
+        metric=maximised,
+        optimum_threshold=chosen,
+        optimum_flagged_rate=round(flagged / rows, 4),
+        max_flagged_rate=ceiling,
+        fallback_threshold=fallback_value,
+        fallback_flagged_rate=round(fallback_flagged / rows, 4),
+        validation_rows=rows,
+    )
+    # Counts and thresholds only: nothing here is a customer's value.
+    _LOGGER.warning(
+        "%s: the auto threshold %s flagged %d of %d validation rows; using %s",
+        THRESHOLD_FALLBACK,
+        _format_threshold(chosen),
+        flagged,
+        rows,
+        _format_threshold(fallback_value),
+    )
+    detail = (
+        f"Auto, fell back to {where} ({THRESHOLD_FALLBACK}: {reason}): {_format_threshold(fallback_value)}"
+    )
+    return ThresholdChoice(fallback_value, ThresholdMode.AUTO, detail, record)
+
+
+def choose_threshold(
+    scores: FloatArray,
+    actual: BoolArray,
+    threshold: ThresholdConfig,
+    *,
+    metric: Metric | None = None,
+) -> tuple[float, ThresholdMode, str]:
+    """`(threshold, mode, detail)` for a classification model: `choose_operating_point`, unpacked."""
+    choice = choose_operating_point(scores, actual, threshold, metric=metric)
+    return choice.threshold, choice.mode, choice.detail
+
+
+def _absent_optional_fields(state: ScorerState) -> set[str]:
+    """The optional `ScorerState` fields left out of `scorer.json` because they are unset."""
+    return {"threshold_fallback"} if state.threshold_fallback is None else set()
 
 
 # ---------------------------------------------------------------------------
@@ -389,6 +616,34 @@ class _FittedScorer(ABC):
 
     def __init__(self, state: ScorerState) -> None:
         self.state = state
+        # Original header -> the internal name the model was fitted under, for the columns ingest
+        # had to rename (DEC-093). Empty for every file whose headers were already safe. Held in
+        # memory, never in `state`: `scorer.json` is exactly what the train stage wrote, and the
+        # mapping lives beside it in `column_names.json` (`engine.column_names`).
+        self._renamed: dict[str, str] = {}
+
+    def with_column_names(self, renamed: Mapping[str, str]) -> Self:
+        """This scorer, speaking the client's column names; the model underneath keeps its own.
+
+        `feature_columns` and `target_column` then report the original headers, and every scoring
+        call takes a frame in original headers and renames its feature columns on the way in. With
+        an empty mapping the result speaks the internal names again - what the explain stage needs,
+        since it drives the predictor directly.
+        """
+        named = copy.copy(self)
+        named._renamed = dict(renamed)
+        return named
+
+    @property
+    def column_names(self) -> dict[str, str]:
+        """Original header -> internal name, for the columns this scorer renames; empty when none."""
+        return dict(self._renamed)
+
+    def _public(self, internal: str) -> str:
+        for original, renamed in self._renamed.items():
+            if renamed == internal:
+                return original
+        return internal
 
     # -- identity -----------------------------------------------------------
     @property
@@ -405,7 +660,7 @@ class _FittedScorer(ABC):
 
     @property
     def feature_columns(self) -> tuple[str, ...]:
-        return self.state.feature_columns
+        return tuple(self._public(column) for column in self.state.feature_columns)
 
     @property
     def recipe_hash(self) -> str:
@@ -418,7 +673,7 @@ class _FittedScorer(ABC):
 
     @property
     def target_column(self) -> str:
-        return self.state.target_column
+        return self._public(self.state.target_column)
 
     @property
     def primary_metric(self) -> Metric:
@@ -453,8 +708,12 @@ class _FittedScorer(ABC):
         usable, reason = self.can_score(frame)
         if not usable:
             raise TrainError("SCORER_CANNOT_SCORE", reason)
-        columns = list(self.state.feature_columns)
-        return to_numpy_dtypes(frame[columns], columns)
+        public = list(self.feature_columns)
+        internal = list(self.state.feature_columns)
+        selected = frame[public]
+        if public != internal:
+            selected = selected.set_axis(internal, axis=1)
+        return to_numpy_dtypes(selected, internal)
 
     def can_score(self, frame: pd.DataFrame) -> tuple[bool, str]:
         """`(True, "")` when `frame` carries every feature column, else `(False, why)`.
@@ -462,7 +721,7 @@ class _FittedScorer(ABC):
         This is what lets the champion rule decide whether a stored model can still be measured on
         a new hold-out frame. The reason names columns, never values.
         """
-        missing = [column for column in self.state.feature_columns if column not in frame.columns]
+        missing = [column for column in self.feature_columns if column not in frame.columns]
         if not missing:
             return True, ""
         shown = ", ".join(missing[:5])
@@ -523,9 +782,17 @@ class _FittedScorer(ABC):
         decided = self.predicted_positive(frame)
         return pd.Series([positive if flag else negative for flag in decided], index=frame.index)
 
+    @property
+    def threshold_fallback(self) -> ThresholdFallback | None:
+        return self.state.threshold_fallback
+
     def to_json(self) -> str:
-        """`scorer.json`'s text: everything needed to rebuild this object beside its predictor."""
-        return self.state.model_dump_json(indent=2)
+        """`scorer.json`'s text: everything needed to rebuild this object beside its predictor.
+
+        An optional record that is absent is left out rather than written as `null`, so a model
+        trained without one has byte-for-byte the file it had before the field existed.
+        """
+        return self.state.model_dump_json(indent=2, exclude=_absent_optional_fields(self.state))
 
 
 class AutoGluonScorer(_FittedScorer):
@@ -604,7 +871,8 @@ def _fit_operating_point(
     *,
     problem_type: ProblemType,
     what: str,
-) -> tuple[CalibratorState, CalibrationSummary | None, float, ThresholdMode, str]:
+    metric: Metric | None = None,
+) -> tuple[CalibratorState, CalibrationSummary | None, ThresholdChoice]:
     """Calibrator, summary, threshold, mode and detail - all from the validation split.
 
     THE TEST SPLIT IS FINAL-DECISION-ONLY: `raw` and `actual` come from validation, and this is the
@@ -612,7 +880,7 @@ def _fit_operating_point(
     else would let the hold-out choose the point it is meant to be judging.
     """
     if problem_type is ProblemType.REGRESSION:
-        return CalibratorState(), None, 0.0, ThresholdMode.FIXED, REGRESSION_THRESHOLD_DETAIL
+        return CalibratorState(), None, ThresholdChoice(0.0, ThresholdMode.FIXED, REGRESSION_THRESHOLD_DETAIL)
     calibrator, refused = fit_calibrator(raw, actual, evaluation.calibration)
     if refused is not None:
         _LOGGER.warning("%s: %s calibration was not fitted because %s", what, evaluation.calibration, refused)
@@ -625,8 +893,8 @@ def _fit_operating_point(
             brier_before=_rounded(brier_score(actual, raw)),
             brier_after=_rounded(brier_score(actual, calibrated)),
         )
-    threshold, mode, detail = choose_threshold(calibrated, actual, evaluation.threshold)
-    return calibrator, summary, threshold, mode, detail
+    choice = choose_operating_point(calibrated, actual, evaluation.threshold, metric=metric)
+    return calibrator, summary, choice
 
 
 def _rounded(value: float | None) -> float | None:
@@ -670,8 +938,13 @@ def fit_scorer(
             if positive is None
             else positive_mask(validation[recipe.target], positive)
         )
-    calibrator, summary, threshold, mode, detail = _fit_operating_point(
-        raw, actual, evaluation, problem_type=recipe.problem_type, what=model_name
+    calibrator, summary, choice = _fit_operating_point(
+        raw,
+        actual,
+        evaluation,
+        problem_type=recipe.problem_type,
+        what=model_name,
+        metric=recipe.model_search.metric,
     )
     state = ScorerState(
         kind="autogluon",
@@ -683,9 +956,10 @@ def fit_scorer(
         feature_columns=tuple(recipe.feature_columns),
         classes=classes,
         primary_metric=recipe.model_search.metric,
-        threshold=threshold,
-        threshold_mode=mode,
-        threshold_detail=detail,
+        threshold=choice.threshold,
+        threshold_mode=choice.mode,
+        threshold_detail=choice.detail,
+        threshold_fallback=choice.fallback,
         calibrator=calibrator,
         calibration=summary,
         recipe_hash=recipe.recipe_hash,
@@ -802,8 +1076,13 @@ def _fit_baseline_scorer(
     else:
         raw = np.asarray(np.asarray(pipeline.predict(validation_features)), dtype=np.float64)
         actual = np.zeros(raw.size, dtype=np.bool_)
-    calibrator, summary, threshold, mode, detail = _fit_operating_point(
-        raw, actual, evaluation, problem_type=recipe.problem_type, what=BASELINE_MODEL_NAME
+    calibrator, summary, choice = _fit_operating_point(
+        raw,
+        actual,
+        evaluation,
+        problem_type=recipe.problem_type,
+        what=BASELINE_MODEL_NAME,
+        metric=recipe.model_search.metric,
     )
     state = ScorerState(
         kind="baseline",
@@ -815,9 +1094,10 @@ def _fit_baseline_scorer(
         feature_columns=tuple(features),
         classes=classes,
         primary_metric=recipe.model_search.metric,
-        threshold=threshold,
-        threshold_mode=mode,
-        threshold_detail=detail,
+        threshold=choice.threshold,
+        threshold_mode=choice.mode,
+        threshold_detail=choice.detail,
+        threshold_fallback=choice.fallback,
         calibrator=calibrator,
         calibration=summary,
         recipe_hash=recipe.recipe_hash,

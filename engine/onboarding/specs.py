@@ -214,10 +214,11 @@ class OnboardingCheck(Artefact):
 
     @model_validator(mode="after")
     def _known_code(self) -> OnboardingCheck:
-        from engine.contracts import VALIDATION_CODES
+        from engine.contracts import EXTENSION_VALIDATION_CODES, VALIDATION_CODES
 
-        if self.code not in ONBOARDING_VALIDATION_CODES | VALIDATION_CODES:
-            known = ", ".join(sorted(ONBOARDING_VALIDATION_CODES | VALIDATION_CODES))
+        accepted = ONBOARDING_VALIDATION_CODES | VALIDATION_CODES | EXTENSION_VALIDATION_CODES
+        if self.code not in accepted:
+            known = ", ".join(sorted(accepted))
             raise ValueError(f"unknown validation code {self.code!r}; known codes: {known}")
         if self.code == "FUTURE_EVENTS_LEAKED" and self.acknowledgeable:
             raise ValueError(
