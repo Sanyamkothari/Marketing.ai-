@@ -6,7 +6,7 @@ error handling - a `converse` that raises, one that answers with whitespace, one
 (DEC-203: the fake is the default so nothing costs money by accident) and it is also, by
 construction, incapable of proving the one thing a mock cannot mock: that a real model's response
 actually parses into `LLMCompletion` the way the code assumes it will, and that a real embedding
-model places related text near itself and unrelated text away from it. the grounded `FakeLLMClient` was
+model places related text near itself and unrelated text away from it. The grounded `FakeLLMClient` was
 built to make retrieval testable offline (DEC-214), by hashing words into buckets so shared
 vocabulary means proximity - and DEC-219 writes down exactly where that stops being enough: a
 question that shares the domain's *vocabulary* without sharing its *meaning* ("How many employees
@@ -289,7 +289,7 @@ def test_a_same_domain_off_topic_question_sits_below_the_genuine_one(
     sample_embeddings: dict[str, tuple[float, ...]],
 ) -> None:
     """The single most valuable assertion in this file, because it is the one property DEC-219
-    says a lexical fake cannot demonstrate. the grounded `FakeLLMClient` hashes words into buckets, so a
+    says a lexical fake cannot demonstrate. The grounded `FakeLLMClient` hashes words into buckets, so a
     question that merely shares the corpus's vocabulary scores well under the fake regardless of
     whether it shares the corpus's *meaning* - DEC-219 measured "How many employees does Northwind
     Telecom have?" at 0.289 against the fake, ABOVE several genuine questions, purely because the

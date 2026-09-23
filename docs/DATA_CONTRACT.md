@@ -105,11 +105,13 @@ usable key, no target or too few rows is refused however the user answers.
 ### 4.3 What a finding carries
 
 ```
-code          the machine code, one of the 19 below
+code          the machine code; validation.json uses the 19 below, and the model also
+              accepts ONBOARDING_VALIDATION_CODES (section 5)
 severity      error | warning
 message       business language, numbers already filled in
 suggestion    what to do about it
 column        the column it is about, when it is about one
+source_id     the onboarding source it is about; null in validation.json
 details       the machine-readable numbers behind the message
 acknowledgeable / acknowledged
 ```
