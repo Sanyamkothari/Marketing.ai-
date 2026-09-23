@@ -286,7 +286,9 @@ def test_a_dataset_whose_build_wrote_no_rows_is_409_not_404(
     root = tmp_path_factory.mktemp("runs-unbuilt")
     _, dataset_id, _ = _build(root)
     (root / "data" / dataset_key(dataset_id, DATASET_FRAME_FILENAME)).unlink()
-    client = TestClient(create_app(data_dir=root / "data"))
+    app = create_app(data_dir=root / "data")
+    app.state.jobs = RecordingJobs()  # the run is read, never trained (DEC-887)
+    client = TestClient(app)
     response = client.post("/runs", json={"use_case": USE_CASE, "mode": "train", "dataset_id": dataset_id})
     assert response.status_code == 409
     detail = response.json()["detail"]
@@ -316,7 +318,9 @@ def test_a_periodic_dataset_runs_on_both_key_columns_and_splits_by_entity(
     assert report.passed, [
         (check.code, check.message) for check in report.checks if check.severity.value == "error"
     ]
-    client = TestClient(create_app(data_dir=root / "data"))
+    app = create_app(data_dir=root / "data")
+    app.state.jobs = RecordingJobs()  # the run is read, never trained (DEC-887)
+    client = TestClient(app)
     response = client.post("/runs", json={"use_case": USE_CASE, "mode": "train", "dataset_id": dataset_id})
     assert response.status_code == 202, response.text
     run_dir = root / "data" / "runs" / response.json()["run_id"]
