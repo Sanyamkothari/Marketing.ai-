@@ -1082,3 +1082,41 @@ class OpeRequest(StrictBase):
 
 
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# The bodies of `api/routes/pilot.py` (Plan E, M59-M64). The reports themselves are the engine's own
+# models in `engine/pilot/`; only the request shapes and the two envelopes live here.
+from engine.pilot.demo import DemoManifest  # noqa: E402
+from engine.pilot.feedback import FeedbackCategory  # noqa: E402
+
+
+class PilotDemoResponse(StrictBase):
+    """`GET /pilot/demo`: whether demo mode is on, and the seeded demo when there is one."""
+
+    demo_mode: bool = Field(
+        description="MARKETING_AI_DEMO_MODE: the screens show the demo client and the tour."
+    )
+    seeded: bool = Field(description="A demo has been seeded into this deployment's storage.")
+    manifest: DemoManifest | None = Field(
+        default=None, description="What the seed made; null when not seeded."
+    )
+    how_to_seed: str = Field(default="", description="The command that seeds one, when none is seeded.")
+
+
+class PilotFeedbackRequest(StrictBase):
+    """`POST /pilot/feedback`: what a person thought of one screen."""
+
+    screen: str = Field(
+        max_length=200, description="The page's route, for example #/pilot/value/r_20260923_ab12cd34."
+    )
+    category: FeedbackCategory = Field(description="confusing, wrong, idea, praise or other.")
+    text: str = Field(default="", max_length=1000, description="Their words; contact details are masked.")
+
+
+class PilotFeedbackResponse(StrictBase):
+    """`POST /pilot/feedback`: the stored entry's id, and what was masked out of the text."""
+
+    feedback_id: str
+    redacted: tuple[str, ...] = ()
+
+
+# ---- END PLAN-E ----

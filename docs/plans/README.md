@@ -27,6 +27,7 @@ is needed from the plan owner as the original text, to be added here unchanged.
 | Phase 3a — generative and hybrid | `MARKETING_AI_PHASE3A_PLAN.md` | `PARALLEL_WORK_PROTOCOL.md` §1; `engine/generative/contracts.py` (§7) |
 | Phase 4a — AWS and production | `MARKETING_AI_PHASE4A_PLAN.md` | `PARALLEL_WORK_PROTOCOL.md` §1; Plan C |
 | Evolve (Phase 5) | name unknown | Plan A M39; `docs/API.md` ("the Evolve layer of Phase 5") |
+| Plan E — pilot readiness | `MARKETING_AI_PLAN_E_PILOT.md` | `PARALLEL_WORK_PROTOCOL.md` §1; `docs/DECISIONS.md` DEC-900 |
 
 Plan B (Phase 3b), which Plan A says starts after M34 merges, is not here either; M39 does not ask for
 it, and it is listed only so that its absence is not mistaken for an oversight.

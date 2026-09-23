@@ -222,3 +222,24 @@ production-test-fast: ## the Phase 4b suites without the two that train a model
 uplift-test: ## every Phase 3b suite: the uplift engine, its API, the flows and the UI module (slow ones too)
 	$(BIN)/python -m pytest tests/unit/uplift tests/integration/uplift -m "$(PAID_MARKERS)" -q
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+.PHONY: pilot-test pilot-generate pilot-check pilot-kit demo-seed demo
+
+pilot-test: ## every Plan E suite (M59-M64): kit, pre-flight, reports, value view, demo, feedback, screens
+	$(BIN)/python -m pytest tests/unit/pilot tests/integration/pilot -m "$(PAID_MARKERS)" -q
+
+pilot-generate: ## regenerate docs/pilot/DATA_REQUEST.md and docs/pilot/templates/ from the configs
+	$(BIN)/python -m scripts.gen_data_request
+
+pilot-check: ## fail if docs/pilot/DATA_REQUEST.md or its templates are stale
+	$(BIN)/python -m scripts.gen_data_request --check
+
+pilot-kit: ## dist/pilot-kit.zip: what a client needs to run the pre-flight check (no AutoGluon)
+	$(BIN)/python -m scripts.build_pilot_kit
+
+demo-seed: ## seed Demo Telecom into MARKETING_AI_DATA_DIR (or data/): trains once, takes a few minutes
+	$(BIN)/python -m scripts.seed_demo
+
+demo: demo-seed ## seed the demo if needed, then serve it on :8000 with demo mode on
+	MARKETING_AI_DEMO_MODE=true $(BIN)/uvicorn api.main:app --port 8000
+# ---- END PLAN-E ----

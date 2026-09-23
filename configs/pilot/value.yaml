@@ -1,0 +1,18 @@
+# configs/pilot/value.yaml
+# Which way round a campaign's measured outcome counts in the value view (Plan E M62, DEC-908).
+# A use case listed here predicts something a campaign exists to PREVENT (a customer leaving, a
+# late payment, a fault): when a campaign is measured on that same outcome - the use case's target
+# column or label - fewer outcomes among the contacted customers is the gain. Every other outcome
+# (a conversion, a customer coming back) is one to have more of. The client can still say otherwise
+# on the value screen; this is only the default, so a churn campaign is never reported backwards
+# before anybody has entered a value.
+
+schema_version: 1
+
+outcomes_to_prevent:
+  - telco-churn
+  - rca
+  - payment-propensity
+  - card-default-propensity
+  - fault-prediction
+  - order-fulfillment

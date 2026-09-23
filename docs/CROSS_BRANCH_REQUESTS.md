@@ -15,6 +15,45 @@ branch to hit the same wall should find the ruling, not the silence.
 
 ## Open
 
+### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
+
+**What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
+`git diff --stat` and `git diff <file>` on the working tree. Plan E's own paths (`engine/pilot/**`,
+`api/routes/pilot.py`, `ui/modules/pilot/**`, `configs/pilot/**`, `scripts/preflight.py`,
+`scripts/gen_data_request.py`, `scripts/seed_demo.py`, `scripts/build_pilot_kit.py`,
+`tests/**/pilot/**`, `docs/pilot/**`) are not listed. Nothing was renamed or removed, and no existing
+value changed meaning (DEC-901).
+
+*Above the PLAN-E block, in shared files:*
+
+* `engine/settings.py`: `ENV_VARS` gained `"demo_mode": MARKETING_AI_DEMO_MODE`, and `Settings`
+  gained the field `demo_mode: bool = False`, each with a comment, above the blocks as Phase 4a and
+  Phase 4b added theirs (DEC-901).
+
+*Outside any block, in files that have none:*
+
+* `infra/naming.py`: `SETTINGS_FIELDS` gained `"demo_mode"`, with a comment, so the mirror of
+  `Settings` stays exact.
+* `tests/unit/test_shared_file_markers.py`: `PHASES` gained `"PLAN-E"` (checked after Phase 3b), and
+  its docstring says why (DEC-900).
+* `tests/integration/test_api_config.py`: the exact-set OpenAPI route pin gained one commented Plan E
+  entry of ten `/pilot/*` paths. Nothing was removed or loosened.
+* `PARALLEL_WORK_PROTOCOL.md`: rows added to the branches table (`plan-e-pilot`, developed on
+  `main`), the ownership table (Plan E's paths) and the decision-number table (DEC-900…949 claimed
+  by Plan E). The old "DEC-900 up | unallocated" row became "DEC-950 up | unallocated".
+* `requirements-freeze.txt`: `fpdf2==2.8.5` and its dependency `defusedxml==0.7.1` added.
+* `docs/CROSS_BRANCH_REQUESTS.md`: this entry.
+* `docs/API.md`: regenerated; not hand-edited.
+
+*Inside the PLAN-E block only:* `api/main.py` (the pilot router), `api/schemas.py` (request and
+envelope models), `ui/index.html` (the module's `<script>`), `ui/modules/router.js` (a comment),
+`Makefile` (`pilot-test`, `pilot-generate`, `pilot-check`, `pilot-kit`, `demo-seed`, `demo`),
+`pyproject.toml` (`fpdf2==2.8.5`, DEC-903), `README.md` and `docs/DECISIONS.md`. The PLAN-E blocks
+of `engine/config.py`, `engine/contracts.py`, `engine/pipeline.py` and `engine/settings.py` are
+empty.
+
+**What I did meanwhile.** Nothing was blocked.
+
 ### 2026-09-23 — phase-3b-uplift → all branches: every change Phase 3b made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

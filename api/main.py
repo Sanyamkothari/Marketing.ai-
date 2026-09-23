@@ -213,5 +213,12 @@ from api.routes.uplift import router as uplift_router  # noqa: E402
 
 PHASE_ROUTERS.append(uplift_router)
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# Pilot readiness: the data request kit, the readiness, results and value reports, demo mode and
+# the feedback loop. Reads artefacts only; no route here trains, scores or changes a check.
+from api.routes.pilot import router as pilot_router  # noqa: E402
+
+PHASE_ROUTERS.append(pilot_router)
+# ---- END PLAN-E ----
 
 app: FastAPI = create_app()

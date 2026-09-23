@@ -3751,3 +3751,5 @@ ResolvedConfig.model_rebuild()
 # `UseCaseConfig.model_rebuild()` above runs before this block, so a forward reference to a class
 # defined here would fail it. That module imports nothing from this one (DEC-601).
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# ---- END PLAN-E ----

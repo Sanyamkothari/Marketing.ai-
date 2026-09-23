@@ -160,6 +160,8 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "scheduler_role_arn",
     "alert_backend",
     "alert_sns_topic_arn",
+    # Plan E (DEC-901): one added field.
+    "demo_mode",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 

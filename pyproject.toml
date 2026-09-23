@@ -52,6 +52,9 @@ dependencies = [
   # ---- PHASE-3B (uplift) — append only below this line ----
   "lightgbm==4.7.0",                    # engine/uplift imports it directly (meta-learners, randomness check); was only transitive via AutoGluon's extra
   # ---- END PHASE-3B ----
+  # ---- PLAN-E (pilot) — append only below this line ----
+  "fpdf2==2.8.5",                       # server-side PDF of the readiness, results and ROI reports; pure Python (DEC-903)
+  # ---- END PLAN-E ----
 ]
 
 [project.optional-dependencies]

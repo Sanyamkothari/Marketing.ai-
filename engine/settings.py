@@ -153,6 +153,8 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "scheduler_role_arn": f"{ENV_PREFIX}SCHEDULER_ROLE_ARN",
     "alert_backend": f"{ENV_PREFIX}ALERT_BACKEND",
     "alert_sns_topic_arn": f"{ENV_PREFIX}ALERT_SNS_TOPIC_ARN",
+    # --- Plan E. One more extension; nothing above changes meaning (DEC-901).
+    "demo_mode": f"{ENV_PREFIX}DEMO_MODE",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -326,6 +328,15 @@ class Settings(BaseModel):
     )
     alert_backend: AlertBackend = Field(default="log", description="`log`, or `sns` to also publish alerts.")
     alert_sns_topic_arn: str | None = Field(default=None, description="Topic alerts are published to.")
+
+    # --- Plan E (pilot readiness) --------------------------------------------------------------
+    # Added field only, defaulted off, so nothing before Plan E moves (DEC-901). On, the API serves
+    # the synthetic "Demo Telecom" client that `scripts/seed_demo.py` seeded ahead of time, so a
+    # sales or management demo never trains live or touches a real file; the screens say it is a demo.
+    demo_mode: bool = Field(
+        default=False,
+        description="Seed and show the synthetic Demo Telecom client (no real data, no live training in the demo).",
+    )
 
     @field_validator("sagemaker_subnet_ids", "sagemaker_security_group_ids", "cors_origins", mode="before")
     @classmethod
@@ -686,3 +697,5 @@ def build_services(config: Settings) -> tuple[Any, Any]:
 # ---- END PHASE-4B ----
 # ---- PHASE-3B (uplift) — append only below this line ----
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# ---- END PLAN-E ----

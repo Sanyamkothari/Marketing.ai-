@@ -1911,3 +1911,5 @@ def uplift_flow_for(pipeline: Pipeline, ctx: StageContext, mode: RunMode) -> _Tr
 
 
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# ---- END PLAN-E ----

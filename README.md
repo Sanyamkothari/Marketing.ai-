@@ -1081,3 +1081,173 @@ Decisions are DEC-600 … DEC-680 in [`docs/DECISIONS.md`](docs/DECISIONS.md). W
 above its blocks is announced in [`docs/CROSS_BRANCH_REQUESTS.md`](docs/CROSS_BRANCH_REQUESTS.md).
 
 <!-- ---- END PHASE-3B ---- -->
+<!-- ---- PLAN-E (pilot) — append only below this line ---- -->
+
+### Plan E — Pilot readiness
+
+A pilot fails for reasons tests never catch: a data request nobody could follow, results a business
+user cannot read, no way to show value to the client's management. Plan E builds what goes around
+the engine for a first client pilot. It **reads artefacts only**: nothing in `engine/pilot/` trains,
+scores, checks or promotes anything, and no check, threshold or champion rule changed. Every report
+is one page model (`engine/pilot/document.py`, DEC-903) drawn twice, as a self-contained HTML page
+and as a PDF (`fpdf2`, pinned in the PLAN-E block of `pyproject.toml`), so the two cannot disagree.
+Every client-facing sentence goes through one plain-language catalogue,
+[`configs/pilot/help.yaml`](configs/pilot/help.yaml) (`engine/pilot/help.py`, DEC-902), and a
+jargon check (`engine/pilot/plain.py`, DEC-904) that the tests run over the catalogue, the data
+request and every report. The plan text itself is not in the repository (see
+[`docs/plans/README.md`](docs/plans/README.md)).
+
+| # | Milestone | Definition of done | Status |
+|---|---|---|---|
+| M59 | Data request kit and pre-flight check | Data request and templates generated from the configs and drift-checked; the pre-flight checker runs on a client laptop without AutoGluon; `dist/pilot-kit.zip` | **done** |
+| M60 | Data readiness report and help catalogue | One verdict per dataset build (Ready, Ready with warnings, Not ready) with every problem's meaning and fix; every check code and advanced setting explained in plain words | **done** |
+| M61 | Business results report | The champion's headline, reasons, actions and limits, in business terms, as HTML and PDF | **done**; the Minfy and client logos are placeholder boxes |
+| M62 | Value and ROI view | A measured campaign effect times the client's own values, always a range, in rupees | **done** |
+| M63 | Demo mode, tour and tooltips | "Demo Telecom" seeded through the platform's own API; a six-step tour; "What does this mean?" beside every warning and setting | **done** |
+| M64 | Playbook, feedback and usability test | The pilot playbook; in-app feedback stored and exported; the internal usability session run | **partial** — playbook and feedback built; the usability session has not been run and the playbook awaits review |
+
+#### M59 — The data request kit and the pre-flight check
+
+`engine/pilot/data_request.py` builds the client-facing request from the use-case configs,
+`configs/roles.yaml` and the wording in `configs/pilot/data_request.yaml`: which tables (required,
+recommended), which columns (required, needed, useful), how much history (the same sum the build
+refuses below), and what never to send (DEC-905). `scripts/gen_data_request.py` writes the committed
+[`docs/pilot/DATA_REQUEST.md`](docs/pilot/DATA_REQUEST.md) and `docs/pilot/templates/*_template.csv`;
+`--check` fails on drift. `engine/pilot/preflight.py` and `scripts/preflight.py` check a folder of
+the client's files on the client's own laptop with the platform's own profiling and onboarding checks,
+upload nothing, and write one HTML page; the exit code is 0 (nothing blocks), 1 (a problem blocks) or
+2 (the command was misused) (DEC-906). `scripts/build_pilot_kit.py` zips the request, the templates,
+the checker and what it runs on into `dist/pilot-kit.zip`, with a `requirements-preflight.txt` of
+four libraries.
+
+```bash
+make pilot-generate                                   # regenerate the request and templates
+make pilot-check                                      # fail if they are stale
+make pilot-kit                                        # dist/pilot-kit.zip
+.venv/bin/python -m scripts.preflight <folder> [--use-case telco-churn] [--out report.html]
+```
+
+#### M60 — The data readiness report and the help catalogue
+
+`engine/pilot/readiness.py` reads a build back for a client analyst from
+`datasets/<id>/build_status.json`, `build_report.json` and `dataset_manifest.json`, the client
+store's recipe, mappings and sources, and each source's `profile.json`: what arrived, how well it
+links up, whether there is enough history and enough examples of the outcome, which personal
+details were masked, and what blocks the pilot, with the fix. The verdict is the build's own; the
+report explains it and never overrides it (DEC-907). `engine/pilot/help.py` serves
+`configs/pilot/help.yaml`: a title, a meaning and a fix for every check code (Phase 1, Phase 2,
+the Phase 3b uplift checks, the two drift verdicts, the threshold fallback and the five `PREFLIGHT_*`
+codes), a meaning for every advanced setting path, a glossary and plain names for the metrics.
+
+#### M61 — The business results report
+
+`engine/pilot/results.py` answers five questions about a use case's champion (or one model) from
+its training run's `run_config`, `evaluation`, `decile_lift`, `baseline`, `feature_importance` and
+split, and the latest scoring run's `scoring_summary` and `row_explanations`; for an uplift
+champion, `uplift_evaluation` and `segments`. What does it do, how good is it ("the 10% flagged
+first contain X% of everyone who left", beside a random 10%), why, what to do, and what are its
+limits. Example customers are "Customer A/B/C", never an ID; a section whose artefact is missing
+says so rather than showing a figure (DEC-909).
+
+#### M62 — The value and ROI view
+
+`engine/pilot/roi.py` reads a campaign's measured effect from `incrementality_report.json` (Phase
+3b campaign results) or `incrementality_input.json` (Phase 4b outcome ingestion, with the same
+Newcombe interval), multiplies it by the values the client enters (stored with the run as
+`runs/<id>/pilot_roi_inputs.json`), and shows every amount as a range in rupees with Indian digit
+grouping (`format_inr`). Before the outcome window has passed it shows the date results will be
+ready, not a number (DEC-908).
+
+#### M63 — Demo mode, the tour and the tooltips
+
+`scripts/seed_demo.py` seeds a synthetic "Demo Telecom" through the platform's own API: raw tables
+uploaded and mapped, a dataset built, a churn model trained and made champion, next month scored with
+a control group, a win-back uplift model trained, and both campaigns measured on simulated outcomes
+(about two minutes). It writes `pilot/demo/demo.json` (`engine/pilot/demo.py`) and keeps the raw
+tables, clean and with one planted problem, under `pilot/demo/raw/<variant>/` for the pre-flight
+check. No public or non-commercial dataset is used (DEC-910). With `MARKETING_AI_DEMO_MODE=true`
+(`Settings.demo_mode`, off by default, DEC-901) the screens open on the demo. The UI module
+`ui/modules/pilot/` (`index.js`, `api.js`, `screen.js`, `help.js`, `feedback.js`, `tour.js`,
+`styles.js`) adds the Pilot screen at `#/pilot`, `#/pilot/view/readiness/<id>`,
+`#/pilot/view/results/<uc>` and `#/pilot/value/<run>`, a demo badge, a six-step tour, and a "?"
+beside every warning code and advanced setting, without editing any other workstream's screen
+(DEC-912).
+
+```bash
+make demo-seed                 # seed Demo Telecom into MARKETING_AI_DATA_DIR (or data/); trains once
+make demo                      # seed if needed, then serve on :8000 with MARKETING_AI_DEMO_MODE=true
+```
+
+#### M64 — The playbook and the feedback loop
+
+[`docs/pilot/PLAYBOOK.md`](docs/pilot/PLAYBOOK.md) is the ten-week pilot plan with its success
+criteria, and [`docs/pilot/USABILITY_TEST.md`](docs/pilot/USABILITY_TEST.md) the script for the
+internal usability session. `engine/pilot/feedback.py` stores what a person types into the feedback
+button on every screen as one JSON file under `pilot/feedback/<id>.json`, with the screen's route
+(ids, never cell values) and the words passed through the platform's redaction, and exports them as
+`pilot_feedback.csv` or `.jsonl` (DEC-911).
+
+**Routes** (`api/routes/pilot.py`; every one reads artefacts). Reading is Viewer, saving value
+inputs is Analyst, and the feedback export is Admin and audited on read.
+
+| Method | Path | What |
+|---|---|---|
+| GET | `/pilot/help` | the plain-language catalogue the tooltips read |
+| GET | `/pilot/data-request` | the data request, `format=md` or `json` |
+| GET | `/pilot/templates/{role}` | one table's header-only CSV template |
+| GET | `/pilot/readiness/{dataset_id}` | the data readiness report, `format=html`, `pdf` or `json` |
+| GET | `/pilot/results?use_case=…` or `?model_id=…` | the business results report of a champion, or of one model |
+| GET, PUT | `/pilot/roi/{run_id}` | a campaign's value view; the client's value inputs |
+| GET | `/pilot/demo` | whether demo mode is on, and what the seeded demo holds |
+| GET | `/pilot/demo/raw/{variant}` | the demo's raw tables as a zip (clean or broken) |
+| POST | `/pilot/feedback` | record feedback on a screen |
+| GET | `/pilot/feedback/export` | every feedback entry, for the pilot team |
+
+**Running the tests.**
+
+```bash
+make pilot-test                # every Plan E suite except the slow acceptance test
+.venv/bin/python -m pytest tests/integration/pilot/test_pilot_acceptance.py -m slow   # seeds the demo; browser journey
+```
+
+`tests/unit/pilot/` covers the kit, the pre-flight check, the catalogue, the page model, the value
+view and the feedback store; `tests/integration/pilot/test_pilot_api.py` the routes and their
+refusals; `test_readiness_report.py` the readiness report on real builds; and the slow
+`test_pilot_acceptance.py` seeds the demo and walks the journey Plan E's acceptance names, including
+the results report, which has no fast test of its own.
+
+```
+engine/pilot/
+├── document.py                   # ReportDocument blocks; render_html and render_pdf
+├── help.py, plain.py             # the plain-language catalogue; the jargon check
+├── data_request.py, preflight.py # the data request kit; the pre-flight checker
+├── readiness.py, results.py      # the data readiness and business results reports
+├── roi.py                        # the value view, as rupee ranges
+├── demo.py                       # the demo manifest and where its raw tables live
+└── feedback.py                   # feedback entries, redacted; CSV and JSON lines export
+api/routes/pilot.py               # the /pilot/* routes and their access policies
+ui/modules/pilot/                 # the Pilot screen, tour, tooltips and feedback button
+configs/pilot/                    # help.yaml and data_request.yaml
+scripts/                          # preflight.py, gen_data_request.py, seed_demo.py, build_pilot_kit.py
+docs/pilot/                       # DATA_REQUEST.md, templates/, PLAYBOOK.md, USABILITY_TEST.md
+```
+
+**What is left.**
+
+1. **The internal usability session has not been run.** It needs a colleague outside the team and a
+   facilitator; [`docs/pilot/USABILITY_TEST.md`](docs/pilot/USABILITY_TEST.md) is the script, and
+   its session log is empty.
+2. **The playbook awaits Mukund's review.** [`docs/pilot/PLAYBOOK.md`](docs/pilot/PLAYBOOK.md) is a
+   draft and has not been agreed with a client.
+3. **The client and Minfy logos are placeholders.** The reports draw named boxes; the logos are the
+   client's and Minfy's to supply.
+4. **Nothing is scheduled.** The `pilot_feedback` export and the reports are produced on request
+   only; no schedule sends them.
+5. **The churn demo campaign is measured through outcome ingestion**
+   (`POST /runs/{id}/outcomes`), because campaign results (`POST /runs/{id}/campaign-results`)
+   refuse the demo dataset's composite key. The win-back campaign goes through campaign results.
+
+Decisions are DEC-900 … DEC-912 in [`docs/DECISIONS.md`](docs/DECISIONS.md). What Plan E changed
+above its blocks is announced in [`docs/CROSS_BRANCH_REQUESTS.md`](docs/CROSS_BRANCH_REQUESTS.md).
+
+<!-- ---- END PLAN-E ---- -->

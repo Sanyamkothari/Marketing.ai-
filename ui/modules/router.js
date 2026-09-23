@@ -147,3 +147,7 @@ import "./production/boot.js";
 // `<script type="module">` in index.html's PHASE-3B block, not imported here: it imports this file
 // for `registerModule`, and an import back from here would run it before `registered` exists.
 // ---- END PHASE-3B ----
+// ---- PLAN-E (pilot) — append only below this line ----
+// The pilot module (`modules/pilot/index.js`, route `pilot`) is loaded by its own `<script>` in
+// index.html's PLAN-E block, as the uplift module is, for the same reason: it imports this file.
+// ---- END PLAN-E ----

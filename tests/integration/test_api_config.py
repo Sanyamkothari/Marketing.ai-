@@ -370,6 +370,17 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/uplift/{name}",
         "/runs/{run_id}/campaign-results",
         "/runs/{run_id}/uplift/ope",
+        # Plan E (pilot readiness): help, the data request kit, the reports, demo mode, feedback
+        "/pilot/help",
+        "/pilot/data-request",
+        "/pilot/templates/{role}",
+        "/pilot/readiness/{dataset_id}",
+        "/pilot/results",
+        "/pilot/roi/{run_id}",
+        "/pilot/demo",
+        "/pilot/demo/raw/{variant}",
+        "/pilot/feedback",
+        "/pilot/feedback/export",
         # Phase 4b M46/M47: sign-in, user management and the audit viewer
         "/auth/login",
         "/auth/logout",

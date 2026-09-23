@@ -51,6 +51,17 @@ Contract schema version: 1.
 | GET | `/monitoring/alerts` | List alerts | AlertListResponse |
 | POST | `/monitoring/alerts/{alert_id}/acknowledge` | Acknowledge an alert | Alert |
 | GET | `/monitoring/missed-firings` | Scheduled runs that were missed, across schedules | FiringListResponse |
+| GET | `/pilot/data-request` | The client-facing data request for the pilot's use cases | - |
+| GET | `/pilot/demo` | Whether demo mode is on, and what the seeded demo contains | PilotDemoResponse |
+| GET | `/pilot/demo/raw/{variant}` | The demo's raw tables as a zip, for trying the pre-flight check (clean or broken) | - |
+| POST | `/pilot/feedback` | Record feedback on a screen (stored with the platform's data; contact details masked) | PilotFeedbackResponse |
+| GET | `/pilot/feedback/export` | Export every feedback entry for the pilot team (pilot_feedback.csv or .jsonl) | - |
+| GET | `/pilot/help` | The plain-language help: every warning code, every setting, the glossary | HelpCatalogue |
+| GET | `/pilot/readiness/{dataset_id}` | The data readiness report of one dataset build: verdict, coverage, history, problems and fixes | - |
+| GET | `/pilot/results` | The business results report of a use case's champion, or of one model | - |
+| GET | `/pilot/roi/{run_id}` | A campaign's measured effect and its value in rupees, as a range | - |
+| PUT | `/pilot/roi/{run_id}` | Save a campaign's value inputs (what an extra customer is worth, offer and contact costs) | RoiView |
+| GET | `/pilot/templates/{role}` | The header-only CSV template of one requested table | - |
 | POST | `/privacy/access-requests` | Export everything held about one person, as a zip | - |
 | POST | `/privacy/consent` | Record one consent given or withdrawn | ConsentRecord |
 | POST | `/privacy/consent/imports` | Import a consent CSV (all or nothing unless partial) | ConsentImportReport |
