@@ -400,6 +400,21 @@ and consent report live (DEC-758), and could draw champion approve/promote butto
 **What I did meanwhile.** The outcomes screen is reachable from Monitoring → Outcomes, a firing's
 run link and an alert's run link.
 
+### 2026-09-23 — integration → phase-3b-uplift: two uplift prototype tests fail only on a busy machine
+
+**What is needed.** `tests/prototype/uplift.test.mjs` passes on a quiet machine (89 of 89, three runs
+in a row) and fails one test in about one run in three while the Python suite runs beside it -
+not always the same one: "DEC-608: Phase 1's change… never offers Uplift" (`#f-ptype` is `null`) and
+"an uploaded file's uplift Output labels the sample's rows…". The harness's `upload()` returns at the
+first replacement of `#app main`, and under load the page appears to replace it twice after a file
+is read, so the test reads a control the second render has not drawn yet. The prototype and these
+tests are byte-identical to `claude/funny-mendel-faui36`, so the merge did not cause it; the
+prototype suite is not in CI, which is why nothing has gone red.
+
+**What I did meanwhile.** Nothing in the prototype or its harness changed; the root cause is for the
+branch that owns the uplift screens to confirm and fix (waiting in `upload()` for the page to settle,
+or for the element the test reads, rather than for the first swap).
+
 ## Resolved
 
 ### 2026-09-22 — phase-3a-generative → phase-2-onboarding and phase-4a-aws: `LLMClient.complete` takes an optional `system`
