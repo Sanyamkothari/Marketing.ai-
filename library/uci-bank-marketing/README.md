@@ -1,6 +1,6 @@
 # UCI Bank Marketing (bank-additional-full)
 
-**Industry** Banking · **Use case** [`bank-term-deposit`](../configs/use_cases/bank_term_deposit.yaml) ·
+**Industry** Banking · **Use case** [`bank-term-deposit`](../../configs/use_cases/bank_term_deposit.yaml) ·
 **Target** `y`
 
 41,188 direct-marketing calls made by a Portuguese retail bank between May 2008 and November 2010.

@@ -1,5 +1,8 @@
 /* Screenshots of every new prototype state, desktop and mobile.
-   Usage: NODE_PATH=/opt/node22/lib/node_modules node scripts/prototype_screenshots.mjs */
+   Usage: node scripts/prototype_screenshots.mjs   (ONLY=19,20 shoots just the states whose name starts so)
+   This is an ES module, and ES modules ignore NODE_PATH: `playwright` must resolve from a
+   node_modules directory above the checkout, e.g. ln -s /opt/node22/lib/node_modules ~/node_modules
+   (never inside the repository, where the link would show up as a new file). */
 import { chromium } from "playwright";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -16,6 +19,26 @@ const open = async (page, hash) => {
   await page.waitForTimeout(120);
 };
 const click = async (page, sel) => { await page.click(sel); await page.waitForTimeout(80); };
+/* DEC-608: uplift is not a Phase 1 Setup choice. Its screens are reached from the "Uplift for this use
+   case" link under win-back's header, so every uplift recipe starts by following that link. */
+const openUplift = async (p) => {
+  await open(p, "#/uc/win-back-campaign");
+  await click(p, ".uentry a");
+  await p.waitForSelector('main[data-module="uplift"] #f-samplecampaign', { timeout: 10000 });
+};
+const trainUplift = async (p) => {
+  await openUplift(p);
+  await click(p, "#f-samplecampaign"); // the uplift screen's sample: a past campaign with a control group
+  await click(p, "#f-run");
+  await p.waitForSelector(".results", { timeout: 20000 });
+};
+const scoreUplift = async (p) => {
+  await click(p, "#f-again");
+  await click(p, '.seg button[data-mode="score"]');
+  await click(p, "#f-sample");
+  await click(p, "#f-run");
+  await p.waitForSelector("#f-campaign", { timeout: 20000 });
+};
 
 /* Each new state, as a named recipe that leaves the page where it should be shot. */
 const STATES = [
@@ -114,6 +137,37 @@ const STATES = [
     });
     await p.waitForSelector(".referr", { timeout: 5000 });
   }],
+  /* Phase 3b §8 — uplift. Runs are driven through the router so the in-memory run survives. */
+  ["19-uplift-setup-treatment", async (p) => {
+    await openUplift(p);
+    await click(p, "#f-samplecampaign");
+  }],
+  ["20-uplift-not-random-acknowledge", async (p) => {
+    await openUplift(p);
+    await click(p, "#f-sampletargeted");
+    await click(p, "#f-ack");
+  }],
+  ["21-uplift-model", async (p) => {
+    await trainUplift(p);
+    await p.evaluate(() => { location.hash = "#/uplift/win-back-campaign/model"; });
+    await p.waitForSelector(".qini", { timeout: 10000 });
+  }],
+  ["22-uplift-output", async (p) => {
+    await trainUplift(p);
+    await scoreUplift(p);
+    await p.evaluate(() => { location.hash = "#/uplift/win-back-campaign/output"; });
+    await p.waitForSelector(".segrow", { timeout: 10000 });
+  }],
+  ["23-campaign-results-immature", async (p) => {
+    await trainUplift(p);
+    await scoreUplift(p);
+    await p.evaluate(() => { location.hash = "#/uplift/win-back-campaign/campaign"; });
+    await p.waitForSelector("[data-up-wait]", { timeout: 10000 });
+  }],
+  ["24-campaign-results-mature", async (p) => {
+    await open(p, "#/uc/win-back-campaign/campaign");
+    await click(p, "#cr-sample");
+  }],
   ["12-rca-before-generation", async (p) => { await open(p, "#/uc/rca/output"); }],
   ["13-rca-root-causes", async (p) => {
     await open(p, "#/uc/rca/output");
@@ -139,11 +193,12 @@ const STATES = [
 ];
 
 /* Two of the new panels again in dark mode, to show the tokens carry over. */
-const DARK = ["03-onboarding-sources", "14-winback-campaign-copy"];
+const DARK = ["03-onboarding-sources", "14-winback-campaign-copy", "22-uplift-output"];
+const ONLY = process.env.ONLY ? process.env.ONLY.split(",").map((x) => x.trim()).filter(Boolean) : null;
 
 const browser = await chromium.launch();
 let n = 0;
-for (const [name, drive] of STATES) {
+for (const [name, drive] of STATES.filter(([n]) => !ONLY || ONLY.some((o) => n.startsWith(o)))) {
   for (const [suffix, viewport, scheme] of [
     ["desktop", DESKTOP, "light"],
     ["mobile", MOBILE, "light"],

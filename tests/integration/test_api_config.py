@@ -187,6 +187,9 @@ def test_problem_type_choices_disable_the_later_phases(client: TestClient) -> No
         "regression": True,
         "forecasting": False,
         "clustering": False,
+        # Phase 3b: uplift is a problem type of its own (DEC-601), but not a Phase 1 Setup choice:
+        # its runs start from #/uplift, where the treatment is picked and checked first (DEC-608)
+        "uplift": False,
     }
     disabled = [choice for choice in body.setup.problem_type_choices if not choice.enabled]
     assert all(choice.help for choice in disabled)
@@ -361,6 +364,12 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/clients/default",
         "/clients/{client_id}/onboarding-specs/{spec_id}/replay",
         "/datasets/{dataset_id}/lineage",
+        # Phase 3b: the treatment picker, uplift runs, their artefacts, campaign results and OPE
+        "/uploads/{upload_id}/treatment-candidates",
+        "/uplift/runs",
+        "/runs/{run_id}/uplift/{name}",
+        "/runs/{run_id}/campaign-results",
+        "/runs/{run_id}/uplift/ope",
     }
 
 

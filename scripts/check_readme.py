@@ -178,6 +178,32 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_ui_journey.py",
     ),
     "M39": ("tests/unit/test_check_readme.py",),
+    # --- Phase 3b (uplift) -------------------------------------------------------------------
+    # The files the Phase 3b README section runs for each milestone. M45 is documentation and the
+    # Criteo run, which has no test; it is reported, never flagged.
+    "M40": (
+        "tests/unit/uplift/test_uplift_checks.py",
+        "tests/unit/uplift/test_uplift_data.py",
+        "tests/unit/uplift/test_uplift_config.py",
+    ),
+    "M41": (
+        "tests/unit/uplift/test_metrics.py",
+        "tests/unit/uplift/test_champion.py",
+        "tests/unit/uplift/test_learners.py",
+    ),
+    "M42": (
+        "tests/unit/uplift/test_segments.py",
+        "tests/unit/uplift/test_policy.py",
+        "tests/unit/uplift/test_uplift_actions.py",
+        "tests/unit/uplift/test_uplift_explain.py",
+    ),
+    "M43": (
+        "tests/unit/uplift/test_incrementality.py",
+        "tests/unit/uplift/test_ope.py",
+        "tests/integration/uplift/test_campaign_results_phase1.py",
+        "tests/integration/uplift/test_uplift_api.py",
+    ),
+    "M44": ("tests/unit/uplift/test_uplift_ui.py",),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

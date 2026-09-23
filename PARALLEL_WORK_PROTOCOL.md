@@ -15,6 +15,7 @@ Three agents work at the same time on three branches. This document is the contr
 | `phase-2-onboarding` | `MARKETING_AI_PHASE2_PLAN.md` | **first** | `main` |
 | `phase-3a-generative` | `MARKETING_AI_PHASE3A_PLAN.md` | second | `main`, then `phase-2-onboarding` once it is merged |
 | `phase-4a-aws` | `MARKETING_AI_PHASE4A_PLAN.md` | third | `main`, then the merged result of 2 and 3a |
+| `phase-3b-uplift` | Plan B (Phase 3b — uplift modelling and measured impact) | fourth, after 2, 3a and 4a had merged | `main`; its shared-file blocks come after Phase 4a's (DEC-600) |
 
 - Rebase (or merge `main` into your branch) **at least once a day**. Resolve conflicts immediately; never let them accumulate.
 - A branch merges only when: CI is green on the branch, the Phase 1 suites (`make test-all`) are green, the phase's own integration test is green, and `README.md` and `docs/DECISIONS.md` are current.
@@ -51,6 +52,8 @@ An agent may freely create and edit files in the directories it owns. It may edi
 | `engine/generative/**`, `engine/llm.py` (implementations), `api/routes/generative.py`, `ui/modules/generative/**`, `configs/prompts/**`, `configs/guardrails.yaml`, `tests/**/generative/**`, `tests/fixtures/docs/**`, `docs/GENERATIVE.md` | Phase 3a |
 | `configs/use_cases/*.yaml` sections `generative`, `rca`, `copy` | Phase 3a |
 | `engine/aws/**` (S3Storage, SageMakerJobRunner, PostgresMetadata, S3ModelRegistry), `infra/**` (CDK), `Dockerfile*`, `docker-compose.yml`, `.github/workflows/deploy*.yml`, `tests/**/aws/**`, `docs/AWS_DEPLOYMENT.md`, `docs/RUNBOOK.md` | Phase 4a |
+| `engine/uplift/**`, `api/routes/uplift.py`, `ui/modules/uplift/**`, `tests/**/uplift/**`, `tests/fixtures/make_uplift_data.py`, `docs/UPLIFT.md` | Phase 3b |
+| `configs/engine.yaml` section `defaults.uplift`, and `configs/use_cases/*.yaml` section `uplift` | Phase 3b |
 | `engine/stages/train.py`, `evaluate.py`, `explain.py`, `engine/registry.py` champion rule | **Frozen.** Nobody. |
 | `engine/contracts.py`, `engine/config.py`, `engine/settings.py`, `engine/pipeline.py`, `api/main.py`, `api/schemas.py`, `ui/index.html`, `ui/modules/router.js`, `Makefile`, `pyproject.toml`, `README.md`, `docs/DECISIONS.md`, `docs/API.md` | **Shared** (section 4) |
 
@@ -77,13 +80,16 @@ Each shared file gets three marked blocks, added by the contracts-first task:
 
   | Range | Workstream | State at integration (2026-09-23) |
   |---|---|---|
-  | DEC-001…099 | trunk (Phase 1, the contracts-first change and Plan A) | **exhausted** at DEC-099 (Plan A used DEC-083…099); the trunk takes the next free hundred |
+  | DEC-001…099 | trunk (Phase 1, the contracts-first change and Plan A) | **exhausted** at DEC-099 (Plan A used DEC-083…099); the trunk continues at DEC-800 |
   | DEC-100…199 | Phase 2 — onboarding | used to DEC-110 |
   | DEC-200…299 | Phase 3a — generative | used to DEC-232 |
   | DEC-300…399 | Phase 4a — AWS | **exhausted** at DEC-399 |
   | DEC-400…499 | public dataset library (`library/`) | used to DEC-411; allocated after the fact |
+  | DEC-500…599 | Phase 5 — Evolve (reserved by plan B) | reserved; unused |
+  | DEC-600…699 | Phase 3b — uplift (plan B assigns it this range and reserves the DEC-500s for Phase 5) | claimed 2026-09-23; used to DEC-680 |
   | DEC-700…799 | Phase 4b — production: access, audit, privacy, scheduling (`docs/PHASE4B_PLAN.md`) | claimed 2026-09-23 |
-  | DEC-500 up | unallocated, except the hundreds claimed above | — |
+  | DEC-800…899 | trunk, continued (the integration of the parallel branches onwards) | claimed 2026-09-23; used to DEC-800 |
+  | DEC-900 up | unallocated | — |
 
   A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.
 - `docs/API.md` is generated; never hand-edit. Run `gen_api_docs` after adding models.

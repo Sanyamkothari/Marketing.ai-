@@ -1,8 +1,10 @@
 """Fetch the Criteo Uplift Prediction Dataset v2.1 and write a mapped sample of at most 1M rows.
 
-**This script has never been run.** `go.criteo.net` and `huggingface.co` are both blocked by the
-egress policy of the environment this library was built in, so no byte of this dataset was ever
-fetched here. Everything below is written against the published file's documented schema; the
+**This script has never been run to completion.** `go.criteo.net` and `huggingface.co` are both
+blocked by the egress policy of the environment this library was built in, so no byte of this
+dataset was ever fetched here. It was started again on 2026-09-23, once Phase 3b made the use case
+runnable: the direct link was refused with HTTP 403 and the `--mirror` link with a 403 on the proxy
+tunnel, before any row was read. Everything below is written against the published file's documented schema; the
 `verify()` step exists so that the first person who runs it on a network that allows the download
 finds out immediately if the schema has moved, rather than discovering it three stages later.
 

@@ -1,6 +1,6 @@
 # UCI Online Retail → win-back
 
-**Industry** E-commerce · **Use case** [`retail-win-back`](../configs/use_cases/retail_win_back.yaml) ·
+**Industry** E-commerce · **Use case** [`retail-win-back`](../../configs/use_cases/retail_win_back.yaml) ·
 **Target** `reactivated_90d` (derived)
 
 The one dataset in the library that does **not** arrive in the data contract's shape. Everything

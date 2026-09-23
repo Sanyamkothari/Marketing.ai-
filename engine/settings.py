@@ -684,3 +684,5 @@ def build_services(config: Settings) -> tuple[Any, Any]:
 
 # ---- PHASE-4B (production) — append only below this line ----
 # ---- END PHASE-4B ----
+# ---- PHASE-3B (uplift) — append only below this line ----
+# ---- END PHASE-3B ----

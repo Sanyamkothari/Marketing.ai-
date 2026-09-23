@@ -29,6 +29,10 @@ from pydantic import (
 )
 
 from engine.settings import DEFAULT_CONFIG_DIR, ENV_VARS, settings
+from engine.uplift.config import (  # Phase 3b (DEC-601); imports nothing from engine
+    UPLIFT_OVERRIDABLE_PATHS,
+    UpliftConfig,
+)
 
 
 class ConfigError(Exception):
@@ -114,6 +118,7 @@ class ProblemType(StrEnum):
     REGRESSION = "regression"
     FORECASTING = "forecasting"
     CLUSTERING = "clustering"
+    UPLIFT = "uplift"  # Phase 3b (DEC-601): one member, announced in docs/CROSS_BRANCH_REQUESTS.md
 
 
 class MissingValues(StrEnum):
@@ -187,6 +192,7 @@ class Metric(StrEnum):
     PRECISION = "precision"
     RMSE = "rmse"
     MAE = "mae"
+    AUUC = "auuc"  # Phase 3b (DEC-601): the uplift problem type's only metric, never sent to AutoGluon
 
 
 class Calibration(StrEnum):
@@ -1258,6 +1264,12 @@ class UseCaseConfig(_Base):
     suggested_features: tuple[FeatureDef, ...] = ()
     label: LabelDefinition | None = None
     onboarding: OnboardingConfig = Field(default_factory=lambda: OnboardingConfig())
+    # --- Phase 3b (uplift) ---------------------------------------------------------------------
+    # The one declaration Phase 3b adds above its block, for Phase 2's reason: `_Base` forbids
+    # unknown keys, so a use case cannot carry an `uplift:` section until the model has a field for
+    # it. Defaulted, and read only when `problem_type` is `uplift`, so no other path moves. The type
+    # lives in `engine/uplift/config.py`, which imports nothing from this file (DEC-601).
+    uplift: UpliftConfig = UpliftConfig()
 
     _catalog: Catalog | None = PrivateAttr(default=None)
 
@@ -1509,12 +1521,18 @@ def config_root(root: Path | None = None) -> Path:
     return settings().config_dir or DEFAULT_CONFIG_ROOT
 
 
+_SAFE_LOADER: Final[Any] = getattr(yaml, "CSafeLoader", yaml.SafeLoader)
+"""libyaml's C parser when PyYAML was built with it, else the pure-Python one. Both build the same
+objects through `SafeConstructor`; the C one is about eight times faster, which matters once
+`GET /industries` validates every use case of every industry on each request (DEC-800)."""
+
+
 def load_yaml(path: Path) -> dict[str, Any]:
     """`yaml.safe_load` with the three file-level `ConfigError` codes."""
     if not path.is_file():
         raise ConfigError("CONFIG_NOT_FOUND", f"No configuration file at {path}.", path=str(path))
     try:
-        loaded = yaml.safe_load(path.read_text(encoding="utf-8"))
+        loaded = yaml.load(path.read_text(encoding="utf-8"), Loader=_SAFE_LOADER)
     except yaml.YAMLError as exc:
         raise ConfigError("CONFIG_YAML_ERROR", f"{path} is not valid YAML: {exc}.", path=str(path)) from exc
     if not isinstance(loaded, dict):
@@ -1818,6 +1836,7 @@ EXTRA_OVERRIDABLE_PATHS: Final[frozenset[str]] = frozenset(
         "prepare.exclude_columns",
         "validation.acknowledged",
         "model_search.candidates",
+        *UPLIFT_OVERRIDABLE_PATHS,  # Phase 3b (DEC-601): the uplift block is per-run, like target.column
     }
 )
 _EMPTY_STRING_IS_NONE: Final[frozenset[str]] = frozenset(
@@ -3721,3 +3740,8 @@ ResolvedConfig.model_rebuild()
 
 # ---- PHASE-4B (production) — append only below this line ----
 # ---- END PHASE-4B ----
+# ---- PHASE-3B (uplift) — append only below this line ----
+# Phase 3b keeps its configuration types in `engine/uplift/config.py`, not here: Phase 2's
+# `UseCaseConfig.model_rebuild()` above runs before this block, so a forward reference to a class
+# defined here would fail it. That module imports nothing from this one (DEC-601).
+# ---- END PHASE-3B ----

@@ -1,6 +1,6 @@
 # UCI Default of Credit Card Clients
 
-**Industry** Banking · **Use case** [`card-default-propensity`](../configs/use_cases/card_default_propensity.yaml) ·
+**Industry** Banking · **Use case** [`card-default-propensity`](../../configs/use_cases/card_default_propensity.yaml) ·
 **Target** `default_payment_next_month`
 
 30,000 Taiwanese credit-card accounts observed from April to September 2005, with whether each one

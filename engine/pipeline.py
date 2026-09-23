@@ -1774,6 +1774,8 @@ class Pipeline:
         leaves both documents consistent and re-raises, which is what makes the job runner record
         the run as terminal.
         """
+        if (uplift := uplift_flow_for(self, ctx, RunMode.TRAIN)) is not None:  # PHASE-3B: plan B §5 lookup
+            return uplift.execute()
         return _TrainFlow(self, ctx).execute()
 
     def run_score(self, ctx: StageContext) -> RunRecord:
@@ -1786,6 +1788,8 @@ class Pipeline:
         calibrator were all settled at train time, and the run replays them and counts what came
         out. See `_ScoreFlow` for why the prepare stage writes nothing of its own.
         """
+        if (uplift := uplift_flow_for(self, ctx, RunMode.SCORE)) is not None:  # PHASE-3B: plan B §5 lookup
+            return uplift.execute()
         return _ScoreFlow(self, ctx).execute()
 
 
@@ -1808,3 +1812,55 @@ class Pipeline:
 
 # ---- PHASE-4B (production) — append only below this line ----
 # ---- END PHASE-4B ----
+# ---- PHASE-3B (uplift) — append only below this line ----
+# The uplift problem type (plan B). `Pipeline.run_train` and `Pipeline.run_score` above ask
+# `uplift_flow_for` first - one line each - and run their own flow whenever it answers `None`.
+
+
+def uplift_flow_for(pipeline: Pipeline, ctx: StageContext, mode: RunMode) -> _TrainFlow | _ScoreFlow | None:
+    """The uplift flow a run needs, or `None` for every run Phase 1 already handles.
+
+    Plan B §5's "one-line registry lookup": the two entry points above ask this first and fall
+    through to their own flow unchanged whenever it answers `None`, so a classification or
+    regression run executes exactly the code it did before Phase 3b. A **training** run is uplift
+    when its configuration says `problem_type: uplift`. A **scoring** run is uplift when the model
+    it scores is one - the version it names, or else the use case's champion - which is recorded as
+    an AUUC metric, or when its configuration says uplift. The registry is only read here, never
+    written, and a version id it does not know is left for Phase 1's resolver to refuse in its own
+    words at `validate_against_schema`.
+
+    A context that carries no configuration at all (the pipeline's own dispatch test drives both
+    entry points with a bare sentinel) cannot ask for uplift and is passed through untouched. The
+    flows are imported here, not at the top: `engine.uplift.flow` subclasses this module's flows.
+    """
+    from engine.config import Metric, ProblemType
+    from engine.registry import RegistryError
+
+    config = getattr(ctx, "config", None)
+    if not isinstance(config, UseCaseConfig):
+        return None
+    if mode is RunMode.TRAIN:
+        if config.problem_type is not ProblemType.UPLIFT:
+            return None
+        from engine.uplift.flow import UpliftTrainFlow
+
+        return UpliftTrainFlow(pipeline, ctx)
+    uplift = config.problem_type is ProblemType.UPLIFT
+    if not uplift:
+        try:
+            version = (
+                ctx.registry.get(ctx.model_version_id)
+                if ctx.model_version_id is not None
+                else ctx.registry.get_champion(config.id)
+            )
+        except RegistryError:
+            return None
+        uplift = version is not None and version.metric == Metric.AUUC
+    if not uplift:
+        return None
+    from engine.uplift.flow import UpliftScoreFlow
+
+    return UpliftScoreFlow(pipeline, ctx)
+
+
+# ---- END PHASE-3B ----

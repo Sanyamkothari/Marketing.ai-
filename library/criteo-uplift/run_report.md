@@ -9,16 +9,38 @@ what was attempted, what stopped it, and what has to be true before a run is pos
 | | |
 |---|---|
 | Dataset | Criteo Uplift Prediction Dataset v2.1 |
-| Use case | `criteo-uplift` — **planned**, drafted in [`use_case.yaml`](use_case.yaml), not installed |
-| Run attempted | **no** |
-| Data fetched | **no** |
+| Use case | `criteo-uplift` — **planned**; [`use_case.yaml`](use_case.yaml) is written for `problem_type: uplift` and valid for the engine, not installed |
+| Run attempted | **no** — there is no data to run on |
+| Data fetched | **no** — re-tested 2026-09-23, still refused |
 | Reported metrics | **none** |
 
-## Why no run: the brief says so
+## Status on 2026-09-23 (Phase 3b, milestone M45)
 
-The brief reserves this dataset for Phase 3b uplift and says *"prepare the config and a mapped
-sample, do not run training"*. The config is prepared ([`use_case.yaml`](use_case.yaml)) and the
-mapping is written ([`mapping.yaml`](mapping.yaml)).
+Plan B's M45 asks for a Criteo run report, and its acceptance test asks for an AUUC interval above
+zero on the Criteo sample. **Neither could be produced here**, and this report says so instead of
+substituting anything:
+
+* The engine side is ready. Phase 3b added the `uplift` problem type, and
+  [`use_case.yaml`](use_case.yaml) now uses it: `problem_type: uplift`, `uplift.treatment_column:
+  treatment`, outcome `conversion`, X-learner on LightGBM, `exposure` and `visit` excluded. It was
+  checked by resolving it with the engine's own config loader from a copy of `configs/`,
+  and on a synthetic frame with the published columns (random numbers, not Criteo data) the uplift
+  feature selection kept exactly `f0` … `f11`. No model was trained on that frame and no number from
+  it is reported anywhere.
+* The data side is not. On 2026-09-23 `python library/criteo-uplift/fetch.py` was started in this
+  environment and the direct link was refused with HTTP 403; `--mirror` was refused with a 403 on
+  the proxy tunnel. `curl` gave the same answers for every host in the table below. Not one row was
+  read.
+
+So the use case stays **planned** in `ad_tech.yaml` and out of `configs/use_cases/`, and
+`library/tests/test_criteo_uplift.py` keeps pinning that state. Plan B's Criteo acceptance
+criterion is **not met** in this environment.
+
+## Why no run before Phase 3b: the brief said so
+
+The library brief reserved this dataset for Phase 3b uplift and said *"prepare the config and a
+mapped sample, do not run training"*. The config was prepared ([`use_case.yaml`](use_case.yaml))
+and the mapping written ([`mapping.yaml`](mapping.yaml)).
 
 The reason behind the instruction is the important part, and it is worth restating where a reader
 will find it. Training a binary classifier on `conversion` would work — the engine would accept the
@@ -32,18 +54,20 @@ because somebody will act on it.
 
 ## Why no data either: the source is blocked here
 
-Independently of the above, the file could not be obtained. Every reachable route was tried:
+Independently of the above, the file could not be obtained. Every reachable route was tried, first
+when the library was built and again on 2026-09-23:
 
-| Host | Attempted URL | Result |
-|---|---|---|
-| `go.criteo.net` | `http://go.criteo.net/criteo-research-uplift-v2.1.csv.gz` | **403** from the egress proxy — organisation policy denial |
-| `huggingface.co` | `.../datasets/criteo/criteo-uplift/resolve/main/criteo-research-uplift-v2.1.csv.gz` | connection refused by the egress proxy |
-| `huggingface.co` | `/api/datasets/criteo/criteo-uplift` | connection refused |
-| `cdn-lfs.huggingface.co` | root | connection refused |
-| `criteo-uplift.s3.amazonaws.com` | `/criteo-uplift-v2.1.csv.gz`, `/criteo-uplift.csv.gz` | **404** — no such key |
-| `s3.amazonaws.com` | `/criteo-uplift/criteo-uplift-v2.1.csv.gz` | **404** |
-| `storage.googleapis.com` | `/criteo-cail-datasets/criteo-uplift-v2.1.csv.gz` | **403** |
-| GitHub | searched for a committed sample in the repositories that use the dataset | none found; they all download it at runtime |
+| Host | Attempted URL | First attempt | 2026-09-23 |
+|---|---|---|---|
+| `go.criteo.net` | `http://go.criteo.net/criteo-research-uplift-v2.1.csv.gz` | **403** from the egress proxy — organisation policy denial | **403** (`curl` and `fetch.py`); `https://` tunnel refused with 403 |
+| `huggingface.co` | `.../datasets/criteo/criteo-uplift/resolve/main/criteo-research-uplift-v2.1.csv.gz` | connection refused by the egress proxy | tunnel refused with **403** (`curl` and `fetch.py --mirror`) |
+| `huggingface.co` | `/api/datasets/criteo/criteo-uplift` | connection refused | tunnel refused with **403** |
+| `cdn-lfs.huggingface.co` | root | connection refused | not re-tested |
+| `ailab.criteo.com` | `/criteo-uplift-prediction-dataset/` | — | tunnel refused with **403** |
+| `criteo-uplift.s3.amazonaws.com` | `/criteo-uplift-v2.1.csv.gz`, `/criteo-uplift.csv.gz` | **404** — no such key | **404** (`/criteo-uplift-v2.1.csv.gz`) |
+| `s3.amazonaws.com` | `/criteo-uplift/criteo-uplift-v2.1.csv.gz` | **404** | not re-tested |
+| `storage.googleapis.com` | `/criteo-cail-datasets/criteo-uplift-v2.1.csv.gz` | **403** | **403** |
+| GitHub | searched for a committed sample in the repositories that use the dataset | none found; they all download it at runtime | not re-searched |
 
 Per the environment's own guidance, an egress policy denial is reported, not routed around.
 
@@ -51,16 +75,14 @@ Consequences, stated so nobody has to infer them:
 
 * there is **no `sample.csv`** in this directory, because there is no data to sample from;
 * there is **no pytest** in `library/tests/` for this dataset, for the same reason;
-* [`fetch.py`](fetch.py) has **never been executed**. It is written against the published schema
-  and carries a `verify()` step that fails loudly on the first real download if the schema has
-  moved;
+* [`fetch.py`](fetch.py) has **never run to completion**: started on 2026-09-23, it was refused
+  before reading a row. It is written against the published schema and carries a `verify()` step
+  that fails loudly on the first real download if the schema has moved;
 * the `examples` values in [`use_case.yaml`](use_case.yaml) are invented placeholders in the right
   shape, labelled as such in that file. No real value from this dataset appears anywhere in this
   library.
 
 ## What a run would need
-
-Two things, in this order.
 
 **1. The data.** Run `python library/criteo-uplift/fetch.py` on a network that allows
 `go.criteo.net` or `huggingface.co`. It streams the 311 MB gzip, samples at most 1,000,000 rows
@@ -68,19 +90,21 @@ Two things, in this order.
 `impression_id` key the file lacks, and writes `data/prepared.csv` and a 5,000-row `sample.csv`.
 Check the licence first: **CC BY-NC-SA 4.0, non-commercial**.
 
-**2. Phase 3b.** Three things the current schema cannot express, each already half-decided
-elsewhere in the repository:
+**2. The engine: done in Phase 3b.** The three things the Phase 1 schema could not express, as this
+report listed them before Phase 3b, and what now answers each:
 
-| Missing | Why it matters here | Where it is already noted |
-|---|---|---|
-| A `treatment` column **role** | The template roles are `primary_key \| time \| feature \| target \| consent \| contact`. A randomised lever is none of them. Declaring it a feature — which the draft is forced to do — is what turns the experiment into a correlation. | `engine/config.py`, `ColumnRole` |
-| An uplift **metric** | `binary_classification` scores separation of converters from non-converters. Qini and the uplift curve score what the ad *changed*. | DEC-009 — "Uplift (Qini)" was cut from the metric list in Phase 1 |
-| Uplift **model families** | A T-learner can be assembled from families the engine already has, but no recipe field says "fit one model per treatment arm and subtract". | DEC-009 — "Uplift forest" was cut from the candidate pool |
+| Was missing | Now |
+|---|---|
+| A `treatment` column **role** | `uplift.treatment_column` names the randomised lever; the uplift engine never uses it as a feature, and six checks (`TREATMENT_NOT_RANDOM` among them) run on it before training. The template still has no treatment role, so `use_case.yaml` lists the column with role `feature` and says why. |
+| An uplift **metric** | `auuc`, with the Qini curve, uplift@10/20/30 %, deciles and bootstrap intervals (`engine/uplift/metrics.py`). |
+| Uplift **model families** | S-, T- and X-learners on LightGBM or AutoGluon (`engine/uplift/learners.py`). |
 
-None of these is filed as a cross-branch request, because none of them is a small change and all
-three are already scheduled: plan §12 puts uplift in Phase 3. This report exists to make sure that
-when Phase 3b starts, the mapping, the licence position and the `exposure` trap are already
-written down.
+**3. Installing and running.** Replace the invented `examples` in `use_case.yaml`, copy it to
+`configs/use_cases/criteo_uplift.yaml`, flip `ad_tech.yaml` to `available`, update
+`library/tests/test_criteo_uplift.py`, and start the run from `#/uplift` or `POST /uplift/runs`.
+`library/run_engine.py` reads Phase 1 artefacts (`prepare.json`, `leaderboard.json`,
+`evaluation.json`) that an uplift run does not write, so a Criteo run report would be written from
+`uplift_evaluation.json` and `qini_curve.json` instead; that harness change has not been made.
 
 ## The `exposure` trap, once more
 

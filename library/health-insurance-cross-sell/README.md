@@ -1,6 +1,6 @@
 # Health Insurance Cross-Sell
 
-**Industry** Insurance · **Use case** [`insurance-cross-sell`](../configs/use_cases/insurance_cross_sell.yaml) ·
+**Industry** Insurance · **Use case** [`insurance-cross-sell`](../../configs/use_cases/insurance_cross_sell.yaml) ·
 **Target** `Response`
 
 381,109 health-insurance policyholders and whether each said they were interested in a vehicle

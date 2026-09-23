@@ -1,4 +1,4 @@
-# Criteo Uplift Prediction Dataset v2.1 -> use case `criteo-uplift` (PLANNED, Phase 3b)
+# Criteo Uplift Prediction Dataset v2.1 -> use case `criteo-uplift` (PLANNED: runnable by Phase 3b, data not fetched)
 #
 # The shape Phase 2's column-mapping UI will import. Written against the published schema; the
 # file itself was never fetched in the environment this library was built in, so `rows` below is
@@ -7,8 +7,8 @@
 schema_version: 1
 dataset: criteo-uplift
 use_case: criteo-uplift
-config_root: null                          # the use case is NOT installed; see use_case.yaml here
-status: planned                            # reserved for Phase 3b uplift (plan section 12)
+config_root: null                          # the use case is NOT installed (no data here); see use_case.yaml
+status: planned                            # problem_type uplift since Phase 3b; planned until the data can be fetched
 
 licence: CC-BY-NC-SA-4.0                   # non-commercial; see LICENSE.txt before any use
 
@@ -27,7 +27,7 @@ prepared:
   changes:
     - "sampled to at most 1,000,000 rows, seeded, proportional per chunk so the treated/control ratio holds"
     - "impression_id added: the 1-based row number in the published order, assigned before sampling"
-  note: "NEVER RUN in this environment - go.criteo.net and huggingface.co are both blocked here."
+  note: "NEVER RUN in this environment - go.criteo.net and huggingface.co are both blocked here (re-tested 2026-09-23: 403)."
 
 experiment:                                # what makes this dataset different from the other five
   randomised_lever: treatment              # 1 = eligible to be shown the ad, 0 = held out. Randomised.
@@ -38,9 +38,9 @@ experiment:                                # what makes this dataset different f
 
 roles:
   primary_key: impression_id
-  target: conversion                       # for Phase 3b: the OUTCOME, with `treatment` as the lever
+  target: conversion                       # the uplift OUTCOME (target.column), with `treatment` as the lever
   positive_label: 1
-  treatment: treatment                     # no role for this in the Phase 1 schema; Phase 3b needs one
+  treatment: treatment                     # Phase 3b: use_case.yaml sets uplift.treatment_column to this
   time: null                               # the file carries no timestamps
 
 columns:
@@ -59,7 +59,7 @@ columns:
     - {source: f10,        standard: f10,        role: feature}
     - {source: f11,        standard: f11,        role: feature}
     - {source: treatment,  standard: treatment,  role: treatment,
-       note: "Randomised. The lever. Phase 1's schema has no `treatment` role, which is one reason this use case is not installed."}
+       note: "Randomised. The lever. The template has no `treatment` role; Phase 3b names it in uplift.treatment_column, which keeps it out of the features."}
     - {source: conversion, standard: conversion, role: target,
        note: "About 0.29% positive overall: read PR-AUC, and expect TARGET_IMBALANCE_SEVERE on every run."}
     - {source: visit,      standard: visit,      role: target_alternative,

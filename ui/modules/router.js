@@ -132,3 +132,8 @@ export function headerToolHtml() {
 
 // ---- PHASE-4B (production) — append only below this line ----
 // ---- END PHASE-4B ----
+// ---- PHASE-3B (uplift) — append only below this line ----
+// The uplift module (`modules/uplift/index.js`, routes `uplift` and `campaign`) is loaded by its own
+// `<script type="module">` in index.html's PHASE-3B block, not imported here: it imports this file
+// for `registerModule`, and an import back from here would run it before `registered` exists.
+// ---- END PHASE-3B ----
