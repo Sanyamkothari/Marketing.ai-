@@ -45,7 +45,7 @@ Suppressions, all written in `infra/nag_suppressions.py` with a reason that name
 |---|---|---|---|---|
 | AwsSolutions-IAM5 | `*` in a resource | task, SageMaker, execution, operations, scheduler roles | 26 | Agree for all but the ones in F-3/F-5: every `*` is the last segment of a key prefix (`uploads/*`), a name prefix (`training-job/marketing-ai-*`), a log-stream suffix, or an API without resource-level permissions (`ecr:GetAuthorizationToken`, `cloudwatch:PutMetricData` - the latter narrowed by a namespace condition) |
 | AwsSolutions-EC23 | `0.0.0.0/0` ingress | ALB security group (443 only); VPC-endpoint group | 2 | Agree: public API. The endpoint group is a false positive (its rule is the VPC CIDR) |
-| AwsSolutions-ECS2 | plain environment variables | API and job task definitions | 2 | Agree: three non-secret selectors (`MARKETING_AI_SETTINGS_SOURCE`, `MARKETING_AI_ENV`, `MARKETING_AI_REGION`); every secret is read from Secrets Manager/SSM at start |
+| AwsSolutions-ECS2 | plain environment variables | API and job task definitions | 2 | Agree: three non-secret selectors (`MARKETING_AI_SETTINGS_SOURCE`, `MARKETING_AI_ENV`, `MARKETING_AI_AWS_REGION`); every secret is read from Secrets Manager/SSM at start |
 | AwsSolutions-ECS4 | Container Insights off | cluster | 1 | Agree as a cost choice; turn it on before tuning `api_cpu`/`api_memory` |
 | AwsSolutions-SMG4 | secret without rotation | `marketing-ai/<env>/app` | 1 | Agree with the stated seam (DEC-376): the credential secret rotates, the composed DSN does not until a redeploy |
 | AwsSolutions-RDS3 / RDS10 | no Multi-AZ / no deletion protection | database, **dev only** | 2 (dev) | Agree: both are on for prod |
