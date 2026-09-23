@@ -41,7 +41,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, TypeAlias, runtime_checkable
 
 from engine import __version__
-from engine.config import Catalog, ResolvedConfig, RunMode, sole_key
+from engine.config import Catalog, PrimaryKey, ResolvedConfig, RunMode, key_columns
 from engine.contracts import (
     DatasetProfile,
     JobEntrypoint,
@@ -55,6 +55,7 @@ from engine.contracts import (
     ValidationReport,
 )
 from engine.jobs import CancelToken, JobCancelledError, JobFn, JobRunner, NullJobRunner
+from engine.keys import normalise_key
 from engine.pipeline import STATUS_FILENAME, Pipeline, StageContext
 from engine.registry import ModelRegistry
 from engine.stages import ingest, validate
@@ -213,7 +214,7 @@ def create_run(
     profile: DatasetProfile,
     report: ValidationReport,
     mode: RunMode,
-    primary_key: str,
+    primary_key: PrimaryKey,
     target: str | None,
     model_choice: str,
     model_version_id: str | None,
@@ -250,7 +251,7 @@ def create_run(
         dataset_fingerprint=dataset.fingerprint if dataset is not None else None,
         file_name=upload.file_name,
         row_count=profile.row_count,
-        primary_key=primary_key,
+        primary_key=normalise_key(primary_key),
         target=target,
         problem_type=config.problem_type,
         model_choice=model_choice,
@@ -415,7 +416,7 @@ def job_spec_for(
         run_config_key=run_key(record.run_id, RUN_CONFIG_FILENAME),
         upload_key=upload.source_key,
         upload_format=upload.file_format,
-        primary_key=sole_key(record.primary_key, what="A run"),
+        primary_key=normalise_key(record.primary_key),
         target=record.target,
         model_version_id=record.model_version_id,
         engine_version=__version__,
@@ -554,7 +555,7 @@ def build_train_job(
                 storage=storage,
                 registry=registry,
                 cancel=cancel,
-                primary_key=sole_key(record.primary_key, what="A run"),
+                primary_key=list(key_columns(record.primary_key)),
                 target=record.target,
                 upload_key=upload.source_key,
                 model_version_id=record.model_version_id,
@@ -598,7 +599,7 @@ def build_score_job(
                 storage=storage,
                 registry=registry,
                 cancel=cancel,
-                primary_key=sole_key(record.primary_key, what="A run"),
+                primary_key=list(key_columns(record.primary_key)),
                 target=record.target,
                 upload_key=upload.source_key,
                 model_version_id=record.model_version_id,

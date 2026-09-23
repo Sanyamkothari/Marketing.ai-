@@ -65,6 +65,7 @@ import time
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Final, Literal
 
+from engine import keys
 from engine.contracts import (
     ActionCount,
     BandCount,
@@ -92,7 +93,7 @@ if TYPE_CHECKING:
 
     import pandas as pd
 
-    from engine.config import UseCaseConfig
+    from engine.config import PrimaryKey, UseCaseConfig
     from engine.contracts import DriftReport
     from engine.storage import Storage
 
@@ -122,20 +123,25 @@ def write_scores(
     config: UseCaseConfig,
     *,
     run_id: str,
-    primary_key: str,
+    primary_key: PrimaryKey,
     storage: Storage,
+    key_source: pd.DataFrame | None = None,
 ) -> dict[str, str]:
     """Write `scores.csv` and `scores.parquet` and return the artefact filename to storage key map.
 
     `frame` is the output of `engine.stages.actions.apply_actions`, optionally with reason columns.
     Both files carry `scores_csv_columns(config, primary_key)`, in that order and nothing else.
+
+    A composite key is written as its original columns, each as the text the client uploaded, read
+    from `key_source` - the rows as uploaded, carrying the run's row key - by row key, so a replayed
+    transform can never change an id that has to join back to the client's systems (DEC-083).
     """
     import io
 
     import pyarrow  # noqa: F401  # imported here, not at module level, so `import engine` stays fast
 
     started = time.perf_counter()
-    table = _output_frame(frame, config, primary_key=primary_key)
+    table = _output_frame(frame, config, primary_key=primary_key, key_source=key_source)
 
     csv_key = run_key(run_id, SCORES_CSV)
     storage.write_bytes(csv_key, table.to_csv(index=False, lineterminator="\n").encode("utf-8"))
@@ -211,15 +217,47 @@ def summarise(
 # ---------------------------------------------------------------------------
 # The exported table
 # ---------------------------------------------------------------------------
-def _output_frame(frame: pd.DataFrame, config: UseCaseConfig, *, primary_key: str) -> pd.DataFrame:
+def _key_output(
+    frame: pd.DataFrame, primary_key: PrimaryKey, *, key_source: pd.DataFrame | None
+) -> dict[str, pd.Series]:
+    """The key column(s) of the exported table: the column itself, or each part of a composite key."""
+    import pandas as pd
+
+    if not keys.is_composite(primary_key):
+        column = keys.row_key_column(primary_key)
+        return {column: frame[column]}
+    columns = keys.key_columns(primary_key)
+    source = key_source if key_source is not None and keys.ROW_KEY_COLUMN in key_source.columns else frame
+    _require_columns(source, (keys.ROW_KEY_COLUMN, *columns))
+    lookup = pd.DataFrame(
+        {name: keys.key_text(source[name]).to_numpy(dtype=object) for name in columns},
+        index=source[keys.ROW_KEY_COLUMN].astype(str).to_numpy(),
+    )
+    lookup = lookup[~lookup.index.duplicated(keep="first")]
+    rows = frame[keys.ROW_KEY_COLUMN].astype(str).to_numpy()
+    aligned = lookup.reindex(rows)
+    return {
+        name: pd.Series(aligned[name].to_numpy(dtype=object), index=frame.index, dtype="object")
+        for name in columns
+    }
+
+
+def _output_frame(
+    frame: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    primary_key: PrimaryKey,
+    key_source: pd.DataFrame | None = None,
+) -> pd.DataFrame:
     """The scored frame reduced to `scores_csv_columns(config, primary_key)`, in that order."""
     import pandas as pd
 
     columns = scores_csv_columns(config, primary_key)
-    _require_columns(frame, (primary_key, config.actions.score_field, *_action_columns()))
+    row_key = keys.row_key_column(primary_key)
+    _require_columns(frame, (row_key, config.actions.score_field, *_action_columns()))
     reason_slots = config.evaluation.reasons_per_row
     data: dict[str, pd.Series] = {
-        primary_key: frame[primary_key],
+        **_key_output(frame, primary_key, key_source=key_source),
         config.actions.score_field: pd.to_numeric(frame[config.actions.score_field], errors="coerce"),
         BAND_COLUMN: frame[BAND_COLUMN].astype("object"),
         ACTION_COLUMN: frame[ACTION_COLUMN].astype("object"),

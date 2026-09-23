@@ -7,8 +7,9 @@ dataset, the client and the fingerprint, or the lineage the build spent all that
 stops at the dataset and never reaches the model trained on it.
 
 The refusals matter as much as the acceptance. A dataset that does not exist, one built for another
-use case, one whose build stopped before it wrote any rows, and one keyed by more than one column
-are four different problems with four different answers, and none of them may be "202 Accepted".
+use case, and one whose build stopped before it wrote any rows are three different problems with
+three different answers, and none of them may be "202 Accepted". A dataset keyed by more than one
+column - a periodic one - is accepted since Plan A M34 (DEC-083).
 
 The dataset is built by the same `build_dataset` the flow test exercises, on a handful of tiny
 in-memory tables - this is about the boundary between the two phases, not about the build.
@@ -291,17 +292,17 @@ def test_a_client_id_that_does_not_own_the_dataset_is_409(client: TestClient, bu
     assert response.json()["detail"]["code"] == "DATASET_CLIENT_MISMATCH"
 
 
-def test_a_periodic_dataset_is_refused_by_name_rather_than_silently_halved(
+def test_a_periodic_dataset_runs_on_both_key_columns_and_splits_by_entity(
     tmp_path_factory: pytest.TempPathFactory,
 ) -> None:
-    """The honest stop.
+    """Plan A M34 (DEC-083) replaced the honest 501 this used to pin.
 
-    A periodic dataset has one row per entity per snapshot date, and the stages still carry a single
-    key column. Taking the first column would join on the customer and lose the date - training one
-    row per customer out of several and reporting success. Plan section 6.5 change 1 widened the key
-    on the contracts; teaching prepare, split, explain, actions and export to carry both columns is
-    the half still outstanding, and until it lands this says so.
+    A periodic dataset has one row per entity per snapshot date. The run is accepted, carries both
+    key columns on `run.json` - never the first alone, which would join on the customer and lose the
+    date - and its resolved configuration splits by entity, recorded as a choice the engine made.
     """
+    from engine.config import ResolvedConfig
+
     root = tmp_path_factory.mktemp("runs-periodic")
     _, dataset_id, report = _build(root, mode=SnapshotMode.PERIODIC)
     assert report.passed, [
@@ -309,10 +310,13 @@ def test_a_periodic_dataset_is_refused_by_name_rather_than_silently_halved(
     ]
     client = TestClient(create_app(data_dir=root / "data"))
     response = client.post("/runs", json={"use_case": USE_CASE, "mode": "train", "dataset_id": dataset_id})
-    assert response.status_code == 501
-    detail = response.json()["detail"]
-    assert detail["code"] == "DATASET_COMPOSITE_KEY_NOT_WIRED"
-    assert "single snapshot" in detail["message"]
+    assert response.status_code == 202, response.text
+    run_dir = root / "data" / "runs" / response.json()["run_id"]
+    record = RunRecord.model_validate_json((run_dir / "run.json").read_text())
+    assert record.primary_key == ["entity_key", "snapshot_date"]
+    resolved = ResolvedConfig.model_validate_json((run_dir / "run_config.json").read_text())
+    assert resolved.config.split.group_column == "entity_key"
+    assert resolved.sources["split.group_column"] == "derived"
 
 
 # ---------------------------------------------------------------------------

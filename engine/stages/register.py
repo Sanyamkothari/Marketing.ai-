@@ -44,7 +44,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
-from engine.config import ColumnType
+from engine.config import ColumnType, PrimaryKey, key_columns
 from engine.contracts import (
     MODEL_DIRECTORY,
     NO_CHAMPION_AT_DECISION,
@@ -434,7 +434,7 @@ def feature_schema(
     train: pd.DataFrame,
     config: UseCaseConfig,
     *,
-    primary_key: str,
+    primary_key: PrimaryKey,
     target: str | None,
     model_version_id: str,
 ) -> FeatureSchema:
@@ -451,7 +451,8 @@ def feature_schema(
     suddenly become null; it is information for that check, not a rule this stage enforces.
     """
     columns = tuple(
-        _schema_column(train, name) for name in _feature_columns(train, config, excluded=(primary_key,))
+        _schema_column(train, name)
+        for name in _feature_columns(train, config, excluded=key_columns(primary_key))
     )
     return FeatureSchema(
         use_case_id=config.id,
@@ -521,7 +522,7 @@ def drift_baseline(
     *,
     run_id: str,
     model_version_id: str,
-    primary_key: str | None = None,
+    primary_key: PrimaryKey | None = None,
 ) -> DriftBaseline:
     """Summarise the training distribution per feature, so scoring runs can measure drift.
 
@@ -533,7 +534,7 @@ def drift_baseline(
     `primary_key` is optional so the stub's signature still calls: pass it whenever it is known, so
     the baseline covers exactly the columns `schema.json` lists.
     """
-    excluded: tuple[str, ...] = () if primary_key is None else (primary_key,)
+    excluded: tuple[str, ...] = () if primary_key is None else key_columns(primary_key)
     features = tuple(
         _feature_baseline(train, name) for name in _feature_columns(train, config, excluded=excluded)
     )

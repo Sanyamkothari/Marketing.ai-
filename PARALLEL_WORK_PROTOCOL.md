@@ -77,7 +77,7 @@ Each shared file gets three marked blocks, added by the contracts-first task:
 
   | Range | Workstream | State at integration (2026-09-23) |
   |---|---|---|
-  | DEC-001…099 | trunk (Phase 1 and the contracts-first change) | used to DEC-082 |
+  | DEC-001…099 | trunk (Phase 1 and the contracts-first change) | used to DEC-089 (Plan A holds DEC-083…099) |
   | DEC-100…199 | Phase 2 — onboarding | used to DEC-110 |
   | DEC-200…299 | Phase 3a — generative | used to DEC-232 |
   | DEC-300…399 | Phase 4a — AWS | **exhausted** at DEC-399 |
