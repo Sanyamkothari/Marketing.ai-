@@ -186,6 +186,26 @@ PHASE_ROUTERS.append(connection_router)
 # ---- END PHASE-4A ----
 
 # ---- PHASE-4B (production) — append only below this line ----
+# M46/M47: access control (a global dependency) and the audit trail (ASGI middleware) wrap every
+# route through one hook (DEC-700, DEC-717, DEC-718); sign-in, users and the audit viewer are routers.
+from api.access import install_access  # noqa: E402
+from api.routes.audit import router as audit_router  # noqa: E402
+from api.routes.auth import router as auth_router  # noqa: E402
+
+PHASE_APP_HOOKS.append(install_access)
+PHASE_ROUTERS.extend((auth_router, audit_router))
+# M48: the DPDP controls - consent ledger, retention, erasure and access requests (DEC-746).
+from api.routes.privacy import router as privacy_router  # noqa: E402
+
+PHASE_ROUTERS.append(privacy_router)
+# M49: schedules, monitoring and outcomes. The hook starts the scheduler `scheduler_backend` names
+# with the app and stops it with the app - and does nothing at all for `none`, the default (DEC-782).
+from api.routes.monitoring import router as monitoring_router  # noqa: E402
+from api.routes.schedules import install_scheduling  # noqa: E402
+from api.routes.schedules import router as schedules_router  # noqa: E402
+
+PHASE_APP_HOOKS.append(install_scheduling)
+PHASE_ROUTERS.extend((schedules_router, monitoring_router))
 # ---- END PHASE-4B ----
 # ---- PHASE-3B (uplift) — append only below this line ----
 # Uplift: the treatment picker, `POST /uplift/runs`, uplift artefacts, campaign results and OPE.

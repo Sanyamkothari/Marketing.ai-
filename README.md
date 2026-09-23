@@ -37,6 +37,10 @@ nightly (`make test-all`, which adds the `@slow` AutoGluon and browser journeys)
   past randomised campaign, read the Qini curve and AUUC, get a budgeted treat list that leaves the
   sleeping dogs alone, and measure a campaign's incremental conversions once its outcomes mature
   (Phase 3b; `tests/integration/uplift/`). Single-column keys only.
+- **Production controls, off by default.** Sign-in with four roles, an append-only audit trail, DPDP
+  consent, retention, erasure and access requests, and schedules with alerts and outcome ingestion,
+  all on local backends; with every setting at its default nothing changes (Phase 4b Part 1,
+  `docs/PRODUCTION.md`). The first AWS deployment (Part 2) waits on an account.
 - **AWS as a set of implementations:** S3 storage, SageMaker jobs, Postgres metadata, the container
   and the CDK infrastructure, all tested offline (Phase 4a).
 - **Guard rails the library found missing:** one PII detector for profiling and preparation,
@@ -798,6 +802,132 @@ is Phase 1's table; this paragraph is Phase 4a's.
 <!-- ---- END PHASE-4A ---- -->
 
 <!-- ---- PHASE-4B (production) — append only below this line ---- -->
+
+### Phase 4b — Production (Part 1: M46–M49)
+
+**What it is.** Part 1 of [`docs/PHASE4B_PLAN.md`](docs/PHASE4B_PLAN.md): sign-in and roles (M46),
+an append-only audit trail (M47), India DPDP engineering controls (M48), and schedules, alerts and
+outcome ingestion (M49). All of it runs with local backends and no AWS account; the AWS backends
+(S3 Object Lock exports, EventBridge Scheduler, SNS) are built behind protocols and tested with moto.
+With every new setting at its default, the product behaves exactly as it did before Phase 4b:
+nobody signs in, nothing fires on its own, an alert is a log line (DEC-701). The operator guide is
+[`docs/PRODUCTION.md`](docs/PRODUCTION.md); decisions are DEC-700 … DEC-798 in
+[`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+> **Legal note.** The DPDP items are engineering controls that support compliance, not legal advice;
+> Minfy's legal or compliance team must review the final design. The DPDP Rules were notified on
+> 13 Nov 2025, with compliance required by 13 May 2027.
+
+**What exists.**
+
+| Area | Code | Screens |
+|---|---|---|
+| Users, sessions, roles, enforcement | `engine/access/`, `api/access.py`, `api/access_policy.py`, `api/routes/auth.py` | sign-in, user bar, Admin → Users, role-aware controls on every screen |
+| Audit log and retained export | `engine/audit/`, `api/routes/audit.py` | Admin → Audit log (filters, CSV, retained export) |
+| Consent, retention, erasure, access export | `engine/privacy/`, `configs/privacy.yaml`, `api/routes/privacy.py`, `scripts/run_retention.py` | Privacy (Admin) |
+| Schedules, alerts, outcomes | `engine/scheduling/`, `api/routes/schedules.py`, `api/routes/monitoring.py`, `scripts/fire_schedule.py` | Monitoring |
+| Schema | `alembic/versions/0002_access_audit.py` → `0003_privacy.py` → `0004_scheduling.py`, one linear chain after `0001` | — |
+
+The screens are one module, `ui/modules/production/`, registered from the PHASE-4B blocks of
+`ui/index.html` and `ui/modules/router.js`; no other phase's screen was edited.
+
+**Turn on sign-in and bootstrap the first Admin.**
+
+```bash
+export MARKETING_AI_AUTH_MODE=local
+.venv/bin/python -m scripts.create_user --username admin --role admin   # prompts twice; never an argument
+make run                                                                # http://localhost:8000/ui
+```
+
+`--password-stdin` reads the password from stdin for automation, and the creation is audited as
+`system:bootstrap` (DEC-722). The same script recovers a deployment that has lost every Admin; the
+API itself refuses to disable or demote the last one (DEC-712). On a prod deployment with sign-in off,
+every route but `/healthz` answers 503 `AUTH_NOT_CONFIGURED` rather than serving anyone (DEC-702).
+
+**Roles** are a set, not a ladder; every role includes Viewer, and Admin does **not** include
+Approver or Analyst (DEC-703).
+
+| Role | May |
+|---|---|
+| Viewer | read every screen and report |
+| Analyst | upload, onboard, build, train, score, generate copy, create and fire schedules, upload outcomes, acknowledge alerts |
+| Approver | approve or promote a champion, approve campaign copy |
+| Admin | users, AWS connection settings, the audit log and exports, every privacy route |
+
+Every route declares its role in `api/access_policy.py`, a route without one is refused, and a test
+fails if one is missing (DEC-704, DEC-716). Scheduled work runs as `system:scheduler`, which is
+Analyst only, so a schedule can train a challenger and can never approve it. The UI shows a refused
+action disabled with the server's reason — "Only an Approver can approve a champion." — never hidden
+(DEC-792).
+
+**Audit trail and export.** Every mutating request, and every row-level download, writes exactly one
+event — succeeded, failed or refused — with who, when, the action, the object, before/after hashes
+and the request id, and no data values: details are a closed set of identifier keys and a data
+principal appears only as a salted hash (DEC-705, DEC-718). Database triggers refuse UPDATE and
+DELETE on the table (DEC-714). Admins export a window as JSON lines, locally or to S3 with Object
+Lock in COMPLIANCE mode (DEC-715).
+
+**DPDP controls.** Policy is `configs/privacy.yaml` (DEC-730).
+
+- *Consent:* a per-client ledger (CSV import, all or nothing); scoring for a use case mapped to a
+  purpose suppresses principals without valid consent through Phase 1's `consent_false` rule and
+  reports the counts in `consent_report.json`. No ledger, no change: the run is Phase 1's byte for
+  byte (DEC-731, DEC-732).
+- *Retention:* `governance.retention_days` is live. `python -m scripts.run_retention` is a dry run by
+  default, `--apply` executes exactly that plan; models and aggregate reports are kept (DEC-736).
+  `governance.retention_days` and `monitoring.performance_alert_drop_pct` are no longer shown as
+  "Coming later" on the Setup form (DEC-795), which supersedes the "parked for Phase 4" note under
+  *What is left* above for those two; `monitoring.retraining` is live through managed schedules and
+  stays parked on the per-run form because it is read from the use case, not the run.
+- *Erasure:* `POST /privacy/erasure` removes a person from every artefact (scanned, rewritten,
+  re-scanned), records the outcome in the audit log, and flags models trained on their data for
+  retraining at the next scheduled cycle — not immediately, and never straight to champion (DEC-741,
+  DEC-743, DEC-768).
+- *Access requests:* `POST /privacy/access-requests` returns one zip of everything held (DEC-745).
+- *Breach runbook:* `docs/RUNBOOK.md` §12.
+
+**Schedules, alerts and outcomes.** Scoring, drift-check and retraining schedules per client × use
+case, fired by nothing (default), a local thread, or EventBridge Scheduler running
+`scripts/fire_schedule.py` as an ECS task (DEC-765). A slot fires at most once; missed slots are
+recorded and alerted (DEC-763, DEC-764). `monitoring.retraining` creates managed schedules
+(DEC-767). Uploading actual outcomes for a matured scoring run measures real-world performance —
+on the control group when there is one — alerts when the drop exceeds
+`monitoring.performance_alert_drop_pct`, and writes Plan B's `incrementality_input.json` (DEC-771 …
+DEC-773). Alerts go to the alert history and the log, and also to SNS (email) when configured.
+
+**New settings** (all optional; see `docs/PRODUCTION.md` §6 and `docs/AWS_DEPLOYMENT.md`'s
+settings table): `MARKETING_AI_AUTH_MODE`, `MARKETING_AI_AUTH_SESSION_TTL_SECONDS`,
+`MARKETING_AI_AUDIT_EXPORT_BUCKET`, `MARKETING_AI_AUDIT_EXPORT_PREFIX`,
+`MARKETING_AI_AUDIT_RETENTION_DAYS`, `MARKETING_AI_SCHEDULER_BACKEND`,
+`MARKETING_AI_SCHEDULER_TICK_SECONDS`, `MARKETING_AI_SCHEDULER_GROUP_NAME`,
+`MARKETING_AI_SCHEDULER_TARGET_ARN`, `MARKETING_AI_SCHEDULER_ROLE_ARN`,
+`MARKETING_AI_ALERT_BACKEND`, `MARKETING_AI_ALERT_SNS_TOPIC_ARN`.
+
+**Running the tests.**
+
+```bash
+make production-test        # every Phase 4b suite, including the two that train a real model
+make production-test-fast   # the same without those two
+```
+
+The same tests also run in the main gates: the fast ones in `make test`, all of them in
+`make test-all`. The screen tests run in jsdom through pytest
+and skip, saying so, until `npm install` has been run once in `tests/integration/production/ui`.
+
+**What is left for Part 2 (M50–M52).** Each needs an AWS account and owner decisions P1–P6
+(`docs/PHASE4B_PLAN.md` §0):
+
+- **M50 — first deployment and cost measurement** (P1–P3, P5): wire the identity provider — a third
+  `IdentityProvider` beside `DisabledIdentity` and `LocalIdentity` (DEC-713) — and run the first real
+  EventBridge firing, SNS delivery and Object Lock export, none of which has run against AWS yet (the
+  migrations and the Postgres append-only trigger pass `make test-postgres` on a local server).
+  `docs/M50_CHECKLIST.md` sequences the day.
+- **M51 — client isolation** (P4: single-tenant per account, or multi-tenant SaaS).
+- **M52 — hardening:** backup and restore drill, load test, security review.
+- Also open from Part 1: login rate limiting, a secret consent salt (DEC-733), running erasure and
+  "Run now" as background jobs rather than inside the request, alert deduplication, and the champion
+  approve/promote screens (the gate table is ready for them, DEC-792).
+
 <!-- ---- END PHASE-4B ---- -->
 <!-- ---- PHASE-3B (uplift) — append only below this line ---- -->
 

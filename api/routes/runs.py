@@ -36,7 +36,7 @@ import re
 from dataclasses import dataclass
 from typing import Annotated, Any, Final, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep
@@ -173,6 +173,10 @@ _UNFINISHED: Final[frozenset[RunState]] = frozenset({RunState.PENDING, RunState.
 UseCaseQuery = Annotated[str | None, Query(description="Keep only runs of this use case.")]
 ModeQuery = Annotated[RunMode | None, Query(description="Keep only train or only score runs.")]
 LimitQuery = Annotated[int, Query(ge=1, le=MAX_LIMIT, description="How many runs to return, newest first.")]
+ClientIdQuery = Annotated[
+    str | None,
+    Query(description="Keep only runs of this client's built datasets; a run of an upload names no client."),
+]
 
 _NOT_FOUND: dict[int | str, dict[str, object]] = {404: {"model": ErrorResponse}}
 _RUN_ERRORS: dict[int | str, dict[str, object]] = {
@@ -308,6 +312,7 @@ def create_run_endpoint(
     jobs: JobsDep,
     settings: SettingsDep,
     response: Response,
+    request: Request,
 ) -> RunCreatedResponse | JSONResponse:
     """Validate synchronously; `409` with the full report, or `202` with a run that is already pollable.
 
@@ -315,9 +320,14 @@ def create_run_endpoint(
     is what a remote runner ships to a container, so writing it after the submit would be a race
     against a job that has already started looking for it (DEC-324).
     """
-    use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
+    own = use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
     resolved = resolve_config(body.use_case, body.overrides, root=root)
     config = resolved.config
+    # PHASE-4B: a run may not loosen a setting owned by a role its caller lacks (DEC-723). Imported
+    # here: api.access imports api.routes.uploads, whose package imports this module.
+    from api.access import require_roles_for_run_overrides
+
+    require_roles_for_run_overrides(request, use_case=own, resolved=config)
     catalog = get_catalog(root)
 
     upload: UploadRecord | None = None
@@ -417,8 +427,17 @@ def list_runs(
     use_case: UseCaseQuery = None,
     mode: ModeQuery = None,
     limit: LimitQuery = DEFAULT_LIMIT,
+    client_id: ClientIdQuery = None,
 ) -> RunListResponse:
-    """The Previous runs card. Run ids sort chronologically, so a reversed key listing is the order."""
+    """The Previous runs card. Run ids sort chronologically, so a reversed key listing is the order.
+
+    `client_id` is the filter `RunRecord.client_id` was added for (plan section 6.5, change 4) and
+    that `GET /datasets?client_id=` already offers one step upstream: without it, a screen working
+    on one client's datasets could only show every client's history, and a run of another client's
+    data sat one click away from being read as this client's. It matches `run.json`'s own field
+    exactly, so a run of an upload - which names no client - is never listed under one
+    (docs/CLIENT_ISOLATION.md). Omitting it lists every run, as before.
+    """
     kept: list[RunRecord] = []
     for key in sorted(storage.list_keys("runs/"), reverse=True):
         if not key.endswith(f"/{RUN_FILENAME}"):
@@ -431,6 +450,8 @@ def list_runs(
         if use_case is not None and record.use_case_id != use_case:
             continue
         if mode is not None and record.mode is not mode:
+            continue
+        if client_id is not None and record.client_id != client_id:
             continue
         kept.append(record)
         if len(kept) == limit:

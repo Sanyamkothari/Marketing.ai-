@@ -1811,6 +1811,53 @@ class Pipeline:
 # ---- END PHASE-4A ----
 
 # ---- PHASE-4B (production) — append only below this line ----
+# M48, the consent ledger in the score flow (DEC-732). The seam is the actions stage body and
+# nothing else: when a consent ledger exists for the run's client and the use case's purpose, the
+# ledger's verdict is written into the consent column before `actions.apply_actions` runs, so the
+# existing `consent_false` rule suppresses the principals without valid consent and the existing
+# `SuppressionCount` reports them; `consent_report.json` adds how many were missing, withdrawn and
+# expired. When there is no ledger, the Phase 1 body below is called unchanged and the run is byte
+# for byte what it was. The method is rebound here, inside this block, because this block is the only
+# part of the file Phase 4b may edit; no stage module and no frozen file is touched. The privacy
+# package is imported inside the body so `import engine.pipeline` stays as light as it was.
+_PHASE1_SCORE_ACTIONS: Final = _ScoreFlow._actions
+"""The score flow's actions body as Phase 1 wrote it; the no-ledger path calls exactly this."""
+
+
+def _consent_gated_actions(self: _ScoreFlow) -> _StageOutcome:
+    """The actions stage, gated by the consent ledger when one applies to this run (DEC-732)."""
+    from engine.privacy.consent import apply_consent_gate, consent_gate_for_run
+    from engine.privacy.contracts import CONSENT_REPORT_FILENAME
+
+    ctx = self._ctx
+    gate = consent_gate_for_run(
+        self._storage, use_case_id=ctx.config.id, client_id=self._run.record.client_id
+    )
+    if gate is None:
+        return _PHASE1_SCORE_ACTIONS(self)
+    gated, config, report = apply_consent_gate(
+        _require(self._scored, "the scored rows"),
+        ctx.config,
+        gate,
+        # The ledger is keyed by the data principal, which is the entity column: the key itself, or
+        # the first column of a composite key (Plan A M34, DEC-083) - never a snapshot's row key.
+        primary_key=keys.entity_column(ctx.primary_key),
+        run_id=ctx.run_id,
+        at=utc_now(),
+    )
+    banded = actions.apply_actions(
+        gated, config, run_id=ctx.run_id, primary_key=ctx.row_key, entity_key=ctx.entity_key
+    )
+    self._scored = banded
+    self._write(CONSENT_REPORT_FILENAME, report)
+    detail = (
+        f"{_actions_detail(banded)} · {humanise_count(report.excluded_total)} without valid consent "
+        f"for {report.purpose.replace('_', ' ')}"
+    )
+    return _StageOutcome(detail, len(banded.index))
+
+
+_ScoreFlow._actions = _consent_gated_actions  # type: ignore[method-assign]
 # ---- END PHASE-4B ----
 # ---- PHASE-3B (uplift) — append only below this line ----
 # The uplift problem type (plan B). `Pipeline.run_train` and `Pipeline.run_score` above ask

@@ -47,7 +47,7 @@ import {
   stagesHtml,
   writePath,
 } from "./settings.js";
-import { setupSource } from "./modules/router.js";
+import { setupSource } from "./modules/extensions.js";
 
 const AUTOML = "__automl__";
 const FILE = "file";

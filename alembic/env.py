@@ -120,12 +120,31 @@ def ensure_schema(connection: Connection, schema: str | None) -> None:
     connection.execute(text(f'CREATE SCHEMA IF NOT EXISTS "{schema}"'))
 
 
+def offline_schema_preamble(schema: str | None, url: str) -> list[str]:
+    """The statements an offline script needs before its first `CREATE TABLE` when a schema is set.
+
+    Online, `postgres_engine` puts the schema on the connection's `search_path` and `ensure_schema`
+    creates it. An offline script has no connection, so without these two statements it qualified
+    `alembic_version` with a schema nobody had created and left every other table to whatever
+    `search_path` the person running `psql` happened to have - `public`, on a fresh database. Found
+    by M50's walk of the deployment guide, which reviews the DDL with `--sql` before applying it.
+    The identifier is quoted as SQL quotes one - wrapped in double quotes, an embedded quote doubled
+    - rather than interpolated raw, because `-x schema=` is whatever was typed.
+    """
+    if schema is None or not url.startswith("postgresql"):
+        return []
+    quoted = '"' + schema.replace('"', '""') + '"'
+    return [f"CREATE SCHEMA IF NOT EXISTS {quoted}", f"SET search_path TO {quoted}, public"]
+
+
 def run_migrations_offline(url: str, schema: str | None) -> None:
     """Emit the SQL for this upgrade to stdout instead of running it (`alembic upgrade --sql`)."""
     context.configure(
         url=url, literal_binds=True, dialect_opts={"paramstyle": "named"}, **context_options(schema)
     )
     with context.begin_transaction():
+        for statement in offline_schema_preamble(schema, url):
+            context.execute(statement)
         context.run_migrations()
 
 

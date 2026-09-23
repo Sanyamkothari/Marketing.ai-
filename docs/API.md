@@ -8,6 +8,12 @@ Contract schema version: 1.
 
 | Method | Path | Summary | Response model |
 |---|---|---|---|
+| GET | `/audit/events` | Read the audit log | AuditEventPage |
+| GET | `/audit/events.csv` | Download the audit log as CSV | - |
+| POST | `/audit/exports` | Export the audit log (JSON lines; S3 Object Lock when configured) | AuditExportResult |
+| POST | `/auth/login` | Sign in | LoginResponse |
+| POST | `/auth/logout` | Sign out | - |
+| GET | `/auth/me` | Who am I, and what may I do | MeResponse |
 | GET | `/clients` | Every client, newest first | ClientListResponse |
 | POST | `/clients` | Register a client whose data will be onboarded | ClientCreateResponse |
 | POST | `/clients/default` | The client every installation starts with, created the first time it is asked for | ClientRecord |
@@ -42,6 +48,21 @@ Contract schema version: 1.
 | GET | `/models` | Registered model versions, newest first, with the champion flagged | ModelListResponse |
 | POST | `/models/{model_id}/approve` | Approve a version that is waiting for a human, making it champion | ModelVersionResponse |
 | POST | `/models/{model_id}/promote` | Make a version champion by hand, recording who did it and why | ModelVersionResponse |
+| GET | `/monitoring/alerts` | List alerts | AlertListResponse |
+| POST | `/monitoring/alerts/{alert_id}/acknowledge` | Acknowledge an alert | Alert |
+| GET | `/monitoring/missed-firings` | Scheduled runs that were missed, across schedules | FiringListResponse |
+| POST | `/privacy/access-requests` | Export everything held about one person, as a zip | - |
+| POST | `/privacy/consent` | Record one consent given or withdrawn | ConsentRecord |
+| POST | `/privacy/consent/imports` | Import a consent CSV (all or nothing unless partial) | ConsentImportReport |
+| POST | `/privacy/consent/lookup` | Look up one person's consent (the id goes in the body, never the URL) | ConsentLookupResponse |
+| GET | `/privacy/erasure` | The erasure register, newest first | ErasureRequestList |
+| POST | `/privacy/erasure` | Erase one person from every store (the id goes in the body) | ErasureOutcome |
+| GET | `/privacy/erasure/{request_id}` | One erasure request | ErasureRequestRecord |
+| GET | `/privacy/purposes` | The consent purposes and the erasure policy | PrivacyPolicyResponse |
+| POST | `/privacy/retention/apply` | Run the retention job on a reviewed dry run | RetentionApplyResponse |
+| GET | `/privacy/retention/plan` | Retention dry run: what the job would delete now | RetentionPlanResponse |
+| GET | `/privacy/retrain-flags` | Models flagged for retraining by an erasure | RetrainFlagList |
+| GET | `/privacy/runs/{run_id}/consent-report` | How the consent ledger gated one scoring run | ConsentReport |
 | GET | `/runs` | Run history, newest first | RunListResponse |
 | POST | `/runs` | Validate an upload and, when it passes, start a run | RunCreatedResponse |
 | GET | `/runs/{run_id}` | One run: its record and the status the Running screen polls | RunDetailResponse |
@@ -53,10 +74,23 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/campaign-results` | Measure a scoring run's campaign from an uploaded outcomes file | IncrementalityReport |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
 | GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
+| GET | `/runs/{run_id}/incrementality-input` | The treated-versus-control outcomes Plan B's incrementality report reads | IncrementalityInput |
+| GET | `/runs/{run_id}/outcomes` | A scoring run's real-world performance | OutcomeReport |
+| POST | `/runs/{run_id}/outcomes` | Add a scoring run's real outcomes, once its window has matured | OutcomeReport |
 | POST | `/runs/{run_id}/root-cause` | Start a root-cause summary over a finished scoring run | GenerativeJobStartedResponse |
 | GET | `/runs/{run_id}/scores.csv` | The scored rows of a scoring run as CSV | - |
 | POST | `/runs/{run_id}/uplift/ope` | Off-policy estimate of a targeting rule on an uplift training run's hold-out | OpeReport |
 | GET | `/runs/{run_id}/uplift/{name}` | One uplift artefact of a run, whitelisted against the uplift artefact registry | - |
+| GET | `/schedules` | List schedules | ScheduleListResponse |
+| POST | `/schedules` | Create a schedule | Schedule |
+| POST | `/schedules/retraining/sync` | Create or remove the schedules monitoring.retraining asks for | RetrainingSyncResponse |
+| DELETE | `/schedules/{schedule_id}` | Delete a schedule | - |
+| GET | `/schedules/{schedule_id}` | One schedule | Schedule |
+| PATCH | `/schedules/{schedule_id}` | Change a schedule's cadence, timezone, data or state | Schedule |
+| POST | `/schedules/{schedule_id}/disable` | Pause a schedule | Schedule |
+| POST | `/schedules/{schedule_id}/enable` | Resume a schedule | Schedule |
+| POST | `/schedules/{schedule_id}/fire` | Run a schedule's work now | ScheduleFiring |
+| GET | `/schedules/{schedule_id}/firings` | A schedule's firing history, newest first | FiringListResponse |
 | POST | `/uplift/runs` | Validate an upload as an experiment and, when it passes, start an uplift training run | RunCreatedResponse |
 | POST | `/uploads` | Store a CSV or Parquet file, profile it and return everything the Setup screen renders | UploadResponse |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
@@ -68,6 +102,10 @@ Contract schema version: 1.
 | GET | `/use-cases/{use_case_id}/standard-schema` | The standard schema, suggested features, label and role catalogue the mapping UI is built from | StandardSchemaResponse |
 | GET | `/use-cases/{use_case_id}/template.csv` | The upload template of one use case as CSV | - |
 | GET | `/use-cases/{use_case_id}/template_README.md` | The upload template's README of one use case as Markdown | - |
+| GET | `/users` | List users | UserListResponse |
+| POST | `/users` | Add a user | UserView |
+| PATCH | `/users/{user_id}` | Change a user | UserView |
+| POST | `/users/{user_id}/password` | Change a password | - |
 
 ## Run artefacts
 

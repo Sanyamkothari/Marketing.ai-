@@ -18,6 +18,10 @@ globalThis.window = {
   location: { hash: "#/", origin: "http://api.test" },
   addEventListener() {},
   scrollTo() {},
+  // `router.js` loads Phase 4b's `boot.js` for its side effects, which wraps `window.fetch` and asks
+  // `GET /auth/me` through it. A 404 there means "no sign-in on this deployment" (DEC-790); it is a
+  // separate stub from the recording `fetch` below, so the calls this file asserts are unchanged.
+  fetch: async () => ({ ok: false, status: 404, json: async () => ({}), text: async () => "" }),
 };
 /** Just enough of an element for the entry-link code: children, attributes, `after`, `isConnected`. */
 function element(tag) {
@@ -30,21 +34,32 @@ function element(tag) {
     dataset: {},
     isConnected: true,
     setAttribute() {},
+    addEventListener() {},
     appendChild(child) {
       this.children.push(child);
     },
   };
 }
-const documentApp = { main: null, querySelector: (sel) => (sel === "main.screen" ? documentApp.main : null) };
+const documentApp = {
+  main: null,
+  querySelector: (sel) => (sel === "main.screen" ? documentApp.main : null),
+  // What Phase 4b's `boot.js` touches on the app element: the user bar is inserted before it, and the
+  // role gates query it for controls (it has none here).
+  querySelectorAll: () => [],
+  parentNode: { insertBefore() {} },
+};
 let observed = null;
 globalThis.MutationObserver = class {
   constructor(callback) {
     observed = callback;
   }
   observe() {}
+  disconnect() {}
 };
+window.MutationObserver = globalThis.MutationObserver;
 globalThis.document = {
   title: "",
+  addEventListener() {},
   getElementById: (id) => (id === "app" ? documentApp : null),
   createElement: element,
   head: { appendChild() {} },

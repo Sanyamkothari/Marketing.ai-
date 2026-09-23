@@ -61,24 +61,36 @@ jobs:
       - uses: aws-actions/amazon-ecr-login@v2
         id: ecr
 
-      - name: Build and push the image, recording its digest
+      - name: Install the infrastructure toolchain
+        run: make infra-setup
+
+      # `make aws-deploy` builds and pushes the image itself (scripts/build_push_image.sh) and then
+      # deploys the digest it recorded, so the ECR variables belong on THIS step. A separate build
+      # step before it (M50 found) pushed the image once and then left `make aws-deploy` to build
+      # it again without ECR_REGISTRY, which failed; and ECR tags are immutable, so a second push of
+      # the same commit's tag could not have succeeded anyway.
+      #
+      # `--require-approval broadening` cannot prompt without a terminal, so this step fails on any
+      # change that widens IAM or a security group - including the FIRST deployment of an account.
+      # That is deliberate: those changes are deployed by a person who reads the prompt
+      # (docs/AWS_DEPLOYMENT.md section 4.4), and CI deploys only what does not widen access.
+      - name: Build, push and deploy
         env:
           ECR_REGISTRY: ${{ steps.ecr.outputs.registry }}
           ECR_REPOSITORY: ${{ vars.ECR_REPOSITORY }}
           IMAGE_TAG: ${{ github.sha }}
-        run: ./scripts/build_push_image.sh
-
-      - name: Install the infrastructure toolchain
-        run: make infra-setup
-
-      - name: Deploy
         run: |
           make aws-deploy ENV="${ENV}"
 
-      # The schema and the seed data are applied after the stacks exist and before the smoke test
-      # runs, because a service whose database has no tables is not deployed, only started.
+      # The schema is applied after the stacks exist and before the smoke test runs, because a
+      # service whose database has no tables is not deployed, only started. It runs INSIDE the
+      # deployment, as a one-off task with the service's own task definition, role and subnets:
+      # the database is in isolated subnets this runner cannot reach, and the permission probes
+      # only mean something when they run as the task role rather than as this workflow's role.
       - name: Create the schema and verify the permissions
-        run: make aws-bootstrap ENV="${ENV}"
+        run: >-
+          .venv-infra/bin/python -m scripts.run_in_deployment --env "${ENV}" --region "${AWS_REGION}"
+          -- python -m scripts.aws_bootstrap
 
       - name: Smoke test
         if: ${{ !inputs.skip_smoke }}

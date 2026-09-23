@@ -1,7 +1,7 @@
 // The prototype's rendering helpers, unchanged in what they produce, plus the one rule that runs
 // through every screen: a value nobody measured is an em dash, never a sample number (plan §13.3).
 
-import { headerToolHtml } from "./modules/router.js";
+import { headerToolHtml } from "./modules/extensions.js";
 
 export const EM_DASH = "—";
 
@@ -121,7 +121,7 @@ export function journeyCrumb(uc) {
 
 /**
  * Every screen's header. A phase module may register one tool for its right-hand side - the client
- * picker (Plan A M35) - through `modules/router.js`; with none registered the logo stands alone, as
+ * picker (Plan A M35) - through `modules/extensions.js`; with none registered the logo stands alone, as
  * it always did.
  */
 export function pageHead(inner) {

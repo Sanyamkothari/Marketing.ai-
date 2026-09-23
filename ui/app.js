@@ -197,6 +197,13 @@ let renderAgain = false;
  * extra draw after a busy spell is always of the route the user is actually on.
  */
 function render() {
+  // A phase module's own screen is drawn at once, never queued behind a Phase 1 draw that may be
+  // waiting on a slow request: the module guards its screen against a late Phase 1 paint itself
+  // (the uplift module's repaint, Phase 4b's deep-link guard), and a hung `GET /industries` must not
+  // keep someone reloading on an admin screen from reaching it (DEC-801).
+  if (resolveRoute(window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean))) {
+    return renderNow();
+  }
   if (rendering) {
     renderAgain = true;
     return rendering;

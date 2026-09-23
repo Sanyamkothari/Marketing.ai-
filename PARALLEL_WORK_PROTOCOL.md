@@ -88,7 +88,7 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-500…599 | Phase 5 — Evolve (reserved by plan B) | reserved; unused |
   | DEC-600…699 | Phase 3b — uplift (plan B assigns it this range and reserves the DEC-500s for Phase 5) | claimed 2026-09-23; used to DEC-680 |
   | DEC-700…799 | Phase 4b — production: access, audit, privacy, scheduling (`docs/PHASE4B_PLAN.md`) | claimed 2026-09-23 |
-  | DEC-800…899 | trunk, continued (the integration of the parallel branches onwards) | claimed 2026-09-23; used to DEC-800 |
+  | DEC-800…899 | trunk, continued (the integration of the parallel branches onwards) | claimed 2026-09-23; used to DEC-801 |
   | DEC-900 up | unallocated | — |
 
   A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.

@@ -134,6 +134,9 @@ def test_nothing_else_differs_between_the_two_deployments() -> None:
         "kms_key_alias",
         "certificate_arn",
         "domain_name",
+        # Phase 4b: the Object Lock period of an audit export. The row is in `AppContext`'s table and
+        # its template assertion is in tests/infra/test_phase4b_context.py.
+        "audit_retention_days",
     }
 
 

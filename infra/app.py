@@ -1,13 +1,13 @@
-"""The CDK application: seven stacks, one direction, one context object.
+"""The CDK application: eight stacks, one direction, one context object.
 
 `cdk synth` runs this file from inside `infra/`, so the repository root is put on `sys.path` before
 anything is imported - that is what lets `infra.network` and `tests/infra/` name the same modules.
 
 The dependency chain is a straight line and is declared, not inferred:
 
-    network -> storage -> observability -> database -> sagemaker -> compute -> budgets
+    network -> storage -> observability -> database -> sagemaker -> compute -> operations -> budgets
 
-Two of those edges exist for reasons that are not visible in the resources:
+Three of those edges exist for reasons that are not visible in the resources:
 
 * **observability before database.** RDS creates `/aws/rds/instance/<id>/postgresql` itself, with no
   retention, the first time it exports a log. Whoever creates that group first decides how long the
@@ -16,6 +16,10 @@ Two of those edges exist for reasons that are not visible in the resources:
 * **sagemaker before compute.** The task role's `iam:PassRole` names the execution role, so the
   role has to exist first. The alternative - one stack holding both - would mean redeploying the
   load balancer to change a job's permissions.
+* **compute before operations.** Phase 4b's stack attaches its grants to the task role, runs the
+  scheduled job in the cluster and with the roles compute creates, so those have to exist first.
+  It is a stack of its own, rather than additions to four existing ones, for the reasons
+  `infra/operations.py` gives.
 
 Nothing points backwards. A cycle between CloudFormation stacks is not a slow deployment, it is a
 deployment that cannot be performed at all, and the way to never have one is for the arrows to have
@@ -47,6 +51,7 @@ from infra.nag_suppressions import apply_suppressions  # noqa: E402
 from infra.naming import stack_name  # noqa: E402
 from infra.network import NetworkStack  # noqa: E402
 from infra.observability import ObservabilityStack  # noqa: E402
+from infra.operations import OperationsStack  # noqa: E402
 from infra.sagemaker import SageMakerStack  # noqa: E402
 from infra.storage import StorageStack  # noqa: E402
 
@@ -74,13 +79,14 @@ STACK_ORDER: Final = (
     "database",
     "sagemaker",
     "compute",
+    "operations",
     "budgets",
 )
 """The chain, in deployment order. `tests/infra/test_app.py` asserts the graph matches it."""
 
 
 class Deployment:
-    """The seven stacks of one deployment, so a test can reach any of them by name."""
+    """The eight stacks of one deployment, so a test can reach any of them by name."""
 
     def __init__(self, app: cdk.App, context: AppContext, environment: cdk.Environment) -> None:
         self.app = app
@@ -134,6 +140,21 @@ class Deployment:
             application_secret=self.database.app_secret,
             sagemaker_role=self.sagemaker.execution_role,
             alarm_topic_arn=self.observability.alarm_topic.topic_arn,
+            env=environment,
+        )
+        self.operations = OperationsStack(
+            app,
+            name("operations"),
+            context=context,
+            key=self.storage.key,
+            bucket=self.storage.bucket,
+            log_bucket=self.storage.log_bucket,
+            cluster=self.compute.cluster,
+            task_role=self.compute.task_role,
+            execution_role=self.compute.execution_role,
+            image_reference=self.compute.image_reference,
+            task_environment=self.compute.task_environment(),
+            api_log_group=self.observability.api_log_group,
             env=environment,
         )
         self.budgets = BudgetsStack(app, name("budgets"), context=context, env=environment)

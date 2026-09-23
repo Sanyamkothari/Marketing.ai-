@@ -1,17 +1,18 @@
 # `infra/` - the AWS deployment
 
-One CDK application, seven stacks, one direction. Everything an operator has to decide is a context
+One CDK application, eight stacks, one direction. Everything an operator has to decide is a context
 key; everything they must not have to decide has a default in `infra/context.py` and nowhere else.
 
 ```
-network -> storage -> observability -> database -> sagemaker -> compute -> budgets
+network -> storage -> observability -> database -> sagemaker -> compute -> operations -> budgets
 ```
 
-Nothing points backwards. Two of those arrows exist for reasons the resources do not show, and
-`infra/app.py` explains both: observability is deployed before the database so that it, rather than
+Nothing points backwards. Three of those arrows exist for reasons the resources do not show, and
+`infra/app.py` explains them: observability is deployed before the database so that it, rather than
 RDS, creates `/aws/rds/instance/<id>/postgresql` and decides how long those logs are kept; sagemaker
 is deployed before compute because the task role's `iam:PassRole` has to name an execution role that
-already exists.
+already exists; and compute is deployed before operations (Phase 4b) because operations attaches its
+grants to compute's task role and runs its scheduled job in compute's cluster.
 
 ## Running it
 
@@ -22,7 +23,7 @@ never depend on, and `make lint` has to keep working in a checkout that never in
 make infra-setup    # .venv-infra: pip install -e ".[deploy]" -r infra/requirements.txt
 make infra-lint     # ruff + black (from .venv) + mypy --strict (from .venv-infra)
 make infra-test     # the offline assertions; no AWS account, no node beyond jsii
-make infra-synth    # a real `cdk synth` of all seven stacks
+make infra-synth    # a real `cdk synth` of all eight stacks
 make infra-nag      # the same synthesis with the AwsSolutions checks switched on
 ```
 
@@ -65,6 +66,9 @@ is, and the only symptom of the typo would be a database of the wrong size three
 | `domain_name` / `certificate_arn` | none | Supply both or neither. |
 | `image_digest` | none | `<registry>/<repository>@sha256:...`. A tag can be moved after it was tested. |
 | `cdk_nag` | `false` | What `make infra-nag` passes. |
+| `auth_mode` | `local` | Phase 4b. `off` is allowed in dev only; a prod synthesis refuses it (see **Phase 4b: the operations stack**). |
+| `audit_retention_days` | `1` in dev, `2555` in prod | Object Lock COMPLIANCE period of an audit export, 1-3650. Permanent once written. |
+| `job_cpu` / `job_memory` | `1024` / `4096` | The scheduled-job task. Chosen, not measured; checked against the Fargate table. |
 
 ## What `env_name` changes
 
@@ -79,6 +83,8 @@ is, and the only symptom of the typo would be a database of the wrong size three
 | load balancer | HTTP unless a certificate is given | HTTPS always; no certificate is refused |
 | log retention | 30 days | 365 days |
 | `cors_origins` written to SSM | `*` unless `domain_name` is given | `https://<domain_name>` |
+| audit export lock (`audit_retention_days` default) | 1 day | 2555 days |
+| `auth_mode` | `local`; `off` may be asked for | `local`; `off` is refused |
 
 A prod synthesis without `certificate_arn` and `domain_name` fails at synth time with the fix in the
 message. An HTTP-only load balancer serves every upload, every pre-signed download URL and every API
@@ -108,7 +114,7 @@ by tests rather than by care:
   which AWS documents no resource types - `ecr:GetAuthorizationToken`, `cloudwatch:PutMetricData`
   (narrowed by a `cloudwatch:namespace` condition), and the EC2 network-interface actions a
   SageMaker job with a `VpcConfig` requires. `tests/infra/test_iam.py` walks every identity policy
-  in all seven synthesised stacks, in both `dev` and `prod`, and fails on any `Allow` with
+  in all eight synthesised stacks, in both `dev` and `prod`, and fails on any `Allow` with
   `"Resource": "*"` whose actions are not all on that list - including one that arrived inside a
   construct nobody read. A second test fails if the allow-list grows an entry nothing uses.
 * **`s3:ListBucket` on the bucket itself.** Without it S3 answers `403 AccessDenied` for a key that
@@ -269,6 +275,8 @@ Every suppression lives in `infra/nag_suppressions.py` with its full reason. In 
 | `CdkNagValidationFailure` | endpoint security group | `AwsSolutions-EC23` cannot evaluate a rule whose source is the VPC's own CIDR, because that synthesises to an `Fn::GetAtt`. It would have passed. Suppressed so a *real* validation failure is visible instead of being one line of known noise. |
 | `AwsSolutions-SMG4` | `marketing-ai/<env>/app` | The credential does rotate; this second secret is not a credential of anything, so there is no service for a rotation function to rotate against. See the operator note above - it goes away when `engine.settings` reads the credential document directly. |
 | `AwsSolutions-IAM5` | three role policies | Two different things, split in the module. ARNs with a wildcard **path** (`.../uploads/*`, `.../training-job/marketing-ai-*`, a log group's `:*` streams) are the boundary, not a widening, and the individual ARNs cannot be named because they contain run ids that do not exist at synth time. Bare `Resource::*` is accepted only for actions AWS documents with no resource types - and `tests/infra/test_iam.py` is stricter than the rule, so it is the test, not the suppression, that holds that line. |
+| `AwsSolutions-ECS2` | scheduled-job task definition (Phase 4b) | The same three variables as the API task, for the same reason. |
+| `AwsSolutions-IAM5` | operations: API grants and scheduler role (Phase 4b) | Each `*` is the last segment of a name that is the boundary: `audit/*` in the audit bucket, `schedule/marketing-ai-<env>/*`, `uploads/*` and `runs/*` for `DeleteObjectVersion` alone, the job family's revision `:*`, and tasks in this cluster for `ecs:TagResource` during `RunTask` only. |
 | `AwsSolutions-RDS3` | database, dev only | Multi-AZ is off because this deployment did not ask for it. Overridable with `-c db_multi_az=true`; a prod synthesis never reaches the suppression. |
 | `AwsSolutions-RDS10` | database, dev only | Deletion protection is off because `removal_policy_destroy` is on, which is what `env_name=dev` means. |
 | `AwsSolutions-ECS4` | cluster, when insights are off | A recurring per-task charge left to an explicit opt-in. What is genuinely lost is per-task CPU and memory utilisation - turn it on before tuning `api_cpu` or `api_memory`. |
@@ -279,6 +287,48 @@ rather than on `env_name`. That distinction has teeth: `db_multi_az` is overrida
 still off and `RDS10` still fires. Keying both on `env_name` would have attached one suppression to
 a finding that no longer exists and left the other uncovered.
 
+## Phase 4b: the operations stack
+
+`infra/operations.py` is the AWS half of plan M46-M49 (sign-in, audit, DPDP retention and erasure,
+scheduling, alerts). It adds no resource to a Phase 4a stack - every Phase 4a stack is pinned by
+tests that count what it holds - and attaches its grants to the task role as one separate inline
+policy, `marketing-ai-<env>-api-operations`, so Phase 4b's rights read as one document.
+
+| resource | what it is for |
+|---|---|
+| `marketing-ai-<env>-<account>-audit` | Audit exports. Object Lock **COMPLIANCE**, default retention `audit_retention_days`, SSE-KMS with the product key, versioned, public access blocked, TLS 1.2+ only, access-logged to `s3-access-audit/`, and a bucket-policy `Deny` of `DeleteObject`/`DeleteObjectVersion` for every principal (Object Lock guards versions; the deny also closes the delete-marker route). **Retained at every `env_name`**: a bucket holding a locked version cannot be emptied, so it could not be destroyed anyway. |
+| schedule group `marketing-ai-<env>` | Every schedule the application creates goes here; the group is the IAM boundary. The deployment creates no schedule itself. |
+| role `marketing-ai-<env>-scheduler` | Assumed by EventBridge Scheduler only (trust pinned to this account and this group). May `ecs:RunTask` the job family in this cluster, tag the task it starts, and pass the task's two roles to ECS. Nothing else. |
+| task definition family `marketing-ai-<env>-job` | What a schedule starts: the API's image, task role, execution role and three environment variables, container `job`, command `python -m scripts.fire_schedule`, logging to the API log group under `job/`. A schedule names the **family ARN without a revision** (stack output `JobTaskDefinitionArn`) so it survives the next deployment. |
+| topic `marketing-ai-<env>-alerts` | Application alerts (drift, performance drop, failed scheduled job); KMS-encrypted, TLS only, `alert_email` subscribed. Separate from the CloudWatch alarm topic so the application cannot speak on CloudWatch's channel. |
+
+The API task role gains: `s3:PutObject` + `s3:PutObjectRetention` on `<audit bucket>/audit/*` (no
+read, no delete); `scheduler:Create/Update/Delete/GetSchedule` on `schedule/marketing-ai-<env>/*`
+(no `List*`); `iam:PassRole` on the scheduler role, to `scheduler.amazonaws.com` only;
+`sns:Publish` on the alert topic; `s3:Get/PutLifecycleConfiguration` and `s3:ListBucketVersions` on
+the artefact bucket for the retention job; and `s3:DeleteObjectVersion` on `uploads/*` and `runs/*`
+only, because on a versioned bucket a plain delete leaves an erased customer's bytes behind as a
+noncurrent version.
+
+The engine is switched over by Parameter Store, never by the task definition (DEC-377):
+`auth_mode`, `audit_export_bucket`, `audit_export_prefix=audit`, `audit_retention_days`,
+`scheduler_backend=eventbridge`, `scheduler_group_name`, `scheduler_target_arn` (the **cluster**
+ARN - an ECS target is addressed by its cluster), `scheduler_role_arn`, `alert_backend=sns`,
+`alert_sns_topic_arn`. `tests/infra/test_phase4b_parameters.py` builds a `Settings` from both
+stacks' parameters, which is what the container does at start.
+
+`auth_mode` is `local` by default at both names because every deployment here sits behind a
+public load balancer. With `local`, nobody can sign in until the first Admin exists, and that user
+has to be created from inside the VPC, because the database is in isolated subnets;
+`docs/AWS_DEPLOYMENT.md` owns that procedure.
+
+**The retention job and CloudFormation share the artefact bucket's lifecycle configuration.**
+`PutBucketLifecycleConfiguration` replaces the whole document, so the job reads it first and keeps
+the rules it does not own. The reverse is not true: a deployment that changes the storage stack's
+lifecycle rules rewrites the document from the template and drops the job's per-client rules until
+its next run. The job must therefore re-apply its rules on every run (it is idempotent), and
+CloudFormation drift detection will report its rules as drift - expected, not a fault.
+
 ## Tags
 
 Every resource in every stack carries `product=marketing-ai`, `env=<env_name>`, and `client` when
@@ -288,7 +338,11 @@ SageMaker job, and the object prefixes carry it in S3 (DEC-375).
 
 ## What has not been verified
 
-There is no AWS account and no credentials in the environment this was built in. `cdk synth`,
+There is no AWS account and no credentials in the environment this was built in. For Phase 4b in
+particular, none of these has been exercised against AWS: the scheduler trust policy's
+`aws:SourceArn` condition, `RunTask` with a family ARN without a revision from an EventBridge
+Scheduler ECS target, an Object Lock `PutObject` with SSE-KMS through the task role, and an email
+subscription on a KMS-encrypted topic. `cdk synth`,
 `cdk-nag` and every assertion in `tests/infra/` really run, and they are what the claims above rest
 on. **Nothing has been deployed.** No cost, no latency, no cold-start time and no failover behaviour
 here has been measured, and where a number is chosen rather than measured it says so.
