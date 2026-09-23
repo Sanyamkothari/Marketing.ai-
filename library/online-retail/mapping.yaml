@@ -8,7 +8,7 @@
 schema_version: 1
 dataset: online-retail
 use_case: retail-win-back
-config_root: library/configs               # see library/README.md for why the use case lives here
+config_root: configs                       # the repo's own config root, where the use case ships (DEC-098)
 
 source:
   file: data/online-retail-dataset.csv

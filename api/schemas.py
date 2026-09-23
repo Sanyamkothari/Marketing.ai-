@@ -92,8 +92,14 @@ class IndustryResponse(StrictBase):
 
 
 class IndustriesResponse(StrictBase):
-    """Body of `GET /industries`."""
+    """Body of `GET /industries`: every industry file, the one the overview opens on listed first."""
 
+    default_industry: str | None = Field(
+        description=(
+            "Id of the industry the overview opens on: telecom when that file exists, else the first "
+            "listed; null only when the configuration has no industry file."
+        )
+    )
     industries: tuple[IndustryResponse, ...]
 
 

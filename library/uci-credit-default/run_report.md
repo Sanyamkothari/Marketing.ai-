@@ -3,7 +3,7 @@
 Every number below came out of one real training run.
 
 ```
-use case      card-default-propensity   (library/configs/use_cases/card_default_propensity.yaml)
+use case      card-default-propensity   (configs/use_cases/card_default_propensity.yaml)
 config        ENGINE DEFAULTS, no overrides at all
 file          data/prepared.csv         (30,000 rows, 25 columns)
 primary key   ID
@@ -142,7 +142,7 @@ tree ensembles picked that up.
 ```bash
 python library/uci-credit-default/fetch.py
 python -m library.run_engine \
-  --dataset uci-credit-default --use-case card-default-propensity --config-root library/configs \
+  --dataset uci-credit-default --use-case card-default-propensity \
   --csv library/uci-credit-default/data/prepared.csv \
   --primary-key ID --target default_payment_next_month
 ```

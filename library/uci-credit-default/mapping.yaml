@@ -5,7 +5,7 @@
 schema_version: 1
 dataset: uci-credit-default
 use_case: card-default-propensity
-config_root: library/configs               # see library/README.md for why the use case lives here
+config_root: configs                       # the repo's own config root, where the use case ships (DEC-098)
 
 source:
   file: data/UCI_Credit_Card.csv

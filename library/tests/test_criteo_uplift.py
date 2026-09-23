@@ -15,7 +15,7 @@ from typing import Any
 import pytest
 import yaml
 
-from conftest import LIBRARY, LIBRARY_CONFIGS
+from conftest import CONFIGS, LIBRARY
 
 DATASET: Path = LIBRARY / "criteo-uplift"
 
@@ -37,11 +37,11 @@ def test_the_use_case_is_drafted_and_not_installed() -> None:
     """Installing it would let the engine train a propensity model and call it uplift."""
     draft = yaml.safe_load((DATASET / "use_case.yaml").read_text(encoding="utf-8"))
     assert draft["id"] == "criteo-uplift"
-    assert not (LIBRARY_CONFIGS / "use_cases" / "criteo_uplift.yaml").exists()
+    assert not (CONFIGS / "use_cases" / "criteo_uplift.yaml").exists()
 
 
 def test_the_industry_file_lists_it_as_planned() -> None:
-    industry = yaml.safe_load((LIBRARY_CONFIGS / "industries" / "ad_tech.yaml").read_text(encoding="utf-8"))
+    industry = yaml.safe_load((CONFIGS / "industries" / "ad_tech.yaml").read_text(encoding="utf-8"))
     refs = [ref for stage in industry["stages"] for ref in stage["use_cases"]]
     criteo = next(ref for ref in refs if ref["id"] == "criteo-uplift")
     assert criteo["status"] == "planned"

@@ -27,7 +27,7 @@ README.
 
 | Path | What it is |
 |---|---|
-| [`configs/`](configs/) | a second config root: four industry files, four use-case files, and their generated templates. `engine.yaml` is a **symlink** to `configs/engine.yaml`, so there is one copy of the defaults. See DEC-400 and the *two assertions forbid a second industry* entry in [`docs/CROSS_BRANCH_REQUESTS.md`](../docs/CROSS_BRANCH_REQUESTS.md) for why they are not in the repository's own `configs/`. |
+| [`../configs/`](../configs/) | not in this directory any more. The library's four industry files and four use-case files ship in the repository's own [`configs/industries/`](../configs/industries/) and [`configs/use_cases/`](../configs/use_cases/), and their templates are generated into [`templates/`](../templates/) with everyone else's. They sat in a second root, `library/configs/`, until a second industry was allowed in `configs/` (DEC-400, then DEC-098). |
 | [`run_engine.py`](run_engine.py) | the harness behind every `run_report.md`. It uploads a CSV, calls `Pipeline.run_train` exactly the way `POST /runs` does, and writes a `results.json` holding the validation findings, leaderboard, test metrics, baseline comparison, decile lift, top features and wall clock. Every number in every report comes out of it. |
 | [`tests/`](tests/) | one pytest module per dataset, opt-in (DEC-409) |
 | [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | one page: which dataset to show to which audience, and what to click |
@@ -41,7 +41,7 @@ python library/uci-bank-marketing/fetch.py
 
 # 2. run the engine on it with defaults
 python -m library.run_engine \
-  --dataset uci-bank-marketing --use-case bank-term-deposit --config-root library/configs \
+  --dataset uci-bank-marketing --use-case bank-term-deposit \
   --csv library/uci-bank-marketing/data/prepared.csv --primary-key client_id --target y
 
 # 3. the library's own tests: validate + a one-minute train on each committed sample
@@ -49,8 +49,8 @@ python -m pytest library/tests            # about two minutes for all six
 python -m pytest library/tests -k telco
 ```
 
-`--config-root library/configs` is needed for every dataset except `telco-customer-churn`, whose
-use case ships in the repository's own `configs/`.
+Every dataset's use case ships in the repository's own `configs/` (DEC-098), so no
+`--config-root` is needed. The flag is still there for trying a use case from a root of your own.
 
 The tests are **not** in pytest's default `testpaths`, so `make test` does not run them. Every
 `sample.csv` is committed, so they work with no network.

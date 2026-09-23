@@ -89,6 +89,8 @@ PER_USE_CASE: dict[str, dict[str, Any]] = {
     "order-fulfillment": {"split": "time_based", "timeCol": "snapshot_date"},
     "fault-prediction": {"split": "time_based", "timeCol": "snapshot_date", "metric": "pr_auc"},
     "rca": {"split": "time_based", "timeCol": "snapshot_date"},
+    # From the library (DEC-098): ranked on the positives, as its own YAML explains.
+    "retail-win-back": {"metric": "pr_auc"},
 }
 
 

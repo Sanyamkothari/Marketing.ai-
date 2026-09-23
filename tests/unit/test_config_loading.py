@@ -105,8 +105,22 @@ def test_load_all_use_cases_returns_every_id() -> None:
     assert all(use_case_id == config.id for use_case_id, config in loaded.items())
 
 
+def shipped_industry_files() -> list[Path]:
+    """Every industry file in `configs/`, read off the directory for the same reason as use cases."""
+    return sorted((DEFAULT_CONFIG_ROOT / "industries").glob("*.yaml"))
+
+
 def test_industries_list_and_telecom_loads() -> None:
-    assert list_industries() == ("telecom",)
+    """Every industry file is listed and loads with its cross-file rules; telecom is still the demo.
+
+    Pinned to exactly `("telecom",)` until DEC-098 (Plan A ruling D3): one file per industry, and
+    the test validates every file rather than asserting there is only one.
+    """
+    industries = list_industries()
+    assert industries == tuple(path.stem for path in shipped_industry_files())
+    assert "telecom" in industries
+    for industry_id in industries:
+        assert load_industry(industry_id).id == industry_id
     industry = load_industry("telecom")
     assert industry.name == "Telecom"
     assert industry.journey_label == "Customer Lifecycle"
@@ -127,13 +141,18 @@ def test_industry_stage_markers() -> None:
 
 
 def test_industry_available_entries_have_files_and_matching_stage_names() -> None:
-    industry = load_industry("telecom")
-    available = []
-    for stage, ref in industry.all_refs():
-        if ref.status is UseCaseStatus.AVAILABLE:
-            available.append(ref.id)
-            assert ref.name is None and ref.description is None
-            assert load_use_case(ref.id).lifecycle_stage == stage.name
+    """Every industry's available entries, and together they reach every shipped use case.
+
+    Telecom used to have to list every file in `configs/use_cases/` itself; since DEC-098 (D3) the
+    union over all industry files must, so no use case is shipped that no overview can open.
+    """
+    available: list[str] = []
+    for industry_id in list_industries():
+        for stage, ref in load_industry(industry_id).all_refs():
+            if ref.status is UseCaseStatus.AVAILABLE:
+                available.append(ref.id)
+                assert ref.name is None and ref.description is None
+                assert load_use_case(ref.id).lifecycle_stage == stage.name
     assert sorted(available) == sorted(list_use_case_ids())
 
 
@@ -149,7 +168,11 @@ def test_industry_planned_entries_have_no_file_but_carry_their_own_copy(tmp_path
 
 
 def test_every_shipped_use_case_is_available() -> None:
-    """The other half: nothing in the real configuration is planned, so nothing is unreachable."""
+    """The other half: nothing in telecom's real journey is planned, so nothing there is unreachable.
+
+    The library's industries do carry planned entries (the stages no public dataset covers yet);
+    `test_industry_available_entries_have_files_and_matching_stage_names` loads them all.
+    """
     refs = load_industry("telecom").all_refs()
     assert refs
     assert all(ref.status is UseCaseStatus.AVAILABLE for _, ref in refs)

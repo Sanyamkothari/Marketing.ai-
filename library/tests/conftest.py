@@ -26,7 +26,9 @@ if str(REPO_ROOT) not in sys.path:
 from library.run_engine import run  # noqa: E402
 
 LIBRARY = REPO_ROOT / "library"
-LIBRARY_CONFIGS = LIBRARY / "configs"
+#: The repository's own config root. The library's industries and use cases lived in a second root,
+#: `library/configs/`, until a second industry was allowed in `configs/` (DEC-098); they ship there now.
+CONFIGS = REPO_ROOT / "configs"
 
 #: How far below its own logistic-regression baseline a one-minute search is allowed to land.
 #: Not a fudge factor, and not a number chosen to make a test pass: across the four datasets that
@@ -87,7 +89,7 @@ def train_on_sample(
     primary_key: str,
     target: str,
     runs_dir: Path,
-    config_root: Path | None = LIBRARY_CONFIGS,
+    config_root: Path | None = None,
 ) -> SampleRun:
     """Validate and train on `library/<sample>`, then hand back the numbers.
 

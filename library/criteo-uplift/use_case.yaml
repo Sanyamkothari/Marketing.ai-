@@ -1,13 +1,12 @@
 # DRAFT - NOT INSTALLED.
 #
-# This file is deliberately not in library/configs/use_cases/. Installing it would make
+# This file is deliberately not in configs/use_cases/. Installing it would make
 # `criteo-uplift` an available use case, and the engine would then happily train a binary
 # classifier on `conversion` - a propensity model, ranking users by how likely they are to convert
 # *anyway*, which is the exact mistake uplift modelling exists to prevent. See README.md.
 #
 # Phase 3b needs three things this schema does not have, and they are listed at the bottom.
-# When they land, move this file to library/configs/use_cases/criteo_uplift.yaml (or
-# configs/use_cases/), flip ad_tech.yaml's entry from `planned` to `available`, and regenerate the
+# When they land, move this file to configs/use_cases/criteo_uplift.yaml, flip ad_tech.yaml's entry from `planned` to `available`, and regenerate the
 # templates.
 
 id: criteo-uplift

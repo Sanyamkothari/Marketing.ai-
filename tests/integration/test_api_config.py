@@ -12,7 +12,14 @@ from fastapi.testclient import TestClient
 from api.main import create_app
 from api.schemas import IndustriesResponse, UseCaseResponse
 from engine import __version__
-from engine.config import DEFAULT_CONFIG_ROOT, UseCaseConfig, get_catalog, list_use_case_ids
+from engine.config import (
+    DEFAULT_CONFIG_ROOT,
+    UseCaseConfig,
+    get_catalog,
+    list_industries,
+    list_use_case_ids,
+    load_industry,
+)
 from engine.templates import template_filenames
 from tests.fixtures.planned import PLANNED_ID, planned_config_root
 
@@ -42,10 +49,13 @@ def test_healthz(client: TestClient) -> None:
 
 
 def test_industries_validates_and_lists_five_stages_in_order(client: TestClient) -> None:
+    """Telecom's journey, opened by default; every other industry file is listed after it (DEC-098)."""
     response = client.get("/industries")
     assert response.status_code == 200
     body = IndustriesResponse.model_validate(response.json())
-    (industry,) = body.industries
+    assert sorted(industry.id for industry in body.industries) == sorted(list_industries())
+    assert body.default_industry == "telecom"
+    industry = body.industries[0]
     assert industry.id == "telecom"
     assert industry.journey_label == "Customer Lifecycle"
     assert tuple(stage.marker for stage in industry.stages) == EXPECTED_MARKERS
@@ -58,6 +68,59 @@ def test_industries_legend_has_three_entries_with_stars(client: TestClient) -> N
     assert len(legend) == 3
     assert all(entry.stars for entry in legend)
     assert {entry.label for entry in legend} == {"Predictive AI", "Generative AI", "Hybrid"}
+
+
+def test_every_industry_file_is_a_journey_the_overview_can_select(client: TestClient) -> None:
+    """One file per industry (DEC-098): each is listed once, in its own stage order, with its cards."""
+    body = IndustriesResponse.model_validate(client.get("/industries").json())
+    ids = [industry.id for industry in body.industries]
+    assert len(ids) == len(set(ids)) > 1
+    assert ids[1:] == sorted(ids[1:]), "after the default, industries are listed in file-name order"
+    for industry in body.industries:
+        config = load_industry(industry.id)
+        assert industry.name == config.name
+        assert industry.journey_label == config.journey_label
+        assert [stage.id for stage in industry.stages] == [stage.id for stage in config.stages]
+        assert tuple(stage.order for stage in industry.stages) == tuple(range(1, len(config.stages) + 1))
+        for stage in industry.stages:
+            for card in stage.use_cases:
+                if card.status == "available":
+                    assert card.problem_type and card.entity, card.id
+                else:
+                    assert card.problem_type is None and card.name and card.description, card.id
+    # Every shipped use case is reachable from one overview or another.
+    available = {
+        card.id
+        for industry in body.industries
+        for stage in industry.stages
+        for card in stage.use_cases
+        if card.status == "available"
+    }
+    assert available == set(USE_CASE_IDS)
+
+
+def test_a_root_without_telecom_opens_on_its_first_industry(tmp_path: Path) -> None:
+    root = tmp_path / "configs"
+    shutil.copytree(DEFAULT_CONFIG_ROOT, root)
+    (root / "industries" / "telecom.yaml").unlink()
+    with TestClient(create_app(config_root=root)) as test_client:
+        body = IndustriesResponse.model_validate(test_client.get("/industries").json())
+    ids = [industry.id for industry in body.industries]
+    assert "telecom" not in ids
+    assert ids == sorted(ids)
+    assert body.default_industry == ids[0]
+
+
+def test_a_root_without_industries_has_no_default(tmp_path: Path) -> None:
+    root = tmp_path / "configs"
+    shutil.copytree(DEFAULT_CONFIG_ROOT, root)
+    shutil.rmtree(root / "industries")
+    with TestClient(create_app(config_root=root)) as test_client:
+        response = test_client.get("/industries")
+    assert response.status_code == 200
+    body = IndustriesResponse.model_validate(response.json())
+    assert body.default_industry is None
+    assert body.industries == ()
 
 
 @pytest.fixture

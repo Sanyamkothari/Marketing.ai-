@@ -3,7 +3,7 @@
 
 import { ApiError, getArtefacts, getIndustries, getRun, getRuns, scoresUrl, getUseCase } from "./api.js";
 import { errorBox, esc, pageHead } from "./dom.js";
-import { overviewHtml } from "./overview.js";
+import { bindOverview, overviewHtml } from "./overview.js";
 import { PAGE_ARTEFACTS, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
 import { resolveRoute } from "./modules/router.js";
@@ -69,10 +69,11 @@ function loading(title) {
   paint(screen(`<h1 class="h1">${esc(title)}</h1><p class="sub">Loading…</p>`));
 }
 
-async function showOverview() {
+/** `industryId` comes from `#/industry/<id>`; null opens the API's default journey. */
+async function showOverview(industryId) {
   active = null;
   loading("Marketing AI");
-  paint(overviewHtml(await allIndustries()));
+  paint(overviewHtml(await allIndustries(), industryId), () => bindOverview(app));
 }
 
 async function showUseCase(id, runId) {
@@ -127,7 +128,7 @@ async function render() {
       return;
     }
     if (parts[0] !== "uc" || !parts[1]) {
-      await showOverview();
+      await showOverview(parts[0] === "industry" && parts[1] ? decodeURIComponent(parts[1]) : null);
       document.title = "Marketing AI · Minfy";
       return;
     }
