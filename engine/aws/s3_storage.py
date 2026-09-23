@@ -716,6 +716,9 @@ class _RangedReader(io.RawIOBase):
     def _fetch(self, position: int) -> None:
         """One ranged GET starting at `position`, at most `READ_CHUNK_BYTES` long."""
         last = min(position + READ_CHUNK_BYTES, self._size) - 1
+        # Let go of the old window first: assigning over it would hold both until the new body is
+        # read, and "at most one window" would be two for the length of every GET.
+        self._window = b""
         try:
             response = self._s3.get_object(
                 Bucket=self._bucket, Key=self._object_key, Range=f"bytes={position}-{last}"
