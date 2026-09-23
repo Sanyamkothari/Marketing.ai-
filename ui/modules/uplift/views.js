@@ -476,17 +476,29 @@ function resultsBody(uc, s) {
     : [
         ["Data", routes.data(uc.id, run.run_id), run.file_name, `${dash(run.row_count, fmtN)} rows`],
         ["Output", routes.output(uc.id, run.run_id), "Treat list", "Segments, recommended contacts, download"],
-        ["Campaign results", routes.campaign(uc.id, run.run_id), "Treated vs control", "Upload outcomes once the campaign has run"],
+        // Not "Done" when the scoring run is: its results exist only once outcomes are uploaded, which
+        // run.json does not record, so the block says when it applies instead.
+        [
+          "Campaign results",
+          routes.campaign(uc.id, run.run_id),
+          "Treated vs control",
+          "Upload outcomes once the campaign has run",
+          "After the campaign",
+        ],
       ];
   const flow = blocks
     .map(
-      ([label, href, value, meta], i) =>
+      ([label, href, value, meta, next], i) =>
         `${i ? '<div class="arrow" aria-hidden="true">→</div>' : ""}<a class="block${
           run.state === "done" ? "" : " pending"
         }" href="${esc(href)}"><div><div class="lab"><span>${String(i + 1).padStart(2, "0")}&nbsp;&nbsp;${esc(
           label,
         )}</span>${
-          run.state === "done" ? '<span class="bstate">✓ Done</span>' : '<span class="bstate waiting">Not reached</span>'
+          run.state !== "done"
+            ? '<span class="bstate waiting">Not reached</span>'
+            : next
+              ? `<span class="bstate waiting">${esc(next)}</span>`
+              : '<span class="bstate">✓ Done</span>'
         }</div><div class="val">${esc(value)}</div><div class="meta">${esc(
           meta,
         )}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`,
@@ -649,7 +661,7 @@ export function modelPageHtml(uc, run, art, ope) {
         ]),
       )
     : `<div class="empty">This run has not produced uplift_evaluation.json yet.</div>`;
-  const body = `${notCausalBanner(validation, evaluation, art["segments.json"], art["policy_recommendation.json"])}
+  const body = `${notCausalBanner(validation, evaluation, curve, art["segments.json"], art["policy_recommendation.json"])}
     ${tiles}${verdict}
     <div class="row">
       <section class="card"><h3>Qini curve (hold-out)</h3>${qiniChart(curve)}<p class="caption">${esc(

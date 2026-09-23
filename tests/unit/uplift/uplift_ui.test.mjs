@@ -64,6 +64,7 @@ const evaluation = {
 const curve = {
   run_id: "r-train",
   rows_evaluated: 1000,
+  causal: true,
   points: Array.from({ length: 11 }, (_, i) => ({
     fraction: i / 10,
     qini: 0.03 * Math.sqrt(i / 10),
@@ -181,6 +182,14 @@ test("model page with no artefacts shows em dashes and says what is missing, nev
 test("model page carries the banner when the evaluation is not causal", () => {
   const art = { "uplift_evaluation.json": { ...evaluation, causal: false }, "qini_curve.json": curve };
   assert.match(views.modelPageHtml(uc, trainRun, art, null), /unotcausal/);
+});
+
+test("model page carries the banner when only the Qini curve says it is not causal", () => {
+  // qini_curve.json carries `causal` like every uplift artefact (DEC-675); the chart alone is enough.
+  const art = { "uplift_evaluation.json": evaluation, "qini_curve.json": { ...curve, causal: false } };
+  assert.match(views.modelPageHtml(uc, trainRun, art, null), /unotcausal/);
+  const causal = { "uplift_evaluation.json": evaluation, "qini_curve.json": { ...curve, causal: true } };
+  assert.ok(!views.modelPageHtml(uc, trainRun, causal, null).includes("unotcausal"));
 });
 
 test("output page of a scoring run: four segments, recommended contacts, CI, treat-list download", () => {
@@ -357,4 +366,20 @@ test("the index page links every use case to its uplift setup", () => {
   });
   assert.match(html, /href="#\/uplift\/a"/);
   assert.match(html, /href="#\/uplift\/b"/);
+});
+
+test("a finished scoring run's Campaign results block says when it applies instead of saying done", () => {
+  const done = { ...scoreRun, state: "done", row_count: 5 };
+  const html = views.upliftScreenHtml(uc, { view: "results", detail: { run: done }, runs: [] });
+  const blocks = [...html.matchAll(/<span>\d\d&nbsp;&nbsp;([^<]*)<\/span><span class="bstate([^"]*)">([^<]*)<\/span>/g)];
+  assert.deepEqual(
+    blocks.map((m) => [m[1], m[3]]),
+    [
+      ["Data", "✓ Done"],
+      ["Output", "✓ Done"],
+      ["Campaign results", "After the campaign"],
+    ],
+  );
+  assert.equal(blocks[2][2], " waiting");
+  noJunk(html);
 });

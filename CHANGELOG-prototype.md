@@ -297,10 +297,18 @@ Win-back's own Setup — and now follows the product:
   Overview's header. The Overview is screenshot 01, which stays byte for byte 8f0d358's, as do the
   Data / Model / Output pages in 14 and 17, which the product also decorates with the use-case link.
   `#/uplift` is therefore reachable by URL only in the prototype. *To confirm:* whether the prototype
-  should carry the Overview link (and reshoot 01) now that DEC-608 makes it the product's main way in.
-- **Still to reconcile (not DEC-608):** the *Uplift champion* label below predates DEC-609 and DEC-649,
-  under which an uplift run on Win-back — a use case configured for classification, whose slot holds a
-  propensity champion — stays a candidate until a person promotes it on the Models page.
+  should carry the Overview link (and reshoot 01) now that DEC-608 makes it the product's main way in
+  — recorded as DEC-666 and asked of the reviewer in `docs/CROSS_BRANCH_REQUESTS.md`.
+- **Reconciled (DEC-667):** the *Uplift champion* label below predated DEC-609 and DEC-649, under
+  which an uplift run on Win-back — a use case configured for classification, whose slot holds a
+  propensity champion — stays a candidate until a person promotes it on the Models page. The prototype
+  now says so: the Model page's AUUC card reads **Candidate** *Its AUUC interval lies above zero, but
+  Win-back's champion is a propensity model and AUUC cannot be compared with ROC AUC, so this version
+  stays a candidate until you promote it on the Models page.*, the results line *Candidate · promote it
+  on the Models page*, and the Running step *kept as a candidate: promote it on the Models page*. No run
+  carries an *Uplift champion* badge any more (`upChampion` is gone). Screenshots 21 (desktop and
+  mobile) were re-shot; 19, 20, 22, 23 and 24 came out byte-identical or differed only in the clock
+  stamp, and were kept.
 
 **Setup** (on the uplift screen since the DEC-608 reconciliation)
 
@@ -382,10 +390,10 @@ Win-back's own Setup — and now follows the product:
 - The run's score is *AUUC 0.0125*. A scoring run copies its model's problem type (it previously got
   `""`, because nothing detects a type without a target), which is what makes the uplift screens
   follow a scored list.
-- **Champion.** An uplift run is labelled **Uplift champion** and the propensity champion keeps its
-  badge. *Open question:* whether an uplift champion should replace the propensity champion for the
-  use case is Stage A's registry decision; the prototype shows both. A not-causal run is never
-  promoted.
+- **Champion.** ~~An uplift run is labelled **Uplift champion** and the propensity champion keeps its
+  badge.~~ Since DEC-667 a causal uplift run is a **Candidate** to promote on the Models page, and the
+  propensity champion keeps its badge (DEC-609, DEC-649 answered the open question this line used to
+  ask). A not-causal run is never promoted.
 - The flow keeps three blocks; the Output block reads *Recommended to contact: 4,000*. A win-back
   scoring run adds a **Campaign results** link to the summary line instead of a fourth block.
 - **Counts are the run's own.** Segments, *Recommended to contact* and the treat list are the

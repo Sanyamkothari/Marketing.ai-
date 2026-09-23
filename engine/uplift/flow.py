@@ -581,6 +581,7 @@ class UpliftTrainFlow(_TrainFlow):
             bootstrap_samples=uplift.bootstrap_samples,
             seed=self._seed,
             causal=self._causal,
+            holdout_keys=self._holdout_keys(rows),
         )
         self._uplift_evaluation = evaluation
         self._write(UPLIFT_EVALUATION_FILENAME, evaluation)
@@ -627,6 +628,11 @@ class UpliftTrainFlow(_TrainFlow):
         verdict = "measurable uplift" if evaluation.measurable_uplift else "no measurable uplift"
         detail = f"{_auuc_line(evaluation)} · {verdict}{_not_causal_suffix(self._causal)}"
         return _StageOutcome(detail, evaluation.rows_evaluated)
+
+    def _holdout_keys(self, rows: IntArray) -> list[str]:
+        """The hold-out rows' primary keys as text: what `holdout_fingerprint` hashes (DEC-670)."""
+        kept = _require(self._kept, "the validated rows")
+        return [str(key) for key in kept[self._ctx.primary_key].iloc[rows].tolist()]
 
     def _write_holdout(self, rows: IntArray, t: IntArray, y: IntArray, prediction: UpliftPrediction) -> None:
         """`uplift_holdout.parquet`: the logged data OPE and every expected-conversions figure use."""
@@ -675,7 +681,7 @@ class UpliftTrainFlow(_TrainFlow):
             importance = importance.model_copy(
                 update={
                     "caption": f"{importance.caption}; a surrogate explains the model with "
-                    f"R² {model.explanation_fidelity:.2f}"
+                    f"in-sample R² {model.explanation_fidelity:.2f}"
                 }
             )
         self._importance = importance
@@ -794,6 +800,7 @@ class UpliftTrainFlow(_TrainFlow):
             bootstrap_samples=ctx.config.uplift.bootstrap_samples,
             seed=self._seed,
             causal=card.causal,
+            holdout_keys=self._holdout_keys(rows),
         )
         self._manifest.add_metrics({Metric.AUUC.value: evaluation.auuc.value}, prefix="champion_")
         return evaluation, ""
@@ -898,7 +905,7 @@ def _method_words(model: UpliftModel) -> str:
         return "exact TreeSHAP of the predicted uplift"
     if model.explanation_fidelity is None:
         return "TreeSHAP of a surrogate of the predicted uplift"
-    return f"TreeSHAP of a surrogate of the predicted uplift (R² {model.explanation_fidelity:.2f})"
+    return f"TreeSHAP of a surrogate of the predicted uplift (in-sample R² {model.explanation_fidelity:.2f})"
 
 
 def _autogluon_version(base_model: UpliftBaseModel) -> str:

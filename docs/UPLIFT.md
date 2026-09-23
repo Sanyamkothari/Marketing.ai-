@@ -90,6 +90,23 @@ stage runs them again.
 A check that cannot run because an earlier one failed is skipped, not failed twice. With no
 treatment column there are no arms to count.
 
+**What each finding says.** This table is the normative list of the six codes (DEC-673): plan B asks
+for them in Phase 1's check registry and `docs/DATA_CONTRACT.md`, which Phase 3b does not own; the
+request to list them there is in `docs/CROSS_BRANCH_REQUESTS.md`. Every finding carries a code, a
+message and a suggestion (and a `details` object with the counts); the texts below are
+`engine/uplift/checks.py`'s, with `<…>` for the values filled in.
+
+| Code | Message | Suggestion |
+|---|---|---|
+| `TREATMENT_COLUMN_MISSING` (configured column absent) | The treatment column '`<column>`' is not in this file. | Choose the column that records who received the campaign in Setup, or upload the file that contains it. |
+| `TREATMENT_COLUMN_MISSING` (nothing configured, no hint found) | No column in this file says which customers received the campaign. Looked for `<hints>`. | Add a column with 1 for customers who were contacted and 0 for the randomly held-out customers, or choose the column in Setup. |
+| `TREATMENT_NOT_BINARY` | '`<column>`' should be 1 for treated customers and 0 for held-out customers, but `<n>` of `<rows>` rows (`<share>`) are blank or hold another value. | Record every customer as 1 (treated) or 0 (held out); true and false work too. Remove customers whose treatment is unknown from the file. |
+| `TREATMENT_ARM_TOO_SMALL` | There are too few customers to measure what the campaign changed[ after leaving out `<n>` customers whose outcome is not final yet]: the `<treated/control>` group has `<n>` customers (at least `<min_arm_rows>` needed); only `<n>` customers in the `<arm>` had a positive '`<target>`' (at least `<min_arm_positives>` needed). | Use a longer period or a larger campaign, or hold out a bigger control group next time. |
+| `TREATMENT_NOT_RANDOM` | Who was treated can be predicted from the customers' own data (AUC `<auc>`, where a random assignment scores about 0.50 and the limit is `<threshold>`). The strongest sign(s) was/were `<features>`. The campaign looks targeted, so comparing treated with untreated customers would mix what the campaign changed with how the chosen customers already differed. | Use data from a campaign with a randomly chosen hold-out group. If you go ahead anyway, every uplift result will be labelled not causal. |
+| `OUTCOME_WINDOW_IMMATURE` | `<n>` customers were treated less than `<days>` days before `<date>`, so their outcome is not final yet. [`<n>` rows have no readable date in '`<column>`', so their outcome cannot be shown to be final.] They are left out of training and evaluation. | Nothing to fix now. Re-run on or after `<date>` to include every customer. (With only undated rows: Fill in '`<column>`' for every customer to include them.) |
+| `OUTCOME_WINDOW_IMMATURE` (date column absent) | The treatment date column '`<column>`' is not in this file, so it cannot be checked whether every customer's outcome is final. | Add the treatment date to the file, or clear the treatment date setting if outcomes are already final. |
+| `FEATURE_AFTER_TREATMENT` | '`<column>`' is later than the treatment date in `<n>` of `<rows>` rows, so this data was captured after the campaign reached customers. Other columns may already show what the campaign changed, which would make its effect look larger or smaller than it was. | Upload customer data as it was before the treatment date. If this column only records the outcome, exclude it in Data preparation. |
+
 **How randomness is tested.** Under random assignment nothing about a customer predicts whether
 they were treated. The check trains a small LightGBM classifier (100 trees, 15 leaves) to predict
 the treatment from exactly the features the uplift model will use. It scores it with 3-fold
@@ -336,12 +353,16 @@ form for it ("Top share of customers, percent"), and the API takes a rule
 (`POST /runs/{run_id}/uplift/ope` with `{"top_share": 0.2}` or `{"min_uplift": 0.01}`, or both) on a
 finished uplift training run (`engine/uplift/ope.py`).
 
-The rule is applied to the hold-out's predicted uplift, and three estimates of the rule's
-conversion rate are reported, each with a 95% interval:
+The rule is applied to the hold-out's predicted uplift, and up to three estimates of the rule's
+conversion rate are reported, each with a 95% interval. IPS and DR are always there; SNIPS is left
+out when it is undefined (DEC-661):
 
 * **IPS** (inverse propensity scoring): unbiased when the treatment probabilities are right, which
   they are by construction in a random experiment.
 * **SNIPS** (self-normalised IPS): slightly biased, usually steadier, and it stays within 0 to 1.
+  It divides by the sum of the weights, and a customer's weight is zero unless the campaign gave them
+  what the rule would give them. When that holds for nobody (possible on a tiny hold-out) it is 0/0,
+  and it is then **left out** of the report, never shown as 0.
 * **DR** (doubly robust): the model's prediction of the rule's value, corrected by the weighted
   errors. It is unbiased if either the propensities or the outcome model are right, and usually has
   the narrowest interval.
@@ -391,7 +412,9 @@ Then:
   challenger must beat its AUUC by at least `champion_min_improvement_pct` percent of |champion
   AUUC|. When the champion's AUUC is zero or below, any strictly greater AUUC wins, and no percentage
   is reported. Two evaluations with different row, treated or control counts are refused as not the
-  same hold-out.
+  same hold-out, and so are two whose `holdout_fingerprint` (a sha256 of the hold-out's sorted
+  primary keys, in `uplift_evaluation.json`) differs: equal counts on different customers are caught
+  too (DEC-670).
 * `governance.approval_required` is honoured exactly as in Phase 1: a winning model waits as
   `pending_approval`.
 
@@ -459,6 +482,19 @@ make test            # the fast suite, which includes the fast uplift tests
 The UI module's node tests run when `node` is installed. Otherwise they are skipped and the reason is
 printed.
 
+The real-browser journey (DEC-660) drives the product in Chromium: an uplift upload, the
+not-random acknowledgement, training, the Model and Output pages checked number for number against
+the artefacts, scoring, the Campaign results page before and after maturity, and a 390 px phone
+width. It needs `playwright` and a Chromium build, is marked slow, and skips with its reason when
+either is missing:
+
+```bash
+pytest tests/integration/uplift/test_uplift_browser.py -m slow
+```
+
+The metric cross-checks against scikit-uplift and causalml (section 16) run when those libraries are
+installed and skip, saying so, when they are not.
+
 ---
 
 ## 14. Configuration
@@ -468,11 +504,11 @@ only when `problem_type` is `uplift` (DEC-601).
 
 | Setting | Default | Per-run override | Phase 5 agent may edit |
 |---|---|---|---|
-| `learner` | `x_learner` | yes | no |
+| `learner` | `x_learner` (`s_learner`, `t_learner`; plan B's `s`, `t`, `x` are accepted, DEC-671) | yes | no |
 | `base_model` | `autogluon_fast` | yes | no |
 | `treatment_column`, `treatment_column_hints` | none; `[treatment, treated, contacted, is_treated]` | yes | no |
 | `treatment_date_column`, `campaign_id_column`, `outcome_window_days` | none | yes | no |
-| `min_arm_rows`, `min_arm_positives` | 1,000; 50 | yes (a small arm only widens the intervals) | no |
+| `min_arm_rows`, `min_arm_positives` | 1,000; 50 | yes, recorded in `run.json`'s `overrides` (a small random arm cannot fake causality, but on a very small arm the percentile bootstrap intervals are less reliable than their 95% says; DEC-680) | no |
 | `randomness_auc_max` | 0.60 | **no** (DEC-607) | no |
 | `bootstrap_samples`, `test_fraction`, `time_limit_minutes` | 200; 0.30; 10 | yes | no |
 | `segments.*` (the three cuts) | 0.02; −0.01; base rate | yes | **yes** |
@@ -486,7 +522,8 @@ not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns
 ## 15. Limits
 
 * **Binary treatment only.** One action versus no action. Several offers (multi-treatment) are not
-  supported.
+  supported. The artefacts are designed so they can be added without renaming anything: DEC-668
+  describes the extension path.
 * **Binary outcome only.** Converted or not. Revenue or other continuous outcomes are not modelled.
 * **Single-column primary key.** Plan B's contract allows one row per customer per snapshot using
   Plan A M34's two-column keys, which are not on `main`. Uplift runs and campaign results use a
@@ -506,3 +543,63 @@ not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns
   no `drift.json`.
 * **Training runs write no `prepare.json`.** The feature spec is on the model card instead. Phase 1's
   Data page therefore shows no prepare report for an uplift run.
+
+---
+
+## 16. Cross-checks against scikit-uplift and causalml
+
+The metrics were checked against both libraries (scikit-uplift 0.5.1, causalml 0.17.0) as well as
+against an independent loop-based implementation. Neither library is a dependency. The brute-force
+cross-check always runs; `tests/unit/uplift/test_metrics.py` also has
+`test_point_metrics_match_scikit_uplift_after_conversion` and
+`test_point_metrics_match_causalml_after_conversion`, which run when the libraries are installed and
+skip otherwise. The libraries report the same quantities in other units and with other edge rules,
+so a comparison needs these conversions (`n` is the number of hold-out rows, `ATE` the treated rate
+minus the control rate):
+
+| Engine | scikit-uplift | causalml |
+|---|---|---|
+| `qini_coefficient` | `(auc(x, y) − auc([0, n], [0, y[-1]])) / n²` with `x, y = qini_curve(y_true, uplift, treatment)` and scikit-learn's `auc` | `qini_score(df, normalize=False) × (n + 1) / n²` |
+| `auuc` | the same expression on `uplift_curve(...)` | `(A·(n + 1)/n − ATE/2)/n − ATE/2` with `A = auuc_score(df, normalize=False)` |
+| `uplift_at` for share `f` | `uplift_at_k(..., strategy="overall", k=ceil(f·n))`, passing the count: a float `k` is rounded **down** | none |
+| deciles | `uplift_by_percentile(..., strategy="overall", bins=10)` (needs `n > 10`) | none |
+
+Where they differ by design, not by error:
+
+* **Ties.** The engine keeps tied rows in input order (a stable sort on `−pred`, DEC-613).
+  scikit-uplift reverses them and draws a straight chord across each tie block; causalml's default
+  sort does not guarantee any order. On tied predictions the numbers therefore differ slightly.
+* **A top share with one arm empty.** The engine's uplift curve is 0 there (a rate of nobody is not
+  zero, and not the other arm's rate). scikit-uplift uses the non-empty arm's rate, and causalml
+  produces a NaN it then interpolates. Any prefix of the ranking with only treated or only control
+  rows that holds a conversion makes the AUUCs differ.
+* **Normalisation.** scikit-uplift's `qini_auc_score` and `uplift_auc_score`, and causalml's default
+  `normalize=True`, divide by a perfect or final value; the engine's areas are not normalised.
+
+With distinct predictions, and both arms present in the top two rows with no conversion before them,
+all four conversions are exact to 1e-12; that is the data the two tests use.
+
+---
+
+## 17. API errors
+
+The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "message", "path"}}`
+(DEC-678). The message says what to do; this table is the place to look a code up.
+
+| Code | Status | Route | Meaning | What to do |
+|---|---|---|---|---|
+| `VALIDATION_FAILED` | 409 | `POST /uplift/runs` | Phase 1's own checks block the file. The body also carries `validation` and `uplift_validation`. | Fix the findings in `validation`, or acknowledge the ones that allow it, and send again. |
+| `UPLIFT_VALIDATION_FAILED` | 409 | `POST /uplift/runs` | Phase 1's checks pass, but an uplift check blocks (the message names the codes; see section 3). | Fix the file, or acknowledge `TREATMENT_NOT_RANDOM` to train a model labelled not causal. |
+| `UPLOAD_MODE_MISMATCH` | 409 | `POST /uplift/runs` | The file was uploaded for scoring. | Upload it again with `mode=train`. |
+| `OVERRIDE_UNKNOWN_PATH` | 422 | `POST /uplift/runs` | An override names a setting a run may not change, such as `uplift.randomness_auc_max` (DEC-607). | Change it in the use-case file, or leave it out. |
+| `ARTEFACT_UNKNOWN` | 404 | `GET /runs/{id}/uplift/{name}` | `name` is not an uplift artefact. | Use one of the names in section 5 to 10 (`uplift_evaluation.json`, `qini_curve.json`, …). |
+| `ARTEFACT_NOT_FOUND` | 404 | `GET /runs/{id}/uplift/{name}` | The run has not written that file (a scoring run writes no `uplift_evaluation.json`, and campaign results or OPE exist only once asked for). | Ask the run that writes it, or create it first. |
+| `RUN_NOT_SCORED` | 409 | `POST /runs/{id}/campaign-results` | The run is not a finished scoring run, or has no scores file. | Measure a campaign against the scoring run that chose its customers. |
+| `CAMPAIGN_RESULTS_INVALID` | 422 | `POST /runs/{id}/campaign-results` | The outcomes file or the request cannot be measured: `bands` on an uplift run, an outcome column that is missing or not 0/1, duplicate keys, and so on (the message names it). | Correct the file or the request as the message says. |
+| `COMPOSITE_KEY_NOT_SUPPORTED` | 422 | `POST /runs/{id}/campaign-results` | The run's primary key has several columns (section 15). | Combine them into one column. |
+| `CAMPAIGN_RESULTS_NOT_FOUND` | 404 | `GET /runs/{id}/campaign-results` | No campaign has been measured for this run yet. | `POST` the outcomes file first. |
+| `RUN_NOT_UPLIFT` | 409 | `POST /runs/{id}/uplift/ope` | The run is not a finished uplift training run, so it has no hold-out to replay. | Use an uplift training run. |
+| `OPE_INVALID` | 422 | `POST /runs/{id}/uplift/ope` | The rule or the logged data cannot be evaluated (the message says why). | Correct the rule as the message says. |
+
+Phase 1's shared codes (`RUN_NOT_FOUND`, `UPLOAD_NOT_FOUND`, the ingest codes and the configuration
+codes) keep their Phase 1 meaning on these routes.

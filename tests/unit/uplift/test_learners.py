@@ -294,6 +294,23 @@ def test_surrogate_contributions_report_their_fidelity(fitted, holdout, learner:
     assert fidelity > 0.8
 
 
+@pytest.mark.parametrize("learner", [UpliftLearner.S_LEARNER, UpliftLearner.T_LEARNER])
+def test_surrogate_fidelity_is_reproducible_for_the_same_rows(
+    fitted, holdout, learner: UpliftLearner
+) -> None:
+    # DEC-616/DEC-676: the fidelity is the surrogate's in-sample R² on the rows it explains, so it
+    # depends on those rows - and on nothing else: the same rows give the same number every time.
+    x, _ = holdout
+    model = fitted[learner]
+    first_matrix, first_expected = model.contributions(x.iloc[:4_000])
+    first = model.explanation_fidelity
+    model.contributions(x.iloc[4_000:])  # other rows in between must not leak into the next call
+    second_matrix, second_expected = model.contributions(x.iloc[:4_000])
+    assert first is not None and model.explanation_fidelity == first
+    np.testing.assert_array_equal(first_matrix, second_matrix)
+    assert first_expected == second_expected
+
+
 # ---------------------------------------------------------------------------
 # AutoGluon (slow)
 # ---------------------------------------------------------------------------

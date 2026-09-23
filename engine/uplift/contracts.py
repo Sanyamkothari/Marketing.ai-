@@ -267,6 +267,13 @@ class UpliftEvaluation(Artefact):
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
     summary: str = Field(description="One plain-language sentence for the Model page.")
     evaluated_at: AwareDatetime = Field(description="UTC time of the evaluation.")
+    holdout_fingerprint: str | None = Field(
+        default=None,
+        description=(
+            "sha256 of the hold-out's sorted primary keys, so two evaluations can be shown to be on "
+            "the same customers; null when the caller had no keys (DEC-670)."
+        ),
+    )
 
 
 class QiniPoint(Artefact):
@@ -291,6 +298,7 @@ class QiniCurve(Artefact):
     run_id: str = Field(description="Run the curve belongs to.")
     rows_evaluated: int = Field(description="Hold-out rows the curve is drawn from.")
     points: tuple[QiniPoint, ...] = Field(description="Points from fraction 0 to 1, ascending.")
+    causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
 
 # ---------------------------------------------------------------------------

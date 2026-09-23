@@ -594,6 +594,26 @@ def test_the_output_recommends_contacting_persuadables_only(app: App, scored: Sc
     assert policy.contacts_recommended <= policy.eligible_persuadables
 
 
+def test_true_sleeping_dogs_are_rarely_treated_and_far_below_their_share(app: App, scored: Scored) -> None:
+    """Plan B §9's "sleeping dogs never recommended", on the generator's TRUE segments (DEC-674).
+
+    No row the model calls a sleeping dog is ever treated - that holds by construction and
+    `test_scoring_with_the_champion_writes_segments_and_actions` checks it. A true sleeping dog the
+    model misjudges as persuadable can be, and no estimated model can promise otherwise; what it can
+    promise is that such rows are rare and far rarer among the treated than in the population. The
+    audit's run of this set-up treated 20 of 983 true sleeping dogs (2 %) at a 0.05 persuadable cut.
+    """
+    truth = scored.campaign.truth.set_index(PRIMARY_KEY)["true_segment"]
+    true_segment = scored.scores[PRIMARY_KEY].map(truth)
+    assert true_segment.notna().all()
+    treat = scored.scores["action"] == "Treat"
+    dogs = true_segment == "sleeping_dog"
+    assert dogs.sum() > 500 and treat.sum() > 500
+    treated_dogs = int((treat & dogs).sum())
+    assert treated_dogs <= 0.05 * dogs.sum(), (treated_dogs, int(dogs.sum()))
+    assert treated_dogs / treat.sum() <= 0.25 * dogs.mean(), (treated_dogs, int(treat.sum()), dogs.mean())
+
+
 def test_bands_do_not_apply_to_an_uplift_run(app: App, scored: Scored) -> None:
     outcomes_upload = upload(app, outcomes_file(scored), mode="score")
     response = app.client.post(
@@ -632,9 +652,8 @@ def test_an_acknowledged_targeted_campaign_runs_and_says_it_is_not_causal(app: A
     body = uplift_body(upload_id, validation={"acknowledged": ["TREATMENT_NOT_RANDOM"]})
     record = finish(app, start_uplift(app, body, run_id="r_20260923_0c000001"))
     for name in UPLIFT_JSON:
-        artefact = uplift_artefact(app, record.run_id, name)
-        if hasattr(artefact, "causal"):
-            assert artefact.causal is False, name
+        # Every uplift artefact carries the flag, qini_curve.json included (DEC-675).
+        assert uplift_artefact(app, record.run_id, name).causal is False, name
     evaluation = uplift_artefact(app, record.run_id, "uplift_evaluation.json")
     assert evaluation.summary.startswith(NOT_CAUSAL_NOTE)
     card = app.storage.read_model(model_card_key(run_key(record.run_id, "model")), UpliftModelCard)

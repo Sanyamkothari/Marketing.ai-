@@ -2,9 +2,11 @@
 
 Every expected number is worked out without the implementation: by hand from the definitions (the
 8-row fixture below, with the cumulative table spelled out), or by a deliberately naive, loop-based
-reimplementation in this file. `sklift` and `causalml` are not installed in this environment, so the
-brute-force reimplementation is the cross-check; it walks `k = 0..n` one row at a time, with Python
-floats and its own trapezoid sum, and re-draws the bootstrap resamples one row at a time.
+reimplementation in this file. The brute-force reimplementation is the cross-check that always runs;
+it walks `k = 0..n` one row at a time, with Python floats and its own trapezoid sum, and re-draws the
+bootstrap resamples one row at a time. When `sklift` (scikit-uplift) or `causalml` is installed, two
+more tests compare the engine with them through the conversions `docs/UPLIFT.md` §16 documents;
+neither library is a dependency, so without them those two tests skip and say why.
 """
 
 from __future__ import annotations
@@ -25,6 +27,7 @@ from engine.uplift.metrics import (
     bootstrap_uplift_at,
     decile_table,
     evaluate_uplift,
+    holdout_digest,
     qini_coefficient,
     qini_points,
     uplift_at_fraction,
@@ -437,9 +440,40 @@ def test_evaluation_artefact_is_complete() -> None:
 
 def test_not_causal_summary_carries_the_note() -> None:
     pred, t, y = _random_data(500, 13, ties=False)
-    evaluation, _ = _evaluate(pred, t, y, causal=False)
+    evaluation, curve = _evaluate(pred, t, y, causal=False)
     assert evaluation.causal is False
+    assert curve.causal is False
     assert evaluation.summary.startswith(NOT_CAUSAL_NOTE + " ")
+
+
+def test_the_qini_curve_carries_the_causal_flag_of_its_evaluation() -> None:
+    pred, t, y = _random_data(300, 17, ties=False)
+    for causal in (True, False):
+        evaluation, curve = _evaluate(pred, t, y, causal=causal)
+        assert curve.causal is evaluation.causal is causal
+    assert "causal" in QiniCurve.model_fields and QiniCurve.model_fields["causal"].is_required()
+
+
+# ---------------------------------------------------------------------------
+# The hold-out fingerprint (DEC-670)
+# ---------------------------------------------------------------------------
+def test_the_holdout_fingerprint_depends_on_the_keys_not_their_order() -> None:
+    keys = [f"C{index:05d}" for index in range(200)]
+    assert holdout_digest(keys) == holdout_digest(list(reversed(keys)))
+    assert holdout_digest(keys) != holdout_digest([*keys[:-1], "C99999"])
+    assert holdout_digest([1, 2]) == holdout_digest(["1", "2"])
+    assert len(holdout_digest(keys)) == 64
+
+
+def test_the_evaluation_records_the_fingerprint_of_its_keys() -> None:
+    pred, t, y = _random_data(200, 19, ties=False)
+    keys = [f"C{index:05d}" for index in range(200)]
+    evaluation, _ = _evaluate(pred, t, y, holdout_keys=keys)
+    assert evaluation.holdout_fingerprint == holdout_digest(keys)
+    without, _ = _evaluate(pred, t, y)
+    assert without.holdout_fingerprint is None
+    with pytest.raises(ValueError, match="one per row"):
+        _evaluate(pred, t, y, holdout_keys=keys[:-1])
 
 
 def test_uplift_at_leaves_out_a_share_with_an_empty_arm() -> None:
@@ -449,3 +483,63 @@ def test_uplift_at_leaves_out_a_share_with_an_empty_arm() -> None:
     y = np.array([1, 0, 0, 1, 1, 0] + [0, 1] * 7)
     evaluation, _ = _evaluate(pred, t, y, bootstrap_samples=20)
     assert [item.fraction for item in evaluation.uplift_at] == [0.2, 0.3]
+
+
+# ---------------------------------------------------------------------------
+# Library cross-checks (plan B §9): scikit-uplift and causalml, after conversion
+# ---------------------------------------------------------------------------
+def _library_data(n: int, seed: int) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    """Distinct predictions; the top-ranked row is a control, the second a treated row, both y = 0.
+
+    Where a top-k prefix has one arm empty the three conventions differ by design (`docs/UPLIFT.md`
+    §16): the engine scores the uplift curve 0 there, scikit-uplift takes the other arm's rate and
+    causalml interpolates across a NaN. From k = 2 both arms are present, and with no outcome before
+    that every convention gives 0, so the conversions below are exact rather than approximate.
+    """
+    pred, t, y = _random_data(n, seed, ties=False)
+    order = np.argsort(-pred, kind="mergesort")
+    t[order[0]], t[order[1]] = 0, 1
+    y[order[:2]] = 0
+    return pred, t, y
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_point_metrics_match_scikit_uplift_after_conversion(seed: int) -> None:
+    sklift = pytest.importorskip("sklift.metrics", reason="scikit-uplift is not installed")
+    from sklearn.metrics import auc
+
+    pred, t, y = _library_data(400, seed)
+    n = len(pred)
+    # sklift's curves are in counts on a count axis; the engine's area is per customer on [0, 1].
+    x_qini, y_qini = sklift.qini_curve(y, pred, t)
+    qini_area = (auc(x_qini, y_qini) - auc([0, n], [0, y_qini[-1]])) / n**2
+    x_uplift, y_uplift = sklift.uplift_curve(y, pred, t)
+    uplift_area = (auc(x_uplift, y_uplift) - auc([0, n], [0, y_uplift[-1]])) / n**2
+    assert qini_coefficient(pred, t, y) == pytest.approx(qini_area, abs=1e-12)
+    assert auuc_score(pred, t, y) == pytest.approx(uplift_area, abs=1e-12)
+    for fraction in (0.1, 0.2, 0.3):
+        # sklift rounds a float share down; the engine takes ceil(fraction·n) rows, passed as a count.
+        expected = sklift.uplift_at_k(y, pred, t, strategy="overall", k=math.ceil(fraction * n))
+        assert uplift_at_fraction(pred, t, y, fraction) == pytest.approx(expected, abs=1e-12)
+    table = sklift.uplift_by_percentile(y, pred, t, strategy="overall", bins=10)
+    deciles = decile_table(pred, t, y)
+    assert [d.treated_rows for d in deciles] == table["n_treatment"].tolist()
+    assert [d.control_rows for d in deciles] == table["n_control"].tolist()
+    assert [d.observed_uplift for d in deciles] == pytest.approx(table["uplift"].tolist(), abs=1e-12)
+
+
+@pytest.mark.parametrize("seed", [0, 1, 2])
+def test_point_metrics_match_causalml_after_conversion(seed: int) -> None:
+    causalml = pytest.importorskip("causalml.metrics", reason="causalml is not installed")
+    import pandas as pd
+
+    pred, t, y = _library_data(400, seed)
+    n = len(pred)
+    frame = pd.DataFrame({"y": y, "w": t, "model": pred})
+    # causalml averages its curves over k = 0..n (a Riemann mean in counts) and does not subtract
+    # the random line from the uplift curve; the conversions undo both.
+    qini = float(causalml.qini_score(frame, outcome_col="y", treatment_col="w", normalize=False)["model"])
+    gain = float(causalml.auuc_score(frame, outcome_col="y", treatment_col="w", normalize=False)["model"])
+    ate = float(y[t == 1].mean() - y[t == 0].mean())
+    assert qini_coefficient(pred, t, y) == pytest.approx(qini * (n + 1) / n**2, abs=1e-12)
+    assert auuc_score(pred, t, y) == pytest.approx((gain * (n + 1) / n - ate / 2) / n - ate / 2, abs=1e-12)

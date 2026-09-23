@@ -230,7 +230,8 @@ test("an acknowledged run is labelled not causal on Model, Output and Campaign r
   await trainUplift(dom, { targeted: true });
   assert.equal($$(dom, ".progress .pt").length, 0);
   assert.match($(dom, ".summary").textContent, /Not promoted: not causal/);
-  assert.equal(ev(dom, `UPSTATE['${WB}'].current.upChampion`), false, "never an uplift champion");
+  assert.equal(ev(dom, `UPSTATE['${WB}'].current.causal`), false, "a targeted run is not causal");
+  assert.doesNotMatch(body(dom), /Candidate · promote/, "and never offered for promotion");
   const note = ev(dom, "NOT_CAUSAL_NOTE");
   go(dom, `${UP}/model`);
   assert.equal($(dom, ".ncbanner").textContent.replace("⚠", "").trim(), note);
@@ -262,13 +263,16 @@ test("the uplift run checks the treatment, trains the learner and measures on th
   const done = ev(dom, `STATE['${WB}'].runs.at(-1)`);
   assert.equal(done.ptype, "Uplift");
   assert.equal(done.score, "AUUC 0.0125");
-  assert.equal(done.upChampion, true);
+  // DEC-609/DEC-649: Win-back is configured for classification and its slot holds a propensity
+  // champion, so a causal, measurable uplift run stays a candidate until a person promotes it.
+  assert.equal(done.champion, false);
   assert.equal(ev(dom, `STATE['${WB}'].runs[0].champion`), true, "the propensity champion is untouched");
   assert.match($(dom, ".summary").textContent, /Best model X-learner · AutoGluon fast · AUUC 0\.0125/);
-  assert.match($(dom, ".summary").textContent, /Set as uplift champion/);
+  assert.match($(dom, ".summary").textContent, /Candidate · promote it on the Models page/);
+  assert.doesNotMatch(body(dom), /Set as uplift champion|Uplift champion/);
   assert.equal($$(dom, ".flow .block").length, 3, "still three blocks");
   assert.match($$(dom, ".flow .block")[2].textContent, /Recommended to contact: 4,000/);
-  assert.match(body(dom), /Uplift champion/);
+  assert.match($$(dom, ".runrow .r1").at(-1).textContent, /^X-learner · AutoGluon fast$/, "listed without a champion badge");
 });
 
 test("Results → Model: Qini curve with the random line, AUUC with its interval, uplift by decile", async () => {
@@ -293,7 +297,9 @@ test("Results → Model: Qini curve with the random line, AUUC with its interval
   assert.match($(dom, "#up-auuc .civ").textContent, /^0\.0125\s*95% CI 0\.0098 to 0\.0151$/);
   assert.equal($(dom, "[data-up-summary]").textContent,
     "Targeting by predicted uplift beats random targeting: AUUC 0.0125 (95% CI 0.0098 to 0.0151).");
-  assert.match($(dom, "#up-auuc").textContent, /Uplift champion/);
+  assert.match($(dom, "#up-auuc").textContent, /Candidate/);
+  assert.match($(dom, "#up-auuc").textContent, /promote it on the Models page/);
+  assert.doesNotMatch($(dom, "#up-auuc").textContent, /Uplift champion/);
   assert.equal(kv(dom, "Hold-out"), "96,000 rows · 86,400 treated · 9,600 control");
   // UpliftEvaluation.uplift_at: the top 10%, 20% and 30%, each with its interval
   assert.equal(kv(dom, "Uplift in the top 10%"), "+13.50 pts (95% CI 11.87 to 14.83)");
@@ -1131,7 +1137,8 @@ test("DEC-608: the uplift screen has its own form and shares the use case's runs
   // Phase 1 scoring, and its form, its current run and its pages are untouched
   go(dom, `#/uc/${WB}`);
   await wait(30);
-  assert.ok($$(dom, ".runrow .r1").some((e) => /Uplift champion/.test(e.textContent)), "the uplift run is in the use case's runs");
+  assert.ok($$(dom, ".runrow .r1").some((e) => /^X-learner · AutoGluon fast/.test(e.textContent)), "the uplift run is in the use case's runs");
+  assert.ok(!$$(dom, ".runrow .r1").some((e) => /Uplift champion/.test(e.textContent)), "as a candidate, not a champion");
   assert.equal(ev(dom, `STATE['${WB}'].current`), null);
   assert.equal(ev(dom, `STATE['${WB}'].file`), null);
   click(dom, '.seg button[data-mode="score"]');

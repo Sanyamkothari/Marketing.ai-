@@ -14,9 +14,10 @@ from __future__ import annotations
 from enum import StrEnum
 from typing import Annotated, Any, Final, Self
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 __all__ = [
+    "LEARNER_SHORT_FORMS",
     "UPLIFT_OVERRIDABLE_PATHS",
     "UPLIFT_RUN_LOCKED_PATHS",
     "UpliftBaseModel",
@@ -47,6 +48,14 @@ class UpliftLearner(StrEnum):
     S_LEARNER = "s_learner"
     T_LEARNER = "t_learner"
     X_LEARNER = "x_learner"
+
+
+LEARNER_SHORT_FORMS: Final[dict[str, UpliftLearner]] = {
+    "s": UpliftLearner.S_LEARNER,
+    "t": UpliftLearner.T_LEARNER,
+    "x": UpliftLearner.X_LEARNER,
+}
+"""Plan B §6 spells the learner `s | t | x`; the stored value is always the full name (DEC-671)."""
 
 
 class UpliftBaseModel(StrEnum):
@@ -121,6 +130,14 @@ class UpliftConfig(BaseModel):
     )
     segments: UpliftSegmentsConfig = UpliftSegmentsConfig()
     policy: UpliftPolicyConfig = UpliftPolicyConfig()
+
+    @field_validator("learner", mode="before")
+    @classmethod
+    def _short_learner(cls, value: Any) -> Any:
+        """Accept plan B's `s`, `t` and `x` (any case) as the three learners' full names (DEC-671)."""
+        if isinstance(value, str) and not isinstance(value, UpliftLearner):
+            return LEARNER_SHORT_FORMS.get(value.strip().lower(), value)
+        return value
 
     def reserved_columns(self) -> tuple[str, ...]:
         """The configured columns that describe the experiment and so are never features."""

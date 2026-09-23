@@ -249,7 +249,14 @@ def _predict(model: dict[int, pd.Series], frame: pd.DataFrame, arm: int) -> np.n
     return _cells(frame).map(model[arm]).fillna(fallback).to_numpy(dtype=np.float64)
 
 
-SEEDS = range(30)
+SEEDS = range(200)
+MIN_HITS = 174
+"""Coverage needs at least 174 of 200 seeds (87 %) per estimator; nominal coverage is 95 %.
+
+The share is no lower than the 26 of 30 (86.7 %) these tests asked for before, but over 200 seeds a
+correct estimator falls short of it with probability 7e-5 at a true coverage of 0.94 (3e-6 at
+0.95), where 26 of 30 failed 3 % (1.6 %) of the time: the binomial tail, not the estimator, set the
+old test's false-alarm rate (DEC-677). The seeds are fixed, so each run is deterministic."""
 
 
 def test_ips_and_dr_cover_the_true_policy_value_and_dr_is_narrower() -> None:
@@ -283,10 +290,10 @@ def test_ips_and_dr_cover_the_true_policy_value_and_dr_is_narrower() -> None:
         dr_hits += dr_lo <= true_value <= dr_hi
         narrower += (dr_hi - dr_lo) < (ips_hi - ips_lo)
 
-    # Nominal coverage is 95 %: 28.5 of 30 expected; 26 leaves room for sampling noise.
-    assert ips_hits >= 26, ips_hits
-    assert snips_hits >= 26, snips_hits
-    assert dr_hits >= 26, dr_hits
+    # Nominal coverage is 95 %: 190 of 200 expected; see MIN_HITS for the margin.
+    assert ips_hits >= MIN_HITS, ips_hits
+    assert snips_hits >= MIN_HITS, snips_hits
+    assert dr_hits >= MIN_HITS, dr_hits
     assert narrower == len(SEEDS)
 
 
@@ -313,7 +320,7 @@ def test_dr_stays_unbiased_with_a_wrong_outcome_model() -> None:
         )
         _, lo, hi = estimate(report, "dr")
         hits += lo <= true_value <= hi
-    assert hits >= 26, hits
+    assert hits >= MIN_HITS, hits
 
 
 def test_treat_all_and_treat_none_recover_the_arm_rates() -> None:

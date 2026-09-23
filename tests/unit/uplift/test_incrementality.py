@@ -383,3 +383,12 @@ def test_winback_campaign_recovers_the_true_average_effect() -> None:
     assert report.absolute_lift is not None
     assert report.absolute_lift.ci_low is not None and report.absolute_lift.ci_high is not None
     assert report.absolute_lift.ci_low <= true_effect <= report.absolute_lift.ci_high
+
+
+def test_a_lift_that_rounds_to_zero_is_never_printed_with_a_minus_sign() -> None:
+    # 499/2500 = 19.96% against 50/250 = 20.00%: a lift of -0.04 points, printed to one decimal.
+    scores, outcomes = build((499, 2_500), (50, 250))
+    report = measure(scores, outcomes)
+    assert report.absolute_lift is not None and report.absolute_lift.value == pytest.approx(-0.0004)
+    assert "-0.0 points" not in report.summary
+    assert "a difference of +0.0 points" in report.summary

@@ -23,6 +23,7 @@ def _evaluation(
     causal: bool = True,
     rows: int = 1_000,
     treated: int = 500,
+    fingerprint: str | None = None,
 ) -> UpliftEvaluation:
     ci_high = ci_high if ci_high is not None else (None if ci_low is None else auuc + (auuc - ci_low))
     zero = ConfidenceValue(value=0.0, ci_low=-0.01, ci_high=0.01)
@@ -45,6 +46,7 @@ def _evaluation(
         causal=causal,
         summary="-",
         evaluated_at=datetime(2026, 9, 1, tzinfo=UTC),
+        holdout_fingerprint=fingerprint,
     )
 
 
@@ -112,6 +114,26 @@ def test_different_hold_outs_are_refused() -> None:
     ):
         with pytest.raises(ValueError, match="same hold-out"):
             decide_uplift_champion(challenger, champion, min_improvement_pct=5.0)
+
+
+def test_equal_counts_on_different_customers_are_refused_by_the_fingerprint() -> None:
+    # The critic's case (DEC-670): the counts agree, but the hold-outs are different customers.
+    challenger = _evaluation(0.03, 0.02, fingerprint="a" * 64)
+    with pytest.raises(ValueError, match="holdout_fingerprint"):
+        decide_uplift_champion(
+            challenger, _evaluation(0.02, 0.01, fingerprint="b" * 64), min_improvement_pct=5.0
+        )
+
+
+@pytest.mark.parametrize(
+    ("mine", "theirs"), [("a" * 64, "a" * 64), ("a" * 64, None), (None, "a" * 64), (None, None)]
+)
+def test_the_fingerprint_is_compared_only_when_both_carry_one(mine: str | None, theirs: str | None) -> None:
+    challenger = _evaluation(0.03, 0.02, fingerprint=mine)
+    decision = decide_uplift_champion(
+        challenger, _evaluation(0.02, 0.01, fingerprint=theirs), min_improvement_pct=5.0
+    )
+    assert decision.promote is True
 
 
 def test_gates_run_before_the_hold_out_check() -> None:

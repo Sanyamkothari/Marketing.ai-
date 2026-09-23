@@ -86,7 +86,7 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-300…399 | Phase 4a — AWS | **exhausted** at DEC-399 |
   | DEC-400…499 | public dataset library (`library/`) | used to DEC-411; allocated after the fact |
   | DEC-500…599 | Phase 5 — Evolve (reserved by plan B) | reserved; unused |
-  | DEC-600…699 | Phase 3b — uplift (plan B assigns it this range and reserves the DEC-500s for Phase 5) | claimed 2026-09-23; used to DEC-657 |
+  | DEC-600…699 | Phase 3b — uplift (plan B assigns it this range and reserves the DEC-500s for Phase 5) | claimed 2026-09-23; used to DEC-680 |
   | DEC-700 up | unallocated | — |
 
   A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.

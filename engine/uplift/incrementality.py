@@ -439,7 +439,13 @@ def _coerce_outcome(values: pd.Series, positive_label: str | None) -> pd.Series:
 
 
 def _points(rate: float) -> str:
-    """A difference of two rates in percentage points, signed: `+2.3 points`."""
+    """A difference of two rates in percentage points, signed: `+2.3 points`.
+
+    A difference that rounds to zero prints `+0.0 points`, never `-0.0 points`: a sign on nothing
+    would read as a direction the data does not show.
+    """
+    if round(rate * 100, 1) == 0.0:  # -0.04 points would print "-0.0"
+        rate = 0.0
     return f"{rate * 100:+.1f} points"
 
 

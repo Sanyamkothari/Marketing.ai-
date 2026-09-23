@@ -16,7 +16,9 @@ Only then is the challenger compared with the champion, on AUUC. That comparison
 only when both were measured on the SAME hold-out - the Phase 1 precondition of DEC-044, and the
 caller's duty. This function cannot see the rows, but it refuses the comparison outright
 (`ValueError`) when the two evaluations disagree on the row, treated or control counts, which is the
-cheapest proof that they were not.
+cheapest proof that they were not, or when both carry a `holdout_fingerprint` (a hash of the
+hold-out's primary keys) and the fingerprints differ: equal counts on different customers are
+caught too (DEC-670).
 
 A relative improvement over a champion AUUC that is zero or negative is undefined, so there any
 strictly greater AUUC wins (the challenger already cleared `ci_low > 0`) and `improvement_pct` is
@@ -59,7 +61,8 @@ def decide_uplift_champion(
     """Apply the uplift champion rule; see the module docstring for the order of the gates.
 
     PRECONDITION: when `champion` is given it must have been re-scored on the challenger's hold-out.
-    Different row, treated or control counts raise `ValueError`.
+    Different row, treated or control counts raise `ValueError`, and so do two different hold-out
+    fingerprints when both evaluations carry one.
     """
     if not challenger.causal:
         return UpliftChampionDecision(
@@ -96,6 +99,9 @@ def decide_uplift_champion(
         for name in ("rows_evaluated", "treated_rows", "control_rows")
         if getattr(challenger, name) != getattr(champion, name)
     ]
+    fingerprints = (challenger.holdout_fingerprint, champion.holdout_fingerprint)
+    if None not in fingerprints and fingerprints[0] != fingerprints[1]:
+        mismatched.append("holdout_fingerprint")
     if mismatched:
         raise ValueError(
             f"The challenger and the champion were not evaluated on the same hold-out ({', '.join(mismatched)} "

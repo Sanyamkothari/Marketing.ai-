@@ -139,7 +139,73 @@ evaluator is OPE plus incrementality "with the OUTCOMES_IMMATURE rule".
   named `OUTCOMES_IMMATURE`; Phase 5 should read the status.
 * **The evaluator:** `engine.uplift.ope.evaluate_policy` (IPS, SNIPS, DR with intervals) on a
   training run's `uplift_holdout.parquet`, exposed as `POST /runs/{run_id}/uplift/ope`, and
-  `engine.uplift.incrementality.measure_incrementality` for a campaign that actually ran.
+  `engine.uplift.incrementality.measure_incrementality` for a campaign that actually ran. SNIPS is
+  left out of `estimates` when it is undefined (no logged row took an action the policy would take,
+  DEC-661), so read the estimates by `method`, not by position; IPS and DR are always there.
+
+### 2026-09-23 — phase-3b-uplift → trunk (owner of `docs/DATA_CONTRACT.md`): list the six uplift check codes
+
+**What is needed.** Plan B §4 adds six codes to the validation table, and plan §13.4 makes
+`docs/DATA_CONTRACT.md` the place every user-facing code is listed: `TREATMENT_COLUMN_MISSING`,
+`TREATMENT_NOT_BINARY`, `TREATMENT_ARM_TOO_SMALL`, `TREATMENT_NOT_RANDOM`, `OUTCOME_WINDOW_IMMATURE`
+and `FEATURE_AFTER_TREATMENT`. `DATA_CONTRACT.md` has none of them, and no Phase 3b block to add them
+in. Either copy the table in `docs/UPLIFT.md` §3 (code, severity, message, suggestion) into
+`DATA_CONTRACT.md`, or add one row pointing to it. The rows can come from
+`engine.uplift.contracts.UPLIFT_VALIDATION_CODES` if the table is generated.
+
+**What I did meanwhile.** `docs/UPLIFT.md` §3 lists all six with their severity, meaning, literal
+message and suggestion, as `engine/uplift/checks.py` writes them, and is the normative table until
+`DATA_CONTRACT.md` lists them (DEC-673). The registry half is the "one code registry" request above
+(DEC-603).
+
+### 2026-09-23 — phase-3b-uplift → trunk (owner of `ui/pages.js`): Phase 1's pages treat an uplift run as a propensity run
+
+**What is needed.** A scoring run of an uplift model is a Phase 1 run (`POST /runs`, DEC-651 records
+it as `problem_type: uplift`), so it appears in Phase 1's runs list and opens in Phase 1's Data,
+Model and Output pages. Those pages then:
+
+* request `prepare.json`, `drift.json` and `decile_lift.json`, which an uplift run never writes
+  (DEC-647; no drift baseline; no propensity deciles), so every visit logs `404`s as browser console
+  errors;
+* show propensity wording on uplift numbers: the KPI "Eligible customers", "Lift (top decile) —",
+  and the score column (`winback_prob`) with High / Medium / Low bands, where the run's score field
+  is `uplift` and its bands are the four segments.
+
+One check in `ui/pages.js` would fix both: when `run.problem_type === "uplift"`, skip those three
+artefacts and send the user to the uplift module's page for the run (`#/uplift/<use case>/output/<run
+id>`, and `model` / `data` likewise), which renders every uplift artefact. The browser-ui track saw
+this in Chromium on 2026-09-23.
+
+**What I did meanwhile.** Nothing in Phase 1's files was touched. The uplift module adds its own
+link on every `#/uc/<id>` screen (DEC-639), and on a scoring run's Output a "Campaign results for
+this run" link, so the uplift pages are one click away. `tests/integration/uplift/test_uplift_browser.py`
+checks the uplift pages' console is clean; it does not hold Phase 1's pages to that.
+
+### 2026-09-23 — phase-3b-uplift → whoever owns `tests/integration/test_runs_from_dataset.py`: a training job outlives the test run
+
+**What is needed.** `test_a_run_from_a_dataset_is_accepted_without_an_upload` (and the other tests
+in the module that `POST /runs` successfully) submits a real training job to the app's job runner,
+a `ThreadPoolExecutor`, and nothing cancels it. `concurrent.futures` joins its worker threads at
+interpreter exit, so after pytest has printed its summary the process keeps running until that
+training finishes. In `make test` this shows as a run that has reported its result but does not
+exit. Cancelling the accepted runs when the module ends (`POST /runs/{run_id}/cancel`), or overriding
+the `get_jobs` dependency with a runner that records the job without starting it, would end it: the
+module's assertions read `run.json` and the refusals, which exist before any training starts.
+
+**What I did meanwhile.** Nothing; the file is Phase 2's (M12). When running `make test` in the
+background, Phase 3b waits for the process to exit rather than for the summary line.
+
+### 2026-09-23 — phase-3b-uplift → human reviewer: may the prototype's screenshots 01, 14 and 17 change to show the uplift entry link?
+
+**What is needed.** A ruling. The product adds **Uplift modelling ›** under the Overview's header
+and **Uplift for this use case ›** on the Data / Model / Output pages (DEC-639). The prototype draws
+the use-case link on Win-back's Setup, Running and Results only, and neither link on the Overview or
+those pages, because screenshot 01 and the pages in 14 and 17 are kept byte for byte as at 8f0d358
+(DEC-666). In the prototype `#/uplift` is therefore reachable by URL only.
+
+**What I did meanwhile.** The prototype follows DEC-608 in everything else, and the gap is recorded
+in `CHANGELOG-prototype.md` (Revision 4, "Not drawn, deliberately"). With a yes, the change is two
+links and three re-shot screenshots.
 
 ### 2026-09-22 — phase-3a-generative → phase-2-onboarding and phase-4a-aws: `LLMClient.complete` takes an optional `system`
 

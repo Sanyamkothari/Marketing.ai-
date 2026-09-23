@@ -700,8 +700,8 @@ the experiment checks before the run exists.
 | M40 | Contracts, checks, problem type | Data contract, the six checks, `uplift` registered, config schema, artefact models | **done** |
 | M41 | Learners and evaluation | S/T/X learners; Qini, AUUC, deciles with bootstrap intervals; uplift champion rule; planted-effect and null tests green | **done** |
 | M42 | Segments, policy, explanations | Four segments, budgeted policy, SHAP on the uplift, actions use segments | **done** |
-| M43 | Incrementality and OPE | Campaign results with maturity; IPS, SNIPS and DR with tests | **done** |
-| M44 | UI | Setup, Model, Output and Campaign results screens; prototype updated | **done**; not yet checked in a real browser, and the prototype still offers Uplift in its Setup (plan B §8 literally) where the product does not (DEC-608) |
+| M43 | Incrementality and OPE | Campaign results with maturity, for uplift and Phase 1 scoring runs; IPS, SNIPS (when defined) and DR with tests | **done** |
+| M44 | UI | Setup, Model, Output and Campaign results screens; prototype updated | **done**; walked end to end in Chromium (DEC-660); the prototype follows DEC-608 and labels an uplift run on Win-back a candidate (DEC-667), and leaves out the Overview link pending a ruling (DEC-666) |
 | M45 | Criteo, docs, hardening | Criteo run report; `docs/UPLIFT.md`; README and DECISIONS current | docs **done**; Criteo **not run**: the data cannot be fetched here (re-tested 2026-09-23, DEC-656) |
 
 #### M40 — Contracts, checks, problem type
@@ -756,10 +756,11 @@ control group (DEC-621). It marks `intended_treatment` so campaign results compa
 `engine/uplift/incrementality.py` measures a finished campaign from an uploaded outcomes file:
 treated rate minus control rate with a Newcombe interval, relative lift, incremental conversions and
 a p-value. Rows whose outcome window has not elapsed are excluded and counted, and "Results available
-on <date>" is shown until one has. `engine/uplift/ope.py` estimates a targeting rule off-policy on
-the randomised hold-out (IPS, SNIPS, doubly robust). `engine/uplift/flow.py` runs uplift training
-and scoring as subclasses of Phase 1's own flows, dispatched by one line in each `Pipeline` entry
-point (DEC-646).
+on <date>" is shown until one has. It works for any scoring run with Phase 1's control group, not
+only an uplift one. `engine/uplift/ope.py` estimates a targeting rule off-policy on the randomised
+hold-out (IPS, doubly robust, and SNIPS when it is defined, DEC-661). `engine/uplift/flow.py` runs
+uplift training and scoring as subclasses of Phase 1's own flows, dispatched by one lookup in each
+`Pipeline` entry point (DEC-646).
 
 ```bash
 .venv/bin/python -m pytest tests/unit/uplift/test_incrementality.py tests/unit/uplift/test_ope.py \
@@ -774,9 +775,20 @@ uplift by decile, an OPE form), Output (four-segment chart, recommended contacts
 incremental conversions, treat list download) and Campaign results. A banner marks every screen
 whose artefacts say `causal: false`, and a missing value is always "—" (DEC-644).
 
+The screens have been walked end to end in Chromium: `tests/integration/uplift/test_uplift_browser.py`
+starts the real app, clicks through upload, training, the Model and Output pages (checked number for
+number against the artefacts), scoring, Campaign results before and after maturity, the not-random
+refusal and acknowledgement, and a 390 px width, with no console error beyond the `404`s the contract
+defines (DEC-660). It is marked slow and needs `playwright` with a Chromium build; without them it
+skips and says why. The reference
+prototype (`marketing-ai-prototype.html`) starts uplift on its own screen as the product does
+(DEC-608, DEC-666) and shows an uplift run on Win-back as a candidate to promote (DEC-667);
+`make prototype-test` checks it.
+
 ```bash
 make run                       # then open http://localhost:8000/ui/#/uplift
 .venv/bin/python -m pytest tests/unit/uplift/test_uplift_ui.py -q    # the node suites; skipped without node
+.venv/bin/python -m pytest tests/integration/uplift/test_uplift_browser.py -m slow   # needs playwright + chromium
 ```
 
 #### M45 — Documentation, Criteo and hardening
@@ -809,7 +821,7 @@ api/routes/uplift.py              # treatment candidates, POST /uplift/runs, art
 ui/modules/uplift/                # Setup, Running, Model, Output and Campaign results screens
 ```
 
-Decisions are DEC-600 … DEC-657 in [`docs/DECISIONS.md`](docs/DECISIONS.md). What Phase 3b changed
+Decisions are DEC-600 … DEC-680 in [`docs/DECISIONS.md`](docs/DECISIONS.md). What Phase 3b changed
 above its blocks is announced in [`docs/CROSS_BRANCH_REQUESTS.md`](docs/CROSS_BRANCH_REQUESTS.md).
 
 <!-- ---- END PHASE-3B ---- -->

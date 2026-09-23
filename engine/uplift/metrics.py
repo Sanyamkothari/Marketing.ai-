@@ -54,6 +54,7 @@ fast.
 
 from __future__ import annotations
 
+import hashlib
 import math
 import time
 from dataclasses import dataclass
@@ -91,6 +92,7 @@ __all__ = [
     "bootstrap_uplift_at",
     "decile_table",
     "evaluate_uplift",
+    "holdout_digest",
     "qini_coefficient",
     "qini_points",
     "top_rows",
@@ -524,6 +526,19 @@ def _summary(auuc: ConfidenceValue, *, causal: bool) -> str:
     return f"{NOT_CAUSAL_NOTE} {sentence}" if not causal else sentence
 
 
+def holdout_digest(keys: Sequence[object]) -> str:
+    """sha256 of the hold-out's primary keys, as text, sorted and newline-joined (DEC-670).
+
+    Order-free, so the same customers give the same fingerprint however the caller listed them;
+    two evaluations with different fingerprints were measured on different customers.
+    """
+    digest = hashlib.sha256()
+    for key in sorted(str(key) for key in keys):
+        digest.update(key.encode("utf-8"))
+        digest.update(b"\n")
+    return digest.hexdigest()
+
+
 def evaluate_uplift(
     pred: npt.ArrayLike,
     t: npt.ArrayLike,
@@ -536,12 +551,17 @@ def evaluate_uplift(
     seed: int,
     causal: bool,
     now: datetime | None = None,
+    holdout_keys: Sequence[object] | None = None,
 ) -> tuple[UpliftEvaluation, QiniCurve]:
     """Every hold-out metric of an uplift model, with bootstrap intervals, and its Qini chart.
 
-    `pred` must come from a model that never saw these rows. Needs both arms (`ValueError`
-    otherwise: without a control group there is no uplift to measure). A top share whose treated or
-    control arm is empty is left out of `uplift_at` rather than reported as a number.
+    This is plan B §5's "evaluate_uplift.py" (DEC-669): the uplift evaluator lives here, and
+    `engine/stages/evaluate.py` is untouched. `pred` must come from a model that never saw these
+    rows. Needs both arms (`ValueError` otherwise: without a control group there is no uplift to
+    measure). A top share whose treated or control arm is empty is left out of `uplift_at` rather
+    than reported as a number. `holdout_keys`, the rows' primary keys in any order, sets
+    `holdout_fingerprint` so the champion rule can prove two evaluations share a hold-out (DEC-670);
+    it must list one key per row.
     """
     import numpy as np
 
@@ -550,6 +570,10 @@ def evaluate_uplift(
     started = time.perf_counter()
     ranked = _rank(pred, t, y)
     _require_both_arms(ranked)
+    if holdout_keys is not None and len(holdout_keys) != ranked.n:
+        raise ValueError(
+            f"holdout_keys lists {len(holdout_keys)} keys for {ranked.n} hold-out rows; it needs one per row."
+        )
     c = _single(ranked)
     n = ranked.n
     top = {fraction: _top_rows(fraction, n) for fraction in UPLIFT_AT_FRACTIONS}
@@ -587,7 +611,8 @@ def evaluate_uplift(
         causal=causal,
         summary=_summary(auuc, causal=causal),
         evaluated_at=now if now is not None else utc_now(),
+        holdout_fingerprint=None if holdout_keys is None else holdout_digest(holdout_keys),
     )
-    curve = QiniCurve(run_id=run_id, rows_evaluated=n, points=qini_points(pred, t, y))
+    curve = QiniCurve(run_id=run_id, rows_evaluated=n, points=qini_points(pred, t, y), causal=causal)
     log_stage(_LOGGER, "uplift_evaluate", rows=n, seconds=time.perf_counter() - started)
     return evaluation, curve

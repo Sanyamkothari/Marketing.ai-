@@ -1539,7 +1539,7 @@ function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),pct=holdoutPct
   const [alo,ahi]=newcombe(t.yt,t.nt,t.yc,t.nc);
   const verdict=UP_NULL_VIEW?`<span class="pill bad">Not promoted</span>Its AUUC interval includes zero, so it can never become the uplift champion.`
     :!causal?`<span class="pill bad">Not promoted</span>The treatment was not random, so this model can never become the uplift champion.`
-    :run.upChampion?`<span class="pill ok">Uplift champion</span>Its AUUC interval lies above zero.`:`<span class="pill warn">Not promoted</span>It did not beat the uplift champion on the same hold-out.`;
+    :`<span class="pill warn">Candidate</span>Its AUUC interval lies above zero, but Win-back's champion is a propensity model and AUUC cannot be compared with ROC AUC, so this version stays a candidate until you promote it on the Models page.`;
   /* An uploaded file's run: the hold-out is the file's counted rows × the share, split into tenths; the
      arm split, rates and intervals are the sample's (the prototype does not train on the file). */
   const up=run.sample===false,H=holdoutRows(run),N=up?runRowCount(run):null;
@@ -1993,7 +1993,7 @@ function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg,u),train=s
         <div class="frow"><div class="field"><div class="control sel"><select id="f-model">${opt([AUTO,...cfg.models],s.model)}</select></div></div></div></div></div>`
    : `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
         <div class="flabel">${u.up?"Trained uplift model":"Trained model"}</div><div class="fhint">${u.up?"The saved uplift model that will rank the uploaded customers.":"The saved model that will score the uploaded rows."}</div>
-        <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun">${trainRuns.length||!u.up?trainRuns.map(r=>`<option value="${r.id}" ${r.id===(scoreBase(u)||{}).id?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}${r.upChampion?" · Uplift champion":""}</option>`).join(""):'<option value="">No trained uplift model yet</option>'}</select></div></div></div></div></div>`;
+        <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun">${trainRuns.length||!u.up?trainRuns.map(r=>`<option value="${r.id}" ${r.id===(scoreBase(u)||{}).id?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}</option>`).join(""):'<option value="">No trained uplift model yet</option>'}</select></div></div></div></div></div>`;
   const adv = train ? `<details class="adv-wrap" id="f-adv" ${s.advOpen?"open":""}><summary>Advanced settings<span class="n">Each ${cfg.gen?"pipeline":"AutoML"} stage can be configured · defaults work for most data</span></summary>${stagesHtml(u)}</details>` : "";
   return `<div class="setup-grid">
     <section class="card"><div class="form-body">
@@ -2009,7 +2009,7 @@ function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg,u),train=s
   <p class="next">${u.up?"After the run: Model (Qini curve, AUUC) → Output (segments, treat list) → Campaign results.":"After the run, this page shows the pipeline: Data → Model → Output."}</p>`;
 }
 function runsCard(u){const s=st(u),runs=u.up?s.runs.filter(r=>r.ptype==="Uplift"):s.runs;
-  return `<section class="card"><h3>${u.up?"Previous uplift runs":"Previous runs"}</h3><div class="runs-list">${runs.length?runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}${r.upChampion?'<span class="champ">Uplift champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">${u.up?"No uplift runs yet.":"No runs yet."}</div>`}</div></section>`;
+  return `<section class="card"><h3>${u.up?"Previous uplift runs":"Previous runs"}</h3><div class="runs-list">${runs.length?runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">${u.up?"No uplift runs yet.":"No runs yet."}</div>`}</div></section>`;
 }
 function flowBlocks(u,run){
   const items = [
@@ -2030,7 +2030,7 @@ function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
       ["Preparing features",`${E.features} features · ${a.upTest}% hold-out, stratified on treatment and outcome`],
       [`Training the ${a.upLearner.split(" (")[0]}`,`${a.upBase} · a model per arm, then the effect models`],
       [`Measuring uplift on the hold-out (${a.upBoot} resamples)`,`AUUC ${f4(ci.value)} (95% CI ${f4(ci.ci_low)} to ${f4(ci.ci_high)})`],
-      ["Segmenting and saving",`4 segments · ${nr?"not promoted: not causal":s.runs.some(r=>r.upChampion)?"not promoted: no better than the uplift champion":"set as uplift champion"}`]];}
+      ["Segmenting and saving",`4 segments · ${nr?"not promoted: not causal":"kept as a candidate: promote it on the Models page"}`]];}
   const upBase=s.mode==="score"&&!cfg.gen?scoreBase(u):null;
   if(upBase&&upBase.ptype==="Uplift"){const N=rowCount(s),pol=upliftPolicy({mode:"score",adv:a,causal:upBase.causal,upTest:holdoutPct(upBase),n:N,rows:s.file.rows});
     return [["Validating columns","All expected features present"],["Loading uplift model",upBase.best],["Scoring rows",`${s.file.rows} rows · uplift, P(treated), P(control)`],
@@ -2052,7 +2052,7 @@ function runningHtml(u){return `<div class="setup-grid"><section class="card"><h
 function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id];
   return `<div class="results"><div class="summary"><span class="ok">✓ ${r.mode==="train"?(cfg.gen?"Assistant built":u.up?"Uplift model trained":"Training complete"):(cfg.gen?"Evaluation complete":"Scoring complete")}</span>
     <span>${r.mode==="train"?`Best model <b>${esc(r.best)}</b> · ${esc(r.score)}`:`<b>${esc(r.rows)}</b> rows scored with ${esc(r.best)}${r.ptype==="Uplift"?` · Recommended to contact: <b>${fmtI(upliftPolicy(r).n)}</b>`:""}`}</span>
-    ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}${r.mode==="train"&&r.ptype==="Uplift"?`<span class="muted">${r.upChampion?"Set as uplift champion":r.causal===false?"Not promoted: not causal":"Not promoted"}</span>`:""}${r.mode==="score"&&u.id==="win-back-campaign"?`<a class="linkbtn" id="f-campaign" href="${pageHref(u,"campaign")}">Campaign results</a>`:""}
+    ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}${r.mode==="train"&&r.ptype==="Uplift"?`<span class="muted">${r.causal===false?"Not promoted: not causal":"Candidate · promote it on the Models page"}</span>`:""}${r.mode==="score"&&u.id==="win-back-campaign"?`<a class="linkbtn" id="f-campaign" href="${pageHref(u,"campaign")}">Campaign results</a>`:""}
     <span class="muted">${esc(r.file)} · ${esc(r.at)}</span><button class="again" id="f-again">Run again / change settings</button></div>
     <span class="cap">${u.up?"Uplift pipeline":"AI pipeline"}</span><div class="flow">${flowBlocks(u,r)}</div>
     ${cfg.gen?assistantResults(u):""}
@@ -2235,7 +2235,6 @@ function bindDetail(u){
         date:isoDay(today()),adv:{...s.adv},causal:s.mode==="train"?!(upTrain&&s.targeted):base.causal!==false,from:base?base.id:null,
         learner:upTrain?learner:base&&base.learner,baseModel:upTrain?s.adv.upBase:base&&base.baseModel,treatment:upTrain?s.treatment:"",upTest:upTrain?s.adv.upTest:base&&base.upTest!=null?base.upTest:null,n:rowCount(s),sample:!!(s.file&&s.file.sample),ts:today().toISOString()};
       if(run.ptype==="Uplift")run.adv.control=ENGINE_CONTROL_PCT;
-      if(upTrain)run.upChampion=run.causal&&!s.runs.some(r=>r.upChampion);
       if(run.champion){run.beat=s.runs.some(r=>r.champion);s.runs.forEach(r=>r.champion=false);}
       s.runs.push(run); s.current=run; if(run.mode==="train")s.scoreRun=run.id;
       setTimeout(()=>{ if(s.view==="running"){s.view="results";rerender(u);} }, reduce?100:500);
