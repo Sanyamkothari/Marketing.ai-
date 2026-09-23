@@ -1028,15 +1028,16 @@ class ScoringSummary(Artefact):
     scored_at: AwareDatetime = Field(description="UTC time scoring finished.")
 
 
-def scores_csv_columns(config: UseCaseConfig, primary_key: str) -> tuple[str, ...]:
+def scores_csv_columns(config: UseCaseConfig, primary_key: PrimaryKey) -> tuple[str, ...]:
     """Header of `scores.csv` / `scores.parquet`, in order.
 
     `(<primary_key>, <actions.score_field>, "band", "action", "reason_1".."reason_n",
-    "suppressed_reason", "control_group")`, where `n` is `evaluation.reasons_per_row`.
+    "suppressed_reason", "control_group")`, where `n` is `evaluation.reasons_per_row`. A composite
+    key contributes each of its columns, in key order, as a column of its own (DEC-083).
     """
     reasons = tuple(f"reason_{i}" for i in range(1, config.evaluation.reasons_per_row + 1))
     return (
-        primary_key,
+        *key_columns(primary_key),
         config.actions.score_field,
         "band",
         "action",
@@ -1312,7 +1313,7 @@ class JobSpec(Artefact):
     run_config_key: str = Field(description="Storage key of run_config.json, the resolved configuration.")
     upload_key: str = Field(description="Storage key of the uploaded file the run consumes.")
     upload_format: Literal["csv", "parquet"] = Field(description="Format of the uploaded file.")
-    primary_key: str = Field(description="Column identifying each entity.")
+    primary_key: PrimaryKey = Field(description="Column, or columns, identifying each row.")
     target: str | None = Field(default=None, description="Target column; set for a training job only.")
     model_version_id: str | None = Field(
         default=None, description="Model version to score with; set for a scoring job only."

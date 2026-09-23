@@ -445,7 +445,10 @@ def test_the_body_reads_its_inputs_back_out_of_the_store(
     (ctx,) = seen
     assert ctx.run_id == record.run_id
     assert ctx.upload_key == _Upload.source_key
-    assert ctx.primary_key == PRIMARY_KEY
+    # DEC-083 (ruling D1): StageContext carries the key as a list of its columns; what the
+    # artefacts store is still the bare column name.
+    assert ctx.primary_key == [PRIMARY_KEY]
+    assert ctx.key == PRIMARY_KEY
     assert ctx.target == TARGET
 
 

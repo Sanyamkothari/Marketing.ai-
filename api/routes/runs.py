@@ -74,6 +74,7 @@ from engine.contracts import (
 )
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
 from engine.jobs import JobRunner, ReconcilingJobRunner
+from engine.keys import normalise_key, split_config_for_key
 from engine.onboarding.specs import DatasetManifest
 from engine.pipeline import STATUS_FILENAME, Pipeline
 from engine.registry import ModelRegistry
@@ -187,7 +188,6 @@ _RUN_ERRORS: dict[int | str, dict[str, object]] = {
 DATASET_NOT_FOUND: Final[str] = "DATASET_NOT_FOUND"
 DATASET_NOT_BUILT: Final[str] = "DATASET_NOT_BUILT"
 DATASET_USE_CASE_MISMATCH: Final[str] = "DATASET_USE_CASE_MISMATCH"
-DATASET_COMPOSITE_KEY_NOT_WIRED: Final[str] = "DATASET_COMPOSITE_KEY_NOT_WIRED"
 DATASET_CLIENT_MISMATCH: Final[str] = "DATASET_CLIENT_MISMATCH"
 
 
@@ -206,8 +206,9 @@ class _DatasetSource:
     source_key: str
 
     @property
-    def primary_key(self) -> str:
-        return str(self.manifest.primary_key[0])
+    def primary_key(self) -> PrimaryKey:
+        """The dataset's own key: one column, or the entity key and the snapshot date (DEC-083)."""
+        return normalise_key(list(self.manifest.primary_key))
 
     # --- `engine.runs.UploadInfo`, so the job path runs a dataset with no code of its own -------
     # Phase 4a's job spec, thread runner and SageMaker container read a run's source through that
@@ -276,19 +277,6 @@ def _dataset_source(
             DATASET_CLIENT_MISMATCH,
             f"Dataset {dataset_id!r} belongs to client {manifest.client_id!r}, not {client_id!r}.",
         )
-    if len(manifest.primary_key) > 1:
-        # Plan section 6.5 change 1 widens the key on the contracts, which is done; teaching
-        # prepare, split, explain, actions and export to carry more than one column is the half of
-        # that change still outstanding. Refusing here is the honest stop: a run that silently took
-        # the first column would join on the customer and lose the snapshot date, training one row
-        # per customer out of twelve and reporting success.
-        raise http_error(
-            501,
-            DATASET_COMPOSITE_KEY_NOT_WIRED,
-            f"Dataset {dataset_id!r} has one row per {' and '.join(manifest.primary_key)}, and a run "
-            "still takes a single key column. Build it with a single snapshot to train on it now.",
-        )
-
     read = ingest.read_upload(storage, frame_key, file_format="parquet")
     profile = ingest.profile_dataset(
         read.frame,
@@ -341,7 +329,11 @@ def create_run_endpoint(
         source_key, file_format = dataset.source_key, "parquet"
         # The manifest knows what a row is and what the outcome is called; a request that repeats
         # them is honoured, a request that omits them is answered rather than refused.
-        primary_key = sole_key(body.primary_key, what="A run") if body.primary_key else dataset.primary_key
+        primary_key = normalise_key(body.primary_key) if body.primary_key else dataset.primary_key
+        # A periodic dataset holds each customer at several dates: its rows are split by customer
+        # (or by snapshot date), and run_config.json records the split as derived (DEC-083).
+        resolved = split_config_for_key(resolved, primary_key)
+        config = resolved.config
         target = body.target or dataset.manifest.target
     else:
         upload_id = _require_upload_id(body.upload_id)

@@ -61,6 +61,15 @@ row, so reordering the input file cannot move a single customer in or out of the
 makes the holdout stable per (run, customer) rather than per (run, row position). Duplicate primary
 keys would break the tie-break into input order; validation refuses them (`PK_NOT_UNIQUE`).
 
+**Per entity, when a frame holds an entity more than once** (DEC-083). A periodic dataset has one row
+per customer per snapshot date, and a customer is one person whichever snapshot a row describes. With
+`entity_key` set, the decisions are taken per entity: a customer suppressed at any snapshot is
+suppressed at all of them, with the highest-priority reason any of their rows earned (each rule
+fails towards the customer), and the holdout draws *customers* - `round_half_up(eligible customers
+* control_group_fraction)` of them, by the same salted digest of the entity key - so a customer is
+either in the control group at every snapshot of a run or at none. Without `entity_key` nothing
+changes.
+
 `pandas` and `numpy` are imported inside the function bodies, never at module level, so
 `import engine` stays fast.
 """
@@ -176,6 +185,7 @@ def apply_actions(
     *,
     run_id: str,
     primary_key: str,
+    entity_key: str | None = None,
     now: datetime | None = None,
 ) -> pd.DataFrame:
     """Add band, action and suppression reason to every scored row, seeded from the run id.
@@ -189,7 +199,11 @@ def apply_actions(
 
     started = time.perf_counter()
     score_field = config.actions.score_field
-    missing = [name for name in (primary_key, score_field) if name not in frame.columns]
+    missing = [
+        name
+        for name in (primary_key, score_field, *([entity_key] if entity_key else []))
+        if name not in frame.columns
+    ]
     if missing:
         raise ValueError(
             f"The scored frame is missing {', '.join(repr(name) for name in missing)}; "
@@ -202,15 +216,25 @@ def apply_actions(
     actions = bands.map(band_action).astype("object")
 
     reasons, applied, skipped = _suppression(result, config, now=utc_now() if now is None else now)
+    if entity_key is not None:
+        reasons = _per_entity_reasons(reasons, result[entity_key], config)
     suppressed = reasons.notna()
     actions[suppressed] = SUPPRESSED_ACTION
 
-    control = _control_mask(
-        result[primary_key],
-        ~suppressed,
-        run_id=run_id,
-        fraction=config.actions.control_group_fraction,
-    )
+    if entity_key is None:
+        control = _control_mask(
+            result[primary_key],
+            ~suppressed,
+            run_id=run_id,
+            fraction=config.actions.control_group_fraction,
+        )
+    else:
+        control = _entity_control_mask(
+            result[entity_key],
+            ~suppressed,
+            run_id=run_id,
+            fraction=config.actions.control_group_fraction,
+        )
     actions[control] = CONTROL_ACTION
 
     result[BAND_COLUMN] = bands
@@ -315,6 +339,51 @@ def _control_mask(
         for _, _, position in ranked[:take]:
             chosen[position] = True
     return pd.Series(chosen, index=keys.index, name=CONTROL_GROUP_COLUMN)
+
+
+def _per_entity_reasons(reasons: pd.Series, entities: pd.Series, config: UseCaseConfig) -> pd.Series:
+    """Every row of an entity takes the highest-priority reason any of that entity's rows earned."""
+    import pandas as pd
+
+    from engine.keys import key_text
+
+    codes = [code for code, _ in suppression_rules(config)]
+    if not codes or not bool(reasons.notna().any()):
+        return reasons
+    rank = reasons.map({code: position for position, code in enumerate(codes)}).astype("Float64")
+    best = rank.groupby(key_text(entities).to_numpy(), sort=False).transform("min")
+    values = [None if pd.isna(value) else codes[int(value)] for value in best.tolist()]
+    return pd.Series(values, index=reasons.index, dtype="object", name=SUPPRESSED_REASON_COLUMN)
+
+
+def _entity_control_mask(
+    entities: pd.Series,
+    eligible: pd.Series,
+    *,
+    run_id: str,
+    fraction: float,
+) -> pd.Series:
+    """The holdout drawn over entities: every row of a chosen entity, and nothing else.
+
+    Eligibility is already per entity (`_per_entity_reasons`), so an entity's rows are either all
+    eligible or none are; the draw ranks the distinct eligible entities by the salted digest.
+    """
+    import numpy as np
+    import pandas as pd
+
+    from engine.keys import key_text
+
+    texts = key_text(entities)
+    mask = eligible.to_numpy(dtype=bool)
+    pool = sorted(set(texts[mask].tolist()))
+    take = _holdout_size(len(pool), fraction)
+    chosen = np.zeros(len(texts), dtype=bool)
+    if take:
+        salt = f"{seed_from(run_id)}:"
+        ranked = sorted((_digest(salt + text), text) for text in pool)
+        picked = {text for _, text in ranked[:take]}
+        chosen = texts.isin(picked).to_numpy(dtype=bool) & mask
+    return pd.Series(chosen, index=entities.index, name=CONTROL_GROUP_COLUMN)
 
 
 def _holdout_size(eligible: int, fraction: float) -> int:

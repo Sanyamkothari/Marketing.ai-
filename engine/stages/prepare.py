@@ -214,7 +214,7 @@ def prepare_rows(
     df: pd.DataFrame,
     config: UseCaseConfig,
     *,
-    primary_key: str,
+    primary_key: str | Sequence[str],
     target: str | None,
 ) -> tuple[pd.DataFrame, RowPlan]:
     """Apply every rule that needs no fitted statistic, so the split sees the final set of rows.
@@ -437,7 +437,7 @@ def prepare(
     config: UseCaseConfig,
     *,
     run_id: str,
-    primary_key: str,
+    primary_key: str | Sequence[str],
     target: str | None,
 ) -> tuple[pd.DataFrame, PrepareReport]:
     """Clean the table as the config asks and record every transform, drop and removal.
@@ -488,10 +488,17 @@ def _fit_mask(frame: pd.DataFrame, fit_index: pd.Index | None) -> pd.Series[bool
     return pd.Series(frame.index.isin(fit_index), index=frame.index, dtype=bool)
 
 
-def _reserved_columns(config: UseCaseConfig, *, primary_key: str, target: str | None) -> tuple[str, ...]:
-    """Columns the engine needs by name, which no heuristic may drop and none of which is a feature."""
+def _reserved_columns(
+    config: UseCaseConfig, *, primary_key: str | Sequence[str], target: str | None
+) -> tuple[str, ...]:
+    """Columns the engine needs by name, which no heuristic may drop and none of which is a feature.
+
+    `primary_key` is one column or several: every column of a composite key - the entity key, the
+    snapshot date - and the run's joined row key are carried through and never learned from (DEC-083).
+    """
+    keys = (primary_key,) if isinstance(primary_key, str) else tuple(primary_key)
     candidates = (
-        primary_key,
+        *keys,
         target,
         config.target.column,
         config.split.time_column,
