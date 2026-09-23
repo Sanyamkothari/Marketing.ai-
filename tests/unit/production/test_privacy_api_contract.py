@@ -72,6 +72,7 @@ def test_no_privacy_route_takes_a_principal_id_outside_the_body() -> None:
         "/privacy/consent",
         "/privacy/consent/lookup",
         "/privacy/erasure",
+        "/privacy/erasure/{request_id}/retry",  # Plan D M54: the id is given again, in the body (DEC-863)
         "/privacy/access-requests",
     }
 
