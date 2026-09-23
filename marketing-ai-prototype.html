@@ -504,6 +504,8 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .upchecks{border:1px solid var(--line2);border-radius:10px;margin-top:14px;overflow:hidden;background:var(--surface)}
 .upchecks .uph{padding:10px 14px;background:var(--bad-t);color:var(--bad);font-size:12px;font-weight:600}
 .upchecks .checks li.warn .ck{color:var(--warn)}
+.upchecks .checks li.skip{color:var(--muted)}
+.upchecks .checks li.skip .ck{color:var(--faint)}
 .upchecks .upmsg{padding:10px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--ink2)}
 .upchecks .upmsg b{color:var(--bad);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600}
 .upchecks .check{height:auto;padding:10px 14px;border-top:1px solid var(--line);background:var(--soft);align-items:flex-start}
@@ -1223,7 +1225,7 @@ const UPLIFT_WHY="Predicts who changes behaviour because of your action.";
 /* uplift.treatment_column_hints, in the order detection tries them */
 const TREAT_HINTS=["treatment","treated","contacted","is_treated"];
 /* the uplift: block of configs/engine.yaml (learner x_learner, base_model autogluon_fast, ...) */
-const UPLIFT_DEFAULTS={learner:"X-learner",base:"AutoGluon fast",persuadable:0.02,sleepingDog:-0.01,
+const UPLIFT_DEFAULTS={learner:"X-learner",base:"AutoGluon fast",persuadable:0.02,sleepingDog:-0.01,sureThing:null,
   minArmRows:1000,minArmPos:50,randomAucMax:0.60,bootstrap:200,testFraction:0.30};
 const UP_LEARNERS=["X-learner (recommended)","T-learner","S-learner (baseline)"];
 const UP_BASES=["AutoGluon fast","LightGBM"];
@@ -1255,7 +1257,9 @@ const CAMPAIGN_SEED={id:"r0501",at:"1 May 2026",date:"2026-05-01",mode:"score",r
   file:"win_back_campaign_2026-05.csv",ptype:"",causal:true,seed:true};
 const CAMPAIGN_OUTCOMES={file:"winback_outcomes_2026-08.csv",treated:[11200,1232],control:[1450,109],suppressed:1850,missing:0};
 const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
-let AS_OF=null, UP_NULL_VIEW=false;
+/* UP_NULL_VIEW is the "no measurable uplift" example on the Model page. It belongs to the page it was
+   opened on: render() clears it whenever the route changes (UP_NULL_HASH is where it was opened). */
+let AS_OF=null, UP_NULL_VIEW=false, UP_NULL_HASH="";
 const today=()=>AS_OF?new Date(AS_OF):new Date();
 const isoDay=d=>new Date(d).toISOString().slice(0,10);
 /* A fixed month table, not toLocaleString: ICU spells September "Sept" in Node and "Sep" elsewhere. */
@@ -1269,9 +1273,13 @@ const hnum=k=>Number(String(HOLDOUT[k]).replace(/,/g,""));
 
 function detectTreatment(cols){const low=cols.map(c=>String(c).toLowerCase());
   for(const h of TREAT_HINTS){const i=low.indexOf(h);if(i>=0)return cols[i];}return "";}
-const treatCandidates=s=>s.cols.filter(c=>TREAT_HINTS.includes(String(c).toLowerCase()));
+/* Uplift is offered only on a use case with uplift sample content (SETUP[id].treatment: Win-back).
+   Everywhere else a column named like a treatment is an ordinary column and the Phase 1 path runs,
+   so no other use case can end up showing the win-back sample's uplift numbers. */
+const hasUplift=u=>!!(SETUP[u.id]&&SETUP[u.id].treatment&&!SETUP[u.id].gen);
+const treatCandidates=(s,u=CUR)=>u&&hasUplift(u)?s.cols.filter(c=>TREAT_HINTS.includes(String(c).toLowerCase())):[];
 const ptypesFor=s=>s.treatment||s.ptype===UPLIFT_PTYPE?[...PTYPES,UPLIFT_PTYPE]:PTYPES;
-function isUplift(u){const s=st(u);return !SETUP[u.id].gen&&s.mode==="train"&&(s.ptype||detectType(u))===UPLIFT_PTYPE;}
+function isUplift(u){const s=st(u);return hasUplift(u)&&s.mode==="train"&&(s.ptype||detectType(u))===UPLIFT_PTYPE;}
 /* The run the uplift screens render from: the current run when it is an uplift run. A scoring run
    carries its model's problem type, so scoring with an uplift model counts too. */
 function upliftRun(u){const r=st(u).current;return r&&r.ptype==="Uplift"?r:null;}
@@ -1326,8 +1334,14 @@ function shareAbove(x){const c=predCurve();if(x>=c[0][1])return 0;if(x<=c[c.leng
 function segCounts(kind,a){const b=kind==="scored"?UPLIFT_SEGS:UPLIFT_SEGS_TEST,tot=SEG_IDS.reduce((x,k)=>x+b[k],0);
   const rp=shareAbove(a.upPers)/shareAbove(UPLIFT_DEFAULTS.persuadable),rd=(1-shareAbove(a.upSleep))/(1-shareAbove(UPLIFT_DEFAULTS.sleepingDog));
   const p=Math.min(tot,Math.round(b.persuadable*rp)),d=Math.min(tot-p,Math.round(b.sleeping_dog*rd)),rest=tot-p-d;
-  const sure=Math.round(rest*b.sure_thing/(b.sure_thing+b.lost_cause));
+  /* Between the cuts: sure thing at P(convert untreated) ≥ the cut, the training base rate when unset.
+     The sample's split holds at the base rate; another cut moves it along an exponential P(control). */
+  const r0=b.sure_thing/(b.sure_thing+b.lost_cause),ratio=a.upSure==null?r0:Math.exp(Math.log(r0)*a.upSure/sureBaseRate());
+  const sure=Math.round(rest*ratio);
   return {persuadable:p,sure_thing:sure,lost_cause:rest-sure,sleeping_dog:d};}
+/* segments.sure_thing_min_probability when unset: the outcome rate over the sample's rows (9,523 of 96,000). */
+function sureBaseRate(d=UPLIFT_DECILES){const t=armTotals(d);return (t.yt+t.yc)/t.n;}
+const sureCutText=a=>a.upSure==null?`${sureBaseRate().toFixed(3)}, the training base rate`:String(a.upSure);
 /* policy_recommendation.json: top N by uplift within budget, among eligible persuadables only. */
 function upliftPolicy(run){const a=run.adv,scored=run.mode==="score",segs=segCounts(scored?"scored":"test",a);
   const rows=SEG_IDS.reduce((x,k)=>x+segs[k],0);
@@ -1342,6 +1356,31 @@ function upliftPolicy(run){const a=run.adv,scored=run.mode==="score",segs=segCou
   return {computed_on:scored?"scored":"test",rows,segs,eligible_persuadables:cand,n,stop_reason:reason,budget:a.upBudget,
     predicted:n?n*topShare(n/rows).pred:0,expected:exp,cost_per_contact:a.upCost,value_per_conversion:a.upValue,
     expected_cost:cost,expected_value:value,expected_net_value:cost!=null&&value!=null?value-cost:null,causal:run.causal!==false};}
+/* engine/uplift/incrementality.py::_summary and _points templates, verbatim */
+const INC_TEXT={
+  noControl:"This run held no control group back, so there is nothing to compare the treated customers with and the campaign's effect cannot be measured.",
+  immature:"Results available on {when}: the {outcome_window_days}-day outcome window has not elapsed yet for any of the {rows_immature} treated and control customers.",
+  nothing:"No treated or control customer of this run has a usable outcome, so there is nothing to measure yet.",
+  empty:"No {empty} customer has a usable outcome yet, so the lift cannot be measured.",
+  pLow:"p < 0.001",p:"p = {p_value:.3f}",
+  rates:"Treated customers converted at {treated_rate:.1%} against {control_rate:.1%} for the control group",
+  extra:"extra",fewer:"fewer",
+  lift:"{rates}: a lift of {_points(absolute_lift.value)} (95% CI {_points(low)} to {_points(high)}; {p_text}), about {abs(incremental.value):,.0f} {direction} conversions caused by the campaign.",
+  noLift:"{rates}: a difference of {_points(absolute_lift.value)}, but the 95% interval ({_points(low)} to {_points(high)}; {p_text}) includes zero, so the campaign cannot be shown to have changed the outcome.",
+  stillOpen:" {rows_immature} customers are still inside the outcome window and are not counted; all results are in on {when}.",
+  points:"{rate * 100:+.1f} points"};
+/* IncrementalityReport.summary: _summary, branch for branch */
+function incSummary(r,hasControl=true){const T=INC_TEXT,when=r.results_available_on||"—",pts=v=>pyfmt(T.points,{"rate * 100":v*100});
+  if(!hasControl)return T.noControl;
+  if(r.status==="immature")return pyfmt(T.immature,{when,outcome_window_days:r.outcome_window_days,rows_immature:r.rows_immature});
+  if(!r.treated_rows&&!r.control_rows)return T.nothing;
+  const L=r.absolute_lift;if(!L||r.treated_rate==null||r.control_rate==null||!r.incremental_conversions)return pyfmt(T.empty,{empty:r.control_rows?"treated":"control"});
+  const p=r.p_value==null?"—":r.p_value<0.001?T.pLow:pyfmt(T.p,{p_value:r.p_value});
+  const v={rates:pyfmt(T.rates,{treated_rate:r.treated_rate,control_rate:r.control_rate}),"_points(absolute_lift.value)":pts(L.value),
+    "_points(low)":pts(L.ci_low),"_points(high)":pts(L.ci_high),p_text:p,"abs(incremental.value)":Math.abs(r.incremental_conversions.value),direction:L.value>0?T.extra:T.fewer};
+  let out=pyfmt(L.ci_low>0||L.ci_high<0?T.lift:T.noLift,v);
+  if(r.rows_immature)out+=pyfmt(T.stillOpen,{rows_immature:r.rows_immature,when});
+  return out;}
 /* incrementality_report.json for a scoring run, from its counts and the outcomes file */
 function campaignReport(run,outcomes,asOf,cr=st(UC.find(x=>x.id==="win-back-campaign")).cr){
   const win=cr.window,avail=addDays(run.date,win),mature=avail<=new Date(isoDay(asOf)+"T00:00:00Z");
@@ -1353,16 +1392,13 @@ function campaignReport(run,outcomes,asOf,cr=st(UC.find(x=>x.id==="win-back-camp
   const nil={treated_rows:0,treated_conversions:0,treated_rate:null,control_rows:0,control_conversions:0,control_rate:null,
     absolute_lift:null,relative_lift:null,incremental_conversions:null,p_value:null};
   if(!outcomes)return {...base,...nil,measured:false,rows_immature:mature?0:tRows+cRows};
-  if(!mature)return {...base,...nil,measured:true,rows_immature:tRows+cRows,
-    summary:`Results available on ${fmtDay(avail)}: the ${win}-day outcome window has not ended for any customer yet.`};
+  if(!mature){const r={...base,...nil,measured:true,rows_immature:tRows+cRows};r.summary=incSummary(r);return r;}
   if(!outcomes.treated)return {...base,...nil,measured:false};
   const [nt,yt]=outcomes.treated,[nc,yc]=outcomes.control,tr=yt/nt,ctl=yc/nc,d=tr-ctl,[lo,hi]=newcombe(yt,nt,yc,nc),p=zTest(yt,nt,yc,nc);
   const r={...base,measured:true,treated_rows:nt,treated_conversions:yt,treated_rate:tr,control_rows:nc,control_conversions:yc,control_rate:ctl,
     absolute_lift:{value:d,ci_low:lo,ci_high:hi},relative_lift:ctl?d/ctl:null,incremental_conversions:{value:d*nt,ci_low:lo*nt,ci_high:hi*nt},
     p_value:p,rows_without_outcome:outcomes.missing,rows_suppressed_or_untreated:outcomes.suppressed};
-  r.summary=lo>0?`The campaign worked: ${pct1(tr)} of treated customers converted against ${pct1(ctl)} of the control group, a lift of ${pts2(d)} (95% CI ${(lo*100).toFixed(2)} to ${(hi*100).toFixed(2)}), about ${fmtI(d*nt)} conversions that would not have happened without it.`
-    :hi<0?`The campaign did harm: ${pct1(tr)} of treated customers converted against ${pct1(ctl)} of the control group (95% CI ${(lo*100).toFixed(2)} to ${(hi*100).toFixed(2)} points).`
-    :`No measurable effect: ${pct1(tr)} of treated customers converted against ${pct1(ctl)} of the control group, and the 95% CI of the lift (${(lo*100).toFixed(2)} to ${(hi*100).toFixed(2)} points) includes zero.`;
+  r.summary=incSummary(r);
   return r;}
 
 /* --- renderers --- */
@@ -1415,7 +1451,11 @@ function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),p=qiniPoints()
         <p class="upverdict">${verdict}</p>
         ${kvs([["Learner",`${run.learner} · ${run.baseModel}`],["Hold-out",`${fmtI(t.n)} rows · ${fmtI(t.nt)} treated · ${fmtI(t.nc)} control`],
           ["Treated rate · control rate",`${pct1(t.yt/t.nt)} · ${pct1(t.yc/t.nc)}`],["Treating everyone gains",`${pts2(ateOf())} (95% CI ${(alo*100).toFixed(2)} to ${(ahi*100).toFixed(2)})`],
-          ["Qini coefficient",`${f4(qc)} (95% CI ${f4(UPLIFT_EVAL.qini.ci_low)} to ${f4(UPLIFT_EVAL.qini.ci_high)})`],["Bootstrap resamples",String(a.upBoot)]])}
+          ["Qini coefficient",`${f4(qc)} (95% CI ${f4(UPLIFT_EVAL.qini.ci_low)} to ${f4(UPLIFT_EVAL.qini.ci_high)})`],
+          /* UpliftEvaluation.uplift_at: the top 10%, 20% and 30% */
+          ...[0.1,0.2,0.3].map(f=>{const x=upliftAt(f);return [`Uplift in the top ${Math.round(f*100)}%`,`${pts2(x.value)} (95% CI ${(x.ci_low*100).toFixed(2)} to ${(x.ci_high*100).toFixed(2)})`];}),
+          ["Bootstrap resamples",String(a.upBoot)]])}
+        <p class="caption" data-up-at>Uplift in the top k%: the treated rate minus the control rate among the k% of the hold-out with the highest predicted uplift.</p>
         <div class="updl"><button type="button" class="linkbtn" id="up-null">${UP_NULL_VIEW?"Back to this model":"What a model with no measurable uplift looks like"}</button></div></section>
     </div>
     <section class="card"><h3>Uplift by decile</h3>${decileBars(UPLIFT_DECILES)}
@@ -1439,7 +1479,7 @@ function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),score
   return `${pol.causal?"":ncBanner()}
     ${kpis([["Recommended to contact",fmtI(pol.n)],["Expected incremental conversions",e?fmtI(e.value):"—"],["Persuadables",fmtI(pol.segs.persuadable)],["Sleeping dogs, never contacted",fmtI(pol.segs.sleeping_dog)]])}
     <div class="row">
-      <section class="card"><h3>Four segments</h3>${segmentChart(pol.segs,run)}<p class="caption" data-up-computed>Computed on ${on}. Persuadable at predicted uplift ≥ ${run.adv.upPers}; sleeping dog at ≤ ${run.adv.upSleep}.</p></section>
+      <section class="card"><h3>Four segments</h3>${segmentChart(pol.segs,run)}<p class="caption" data-up-computed>Computed on ${on}. Persuadable at predicted uplift ≥ ${run.adv.upPers}; sleeping dog at ≤ ${run.adv.upSleep}; in between, sure thing when P(convert without contact) ≥ ${sureCutText(run.adv)}, otherwise lost cause.</p></section>
       <section class="card"><h3>Who to contact</h3>
         <div class="upbig"><div class="ub1">Recommended to contact</div><div class="ub2" data-up-n>${fmtI(pol.n)}</div><div class="ub3">${esc(STOP_REASONS[pol.stop_reason])}${pol.budget!=null?` Budget: ${fmtI(pol.budget)} contacts.`:""}</div></div>
         ${kvs([["Eligible persuadables",fmtI(pol.eligible_persuadables)],
@@ -1453,31 +1493,97 @@ function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),score
         <span class="reason">${scored?`winback_treat_list.csv · ${fmtI(pol.n)} customers · persuadables within budget only`:"Score a list with this model to download who to contact."}</span></div>
       ${table(["customer_id","uplift","segment","top_reason (SHAP on uplift)","action"],UP_SAMPLE_ROWS)}
       <p class="caption">Sample rows of scores.csv. The download holds the Treat rows only, with every column of scores.csv.</p></section>`;}
-/* The 409 of POST /uplift/runs, inline: uplift_validation.json's six checks. The wording is the
-   prototype's; engine/uplift/checks.py should adopt it. */
-function upChecksHtml(u){const s=st(u),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
-  if(!(isUplift(u)&&s.targeted&&s.treatment))return "";
-  const li=(bad,code,t)=>`<li class="${bad?"bad":""}" data-up-check="${code}"><span class="ck">${bad?"✕":"✓"}</span><span>${esc(t)}</span></li>`;
-  return `<div class="upchecks" role="alert"><div class="uph">The uplift checks stopped this run: 1 error</div><ul class="checks">
-    ${li(0,"TREATMENT_COLUMN_MISSING",`Treatment column found: ${s.treatment}.`)}
-    ${li(0,"TREATMENT_NOT_BINARY","Every treatment value is 0 or 1.")}
-    ${li(0,"TREATMENT_ARM_TOO_SMALL",`Both arms are big enough: ${fmtI(E.treated)} treated and ${fmtI(E.control)} control, each above ${fmtI(D.minArmRows)} rows and ${D.minArmPos} conversions.`)}
-    ${li(1,"TREATMENT_NOT_RANDOM",`The features predict who was treated: AUC ${E.targetedAuc.toFixed(2)} against the ${D.randomAucMax.toFixed(2)} limit.`)}
-    ${li(0,"OUTCOME_WINDOW_IMMATURE","Every row's outcome window has ended.")}
-    ${li(0,"FEATURE_AFTER_TREATMENT","No feature is dated after the treatment date.")}</ul>
-    <div class="upmsg"><b>TREATMENT_NOT_RANDOM</b> The offer went to customers the features can pick out, so the treated and control groups differed before anything was sent. Use a campaign with a random control group, or acknowledge this and train anyway.</div>
-    <label class="check"><input type="checkbox" id="f-ack" ${s.ack?"checked":""}><span>Train anyway, and label every output not causal.<span class="uphint" style="display:block">The model can never become the uplift champion, and every page it feeds carries a not-causal banner.</span></span></label></div>`;}
+/* Python str.format for the engine's own f-string templates, so the prototype can carry them
+   verbatim (tests/prototype/consistency.test.mjs compares them with the engine source). `vars` is
+   keyed by the exact expression inside the braces; the format specs are the ones the engine uses. */
+function pyfmt(tpl,vars){return tpl.replace(/\{([^{}:]+)(?::([^{}]*))?\}/g,(m,expr,spec)=>{
+  if(!(expr in vars))throw new Error(`pyfmt: no value for {${expr}}`);const v=vars[expr];
+  if(!spec)return String(v);
+  if(spec===".1%")return `${(v*100).toFixed(1)}%`;
+  if(spec===",.0f")return Math.round(v).toLocaleString("en-US");
+  if(spec==="+.1f")return `${v>=0?"+":"-"}${Math.abs(v).toFixed(1)}`;
+  const f=spec.match(/^\.(\d)f$/);if(f)return v.toFixed(+f[1]);
+  throw new Error(`pyfmt: unsupported spec ${spec}`);});}
+const pyN=n=>Math.round(n).toLocaleString("en-US");
+const pyJoin=a=>a.length<=1?(a.length?`'${a[0]}'`:""):`${a.slice(0,-1).map(x=>`'${x}'`).join(", ")} and '${a[a.length-1]}'`;
+/* engine/uplift/checks.py message and suggestion templates, verbatim */
+const UP_CHECK_TEXT={
+  notBinary:"'{column}' should be 1 for treated customers and 0 for held-out customers, but {_n(bad)} of {_n(rows)} rows ({share:.1%}) are blank or hold another value.",
+  notBinaryFix:"Record every customer as 1 (treated) or 0 (held out); true and false work too. Remove customers whose treatment is unknown from the file.",
+  armRows:"the {arm} has {_n(rows)} customers (at least {_n(min_rows)} needed)",
+  armPositives:"only {_n(positives)} customers in the {arm} had a positive '{target}' (at least {_n(min_positives)} needed)",
+  armAfter:" after leaving out {_n(rows_excluded)} customers whose outcome is not final yet",
+  armTooSmall:"There are too few customers to measure what the campaign changed{after}: {'; '.join(shortfalls)}.",
+  armTooSmallFix:"Use a longer period or a larger campaign, or hold out a bigger control group next time.",
+  signalOne:" The strongest sign was {_join(signals)}.",
+  signalMany:" The strongest signs were {_join(signals)}.",
+  notRandom:"Who was treated can be predicted from the customers' own data (AUC {auc:.2f}, where a random assignment scores about 0.50 and the limit is {threshold:.2f}).{strongest} The campaign looks targeted, so comparing treated with untreated customers would mix what the campaign changed with how the chosen customers already differed.",
+  notRandomFix:"Use data from a campaign with a randomly chosen hold-out group. If you go ahead anyway, every uplift result will be labelled not causal."};
+/* checks.py RANDOMNESS_MIN_ARM_ROWS: below it in either arm the randomness check does not run */
+const RANDOMNESS_MIN_ARM_ROWS=30;
+/* The features the targeted sample's randomness classifier leans on (checks.py names at most three). */
+const TARGETED_SIGNALS=["months_since_churn","avg_monthly_spend"];
+const TREAT_CODE=v=>{const t=String(v??"").trim().toLowerCase();return t==="1"||t==="1.0"||t==="true"?1:t==="0"||t==="0.0"||t==="false"?0:null;};
+/* uplift_validation.json for the file in Setup. The sample campaign files carry the sample's
+   counts; a CSV the page read whole (s.upRows) is counted row by row, as checks.py counts it.
+   A bigger upload cannot be checked in the page, so it shows no panel. */
+function upliftChecks(u){const s=st(u),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
+  if(!(isUplift(u)&&s.target&&s.treatment))return null;
+  const out=[],add=(code,state,text,finding)=>out.push({code,state,text,finding});
+  add("TREATMENT_COLUMN_MISSING","pass",`Treatment column found: ${s.treatment}.`);
+  if(s.file&&s.file.sample){
+    add("TREATMENT_NOT_BINARY","pass","Every treatment value is 0 or 1.");
+    add("TREATMENT_ARM_TOO_SMALL","pass",`Both arms are big enough: ${fmtI(E.treated)} treated and ${fmtI(E.control)} control, each above ${fmtI(D.minArmRows)} rows and ${D.minArmPos} conversions.`);
+    if(s.targeted){const sig=TARGETED_SIGNALS,strongest=pyfmt(sig.length>1?UP_CHECK_TEXT.signalMany:UP_CHECK_TEXT.signalOne,{"_join(signals)":pyJoin(sig)});
+      const message=pyfmt(UP_CHECK_TEXT.notRandom,{auc:E.targetedAuc,threshold:D.randomAucMax,strongest});
+      add("TREATMENT_NOT_RANDOM","bad",message,{message,suggestion:UP_CHECK_TEXT.notRandomFix,acknowledgeable:true});}
+    else add("TREATMENT_NOT_RANDOM","pass",`Nothing predicts who was treated: AUC ${E.randomAuc.toFixed(2)}, within the ${D.randomAucMax.toFixed(2)} limit.`);
+    add("OUTCOME_WINDOW_IMMATURE","pass","Every row's outcome window has ended.");
+    add("FEATURE_AFTER_TREATMENT","pass","No feature is dated after the treatment date.");
+    return out;}
+  if(!s.upRows)return null;
+  const ti=s.cols.indexOf(s.treatment),yi=s.cols.indexOf(s.target),rows=s.upRows.length;
+  const t=s.upRows.map(r=>TREAT_CODE(r[ti])),bad=t.filter(x=>x==null).length;
+  if(bad){const message=pyfmt(UP_CHECK_TEXT.notBinary,{column:s.treatment,"_n(bad)":pyN(bad),"_n(rows)":pyN(rows),share:bad/rows});
+    add("TREATMENT_NOT_BINARY","bad",message,{message,suggestion:UP_CHECK_TEXT.notBinaryFix});
+    ["TREATMENT_ARM_TOO_SMALL","TREATMENT_NOT_RANDOM"].forEach(c=>add(c,"skip","Not run: the treatment column has to be 0 or 1 first."));}
+  else{const y=s.upRows.map(r=>TREAT_CODE(r[yi])),yOk=yi>=0&&y.every(v=>v!=null);
+    const arms=[["treated group",1],["control group",0]].map(([arm,k])=>({arm,rows:t.filter(v=>v===k).length,positives:yOk?y.filter((v,i)=>t[i]===k&&v===1).length:null}));
+    /* no treatment date column, so no row is left out as immature */
+    const short=[],rowsExcluded=0;arms.forEach(a=>{
+      if(a.rows<D.minArmRows)short.push(pyfmt(UP_CHECK_TEXT.armRows,{arm:a.arm,"_n(rows)":pyN(a.rows),"_n(min_rows)":pyN(D.minArmRows)}));
+      if(a.positives!=null&&a.positives<D.minArmPos)short.push(pyfmt(UP_CHECK_TEXT.armPositives,{arm:a.arm,"_n(positives)":pyN(a.positives),target:s.target,"_n(min_positives)":pyN(D.minArmPos)}));});
+    if(short.length){const message=pyfmt(UP_CHECK_TEXT.armTooSmall,{after:rowsExcluded?pyfmt(UP_CHECK_TEXT.armAfter,{"_n(rows_excluded)":pyN(rowsExcluded)}):"","'; '.join(shortfalls)":short.join("; ")});
+      add("TREATMENT_ARM_TOO_SMALL","bad",message,{message,suggestion:UP_CHECK_TEXT.armTooSmallFix});}
+    else add("TREATMENT_ARM_TOO_SMALL","pass",`Both arms are big enough: ${fmtI(arms[0].rows)} treated and ${fmtI(arms[1].rows)} control.`);
+    add("TREATMENT_NOT_RANDOM","skip",Math.min(arms[0].rows,arms[1].rows)<RANDOMNESS_MIN_ARM_ROWS
+      ?`Not run: an arm has fewer than ${RANDOMNESS_MIN_ARM_ROWS} customers.`:"Measured when the run starts.");}
+  ["OUTCOME_WINDOW_IMMATURE","FEATURE_AFTER_TREATMENT"].forEach(c=>add(c,"skip","Not run: no treatment date column is set."));
+  return out;}
+const upErrors=u=>(upliftChecks(u)||[]).filter(c=>c.state==="bad");
+/* The 409 of POST /uplift/runs, inline: uplift_validation.json's six checks, each finding in
+   engine/uplift/checks.py's words. Only TREATMENT_NOT_RANDOM can be acknowledged. */
+function upChecksHtml(u){const s=st(u),checks=upliftChecks(u),errs=upErrors(u);if(!errs.length)return "";
+  const mark={pass:"✓",bad:"✕",skip:"–"};
+  const li=c=>`<li class="${c.state==="bad"?"bad":c.state==="skip"?"skip":""}" data-up-check="${c.code}"><span class="ck">${mark[c.state]}</span><span>${esc(c.text)}</span></li>`;
+  const ackable=errs.every(c=>c.finding.acknowledgeable);
+  return `<div class="upchecks" role="alert"><div class="uph">The uplift checks stopped this run: ${errs.length} error${errs.length>1?"s":""}</div><ul class="checks">
+    ${checks.map(li).join("")}</ul>
+    ${errs.map(c=>`<div class="upmsg" data-up-fix="${c.code}"><b>${c.code}</b> ${esc(c.finding.suggestion)}</div>`).join("")}
+    ${ackable?`<label class="check"><input type="checkbox" id="f-ack" ${s.ack?"checked":""}><span>Train anyway, and label every output not causal.<span class="uphint" style="display:block">The model can never become the uplift champion, and every page it feeds carries a not-causal banner.</span></span></label>`:""}</div>`;}
 const unum=(key,label,step,min,max,hint,cls="sm")=>{const v=st(CUR).adv[key];
   return `<div class="field ${cls}"><span class="sub">${esc(label)}</span><div class="control"><input type="number" data-up-num="${key}" step="${step}" min="${min}" max="${max}" value="${v==null?"":v}" placeholder="—"></div><span class="uphint">${esc(hint)}</span></div>`;};
 function upStage5(a){return [`AUUC · ${a.upBoot} bootstrap resamples · ${a.upTest}% hold-out${a.shap?` · top ${a.reasons} SHAP reasons on uplift`:""} · champion if +${a.champ}%`,
   `<div class="frow">${unum("upBoot","Bootstrap resamples",10,10,5000,"Resamples behind every confidence interval. More is steadier and slower.")}${unum("upTest","Hold-out share (%)",5,10,50,"Customers kept back to measure uplift. The learners never see them.")}${num("reasons","Reasons per row",1,1,5)}${num("champ","Replace uplift champion if better by (%)",0.5,0,20)}${chk("shap","Explain the uplift of every row (SHAP)")}</div>`];}
-function upStage6(a){return [`Persuadable ≥ ${a.upPers} · sleeping dog ≤ ${a.upSleep} · budget ${a.upBudget==null?"—":fmtI(a.upBudget)}${a.supOpt?" · skip opted-out":""}${a.supRecent?` · skip contacted <${a.recentDays}d`:""} · ${a.control}% control group`,
-  `<div class="frow">${unum("upPers","Persuadable at uplift ≥",0.01,-1,1,"Customers at or above this are worth contacting.")}${unum("upSleep","Sleeping dog at uplift ≤",0.01,-1,1,"Customers at or below this are never contacted, whatever the budget.")}${unum("upBudget","Budget (contacts)",100,1,10000000,"The most customers to contact. Empty means every persuadable.")}${unum("upCost","Cost per contact (₹)",1,0,100000,"With a value per conversion, the list stops where a contact no longer pays for itself.")}${unum("upValue","Value per conversion (₹)",10,0,10000000,"What one extra conversion is worth to you.")}
+function upStage6(a){return [`Persuadable ≥ ${a.upPers} · sleeping dog ≤ ${a.upSleep} · sure thing P ≥ ${a.upSure==null?"base rate":a.upSure} · budget ${a.upBudget==null?"—":fmtI(a.upBudget)}${a.supOpt?" · skip opted-out":""}${a.supRecent?` · skip contacted <${a.recentDays}d`:""} · ${a.control}% control group`,
+  `<div class="frow">${unum("upPers","Persuadable at uplift ≥",0.01,-1,1,"Customers at or above this are worth contacting.")}${unum("upSleep","Sleeping dog at uplift ≤",0.01,-1,1,"Customers at or below this are never contacted, whatever the budget.")}${unum("upSure","Sure thing at P(convert untreated) ≥",0.01,0,1,`Between the cuts, a customer this likely to convert without the action is a sure thing. Empty means the training base rate (${sureBaseRate().toFixed(3)}).`)}${unum("upBudget","Budget (contacts)",100,1,10000000,"The most customers to contact. Empty means every persuadable.")}${unum("upCost","Cost per contact (₹)",1,0,100000,"With a value per conversion, the list stops where a contact no longer pays for itself.")}${unum("upValue","Value per conversion (₹)",10,0,10000000,"What one extra conversion is worth to you.")}
     <div class="field sm"><span class="sub">Control group holdout</span><div class="control" style="padding:0 12px;color:var(--muted)" data-up-control>${a.control}% · fixed</div><span class="uphint">Held out at random so campaign results can be measured. Not editable for uplift.</span></div>
     ${num("recentDays","Recently contacted (days)",1,1,90)}${chk("supOpt","Suppress opted-out customers")}${chk("supRecent","Suppress recently contacted")}</div>`];}
 function campaignRuns(u){const s=st(u);return [...s.runs.filter(r=>r.mode==="score").slice().reverse(),CAMPAIGN_SEED];}
 function campaignPage(u){const s=st(u),cr=s.cr,runs=campaignRuns(u),run=runs.find(r=>r.id===cr.run)||runs[0];
-  const rep=campaignReport(run,cr.outcomes?(run.seed?CAMPAIGN_OUTCOMES:{}):null,today(),cr);
+  /* Only the sample outcomes link has numbers behind it: the page cannot read a real outcomes file. */
+  const unread=cr.outcomes&&!cr.sample;
+  const rep=campaignReport(run,cr.outcomes&&cr.sample?(run.seed?CAMPAIGN_OUTCOMES:{}):null,today(),cr);
   const nc=run.causal===false;
   const hint=(t)=>`<span class="uphint">${esc(t)}</span>`;
   const form=`<div class="crgrid">
@@ -1488,8 +1594,9 @@ function campaignPage(u){const s=st(u),cr=s.cr,runs=campaignRuns(u),run=runs.fin
     <div class="field"><span class="sub">Treatment date column</span><div class="control sel"><select id="cr-datecol">${opt(["treatment_date"],cr.dateCol,"None: use the send date")}</select></div>${hint("Per-customer send dates; without it every row uses the run's send date.")}</div></div>`;
   const ok=rep.absolute_lift&&rep.absolute_lift.ci_low>0;
   let result;
-  if(rep.status==="immature") result=`<div class="crwait" data-up-wait><span class="cw1">Results available on ${fmtDay(rep.results_available_on)}</span>
-    <span class="cw2">Sent ${esc(fmtDay(run.date))}. The ${rep.outcome_window_days}-day outcome window has not ended for any customer yet, so nothing is measured and no row is guessed.${rep.measured?` ${fmtI(rep.rows_immature)} rows are waiting for their window.`:""}</span></div>`;
+  if(unread) result=`<div class="genbox" data-up-unread><span class="gb1">${esc(cr.file)} is not read by the prototype, so nothing is computed from it.</span><span class="gb2">The product joins it to the run's treated and control customers and measures the lift from its rows. Use sample outcomes to see a measured campaign.</span></div>`;
+  else if(rep.status==="immature") result=`<div class="crwait" data-up-wait><span class="cw1">Results available on ${fmtDay(rep.results_available_on)}</span>
+    <span class="cw2">Sent ${esc(fmtDay(run.date))}. The ${rep.outcome_window_days}-day outcome window has not ended for any customer yet, so nothing is measured and no row is guessed.</span></div>${rep.measured?`<p class="crsum" data-up-summary>${esc(rep.summary)}</p>`:""}`;
   else if(!rep.measured) result=`<div class="genbox"><span class="gb1">The outcome window has ended. Upload the outcomes file to measure this campaign.</span><span class="gb2">Treated customers are compared with the control group the run held out at random.</span></div>`;
   else result=`${ciBar({value:rep.absolute_lift.value*100,ci_low:rep.absolute_lift.ci_low*100,ci_high:rep.absolute_lift.ci_high*100},v=>`${v>=0?"+":"−"}${Math.abs(v).toFixed(2)} pts`,ok,"zero = the campaign changed nothing")}
     <p class="crsum" data-up-summary>${esc(rep.summary)}</p>
@@ -1549,12 +1656,12 @@ function defaultAdv(cfg){return cfg.gen
      drift:0.2,retrain:"On drift",alert:5,
      retention:90,consentCol:"",approval:true,
      upLearner:UP_LEARNERS[0],upBase:UPLIFT_DEFAULTS.base,upBoot:UPLIFT_DEFAULTS.bootstrap,upTest:Math.round(UPLIFT_DEFAULTS.testFraction*100),
-     upPers:UPLIFT_DEFAULTS.persuadable,upSleep:UPLIFT_DEFAULTS.sleepingDog,upBudget:cfg.budget??null,upCost:null,upValue:null};}
+     upPers:UPLIFT_DEFAULTS.persuadable,upSleep:UPLIFT_DEFAULTS.sleepingDog,upSure:UPLIFT_DEFAULTS.sureThing,upBudget:cfg.budget??null,upCost:null,upValue:null};}
 function st(u){
   if(!STATE[u.id]){const c=SETUP[u.id];
     STATE[u.id]={mode:"train",file:null,cols:[],preview:null,pk:"",target:"",ptype:"",model:AUTO,adv:defaultAdv(c),advOpen:false,view:"setup",current:null,scoreRun:"r1",
-      source:"file",docs:null,qa:null,pkExtra:"",pkParts:null,builtFrom:false,recipe:RECIPE,treatment:"",ack:false,targeted:false,
-      cr:{run:"",outcomes:false,file:"",window:90,dateCol:"treatment_date",outcome:c.target},
+      source:"file",docs:null,qa:null,pkExtra:"",pkParts:null,builtFrom:false,recipe:RECIPE,treatment:"",ack:false,targeted:false,upRows:null,
+      cr:{run:"",outcomes:false,sample:false,file:"",window:90,dateCol:"treatment_date",outcome:c.target},
       runs:[{id:"r1",at:"14 Sep 2026, 10:20",mode:"train",file:`${u.id.replace(/-/g,"_")}_history.csv`,rows:u.data.kp[0][1],model:AUTO,best:c.best,score:c.score,target:c.target,pk:c.gen?"question":"customer_id",champion:true}]};}
   return STATE[u.id];
 }
@@ -1580,19 +1687,23 @@ function blocker(u){const s=st(u),cfg=SETUP[u.id];
   if(s.mode==="train"&&!s.target)return `Choose the ${cfg.tlabel?"reference answer":"target"} column`;
   if(s.mode==="score"&&!s.runs.some(r=>r.mode==="train"))return "Train a model first";
   if(isUplift(u)&&!s.treatment)return "Choose the treatment column";
-  if(isUplift(u)&&s.targeted&&!s.ack)return "The treatment was not randomly assigned (TREATMENT_NOT_RANDOM). Acknowledge it to continue";
+  if(isUplift(u)){const errs=upErrors(u),hard=errs.filter(c=>!c.finding.acknowledgeable);
+    if(hard.length)return hard[0].code==="TREATMENT_ARM_TOO_SMALL"?"Too few customers to measure what the campaign changed (TREATMENT_ARM_TOO_SMALL)":"The treatment column is not 0 or 1 (TREATMENT_NOT_BINARY)";
+    if(errs.length&&!s.ack)return "The treatment was not randomly assigned (TREATMENT_NOT_RANDOM). Acknowledge it to continue";}
   return "";}
-function sampleFile(u){const s=st(u),cfg=SETUP[u.id];const feats=u.data.ft.map(f=>f[0]);
+function sampleFile(u,campaign=false){const s=st(u),cfg=SETUP[u.id];const feats=u.data.ft.map(f=>f[0]);
   const idc=cfg.gen?"question":"customer_id";
-  /* Phase 3b: a use case with a treatment column in its sample carries it, and its send date */
-  const treat=cfg.treatment&&s.mode==="train"?[cfg.treatment,"treatment_date"]:[];
+  /* Phase 3b: only the sample campaign file (an opt-in, on a use case with uplift sample content)
+     carries a treatment column and its send date. The plain sample is Phase 1's, column for column. */
+  campaign=!!(campaign&&cfg.treatment&&s.mode==="train");
+  const treat=campaign?[cfg.treatment,"treatment_date"]:[];
   const base=s.mode==="score"?s.runs.find(r=>r.id===s.scoreRun):null,upScore=!!(base&&base.ptype==="Uplift");
   s.cols=s.mode==="train"?[idc,"snapshot_date",...feats,...treat,cfg.target]:[idc,"snapshot_date",...feats];
-  s.file={name:`${u.id.replace(/-/g,"_")}_${s.mode==="train"?"history":"this_week"}.csv`,size:"Sample dataset",rows:s.mode==="train"?u.data.kp[0][1]:upScore?HOLDOUT.eligible:"12,480",sample:true};
+  s.file={name:`${u.id.replace(/-/g,"_")}_${campaign?"with_control":s.mode==="train"?"history":"this_week"}.csv`,size:"Sample dataset",rows:s.mode==="train"?u.data.kp[0][1]:upScore?HOLDOUT.eligible:"12,480",sample:true};
   s.pk=idc;s.target=s.mode==="train"?cfg.target:"";s.preview=null;s.adv.timeCol="snapshot_date";
-  s.treatment=s.mode==="train"?detectTreatment(s.cols):"";s.targeted=false;s.ack=false;
+  s.treatment=campaign?detectTreatment(s.cols):"";s.targeted=false;s.ack=false;s.upRows=null;
 }
-function sampleTargeted(u){const s=st(u);sampleFile(u);s.targeted=true;s.ack=false;
+function sampleTargeted(u){const s=st(u);sampleFile(u,true);s.targeted=true;s.ack=false;
   s.file.name=`${u.id.replace(/-/g,"_")}_targeted.csv`;}
 function sampleDocs(u){const s=st(u);s.docs=DOCS;
   s.file={name:"product_docs (5 files)",size:`${DOC_PAGES} pages · ${DOC_CHUNKS} chunks`,rows:DOC_CHUNKS,sample:true,docs:true};}
@@ -1622,7 +1733,7 @@ function predStep1(u){const s=st(u),o=onb(u),train=s.mode==="train";
     ${card("raw",train?"Build from raw tables":"Upload this month's tables",train?"Bring the tables you already have. We map them, build the features and the label, and write the dataset.":`The saved recipe ${RECIPE.name} v${RECIPE.version} maps and builds them exactly as last time.`)}</div>`;
   const body=s.source==="raw"
     ? `${obPanel(u)}${o.used?previewHtml(u):""}`
-    : `<div class="orline" style="margin-top:12px"><label class="control file ${s.file?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.file?esc(s.file.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sample">use the sample dataset</button></span>${SETUP[u.id].treatment&&train?'<span>or <button type="button" class="linkbtn" id="f-sampletargeted">use a sample where offers were targeted</button></span>':""}</div>${previewHtml(u)}`;
+    : `<div class="orline" style="margin-top:12px"><label class="control file ${s.file?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.file?esc(s.file.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sample">use the sample dataset</button></span>${SETUP[u.id].treatment&&train?'<span>or <button type="button" class="linkbtn" id="f-samplecampaign">use the sample campaign file (with a control group)</button></span><span>or <button type="button" class="linkbtn" id="f-sampletargeted">use a sample where offers were targeted</button></span>':""}</div>${previewHtml(u)}`;
   return `<div class="fstep ${s.file?"done":""}"><div class="stepno">1</div><div>
     <div class="flabel">Dataset</div><div class="fhint">Start from a file you have already prepared, or from the raw tables as they come out of your systems.</div>
     ${pick}${body}</div></div>`;}
@@ -1693,7 +1804,7 @@ function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
 }
 const PTYPES=["Classification (yes / no)","Regression (a number)","Forecasting (a number over time)","Clustering (no target)"];
 function detectType(u){const s=st(u),cfg=SETUP[u.id];if(cfg.gen)return "";if(!s.target)return "";
-  if(s.treatment&&s.mode==="train")return UPLIFT_PTYPE;
+  if(s.treatment&&s.mode==="train"&&hasUplift(u))return UPLIFT_PTYPE;
   if(s.file&&s.file.sample)return PTYPES[0];
   const i=s.cols.indexOf(s.target);const vals=(s.preview||[]).map(r=>r[i]).filter(v=>v!==undefined&&v!=="");
   const uniq=new Set(vals.map(v=>String(v).toLowerCase()));const numeric=vals.length&&vals.every(v=>!isNaN(parseFloat(v)));
@@ -1704,7 +1815,7 @@ function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg),train=s.m
   const detected=detectType(u), ptype=s.ptype||detected;
   const upl=ptype===UPLIFT_PTYPE;
   const ptypeHtml = train&&!cfg.gen&&s.target ? `<div class="ptype"><span>Problem type</span><span class="pill">${esc(ptype)}</span><span>${s.ptype&&s.ptype!==detected?"set manually":upl?"detected from the treatment column":"detected from the target column"}</span><select id="f-ptype" aria-label="Change problem type"><option value="">change…</option>${ptypesFor(s).map(t=>`<option ${t===ptype?"disabled":""}>${esc(t)}</option>`).join("")}</select>${upl?`<span class="upwhy">${esc(UPLIFT_WHY)}</span>`:ptype!==PTYPES[0]?`<span style="flex-basis:100%;color:var(--warn)">${ptype.startsWith("Clustering")?"Clustering ignores the target and groups similar rows.":"Metrics and models will switch to "+ptype.split(" (")[0].toLowerCase()+" defaults."}</span>`:""}</div>${upChecksHtml(u)}` : "";
-  const cands=train&&!cfg.gen?treatCandidates(s):[];
+  const cands=train&&!cfg.gen?treatCandidates(s,u):[];
   const treatField=cands.length?`<div class="field"><span class="sub">Treatment column</span><div class="control sel"><select id="f-treat">${opt(cands,s.treatment,"None")}</select></div><span class="uphint">1 means the customer received the action, 0 means held out. It must be randomly assigned.</span><span class="uphint" data-up-share>Treated share: ${s.treatment&&s.file&&s.file.sample?`${Math.round(100*UPLIFT_EVAL.treated/(UPLIFT_EVAL.treated+UPLIFT_EVAL.control))}% treated`:"—"}</span></div>`:"";
   const trainRuns=s.runs.filter(r=>r.mode==="train");
   const step1 = cfg.gen?genStep1(u):predStep1(u);
@@ -1777,9 +1888,7 @@ function runningHtml(u){return `<div class="setup-grid"><section class="card"><h
 function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id];
   return `<div class="results"><div class="summary"><span class="ok">✓ ${r.mode==="train"?(cfg.gen?"Assistant built":"Training complete"):(cfg.gen?"Evaluation complete":"Scoring complete")}</span>
     <span>${r.mode==="train"?`Best model <b>${esc(r.best)}</b> · ${esc(r.score)}`:`<b>${esc(r.rows)}</b> rows scored with ${esc(r.best)}${r.ptype==="Uplift"?` · Recommended to contact: <b>${fmtI(upliftPolicy(r).n)}</b>`:""}`}</span>
-    ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}
-    ${r.mode==="train"&&r.ptype==="Uplift"?`<span class="muted">${r.upChampion?"Set as uplift champion":r.causal===false?"Not promoted: not causal":"Not promoted"}</span>`:""}
-    ${r.mode==="score"&&u.id==="win-back-campaign"?`<a class="linkbtn" id="f-campaign" href="#/uc/${u.id}/campaign">Campaign results</a>`:""}
+    ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}${r.mode==="train"&&r.ptype==="Uplift"?`<span class="muted">${r.upChampion?"Set as uplift champion":r.causal===false?"Not promoted: not causal":"Not promoted"}</span>`:""}${r.mode==="score"&&u.id==="win-back-campaign"?`<a class="linkbtn" id="f-campaign" href="#/uc/${u.id}/campaign">Campaign results</a>`:""}
     <span class="muted">${esc(r.file)} · ${esc(r.at)}</span><button class="again" id="f-again">Run again / change settings</button></div>
     <span class="cap">AI pipeline</span><div class="flow">${flowBlocks(u,r)}</div>
     ${cfg.gen?assistantResults(u):""}
@@ -1799,6 +1908,7 @@ function bindDetail(u){
   document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{if(s.mode!==b.dataset.mode){s.mode=b.dataset.mode;s.file=null;s.cols=[];s.preview=null;s.target="";s.pk="";s.treatment="";s.targeted=false;s.ack=false;if(s.ptype===UPLIFT_PTYPE)s.ptype="";rerender(u);}}));
   on("f-sample","click",()=>{sampleFile(u);rerender(u);});
   /* Phase 3b §8: treatment column, the targeted sample and its acknowledgement */
+  on("f-samplecampaign","click",()=>{sampleFile(u,true);rerender(u);});
   on("f-sampletargeted","click",()=>{sampleTargeted(u);rerender(u);});
   on("f-treat","change",e=>{const was=isUplift(u);s.treatment=e.target.value;
     if(!s.treatment&&was&&!s.ptype)s.ptype=UPLIFT_PTYPE;
@@ -1808,7 +1918,7 @@ function bindDetail(u){
   document.querySelectorAll("[data-up-num]").forEach(el=>el.addEventListener("change",()=>{
     const k=el.dataset.upNum;s.adv[k]=el.value===""?null:+el.value;rerender(u);}));
   on("f-file","change",e=>{const f=e.target.files[0];if(!f)return;
-    s.file={name:f.name,size:fmtSize(f.size),rows:"—",sample:false};s.cols=[];s.preview=null;s.target="";s.pk="";s.ptype="";s.treatment="";s.targeted=false;s.ack=false;
+    s.file={name:f.name,size:fmtSize(f.size),rows:"—",sample:false};s.cols=[];s.preview=null;s.target="";s.pk="";s.ptype="";s.treatment="";s.targeted=false;s.ack=false;s.upRows=null;
     if(/\.csv$/i.test(f.name)){
       const CH=262144;
       f.slice(0,CH).text().then(t=>{
@@ -1821,7 +1931,9 @@ function bindDetail(u){
           if(cols.includes(cfg.target)&&s.mode==="train")s.target=cfg.target;
           const idc=cols.find(c=>/(^id$|_id$|^id_|_key$|customer|cust)/i.test(c));if(idc)s.pk=idc;
           const tc=cols.find(c=>/date|time|month|week|day|ts$/i.test(c));if(tc)s.adv.timeCol=tc;
-          if(s.mode==="train")s.treatment=detectTreatment(cols);}
+          /* the whole file was read: keep its rows so the uplift checks count real arms, not the sample's */
+          s.upRows=f.size<=CH?lines.slice(1).map(parseLine):null;
+          if(s.mode==="train"&&hasUplift(u))s.treatment=detectTreatment(cols);}
         rerender(u);}).catch(()=>rerender(u));
     } else rerender(u);});
   on("f-pk","change",e=>{s.pk=e.target.value;if(s.target===s.pk)s.target="";rerender(u);});
@@ -2034,14 +2146,15 @@ function bindGlobal(){
   const u=UC.find(x=>location.hash.startsWith(`#/uc/${x.id}/`));if(!u)return;
   const s=st(u),$i=id=>document.getElementById(id),on=(id,ev,fn)=>{const el=$i(id);if(el)el.addEventListener(ev,fn);};
   on("up-dl","click",()=>downloadTreatList(u));
-  on("up-null","click",()=>{UP_NULL_VIEW=!UP_NULL_VIEW;render();});
+  on("up-null","click",()=>{UP_NULL_VIEW=!UP_NULL_VIEW;UP_NULL_HASH=location.hash;render();});
   on("cr-run","change",e=>{s.cr.run=e.target.value;render();});
-  on("cr-sample","click",()=>{s.cr.outcomes=true;s.cr.file=CAMPAIGN_OUTCOMES.file;render();});
-  on("cr-file","change",e=>{const f=e.target.files[0];if(!f)return;s.cr.outcomes=true;s.cr.file=f.name;render();});
+  on("cr-sample","click",()=>{s.cr.outcomes=true;s.cr.sample=true;s.cr.file=CAMPAIGN_OUTCOMES.file;render();});
+  on("cr-file","change",e=>{const f=e.target.files[0];if(!f)return;s.cr.outcomes=true;s.cr.sample=false;s.cr.file=f.name;render();});
   on("cr-window","change",e=>{s.cr.window=Math.max(1,Math.min(3650,+e.target.value||90));render();});
   on("cr-datecol","change",e=>{s.cr.dateCol=e.target.value;render();});}
 
 function render(){
+  if(UP_NULL_VIEW&&location.hash!==UP_NULL_HASH)UP_NULL_VIEW=false;
   const parts = location.hash.replace(/^#\/?/,"").split("/").filter(Boolean);
   const app = document.getElementById("app");
   let html, t = "Marketing AI · Minfy", after = null;

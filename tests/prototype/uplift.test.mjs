@@ -21,7 +21,7 @@ function winback() {
   return dom;
 }
 async function trainUplift(dom, { targeted = false } = {}) {
-  click(dom, targeted ? "#f-sampletargeted" : "#f-sample");
+  click(dom, targeted ? "#f-sampletargeted" : "#f-samplecampaign");
   if (targeted) set(dom, "#f-ack", true);
   submit(dom);
   await wait(1300);
@@ -42,8 +42,10 @@ test("the treatment picker appears only when a column looks like a treatment", a
   const dom = winback();
   assert.equal($(dom, "#f-treat"), null, "nothing to pick before a file");
   click(dom, "#f-sample");
+  assert.equal($(dom, "#f-treat"), null, "the plain sample is Phase 1's: no treatment column");
+  click(dom, "#f-samplecampaign");
   const pick = $(dom, "#f-treat");
-  assert.ok(pick, "the win-back sample carries a treatment column");
+  assert.ok(pick, "the sample campaign file carries a treatment column");
   assert.deepEqual([...pick.options].map((o) => o.textContent), ["None", "treatment"]);
   assert.equal(pick.value, "treatment", "the detected column is pre-selected, as the API's `detected` is");
   const field = pick.closest(".field");
@@ -51,23 +53,22 @@ test("the treatment picker appears only when a column looks like a treatment", a
   assert.equal(field.querySelector("[data-up-share]").textContent, "Treated share: 90% treated");
   // the step list does not grow: the picker is a field inside step 2
   assert.deepEqual($$(dom, ".flabel").map((e) => e.textContent.trim()), ["Dataset", "Columns", "Model"]);
+  // a real win-back upload with a hinted column gets the picker, and its treated share is not guessed
+  await upload(dom, "#f-file", "offers.csv",
+    "customer_id,months_since_churn,treatment,reactivated_90d\nC1,2,1,0\nC2,5,0,1\n");
+  assert.equal($(dom, "#f-treat").value, "treatment");
+  assert.equal($(dom, "[data-up-share]").textContent, "Treated share: —");
+  assert.equal($(dom, ".ptype .pill").textContent, PTYPE);
   // another use case's sample has no such column, so no picker
   go(dom, "#/uc/payment-propensity");
   await wait(30); // let the hashchange render land before a file read starts
   click(dom, "#f-sample");
   assert.equal($(dom, "#f-treat"), null);
-  // a real upload with a hinted column gets the picker, and its treated share is not guessed
-  await upload(dom, "#f-file", "offers.csv",
-    "account_id,late_payments_6m,contacted,late_or_missed_payment\nA1,2,1,0\nA2,0,0,1\n");
-  set(dom, "#f-target", "late_or_missed_payment");
-  assert.equal($(dom, "#f-treat").value, "contacted");
-  assert.equal($(dom, "[data-up-share]").textContent, "Treated share: —");
-  assert.equal($(dom, ".ptype .pill").textContent, PTYPE);
 });
 
 test("Uplift is the problem type, detected from the treatment column, with its one-line explanation", () => {
   const dom = winback();
-  click(dom, "#f-sample");
+  click(dom, "#f-samplecampaign");
   assert.equal($(dom, ".ptype .pill").textContent, PTYPE);
   assert.match($(dom, ".ptype").textContent, /detected from the treatment column/);
   assert.equal($(dom, ".ptype .upwhy").textContent, "Predicts who changes behaviour because of your action.");
@@ -89,6 +90,8 @@ test("change… offers Uplift only when there is a treatment column", () => {
   assert.match($(dom, ".ptype .pill").textContent, /^Classification/);
   go(dom, `#/uc/${WB}`);
   click(dom, "#f-sample");
+  assert.ok(!opts(dom).includes(PTYPE), "the plain win-back sample has no treatment column either");
+  click(dom, "#f-samplecampaign");
   assert.ok(opts(dom).includes(PTYPE));
   set(dom, "#f-ptype", "Classification (yes / no)");
   assert.match($(dom, ".ptype .pill").textContent, /^Classification/);
@@ -98,7 +101,7 @@ test("change… offers Uplift only when there is a treatment column", () => {
 
 test("an uplift run without a treatment column is blocked, with the reason", () => {
   const dom = winback();
-  click(dom, "#f-sample");
+  click(dom, "#f-samplecampaign");
   set(dom, "#f-treat", "");
   assert.equal($(dom, ".ptype .pill").textContent, PTYPE, "the problem type stays Uplift");
   assert.equal($(dom, ".reason").textContent, "Choose the treatment column");
@@ -110,7 +113,7 @@ test("an uplift run without a treatment column is blocked, with the reason", () 
 
 test("uplift settings sit inside the existing stages 5 and 6, each with a hint", () => {
   const dom = winback();
-  click(dom, "#f-sample");
+  click(dom, "#f-samplecampaign");
   assert.deepEqual($$(dom, ".stage-d .st").map((e) => e.textContent), [
     "Data preparation", "Data split", "Feature engineering", "Model search",
     "Evaluation & explainability", "Actions & output", "Monitoring & retraining", "Governance & privacy",
@@ -121,6 +124,8 @@ test("uplift settings sit inside the existing stages 5 and 6, each with a hint",
   assert.equal(val("upPers"), "0.02");
   assert.equal(val("upSleep"), "-0.01");
   assert.equal(val("upBudget"), "4000");
+  assert.equal(val("upSure"), "", "sure_thing_min_probability is unset: the training base rate");
+  assert.match($(dom, '[data-up-num="upSure"]').closest(".field").textContent, /Empty means the training base rate \(0\.099\)\./);
   assert.equal(val("upCost"), "", "unset is empty, shown as —");
   assert.equal($(dom, '[data-up-num="upCost"]').placeholder, "—");
   assert.equal($(dom, '[data-up-num="upValue"]').value, "");
@@ -131,7 +136,9 @@ test("uplift settings sit inside the existing stages 5 and 6, each with a hint",
   // the stage summaries follow the settings
   const summ = $$(dom, ".stage-d .ss").map((e) => e.textContent);
   assert.match(summ[4], /AUUC · 200 bootstrap resamples · 30% hold-out/);
-  assert.match(summ[5], /Persuadable ≥ 0\.02 · sleeping dog ≤ -0\.01 · budget 4,000/);
+  assert.match(summ[5], /Persuadable ≥ 0\.02 · sleeping dog ≤ -0\.01 · sure thing P ≥ base rate · budget 4,000/);
+  set(dom, '[data-up-num="upSure"]', "0.15");
+  assert.match($$(dom, ".stage-d .ss")[5].textContent, /sure thing P ≥ 0\.15 ·/);
   set(dom, '[data-up-num="upBudget"]', "");
   assert.match($$(dom, ".stage-d .ss")[5].textContent, /budget —/);
   // every uplift field explains itself in one sentence
@@ -150,7 +157,15 @@ test("TREATMENT_NOT_RANDOM: the six checks fail inline and Run waits for an ackn
   const bad = checks.filter((li) => li.classList.contains("bad"));
   assert.equal(bad.length, 1);
   assert.equal(bad[0].dataset.upCheck, "TREATMENT_NOT_RANDOM");
-  assert.match(bad[0].textContent, /AUC 0\.74 against the 0\.60 limit/);
+  // the engine's own finding (engine/uplift/checks.py::_not_random), word for word
+  assert.equal(bad[0].querySelector("span:last-child").textContent,
+    "Who was treated can be predicted from the customers' own data (AUC 0.74, where a random assignment " +
+    "scores about 0.50 and the limit is 0.60). The strongest signs were 'months_since_churn' and " +
+    "'avg_monthly_spend'. The campaign looks targeted, so comparing treated with untreated customers would " +
+    "mix what the campaign changed with how the chosen customers already differed.");
+  assert.equal($(dom, '[data-up-fix="TREATMENT_NOT_RANDOM"]').textContent,
+    "TREATMENT_NOT_RANDOM Use data from a campaign with a randomly chosen hold-out group. If you go ahead " +
+    "anyway, every uplift result will be labelled not causal.");
   assert.match(checks[2].textContent, /each above 1,000 rows and 50 conversions/);
   assert.equal($(dom, "#f-run").disabled, true);
   assert.match($(dom, ".reason").textContent, /TREATMENT_NOT_RANDOM/);
@@ -158,7 +173,7 @@ test("TREATMENT_NOT_RANDOM: the six checks fail inline and Run waits for an ackn
   assert.equal($(dom, "#f-run").disabled, false);
   assert.equal($(dom, ".reason").textContent, "");
   // the random sample never shows the panel
-  click(dom, "#f-sample");
+  click(dom, "#f-samplecampaign");
   assert.equal($(dom, ".upchecks"), null);
 });
 
@@ -189,7 +204,7 @@ test("an acknowledged run is labelled not causal on Model, Output and Campaign r
 
 test("the uplift run checks the treatment, trains the learner and measures on the hold-out", async () => {
   const dom = winback();
-  click(dom, "#f-sample");
+  click(dom, "#f-samplecampaign");
   submit(dom);
   assert.deepEqual($$(dom, ".progress .pt").map((e) => e.textContent), [
     "Checking the treatment", "Preparing features", "Training the X-learner",
@@ -232,6 +247,11 @@ test("Results → Model: Qini curve with the random line, AUUC with its interval
     "Targeting by predicted uplift beats random targeting: AUUC 0.0125 (95% CI 0.0098 to 0.0151).");
   assert.match($(dom, "#up-auuc").textContent, /Uplift champion/);
   assert.equal(kv(dom, "Hold-out"), "96,000 rows · 86,400 treated · 9,600 control");
+  // UpliftEvaluation.uplift_at: the top 10%, 20% and 30%, each with its interval
+  assert.equal(kv(dom, "Uplift in the top 10%"), "+13.50 pts (95% CI 11.87 to 14.83)");
+  assert.equal(kv(dom, "Uplift in the top 20%"), "+11.40 pts (95% CI 10.26 to 12.39)");
+  assert.equal(kv(dom, "Uplift in the top 30%"), "+9.85 pts (95% CI 8.91 to 10.69)");
+  assert.ok($(dom, "[data-up-at]").textContent.endsWith("."));
   // uplift by decile: diverging bars, the sleeping-dog deciles below zero
   const rows = $$(dom, ".dbrow");
   assert.equal(rows.length, 10);
@@ -262,6 +282,8 @@ test("Results → Output after training: four segments on the hold-out, and no l
   assert.deepEqual(segs.map((r) => r.querySelector(".sa").textContent),
     ["Treat", "Don't treat (converts anyway)", "Don't treat (won't convert)", "Never treat (contact makes it worse)"]);
   assert.match($(dom, "[data-up-computed]").textContent, /Computed on the 96,000-customer hold-out of the training run/);
+  assert.match($(dom, "[data-up-computed]").textContent,
+    /in between, sure thing when P\(convert without contact\) ≥ 0\.099, the training base rate, otherwise lost cause\.$/);
   assert.equal($(dom, "#up-dl").disabled, true);
   assert.match($(dom, "#up-dl").parentElement.textContent, /Score a list with this model to download who to contact\./);
   assert.equal(ev(dom, `treatListRows(UC.find(u=>u.id==='${WB}')).length`), 0);
@@ -330,7 +352,9 @@ test("Campaign results: a list scored today says when its results will be ready"
   assert.deepEqual(Object.values(kpiMap(dom)), ["—", "—", "—", "—"], "nothing is measured before the window ends");
   click(dom, "#cr-sample");
   assert.equal($(dom, "[data-up-wait] .cw1").textContent, "Results available on 22 Dec 2026");
-  assert.match($(dom, "[data-up-wait]").textContent, /4,518 rows are waiting for their window\./);
+  // incrementality.py::_summary's IMMATURE sentence, verbatim (the engine prints the ISO date and a bare count)
+  assert.equal($(dom, "[data-up-summary]").textContent,
+    "Results available on 2026-12-22: the 90-day outcome window has not elapsed yet for any of the 4518 treated and control customers.");
 });
 
 test("Campaign results: the 1 May campaign, measured once its window has ended", () => {
@@ -351,13 +375,15 @@ test("Campaign results: the 1 May campaign, measured once its window has ended",
   assert.equal(kv(dom, "Rows still inside their window"), "0");
   assert.equal(kv(dom, "Rows without an outcome"), "0");
   assert.equal(kv(dom, "Suppressed or not treated"), "1,850");
-  assert.match($(dom, "[data-up-summary]").textContent,
-    /^The campaign worked: 11\.0% of treated customers converted against 7\.52% of the control group, a lift of \+3\.48 pts \(95% CI 1\.91 to 4\.86\), about 390 conversions/);
+  // incrementality.py::_summary, verbatim
+  assert.equal($(dom, "[data-up-summary]").textContent,
+    "Treated customers converted at 11.0% against 7.5% for the control group: a lift of +3.5 points " +
+    "(95% CI +1.9 points to +4.9 points; p < 0.001), about 390 extra conversions caused by the campaign.");
   assert.equal($(dom, ".ncbanner"), null, "a Phase 1 control group is causal");
   // a longer window has not ended yet: 1 May + 180 days
   set(dom, "#cr-window", "180");
   assert.equal($(dom, "[data-up-wait] .cw1").textContent, "Results available on 28 Oct 2026");
-  assert.match($(dom, "[data-up-wait]").textContent, /12,650 rows are waiting/);
+  assert.match($(dom, "[data-up-summary]").textContent, /for any of the 12650 treated and control customers\.$/);
   // every campaign setting explains itself
   for (const el of $$(dom, "#cr-run, #cr-file, #cr-outcome, #cr-window, #cr-datecol")) {
     const hint = el.closest(".field").querySelector(".uphint");
@@ -396,7 +422,7 @@ test("the other use cases, and win-back before an uplift run, get no uplift UI",
   assert.equal($$(dom, ".cccard").length, 12);
   // a classification run on win-back stays a classification run
   go(dom, `#/uc/${WB}`);
-  click(dom, "#f-sample");
+  click(dom, "#f-samplecampaign");
   set(dom, "#f-ptype", "Classification (yes / no)");
   submit(dom);
   await wait(1200);
@@ -404,4 +430,115 @@ test("the other use cases, and win-back before an uplift run, get no uplift UI",
   go(dom, `#/uc/${WB}/output`);
   assert.equal($(dom, ".segrow"), null);
   assert.ok($(dom, ".vchart"));
+});
+
+/* ---------- Review round 1 ---------- */
+
+test("the plain win-back sample is the Phase 1 path: no treatment column, a propensity champion", async () => {
+  const dom = winback();
+  click(dom, "#f-sample");
+  const feats = JSON.parse(ev(dom, `JSON.stringify(UC.find(u=>u.id==='${WB}').data.ft.map(f=>f[0]))`));
+  assert.deepEqual(JSON.parse(ev(dom, `JSON.stringify(STATE['${WB}'].cols)`)),
+    ["customer_id", "snapshot_date", ...feats, "reactivated_90d"], "the columns are Phase 1's");
+  assert.equal(ev(dom, `STATE['${WB}'].file.name`), "win_back_campaign_history.csv");
+  assert.equal($(dom, "#f-treat"), null);
+  assert.equal($(dom, ".upwhy"), null);
+  assert.equal($(dom, ".ptype .pill").textContent, "Classification (yes / no)");
+  assert.ok($(dom, "#f-model"), "the Phase 1 model step, not the meta-learners");
+  assert.equal($(dom, "#f-learner"), null);
+  assert.ok($(dom, "#f-samplecampaign"), "uplift is an explicit opt-in");
+  submit(dom);
+  assert.equal($$(dom, ".progress .pt")[0].textContent === "Checking the treatment", false);
+  await wait(1300);
+  const summary = $(dom, ".summary").textContent;
+  assert.match(summary, /Best model LightGBM \+ Claude copy · ROC-AUC 0\.78/);
+  assert.match(summary, /Set as champion/);
+  assert.doesNotMatch(summary, /uplift/i);
+  assert.equal(ev(dom, `STATE['${WB}'].current.ptype`), "Classification");
+  go(dom, `#/uc/${WB}/model`);
+  assert.match($(dom, "h1").textContent, /Win-back Propensity \+ GenAI Content/);
+  assert.equal($(dom, ".qini"), null);
+  go(dom, `#/uc/${WB}/output`);
+  assert.equal($(dom, ".segrow"), null);
+  assert.ok($(dom, ".vchart"));
+});
+
+test("uplift never leaks into another use case: a treatment-like column there is an ordinary column", async () => {
+  const dom = winback();
+  go(dom, "#/uc/payment-propensity");
+  await wait(30);
+  await upload(dom, "#f-file", "offers.csv",
+    "account_id,late_payments_6m,contacted,late_or_missed_payment\nA1,2,1,0\nA2,0,0,1\n");
+  set(dom, "#f-target", "late_or_missed_payment");
+  assert.equal($(dom, "#f-treat"), null, "no treatment picker outside win-back");
+  assert.match($(dom, ".ptype .pill").textContent, /^Classification/);
+  assert.ok(![...$(dom, "#f-ptype").options].some((o) => o.textContent === PTYPE));
+  assert.ok($$(dom, "#f-target option").some((o) => o.textContent === "contacted"), "contacted stays a column");
+  submit(dom);
+  await wait(1300);
+  assert.notEqual(ev(dom, "STATE['payment-propensity'].current.ptype"), "Uplift");
+  for (const page of ["model", "output"]) {
+    go(dom, `#/uc/payment-propensity/${page}`);
+    assert.equal($(dom, ".segrow"), null);
+    assert.equal($(dom, ".qini"), null);
+    assert.doesNotMatch(body(dom), /57,600|months_since_churn|Recommended to contact|Persuadables/, `${page} shows no win-back uplift numbers`);
+  }
+});
+
+test("a two-row upload on win-back is stopped by TREATMENT_ARM_TOO_SMALL, in the engine's words", async () => {
+  const dom = winback();
+  await upload(dom, "#f-file", "tiny.csv",
+    "customer_id,months_since_churn,treatment,reactivated_90d\nC1,2,1,0\nC2,5,0,1\n");
+  assert.equal($(dom, ".ptype .pill").textContent, PTYPE);
+  const bad = $$(dom, ".upchecks .checks li.bad");
+  assert.deepEqual(bad.map((li) => li.dataset.upCheck), ["TREATMENT_ARM_TOO_SMALL"]);
+  assert.equal(bad[0].querySelector("span:last-child").textContent,
+    "There are too few customers to measure what the campaign changed: the treated group has 1 customers " +
+    "(at least 1,000 needed); only 0 customers in the treated group had a positive 'reactivated_90d' " +
+    "(at least 50 needed); the control group has 1 customers (at least 1,000 needed); only 1 customers in " +
+    "the control group had a positive 'reactivated_90d' (at least 50 needed).");
+  assert.match($(dom, '[data-up-fix="TREATMENT_ARM_TOO_SMALL"]').textContent,
+    /Use a longer period or a larger campaign, or hold out a bigger control group next time\.$/);
+  // nothing the page could not count is claimed to pass
+  assert.ok($(dom, '[data-up-check="TREATMENT_NOT_RANDOM"]').classList.contains("skip"));
+  assert.match($(dom, '[data-up-check="TREATMENT_NOT_RANDOM"]').textContent, /fewer than 30 customers/);
+  assert.equal($(dom, "#f-ack"), null, "only TREATMENT_NOT_RANDOM can be acknowledged");
+  assert.equal($(dom, "#f-run").disabled, true);
+  assert.match($(dom, ".reason").textContent, /TREATMENT_ARM_TOO_SMALL/);
+  // a value that is not 0 or 1 is TREATMENT_NOT_BINARY instead, and the arm check does not run
+  await upload(dom, "#f-file", "yes.csv",
+    "customer_id,months_since_churn,treatment,reactivated_90d\nC1,2,yes,0\nC2,5,0,1\n");
+  assert.equal($(dom, '[data-up-check="TREATMENT_NOT_BINARY"] span:last-child').textContent,
+    "'treatment' should be 1 for treated customers and 0 for held-out customers, but 1 of 2 rows (50.0%) are blank or hold another value.");
+  assert.ok($(dom, '[data-up-check="TREATMENT_ARM_TOO_SMALL"]').classList.contains("skip"));
+  assert.equal($(dom, "#f-run").disabled, true);
+});
+
+test("the no-measurable-uplift example belongs to the page it was opened on", async () => {
+  const dom = winback();
+  await trainUplift(dom);
+  go(dom, `#/uc/${WB}/model`);
+  click(dom, "#up-null");
+  assert.match($(dom, "#up-auuc h3").textContent, /example with no measurable uplift/);
+  go(dom, `#/uc/${WB}/data`);
+  await wait(20);
+  go(dom, `#/uc/${WB}/model`);
+  await wait(20);
+  assert.equal($(dom, "#up-auuc h3").textContent, "AUUC", "back on Model, the real run again");
+  assert.match($(dom, "[data-up-summary]").textContent, /^Targeting by predicted uplift beats random targeting/);
+  assert.equal($(dom, "#up-null").textContent, "What a model with no measurable uplift looks like");
+});
+
+test("Campaign results: an uploaded outcomes file is not measured with the sample's numbers", async () => {
+  const dom = winback();
+  go(dom, `#/uc/${WB}/campaign`);
+  await upload(dom, "#cr-file", "my_outcomes.csv", "customer_id,reactivated_90d\nC1,1\n");
+  assert.equal($(dom, "#cr-file").closest("label").querySelector(".fname").textContent, "my_outcomes.csv");
+  assert.deepEqual(Object.values(kpiMap(dom)), ["—", "—", "—", "—"]);
+  assert.match($(dom, "[data-up-unread]").textContent, /my_outcomes\.csv is not read by the prototype, so nothing is computed from it\./);
+  assert.equal($(dom, "[data-up-summary]"), null);
+  assert.doesNotMatch(body(dom), /11,200|1,232|\+3\.48/);
+  // the sample link is still the way to a measured campaign
+  click(dom, "#cr-sample");
+  assert.equal(kpiMap(dom).Lift, "+3.48 pts");
 });

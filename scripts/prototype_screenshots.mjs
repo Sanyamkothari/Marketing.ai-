@@ -21,7 +21,7 @@ const open = async (page, hash) => {
 const click = async (page, sel) => { await page.click(sel); await page.waitForTimeout(80); };
 const trainUplift = async (p) => {
   await open(p, "#/uc/win-back-campaign");
-  await click(p, "#f-sample");
+  await click(p, "#f-samplecampaign"); // uplift is an opt-in: the plain sample is Phase 1's
   await click(p, "#f-run");
   await p.waitForSelector(".results", { timeout: 20000 });
 };
@@ -133,7 +133,7 @@ const STATES = [
   /* Phase 3b §8 — uplift. Runs are driven through the router so the in-memory run survives. */
   ["19-uplift-setup-treatment", async (p) => {
     await open(p, "#/uc/win-back-campaign");
-    await click(p, "#f-sample");
+    await click(p, "#f-samplecampaign");
   }],
   ["20-uplift-not-random-acknowledge", async (p) => {
     await open(p, "#/uc/win-back-campaign");

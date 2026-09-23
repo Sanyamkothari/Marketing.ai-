@@ -181,6 +181,9 @@ test("the uplift label, defaults and thresholds are the product's", (t) => {
   assert.equal(D.testFraction, Number(val("test_fraction")));
   assert.equal(D.persuadable, Number(val("persuadable_min_uplift")));
   assert.equal(D.sleepingDog, Number(val("sleeping_dog_max_uplift")));
+  const sure = val("sure_thing_min_probability");
+  assert.equal(D.sureThing, sure === "null" ? null : Number(sure), "unset means the training base rate");
+  assert.equal(ev(dom, "defaultAdv(SETUP['win-back-campaign']).upSure"), D.sureThing);
   assert.deepEqual(JSON.parse(ev(dom, "JSON.stringify(TREAT_HINTS)")),
     val("treatment_column_hints").replace(/[[\]]/g, "").split(",").map((x) => x.trim()));
   assert.ok(ev(dom, "UP_LEARNERS[0]").startsWith(D.learner), "the default learner is listed first");
@@ -244,6 +247,81 @@ test("the AUUC sentence is metrics.py's, template for template", (t) => {
     assert.equal(ev(dom, `upliftSummary(${JSON.stringify(c)},false)`), `${ev(dom, "NOT_CAUSAL_NOTE")} ${js}`);
   });
   assert.equal(f4(-0.00001), "0.0000", "_fmt never prints -0.0000");
+});
+
+/* Python string literals of a source file, adjacent ones joined as Python joins them. Each run is
+   one template as written (f-string braces left in place); docstrings and comments are skipped. */
+function pyStringRuns(src) {
+  const runs = [];
+  let i = 0, open = false, lastEnd = -1;
+  const lit = /([rRbBfF]{0,2})("""|'''|"|')/y;
+  while (i < src.length) {
+    const ch = src[i];
+    if (ch === "#") { i = src.indexOf("\n", i); if (i < 0) break; continue; }
+    lit.lastIndex = i;
+    const m = /[A-Za-z0-9_]/.test(src[i - 1] || "") ? null : lit.exec(src);
+    if (m) {
+      const q = m[2], start = i + m[0].length;
+      if (q.length === 3) { i = src.indexOf(q, start) + 3; open = false; continue; } // a docstring
+      let j = start, body = "";
+      while (src[j] !== q) {
+        if (src[j] === "\\") { body += src[j + 1] === "n" ? "\n" : src[j + 1]; j += 2; } else body += src[j++];
+      }
+      if (open && /^\s*$/.test(src.slice(lastEnd, i))) runs[runs.length - 1] += body; else runs.push(body);
+      open = true; lastEnd = j + 1; i = j + 1;
+      continue;
+    }
+    if (!/\s/.test(ch)) open = false;
+    i++;
+  }
+  return runs;
+}
+/* The function `name` of a Python source, up to the next top-level statement. */
+const pyFunction = (src, name) => {
+  const at = src.indexOf(`\ndef ${name}(`);
+  assert.ok(at >= 0, `${name} is not in the engine source`);
+  const next = src.slice(at + 1).search(/\n[^\s)#]/);
+  return src.slice(at, next < 0 ? undefined : at + 1 + next);
+};
+/* Both ways: every template the prototype carries is one of the engine's, and every sentence the
+   engine's functions write (a literal with a space, longer than a label) is one the prototype carries. */
+function assertSameTemplates(py, fns, js, what) {
+  const all = new Set(pyStringRuns(py));
+  for (const [k, tpl] of Object.entries(js)) assert.ok(all.has(tpl), `${what}.${k} is not the engine's wording: ${tpl}`);
+  const carried = new Set(Object.values(js));
+  for (const fn of fns) {
+    const runs = pyStringRuns(pyFunction(py, fn)).filter((r) => r.includes(" ") && r.length > 15);
+    assert.ok(runs.length, `${fn} has no sentence to compare`);
+    for (const run of runs) assert.ok(carried.has(run), `${fn} writes a sentence the prototype does not carry: ${run}`);
+  }
+}
+
+test("the uplift check findings are checks.py's, template for template", (t) => {
+  const py = productText("engine/uplift/checks.py", (x) => x.includes("def _not_random("));
+  if (!py) return t.skip("engine/uplift/checks.py is not on this branch yet");
+  const dom = load("#/");
+  assertSameTemplates(py, ["_treatment_not_binary", "_arm_too_small", "_not_random"],
+    JSON.parse(ev(dom, "JSON.stringify(UP_CHECK_TEXT)")), "UP_CHECK_TEXT");
+  assert.equal(ev(dom, "RANDOMNESS_MIN_ARM_ROWS"), Number(py.match(/^RANDOMNESS_MIN_ARM_ROWS: Final\[int\] = (\d+)/m)[1]));
+  const top = Number(py.match(/^TOP_SIGNALS: Final\[int\] = (\d+)/m)[1]);
+  assert.ok(ev(dom, "TARGETED_SIGNALS.length") <= top, "the finding names at most TOP_SIGNALS features");
+});
+
+test("the Campaign results summary is incrementality.py's, template for template", (t) => {
+  const py = productText("engine/uplift/incrementality.py", (x) => x.includes("def _summary("));
+  if (!py) return t.skip("engine/uplift/incrementality.py is not on this branch yet");
+  const dom = load("#/");
+  assertSameTemplates(py, ["_summary", "_points"], JSON.parse(ev(dom, "JSON.stringify(INC_TEXT)")), "INC_TEXT");
+  // the branches the page reaches, rendered: a lift, a null lift, a harm, and the immature sentence
+  const base = { status: "mature", treated_rows: 11200, control_rows: 1450, rows_immature: 0, results_available_on: null, outcome_window_days: 90 };
+  const r = (o) => ev(dom, `incSummary(${JSON.stringify({ ...base, ...o })})`);
+  const lift = (v, lo, hi, p) => ({ treated_rate: 0.11, control_rate: 0.0752, absolute_lift: { value: v, ci_low: lo, ci_high: hi },
+    incremental_conversions: { value: v * 11200 }, p_value: p });
+  assert.match(r(lift(0.0348, 0.0191, 0.0486, 5e-5)), /: a lift of \+3\.5 points \(95% CI \+1\.9 points to \+4\.9 points; p < 0\.001\), about 390 extra conversions/);
+  assert.match(r(lift(0.004, -0.01, 0.018, 0.4172)), /a difference of \+0\.4 points, but the 95% interval \(-1\.0 points to \+1\.8 points; p = 0\.417\) includes zero/);
+  assert.match(r(lift(-0.03, -0.045, -0.015, 0.0004)), /about 336 fewer conversions caused by the campaign\.$/);
+  assert.equal(r({ status: "immature", rows_immature: 4518, results_available_on: "2026-12-22" }),
+    "Results available on 2026-12-22: the 90-day outcome window has not elapsed yet for any of the 4518 treated and control customers.");
 });
 
 test("the uplift numbers add up", () => {
