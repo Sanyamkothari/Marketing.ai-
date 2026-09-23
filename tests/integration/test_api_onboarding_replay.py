@@ -329,3 +329,37 @@ def test_the_lineage_of_an_unknown_dataset_is_not_found(client: TestClient) -> N
     response = client.get("/datasets/ds_nope/lineage")
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "DATASET_NOT_FOUND"
+
+
+# ---------------------------------------------------------------------------
+# onboarding.limits.max_sources, month after month
+# ---------------------------------------------------------------------------
+def test_the_source_limit_counts_only_tables_no_saved_recipe_reads(
+    config_root: Path, raw: RawTables, next_month: RawTables, tmp_path: Path
+) -> None:
+    """A client that scores every month keeps every month's tables, because each saved recipe's
+    lineage names them. With the limit counting all of them, a four-table client could train and
+    score one month and was then refused the third month's tables. The limit counts the tables still
+    being worked on - those no saved recipe reads - so it still stops a fifth loose table."""
+    from tests.integration.test_api_clients import small_limits_config_root
+
+    root = small_limits_config_root(config_root, tmp_path, max_sources=len(TABLES))
+    third_month = make_next_month(next_month, tmp_path / "third")
+    with TestClient(create_app(config_root=root, data_dir=tmp_path / "data")) as limited:
+        client_id = new_client(limited)
+        spec_id, _ = onboard(limited, client_id, raw)
+        second = [upload(limited, client_id, getattr(next_month, name)) for name in TABLES]
+        replayed = ok(replay(limited, client_id, spec_id, second))
+        assert replayed["spec_id"], replayed
+
+        third = [upload(limited, client_id, getattr(third_month, name)) for name in TABLES]
+        assert len(set(third)) == len(TABLES)
+
+        refused = limited.post(
+            f"/clients/{client_id}/sources",
+            files={"file": ("extra.csv", raw.customers.read_bytes(), "text/csv")},
+        )
+    assert refused.status_code == 409
+    detail = refused.json()["detail"]
+    assert detail["code"] == "TOO_MANY_SOURCES"
+    assert f"{len(TABLES)} sources not yet in a saved recipe" in detail["message"], detail["message"]

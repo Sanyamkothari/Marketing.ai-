@@ -42,14 +42,14 @@ router: APIRouter = APIRouter(tags=["industries"])
 def read_industries(root: ConfigRootDep) -> IndustriesResponse:
     """The overview screen: stages in file order, available cards filled from their use-case YAML."""
     catalog = get_catalog(root)
-    ordered = _default_first(list_industries(root))
+    ordered = default_first(list_industries(root))
     return IndustriesResponse(
         default_industry=ordered[0] if ordered else None,
         industries=tuple(_industry(industry_id, root, catalog) for industry_id in ordered),
     )
 
 
-def _default_first(industry_ids: tuple[str, ...]) -> tuple[str, ...]:
+def default_first(industry_ids: tuple[str, ...]) -> tuple[str, ...]:
     """`DEFAULT_INDUSTRY` first when that file exists, the rest in file-name order.
 
     A root without it (a test fixture, a client's own root) still opens on something: its first file.

@@ -149,13 +149,13 @@ async def create_source(
     if role is not None:
         require_role(roles, role)
     limits = onboarding_limits(root)
-    held = len(store.list_sources(client_id))
+    held = len(working_sources(store, client_id))
     if held >= limits.max_sources:
         raise http_error(
             409,
             "TOO_MANY_SOURCES",
-            f"This client already has {held} source{'' if held == 1 else 's'}, and this engine "
-            f"allows {limits.max_sources}. Remove one before adding another.",
+            f"This client already has {held} source{'' if held == 1 else 's'} not yet in a saved "
+            f"recipe, and this engine allows {limits.max_sources}. Remove one before adding another.",
         )
     try:
         file_format = ingest.file_format_for(file.filename or "")
@@ -321,6 +321,24 @@ def delete_source(
 # ---------------------------------------------------------------------------
 # Storage keys and ids
 # ---------------------------------------------------------------------------
+def working_sources(store: ClientStore, client_id: str) -> tuple[SourceSpec, ...]:
+    """The client's sources that no saved onboarding recipe reads yet: what `max_sources` limits.
+
+    The limit exists because every table is another full read and another join in a build, and the
+    build itself enforces it per recipe (`TOO_MANY_SOURCES` in `engine.onboarding.validate`). A
+    source a saved recipe reads is part of that recipe's lineage and must stay: counting it here
+    would let a four-table client train and score one month and then refuse the third month's
+    tables, because each month's replay adds a copy of every table (Plan A M35). So only the tables
+    still being worked on count towards the upload limit; with no saved recipe that is every source,
+    exactly as before.
+    """
+    referenced: set[str] = set()
+    for spec in store.list_specs(client_id):
+        referenced.add(spec.entity_source_id)
+        referenced.update(spec.event_source_ids)
+    return tuple(source for source in store.list_sources(client_id) if source.source_id not in referenced)
+
+
 def source_raw_key(client_id: str, source_id: str, file_format: Literal["csv", "parquet"]) -> str:
     return f"clients/{client_id}/sources/{source_id}/raw.{file_format}"
 

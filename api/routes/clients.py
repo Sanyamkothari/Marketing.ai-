@@ -30,6 +30,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
 from api.deps import ConfigRootDep
+from api.routes.industries import default_first
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorResponse
 from engine.clients import (
@@ -155,9 +156,10 @@ def ensure_default_client(root: ConfigRootDep, store: ClientStoreDep) -> ClientR
     The header's client picker needs a client to stand on before anyone has created one, and the
     onboarding screens need a client id before the first table can be uploaded. A `POST`, because
     the first call writes; idempotent, because every later call returns the same row unchanged.
-    Its industry is the first one this installation configures - `configs/industries/`, sorted,
-    the order the overview itself reads them in - so the default is never an industry the product
-    does not have. An installation with no industry at all has nothing to onboard for, and says so.
+    Its industry is the one the overview opens on - `DEFAULT_INDUSTRY` when this installation has
+    that file, otherwise its first industry file (`api.routes.industries.default_first`, the order the
+    overview itself reads them in) - so the default is never an industry the product does not have.
+    An installation with no industry at all has nothing to onboard for, and says so.
     """
     industries = list_industries(root)
     if not industries:
@@ -167,7 +169,7 @@ def ensure_default_client(root: ConfigRootDep, store: ClientStoreDep) -> ClientR
             "This installation configures no industry, so there is nothing to onboard a client for. "
             "Add an industry file under configs/industries/ and reload.",
         )
-    return store.ensure_client(DEFAULT_CLIENT_ID, DEFAULT_CLIENT_NAME, industries[0])
+    return store.ensure_client(DEFAULT_CLIENT_ID, DEFAULT_CLIENT_NAME, default_first(industries)[0])
 
 
 @router.get(
