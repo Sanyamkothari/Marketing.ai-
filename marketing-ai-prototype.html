@@ -1227,6 +1227,9 @@ const TREAT_HINTS=["treatment","treated","contacted","is_treated"];
 /* the uplift: block of configs/engine.yaml (learner x_learner, base_model autogluon_fast, ...) */
 const UPLIFT_DEFAULTS={learner:"X-learner",base:"AutoGluon fast",persuadable:0.02,sleepingDog:-0.01,sureThing:null,
   minArmRows:1000,minArmPos:50,randomAucMax:0.60,bootstrap:200,testFraction:0.30};
+/* actions.control_group_fraction in configs/engine.yaml, as a percentage: Phase 1's default control
+   share, and the fixed control share of every uplift run (tests/prototype/consistency.test.mjs pins it). */
+const ENGINE_CONTROL_PCT=10;
 const UP_LEARNERS=["X-learner (recommended)","T-learner","S-learner (baseline)"];
 const UP_BASES=["AutoGluon fast","LightGBM"];
 /* engine/uplift/contracts.py SEGMENT_LABELS, SEGMENT_ACTIONS and NOT_CAUSAL_NOTE, verbatim */
@@ -1269,7 +1272,10 @@ function holdoutRows(run){const pct=holdoutPct(run);if(!run||run.sample!==false)
   const N=runRowCount(run);return N==null?null:Math.round(N*pct/100);}
 /* A scoring run's control group and suppressed rows, from its own row count: the control share it ran
    with (stage 6, 10% unless changed) and the sample's suppressed share (1,850 of 14,500). */
-function runArms(run,N){const ctl=run.adv&&run.adv.control!=null?run.adv.control:Math.round(100*hnum("control")/hnum("eligible"));
+/* The control share a run was configured with: stage 6's, fixed at the engine default on an uplift run. */
+function runControlPct(run){if(run.ptype==="Uplift")return ENGINE_CONTROL_PCT;
+  return run.adv&&run.adv.control!=null?run.adv.control:Math.round(100*hnum("control")/hnum("eligible"));}
+function runArms(run,N){const ctl=runControlPct(run);
   const c=Math.round(N*ctl/100),sup=Math.round(N*hnum("suppressed")/hnum("eligible"));return {c,sup,sent:Math.max(0,N-c-sup)};}
 const UPLIFT_SEG_MEANS={persuadable:[0.071,0.121,0.050],sure_thing:[0.008,0.196,0.188],lost_cause:[0.004,0.021,0.017],sleeping_dog:[-0.019,0.052,0.071]};
 /* The policy runs on the rows that are neither suppressed nor held out (engine/uplift/actions.py). */
@@ -1442,12 +1448,13 @@ function campaignReport(run,outcomes,asOf,cr=st(UC.find(x=>x.id==="win-back-camp
   const win=cr.window,avail=addDays(run.date,win),mature=avail<=new Date(isoDay(asOf)+"T00:00:00Z");
   const arms=campaignArms(run),tRows=arms?arms.treated:null,cRows=arms?arms.control:null;
   /* IncrementalityReport.causal is has_control_group: a run that held no control group back (a 0%
-     control share) cannot be measured, and _summary says so before anything else. */
-  const hasControl=!arms||arms.held>0;
+     control share, or a share that rounds to no one) cannot be measured, and _summary says so before
+     anything else. A row count the page only estimated has no arms: the run's configured share decides. */
+  const hasControl=arms?arms.held>0:runControlPct(run)>0;
   if(!hasControl){const r={run_id:run.id,outcome_column:cr.outcome,outcome_window_days:win,as_of:isoDay(asOf),results_available_on:mature?null:isoDay(avail),
     status:mature?"mature":"immature",causal:false,treated_rows:0,treated_conversions:0,treated_rate:null,control_rows:0,control_conversions:0,control_rate:null,
     absolute_lift:null,relative_lift:null,incremental_conversions:null,p_value:null,rows_immature:mature?0:tRows,rows_without_outcome:0,
-    rows_suppressed_or_untreated:arms.eligible-tRows,measured:false};r.summary=incSummary(r,false);return r;}
+    rows_suppressed_or_untreated:arms?arms.eligible-tRows:null,measured:false};r.summary=incSummary(r,false);return r;}
   const base={run_id:run.id,outcome_column:cr.outcome,outcome_window_days:win,as_of:isoDay(asOf),
     results_available_on:mature?null:isoDay(avail),status:mature?"mature":"immature",causal:true,
     rows_suppressed_or_untreated:arms?arms.eligible-tRows-cRows:null,rows_without_outcome:0,rows_immature:0};
@@ -1491,10 +1498,11 @@ function decileBars(d){const obs=d.map(x=>x.treated_conv/x.treated_rows-x.contro
   return `<div class="dbars">${d.map((x,i)=>`<div class="dbrow" data-up-decile="${x.decile}"><span class="dl">D${x.decile}</span>
     <span class="dbar"><span class="dz" style="left:${z.toFixed(1)}%"></span>${bar(obs[i],"dob")}${bar(x.predicted_uplift,"dpr")}</span>
     <span class="dv">${pts2(obs[i])} <span>· predicted ${pts2(x.predicted_uplift)}</span></span></div>`).join("")}</div>`;}
-function segmentChart(segs,run){const tot=SEG_IDS.reduce((a,k)=>a+segs[k],0);
+/* The segment means are the sample's: on an uploaded file's run they are not shown (the file is never scored in the page). */
+function segmentChart(segs,run){const tot=SEG_IDS.reduce((a,k)=>a+segs[k],0),up=!!run&&run.sample===false;
   return `<div class="segbar" role="img" aria-label="Customers by segment">${SEG_IDS.map(k=>`<i class="sg-${k}" style="width:${(100*segs[k]/tot).toFixed(2)}%"></i>`).join("")}</div>
     <div class="segrows">${SEG_IDS.map(k=>`<div class="segrow sg-${k}" data-up-seg="${k}"><span class="sw"></span>
-      <span class="sn">${esc(SEG_LABELS[k])}<small>mean predicted uplift ${pts2(UPLIFT_SEG_MEANS[k][0])}</small></span>
+      <span class="sn">${esc(SEG_LABELS[k])}<small>mean predicted uplift ${up?"—":pts2(UPLIFT_SEG_MEANS[k][0])}</small></span>
       <span class="sc2">${fmtI(segs[k])}</span><span class="sp">${(100*segs[k]/tot).toFixed(1)}%</span><span class="sa">${esc(SEG_ACTIONS[k])}</span></div>`).join("")}</div>`;}
 function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),pct=holdoutPct(run),d=holdoutDeciles(pct),p=qiniPoints(d),a=run.adv,t=armTotals(d),causal=run.causal!==false;
   const auuc=auucCI(pct),qci=qiniCI(pct),qc=qci.value,u10=upliftAt(0.1,d),ci=UP_NULL_VIEW?UPLIFT_NULL:auuc,good=ci.ci_low>0;
@@ -1542,7 +1550,7 @@ function downloadTreatList(u){const csv=treatListCsv(u);if(!csv)return;
 const UP_SAMPLE_ROWS=[["C-90112","0.1420","Persuadables","months_since_churn ↓ (2)","Treat"],["C-90147","0.1180","Persuadables","offers_accepted ↑ (3)","Treat"],
   ["C-90183","0.0950","Persuadables","churn_reason = Network","Control (hold out)"],["C-90236","0.0080","Sure things","avg_monthly_spend ↑ (₹1,420)",SEG_ACTIONS.sure_thing],
   ["C-90210","−0.0230","Sleeping dogs","complaints_90d ↑ (4)",SEG_ACTIONS.sleeping_dog]];
-function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),scored=run.mode==="score",e=pol.expected,counted=pol.rows!=null;
+function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),scored=run.mode==="score",e=pol.expected,counted=pol.rows!=null,up=run.sample===false;
   const money=v=>v==null?"—":`₹${fmtI(v)}`;
   const on=!counted?`${scored?"a list":"a hold-out"} the page could not count (${esc(run.rows)} rows is an estimate), so no count is shown`
     :scored?`every one of the ${fmtI(pol.rows)} scored customers`:`the ${fmtI(pol.rows)}-customer hold-out of the training run`;
@@ -1550,7 +1558,7 @@ function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),score
   return `${pol.causal?"":ncBanner()}
     ${kpis([["Recommended to contact",fmtI(pol.n)],["Expected incremental conversions",e?fmtI(e.value):"—"],["Persuadables",fmtI(counted?pol.segs.persuadable:null)],["Sleeping dogs, never contacted",fmtI(counted?pol.segs.sleeping_dog:null)]])}
     <div class="row">
-      <section class="card"><h3>Four segments</h3>${counted?segmentChart(pol.segs,run):""}<p class="caption" data-up-computed>Computed on ${on}. Persuadable at predicted uplift ≥ ${run.adv.upPers}; sleeping dog at ≤ ${run.adv.upSleep}; in between, sure thing when P(convert without contact) ≥ ${sureCutText(run.adv)}, otherwise lost cause.</p></section>
+      <section class="card"><h3>Four segments</h3>${counted?segmentChart(pol.segs,run):""}<p class="caption" data-up-computed>Computed on ${on}. Persuadable at predicted uplift ≥ ${run.adv.upPers}; sleeping dog at ≤ ${run.adv.upSleep}; in between, sure thing when P(convert without contact) ≥ ${sureCutText(run.adv)}, otherwise lost cause.</p>${up?`<p class="caption" data-up-sample>The prototype does not ${scored?"score":"train on"} ${esc(run.file)}: the segment shares and the uplift behind the expected conversions are the sample's, and the segments' mean predicted uplift is not shown; the row counts are the file's.</p>`:""}</section>
       <section class="card"><h3>Who to contact</h3>
         <div class="upbig"><div class="ub1">Recommended to contact</div><div class="ub2" data-up-n>${fmtI(pol.n)}</div><div class="ub3">${counted?esc(STOP_REASONS[pol.stop_reason]):"Nothing is chosen from rows the page did not count."}${pol.budget!=null?` Budget: ${fmtI(pol.budget)} contacts.`:""}</div></div>
         ${kvs([["Eligible persuadables",fmtI(pol.eligible_persuadables)],
@@ -1563,7 +1571,8 @@ function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),score
       <div class="updl"><button type="button" class="run sm" id="up-dl" ${dl?"":"disabled"}>Download treat list</button>
         <span class="reason">${dl?`winback_treat_list.csv · ${fmtI(pol.n)} customers · persuadables within budget only`:scored?"The product builds this list from every scored row; the page could not count them.":"Score a list with this model to download who to contact."}</span></div>
       ${table(["customer_id","uplift","segment","top_reason (SHAP on uplift)","action"],UP_SAMPLE_ROWS)}
-      <p class="caption">Sample rows of scores.csv. The download holds the Treat rows only, with every column of scores.csv.</p></section>`;}
+      <p class="caption"${up?" data-up-sample-rows":""}>${up?`Illustrative sample rows, not rows of ${esc(run.file)}: the prototype does not ${scored?"score":"train on"} the file, so these customers and scores${dl?", and those in the download,":""} are the sample's. The product's download holds the Treat rows only, with every column of scores.csv.`
+        :"Sample rows of scores.csv. The download holds the Treat rows only, with every column of scores.csv."}</p></section>`;}
 /* Python str.format for the engine's own f-string templates, so the prototype can carry them
    verbatim (tests/prototype/consistency.test.mjs compares them with the engine source). `vars` is
    keyed by the exact expression inside the braces; the format specs are the ones the engine uses. */
@@ -1657,9 +1666,18 @@ function upStage6(a){return [`Persuadable ≥ ${a.upPers} · sleeping dog ≤ ${
   `<div class="frow">${unum("upPers","Persuadable at uplift ≥",0.01,-1,1,"Customers at or above this are worth contacting.")}${unum("upSleep","Sleeping dog at uplift ≤",0.01,-1,1,"Customers at or below this are never contacted, whatever the budget.")}${unum("upSure","Sure thing at P(convert untreated) ≥",0.01,0,1,`Between the cuts, a customer this likely to convert without the action is a sure thing. Empty means the training base rate (${sureBaseRate().toFixed(3)}).`)}${unum("upBudget","Budget (contacts)",100,1,10000000,"The most customers to contact. Empty means every persuadable.")}${unum("upCost","Cost per contact (₹)",1,0,100000,"With a value per conversion, the list stops where a contact no longer pays for itself.")}${unum("upValue","Value per conversion (₹)",10,0,10000000,"What one extra conversion is worth to you.")}
     <div class="field sm"><span class="sub">Control group holdout</span><div class="control" style="padding:0 12px;color:var(--muted)" data-up-control>${a.control}% · fixed</div><span class="uphint">Held out at random so campaign results can be measured. Not editable for uplift.</span></div>
     ${num("recentDays","Recently contacted (days)",1,1,90)}${chk("supOpt","Suppress opted-out customers")}${chk("supRecent","Suppress recently contacted")}</div>`];}
-/* A run's date on Campaign results, in the page's one month table (fmtDay, UTC like the send date):
-   the run stamp (nowStamp, en-IN) spells September "Sept", beside "Sent 23 Sep 2026". */
-const crStamp=r=>{if(!r.ts)return r.date?fmtDay(r.date):r.at;const d=new Date(r.ts),z=n=>String(n).padStart(2,"0");return `${fmtDay(d)}, ${z(d.getUTCHours())}:${z(d.getUTCMinutes())} UTC`;};
+/* A run's date on Campaign results: the local day and time, as the run stamp on Results (nowStamp) dates
+   it, so both show the same day in every time zone, but in the page's one month table (en-IN ICU spells
+   September "Sept"). results_available_on stays the engine's own date (UTC), as incrementality.py writes it. */
+const localDay=d=>`${d.getDate()} ${MONTHS[d.getMonth()]} ${d.getFullYear()}`;
+const crStamp=r=>{if(!r.ts)return r.date?fmtDay(r.date):r.at;const d=new Date(r.ts);
+  return `${localDay(d)}, ${d.toLocaleTimeString("en-IN",{hour:"2-digit",minute:"2-digit"})}`;};
+const sentDay=r=>r.ts?localDay(new Date(r.ts)):fmtDay(r.date);
+/* What to do about a run that held no control group back, in terms the run's mode allows: a Phase 1 run
+   set its share to 0 (stage 6); otherwise the share rounded to no one (actions.py rounds half up, no minimum). */
+function noControlAdvice(run){const pct=runControlPct(run),arms=campaignArms(run);
+  if(pct>0)return arms?`On a list of ${fmtI(arms.eligible)} customers, a ${pct}% control group rounds to no one. Score a larger list to measure the next campaign.`:"";
+  return "Keep a control group (Advanced: Control group holdout) on the next scoring run to measure it.";}
 function campaignRuns(u){const s=st(u);return [...s.runs.filter(r=>r.mode==="score").slice().reverse(),CAMPAIGN_SEED];}
 function campaignPage(u){const s=st(u),cr=s.cr,runs=campaignRuns(u),run=runs.find(r=>r.id===cr.run)||runs[0];
   /* Only the sample outcomes link has numbers behind it: the page cannot read a real outcomes file. */
@@ -1668,7 +1686,7 @@ function campaignPage(u){const s=st(u),cr=s.cr,runs=campaignRuns(u),run=runs.fin
   const nc=run.causal===false,noCtl=rep.causal===false;
   const hint=(t)=>`<span class="uphint">${esc(t)}</span>`;
   const form=`<div class="crgrid">
-    <div class="field"><span class="sub">Scoring run</span><div class="control sel"><select id="cr-run">${runs.map(r=>`<option value="${r.id}" ${r.id===run.id?"selected":""}>Scored ${esc(r.rows)} rows · ${esc(crStamp(r))}</option>`).join("")}</select></div>${hint("Its treated customers are compared with the control group it held out at random.")}</div>
+    <div class="field"><span class="sub">Scoring run</span><div class="control sel"><select id="cr-run">${runs.map(r=>`<option value="${r.id}" ${r.id===run.id?"selected":""}>Scored ${esc(r.rows)} rows · ${esc(crStamp(r))}</option>`).join("")}</select></div>${hint(noCtl?"The run whose customers the outcomes file is joined to.":"Its treated customers are compared with the control group it held out at random.")}</div>
     <div class="field"><span class="sub">Outcomes file</span><div class="orline"><label class="control file ${cr.outcomes?"has":""}"><input type="file" id="cr-file" class="sr" accept=".csv,.parquet"><span class="fname">${cr.outcomes?esc(cr.file):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="cr-sample">use sample outcomes</button></span></div>${hint("One row per customer, with the outcome measured after the send.")}</div>
     <div class="field"><span class="sub">Outcome column</span><div class="control sel"><select id="cr-outcome">${opt([cr.outcome],cr.outcome)}</select></div>${hint("1 or true when the customer converted inside the window.")}</div>
     <div class="field"><span class="sub">Outcome window (days)</span><div class="control"><input type="number" id="cr-window" min="1" max="3650" step="1" value="${cr.window}"></div>${hint("How long after the send an outcome still counts.")}</div>
@@ -1676,10 +1694,10 @@ function campaignPage(u){const s=st(u),cr=s.cr,runs=campaignRuns(u),run=runs.fin
   const ok=rep.absolute_lift&&rep.absolute_lift.ci_low>0;
   let result;
   /* a run that held no control group back (a 0% control share): the engine's sentence, and nothing to measure */
-  if(noCtl) result=`<div class="genbox" data-up-nocontrol><span class="gb1" data-up-summary>${esc(rep.summary)}</span><span class="gb2">Keep a control group (Advanced: Control group holdout) on the next scoring run to measure it.</span></div>`;
+  if(noCtl){const adv=noControlAdvice(run);result=`<div class="genbox" data-up-nocontrol><span class="gb1" data-up-summary>${esc(rep.summary)}</span>${adv?`<span class="gb2">${esc(adv)}</span>`:""}</div>`;}
   else if(unread) result=`<div class="genbox" data-up-unread><span class="gb1">${esc(cr.file)} is not read by the prototype, so nothing is computed from it.</span><span class="gb2">The product joins it to the run's treated and control customers and measures the lift from its rows. Use sample outcomes to see a measured campaign.</span></div>`;
   else if(rep.status==="immature") result=`<div class="crwait" data-up-wait><span class="cw1">Results available on ${fmtDay(rep.results_available_on)}</span>
-    <span class="cw2">Sent ${esc(fmtDay(run.date))}. The ${rep.outcome_window_days}-day outcome window has not ended for any customer yet, so nothing is measured and no row is guessed.</span></div>${rep.measured?`<p class="crsum" data-up-summary>${esc(rep.summary)}</p>`:""}`;
+    <span class="cw2">Sent ${esc(sentDay(run))}. The ${rep.outcome_window_days}-day outcome window has not ended for any customer yet, so nothing is measured and no row is guessed.</span></div>${rep.measured?`<p class="crsum" data-up-summary>${esc(rep.summary)}</p>`:""}`;
   else if(!rep.measured) result=`<div class="genbox"><span class="gb1">The outcome window has ended. Upload the outcomes file to measure this campaign.</span><span class="gb2">Treated customers are compared with the control group the run held out at random.</span></div>`;
   else result=`${ciBar({value:rep.absolute_lift.value*100,ci_low:rep.absolute_lift.ci_low*100,ci_high:rep.absolute_lift.ci_high*100},v=>`${v>=0?"+":"−"}${Math.abs(v).toFixed(2)} pts`,ok,"zero = the campaign changed nothing")}
     <p class="crsum" data-up-summary>${esc(rep.summary)}</p>
@@ -1735,7 +1753,7 @@ function defaultAdv(cfg){return cfg.gen
      autofeat:true,encoding:"Auto",scaling:"Auto",text:"Ignore",fsel:"Importance-based",maxfeat:100,
      strategy:"Balanced",algos:cfg.models.slice(),ensemble:true,trials:50,limit:30,folds:5,imbalance:"Auto",
      metric:cfg.metrics[0],calib:"Isotonic",thr:"Auto",shap:true,reasons:3,fair:"",champ:1,
-     hi:0.8,md:0.5,supOpt:true,supRecent:true,recentDays:14,control:10,
+     hi:0.8,md:0.5,supOpt:true,supRecent:true,recentDays:14,control:ENGINE_CONTROL_PCT,
      drift:0.2,retrain:"On drift",alert:5,
      retention:90,consentCol:"",approval:true,
      upLearner:UP_LEARNERS[0],upBase:UPLIFT_DEFAULTS.base,upBoot:UPLIFT_DEFAULTS.bootstrap,upTest:Math.round(UPLIFT_DEFAULTS.testFraction*100),
@@ -1751,9 +1769,10 @@ function st(u){
 const fmtSize = b => b<1024?`${b} B`:b<1048576?`${(b/1024).toFixed(1)} KB`:`${(b/1048576).toFixed(1)} MB`;
 const fmtN = n => n>=1e6?`${(n/1e6).toFixed(1)}M`:n>=1e3?`${Math.round(n/1e3)}K`:String(n);
 function parseLine(line){const out=[];let cur="",q=false;for(const ch of line){if(ch==='"'){q=!q;}else if(ch===","&&!q){out.push(cur.trim());cur="";}else cur+=ch;}out.push(cur.trim());return out;}
-/* The run and approval stamp, as before the uplift screens. en-IN ICU spells September "Sept", so the
-   Campaign results page, whose dates use MONTHS, never shows it (crStamp). */
-const nowStamp=()=>new Date().toLocaleString("en-IN",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}).replace(/(\d{4}),?\s*/,"$1, ");
+/* The run and approval stamp, as before the uplift screens, in local time on the page's one clock
+   (today(): AS_OF when pinned). en-IN ICU spells September "Sept", so the Campaign results page, whose
+   dates use MONTHS, never shows it (crStamp). */
+const nowStamp=(d=today())=>d.toLocaleString("en-IN",{day:"2-digit",month:"short",year:"numeric",hour:"2-digit",minute:"2-digit"}).replace(/(\d{4}),?\s*/,"$1, ");
 function modeLabels(cfg){return cfg.modes||{train:"Train a model",score:"Score new data"};}
 function modeHelp(cfg,mode){if(cfg.help)return cfg.help[mode];return mode==="train"?"Upload historical data where the outcome is already known. The best model is trained and saved.":"Upload new records without the outcome. The saved model scores every row and recommends an action.";}
 function blocker(u){const s=st(u),cfg=SETUP[u.id];
@@ -1899,7 +1918,12 @@ function detectType(u){const s=st(u),cfg=SETUP[u.id];if(cfg.gen)return "";if(!s.
   if(uniq.size<=2)return PTYPES[0];
   if(numeric)return s.cols.some(c=>/date|time|month|week|day|ts$/i.test(c))?PTYPES[2]:PTYPES[1];
   return PTYPES[0];}
-function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg),train=s.mode==="train",why=blocker(u);
+/* Uplift holds out the engine's control share, whatever stage 6 said for Phase 1: switching to uplift
+   restores it (keeping the Phase 1 share aside), and switching back to Phase 1 training returns that share. */
+function syncUpliftControl(u){const s=st(u);if(!s.adv||SETUP[u.id].gen)return;
+  if(isUplift(u)){if(s.adv.control!==ENGINE_CONTROL_PCT){s.p1Control=s.adv.control;s.adv.control=ENGINE_CONTROL_PCT;}}
+  else if(s.mode==="train"&&s.p1Control!=null){s.adv.control=s.p1Control;s.p1Control=null;}}
+function setupHtml(u){syncUpliftControl(u);const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg),train=s.mode==="train",why=blocker(u);
   const detected=detectType(u), ptype=s.ptype||detected;
   const upl=ptype===UPLIFT_PTYPE;
   const ptypeHtml = train&&!cfg.gen&&s.target ? `<div class="ptype"><span>Problem type</span><span class="pill">${esc(ptype)}</span><span>${s.ptype&&s.ptype!==detected?"set manually":upl?"detected from the treatment column":"detected from the target column"}</span><select id="f-ptype" aria-label="Change problem type"><option value="">change…</option>${ptypesFor(s).map(t=>`<option ${t===ptype?"disabled":""}>${esc(t)}</option>`).join("")}</select>${upl?`<span class="upwhy">${esc(UPLIFT_WHY)}</span>`:ptype!==PTYPES[0]?`<span style="flex-basis:100%;color:var(--warn)">${ptype.startsWith("Clustering")?"Clustering ignores the target and groups similar rows.":"Metrics and models will switch to "+ptype.split(" (")[0].toLowerCase()+" defaults."}</span>`:""}</div>${upChecksHtml(u)}` : "";
@@ -2150,6 +2174,7 @@ function bindDetail(u){
         best:s.mode==="train"?(upTrain?`${learner} · ${s.adv.upBase}`:s.model===AUTO?cfg.best:s.model):base.best,score:s.mode==="train"?(upTrain?`AUUC ${f4(auucOf(holdoutDeciles(s.adv.upTest)))}`:cfg.score):base.score,target:s.mode==="train"?s.target:base.target,champion:s.mode==="train"&&!upTrain,beat:false,lineage:!!s.builtFrom,
         date:isoDay(today()),adv:{...s.adv},causal:s.mode==="train"?!(upTrain&&s.targeted):base.causal!==false,from:base?base.id:null,
         learner:upTrain?learner:base&&base.learner,baseModel:upTrain?s.adv.upBase:base&&base.baseModel,treatment:upTrain?s.treatment:"",upTest:upTrain?s.adv.upTest:base&&base.upTest!=null?base.upTest:null,n:rowCount(s),sample:!!(s.file&&s.file.sample),ts:today().toISOString()};
+      if(run.ptype==="Uplift")run.adv.control=ENGINE_CONTROL_PCT;
       if(upTrain)run.upChampion=run.causal&&!s.runs.some(r=>r.upChampion);
       if(run.champion){run.beat=s.runs.some(r=>r.champion);s.runs.forEach(r=>r.champion=false);}
       s.runs.push(run); s.current=run; if(run.mode==="train")s.scoreRun=run.id;
@@ -2162,7 +2187,7 @@ function mock(u, kind){
   const NAMES = {data:"Data",model:"Model",output:"Output",campaign:"Campaign results"};
   const K = NAMES[kind], up = upliftRun(u), cur = st(u).current;
   const title = kind==="model"&&up ? `${u.name} uplift model` : {data:u.d,model:u.m,output:u.o,campaign:"Campaign results"}[kind];
-  /* Phase 3b: a fourth tab once a scoring run (every one keeps a control group) is current */
+  /* Phase 3b: a fourth tab once a scoring run is current (one that held no control group back says so there) */
   const camp = u.id==="win-back-campaign"&&(kind==="campaign"||!!(cur&&cur.mode==="score"));
   const tabs = ["data","model","output",...(camp?["campaign"]:[])].map((t,i)=>`${i?'<span class="arr" aria-hidden="true">→</span>':""}<a class="tab ${t===kind?"on":""}" href="#/uc/${u.id}/${t}" ${t===kind?'aria-current="page"':""}><span class="n">0${i+1}</span>${NAMES[t]}</a>`).join("");
   let body = "";

@@ -199,6 +199,8 @@ test("the uplift control group is Phase 1's, and it is the holdout the copy bloc
   const frac = Number(yaml.match(/control_group_fraction:\s*([\d.]+)/)[1]);
   const dom = load("#/uc/win-back-campaign");
   assert.equal(ev(dom, "defaultAdv(SETUP['win-back-campaign']).control"), Math.round(frac * 100));
+  // the one constant behind Phase 1's default and uplift's fixed share
+  assert.equal(ev(dom, "ENGINE_CONTROL_PCT"), Math.round(frac * 100));
   const n = (k) => Number(ev(dom, `HOLDOUT.${k}`).replace(/,/g, ""));
   assert.equal(n("control") / n("eligible"), frac, "1,450 of 14,500");
   // the campaign measured on the Campaign results page is that same holdout

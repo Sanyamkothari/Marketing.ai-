@@ -296,7 +296,11 @@ byte against 8f0d358: review round 2 had changed the run stamp in 11 and 16 to a
   High / Medium cuts for the segment cuts (persuadable, sleeping dog and
   `segments.sure_thing_min_probability`, empty meaning the training base rate, 0.099 on the sample)
   and the policy (budget, cost per contact, value per conversion — empty is "—"), and shows the
-  control group as read-only text: plan B §5 makes it non-editable. Every field has a one-line hint.
+  control group as read-only text: plan B §5 makes it non-editable. It is always the engine's
+  `actions.control_group_fraction` (10%, `ENGINE_CONTROL_PCT`, pinned to `configs/engine.yaml` by
+  `consistency.test.mjs`): a share set on Phase 1's stage 6 (0%, say) does not carry into uplift, every
+  uplift run holds out 10%, and going back to Phase 1 training restores the share the user set there.
+  Every field has a one-line hint.
   Only the settings the config lets be null can be empty: emptying bootstrap resamples, hold-out
   share or either segment cut puts its default back (the placeholder shows it), and a value outside
   the config's range (`bootstrap_samples` 10..5000, `test_fraction` 0.1..0.5, cuts −1..1) is brought
@@ -358,7 +362,12 @@ rate, control rate, observed and predicted uplift).
 with its stop reason; **expected incremental conversions with a CI**; a caption naming all three
 segment cuts (the sure-thing cut too); the model's own estimate;
 cost, value and net value, or "—"; and a caption saying whether the numbers were computed on the
-training run's hold-out or on every scored row. **Download treat list** (`#up-dl`) builds
+training run's hold-out or on every scored row. On a run over an **uploaded** file (scored or
+trained on) the page says what is the sample's: a caption names the file and says the segment shares
+and the uplift behind the expected conversions are the sample's; the segments' mean predicted uplift
+reads **—**; and the treat-list rows are captioned *"Illustrative sample rows, not rows of week.csv:
+the prototype does not score the file, so these customers and scores, and those in the download, are
+the sample's"* instead of *"Sample rows of scores.csv"*. **Download treat list** (`#up-dl`) builds
 `winback_treat_list.csv` in the page with the contract's `scores.csv` columns — persuadables within
 budget only, never a sleeping dog, never a control-group row. Before a scoring run it is disabled:
 *"Score a list with this model to download who to contact."* The campaign copy block follows,
@@ -372,19 +381,30 @@ control n and rate, the absolute lift with its Newcombe interval, relative lift,
 conversions with their interval, the p-value, the row accounting (still inside the window, without
 an outcome, suppressed or not treated) and a summary sentence — all computed in the page from the
 counts. Every date on the page uses one fixed month table (`MONTHS`): en-IN ICU spells September
-"Sept" in Node and in the bundled Chromium alike, so the run select dates a run from its send day and
-time (*Scored 14,500 rows · 23 Sep 2026, 10:00 UTC*), never from the run stamp, beside *Sent 23 Sep
-2026*. The run stamp itself (`nowStamp`, the run history and the copy approval record) is 8f0d358's
-en-IN stamp, untouched: review round 2 had switched it to a 24-hour *Sep* form, which moved the mix
-to the Output page (*23 Sep 2026, 10:42* beside the seeded *21 Sept 2026, 16:40*). The treated and
+"Sept" in Node and in the bundled Chromium alike. The run select and the *Sent* line date a run in
+**local time, as Results does** (*Scored 14,500 rows · 23 Sep 2026, 10:00 am*, *Sent 23 Sep 2026*):
+the same instant and time zone as the run stamp, in the month table, so a run scored at 20:00 UTC
+reads 24 Sep on both pages in Asia/Kolkata. *Results available on* stays the engine's own date,
+which `incrementality.py` takes in UTC. The run stamp itself (`nowStamp`, the run history and the
+copy approval record) is 8f0d358's en-IN stamp in form: review round 2 had switched it to a 24-hour
+*Sep* form, which moved the mix to the Output page (*23 Sep 2026, 10:42* beside the seeded *21 Sept
+2026, 16:40*). It now reads the page's one clock (`today()`, the pinned `AS_OF` in tests), as the
+run's send date always did. The treated and
 control counts are the run's own: a Phase 1 scoring run of 12,480 rows is 1,248 control, 1,592
 suppressed and 9,640 sent (10,888 in the IMMATURE sentence), not the 14,500-row seed list's 12,650;
 an uplift run treats its own list (3 rows: at most 3 customers, never the sample's 4,000 + 518); a
 row count the page only estimated gives no count. A run that held **no control group** back (Control
-group holdout 0%, which `control_group_fraction` allows) gets the engine's `has_control_group`
+group holdout 0%, which `control_group_fraction` allows, or a share that rounds to no one on a small
+list, as `actions.py` rounds half up with no minimum) gets the engine's `has_control_group`
 sentence — *"This run held no control group back, so there is nothing to compare the treated
-customers with and the campaign's effect cannot be measured."* — with `causal` false, and the run
-hint no longer claims every scoring run keeps one. **The summary sentence is the engine's**: `engine/uplift/incrementality.py::
+customers with and the campaign's effect cannot be measured."* — with `causal` false. On a list the
+page only estimated (*~20K*) the arms are unknown, so the run's configured share decides: 0% is the
+same sentence and `causal` false, with no count; an uplift run's fixed 10% keeps a control group. The
+run picker's hint says the run's treated customers are compared with the control group it held out
+at random only when it held one out. The advice under the sentence is one the run's mode allows:
+*Keep a control group (Advanced: Control group holdout)* for a Phase 1 run set to 0%; for a share
+that rounded to no one (every such uplift run, since uplift's share is fixed) *"On a list of 3
+customers, a 10% control group rounds to no one. Score a larger list to measure the next campaign."* **The summary sentence is the engine's**: `engine/uplift/incrementality.py::
 _summary` branch for branch (`incSummary()`, templates in `INC_TEXT`) — *"Treated customers converted
 at 11.0% against 7.5% for the control group: a lift of +3.5 points (95% CI +1.9 points to +4.9 points;
 p < 0.001), about 390 extra conversions caused by the campaign."* — and, while the window is open,
@@ -457,6 +477,19 @@ Campaign results for a run with a 0% control group said its results were pending
 and control customers" (now the engine's no-control sentence, `causal` false). The uplift policy
 check in `consistency.test.mjs` now names the sample list's 14,500 rows, since a policy is sized by
 its run's rows.
+
+**Review round 4** (final) fixed, each with a test that fails without the fix: a Phase 1 run with a 0%
+control group scored on a list the page only estimated (*~20K*) still said it would be measured
+(`campaignArms` gave no arms, and no arms counted as a control group; now the run's configured share
+decides, and it is the engine's no-control sentence with `causal` false); the run picker's hint said
+the run held out a control group directly above the sentence saying it held none (now only for a run
+that held one); uplift kept a 0% share set on Phase 1's stage 6 while showing it as *fixed* (now the
+engine's 10%, and Phase 1's share comes back with Phase 1), and the no-control advice named a setting
+uplift locks (now *score a larger list*); an uploaded file's uplift Output showed the sample list's
+customers as *"Sample rows of scores.csv"* and the sample's segment means (now labelled illustrative,
+and **—** for the means); Campaign results dated runs in UTC and Results in local time, so the same run
+showed different days east or west of UTC (now local on both; test in Asia/Kolkata). Screenshot 23 was
+re-shot for its local run time; 19–22 and 24 are unchanged, and 01–18 are byte for byte 8f0d358's.
 
 ---
 

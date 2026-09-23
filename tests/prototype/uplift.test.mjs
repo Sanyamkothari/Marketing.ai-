@@ -3,7 +3,7 @@
    Output (four segments, who to contact, the treat list) and the Campaign results page. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, body, click, set, wait, upload } from "./harness.mjs";
+import { load, go, ev, $, $$, body, click, set, wait, upload, repoText } from "./harness.mjs";
 
 const WB = "win-back-campaign";
 const PTYPE = "Uplift (who changes because of your action)";
@@ -19,6 +19,17 @@ function winback() {
   const dom = load(`#/uc/${WB}`);
   ev(dom, "AS_OF='2026-09-23T10:00:00Z'");
   return dom;
+}
+/** Run `fn` with the process in time zone `tz` (Node re-reads TZ when it is assigned, jsdom's Date included). */
+async function inTimeZone(tz, fn) {
+  const was = process.env.TZ;
+  process.env.TZ = tz;
+  try {
+    return await fn();
+  } finally {
+    if (was === undefined) delete process.env.TZ;
+    else process.env.TZ = was;
+  }
 }
 async function trainUplift(dom, { targeted = false } = {}) {
   click(dom, targeted ? "#f-sampletargeted" : "#f-samplecampaign");
@@ -687,15 +698,17 @@ test("an uploaded file's checks panel lists all six checks, TREATMENT_NOT_BINARY
 });
 
 test("Campaign results spells the month as its other dates do ('Sep', never 'Sept')", async () => {
-  const dom = winback();
-  await trainUplift(dom);
-  await scoreUplift(dom);
-  go(dom, `#/uc/${WB}/campaign`);
-  // the run select dates the run as the send line does, from the page's one month table, not the run stamp
-  assert.equal($(dom, "#cr-run").selectedOptions[0].textContent, "Scored 14,500 rows · 23 Sep 2026, 10:00 UTC");
-  assert.match($(dom, ".cw2").textContent, /^Sent 23 Sep 2026\./);
-  assert.equal([...$(dom, "#cr-run").options].at(-1).textContent, "Scored 14,500 rows · 1 May 2026");
-  assert.doesNotMatch(body(dom), /Sept/);
+  await inTimeZone("UTC", async () => {
+    const dom = winback();
+    await trainUplift(dom);
+    await scoreUplift(dom);
+    go(dom, `#/uc/${WB}/campaign`);
+    // the run select dates the run as the send line does, from the page's one month table, not the run stamp
+    assert.equal($(dom, "#cr-run").selectedOptions[0].textContent, "Scored 14,500 rows · 23 Sep 2026, 10:00 am");
+    assert.match($(dom, ".cw2").textContent, /^Sent 23 Sep 2026\./);
+    assert.equal([...$(dom, "#cr-run").options].at(-1).textContent, "Scored 14,500 rows · 1 May 2026");
+    assert.doesNotMatch(body(dom), /Sept/);
+  });
 });
 
 /* ---------- Review round 3 ---------- */
@@ -840,4 +853,144 @@ test("Campaign results for a run with a 0% control group says the effect cannot 
   // the seeded 1 May run kept its 10% control group and is measured as before
   set(dom, "#cr-run", "r0501");
   assert.equal(kpiMap(dom).Lift, "+3.48 pts");
+});
+
+/* ---------- Review round 4 ---------- */
+
+/** A Phase 1 win-back model trained on the plain sample with stage 6's control share at `control`%. */
+async function trainPhase1(dom, control) {
+  click(dom, "#f-sample");
+  set(dom, '[data-adv="control"]', String(control));
+  submit(dom);
+  await wait(1300);
+  assert.ok($(dom, ".results"), "the Phase 1 run reaches its results");
+}
+
+test("a 0% control group on a list the page only estimated is still not measurable, in the engine's words", async () => {
+  const dom = winback();
+  await trainPhase1(dom, 0);
+  await scoreUpload(dom, "big_week.csv", weekCsv(20000));
+  const run = JSON.parse(ev(dom, `JSON.stringify(STATE['${WB}'].current)`));
+  assert.match(run.rows, /^~20K$/, "the row count is an estimate");
+  assert.equal(run.adv.control, 0);
+  assert.equal(ev(dom, `campaignArms(STATE['${WB}'].current)`), null, "no arms from rows the page did not count");
+  const rep = JSON.parse(ev(dom, `JSON.stringify(campaignReport(STATE['${WB}'].current,{},today()))`));
+  const noControl = ev(dom, "INC_TEXT.noControl");
+  assert.equal(rep.causal, false, "IncrementalityReport.causal is has_control_group");
+  assert.equal(rep.summary, noControl);
+  assert.equal(rep.rows_immature, null, "no count of customers the page did not count");
+  assert.equal(rep.rows_suppressed_or_untreated, null);
+  go(dom, `#/uc/${WB}/campaign`);
+  click(dom, "#cr-sample");
+  assert.equal($(dom, "[data-up-summary]").textContent, noControl);
+  assert.equal($(dom, "[data-up-wait]"), null, "no 'Results available on' for a run that cannot be measured");
+  assert.doesNotMatch(body(dom), /treated and control customers|held out at random/);
+  // the same estimated list at 10% keeps a control group and waits for its window, as before
+  go(dom, `#/uc/${WB}`);
+  click(dom, "#f-again");
+  click(dom, '.seg button[data-mode="train"]');
+  await trainPhase1(dom, 10);
+  await scoreUpload(dom, "big_week.csv", weekCsv(20000));
+  const rep10 = JSON.parse(ev(dom, `JSON.stringify(campaignReport(STATE['${WB}'].current,{},today()))`));
+  assert.equal(rep10.causal, true);
+  assert.equal(rep10.status, "immature");
+});
+
+test("the run picker's hint mentions a control group only for a run that held one out", async () => {
+  const dom = winback();
+  await trainPhase1(dom, 0);
+  click(dom, "#f-again");
+  click(dom, '.seg button[data-mode="score"]');
+  click(dom, "#f-sample");
+  submit(dom);
+  await wait(1100);
+  go(dom, `#/uc/${WB}/campaign`);
+  click(dom, "#cr-sample");
+  const hint = () => $(dom, "#cr-run").closest(".field").querySelector(".uphint").textContent;
+  assert.ok($(dom, "[data-up-nocontrol]"));
+  assert.doesNotMatch(hint(), /control group/);
+  assert.ok(hint().endsWith("."), "still a one-line hint");
+  // the seeded 1 May run held its control group out at random, and says so
+  set(dom, "#cr-run", "r0501");
+  assert.equal(hint(), "Its treated customers are compared with the control group it held out at random.");
+});
+
+test("uplift restores the engine's fixed control share, and its no-control advice is one the user can follow", async () => {
+  const yaml = repoText("configs/engine.yaml");
+  const pct = Math.round(Number(yaml.match(/control_group_fraction:\s*([\d.]+)/)[1]) * 100);
+  const dom = winback();
+  click(dom, "#f-sample");
+  set(dom, '[data-adv="control"]', "0");
+  click(dom, "#f-samplecampaign");
+  assert.equal($(dom, "[data-up-control]").textContent, `${pct}% · fixed`);
+  assert.match($$(dom, ".stage-d .ss")[5].textContent, new RegExp(` · ${pct}% control group$`));
+  submit(dom);
+  await wait(1300);
+  assert.equal(ev(dom, `STATE['${WB}'].current.adv.control`), pct, "the uplift run holds out the engine's share");
+  // back on Phase 1 training, the share the user set there is theirs again
+  click(dom, "#f-again");
+  click(dom, "#f-sample");
+  assert.equal($(dom, '[data-adv="control"]').value, "0");
+  // an uplift list too small for its fixed share: the advice is to score a larger list, not a setting uplift locks
+  click(dom, "#f-samplecampaign");
+  submit(dom);
+  await wait(1300);
+  await scoreUpload(dom, "week.csv", weekCsv(3));
+  assert.equal(ev(dom, `STATE['${WB}'].current.adv.control`), pct);
+  go(dom, `#/uc/${WB}/campaign`);
+  click(dom, "#cr-sample");
+  const box = $(dom, "[data-up-nocontrol]");
+  assert.ok(box, "three customers at 10% hold out no one");
+  assert.doesNotMatch(box.textContent, /Advanced|Control group holdout/);
+  assert.equal(box.querySelector(".gb2").textContent,
+    `On a list of 3 customers, a ${pct}% control group rounds to no one. Score a larger list to measure the next campaign.`);
+});
+
+test("an uploaded file's uplift Output labels the sample's rows and segment means, and shows no mean as the file's", async () => {
+  const dom = winback();
+  await trainUplift(dom);
+  await scoreUplift(dom);
+  go(dom, `#/uc/${WB}/output`);
+  // the sample list: unchanged
+  const rowsCaption = () => $$(dom, ".caption").find((c) => /scores\.csv/.test(c.textContent)).textContent;
+  assert.match(rowsCaption(), /^Sample rows of scores\.csv\./);
+  assert.ok($$(dom, "[data-up-seg] small").every((e) => /mean predicted uplift [+−-]?\d/.test(e.textContent)));
+  assert.equal($(dom, "[data-up-sample]"), null);
+  // a scored upload
+  go(dom, `#/uc/${WB}`);
+  await scoreUpload(dom, "week.csv", weekCsv(3));
+  go(dom, `#/uc/${WB}/output`);
+  assert.ok(body(dom).includes("C-90112"), "the illustrative rows are still shown");
+  assert.match(rowsCaption(), /^Illustrative sample rows, not rows of week\.csv: the prototype does not score the file/);
+  assert.doesNotMatch(body(dom), /Sample rows of scores\.csv/);
+  assert.ok($$(dom, "[data-up-seg] small").every((e) => e.textContent === "mean predicted uplift —"));
+  assert.match($(dom, "[data-up-sample]").textContent, /does not score week\.csv: the segment shares .* are the sample's/);
+  // a training upload
+  const dom2 = winback();
+  await upload(dom2, "#f-file", "offers.csv", campaignCsv(2400));
+  submit(dom2);
+  await wait(1300);
+  go(dom2, `#/uc/${WB}/output`);
+  const cap2 = $$(dom2, ".caption").find((c) => /scores\.csv/.test(c.textContent)).textContent;
+  assert.match(cap2, /^Illustrative sample rows, not rows of offers\.csv: the prototype does not train on the file/);
+  assert.ok($$(dom2, "[data-up-seg] small").every((e) => e.textContent === "mean predicted uplift —"));
+  assert.match($(dom2, "[data-up-sample]").textContent, /does not train on offers\.csv/);
+});
+
+test("Campaign results and Results date a run on the same day in Asia/Kolkata (IST, UTC+5:30)", async () => {
+  await inTimeZone("Asia/Kolkata", async () => {
+    const dom = load(`#/uc/${WB}`);
+    // 20:00 UTC on 23 Sep is 01:30 on 24 Sep in Kolkata
+    ev(dom, "AS_OF='2026-09-23T20:00:00Z'");
+    await trainUplift(dom);
+    await scoreUplift(dom);
+    const stamp = ev(dom, `STATE['${WB}'].current.at`);
+    // the Results stamp keeps its 8f0d358 form (en-IN), on the page's one clock
+    assert.equal(stamp, "24 Sept 2026, 01:30 am");
+    assert.ok($$(dom, ".runrow .r2, .muted").some((e) => e.textContent.endsWith(stamp)), "Results shows the stamp");
+    go(dom, `#/uc/${WB}/campaign`);
+    assert.equal($(dom, "#cr-run").selectedOptions[0].textContent, "Scored 14,500 rows · 24 Sep 2026, 01:30 am");
+    assert.match($(dom, ".cw2").textContent, /^Sent 24 Sep 2026\./);
+    assert.doesNotMatch(body(dom), /23 Sep 2026|UTC/);
+  });
 });
