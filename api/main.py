@@ -175,6 +175,10 @@ PHASE_ROUTERS.append(connection_router)
 # ---- END PHASE-4A ----
 
 # ---- PHASE-3B (uplift) — append only below this line ----
+# Uplift: the treatment picker, `POST /uplift/runs`, uplift artefacts, campaign results and OPE.
+from api.routes.uplift import router as uplift_router  # noqa: E402
+
+PHASE_ROUTERS.append(uplift_router)
 # ---- END PHASE-3B ----
 
 app: FastAPI = create_app()

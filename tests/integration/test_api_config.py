@@ -124,6 +124,8 @@ def test_problem_type_choices_disable_the_later_phases(client: TestClient) -> No
         "regression": True,
         "forecasting": False,
         "clustering": False,
+        # Phase 3b: uplift is a problem type of its own, enabled in the catalog (DEC-601)
+        "uplift": True,
     }
     disabled = [choice for choice in body.setup.problem_type_choices if not choice.enabled]
     assert all(choice.help for choice in disabled)
@@ -294,6 +296,12 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/datasets/{dataset_id}/features.sql",
         "/datasets/{dataset_id}/report",
         "/datasets/{dataset_id}/sample",
+        # Phase 3b: the treatment picker, uplift runs, their artefacts, campaign results and OPE
+        "/uploads/{upload_id}/treatment-candidates",
+        "/uplift/runs",
+        "/runs/{run_id}/uplift/{name}",
+        "/runs/{run_id}/campaign-results",
+        "/runs/{run_id}/uplift/ope",
     }
 
 

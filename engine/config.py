@@ -29,7 +29,10 @@ from pydantic import (
 )
 
 from engine.settings import DEFAULT_CONFIG_DIR, ENV_VARS, settings
-from engine.uplift.config import UPLIFT_OVERRIDABLE_PATHS, UpliftConfig  # Phase 3b (DEC-601); imports nothing from engine
+from engine.uplift.config import (  # Phase 3b (DEC-601); imports nothing from engine
+    UPLIFT_OVERRIDABLE_PATHS,
+    UpliftConfig,
+)
 
 
 class ConfigError(Exception):

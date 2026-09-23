@@ -597,4 +597,94 @@ class ConnectionTestRequest(StrictBase):
 # ---- END PHASE-4A ----
 
 # ---- PHASE-3B (uplift) — append only below this line ----
+# The bodies of `api/routes/uplift.py` (plan B §8). The artefacts those routes return are the engine's
+# own contracts in `engine/uplift/contracts.py`; only request shapes and the two envelopes live here.
+from engine.uplift.contracts import UpliftValidationReport  # noqa: E402
+
+
+class TreatmentCandidate(StrictBase):
+    """One column of an upload that could record who was treated: only 0/1 values, both present."""
+
+    column: str = Field(description="Column name, as spelled in the file.")
+    treated_share: float = Field(description="Share of rows with the value 1, 0 to 1.")
+    hinted: bool = Field(description="True when the column is the configured one or matches a name hint.")
+
+
+class TreatmentCandidatesResponse(StrictBase):
+    """Body of `GET /uploads/{upload_id}/treatment-candidates`."""
+
+    candidates: tuple[TreatmentCandidate, ...] = Field(description="Every 0/1 column, in file order.")
+    detected: str | None = Field(
+        description="The column the uplift checks would use: the configured one, else the first hint present."
+    )
+
+
+class UpliftRunRequest(StrictBase):
+    """Body of `POST /uplift/runs`: an uplift training run on one uploaded file.
+
+    `overrides` takes the same nested or dotted run overrides as `RunRequest.overrides`; the route
+    adds `problem_type: uplift` and, when given, `uplift.treatment_column` on top of them.
+    """
+
+    use_case: str = Field(description="Use case the run belongs to.")
+    upload_id: str = Field(description="Upload uploaded in train mode.")
+    primary_key: str = Field(description="Column that identifies a customer.")
+    target: str = Field(description="Binary outcome column.")
+    treatment_column: str | None = Field(
+        default=None,
+        description="0/1 column recording who was treated; the configured or hinted one when null.",
+    )
+    overrides: dict[str, Any] = Field(default_factory=dict, description="Run overrides, nested or dotted.")
+
+
+class UpliftValidationErrorResponse(StrictBase):
+    """The `409` of `POST /uplift/runs`: M1's envelope plus both reports, so Setup renders one response."""
+
+    detail: ErrorBody
+    validation: ValidationReport
+    uplift_validation: UpliftValidationReport
+
+
+class CampaignResultsRequest(StrictBase):
+    """Body of `POST /runs/{run_id}/campaign-results`: an uploaded outcomes file and how to read it."""
+
+    upload_id: str = Field(description="Upload holding the primary key and the observed outcome.")
+    outcome_column: str = Field(description="Outcome column of that file.")
+    positive_label: str | None = Field(default=None, description="Outcome value that counts as a conversion.")
+    outcome_window_days: int | None = Field(
+        default=None,
+        ge=0,
+        description="Days after treatment the outcome is measured over; null = all mature.",
+    )
+    treatment_date_column: str | None = Field(
+        default=None,
+        description="Per-row treatment date in the outcomes file; the run's finish time when null.",
+    )
+    as_of: AwareDatetime | None = Field(
+        default=None, description="Reference time for maturity; now when null."
+    )
+    bands: tuple[str, ...] | None = Field(
+        default=None,
+        description="Bands to measure within, for a Phase 1 run; an uplift run uses its intended set.",
+    )
+    campaign_id: str | None = Field(default=None, description="Campaign the report is about, if known.")
+
+
+class OpeRequest(StrictBase):
+    """Body of `POST /runs/{run_id}/uplift/ope`: the targeting rule to evaluate on the hold-out."""
+
+    top_share: float | None = Field(
+        default=None, gt=0.0, le=1.0, description="Treat the top share by predicted uplift, 0 to 1."
+    )
+    min_uplift: float | None = Field(
+        default=None, ge=-1.0, le=1.0, description="Treat every row whose predicted uplift is at least this."
+    )
+
+    @model_validator(mode="after")
+    def _a_rule(self) -> OpeRequest:
+        if self.top_share is None and self.min_uplift is None:
+            raise ValueError("Give top_share, min_uplift or both: a policy needs a rule.")
+        return self
+
+
 # ---- END PHASE-3B ----

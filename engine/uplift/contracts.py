@@ -469,6 +469,14 @@ class UpliftModelCard(Artefact):
     categorical_levels: dict[str, tuple[str, ...]] = Field(
         description="Category levels seen at fit time per categorical feature; unseen levels score as missing."
     )
+    dropped_columns: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Columns of the training file that were not used as features, mapped to why: high_null, "
+            "constant, id_like, pii, date or unsupported_type. Reserved columns (key, outcome, "
+            "treatment and the other configured roles) are never listed."
+        ),
+    )
     treatment_column: str = Field(description="Treatment column of the training data.")
     outcome_column: str = Field(description="Outcome column of the training data.")
     positive_label: str = Field(description="Outcome value counted as a conversion, stringified.")

@@ -48,6 +48,7 @@ dependencies = [
   # ---- END PHASE-4A ----
 
   # ---- PHASE-3B (uplift) — append only below this line ----
+  "lightgbm==4.7.0",                    # engine/uplift imports it directly (meta-learners, randomness check); was only transitive via AutoGluon's extra
   # ---- END PHASE-3B ----
 ]
 

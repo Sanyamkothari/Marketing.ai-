@@ -46,12 +46,18 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/campaign-copy` | Start campaign-copy generation over a finished scoring run | GenerativeJobStartedResponse |
 | POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/approve` | Record that a person approved one campaign-copy template | CopyTemplate |
 | POST | `/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate` | Re-run generation for one campaign-copy template in place | CopyTemplate |
+| GET | `/runs/{run_id}/campaign-results` | The stored campaign results of a scoring run | IncrementalityReport |
+| POST | `/runs/{run_id}/campaign-results` | Measure a scoring run's campaign from an uploaded outcomes file | IncrementalityReport |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
 | GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
 | POST | `/runs/{run_id}/root-cause` | Start a root-cause summary over a finished scoring run | GenerativeJobStartedResponse |
 | GET | `/runs/{run_id}/scores.csv` | The scored rows of a scoring run as CSV | - |
+| POST | `/runs/{run_id}/uplift/ope` | Off-policy estimate of a targeting rule on an uplift training run's hold-out | OpeReport |
+| GET | `/runs/{run_id}/uplift/{name}` | One uplift artefact of a run, whitelisted against the uplift artefact registry | - |
+| POST | `/uplift/runs` | Validate an upload as an experiment and, when it passes, start an uplift training run | RunCreatedResponse |
 | POST | `/uploads` | Store a CSV or Parquet file, profile it and return everything the Setup screen renders | UploadResponse |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
+| GET | `/uploads/{upload_id}/treatment-candidates` | The 0/1 columns of an upload that could record who was treated | TreatmentCandidatesResponse |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
 | GET | `/use-cases/{use_case_id}/indexes` | Every index this use case has built or graded, newest first | IndexListResponse |
 | POST | `/use-cases/{use_case_id}/indexes` | Start a knowledge-index build, and grade it when a reference set is given | IndexJobStartedResponse |
@@ -91,11 +97,11 @@ A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explana
 | `row_count` | integer \| null | no | Rows in the upload, taken from the dataset profile. |
 | `primary_key` | string \| list[string] | yes | Column, or columns, identifying each entity. |
 | `target` | string \| null | no | Target column; set for training runs only. |
-| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Problem type resolved for this run, detected or overridden. |
+| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering" \| "uplift") | yes | Problem type resolved for this run, detected or overridden. |
 | `model_choice` | string | yes | Step-3 choice: the AutoML sentinel or a single model family value. |
 | `model_version_id` | string \| null | no | Model version produced (train) or used (score). |
 | `best_model` | string \| null | no | Display name of the winning or scoring model. |
-| `headline_metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae") \| null | no | Metric behind the headline score. |
+| `headline_metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") \| null | no | Metric behind the headline score. |
 | `headline_metric_label` | string \| null | no | Catalog label of the headline metric. |
 | `headline_score` | number \| null | no | Test score of the headline metric, rounded. |
 | `champion` | boolean | no | Whether this run's model is, or became, the champion. |
@@ -196,7 +202,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `description` | string | no |  |
 | `lifecycle_stage` | string | yes |  |
 | `ai_type` | AiType ("predictive" \| "generative" \| "hybrid") | no |  |
-| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | no |  |
+| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering" \| "uplift") | no |  |
 | `entity` | string | no |  |
 | `target` | TargetConfig | no |  |
 | `primary_key_hints` | list[string] | no |  |
@@ -218,6 +224,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `suggested_features` | list[FeatureDef] | no |  |
 | `label` | LabelDefinition \| null | no |  |
 | `onboarding` | OnboardingConfig | no | `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3). |
+| `uplift` | UpliftConfig | no | `uplift:` in a use case. Inert unless `problem_type` is `uplift`.  The data limits, the randomness check and anything about the treatment assignment are **not** agent-editable: an agent that could loosen them could make a targeted campaign look causal. |
 
 #### TargetConfig
 
@@ -277,8 +284,8 @@ A fully merged, validated use case. This is what the whole engine consumes.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae") | no |  |
-| `metric_choices` | list[Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae")] | no |  |
+| `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | no |  |
+| `metric_choices` | list[Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc")] | no |  |
 | `strategy` | Strategy ("fast" \| "balanced" \| "exhaustive") | no |  |
 | `candidate_pool` | list[ModelFamily ("XGBoost" \| "LightGBM" \| "RandomForest" \| "LogisticRegression" \| "CatBoost" \| "NeuralNet")] | no |  |
 | `candidates` | list[ModelFamily ("XGBoost" \| "LightGBM" \| "RandomForest" \| "LogisticRegression" \| "CatBoost" \| "NeuralNet")] | no |  |
@@ -416,6 +423,28 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `snapshots` | SnapshotDefinition | no | Which dates to build rows for (plan section 6.4), and `engine.yaml`'s default for them.  Like `LabelDefinition`, this is never agent-editable: moving the snapshot dates moves the measurement, and a search that may move its own measurement measures nothing. |
 | `labels` | LabelDefaults | no | `engine.yaml:defaults.onboarding.labels` (plan section 5.3). |
 | `limits` | OnboardingLimits | no | `engine.yaml:defaults.onboarding.limits` (plan section 5.3). Phase 2 reads files, not warehouses. |
+
+#### UpliftConfig
+
+`uplift:` in a use case. Inert unless `problem_type` is `uplift`.  The data limits, the randomness check and anything about the treatment assignment are **not** agent-editable: an agent that could loosen them could make a targeted campaign look causal.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `learner` | UpliftLearner ("s_learner" \| "t_learner" \| "x_learner") | no |  |
+| `base_model` | UpliftBaseModel ("autogluon_fast" \| "lightgbm") | no |  |
+| `treatment_column` | string \| null | no |  |
+| `treatment_column_hints` | list[string] | no |  |
+| `treatment_date_column` | string \| null | no |  |
+| `campaign_id_column` | string \| null | no |  |
+| `outcome_window_days` | integer \| null | no |  |
+| `min_arm_rows` | integer | no |  |
+| `min_arm_positives` | integer | no |  |
+| `randomness_auc_max` | number | no |  |
+| `bootstrap_samples` | integer | no |  |
+| `test_fraction` | number | no |  |
+| `time_limit_minutes` | integer | no |  |
+| `segments` | UpliftSegmentsConfig | no | Where the four segments are cut. A Phase 5 agent may propose new cuts. |
+| `policy` | UpliftPolicyConfig | no | The budget the targeting recommendation works within. A Phase 5 agent may propose budgets. |
 
 #### ThresholdConfig
 
@@ -644,6 +673,26 @@ Which dates to build rows for (plan section 6.4), and `engine.yaml`'s default fo
 |---|---|---|---|
 | `max_source_rows` | integer | no |  |
 | `max_sources` | integer | no |  |
+
+#### UpliftSegmentsConfig
+
+Where the four segments are cut. A Phase 5 agent may propose new cuts.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `persuadable_min_uplift` | number | no |  |
+| `sleeping_dog_max_uplift` | number | no |  |
+| `sure_thing_min_probability` | number \| null | no |  |
+
+#### UpliftPolicyConfig
+
+The budget the targeting recommendation works within. A Phase 5 agent may propose budgets.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `budget_contacts` | integer \| null | no |  |
+| `cost_per_contact` | number \| null | no |  |
+| `value_per_conversion` | number \| null | no |  |
 
 #### CopyLimits
 
@@ -883,7 +932,7 @@ One part of the split and its shape.
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `run_id` | string | yes | Run this leaderboard belongs to. |
-| `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae") | yes | Metric every score is measured in. |
+| `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | yes | Metric every score is measured in. |
 | `metric_label` | string | yes | Catalog label of the metric. |
 | `greater_is_better` | boolean | yes | Whether a higher score is a better score. |
 | `entries` | list[LeaderboardEntry] | yes | Leaderboard rows, sorted by rank. |
@@ -923,7 +972,7 @@ One trained model on the leaderboard.
 | `is_ensemble` | boolean | yes | Whether the winner is an ensemble. |
 | `ensemble_members` | list[string] | no | Member model names of the ensemble. |
 | `display_name` | string | yes | Name shown to the user, for example Ensemble (XGBoost + LightGBM). |
-| `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae") | yes | Metric the scores below are measured in. |
+| `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | yes | Metric the scores below are measured in. |
 | `metric_label` | string | yes | Catalog label of the metric. |
 | `validation_score` | number | yes | Score on the validation split. |
 | `test_score` | number | yes | Score on the test split, the headline number. |
@@ -943,10 +992,10 @@ One trained model on the leaderboard.
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `run_id` | string | yes | Run this evaluation belongs to. |
-| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Problem type the metrics belong to. |
+| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering" \| "uplift") | yes | Problem type the metrics belong to. |
 | `rows_evaluated` | integer | yes | Rows in the test split. |
 | `positive_rate` | number \| null | yes | Positive rate of the test split, 0 to 1. |
-| `primary_metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae") | yes | Metric the model was optimised for. |
+| `primary_metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | yes | Metric the model was optimised for. |
 | `primary_metric_label` | string | yes | Catalog label of the primary metric. |
 | `headline_score` | number | yes | Primary metric on the test split, the headline number. |
 | `metrics` | list[MetricValue] | yes | Every catalog metric valid for this problem type, in catalog order. |
@@ -964,7 +1013,7 @@ One evaluated metric, ready to render.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
-| `id` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae") | yes | Metric id from the catalog. |
+| `id` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | yes | Metric id from the catalog. |
 | `label` | string | yes | Catalog label of the metric. |
 | `value` | number | yes | Value on the test split, rounded. |
 | `greater_is_better` | boolean | yes | Whether a higher value is a better value. |
@@ -1060,7 +1109,7 @@ One line of the model-versus-baseline table.
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
-| `id` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae") | yes | Metric id from the catalog. |
+| `id` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | yes | Metric id from the catalog. |
 | `label` | string | yes | Catalog label of the metric. |
 | `model_value` | number | yes | The trained model's value. |
 | `baseline_value` | number \| null | yes | The baseline model's value. |
@@ -1309,7 +1358,7 @@ One per-row reason behind a score.
 | `model_version_id` | string | yes | Model version the schema was saved with. |
 | `primary_key` | string \| list[string] | yes | Primary-key column, or columns. |
 | `target` | string \| null | yes | Target column; null for scoring-only schemas. |
-| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Problem type the model was fitted for. |
+| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering" \| "uplift") | yes | Problem type the model was fitted for. |
 | `columns` | list[FeatureSchemaColumn] | yes | Columns in the exact order used at fit time. |
 | `row_count_at_fit` | integer | yes | Rows the model was fitted on. |
 | `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the schema was written. |
@@ -1358,7 +1407,7 @@ Every choice that determines a trained model, and nothing else.  `train(recipe)`
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `use_case_id` | string | yes | Use case this recipe belongs to. |
-| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering") | yes | Learning task the model is fitted for. |
+| `problem_type` | ProblemType ("binary_classification" \| "regression" \| "forecasting" \| "clustering" \| "uplift") | yes | Learning task the model is fitted for. |
 | `target` | string | yes | Column the model learns to predict. |
 | `primary_key` | string \| list[string] | yes | Row identifier; never used as a feature. |
 | `feature_columns` | list[string] | yes | Exact ordered feature list handed to training, after exclusions. |
@@ -1486,7 +1535,7 @@ The registry record of one trained model (SQLite, not a run artefact).
 | `run_id` | string | yes | Training run that produced the model. |
 | `created_at` | datetime (ISO-8601, with timezone) | yes | UTC time the version was registered. |
 | `status` | ModelStatus ("candidate" \| "pending_approval" \| "champion" \| "archived") | yes | Lifecycle status of the version. |
-| `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae") | yes | Metric the scores below are measured in. |
+| `metric` | Metric ("roc_auc" \| "pr_auc" \| "f1" \| "recall" \| "precision" \| "rmse" \| "mae" \| "auuc") | yes | Metric the scores below are measured in. |
 | `metric_label` | string | yes | Catalog label of the metric. |
 | `test_score` | number | yes | Test-split score, the number the champion rule compares. |
 | `validation_score` | number \| null | no | Validation-split score. |
@@ -1741,6 +1790,28 @@ Keys of the default document that no advanced-settings field renders, with their
 | `onboarding.labels.drop_censored` | bool; drop snapshots whose outcome window runs past the end of the data |
 | `onboarding.limits.max_source_rows` | int >= 1; SOURCE_TOO_LARGE above this |
 | `onboarding.limits.max_sources` | int >= 1; TOO_MANY_SOURCES above this |
+| `uplift` | Phase 3b (plan B §6). Read only when problem_type is uplift (DEC-601) |
+| `uplift.learner` | enum: s_learner \| t_learner \| x_learner |
+| `uplift.base_model` | enum: autogluon_fast \| lightgbm |
+| `uplift.treatment_column` | str \| null; 1 = received the action, 0 = held out, RANDOMLY assigned |
+| `uplift.treatment_column_hints` | list[str]; detection order when treatment_column is null |
+| `uplift.treatment_date_column` | str \| null; enables OUTCOME_WINDOW_IMMATURE and FEATURE_AFTER_TREATMENT |
+| `uplift.campaign_id_column` | str \| null; never a feature |
+| `uplift.outcome_window_days` | int 1..3650 \| null; days after the treatment date the outcome is measured over |
+| `uplift.min_arm_rows` | int >= 1; TREATMENT_ARM_TOO_SMALL below this in either arm |
+| `uplift.min_arm_positives` | int >= 1; TREATMENT_ARM_TOO_SMALL below this in either arm |
+| `uplift.randomness_auc_max` | float 0.5..1; TREATMENT_NOT_RANDOM when features predict treatment better than this |
+| `uplift.bootstrap_samples` | int 10..5000; resamples behind every uplift confidence interval |
+| `uplift.test_fraction` | float 0.1..0.5; hold-out share the uplift metrics are measured on |
+| `uplift.time_limit_minutes` | int 1..240; AutoGluon budget across all base models (autogluon_fast only) |
+| `uplift.segments` | agent_editable: true (plan B §12) |
+| `uplift.segments.persuadable_min_uplift` | float; predicted uplift at or above this = persuadable |
+| `uplift.segments.sleeping_dog_max_uplift` | float; predicted uplift at or below this = sleeping dog (never treated) |
+| `uplift.segments.sure_thing_min_probability` | float 0..1 \| null; between the cuts, P(outcome \| not treated) at or above this = sure thing; null = the training base rate |
+| `uplift.policy` | agent_editable: true (plan B §12) |
+| `uplift.policy.budget_contacts` | int >= 1 \| null; most customers to contact; null = every persuadable |
+| `uplift.policy.cost_per_contact` | float >= 0 \| null |
+| `uplift.policy.value_per_conversion` | float >= 0 \| null; with cost, stops where expected value per contact < cost |
 
 ### Catalog keys
 
@@ -1755,9 +1826,11 @@ Engine constants. The catalog is never merged into a use case and never overrida
 | `catalog.strategy_presets.balanced` | str |
 | `catalog.strategy_presets.exhaustive` | str |
 | `catalog.metrics` | id -> {label, autogluon_name, problem_types, greater_is_better} |
+| `catalog.metrics.auuc` | Phase 3b (DEC-601): area between the uplift curve and random targeting; computed by engine/uplift/metrics.py, never by AutoGluon |
 | `catalog.problem_types` | id -> {label (prototype PTYPES verbatim), enabled in Phase 1} |
 | `catalog.problem_types.forecasting` | plan §12: later |
 | `catalog.problem_types.clustering` | plan §12: later |
+| `catalog.problem_types.uplift` | Phase 3b (DEC-601): needs a randomly assigned treatment column |
 | `catalog.ai_types` | id -> {marker on the overview, stars, label} (prototype TYPES verbatim) |
 | `catalog.automl_choice` | the step-3 first option; value is a sentinel, never a display string |
 | `catalog.automl_choice.value` | str |

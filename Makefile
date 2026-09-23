@@ -192,4 +192,8 @@ aws-test: infra-test ## every Phase 4a suite: the AWS backends, the container fi
 # ---- END PHASE-4A ----
 
 # ---- PHASE-3B (uplift) — append only below this line ----
+.PHONY: uplift-test
+
+uplift-test: ## every Phase 3b suite: the uplift engine, its API, the flows and the UI module (slow ones too)
+	$(BIN)/python -m pytest tests/unit/uplift tests/integration/uplift -m "$(PAID_MARKERS)" -q
 # ---- END PHASE-3B ----
