@@ -410,6 +410,7 @@ def create_run_endpoint(
         target=target,
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
+        requested_by=requested_by(request),
     )
     spec = job_spec_for(record, upload=source, client_id=settings.client_id)
     write_job_spec(storage, spec)
@@ -617,6 +618,18 @@ def validation_conflict(report: ValidationReport) -> JSONResponse:
         validation=report,
     )
     return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
+
+
+def requested_by(request: Request) -> str | None:
+    """Who is starting a run: the principal `api.access.enforce_access` resolved, or None without one.
+
+    Recorded on `run.json` so the approval screen can keep the person who trained a model from
+    approving it (Plan D M54, DEC-862). Read from the request state rather than through
+    `api.access.current_principal`, which would raise on an app built without access control.
+    """
+    principal = getattr(request.state, "principal", None)
+    user_id = getattr(principal, "user_id", None)
+    return user_id if isinstance(user_id, str) else None
 
 
 def load_run(storage: Storage, run_id: str) -> RunRecord:

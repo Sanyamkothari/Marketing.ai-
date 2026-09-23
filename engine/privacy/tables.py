@@ -30,10 +30,12 @@ from engine.platform_db import create_tables
 
 __all__ = [
     "CONSENT_RECORD_TABLE",
+    "ERASURE_PROGRESS_TABLE",
     "ERASURE_REQUEST_TABLE",
     "MODEL_RETRAIN_FLAG_TABLE",
     "PRIVACY_TABLES",
     "ConsentRecordRow",
+    "ErasureProgressRow",
     "ErasureRequestRow",
     "ModelRetrainFlagRow",
     "create_privacy_tables",
@@ -48,6 +50,9 @@ PRIVACY_TABLES: Final[tuple[str, ...]] = (
     MODEL_RETRAIN_FLAG_TABLE,
 )
 """The tables this package owns, in creation order. `alembic/versions/0003_privacy.py` creates them."""
+
+ERASURE_PROGRESS_TABLE: Final[str] = "erasure_progress"
+"""Plan D M54 (DEC-863): a background erasure's progress per store. `0005_plan_d` creates it."""
 
 
 class ConsentRecordRow(SQLModel, table=True):
@@ -103,6 +108,21 @@ class ErasureRequestRow(SQLModel, table=True):
     error_code: str | None = None
 
 
+class ErasureProgressRow(SQLModel, table=True):
+    """How far one erasure request has got in one store. Holds counts and codes, never the principal."""
+
+    __tablename__ = ERASURE_PROGRESS_TABLE
+
+    request_id: str = SQLField(primary_key=True)
+    store: str = SQLField(primary_key=True)
+    status: str
+    files_total: int = 0
+    files_done: int = 0
+    attempts: int = 0
+    error_code: str | None = None
+    updated_at: datetime = SQLField(sa_column=Column("updated_at", DateTime(timezone=True), nullable=False))
+
+
 class ModelRetrainFlagRow(SQLModel, table=True):
     """A model version whose training data included an erased principal, until retraining clears it."""
 
@@ -119,5 +139,5 @@ class ModelRetrainFlagRow(SQLModel, table=True):
 
 
 def create_privacy_tables(engine: Engine) -> None:
-    """Create this package's three tables if missing (SQLite only; Alembic owns Postgres, DEC-340)."""
-    create_tables(engine, PRIVACY_TABLES)
+    """Create this package's tables if missing (SQLite only; Alembic owns Postgres, DEC-340)."""
+    create_tables(engine, (*PRIVACY_TABLES, ERASURE_PROGRESS_TABLE))

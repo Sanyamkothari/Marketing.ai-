@@ -281,3 +281,30 @@ checks the build fails with FUTURE_EVENTS_LEAKED and writes no dataset. `tests/i
 twice. `tests/unit/test_fingerprint_parallel.py` holds the parallel rendering of §6 to equality with the
 in-process fingerprint: on a mixed-type frame of five chunks, with a pool whose workers fail, on
 one core, and for a single chunk.
+
+## One million rows on a laptop (Phase 1 plan §11, Plan D M57)
+
+Plan §11 asks for "1M rows in under the time limit on a laptop". Every earlier one-million-row
+figure (README, *Large-file handling*) was measured on a 4-CPU container. `scripts/bench_1m.py`
+runs `scripts/bench_large_file.py` at 1,000,000 CSV rows, reads the numbers it printed, names the
+machine (CPU model, the CPUs the process may use, RAM, OS, Python) and, with `--record`, appends the
+row below. `--kind` is required, so a container run is never recorded as the laptop run.
+
+```bash
+# on the laptop, idle, from a checkout that has run `make setup`
+.venv/bin/python -m scripts.bench_1m --kind laptop --label "<make and model, RAM>" --record
+```
+
+Ingest is `read_upload` + `profile_dataset` (the whole-file fingerprint included); score is the whole
+score flow (plan §6.2), which re-reads the file as its own first stage, so the two are not additive.
+Peak memory is the benchmark process's high-water mark (on macOS `ru_maxrss` is bytes, not KiB; the
+benchmark converts it since Plan D).
+
+| date | kind | machine | CPU, cores, RAM, OS, Python | ingest (1M CSV rows) | score (1M rows) | peak memory |
+|---|---|---|---|---|---|---|
+<!-- bench_1m rows: appended by scripts/bench_1m.py --record -->
+
+**Status: the laptop row is an owner action.** This work runs in a cloud container with no laptop to
+hand, so the command above has not been run on one, and no laptop number is claimed anywhere. Until a
+`laptop` row is in the table, plan §11's laptop criterion is **not met**; the container figures in
+README remain the only one-million-row measurements.

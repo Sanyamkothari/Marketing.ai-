@@ -8,6 +8,7 @@ Contract schema version: 1.
 
 | Method | Path | Summary | Response model |
 |---|---|---|---|
+| GET | `/approvals` | Challengers waiting for an Approver, with the head-to-head and who may decide | ApprovalListResponse |
 | GET | `/audit/events` | Read the audit log | AuditEventPage |
 | GET | `/audit/events.csv` | Download the audit log as CSV | - |
 | POST | `/audit/exports` | Export the audit log (JSON lines; S3 Object Lock when configured) | AuditExportResult |
@@ -48,6 +49,7 @@ Contract schema version: 1.
 | GET | `/models` | Registered model versions, newest first, with the champion flagged | ModelListResponse |
 | POST | `/models/{model_id}/approve` | Approve a version that is waiting for a human, making it champion | ModelVersionResponse |
 | POST | `/models/{model_id}/promote` | Make a version champion by hand, recording who did it and why | ModelVersionResponse |
+| POST | `/models/{model_id}/reject` | Turn down a challenger waiting for approval, with a reason | ModelDecisionResponse |
 | GET | `/monitoring/alerts` | List alerts | AlertListResponse |
 | POST | `/monitoring/alerts/{alert_id}/acknowledge` | Acknowledge an alert | Alert |
 | GET | `/monitoring/missed-firings` | Scheduled runs that were missed, across schedules | FiringListResponse |
@@ -67,8 +69,10 @@ Contract schema version: 1.
 | POST | `/privacy/consent/imports` | Import a consent CSV (all or nothing unless partial) | ConsentImportReport |
 | POST | `/privacy/consent/lookup` | Look up one person's consent (the id goes in the body, never the URL) | ConsentLookupResponse |
 | GET | `/privacy/erasure` | The erasure register, newest first | ErasureRequestList |
-| POST | `/privacy/erasure` | Erase one person from every store (the id goes in the body) | ErasureOutcome |
+| POST | `/privacy/erasure` | Erase one person from every store, as a background job (the id goes in the body) | ErasureAccepted |
 | GET | `/privacy/erasure/{request_id}` | One erasure request | ErasureRequestRecord |
+| GET | `/privacy/erasure/{request_id}/progress` | How far an erasure request has got, store by store | ErasureProgressResponse |
+| POST | `/privacy/erasure/{request_id}/retry` | Run a failed erasure request again (the id goes in the body again) | ErasureAccepted |
 | GET | `/privacy/purposes` | The consent purposes and the erasure policy | PrivacyPolicyResponse |
 | POST | `/privacy/retention/apply` | Run the retention job on a reviewed dry run | RetentionApplyResponse |
 | GET | `/privacy/retention/plan` | Retention dry run: what the job would delete now | RetentionPlanResponse |
@@ -162,6 +166,7 @@ A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explana
 | `artefacts` | object of string -> string | no | Artefact filename mapped to its storage key. |
 | `error` | RunError \| null | no | Failure detail; set when the state is failed. |
 | `engine_version` | string | yes | Version of the engine package that produced the run. |
+| `requested_by` | string \| null | no | `Principal.user_id` of whoever started the run (the firing principal for a scheduled run); null for a run started before this was recorded. Separation of duties reads it. |
 
 #### RunError
 

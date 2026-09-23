@@ -45,6 +45,8 @@ select.pb-input{cursor:pointer}
 .pb-small{font-size:12px;color:var(--muted)}
 .pb-signin{max-width:440px}
 .pill.pb-pill-none{background:var(--soft);color:var(--muted);border:1px solid var(--line)}
+.pb-h2h tr.pb-worse td{background:var(--bad-t)}
+.pb-decide textarea.pb-input{height:auto;padding:8px 12px;resize:vertical}
 `;
 
 let injected = false;

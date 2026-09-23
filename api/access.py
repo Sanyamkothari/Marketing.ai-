@@ -76,6 +76,7 @@ from typing import Annotated, Any, Final
 import anyio
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.routing import APIRoute
+from sqlalchemy.engine import Engine
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from api.access_policy import MUTATING_METHODS, RoutePolicy, policy_for, refusal_message
@@ -83,6 +84,7 @@ from api.deps import get_settings
 from api.routes.uploads import http_error
 from engine.access.identity import DisabledIdentity, IdentityProvider, LocalIdentity
 from engine.access.roles import LOCAL_OPERATOR, Principal, Role
+from engine.access.throttle import LoginThrottle
 from engine.access.users import SqlUserStore, UserStore
 from engine.audit.events import AuditEvent, AuditLog
 from engine.audit.store import (
@@ -104,10 +106,13 @@ __all__ = [
     "IdentityDep",
     "PrincipalDep",
     "UserStoreDep",
+    "client_address",
     "current_principal",
     "enforce_access",
     "get_audit_log",
     "get_identity",
+    "get_login_throttle",
+    "get_platform_engine",
     "get_user_store",
     "install_access",
     "platform_data_dir",
@@ -211,6 +216,16 @@ def get_audit_log(request: Request) -> AuditLog:
     return log
 
 
+def get_platform_engine(request: Request) -> Engine:
+    """The platform database's engine, as `get_audit_log` builds it (Plan D: approval decisions)."""
+
+    def build() -> Engine:
+        return platform_engine(get_settings(request), data_dir=_explicit_data_dir(request))
+
+    engine: Engine = _cached(request, "platform_engine", build)
+    return engine
+
+
 def get_user_store(request: Request) -> UserStore:
     """The built-in user store. A test may put a faster-hashing `SqlUserStore` on `app.state.user_store`."""
 
@@ -236,6 +251,40 @@ def get_identity(request: Request) -> IdentityProvider:
 
     identity: IdentityProvider = _cached(request, "identity", build)
     return identity
+
+
+def get_login_throttle(request: Request) -> LoginThrottle:
+    """The sign-in rate limiter (Plan D M54, DEC-861). A test may put one with its own clock on `app.state`."""
+
+    def build() -> LoginThrottle:
+        settings = get_settings(request)
+        return LoginThrottle(
+            max_failures_per_account=settings.login_max_failures_per_account,
+            max_failures_per_address=settings.login_max_failures_per_address,
+            window_seconds=settings.login_failure_window_seconds,
+            lockout_seconds=settings.login_lockout_seconds,
+        )
+
+    throttle: LoginThrottle = _cached(request, "login_throttle", build)
+    return throttle
+
+
+def client_address(request: Request, settings: Settings) -> str:
+    """The address a request came from, for rate limiting (DEC-861).
+
+    The peer address, unless `trusted_proxy_hops` says N proxies (a load balancer) sit in front of
+    the API: then the N-th `X-Forwarded-For` entry from the right, the one the outermost trusted proxy
+    appended. Entries further left are whatever the client wrote and are never used. A request with
+    fewer entries than trusted hops did not come through the proxies and is counted by its peer.
+    """
+    peer = request.client.host if request.client is not None else "unknown"
+    hops = settings.trusted_proxy_hops
+    if hops == 0:
+        return peer
+    forwarded = [
+        part.strip() for part in request.headers.get("x-forwarded-for", "").split(",") if part.strip()
+    ]
+    return forwarded[-hops] if len(forwarded) >= hops else peer
 
 
 def current_principal(request: Request) -> Principal:

@@ -38,11 +38,11 @@ from __future__ import annotations
 import io
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep
-from api.routes.runs import ARTEFACT_NAME, load_run, read_frame
+from api.routes.runs import ARTEFACT_NAME, load_run, read_frame, requested_by
 from api.routes.uploads import (
     UPLOAD_VALIDATION_FILENAME,
     http_error,
@@ -181,6 +181,7 @@ def create_uplift_run(
     jobs: JobsDep,
     settings: SettingsDep,
     response: Response,
+    request: Request,
 ) -> RunCreatedResponse | JSONResponse:
     """Phase 1's checks and the six uplift checks, synchronously; `409` with both reports, or `202`."""
     from engine.uplift.checks import run_uplift_checks
@@ -234,6 +235,7 @@ def create_uplift_run(
         target=body.target,
         model_choice=config.uplift.learner.value,
         model_version_id=None,
+        requested_by=requested_by(request),
     )
     storage.write_model(
         run_key(record.run_id, UPLIFT_VALIDATION_FILENAME),

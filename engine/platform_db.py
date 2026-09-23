@@ -44,6 +44,9 @@ PLATFORM_TABLES: Final[tuple[str, ...]] = (
     "schedule",
     "schedule_firing",
     "alert",
+    # 0005_plan_d (Plan D M54) - `engine.approvals.MODEL_DECISION_TABLE`, `engine.privacy.tables.ERASURE_PROGRESS_TABLE`
+    "model_decision",
+    "erasure_progress",
 )
 """Every Phase 4b table a migration creates, beside `engine.aws.postgres.METADATA_TABLES`.
 

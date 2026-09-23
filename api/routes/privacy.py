@@ -20,7 +20,7 @@ so `GET /privacy/consent?principal_id=C-104` would copy the very value an erasur
 remove into three places nothing erases. Being `POST`s, both are audited like every mutating
 request; the event's `object_id` is the *request's* id (the lookup id, the access-request id, the
 erasure-request id) and the person appears only as `principal_hash` in `details`, salted with
-`privacy_salt(settings)` like the ledger and the erasure register (DEC-705, DEC-733). No response
+`privacy_salt` (the deployment's secret salt, DEC-860) like the ledger and the erasure register (DEC-705, DEC-733). No response
 echoes the id either.
 
 **Exactly one audit event per request.** The engine's `erase` and `apply_retention` can each write
@@ -48,11 +48,14 @@ processes (see the report's gaps).
 column at once; at most 64 MB, UTF-8 (DEC-751). A consent needs a client: the request's, else the
 deployment's `client_id`, else 422 `CLIENT_ID_REQUIRED`.
 
-**Erasure answers 201 with the outcome**, recorded under a request id the route mints before the
-engine starts, so a failure still has an id: the register row is written first and marked `failed`,
-and the 500 names the id (`ERASURE_INCOMPLETE` when a rewritten file still held the person,
-`ERASURE_FAILED` otherwise) (DEC-752). `GET /privacy/erasure/{request_id}` reads the register back; it is an
-audited read, because it is a record about an identifiable person's request.
+**Erasure is a background job** (Plan D M54, DEC-863; it answered 201 with the outcome before,
+DEC-752). `POST /privacy/erasure` writes the register row as `queued` under an id the route mints,
+starts the job and answers `202`; `GET /privacy/erasure/{request_id}/progress` shows how far it has
+got store by store (a plain read: no hash, no person), and `GET /privacy/erasure/{request_id}` - an
+audited read, a record about an identifiable person's request - is the completion report. A store
+that still fails after its retries ends the request `failed` (`ERASURE_STORE_FAILED`), and
+`POST /privacy/erasure/{request_id}/retry`, given the id again, runs it again. Audited at start (the
+`POST`'s event) and at end (the job's `privacy.erasure.complete`).
 
 **Access requests return a zip and store nothing** (DEC-745): the bytes are streamed to the Admin
 and the audit event's `after_hash` is their SHA-256 and its `object_id` the export's `ar_` id, so
@@ -71,12 +74,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
-from fastapi import APIRouter, File, Form, Query, Request, Response, UploadFile
+from fastapi import APIRouter, FastAPI, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.engine import Engine
 from starlette.concurrency import run_in_threadpool
 
-from api.access import PrincipalDep, platform_data_dir, set_audit_context
+from api.access import PrincipalDep, get_audit_log, platform_data_dir, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, SettingsDep, StorageDep, get_settings
 from api.routes.clients import CLIENTS_DB_FILENAME, get_client_store
@@ -90,9 +93,11 @@ from api.schemas import (
     ConsentRecordRequest,
     ConsentRecordResponse,
     ConsentReportResponse,
+    ErasureAccepted,
+    ErasureProgressResponse,
     ErasureRequestBody,
     ErasureRequestList,
-    ErasureResponse,
+    ErasureRetryBody,
     ErrorResponse,
     PrivacyPolicyResponse,
     PurposeConsent,
@@ -107,7 +112,7 @@ from engine.audit.events import content_hash, principal_hash
 from engine.clients import ClientStore
 from engine.platform_db import platform_engine
 from engine.privacy.access_export import export_principal
-from engine.privacy.config import PrivacyConfig, privacy_config_or_none, privacy_salt
+from engine.privacy.config import PrivacyConfig, check_privacy_salt, privacy_config_or_none, privacy_salt
 from engine.privacy.consent import FUTURE_TOLERANCE, ConsentLedger, principal_key
 from engine.privacy.contracts import (
     CONSENT_REPORT_FILENAME,
@@ -118,12 +123,12 @@ from engine.privacy.contracts import (
     RetentionPlan,
 )
 from engine.privacy.erasure import (
-    erase,
-    erasure_audit_details,
     erasure_request,
     erasure_requests,
+    queue_request,
     retrain_flags,
 )
+from engine.privacy.erasure_jobs import ErasureJobs
 from engine.privacy.errors import PrivacyError, require_principal_id
 from engine.privacy.retention import apply_retention, plan_retention
 from engine.privacy.tables import create_privacy_tables
@@ -173,6 +178,20 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ),
     ("GET", "/privacy/erasure"): RoutePolicy(
         role=_AD, action="privacy.erasure.list", purpose="see erasure requests"
+    ),
+    ("POST", "/privacy/erasure/{request_id}/retry"): RoutePolicy(
+        role=_AD,
+        action="privacy.erasure.retry",
+        object_type="erasure_request",
+        object_param="request_id",
+        purpose="retry an erasure request",
+    ),
+    ("GET", "/privacy/erasure/{request_id}/progress"): RoutePolicy(
+        role=_AD,
+        action="privacy.erasure.progress",
+        object_type="erasure_request",
+        object_param="request_id",
+        purpose="follow an erasure request",
     ),
     ("GET", "/privacy/erasure/{request_id}"): RoutePolicy(
         role=_AD,
@@ -224,7 +243,6 @@ _ERRORS: dict[int | str, dict[str, object]] = {
     422: {"model": ErrorResponse},
 }
 _NOT_FOUND: dict[int | str, dict[str, object]] = {**_ERRORS, 404: {"model": ErrorResponse}}
-_ERASURE_ERRORS: dict[int | str, dict[str, object]] = {**_ERRORS, 500: {"model": ErrorResponse}}
 
 AsOfQuery = Annotated[
     datetime | None,
@@ -267,6 +285,32 @@ def get_privacy_engine(request: Request) -> Engine:
             setattr(state, _ENGINE_SLOT, fresh)
             return fresh
     return existing
+
+
+def install_privacy_checks(app: FastAPI) -> None:
+    """`PHASE_APP_HOOKS` entry: a production API does not start without its privacy salt (R3, DEC-860).
+
+    With settings given to `create_app`, the refusal is immediate - `create_app` raises. The deployed
+    `api.main:app` is built with none, so the check runs at startup, where a `SettingsError` stops
+    uvicorn before it serves a request: failing to boot is right here, unlike sign-in (DEC-702),
+    because every hash written without the secret would have to be thrown away later.
+    """
+    settings = getattr(app.state, "settings", None)
+    if isinstance(settings, Settings):
+        check_privacy_salt(settings)
+        return
+
+    def at_startup() -> None:
+        check_privacy_salt(
+            get_settings(Request({"type": "http", "app": app, "headers": [], "method": "GET"}))
+        )
+
+    app.router.on_startup.append(at_startup)
+
+
+def _salt(request: Request, settings: Settings) -> str:
+    """This deployment's secret principal-hash salt (R3, DEC-860), kept with the platform database."""
+    return privacy_salt(settings, engine=get_privacy_engine(request))
 
 
 def _privacy_config(root: Path) -> PrivacyConfig:
@@ -422,7 +466,7 @@ def record_consent(
             "`expires_at` must be after `recorded_at`.",
             path="expires_at",
         )
-    ledger = ConsentLedger(get_privacy_engine(request), salt=privacy_salt(settings))
+    ledger = ConsentLedger(get_privacy_engine(request), salt=_salt(request, settings))
     record = ledger.record(
         client_id=client,
         principal_id=principal,
@@ -479,7 +523,7 @@ async def import_consent(
             )
 
     def load() -> ConsentImportReport:
-        ledger = ConsentLedger(get_privacy_engine(request), salt=privacy_salt(settings))
+        ledger = ConsentLedger(get_privacy_engine(request), salt=_salt(request, settings))
         return ledger.import_csv(bytes(data), client_id=client, privacy=config, partial=partial)
 
     try:
@@ -515,7 +559,7 @@ def lookup_consent(
     client = _client_id(body.client_id, settings, required=True)
     assert client is not None
     moment = _not_future(body.as_of, field="as_of") if body.as_of is not None else utc_now()
-    ledger = ConsentLedger(get_privacy_engine(request), salt=privacy_salt(settings))
+    ledger = ConsentLedger(get_privacy_engine(request), salt=_salt(request, settings))
     states: list[PurposeConsent] = []
     for purpose in sorted(config.purposes):
         verdict = ledger.classify(client, purpose, [principal], moment)
@@ -639,74 +683,186 @@ def retention_apply(
 # ---------------------------------------------------------------------------
 @router.post(
     "/privacy/erasure",
-    response_model=ErasureResponse,
-    status_code=201,
-    responses=_ERASURE_ERRORS,
-    summary="Erase one person from every store (the id goes in the body)",
+    response_model=ErasureAccepted,
+    status_code=202,
+    responses=_ERRORS,
+    summary="Erase one person from every store, as a background job (the id goes in the body)",
 )
 def create_erasure(
     body: ErasureRequestBody,
     request: Request,
+    response: Response,
     root: ConfigRootDep,
     storage: StorageDep,
     settings: SettingsDep,
     principal: PrincipalDep,
-) -> ErasureResponse:
-    """Find the person everywhere, delete or tombstone them, flag the models trained on them (DEC-741-743).
+) -> ErasureAccepted:
+    """Queue the erasure and answer `202` at once; a background job does the work (DEC-863).
 
-    Models are flagged, never retrained here: the next scheduled retraining produces a challenger
-    that still needs the champion rule and an Approver.
+    The job finds the person everywhere, deletes or tombstones them store by store - retrying a store
+    that fails - and flags the models trained on them (DEC-741-743). Models are flagged, never
+    retrained here: the next scheduled retraining produces a challenger that still needs the champion
+    rule and an Approver. Follow it at `GET /privacy/erasure/{id}/progress`; the full record is
+    `GET /privacy/erasure/{id}`. This request's audit event is the start; the job appends
+    `privacy.erasure.complete` at the end.
     """
-    _privacy_config(root)
+    config = _privacy_config(root)
     principal_id = _principal_id(body.principal_id)
     client = _client_id(body.client_id, settings, required=False)
-    salt = privacy_salt(settings)
+    salt = _salt(request, settings)
+    engine = get_privacy_engine(request)
     erasure_id = f"er_{uuid.uuid4().hex[:20]}"
     hashed = principal_hash(principal_key(principal_id), salt=salt)
-    set_audit_context(request, object_id=erasure_id)
-    try:
-        with _STORE_REWRITE_LOCK:
-            outcome = erase(
-                storage,
-                principal_id,
-                engine=get_privacy_engine(request),
-                principal=principal,
-                salt=salt,
-                client_id=client,
-                config_root=root,
-                audit_log=None,
-                request_id=erasure_id,
-                history_all_clients=not body.client_id,
-            )
-    except Exception as exc:
-        code = exc.code if isinstance(exc, PrivacyError) else "ERASURE_FAILED"
-        _LOGGER.error(
-            "privacy.erasure failed request=%s code=%s error=%s", erasure_id, code, type(exc).__name__
-        )
-        set_audit_context(
-            request,
-            details={
-                "request_kind": "erasure",
-                "principal_hash": hashed,
-                "client_id": client,
-                "reason_code": code,
-            },
-        )
-        if code == "ERASURE_RUNS_IN_PROGRESS":  # nothing was changed; a retry later will work (DEC-728)
-            raise http_error(
-                409,
-                code,
-                f"Erasure request {erasure_id} was not carried out: a run reading this person's data "
-                "has not finished yet. Nothing was changed; ask again once it has finished.",
-            ) from None
+    set_audit_context(
+        request,
+        object_id=erasure_id,
+        details={
+            "request_kind": "erasure",
+            "principal_hash": hashed,
+            "client_id": client,
+            "trigger": "queued",
+        },
+    )
+    queue_request(
+        engine,
+        request_id=erasure_id,
+        principal_hash=hashed,
+        client_id=client,
+        mode=config.erasure.mode.value,
+        requested_by=principal.user_id,
+        requested_at=utc_now(),
+    )
+    _erasure_jobs(request).submit(
+        request_id=erasure_id,
+        storage=storage,
+        principal_id=principal_id,
+        engine=engine,
+        principal=principal,
+        salt=salt,
+        client_id=client,
+        config_root=root,
+        audit_log=get_audit_log(request),
+        history_all_clients=not body.client_id,
+    )
+    return _accepted(response, erasure_id, hashed, client)
+
+
+@router.post(
+    "/privacy/erasure/{request_id}/retry",
+    response_model=ErasureAccepted,
+    status_code=202,
+    responses=_NOT_FOUND,
+    summary="Run a failed erasure request again (the id goes in the body again)",
+)
+def retry_erasure(
+    request_id: str,
+    body: ErasureRetryBody,
+    request: Request,
+    response: Response,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    settings: SettingsDep,
+    principal: PrincipalDep,
+) -> ErasureAccepted:
+    """A `failed` request is queued again; the job re-finds whatever still holds the person (DEC-863).
+
+    The id was never stored, so it is asked for again and checked against the request's salted hash:
+    **422 `PRINCIPAL_MISMATCH`** when it is not the same person. Only a failed request can be retried
+    (**409 `ERASURE_NOT_RETRYABLE`**): a finished one has nothing left to do and a running one is
+    already doing it.
+    """
+    _privacy_config(root)
+    engine = get_privacy_engine(request)
+    record = erasure_request(engine, request_id)
+    if record is None:
+        raise http_error(404, "ERASURE_REQUEST_NOT_FOUND", "There is no erasure request with this id.")
+    set_audit_context(request, object_id=request_id)
+    principal_id = _principal_id(body.principal_id)
+    salt = _salt(request, settings)
+    hashed = principal_hash(principal_key(principal_id), salt=salt)
+    if hashed != record.principal_hash:
+        set_audit_context(request, details={"reason_code": "PRINCIPAL_MISMATCH"})
         raise http_error(
-            500,
-            code,
-            f"Erasure request {erasure_id} did not complete and is recorded as failed. "
-            "The server log has the reason; nothing was reported as erased.",
-        ) from None
-    set_audit_context(request, details=erasure_audit_details(outcome))
-    return outcome
+            422,
+            "PRINCIPAL_MISMATCH",
+            "This id is not the one the erasure request was made for.",
+            path="principal_id",
+        )
+    if record.status != "failed":
+        set_audit_context(request, details={"reason_code": "ERASURE_NOT_RETRYABLE"})
+        raise http_error(
+            409,
+            "ERASURE_NOT_RETRYABLE",
+            f"Only a failed erasure request can be retried; this one is {record.status}.",
+        )
+    set_audit_context(
+        request,
+        details={
+            "request_kind": "erasure",
+            "principal_hash": hashed,
+            "client_id": record.client_id,
+            "trigger": "retry",
+        },
+    )
+    _erasure_jobs(request).submit(
+        request_id=request_id,
+        storage=storage,
+        principal_id=principal_id,
+        engine=engine,
+        principal=principal,
+        salt=salt,
+        client_id=record.client_id,
+        config_root=root,
+        audit_log=get_audit_log(request),
+        history_all_clients=record.client_id is None,
+    )
+    return _accepted(response, request_id, hashed, record.client_id)
+
+
+@router.get(
+    "/privacy/erasure/{request_id}/progress",
+    response_model=ErasureProgressResponse,
+    responses=_NOT_FOUND,
+    summary="How far an erasure request has got, store by store",
+)
+def erasure_progress(request_id: str, request: Request) -> ErasureProgressResponse:
+    """Status and per-store progress only - no hash, no counts per person - so polling it is a plain read."""
+    record = erasure_request(get_privacy_engine(request), request_id)
+    if record is None:
+        raise http_error(404, "ERASURE_REQUEST_NOT_FOUND", "There is no erasure request with this id.")
+    return ErasureProgressResponse(
+        request_id=record.request_id,
+        status=record.status,
+        error_code=record.error_code,
+        progress=record.progress,
+        completed_at=record.completed_at,
+    )
+
+
+def _accepted(response: Response, request_id: str, hashed: str, client: str | None) -> ErasureAccepted:
+    progress_url = f"/privacy/erasure/{request_id}/progress"
+    response.headers["Location"] = f"/privacy/erasure/{request_id}"
+    return ErasureAccepted(
+        request_id=request_id,
+        status="queued",
+        principal_hash=hashed,
+        client_id=client,
+        progress_url=progress_url,
+    )
+
+
+def _erasure_jobs(request: Request) -> ErasureJobs:
+    """The app's erasure job runner, created on first use; it holds the store rewrite lock (DEC-749)."""
+    state = request.app.state
+    jobs = getattr(state, "erasure_jobs", None)
+    if isinstance(jobs, ErasureJobs):
+        return jobs
+    with _ENGINE_LOCK:
+        jobs = getattr(state, "erasure_jobs", None)
+        if not isinstance(jobs, ErasureJobs):
+            jobs = ErasureJobs(rewrite_lock=_STORE_REWRITE_LOCK)
+            state.erasure_jobs = jobs
+    return jobs
 
 
 @router.get(
@@ -767,7 +923,7 @@ def create_access_request(
     export = export_principal(
         storage,
         principal_id,
-        salt=privacy_salt(settings),
+        salt=_salt(request, settings),
         engine=get_privacy_engine(request),
         client_id=client,
         history_all_clients=not body.client_id,

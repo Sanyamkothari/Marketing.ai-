@@ -264,6 +264,9 @@ def test_every_timestamp_column_really_is_timestamptz(
         ("schedule_firing", "finished_at"): "timestamp with time zone",
         ("schedule_firing", "fired_at"): "timestamp with time zone",
         ("schedule_firing", "scheduled_for"): "timestamp with time zone",
+        # Plan D, 0005_plan_d (DEC-862, DEC-863)
+        ("erasure_progress", "updated_at"): "timestamp with time zone",
+        ("model_decision", "decided_at"): "timestamp with time zone",
     }
 
 

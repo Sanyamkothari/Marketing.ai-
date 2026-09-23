@@ -48,6 +48,7 @@ from engine.onboarding.specs import (
 from engine.stages.ingest import read_upload
 from engine.storage import LocalStorage
 from engine.utils.time import utc_now
+from tests.unit.production.scheduling_support import RecordingJobs
 
 if TYPE_CHECKING:
     from engine.onboarding.specs import BuildReport
@@ -198,8 +199,16 @@ def built(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, str]:
 
 @pytest.fixture
 def client(built: tuple[Path, str]) -> TestClient:
+    """The app, with a job runner that records a submitted training job and never starts it.
+
+    Every assertion here reads `run.json` or a refusal, which exist before any training starts. A real
+    thread pool would train each accepted run to the end after the suite had finished, holding the
+    process open (Plan D closes that cross-branch request, DEC-887).
+    """
     root, _ = built
-    return TestClient(create_app(data_dir=root / "data"))
+    app = create_app(data_dir=root / "data")
+    app.state.jobs = RecordingJobs()
+    return TestClient(app)
 
 
 def _post(client: TestClient, **body: object) -> object:

@@ -39,6 +39,8 @@ function adminLinks(me) {
   if (can("GET", "/audit/events", me)) links.push(`<a href="#/admin/audit">Audit log</a>`);
   if (can("GET", "/privacy/purposes", me)) links.push(`<a href="#/privacy/consent">Privacy</a>`);
   if (can("GET", "/schedules", me)) links.push(`<a href="#/monitoring/schedules">Monitoring</a>`);
+  // Plan D M54: the Approver's screen, for whoever may approve (a Viewer can read it by its URL)
+  if (can("POST", "/models/{model_id}/approve", me)) links.push(`<a href="#/approvals">Approvals</a>`);
   return links.join("");
 }
 

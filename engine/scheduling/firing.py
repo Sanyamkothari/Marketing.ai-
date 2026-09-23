@@ -296,6 +296,7 @@ def start_dataset_run(
     version: ModelVersion | None,
     client_tag: str | None,
     now: datetime | None = None,
+    requested_by: str | None = None,
 ) -> RunRecord:
     """Validate a built dataset, write the run directory and its job spec, and submit the job.
 
@@ -373,6 +374,7 @@ def start_dataset_run(
         model_choice=catalog.automl_choice.value,
         model_version_id=None if version is None else version.model_id,
         now=now,
+        requested_by=requested_by,
     )
     spec = job_spec_for(record, upload=source, client_id=client_tag)
     write_job_spec(storage, spec)
@@ -1052,6 +1054,7 @@ class ScheduleFirer:
             version=version,
             client_tag=services.job_client_tag,
             now=services.clock(),
+            requested_by=services.principal.user_id,  # Plan D, DEC-862
         )
 
     def _dataset(self, schedule: Schedule, config: UseCaseConfig, *, mode: RunMode) -> DatasetManifest:

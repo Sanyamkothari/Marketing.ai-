@@ -38,7 +38,7 @@ from aws_cdk import aws_secretsmanager as secretsmanager
 from constructs import Construct
 
 from infra.context import AppContext
-from infra.naming import PRODUCT, db_instance_identifier, secret_name
+from infra.naming import PRODUCT, db_instance_identifier, privacy_salt_secret_name, secret_name
 from infra.network import POSTGRES_PORT
 
 __all__ = [
@@ -46,6 +46,7 @@ __all__ = [
     "DATABASE_SCHEMA",
     "DATABASE_USERNAME",
     "PASSWORD_LENGTH",
+    "PRIVACY_SALT_LENGTH",
     "ROTATION_DAYS",
     "DatabaseStack",
 ]
@@ -54,6 +55,9 @@ DATABASE_NAME: Final[str] = "marketing_ai"
 DATABASE_USERNAME: Final[str] = "marketing_ai_app"
 DATABASE_SCHEMA: Final[str] = "marketing_ai"
 """The schema Alembic owns; `Settings.postgres_schema` is set to it."""
+
+PRIVACY_SALT_LENGTH: Final[int] = 48
+"""Chosen, not measured: well above `engine.privacy.config.MIN_SALT_LENGTH` (16)."""
 
 PASSWORD_LENGTH: Final[int] = 40
 """Chosen, not measured. Long enough that its alphanumeric-only alphabet costs nothing."""
@@ -118,6 +122,24 @@ class DatabaseStack(Stack):
                 # escaping bug here is a deployment that cannot connect and a password nobody can
                 # print to find out why.
                 exclude_punctuation=True,
+            ),
+        )
+
+        # Plan D (ruling R3, DEC-860): the privacy salt every principal hash - consent ledger, erasure
+        # register, audit trail - is salted with. `engine.settings` has no default for it and a prod
+        # API refuses to start without it. Generated once here and NEVER rotated or replaced: a new
+        # salt would leave every hash already written unmatchable, which is why it is retained even
+        # when the rest of the stack is destroyed. It reaches the application the same way the
+        # database URL does, as a key of the application secret below.
+        self.privacy_salt_secret = secretsmanager.Secret(
+            self,
+            "PrivacySalt",
+            secret_name=privacy_salt_secret_name(context.env_name),
+            description=f"Principal-hash salt for {PRODUCT} {context.env_name}; generated once, never rotated",
+            encryption_key=key,
+            removal_policy=RemovalPolicy.RETAIN,
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                password_length=PRIVACY_SALT_LENGTH, exclude_punctuation=True
             ),
         )
 
@@ -206,7 +228,13 @@ class DatabaseStack(Stack):
             ),
             encryption_key=key,
             removal_policy=removal,
-            secret_object_value={"postgres_dsn": SecretValue.unsafe_plain_text(url)},
+            secret_object_value={
+                "postgres_dsn": SecretValue.unsafe_plain_text(url),
+                # a dynamic reference, resolved at deploy time like the password in the URL (DEC-860)
+                "privacy_salt": SecretValue.unsafe_plain_text(
+                    self.privacy_salt_secret.secret_value.unsafe_unwrap()
+                ),
+            },
         )
 
         CfnOutput(

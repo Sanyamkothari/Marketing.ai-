@@ -45,6 +45,7 @@ __all__ = [
     "job_task_family",
     "jobs_log_group_name",
     "log_retention",
+    "privacy_salt_secret_name",
     "rds_log_group_name",
     "schedule_group_name",
     "secret_name",
@@ -162,6 +163,13 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "alert_sns_topic_arn",
     # Plan E (DEC-901): one added field.
     "demo_mode",
+    # Plan D (DEC-860, DEC-861): added fields only, in `engine.settings.ENV_VARS` order.
+    "privacy_salt",
+    "login_max_failures_per_account",
+    "login_max_failures_per_address",
+    "login_failure_window_seconds",
+    "login_lockout_seconds",
+    "trusted_proxy_hops",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 
@@ -221,6 +229,11 @@ def ssm_parameter_name(env_name: str, field_name: str) -> str:
 def secret_name(env_name: str) -> str:
     """The Secrets Manager secret holding this deployment's one credential, the database URL."""
     return SECRET_NAME_TEMPLATE.format(env=env_name)
+
+
+def privacy_salt_secret_name(env_name: str) -> str:
+    """`marketing-ai/<env>/privacy-salt`: the generated principal-hash salt (Plan D, DEC-860)."""
+    return f"{PRODUCT}/{env_name}/privacy-salt"
 
 
 def stack_name(env_name: str, component: str) -> str:

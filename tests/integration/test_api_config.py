@@ -416,6 +416,11 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/monitoring/alerts",
         "/monitoring/alerts/{alert_id}/acknowledge",
         "/monitoring/missed-firings",
+        # Plan D M54: the Approver's screen, rejecting a challenger, and background erasure
+        "/approvals",
+        "/models/{model_id}/reject",
+        "/privacy/erasure/{request_id}/retry",
+        "/privacy/erasure/{request_id}/progress",
     }
 
 

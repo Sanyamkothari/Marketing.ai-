@@ -14,6 +14,18 @@ what was attempted, what stopped it, and what has to be true before a run is pos
 | Data fetched | **no** — re-tested 2026-09-23, still refused |
 | Reported metrics | **none** |
 
+## Status after Plan D M57 (2026-09-23)
+
+Plan D M57 asked for the Criteo uplift run "on a machine with open internet", its report to be
+committed marked **internal validation, non-commercial licence**, and - if the network stayed
+blocked - for that to be recorded and the run skipped. It stayed blocked: from this environment
+`go.criteo.net` answered **403** and the `huggingface.co` and `ailab.criteo.com` tunnels were refused
+with **403**, so no row was read and the run was **skipped**. Nothing below changes.
+
+Ruling R2 (DEC-852) governs any run that does happen: Criteo's licence (CC BY-NC-SA 4.0) allows it
+for **internal validation only**. Its report goes in this file marked as such, and Criteo never
+appears in demos, screenshots, sales material or the demo dataset (Plan E).
+
 ## Status on 2026-09-23 (Phase 3b, milestone M45)
 
 Plan B's M45 asks for a Criteo run report, and its acceptance test asks for an AUUC interval above

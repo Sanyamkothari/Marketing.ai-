@@ -155,6 +155,13 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "alert_sns_topic_arn": f"{ENV_PREFIX}ALERT_SNS_TOPIC_ARN",
     # --- Plan E. One more extension; nothing above changes meaning (DEC-901).
     "demo_mode": f"{ENV_PREFIX}DEMO_MODE",
+    # --- Plan D (hardening). Extensions again (DEC-860, DEC-861).
+    "privacy_salt": f"{ENV_PREFIX}PRIVACY_SALT",
+    "login_max_failures_per_account": f"{ENV_PREFIX}LOGIN_MAX_FAILURES_PER_ACCOUNT",
+    "login_max_failures_per_address": f"{ENV_PREFIX}LOGIN_MAX_FAILURES_PER_ADDRESS",
+    "login_failure_window_seconds": f"{ENV_PREFIX}LOGIN_FAILURE_WINDOW_SECONDS",
+    "login_lockout_seconds": f"{ENV_PREFIX}LOGIN_LOCKOUT_SECONDS",
+    "trusted_proxy_hops": f"{ENV_PREFIX}TRUSTED_PROXY_HOPS",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -338,6 +345,40 @@ class Settings(BaseModel):
         description="Seed and show the synthetic Demo Telecom client (no real data, no live training in the demo).",
     )
 
+    # --- Plan D (hardening) ------------------------------------------------------------------
+    # Added fields only (PARALLEL_WORK_PROTOCOL.md section 2). `privacy_salt` has no default in code
+    # on purpose (ruling R3, DEC-860): a laptop without one gets a random salt generated once into its
+    # own data directory (`engine.privacy.config.privacy_salt`), and a production API refuses to start
+    # without one (`api.main`). The login limits are policy, not measurements (DEC-861).
+    privacy_salt: SecretStr | None = Field(
+        default=None,
+        description="Salt of every principal hash (consent, erasure, audit). A secret; required on env=prod.",
+    )
+    login_max_failures_per_account: int = Field(
+        default=5,
+        ge=1,
+        le=1000,
+        description="Failed sign-ins for one username, within the window, before it locks.",
+    )
+    login_max_failures_per_address: int = Field(
+        default=20,
+        ge=1,
+        le=100000,
+        description="Failed sign-ins from one client address, within the window, before it locks.",
+    )
+    login_failure_window_seconds: int = Field(
+        default=900, ge=1, le=86400, description="How far back failed sign-ins are counted."
+    )
+    login_lockout_seconds: int = Field(
+        default=900, ge=1, le=86400, description="How long a locked username or address is refused."
+    )
+    trusted_proxy_hops: int = Field(
+        default=0,
+        ge=0,
+        le=5,
+        description="Proxies in front of the API whose X-Forwarded-For entries are trusted; 0 uses the peer address.",
+    )
+
     @field_validator("sagemaker_subnet_ids", "sagemaker_security_group_ids", "cors_origins", mode="before")
     @classmethod
     def _split_list(cls, value: object) -> object:
@@ -349,6 +390,14 @@ class Settings(BaseModel):
         """
         if isinstance(value, str):
             return tuple(part.strip() for part in value.split(",") if part.strip())
+        return value
+
+    @field_validator("privacy_salt")
+    @classmethod
+    def _salt_long_enough(cls, value: SecretStr | None) -> SecretStr | None:
+        """A privacy salt is a secret: sixteen characters at least, never whitespace (DEC-860)."""
+        if value is not None and len(value.get_secret_value().strip()) < 16:
+            raise ValueError("must be at least 16 characters")
         return value
 
     @field_validator("s3_prefix")
@@ -510,7 +559,9 @@ fixtures use.
 
 REDACTED: Final[str] = "<redacted>"
 
-SECRET_FIELDS: Final[frozenset[str]] = frozenset({"postgres_dsn"})
+SECRET_FIELDS: Final[frozenset[str]] = frozenset(
+    {"postgres_dsn", "privacy_salt"}
+)  # privacy_salt: Plan D, DEC-860
 """Fields `redacted()` hides and `summary()` may never name."""
 
 SUMMARY_FIELDS: Final[tuple[str, ...]] = (

@@ -311,6 +311,14 @@ class RunRecord(Artefact):
     )
     error: RunError | None = Field(default=None, description="Failure detail; set when the state is failed.")
     engine_version: str = Field(description="Version of the engine package that produced the run.")
+    # Plan D M54 (DEC-862): an added, defaulted field, so every run.json written before it still reads.
+    requested_by: str | None = Field(
+        default=None,
+        description=(
+            "`Principal.user_id` of whoever started the run (the firing principal for a scheduled run); "
+            "null for a run started before this was recorded. Separation of duties reads it."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

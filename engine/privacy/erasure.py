@@ -41,6 +41,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from collections.abc import Callable
 from datetime import datetime
 from pathlib import Path
 from typing import Final
@@ -59,11 +60,17 @@ from engine.privacy.contracts import (
     PrincipalLocation,
     RetrainFlag,
     StoreCount,
+    StoreProgress,
 )
 from engine.privacy.errors import PrivacyError, require_principal_id
 from engine.privacy.layout import Store, StoreIndex, is_artefact_key, purge_old_versions, store_of
 from engine.privacy.rewrite import FileKind, Matcher, file_kind, rewrite_bytes, scan_bytes
-from engine.privacy.tables import ErasureRequestRow, ModelRetrainFlagRow, create_privacy_tables
+from engine.privacy.tables import (
+    ErasureProgressRow,
+    ErasureRequestRow,
+    ModelRetrainFlagRow,
+    create_privacy_tables,
+)
 from engine.registry import aware_utc
 from engine.storage import Storage, StorageError
 from engine.utils.logging import get_logger
@@ -75,8 +82,10 @@ __all__ = [
     "erasure_audit_details",
     "erasure_request",
     "erasure_requests",
+    "fail_if_unfinished",
     "find_principal",
     "models_flagged_for_retraining",
+    "queue_request",
     "retrain_flags",
 ]
 
@@ -265,16 +274,32 @@ def erase(
     now: datetime | None = None,
     request_id: str | None = None,
     history_all_clients: bool = False,
+    max_attempts: int = 1,
+    wait: Callable[[int], None] | None = None,
+    resume: bool = False,
+    audit_action: str = "privacy.erasure",
 ) -> ErasureOutcome:
     """Erase one data principal from every store, record the request, and flag affected models.
 
-    `principal` is who asked (an Admin through the API, or a job). `salt` is `privacy_salt(settings)`.
-    `history_all_clients` deletes the consent history under every client rather than `client_id`'s
-    only - what the API does when the Admin named no client, since the same person's consent may
-    be recorded under the deployment's id and under an onboarding client's (DEC-738).
-    Raises `PrivacyError` - `PRINCIPAL_ID_INVALID`, or `ERASURE_INCOMPLETE` when a rewritten file still
-    holds the id - after recording the request as `failed`; the request row is written first, so even a
-    crash leaves evidence that the request was received.
+    `principal` is who asked (an Admin through the API, or a job). `salt` is the deployment's
+    `privacy_salt` (DEC-860). `history_all_clients` deletes the consent history under every client
+    rather than `client_id`'s only - what the API does when the Admin named no client, since the same
+    person's consent may be recorded under the deployment's id and under an onboarding client's
+    (DEC-738).
+
+    **Store by store, with retries** (Plan D M54, DEC-863). The files found are rewritten one store at
+    a time; `erasure_progress` holds each store's count of files done, its attempts and its status. A
+    file that cannot be written (`StorageError`, `OSError`) is tried again, with the rest of its
+    store's failures, up to `max_attempts` times, calling `wait(attempt)` between tries (the job's
+    backoff); a store still failing after that is `failed`, the other stores carry on, and the request
+    ends `failed` with `ERASURE_STORE_FAILED` - its counts recorded, its models flagged - so a retry
+    (`resume=True` on the same `request_id`, which re-finds whatever still holds the person) finishes
+    the job. `resume` means the request row already exists (the job queued it, or this is a retry): it
+    is re-opened rather than inserted, and must belong to the same principal.
+
+    Raises `PrivacyError` - `PRINCIPAL_ID_INVALID`, `ERASURE_RUNS_IN_PROGRESS`, `ERASURE_INCOMPLETE`
+    when a rewritten file still holds the id, `ERASURE_STORE_FAILED` - after recording the request as
+    `failed`; the request row is written first, so even a crash leaves evidence the request was received.
     """
     cleaned = require_principal_id(principal_id)
     policy = load_privacy_config(config_root).erasure
@@ -283,19 +308,20 @@ def erase(
     hashed = principal_hash(principal_key(cleaned), salt=salt)
     request = request_id or f"er_{uuid.uuid4().hex[:20]}"
     started = now or utc_now()
-    with Session(engine) as session:
-        session.add(
-            ErasureRequestRow(
-                request_id=request,
-                client_id=client_id,
-                principal_hash=hashed,
-                status="in_progress",
-                mode=policy.mode.value,
-                requested_by=principal.user_id,
-                requested_at=started,
-            )
+    if resume:
+        _reopen_row(engine, request, hashed)
+    else:
+        queue_request(
+            engine,
+            request_id=request,
+            principal_hash=hashed,
+            client_id=client_id,
+            mode=policy.mode.value,
+            requested_by=principal.user_id,
+            requested_at=started,
+            status="in_progress",
         )
-        session.commit()
+    progress = _Progress(engine, request)
     try:
         outcome = _erase(
             storage,
@@ -312,26 +338,169 @@ def erase(
             hashed=hashed,
             principal=principal,
             started=started,
+            progress=progress,
+            max_attempts=max(1, max_attempts),
+            wait=wait or (lambda _attempt: None),
         )
     except Exception as exc:
         code = exc.code if isinstance(exc, PrivacyError) else "ERASURE_FAILED"
-        _finish_row(engine, request, status="failed", error_code=code)
+        _finish_row(engine, request, status="failed", error_code=code, merge=resume)
         if audit_log is not None:
             details: dict[str, str | int | float | bool | None] = {
                 "request_kind": "erasure",
                 "principal_hash": hashed,
                 "reason_code": code,
             }
-            audit_log.append(_event(principal, request, outcome="failed", details=details))
+            audit_log.append(
+                _event(principal, request, outcome="failed", details=details, action=audit_action)
+            )
         raise
-    _finish_row(engine, request, status=outcome.status, outcome=outcome)
+    if outcome.failed_stores:
+        _finish_row(
+            engine, request, status="failed", outcome=outcome, error_code="ERASURE_STORE_FAILED", merge=resume
+        )
+        if audit_log is not None:
+            audit_log.append(
+                _event(
+                    principal,
+                    request,
+                    outcome="failed",
+                    details={
+                        **erasure_audit_details(outcome),
+                        "reason_code": "ERASURE_STORE_FAILED",
+                        "failed_stores": ",".join(outcome.failed_stores)[:200],
+                    },
+                    after=outcome,
+                    action=audit_action,
+                )
+            )
+        raise PrivacyError(
+            "ERASURE_STORE_FAILED",
+            f"{len(outcome.failed_stores)} store(s) could not be rewritten after every retry "
+            f"({', '.join(outcome.failed_stores)}); the request is recorded as failed and can be retried.",
+        )
+    _finish_row(engine, request, status=outcome.status, outcome=outcome, merge=resume)
     if audit_log is not None:
         audit_log.append(
             _event(
-                principal, request, outcome="success", details=erasure_audit_details(outcome), after=outcome
+                principal,
+                request,
+                outcome="success",
+                details=erasure_audit_details(outcome),
+                after=outcome,
+                action=audit_action,
             )
         )
     return outcome
+
+
+def queue_request(
+    engine: Engine,
+    *,
+    request_id: str,
+    principal_hash: str,
+    client_id: str | None,
+    mode: str,
+    requested_by: str,
+    requested_at: datetime,
+    status: str = "queued",
+) -> None:
+    """Write the register row of a request before any work starts (DEC-752, DEC-863)."""
+    create_privacy_tables(engine)
+    with Session(engine) as session:
+        session.add(
+            ErasureRequestRow(
+                request_id=request_id,
+                client_id=client_id,
+                principal_hash=principal_hash,
+                status=status,
+                mode=mode,
+                requested_by=requested_by,
+                requested_at=requested_at,
+            )
+        )
+        session.commit()
+
+
+def fail_if_unfinished(engine: Engine, request_id: str, code: str) -> None:
+    """Mark a request that a job left `queued` or `in_progress` as failed with `code` (a crash)."""
+    with Session(engine) as session:
+        row = session.get(ErasureRequestRow, request_id)
+        if row is None or row.status not in {"queued", "in_progress"}:
+            return
+        row.status, row.error_code, row.completed_at = "failed", code, utc_now()
+        session.add(row)
+        session.commit()
+
+
+def _reopen_row(engine: Engine, request_id: str, hashed: str) -> None:
+    """Mark a queued or failed request as running again; refuse one that is not this person's."""
+    with Session(engine) as session:
+        row = session.get(ErasureRequestRow, request_id)
+        if row is None:
+            raise PrivacyError("ERASURE_REQUEST_NOT_FOUND", "There is no erasure request with this id.")
+        if row.principal_hash != hashed:
+            raise PrivacyError(
+                "PRINCIPAL_MISMATCH", "This id is not the one the erasure request was made for."
+            )
+        row.status = "in_progress"
+        row.error_code = None
+        row.completed_at = None
+        session.add(row)
+        session.commit()
+
+
+class _Progress:
+    """Writes `erasure_progress` as the stores are worked through (DEC-863)."""
+
+    def __init__(self, engine: Engine, request_id: str) -> None:
+        self._engine = engine
+        self._request_id = request_id
+
+    def plan(self, totals: dict[str, int]) -> None:
+        """One `pending` row per store about to be worked on (a retry resets its stores' rows)."""
+        with Session(self._engine) as session:
+            for store, total in totals.items():
+                row = session.get(ErasureProgressRow, (self._request_id, store))
+                if row is None:
+                    row = ErasureProgressRow(
+                        request_id=self._request_id, store=store, status="pending", updated_at=utc_now()
+                    )
+                row.status, row.files_total, row.files_done, row.error_code = "pending", total, 0, None
+                row.updated_at = utc_now()
+                session.add(row)
+            session.commit()
+
+    def update(
+        self,
+        store: str,
+        *,
+        status: str | None = None,
+        done: int | None = None,
+        attempts: int | None = None,
+        error_code: str | None = None,
+    ) -> None:
+        with Session(self._engine) as session:
+            row = session.get(ErasureProgressRow, (self._request_id, store))
+            if row is None:
+                return
+            if status is not None:
+                row.status = status
+            if done is not None:
+                row.files_done = done
+            if attempts is not None:
+                row.attempts = attempts
+            row.error_code = error_code if status == "failed" else row.error_code if status is None else None
+            row.updated_at = utc_now()
+            session.add(row)
+            session.commit()
+
+
+_RETRYABLE: Final[tuple[type[BaseException], ...]] = (StorageError, OSError)
+"""Failures of one file's write that a later attempt may not meet: the store, not the request, is at fault."""
+
+CONSENT_STORE: Final[str] = "consent_ledger"
+"""The consent history's step in the progress rows; it is a table, not an artefact store."""
 
 
 def _erase(
@@ -350,6 +519,9 @@ def _erase(
     hashed: str,
     principal: Principal,
     started: datetime,
+    progress: _Progress,
+    max_attempts: int,
+    wait: Callable[[int], None],
 ) -> ErasureOutcome:
     layout = StoreIndex(storage)
     findings = find_principal(storage, principal_id, index=layout)
@@ -361,86 +533,151 @@ def _erase(
             "already read it would write it back after the erasure. Nothing was changed; ask again "
             "once they have finished.",
         )
+    by_store: dict[str, list[PrincipalLocation]] = {}
+    for location in findings.locations:
+        by_store.setdefault(location.store, []).append(location)
+    totals = {
+        store: sum(1 for loc in items if loc.rewritable or loc.store == Store.LLM_CACHE)
+        for store, items in by_store.items()
+    }
+    progress.plan({**totals, **({CONSENT_STORE: 1} if delete_consent else {})})
     counts: dict[str, StoreCount] = {}
-    rows = cells = rewritten = deleted = 0
+    tally = {"rows": 0, "cells": 0, "rewritten": 0, "deleted": 0}
     unrewritable: list[str] = []
     touched: list[tuple[str, FileKind]] = []
-    for location in findings.locations:
-        kind = FileKind(location.file_kind)
-        if location.store == Store.LLM_CACHE:
-            storage.delete(location.key)
-            purge_old_versions(storage, location.key)
-            deleted += 1
-            changed_rows, changed_cells = 0, location.rows + location.cells + location.occurrences
-        elif not location.rewritable:
-            unrewritable.append(location.key)
-            continue
-        else:
-            data = storage.read_bytes(location.key)
-            new, hits = rewrite_bytes(
-                kind, data, matcher, location.key_columns, mode=policy_mode, tombstone=tombstone
-            )
-            storage.write_bytes(location.key, new)
-            purge_old_versions(storage, location.key)
-            rewritten += 1
-            touched.append((location.key, kind))
-            changed_rows, changed_cells = hits.rows, hits.cells + hits.occurrences
-        rows += changed_rows
-        cells += changed_cells
-        previous = counts.get(location.store, StoreCount())
-        counts[location.store] = StoreCount(
-            files=previous.files + 1, rows=previous.rows + changed_rows, cells=previous.cells + changed_cells
+    failed_stores: list[str] = []
+    for store, locations in by_store.items():
+        unrewritable.extend(
+            loc.key for loc in locations if not loc.rewritable and loc.store != Store.LLM_CACHE
         )
-    remaining = [
+        remaining = [loc for loc in locations if loc.rewritable or loc.store == Store.LLM_CACHE]
+        done, attempt = 0, 0
+        progress.update(store, status="running")
+        while remaining:
+            attempt += 1
+            failed: list[PrincipalLocation] = []
+            for location in remaining:
+                try:
+                    changed_rows, changed_cells, kind = _erase_file(
+                        storage, location, matcher, policy_mode=policy_mode, tombstone=tombstone
+                    )
+                except _RETRYABLE as exc:
+                    _LOGGER.warning(
+                        "privacy.erase request=%s store=%s attempt=%d file failed error=%s",
+                        request_id,
+                        store,
+                        attempt,
+                        type(exc).__name__,
+                    )
+                    failed.append(location)
+                    continue
+                if kind is None:
+                    tally["deleted"] += 1
+                else:
+                    tally["rewritten"] += 1
+                    touched.append((location.key, kind))
+                tally["rows"] += changed_rows
+                tally["cells"] += changed_cells
+                previous = counts.get(store, StoreCount())
+                counts[store] = StoreCount(
+                    files=previous.files + 1,
+                    rows=previous.rows + changed_rows,
+                    cells=previous.cells + changed_cells,
+                )
+                done += 1
+                progress.update(store, done=done, attempts=attempt)
+            remaining = failed
+            if remaining and attempt < max_attempts:
+                wait(attempt)
+                continue
+            break
+        if remaining:
+            failed_stores.append(store)
+            progress.update(store, status="failed", attempts=attempt, error_code="STORE_WRITE_FAILED")
+        else:
+            progress.update(store, status="done", attempts=max(attempt, 1))
+    remaining_keys = [
         key
         for key, kind in touched
         if scan_bytes(
             kind, storage.read_bytes(key), matcher, layout.key_columns(key) if kind in _KEYED else None
         ).any
     ]
-    if remaining:
+    if remaining_keys:
         raise PrivacyError(
             "ERASURE_INCOMPLETE",
-            f"{len(remaining)} rewritten file(s) still hold the principal; the request is recorded as failed.",
+            f"{len(remaining_keys)} rewritten file(s) still hold the principal; the request is recorded as failed.",
         )
-    consent_deleted = (
-        ConsentLedger(engine, salt=salt).delete_history(principal_id, client_id=history_client_id)
-        if delete_consent
-        else 0
-    )
+    consent_deleted = 0
+    if delete_consent:
+        progress.update(CONSENT_STORE, status="running")
+        consent_deleted = ConsentLedger(engine, salt=salt).delete_history(
+            principal_id, client_id=history_client_id
+        )
+        progress.update(CONSENT_STORE, status="done", done=1, attempts=1)
     flagged = _flag_models(engine, layout, findings, request_id, started)
     unknown = tuple(model for model in findings.models_exposure_unknown if model in flagged)
     finished = utc_now()
     _LOGGER.info(
-        "privacy.erase request=%s files_rewritten=%d files_deleted=%d rows=%d cells=%d unrewritable=%d models_flagged=%d",
+        "privacy.erase request=%s files_rewritten=%d files_deleted=%d rows=%d cells=%d unrewritable=%d models_flagged=%d failed_stores=%d",
         request_id,
-        rewritten,
-        deleted,
-        rows,
-        cells,
+        tally["rewritten"],
+        tally["deleted"],
+        tally["rows"],
+        tally["cells"],
         len(unrewritable),
         len(flagged),
+        len(failed_stores),
     )
+    rows = tally["rows"]
     return ErasureOutcome(
         request_id=request_id,
-        status="completed_with_exceptions" if unrewritable or unknown else "completed",
+        status=(
+            "failed"
+            if failed_stores
+            else "completed_with_exceptions" if unrewritable or unknown else "completed"
+        ),
         principal_hash=hashed,
         client_id=client_id,
         mode=policy_mode.value,
         store_counts=counts,
         rows_deleted=rows if policy_mode is ErasureMode.DELETE else 0,
         rows_tombstoned=rows if policy_mode is ErasureMode.TOMBSTONE else 0,
-        cells_masked=cells,
-        files_rewritten=rewritten,
-        files_deleted=deleted,
+        cells_masked=tally["cells"],
+        files_rewritten=tally["rewritten"],
+        files_deleted=tally["deleted"],
         unrewritable_keys=tuple(unrewritable),
         models_flagged=tuple(flagged),
         models_exposure_unknown=unknown,
         consent_records_deleted=consent_deleted,
+        failed_stores=tuple(failed_stores),
         requested_by=principal.user_id,
         requested_at=started,
         completed_at=finished,
     )
+
+
+def _erase_file(
+    storage: Storage,
+    location: PrincipalLocation,
+    matcher: Matcher,
+    *,
+    policy_mode: ErasureMode,
+    tombstone: str,
+) -> tuple[int, int, FileKind | None]:
+    """Erase the principal from one file: `(rows, cells, kind)`, `kind` None for a deleted cache entry."""
+    if location.store == Store.LLM_CACHE:
+        storage.delete(location.key)
+        purge_old_versions(storage, location.key)
+        return 0, location.rows + location.cells + location.occurrences, None
+    kind = FileKind(location.file_kind)
+    data = storage.read_bytes(location.key)
+    new, hits = rewrite_bytes(
+        kind, data, matcher, location.key_columns, mode=policy_mode, tombstone=tombstone
+    )
+    storage.write_bytes(location.key, new)
+    purge_old_versions(storage, location.key)
+    return hits.rows, hits.cells + hits.occurrences, kind
 
 
 def _flag_models(
@@ -448,7 +685,14 @@ def _flag_models(
 ) -> list[str]:
     flagged: list[str] = []
     with Session(engine) as session:
+        already = set(  # a retry of the same request flags nothing twice (DEC-863)
+            session.exec(
+                select(ModelRetrainFlagRow.model_id).where(col(ModelRetrainFlagRow.request_id) == request_id)
+            ).all()
+        )
         for model_id in (*findings.models, *findings.models_exposure_unknown):
+            if model_id in already or model_id in flagged:
+                continue
             reason = (
                 "training_input_unavailable"
                 if model_id in findings.models_exposure_unknown
@@ -500,7 +744,9 @@ def _finish_row(
     status: str,
     outcome: ErasureOutcome | None = None,
     error_code: str | None = None,
+    merge: bool = False,
 ) -> None:
+    """Record how a request ended. `merge` adds a retry's counts to what the earlier runs recorded."""
     with Session(engine) as session:
         row = session.get(ErasureRequestRow, request_id)
         if row is None:
@@ -509,15 +755,33 @@ def _finish_row(
         row.error_code = error_code
         row.completed_at = utc_now()
         if outcome is not None:
-            row.store_counts_json = json.dumps(
-                {store: count.model_dump() for store, count in sorted(outcome.store_counts.items())}
+            counts = (
+                {
+                    store: StoreCount.model_validate(value)
+                    for store, value in json.loads(row.store_counts_json or "{}").items()
+                }
+                if merge
+                else {}
             )
-            row.models_flagged_json = json.dumps(list(outcome.models_flagged))
-            row.rows_deleted = outcome.rows_deleted
-            row.rows_tombstoned = outcome.rows_tombstoned
-            row.cells_masked = outcome.cells_masked
-            row.files_rewritten = outcome.files_rewritten
-            row.files_deleted = outcome.files_deleted
+            for store, count in outcome.store_counts.items():
+                before = counts.get(store, StoreCount())
+                counts[store] = StoreCount(
+                    files=before.files + count.files,
+                    rows=before.rows + count.rows,
+                    cells=before.cells + count.cells,
+                )
+            flagged = list(json.loads(row.models_flagged_json or "[]")) if merge else []
+            flagged += [model for model in outcome.models_flagged if model not in flagged]
+            row.store_counts_json = json.dumps(
+                {store: count.model_dump() for store, count in sorted(counts.items())}
+            )
+            row.models_flagged_json = json.dumps(flagged)
+            keep = 1 if merge else 0  # a retry adds to what the earlier runs of the request did
+            row.rows_deleted = keep * row.rows_deleted + outcome.rows_deleted
+            row.rows_tombstoned = keep * row.rows_tombstoned + outcome.rows_tombstoned
+            row.cells_masked = keep * row.cells_masked + outcome.cells_masked
+            row.files_rewritten = keep * row.files_rewritten + outcome.files_rewritten
+            row.files_deleted = keep * row.files_deleted + outcome.files_deleted
             row.completed_at = outcome.completed_at
         session.add(row)
         session.commit()
@@ -530,13 +794,14 @@ def _event(
     outcome: str,
     details: dict[str, str | int | float | bool | None],
     after: ErasureOutcome | None = None,
+    action: str = "privacy.erasure",
 ) -> AuditEvent:
     return AuditEvent(
         event_id=uuid.uuid4().hex,
         occurred_at=utc_now(),
         actor_id=principal.user_id,
         actor_kind=principal.kind,
-        action="privacy.erasure",
+        action=action,
         object_type="erasure_request",
         object_id=request_id,
         after_hash=content_hash(after),
@@ -585,10 +850,12 @@ def erasure_request(engine: Engine, request_id: str) -> ErasureRequestRecord | N
     create_privacy_tables(engine)
     with Session(engine) as session:
         row = session.get(ErasureRequestRow, request_id)
-        return None if row is None else _request_contract(row)
+        return None if row is None else _request_contract(row, _progress_of(session, request_id))
 
 
-def _request_contract(row: ErasureRequestRow) -> ErasureRequestRecord:
+def _request_contract(
+    row: ErasureRequestRow, progress: tuple[StoreProgress, ...] = ()
+) -> ErasureRequestRecord:
     counts = json.loads(row.store_counts_json or "{}")
     return ErasureRequestRecord(
         request_id=row.request_id,
@@ -607,6 +874,27 @@ def _request_contract(row: ErasureRequestRow) -> ErasureRequestRecord:
         requested_at=aware_utc(row.requested_at),
         completed_at=None if row.completed_at is None else aware_utc(row.completed_at),
         error_code=row.error_code,
+        progress=progress,
+    )
+
+
+def _progress_of(session: Session, request_id: str) -> tuple[StoreProgress, ...]:
+    rows = session.exec(
+        select(ErasureProgressRow)
+        .where(col(ErasureProgressRow.request_id) == request_id)
+        .order_by(col(ErasureProgressRow.store))
+    ).all()
+    return tuple(
+        StoreProgress(
+            store=row.store,
+            status=row.status,  # type: ignore[arg-type]
+            files_total=row.files_total,
+            files_done=row.files_done,
+            attempts=row.attempts,
+            error_code=row.error_code,
+            updated_at=aware_utc(row.updated_at),
+        )
+        for row in rows
     )
 
 

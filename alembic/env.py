@@ -19,8 +19,9 @@ the defect this milestone fixed - a `TIMESTAMP` where a `TIMESTAMP WITH TIME ZON
 drift check silently (DEC-339).
 
 **Only this product's tables are considered.** `SQLModel.metadata` is a process-wide namespace;
-`engine.aws.postgres.METADATA_TABLES` is the definite list, and `include_name` holds autogenerate to
-it so an unrelated table in the same database is neither dropped nor reported as drift (DEC-340).
+`engine.aws.postgres.METADATA_TABLES` and `engine.platform_db.PLATFORM_TABLES` are the definite
+lists, and `include_name` holds autogenerate to them so an unrelated table in the same database is
+neither dropped nor reported as drift (DEC-340; the platform half since Plan D, DEC-888).
 """
 
 from __future__ import annotations
@@ -34,14 +35,40 @@ from sqlmodel import SQLModel
 
 # Imported for their side effect: a `table=True` class registers itself with `SQLModel.metadata`,
 # and a table this process has not imported is a table autogenerate would propose dropping.
+from engine.access.users import AuthSessionRow, PlatformUserRow
+from engine.approvals import ModelDecisionRow
+from engine.audit.store import AuditEventRow
 from engine.aws.postgres import METADATA_TABLES, PostgresConfig, normalise_url, postgres_engine
+from engine.platform_db import PLATFORM_TABLES
+from engine.privacy.tables import ConsentRecordRow, ErasureProgressRow, ErasureRequestRow, ModelRetrainFlagRow
 from engine.registry import ModelVersionRow
+from engine.scheduling.alerts import AlertRow
+from engine.scheduling.schedules import ScheduleFiringRow, ScheduleRow
 from engine.settings import load_settings
 
-_ = ModelVersionRow  # the import above is the point; this line keeps linters from removing it.
+# The imports above are the point; this line keeps linters from removing them. The platform tables'
+# models are imported BEFORE the filter below admits their names: a table the filter admits but the
+# metadata does not hold is a table autogenerate proposes to drop (DEC-797, Plan D DEC-888).
+_ = (
+    ModelVersionRow,
+    PlatformUserRow,
+    AuthSessionRow,
+    AuditEventRow,
+    ConsentRecordRow,
+    ErasureRequestRow,
+    ErasureProgressRow,
+    ModelRetrainFlagRow,
+    ScheduleRow,
+    ScheduleFiringRow,
+    AlertRow,
+    ModelDecisionRow,
+)
+
+INCLUDED_TABLES: frozenset[str] = frozenset(METADATA_TABLES) | frozenset(PLATFORM_TABLES)
+"""The registry's tables and the platform database's (Phase 4b, Plan D): everything a migration owns."""
 
 target_metadata: MetaData = SQLModel.metadata
-"""What the migrations are compared against. Filtered to `METADATA_TABLES` by `include_name`."""
+"""What the migrations are compared against. Filtered to `INCLUDED_TABLES` by `include_name`."""
 
 SCHEMA_ARGUMENT: str = "schema"
 """`-x schema=...`, for running a migration into a schema without describing a whole deployment."""
@@ -75,10 +102,10 @@ def resolve_url(fallback: str | None) -> tuple[str, str | None]:
 
 
 def include_name(name: str | None, type_: str, parent_names: dict[str, str | None]) -> bool:
-    """Restrict autogenerate to this product's tables (DEC-340)."""
+    """Restrict autogenerate to this product's tables (DEC-340), the platform's included (DEC-888)."""
     del parent_names
     if type_ == "table":
-        return name in METADATA_TABLES
+        return name in INCLUDED_TABLES
     return True
 
 

@@ -252,13 +252,40 @@ def write_privacy_fixtures(out: Path, root: Path, config_root: Path, monkeypatch
         "access_export",
         {"disposition": access.headers["content-disposition"], "size": len(access.content)},
     )
-    outcome = _ok(
+    # Plan D (DEC-863): a background job. First a request whose uploads store keeps failing - its
+    # accepted answer, its failed progress and record - then its retry, which finishes it.
+    storage = erasing.flaky("uploads/", failures=10_000)
+    failed_accepted = _ok(
         erasing.client.post(
             "/privacy/erasure", json={"principal_id": SENTINEL, "client_id": CLIENT}, headers=erasing.admin
         ),
-        201,
+        202,
     )
-    assert SENTINEL not in json.dumps(outcome)
+    request_id = failed_accepted["request_id"]
+    failed_record = erasing.finish(request_id)
+    assert failed_record["error_code"] == "ERASURE_STORE_FAILED", failed_record
+    _write(out, "erasure_accepted", failed_accepted)
+    _write(out, "erasure_failed", failed_record)
+    _write(
+        out,
+        "erasure_failed_progress",
+        _ok(erasing.client.get(f"/privacy/erasure/{request_id}/progress", headers=erasing.admin)),
+    )
+    storage.failures = 0
+    retried = _ok(
+        erasing.client.post(
+            f"/privacy/erasure/{request_id}/retry", json={"principal_id": SENTINEL}, headers=erasing.admin
+        ),
+        202,
+    )
+    _write(out, "erasure_retry_accepted", retried)
+    outcome = erasing.finish(request_id)
+    _write(
+        out,
+        "erasure_progress",
+        _ok(erasing.client.get(f"/privacy/erasure/{request_id}/progress", headers=erasing.admin)),
+    )
+    assert SENTINEL not in json.dumps([failed_accepted, failed_record, retried, outcome])
     _write(out, "erasure", outcome)
     _write(out, "erasures", _ok(erasing.client.get("/privacy/erasure", headers=erasing.admin)))
     _write(out, "retrain_flags", _ok(erasing.client.get("/privacy/retrain-flags", headers=erasing.admin)))

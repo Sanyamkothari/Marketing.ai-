@@ -368,8 +368,13 @@ def measure_score(
 # Reporting
 # ---------------------------------------------------------------------------
 def peak_memory_mb() -> float:
-    """This process's peak resident set size in MiB. See `PEAK_MEMORY_BASIS` for what that covers."""
-    return resource.getrusage(resource.RUSAGE_SELF).ru_maxrss / KIB_PER_MB
+    """This process's peak resident set size in MiB. See `PEAK_MEMORY_BASIS` for what that covers.
+
+    `ru_maxrss` is in KiB on Linux and in **bytes** on macOS (Plan D M57): the laptop plan §11 names
+    is likely a Mac, and reading its bytes as KiB would report a peak 1,024 times too large.
+    """
+    peak = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    return peak / (KIB_PER_MB * 1024) if sys.platform == "darwin" else peak / KIB_PER_MB
 
 
 def machine_line() -> str:

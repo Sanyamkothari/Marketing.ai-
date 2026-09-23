@@ -47,6 +47,7 @@
     "PostgresRotationSingleUserA53C71BD": "AWS::Serverless::Application",
     "PostgresRotationSingleUserSecurityGroup692E06D4": "AWS::EC2::SecurityGroup",
     "PostgresSubnetGroup9F8A4D6E": "AWS::RDS::DBSubnetGroup",
+    "PrivacySalt4E3455A7": "AWS::SecretsManager::Secret",
     "SecurityGroupDD263621": "AWS::EC2::SecurityGroup",
     "SecurityGroupfrommarketingaidevdatabasePostgresRotationSingleUserSecurityGroup8CE01C48IndirectPort7632830C": "AWS::EC2::SecurityGroupIngress",
     "SecurityGroupfrommarketingaidevnetworkJobsSecurityGroup4C7CFDF9543329A0D41A": "AWS::EC2::SecurityGroupIngress",

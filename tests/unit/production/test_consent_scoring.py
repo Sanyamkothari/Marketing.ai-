@@ -35,6 +35,8 @@ from tests.unit.test_run_score import (
 )
 
 CLIENT = "acme"
+PRIVACY_SALT = "consent-scoring-salt-01"
+"""The deployment's secret privacy salt (DEC-860); the ledger and the gate both hash with it."""
 PURPOSE = "marketing_communication"
 ROWS = 40
 
@@ -53,6 +55,7 @@ def stubs(monkeypatch: pytest.MonkeyPatch) -> StageStubs:
 def deployment_client(monkeypatch: pytest.MonkeyPatch) -> None:
     """The run names no client (an upload run), so the deployment's client id is the ledger's."""
     monkeypatch.setenv("MARKETING_AI_CLIENT_ID", CLIENT)
+    monkeypatch.setenv("MARKETING_AI_PRIVACY_SALT", PRIVACY_SALT)
 
 
 def make_store(root: Path) -> LocalStorage:
@@ -81,7 +84,7 @@ def scores(store: LocalStorage) -> pd.DataFrame:
 
 
 def ledger_at(root: Path) -> ConsentLedger:
-    return ConsentLedger(sqlite_engine(root / PLATFORM_DB_FILENAME), salt=CLIENT)
+    return ConsentLedger(sqlite_engine(root / PLATFORM_DB_FILENAME), salt=PRIVACY_SALT)
 
 
 def record(ledger: ConsentLedger, principal: str, status: str, **kwargs: object) -> None:
@@ -238,7 +241,9 @@ def test_the_gate_reads_the_deployment_settings_the_api_reads(
     plant_ledger(root)
     store = make_store(root)
     assert consent.consent_gate_for_run(store, use_case_id=USE_CASE, client_id=None) is None
-    monkeypatch.setattr(consent, "load_settings", lambda: Settings(client_id=CLIENT))
+    monkeypatch.setattr(
+        consent, "load_settings", lambda: Settings(client_id=CLIENT, privacy_salt=PRIVACY_SALT)
+    )
     gate = consent.consent_gate_for_run(store, use_case_id=USE_CASE, client_id=None)
     assert gate is not None
     assert (gate.client_id, gate.purpose) == (CLIENT, PURPOSE)
