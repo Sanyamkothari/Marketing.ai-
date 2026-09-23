@@ -86,13 +86,16 @@ const sameValue = (a, b) =>
   Array.isArray(a) && Array.isArray(b) ? a.length === b.length && a.every((x, i) => x === b[i]) : a === b;
 
 /**
- * The `overrides` body of `POST /runs`: every field the user moved away from its default, keyed by
- * the schema's own dotted path, which is exactly what the config resolver accepts.
+ * The `overrides` body of `POST /runs`: every non-advisory field the user moved away from its
+ * default, keyed by the schema's own dotted path, which is exactly what the config resolver accepts.
  */
 export function overridesFrom(schema, values) {
   const overrides = {};
   for (const stage of schema.stages || []) {
     for (const field of stage.fields || []) {
+      // An advisory field changes no model, so it never goes back as an override even if something
+      // other than its (disabled) control moved it; the API would accept it, the screen never sends it.
+      if (field.advisory) continue;
       const current = readPath(values, field.path);
       if (current === undefined) continue;
       if (!sameValue(current, field.default)) overrides[field.path] = clone(current);
@@ -357,6 +360,18 @@ function stageBody(stage, values, columns) {
   return out.join("");
 }
 
+/**
+ * The note a collapsed stage leads with when every one of its fields is advisory, else "".
+ *
+ * The summary line of such a stage still reads the recorded values ("encoding Auto · max 100"), and
+ * with the stage folded nothing else on screen says they are inert. The text is the fields' own
+ * `help`, which the schema sets to its "Coming later" note, so this file still names no setting.
+ */
+function parkedNote(stage) {
+  const fields = stage.fields || [];
+  return fields.length && fields.every((field) => field.advisory) ? `${fields[0].help} ` : "";
+}
+
 /** The collapsed stages of the prototype, one per stage the schema returned. */
 export function stagesHtml(schema, values, columns) {
   const byPath = indexSchema(schema);
@@ -365,7 +380,7 @@ export function stagesHtml(schema, values, columns) {
       `<details class="stage-d" data-stage="${esc(stage.id)}"><summary><span class="sn">${esc(
         stage.number,
       )}</span><span><div class="st">${esc(stage.title)}</div><div class="ss">${esc(
-        stageSummary(stage, byPath, values),
+        parkedNote(stage) + stageSummary(stage, byPath, values),
       )}</div></span><span class="sc">Configure</span></summary>${stageBody(stage, values, columns)}</details>`,
   );
   return `<div class="stages">${stages.join("")}</div>`;
