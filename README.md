@@ -414,7 +414,11 @@ they are not the same kind of thing at all.
   is available to this repository's runs.
 
 **Parked for Phase 4 by plan §12, not Phase 1 debt** — §12 defers "drift monitoring schedule,
-retraining triggers … DPDP controls (retention, consent, deletion)" by name:
+retraining triggers … DPDP controls (retention, consent, deletion)" by name. *Since Phase 4b, two of
+these three have shipped:* `governance.retention_days` (with erasure and consent) and
+`monitoring.performance_alert_drop_pct` (with schedules and alerts) are live, and only
+`monitoring.retraining` stays parked on the form. The Phase 4b section below is current; the two
+bullets that follow record the state before it:
 
 - **`governance.retention_days`** and **deletion**. Retention is recorded with the run and not enforced;
   deletion has no seam at all (`docs/AWS_DEPLOYMENT.md` §7). The seam is worth calling out because §12
@@ -427,8 +431,8 @@ retraining triggers … DPDP controls (retention, consent, deletion)" by name:
   threshold. What these two settings would need is monitoring *between* runs, a schedule and an alert,
   which is exactly the half §12 names.
 
-Those three settings being disabled and recorded is the correct state for work the plan defers, not a
-shortfall against Phase 1. Each is stated where a reader meets it rather than left to be discovered.
+Those three settings being disabled and recorded was the correct state for work the plan defers, not a
+shortfall against Phase 1, until Phase 4b built two of them. Each is stated where a reader meets it rather than left to be discovered.
 
 ---
 
