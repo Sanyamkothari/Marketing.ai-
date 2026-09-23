@@ -70,6 +70,11 @@ export function resolveRoute(parts) {
 // Registration can land after the first screen is painted - `index.html` loads a phase module after
 // `app.js` - so every registration announces itself with `MODULES_CHANGED`, and `app.js` repaints
 // the current route when it hears it.
+//
+// The header tool itself is kept by `ui/dom.js`, which draws the header: `dom.js` must not import
+// this file (see `setHeaderTool`), so the edge runs from here to there.
+
+import { headerToolHtml as drawnHeaderTool, setHeaderTool } from "../dom.js";
 
 export const MODULES_CHANGED = "marketing-ai:modules-changed";
 
@@ -115,12 +120,13 @@ export function registerHeaderTool(tool) {
   if (!name || typeof html !== "function") throw new Error("registerHeaderTool needs { name, html() }");
   if (extensions.headerTool) throw new Error(`A header tool ("${extensions.headerTool.name}") is already registered`);
   extensions.headerTool = tool;
+  setHeaderTool(tool);
   announce();
 }
 
 /** The header tool's markup, or `""` when none is registered. */
 export function headerToolHtml() {
-  return extensions.headerTool ? extensions.headerTool.html() : "";
+  return drawnHeaderTool();
 }
 // ---- END PHASE-2 ----
 

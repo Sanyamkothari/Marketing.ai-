@@ -77,12 +77,25 @@ def test_the_phase_1_files_ask_the_registry_and_never_import_onboarding() -> Non
     """`usecase.js`, `dom.js` and `app.js` know the seams, never the module behind them."""
     for name, seam in (
         ("usecase.js", "setupSource"),
-        ("dom.js", "headerToolHtml"),
         ("app.js", "MODULES_CHANGED"),
     ):
         text = code(UI / name)
         assert "modules/onboarding" not in text, name
         assert re.search(rf'import \{{[^}}]*\b{seam}\b[^}}]*\}} from "\./modules/router\.js"', text), name
+
+
+def test_dom_js_keeps_the_header_slot_and_the_router_fills_it() -> None:
+    """`dom.js` is reached from `modules/production/boot.js` while `router.js` is still evaluating,
+    so it may not import the router (DEC-790): it keeps the slot, and `registerHeaderTool` fills it."""
+    dom = code(UI / "dom.js")
+    assert "modules/onboarding" not in dom and "modules/router.js" not in dom
+    for name in ("setHeaderTool", "headerToolHtml"):
+        assert re.search(rf"export function {name}\b", dom), name
+    assert re.search(r"pageHead\(inner\) \{[^}]*headerToolHtml\(\)", dom)
+    router = code(UI / "modules" / "router.js")
+    assert re.search(r'import \{[^}]*\bsetHeaderTool\b[^}]*\} from "\.\./dom\.js"', router)
+    register = router[router.index("export function registerHeaderTool") :]
+    assert "setHeaderTool(tool)" in register[: register.index("\n}")]
 
 
 def test_the_setup_source_implements_what_the_registry_requires() -> None:

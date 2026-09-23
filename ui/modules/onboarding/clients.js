@@ -49,10 +49,19 @@ export function currentClient() {
   return state.clients.find((client) => client.client_id === state.current) || null;
 }
 
+/** Reads the list first and asks for the default client only when there is no client at all: the
+ * `POST` writes (and is audited, and needs the Analyst role), so an installation that already has a
+ * client - every load after the first - never sends it, and a Viewer can still pick among them. */
 async function load() {
   try {
-    const fallback = await ensureDefaultClient();
-    const { clients } = await listClients();
+    let { clients } = await listClients();
+    // Newest first (`GET /clients`), so the last is the oldest: the default client, on every
+    // installation that started here.
+    let fallback = (clients || [])[(clients || []).length - 1];
+    if (!fallback) {
+      fallback = await ensureDefaultClient();
+      ({ clients } = await listClients());
+    }
     state.clients = clients || [];
     const wanted = remembered();
     state.current = state.clients.some((c) => c.client_id === wanted) ? wanted : fallback.client_id;
