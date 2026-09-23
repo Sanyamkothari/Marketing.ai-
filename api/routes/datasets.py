@@ -64,6 +64,7 @@ from fastapi import APIRouter, HTTPException, Query, Response
 from fastapi.responses import JSONResponse
 from pydantic import Field, ValidationError
 
+from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, JobsDep, StorageDep
 from api.routes.clients import ClientStoreDep, load_client
 from api.routes.mappings import check_params, facts_for, load_mapping, new_mapping_id
@@ -76,6 +77,7 @@ from api.routes.sources import (
 )
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
+from engine.access.roles import Role
 from engine.clients import ClientStore, ClientStoreError
 from engine.config import RunMode, StrictBase, UseCaseConfig, get_roles
 from engine.contracts import RunState, Severity
@@ -113,6 +115,28 @@ from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
 
 router: APIRouter = APIRouter(tags=["datasets"])
+
+# Plan A M35's two routes, declared where they are served (`api/access_policy.py`). Replaying a recipe
+# onto this month's files saves mappings and a recipe, so it is Analyst like `.../preview`; the lineage
+# is metadata about a dataset, not its rows, so it is a Viewer read that is not audited (DEC-716).
+register(
+    {
+        ("POST", "/clients/{client_id}/onboarding-specs/{spec_id}/replay"): RoutePolicy(
+            role=Role.ANALYST,
+            action="onboarding_specs.replay",
+            purpose="replay an onboarding spec on new tables",
+            object_type="onboarding_spec",
+            object_param="spec_id",
+        ),
+        ("GET", "/datasets/{dataset_id}/lineage"): RoutePolicy(
+            role=Role.VIEWER,
+            action="datasets.lineage",
+            purpose="see where a dataset came from",
+            object_type="dataset",
+            object_param="dataset_id",
+        ),
+    }
+)
 
 _LOGGER = get_logger(__name__)
 

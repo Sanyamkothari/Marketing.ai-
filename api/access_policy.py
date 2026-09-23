@@ -278,22 +278,10 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
     ("POST", "/connection/aws/test"): _policy(
         _AD, "settings.aws_connection.test", "test the AWS connection", object_type="setting"
     ),
-    # --- Plan A M35 and Phase 3b: routes that merged after this table was written (DEC-801) ----
-    # Filled by DEC-716's rules. The one exception is `/clients/default`: every page's header asks
-    # for it, a Viewer's included, and the only write it can make is the fixed Demo client, once.
-    ("POST", "/clients/default"): _policy(
-        _V, "clients.ensure_default", "open the demo client", object_type="client"
-    ),
-    ("POST", "/clients/{client_id}/onboarding-specs/{spec_id}/replay"): _policy(
-        _AN,
-        "onboarding_specs.replay",
-        "score new tables through a saved recipe",
-        object_type="onboarding_spec",
-        object_param="spec_id",
-    ),
-    ("GET", "/datasets/{dataset_id}/lineage"): _policy(
-        _V, "datasets.lineage", "see a dataset's lineage", object_type="dataset", object_param="dataset_id"
-    ),
+    # --- Phase 3b: the uplift routes, which merged after this table was written (DEC-801) --------
+    # Phase 3b's router is another workstream's file, so its routes are declared here like every
+    # other legacy route, by DEC-716's rules. Plan A M35's three routes are registered next to the
+    # routes themselves (`api/routes/clients.py`, `api/routes/datasets.py`).
     ("GET", "/uploads/{upload_id}/treatment-candidates"): _policy(
         _V,
         "uploads.treatment_candidates",
@@ -328,7 +316,7 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
         _AN, "uplift.ope", "evaluate a targeting policy", object_type="run", object_param="run_id"
     ),
 }
-"""Every route that existed before Phase 4b (DEC-716), and those that merged after it (DEC-801)."""
+"""Every route that existed before Phase 4b (DEC-716), and Phase 3b's, which merged after it (DEC-801)."""
 
 _ARTICLE: Final[dict[Role, str]] = {
     Role.VIEWER: "a",

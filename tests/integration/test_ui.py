@@ -40,10 +40,10 @@ MODULES: Final[tuple[str, ...]] = (
 )
 """Every module `index.html` reaches, directly or through an import."""
 
-SHARED_MODULES: Final[tuple[str, ...]] = ("modules/router.js", "modules/extensions.js")
+SHARED_MODULES: Final[tuple[str, ...]] = ("modules/router.js",)
 """Modules under `ui/modules/`, shared with the phase branches (PARALLEL_WORK_PROTOCOL.md §4).
 
-The registry and the two seams it re-exports from `extensions.js`, which imports nothing (DEC-801). Every screen a phase branch draws lives in its own
+The registry itself and nothing else. Every screen a phase branch draws lives in its own
 `ui/modules/<phase>/` directory and reaches the page by registering with the router, so a branch
 adds files here without this tuple, or any other line of this test, having to learn their names.
 """

@@ -29,10 +29,12 @@ from typing import Annotated, Final
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
+from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep
 from api.routes.industries import default_first
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorResponse
+from engine.access.roles import Role
 from engine.clients import (
     DEFAULT_CLIENT_ID,
     DEFAULT_CLIENT_NAME,
@@ -53,6 +55,20 @@ from engine.onboarding.specs import ClientRecord
 from engine.settings import settings
 
 router: APIRouter = APIRouter(tags=["clients"])
+
+# Plan A M35's route, declared where it is served (`api/access_policy.py`: every route has a policy).
+# Creating the default client is creating work, so it is Analyst like `POST /clients` (DEC-716). The
+# header asks for it only when the list does not already hold it, so a Viewer never needs it.
+register(
+    {
+        ("POST", "/clients/default"): RoutePolicy(
+            role=Role.ANALYST,
+            action="clients.create_default",
+            purpose="add the default client",
+            object_type="client",
+        ),
+    }
+)
 
 CLIENTS_DB_FILENAME: Final[str] = "clients.db"
 """Sibling of `engine.registry.REGISTRY_FILENAME`, inside the same data directory `StorageDep` roots."""

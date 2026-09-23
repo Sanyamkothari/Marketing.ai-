@@ -1112,12 +1112,13 @@ What had to be decided rather than merged is DEC-800:
 DEC-801 records:
 
 - **An import cycle.** Plan A's `dom.js` imported its header seam from `router.js`, and Phase 4b's
-  `router.js` block loads `boot.js`, which imports `dom.js`. The two seams now live in
-  `ui/modules/extensions.js`, which imports nothing; `router.js` re-exports them.
+  `router.js` block loads `boot.js`, which imports `dom.js`. Plan A fixed it on its own branch
+  (`4bf0355`, DEC-090 addendum) and registered roles for its three routes; the integration takes
+  that fix as it stands.
 - **A queued redraw.** `app.js` now draws a phase module's route at once instead of queueing it
   behind a Phase 1 draw, so a reload on an admin screen is not held by a slow `GET /industries`.
-- **Nine routes without a role** (Plan A M35's replay, lineage and default client; Phase 3b's five
-  uplift routes) are in `LEGACY_POLICIES` by DEC-716's rules, so sign-in does not refuse them.
+- **Six uplift operations without a role** are in `LEGACY_POLICIES` by DEC-716's rules, so
+  sign-in does not refuse them. All 82 paths now have one.
 
 **Still open after the merge**, each with its own entry above: uplift on two-column keys, the six
 uplift codes in `docs/DATA_CONTRACT.md`, Phase 1's pages on uplift runs, one code registry for all
