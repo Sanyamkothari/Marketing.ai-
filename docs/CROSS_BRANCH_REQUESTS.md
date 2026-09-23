@@ -15,6 +15,65 @@ branch to hit the same wall should find the ruling, not the silence.
 
 ## Open
 
+### 2026-09-22 — contracts-first → human reviewer: the three phase plans
+
+**What is needed.** `MARKETING_AI_PHASE2_PLAN.md`, `MARKETING_AI_PHASE3A_PLAN.md` and
+`MARKETING_AI_PHASE4A_PLAN.md` are not in the repository. `PARALLEL_WORK_PROTOCOL.md` §2 items 2
+and 3 ask the contracts-first task to add "the pydantic models named in Phase 2 §8" and "the models
+named in Phase 3a §7", and those sections are the only definition of what those models are called
+and which fields they carry.
+
+**What I did meanwhile.** Items 1, 4, 5, 6 and 7 of §2 are complete and do not depend on the
+plans: the composite `primary_key`, `dataset_id`, `client_id`, `LLMUsage` and `ComputeInfo` are on
+the shared contracts; `engine/settings.py` and `engine/llm.py` exist; the marker blocks are in
+every shared file; CI already runs the fast suite on every push and the slow suite nightly.
+`engine/onboarding/specs.py` and `engine/generative/contracts.py` exist as empty modules, so the
+import paths and the ownership are settled, and each one's docstring says exactly what is missing.
+The models themselves are **not** guessed: a branch that starts against an invented `SourceSpec`
+has to rename its fields when the real plan lands, and §2 forbids renaming a field of a shared
+contract. Sending the three plans unblocks both modules with no change to anything already built.
+
+**Re-filed 2026-09-23 (Plan A M39).** Still open. `docs/plans/` now holds Plan A; the Phase 2, 3a and 4a plans (and the Evolve plan Plan A names) are still not in the repository, and `docs/plans/README.md` lists them as missing rather than reconstructing them. Needed from: the human reviewer, the three files.
+
+### 2026-09-22 — audit → phase-3a-generative: four defects fixed in files §3 assigns to you
+
+**What is needed.** An owner's review of four changes made inside `engine/generative/**`, which
+§3 assigns to `phase-3a-generative`. They were made here, on the shared branch where that code
+actually lives, at the repository owner's direct instruction after an audit found them. Nothing was
+removed, no assertion was loosened, and each fix carries a regression test.
+
+1. `guardrails.py` — `_URL` captured the **userinfo**, not the host, so
+   `https://allowed.test@phish.test/x` passed a whitelist for `allowed.test`; and without
+   `IGNORECASE` an uppercase scheme matched nothing, so the rule returned "nothing found" (PASSED)
+   and was defeated in its shipped default state, where `allowed_url_domains` is empty. Now matches
+   the whole token case-insensitively and compares `urlsplit().hostname`.
+2. `guardrails.py` / `evaluation.py` — `json.loads` accepts a bare `NaN` and `min(1.0, nan)`
+   returns 1.0, so an unreadable judge verdict scored a *perfect* pass and wrote a fabricated
+   `mean_faithfulness` into `rag_eval.json`. Non-finite scores now score 0.0, which is the rule both
+   docstrings already stated for a reply that is not JSON at all.
+3. `index.py` — `doc_id = path.stem` with a four-extension `accepted_types` gave `policy.pdf` and
+   `policy.md` the same `chunk_id`, so one document's vector overwrote the other's and the assistant
+   verified a quote against the wrong chunk. Refused up front by `_check_names` with a new
+   `DOCUMENT_NAME_CLASH` code rather than disambiguated: widening `doc_id` would change the stored
+   `chunk_id` shape and strand every index already built.
+4. `contracts.py` / `win_back.py` / `budget.py` — `CopyMessage` gained a required `backend` field.
+   The screens were already honest (`gdom.backendBadge` puts a warning-coloured "Fake backend"
+   panel above every one, citing plan §13.3), but `copy_messages.csv` is downloadable through
+   `GET /runs/{run_id}/copy_messages.csv` and the badge does not follow the file. A marketer
+   downloading it held ready-to-send copy with nothing on it to say a deterministic stand-in wrote
+   it. `Meter.backend` reads the same `LlmConfig` the calls are made against.
+
+**What I did meanwhile.** All four are in, `make lint` and the fast suite are green, and
+`docs/API.md` was regenerated rather than hand-edited. Phase 3a owns these files: if any fix is
+wrong, revert it and say so here — I would rather be reverted than have you inherit a change you
+disagree with. The one judgement call worth your attention is (3): refusing a name clash is a
+behaviour change for a knowledge base that has one, and the alternative (a wider `doc_id`) trades
+that for breaking every existing index.
+
+**Re-filed 2026-09-23 (Plan A M39)** to the human reviewer, since Phase 3a has merged and has no branch left to review from. Still open: the four fixes are on `main` with their tests, and no owner review is on record. The judgement call is still (3), refusing a document name clash.
+
+## Resolved
+
 ### 2026-09-22 — phase-3a-generative → phase-2-onboarding and phase-4a-aws: `LLMClient.complete` takes an optional `system`
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for when a branch
@@ -32,6 +91,8 @@ weaker at the one thing the guardrails then check.
 
 **What I did meanwhile.** Nothing was blocked. `BedrockLLMClient` sends it as the Converse system
 block; a caller that passes nothing gets exactly the behaviour that was there before.
+
+**Resolved 2026-09-23.** All three phases are merged on `main` with this signature, and no branch objected; nothing further is needed.
 
 ### 2026-09-22 — phase-3a-generative → human reviewer: a second fake, beside `FakeLLMClient`
 
@@ -54,23 +115,7 @@ and neither touches the other. If the ruling is that there should be one, the me
 grounded behaviour into `FakeLLMClient` behind a mode argument whose default is today's digest —
 which keeps `tests/unit/test_llm.py` green as written. See DEC-214.
 
-### 2026-09-22 — contracts-first → human reviewer: the three phase plans
-
-**What is needed.** `MARKETING_AI_PHASE2_PLAN.md`, `MARKETING_AI_PHASE3A_PLAN.md` and
-`MARKETING_AI_PHASE4A_PLAN.md` are not in the repository. `PARALLEL_WORK_PROTOCOL.md` §2 items 2
-and 3 ask the contracts-first task to add "the pydantic models named in Phase 2 §8" and "the models
-named in Phase 3a §7", and those sections are the only definition of what those models are called
-and which fields they carry.
-
-**What I did meanwhile.** Items 1, 4, 5, 6 and 7 of §2 are complete and do not depend on the
-plans: the composite `primary_key`, `dataset_id`, `client_id`, `LLMUsage` and `ComputeInfo` are on
-the shared contracts; `engine/settings.py` and `engine/llm.py` exist; the marker blocks are in
-every shared file; CI already runs the fast suite on every push and the slow suite nightly.
-`engine/onboarding/specs.py` and `engine/generative/contracts.py` exist as empty modules, so the
-import paths and the ownership are settled, and each one's docstring says exactly what is missing.
-The models themselves are **not** guessed: a branch that starts against an invented `SourceSpec`
-has to rename its fields when the real plan lands, and §2 forbids renaming a field of a shared
-contract. Sending the three plans unblocks both modules with no change to anything already built.
+**Resolved 2026-09-23.** Plan A M38, ruling D7 (DEC-089, DEC-098): `engine/llm.py` has one `FakeLLMClient` with a `mode` (`FakeLLMMode`); `GroundedFakeLLMClient` is deleted and every generative test constructs the one fake.
 
 ### 2026-09-22 — library-datasets → whoever owns `tests/unit/test_config_loading.py`: two assertions forbid a second industry
 
@@ -107,6 +152,8 @@ shipped `telco-churn` use case, and proves the same point inside the product. Wh
 assertions are relaxed, moving the configs is `git mv library/configs/industries/*.yaml
 configs/industries/`, the same for `use_cases/`, then `make generate`. Recorded as DEC-400.
 
+**Resolved 2026-09-23.** Plan A M38, ruling D3 (DEC-085, DEC-098): the two tests validate every industry file, the library's industries and use cases moved into `configs/`, and the overview has an industry selector.
+
 ### 2026-09-22 — library-datasets → whoever owns `engine/stages/prepare.py`: two PII detectors that disagree
 
 **What is needed.** One PII detector, not two. `engine/stages/validate.py:390` says "PII detection
@@ -136,6 +183,8 @@ type gate, the one line `if inferred not in _PII_TYPES: return ()`.
 full in `library/online-retail/run_report.md` under "A discrepancy worth recording", with the
 artefact keys quoted, so the next reader meets it as a known issue rather than a surprise.
 
+**Resolved 2026-09-23.** Plan A M36, ruling D6 (DEC-088, DEC-092): `engine/pii.py` is the one detector both call sites use; on the library samples the flags are identical or stricter.
+
 ### 2026-09-22 — library-datasets → whoever owns `engine/config.py`: a template column name cannot contain a dot
 
 **What is needed.** Either a widened pattern or one line in the data contract.
@@ -159,6 +208,8 @@ second is cheaper and probably the better answer.
 and what Phase 2's column-mapping UI will absorb. Both use cases carry full templates and the
 source names are not lost. Recorded as DEC-404.
 
+**Resolved 2026-09-23.** Plan A M36 (DEC-093): odd headers get safe internal names at ingest, used only inside the model boundary; every artefact and `scores.csv` shows the uploaded names.
+
 ### 2026-09-22 — library-datasets → whoever owns `engine/stages/evaluate.py`: `threshold.mode: auto` can call every row positive
 
 **What is needed.** A guard in the `auto` threshold search. `auto` maximises F1 on the validation
@@ -176,6 +227,8 @@ positives) and take the best remaining one; if none qualifies, fall back to 0.5 
 **What I did meanwhile.** Nothing was blocked. The numbers are reported as measured in
 `library/online-retail/run_report.md`, with a paragraph explaining why 100 % recall is not good
 news, so nobody quotes it as a result.
+
+**Resolved 2026-09-23.** Plan A M36 (DEC-094): `auto` maximises the configured metric under `evaluation.threshold.max_flagged_rate` (0.30) and falls back to the top decile with `THRESHOLD_FALLBACK`; the online-retail baseline now flags about 11% of validation rows instead of 81%. `evaluate.py` was not touched.
 
 ### 2026-09-22 — library-datasets → human reviewer: `README.md` has no block a non-phase branch may write in
 
@@ -199,6 +252,8 @@ others — `docs/LIBRARY.md` ↔ `library/README.md` ↔ `library/DEMO_SCRIPT.md
 `README.md` and `run_report.md` — so the set is navigable from any one of them, and
 `docs/DECISIONS.md` (DEC-400 … DEC-411) names `docs/LIBRARY.md`. Only the entry point from
 `README.md` is missing.
+
+**Resolved 2026-09-23.** Plan A M39: the line is in `README.md` under *Public dataset smoke test*, pointing at `docs/LIBRARY.md`.
 
 ### 2026-09-22 — phase-4a-aws → whoever owns `engine/stages/train.py`: one line, after `predictor.save()`
 
@@ -230,6 +285,8 @@ against the frozen version is the one statement and its comment. If the ruling i
 file may not take even this, the alternative is a wrapper in `engine/pipeline.py` that calls
 `publish_local_path` after `run_train` returns — which is strictly worse, because the artefact is
 then unpublished across every line of the stage that can fail, which is most of them.
+
+**Resolved 2026-09-23.** Plan A M38, ruling D4 (DEC-086, DEC-098): the line stays in `train.py`, both moves were evaluated and rejected, and `tests/unit/test_train_local_mirror.py` proves it inert on local storage.
 
 ### 2026-09-22 — prototype → human reviewer and phase-2-onboarding: the onboarding panel is built, nothing mounts it, and nothing could run what it builds
 
@@ -274,40 +331,7 @@ differences between the built panel and the prototype are in `CHANGELOG-prototyp
 `engine/runs.py` job path as an upload (see the Resolved entry below). Items 1 and 2 - mounting the
 panel and letting step 2 read a built dataset - are still open and are Phase 2's M13.
 
-### 2026-09-22 — audit → phase-3a-generative: four defects fixed in files §3 assigns to you
-
-**What is needed.** An owner's review of four changes made inside `engine/generative/**`, which
-§3 assigns to `phase-3a-generative`. They were made here, on the shared branch where that code
-actually lives, at the repository owner's direct instruction after an audit found them. Nothing was
-removed, no assertion was loosened, and each fix carries a regression test.
-
-1. `guardrails.py` — `_URL` captured the **userinfo**, not the host, so
-   `https://allowed.test@phish.test/x` passed a whitelist for `allowed.test`; and without
-   `IGNORECASE` an uppercase scheme matched nothing, so the rule returned "nothing found" (PASSED)
-   and was defeated in its shipped default state, where `allowed_url_domains` is empty. Now matches
-   the whole token case-insensitively and compares `urlsplit().hostname`.
-2. `guardrails.py` / `evaluation.py` — `json.loads` accepts a bare `NaN` and `min(1.0, nan)`
-   returns 1.0, so an unreadable judge verdict scored a *perfect* pass and wrote a fabricated
-   `mean_faithfulness` into `rag_eval.json`. Non-finite scores now score 0.0, which is the rule both
-   docstrings already stated for a reply that is not JSON at all.
-3. `index.py` — `doc_id = path.stem` with a four-extension `accepted_types` gave `policy.pdf` and
-   `policy.md` the same `chunk_id`, so one document's vector overwrote the other's and the assistant
-   verified a quote against the wrong chunk. Refused up front by `_check_names` with a new
-   `DOCUMENT_NAME_CLASH` code rather than disambiguated: widening `doc_id` would change the stored
-   `chunk_id` shape and strand every index already built.
-4. `contracts.py` / `win_back.py` / `budget.py` — `CopyMessage` gained a required `backend` field.
-   The screens were already honest (`gdom.backendBadge` puts a warning-coloured "Fake backend"
-   panel above every one, citing plan §13.3), but `copy_messages.csv` is downloadable through
-   `GET /runs/{run_id}/copy_messages.csv` and the badge does not follow the file. A marketer
-   downloading it held ready-to-send copy with nothing on it to say a deterministic stand-in wrote
-   it. `Meter.backend` reads the same `LlmConfig` the calls are made against.
-
-**What I did meanwhile.** All four are in, `make lint` and the fast suite are green, and
-`docs/API.md` was regenerated rather than hand-edited. Phase 3a owns these files: if any fix is
-wrong, revert it and say so here — I would rather be reverted than have you inherit a change you
-disagree with. The one judgement call worth your attention is (3): refusing a name clash is a
-behaviour change for a knowledge base that has one, and the alternative (a wider `doc_id`) trades
-that for breaking every existing index.
+**Resolved 2026-09-23.** Plan A M34 and M35 (DEC-083, DEC-090): the stages carry the composite key, and Setup mounts the panel, runs its dataset and scores next month's tables through the saved recipe; `tests/integration/test_onboarding_acceptance.py` walks the journey in a browser.
 
 ### 2026-09-22 — phase-2-onboarding → human reviewer: PII inside free text is not detected
 
@@ -332,6 +356,8 @@ match whole cells and that the column should be treated as unredacted free text.
 `tests/fixtures/raw/make_raw.py` plants contacts in the exact shapes the shipped patterns
 recognise, so whoever takes the decision has something to test against.
 
+**Resolved 2026-09-23.** Plan A M36, ruling D5 (DEC-087, DEC-095): contacts inside free text are found at profiling, masked wherever a cell is shown or sent to an LLM, and reported as the warning `PII_IN_FREE_TEXT`.
+
 ### 2026-09-22 — phase-2-onboarding → phase-3a, phase-4a: four fields added to `UseCaseConfig`
 
 **What is needed.** Nothing from you; this is the announcement `PARALLEL_WORK_PROTOCOL.md` §3
@@ -349,6 +375,8 @@ needed room above the block went to `engine/onboarding/roles.py` instead (DEC-10
 only such edit this branch makes to `engine/config.py`. If either of you would rather these four
 fields were moved into a reviewed change on `main`, say so and I will rebase onto it.
 
+**Resolved 2026-09-23.** Merged on `main` with every phase; no branch asked for the fields to move.
+
 ### 2026-09-22 — phase-2-onboarding → human reviewer: unify `OnboardingCheck` with `ValidationCheck`
 
 **What is needed.** A reviewed change on `main` that lets `engine.contracts.ValidationCheck` accept
@@ -363,7 +391,7 @@ dataset, appending its findings to the same list, so one type really does have t
 unchanged (DEC-101). Nothing is lost while the request is open — the field contract is identical —
 but it is a duplicated field list, so it should not stay open indefinitely.
 
-## Resolved
+**Resolved 2026-09-23.** Plan A M38, ruling D7 (DEC-089, DEC-098): `ValidationCheck` is the one check contract, with an optional `source_id`; `OnboardingCheck` is an alias of it.
 
 ### 2026-09-22 — contracts-first → human reviewer: `StageContext.primary_key` and the ownership map
 

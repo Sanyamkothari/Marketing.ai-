@@ -100,10 +100,13 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_api_datasets.py",
         "tests/integration/test_runs_from_dataset.py",
     ),
-    # M13 is deliberately absent. Its definition of done is the panel *inside Setup*, and the
-    # standalone panel's tests (test_onboarding_ui.py, test_onboarding_flow.py) pass whether or not
-    # Setup mounts it - so they would call M13 built while it is not. Mounting it is Plan A M35;
-    # map M13 to the tests M35 writes (the Setup-mounted panel, the browser acceptance) when it merges.
+    # M13's definition of done is the panel *inside Setup*. The standalone panel's tests
+    # (test_onboarding_ui.py, test_onboarding_flow.py) pass whether or not Setup mounts it, so M13 is
+    # proved only by the tests Plan A M35 wrote when it mounted the panel - the same ones as M35.
+    "M13": (
+        "tests/unit/onboarding/test_setup_wiring_ui.py",
+        "tests/integration/test_onboarding_acceptance.py",
+    ),
     "M14": ("tests/fixtures/raw/test_make_raw.py",),
     # --- Phase 3a (generative) ---------------------------------------------------------------
     "M15": (
@@ -148,16 +151,35 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/test_docs_honesty.py",
     ),
     # --- Plan A (Phase 2 completion) ---------------------------------------------------------
-    # M35-M38 are added by whoever merges them, naming the tests that milestone wrote: a mapping
-    # that points at an older test would call the new milestone built before it was.
+    # Each names the tests that milestone wrote: a mapping that points at an older test would call
+    # the new milestone built before it was.
     "M34": ("tests/unit/test_composite_key.py", "tests/integration/test_periodic_flow.py"),
+    "M35": (
+        "tests/unit/onboarding/test_setup_wiring_ui.py",
+        "tests/unit/onboarding/test_replay.py",
+        "tests/unit/onboarding/test_default_client.py",
+        "tests/integration/test_api_onboarding_replay.py",
+        "tests/integration/test_onboarding_acceptance.py",
+    ),
+    "M36": (
+        "tests/unit/test_pii.py",
+        "tests/unit/test_column_names.py",
+        "tests/unit/test_threshold_auto.py",
+    ),
+    "M37": ("tests/unit/onboarding/test_build_speed.py", "tests/integration/test_onboarding_build_reads.py"),
+    "M38": (
+        "tests/unit/test_inactive_settings.py",
+        "tests/integration/test_inactive_settings_ui.py",
+        "tests/unit/test_train_local_mirror.py",
+        "tests/integration/test_ui_journey.py",
+    ),
     "M39": ("tests/unit/test_check_readme.py",),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
 Taken from the commits that delivered each milestone. A milestone may be absent - Phase 4b's M46
-... M52 are, so is M13 until the panel is mounted in Setup, and so is anything planned but not
-started - and an absent milestone is reported, never flagged. A mapping must name tests that fail
+... M52 are, and so is anything planned but not started - and an absent milestone is reported, never
+flagged. A mapping must name tests that fail
 when the milestone's definition of done is not met; tests of a part that passes on its own are not
 evidence for the whole. Paths are relative to the repository root, the way pytest's node ids spell them."""
 
