@@ -4,10 +4,11 @@ name: Ad-tech
 journey_label: Audience Lifecycle
 
 # Ad-tech is configured but has nothing available yet. The Criteo Uplift dataset is mapped in
-# library/criteo-uplift/, and its use-case file is drafted there rather than installed here,
-# because the question that dataset exists to answer - the incremental effect of showing an ad -
-# is uplift modelling, which is Phase 3b (plan section 12). A propensity model on `conversion`
-# would train happily today and would answer the wrong question.
+# library/criteo-uplift/, and its use-case file is kept there rather than installed here. The
+# question that dataset exists to answer - the incremental effect of showing an ad - is uplift
+# modelling; since Phase 3b that file is written for `problem_type: uplift` and the engine can run
+# it. It stays `planned` because the data could not be fetched in this environment (re-tested
+# 2026-09-23: refused with 403), so there is nothing to run it on.
 
 stages:
   - id: awareness

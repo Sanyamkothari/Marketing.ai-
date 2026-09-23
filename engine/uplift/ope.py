@@ -128,12 +128,15 @@ def policy_from_rule(
 ) -> tuple[np.ndarray, str]:
     """A deterministic policy (`π(1 | x)` of 0.0 or 1.0 per row) and its description in words.
 
-    `top_share` treats the top `ceil(top_share·n)` rows by predicted uplift (stable sort on
-    `-uplift`, so ties keep input order, as in `engine.uplift.metrics`); `min_uplift` treats every
+    `top_share` treats the top `ceil(top_share·n)` rows by predicted uplift, counted by
+    `engine.uplift.metrics.top_rows` so that `0.07·100` is 7 rows here exactly as in uplift@7%
+    (stable sort on `-uplift`, so ties keep input order, as in `engine.uplift.metrics`); `min_uplift` treats every
     row whose predicted uplift is at least that value. Given both, a row must pass both. At least one
     is required.
     """
     import numpy as np
+
+    from engine.uplift.metrics import top_rows
 
     if top_share is None and min_uplift is None:
         raise ValueError("A policy rule needs top_share, min_uplift or both.")
@@ -145,7 +148,7 @@ def policy_from_rule(
     if top_share is not None:
         if not 0.0 < top_share <= 1.0:
             raise ValueError("top_share must be greater than 0 and at most 1.")
-        count = math.ceil(top_share * len(scores))
+        count = top_rows(top_share, len(scores)) if len(scores) else 0
         order = np.argsort(-scores, kind="mergesort")
         top = np.zeros(len(scores), dtype=bool)
         top[order[:count]] = True

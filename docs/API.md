@@ -1830,7 +1830,7 @@ Engine constants. The catalog is never merged into a use case and never overrida
 | `catalog.problem_types` | id -> {label (prototype PTYPES verbatim), enabled in Phase 1} |
 | `catalog.problem_types.forecasting` | plan §12: later |
 | `catalog.problem_types.clustering` | plan §12: later |
-| `catalog.problem_types.uplift` | Phase 3b (DEC-601): needs a randomly assigned treatment column |
+| `catalog.problem_types.uplift` | Phase 3b (DEC-601, DEC-608): needs a randomly assigned treatment column; not a Phase 1 Setup choice - uplift runs start at #/uplift (POST /uplift/runs), whose checks run before the run does |
 | `catalog.ai_types` | id -> {marker on the overview, stars, label} (prototype TYPES verbatim) |
 | `catalog.automl_choice` | the step-3 first option; value is a sentinel, never a display string |
 | `catalog.automl_choice.value` | str |

@@ -23,6 +23,7 @@ tests crowned, and scores with it by id.
 from __future__ import annotations
 
 import io
+import shutil
 import time
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -37,7 +38,7 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from engine import runs as engine_runs
-from engine.config import Metric
+from engine.config import Metric, ResolvedConfig
 from engine.contracts import (
     FeatureImportance,
     FeatureSchema,
@@ -237,9 +238,22 @@ class Trained:
 
 @pytest.fixture(scope="module")
 def trained(app: App) -> Trained:
+    """The first uplift run on `win-back-campaign`, then its model handed the champion slot by hand.
+
+    The use case is configured for classification, so the run keeps its model a candidate however
+    good it is (DEC-609); the promotion is the deliberate `POST /models/{id}/promote` a person makes
+    on the Models page, after which Phase 1's scoring with no model named scores the uplift model.
+    """
     upload_id = upload(app, train_frame(make_uplift_data(TRAIN_ROWS, seed=7)), mode="train")
     run_id = start_uplift(app, uplift_body(upload_id), run_id="r_20260923_0a000001")
-    return Trained(upload_id=upload_id, run_id=run_id, record=finish(app, run_id))
+    record = finish(app, run_id)
+    assert record.champion is False and app.registry.get_champion(USE_CASE) is None
+    response = app.client.post(
+        f"/models/{record.model_version_id}/promote",
+        json={"promoted_by": "uplift test", "reason": "hand the slot to the uplift model"},
+    )
+    assert response.status_code == 200, response.text
+    return Trained(upload_id=upload_id, run_id=run_id, record=record)
 
 
 @dataclass(frozen=True)
@@ -294,6 +308,27 @@ def test_a_targeted_campaign_is_refused_with_both_reports(app: App) -> None:
     finding = next(check for check in report.checks if check.code == "TREATMENT_NOT_RANDOM")
     assert finding.acknowledgeable and not finding.acknowledged
     assert report.randomness_auc is not None and report.randomness_auc > 0.6
+    # The shape the Setup screen parses (ui/modules/uplift/controller.js `refusal`, pinned by
+    # tests/unit/uplift/uplift_ui_wiring.test.mjs): both reports at the top level, beside the envelope.
+    assert set(body) == {"detail", "validation", "uplift_validation"}
+    assert set(body["detail"]) == {"code", "message", "path"}
+
+
+def test_the_randomness_threshold_cannot_be_loosened_per_run(app: App) -> None:
+    """A per-run `randomness_auc_max: 1.0` would have let a targeted campaign through as causal."""
+    upload_id = upload(app, make_uplift_data(4_000, seed=21, targeted=True).frame, mode="train")
+    body = uplift_body(upload_id, uplift={"randomness_auc_max": 1.0})
+    response = app.client.post("/uplift/runs", json=body)
+    assert response.status_code == 422, response.text
+    detail = response.json()["detail"]
+    assert detail["code"] == "OVERRIDE_UNKNOWN_PATH"
+    assert detail["path"] == "uplift.randomness_auc_max"
+    # Acknowledging the finding stays the one way past it, and it is never called causal.
+    acknowledged = uplift_body(upload_id, validation={"acknowledged": ["TREATMENT_NOT_RANDOM"]})
+    record = finish(app, start_uplift(app, acknowledged, run_id="r_20260923_0e000001"))
+    evaluation = uplift_artefact(app, record.run_id, "uplift_evaluation.json")
+    assert evaluation.causal is False and evaluation.summary.startswith(NOT_CAUSAL_NOTE)
+    assert record.champion is False
 
 
 def test_a_file_without_a_treatment_column_is_refused(app: App) -> None:
@@ -349,17 +384,61 @@ def test_the_training_run_writes_every_artefact_and_each_validates(app: App, tra
     assert set(record.artefacts) >= {*UPLIFT_JSON, "model/", "schema.json", UPLIFT_HOLDOUT_FILENAME}
 
 
-def test_the_training_run_is_promoted_when_approval_is_not_required(app: App, trained: Trained) -> None:
+def test_on_a_classification_use_case_the_run_does_not_take_the_champion_slot(
+    app: App, trained: Trained
+) -> None:
+    """DEC-609: an uplift run started on a use case configured for classification stays a candidate.
+
+    Were it to take the empty slot, Phase 1's scoring with no model named would switch to uplift and
+    no classification model could be promoted over it again (`METRIC_MISMATCH`).
+    """
     record = trained.record
-    assert record.champion is True
-    champion = app.registry.get_champion(USE_CASE)
-    assert champion is not None and champion.model_id == record.model_version_id
-    assert champion.metric is Metric.AUUC and champion.status is ModelStatus.CHAMPION
+    assert record.champion is False  # measured, measurable, approval off - and still not crowned
+    version = app.registry.get(str(record.model_version_id))
+    assert version.metric is Metric.AUUC
+    assert version.promoted_by == "uplift test"  # the slot is the person's deliberate promotion
     evaluation = uplift_artefact(app, trained.run_id, "uplift_evaluation.json")
-    assert champion.test_score == evaluation.auuc.value
+    assert evaluation.measurable_uplift and version.test_score == evaluation.auuc.value
+    manifest = RunManifest.model_validate_json(run_artefact(app, trained.run_id, "run_manifest.json"))
+    assert "champion_auuc" not in manifest.metrics
     listed = app.client.get("/models", params={"use_case": USE_CASE})
     assert listed.status_code == 200, listed.text
     assert record.model_version_id in {item["version"]["model_id"] for item in listed.json()["versions"]}
+
+
+def test_on_a_use_case_configured_as_uplift_the_run_takes_the_empty_slot(
+    config_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> None:
+    """The same run on a config root whose `win-back-campaign` says `problem_type: uplift`."""
+    root = tmp_path_factory.mktemp("uplift-root") / "configs"
+    shutil.copytree(config_root, root)
+    path = root / "use_cases" / "win_back_campaign.yaml"
+    text = path.read_text(encoding="utf-8")
+    choices = "model_search:\n  metric_choices: [roc_auc, recall, f1]"
+    assert choices in text
+    path.write_text(
+        text.replace(
+            choices, "problem_type: uplift\n\nmodel_search:\n  metric: auuc\n  metric_choices: [auuc]"
+        ),
+        encoding="utf-8",
+    )
+    data_dir = tmp_path_factory.mktemp("uplift-configured") / "data"
+    data_dir.mkdir()
+    with TestClient(create_app(config_root=root, data_dir=data_dir)) as client:
+        configured = App(client=client, data_dir=data_dir)
+        upload_id = upload(configured, train_frame(make_uplift_data(TRAIN_ROWS, seed=7)), mode="train")
+        # A caller's own `problem_type` override is dropped on a use case already configured as uplift.
+        body = uplift_body(upload_id, problem_type="binary_classification")
+        record = finish(configured, start_uplift(configured, body, run_id="r_20260923_0a000001"))
+        assert record.problem_type.value == "uplift"
+        resolved = configured.storage.read_model(run_key(record.run_id, "run_config.json"), ResolvedConfig)
+        assert resolved.sources["problem_type"] == "use_case"
+        assert record.champion is True
+        champion = configured.registry.get_champion(USE_CASE)
+        assert champion is not None and champion.model_id == record.model_version_id
+        assert champion.metric is Metric.AUUC and champion.status is ModelStatus.CHAMPION
+        evaluation = uplift_artefact(configured, record.run_id, "uplift_evaluation.json")
+        assert champion.test_score == evaluation.auuc.value
 
 
 def test_the_uplift_route_serves_only_uplift_artefacts(app: App, trained: Trained) -> None:

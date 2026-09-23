@@ -678,4 +678,138 @@ is Phase 1's table; this paragraph is Phase 4a's.
 <!-- ---- END PHASE-4A ---- -->
 
 <!-- ---- PHASE-3B (uplift) — append only below this line ---- -->
+
+### Phase 3b — Uplift modelling
+
+Phase 1 predicts **who will convert**. Uplift predicts **who converts *because* of the action**: the
+difference between a customer's chance of converting if contacted and if not, learnt from a past
+campaign whose treatment was **randomly assigned**. It is a problem type of its own (`uplift`,
+metric `auuc`), configured by the `uplift:` block of a use case (`configs/engine.yaml` has the
+defaults, each commented) and read only when the problem type is uplift (DEC-601). The
+plain-language guide, with every metric's exact definition, is [`docs/UPLIFT.md`](docs/UPLIFT.md).
+
+**Where it is in the product.** The uplift screens are a UI module (`ui/modules/uplift/`) at
+`#/uplift`, reached from an **Uplift modelling ›** link the module adds to the Overview and an
+**Uplift for this use case ›** link on every use-case screen (DEC-639). A Phase 1 scoring run's
+screen also links to its **Campaign results**. Uplift is deliberately *not* a choice in Phase 1's
+Setup (DEC-608). An uplift run starts from its own Setup, which picks the treatment column and runs
+the experiment checks before the run exists.
+
+| # | Milestone | Definition of done | Status |
+|---|---|---|---|
+| M40 | Contracts, checks, problem type | Data contract, the six checks, `uplift` registered, config schema, artefact models | **done** |
+| M41 | Learners and evaluation | S/T/X learners; Qini, AUUC, deciles with bootstrap intervals; uplift champion rule; planted-effect and null tests green | **done** |
+| M42 | Segments, policy, explanations | Four segments, budgeted policy, SHAP on the uplift, actions use segments | **done** |
+| M43 | Incrementality and OPE | Campaign results with maturity; IPS, SNIPS and DR with tests | **done** |
+| M44 | UI | Setup, Model, Output and Campaign results screens; prototype updated | **done**; not yet checked in a real browser, and the prototype still offers Uplift in its Setup (plan B §8 literally) where the product does not (DEC-608) |
+| M45 | Criteo, docs, hardening | Criteo run report; `docs/UPLIFT.md`; README and DECISIONS current | docs **done**; Criteo **not run**: the data cannot be fetched here (re-tested 2026-09-23, DEC-656) |
+
+#### M40 — Contracts, checks, problem type
+
+`engine/uplift/config.py` (the `uplift:` block and which leaves a Phase 5 agent may edit),
+`engine/uplift/contracts.py` (every artefact model, served from their own registry, DEC-602),
+`engine/uplift/data.py` (what may be a feature, DEC-633 to DEC-635) and `engine/uplift/checks.py`:
+treatment column missing or not 0/1, an arm too small, treatment predictable from the features, the
+outcome window not yet elapsed, and a feature dated after the treatment. `POST /uplift/runs` runs
+Phase 1's validation and these six synchronously and answers `409` with both reports (DEC-654).
+`TREATMENT_NOT_RANDOM` can be acknowledged, never loosened per run (DEC-607). An acknowledged run is
+marked not causal in every artefact.
+
+```bash
+.venv/bin/python -m pytest tests/unit/uplift/test_uplift_checks.py tests/unit/uplift/test_uplift_data.py \
+    tests/unit/uplift/test_uplift_config.py -q
+```
+
+#### M41 — Learners, evaluation and the champion rule
+
+`engine/uplift/learners.py` fits an S-, T- or X-learner on LightGBM or AutoGluon.
+`engine/uplift/metrics.py` measures Qini, AUUC, uplift@10/20/30% and deciles on the hold-out, with
+percentile bootstrap intervals drawn within each arm and the model held fixed (DEC-605, DEC-610).
+`engine/uplift/champion.py` keeps Phase 1's shape: beat the champion on the same hold-out by
+`champion_min_improvement_pct`. It also requires the model to be causal with an AUUC lower bound
+above zero (DEC-614). An uplift model fills an empty champion slot only on a use case configured as
+uplift (DEC-609), and never replaces a champion of another metric (DEC-649).
+
+```bash
+.venv/bin/python -m pytest tests/unit/uplift/test_metrics.py tests/unit/uplift/test_champion.py \
+    tests/unit/uplift/test_learners.py -q
+```
+
+#### M42 — Segments, targeting, explanations and actions
+
+`engine/uplift/segments.py` splits customers into persuadables, sure things, lost causes and
+sleeping dogs. Sleeping dogs are never treated (DEC-623). `engine/uplift/policy.py` recommends how
+many to contact within the budget, with the expected incremental conversions the hold-out measured
+at that ranking depth (DEC-604). `engine/uplift/explain.py` gives SHAP of the predicted uplift, exact
+for the X-learner on LightGBM and a stated-fidelity surrogate otherwise (DEC-615, DEC-616).
+`engine/uplift/actions.py` replaces bands with segments on top of Phase 1's unchanged suppression and
+control group (DEC-621). It marks `intended_treatment` so campaign results compare like with like
+(DEC-606, DEC-624).
+
+```bash
+.venv/bin/python -m pytest tests/unit/uplift/test_segments.py tests/unit/uplift/test_policy.py \
+    tests/unit/uplift/test_uplift_actions.py tests/unit/uplift/test_uplift_explain.py -q
+```
+
+#### M43 — Incrementality and off-policy evaluation
+
+`engine/uplift/incrementality.py` measures a finished campaign from an uploaded outcomes file:
+treated rate minus control rate with a Newcombe interval, relative lift, incremental conversions and
+a p-value. Rows whose outcome window has not elapsed are excluded and counted, and "Results available
+on <date>" is shown until one has. `engine/uplift/ope.py` estimates a targeting rule off-policy on
+the randomised hold-out (IPS, SNIPS, doubly robust). `engine/uplift/flow.py` runs uplift training
+and scoring as subclasses of Phase 1's own flows, dispatched by one line in each `Pipeline` entry
+point (DEC-646).
+
+```bash
+.venv/bin/python -m pytest tests/unit/uplift/test_incrementality.py tests/unit/uplift/test_ope.py \
+    tests/integration/uplift -q
+```
+
+#### M44 — The uplift screens
+
+`ui/modules/uplift/`: Setup (upload, treatment picker, train or score, inline refusals with the
+acknowledge button), Running, Model (Qini curve with the random line, AUUC with its interval,
+uplift by decile, an OPE form), Output (four-segment chart, recommended contacts, expected
+incremental conversions, treat list download) and Campaign results. A banner marks every screen
+whose artefacts say `causal: false`, and a missing value is always "—" (DEC-644).
+
+```bash
+make run                       # then open http://localhost:8000/ui/#/uplift
+.venv/bin/python -m pytest tests/unit/uplift/test_uplift_ui.py -q    # the node suites; skipped without node
+```
+
+#### M45 — Documentation, Criteo and hardening
+
+[`docs/UPLIFT.md`](docs/UPLIFT.md) is the guide for marketers and reviewers: uplift against
+propensity, the data contract, the six checks, the segments, how to read the Qini chart and AUUC,
+targeting, campaign results, OPE, the champion rule, what "not causal" means, how to run it, and the
+limits. These include binary treatment and outcome only, and a single-column primary key until Plan
+A's two-column keys reach `main`. The Criteo Uplift use case in
+[`library/criteo-uplift/`](library/criteo-uplift/) is now written for this problem type, but the
+dataset could not be downloaded from this environment, so it stays uninstalled and has no run report
+numbers (DEC-656).
+
+```bash
+make uplift-test               # every Phase 3b suite, slow ones included
+make lint test                 # the gate, as for every phase
+```
+
+```
+engine/uplift/
+├── config.py, contracts.py       # the `uplift:` block and every artefact model (DEC-601 … DEC-603)
+├── data.py, checks.py            # data preparation and the six checks
+├── learners.py, explain.py       # S/T/X meta-learners; TreeSHAP of the predicted uplift
+├── metrics.py, champion.py       # Qini, AUUC, deciles, bootstrap; the uplift champion rule
+├── segments.py, policy.py        # the four segments; the budgeted targeting recommendation
+├── actions.py                    # segments instead of bands, on Phase 1's suppression and control group
+├── incrementality.py, ope.py     # campaign results; off-policy evaluation
+└── flow.py                       # UpliftTrainFlow / UpliftScoreFlow, dispatched by engine.pipeline.uplift_flow_for
+api/routes/uplift.py              # treatment candidates, POST /uplift/runs, artefacts, campaign results, OPE
+ui/modules/uplift/                # Setup, Running, Model, Output and Campaign results screens
+```
+
+Decisions are DEC-600 … DEC-657 in [`docs/DECISIONS.md`](docs/DECISIONS.md). What Phase 3b changed
+above its blocks is announced in [`docs/CROSS_BRANCH_REQUESTS.md`](docs/CROSS_BRANCH_REQUESTS.md).
+
 <!-- ---- END PHASE-3B ---- -->

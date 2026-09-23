@@ -29,10 +29,21 @@ overwritten; the input frame's own `score_field` column, if it has one, is retur
 **`intended_treatment`.** Stage D measures a campaign by comparing treated and control customers,
 and that comparison is only fair between customers the policy treats the *same way*. The column
 marks the selected rows plus the control rows that *would* have been selected had they not been held
-out: persuadables whose uplift is at least the lowest selected uplift. The policy is a threshold on
-the prediction, so both sides of the comparison pass the same threshold, and the control side is a
-random draw - which is what makes treated-minus-control inside `intended_treatment` an unbiased
-estimate of what the campaign caused. With nobody selected, nobody is intended.
+out: persuadables ranked at or above the last selected row. The policy is a threshold on the
+ranking, so both sides of the comparison pass the same threshold, and the control side is a random
+draw - which is what makes treated-minus-control inside `intended_treatment` an unbiased estimate of
+what the campaign caused. With nobody selected, nobody is intended.
+
+**Ties at the cut (DEC-606).** "At or above the last selected row" is a position in one ranking
+(`engine.uplift.policy.ranking`), not a comparison of uplift values. When a coarse model gives a
+block of customers the same uplift and the budget cuts through it, only part of the block is
+treated; comparing it with *every* tied control row would compare different populations. And if
+the part treated were chosen by input order, a file sorted by, say, recency would treat the
+likeliest converters and credit the campaign with their conversions. So ties are broken by a
+run-seeded per-customer hash (`sha256("uplift-tie:{seed}:{key}")`, salted differently from the
+control-group draw so the two are independent): the treated part of a tie block is a random subset
+of it, and the control rows kept are those the same hash ranks inside the cut - the same rule on
+both sides, and order-independent like the control group itself.
 
 `pandas` and `numpy` are imported inside the function bodies, never at module level, so
 `import engine` stays fast.
@@ -40,10 +51,12 @@ estimate of what the campaign caused. With nobody selected, nobody is intended.
 
 from __future__ import annotations
 
+import hashlib
 import time
 from typing import TYPE_CHECKING, Final
 
 from engine.uplift.contracts import SEGMENT_ACTIONS, SEGMENT_LABELS, Segment
+from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger, log_stage
 
 if TYPE_CHECKING:
@@ -61,8 +74,10 @@ __all__ = [
     "INTENDED_TREATMENT_COLUMN",
     "OVER_BUDGET_ACTION",
     "SEGMENT_COLUMN",
+    "TIEBREAK_SALT",
     "TREAT_ACTION",
     "apply_uplift_actions",
+    "tiebreak_keys",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -73,6 +88,9 @@ INTENDED_TREATMENT_COLUMN: Final[str] = "intended_treatment"
 TREAT_ACTION: Final[str] = SEGMENT_ACTIONS[Segment.PERSUADABLE]
 OVER_BUDGET_ACTION: Final[str] = "Don't treat (over budget)"
 BELOW_COST_ACTION: Final[str] = "Don't treat (below cost)"
+
+TIEBREAK_SALT: Final[str] = "uplift-tie"
+"""Prefix of the tie-break hash; differs from the control-group draw's so the two are independent."""
 
 
 def apply_uplift_actions(
@@ -109,7 +127,7 @@ def apply_uplift_actions(
         SUPPRESSED_REASON_COLUMN,
         apply_actions,
     )
-    from engine.uplift.policy import below_cost, recommend_policy
+    from engine.uplift.policy import below_cost, rank_positions, recommend_policy
     from engine.uplift.segments import assign_segments
 
     started = time.perf_counter()
@@ -139,6 +157,7 @@ def apply_uplift_actions(
     eligible = ~suppressed & ~control
 
     policy = config.uplift.policy
+    tiebreak = tiebreak_keys(frame[primary_key], run_id=run_id)
     recommendation, selected = recommend_policy(
         uplift,
         segments,
@@ -148,6 +167,7 @@ def apply_uplift_actions(
         causal=causal,
         observed_top_share=observed_top_share,
         eligible=eligible,
+        tiebreak=tiebreak,
     )
 
     values = np.array([segment.value for segment in segments.tolist()], dtype=object)
@@ -164,8 +184,8 @@ def apply_uplift_actions(
 
     intended = selected.copy()
     if selected.any():
-        lowest = float(uplift[selected].min())
-        intended |= control & persuadable & (uplift >= lowest)
+        positions = rank_positions(uplift, tiebreak)
+        intended |= control & persuadable & (positions <= int(positions[selected].max()))
 
     if bool((sleeping & ((actions == TREAT_ACTION) | intended)).any()):
         raise RuntimeError("A sleeping dog was marked for treatment; refusing to export the actions.")
@@ -188,6 +208,27 @@ def apply_uplift_actions(
     )
     log_stage(_LOGGER, "uplift_actions", rows=len(result), seconds=time.perf_counter() - started)
     return result, recommendation
+
+
+def tiebreak_keys(keys: pd.Series, *, run_id: str) -> np.ndarray:
+    """One run-seeded 64-bit draw per row, from its primary key; orders rows of equal uplift.
+
+    Order-independent by construction, like Phase 1's control-group draw: reordering the file cannot
+    change which of several tied customers is contacted.
+    """
+    import numpy as np
+    import pandas as pd
+
+    salt = f"{TIEBREAK_SALT}:{seed_from(run_id)}:"
+    values = keys.to_numpy()
+    draws = [
+        int.from_bytes(
+            hashlib.sha256((salt + ("" if pd.isna(value) else str(value))).encode("utf-8")).digest()[:8],
+            "big",
+        )
+        for value in values.tolist()
+    ]
+    return np.asarray(draws, dtype=np.uint64)
 
 
 def _numeric(values: pd.Series, name: str) -> np.ndarray:

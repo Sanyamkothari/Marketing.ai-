@@ -194,3 +194,114 @@ test("the Overview gets one link to the uplift index; other modules' screens get
   observed();
   assert.equal(documentApp.main.entry, null);
 });
+
+/** The 409 `POST /uplift/runs` really sends (api/routes/uplift.py `_validation_conflict`): the two
+    reports at the top level, beside an error envelope that is always an object. */
+const REFUSED = {
+  detail: {
+    code: "UPLIFT_VALIDATION_FAILED",
+    message: "This file cannot be used as an experiment yet: TREATMENT_NOT_RANDOM.",
+    path: null,
+  },
+  validation: {
+    schema_version: 1,
+    upload_id: "u9",
+    passed: true,
+    error_count: 0,
+    warning_count: 1,
+    checks: [
+      {
+        code: "LOW_POSITIVE_RATE",
+        severity: "warning",
+        message: "Only a few customers converted.",
+        suggestion: "Check the outcome column.",
+        details: {},
+        acknowledged: false,
+      },
+    ],
+  },
+  uplift_validation: {
+    schema_version: 1,
+    upload_id: "u9",
+    treatment_column: "treatment",
+    passed: false,
+    causal: false,
+    randomness_auc: 0.8821,
+    checks: [
+      {
+        code: "TREATMENT_NOT_RANDOM",
+        severity: "error",
+        message: "Who was treated can be predicted from the customer data.",
+        suggestion: "Use a campaign whose treatment was assigned at random.",
+        details: { auc: 0.8821 },
+        acknowledgeable: true,
+        acknowledged: false,
+      },
+    ],
+  },
+};
+
+test("a real 409 from POST /uplift/runs renders both reports and the acknowledge control", async () => {
+  const controller = await import(new URL("modules/uplift/controller.js", UI));
+  const { ApiError } = await import(new URL("api.js", UI));
+  const { upliftScreenHtml } = await import(new URL("modules/uplift/views.js", UI));
+
+  // The parser, on the exact body shape.
+  const parsed = controller.refusal(new ApiError(409, "UPLIFT_VALIDATION_FAILED", "no", REFUSED));
+  assert.deepEqual(parsed, { validation: REFUSED.validation, upliftValidation: REFUSED.uplift_validation });
+  // The nested fallback still works, and anything that is not a 409 with a report is not a refusal.
+  const nested = { detail: { validation: REFUSED.validation, uplift_validation: REFUSED.uplift_validation } };
+  assert.deepEqual(controller.refusal(new ApiError(409, "X", "no", nested)), parsed);
+  assert.equal(controller.refusal(new ApiError(409, "X", "no", { detail: REFUSED.detail })), null);
+  assert.equal(controller.refusal(new ApiError(422, "X", "no", REFUSED)), null);
+
+  // End to end through the Setup controller: submit, get the 409, render what the state holds.
+  reply("/uplift/runs", 409, REFUSED);
+  const uc = {
+    id: "win-back",
+    name: "Win-back",
+    entity: "customer",
+    marker: "P",
+    stars: "★",
+    ai_type: "predictive",
+    lifecycle_stage: "Retention",
+  };
+  let renders = 0;
+  const setup = controller.createSetupController(uc, () => (renders += 1));
+  Object.assign(setup.state, {
+    mode: "train",
+    upload: {
+      upload_id: "u9",
+      profile: {
+        file_name: "c.csv",
+        row_count: 10,
+        column_count: 4,
+        file_size_bytes: 100,
+        columns: ["customer_id", "treatment", "converted", "visits"].map((name) => ({ name })),
+      },
+    },
+    pk: "customer_id",
+    target: "converted",
+    treatment: "treatment",
+  });
+  const listeners = {};
+  const form = { addEventListener: (event, fn) => (listeners[event] = fn) };
+  setup.bind({ querySelector: (sel) => (sel === "#u-setup" ? form : null), querySelectorAll: () => [] });
+  calls.length = 0;
+  listeners.submit({ preventDefault() {} });
+  await new Promise((resolve) => setTimeout(resolve, 20));
+  assert.deepEqual(
+    calls.map(([method, path]) => [method, path]),
+    [["POST", "/uplift/runs"]],
+  );
+  const s = setup.state;
+  assert.equal(s.submitError, null, "a refusal is not a generic error");
+  assert.deepEqual(s.upliftValidation, REFUSED.uplift_validation);
+  assert.deepEqual(s.validation, REFUSED.validation);
+  assert.ok(renders > 0);
+  const html = upliftScreenHtml(uc, s);
+  assert.match(html, /data-uack="TREATMENT_NOT_RANDOM"/);
+  assert.match(html, /Who was treated can be predicted from the customer data/);
+  assert.match(html, /Only a few customers converted/);
+  assert.ok(!/undefined|NaN/.test(html));
+});

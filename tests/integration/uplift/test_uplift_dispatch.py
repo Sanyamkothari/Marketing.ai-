@@ -8,6 +8,7 @@ uplift configuration (train), or a score run whose model is recorded as AUUC, is
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 from typing import Any, cast
 
@@ -108,3 +109,26 @@ def test_a_score_run_follows_the_metric_of_the_model_it_scores(pipeline: Pipelin
     assert flow(None) is None  # no champion yet: Phase 1 reports CHAMPION_NOT_FOUND
     pipeline.registry.promote("m_uplift", by="test", note="uplift champion")
     assert isinstance(flow(None), UpliftScoreFlow)
+
+
+def test_only_a_use_case_configured_as_uplift_owns_an_empty_champion_slot(
+    tmp_path: Path, config_root: Path
+) -> None:
+    """DEC-609: an uplift run chosen per run must not crown itself on a classification use case."""
+    from engine.uplift.flow import uplift_owns_champion_slot
+
+    assert uplift_owns_champion_slot(resolve_config(USE_CASE)) is False  # classification
+    assert uplift_owns_champion_slot(resolve_config(USE_CASE, {"problem_type": "uplift"})) is False
+    root = tmp_path / "configs"
+    shutil.copytree(config_root, root)
+    path = root / "use_cases" / "win_back_campaign.yaml"
+    text = path.read_text(encoding="utf-8")
+    choices = "model_search:\n  metric_choices: [roc_auc, recall, f1]"
+    assert choices in text
+    path.write_text(
+        text.replace(
+            choices, "problem_type: uplift\n\nmodel_search:\n  metric: auuc\n  metric_choices: [auuc]"
+        ),
+        encoding="utf-8",
+    )
+    assert uplift_owns_champion_slot(resolve_config(USE_CASE, root=root)) is True

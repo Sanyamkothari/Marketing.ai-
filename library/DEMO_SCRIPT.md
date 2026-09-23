@@ -150,9 +150,10 @@ CC BY-NC-SA 4.0: **non-commercial**. It may not appear in a sales deck, a custom
 shipped product.
 
 If the conversation turns to incrementality, use it verbally: *"Ranking who will convert and
-ranking who converts because of the ad are different questions. The second is Phase 3b, the
-dataset and the mapping are already prepared in the repository, and we are not going to show you a
-propensity model and call it uplift."* See [`criteo-uplift/README.md`](criteo-uplift/README.md).
+ranking who converts because of the ad are different questions. The second is uplift modelling
+(Phase 3b); the dataset is mapped and its uplift use case is written, and we are not going to show
+you a propensity model and call it uplift."* Uplift itself can be shown on synthetic data, never on
+this dataset. See [`criteo-uplift/README.md`](criteo-uplift/README.md).
 
 ---
 

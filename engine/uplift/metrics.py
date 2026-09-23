@@ -93,6 +93,7 @@ __all__ = [
     "evaluate_uplift",
     "qini_coefficient",
     "qini_points",
+    "top_rows",
     "uplift_at_fraction",
 ]
 
@@ -186,6 +187,15 @@ def _require_both_arms(ranked: _Ranked) -> None:
             f"Uplift needs treated and control customers; the data has {ranked.treated_rows} "
             f"treated and {ranked.control_rows} control rows."
         )
+
+
+def top_rows(fraction: float, n: int) -> int:
+    """How many rows "the top `fraction`" of `n` is: `ceil(fraction·n)`, at least 1.
+
+    Immune to `0.1·30 = 3.0000000000000004`. Public so that every "top X%" in the uplift package
+    (uplift@k here, the OPE rule in `engine.uplift.ope`) counts the same rows.
+    """
+    return _top_rows(fraction, n)
 
 
 def _top_rows(fraction: float, n: int) -> int:

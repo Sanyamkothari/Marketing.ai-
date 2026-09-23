@@ -24,7 +24,7 @@ happened, the table says so.
 | 3 | [UCI Online Retail](../library/online-retail/) | E-commerce | `retail-win-back` | 1,463 | PR-AUC **0.4975** (baseline 0.4985) — **loses** | 1.33× | An invoice log alone cannot predict who comes back; the engine ran the whole path and returned an honest no. |
 | 4 | [Health Insurance Cross-Sell](../library/health-insurance-cross-sell/) | Insurance | `insurance-cross-sell` | 381,109 | ROC-AUC **0.8581** (baseline 0.8380) | **3.23×** | Half the book is not worth a call; "already insured" is 55 % of the model on its own. |
 | 5 | [UCI Credit Default](../library/uci-credit-default/) | Banking | `card-default-propensity` | 30,000 | ROC-AUC **0.7957** (baseline 0.7279) | **3.25×** | The widest win over a linear baseline in the library, +0.068: last month's payment status is half the answer. |
-| 6 | [Criteo Uplift](../library/criteo-uplift/) | Ad-tech | `criteo-uplift` — **planned** | 13,979,592 | **not run** | — | Reserved for Phase 3b. The data is also unreachable from this environment, and both facts are recorded rather than papered over. |
+| 6 | [Criteo Uplift](../library/criteo-uplift/) | Ad-tech | `criteo-uplift` — **planned** | 13,979,592 | **not run** | — | Configured for Phase 3b's `uplift` problem type since 2026-09-23, but the data is still unreachable from this environment (re-tested that day), so nothing was trained and nothing is reported. |
 
 Every run used **engine defaults** — `strategy: balanced`, `time_limit_minutes: 30`,
 `tuning_trials: 50`, the default candidate pool — with no overrides, except the second bank run,
@@ -80,6 +80,18 @@ five public files from four industries — telecom, banking, e-commerce and insu
 ingested, validated, prepared, split, trained, evaluated, explained, banded and exported. All five
 ran end to end on the first attempt with no overrides at all. That is the claim, and it held. The
 sixth, Criteo Uplift, was not run for reasons that have nothing to do with the engine (DEC-406).
+
+**Criteo Uplift after Phase 3b (2026-09-23).** Of the two reasons DEC-406 recorded, the first — the
+question is uplift and the engine could only answer propensity — is gone: Phase 3b added the
+`uplift` problem type ([`docs/UPLIFT.md`](UPLIFT.md)), and
+[`library/criteo-uplift/use_case.yaml`](../library/criteo-uplift/use_case.yaml) now uses it
+(`problem_type: uplift`, `uplift.treatment_column: treatment`, outcome `conversion`, X-learner on
+LightGBM, `exposure` and `visit` excluded). It resolves with the engine's own config loader. The
+second reason is unchanged: on 2026-09-23 `fetch.py` and `curl` were refused by the egress proxy
+(403) for `go.criteo.net`, `huggingface.co` and `ailab.criteo.com`, so there is still no sample, no
+run and no number. The use case therefore stays **planned** and uninstalled, its tests keep pinning
+that, and plan B's Criteo acceptance criterion (an AUUC interval above zero on the Criteo sample)
+is **not met here**. The licence is still CC BY-NC-SA 4.0, non-commercial.
 
 **The one blocker is a test, not the engine.** `load_industry`, `list_industries` and every loader
 already take a config root and already validate each file on its own (DEC-038). The engine is

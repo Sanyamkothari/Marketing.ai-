@@ -153,6 +153,26 @@ def test_policy_from_rule_top_share_uses_a_stable_ranking() -> None:
     assert policy.tolist() == [1.0, 1.0, 0.0]
 
 
+@pytest.mark.parametrize(("share", "rows"), [(0.07, 100), (0.07, 5000), (0.14, 5000), (0.07, 6000)])
+def test_policy_from_rule_counts_the_top_share_exactly_as_the_metrics_do(share: float, rows: int) -> None:
+    # 0.07 × 100 is 7.000000000000001 in floating point: a bare ceil treated 8 rows, uplift@7% 7.
+    from engine.uplift.metrics import top_rows
+
+    policy, _ = policy_from_rule(np.linspace(1.0, 0.0, rows), top_share=share)
+    assert int(policy.sum()) == top_rows(share, rows) == round(share * rows)
+
+
+def test_policy_from_rule_matches_the_metrics_rounding_on_every_share_and_size() -> None:
+    from engine.uplift.metrics import top_rows
+
+    for rows in (1_000, 5_000, 6_000, 30_000):
+        uplift = np.linspace(1.0, 0.0, rows)
+        for hundredths in range(1, 100):
+            share = hundredths / 100
+            policy, _ = policy_from_rule(uplift, top_share=share)
+            assert int(policy.sum()) == top_rows(share, rows), (share, rows)
+
+
 def test_policy_from_rule_min_uplift_and_both() -> None:
     uplift = np.array([0.1, 0.3, 0.02, -0.2, 0.05])
     policy, description = policy_from_rule(uplift, min_uplift=0.05)

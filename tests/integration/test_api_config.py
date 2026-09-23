@@ -124,8 +124,9 @@ def test_problem_type_choices_disable_the_later_phases(client: TestClient) -> No
         "regression": True,
         "forecasting": False,
         "clustering": False,
-        # Phase 3b: uplift is a problem type of its own, enabled in the catalog (DEC-601)
-        "uplift": True,
+        # Phase 3b: uplift is a problem type of its own (DEC-601), but not a Phase 1 Setup choice:
+        # its runs start from #/uplift, where the treatment is picked and checked first (DEC-608)
+        "uplift": False,
     }
     disabled = [choice for choice in body.setup.problem_type_choices if not choice.enabled]
     assert all(choice.help for choice in disabled)

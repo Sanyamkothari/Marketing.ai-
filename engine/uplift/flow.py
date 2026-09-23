@@ -47,6 +47,17 @@ ROC AUC; Phase 1 answers the same situation (`METRIC_MISMATCH`) by keeping the c
 candidate, and so does this flow. `POST /models/{id}/promote` is the deliberate override, and a
 scoring run can always name the uplift version it wants.
 
+**Why an empty slot is not always filled either (DEC-609).** The same single slot decides what a
+Phase 1 scoring run with no model named scores (`engine.pipeline.uplift_flow_for`), and the frozen
+Phase 1 rule never promotes a ROC AUC challenger over an AUUC champion (`METRIC_MISMATCH`). So if an
+uplift run on a use case *configured* as classification crowned itself because nobody held the
+slot, that use case's Phase 1 scoring would silently switch to uplift and its classification models
+could never be promoted again. The flow therefore auto-promotes into an empty slot only when the
+use case itself is configured as `uplift` (`uplift_owns_champion_slot`); a run that chose uplift
+through a per-run override keeps its model a candidate, which the uplift screens and a scoring run
+that names it use exactly as they would a champion. Once a person has handed the slot to an uplift
+model on the Models page, later uplift runs are compared with it under the uplift champion rule.
+
 `numpy` and `pandas` are imported inside function bodies, as everywhere in the engine.
 """
 
@@ -114,7 +125,7 @@ if TYPE_CHECKING:
     import numpy.typing as npt
     import pandas as pd
 
-    from engine.config import UseCaseConfig
+    from engine.config import ResolvedConfig, UseCaseConfig
     from engine.contracts import ScoringSummary, ValidationReport
     from engine.storage import Storage
     from engine.uplift.champion import UpliftChampionDecision
@@ -143,6 +154,7 @@ __all__ = [
     "model_display_name",
     "read_holdout",
     "scores_columns",
+    "uplift_owns_champion_slot",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -262,6 +274,19 @@ def _observed_top_share(
         return bootstrap_uplift_at(uplift, t, y, fraction, samples=samples, seed=seed)
 
     return observed
+
+
+def uplift_owns_champion_slot(resolved: ResolvedConfig) -> bool:
+    """Whether an uplift model may take the use case's EMPTY champion slot by itself.
+
+    Only when the use case (or the engine defaults) says `problem_type: uplift` - not when a run's
+    overrides switched to uplift, which is how the uplift Setup screen starts a run on a use case
+    configured for classification. See the module docstring (DEC-609).
+    """
+    return (
+        resolved.config.problem_type is ProblemType.UPLIFT
+        and resolved.sources.get("problem_type") != "override"
+    )
 
 
 def _auuc_line(evaluation: UpliftEvaluation) -> str:
@@ -697,7 +722,14 @@ class UpliftTrainFlow(_TrainFlow):
         champion = ctx.registry.get_champion(ctx.config.id)
         champion_evaluation, unavailable = self._rescore_uplift_champion(champion)
         decision: UpliftChampionDecision | None = None
-        if champion is None or champion_evaluation is not None:
+        if champion is None and not uplift_owns_champion_slot(ctx.resolved):
+            reason = (
+                "Not promoted: this use case is not configured as uplift (this run chose uplift "
+                "per run), and its one champion slot stays with the problem type it is configured "
+                "for; promote this version on the Models page to hand the slot over deliberately, "
+                "or name it when scoring"
+            )
+        elif champion is None or champion_evaluation is not None:
             decision = decide_uplift_champion(
                 evaluation,
                 champion_evaluation,

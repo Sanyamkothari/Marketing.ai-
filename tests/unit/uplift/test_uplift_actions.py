@@ -30,6 +30,7 @@ from engine.uplift.actions import (
     SEGMENT_COLUMN,
     TREAT_ACTION,
     apply_uplift_actions,
+    tiebreak_keys,
 )
 from engine.uplift.contracts import (
     SEGMENT_ACTIONS,
@@ -230,6 +231,67 @@ def test_intended_treatment_is_the_selected_rows_plus_the_control_rows_that_woul
     assert not result.loc[result["suppressed_reason"].notna(), INTENDED_TREATMENT_COLUMN].any()
     below_cut = result["control_group"] & (result["uplift"] < lowest)
     assert not result.loc[below_cut, INTENDED_TREATMENT_COLUMN].any()
+
+
+def test_a_tie_block_cut_by_the_budget_is_split_the_same_way_in_both_arms() -> None:
+    """Every persuadable has the same uplift, and the file is sorted by how likely each converts.
+
+    With ties kept in input order the budget treated the top of the file and every tied control
+    row was "intended", so a campaign with no effect at all measured a lift of 28 points
+    (p = 1e-36). The run-seeded tie-break makes both arms random draws from the same block.
+    """
+    from engine.uplift.incrementality import measure_incrementality
+
+    rows = 10_000
+    rng = np.random.default_rng(3)
+    latent = np.sort(rng.uniform(0.0, 0.6, rows))[::-1]
+    frame = pd.DataFrame(
+        {
+            "customer_id": [f"C-{index:05d}" for index in range(rows)],
+            "uplift": np.full(rows, 0.10),
+            "p_treated": np.full(rows, 0.3),
+            "p_control": np.full(rows, 0.2),
+            "marketing_opt_in": True,
+        }
+    )
+    result, _ = run(frame, use_case(control_fraction=0.10, opt_out=False, policy={"budget_contacts": 1_000}))
+    intended = result[INTENDED_TREATMENT_COLUMN].to_numpy(dtype=bool)
+    control = result["control_group"].to_numpy(dtype=bool)
+    treated = intended & ~control
+    held_out = intended & control
+    assert int(treated.sum()) == 1_000
+    # The same share of the block on both sides: 1,000 of 9,000 eligible, and about 1/9 of 1,000.
+    assert 70 <= int(held_out.sum()) <= 150
+    assert abs(latent[treated].mean() - latent[held_out].mean()) < 0.05
+
+    outcomes = pd.DataFrame(
+        {"customer_id": frame["customer_id"], "converted": (rng.random(rows) < latent).astype(int)}
+    )
+    report = measure_incrementality(
+        result,
+        outcomes,
+        run_id=RUN_ID,
+        primary_key="customer_id",
+        outcome_column="converted",
+        intended_column=INTENDED_TREATMENT_COLUMN,
+        treatment_time=datetime(2026, 1, 1, tzinfo=UTC),
+        as_of=NOW,
+    )
+    lift = report.absolute_lift
+    assert lift is not None and lift.ci_low is not None and lift.ci_high is not None
+    assert lift.ci_low <= 0.0 <= lift.ci_high, "no effect was planted, so none may be measured"
+
+
+def test_the_tie_break_does_not_depend_on_the_file_order() -> None:
+    frame = scored(600)
+    frame["uplift"] = np.where(frame["uplift"] >= 0.02, 0.10, frame["uplift"])  # one big tie block
+    config = use_case(control_fraction=0.2, policy={"budget_contacts": 40})
+    forward, _ = run(frame, config)
+    backward, _ = run(frame.iloc[::-1].reset_index(drop=True), config)
+    backward = backward.set_index("customer_id").loc[forward["customer_id"]].reset_index()
+    for column in ("action", INTENDED_TREATMENT_COLUMN, "control_group"):
+        assert forward[column].tolist() == backward[column].tolist(), column
+    assert tiebreak_keys(frame["customer_id"], run_id=RUN_ID).dtype == np.uint64
 
 
 def test_with_nobody_selected_nobody_is_intended() -> None:

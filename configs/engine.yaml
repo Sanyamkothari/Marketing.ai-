@@ -38,7 +38,7 @@ catalog:
     regression:            {label: "Regression (a number)",              enabled: true}
     forecasting:           {label: "Forecasting (a number over time)",   enabled: false}   # plan §12: later
     clustering:            {label: "Clustering (no target)",             enabled: false}   # plan §12: later
-    uplift:                {label: "Uplift (who changes because of your action)", enabled: true}   # Phase 3b (DEC-601): needs a randomly assigned treatment column
+    uplift:                {label: "Uplift (who changes because of your action)", enabled: false}  # Phase 3b (DEC-601, DEC-608): needs a randomly assigned treatment column; not a Phase 1 Setup choice - uplift runs start at #/uplift (POST /uplift/runs), whose checks run before the run does
 
   ai_types:                             # id -> {marker on the overview, stars, label} (prototype TYPES verbatim)
     predictive: {marker: "P", stars: "★",      label: "Predictive AI"}

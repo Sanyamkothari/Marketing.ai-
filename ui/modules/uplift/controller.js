@@ -32,12 +32,19 @@ async function upliftRuns(useCaseId) {
 }
 
 /**
- * The body of a 409 from `POST /uplift/runs`. The contract puts both reports at the top level;
- * FastAPI's `HTTPException` would nest them under `detail`, so both shapes are read.
+ * The two reports of a 409 from `POST /uplift/runs`, or `null` when the error is anything else.
+ *
+ * The API sends `{detail: {code, message, path}, validation, uplift_validation}`: the reports sit at
+ * the TOP level, beside an error envelope that is always an object. So the top level is read first;
+ * `detail` is only a fallback, for a server that nests the reports inside it (as FastAPI's
+ * `HTTPException` would). Reading `detail` first dropped every real refusal: the envelope has no
+ * report, so the Setup screen never showed either report or the acknowledge control.
  */
-function refusal(error) {
+export function refusal(error) {
   if (!(error instanceof ApiError) || error.status !== 409 || !error.body) return null;
-  const body = error.body.detail && typeof error.body.detail === "object" ? error.body.detail : error.body;
+  const top = error.body;
+  const nested = top.detail && typeof top.detail === "object" ? top.detail : {};
+  const body = top.validation || top.uplift_validation ? top : nested;
   if (!body.validation && !body.uplift_validation) return null;
   return { validation: body.validation || null, upliftValidation: body.uplift_validation || null };
 }

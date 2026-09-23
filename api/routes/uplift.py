@@ -185,8 +185,8 @@ def create_uplift_run(
     """Phase 1's checks and the six uplift checks, synchronously; `409` with both reports, or `202`."""
     from engine.uplift.checks import run_uplift_checks
 
-    use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
-    resolved = resolve_config(body.use_case, _uplift_overrides(body), root=root)
+    configured = use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before any read
+    resolved = resolve_config(body.use_case, _uplift_overrides(body, configured.problem_type), root=root)
     config = resolved.config
     catalog = get_catalog(root)
     upload = load_upload(storage, body.upload_id)
@@ -246,15 +246,21 @@ def create_uplift_run(
     return RunCreatedResponse(run_id=record.run_id)
 
 
-def _uplift_overrides(body: UpliftRunRequest) -> dict[str, Any]:
+def _uplift_overrides(body: UpliftRunRequest, configured: ProblemType) -> dict[str, Any]:
     """The caller's overrides, with the two that make this an uplift run applied last.
 
     `problem_type` goes last so a stray override cannot turn an uplift request into something else;
     `engine.config` normalises the nested and dotted spellings together (DEC-039 re-derives the
-    metric for the new problem type, so `model_search.metric` becomes `auuc`).
+    metric for the new problem type, so `model_search.metric` becomes `auuc`). On a use case that is
+    already *configured* as uplift the problem type is not overridden at all - any caller override
+    of it is dropped instead - so the run records it as the use case's own setting, which is what
+    lets the uplift model take the use case's empty champion slot (DEC-609).
     """
     overrides: dict[str, Any] = dict(body.overrides)
-    overrides["problem_type"] = ProblemType.UPLIFT.value
+    if configured is ProblemType.UPLIFT:
+        overrides.pop("problem_type", None)
+    else:
+        overrides["problem_type"] = ProblemType.UPLIFT.value
     if body.treatment_column is not None:
         overrides["uplift.treatment_column"] = body.treatment_column
     return overrides

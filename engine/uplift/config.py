@@ -18,6 +18,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "UPLIFT_OVERRIDABLE_PATHS",
+    "UPLIFT_RUN_LOCKED_PATHS",
     "UpliftBaseModel",
     "UpliftConfig",
     "UpliftLearner",
@@ -151,8 +152,26 @@ def uplift_agent_editable_paths(prefix: str = "uplift") -> dict[str, bool]:
     return paths
 
 
-UPLIFT_OVERRIDABLE_PATHS: Final[frozenset[str]] = frozenset(uplift_agent_editable_paths())
-"""Every uplift leaf may be set per run: the treatment column is chosen at Setup like the target.
+UPLIFT_RUN_LOCKED_PATHS: Final[frozenset[str]] = frozenset({"uplift.randomness_auc_max"})
+"""Uplift leaves a run may NOT override: they decide whether a result may be called causal (DEC-607).
+
+`randomness_auc_max` is the TREATMENT_NOT_RANDOM threshold. Were it overridable per run, a request
+could raise it to 1.0 and a targeted campaign would pass the check and be reported `causal: true` -
+the one outcome plan B §4 forbids ("non-random assignment -> refuse to call it causal"). The honest
+way past the check is to acknowledge it (`validation.acknowledged: ["TREATMENT_NOT_RANDOM"]`), which
+runs the model and marks every artefact not causal. The threshold stays settable in the use-case
+file, where changing it is a reviewed configuration change rather than a request field.
+
+The arm-size floors (`min_arm_rows`, `min_arm_positives`) stay overridable: a small arm widens every
+bootstrap interval, so the champion rule (AUUC lower bound above zero) already refuses what a small
+sample cannot show, and nothing about a small arm can make non-random data look random.
+"""
+
+UPLIFT_OVERRIDABLE_PATHS: Final[frozenset[str]] = (
+    frozenset(uplift_agent_editable_paths()) - UPLIFT_RUN_LOCKED_PATHS
+)
+"""Every uplift leaf but the locked ones may be set per run: the treatment column is chosen at Setup
+like the target.
 
 `engine.config.EXTRA_OVERRIDABLE_PATHS` includes these; being overridable by a *person* for one run
 is a different permission from being editable by an *agent* (see `uplift_agent_editable_paths`).
