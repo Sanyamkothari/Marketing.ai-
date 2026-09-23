@@ -21,6 +21,21 @@ export function chooseIndustry(payload, wanted) {
 export const industryHref = (payload, id) =>
   id === payload.default_industry ? "#/" : `#/industry/${encodeURIComponent(id)}`;
 
+/**
+ * Where a use case's screens lead back to, as `{ href, label }`: the journey of the industry file
+ * that lists it, among its available and planned cards alike, so a planned card's 404 still goes
+ * back to the journey it was opened from. Industries are searched in the order the API lists them,
+ * default first, so a use case two files share belongs to the default journey. One that no file
+ * lists goes back to the default journey; null only when there is no industry at all.
+ */
+export function journeyFor(payload, useCaseId) {
+  const industries = (payload && payload.industries) || [];
+  const lists = (industry) =>
+    (industry.stages || []).some((stage) => (stage.use_cases || []).some((u) => u.id === useCaseId));
+  const owner = industries.find(lists) || chooseIndustry(payload || {}, null);
+  return owner ? { href: industryHref(payload, owner.id), label: owner.journey_label } : null;
+}
+
 function industrySelect(payload, current) {
   const industries = payload.industries || [];
   if (industries.length < 2) return "";

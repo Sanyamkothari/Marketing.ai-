@@ -67,7 +67,7 @@ sceptically. Five entries were written in
 
 | Entry (2026-09-22, from `library-datasets`) | What | Owner | Blocked the library? |
 |---|---|---|---|
-| *two assertions forbid a second industry* | `test_industries_list_and_telecom_loads` pins the config directory to exactly one industry, and `test_industry_available_entries_have_files_and_matching_stage_names` pins the telecom file to listing every shipped use case. So no second industry and no further use case can be added to `configs/`. | `tests/` | **Yes** — see DEC-400; resolved by DEC-098 |
+| *two assertions forbid a second industry* | `test_industries_list_and_telecom_loads` pins the config directory to exactly one industry, and `test_industry_available_entries_have_files_and_matching_stage_names` pins the telecom file to listing every shipped use case. So no second industry and no further use case can be added to `configs/`. | `tests/` | **Yes** — see DEC-400; resolved by DEC-085 |
 | *two PII detectors that disagree* | `prepare` has a second, looser PII detector than `ingest`; its phone-number regex matches ISO dates, so `snapshot_date` was redacted with nothing in the validation report to say so. | `engine/` | No |
 | *a template column name cannot contain a dot* | `emp.var.rate` and `default.payment.next.month` must be renamed before a use case can carry a template. | `engine/` | No |
 | *`threshold.mode: auto` can call every row positive* | On a weak model at a ~50 % base rate the F1-maximising threshold gives recall 1.0 and specificity 0.0, which reads as a triumph and is no decision at all. | `engine/` | No |
@@ -87,7 +87,7 @@ perfectly happy with four industries; two test assertions were not. Until they w
 library's configs sat in `library/configs/` — a second root the engine already supports, with
 `engine.yaml` symlinked so there was nothing to drift (DEC-400).
 
-**Resolved in Plan A M38 (DEC-098, ruling D3).** The two tests now validate every industry file
+**Resolved in Plan A M38 (DEC-085, ruling D3).** The two tests now validate every industry file
 instead of asserting there is exactly one, and the move was exactly what was promised: `git mv` of
 the four industry files into `configs/industries/` and the four use-case files into
 `configs/use_cases/`, then `python -m scripts.gen_templates`, which wrote the same eight template

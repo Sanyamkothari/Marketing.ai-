@@ -4,7 +4,7 @@ Which dataset to show to whom, and what to click. Every number quoted below is i
 `run_report.md`; none of it is a forecast.
 
 **Before you start.** `python library/<dataset>/fetch.py` for the dataset you are showing, so the
-prepared file exists. Every dataset's use case ships in the repository's own `configs/` (DEC-098),
+prepared file exists. Every dataset's use case ships in the repository's own `configs/` (DEC-085),
 so the overview's industry selector reaches all of them and no `--config-root` is needed.
 **Never demo Criteo Uplift — it is CC BY-NC-SA, non-commercial.**
 

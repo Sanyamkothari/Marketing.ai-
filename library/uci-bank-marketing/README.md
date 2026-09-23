@@ -16,7 +16,7 @@ The question is the one every outbound campaign asks: *which client is worth cal
 | Primary key | `client_id` (derived, see below) |
 | Target | `y`, `yes` / `no`; 4,640 `yes` (11.3 %) |
 | Time column | none usable |
-| Config root | `configs`, the repository's own (DEC-098) |
+| Config root | `configs`, the repository's own (DEC-085) |
 
 ## What the target means
 

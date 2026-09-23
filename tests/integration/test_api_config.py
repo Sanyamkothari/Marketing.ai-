@@ -49,7 +49,7 @@ def test_healthz(client: TestClient) -> None:
 
 
 def test_industries_validates_and_lists_five_stages_in_order(client: TestClient) -> None:
-    """Telecom's journey, opened by default; every other industry file is listed after it (DEC-098)."""
+    """Telecom's journey, opened by default; every other industry file is listed after it (DEC-085)."""
     response = client.get("/industries")
     assert response.status_code == 200
     body = IndustriesResponse.model_validate(response.json())
@@ -71,7 +71,7 @@ def test_industries_legend_has_three_entries_with_stars(client: TestClient) -> N
 
 
 def test_every_industry_file_is_a_journey_the_overview_can_select(client: TestClient) -> None:
-    """One file per industry (DEC-098): each is listed once, in its own stage order, with its cards."""
+    """One file per industry (DEC-085): each is listed once, in its own stage order, with its cards."""
     body = IndustriesResponse.model_validate(client.get("/industries").json())
     ids = [industry.id for industry in body.industries]
     assert len(ids) == len(set(ids)) > 1

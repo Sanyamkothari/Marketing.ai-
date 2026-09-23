@@ -17,6 +17,7 @@ import {
 } from "./api.js";
 import {
   EM_DASH,
+  backLink,
   dash,
   errorBox,
   esc,
@@ -622,7 +623,7 @@ export function useCaseHtml(uc, s) {
     s.view === "running" ? runningHtml(uc, s) : s.view === "results" ? resultsHtml(uc, s) : setupHtml(uc, s);
   return `<main class="screen t-${esc(uc.marker)}">
     ${pageHead(
-      `<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">${esc(
+      `${backLink(uc)}<h1 class="h1">${esc(
         uc.name,
       )}</h1><p class="desc">${esc(uc.description)}</p><div class="chips">${stageChip(
         uc.lifecycle_stage,

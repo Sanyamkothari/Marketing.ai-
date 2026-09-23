@@ -2,8 +2,8 @@
 // across a reload and nothing is rendered from a value the API did not send.
 
 import { ApiError, getArtefacts, getIndustries, getRun, getRuns, scoresUrl, getUseCase } from "./api.js";
-import { errorBox, esc, pageHead } from "./dom.js";
-import { bindOverview, overviewHtml } from "./overview.js";
+import { backLink, errorBox, esc, pageHead } from "./dom.js";
+import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
 import { PAGE_ARTEFACTS, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
 import { resolveRoute } from "./modules/router.js";
@@ -20,13 +20,15 @@ async function allIndustries() {
 
 /**
  * `GET /use-cases/{id}` carries the marker and the stars but not the wording beside them; the
- * industry legend is where that lives, so one cached `GET /industries` supplies it.
+ * industry legend is where that lives, so one cached `GET /industries` supplies it. The same
+ * response names the journey the use case belongs to, which its back link and breadcrumb return to.
  */
 async function useCase(id) {
   const [uc, payload] = await Promise.all([getUseCase(id), allIndustries()]);
   const legend = ((payload.industries || [])[0] || {}).legend || [];
   const entry = legend.find((l) => l.ai_type === uc.ai_type);
-  return entry ? { ...uc, type_label: entry.label } : uc;
+  const journey = journeyFor(payload, uc.id);
+  return { ...uc, ...(entry ? { type_label: entry.label } : {}), ...(journey ? { journey } : {}) };
 }
 
 const controllers = new Map();
@@ -56,12 +58,21 @@ function paint(html, after) {
 
 const screen = (inner) => `<main class="screen">${pageHead(inner)}</main>`;
 
-function failure(error) {
+/**
+ * A use case that could not be loaded (a planned card's 404, say) still goes back to the journey it
+ * was opened from; `parts` is the route that failed. When `GET /industries` is what failed, the link
+ * is the bare overview.
+ */
+async function failure(error, parts) {
   const api = error instanceof ApiError ? error : new ApiError(0, "UI_ERROR", String(error), null);
+  const payload = await allIndustries().catch(() => null);
+  const journey = payload && journeyFor(payload, parts[0] === "uc" ? parts[1] : null);
+  const back = backLink(journey ? { journey } : null);
   paint(
-    screen(
-      `<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">This screen could not be loaded</h1>`,
-    ).replace("</main>", `${errorBox(api)}</main>`),
+    screen(`${back}<h1 class="h1">This screen could not be loaded</h1>`).replace(
+      "</main>",
+      `${errorBox(api)}</main>`,
+    ),
   );
 }
 
@@ -144,7 +155,7 @@ async function render() {
     }
     document.title = `${id} · Marketing AI`;
   } catch (error) {
-    failure(error);
+    await failure(error, parts);
   }
 }
 

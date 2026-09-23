@@ -27,7 +27,7 @@ README.
 
 | Path | What it is |
 |---|---|
-| [`../configs/`](../configs/) | not in this directory any more. The library's four industry files and four use-case files ship in the repository's own [`configs/industries/`](../configs/industries/) and [`configs/use_cases/`](../configs/use_cases/), and their templates are generated into [`templates/`](../templates/) with everyone else's. They sat in a second root, `library/configs/`, until a second industry was allowed in `configs/` (DEC-400, then DEC-098). |
+| [`../configs/`](../configs/) | not in this directory any more. The library's four industry files and four use-case files ship in the repository's own [`configs/industries/`](../configs/industries/) and [`configs/use_cases/`](../configs/use_cases/), and their templates are generated into [`templates/`](../templates/) with everyone else's. They sat in a second root, `library/configs/`, until a second industry was allowed in `configs/` (DEC-400, then DEC-085). |
 | [`run_engine.py`](run_engine.py) | the harness behind every `run_report.md`. It uploads a CSV, calls `Pipeline.run_train` exactly the way `POST /runs` does, and writes a `results.json` holding the validation findings, leaderboard, test metrics, baseline comparison, decile lift, top features and wall clock. Every number in every report comes out of it. |
 | [`tests/`](tests/) | one pytest module per dataset, opt-in (DEC-409) |
 | [`DEMO_SCRIPT.md`](DEMO_SCRIPT.md) | one page: which dataset to show to which audience, and what to click |
@@ -49,7 +49,7 @@ python -m pytest library/tests            # about two minutes for all six
 python -m pytest library/tests -k telco
 ```
 
-Every dataset's use case ships in the repository's own `configs/` (DEC-098), so no
+Every dataset's use case ships in the repository's own `configs/` (DEC-085), so no
 `--config-root` is needed. The flag is still there for trying a use case from a root of your own.
 
 The tests are **not** in pytest's default `testpaths`, so `make test` does not run them. Every

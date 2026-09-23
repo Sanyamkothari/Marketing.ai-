@@ -113,7 +113,7 @@ def shipped_industry_files() -> list[Path]:
 def test_industries_list_and_telecom_loads() -> None:
     """Every industry file is listed and loads with its cross-file rules; telecom is still the demo.
 
-    Pinned to exactly `("telecom",)` until DEC-098 (Plan A ruling D3): one file per industry, and
+    Pinned to exactly `("telecom",)` until DEC-085 (Plan A ruling D3): one file per industry, and
     the test validates every file rather than asserting there is only one.
     """
     industries = list_industries()
@@ -143,7 +143,7 @@ def test_industry_stage_markers() -> None:
 def test_industry_available_entries_have_files_and_matching_stage_names() -> None:
     """Every industry's available entries, and together they reach every shipped use case.
 
-    Telecom used to have to list every file in `configs/use_cases/` itself; since DEC-098 (D3) the
+    Telecom used to have to list every file in `configs/use_cases/` itself; since DEC-085 (D3) the
     union over all industry files must, so no use case is shipped that no overview can open.
     """
     available: list[str] = []

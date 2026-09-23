@@ -16,7 +16,7 @@ defaulted the month after. The payment-propensity question, on real repayment hi
 | Primary key | `ID` |
 | Target | `default_payment_next_month`, 0/1; 6,636 positive (22.1 %) |
 | Time column | none |
-| Config root | `configs`, the repository's own (DEC-098) |
+| Config root | `configs`, the repository's own (DEC-085) |
 
 ## What the target means
 

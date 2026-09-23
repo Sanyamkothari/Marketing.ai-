@@ -336,7 +336,7 @@ def main(argv: list[str] | None = None) -> int:
         default=None,
         help=(
             "config root to load the use case from; defaults to the repo's configs/, where every "
-            "library use case ships (DEC-098)"
+            "library use case ships (DEC-085)"
         ),
     )
     parser.add_argument(

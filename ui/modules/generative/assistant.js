@@ -11,7 +11,7 @@
 // reached a real model, and plan §13.3 asks that this be obvious rather than discovered.
 
 import { ApiError } from "../../api.js";
-import { EM_DASH, dash, errorBox, esc, fmtInt, fmtNum, fmtSize, fmtStamp, pageHead, stageChip, typeChip } from "../../dom.js";
+import { EM_DASH, backLink, dash, errorBox, esc, fmtInt, fmtNum, fmtSize, fmtStamp, pageHead, stageChip, typeChip } from "../../dom.js";
 import { backendBadge, citationCard, guardrailList, usageLine } from "./gdom.js";
 import { getIndex, getIndexes, postAsk, postEvaluate, postIndexBuild, postReferenceSet } from "./api.js";
 
@@ -382,7 +382,7 @@ export function assistantHtml(uc, s) {
   const body = s.view === "running" ? runningHtml(uc, s) : s.view === "results" ? resultsHtml(uc, s) : setupHtml(uc, s);
   return `<main class="screen t-${esc(uc.marker)}">
     ${pageHead(
-      `<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">${esc(
+      `${backLink(uc)}<h1 class="h1">${esc(
         uc.name,
       )}</h1><p class="desc">${esc(uc.description)}</p><div class="chips">${stageChip(
         uc.lifecycle_stage,

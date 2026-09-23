@@ -27,7 +27,7 @@ from library.run_engine import run  # noqa: E402
 
 LIBRARY = REPO_ROOT / "library"
 #: The repository's own config root. The library's industries and use cases lived in a second root,
-#: `library/configs/`, until a second industry was allowed in `configs/` (DEC-098); they ship there now.
+#: `library/configs/`, until a second industry was allowed in `configs/` (DEC-085); they ship there now.
 CONFIGS = REPO_ROOT / "configs"
 
 #: How far below its own logistic-regression baseline a one-minute search is allowed to land.

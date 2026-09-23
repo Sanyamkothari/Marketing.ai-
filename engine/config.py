@@ -1543,7 +1543,7 @@ def get_catalog(root: Path | None = None) -> Catalog:
 
 
 #: The industry the overview opens on and `load_industry` reads when given no id. One file per
-#: industry sits in `configs/industries/` (DEC-098); telecom is the product's own journey and stays
+#: industry sits in `configs/industries/` (DEC-085); telecom is the product's own journey and stays
 #: the default, so adding an industry adds a choice rather than changing what a user first sees.
 DEFAULT_INDUSTRY: Final[str] = "telecom"
 

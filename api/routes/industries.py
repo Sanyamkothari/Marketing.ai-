@@ -1,6 +1,6 @@
 """`GET /industries` — the overview screen: one journey per industry file (plan §5).
 
-Every file in `configs/industries/` is listed (DEC-098). The overview shows one journey at a time
+Every file in `configs/industries/` is listed (DEC-085). The overview shows one journey at a time
 and opens on `default_industry`, which is also listed first so a client that only ever read the
 first entry - the Phase 1 overview did - still opens on the same journey it always has.
 """

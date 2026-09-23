@@ -463,7 +463,7 @@ def numeric_hint(column: TemplateColumn) -> NumericHint:
     # However wide the shape above is drawn, no value strays further from the examples than they
     # justify: two example ranges below the lowest, four above the highest. Every draw of the
     # telecom templates already sat inside that band, so for them this clip changes nothing; the
-    # library's templates (DEC-098) are what showed the need - a flag whose five examples are all
+    # library's templates (DEC-085) are what showed the need - a flag whose five examples are all
     # 1 read as a count up to 8, and a price index of 92-95 read as a spend from 0 to 140.
     width = max(highest - lowest, 1.0)
     floor, ceiling = lowest - 2.0 * width, highest + 4.0 * width

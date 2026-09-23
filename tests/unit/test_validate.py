@@ -75,7 +75,7 @@ def _reference_first(use_case_ids: tuple[str, ...]) -> tuple[str, ...]:
 
     The single-use-case checks below run on `USE_CASE_IDS[0]` and need both roles. Sorted order
     gave them that until the library's use cases, whose public files lack a consent column
-    (DEC-407), moved into `configs/` and sorted ahead (DEC-098). Over the telecom use cases alone
+    (DEC-407), moved into `configs/` and sorted ahead (DEC-085). Over the telecom use cases alone
     this is the identity, so every assertion below still runs on the use case it always did.
     """
     roles = (ColumnRole.CONSENT, ColumnRole.TIME)

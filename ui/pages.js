@@ -17,6 +17,7 @@ import {
   fmtPct,
   fmtStamp,
   fmtSize,
+  journeyCrumb,
   kpis,
   kvs,
   pageHead,
@@ -77,7 +78,7 @@ function shell(uc, kind, run, body) {
     run.created_at,
   )}`;
   return `<main class="screen t-${esc(uc.marker)}">
-    ${pageHead(`<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Customer Lifecycle</a><span class="sep">›</span><a href="#/uc/${esc(
+    ${pageHead(`<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}<span class="sep">›</span><a href="#/uc/${esc(
       uc.id,
     )}">${esc(uc.name)}</a><span class="sep">›</span><span class="cur">${label}</span></nav>
       <span class="over" style="color:var(--c)">${label}</span><h1 class="h1">${esc(
