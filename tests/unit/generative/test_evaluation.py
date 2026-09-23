@@ -65,7 +65,7 @@ from engine.generative.guardrails import (
 from engine.generative.index import build_index
 from engine.generative.retrieval import Retrieved
 from engine.generative.vectorstore import LocalVectorStore, Match, VectorStore
-from engine.llm import GroundedFakeLLMClient
+from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.storage import LocalStorage, index_key
 from engine.utils.ids import new_index_id
 from tests.fixtures.make_docs import build_knowledge_base
@@ -399,7 +399,7 @@ def small_use_case() -> UseCaseConfig:
     return BASE.model_copy(update={"generative": BASE.generative.model_copy(update={"rag": rag()})})
 
 
-def meter_for(client: GroundedFakeLLMClient) -> Meter:
+def meter_for(client: FakeLLMClient) -> Meter:
     return Meter(client, job_id="x_20260101_evalcase", llm=LlmConfig(), budget=BudgetConfig(cache=False))
 
 
@@ -433,7 +433,7 @@ def graded_fixture(tmp_path_factory: pytest.TempPathFactory) -> GradedFixture:
         use_case=BASE,
         storage=storage,
         store=store,
-        meter=meter_for(GroundedFakeLLMClient()),
+        meter=meter_for(FakeLLMClient(mode=FakeLLMMode.GROUNDED)),
     )
     reference_set_path = write_reference_csv(
         root / "reference.csv",
@@ -456,7 +456,7 @@ def graded_fixture(tmp_path_factory: pytest.TempPathFactory) -> GradedFixture:
 def test_grading_a_small_index_produces_an_artefact_whose_counts_add_up(
     graded_fixture: GradedFixture,
 ) -> None:
-    meter = meter_for(GroundedFakeLLMClient())
+    meter = meter_for(FakeLLMClient(mode=FakeLLMMode.GROUNDED))
     guardrails = Guardrails(load_policy(), meter=meter)
 
     result = evaluate(
@@ -502,7 +502,7 @@ def test_evaluating_the_same_index_twice_does_not_grow_its_stored_files(
 ) -> None:
     """`rag_eval.json` is written once and overwritten, not appended, however many times grading runs."""
     before = sorted(p for p in graded_fixture.storage.root.rglob("*") if p.is_file())
-    meter = meter_for(GroundedFakeLLMClient())
+    meter = meter_for(FakeLLMClient(mode=FakeLLMMode.GROUNDED))
     evaluate(
         index_id=graded_fixture.index_id,
         use_case=small_use_case(),
@@ -546,7 +546,7 @@ def test_a_row_the_reference_set_says_should_refuse_gets_no_retrieval_verdict(
     reference_set_path = write_reference_csv(
         tmp_path / "refusals.csv", [(DISJOINT, "true", "faq_activation.md", "Nothing to say about it.")]
     )
-    meter = meter_for(GroundedFakeLLMClient())
+    meter = meter_for(FakeLLMClient(mode=FakeLLMMode.GROUNDED))
 
     result = evaluate(
         index_id=graded_fixture.index_id,

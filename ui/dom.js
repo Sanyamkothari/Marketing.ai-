@@ -1,6 +1,8 @@
 // The prototype's rendering helpers, unchanged in what they produce, plus the one rule that runs
 // through every screen: a value nobody measured is an em dash, never a sample number (plan §13.3).
 
+import { headerToolHtml } from "./modules/router.js";
+
 export const EM_DASH = "—";
 
 export const LOGO = `<svg class="logo" viewBox="0 0 2576 690" role="img" aria-label="Minfy"><rect class="b" x="0" y="0" width="493" height="493"/><rect class="y" x="246" y="0" width="247" height="246"/><g fill="none" class="s" stroke-width="87"><path d="M719.5 493V338A121.5 121.5 0 0 1 962.5 338V493"/><path d="M961 493V338A121 121 0 0 1 1203 338V493"/><path d="M1548.5 493V338A120.5 120.5 0 0 1 1789.5 338V493"/><path d="M1962.5 493V182A121 121 0 0 1 2204.5 182"/><path d="M2291 354A120.75 120.75 0 0 0 2532.5 354"/><path d="M2532.5 182V520A120.5 120.5 0 0 1 2319.7 597.5"/></g><circle class="b" cx="1376" cy="61" r="61"/><rect class="b" x="1332" y="182" width="87" height="311"/><rect class="b" x="2006" y="268" width="156" height="86"/><rect class="y" x="2248" y="182" width="86" height="86"/></svg>`;
@@ -95,8 +97,38 @@ export const steps = (arr) =>
     )
     .join("")}</ol>`;
 
-export const pageHead = (inner) =>
-  `<div class="head"><div class="titles">${inner}</div>${LOGO}</div><div class="rule"></div>`;
+/**
+ * The root a use-case screen goes back to: `uc.journey`, the `{ href, label }` of the industry
+ * journey that lists it, which the router resolves from `GET /industries` (`journeyFor` in
+ * `overview.js`). The label is that industry's own `journey_label` - its file calls it the
+ * "overview subtitle and breadcrumb root" - so a Banking use case reads "Client Lifecycle" and goes
+ * back to Banking, not to the Telecom journey the bare `#/` opens. With no journey (no industry file
+ * is configured) it is the bare overview, under the heading that screen then carries.
+ */
+const journeyOf = (uc) => (uc && uc.journey) || { href: "#/", label: "Marketing AI" };
+
+/** The "‹ journey" link above a use case's title. */
+export function backLink(uc) {
+  const { href, label } = journeyOf(uc);
+  return `<a class="back" href="${esc(href)}">‹&nbsp; ${esc(label)}</a>`;
+}
+
+/** The first link of a use case's breadcrumb. */
+export function journeyCrumb(uc) {
+  const { href, label } = journeyOf(uc);
+  return `<a href="${esc(href)}">${esc(label)}</a>`;
+}
+
+/**
+ * Every screen's header. A phase module may register one tool for its right-hand side - the client
+ * picker (Plan A M35) - through `modules/router.js`; with none registered the logo stands alone, as
+ * it always did.
+ */
+export function pageHead(inner) {
+  const tool = headerToolHtml();
+  const right = tool ? `<div class="headtools">${tool}${LOGO}</div>` : LOGO;
+  return `<div class="head"><div class="titles">${inner}</div>${right}</div><div class="rule"></div>`;
+}
 
 export const errorBox = (error) =>
   `<div class="apierr" role="alert"><b>${esc(error.code || "ERROR")}</b>${esc(

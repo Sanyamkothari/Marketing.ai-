@@ -84,6 +84,7 @@ __all__ = [
     "apply_mapping",
     "name_similarity",
     "range_plausibility",
+    "required_standard_columns",
     "suggested_mapping_spec",
     "type_compatibility",
     "value_overlap",
@@ -758,3 +759,14 @@ def _required(schema: StandardSchemaConfig, role: RoleSpec) -> set[str]:
     if not role.is_event:
         required |= {column.name for column in schema.required_columns if column.derivable is None}
     return required
+
+
+def required_standard_columns(schema: StandardSchemaConfig, role: RoleSpec) -> frozenset[str]:
+    """The public face of `_required`: what a mapping for `role` must fill, and nothing derivable.
+
+    `engine.onboarding.replay` copies last month's mapping onto this month's file and has to say
+    which standard columns are missing again when a source column disappears; asking this rule rather
+    than keeping a second one is what stops a replayed mapping and a suggested one disagreeing about
+    what "required" means.
+    """
+    return frozenset(_required(schema, role))

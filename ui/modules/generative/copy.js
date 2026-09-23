@@ -12,7 +12,7 @@
 // the actual export is the CSV download, same as `scores.csv` is for a predictive run.
 
 import { ApiError, getArtefacts, getRun } from "../../api.js";
-import { dash, errorBox, esc, fmtInt, fmtNum, fmtStamp, kpis, pageHead, stageChip, typeChip } from "../../dom.js";
+import { dash, errorBox, esc, fmtInt, fmtNum, fmtStamp, journeyCrumb, kpis, pageHead, stageChip, typeChip } from "../../dom.js";
 import { backendBadge, copyStatusPill, guardrailCounts, guardrailList, usageLine } from "./gdom.js";
 import { copyMessagesUrl, postApproveTemplate, postCampaignCopy, postRegenerateTemplate } from "./api.js";
 import { readPath } from "../../settings.js";
@@ -221,7 +221,7 @@ export function copyHtml(uc, s) {
   const llm = config && readPath(config, "generative.llm");
   return `<main class="screen t-${esc(uc.marker)}">
     ${pageHead(
-      `<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Customer Lifecycle</a><span class="sep">›</span><a href="#/uc/${esc(
+      `<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}<span class="sep">›</span><a href="#/uc/${esc(
         uc.id,
       )}">${esc(uc.name)}</a><span class="sep">›</span><span class="cur">Campaign copy</span></nav>
       <span class="over" style="color:var(--c)">Personalised offers</span><h1 class="h1">${esc(

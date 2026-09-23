@@ -529,3 +529,28 @@ def test_a_feature_builder_that_lost_its_time_bound_is_caught_and_fails_the_buil
     assert all(check.severity is Severity.ERROR for check in leaked)
     assert not flow.report.passed
     assert not flow.registry.storage.exists(dataset_key(flow.dataset_id, DATASET_FRAME_FILENAME))
+
+
+def test_a_derive_feature_over_an_event_table_fails_the_build_as_a_leak(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A `derive` over an event table reads that table's whole history, future rows included.
+
+    It never becomes SQL, so only the leak probe can see it, and the probe has to say so rather than
+    fail on it: the features frame such a recipe builds has a row per bill, not a row per snapshot.
+    """
+    derived = FeatureDef(
+        name="bill_age_days",
+        role="bills",
+        function=AggFunction.DERIVE,
+        expression="days_between(snapshot_date, event_time)",
+    )
+    monkeypatch.setitem(globals(), "FEATURES", FeatureSpec(features=(*FEATURES.features, derived)))
+
+    flow = _run(tmp_path, entity_columns=ENTITY_COLUMNS)
+
+    leaked = [check for check in flow.report.checks if check.code == "FUTURE_EVENTS_LEAKED"]
+    assert leaked, [check.code for check in flow.report.checks]
+    assert all(check.severity is Severity.ERROR for check in leaked)
+    assert not flow.report.passed
+    assert not flow.registry.storage.exists(dataset_key(flow.dataset_id, DATASET_FRAME_FILENAME))

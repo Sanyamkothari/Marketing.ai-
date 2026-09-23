@@ -95,8 +95,19 @@ jobs:
       - name: make lint
         run: make lint
 
+      # PYTEST_ADDOPTS rather than a changed `test` target (protocol §4 keeps setup/test/test-all/lint
+      # fixed): pytest appends it to pyproject's addopts, so the fast suite runs exactly as before and
+      # also leaves a JUnit report for the next step to read.
       - name: make test
         run: make test
+        env:
+          PYTEST_ADDOPTS: --junitxml=${{ runner.temp }}/junit-fast.xml
+
+      # Plan A M39: a milestone the README calls "pending" whose mapped tests just passed fails the
+      # build (scripts/check_readme.py says which, and at which line). It reads the report the step
+      # above wrote rather than running anything again, so it costs a parse, not minutes.
+      - name: make check-readme
+        run: make check-readme JUNIT=${{ runner.temp }}/junit-fast.xml
 
   # --- Phase 4a -------------------------------------------------------------
   # Two jobs the main gate cannot do. `infra` needs node and a second virtualenv; `image` needs a

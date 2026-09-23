@@ -714,6 +714,12 @@ class ModelSearchConfig(_Base):
 class ThresholdConfig(_Base):
     mode: ThresholdMode = ThresholdMode.AUTO
     value: Annotated[float, Field(ge=0.01, le=0.99)] = 0.50
+    # The share of validation rows `auto` may flag before it falls back to the top decile and says
+    # so with THRESHOLD_FALLBACK (DEC-094). `configs/engine.yaml` sets the product default, 0.30, so
+    # every shipped use case has it; `None` - what a bare `ThresholdConfig()` built in code gets -
+    # is no ceiling, the rule `auto` followed before the ceiling existed. Config-only: not a form
+    # control and not a per-run override. Only `auto` reads it.
+    max_flagged_rate: Annotated[float, Field(ge=0.01, le=1.0)] | None = None
 
     @model_validator(mode="after")
     def _fixed_is_half(self) -> Self:
@@ -1366,6 +1372,13 @@ class UseCaseConfig(_Base):
             )
         if self.split.type is SplitType.TIME_BASED and self.split.time_column is not None:
             time_names = {column.name for column in self.template.by_role(ColumnRole.TIME)}
+            if self.standard_schema.columns:
+                # A use case that can be built from raw tables has a second shape besides the
+                # prepared file: the built dataset, whose as-of date is its time column by
+                # definition. "Use this dataset" splits a periodic one on it (Plan A M35), and a
+                # prepared-file template - a public file with no date column, say - need not name
+                # it. Whether an upload has the column is `check_time_column_missing`'s job.
+                time_names.add(self.standard_schema.snapshot_column)
             if self.split.time_column not in time_names:
                 raise ConfigError(
                     "TEMPLATE_TIME_MISSING",
@@ -1542,6 +1555,12 @@ def get_catalog(root: Path | None = None) -> Catalog:
     return load_engine_config(root).catalog
 
 
+#: The industry the overview opens on and `load_industry` reads when given no id. One file per
+#: industry sits in `configs/industries/` (DEC-085); telecom is the product's own journey and stays
+#: the default, so adding an industry adds a choice rather than changing what a user first sees.
+DEFAULT_INDUSTRY: Final[str] = "telecom"
+
+
 def list_industries(root: Path | None = None) -> tuple[str, ...]:
     base = config_root(root) / "industries"
     if not base.is_dir():
@@ -1616,7 +1635,7 @@ def load_all_use_cases(root: Path | None = None) -> dict[str, UseCaseConfig]:
     return {use_case_id: load_use_case(use_case_id, root) for use_case_id in list_use_case_ids(root)}
 
 
-def load_industry(industry_id: str = "telecom", root: Path | None = None) -> IndustryConfig:
+def load_industry(industry_id: str = DEFAULT_INDUSTRY, root: Path | None = None) -> IndustryConfig:
     """Validates the file AND the cross-file rules of the industry document."""
     base = config_root(root)
     path = base / "industries" / f"{industry_id}.yaml"

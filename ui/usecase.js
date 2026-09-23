@@ -3,6 +3,14 @@
 // The Setup form is generated: the mode switch, both hints, the target label, the problem-type
 // choices, the model list and every one of the advanced settings come from `GET /use-cases/{id}`.
 // The only numbers on the Running and Results screens are the ones `GET /runs/{id}` reported.
+//
+// Step 1 has two sources of data when a phase module registers a second one (Plan A M35): the
+// prepared file this screen always took, and whatever the registered setup source offers - today,
+// "Build from raw tables". This module never learns what that source is. It asks the registry for a
+// card to show, mounts the source into an element when the card is chosen, and takes back one
+// payload - `{datasetId, clientId, primaryKey, target, problemType, timeColumn, manifest, sample}` -
+// which fills Step 2 exactly as an upload's profile does. Run then posts `dataset_id` instead of
+// `upload_id`, and nothing after the `202` knows the difference.
 
 import {
   cancelRun,
@@ -17,6 +25,7 @@ import {
 } from "./api.js";
 import {
   EM_DASH,
+  backLink,
   dash,
   errorBox,
   esc,
@@ -38,8 +47,11 @@ import {
   stagesHtml,
   writePath,
 } from "./settings.js";
+import { setupSource } from "./modules/router.js";
 
 const AUTOML = "__automl__";
+const FILE = "file";
+const RAW = "raw";
 const POLL_MS = 2000;
 
 const STATE = new Map();
@@ -68,6 +80,8 @@ export function useCaseState(uc) {
     values.__ui = { model: AUTOML };
     STATE.set(uc.id, {
       mode: (uc.setup.modes[0] || {}).value || "train",
+      source: FILE,
+      dataset: null,
       upload: null,
       uploadError: null,
       uploading: false,
@@ -77,6 +91,7 @@ export function useCaseState(uc) {
       model: AUTOML,
       modelVersionId: "",
       values,
+      datasetSplit: null,
       advOpen: false,
       openStages: [],
       validation: null,
@@ -96,13 +111,33 @@ export function useCaseState(uc) {
 
 // --- derived -------------------------------------------------------------------------------------
 
-const profileOf = (s) => (s.upload ? s.upload.profile : null);
+const profileOf = (s) => (s.source === FILE && s.upload ? s.upload.profile : null);
+
+/** The built dataset Step 2 reads, when Step 1 is on the raw-tables card and one was taken. */
+const datasetOf = (s) => (s.source === RAW ? s.dataset : null);
+
+/** What Step 1 has produced for the chosen card: an upload, a built dataset, or nothing yet. */
+const dataOf = (s) => (s.source === RAW ? s.dataset : s.upload);
+
+/** The key as a list of columns: an upload's is one, a periodic dataset's is two (DEC-083). */
+const keyColumns = (pk) => (Array.isArray(pk) ? pk : pk ? [pk] : []);
+
+/** The key as the engine writes it for a person (`engine.keys.key_label`): `a + b`. */
+const keyLabel = (pk) => keyColumns(pk).join(" + ");
 
 function columnsFor(uc, s) {
   const profile = profileOf(s);
-  const all = profile ? profile.columns.map((c) => c.name) : [];
-  const features = all.filter((c) => c !== s.pk && c !== s.target);
-  const candidates = (profile && profile.time_column_candidates) || [];
+  const dataset = datasetOf(s);
+  const all = dataset
+    ? dataset.manifest.columns.map((c) => c.name)
+    : profile
+      ? profile.columns.map((c) => c.name)
+      : [];
+  const keys = keyColumns(s.pk);
+  const features = all.filter((c) => !keys.includes(c) && c !== s.target);
+  const candidates = dataset
+    ? [dataset.timeColumn].filter(Boolean)
+    : (profile && profile.time_column_candidates) || [];
   let timeLike = candidates.filter((c) => all.includes(c));
   if (!timeLike.length && uc.time_like_pattern) {
     const pattern = new RegExp(uc.time_like_pattern, "i");
@@ -113,6 +148,8 @@ function columnsFor(uc, s) {
 
 /** The problem type the uploaded column itself implies; `""` until a target is chosen. */
 function detectProblemType(s) {
+  const dataset = datasetOf(s);
+  if (dataset) return (s.target && dataset.problemType) || "";
   const profile = profileOf(s);
   if (!s.target || !profile) return "";
   const column = profile.columns.find((c) => c.name === s.target);
@@ -129,8 +166,13 @@ const modeCopy = (uc, s) => uc.setup.modes.find((m) => m.value === s.mode) || uc
 const trainedVersions = (s) => s.models;
 
 function blocker(uc, s) {
-  if (!s.upload) return "Upload a dataset to continue";
-  if (!s.pk) return "Choose the primary key column";
+  if (s.source === RAW && !s.dataset) {
+    return s.mode === "score"
+      ? "Build the dataset from this month's tables to continue"
+      : "Build the dataset from your tables to continue";
+  }
+  if (!dataOf(s)) return "Upload a dataset to continue";
+  if (!keyColumns(s.pk).length) return "Choose the primary key column";
   if (s.mode === "train" && !s.target) return `Choose the ${uc.setup.target_label.toLowerCase()}`;
   if (s.mode === "score" && !trainedVersions(s).length) return "Train a model first";
   return "";
@@ -193,6 +235,53 @@ function previewHtml(s) {
   )}</b> rows · <b>${profile.column_count}</b> columns</span><span>${esc(
     fmtSize(profile.file_size_bytes),
   )}</span></div>${tbl}${chips}</div>`;
+}
+
+/**
+ * The built dataset's preview, in the upload preview's shape (prototype `07`): the manifest's own
+ * row count and columns, and the first rows of its redacted `sample.json` - never rows made up here.
+ */
+function datasetPreviewHtml(s) {
+  const dataset = datasetOf(s);
+  if (!dataset) return "";
+  const names = dataset.manifest.columns.map((c) => c.name);
+  const shown = names.slice(0, 6);
+  const more = names.length - shown.length;
+  const rows = (dataset.sample || []).slice(0, 5);
+  const tbl = rows.length
+    ? `<div class="tbl-wrap"><table><thead><tr>${shown
+        .map((c) => `<th>${esc(c)}</th>`)
+        .join("")}${more > 0 ? `<th>+${more} more</th>` : ""}</tr></thead><tbody>${rows
+        .map(
+          (r) =>
+            `<tr>${shown.map((c) => `<td>${esc(dash(r[c]))}</td>`).join("")}${more > 0 ? "<td>…</td>" : ""}</tr>`,
+        )
+        .join("")}</tbody></table></div>`
+    : "";
+  return `<div class="preview"><div class="pv-head"><span><b>${fmtInt(
+    dataset.manifest.n_rows,
+  )}</b> rows · <b>${names.length}</b> columns</span><span>${esc(dataset.datasetId)}</span></div>${tbl}</div>`;
+}
+
+/** Step 1's two cards, when a setup source is registered; `""` when it is not (the Phase 1 form). */
+function sourcePickHtml(uc, s, card) {
+  if (!card) return "";
+  const entity = uc.entity || "row";
+  const prepared =
+    s.mode === "train"
+      ? `One row per ${entity}, including the outcome column. CSV or Parquet.`
+      : `One row per ${entity}. CSV or Parquet.`;
+  const option = (value, title, text) =>
+    `<button type="button" class="pickcard${s.source === value ? " on" : ""}" data-source="${value}" aria-pressed="${
+      s.source === value
+    }"><span class="pt1">${esc(title)}</span><span class="pt2">${esc(text)}</span>${
+      s.source === value ? '<span class="ptag">Selected</span>' : ""
+    }</button>`;
+  return `<div class="pick" role="group" aria-label="Where the data comes from">${option(
+    FILE,
+    "Upload a prepared file",
+    prepared,
+  )}${option(RAW, card.title, card.text)}</div>`;
 }
 
 function problemTypeHtml(uc, s) {
@@ -348,53 +437,68 @@ function setupHtml(uc, s) {
   const train = s.mode === "train";
   const why = blocker(uc, s);
   const profile = profileOf(s);
+  const dataset = datasetOf(s);
   const columns = columnsFor(uc, s);
   const names = columns.all;
+  const extension = setupSource();
+  const card = extension ? extension.card(uc, s.mode, extension.context()) : null;
+  const raw = s.source === RAW && card;
+  const hasData = !!dataOf(s);
 
-  const step1 = `<div class="fstep ${s.upload ? "done" : ""}"><div class="stepno">1</div><div>
-    <div class="flabel">Dataset</div><div class="fhint">${esc(copy.dataset_hint)}</div>
-    <div class="orline"><label class="control file ${
-      s.upload ? "has" : ""
-    }"><input type="file" id="f-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
-      profile ? profile.file_name : "Upload CSV or Parquet",
-    )}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <a class="linkbtn" href="${esc(
-      templateUrl(uc.setup.template_url),
-    )}" download>Download template</a></span></div>
+  const uploadControl = `<div class="orline"><label class="control file ${
+    s.upload ? "has" : ""
+  }"><input type="file" id="f-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
+    profile ? profile.file_name : "Upload CSV or Parquet",
+  )}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <a class="linkbtn" href="${esc(
+    templateUrl(uc.setup.template_url),
+  )}" download>Download template</a></span></div>
     ${s.uploading ? `<div class="loading">Reading the file…</div>` : ""}
     ${s.uploadError ? errorBox(s.uploadError) : ""}
-    ${previewHtml(s)}</div></div>`;
+    ${previewHtml(s)}`;
+  // The raw-tables panel is mounted into this element after every paint (`bind`), by the source.
+  const rawSlot = `<div id="f-onboarding"></div>${datasetPreviewHtml(s)}`;
 
-  const step2 = `<div class="fstep ${s.upload ? "" : "locked"} ${
-    s.pk && (!train || s.target) ? "done" : ""
+  const step1 = `<div class="fstep ${hasData ? "done" : ""}"><div class="stepno">1</div><div>
+    <div class="flabel">Dataset</div><div class="fhint">${esc(copy.dataset_hint)}</div>
+    ${sourcePickHtml(uc, s, card)}
+    ${raw ? rawSlot : uploadControl}</div></div>`;
+
+  // A built dataset's key and outcome are the manifest's: its key is the entity key and the
+  // snapshot date together, and its outcome is the label the recipe defined. They are shown as the
+  // one choice there is, not offered as columns to pick from.
+  const pkOptions = dataset
+    ? `<option value="${esc(keyLabel(s.pk))}" selected>${esc(keyLabel(s.pk))}</option>`
+    : columnOptions(names, s.pk, "Select a column…");
+  const targetOptions = dataset
+    ? columnOptions([dataset.target].filter(Boolean), s.target, dataset.target ? null : "Select a column…")
+    : columnOptions(
+        names.filter((c) => c !== s.pk),
+        s.target,
+        "Select a column…",
+      );
+  const step2 = `<div class="fstep ${hasData ? "" : "locked"} ${
+    keyColumns(s.pk).length && (!train || s.target) ? "done" : ""
   }"><div class="stepno">2</div><div>
     <div class="flabel">Columns</div><div class="fhint">${esc(copy.columns_hint)}</div>
-    <div class="frow"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${columnOptions(
-      names,
-      s.pk,
-      "Select a column…",
-    )}</select></div></div>
+    <div class="frow"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${pkOptions}</select></div></div>
     ${
       train
         ? `<div class="field"><span class="sub">${esc(
             uc.setup.target_label,
-          )}</span><div class="control sel"><select id="f-target">${columnOptions(
-            names.filter((c) => c !== s.pk),
-            s.target,
-            "Select a column…",
-          )}</select></div></div>`
+          )}</span><div class="control sel"><select id="f-target">${targetOptions}</select></div></div>`
         : ""
     }</div>${problemTypeHtml(uc, s)}</div></div>`;
 
   const versions = trainedVersions(s);
   const step3 = train
-    ? `<div class="fstep ${s.upload ? "" : "locked"} done"><div class="stepno">3</div><div>
+    ? `<div class="fstep ${hasData ? "" : "locked"} done"><div class="stepno">3</div><div>
         <div class="flabel">Model</div><div class="fhint">AutoML tries every selected algorithm and keeps the best. Pick one only if you need to.</div>
         <div class="frow"><div class="field"><div class="control sel"><select id="f-model" aria-label="Model">${optionsOf(
           uc.setup.model_choices,
           s.model,
           null,
         )}</select></div></div></div></div></div>`
-    : `<div class="fstep ${s.upload ? "" : "locked"} done"><div class="stepno">3</div><div>
+    : `<div class="fstep ${hasData ? "" : "locked"} done"><div class="stepno">3</div><div>
         <div class="flabel">Trained model</div><div class="fhint">The saved model that will score the uploaded rows.</div>
         <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun" aria-label="Trained model">${
           versions.length
@@ -520,7 +624,7 @@ function flowBlocks(uc, s, run) {
       "data",
       "Data",
       run.file_name,
-      `${dash(run.row_count, fmtN)} rows · key ${dash(run.primary_key)}${
+      `${dash(run.row_count, fmtN)} rows · key ${dash(keyLabel(run.primary_key))}${
         train ? ` · target ${dash(run.target)} · ${uc.problem_type_label.toLowerCase()}` : ""
       }`,
     ],
@@ -622,7 +726,7 @@ export function useCaseHtml(uc, s) {
     s.view === "running" ? runningHtml(uc, s) : s.view === "results" ? resultsHtml(uc, s) : setupHtml(uc, s);
   return `<main class="screen t-${esc(uc.marker)}">
     ${pageHead(
-      `<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">${esc(
+      `${backLink(uc)}<h1 class="h1">${esc(
         uc.name,
       )}</h1><p class="desc">${esc(uc.description)}</p><div class="chips">${stageChip(
         uc.lifecycle_stage,
@@ -704,10 +808,16 @@ export function createController(uc, rerender) {
     const body = {
       use_case: uc.id,
       mode: s.mode,
-      upload_id: s.upload.upload_id,
       primary_key: s.pk,
       overrides: overridesFor(uc, s),
     };
+    if (s.source === RAW) {
+      // A built dataset carries its own lineage; the run records which one, and whose (DEC-107).
+      body.dataset_id = s.dataset.datasetId;
+      body.client_id = s.dataset.clientId;
+    } else {
+      body.upload_id = s.upload.upload_id;
+    }
     if (s.mode === "train") {
       body.target = s.target;
       body.model_choice = s.model;
@@ -748,21 +858,132 @@ export function createController(uc, rerender) {
     try {
       const result = await postUpload(file, uc.id, s.mode);
       s.upload = result;
-      const profile = result.profile;
-      s.pk = (profile.primary_key_candidates || [])[0] || "";
-      s.target = s.mode === "train" ? profile.target_candidate || "" : "";
-      const timeField = (uc.advanced_settings.stages || [])
-        .flatMap((stage) => stage.fields || [])
-        .find((f) => f.column_source === "time_like" && f.widget === "column-select");
-      const candidate = (profile.time_column_candidates || [])[0];
-      if (timeField && candidate && !readPath(s.values, timeField.path)) {
-        writePath(s.values, timeField.path, candidate);
-      }
+      adoptUpload();
     } catch (error) {
       s.uploadError = error;
     }
     s.uploading = false;
     rerender();
+  }
+
+  /** The advanced setting the schema says reads a time column; `undefined` when none does. */
+  function timeField() {
+    return (uc.advanced_settings.stages || [])
+      .flatMap((stage) => stage.fields || [])
+      .find((f) => f.column_source === "time_like" && f.widget === "column-select");
+  }
+
+  /** The time column Step 2 fills, into whichever advanced setting the schema says reads one. */
+  function fillTimeColumn(candidate) {
+    const field = timeField();
+    if (field && candidate && !readPath(s.values, field.path)) {
+      writePath(s.values, field.path, candidate);
+    }
+  }
+
+  /**
+   * A built dataset's time column, and for a periodic one in training the split it needs: made on
+   * the snapshot date, as the reference prototype's `useDataset()` sets it. Without the split type
+   * the column would be read by nothing, and the rows split at random. The type and its value are
+   * the ones the schema shows the time column under (`visible_when`), so no path or value is spelled
+   * here. What Step 2 held before is overwritten - a time column left from an earlier upload names a
+   * column this dataset does not have - and what was written is remembered for `releaseTimeSplit`.
+   */
+  function adoptTimeSplit(column) {
+    const field = timeField();
+    if (!field) return;
+    releaseTimeSplit();
+    const written = [];
+    if (column && s.mode === "train" && field.visible_when) {
+      written.push([field.visible_when.path, field.visible_when.equals]);
+    }
+    written.push([field.path, column || null]);
+    for (const [path, value] of written) writePath(s.values, path, value);
+    s.datasetSplit = written;
+  }
+
+  /** Back to a prepared file: the use case's own starting values, wherever the user left what a
+   * dataset wrote untouched. */
+  function releaseTimeSplit() {
+    const byPath = indexSchema(uc.advanced_settings || { stages: [] });
+    for (const [path, value] of s.datasetSplit || []) {
+      if (byPath.has(path) && readPath(s.values, path) === value) {
+        writePath(s.values, path, byPath.get(path).value);
+      }
+    }
+    s.datasetSplit = null;
+  }
+
+  /** Step 2 from an upload's profile: detection proposes the key, the target and the time column. */
+  function adoptUpload() {
+    const profile = s.upload.profile;
+    releaseTimeSplit();
+    s.pk = (profile.primary_key_candidates || [])[0] || "";
+    s.target = s.mode === "train" ? profile.target_candidate || "" : "";
+    fillTimeColumn((profile.time_column_candidates || [])[0]);
+  }
+
+  /** Step 2 from a built dataset: its manifest settles the key (both columns), the outcome, the
+   * problem type, the time column and a periodic dataset's split - "Use this dataset" fills them all
+   * (Plan A M35). */
+  function adoptDataset() {
+    const dataset = s.dataset;
+    const key = keyColumns(dataset.primaryKey);
+    s.pk = key.length === 1 ? key[0] : key;
+    s.target = s.mode === "train" ? dataset.target || "" : "";
+    adoptTimeSplit(dataset.timeColumn);
+  }
+
+  /** Step 2 starts again whenever what Step 1 holds changes. */
+  function resetColumns() {
+    s.pk = "";
+    s.target = "";
+    s.problemType = "";
+    s.validation = null;
+    s.submitError = null;
+  }
+
+  function chooseSource(source) {
+    if (s.source === source) return;
+    s.source = source;
+    resetColumns();
+    const data = dataOf(s);
+    if (data && source === RAW) adoptDataset();
+    else if (data) adoptUpload();
+    rerender();
+  }
+
+  function datasetReady(payload) {
+    s.dataset = payload;
+    resetColumns();
+    adoptDataset();
+    rerender();
+  }
+
+  /**
+   * Bring this screen's state in line with the setup source's, before it is painted: a dataset built
+   * for one client is not the one to run once the header names another. Called on every route paint.
+   */
+  function sync() {
+    const extension = setupSource();
+    const clientId = extension ? extension.context().clientId : null;
+    if (s.dataset && s.dataset.clientId !== clientId) {
+      s.dataset = null;
+      if (s.source === RAW) resetColumns();
+    }
+    if (!extension && s.source === RAW) {
+      s.source = FILE;
+      resetColumns();
+    }
+  }
+
+  /** Mount the setup source's panel into this paint's placeholder, when the raw card is chosen. */
+  function mountSource(root) {
+    const slot = root.querySelector("#f-onboarding");
+    const extension = setupSource();
+    if (!slot || !extension) return;
+    const modelVersion = (s.models.find((v) => v.version.model_id === s.modelVersionId) || {}).version || null;
+    extension.mount(slot, { uc, mode: s.mode, modelVersion, onDatasetReady: datasetReady });
   }
 
   function bind(root) {
@@ -777,6 +998,9 @@ export function createController(uc, rerender) {
         if (s.mode === button.dataset.mode) return;
         s.mode = button.dataset.mode;
         s.upload = null;
+        // A dataset built for training is not a scoring input, nor the other way round.
+        s.source = FILE;
+        s.dataset = null;
         s.pk = "";
         s.target = "";
         s.problemType = "";
@@ -786,11 +1010,15 @@ export function createController(uc, rerender) {
       }),
     );
 
+    root.querySelectorAll(".pickcard[data-source]").forEach((button) =>
+      button.addEventListener("click", () => chooseSource(button.dataset.source)),
+    );
     on("f-file", "change", (event) => {
       const file = event.target.files[0];
       if (file) upload(file);
     });
     on("f-pk", "change", (event) => {
+      if (datasetOf(s)) return; // a built dataset's key is its manifest's; there is no other to pick
       s.pk = event.target.value;
       if (s.target === s.pk) s.target = "";
       rerender();
@@ -811,6 +1039,13 @@ export function createController(uc, rerender) {
     });
     on("f-scorerun", "change", (event) => {
       s.modelVersionId = event.target.value;
+      // The raw-tables panel replays the chosen model's own recipe, so a different model is a
+      // different panel.
+      if (s.source === RAW) {
+        s.dataset = null;
+        resetColumns();
+        rerender();
+      }
     });
     on("f-adv", "toggle", (event) => {
       s.advOpen = event.target.open;
@@ -880,7 +1115,10 @@ export function createController(uc, rerender) {
     root.querySelectorAll(".stage-d").forEach((details) => {
       if (s.openStages.includes(details.dataset.stage)) details.open = true;
     });
+
+    // Last, so none of the queries above reaches into the panel: it binds its own events.
+    if (s.view === "setup") mountSource(root);
   }
 
-  return { state: s, bind, refreshLists, loadRun, poll, stop };
+  return { state: s, bind, refreshLists, loadRun, poll, stop, sync };
 }

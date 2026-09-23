@@ -110,7 +110,7 @@ def test_a_phase_one_finding_crosses_unchanged() -> None:
     check = ValidationCheck(
         code="PK_NOT_UNIQUE", severity=Severity.ERROR, message="2.0 rows per customer", column="id"
     )
-    carried = OnboardingCheck.from_validation_check(check)
+    carried = OnboardingCheck.model_validate(check.model_dump())
     assert (carried.code, carried.message, carried.column) == (check.code, check.message, check.column)
 
 

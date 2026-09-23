@@ -30,9 +30,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import Field
 
 from api.deps import ConfigRootDep
+from api.routes.industries import default_first
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import ErrorResponse
-from engine.clients import ClientStore, ClientStoreError, LocalClientStore
+from engine.clients import (
+    DEFAULT_CLIENT_ID,
+    DEFAULT_CLIENT_NAME,
+    ClientStore,
+    ClientStoreError,
+    LocalClientStore,
+)
 from engine.config import (
     FeatureDef,
     LabelDefinition,
@@ -40,6 +47,7 @@ from engine.config import (
     StandardSchemaConfig,
     StrictBase,
     get_roles,
+    list_industries,
 )
 from engine.onboarding.specs import ClientRecord
 from engine.settings import settings
@@ -134,6 +142,34 @@ def create_client(body: ClientCreateRequest, store: ClientStoreDep) -> ClientCre
 @router.get("/clients", response_model=ClientListResponse, summary="Every client, newest first")
 def list_clients(store: ClientStoreDep) -> ClientListResponse:
     return ClientListResponse(clients=store.list_clients())
+
+
+@router.post(
+    "/clients/default",
+    response_model=ClientRecord,
+    responses={409: {"model": ErrorResponse}},
+    summary="The client every installation starts with, created the first time it is asked for",
+)
+def ensure_default_client(root: ConfigRootDep, store: ClientStoreDep) -> ClientRecord:
+    """`Demo`, under the fixed id `engine.clients.DEFAULT_CLIENT_ID` (Plan A M35).
+
+    The header's client picker needs a client to stand on before anyone has created one, and the
+    onboarding screens need a client id before the first table can be uploaded. A `POST`, because
+    the first call writes; idempotent, because every later call returns the same row unchanged.
+    Its industry is the one the overview opens on - `DEFAULT_INDUSTRY` when this installation has
+    that file, otherwise its first industry file (`api.routes.industries.default_first`, the order the
+    overview itself reads them in) - so the default is never an industry the product does not have.
+    An installation with no industry at all has nothing to onboard for, and says so.
+    """
+    industries = list_industries(root)
+    if not industries:
+        raise http_error(
+            409,
+            "NO_INDUSTRY_CONFIGURED",
+            "This installation configures no industry, so there is nothing to onboard a client for. "
+            "Add an industry file under configs/industries/ and reload.",
+        )
+    return store.ensure_client(DEFAULT_CLIENT_ID, DEFAULT_CLIENT_NAME, default_first(industries)[0])
 
 
 @router.get(

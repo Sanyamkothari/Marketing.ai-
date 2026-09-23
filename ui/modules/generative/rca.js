@@ -23,6 +23,7 @@ import {
   fmtN,
   fmtNum,
   fmtStamp,
+  journeyCrumb,
   pageHead,
   stageChip,
   typeChip,
@@ -223,7 +224,7 @@ export function rcaHtml(uc, s) {
   if (!run) return `<main class="screen t-${esc(uc.marker)}">${pageHead(`<h1 class="h1">${esc(uc.name)}</h1>`)}<p class="loading">Loading the run…</p></main>`;
   return `<main class="screen t-${esc(uc.marker)}">
     ${pageHead(
-      `<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Customer Lifecycle</a><span class="sep">›</span><a href="#/uc/${esc(
+      `<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}<span class="sep">›</span><a href="#/uc/${esc(
         uc.id,
       )}">${esc(uc.name)}</a><span class="sep">›</span><span class="cur">Root causes</span></nav>
       <span class="over" style="color:var(--c)">Root cause analysis</span><h1 class="h1">${esc(

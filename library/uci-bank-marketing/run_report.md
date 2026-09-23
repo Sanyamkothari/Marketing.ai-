@@ -4,7 +4,7 @@ Two runs are reported here, because one of them is a trap and the other is the a
 real; both used engine defaults except where stated.
 
 ```
-use case      bank-term-deposit    (library/configs/use_cases/bank_term_deposit.yaml)
+use case      bank-term-deposit    (configs/use_cases/bank_term_deposit.yaml)
 file          data/prepared.csv    (41,188 rows, 22 columns)
 primary key   client_id
 target        y, positive label "yes"
@@ -224,12 +224,12 @@ python library/uci-bank-marketing/fetch.py
 
 # Run A — defaults
 python -m library.run_engine \
-  --dataset uci-bank-marketing --use-case bank-term-deposit --config-root library/configs \
+  --dataset uci-bank-marketing --use-case bank-term-deposit \
   --csv library/uci-bank-marketing/data/prepared.csv --primary-key client_id --target y
 
 # Run B — one config override
 python -m library.run_engine \
-  --dataset uci-bank-marketing --use-case bank-term-deposit --config-root library/configs \
+  --dataset uci-bank-marketing --use-case bank-term-deposit \
   --csv library/uci-bank-marketing/data/prepared.csv --primary-key client_id --target y \
   --override 'prepare.exclude_columns=["duration"]'
 ```

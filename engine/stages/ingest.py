@@ -15,7 +15,10 @@ estimated quantity in the module - the row count of a caller-bounded preview rea
 *No data value ever leaves the column it came from* (plan §13.7). ``log_stage`` is the only logging
 call that carries numbers, PII detectors return detector *names* and never matched values, and every
 surface that would otherwise show a PII column's content - ``sample_values``, ``top_categories`` and
-``preview_rows`` - carries :data:`REDACTED` instead.
+``preview_rows`` - carries :data:`REDACTED` instead. A free-text column that merely *mentions* a
+contact (a phone number typed into a complaint) is shown on the same surfaces with each mention
+replaced by a marker such as ``[REDACTED:phone]``, and records the kinds it found in
+``free_text_pii_kinds`` (DEC-095); the detectors themselves are :mod:`engine.pii` (DEC-092).
 
 *Bad data is never an exception.* Only a genuinely unreadable *file* raises :class:`IngestError`;
 everything about the data's fitness for training is a ``ValidationCheck`` raised by the validate
@@ -31,25 +34,32 @@ Heavy libraries (pandas, pyarrow) are imported inside the function bodies, never
 
 from __future__ import annotations
 
+import atexit
 import csv
 import hashlib
 import io
 import math
+import os
 import re
+import threading
+from collections import deque
 from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import PurePosixPath
 from time import perf_counter
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, cast
 
+from engine import pii
 from engine.config import ColumnType, ProblemType
 from engine.contracts import CategoryCount, ColumnProfile, DatasetFingerprint, DatasetProfile
+from engine.pii import PiiDetector
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.text import humanise_count
 from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping, Sequence
+    from concurrent.futures import Future, ProcessPoolExecutor
 
     import pandas as pd
 
@@ -126,7 +136,7 @@ ID_MIN_ROWS: Final[int] = 20
 NUMERIC_PARSE_RATE: Final[float] = 0.99
 DATETIME_PARSE_RATE: Final[float] = 0.95
 TEXT_MEAN_LENGTH: Final[float] = 50.0
-PII_SAMPLE_VALUES: Final[int] = 1_000
+PII_SAMPLE_VALUES: Final[int] = pii.PII_SAMPLE_VALUES
 REDACTED: Final[str] = "[REDACTED]"
 MAX_CELL_CHARS: Final[int] = 200
 """Longest stringified cell any profile surface carries; longer values end in an ellipsis."""
@@ -242,6 +252,15 @@ class ReadResult:
     truncated: bool
     fingerprint: DatasetFingerprint | None = None
     """Covers every row of the file, including rows above the cap; `None` on a bounded preview read."""
+    all_rows: pd.DataFrame | None = None
+    """Every row of the file, when the caller asked for them with `keep_all_rows`; else `None`.
+
+    `frame` and `fingerprint` are unchanged by asking: they are still exactly what the same read
+    returns without it. This exists for the onboarding build, which needs both a profile of a source
+    (made from the capped rows, like any profile) and every row of it (to aggregate), and used to
+    read each file twice to get them - the second pass re-parsing and re-fingerprinting the whole
+    file for a frame the first pass had already had in its hands (docs/PERFORMANCE.md).
+    """
 
 
 def file_format_for(key: str) -> Literal["csv", "parquet"]:
@@ -363,19 +382,28 @@ def read_upload(
     max_rows: int | None = None,
     row_cap: int = DEFAULT_PROFILE_ROW_CAP,
     chunk_rows: int = CHUNK_ROWS,
+    keep_all_rows: bool = False,
 ) -> ReadResult:
     """Read `key` once: the profiled rows, the exact row count and the dataset fingerprint.
 
     `max_rows` asks for a cheap bounded preview instead: the tail is not read, so the row count is
     extrapolated (`row_count_estimated`) and no fingerprint is computed. `POST /uploads` never uses
     that path.
+
+    `keep_all_rows` also returns every row of the file as `ReadResult.all_rows`, from the same pass;
+    it is ignored on a bounded preview, which by definition does not read them all.
     """
     resolved = file_format if file_format is not None else file_format_for(key)
     if storage.size_bytes(key) == 0:
         raise IngestError("UPLOAD_EMPTY", "The file is empty.")
+    keep = keep_all_rows and max_rows is None
     if resolved == "parquet":
-        return _read_parquet(storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows)
-    return _read_csv(storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows)
+        return _read_parquet(
+            storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows, keep_all_rows=keep
+        )
+    return _read_csv(
+        storage, key, max_rows=max_rows, row_cap=row_cap, chunk_rows=chunk_rows, keep_all_rows=keep
+    )
 
 
 def _read_csv(
@@ -385,6 +413,7 @@ def _read_csv(
     max_rows: int | None,
     row_cap: int,
     chunk_rows: int,
+    keep_all_rows: bool,
 ) -> ReadResult:
     size = storage.size_bytes(key)
     with storage.open_read(key) as handle:
@@ -407,6 +436,7 @@ def _read_csv(
                 max_rows=max_rows,
                 row_cap=row_cap,
                 chunk_rows=chunk_rows,
+                keep_all_rows=keep_all_rows,
             )
         except UnicodeDecodeError:
             _LOG.info("ingest.encoding_retry encoding=%s", encoding)
@@ -428,6 +458,7 @@ def _read_csv_once(
     max_rows: int | None,
     row_cap: int,
     chunk_rows: int,
+    keep_all_rows: bool,
 ) -> ReadResult:
     """One decoded pass. Raises `UnicodeDecodeError` so the caller can try the next codec."""
     import pandas as pd
@@ -435,6 +466,7 @@ def _read_csv_once(
     bounded = max_rows is not None
     cap = max_rows if max_rows is not None else row_cap
     kept: list[pd.DataFrame] = []
+    every: list[pd.DataFrame] = []
     empty: pd.DataFrame | None = None
     rows_kept = 0
     row_count = 0
@@ -466,6 +498,8 @@ def _read_csv_once(
                 row_count += len(chunk)
                 if not bounded:
                     digest.update(chunk)
+                if keep_all_rows:
+                    every.append(chunk)
                 if rows_kept < cap:
                     take = chunk if rows_kept + len(chunk) <= cap else chunk.iloc[: cap - rows_kept]
                     kept.append(take)
@@ -496,7 +530,21 @@ def _read_csv_once(
         row_count_estimated=bounded,
         truncated=row_count > len(frame),
         fingerprint=None if bounded else digest.finish(frame, n_rows=row_count),
+        all_rows=_all_rows(frame, every) if keep_all_rows else None,
     )
+
+
+def _all_rows(frame: pd.DataFrame, every: list[pd.DataFrame]) -> pd.DataFrame:
+    """Every chunk of the file as one frame; the capped frame itself when the cap took them all.
+
+    Reusing `frame` when nothing was cut is not only cheaper, it is the guarantee that a file under
+    the cap reads back as the very frame an uncapped read would build - same chunks, same `concat`.
+    """
+    import pandas as pd
+
+    if sum(len(chunk) for chunk in every) == len(frame):
+        return frame
+    return pd.concat(every, ignore_index=True)
 
 
 def _read_parquet(
@@ -506,6 +554,7 @@ def _read_parquet(
     max_rows: int | None,
     row_cap: int,
     chunk_rows: int,
+    keep_all_rows: bool,
 ) -> ReadResult:
     import pyarrow as pa
 
@@ -517,7 +566,9 @@ def _read_parquet(
         _check_header(names)
         if row_count == 0:
             raise IngestError("UPLOAD_NO_ROWS", "The file has a header row but no data rows.")
-        frame, digest = _parquet_frame(parquet_file, cap=cap, chunk_rows=chunk_rows, bounded=max_rows)
+        frame, digest, every = _parquet_frame(
+            parquet_file, cap=cap, chunk_rows=chunk_rows, bounded=max_rows, keep_all_rows=keep_all_rows
+        )
     except pa.ArrowInvalid as exc:
         raise IngestError("UPLOAD_UNREADABLE", _UNREADABLE_MESSAGE.format(format="Parquet")) from exc
     return ReadResult(
@@ -529,17 +580,27 @@ def _read_parquet(
         row_count_estimated=False,
         truncated=row_count > len(frame),
         fingerprint=None if max_rows is not None else digest.finish(frame, n_rows=row_count),
+        all_rows=_all_rows(frame, every) if keep_all_rows else None,
     )
 
 
 def _parquet_frame(
-    parquet_file: _ParquetReader, *, cap: int, chunk_rows: int, bounded: int | None
-) -> tuple[pd.DataFrame, _ContentDigest]:
-    """Row groups up to `cap`, folding every row of the file into the digest on the unbounded path."""
+    parquet_file: _ParquetReader,
+    *,
+    cap: int,
+    chunk_rows: int,
+    bounded: int | None,
+    keep_all_rows: bool = False,
+) -> tuple[pd.DataFrame, _ContentDigest, list[pd.DataFrame]]:
+    """Row groups up to `cap`, folding every row of the file into the digest on the unbounded path.
+
+    The third element is every batch read, when `keep_all_rows` asks for them, else empty.
+    """
     import pandas as pd
 
     digest = _ContentDigest()
     kept: list[pd.DataFrame] = []
+    every: list[pd.DataFrame] = []
     empty: pd.DataFrame | None = None
     rows_kept = 0
     for batch in parquet_file.iter_batches(batch_size=max(1, min(chunk_rows, cap) if cap else 1)):
@@ -548,6 +609,8 @@ def _parquet_frame(
             empty = chunk.iloc[0:0]
         if bounded is None:
             digest.update(chunk)
+        if keep_all_rows:
+            every.append(chunk)
         if rows_kept < cap:
             take = chunk if rows_kept + len(chunk) <= cap else chunk.iloc[: cap - rows_kept]
             kept.append(take)
@@ -557,7 +620,7 @@ def _parquet_frame(
     if empty is None:
         empty = parquet_file.schema_arrow.empty_table().to_pandas()
     frame = kept[0] if len(kept) == 1 else pd.concat(kept, ignore_index=True) if kept else empty
-    return frame.reset_index(drop=True), digest
+    return frame.reset_index(drop=True), digest, every
 
 
 def read_table(storage: Storage, key: str, *, max_rows: int | None = None) -> pd.DataFrame:
@@ -595,16 +658,127 @@ def canonical_chunk_bytes(chunk: pd.DataFrame) -> bytes:
     return rendered.encode("utf-8")
 
 
+# ---------------------------------------------------------------------------
+# Rendering chunks in parallel (Plan A M37, DEC-097)
+# ---------------------------------------------------------------------------
+# `canonical_chunk_bytes` is the single most expensive thing a large build does: every cell of every
+# source and of the dataset rendered as text, on one core. The digest itself is cheap and inherently
+# sequential - one sha256 over the chunks in order - so the chunks are *rendered* in worker processes
+# and *hashed* here, in the order they arrived. The bytes fed to sha256 are the same bytes in the same
+# order as the in-process path, so every fingerprint is identical by construction, not by tolerance.
+#
+# Worker processes, not threads: pandas' CSV writer holds the GIL. Spawned, not forked: a build runs
+# on the API's job thread, and forking a process that has other threads can deadlock on a lock one
+# of them held. A digest only reaches for the pool at its second chunk, so a file under one chunk
+# (every test fixture, most uploads) never starts it and behaves exactly as it always did.
+_PARALLEL_FROM_CHUNK: Final[int] = 2
+"""The chunk at which a digest starts rendering in the pool; the first is always rendered here."""
+
+_MAX_RENDER_WORKERS: Final[int] = 8
+
+
+def _render_workers() -> int:
+    """Worker processes for rendering: every core but one, which keeps parsing and hashing."""
+    return min(_MAX_RENDER_WORKERS, (os.cpu_count() or 1) - 1)
+
+
+_pool: ProcessPoolExecutor | None = None
+_pool_disabled = False
+_pool_lock = threading.Lock()
+
+
+def _render_pool() -> ProcessPoolExecutor | None:
+    """The one process pool, started on first use; `None` where parallel rendering cannot help or run."""
+    global _pool, _pool_disabled
+    if _pool is not None or _pool_disabled:
+        return _pool
+    with _pool_lock:
+        if _pool is None and not _pool_disabled:
+            workers = _render_workers()
+            if workers < 2:
+                _pool_disabled = True
+                return None
+            import multiprocessing
+            from concurrent.futures import ProcessPoolExecutor
+
+            try:
+                _pool = ProcessPoolExecutor(
+                    max_workers=workers, mp_context=multiprocessing.get_context("spawn")
+                )
+            except (OSError, ValueError, NotImplementedError) as exc:
+                _LOG.warning(
+                    "fingerprint: parallel rendering unavailable (%s); rendering in-process",
+                    type(exc).__name__,
+                )
+                _pool_disabled = True
+                return None
+            atexit.register(_shutdown_render_pool)
+            _LOG.info("fingerprint: rendering chunks in %d worker processes", workers)
+    return _pool
+
+
+def _shutdown_render_pool() -> None:
+    global _pool
+    if _pool is not None:
+        _pool.shutdown(wait=False, cancel_futures=True)
+        _pool = None
+
+
+def _disable_render_pool() -> None:
+    """Stop using a pool that has failed; every later chunk is rendered in-process."""
+    global _pool_disabled
+    _pool_disabled = True
+    _shutdown_render_pool()
+
+
 class _ContentDigest:
-    """Streams `canonical_chunk_bytes` into one sha256 and seals it with the schema at the end."""
+    """Streams `canonical_chunk_bytes` into one sha256 and seals it with the schema at the end.
+
+    From its second chunk on, a chunk is rendered in the render pool and hashed here in arrival
+    order, with at most two chunks per worker in flight so memory stays bounded. Each pending chunk
+    is kept with its future: if a worker fails, that chunk is rendered in-process and the pool is
+    retired, so a broken pool costs time and never changes a fingerprint.
+    """
 
     def __init__(self) -> None:
         self._content = hashlib.sha256()
         self._rows = 0
+        self._chunks = 0
+        self._pending: deque[tuple[Future[bytes], pd.DataFrame]] = deque()
 
     def update(self, chunk: pd.DataFrame) -> None:
-        self._content.update(canonical_chunk_bytes(chunk))
         self._rows += len(chunk)
+        self._chunks += 1
+        pool = _render_pool() if self._chunks >= _PARALLEL_FROM_CHUNK else None
+        if pool is None:
+            self._drain()
+            self._content.update(canonical_chunk_bytes(chunk))
+            return
+        try:
+            self._pending.append((pool.submit(canonical_chunk_bytes, chunk), chunk))
+        except RuntimeError:  # the pool was shut down under us (interpreter exit, a failed worker)
+            self._drain()
+            self._content.update(canonical_chunk_bytes(chunk))
+            return
+        while len(self._pending) > 2 * _render_workers():
+            self._hash_next()
+
+    def _hash_next(self) -> None:
+        future, chunk = self._pending.popleft()
+        try:
+            rendered = future.result()
+        except Exception as exc:  # any worker failure falls back to the in-process render
+            if not _pool_disabled:  # once: every chunk still in flight fails the same way
+                _LOG.warning(
+                    "fingerprint: a render worker failed (%s); rendering in-process", type(exc).__name__
+                )
+            _disable_render_pool()
+            rendered = canonical_chunk_bytes(chunk)
+        self._content.update(rendered)
+
+    def _drain(self) -> None:
+        while self._pending:
+            self._hash_next()
 
     def finish(
         self,
@@ -613,6 +787,7 @@ class _ContentDigest:
         types: Mapping[str, ColumnType] | None = None,
         n_rows: int | None = None,
     ) -> DatasetFingerprint:
+        self._drain()
         resolved = types if types is not None else _inferred_types(frame)
         outer = hashlib.sha256()
         outer.update(FINGERPRINT_HEADER)
@@ -739,123 +914,38 @@ def infer_column_type(series: pd.Series[Any]) -> ColumnType:
 # ---------------------------------------------------------------------------
 # 1.5 PII detection
 # ---------------------------------------------------------------------------
-@dataclass(frozen=True)
-class PiiDetector:
-    """One PII shape: what its values look like, what its column is usually called, and how sure.
+# The detector table lives in `engine.pii`, the one definition (DEC-092); these names are
+# re-exported because validate, the generative redaction and the tests have always read them here.
+NAME_MIN_DISTINCT_RATIO: Final[float] = pii.NAME_MIN_DISTINCT_RATIO
 
-    `min_distinct_ratio` guards the *values alone* branch: the share of the sampled values that
-    must be distinct before the value pattern may fire on its own. It stays 0 for a shape no
-    ordinary column wears by accident (an e-mail address, an Aadhaar number) and rises above 0 for
-    a shape that is also the shape of a perfectly innocent category level. It never touches the
-    name-assisted branch, so a column whose *name* says it holds names is judged exactly as before.
-    """
+PII_DETECTORS: Final[tuple[PiiDetector, ...]] = pii.VALUE_DETECTORS
+"""The value-shaped detectors, in the order `detect_pii` reports them.
 
-    kind: str
-    value_pattern: re.Pattern[str] | None
-    name_pattern: re.Pattern[str] | None
-    min_value_match_rate: float
-    name_assisted_rate: float = 0.20
-    min_distinct_ratio: float = 0.0
-
-
-NAME_MIN_DISTINCT_RATIO: Final[float] = 0.40
-"""How much of a sampled column must be distinct before its values alone may be read as names.
-
-Well above any ordinary categorical column (a handful of levels over hundreds of rows) and well
-below a real roster of people (near one distinct value per row, even when a few names repeat).
+The name-only detectors (address, SSN, passport) are `engine.pii.NAME_ONLY_DETECTORS`; `detect_pii`
+runs both, and this tuple keeps its long-standing meaning - the detectors with a value pattern - for
+the free-text redaction and the fixture tests that read their patterns.
 """
 
 
-PII_DETECTORS: Final[tuple[PiiDetector, ...]] = (
-    PiiDetector(
-        kind="email",
-        value_pattern=re.compile(r"[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}"),
-        name_pattern=re.compile(r"(?i)(^|_)(e?mail|email_address)($|_)"),
-        min_value_match_rate=0.60,
-    ),
-    PiiDetector(
-        kind="phone",
-        # An earlier version of this pattern allowed exactly two digit groups after the country
-        # code, so the three-group NANP shape `+1-555-555-0001` - what `tests/fixtures/make_data.py`'s
-        # `pii_column` variant writes, and the commonest international format there is - did not
-        # match. The trailing group repeats one to two times instead; the guard that matters is
-        # unchanged (at least seven digits), so a short integer column still cannot look like a phone.
-        value_pattern=re.compile(
-            r"(?:\+|00)?\d{1,3}[ \-]?(?:\(\d{2,4}\)[ \-]?)?\d{3,5}(?:[ \-]?\d{3,5}){1,2}"
-        ),
-        name_pattern=re.compile(r"(?i)(^|_)(phone|mobile|msisdn|contact_number|telephone)($|_)"),
-        min_value_match_rate=0.80,
-    ),
-    PiiDetector(
-        kind="pan",
-        value_pattern=re.compile(r"(?i)[A-Z]{5}\d{4}[A-Z]"),
-        name_pattern=re.compile(r"(?i)(^|_)pan(_no|_number)?($|_)"),
-        min_value_match_rate=0.60,
-    ),
-    PiiDetector(
-        kind="aadhaar",
-        value_pattern=re.compile(r"[2-9]\d{3}[ \-]?\d{4}[ \-]?\d{4}"),
-        name_pattern=re.compile(r"(?i)(^|_)aadhaa?r(_no|_number)?($|_)"),
-        min_value_match_rate=0.80,
-    ),
-    PiiDetector(
-        kind="name",
-        # The value pattern is "one to four capitalised words", which is what a personal name looks
-        # like - and also what a great many category levels look like: `Female`/`Male`, `Yes`/`No`,
-        # `Basic`/`Premium` all full-match at a 100 % rate. Redacting such a column would silently
-        # drop a model input, and a column like `gender` is exactly the one a fairness report wants.
-        # What really separates the two is vocabulary size: names are open-ended and near-unique,
-        # a category is a small fixed set repeated over and over. So on values alone the detector
-        # also demands an open vocabulary (`min_distinct_ratio`); a column whose name says `name`
-        # still fires through the name-assisted branch however few distinct values it carries.
-        value_pattern=re.compile(r"[A-Z][a-z]+(?:[ '\-][A-Z][a-z]+){0,3}"),
-        name_pattern=re.compile(
-            r"(?i)(^|_)(name|first_name|last_name|full_name|given_name|surname|"
-            r"customer_name|account_name|contact_name|holder_name)($|_)"
-        ),
-        min_value_match_rate=0.90,
-        min_distinct_ratio=NAME_MIN_DISTINCT_RATIO,
-    ),
-)
-
-_DIGIT_DETECTOR_KINDS: Final[frozenset[str]] = frozenset({"phone", "pan", "aadhaar"})
-"""The only detectors an INTEGER column is examined for: a 10-digit mobile read as `int64`."""
-
-_PII_TYPES: Final[frozenset[ColumnType]] = frozenset({ColumnType.STRING, ColumnType.TEXT, ColumnType.INTEGER})
-"""FLOAT, BOOLEAN, DATE and DATETIME columns are never examined for PII."""
-
-
 def detect_pii(series: pd.Series[Any], name: str, inferred: ColumnType) -> tuple[str, ...]:
-    """Detector kinds that fired, in `PII_DETECTORS` order. Never returns, stores or logs a value."""
-    if inferred not in _PII_TYPES:
-        return ()
-    textual = inferred is not ColumnType.INTEGER
-    sample = [str(value).strip() for value in series.dropna().head(PII_SAMPLE_VALUES)]
-    if not sample:
-        return ()
-    distinct_ratio = len(set(sample)) / len(sample)
-    fired: list[str] = []
-    for detector in PII_DETECTORS:
-        if not textual and detector.kind not in _DIGIT_DETECTOR_KINDS:
-            continue
-        pattern = detector.value_pattern
-        if pattern is None:
-            continue
-        matches = sum(1 for value in sample if pattern.fullmatch(value) is not None)
-        rate = matches / len(sample)
-        named = detector.name_pattern is not None and detector.name_pattern.search(name) is not None
-        by_values = rate >= detector.min_value_match_rate and distinct_ratio >= detector.min_distinct_ratio
-        by_name = named and rate >= detector.name_assisted_rate
-        if by_values or by_name:
-            fired.append(detector.kind)
-    return tuple(fired)
+    """Detector kinds that fired. Never returns, stores or logs a value.
+
+    The one detector (`engine.pii.detect_pii`), under the name validate and every test have always
+    called; `engine.stages.prepare` calls the same function, so the report and the redaction agree.
+    """
+    return pii.detect_pii(series, name, inferred)
 
 
 # ---------------------------------------------------------------------------
 # 1.6 Per-column profiling
 # ---------------------------------------------------------------------------
-def _cell_str(value: object) -> str:
-    """One cell as the UI shows it: empty for a null, ISO for a date, no `repr` artefacts."""
+def _cell_str(value: object, *, mask_free_text: bool = False) -> str:
+    """One cell as the UI shows it: empty for a null, ISO for a date, no `repr` artefacts.
+
+    `mask_free_text` replaces every contact inside the text with its marker *before* the cell is cut
+    to `MAX_CELL_CHARS`: cutting first could leave half a phone number - too short for the pattern
+    to recognise, long enough for a person to (DEC-095).
+    """
     import pandas as pd
 
     if value is None or value is pd.NaT or value is pd.NA:
@@ -872,6 +962,8 @@ def _cell_str(value: object) -> str:
         rendered = value.isoformat()
     else:
         rendered = str(value)
+    if mask_free_text:
+        rendered = pii.redact_text(rendered)[0]
     if len(rendered) > MAX_CELL_CHARS:
         return rendered[: MAX_CELL_CHARS - 1] + "…"
     return rendered
@@ -894,10 +986,12 @@ def _numeric_summary(series: pd.Series[Any]) -> tuple[float | None, float | None
     )
 
 
-def _top_categories(series: pd.Series[Any], *, non_null: int) -> tuple[CategoryCount, ...]:
+def _top_categories(
+    series: pd.Series[Any], *, non_null: int, mask_free_text: bool = False
+) -> tuple[CategoryCount, ...]:
     counts = series.value_counts(dropna=True)
     ordered = sorted(
-        ((_cell_str(value), int(count)) for value, count in counts.items()),
+        ((_cell_str(value, mask_free_text=mask_free_text), int(count)) for value, count in counts.items()),
         key=lambda item: (-item[1], item[0]),
     )
     return tuple(
@@ -917,14 +1011,24 @@ def profile_column(
     distinct_count = int(series.nunique(dropna=True))
     is_unique = distinct_count == non_null and null_count < profiled_rows
     pii_kinds = detect_pii(series, name, inferred)
+    # A column that IS personal data is hidden whole; a free-text column that only MENTIONS some is
+    # shown with each mention replaced by a marker, and is otherwise untouched (DEC-095).
+    free_text = not pii_kinds and pii.is_free_text(series, inferred)
+    free_text_kinds = pii.free_text_pii(series, inferred) if free_text else ()
 
     if pii_kinds:
         sample_values: tuple[str, ...] = (REDACTED,) * min(SAMPLE_VALUES, max(non_null, 0))
         top_categories: tuple[CategoryCount, ...] = ()
     else:
-        sample_values = tuple(_cell_str(value) for value in series.dropna().head(SAMPLE_VALUES))
+        sample_values = tuple(
+            _cell_str(value, mask_free_text=free_text) for value in series.dropna().head(SAMPLE_VALUES)
+        )
         wanted = inferred in _CATEGORICAL_TYPES or distinct_count <= TOP_CATEGORIES_MAX_DISTINCT
-        top_categories = _top_categories(series, non_null=non_null) if wanted and non_null else ()
+        top_categories = (
+            _top_categories(series, non_null=non_null, mask_free_text=free_text)
+            if wanted and non_null
+            else ()
+        )
 
     minimum, maximum, mean = _numeric_summary(series) if inferred in _NUMERIC_TYPES else (None, None, None)
     looks_like_id = (
@@ -952,6 +1056,7 @@ def profile_column(
         looks_like_id=looks_like_id,
         looks_like_time=bool(time_like.search(name)) or inferred in _TEMPORAL_TYPES,
         pii_kinds=pii_kinds,
+        free_text_pii_kinds=free_text_kinds,
     )
 
 
@@ -959,14 +1064,21 @@ def profile_column(
 # 1.7 Whole-table profiling
 # ---------------------------------------------------------------------------
 def _preview_rows(df: pd.DataFrame, columns: Sequence[ColumnProfile]) -> tuple[tuple[str, ...], ...]:
+    """The first rows as the Setup preview shows them: PII columns hidden, free-text PII masked."""
     redact = tuple(bool(column.pii_kinds) for column in columns)
+    free_text = tuple(
+        not column.pii_kinds and pii.is_free_text(df.iloc[:, position], column.inferred_type)
+        for position, column in enumerate(columns)
+    )
     head = df.head(PREVIEW_ROWS)
+
+    def shown(row: int, position: int) -> str:
+        if redact[position]:
+            return REDACTED
+        return _cell_str(head.iat[row, position], mask_free_text=free_text[position])
+
     return tuple(
-        tuple(
-            REDACTED if redact[position] else _cell_str(head.iat[row, position])
-            for position in range(len(head.columns))
-        )
-        for row in range(len(head))
+        tuple(shown(row, position) for position in range(len(head.columns))) for row in range(len(head))
     )
 
 
@@ -1039,10 +1151,24 @@ def _id_like_pattern(config: UseCaseConfig) -> re.Pattern[str]:
     return re.compile(pattern, re.IGNORECASE)
 
 
+def _identifier_of(name: str) -> str:
+    """The name a configuration can use for a header: itself, or its safe internal form (DEC-093).
+
+    A use case's template and hints are identifiers, so a config can only say
+    `default_payment_next_month`; the published file says `default.payment.next.month`. Matching on
+    the safe form lets the configured name find the client's header - and the header, not the
+    configured name, is what is offered, so every later stage still sees the file's own columns.
+    """
+    from engine.column_names import is_safe_name, safe_base
+
+    return name if is_safe_name(name) else safe_base(name)
+
+
 def _hint_rank(name: str, hints: Sequence[str]) -> int | None:
     lowered = name.lower()
+    identifier = _identifier_of(name).lower()
     for index, hint in enumerate(hints):
-        if hint.lower() == lowered:
+        if hint.lower() in {lowered, identifier}:
             return index
     return None
 
@@ -1088,6 +1214,8 @@ def target_candidate(columns: Sequence[ColumnProfile], config: UseCaseConfig) ->
     if configured in names:
         return configured
     matches = [name for name in names if name.lower() == configured.lower()]
+    if not matches:
+        matches = [name for name in names if _identifier_of(name).lower() == configured.lower()]
     return matches[0] if len(matches) == 1 else None
 
 

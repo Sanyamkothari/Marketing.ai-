@@ -24,6 +24,9 @@
 //   snapshot      - editable SnapshotDefinition-shaped object
 //   specChecks, previewLoading, previewError, preview (the preview response, or null)
 //   datasetId, building, dataset ({manifest, status}), buildError, buildChecks (409 checks), buildReport
+//   inUse         - the host has taken this dataset into Step 2 ("Use this dataset" was clicked)
+//   replay        - score mode only (Plan A M35), else null: {spec, uploadedIds, settledIds,
+//                   response (the POST .../replay answer, or null), running, error}
 
 import { EM_DASH, barTrack, dash, errorBox, esc, fmtInt, fmtPct, present, table } from "../../dom.js";
 
@@ -243,6 +246,7 @@ function schemaPending(state, id, number, title, hint) {
 export function sourcesStep(state) {
   const pending = schemaPending(state, "sources", 1, "Sources", "The client's raw tables, one row per file.");
   if (pending) return pending;
+  if (state.replay) return replaySourcesStep(state);
   const entityRole = state.schema && entityRoleId(state.schema);
   const entityConfirmed = state.sources.some((entry) => entry.source.role === entityRole);
   const done = entityConfirmed;
@@ -266,6 +270,80 @@ export function sourcesStep(state) {
     ${!entityConfirmed && state.sources.length ? `<p class="fhint">One source must be set to the entity role before mapping can start.</p>` : ""}
   `;
   return stepShell("sources", 1, "Sources", "The client's raw tables, one row per file.", done, state.open === "sources", body);
+}
+
+/** The replay's row for one of this month's files, or `null` while it has not answered. */
+function replayedEntry(state, sourceId) {
+  const response = state.replay && state.replay.response;
+  return (response && response.sources.find((entry) => entry.source_id === sourceId)) || null;
+}
+
+/**
+ * Score mode's Sources step (prototype `08`): this month's files, each with the role the saved
+ * recipe gives it. There is no role to choose - the recipe made that decision last month - so the
+ * role is shown, not offered; a file the recipe had and this month's upload does not is listed with
+ * the API's own words about it.
+ */
+function replaySourcesStep(state) {
+  const replay = state.replay;
+  const entityRole = entityRoleId(state.schema);
+  const entityConfirmed = state.sources.some((entry) => entry.source.role === entityRole);
+  const response = replay.response;
+  const rows = state.sources
+    .map((entry) => {
+      const { source, profile } = entry;
+      const replayed = replayedEntry(state, source.source_id);
+      const keyTop = (profile.key_candidates || [])[0];
+      const timeTop = (profile.time_candidates || [])[0];
+      return `<tr>
+        <td>${esc(source.file_name)}</td>
+        <td>${dash(source.rows, fmtInt)}</td>
+        <td>${replayed ? esc(humanizeId(replayed.role)) : EM_DASH}</td>
+        <td>${esc(dash(keyTop && keyTop.column))}</td>
+        <td>${esc(dash(timeTop && timeTop.column))}</td>
+        <td>${coverageBadge(entityConfirmed, source.role === entityRole, profile.key_candidates)}</td>
+        <td><button type="button" class="linkbtn" data-act="delete-source" data-source="${esc(
+          source.source_id,
+        )}">Remove</button></td>
+      </tr>`;
+    })
+    .join("");
+  const unmatched = response ? response.unmatched : [];
+  const unused = response
+    ? state.sources.filter((entry) => response.unused_source_ids.includes(entry.source.source_id))
+    : [];
+  const body = `
+    <div class="orline">
+      <label class="control file"><input type="file" class="sr" multiple accept=".csv,.parquet" data-act="pick-files"><span class="fname">Add this month's files</span><span class="ico" aria-hidden="true">⤒</span></label>
+      <span>CSV or Parquet, one file per table</span>
+    </div>
+    ${state.uploading.map((name) => `<div class="loading">Reading ${esc(name)}…</div>`).join("")}
+    ${state.sourcesError ? errorBox(state.sourcesError) : ""}
+    ${replay.error ? errorBox(replay.error) : ""}
+    ${replay.running ? `<div class="loading">Matching this month's tables to the saved recipe…</div>` : ""}
+    ${
+      state.sources.length
+        ? `<div class="tbl-wrap"><table><thead><tr><th>File</th><th>Rows</th><th>Role</th><th>Key candidate</th><th>Time candidate</th><th>Coverage</th><th></th></tr></thead><tbody>${rows}</tbody></table></div>`
+        : `<div class="empty">${state.sourcesLoading ? "Loading sources…" : "No tables yet - add this month's files above."}</div>`
+    }
+    ${
+      unmatched.length
+        ? `<div class="vlist" role="alert">${unmatched
+            .map((entry) => `<div class="vitem"><span class="pill bad">${esc(entry.file_name)}</span><div><div class="vmsg">${esc(entry.message)}</div></div></div>`)
+            .join("")}</div>`
+        : ""
+    }
+    ${
+      unused.length
+        ? `<p class="fhint">${esc(
+            `Not part of the saved recipe, so not read: ${unused.map((entry) => entry.source.file_name).join(", ")}.`,
+          )}</p>`
+        : ""
+    }
+    <p class="fhint">These are this month's tables. The roles come from the saved recipe.</p>
+  `;
+  const done = !!response && !unmatched.length && response.sources.length > 0;
+  return stepShell("sources", 1, "Sources", "This month's tables, read the way the saved recipe reads them.", done, state.open === "sources", body);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -452,9 +530,37 @@ function missingRequiredBlock(state, sourceId, mapping) {
   return `<div class="vlist" role="alert"><div class="vhead">${esc(head)}</div>${items}</div>`;
 }
 
+/**
+ * Score mode's Mapping step: closed and ticked when every file has the columns last month's mapping
+ * read, and reopened on exactly the files that do not - each under the API's own sentence about what
+ * went missing. The mapping table itself is the train-mode one, over the replayed copy.
+ */
+function replayMappingStep(state) {
+  const response = state.replay.response;
+  const reopened = response ? response.sources.filter((entry) => entry.missing_columns.length) : [];
+  let body;
+  if (!response) {
+    body = `<div class="empty">Add this month's tables in step 1; their mapping is replayed from the saved recipe.</div>`;
+  } else if (!reopened.length) {
+    body = `<div class="empty">Every table has the columns last month's mapping read, so the mapping is replayed exactly as it was.</div>`;
+  } else {
+    body = reopened
+      .map((replayed) => {
+        const entry = state.sources.find((candidate) => candidate.source.source_id === replayed.source_id);
+        return `<div class="vlist" role="alert"><div class="vhead">${esc(replayed.message)}</div></div>${
+          entry ? mappingTable(state, entry) : ""
+        }`;
+      })
+      .join("");
+  }
+  const done = !!response && !reopened.length && !response.unmatched.length;
+  return stepShell("mapping", 2, "Mapping", "Replayed from the saved recipe.", done, state.open === "mapping", body);
+}
+
 export function mappingStep(state) {
   const pending = schemaPending(state, "mapping", 2, "Mapping", "Your columns, matched to ours.");
   if (pending) return pending;
+  if (state.replay) return replayMappingStep(state);
   const mappable = state.sources.filter((entry) => entry.source.role);
   const done = mappable.length > 0 && mappable.every((entry) => state.mappingSaved[entry.source.source_id]);
   const body = mappable.length
@@ -682,13 +788,60 @@ function recipeBlockers(state) {
   return reasons;
 }
 
+/** What still stands between this month's files and a score-mode build: the same idea as
+ * `recipeBlockers`, answered from the replay - whose own words are used wherever it gave any. */
+function replayBlockers(state) {
+  const replay = state.replay;
+  if (!state.schema) return ["The standard schema has not loaded yet."];
+  if (!replay.uploadedIds.length) return ["Add this month's tables in step 1."];
+  if (replay.running) return ["Matching this month's tables to the saved recipe…"];
+  const response = replay.response;
+  if (!response) return ["The saved recipe has not been replayed onto this month's tables yet."];
+  const reasons = response.unmatched.map((entry) => entry.message);
+  const reopened = response.sources.filter((entry) => entry.missing_columns.length);
+  if (reopened.length) {
+    reasons.push(`Review the mapping for ${reopened.map((entry) => entry.file_name).join(", ")} in step 2.`);
+  }
+  return reasons;
+}
+
 /** A disabled action's reason line, in the same `.reason` the Build step already uses. */
 const blockerLine = (reasons) =>
   reasons.length ? `<span class="reason">${esc(reasons.join(" "))}</span>` : "";
 
+/**
+ * Score mode's Features & label step: the saved recipe's features, applied unchanged, and the one
+ * sentence that explains why no outcome is built when scoring (`docs/ONBOARDING.md` section 8). Read
+ * only: a feature that differed from the ones the model was fitted on would score nothing it knows.
+ */
+function replayFeaturesStep(state) {
+  const spec = state.replay.spec;
+  const features = (spec.feature_spec && spec.feature_spec.features) || [];
+  const rows = features
+    .map(
+      (feature) =>
+        `<div class="kv"><span class="k">${esc(feature.name)}</span><span class="v">${esc(
+          feature.description || windowLabel(feature),
+        )}</span></div>`,
+    )
+    .join("");
+  const label = spec.label_spec;
+  const body = `
+    <div class="card"><h4>Features, from the saved recipe</h4>${rows || `<div class="empty">The saved recipe builds no features.</div>`}</div>
+    <div class="card"><h4>Label</h4><p class="fhint" style="padding:12px 16px 0">${esc(
+      label
+        ? `${label.name} is not built when scoring: there is nothing yet to look forward to.`
+        : "The saved recipe builds no outcome.",
+    )}</p></div>
+    <div class="card"><h4>Snapshots</h4><p class="fhint" style="padding:12px 16px 0">Scoring stands at a single date: the end of this month's data.</p></div>
+  `;
+  return stepShell("features", 3, "Features & label", "The saved recipe's, unchanged.", true, state.open === "features", body);
+}
+
 export function featuresStep(state) {
   const pending = schemaPending(state, "features", 3, "Features & label", "What the model reads, and what it predicts.");
   if (pending) return pending;
+  if (state.replay) return replayFeaturesStep(state);
   // A preview that came back carrying a blocking check did not succeed, whatever its HTTP status:
   // `POST .../preview` answers 200 with empty rows and the refusal in `checks` when the recipe is
   // structurally wrong. A green tick there would be this screen telling the user something the API
@@ -812,12 +965,13 @@ function buildReview(state) {
     <div class="actions" style="border-top:0">
       <button type="button" class="run" data-act="use-dataset"${report.passed ? "" : " disabled"}>Use this dataset</button>
       ${!report.passed ? `<span class="reason">Resolve the errors above first.</span>` : ""}
+      ${state.inUse ? `<span class="reason">In use: the Columns step below now reads this dataset.</span>` : ""}
     </div>`;
 }
 
 export function buildStep(state) {
   const done = !!(state.buildReport && state.buildReport.passed);
-  const blockers = recipeBlockers(state);
+  const blockers = state.replay ? replayBlockers(state) : recipeBlockers(state);
   const body = `
     ${
       !state.datasetId

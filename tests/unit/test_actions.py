@@ -133,9 +133,13 @@ def test_the_refusal_message_never_carries_a_data_value(config: UseCaseConfig) -
     assert "0.9" not in str(error.value)
 
 
+# The two property tests read the module's `config` rather than loading the YAML in every example:
+# loading and validating a use case is allocation-heavy, and inside Hypothesis's per-example deadline
+# it made the timing - not the banding under test - fail on a busy CI runner (a 339 ms first example
+# against a 200 ms deadline, 30 ms on the retry). Same config, same inputs, same assertions, same
+# deadline; the fixture is module-scoped, so Hypothesis runs every example against one object.
 @given(score=st.floats(min_value=0.0, max_value=1.0, allow_nan=False, allow_infinity=False))
-def test_every_score_lands_in_exactly_one_band(score: float) -> None:
-    config = load_use_case("targeted-advertisement")
+def test_every_score_lands_in_exactly_one_band(config: UseCaseConfig, score: float) -> None:
     band = assign_bands(pd.Series([score]), config).iat[0]
     matching = [b.name for b in config.actions.bands if score >= b.min_score]
     assert matching, "the floor band at 0.0 must catch every score"
@@ -146,8 +150,7 @@ def test_every_score_lands_in_exactly_one_band(score: float) -> None:
     low=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
     high=st.floats(min_value=0.0, max_value=1.0, allow_nan=False),
 )
-def test_a_higher_score_never_lands_in_a_lower_band(low: float, high: float) -> None:
-    config = load_use_case("targeted-advertisement")
+def test_a_higher_score_never_lands_in_a_lower_band(config: UseCaseConfig, low: float, high: float) -> None:
     first, second = sorted((low, high))
     bands = assign_bands(pd.Series([first, second]), config)
     assert band_rank(config, str(bands.iat[1])) <= band_rank(config, str(bands.iat[0]))

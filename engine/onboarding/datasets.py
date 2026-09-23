@@ -43,11 +43,12 @@ import json
 import math
 from collections.abc import Iterable, Mapping
 from datetime import date, datetime
-from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import Field
 
-from engine import __version__
+from engine import __version__, pii
+from engine.config import ColumnType
 from engine.contracts import Artefact, DatasetFingerprint, RunRecord
 from engine.onboarding.specs import (
     DATASET_ARTEFACTS,
@@ -67,6 +68,8 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     import pandas as pd
+
+    from engine.config import ColumnType
 
 __all__ = [
     "DATASET_FEATURES_SQL_FILENAME",
@@ -361,6 +364,7 @@ def build_manifest(
     target: str | None,
     built_at: datetime | None = None,
     engine_version: str = __version__,
+    fingerprint: DatasetFingerprint | None = None,
 ) -> DatasetManifest:
     """Assemble a `DatasetManifest` from the recipe that ran, what it read, and what it produced.
 
@@ -375,6 +379,12 @@ def build_manifest(
     only ever be redundant with that or wrong about it. `DatasetManifest`'s own validator refuses a
     periodic key of the wrong width; this function is what has to get the width right in the first
     place, which is the whole reason M12 exists.
+
+    `fingerprint` is the one `DatasetRegistry.write_frame` returned for this same `frame`, when the
+    caller has it: the fingerprint renders every cell of the table as text, and computing it a second
+    time here for an answer the caller is already holding was a quarter of the whole write stage at
+    the benchmark size (docs/PERFORMANCE.md). Without one it is computed from `frame`, as it always
+    was.
     """
     missing_mappings = sorted(set(spec.mapping_ids) - set(mappings))
     if missing_mappings:
@@ -441,7 +451,7 @@ def build_manifest(
         n_rows=len(frame),
         n_entities=int(frame[entity_key].nunique()),
         snapshot_dates=snapshot_dates,
-        fingerprint=dataset_fingerprint_of(frame),
+        fingerprint=fingerprint if fingerprint is not None else dataset_fingerprint_of(frame),
         built_at=built_at or utc_now(),
         engine_version=engine_version,
     )
@@ -480,7 +490,7 @@ def _snapshot_dates(frame: pd.DataFrame, snapshot_column: str, *, dataset_id: st
 # ---------------------------------------------------------------------------
 # Sample rows: stringified, PII-redacted, exactly as the review screen shows them
 # ---------------------------------------------------------------------------
-def _stringify_cell(value: object) -> str:
+def _stringify_cell(value: object, *, mask_free_text: bool = False) -> str:
     """One sample cell as the review screen shows it: empty for null, ISO for a date, `str()` else.
 
     A local twin of `engine.stages.ingest._cell_str`, which answers the same question for the Setup
@@ -507,9 +517,20 @@ def _stringify_cell(value: object) -> str:
         rendered = value.isoformat()
     else:
         rendered = str(value)
+    if mask_free_text:
+        rendered = pii.redact_text(rendered)[0]
     if len(rendered) > MAX_CELL_CHARS:
         return rendered[: MAX_CELL_CHARS - 1] + "…"
     return rendered
+
+
+def _is_free_text(column: pd.Series[Any]) -> bool:
+    """Whether a built column is prose: text-typed, and `engine.pii`'s free-text rule says so."""
+    import pandas as pd
+
+    if not (pd.api.types.is_object_dtype(column.dtype) or pd.api.types.is_string_dtype(column.dtype)):
+        return False
+    return pii.is_free_text(column, ColumnType.STRING)
 
 
 def _sample_rows(frame: pd.DataFrame, *, pii_columns: frozenset[str]) -> list[dict[str, str]]:
@@ -521,15 +542,25 @@ def _sample_rows(frame: pd.DataFrame, *, pii_columns: frozenset[str]) -> list[di
     reaches the review screen with different digits than went into the parquet, which is a fabricated
     number on a screen (house rule 2) and the hardest kind to notice, because it still looks like an
     id. Reading each column in its own dtype is what makes `sample.json` show what was built.
+
+    A free-text column that is not PII as a whole (a complaint carried through as an attribute) is
+    shown with every contact inside it replaced by its marker, as the Setup preview shows it (DEC-095).
     """
     head = frame.head(SAMPLE_ROWS)
+    masked = [
+        str(name) not in pii_columns and _is_free_text(frame.iloc[:, position])
+        for position, name in enumerate(frame.columns)
+    ]
     rendered: list[tuple[str, list[str]]] = [
         (
             str(name),
             (
                 [REDACTED] * len(head)
                 if str(name) in pii_columns
-                else [_stringify_cell(value) for value in head.iloc[:, position].tolist()]
+                else [
+                    _stringify_cell(value, mask_free_text=masked[position])
+                    for value in head.iloc[:, position].tolist()
+                ]
             ),
         )
         for position, name in enumerate(head.columns)
@@ -559,7 +590,12 @@ class DatasetRegistry(Protocol):
     def read_report(self, dataset_id: str) -> BuildReport: ...
 
     def write_frame(
-        self, dataset_id: str, frame: pd.DataFrame, *, pii_columns: Iterable[str] = ()
+        self,
+        dataset_id: str,
+        frame: pd.DataFrame,
+        *,
+        pii_columns: Iterable[str] = (),
+        types: Mapping[str, ColumnType] | None = None,
     ) -> DatasetFingerprint: ...
 
     def read_frame(self, dataset_id: str, *, max_rows: int | None = None) -> pd.DataFrame: ...
@@ -663,13 +699,31 @@ class LocalDatasetRegistry:
             raise _not_found(dataset_id) from exc
 
     def write_frame(
-        self, dataset_id: str, frame: pd.DataFrame, *, pii_columns: Iterable[str] = ()
+        self,
+        dataset_id: str,
+        frame: pd.DataFrame,
+        *,
+        pii_columns: Iterable[str] = (),
+        types: Mapping[str, ColumnType] | None = None,
     ) -> DatasetFingerprint:
         """Write `dataset.parquet` and `sample.json`, and return the table's fingerprint.
 
         The fingerprint is computed from `frame` itself, not read back from the file just written:
         a `Storage` round-trip is not part of what identifies a dataset, and computing it once here
         means a caller never has to read the whole parquet file back just to learn its own identity.
+
+        `types` is each column's `infer_column_type`, for a caller that has already inferred them
+        (the build does, for the manifest's columns); the fingerprint's schema line is exactly those
+        types, so passing them changes nothing but the time it takes. Without them they are
+        inferred here.
+
+        The file is written by pyarrow rather than by DuckDB's `COPY ... TO`, although the build's
+        queries run in DuckDB, because measuring it said so (docs/PERFORMANCE.md, DEC-097). The
+        frame has to exist in pandas whatever writes it - the fingerprint, the sample and the Phase 1
+        validation all read it there - so a `COPY` would only replace this writer, and on the same
+        frame it was the slower of the two. The parquet writer was never the slow part of this call:
+        in a profiled build at 20,000 customers it was 0.7 of the 21.7 seconds; the fingerprint
+        was nearly all the rest.
         """
         _require_id(dataset_id)
         buffer = io.BytesIO()
@@ -679,7 +733,7 @@ class LocalDatasetRegistry:
         self._storage.write_text(
             dataset_key(dataset_id, DATASET_SAMPLE_FILENAME), json.dumps(sample, indent=2) + "\n"
         )
-        return dataset_fingerprint_of(frame)
+        return dataset_fingerprint(frame, types) if types is not None else dataset_fingerprint_of(frame)
 
     def read_frame(self, dataset_id: str, *, max_rows: int | None = None) -> pd.DataFrame:
         """The built table, optionally only its first `max_rows` rows.

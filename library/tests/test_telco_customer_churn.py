@@ -35,7 +35,6 @@ def sample_run(tmp_path_factory: pytest.TempPathFactory) -> SampleRun:
         sample="telco-customer-churn/sample.csv",
         primary_key="customerID",
         target="Churn",
-        config_root=None,  # this use case ships in the repo's own configs/
     )
 
 

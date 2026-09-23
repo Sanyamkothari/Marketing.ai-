@@ -1,4 +1,9 @@
-"""`GET /industries` — the overview screen: one journey per industry file (plan §5)."""
+"""`GET /industries` — the overview screen: one journey per industry file (plan §5).
+
+Every file in `configs/industries/` is listed (DEC-085). The overview shows one journey at a time
+and opens on `default_industry`, which is also listed first so a client that only ever read the
+first entry - the Phase 1 overview did - still opens on the same journey it always has.
+"""
 
 from __future__ import annotations
 
@@ -15,6 +20,7 @@ from api.schemas import (
     UseCaseSummary,
 )
 from engine.config import (
+    DEFAULT_INDUSTRY,
     Catalog,
     IndustryStage,
     IndustryUseCaseRef,
@@ -36,8 +42,23 @@ router: APIRouter = APIRouter(tags=["industries"])
 def read_industries(root: ConfigRootDep) -> IndustriesResponse:
     """The overview screen: stages in file order, available cards filled from their use-case YAML."""
     catalog = get_catalog(root)
+    ordered = default_first(list_industries(root))
     return IndustriesResponse(
-        industries=tuple(_industry(industry_id, root, catalog) for industry_id in list_industries(root))
+        default_industry=ordered[0] if ordered else None,
+        industries=tuple(_industry(industry_id, root, catalog) for industry_id in ordered),
+    )
+
+
+def default_first(industry_ids: tuple[str, ...]) -> tuple[str, ...]:
+    """`DEFAULT_INDUSTRY` first when that file exists, the rest in file-name order.
+
+    A root without it (a test fixture, a client's own root) still opens on something: its first file.
+    """
+    if DEFAULT_INDUSTRY not in industry_ids:
+        return industry_ids
+    return (
+        DEFAULT_INDUSTRY,
+        *(industry_id for industry_id in industry_ids if industry_id != DEFAULT_INDUSTRY),
     )
 
 

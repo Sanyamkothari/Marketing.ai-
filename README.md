@@ -13,6 +13,39 @@ model, and every prediction comes with a reason and a recommended action.
 
 ---
 
+## What works today
+
+Everything below is merged on `main` and covered by tests that run in CI (`make lint test`) or
+nightly (`make test-all`, which adds the `@slow` AutoGluon and browser journeys).
+
+- **Prepared file → trained model → scored file, in the browser.** Upload a CSV or Parquet file with
+  one row per customer, keep every default, click Run: validation, AutoML training, evaluation,
+  per-row reasons, the champion rule, then scoring of a second file into `scores.csv` with a band,
+  an action and a reason on every row (Phase 1; `tests/integration/test_acceptance.py`).
+- **Raw tables → dataset → trained model → next month scored, in the browser.** Setup offers *Build
+  from raw tables*: upload a customer master and event tables (bills, complaints, activity), accept
+  the suggested roles, mappings and features, keep the default churn definition, and build one row
+  per customer per snapshot date. "Use this dataset" fills the run, the run trains on the two-column
+  key, and next month's tables are scored through the same saved recipe, with the mapping step
+  reopened only for a table whose columns changed (Phase 2 and Plan A M34-M35;
+  `tests/integration/test_onboarding_acceptance.py`).
+- **Several industries.** Telecom (the default) plus banking, insurance, e-commerce and ad tech, each a
+  YAML file under `configs/industries/`, chosen on the overview (Plan A M38).
+- **Generative features** on the fake LLM by default and on Bedrock when configured: the onboarding
+  assistant, root-cause summaries per risk segment and win-back copy with a judge (Phase 3a).
+- **AWS as a set of implementations:** S3 storage, SageMaker jobs, Postgres metadata, the container
+  and the CDK infrastructure, all tested offline (Phase 4a).
+- **Guard rails the library found missing:** one PII detector for profiling and preparation,
+  contacts inside free text masked wherever a cell is shown, dotted and non-ASCII column names that
+  train on every model family, and an automatic threshold that can no longer flag every row
+  (Plan A M36).
+
+What is not done yet is listed where it belongs: the Phase 1 items under *What is left*, the build's
+full-size timing under *Build performance, measured*, and each open request in
+`docs/CROSS_BRANCH_REQUESTS.md`.
+
+---
+
 ## Repository layout
 
 ```
@@ -29,8 +62,9 @@ marketing-ai/
 │       └── nightly.yml           # the full suite including @slow, nightly and on demand
 ├── configs/
 │   ├── engine.yaml               # catalog (engine constants) + defaults (advanced-settings defaults)
-│   ├── industries/
-│   │   └── telecom.yaml          # lifecycle stages + which use cases appear
+│   ├── industries/               # one file per industry (DEC-085): lifecycle stages + which use cases appear
+│   │   ├── telecom.yaml          #   the default journey the overview opens on
+│   │   └── ...                   #   banking, insurance, ecommerce, ad_tech (moved from library/, M38)
 │   └── use_cases/
 │       ├── targeted_advertisement.yaml
 │       ├── payment_propensity.yaml
@@ -38,15 +72,19 @@ marketing-ai/
 │       ├── fault_prediction.yaml
 │       ├── rca.yaml
 │       ├── win_back_campaign.yaml
-│       └── telco_churn.yaml      # the public-dataset mapping (M6); YAML only, no engine change
+│       ├── telco_churn.yaml      # the public-dataset mapping (M6); YAML only, no engine change
+│       └── ...                   # the library's four use cases, moved here in M38
 ├── templates/                    # generated and committed (DEC-014): <use_case>_template.csv and
-│   └── ...                       #   <use_case>_template_README.md for each of the seven use cases
+│   └── ...                       #   <use_case>_template_README.md for every use case
 ├── engine/
 │   ├── __init__.py               # __version__
 │   ├── config.py                 # pydantic models for YAML configs, merge, overrides, advanced settings
 │   ├── contracts.py              # pydantic models for every artefact JSON
 │   ├── settings.py               # the one env-driven Settings: which backends this process talks to
-│   ├── llm.py                    # LLMClient protocol + the deterministic FakeLLMClient
+│   ├── llm.py                    # LLMClient protocol + the one deterministic FakeLLMClient (modes, DEC-098)
+│   ├── keys.py                   # the primary key, one column or several: key columns and the row key (DEC-083)
+│   ├── pii.py                    # the one PII detector, header and value rules, free-text search (DEC-092, DEC-095)
+│   ├── column_names.py           # safe internal names for odd headers, used only inside the model (DEC-093)
 │   ├── errors.py                 # the pipeline's exception and the RunError any stage failure becomes
 │   ├── templates.py              # renders the CSV/README templates from a use-case config
 │   ├── storage.py                # Storage protocol + LocalStorage
@@ -98,6 +136,8 @@ marketing-ai/
 │   ├── DATA_CONTRACT.md
 │   ├── API.md                    # generated from the contracts, routes and configs
 │   ├── CROSS_BRANCH_REQUESTS.md  # what a branch needs from outside its own files
+│   ├── PERFORMANCE.md            # the dataset build, profiled and measured (Plan A M37)
+│   ├── plans/                    # the plans this repository holds, and the ones it does not (M39)
 │   └── AWS_DEPLOYMENT.md         # Phase 4 notes
 └── data/                         # local artefact store, gitignored, created on first run (runs/<run_id>/...)
 ```
@@ -262,6 +302,25 @@ attempt at a million rows was killed at a 45-minute cap while several other jobs
 cores, and the `--format both` scoring figures are the same effect caught in the act, so on a busy box
 expect far worse than the tables.
 
+### Re-measured after Plan A (M37's open item)
+
+Plan A M37 asks for this benchmark to be run again and recorded. On 2026-09-23 it ran on the same
+container (4 CPUs, 15.7 GiB, a quiet machine: load average under 1 at the start of each run), first
+with Plan A and then with the code before it (`main` @ `d37fc72`), back to back:
+
+| 1,000,000 rows, CSV | ingest | score (full flow) | of which per-row reasons | peak RSS |
+| --- | --- | --- | --- | --- |
+| before Plan A | 57.0 s | 322.8 s | 210.7 s | 6,174 MB |
+| after Plan A | 55.1 s | 275.5 s | 166.6 s | 6,276 MB |
+| after Plan A, Parquet | 54.0 s | 267.2 s | 150.1 s | (same process as the CSV row) |
+
+Plan A made neither path slower. The score figures differ from each other, and from the 245 s in the
+first table, mostly because of **which model each run trains**: every run fits its own champion on
+4,000 rows under a one-minute limit, and the per-row reasons cost what explaining that model costs.
+Read the score column as a range, not a constant. The ingest figures agree within 4% of each other and
+are faster than the first table's 68.5 s. That comparison is across days, so it is not attributed to
+any one change. This is still a container, not the laptop plan §11 names.
+
 Re-run it with:
 
 ```bash
@@ -341,19 +400,18 @@ DEC-074 parked nine settings that the form records and no stage reads. Listing t
 "not done" implied they were all Phase 1 debt. Checked against plan §12, which names the later phases,
 they are not the same kind of thing at all.
 
-**Phase 1 work genuinely outstanding:**
+**Phase 1 items still open, and one now settled:**
 
 - **The `features` block** — `auto_feature_engineering`, `categorical_encoding`, `numeric_scaling`,
-  `text_columns`, `selection` and `max_features`, six of DEC-074's nine. These are neither parked
-  Phase 1 work nor deferred Phase 4 work: **`plan.md` does not ask for them anywhere.** Nothing in it
-  mentions feature engineering, encoding, scaling or feature selection, in §12's later phases or
-  outside them. They are scope the implementation invented, offered on the Setup screen, and never
-  built. DEC-074 made them inert and said so on the control, which was the right repair for a promise
-  the engine could not keep; what it did not settle is whether they should exist at all, and that is
-  still open.
+  `text_columns`, `selection` and `max_features`, six of DEC-074's nine. `plan.md` never asked for them,
+  and whether they should exist is now settled by Plan A ruling D2 (DEC-084, DEC-098): they stay in
+  the schema, shown disabled as "Coming later — recorded with the run, not yet applied", the screen
+  never sends them, and they are left out of the recipe hash, so two runs that differ only in them
+  share a recipe. Shipping one means removing its path from `engine.config.ADVISORY_PATHS`.
 - **The laptop.** Plan §11 asks for a million rows under the time limit *on a laptop*, and the numbers
-  above were measured on a 4-CPU container. The Parquet half of that line is now measured, so the
-  format gap is closed and the machine gap is not.
+  above were measured on a 4-CPU container, most recently after Plan A (*Re-measured after Plan A*,
+  below the large-file tables). The format gap is closed; the machine gap is not, because no laptop
+  is available to this repository's runs.
 
 **Parked for Phase 4 by plan §12, not Phase 1 debt** — §12 defers "drift monitoring schedule,
 retraining triggers … DPDP controls (retention, consent, deletion)" by name:
@@ -386,6 +444,19 @@ cannot pass or fail for reasons the Makefile does not know about:
 - **`.github/workflows/nightly.yml`** — the full suite including `@slow` (`make test-all`), on a nightly
   schedule and on demand via `workflow_dispatch`. This is what keeps "may be marked slow" (plan §10)
   from becoming "never run": the integration train and score flows and the golden checks run here.
+  The scheduled run checks out `main` by name; a manual run tests the branch it was started from.
+  **Owner action required:** GitHub fires a `schedule` only on the repository's *default* branch,
+  which is currently `claude/gracious-noether-y0njma`, not `main`, so until the default branch is
+  switched (Settings → General → Default branch) the nightly runs only when started by hand.
+- **The library, on request.** A separate nightly job runs `make library-test` (`library/tests`: five
+  small trainings on committed samples, no network) when the repository variable
+  `NIGHTLY_LIBRARY_TESTS` is `true`, or when a manual run ticks "library".
+- **The README is checked against the tests.** `ci.yml` runs `make check-readme` after `make test`:
+  `scripts/check_readme.py` reads that run's JUnit report and fails when a milestone table marks a
+  milestone pending (or not started, todo, planned) while every mapped test that ran passed. The
+  mapping is `MILESTONE_TESTS` in the script; a milestone adds its own tests there when it merges
+  (DEC-099). Locally, `make check-readme` runs only the pending milestones' tests, and
+  `make check-readme JUNIT=report.xml` reads an existing report.
 
 ---
 
@@ -395,6 +466,10 @@ Plan section 10 asks for one public dataset mapped onto the engine **by configur
 proof that config-only reuse is real rather than aspirational. That dataset is the **Kaggle Telco
 Customer Churn** file, and the mapping is [`configs/use_cases/telco_churn.yaml`](configs/use_cases/telco_churn.yaml).
 Nothing under `engine/` or `api/` was added, changed or branched for it.
+
+[`docs/LIBRARY.md`](docs/LIBRARY.md) is the public dataset library: six public datasets across five
+industries, run through the engine on configuration alone, with what each run actually scored and
+what needed a code change. Its industries and use cases live in `configs/` since Plan A M38.
 
 ### Where to get the data
 
@@ -510,39 +585,37 @@ one-row-per-entity dataset Phase 1 already knows how to train and score on.
 | # | Milestone | Definition of done | Status |
 |---|---|---|---|
 | — | Onboarding contracts | `configs/roles.yaml`, the spec vocabulary, `engine/onboarding/specs.py`, the `onboarding` defaults block; Phase 1 suites green and unedited | **done** |
-| M8 | Clients, sources, roles, standard schema | `ClientStore`; source upload with profiling and role detection; `standard_schema` for the predictive use cases; `GET /use-cases/{id}/standard-schema` | pending |
-| M9 | Mapping | Heuristic suggester, transforms, value maps, mapping checks; an entity-only source maps to a Phase 1-shaped table | pending |
-| M10 | Aggregation engine | `FeatureSpec` → DuckDB; the function library; the golden and point-in-time tests; `features.sql` written | pending |
-| M11 | Labels, snapshots, composite keys | All four label types; censoring; periodic snapshots; the stages taught composite keys | pending |
-| M12 | Datasets, lineage, run integration | `DatasetRegistry`, the build job, `POST /runs` with `dataset_id`, build-then-score | pending |
-| M13 | UI | The four-step onboarding panel inside Setup, the client selector, preview, lineage | pending |
-| M14 | Hardening and docs | Build benchmark, cancel and error states, `docs/ONBOARDING.md` | **done** — benchmark recorded below |
+| M8 | Clients, sources, roles, standard schema | `ClientStore`; source upload with profiling and role detection; `standard_schema` for the predictive use cases; `GET /use-cases/{id}/standard-schema` | **done** |
+| M9 | Mapping | Heuristic suggester, transforms, value maps, mapping checks; an entity-only source maps to a Phase 1-shaped table | **done** |
+| M10 | Aggregation engine | `FeatureSpec` → DuckDB; the function library; the golden and point-in-time tests; `features.sql` written | **done** |
+| M11 | Labels, snapshots, composite keys | All four label types; censoring; periodic snapshots; the stages taught composite keys | **done** — the stages carry the composite key since Plan A M34 (DEC-083) |
+| M12 | Datasets, lineage, run integration | `DatasetRegistry`, the build job, `POST /runs` with `dataset_id`, build-then-score | **done** |
+| M13 | UI | The four-step onboarding panel inside Setup, the client selector, preview, lineage | **done** — mounted in Setup by Plan A M35 (DEC-090) |
+| M14 | Hardening and docs | Build benchmark, cancel and error states, `docs/ONBOARDING.md` | **done** — benchmark recorded below; the build was sped up in Plan A M37 |
 
 #### Build performance, measured
 
 `scripts/bench_onboarding.py` generates the raw tables and times a real `build_dataset` — no stage
-stubbed, every onboarding and Phase 1 check run, `dataset.parquet` on disk at the end. One run at
-the plan's own target, on **4 CPUs · 15.7 GiB RAM · Python 3.11.15 · Linux** (a container, not a
-laptop):
+stubbed, every onboarding and Phase 1 check run, `dataset.parquet` on disk at the end. At the plan's
+own target, on **4 CPUs · 15.7 GiB RAM · Python 3.11.15 · Linux** (a container, not a laptop), three
+builds of the same tables, back to back:
 
 | | |
 |---|---|
-| Input | 200,000 customers · 5,000,000 usage rows · 6 CSVs · 1,377 MB |
+| Input | 200,000 customers · 5,000,000 usage rows · 6 CSVs · 1,377 MB (37.7M event rows) |
 | Output | 2,400,000 rows · 200,000 entities · 12 snapshots · 60 features (3 dropped, all-null) |
-| Build | **828.9 s** · peak RSS 10,975 MB · `passed=True`, 0 blocking checks |
+| Before Plan A M37 | 763.5 s · peak RSS 10,863 MB (the M14 run, on other tables: 828.9 s) |
+| After M37 | **275.9 s** · peak RSS 8,300 MB, plus about 1,000 MB in three render workers |
 | Target | the same shape in under 300 s |
-| Verdict | **not met** — correct at this size, about 2.8× slower than the plan asks |
+| Verdict | **met** — 2.8× faster, the same dataset (identical cells; floats within 4 × 10⁻¹⁶) |
 
-Where the time goes: `write` 386 s, `apply_mappings` 209 s, `validate` 112 s, all five feature
-queries together 81 s. The DuckDB aggregation the plan worried about is the cheapest part of the
-build; parquet writing and the per-source cast-and-rename pass are the expensive ones, and neither
-is something the plan anticipated. Nothing here has been optimised — the target is missed by a
-factor small enough that the two obvious fixes (writing the frame in row-group chunks, and casting
-in DuckDB rather than pandas) plausibly close it, but neither has been tried and neither should be
-assumed.
-
-Smaller runs, same script: 5,000 customers · 120,000 usage rows builds in **26.1 s**; 400 customers
-· 6,000 usage rows in **4.8 s**.
+M37 profiled first (`docs/PERFORMANCE.md`). The plan expected Parquet writing and column renaming
+to dominate; they did not (writing was under 1% of the build). The build did work twice: the dataset
+fingerprinted twice, every source read and fingerprinted twice, and the leak probe re-ran a full
+aggregation. Removing that brought it to 369.1 s (DEC-096, DEC-097). The rest was the fingerprint
+canonicaliser rendering every cell on one core, which now renders chunks in worker processes and
+hashes them in order, so every fingerprint is byte-identical (DEC-097's addendum). The before/after
+pairs at one tenth of the size, and the profiles, are in `docs/PERFORMANCE.md` §1–§5.
 
 Two defects were found by running this and could not have been found any other way. The build was
 reading only the first 2,000,000 rows of each source, having inherited the *profiling* row cap; and
@@ -585,6 +658,49 @@ make prototype-screenshots         # docs/prototype/*.png, desktop and mobile
 overview, the seven use-case definitions, the eight advanced-settings stages, the three run
 states and the colour tokens. Screenshots of every new state, desktop (1440px) and mobile
 (390px), are in `docs/prototype/`.
+
+### Plan A — Phase 2 completion and integration hardening
+
+[`docs/plans/MARKETING_AI_PLAN_A_PHASE2B.md`](docs/plans/MARKETING_AI_PLAN_A_PHASE2B.md) finishes what
+the 23 September status report left open, so the product works end to end *through the UI* on raw
+tables, and closes the engine issues the dataset library found. Its seven rulings are DEC-083…089;
+what building them found is DEC-090…099.
+
+| # | Milestone | Definition of done | Status |
+|---|---|---|---|
+| M34 | Two-column keys through every stage | A periodic dataset trains and scores on `(entity_key, snapshot_date)`; no entity in two splits; control and suppression per entity; `scores.csv` round-trips the client's ids | **done** — DEC-083 |
+| M35 | Onboarding wired into Setup | Setup step 1 builds from raw tables; client picker; "Use this dataset"; next month's tables replayed through the saved recipe; lineage on the Data page; the browser journey | **done** — DEC-090, DEC-091 |
+| M36 | Engine issues the library found | One PII detector; odd column names; `threshold.mode: auto` under a flagged-rate ceiling; free-text PII | **done** — DEC-092…095 |
+| M37 | Dataset build speed | 200k customers, 5M events, 12 snapshots, 60 features in ≤ 300 s; profile recorded | **done** — 275.9 s at the target size, from 763.5 s on the same tables and machine; DEC-096, DEC-097 |
+| M38 | Configuration and settings cleanup | Several industries; inactive settings "Coming later"; the `train.py` line; one fake LLM client, one check type | **done** — DEC-098 |
+| M39 | Docs, CI and housekeeping | README current; plans under `docs/plans/`; nightly on `main`; the library job; the README check | **done** — DEC-099; the nightly waits on the default-branch switch above |
+
+**What changed for a user.** Setup step 1 offers *Upload a prepared file* or *Build from raw tables*.
+The second mounts the four-step onboarding panel inline; the header carries a client picker that
+starts on "Demo". "Use this dataset" fills step 2 with both key columns, the label, the problem type
+and a time-based split on `snapshot_date`, and Run trains on the dataset. In score mode the card
+reads "Upload this month's tables": the new files are matched to the recipe's, each mapping is
+replayed, and only a table that lost a column reopens its mapping step. The Data page of a dataset
+run shows where it came from: sources → mapping → recipe → dataset → run.
+
+**Things a reader should know.**
+
+- *Keys.* A single-column key is byte-identical to before: `run.json`, the recipe and its hash do
+  not change. A composite key splits by entity, or on the snapshot date for a time-based use case.
+  The generative win-back and root-cause modules still take a single key and refuse a composite run
+  by name.
+- *PII.* A header that names personal data (email, phone, name, pan, aadhaar, address, ssn,
+  passport) is now enough on its own to redact a column and report `PII_DETECTED`, as preparation
+  already did; contacts typed inside free text are masked in every sample, preview, reason and LLM
+  input, and reported as the warning `PII_IN_FREE_TEXT`. A date column named like a time hint is kept
+  with the rows and never trained on (`carried_columns` in `prepare.json`).
+- *Thresholds.* `threshold.mode: auto` maximises the use case's metric on validation but refuses an
+  optimum that flags more than `evaluation.threshold.max_flagged_rate` (0.30) of the rows, falling
+  back to the top decile and saying so on the Model page.
+- *Monthly scoring.* `onboarding.limits.max_sources` counts the tables no saved recipe reads, so a
+  client can keep scoring month after month.
+- *The acceptance journey* uploads four tables, not the plan's three: the default churn label reads
+  the activity table.
 
 <!-- ---- END PHASE-2 ---- -->
 

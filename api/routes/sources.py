@@ -149,13 +149,13 @@ async def create_source(
     if role is not None:
         require_role(roles, role)
     limits = onboarding_limits(root)
-    held = len(store.list_sources(client_id))
+    held = len(working_sources(store, client_id))
     if held >= limits.max_sources:
         raise http_error(
             409,
             "TOO_MANY_SOURCES",
-            f"This client already has {held} source{'' if held == 1 else 's'}, and this engine "
-            f"allows {limits.max_sources}. Remove one before adding another.",
+            f"This client already has {held} source{'' if held == 1 else 's'} not yet in a saved "
+            f"recipe, and this engine allows {limits.max_sources}. Remove one before adding another.",
         )
     try:
         file_format = ingest.file_format_for(file.filename or "")
@@ -283,12 +283,7 @@ def update_source_role(
     load_source(store, client_id, source_id)
     roles = get_roles(root)
     require_role(roles, body.role)
-    updated = store.set_source_role(source_id, body.role)
-    profile = load_profile(storage, client_id, source_id)
-    storage.write_model(
-        source_profile_key(client_id, source_id),
-        profile.model_copy(update={"role": body.role, "role_decided_by": DecidedBy.USER}),
-    )
+    updated = record_role(storage, store, client_id=client_id, source_id=source_id, role=body.role)
     resync_join_coverage(storage, store, root=root, roles=roles, client_id=client_id)
     return updated
 
@@ -326,6 +321,24 @@ def delete_source(
 # ---------------------------------------------------------------------------
 # Storage keys and ids
 # ---------------------------------------------------------------------------
+def working_sources(store: ClientStore, client_id: str) -> tuple[SourceSpec, ...]:
+    """The client's sources that no saved onboarding recipe reads yet: what `max_sources` limits.
+
+    The limit exists because every table is another full read and another join in a build, and the
+    build itself enforces it per recipe (`TOO_MANY_SOURCES` in `engine.onboarding.validate`). A
+    source a saved recipe reads is part of that recipe's lineage and must stay: counting it here
+    would let a four-table client train and score one month and then refuse the third month's
+    tables, because each month's replay adds a copy of every table (Plan A M35). So only the tables
+    still being worked on count towards the upload limit; with no saved recipe that is every source,
+    exactly as before.
+    """
+    referenced: set[str] = set()
+    for spec in store.list_specs(client_id):
+        referenced.add(spec.entity_source_id)
+        referenced.update(spec.event_source_ids)
+    return tuple(source for source in store.list_sources(client_id) if source.source_id not in referenced)
+
+
 def source_raw_key(client_id: str, source_id: str, file_format: Literal["csv", "parquet"]) -> str:
     return f"clients/{client_id}/sources/{source_id}/raw.{file_format}"
 
@@ -416,6 +429,25 @@ def load_profile(storage: Storage, client_id: str, source_id: str) -> SourceProf
 
 def source_not_found(source_id: str) -> HTTPException:
     return http_error(404, "SOURCE_NOT_FOUND", f"No source with id {source_id!r}.")
+
+
+def record_role(
+    storage: Storage, store: ClientStore, *, client_id: str, source_id: str, role: str
+) -> SourceSpec:
+    """Write a settled role onto both documents that carry it, as a user decision.
+
+    Shared by the role `PATCH` above and by replaying a saved recipe onto this month's files
+    (`api.routes.datasets.replay_onboarding_spec`), where the recipe the user saved last month is
+    the decision. Coverage is left to the caller, which knows whether one role or several changed
+    and so how many times the client's tables need re-reading.
+    """
+    updated = store.set_source_role(source_id, role)
+    profile = load_profile(storage, client_id, source_id)
+    storage.write_model(
+        source_profile_key(client_id, source_id),
+        profile.model_copy(update={"role": role, "role_decided_by": DecidedBy.USER}),
+    )
+    return updated
 
 
 # ---------------------------------------------------------------------------

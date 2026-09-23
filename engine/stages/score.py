@@ -297,6 +297,7 @@ def predict(
     `frame[config.actions.score_field] = result.scores`; `result.prepared` is the frame the actions
     and export stages work from. Every failure mode is documented in the module docstring.
     """
+    from engine.column_names import load_for_model
     from engine.stages.prepare import replay
 
     started = time.perf_counter()
@@ -304,6 +305,11 @@ def predict(
     report = _prepare_report(version, storage=storage)
     prepared = replay(frame, report)
     scorer = _load_scorer(version, storage=storage)
+    # The client's headers in, the model's own names underneath: a model trained on a file whose
+    # headers ingest had to rename stored the mapping beside its `scorer.json` (DEC-093).
+    names = load_for_model(storage, version.predictor_key)
+    if not names.is_identity:
+        scorer = scorer.with_column_names(names.renamed)
     _require_features(scorer, prepared, version)
     scores = _calibrated_scores(scorer, prepared, config)
     drift = _drift(version, prepared, config, run_id=run_id, storage=storage)

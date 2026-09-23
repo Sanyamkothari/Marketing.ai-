@@ -19,7 +19,7 @@ and this file explains every column it produces.
 | Primary key | `customer_id` |
 | Target | `reactivated_90d`, 0/1; 604 positive (41.3 %) |
 | Time column | `snapshot_date` (present, constant — a single snapshot) |
-| Config root | `library/configs` |
+| Config root | `configs`, the repository's own (DEC-085) |
 
 ## Which "Online Retail" this is
 

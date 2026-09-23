@@ -10,6 +10,7 @@ Contract schema version: 1.
 |---|---|---|---|
 | GET | `/clients` | Every client, newest first | ClientListResponse |
 | POST | `/clients` | Register a client whose data will be onboarded | ClientCreateResponse |
+| POST | `/clients/default` | The client every installation starts with, created the first time it is asked for | ClientRecord |
 | GET | `/clients/{client_id}` | One client | ClientRecord |
 | GET | `/clients/{client_id}/mappings` | A client's saved mappings, newest first | MappingListResponse |
 | POST | `/clients/{client_id}/mappings/suggest` | Suggest a mapping of one source against one use case's standard schema; nothing is saved | MappingSpec |
@@ -17,6 +18,7 @@ Contract schema version: 1.
 | GET | `/clients/{client_id}/onboarding-specs` | A client's saved onboarding recipes, newest first | OnboardingSpecListResponse |
 | POST | `/clients/{client_id}/onboarding-specs` | Save a client's onboarding recipe and return the checks it implies | OnboardingSpecCreateResponse |
 | POST | `/clients/{client_id}/onboarding-specs/{spec_id}/preview` | Build this recipe on a 200-entity sample, synchronously, to preview its effect | PreviewResponse |
+| POST | `/clients/{client_id}/onboarding-specs/{spec_id}/replay` | Point a saved recipe at this month's files, reopening only what no longer fits | ReplayResponse |
 | GET | `/clients/{client_id}/sources` | A client's sources and their stored profiles | SourceListResponse |
 | POST | `/clients/{client_id}/sources` | Store a client's raw table, profile it and propose its role | SourceCreateResponse |
 | DELETE | `/clients/{client_id}/sources/{source_id}` | Remove one source | - |
@@ -29,6 +31,7 @@ Contract schema version: 1.
 | POST | `/datasets` | Validate a recipe and, when it passes, start building a dataset from it | DatasetCreatedResponse |
 | GET | `/datasets/{dataset_id}` | One dataset: its manifest, once built, and the status the Build screen polls | DatasetGetResponse |
 | GET | `/datasets/{dataset_id}/features.sql` | The compiled feature SQL of one built dataset, for debugging and Phase 4 porting | - |
+| GET | `/datasets/{dataset_id}/lineage` | Where one built dataset came from: its sources, mappings and recipe, already worded | Lineage |
 | GET | `/datasets/{dataset_id}/report` | The build review screen's report for one dataset | BuildReport |
 | GET | `/datasets/{dataset_id}/sample` | A stringified, PII-redacted sample of one built dataset | DatasetSampleResponse |
 | GET | `/healthz` | Liveness probe | HealthResponse |
@@ -423,6 +426,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 |---|---|---|---|
 | `mode` | ThresholdMode ("auto" \| "fixed" \| "manual") | no |  |
 | `value` | number | no |  |
+| `max_flagged_rate` | number \| null | no |  |
 
 #### Band
 
@@ -729,6 +733,7 @@ Everything ingest learned about one column of the uploaded file.
 | `looks_like_id` | boolean | yes | Distinct count is close to the row count and this is not the primary key. |
 | `looks_like_time` | boolean | yes | Name matches the time-like pattern or values parse as dates. |
 | `pii_kinds` | list[string] | no | Names of the PII detectors that matched; never the matched values. |
+| `free_text_pii_kinds` | list[string] | no | Kinds of personal data found inside this free-text column's values, such as a phone number in a complaint. Every shown cell has each match replaced by a marker; the column itself is kept as it is (DEC-095). |
 
 #### DatasetFingerprint
 
@@ -771,16 +776,17 @@ One category of a categorical column and how often it occurs.
 
 #### ValidationCheck
 
-One row of the validation table, already interpolated for the user.
+One row of a validation table, already interpolated for the user.  `validation.json` carries it, and so does a dataset's build report, which lists the onboarding findings and the Phase 1 findings re-run on the assembled dataset together - so a code from either table is accepted, and `source_id` names the raw source an onboarding finding is about.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
-| `code` | string | yes | Validation table code, for example PK_NOT_UNIQUE. |
+| `code` | string | yes | Code from either validation table, for example PK_NOT_UNIQUE or JOIN_KEY_COVERAGE_LOW. |
 | `severity` | Severity ("error" \| "warning" \| "info") | yes | Whether this check blocks the run or is only reported. |
 | `message` | string | yes | Business-language message, with the numbers already filled in. |
 | `suggestion` | string | no | What the user can do about it. |
 | `column` | string \| null | no | Column the check is about, when it is about one. |
+| `source_id` | string \| null | no | Onboarding source the check is about, when it is about one; null in validation.json. |
 | `details` | object | no | Machine-readable numbers behind the message. |
 | `acknowledgeable` | boolean | no | Whether the UI may offer to acknowledge this check. |
 | `acknowledged` | boolean | no | Whether the user acknowledged it through the run overrides. |
@@ -802,6 +808,7 @@ One row of the validation table, already interpolated for the user.
 | `row_removals` | list[RowRemoval] | yes | Row removals grouped by reason. |
 | `transforms` | list[Transform] | yes | Transforms in replay order. |
 | `pii_columns` | list[string] | no | Columns the PII detectors matched. |
+| `carried_columns` | list[CarriedColumn] | no | Columns kept with the rows but not trained on, with reasons. |
 | `consent_column` | string \| null | no | Consent column applied, when configured. |
 | `consent_rows_removed` | integer | no | Rows removed because consent was not given. |
 | `detail` | string | yes | Pre-formatted Running-screen line for the preparation step. |
@@ -839,6 +846,17 @@ One transform fitted on the training data and replayed at score time.
 | `kind` | "fill_median" \| "fill_mode" \| "clip_percentile" \| "redact" \| "cast" \| "dedupe" \| "consent_filter" | yes | Kind of transform applied. |
 | `columns` | list[string] | yes | Columns the transform was applied to. |
 | `parameters` | object of string -> number \| string \| boolean | no | Fitted parameters, so scoring replays the transform identically. |
+
+#### CarriedColumn
+
+One column kept with the rows but never trained on, and why (DEC-092).  Not a dropped column: it stays in the prepared frame and in the scoring file, so replay leaves it alone. It is recorded so the Data preparation page can say why a column the user uploaded is not a feature, instead of saying nothing.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `name` | string | yes | Name of the carried column. |
+| `reason` | "snapshot_date" | yes | Why the column is not trained on: `snapshot_date` is the use case's as-of date. |
+| `detail` | string | no | One line of extra context for the Data preparation page. |
 
 ### `split.json`
 
@@ -1633,6 +1651,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `model_search.candidate_pool` | list[enum catalog.model_families]; offered in the grid, in this order |
 | `evaluation` | [UI 5] Evaluation & explainability |
 | `evaluation.threshold` | DEC-006 |
+| `evaluation.threshold.max_flagged_rate` | float 0.01..1 \| null (config-only); auto falls back to the top decile (THRESHOLD_FALLBACK) above this share flagged |
 | `actions` | [UI 6] Actions & output |
 | `actions.score_field` | str; score column name in scores.csv |
 | `actions.bands` | list[Band]; strictly descending min_score, last must be 0.0, unique names (DEC-008) |

@@ -1,7 +1,9 @@
 """Finding and removing personal data *inside* free text.
 
-Phase 1 already detects PII, and this module does not detect anything Phase 1 does not: it imports
-`engine.stages.ingest.PII_DETECTORS` and uses the same patterns. What differs is where it looks.
+Phase 1 already detects PII, and this module does not detect anything Phase 1 does not: since M36
+the patterns, the scanners and the substring redaction all live in `engine.pii` (DEC-092), which the
+profiler also uses to hide contacts inside a free-text column (DEC-095), and this module is the
+generative engine's name for them. What differs from `detect_pii` is where it looks.
 
 `ingest.detect_pii` asks "is this column made of e-mail addresses?" and answers with `fullmatch`
 over a sample of whole cells, which is right for a column and useless for a complaint. A complaint
@@ -28,34 +30,24 @@ from __future__ import annotations
 import re
 from typing import Final
 
-from engine.stages.ingest import PII_DETECTORS
+from engine import pii
 
 __all__ = ["REDACTION_PATTERN", "contains_pii", "find", "marker_for", "redact"]
 
-_MARKER_PREFIX: Final[str] = "[REDACTED:"
-_MARKER_SUFFIX: Final[str] = "]"
-
-REDACTION_PATTERN: Final[re.Pattern[str]] = re.compile(r"\[REDACTED:[a-z]+\]")
+REDACTION_PATTERN: Final[re.Pattern[str]] = pii.REDACTION_MARKER_PATTERN
 """What a marker looks like, so a guardrail can tell a redaction from an identifier that got through."""
 
-_SCANNERS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = tuple(
-    (detector.kind, detector.value_pattern)
-    for detector in PII_DETECTORS
-    if detector.value_pattern is not None and detector.kind != "name"
-)
-"""The Phase 1 detectors worth running over free text, in their own order.
-
-`name` is left out on purpose. Its pattern is "one to four capitalised words", which inside a
-sentence matches the first word of every sentence, every product name and every place - it is
-usable over a column, where an open vocabulary distinguishes a roster from a category, and it is
-not usable over prose. Leaving it in would redact the text into uselessness; leaving it out is
-recorded here so nobody adds it back without reading this paragraph (DEC-213).
-"""
+# `name` is not among the scanners, on purpose: its pattern is "one to four capitalised words",
+# which inside a sentence matches the first word of every sentence, every product name and every
+# place. It is usable over a column, where an open vocabulary distinguishes a roster from a
+# category, and it is not usable over prose. Leaving it in would redact the text into uselessness;
+# leaving it out is recorded in `engine.pii.TEXT_SCANNERS` so nobody adds it back without reading
+# why (DEC-213).
 
 
 def marker_for(kind: str) -> str:
     """What replaces a match of `kind`."""
-    return f"{_MARKER_PREFIX}{kind}{_MARKER_SUFFIX}"
+    return pii.marker_for(kind)
 
 
 def find(text: str) -> tuple[str, ...]:
@@ -64,7 +56,7 @@ def find(text: str) -> tuple[str, ...]:
     Returns kinds and never values, so the result is safe to log, to put in a warning and to store
     in an artefact.
     """
-    return tuple(kind for kind, pattern in _SCANNERS if pattern.search(text) is not None)
+    return pii.find_in_text(text)
 
 
 def contains_pii(text: str) -> bool:
@@ -82,11 +74,4 @@ def redact(text: str) -> tuple[str, tuple[str, ...]]:
     that is the more useful of the two - it is the statement an evidence pack carries. Either way
     nothing recognisable survives, which is the property that matters and the one the tests pin.
     """
-    redacted = text
-    kinds: list[str] = []
-    for kind, pattern in _SCANNERS:
-        replaced, count = pattern.subn(marker_for(kind), redacted)
-        if count:
-            kinds.append(kind)
-            redacted = replaced
-    return redacted, tuple(kinds)
+    return pii.redact_text(text)

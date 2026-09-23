@@ -42,7 +42,7 @@ from engine.generative.cache import CompletionCache, NullCache, cache_key
 from engine.generative.contracts import PRICE_UNKNOWN, GenerativePurpose, LlmUsageReport
 from engine.generative.errors import GenerativeError
 from engine.generative.prompts import RenderedPrompt, load_prompt, render
-from engine.llm import GroundedFakeLLMClient, LLMCompletion
+from engine.llm import FakeLLMClient, FakeLLMMode, LLMCompletion
 
 PURPOSE = GenerativePurpose.JUDGE_TOXICITY
 PRICED = PriceTable(prices={"fake": ModelPrice(input_per_1m=3.0, output_per_1m=15.0)}, as_of="a-date")
@@ -67,7 +67,7 @@ def meter(
     use_cache: bool = True,
 ) -> Meter:
     return Meter(
-        GroundedFakeLLMClient(),
+        FakeLLMClient(mode=FakeLLMMode.GROUNDED),
         job_id="r_20260922_abcdef01",
         llm=LlmConfig(),
         budget=BudgetConfig(max_calls_per_run=calls, max_cost_usd_per_run=cost, cache=use_cache),
@@ -79,7 +79,7 @@ def meter(
 def split_meter(*, calls: int = 500, cost: float = 2.0, prices: PriceTable = HALF_PRICED) -> Meter:
     """A meter that generates with one model and judges with another, so one of them can be unpriced."""
     return Meter(
-        GroundedFakeLLMClient(),
+        FakeLLMClient(mode=FakeLLMMode.GROUNDED),
         job_id="r_20260922_abcdef01",
         llm=LlmConfig(
             backend=LlmBackend.BEDROCK,
@@ -290,7 +290,7 @@ def test_judging_uses_the_judging_model_and_generating_uses_the_generating_one()
         embedding_model_id="an-embedder",
     )
     subject = Meter(
-        GroundedFakeLLMClient(),
+        FakeLLMClient(mode=FakeLLMMode.GROUNDED),
         job_id="r_1",
         llm=config,
         budget=BudgetConfig(cache=False),

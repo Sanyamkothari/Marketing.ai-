@@ -5,7 +5,7 @@ end-to-end run:
 
 **A claim that points nowhere is not stored.** `grounded_causes` is proved on hand-built replies
 first, so the filter itself is pinned; `generate_segment_summary` is then proved against
-`GroundedFakeMode.UNGROUNDED`, which cites an id no pack ever contains, to show the whole retry loop
+`FakeLLMMode.UNGROUNDED`, which cites an id no pack ever contains, to show the whole retry loop
 really does exhaust its attempts and raise rather than settle for the first reply that parses.
 
 **A customer's words are redacted before a pack exists, not before a screen renders it.** The
@@ -64,7 +64,7 @@ from engine.generative.root_cause import (
     grounded_causes,
     segment_stats,
 )
-from engine.llm import GroundedFakeLLMClient, GroundedFakeMode
+from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.storage import LocalStorage, run_key
 from tests.fixtures.make_run import RunSpec, write_run
 
@@ -78,9 +78,9 @@ POSITIVE_RATE = 0.25
 Low 184, Medium 32, High 24), so a run built once exercises every segment every test needs."""
 
 
-def _meter(mode: GroundedFakeMode = GroundedFakeMode.GROUNDED) -> Meter:
+def _meter(mode: FakeLLMMode = FakeLLMMode.GROUNDED) -> Meter:
     return Meter(
-        GroundedFakeLLMClient(mode=mode), job_id="rc_test", llm=LlmConfig(), budget=BudgetConfig(cache=False)
+        FakeLLMClient(mode=mode), job_id="rc_test", llm=LlmConfig(), budget=BudgetConfig(cache=False)
     )
 
 
@@ -300,12 +300,12 @@ def test_grounded_causes_ignores_an_entry_that_is_not_an_object() -> None:
 def test_ungrounded_claims_are_rejected_and_the_segment_raises_after_every_retry(config_root: Path) -> None:
     """The single most important behaviour in this module: an id nobody supplied is never stored.
 
-    `GroundedFakeMode.UNGROUNDED` always cites an id no pack ever contains (DEC-214), so every one of
+    `FakeLLMMode.UNGROUNDED` always cites an id no pack ever contains (DEC-214), so every one of
     `guardrails.retries + 1` attempts must fail to ground, and the segment must raise rather than
     settle for a reply with nothing left in it once the bad claim is dropped.
     """
     use_case = load_use_case(USE_CASE_ID, config_root)
-    meter = _meter(GroundedFakeMode.UNGROUNDED)
+    meter = _meter(FakeLLMMode.UNGROUNDED)
     guardrails = _guardrails(meter, config_root)
 
     with pytest.raises(GenerativeError) as excinfo:
@@ -322,7 +322,7 @@ def test_a_job_whose_model_never_grounds_stores_no_summary_for_any_segment(
 ) -> None:
     """What an exhausted segment looks like once a whole job has run over it: recorded, not thrown away."""
     storage, run_id, use_case = run
-    meter = _meter(GroundedFakeMode.UNGROUNDED)
+    meter = _meter(FakeLLMMode.UNGROUNDED)
     guardrails = _guardrails(meter, config_root)
 
     summary = build_root_cause_summary(
@@ -345,7 +345,7 @@ def test_a_job_whose_model_never_grounds_stores_no_summary_for_any_segment(
 
 def test_a_reply_that_is_not_json_raises_model_output_malformed_after_every_retry(config_root: Path) -> None:
     use_case = load_use_case(USE_CASE_ID, config_root)
-    meter = _meter(GroundedFakeMode.MALFORMED)
+    meter = _meter(FakeLLMMode.MALFORMED)
     guardrails = _guardrails(meter, config_root)
 
     with pytest.raises(GenerativeError) as excinfo:
@@ -359,7 +359,7 @@ def test_a_reply_that_is_not_json_raises_model_output_malformed_after_every_retr
 
 def test_a_grounded_reply_is_stored_with_the_guardrail_checks_that_passed_it(config_root: Path) -> None:
     use_case = load_use_case(USE_CASE_ID, config_root)
-    meter = _meter(GroundedFakeMode.GROUNDED)
+    meter = _meter(FakeLLMMode.GROUNDED)
     guardrails = _guardrails(meter, config_root)
 
     summary, checks, attempts = generate_segment_summary(
@@ -383,7 +383,7 @@ def test_complaint_samples_in_the_pack_are_redacted_before_they_could_reach_a_pr
 ) -> None:
     """Read straight off `SummarisedSegment.evidence_pack` - the exact object the prompt was built from."""
     storage, run_id, use_case = run
-    meter = _meter(GroundedFakeMode.GROUNDED)
+    meter = _meter(FakeLLMMode.GROUNDED)
     guardrails = _guardrails(meter, config_root)
 
     summary = build_root_cause_summary(
@@ -410,7 +410,7 @@ def test_a_use_case_with_no_complaint_column_configured_gets_packs_with_no_compl
     """The summary still has to come from reasons and statistics alone, and still has to come."""
     storage, run_id, use_case = run
     no_text_use_case = _without_complaint_column(use_case)
-    meter = _meter(GroundedFakeMode.GROUNDED)
+    meter = _meter(FakeLLMMode.GROUNDED)
     guardrails = _guardrails(meter, config_root)
 
     summary = build_root_cause_summary(
@@ -533,7 +533,7 @@ def test_segmenting_by_top_reason_names_each_segment_after_a_feature(
 ) -> None:
     storage, run_id, use_case = run
     top_reason_use_case = _with_segment_by(use_case, SegmentBy.TOP_REASON)
-    meter = _meter(GroundedFakeMode.GROUNDED)
+    meter = _meter(FakeLLMMode.GROUNDED)
     guardrails = _guardrails(meter, config_root)
 
     summary = build_root_cause_summary(
@@ -558,7 +558,7 @@ def test_the_root_cause_summary_artefact_validates_end_to_end(
     run: tuple[LocalStorage, str, UseCaseConfig], config_root: Path
 ) -> None:
     storage, run_id, use_case = run
-    meter = _meter(GroundedFakeMode.GROUNDED)
+    meter = _meter(FakeLLMMode.GROUNDED)
     guardrails = _guardrails(meter, config_root)
 
     summary = build_root_cause_summary(
@@ -599,7 +599,7 @@ def test_running_out_of_budget_stops_the_job_rather_than_blocking_every_remainin
     """`BUDGET_EXCEEDED` is about the job: no later segment could have been generated either."""
     storage, run_id, use_case = run
     meter = Meter(
-        GroundedFakeLLMClient(),
+        FakeLLMClient(mode=FakeLLMMode.GROUNDED),
         job_id="rc_budget",
         llm=LlmConfig(),
         budget=BudgetConfig(cache=False, max_calls_per_run=1),

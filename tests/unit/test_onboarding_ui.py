@@ -436,7 +436,7 @@ UI_READS: Final[dict[str, tuple[str, ...]]] = {
     "MappingSpec": ("mapping_id", "columns", "unmapped_source", "missing_required", "value_maps"),
     "MappingColumn": ("source", "standard", "confidence", "decided_by", "transform"),
     "MappingSaveResponse": ("checks",),
-    "OnboardingCheck": ("code", "severity", "message", "suggestion", "column"),
+    "ValidationCheck": ("code", "severity", "message", "suggestion", "column"),
     "FeatureDef": ("name", "role", "function", "column", "window_days", "where", "description"),
     "LabelDefinition": ("name", "type", "horizon_days"),
     "SnapshotDefinition": ("mode", "frequency", "max_snapshots"),

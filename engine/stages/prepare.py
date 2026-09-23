@@ -127,10 +127,18 @@ import re
 from dataclasses import dataclass
 from datetime import datetime
 from time import perf_counter
-from typing import TYPE_CHECKING, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from engine.config import MissingValues, Outliers, PiiHandling, ProblemType, SplitType
-from engine.contracts import DroppedColumn, PrepareReport, RowRemoval, SplitPart, SplitReport, Transform
+from engine.contracts import (
+    CarriedColumn,
+    DroppedColumn,
+    PrepareReport,
+    RowRemoval,
+    SplitPart,
+    SplitReport,
+    Transform,
+)
 from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger
 from engine.utils.text import humanise_count
@@ -143,35 +151,42 @@ if TYPE_CHECKING:
 
     from engine.config import UseCaseConfig
 
-__all__ = ["RowPlan", "fit_transforms", "prepare", "prepare_rows", "replay", "split_dataset"]
+__all__ = [
+    "RowPlan",
+    "carried_segment",
+    "fit_transforms",
+    "prepare",
+    "prepare_rows",
+    "replay",
+    "split_dataset",
+]
 
 _LOG = get_logger(__name__)
 
 REDACTION: Final[str] = "[REDACTED]"
 
+_SNAPSHOT_DATE_DETAIL: Final[str] = "The as-of date of each row: kept with the rows, not trained on."
+
 _LOWER_QUANTILE: Final[float] = 0.01
 _UPPER_QUANTILE: Final[float] = 0.99
 _ID_LIKE_DISTINCT_SHARE: Final[float] = 0.99
-_PII_SAMPLE_ROWS: Final[int] = 1000
-_PII_VALUE_SHARE: Final[float] = 0.5
 _SEED_MODULUS: Final[int] = 2**32
 
 _TRUTHY_TEXT: Final[frozenset[str]] = frozenset({"true", "t", "yes", "y", "1"})
 
 _ID_LIKE_NAME: Final[re.Pattern[str]] = re.compile(r"(^|_)(id|uuid|guid|ref)(_|$)", re.IGNORECASE)
 
-_PII_NAME: Final[re.Pattern[str]] = re.compile(
-    r"(^|_)(e?mail|phone|mobile|msisdn|telephone|name|surname|address|street|postcode|zipcode"
-    r"|aadhaar|aadhar|pan|ssn|passport)(_|$)",
-    re.IGNORECASE,
-)
-
-_PII_VALUE_PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
-    ("email", re.compile(r"[^@\s]+@[^@\s]+\.[A-Za-z]{2,}")),
-    ("phone number", re.compile(r"\+?\d[\d\s().-]{7,17}\d")),
-    ("PAN", re.compile(r"[A-Z]{5}\d{4}[A-Z]")),
-    ("Aadhaar", re.compile(r"\d{4}\s?\d{4}\s?\d{4}")),
-)
+_PII_LABELS: Final[dict[str, str]] = {
+    "email": "email",
+    "phone": "phone number",
+    "pan": "PAN",
+    "aadhaar": "Aadhaar",
+    "name": "personal name",
+    "address": "address",
+    "ssn": "SSN",
+    "passport": "passport number",
+}
+"""How a `DroppedColumn.detail` names the detector that matched; the kinds are `engine.pii`'s."""
 
 _ROW_LEVEL_KINDS: Final[frozenset[str]] = frozenset({"dedupe", "consent_filter"})
 
@@ -200,6 +215,7 @@ class RowPlan:
     consent_column: str | None
     consent_rows_removed: int
     missing_rows_dropped: int
+    carried_columns: tuple[CarriedColumn, ...] = ()
 
     @property
     def last_order(self) -> int:
@@ -323,8 +339,18 @@ def prepare_rows(
         if duplicates:
             removals.append(RowRemoval(reason="duplicate", rows=duplicates))
 
+    snapshot_dates = _snapshot_date_columns(frame, config, reserved=reserved)
+    carried = tuple(
+        CarriedColumn(name=str(column), reason="snapshot_date", detail=_SNAPSHOT_DATE_DETAIL)
+        for column in frame.columns
+        if column in snapshot_dates
+    )
+    if carried:
+        _LOG.info("prepare: %d snapshot-date column(s) carried, not trained on", len(carried))
     feature_columns = tuple(
-        column for column in frame.columns if column not in reserved and column not in redacted
+        column
+        for column in frame.columns
+        if column not in reserved and column not in redacted and column not in snapshot_dates
     )
 
     missing_rows_dropped = 0
@@ -346,6 +372,7 @@ def prepare_rows(
         consent_column=consent_column,
         consent_rows_removed=consent_removed,
         missing_rows_dropped=missing_rows_dropped,
+        carried_columns=carried,
     )
     _LOG.info(
         "stage=prepare phase=rows rows_in=%d rows_out=%d columns_in=%d columns_out=%d seconds=%.3f",
@@ -410,6 +437,7 @@ def fit_transforms(
         row_removals=tuple(removals),
         transforms=tuple(transforms),
         pii_columns=plan.pii_columns,
+        carried_columns=plan.carried_columns,
         consent_column=plan.consent_column,
         consent_rows_removed=plan.consent_rows_removed,
         detail=_prepare_detail(
@@ -418,6 +446,7 @@ def fit_transforms(
             dropped=len(plan.dropped_columns),
             removals=removals,
             missing_rows=plan.missing_rows_dropped,
+            carried=len(plan.carried_columns),
         ),
         prepared_at=utc_now(),
     )
@@ -515,13 +544,53 @@ def _reserved_columns(
     return tuple(reserved)
 
 
-def _detect_pii(frame: pd.DataFrame, reserved: Sequence[str]) -> dict[str, str]:
-    """Columns that look like personal data, mapped to the detector that matched.
+def _snapshot_date_columns(
+    frame: pd.DataFrame, config: UseCaseConfig, *, reserved: Sequence[str]
+) -> frozenset[str]:
+    """The use case's as-of date, when the file carries one: carried with the rows, never learned from.
 
-    A column matches on its **name** whatever its dtype, or on its **values** when it holds text and
-    the majority of the first `_PII_SAMPLE_ROWS` observed values match one of the value patterns.
-    Value matching is limited to text columns on purpose: a twelve-digit integer is an Aadhaar number
-    only in a column that says so, and treating every long number as PII would redact real features.
+    A column named like one of `time_column_hints` (`snapshot_date`, `as_of_date`...) whose values
+    are dates says *when* a row was observed, not anything about the customer, and every scoring
+    file carries a date the model has never seen. Until M36 no such column ever reached a model, but
+    by accident: the old prepare-only PII table read an ISO date as a phone number and redacted it
+    (DEC-092). With that table gone the column would have become a feature of every shipped use
+    case - and a `SCHEMA_MISMATCH` error at scoring time, since the scoring file's dates are new - so
+    the rule it was silently following is now stated here. A constant snapshot date is still dropped
+    as constant first (step 1), which is what `CONSTANT_COLUMN` tells the user; the configured time
+    column of a time-based split is reserved and never reaches this function. Each column found is
+    named in `prepare.json` under `carried_columns` (reason `snapshot_date`), so the Data preparation
+    page can say why it is not a feature; replay leaves it in the frame, as training did.
+    """
+    from engine.config import ColumnType
+    from engine.stages.ingest import infer_column_type
+
+    hints = {hint.lower() for hint in config.time_column_hints}
+    found: set[str] = set()
+    for column in frame.columns:
+        name = str(column)
+        if name in reserved or name.lower() not in hints:
+            continue
+        if infer_column_type(frame[name]) in {ColumnType.DATE, ColumnType.DATETIME}:
+            found.add(name)
+    return frozenset(found)
+
+
+def carried_segment(carried: int) -> str:
+    """The Running-line segment for columns kept with the rows but not trained on."""
+    return f"{carried} as-of date {'column' if carried == 1 else 'columns'} not trained on"
+
+
+def _detect_pii(frame: pd.DataFrame, reserved: Sequence[str]) -> dict[str, str]:
+    """Columns that look like personal data, mapped to the label of the first detector that matched.
+
+    THE ONE DETECTOR (DEC-092). This used to be a second, looser table of its own, which examined
+    every column whatever its type and whose phone shape matched an ISO date, so on the library's
+    online-retail file it redacted `snapshot_date` while the validation report - which reads
+    `engine.stages.ingest.detect_pii` - said nothing about it. It now asks `engine.pii.detect_pii`,
+    column by column, with the type `ingest.infer_column_type` gives the same column: the same
+    function, the same type and the same values the validate stage uses, so a column is redacted
+    here exactly when `PII_DETECTED` named it there.
+
     Reserved columns are never matched - the primary key is meant to identify a customer, and
     redacting it would make the scores unusable.
 
@@ -529,24 +598,18 @@ def _detect_pii(frame: pd.DataFrame, reserved: Sequence[str]) -> dict[str, str]:
     personal data or it is not, whichever partition a row lands in, and the answer has to be the same
     for all three (see step 1 of the order above).
     """
+    from engine.pii import detect_pii
+    from engine.stages.ingest import infer_column_type
+
     found: dict[str, str] = {}
     for column in frame.columns:
         name = str(column)
         if name in reserved:
             continue
-        if _PII_NAME.search(name):
-            found[name] = "column name"
-            continue
-        if not _is_texty(frame, name):
-            continue
-        sampled = [str(value) for value in frame[name].dropna().head(_PII_SAMPLE_ROWS).tolist()]
-        if not sampled:
-            continue
-        needed = max(1, int(len(sampled) * _PII_VALUE_SHARE))
-        for label, pattern in _PII_VALUE_PATTERNS:
-            if sum(1 for value in sampled if pattern.fullmatch(value)) >= needed:
-                found[name] = label
-                break
+        series = frame[name]
+        kinds = detect_pii(series, name, infer_column_type(series))
+        if kinds:
+            found[name] = _PII_LABELS.get(kinds[0], kinds[0])
     return found
 
 
@@ -708,7 +771,7 @@ def _apply_outliers(
         lower = float(observed.quantile(_LOWER_QUANTILE))
         upper = float(observed.quantile(_UPPER_QUANTILE))
         if config.prepare.outliers is Outliers.CLIP:
-            frame[column] = series.clip(lower=lower, upper=upper)
+            frame[column] = _widened(series).clip(lower=lower, upper=upper)
             order += 1
             out.append(
                 Transform(
@@ -774,7 +837,8 @@ def _apply_missing_values(
                 )
             )
             continue
-        frame[column] = series.fillna(value=_fill_object(value, value_kind))
+        filled = _widened(series) if value_kind == "number" else series
+        frame[column] = filled.fillna(value=_fill_object(value, value_kind))
         out.append(
             Transform(
                 order=order,
@@ -831,6 +895,25 @@ def _fill_object(value: float | str | bool, value_kind: _ValueKind) -> float | s
     return str(value)
 
 
+def _widened(series: pd.Series[Any]) -> pd.Series[Any]:
+    """A nullable-integer column (`Int64` and its kin) as `float64`; any other column unchanged.
+
+    A dataset built from raw tables (`engine.onboarding.build`) writes its count features as
+    pandas' nullable integers, because a count can be missing for a customer with no rows in a
+    window, and Parquet reads them back as `Int64`. A clip bound or a fill median is a float, and
+    `Int64` refuses to hold one (`TypeError: Invalid value '2.5' for dtype 'Int64'`), so the run
+    failed at the split stage on the first built dataset it met (DEC-091). A NumPy `int64` column
+    from a CSV upload is upcast by pandas itself and is left exactly as it was, so a Phase 1 run's
+    transforms and recipe are unchanged.
+    """
+    import pandas as pd
+
+    dtype = series.dtype
+    if isinstance(dtype, pd.api.extensions.ExtensionDtype) and pd.api.types.is_integer_dtype(dtype):
+        return series.astype("float64")
+    return series
+
+
 def _is_numeric_feature(frame: pd.DataFrame, column: str) -> bool:
     """Numeric and not boolean: a flag has no first or ninety-ninth percentile worth clipping."""
     import pandas as pd
@@ -848,6 +931,7 @@ def _prepare_detail(
     dropped: int,
     removals: Sequence[RowRemoval],
     missing_rows: int,
+    carried: int = 0,
 ) -> str:
     """The Running-screen line: only the segments that actually happened (plan §2.1 principle 5)."""
     segments = [
@@ -856,6 +940,8 @@ def _prepare_detail(
     ]
     if dropped:
         segments.append(f"{dropped} {'column' if dropped == 1 else 'columns'} dropped")
+    if carried:
+        segments.append(carried_segment(carried))
     removed = sum(removal.rows for removal in removals)
     if removed:
         segments.append(f"{humanise_count(removed)} rows removed")
@@ -916,14 +1002,15 @@ def replay(df: pd.DataFrame, report: PrepareReport) -> pd.DataFrame:
                         "stage=replay transform=clip_percentile column=%s skipped=not_numeric", column
                     )
                     continue
-                frame[column] = frame[column].clip(
+                frame[column] = _widened(frame[column]).clip(
                     lower=float(transform.parameters["lower"]),
                     upper=float(transform.parameters["upper"]),
                 )
             elif transform.kind in ("fill_median", "fill_mode"):
                 value = transform.parameters["value"]
-                kind = str(transform.parameters.get("value_kind", "text"))
-                frame[column] = frame[column].fillna(value=_fill_object(value, _value_kind(kind)))
+                kind = _value_kind(str(transform.parameters.get("value_kind", "text")))
+                target = _widened(frame[column]) if kind == "number" else frame[column]
+                frame[column] = target.fillna(value=_fill_object(value, kind))
     return frame
 
 

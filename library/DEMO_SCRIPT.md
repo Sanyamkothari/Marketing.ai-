@@ -4,7 +4,8 @@ Which dataset to show to whom, and what to click. Every number quoted below is i
 `run_report.md`; none of it is a forecast.
 
 **Before you start.** `python library/<dataset>/fetch.py` for the dataset you are showing, so the
-prepared file exists. Datasets 2–5 need `--config-root library/configs` (DEC-400).
+prepared file exists. Every dataset's use case ships in the repository's own `configs/` (DEC-085),
+so the overview's industry selector reaches all of them and no `--config-root` is needed.
 **Never demo Criteo Uplift — it is CC BY-NC-SA, non-commercial.**
 
 > ### Do not train live at the default budget
@@ -51,6 +52,8 @@ prepared file exists. Datasets 2–5 need `--config-root library/configs` (DEC-4
 
 *The best story in the library, and the only one that needs two runs. Pre-run both.*
 
+**Open it:** Overview → industry selector **Banking** → Awareness → **Term Deposit Conversion**.
+
 1. **Upload** `library/uci-bank-marketing/data/prepared.csv` — 41,188 real campaign calls.
 2. **Show run A** (engine defaults). **Model page** — ROC-AUC **0.951**. Decile 1 subscribes at
    **66 %** against 11 %: **5.9× lift**, capturing **59 %** of all subscriptions in one decile.
@@ -78,6 +81,8 @@ the problem, and the one-line fix.
 
 *The scale story. 381,109 rows, and the most actionable finding in the library.*
 
+**Open it:** Overview → industry selector **Insurance** → Awareness → **Vehicle Policy Cross-sell**.
+
 1. **Upload** `library/health-insurance-cross-sell/data/prepared.csv` — **381,109 policyholders**.
    Let the row count land.
 2. **Run training.** 77 models at the default budget.
@@ -101,6 +106,9 @@ list; it does not forecast revenue.
 
 *Show this when someone asks whether the AutoML is doing anything a logistic regression would not.*
 
+**Open it:** Overview → industry selector **Banking** → Service / Payments → **Card Default
+Propensity**.
+
 1. **Upload** `library/uci-credit-default/data/prepared.csv` — 30,000 card accounts.
 2. **Run training.** 152 models at the default budget.
 3. **Model page** — ROC-AUC **0.796** against a baseline of **0.728**: **+0.068**, the widest
@@ -121,6 +129,8 @@ list; it does not forecast revenue.
 ## E-commerce → UCI Online Retail (win-back)
 
 *Only show this to a technical audience, and only to make a point about honesty.*
+
+**Open it:** Overview → industry selector **E-commerce** → Win-back → **Retail Win-back**.
 
 1. Explain first: this is a **transaction log**, 541,909 invoice lines, not one row per customer.
    `library/online-retail/fetch.py` aggregates it — that work becomes part of the product in

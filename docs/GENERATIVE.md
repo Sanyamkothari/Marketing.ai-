@@ -278,7 +278,7 @@ every document a lexical model has no way to tell apart on meaning; a real embed
 the two by what they mean, not by which words they share. That is why the reference set's floor test
 uses a question whose vocabulary is genuinely disjoint (proving the floor really did catch nothing,
 for the right reason), why the prompt-level refusal is tested separately with
-`GroundedFakeMode.REFUSING`, and why the same-domain off-topic case - where only meaning, not
+`FakeLLMMode.REFUSING`, and why the same-domain off-topic case - where only meaning, not
 vocabulary, tells the two questions apart - is a Bedrock assertion rather than one the fake can stand
 in for.
 
@@ -501,19 +501,21 @@ anywhere in this package, they default to blank, and `LlmConfig` refuses a docum
 `backend: bedrock` while any of the three is still blank - at configuration-load time, naming the
 first one missing, rather than three stages into a run that was always going to fail (DEC-204).
 
-The fake backend is not `FakeLLMClient`, the digest-based fake the rest of the engine already shares.
-`build_client` hands a generative flow `GroundedFakeLLMClient` instead, and DEC-214 explains why a
-second fake was worth writing rather than reusing the first: `FakeLLMClient` derives every answer from
-a SHA-256 of the request, which is exactly right for the seam it was built for - visibly machine-made,
-assertable byte for byte - and exactly wrong for testing retrieval, because a hash embedding has no
-semantics: the chunk that answers a question would sit no closer to it than any other, and a RAG test
-against it would be asserting that one random number beat another for no real reason.
-`GroundedFakeLLMClient` instead hashes a text's words into buckets with a log term frequency, so two
-texts that genuinely share vocabulary really do sit close together, and its completions are built out
-of the prompt it was actually given - the numbered extracts, the evidence pack, the allowed
+The fake backend is `FakeLLMClient`, the one fake the whole engine shares, but not in its default
+`DIGEST` mode: `build_client` hands a generative flow `FakeLLMClient(mode=FakeLLMMode.GROUNDED)`, and
+DEC-214 explains why that second behaviour was worth writing rather than reusing the first. (It was
+written as a second fake class, `GroundedFakeLLMClient`; Plan A ruling D7 folded it into
+`FakeLLMClient` as a set of modes, with no change to what either behaviour returns.) In `DIGEST` mode
+`FakeLLMClient` derives every answer from a SHA-256 of the request, which is exactly right for the
+seam it was built for - visibly machine-made, assertable byte for byte - and exactly wrong for testing
+retrieval, because a hash embedding has no semantics: the chunk that answers a question would sit no
+closer to it than any other, and a RAG test against it would be asserting that one random number beat
+another for no real reason. `GROUNDED` mode instead hashes a text's words into buckets with a log term
+frequency, so two texts that genuinely share vocabulary really do sit close together, and its
+completions are built out of the prompt it was actually given - the numbered extracts, the evidence pack, the allowed
 placeholder list - so a grounded answer under the fake is grounded for the same reason a grounded
-answer under Bedrock is, and `GroundedFakeMode` can then break exactly one guardrail at a time for a
-targeted test.
+answer under Bedrock is, and each of the remaining `FakeLLMMode` values can then break exactly one
+guardrail at a time for a targeted test.
 
 **With a fake backend, no path that renders generated text may be reachable** (plan section 13.3, as
 DEC-214 restates it for this package specifically). This is stricter than "the fake must not be used

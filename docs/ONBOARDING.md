@@ -389,6 +389,13 @@ rows dated before a customer signed up are not built at all. A customer three mo
 existed is zero or blank on every behavioural feature, which is exactly the shape of a customer
 about to leave — train on both and the model learns the shape of a missing row.
 
+Periodic rows also change how the data is split for training. A customer's March and April rows are
+two rows of one customer, and April's features overlap March's outcome window, so a split at random
+by row would grade the model on customers — and on months — it has already seen. **Use this
+dataset** therefore sets Step 2's split to *time-based on `snapshot_date`*: the earliest snapshots
+train, the latest test, the way the model will be used. You can still change it under the advanced
+settings; if you choose a random split, the engine keeps each customer's rows together instead.
+
 ---
 
 ## 7. The build, and what its report tells you
@@ -512,6 +519,19 @@ Next month you upload the new extracts and replay it. No mapping screen, no conf
 decisions — the same transforms applied to the same columns, producing the same shape of dataset.
 Every transform is a pure function of the data and the saved mapping, with no clock and no
 randomness in it, which is exactly what makes an unattended replay safe.
+
+On screen this is **Score new data → Upload this month's tables**. The recipe replayed is the one
+the model you are scoring with was trained on — the model knows which dataset it learned from, and
+the dataset knows its recipe — so there is nothing to pick. Each new file is matched to one of last
+month's: by the same file name, or, failing that, by the role the engine detects for it. Each
+matched file gets last month's mapping, and its role, unchanged.
+
+The mapping screen comes back in exactly one case: a file that no longer has a column last month's
+mapping read — a renamed export field, a dropped column. Only that file's mapping is reopened, with
+the missing column named at the top; point one of the file's own columns at what the old one meant,
+or save the mapping without it, and the replay carries on. A table the recipe needs that this
+month's upload does not include is named too, and nothing is built until it is uploaded. A new
+column that was not there last month is left out, exactly as an unmapped column was the first time.
 
 The recipe is also what makes a result auditable months later. Each built dataset records which
 recipe produced it, which mappings it applied and a fingerprint of every source file it read, so

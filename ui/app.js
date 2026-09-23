@@ -1,12 +1,21 @@
 // The router. Every screen is built from a response the API just gave us; nothing is cached
 // across a reload and nothing is rendered from a value the API did not send.
 
-import { ApiError, getArtefacts, getIndustries, getRun, getRuns, scoresUrl, getUseCase } from "./api.js";
-import { errorBox, esc, pageHead } from "./dom.js";
-import { overviewHtml } from "./overview.js";
+import {
+  ApiError,
+  getArtefacts,
+  getDatasetLineage,
+  getIndustries,
+  getRun,
+  getRuns,
+  scoresUrl,
+  getUseCase,
+} from "./api.js";
+import { backLink, errorBox, esc, pageHead } from "./dom.js";
+import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
 import { PAGE_ARTEFACTS, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
-import { resolveRoute } from "./modules/router.js";
+import { MODULES_CHANGED, resolveRoute } from "./modules/router.js";
 
 const app = document.getElementById("app");
 const PAGES = ["data", "model", "output"];
@@ -20,13 +29,15 @@ async function allIndustries() {
 
 /**
  * `GET /use-cases/{id}` carries the marker and the stars but not the wording beside them; the
- * industry legend is where that lives, so one cached `GET /industries` supplies it.
+ * industry legend is where that lives, so one cached `GET /industries` supplies it. The same
+ * response names the journey the use case belongs to, which its back link and breadcrumb return to.
  */
 async function useCase(id) {
   const [uc, payload] = await Promise.all([getUseCase(id), allIndustries()]);
   const legend = ((payload.industries || [])[0] || {}).legend || [];
   const entry = legend.find((l) => l.ai_type === uc.ai_type);
-  return entry ? { ...uc, type_label: entry.label } : uc;
+  const journey = journeyFor(payload, uc.id);
+  return { ...uc, ...(entry ? { type_label: entry.label } : {}), ...(journey ? { journey } : {}) };
 }
 
 const controllers = new Map();
@@ -56,12 +67,21 @@ function paint(html, after) {
 
 const screen = (inner) => `<main class="screen">${pageHead(inner)}</main>`;
 
-function failure(error) {
+/**
+ * A use case that could not be loaded (a planned card's 404, say) still goes back to the journey it
+ * was opened from; `parts` is the route that failed. When `GET /industries` is what failed, the link
+ * is the bare overview.
+ */
+async function failure(error, parts) {
   const api = error instanceof ApiError ? error : new ApiError(0, "UI_ERROR", String(error), null);
+  const payload = await allIndustries().catch(() => null);
+  const journey = payload && journeyFor(payload, parts[0] === "uc" ? parts[1] : null);
+  const back = backLink(journey ? { journey } : null);
   paint(
-    screen(
-      `<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">This screen could not be loaded</h1>`,
-    ).replace("</main>", `${errorBox(api)}</main>`),
+    screen(`${back}<h1 class="h1">This screen could not be loaded</h1>`).replace(
+      "</main>",
+      `${errorBox(api)}</main>`,
+    ),
   );
 }
 
@@ -69,10 +89,11 @@ function loading(title) {
   paint(screen(`<h1 class="h1">${esc(title)}</h1><p class="sub">Loading…</p>`));
 }
 
-async function showOverview() {
+/** `industryId` comes from `#/industry/<id>`; null opens the API's default journey. */
+async function showOverview(industryId) {
   active = null;
   loading("Marketing AI");
-  paint(overviewHtml(await allIndustries()));
+  paint(overviewHtml(await allIndustries(), industryId), () => bindOverview(app));
 }
 
 async function showUseCase(id, runId) {
@@ -81,6 +102,7 @@ async function showUseCase(id, runId) {
   const controller = controllerFor(uc);
   controller.stop();
   await controller.refreshLists();
+  controller.sync();
   if (runId) {
     await controller.loadRun(runId);
   }
@@ -112,10 +134,25 @@ async function showPage(id, kind, runId) {
   loading(uc.pages[kind]);
   const detail = await getRun(chosen);
   const art = await getArtefacts(chosen, PAGE_ARTEFACTS[kind]);
-  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen)));
+  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), await lineageOf(kind, detail.run)));
 }
 
-async function render() {
+/**
+ * The Data page's lineage block (sources -> mapping -> recipe -> dataset -> run) for a run that read
+ * a built dataset; nothing for a run that read an uploaded file, which has no such history. A
+ * lineage that cannot be read is shown as its error, not as a page that failed to load.
+ */
+async function lineageOf(kind, run) {
+  if (kind !== "data" || !run.dataset_id) return {};
+  try {
+    return { lineage: await getDatasetLineage(run.dataset_id) };
+  } catch (error) {
+    if (error instanceof ApiError) return { lineageError: error };
+    throw error;
+  }
+}
+
+async function renderNow() {
   const parts = window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
   try {
     // A phase branch registers whole screens of its own through `modules/router.js`; nothing is
@@ -127,7 +164,7 @@ async function render() {
       return;
     }
     if (parts[0] !== "uc" || !parts[1]) {
-      await showOverview();
+      await showOverview(parts[0] === "industry" && parts[1] ? decodeURIComponent(parts[1]) : null);
       document.title = "Marketing AI · Minfy";
       return;
     }
@@ -143,9 +180,39 @@ async function render() {
     }
     document.title = `${id} · Marketing AI`;
   } catch (error) {
-    failure(error);
+    await failure(error, parts);
   }
 }
 
+let rendering = null;
+let renderAgain = false;
+
+/**
+ * Draw the current route - one draw at a time, and once more if anything asked meanwhile.
+ *
+ * Draws used to overlap freely, which was harmless while only a hash change started one. Phase
+ * modules now ask for a redraw too (`MODULES_CHANGED`, below), and two overlapping draws of two
+ * different routes can finish out of order: the overview a picker change asked for landing on top of
+ * the use case the user had just clicked into. Every draw reads the hash when it starts, so the one
+ * extra draw after a busy spell is always of the route the user is actually on.
+ */
+function render() {
+  if (rendering) {
+    renderAgain = true;
+    return rendering;
+  }
+  rendering = (async () => {
+    do {
+      renderAgain = false;
+      await renderNow();
+    } while (renderAgain);
+    rendering = null;
+  })();
+  return rendering;
+}
+
 window.addEventListener("hashchange", render);
+// A phase module that registers after the first paint - or whose state the current screen shows,
+// like the client picked in the header - asks for the current route to be drawn again.
+window.addEventListener(MODULES_CHANGED, render);
 render();
