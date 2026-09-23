@@ -177,3 +177,41 @@ def test_the_lineage_block_draws_the_five_layers_in_order() -> None:
     pages = code(UI / "pages.js")
     titles = re.findall(r'lineageColumn\("([A-Za-z]+)"', pages)
     assert titles == ["Sources", "Mapping", "Recipe", "Dataset", "Run"]
+
+
+# ---------------------------------------------------------------------------
+# "Use this dataset" makes a periodic dataset's split time-based
+# ---------------------------------------------------------------------------
+def test_the_time_column_field_is_shown_under_the_time_based_split() -> None:
+    """`adoptTimeSplit` reads the split type it writes from the time column's `visible_when`.
+
+    Filling the time column alone left `split.type` at `random_stratified`, which never reads it:
+    a periodic dataset was split at random by row. The path and the value the Setup form writes
+    are therefore the schema's own, and this pins them to the engine's split enum.
+    """
+    from engine.config import ColumnSource, SplitType, advanced_settings_schema, load_use_case
+
+    schema = advanced_settings_schema(load_use_case("telco-churn"))
+    fields_ = [field for stage in schema.stages for field in stage.fields]
+    time_fields = [field for field in fields_ if field.column_source is ColumnSource.TIME_LIKE]
+    assert len(time_fields) == 1
+    when = time_fields[0].visible_when
+    assert when is not None
+    assert when.path == "split.type"
+    assert when.equals == SplitType.TIME_BASED.value
+    assert when.path in {field.path for field in fields_}
+
+
+def test_use_this_dataset_writes_the_split_type_the_time_column_is_shown_under() -> None:
+    usecase = code(UI / "usecase.js")
+    adopt = usecase[usecase.index("function adoptDataset(") :]
+    adopt = adopt[: adopt.index("\n  }\n")]
+    assert "adoptTimeSplit(dataset.timeColumn)" in adopt
+    assert "fillTimeColumn" not in adopt, "a periodic dataset's time column must overwrite a stale one"
+    split = usecase[usecase.index("function adoptTimeSplit(") :]
+    split = split[: split.index("\n  }\n")]
+    assert "[field.visible_when.path, field.visible_when.equals]" in split
+    assert "written.push([field.path, column || null])" in split
+    assert 's.mode === "train"' in split
+    upload = usecase[usecase.index("function adoptUpload(") :]
+    assert "releaseTimeSplit()" in upload[: upload.index("\n  }\n")]

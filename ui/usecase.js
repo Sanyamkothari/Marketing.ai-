@@ -90,6 +90,7 @@ export function useCaseState(uc) {
       model: AUTOML,
       modelVersionId: "",
       values,
+      datasetSplit: null,
       advOpen: false,
       openStages: [],
       validation: null,
@@ -864,32 +865,72 @@ export function createController(uc, rerender) {
     rerender();
   }
 
-  /** The time column Step 2 fills, into whichever advanced setting the schema says reads one. */
-  function fillTimeColumn(candidate) {
-    const timeField = (uc.advanced_settings.stages || [])
+  /** The advanced setting the schema says reads a time column; `undefined` when none does. */
+  function timeField() {
+    return (uc.advanced_settings.stages || [])
       .flatMap((stage) => stage.fields || [])
       .find((f) => f.column_source === "time_like" && f.widget === "column-select");
-    if (timeField && candidate && !readPath(s.values, timeField.path)) {
-      writePath(s.values, timeField.path, candidate);
+  }
+
+  /** The time column Step 2 fills, into whichever advanced setting the schema says reads one. */
+  function fillTimeColumn(candidate) {
+    const field = timeField();
+    if (field && candidate && !readPath(s.values, field.path)) {
+      writePath(s.values, field.path, candidate);
     }
+  }
+
+  /**
+   * A built dataset's time column, and for a periodic one in training the split it needs: made on
+   * the snapshot date, as the reference prototype's `useDataset()` sets it. Without the split type
+   * the column would be read by nothing, and the rows split at random. The type and its value are
+   * the ones the schema shows the time column under (`visible_when`), so no path or value is spelled
+   * here. What Step 2 held before is overwritten - a time column left from an earlier upload names a
+   * column this dataset does not have - and what was written is remembered for `releaseTimeSplit`.
+   */
+  function adoptTimeSplit(column) {
+    const field = timeField();
+    if (!field) return;
+    releaseTimeSplit();
+    const written = [];
+    if (column && s.mode === "train" && field.visible_when) {
+      written.push([field.visible_when.path, field.visible_when.equals]);
+    }
+    written.push([field.path, column || null]);
+    for (const [path, value] of written) writePath(s.values, path, value);
+    s.datasetSplit = written;
+  }
+
+  /** Back to a prepared file: the use case's own starting values, wherever the user left what a
+   * dataset wrote untouched. */
+  function releaseTimeSplit() {
+    const byPath = indexSchema(uc.advanced_settings || { stages: [] });
+    for (const [path, value] of s.datasetSplit || []) {
+      if (byPath.has(path) && readPath(s.values, path) === value) {
+        writePath(s.values, path, byPath.get(path).value);
+      }
+    }
+    s.datasetSplit = null;
   }
 
   /** Step 2 from an upload's profile: detection proposes the key, the target and the time column. */
   function adoptUpload() {
     const profile = s.upload.profile;
+    releaseTimeSplit();
     s.pk = (profile.primary_key_candidates || [])[0] || "";
     s.target = s.mode === "train" ? profile.target_candidate || "" : "";
     fillTimeColumn((profile.time_column_candidates || [])[0]);
   }
 
   /** Step 2 from a built dataset: its manifest settles the key (both columns), the outcome, the
-   * problem type and the time column - "Use this dataset" fills them all (Plan A M35). */
+   * problem type, the time column and a periodic dataset's split - "Use this dataset" fills them all
+   * (Plan A M35). */
   function adoptDataset() {
     const dataset = s.dataset;
     const key = keyColumns(dataset.primaryKey);
     s.pk = key.length === 1 ? key[0] : key;
     s.target = s.mode === "train" ? dataset.target || "" : "";
-    fillTimeColumn(dataset.timeColumn);
+    adoptTimeSplit(dataset.timeColumn);
   }
 
   /** Step 2 starts again whenever what Step 1 holds changes. */

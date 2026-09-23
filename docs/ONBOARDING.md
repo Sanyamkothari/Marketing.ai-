@@ -389,6 +389,13 @@ rows dated before a customer signed up are not built at all. A customer three mo
 existed is zero or blank on every behavioural feature, which is exactly the shape of a customer
 about to leave — train on both and the model learns the shape of a missing row.
 
+Periodic rows also change how the data is split for training. A customer's March and April rows are
+two rows of one customer, and April's features overlap March's outcome window, so a split at random
+by row would grade the model on customers — and on months — it has already seen. **Use this
+dataset** therefore sets Step 2's split to *time-based on `snapshot_date`*: the earliest snapshots
+train, the latest test, the way the model will be used. You can still change it under the advanced
+settings; if you choose a random split, the engine keeps each customer's rows together instead.
+
 ---
 
 ## 7. The build, and what its report tells you

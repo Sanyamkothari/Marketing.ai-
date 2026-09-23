@@ -19,8 +19,8 @@ The journey, screen by screen:
    client's own column names, one row per invoice, one per ticket, one per login) go into its file
    input. Every proposed role is confirmed, every suggested mapping accepted, the suggested features
    and the use case's own churn definition kept, and the dataset built.
-3. "Use this dataset" fills Step 2 - the key is both columns, the target is the label - and
-   "Run training" trains on it.
+3. "Use this dataset" fills Step 2 - the key is both columns, the target is the label, and the
+   split is time-based on the snapshot date - and "Run training" trains on it.
 4. The Data page shows where the dataset came from: sources -> mapping -> recipe -> dataset -> run.
 5. "Score new data" -> "Upload this month's tables": the same client's extract one month later
    (`make_next_month`) goes into the panel, the saved recipe is replayed onto it with no mapping to
@@ -44,6 +44,7 @@ The module **skips** rather than fails when playwright or a usable browser is mi
 from __future__ import annotations
 
 import csv
+import json
 import os
 import re
 import shutil
@@ -303,6 +304,7 @@ class Journey:
     pk_after_use: str = ""
     target_after_use: str = ""
     problem_type: str = ""
+    split_after_use: str = ""
     train_summary: str = ""
     data_block: tuple[str, str] = ("", "")
     lineage: list[str] = field(default_factory=list)
@@ -382,6 +384,9 @@ def journey(
     seen.pk_after_use = selected_text(page, "#f-pk")
     seen.target_after_use = selected_text(page, "#f-target")
     seen.problem_type = page.locator(".ptype .pill").inner_text().strip()
+    # The advanced settings are folded away, so the split line is read, not seen.
+    split_line = page.locator('.stage-d[data-stage="data_split"] .ss').text_content()
+    seen.split_after_use = (split_line or "").strip()
     at = mark("build", at)
 
     # 3. Train on it.
@@ -471,6 +476,30 @@ def test_use_this_dataset_filled_step_two_from_the_manifest(journey: Journey) ->
     assert journey.pk_after_use == KEY_LABEL
     assert journey.target_after_use == LABEL
     assert journey.problem_type.lower().startswith("classification"), journey.problem_type
+
+
+def test_use_this_dataset_split_the_snapshots_by_time(journey: Journey, workdir: Path) -> None:
+    """A periodic dataset is split on its snapshot date, as the prototype's `useDataset()` sets it.
+
+    Step 2's split line says so, the training run's `run_config.json` carries both leaves as the
+    request's own overrides, and `split.json` reports the split that was actually made: the test
+    part starts after the last training snapshot.
+    """
+    assert (
+        "Time-based" in journey.split_after_use and "by snapshot_date" in journey.split_after_use
+    ), journey.split_after_use
+    trained = [
+        run_dir
+        for run_dir in (workdir / "data" / "runs").iterdir()
+        if json.loads((run_dir / "run.json").read_text(encoding="utf-8"))["mode"] == "train"
+    ]
+    assert len(trained) == 1, trained
+    resolved = json.loads((trained[0] / "run_config.json").read_text(encoding="utf-8"))
+    assert resolved["overrides_applied"]["split"] == {"type": "time_based", "time_column": "snapshot_date"}
+    assert resolved["sources"]["split.type"] == resolved["sources"]["split.time_column"] == "override"
+    split = json.loads((trained[0] / "split.json").read_text(encoding="utf-8"))
+    assert split["type"] == "time_based" and split["time_column"] == "snapshot_date", split
+    assert split["train_cutoff"] < split["test_cutoff"], split
 
 
 def test_the_training_run_read_the_built_dataset(journey: Journey) -> None:

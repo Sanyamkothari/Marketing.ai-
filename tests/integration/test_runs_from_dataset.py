@@ -26,7 +26,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from engine.config import RunMode, load_use_case
+from engine.config import ResolvedConfig, RunMode, load_use_case
 from engine.contracts import RunRecord
 from engine.onboarding.build import build_dataset
 from engine.onboarding.datasets import DATASET_FRAME_FILENAME, LocalDatasetRegistry, dataset_key
@@ -301,7 +301,6 @@ def test_a_periodic_dataset_runs_on_both_key_columns_and_splits_by_entity(
     key columns on `run.json` - never the first alone, which would join on the customer and lose the
     date - and its resolved configuration splits by entity, recorded as a choice the engine made.
     """
-    from engine.config import ResolvedConfig
 
     root = tmp_path_factory.mktemp("runs-periodic")
     _, dataset_id, report = _build(root, mode=SnapshotMode.PERIODIC)
@@ -317,6 +316,81 @@ def test_a_periodic_dataset_runs_on_both_key_columns_and_splits_by_entity(
     resolved = ResolvedConfig.model_validate_json((run_dir / "run_config.json").read_text())
     assert resolved.config.split.group_column == "entity_key"
     assert resolved.sources["split.group_column"] == "derived"
+
+
+@pytest.fixture(scope="module")
+def periodic(tmp_path_factory: pytest.TempPathFactory) -> tuple[Path, str]:
+    root = tmp_path_factory.mktemp("runs-periodic-time")
+    _, dataset_id, report = _build(root, mode=SnapshotMode.PERIODIC)
+    assert report.passed, [
+        (check.code, check.message) for check in report.checks if check.severity.value == "error"
+    ]
+    return root, dataset_id
+
+
+@pytest.fixture
+def quiet(periodic: tuple[Path, str], monkeypatch: pytest.MonkeyPatch) -> tuple[Path, str, TestClient]:
+    """The periodic dataset and an app whose submitted jobs return at once.
+
+    What these tests read - `run_config.json` - is written before the job is submitted, so none of
+    them needs a model fitted; the job seam is the one `test_api_runs.py` stubs (DEC-324).
+    """
+    from api.routes import runs
+
+    monkeypatch.setattr(runs, "build_job_fn", lambda *_args, **_kwargs: lambda _cancel: None)
+    root, dataset_id = periodic
+    return root, dataset_id, TestClient(create_app(data_dir=root / "data"))
+
+
+def _resolved(root: Path, run_id: str) -> ResolvedConfig:
+    return ResolvedConfig.model_validate_json(
+        (root / "data" / "runs" / run_id / "run_config.json").read_text()
+    )
+
+
+def test_a_periodic_dataset_takes_the_time_based_split_use_this_dataset_asks_for(
+    quiet: tuple[Path, str, TestClient],
+) -> None:
+    """Plan A M35: "Use this dataset" posts a time-based split on the snapshot date.
+
+    telco-churn's template describes the Kaggle file, which has no date column, and the template
+    rule used to refuse `split.time_column = snapshot_date` - at `POST /runs`, and again when the job
+    read `run_config.json` back, which is what `_resolved` does here. The standard schema's snapshot
+    column is a use case's time column too, so the request is accepted, recorded as the request's
+    own choice, and readable by the job.
+    """
+    root, dataset_id, client = quiet
+    overrides = {"split.type": "time_based", "split.time_column": "snapshot_date"}
+    response = _post(client, dataset_id=dataset_id, overrides=overrides)
+    assert response.status_code == 202, response.text
+    resolved = _resolved(root, response.json()["run_id"])
+    assert resolved.config.split.type.value == "time_based"
+    assert resolved.config.split.time_column == "snapshot_date"
+    assert resolved.sources["split.time_column"] == "override"
+    assert resolved.overrides_applied["split"]["time_column"] == "snapshot_date"
+
+
+def test_any_other_time_column_on_a_dataset_meets_the_templates_rule_as_before(
+    quiet: tuple[Path, str, TestClient],
+) -> None:
+    """Only the standard schema's snapshot date is added; any other column meets the rule as before."""
+    _, dataset_id, client = quiet
+    overrides = {"split.type": "time_based", "split.time_column": "signup_date"}
+    response = _post(client, dataset_id=dataset_id, overrides=overrides)
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "TEMPLATE_TIME_MISSING"
+
+
+def test_a_time_column_under_a_random_split_is_recorded_exactly_as_before(
+    quiet: tuple[Path, str, TestClient],
+) -> None:
+    root, dataset_id, client = quiet
+    response = _post(client, dataset_id=dataset_id, overrides={"split.time_column": "snapshot_date"})
+    assert response.status_code == 202, response.text
+    resolved = _resolved(root, response.json()["run_id"])
+    assert resolved.config.split.type.value == "random_stratified"
+    assert resolved.config.split.group_column == "entity_key"
+    assert resolved.sources["split.time_column"] == "override"
 
 
 # ---------------------------------------------------------------------------

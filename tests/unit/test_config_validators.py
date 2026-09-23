@@ -244,6 +244,32 @@ def test_template_time_and_consent_cross_checks() -> None:
     )
 
 
+def test_the_standard_schemas_snapshot_date_is_a_time_column_of_a_buildable_use_case() -> None:
+    """Plan A M35: a periodic dataset built from raw tables is split on its snapshot date.
+
+    Accepted for a use case with a standard schema whatever its prepared-file template names; a use
+    case with no standard schema cannot be built from raw tables, so the template alone still rules.
+    """
+    split = {
+        "type": "time_based",
+        "time_column": "snapshot_date",
+        "validation_fraction": 0.15,
+        "test_fraction": 0.15,
+        "group_column": None,
+    }
+    # telco-churn's template is the public Kaggle file, which has no date column at all.
+    document = copy.deepcopy(load_use_case_document("telco-churn"))
+    assert document["standard_schema"]["columns"]
+    assert not [column for column in document["template"]["columns"] if column["role"] == "time"]
+    document["split"] = split
+    assert UseCaseConfig.model_validate(document).split.time_column == "snapshot_date"
+
+    document["standard_schema"] = {"columns": []}
+    with pytest.raises(ConfigError) as error:
+        UseCaseConfig.model_validate(document)
+    assert error.value.code == "TEMPLATE_TIME_MISSING"
+
+
 def test_kpi_band_and_column_checks() -> None:
     _raises(
         "KPI_UNKNOWN_BAND", output={"kpi": {"label": "X", "formula": 'count_where_band_in(["Critical"])'}}

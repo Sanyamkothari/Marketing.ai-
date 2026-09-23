@@ -1366,6 +1366,13 @@ class UseCaseConfig(_Base):
             )
         if self.split.type is SplitType.TIME_BASED and self.split.time_column is not None:
             time_names = {column.name for column in self.template.by_role(ColumnRole.TIME)}
+            if self.standard_schema.columns:
+                # A use case that can be built from raw tables has a second shape besides the
+                # prepared file: the built dataset, whose as-of date is its time column by
+                # definition. "Use this dataset" splits a periodic one on it (Plan A M35), and a
+                # prepared-file template - a public file with no date column, say - need not name
+                # it. Whether an upload has the column is `check_time_column_missing`'s job.
+                time_names.add(self.standard_schema.snapshot_column)
             if self.split.time_column not in time_names:
                 raise ConfigError(
                     "TEMPLATE_TIME_MISSING",
