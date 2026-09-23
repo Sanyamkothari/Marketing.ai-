@@ -493,9 +493,16 @@ not the number — only the kind and the column name (plan §13.7).
 
 **One detector** (DEC-092). This finding and the redaction `prepare` applies come from the same
 function, `engine.pii.detect_pii`, so a column is redacted or dropped exactly when this check names
-it. FLOAT, BOOLEAN, DATE and DATETIME columns are never examined, so a date column is never read as
-a phone number. A header naming an address, street, postcode, zipcode, SSN or passport is enough on
-its own (`pii_kinds` `address`, `ssn`, `passport`): no value pattern can recognise those.
+it. A header that names personal data is enough on its own, whatever the column's type or values:
+`email`/`mail`, `phone`/`mobile`/`msisdn`/`telephone`, `name`/`surname`, `pan`, `aadhaar`, and
+`address`/`street`/`postcode`/`zipcode`, `ssn`, `passport` - so a `phone` column read as decimals
+because a value is missing, or a hashed `email` column, is still reported and redacted. Without such
+a header only the values can speak, and FLOAT, BOOLEAN, DATE and DATETIME columns are never examined
+by value, so a date column is never read as a phone number.
+
+A column named like one of the use case's `time_column_hints` (`snapshot_date`, `as_of_date`...)
+whose values are dates is kept with the rows and never trained on; `prepare.json` names it under
+`carried_columns` (reason `snapshot_date`) and the Data preparation page lists it.
 
 ---
 

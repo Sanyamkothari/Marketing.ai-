@@ -184,6 +184,15 @@ function dataPage(uc, run, art, byPath) {
 
   const dropped = (prepare && prepare.dropped_columns) || [];
   const removals = (prepare && prepare.row_removals) || [];
+  // Kept with the rows but never trained on - the as-of date (DEC-092). Not a dropped column, but
+  // a column the user uploaded that is not a feature has to say why somewhere.
+  const carried = (prepare && prepare.carried_columns) || [];
+  const carriedCard = carried.length
+    ? `<section class="card"><h3>Columns kept, not trained on</h3>${table(
+        ["column", "reason", "detail"],
+        carried.map((c) => [c.name, humanise(c.reason), c.detail]),
+      )}</section>`
+    : "";
   const droppedCard = dropped.length
     ? `<section class="card"><h3>Columns dropped</h3>${table(
         ["column", "reason", "detail"],
@@ -223,7 +232,7 @@ function dataPage(uc, run, art, byPath) {
         ? table(["feature", "type", "missing", "transform"], featureRows)
         : `<div class="empty">This run has not produced ${esc("prepare.json")} yet.</div>`
     }</section>
-    ${droppedCard}${removalCard}`;
+    ${droppedCard}${carriedCard}${removalCard}`;
 }
 
 function describeParameters(parameters) {

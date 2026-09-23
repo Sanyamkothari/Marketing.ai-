@@ -43,6 +43,7 @@ from engine.stages.scorer import (
     ThresholdFallback,
     choose_operating_point,
     choose_threshold,
+    fallback_flagged_rate,
     fit_baseline_scorer,
     threshold_metric,
 )
@@ -93,6 +94,32 @@ def test_an_optimum_above_the_ceiling_falls_back_to_the_top_decile() -> None:
     assert THRESHOLD_FALLBACK in choice.detail
     assert "above the 30% ceiling" in choice.detail
     assert choice.detail.startswith("Auto, fell back to the top 10% of validation scores")
+
+
+def test_a_ceiling_below_a_tenth_caps_the_fallback_too() -> None:
+    """The fallback enforces the ceiling it was called for: it never flags more than it allows.
+
+    With a 5 % ceiling an optimum flagging 6 % is refused; the top decile would flag 10 % - more
+    than the ceiling and more than the refused optimum - so the fallback is the top 5 % instead.
+    """
+    rows, positives = 1000, 60
+    scores = np.linspace(0.0, 0.5, rows)
+    scores[-positives:] += 0.4  # sixty well-separated positives: the F1 optimum takes exactly them
+    actual = np.zeros(rows, dtype=bool)
+    actual[-positives:] = True
+    five = ThresholdConfig(max_flagged_rate=0.05)
+    choice = choose_operating_point(scores, actual, five)
+    assert choice.fallback is not None
+    assert choice.fallback.optimum_flagged_rate == pytest.approx(0.06)
+    assert flagged(scores, choice.threshold) <= 0.05
+    assert choice.fallback.fallback_flagged_rate == pytest.approx(0.05)
+    assert choice.fallback.fallback_flagged_rate < choice.fallback.optimum_flagged_rate
+    assert choice.detail.startswith("Auto, fell back to the top 5% of validation scores")
+    assert "above the 5% ceiling" in choice.detail
+    assert fallback_flagged_rate(None) == fallback_flagged_rate(0.30) == FALLBACK_FLAGGED_RATE
+    assert fallback_flagged_rate(0.025) == 0.025
+    odd = choose_operating_point(scores, actual, ThresholdConfig(max_flagged_rate=0.025))
+    assert odd.detail.startswith("Auto, fell back to the top 2.5% of validation scores")
 
 
 def test_flagging_every_row_falls_back_even_without_a_ceiling() -> None:

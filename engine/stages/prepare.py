@@ -130,7 +130,15 @@ from time import perf_counter
 from typing import TYPE_CHECKING, Final, Literal
 
 from engine.config import MissingValues, Outliers, PiiHandling, ProblemType, SplitType
-from engine.contracts import DroppedColumn, PrepareReport, RowRemoval, SplitPart, SplitReport, Transform
+from engine.contracts import (
+    CarriedColumn,
+    DroppedColumn,
+    PrepareReport,
+    RowRemoval,
+    SplitPart,
+    SplitReport,
+    Transform,
+)
 from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger
 from engine.utils.text import humanise_count
@@ -143,11 +151,21 @@ if TYPE_CHECKING:
 
     from engine.config import UseCaseConfig
 
-__all__ = ["RowPlan", "fit_transforms", "prepare", "prepare_rows", "replay", "split_dataset"]
+__all__ = [
+    "RowPlan",
+    "carried_segment",
+    "fit_transforms",
+    "prepare",
+    "prepare_rows",
+    "replay",
+    "split_dataset",
+]
 
 _LOG = get_logger(__name__)
 
 REDACTION: Final[str] = "[REDACTED]"
+
+_SNAPSHOT_DATE_DETAIL: Final[str] = "The as-of date of each row: kept with the rows, not trained on."
 
 _LOWER_QUANTILE: Final[float] = 0.01
 _UPPER_QUANTILE: Final[float] = 0.99
@@ -197,6 +215,7 @@ class RowPlan:
     consent_column: str | None
     consent_rows_removed: int
     missing_rows_dropped: int
+    carried_columns: tuple[CarriedColumn, ...] = ()
 
     @property
     def last_order(self) -> int:
@@ -321,8 +340,13 @@ def prepare_rows(
             removals.append(RowRemoval(reason="duplicate", rows=duplicates))
 
     snapshot_dates = _snapshot_date_columns(frame, config, reserved=reserved)
-    if snapshot_dates:
-        _LOG.info("prepare: %d snapshot-date column(s) carried, not trained on", len(snapshot_dates))
+    carried = tuple(
+        CarriedColumn(name=str(column), reason="snapshot_date", detail=_SNAPSHOT_DATE_DETAIL)
+        for column in frame.columns
+        if column in snapshot_dates
+    )
+    if carried:
+        _LOG.info("prepare: %d snapshot-date column(s) carried, not trained on", len(carried))
     feature_columns = tuple(
         column
         for column in frame.columns
@@ -348,6 +372,7 @@ def prepare_rows(
         consent_column=consent_column,
         consent_rows_removed=consent_removed,
         missing_rows_dropped=missing_rows_dropped,
+        carried_columns=carried,
     )
     _LOG.info(
         "stage=prepare phase=rows rows_in=%d rows_out=%d columns_in=%d columns_out=%d seconds=%.3f",
@@ -412,6 +437,7 @@ def fit_transforms(
         row_removals=tuple(removals),
         transforms=tuple(transforms),
         pii_columns=plan.pii_columns,
+        carried_columns=plan.carried_columns,
         consent_column=plan.consent_column,
         consent_rows_removed=plan.consent_rows_removed,
         detail=_prepare_detail(
@@ -420,6 +446,7 @@ def fit_transforms(
             dropped=len(plan.dropped_columns),
             removals=removals,
             missing_rows=plan.missing_rows_dropped,
+            carried=len(plan.carried_columns),
         ),
         prepared_at=utc_now(),
     )
@@ -530,7 +557,9 @@ def _snapshot_date_columns(
     case - and a `SCHEMA_MISMATCH` error at scoring time, since the scoring file's dates are new - so
     the rule it was silently following is now stated here. A constant snapshot date is still dropped
     as constant first (step 1), which is what `CONSTANT_COLUMN` tells the user; the configured time
-    column of a time-based split is reserved and never reaches this function.
+    column of a time-based split is reserved and never reaches this function. Each column found is
+    named in `prepare.json` under `carried_columns` (reason `snapshot_date`), so the Data preparation
+    page can say why it is not a feature; replay leaves it in the frame, as training did.
     """
     from engine.config import ColumnType
     from engine.stages.ingest import infer_column_type
@@ -544,6 +573,11 @@ def _snapshot_date_columns(
         if infer_column_type(frame[name]) in {ColumnType.DATE, ColumnType.DATETIME}:
             found.add(name)
     return frozenset(found)
+
+
+def carried_segment(carried: int) -> str:
+    """The Running-line segment for columns kept with the rows but not trained on."""
+    return f"{carried} as-of date {'column' if carried == 1 else 'columns'} not trained on"
 
 
 def _detect_pii(frame: pd.DataFrame, reserved: Sequence[str]) -> dict[str, str]:
@@ -877,6 +911,7 @@ def _prepare_detail(
     dropped: int,
     removals: Sequence[RowRemoval],
     missing_rows: int,
+    carried: int = 0,
 ) -> str:
     """The Running-screen line: only the segments that actually happened (plan §2.1 principle 5)."""
     segments = [
@@ -885,6 +920,8 @@ def _prepare_detail(
     ]
     if dropped:
         segments.append(f"{dropped} {'column' if dropped == 1 else 'columns'} dropped")
+    if carried:
+        segments.append(carried_segment(carried))
     removed = sum(removal.rows for removal in removals)
     if removed:
         segments.append(f"{humanise_count(removed)} rows removed")

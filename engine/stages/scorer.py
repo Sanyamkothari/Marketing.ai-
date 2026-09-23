@@ -44,9 +44,9 @@ predictor. The mapping itself is stored beside `scorer.json` (`engine.column_nam
 `scorer.json` stays exactly what the train stage wrote.
 
 `auto`'s threshold is defined in :func:`choose_operating_point` (DEC-094): the configured metric's
-optimum on validation, refused for the top decile - with a `THRESHOLD_FALLBACK` record in
-`scorer.json` and a sentence in `threshold_detail` - when it flags more rows than
-`evaluation.threshold.max_flagged_rate` allows, or every row.
+optimum on validation, refused for the top decile (or the ceiling itself, when that is lower) -
+with a `THRESHOLD_FALLBACK` record in `scorer.json` and a sentence in `threshold_detail` - when it
+flags more rows than `evaluation.threshold.max_flagged_rate` allows, or every row.
 
 `sklearn`, `numpy` and `autogluon` are imported inside function bodies: importing the engine must
 not pull a heavy library in (`tests/integration/test_engine_imports.py`).
@@ -103,6 +103,7 @@ __all__ = [
     "brier_score",
     "choose_operating_point",
     "choose_threshold",
+    "fallback_flagged_rate",
     "fit_baseline_scorer",
     "fit_calibrator",
     "fit_scorer",
@@ -138,7 +139,12 @@ THRESHOLD_FALLBACK: Final[str] = "THRESHOLD_FALLBACK"
 """The code `auto` records when its optimum was refused and the top decile was used instead (DEC-094)."""
 
 FALLBACK_FLAGGED_RATE: Final[float] = 0.10
-"""The fallback operating point: the top decile of the validation scores."""
+"""The fallback operating point: the top decile of the validation scores.
+
+A configured ceiling below a tenth caps it (`fallback_flagged_rate`): a fallback that flagged more
+rows than the ceiling it enforces - and than the optimum it refused - would contradict its own
+`THRESHOLD_FALLBACK` record.
+"""
 
 _THRESHOLD_METRICS: Final[frozenset[Metric]] = frozenset({Metric.F1, Metric.RECALL, Metric.PRECISION})
 """The configurable metrics a threshold can change. ROC-AUC and PR-AUC read the ranking alone, so
@@ -462,17 +468,29 @@ def _flagged_at(sorted_scores: FloatArray, value: float) -> int:
     return int((sorted_scores >= value).sum())
 
 
-def _top_decile_threshold(scores: FloatArray, actual: BoolArray) -> tuple[float, int] | None:
-    """The cut flagging the most rows without passing `FALLBACK_FLAGGED_RATE`, and how many it flags.
+def fallback_flagged_rate(ceiling: float | None) -> float:
+    """The share the fallback may flag: the top decile, or the ceiling when the ceiling is lower."""
+    return FALLBACK_FLAGGED_RATE if ceiling is None else min(FALLBACK_FLAGGED_RATE, ceiling)
 
-    When the highest-scoring tie alone is larger than a tenth of the rows, that tie is the smallest
-    group the model can single out, and it is taken; when it is every row the model ranks nobody
-    above anybody, and there is no top decile to fall back to (`None`).
+
+def _percent(rate: float) -> str:
+    """`0.3` as `30%` and `0.025` as `2.5%`: a configured share, printed as it was configured."""
+    return f"{rate * 100:g}%"
+
+
+def _top_decile_threshold(
+    scores: FloatArray, actual: BoolArray, rate: float = FALLBACK_FLAGGED_RATE
+) -> tuple[float, int] | None:
+    """The cut flagging the most rows without passing `rate` of them, and how many it flags.
+
+    When the highest-scoring tie alone is larger than that share of the rows, that tie is the
+    smallest group the model can single out, and it is taken; when it is every row the model ranks
+    nobody above anybody, and there is no top decile to fall back to (`None`).
     """
     import math
 
     sorted_scores, _, _, candidates = _sweep(scores, actual)
-    limit = max(1, math.floor(FALLBACK_FLAGGED_RATE * scores.size))
+    limit = max(1, math.floor(rate * scores.size))
     best: tuple[float, int] | None = None
     for index in candidates:
         value = _as_threshold(float(sorted_scores[int(index)]))
@@ -505,7 +523,8 @@ def _fallback_reason(label: str, flagged: int, rows: int, ceiling: float | None)
     if flagged == rows or ceiling is None:
         return f"maximising {label} flags every validation row, which decides nothing"
     return (
-        f"maximising {label} flags {flagged / rows:.0%} of validation rows, above the {ceiling:.0%} ceiling"
+        f"maximising {label} flags {flagged / rows:.0%} of validation rows, "
+        f"above the {_percent(ceiling)} ceiling"
     )
 
 
@@ -525,8 +544,9 @@ def choose_operating_point(
     **`auto`, precisely (DEC-094).** Take the threshold that maximises the configured metric on
     validation (`threshold_metric`: F1, recall or precision; F1 for a ranking metric). If that
     optimum flags more than `threshold.max_flagged_rate` of the validation rows, or flags every row,
-    it is refused, the top decile of the validation scores is used instead, and the choice carries a
-    `THRESHOLD_FALLBACK` record saying why. On a weak model over a base rate near a half the F1
+    it is refused, the top decile of the validation scores is used instead - the top
+    `max_flagged_rate` when the ceiling is below a tenth, so the fallback never flags more than the
+    ceiling it enforces - and the choice carries a `THRESHOLD_FALLBACK` record saying why. On a weak model over a base rate near a half the F1
     optimum really is "call everybody positive" - recall 1.0, specificity 0.0 on the library's
     online-retail file - which reads as a triumph on the Model page and is no decision at all. The
     ceiling is a policy, not a statistic: the share of an audience a campaign can act on.
@@ -552,7 +572,8 @@ def choose_operating_point(
         detail = f"Auto (maximises {label} on validation): {_format_threshold(chosen)}"
         return ThresholdChoice(chosen, ThresholdMode.AUTO, detail)
     reason = _fallback_reason(label, flagged, rows, ceiling)
-    decile = _top_decile_threshold(scores, actual)
+    share = fallback_flagged_rate(ceiling)
+    decile = _top_decile_threshold(scores, actual, share)
     if decile is None:
         reason += "; every validation row has the same score, so there is no top decile to use"
         fallback_value = FIXED_THRESHOLD
@@ -560,7 +581,7 @@ def choose_operating_point(
         where = f"{FIXED_THRESHOLD:.2f}"
     else:
         fallback_value, fallback_flagged = decile
-        where = f"the top {FALLBACK_FLAGGED_RATE:.0%} of validation scores"
+        where = f"the top {_percent(share)} of validation scores"
     record = ThresholdFallback(
         reason=reason,
         metric=maximised,

@@ -1172,6 +1172,8 @@ def _row_phase_detail(plan: prepare.RowPlan, rows: int) -> str:
     dropped = len(plan.dropped_columns)
     if dropped:
         segments.append(f"{dropped} {'column' if dropped == 1 else 'columns'} dropped")
+    if plan.carried_columns:
+        segments.append(prepare.carried_segment(len(plan.carried_columns)))
     return " · ".join(segments)
 
 

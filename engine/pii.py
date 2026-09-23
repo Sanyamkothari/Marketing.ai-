@@ -16,6 +16,9 @@ the old detectors each knew is kept, as one table:
 
 * **Value detectors** (:data:`VALUE_DETECTORS`): e-mail, phone, PAN, Aadhaar and personal name,
   each with a value pattern, a column-name pattern and the calibrated rates ingest already used.
+  A header matching the column-name pattern is enough on its own, as it was for prepare: merging
+  must leave every column prepare redacted still redacted, so the one detector is at least as
+  strict as each old one (a `phone` column read as float64, a hashed `email` column).
   The patterns are the union of the shapes both old tables recognised - prepare's e-mail accepted
   any non-space local part, its phone shape accepted dots and parentheses - minus the one shape
   that was never a phone number: an ISO date. ``tests/unit/test_pii.py`` holds a case for every
@@ -25,9 +28,10 @@ the old detectors each knew is kept, as one table:
   column called `street_address` must not stop being redacted because the detectors were merged.
   They keep that meaning, now visible to the validation report as well.
 
-The type gate is ingest's: FLOAT, BOOLEAN, DATE and DATETIME columns are never examined, and an
-INTEGER column only for the digit-shaped kinds. That gate is exactly what prepare lacked when it
-redacted a date column.
+The type gate is ingest's and applies to the values: FLOAT, BOOLEAN, DATE and DATETIME columns are
+never examined by value, and an INTEGER column only for the digit-shaped kinds. That gate is exactly
+what prepare lacked when it redacted a date column by value; a header that names personal data
+still fires whatever the type.
 
 Whole cells and free text (DEC-095, ruling D5)
 ----------------------------------------------
@@ -104,21 +108,20 @@ point: an id like `ACC-1234567` contains a phone-shaped run and must not be repo
 class PiiDetector:
     """One PII shape: what its values look like, what its column is usually called, and how sure.
 
-    `value_pattern` is `None` for a name-only detector: the header is the only evidence there can
-    be, and a header that matches is enough on its own.
+    A header matching `name_pattern` is enough on its own for every detector. `value_pattern` is
+    `None` for a name-only detector: the header is the only evidence there can be.
 
     `min_distinct_ratio` guards the *values alone* branch: the share of the sampled values that
     must be distinct before the value pattern may fire on its own. It stays 0 for a shape no
     ordinary column wears by accident (an e-mail address, an Aadhaar number) and rises above 0 for
     a shape that is also the shape of a perfectly innocent category level. It never touches the
-    name-assisted branch, so a column whose *name* says it holds names is judged exactly as before.
+    header, so a column whose *name* says it holds names is caught however its values look.
     """
 
     kind: str
     value_pattern: re.Pattern[str] | None
     name_pattern: re.Pattern[str] | None
     min_value_match_rate: float
-    name_assisted_rate: float = 0.20
     min_distinct_ratio: float = 0.0
     digit_shaped: bool = False
 
@@ -185,7 +188,7 @@ VALUE_DETECTORS: Final[tuple[PiiDetector, ...]] = (
         # What really separates the two is vocabulary size: names are open-ended and near-unique,
         # a category is a small fixed set repeated over and over. So on values alone the detector
         # also demands an open vocabulary (`min_distinct_ratio`); a column whose name says `name`
-        # still fires through the name-assisted branch however few distinct values it carries.
+        # still fires on its header alone however few distinct values it carries.
         value_pattern=re.compile(r"[A-Z][a-z]+(?:[ '\-][A-Z][a-z]+){0,3}"),
         name_pattern=re.compile(
             r"(?i)(^|_)(name|first_name|last_name|full_name|given_name|surname|"
@@ -256,33 +259,40 @@ def _sample(series: pd.Series[Any]) -> list[str]:
 def detect_pii(series: pd.Series[Any], name: str, inferred: ColumnType) -> tuple[str, ...]:
     """Detector kinds that fired, in `DETECTORS` order. Never returns, stores or logs a value.
 
-    A value detector fires on its values alone (`min_value_match_rate` of whole cells, and an open
-    enough vocabulary), or on a matching header plus `name_assisted_rate` of matching cells. A
-    name-only detector fires on its header. Either way the column's type must be one the gate
-    admits, and an INTEGER column is examined only for the digit-shaped kinds.
+    A header that matches a detector's `name_pattern` fires that detector on its own, whatever the
+    column's type and whatever its values: `phone`, `customer_name` or `email` says what the column
+    holds, and the old prepare table redacted such a column on its header alone. Merging the
+    detectors must not loosen that (DEC-092) - a `phone` column pandas reads as float64 because one
+    value is missing, an upper-case `CUSTOMER_NAME` column or a hashed `email` column is still
+    redacted, and its values can never reach a reason or `scores.csv`.
+
+    Without such a header only the values can speak, and then the type gate applies: FLOAT,
+    BOOLEAN, DATE and DATETIME columns are never examined, an INTEGER column only for the
+    digit-shaped kinds, and a value detector needs `min_value_match_rate` of whole cells plus an
+    open enough vocabulary. That gate is what stops an ISO date being read as a phone number.
     """
-    if inferred not in _EXAMINED_TYPES:
-        return ()
-    textual = inferred is not ColumnType.INTEGER
-    sample = _sample(series)
-    if not sample:
-        return ()
-    distinct_ratio = len(set(sample)) / len(sample)
     fired: list[str] = []
+    named = {
+        detector.kind
+        for detector in DETECTORS
+        if detector.name_pattern is not None and detector.name_pattern.search(name) is not None
+    }
+    examined = inferred in _EXAMINED_TYPES
+    textual = inferred is not ColumnType.INTEGER
+    sample = _sample(series) if examined else []
+    distinct_ratio = len(set(sample)) / len(sample) if sample else 0.0
     for detector in DETECTORS:
-        named = detector.name_pattern is not None and detector.name_pattern.search(name) is not None
+        if detector.kind in named:
+            fired.append(detector.kind)
+            continue
         pattern = detector.value_pattern
-        if pattern is None:
-            if named:
-                fired.append(detector.kind)
+        if pattern is None or not sample:
             continue
         if not textual and not detector.digit_shaped:
             continue
         matches = sum(1 for value in sample if pattern.fullmatch(value) is not None)
         rate = matches / len(sample)
-        by_values = rate >= detector.min_value_match_rate and distinct_ratio >= detector.min_distinct_ratio
-        by_name = named and rate >= detector.name_assisted_rate
-        if by_values or by_name:
+        if rate >= detector.min_value_match_rate and distinct_ratio >= detector.min_distinct_ratio:
             fired.append(detector.kind)
     return tuple(fired)
 

@@ -52,6 +52,7 @@ __all__ = [
     "BaselineMetric",
     "BestModel",
     "CalibrationSummary",
+    "CarriedColumn",
     "CategoryCount",
     "ColumnProfile",
     "ComputeBackend",
@@ -531,6 +532,21 @@ class DroppedColumn(Artefact):
     detail: str = Field(default="", description="One line of extra context, for example the null rate.")
 
 
+class CarriedColumn(Artefact):
+    """One column kept with the rows but never trained on, and why (DEC-092).
+
+    Not a dropped column: it stays in the prepared frame and in the scoring file, so replay leaves it
+    alone. It is recorded so the Data preparation page can say why a column the user uploaded is
+    not a feature, instead of saying nothing.
+    """
+
+    name: str = Field(description="Name of the carried column.")
+    reason: Literal["snapshot_date"] = Field(
+        description="Why the column is not trained on: `snapshot_date` is the use case's as-of date."
+    )
+    detail: str = Field(default="", description="One line of extra context for the Data preparation page.")
+
+
 class RowRemoval(Artefact):
     """Rows removed by one prepare rule."""
 
@@ -566,6 +582,9 @@ class PrepareReport(Artefact):
     row_removals: tuple[RowRemoval, ...] = Field(description="Row removals grouped by reason.")
     transforms: tuple[Transform, ...] = Field(description="Transforms in replay order.")
     pii_columns: tuple[str, ...] = Field(default=(), description="Columns the PII detectors matched.")
+    carried_columns: tuple[CarriedColumn, ...] = Field(
+        default=(), description="Columns kept with the rows but not trained on, with reasons."
+    )
     consent_column: str | None = Field(default=None, description="Consent column applied, when configured.")
     consent_rows_removed: int = Field(default=0, description="Rows removed because consent was not given.")
     detail: str = Field(description="Pre-formatted Running-screen line for the preparation step.")

@@ -193,16 +193,92 @@ def test_a_header_that_names_an_address_ssn_or_passport_is_enough(header: str, k
 def test_every_header_prepare_matched_still_leads_to_its_kind(
     header: str, values: list[object], kind: str
 ) -> None:
-    """prepare's other header tokens: a header plus a share of matching values (ingest's rule)."""
+    """prepare's header tokens with a few matching values: still their kind (the header is enough)."""
     assert kind in kinds_of(values, name=header)
 
 
+#: Every header token of the old prepare `_PII_NAME`, with the kind the one detector reports for it.
+PREPARE_HEADER_TOKENS: tuple[tuple[str, str], ...] = (
+    ("email", "email"),
+    ("mail", "email"),
+    ("phone", "phone"),
+    ("mobile", "phone"),
+    ("msisdn", "phone"),
+    ("telephone", "phone"),
+    ("name", "name"),
+    ("surname", "name"),
+    ("address", "address"),
+    ("street", "address"),
+    ("postcode", "address"),
+    ("zipcode", "address"),
+    ("aadhaar", "aadhaar"),
+    ("aadhar", "aadhaar"),
+    ("pan", "pan"),
+    ("ssn", "ssn"),
+    ("passport", "passport"),
+)
+
+
+@pytest.mark.parametrize(("token", "kind"), PREPARE_HEADER_TOKENS)
+def test_a_header_prepare_matched_is_enough_on_its_own(token: str, kind: str) -> None:
+    """prepare's `_PII_NAME` redacted a column on its header alone, whatever its type or values.
+
+    The one detector keeps that for every token (DEC-092): values that match nothing, a float
+    column, an all-missing column, an upper-case or prefixed header - still the header's kind.
+    """
+    hashed = [f"h{index:06x}" for index in range(30)]
+    floats = [float(9876543210 + index) if index % 7 else float("nan") for index in range(30)]
+    for header in (token, token.upper(), f"customer_{token}", f"{token}_1"):
+        assert kind in kinds_of(list(hashed), name=header), header
+        assert kind in kinds_of(list(floats), name=header), header
+        assert kind in pii.detect_pii(pd.Series([None] * 5, dtype=object), header, ColumnType.STRING)
+        assert kind in pii.detect_pii(pd.Series([True, False] * 5), header, ColumnType.BOOLEAN)
+
+
 def test_the_type_gate_is_the_one_both_call_sites_use() -> None:
-    """FLOAT, BOOLEAN, DATE and DATETIME are never examined - the gate prepare used to lack."""
+    """FLOAT, BOOLEAN, DATE and DATETIME are never examined by value - the gate prepare used to lack.
+
+    Only the values are gated: a header that names personal data still fires on its own (above).
+    """
     dates = pd.to_datetime(pd.Series(["2011-09-10"] * 20))
     assert pii.detect_pii(dates, "snapshot_date", ColumnType.DATE) == ()
-    assert pii.detect_pii(pd.Series([True, False] * 5), "has_address", ColumnType.BOOLEAN) == ()
-    assert pii.detect_pii(pd.Series([9876543210.5] * 5), "phone", ColumnType.FLOAT) == ()
+    assert pii.detect_pii(pd.Series([True, False] * 5), "has_contract", ColumnType.BOOLEAN) == ()
+    assert pii.detect_pii(pd.Series([9876543210.5] * 5), "amount", ColumnType.FLOAT) == ()
+    assert pii.detect_pii(pd.Series([9876543210.5] * 5), "phone", ColumnType.FLOAT) == ("phone",)
+
+
+def _header_only_frame(rows: int = 200) -> pd.DataFrame:
+    """The review's probe: PII columns whose headers say so and whose values do not look it.
+
+    `phone` is float64 because every seventh number is missing, `customer_name` is upper case (the
+    name pattern wants `Title Case`) and `email` holds hashes. Before M36 prepare redacted all three
+    on their headers; the first merge of the detectors made them model features.
+    """
+    return pd.DataFrame(
+        {
+            "customer_id": [f"C-{10000 + i}" for i in range(rows)],
+            "phone": [float(9876543210 + i) if i % 7 else float("nan") for i in range(rows)],
+            "customer_name": [f"JOHN SMITH {i}" for i in range(rows)],
+            "email": [f"hash{i:03d}" for i in range(rows)],
+            "tenure_months": [i % 60 for i in range(rows)],
+            "churned": [0, 1] * (rows // 2),
+        }
+    )
+
+
+def test_header_named_pii_is_redacted_and_reported_whatever_its_values() -> None:
+    """Stricter than the first merge, identical to old prepare, and the report still agrees."""
+    frame = _header_only_frame()
+    assert frame["phone"].dtype == "float64"
+    config = load_use_case("telco-churn")
+    _, plan = prepare.prepare_rows(frame, config, primary_key="customer_id", target="churned")
+    assert set(plan.pii_columns) == {"phone", "customer_name", "email"}
+    assert not {"phone", "customer_name", "email"} & set(plan.feature_columns)
+    facts = validate.derive_facts(frame)
+    assert {name for name, kinds in facts.pii_kinds.items() if kinds} == {"phone", "customer_name", "email"}
+    assert facts.pii_kinds["phone"] == ("phone",)
+    assert facts.pii_kinds["customer_name"] == ("name",)
+    assert facts.pii_kinds["email"] == ("email",)
 
 
 def test_ingest_and_the_generative_redaction_use_the_one_table() -> None:
@@ -258,6 +334,29 @@ def test_a_live_snapshot_date_is_neither_reported_nor_redacted() -> None:
     # out, now because it is the use case's snapshot date, and is carried with the rows.
     assert "snapshot_date" not in plan.feature_columns
     assert "snapshot_date" in rows.columns
+
+
+def test_a_carried_snapshot_date_is_named_in_prepare_json_and_left_in_the_scoring_frame() -> None:
+    """Not a feature, not dropped, and not silent: `carried_columns` says why (DEC-092).
+
+    Before M36 the as-of date at least appeared under `pii_columns`; without that false flag the
+    Data preparation page would show nothing about a column the user uploaded and no model uses.
+    """
+    frame = _mixed_frame()
+    config = load_use_case("telco-churn")
+    rows, plan = prepare.prepare_rows(frame, config, primary_key="customer_id", target="churned")
+    assert [(column.name, column.reason) for column in plan.carried_columns] == [
+        ("snapshot_date", "snapshot_date")
+    ]
+    assert "snapshot_date" not in {column.name for column in plan.dropped_columns}
+    _, report = prepare.fit_transforms(rows, config, plan, run_id="run_test")
+    assert report.carried_columns == plan.carried_columns
+    assert "not trained on" in report.carried_columns[0].detail
+    assert report.detail.endswith("1 as-of date column not trained on")
+    # the column is carried, so replay leaves it where scoring and export expect it
+    assert "snapshot_date" in prepare.replay(frame, report).columns
+    # and the artefact round-trips through its contract
+    assert '"carried_columns"' in dump_artefact(report)
 
 
 def test_every_shipped_use_case_trains_on_exactly_the_columns_it_did_before() -> None:

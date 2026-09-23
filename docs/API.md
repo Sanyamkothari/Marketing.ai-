@@ -804,6 +804,7 @@ One row of the validation table, already interpolated for the user.
 | `row_removals` | list[RowRemoval] | yes | Row removals grouped by reason. |
 | `transforms` | list[Transform] | yes | Transforms in replay order. |
 | `pii_columns` | list[string] | no | Columns the PII detectors matched. |
+| `carried_columns` | list[CarriedColumn] | no | Columns kept with the rows but not trained on, with reasons. |
 | `consent_column` | string \| null | no | Consent column applied, when configured. |
 | `consent_rows_removed` | integer | no | Rows removed because consent was not given. |
 | `detail` | string | yes | Pre-formatted Running-screen line for the preparation step. |
@@ -841,6 +842,17 @@ One transform fitted on the training data and replayed at score time.
 | `kind` | "fill_median" \| "fill_mode" \| "clip_percentile" \| "redact" \| "cast" \| "dedupe" \| "consent_filter" | yes | Kind of transform applied. |
 | `columns` | list[string] | yes | Columns the transform was applied to. |
 | `parameters` | object of string -> number \| string \| boolean | no | Fitted parameters, so scoring replays the transform identically. |
+
+#### CarriedColumn
+
+One column kept with the rows but never trained on, and why (DEC-092).  Not a dropped column: it stays in the prepared frame and in the scoring file, so replay leaves it alone. It is recorded so the Data preparation page can say why a column the user uploaded is not a feature, instead of saying nothing.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `name` | string | yes | Name of the carried column. |
+| `reason` | "snapshot_date" | yes | Why the column is not trained on: `snapshot_date` is the use case's as-of date. |
+| `detail` | string | no | One line of extra context for the Data preparation page. |
 
 ### `split.json`
 
