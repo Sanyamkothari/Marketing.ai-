@@ -31,12 +31,14 @@ catalog:
     precision: {label: "Precision", autogluon_name: precision,               problem_types: [binary_classification], greater_is_better: true}
     rmse:      {label: "RMSE",      autogluon_name: root_mean_squared_error, problem_types: [regression],            greater_is_better: false}
     mae:       {label: "MAE",       autogluon_name: mean_absolute_error,     problem_types: [regression],            greater_is_better: false}
+    auuc:      {label: "AUUC",      autogluon_name: auuc,                    problem_types: [uplift],                greater_is_better: true}    # Phase 3b (DEC-601): area between the uplift curve and random targeting; computed by engine/uplift/metrics.py, never by AutoGluon
 
   problem_types:                        # id -> {label (prototype PTYPES verbatim), enabled in Phase 1}
     binary_classification: {label: "Classification (yes / no)",          enabled: true}
     regression:            {label: "Regression (a number)",              enabled: true}
     forecasting:           {label: "Forecasting (a number over time)",   enabled: false}   # plan §12: later
     clustering:            {label: "Clustering (no target)",             enabled: false}   # plan §12: later
+    uplift:                {label: "Uplift (who changes because of your action)", enabled: true}   # Phase 3b (DEC-601): needs a randomly assigned treatment column
 
   ai_types:                             # id -> {marker on the overview, stars, label} (prototype TYPES verbatim)
     predictive: {marker: "P", stars: "★",      label: "Predictive AI"}
@@ -290,3 +292,26 @@ defaults:
     limits:
       max_source_rows: 50000000         # int >= 1; SOURCE_TOO_LARGE above this
       max_sources: 10                   # int >= 1; TOO_MANY_SOURCES above this
+
+  uplift:                               # Phase 3b (plan B §6). Read only when problem_type is uplift (DEC-601)
+    learner: x_learner                  # enum: s_learner | t_learner | x_learner
+    base_model: autogluon_fast          # enum: autogluon_fast | lightgbm
+    treatment_column: null              # str | null; 1 = received the action, 0 = held out, RANDOMLY assigned
+    treatment_column_hints: [treatment, treated, contacted, is_treated]   # list[str]; detection order when treatment_column is null
+    treatment_date_column: null         # str | null; enables OUTCOME_WINDOW_IMMATURE and FEATURE_AFTER_TREATMENT
+    campaign_id_column: null            # str | null; never a feature
+    outcome_window_days: null           # int 1..3650 | null; days after the treatment date the outcome is measured over
+    min_arm_rows: 1000                  # int >= 1; TREATMENT_ARM_TOO_SMALL below this in either arm
+    min_arm_positives: 50               # int >= 1; TREATMENT_ARM_TOO_SMALL below this in either arm
+    randomness_auc_max: 0.60            # float 0.5..1; TREATMENT_NOT_RANDOM when features predict treatment better than this
+    bootstrap_samples: 200              # int 10..5000; resamples behind every uplift confidence interval
+    test_fraction: 0.30                 # float 0.1..0.5; hold-out share the uplift metrics are measured on
+    time_limit_minutes: 10              # int 1..240; AutoGluon budget across all base models (autogluon_fast only)
+    segments:                           # agent_editable: true (plan B §12)
+      persuadable_min_uplift: 0.02      # float; predicted uplift at or above this = persuadable
+      sleeping_dog_max_uplift: -0.01    # float; predicted uplift at or below this = sleeping dog (never treated)
+      sure_thing_min_probability: null  # float 0..1 | null; between the cuts, P(outcome | not treated) at or above this = sure thing; null = the training base rate
+    policy:                             # agent_editable: true (plan B §12)
+      budget_contacts: null             # int >= 1 | null; most customers to contact; null = every persuadable
+      cost_per_contact: null            # float >= 0 | null
+      value_per_conversion: null        # float >= 0 | null; with cost, stops where expected value per contact < cost

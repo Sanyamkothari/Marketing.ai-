@@ -29,6 +29,7 @@ from pydantic import (
 )
 
 from engine.settings import DEFAULT_CONFIG_DIR, ENV_VARS, settings
+from engine.uplift.config import UPLIFT_OVERRIDABLE_PATHS, UpliftConfig  # Phase 3b (DEC-601); imports nothing from engine
 
 
 class ConfigError(Exception):
@@ -114,6 +115,7 @@ class ProblemType(StrEnum):
     REGRESSION = "regression"
     FORECASTING = "forecasting"
     CLUSTERING = "clustering"
+    UPLIFT = "uplift"  # Phase 3b (DEC-601): one member, announced in docs/CROSS_BRANCH_REQUESTS.md
 
 
 class MissingValues(StrEnum):
@@ -187,6 +189,7 @@ class Metric(StrEnum):
     PRECISION = "precision"
     RMSE = "rmse"
     MAE = "mae"
+    AUUC = "auuc"  # Phase 3b (DEC-601): the uplift problem type's only metric, never sent to AutoGluon
 
 
 class Calibration(StrEnum):
@@ -1252,6 +1255,12 @@ class UseCaseConfig(_Base):
     suggested_features: tuple[FeatureDef, ...] = ()
     label: LabelDefinition | None = None
     onboarding: OnboardingConfig = Field(default_factory=lambda: OnboardingConfig())
+    # --- Phase 3b (uplift) ---------------------------------------------------------------------
+    # The one declaration Phase 3b adds above its block, for Phase 2's reason: `_Base` forbids
+    # unknown keys, so a use case cannot carry an `uplift:` section until the model has a field for
+    # it. Defaulted, and read only when `problem_type` is `uplift`, so no other path moves. The type
+    # lives in `engine/uplift/config.py`, which imports nothing from this file (DEC-601).
+    uplift: UpliftConfig = UpliftConfig()
 
     _catalog: Catalog | None = PrivateAttr(default=None)
 
@@ -1799,6 +1808,7 @@ EXTRA_OVERRIDABLE_PATHS: Final[frozenset[str]] = frozenset(
         "prepare.exclude_columns",
         "validation.acknowledged",
         "model_search.candidates",
+        *UPLIFT_OVERRIDABLE_PATHS,  # Phase 3b (DEC-601): the uplift block is per-run, like target.column
     }
 )
 _EMPTY_STRING_IS_NONE: Final[frozenset[str]] = frozenset(
@@ -3699,3 +3709,9 @@ ResolvedConfig.model_rebuild()
 
 # ---- PHASE-4A (aws) — append only below this line ----
 # ---- END PHASE-4A ----
+
+# ---- PHASE-3B (uplift) — append only below this line ----
+# Phase 3b keeps its configuration types in `engine/uplift/config.py`, not here: Phase 2's
+# `UseCaseConfig.model_rebuild()` above runs before this block, so a forward reference to a class
+# defined here would fail it. That module imports nothing from this one (DEC-601).
+# ---- END PHASE-3B ----
