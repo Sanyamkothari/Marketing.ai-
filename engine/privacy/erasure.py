@@ -46,6 +46,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Final
 
+from sqlalchemy import update
 from sqlalchemy.engine import Engine
 from sqlmodel import Session, col, select
 
@@ -83,15 +84,23 @@ __all__ = [
     "erasure_request",
     "erasure_requests",
     "fail_if_unfinished",
+    "fail_interrupted",
     "find_principal",
     "models_flagged_for_retraining",
     "queue_request",
+    "requeue_failed",
     "retrain_flags",
 ]
 
 _LOGGER = get_logger(__name__)
 
 _CHUNK: Final[int] = 1 << 20
+INTERRUPTED: Final[str] = "ERASURE_INTERRUPTED"
+"""The error code of a request the API found unfinished when it started (the process stopped mid-job)."""
+
+_UNAVAILABLE: Final[str] = "training_input_unavailable"
+"""`model_retrain_flag.reason` of a model whose training inputs are gone (exposure unknown, DEC-709)."""
+
 _KEYED: Final[frozenset[FileKind]] = frozenset({FileKind.CSV, FileKind.PARQUET, FileKind.JSON})
 """Kinds whose rows are decided by the file's recorded key columns (JSON: its rows of records)."""
 
@@ -294,8 +303,11 @@ def erase(
     backoff); a store still failing after that is `failed`, the other stores carry on, and the request
     ends `failed` with `ERASURE_STORE_FAILED` - its counts recorded, its models flagged - so a retry
     (`resume=True` on the same `request_id`, which re-finds whatever still holds the person) finishes
-    the job. `resume` means the request row already exists (the job queued it, or this is a retry): it
-    is re-opened rather than inserted, and must belong to the same principal.
+    the job. `resume` means the request row already exists and is `queued` (the route queued it, or
+    re-queued a failed one with `requeue_failed`): it is moved to `in_progress` rather than inserted,
+    and must belong to the same principal. The models are flagged before any file is rewritten, so a
+    run that fails half way has flagged them already - a retry could no longer find the person in the
+    stores this one erased (DEC-870).
 
     Raises `PrivacyError` - `PRINCIPAL_ID_INVALID`, `ERASURE_RUNS_IN_PROGRESS`, `ERASURE_INCOMPLETE`
     when a rewritten file still holds the id, `ERASURE_STORE_FAILED` - after recording the request as
@@ -320,6 +332,7 @@ def erase(
             requested_by=principal.user_id,
             requested_at=started,
             status="in_progress",
+            history_all_clients=history_all_clients,
         )
     progress = _Progress(engine, request)
     try:
@@ -404,8 +417,12 @@ def queue_request(
     requested_by: str,
     requested_at: datetime,
     status: str = "queued",
+    history_all_clients: bool = False,
 ) -> None:
-    """Write the register row of a request before any work starts (DEC-752, DEC-863)."""
+    """Write the register row of a request before any work starts (DEC-752, DEC-863).
+
+    `history_all_clients` is recorded so a retry deletes the same consent history (DEC-870).
+    """
     create_privacy_tables(engine)
     with Session(engine) as session:
         session.add(
@@ -417,6 +434,7 @@ def queue_request(
                 mode=mode,
                 requested_by=requested_by,
                 requested_at=requested_at,
+                history_all_clients=history_all_clients,
             )
         )
         session.commit()
@@ -433,21 +451,65 @@ def fail_if_unfinished(engine: Engine, request_id: str, code: str) -> None:
         session.commit()
 
 
+def fail_interrupted(engine: Engine) -> int:
+    """Mark every request left `queued` or `in_progress` as failed with `ERASURE_INTERRUPTED`.
+
+    Called when the API starts (`api.routes.privacy.install_privacy_checks`, DEC-869). The jobs live in
+    the API process's memory, so a request still unfinished at start-up belongs to a process that has
+    stopped and will never finish on its own; `failed` makes it retryable. Safe because a deployment
+    runs one API process (DEC-861's premise): no other live process can own a running job. Returns how
+    many rows were marked.
+    """
+    create_privacy_tables(engine)
+    statement = (
+        update(ErasureRequestRow)
+        .where(col(ErasureRequestRow.status).in_(("queued", "in_progress")))
+        .values(status="failed", error_code=INTERRUPTED, completed_at=utc_now())
+    )
+    with engine.begin() as connection:
+        marked = connection.execute(statement).rowcount
+    if marked:
+        _LOGGER.warning("privacy.erasure %d unfinished request(s) marked failed %s", marked, INTERRUPTED)
+    return int(marked or 0)
+
+
+def requeue_failed(engine: Engine, request_id: str) -> bool:
+    """Move a `failed` request back to `queued` in one statement; False when it was not `failed`.
+
+    The retry route's claim on the request (DEC-869): of two retries at once only one changes the row,
+    and the progress route reads `queued` from the moment the retry is answered.
+    """
+    statement = (
+        update(ErasureRequestRow)
+        .where(col(ErasureRequestRow.request_id) == request_id)
+        .where(col(ErasureRequestRow.status) == "failed")
+        .values(status="queued", error_code=None, completed_at=None)
+    )
+    with engine.begin() as connection:
+        return bool(connection.execute(statement).rowcount == 1)
+
+
 def _reopen_row(engine: Engine, request_id: str, hashed: str) -> None:
-    """Mark a queued or failed request as running again; refuse one that is not this person's."""
+    """Move a `queued` request of this person to `in_progress`; refuse anything else (DEC-869)."""
+    statement = (
+        update(ErasureRequestRow)
+        .where(col(ErasureRequestRow.request_id) == request_id)
+        .where(col(ErasureRequestRow.status) == "queued")
+        .where(col(ErasureRequestRow.principal_hash) == hashed)
+        .values(status="in_progress", error_code=None, completed_at=None)
+    )
+    with engine.begin() as connection:
+        if connection.execute(statement).rowcount == 1:
+            return
     with Session(engine) as session:
         row = session.get(ErasureRequestRow, request_id)
-        if row is None:
-            raise PrivacyError("ERASURE_REQUEST_NOT_FOUND", "There is no erasure request with this id.")
-        if row.principal_hash != hashed:
-            raise PrivacyError(
-                "PRINCIPAL_MISMATCH", "This id is not the one the erasure request was made for."
-            )
-        row.status = "in_progress"
-        row.error_code = None
-        row.completed_at = None
-        session.add(row)
-        session.commit()
+    if row is None:
+        raise PrivacyError("ERASURE_REQUEST_NOT_FOUND", "There is no erasure request with this id.")
+    if row.principal_hash != hashed:
+        raise PrivacyError("PRINCIPAL_MISMATCH", "This id is not the one the erasure request was made for.")
+    raise PrivacyError(
+        "ERASURE_NOT_RETRYABLE", f"Only a queued erasure request can be started; this one is {row.status}."
+    )
 
 
 class _Progress:
@@ -533,6 +595,10 @@ def _erase(
             "already read it would write it back after the erasure. Nothing was changed; ask again "
             "once they have finished.",
         )
+    # Flag first (DEC-870): once a store is rewritten the person can no longer be found there, so a
+    # run that fails after it - and the retry that follows - would never flag its models.
+    flags, flagged = _flag_models(engine, layout, findings, request_id, started)
+    _record_flags(engine, request_id, tuple(flags))
     by_store: dict[str, list[PrincipalLocation]] = {}
     for location in findings.locations:
         by_store.setdefault(location.store, []).append(location)
@@ -615,8 +681,8 @@ def _erase(
             principal_id, client_id=history_client_id
         )
         progress.update(CONSENT_STORE, status="done", done=1, attempts=1)
-    flagged = _flag_models(engine, layout, findings, request_id, started)
-    unknown = tuple(model for model in findings.models_exposure_unknown if model in flagged)
+    # every flag this request holds, a failed earlier run's included, so a retry reports them too
+    unknown = tuple(model for model, reason in flags.items() if reason == _UNAVAILABLE)
     finished = utc_now()
     _LOGGER.info(
         "privacy.erase request=%s files_rewritten=%d files_deleted=%d rows=%d cells=%d unrewritable=%d models_flagged=%d failed_stores=%d",
@@ -647,7 +713,7 @@ def _erase(
         files_rewritten=tally["rewritten"],
         files_deleted=tally["deleted"],
         unrewritable_keys=tuple(unrewritable),
-        models_flagged=tuple(flagged),
+        models_flagged=tuple(flags),  # every model this request flagged, in any of its runs
         models_exposure_unknown=unknown,
         consent_records_deleted=consent_deleted,
         failed_stores=tuple(failed_stores),
@@ -682,28 +748,49 @@ def _erase_file(
 
 def _flag_models(
     engine: Engine, layout: StoreIndex, findings: PrincipalFindings, request_id: str, now: datetime
-) -> list[str]:
+) -> tuple[dict[str, str], list[str]]:
+    """Flag the models `findings` names: `(every flag of this request -> reason, the ones added now)`.
+
+    A retry of the same request flags nothing twice (DEC-863); the first return value holds the flags
+    earlier runs of the request recorded as well, which is what the outcome reports (DEC-870).
+    """
     flagged: list[str] = []
     with Session(engine) as session:
-        already = set(  # a retry of the same request flags nothing twice (DEC-863)
-            session.exec(
-                select(ModelRetrainFlagRow.model_id).where(col(ModelRetrainFlagRow.request_id) == request_id)
-            ).all()
-        )
+        rows = session.exec(
+            select(ModelRetrainFlagRow)
+            .where(col(ModelRetrainFlagRow.request_id) == request_id)
+            .order_by(col(ModelRetrainFlagRow.flag_id))
+        ).all()
+        flags: dict[str, str] = {}
+        for row in rows:
+            flags.setdefault(row.model_id, row.reason)
         for model_id in (*findings.models, *findings.models_exposure_unknown):
-            if model_id in already or model_id in flagged:
+            if model_id in flags:
                 continue
             reason = (
-                "training_input_unavailable"
+                _UNAVAILABLE
                 if model_id in findings.models_exposure_unknown
                 else _exposure_reason(layout, model_id, findings)
             )
             session.add(
                 ModelRetrainFlagRow(model_id=model_id, request_id=request_id, reason=reason, created_at=now)
             )
+            flags[model_id] = reason
             flagged.append(model_id)
         session.commit()
-    return flagged
+    return flags, flagged
+
+
+def _record_flags(engine: Engine, request_id: str, models: tuple[str, ...]) -> None:
+    """Put the request's flagged models on its row at once, so a run that fails later still shows them."""
+    with Session(engine) as session:
+        row = session.get(ErasureRequestRow, request_id)
+        if row is None:
+            return
+        listed = list(json.loads(row.models_flagged_json or "[]"))
+        row.models_flagged_json = json.dumps(listed + [model for model in models if model not in listed])
+        session.add(row)
+        session.commit()
 
 
 def _runs_in_progress(layout: StoreIndex, findings: PrincipalFindings) -> list[str]:
@@ -875,6 +962,7 @@ def _request_contract(
         completed_at=None if row.completed_at is None else aware_utc(row.completed_at),
         error_code=row.error_code,
         progress=progress,
+        history_all_clients=row.history_all_clients,
     )
 
 

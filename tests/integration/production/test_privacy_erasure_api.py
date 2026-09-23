@@ -22,10 +22,14 @@ from fastapi.testclient import TestClient
 from api.routes.privacy import _STORE_REWRITE_LOCK
 from engine.access.roles import Role
 from engine.audit.events import AuditEvent, AuditQuery, principal_hash
+from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.privacy import erasure as erasure_module
+from engine.privacy.consent import principal_key
+from engine.privacy.erasure import queue_request
 from engine.privacy.erasure_jobs import ErasureJobs
 from engine.privacy.errors import PrivacyError
 from engine.storage import LocalStorage, StorageError
+from engine.utils.time import utc_now
 from tests.integration.production.access_support import audit_log_at, bearer, local_app, make_user
 from tests.unit.production.sentinel_store import (
     CLIENT,
@@ -316,6 +320,137 @@ def test_a_store_that_keeps_failing_fails_the_request_and_a_retry_finishes_it(ap
 
     finished = _retry(api, request_id)
     assert finished.status_code == 409 and finished.json()["detail"]["code"] == "ERASURE_NOT_RETRYABLE"
+
+
+def _failed_request(api: Api, body: dict[str, str] | None = None) -> tuple[str, FlakyStorage]:
+    """A request whose uploads would not take a write, so it ends `failed`; the storage is returned to fix."""
+    storage = api.flaky("uploads/", failures=10_000)
+    response = api.client.post(
+        "/privacy/erasure", json=body or {"principal_id": SENTINEL, "client_id": CLIENT}, headers=api.admin
+    )
+    assert response.status_code == 202, response.text
+    request_id = str(response.json()["request_id"])
+    assert api.finish(request_id)["status"] == "failed"
+    return request_id, storage
+
+
+def test_a_retry_is_claimed_at_once_and_a_second_retry_is_refused(api: Api) -> None:
+    """DEC-869: the row reads `queued` as soon as the retry is answered, so a double submit starts one job."""
+    request_id, storage = _failed_request(api)
+    storage.failures = 0
+    with _STORE_REWRITE_LOCK:  # the job cannot start until the test lets it
+        first = _retry(api, request_id)
+        assert first.status_code == 202, first.text
+        progress = api.client.get(f"/privacy/erasure/{request_id}/progress", headers=api.admin).json()
+        assert (progress["status"], progress["error_code"], progress["completed_at"]) == (
+            "queued",
+            None,
+            None,
+        )
+        second = _retry(api, request_id)
+        assert second.status_code == 409, second.text
+        assert second.json()["detail"]["code"] == "ERASURE_NOT_RETRYABLE"
+        assert "queued" in second.json()["detail"]["message"]
+        (refused,) = api.events_of(second)
+        assert refused.details["reason_code"] == "ERASURE_NOT_RETRYABLE"
+    assert api.finish(request_id)["status"] == "completed"
+    ends = api.events(action="privacy.erasure.complete")
+    assert sorted(event.outcome for event in ends) == ["failed", "success"], "one job for the retry, not two"
+
+
+def test_a_retry_deletes_the_consent_history_the_request_was_made_for(
+    api: Api, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """DEC-870: no client named means every client's history - on the retry too, though `client_id` is set."""
+    jobs = api.app.state.erasure_jobs
+    assert isinstance(jobs, ErasureJobs)
+    submitted: list[bool] = []
+    original = jobs.submit
+
+    def spy(**kwargs: Any) -> None:
+        submitted.append(kwargs["history_all_clients"])
+        original(**kwargs)
+
+    monkeypatch.setattr(jobs, "submit", spy)
+    request_id, storage = _failed_request(api, {"principal_id": SENTINEL})
+    record = api.client.get(f"/privacy/erasure/{request_id}", headers=api.admin).json()
+    assert (record["client_id"], record["history_all_clients"]) == ("acme", True)
+    storage.failures = 0
+    assert _retry(api, request_id).status_code == 202
+    assert api.finish(request_id)["status"] == "completed"
+    assert submitted == [True, True]
+
+    named = _erase(api).json()["request_id"]  # a client named: only that client's history
+    assert api.finish(named)["history_all_clients"] is False
+    assert submitted[2:] == [False]
+
+
+def test_a_request_a_stopped_process_left_running_is_failed_at_startup_and_can_be_retried(api: Api) -> None:
+    """DEC-869: the jobs live in the API process; one that stopped leaves rows nothing would finish."""
+    engine = sqlite_engine(api.root / PLATFORM_DB_FILENAME)
+    for request_id, status in (("er_orphan_running", "in_progress"), ("er_orphan_queued", "queued")):
+        queue_request(
+            engine,
+            request_id=request_id,
+            principal_hash=principal_hash(principal_key(SENTINEL), salt=SALT),
+            client_id=CLIENT,
+            mode="delete",
+            requested_by="u_gone",
+            requested_at=utc_now(),
+            status=status,
+        )
+    with TestClient(api.app) as started:  # entering the client runs the startup hooks
+        for request_id in ("er_orphan_running", "er_orphan_queued"):
+            record = started.get(f"/privacy/erasure/{request_id}", headers=api.admin).json()
+            assert (record["status"], record["error_code"]) == ("failed", "ERASURE_INTERRUPTED")
+        retry = started.post(
+            "/privacy/erasure/er_orphan_running/retry", json={"principal_id": SENTINEL}, headers=api.admin
+        )
+        assert retry.status_code == 202, retry.text
+    assert api.finish("er_orphan_running")["status"] == "completed"
+    assert files_holding(api.root, SENTINEL) == []
+
+
+def test_starting_the_api_on_a_fresh_directory_creates_no_platform_database(tmp_path: Path) -> None:
+    from api.main import create_app
+    from engine.settings import Settings
+
+    app = create_app(data_dir=tmp_path)
+    app.state.settings = Settings(data_dir=tmp_path, privacy_salt=SALT)  # type: ignore[arg-type]
+    with TestClient(app) as started:
+        assert started.get("/healthz").status_code == 200
+    assert not (tmp_path / PLATFORM_DB_FILENAME).exists(), "nothing to sweep, and nothing created"
+
+
+class CrashingStorage(FlakyStorage):
+    """Writes under `prefix` fail with an error no retry within the job would help (a bug, a crash)."""
+
+    def write_bytes(self, key: str, data: bytes) -> None:
+        if key.startswith(self.prefix) and self.failures > 0:
+            raise RuntimeError("the worker fell over")
+        self._inner.write_bytes(key, data)
+
+
+def test_a_job_that_crashes_mid_rewrite_has_flagged_the_models_already(api: Api) -> None:
+    """DEC-870: flagged before any rewrite, so the retry - which cannot find the person any more in the
+    stores the first run erased - does not lose the flag."""
+    storage = CrashingStorage(LocalStorage(api.root), "uploads/", failures=1)
+    api.app.state.storage = storage
+    request_id = _erase(api).json()["request_id"]
+    failed = api.finish(request_id)
+    assert (failed["status"], failed["error_code"]) == ("failed", "ERASURE_FAILED")
+    assert failed["models_flagged"] == [MODEL_ON_UPLOAD, MODEL_ON_DATASET]
+    flags = api.client.get("/privacy/retrain-flags", headers=api.admin).json()["flags"]
+    assert sorted(flag["model_id"] for flag in flags) == sorted([MODEL_ON_UPLOAD, MODEL_ON_DATASET])
+
+    storage.failures = 0
+    assert _retry(api, request_id).status_code == 202
+    done = api.finish(request_id)
+    assert done["status"] == "completed"
+    assert done["models_flagged"] == [MODEL_ON_UPLOAD, MODEL_ON_DATASET]
+    again = api.client.get("/privacy/retrain-flags", headers=api.admin).json()["flags"]
+    assert len(again) == 2, "no flag twice"
+    assert files_holding(api.root, SENTINEL) == []
 
 
 # ---------------------------------------------------------------------------

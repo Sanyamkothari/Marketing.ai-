@@ -39,7 +39,7 @@ from engine.access.users import AuthSessionRow, PlatformUserRow
 from engine.approvals import ModelDecisionRow
 from engine.audit.store import AuditEventRow
 from engine.aws.postgres import METADATA_TABLES, PostgresConfig, normalise_url, postgres_engine
-from engine.platform_db import PLATFORM_TABLES
+from engine.platform_db import PLATFORM_TABLES, PlatformSettingRow
 from engine.privacy.tables import ConsentRecordRow, ErasureProgressRow, ErasureRequestRow, ModelRetrainFlagRow
 from engine.registry import ModelVersionRow
 from engine.scheduling.alerts import AlertRow
@@ -62,6 +62,7 @@ _ = (
     ScheduleFiringRow,
     AlertRow,
     ModelDecisionRow,
+    PlatformSettingRow,
 )
 
 INCLUDED_TABLES: frozenset[str] = frozenset(METADATA_TABLES) | frozenset(PLATFORM_TABLES)

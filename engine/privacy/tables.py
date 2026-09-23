@@ -21,8 +21,9 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any, ClassVar, Final
 
-from sqlalchemy import Column, DateTime, Index
+from sqlalchemy import Boolean, Column, DateTime, Index, false, inspect, text
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Field as SQLField
 from sqlmodel import SQLModel
 
@@ -106,6 +107,12 @@ class ErasureRequestRow(SQLModel, table=True):
         default=None, sa_column=Column("completed_at", DateTime(timezone=True), nullable=True)
     )
     error_code: str | None = None
+    history_all_clients: bool = SQLField(
+        default=False,
+        sa_column=Column("history_all_clients", Boolean(), nullable=False, server_default=false()),
+    )
+    """Whether the consent history goes under every client (the Admin named none), kept so a retry
+    does what the request asked (Plan D, DEC-870). Added by `0005_plan_d`."""
 
 
 class ErasureProgressRow(SQLModel, table=True):
@@ -138,6 +145,30 @@ class ModelRetrainFlagRow(SQLModel, table=True):
     )
 
 
+_ADDED_COLUMNS: Final[tuple[tuple[str, str, str], ...]] = (
+    (ERASURE_REQUEST_TABLE, "history_all_clients", "BOOLEAN NOT NULL DEFAULT 0"),
+)
+"""Columns a later revision added to a table Phase 4b's `create_tables` may already have made in a
+SQLite file: `create_all` adds a missing table, never a missing column (DEC-341), so they are added
+here - `(table, column, SQLite DDL)`. Postgres gets them from Alembic (`0005_plan_d`)."""
+
+
 def create_privacy_tables(engine: Engine) -> None:
-    """Create this package's tables if missing (SQLite only; Alembic owns Postgres, DEC-340)."""
+    """Create this package's tables if missing (SQLite only; Alembic owns Postgres, DEC-340).
+
+    On SQLite, a column a later revision added (`_ADDED_COLUMNS`) is added to a table an earlier
+    version of this code created without it, so a laptop's `platform.db` keeps working (DEC-870).
+    """
     create_tables(engine, (*PRIVACY_TABLES, ERASURE_PROGRESS_TABLE))
+    if engine.dialect.name != "sqlite":
+        return
+    for table, column, ddl in _ADDED_COLUMNS:
+        present = {item["name"] for item in inspect(engine).get_columns(table)}
+        if column in present:
+            continue
+        try:
+            with engine.begin() as connection:
+                connection.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+        except OperationalError:  # another thread added it first
+            if column not in {item["name"] for item in inspect(engine).get_columns(table)}:
+                raise

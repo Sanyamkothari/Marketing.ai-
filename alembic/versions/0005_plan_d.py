@@ -1,4 +1,4 @@
-"""Plan D M54: `model_decision` and `erasure_progress`.
+"""Plan D M54: `model_decision`, `erasure_progress`, `platform_setting` and `erasure_request.history_all_clients`.
 
 Revision ID: 0005
 Revises: 0004
@@ -15,9 +15,20 @@ far it has got, store by store, with the attempts each store took and why one fa
 (request, store); counts and codes only, never the principal - the request row already holds the
 salted hash and nothing here needs more.
 
+WHY `erasure_request.history_all_clients` (DEC-870): whether an erasure deletes the consent history
+under every client or only the request's is decided when the request is made (the Admin named no
+client) and cannot be inferred later from `client_id`, which then holds the deployment's id. A retry
+must do what the request asked, so the choice is stored. `NOT NULL DEFAULT false`: a row written
+before this revision behaves as it did.
+
+WHY `platform_setting` (DEC-871): a key/value table of facts about the database itself; its first
+key is the privacy salt's fingerprint, so a deployment that changes its salt is refused rather than
+silently orphaning every stored hash. The fingerprint is a hash of the salt, never the salt.
+
 Every timestamp is `DateTime(timezone=True)`, for DEC-339's reason. The models are
-`engine/approvals.py` and `engine/privacy/tables.py`; this revision creates exactly what they
-declare. Reversible: `downgrade` drops both, which loses the decision reasons and the progress rows.
+`engine/approvals.py`, `engine/privacy/tables.py` and `engine/platform_db.py`; this revision creates
+exactly what they declare. Reversible: `downgrade` drops what `upgrade` added, which loses the
+decision reasons, the progress rows, the recorded history choice and the salt fingerprint.
 """
 
 from __future__ import annotations
@@ -38,7 +49,7 @@ _TS = sa.DateTime(timezone=True)
 
 
 def upgrade() -> None:
-    """Create the two Plan D tables and their indexes."""
+    """Create the Plan D tables and their indexes, and add the erasure request's history choice."""
     op.create_table(
         "model_decision",
         sa.Column("decision_id", _STR(), nullable=False),
@@ -64,10 +75,24 @@ def upgrade() -> None:
         sa.Column("updated_at", _TS, nullable=False),
         sa.PrimaryKeyConstraint("request_id", "store"),
     )
+    op.create_table(
+        "platform_setting",
+        sa.Column("key", _STR(), nullable=False),
+        sa.Column("value", _STR(), nullable=False),
+        sa.Column("updated_at", _TS, nullable=False),
+        sa.PrimaryKeyConstraint("key"),
+    )
+    op.add_column(
+        "erasure_request",
+        sa.Column("history_all_clients", sa.Boolean(), nullable=False, server_default=sa.false()),
+    )
 
 
 def downgrade() -> None:
-    """Drop both tables and, with them, the decision reasons and the progress rows."""
+    """Drop what `upgrade` added and, with it, the decision reasons, progress rows and salt fingerprint."""
+    with op.batch_alter_table("erasure_request") as batch:  # SQLite cannot drop a column in place
+        batch.drop_column("history_all_clients")
+    op.drop_table("platform_setting")
     op.drop_table("erasure_progress")
     op.drop_index(op.f("ix_model_decision_model_id"), table_name="model_decision")
     op.drop_table("model_decision")

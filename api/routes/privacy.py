@@ -77,6 +77,7 @@ from typing import Annotated, Final, Literal
 from fastapi import APIRouter, FastAPI, File, Form, Query, Request, Response, UploadFile
 from fastapi.responses import JSONResponse
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import SQLAlchemyError
 from starlette.concurrency import run_in_threadpool
 
 from api.access import PrincipalDep, get_audit_log, platform_data_dir, set_audit_context
@@ -110,7 +111,7 @@ from api.schemas import (
 from engine.access.roles import Role
 from engine.audit.events import content_hash, principal_hash
 from engine.clients import ClientStore
-from engine.platform_db import platform_engine
+from engine.platform_db import PLATFORM_DB_FILENAME, platform_engine
 from engine.privacy.access_export import export_principal
 from engine.privacy.config import PrivacyConfig, check_privacy_salt, privacy_config_or_none, privacy_salt
 from engine.privacy.consent import FUTURE_TOLERANCE, ConsentLedger, principal_key
@@ -125,14 +126,16 @@ from engine.privacy.contracts import (
 from engine.privacy.erasure import (
     erasure_request,
     erasure_requests,
+    fail_interrupted,
     queue_request,
+    requeue_failed,
     retrain_flags,
 )
 from engine.privacy.erasure_jobs import ErasureJobs
 from engine.privacy.errors import PrivacyError, require_principal_id
 from engine.privacy.retention import apply_retention, plan_retention
 from engine.privacy.tables import create_privacy_tables
-from engine.settings import Settings
+from engine.settings import Settings, SettingsError
 from engine.storage import run_key
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
@@ -288,24 +291,51 @@ def get_privacy_engine(request: Request) -> Engine:
 
 
 def install_privacy_checks(app: FastAPI) -> None:
-    """`PHASE_APP_HOOKS` entry: a production API does not start without its privacy salt (R3, DEC-860).
+    """`PHASE_APP_HOOKS` entry: a production API does not start without its privacy salt (R3, DEC-860),
+    and an erasure a stopped process left unfinished is marked failed when it starts (DEC-869).
 
-    With settings given to `create_app`, the refusal is immediate - `create_app` raises. The deployed
-    `api.main:app` is built with none, so the check runs at startup, where a `SettingsError` stops
-    uvicorn before it serves a request: failing to boot is right here, unlike sign-in (DEC-702),
+    With settings given to `create_app`, the salt refusal is immediate - `create_app` raises. The
+    deployed `api.main:app` is built with none, so the check runs at startup, where a `SettingsError`
+    stops uvicorn before it serves a request: failing to boot is right here, unlike sign-in (DEC-702),
     because every hash written without the secret would have to be thrown away later.
+
+    **Orphaned erasures.** The erasure jobs live in the API process's memory (DEC-863), so a request
+    still `queued` or `in_progress` when an API process starts was left by one that stopped, and
+    nothing would ever finish it or let it be retried. At startup every such row becomes `failed`
+    with `ERASURE_INTERRUPTED`, which the retry route accepts. That is safe because a deployment runs
+    **one** API process (DEC-861's premise, the same one the sign-in limiter's memory rests on): no
+    other live process can be running a job this would mark. A database that cannot be reached is
+    logged, not fatal - the routes that need it will say so.
     """
     settings = getattr(app.state, "settings", None)
-    if isinstance(settings, Settings):
-        check_privacy_salt(settings)
-        return
+    given = settings if isinstance(settings, Settings) else None
+    if given is not None:
+        check_privacy_salt(given)
 
     def at_startup() -> None:
-        check_privacy_salt(
-            get_settings(Request({"type": "http", "app": app, "headers": [], "method": "GET"}))
-        )
+        request = Request({"type": "http", "app": app, "headers": [], "method": "GET"})
+        if given is None:
+            check_privacy_salt(get_settings(request))
+        try:
+            _fail_interrupted_erasures(request)
+        except (SQLAlchemyError, SettingsError, ImportError, OSError) as exc:
+            _LOGGER.warning(
+                "privacy: unfinished erasures not checked at startup error=%s", type(exc).__name__
+            )
 
     app.router.on_startup.append(at_startup)
+
+
+def _fail_interrupted_erasures(request: Request) -> None:
+    """`fail_interrupted` on the platform database - unless it is a SQLite file that does not exist yet:
+    then nothing can be unfinished, and starting the API must not create one in a Phase 1 directory."""
+    explicit = getattr(request.app.state, "data_dir", None)
+    settings = get_settings(request)
+    if explicit is not None or settings.metadata_backend == "sqlite":
+        directory = Path(str(explicit)) if explicit is not None else settings.data_dir
+        if not (directory / PLATFORM_DB_FILENAME).is_file():
+            return
+    fail_interrupted(get_privacy_engine(request))
 
 
 def _salt(request: Request, settings: Settings) -> str:
@@ -731,6 +761,7 @@ def create_erasure(
         mode=config.erasure.mode.value,
         requested_by=principal.user_id,
         requested_at=utc_now(),
+        history_all_clients=not body.client_id,
     )
     _erasure_jobs(request).submit(
         request_id=erasure_id,
@@ -769,7 +800,10 @@ def retry_erasure(
     The id was never stored, so it is asked for again and checked against the request's salted hash:
     **422 `PRINCIPAL_MISMATCH`** when it is not the same person. Only a failed request can be retried
     (**409 `ERASURE_NOT_RETRYABLE`**): a finished one has nothing left to do and a running one is
-    already doing it.
+    already doing it. The request is claimed by one conditional update (`failed` -> `queued`) before
+    the job is submitted, so the progress route reads `queued` as soon as this answers and a second
+    retry sent meanwhile gets the 409 instead of a second job (DEC-869). The retry deletes the consent
+    history the request was made to delete - every client's when no client was named (DEC-870).
     """
     _privacy_config(root)
     engine = get_privacy_engine(request)
@@ -788,12 +822,14 @@ def retry_erasure(
             "This id is not the one the erasure request was made for.",
             path="principal_id",
         )
-    if record.status != "failed":
+    if not requeue_failed(engine, request_id):
+        current = erasure_request(engine, request_id)
         set_audit_context(request, details={"reason_code": "ERASURE_NOT_RETRYABLE"})
         raise http_error(
             409,
             "ERASURE_NOT_RETRYABLE",
-            f"Only a failed erasure request can be retried; this one is {record.status}.",
+            "Only a failed erasure request can be retried; "
+            f"this one is {record.status if current is None else current.status}.",
         )
     set_audit_context(
         request,
@@ -814,7 +850,7 @@ def retry_erasure(
         client_id=record.client_id,
         config_root=root,
         audit_log=get_audit_log(request),
-        history_all_clients=record.client_id is None,
+        history_all_clients=record.history_all_clients,
     )
     return _accepted(response, request_id, hashed, record.client_id)
 

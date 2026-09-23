@@ -267,6 +267,8 @@ def test_every_timestamp_column_really_is_timestamptz(
         # Plan D, 0005_plan_d (DEC-862, DEC-863)
         ("erasure_progress", "updated_at"): "timestamp with time zone",
         ("model_decision", "decided_at"): "timestamp with time zone",
+        # Plan D, 0005_plan_d (DEC-871)
+        ("platform_setting", "updated_at"): "timestamp with time zone",
     }
 
 

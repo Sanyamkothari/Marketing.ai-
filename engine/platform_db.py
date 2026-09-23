@@ -17,16 +17,26 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Iterable
+from datetime import datetime
 from pathlib import Path
 from typing import Final
 
-from sqlalchemy import event
+from sqlalchemy import Column, DateTime, event
 from sqlalchemy.engine import Engine
+from sqlmodel import Field as SQLField
 from sqlmodel import SQLModel, create_engine
 
 from engine.settings import Settings
 
-__all__ = ["PLATFORM_DB_FILENAME", "PLATFORM_TABLES", "create_tables", "platform_engine", "sqlite_engine"]
+__all__ = [
+    "PLATFORM_DB_FILENAME",
+    "PLATFORM_SETTING_TABLE",
+    "PLATFORM_TABLES",
+    "PlatformSettingRow",
+    "create_tables",
+    "platform_engine",
+    "sqlite_engine",
+]
 
 PLATFORM_DB_FILENAME: Final[str] = "platform.db"
 """The SQLite file's name, inside the data directory."""
@@ -44,15 +54,35 @@ PLATFORM_TABLES: Final[tuple[str, ...]] = (
     "schedule",
     "schedule_firing",
     "alert",
-    # 0005_plan_d (Plan D M54) - `engine.approvals.MODEL_DECISION_TABLE`, `engine.privacy.tables.ERASURE_PROGRESS_TABLE`
+    # 0005_plan_d (Plan D M54) - `engine.approvals.MODEL_DECISION_TABLE`, `engine.privacy.tables.ERASURE_PROGRESS_TABLE`,
+    # `PLATFORM_SETTING_TABLE`
     "model_decision",
     "erasure_progress",
+    "platform_setting",
 )
 """Every Phase 4b table a migration creates, beside `engine.aws.postgres.METADATA_TABLES`.
 
 The definite answer to "which tables does `alembic upgrade head` make", for the same reason
 `METADATA_TABLES` exists (DEC-340): `SQLModel.metadata` holds whatever has been imported. A Phase 4b
 migration that creates a table adds its name here, in the migration's order (DEC-721)."""
+
+PLATFORM_SETTING_TABLE: Final[str] = "platform_setting"
+"""A tiny key/value table of facts about the platform database itself (Plan D, DEC-871).
+
+Its first key is the privacy salt's fingerprint (`engine.privacy.config.privacy_salt`): which salt
+the hashes in this database were made with, so a changed salt is refused instead of silently
+orphaning every stored hash. A value here is never a secret and never a person's data."""
+
+
+class PlatformSettingRow(SQLModel, table=True):
+    """One fact about this platform database, by key. `0005_plan_d` creates the table."""
+
+    __tablename__ = PLATFORM_SETTING_TABLE
+
+    key: str = SQLField(primary_key=True)
+    value: str
+    updated_at: datetime = SQLField(sa_column=Column("updated_at", DateTime(timezone=True), nullable=False))
+
 
 _ENGINES: dict[str, Engine] = {}
 _LOCK: Final[threading.Lock] = threading.Lock()

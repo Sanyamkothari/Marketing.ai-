@@ -16,7 +16,12 @@ with a growing wait (`backoff`), and the other stores carry on meanwhile; a stor
 the request `failed` with `ERASURE_STORE_FAILED` (`engine.privacy.erasure.erase`). An Admin can then
 retry the request: the id is given again in the body (it is never stored - only its salted hash, which
 the retry is checked against) and the job re-finds whatever still holds the person, which is exactly
-what the failed stores left behind.
+what the failed stores left behind. The route claims the request first, moving it from `failed` to
+`queued` in one conditional statement, so two retries at once start one job (DEC-869).
+
+**A restart.** The jobs live in this process's memory, so a request still `queued` or `in_progress`
+when the API starts belonged to a process that stopped: `fail_interrupted` marks it `failed` with
+`ERASURE_INTERRUPTED` at start-up, and it can be retried (DEC-869).
 
 **Audited at start and at end.** The start is the audit middleware's event for the `POST`; the end is
 a `privacy.erasure.complete` event this job appends with the outcome's counts - or its failure code -
@@ -92,7 +97,7 @@ class ErasureJobs:
         audit_log: AuditLog | None,
         history_all_clients: bool,
     ) -> None:
-        """Queue the erasure of an already-`queued` (or `failed`, for a retry) request row."""
+        """Queue the erasure of an already-`queued` request row (a retry re-queues it first, DEC-869)."""
 
         def run() -> None:
             try:
@@ -115,7 +120,8 @@ class ErasureJobs:
                     )
             except PrivacyError as exc:  # recorded on the request row and in the audit trail by `erase`
                 _LOGGER.error("privacy.erasure job request=%s code=%s", request_id, exc.code)
-                fail_if_unfinished(engine, request_id, exc.code)
+                if exc.code != "ERASURE_NOT_RETRYABLE":  # not queued: the row is another job's to finish
+                    fail_if_unfinished(engine, request_id, exc.code)
             except Exception as exc:
                 _LOGGER.error("privacy.erasure job request=%s error=%s", request_id, type(exc).__name__)
                 fail_if_unfinished(engine, request_id, "ERASURE_FAILED")
