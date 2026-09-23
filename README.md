@@ -302,6 +302,25 @@ attempt at a million rows was killed at a 45-minute cap while several other jobs
 cores, and the `--format both` scoring figures are the same effect caught in the act, so on a busy box
 expect far worse than the tables.
 
+### Re-measured after Plan A (M37's open item)
+
+Plan A M37 asks for this benchmark to be run again and recorded. On 2026-09-23 it ran on the same
+container (4 CPUs, 15.7 GiB, a quiet machine: load average under 1 at the start of each run), first
+with Plan A and then with the code before it (`main` @ `d37fc72`), back to back:
+
+| 1,000,000 rows, CSV | ingest | score (full flow) | of which per-row reasons | peak RSS |
+| --- | --- | --- | --- | --- |
+| before Plan A | 57.0 s | 322.8 s | 210.7 s | 6,174 MB |
+| after Plan A | 55.1 s | 275.5 s | 166.6 s | 6,276 MB |
+| after Plan A, Parquet | 54.0 s | 267.2 s | 150.1 s | (same process as the CSV row) |
+
+Plan A made neither path slower. The score figures differ from each other, and from the 245 s in the
+first table, mostly because of **which model each run trains**: every run fits its own champion on
+4,000 rows under a one-minute limit, and the per-row reasons cost what explaining that model costs.
+Read the score column as a range, not a constant. The ingest figures agree within 4% of each other and
+are faster than the first table's 68.5 s. That comparison is across days, so it is not attributed to
+any one change. This is still a container, not the laptop plan §11 names.
+
 Re-run it with:
 
 ```bash
@@ -390,8 +409,9 @@ they are not the same kind of thing at all.
   never sends them, and they are left out of the recipe hash, so two runs that differ only in them
   share a recipe. Shipping one means removing its path from `engine.config.ADVISORY_PATHS`.
 - **The laptop.** Plan §11 asks for a million rows under the time limit *on a laptop*, and the numbers
-  above were measured on a 4-CPU container. The Parquet half of that line is now measured, so the
-  format gap is closed and the machine gap is not.
+  above were measured on a 4-CPU container, most recently after Plan A (*Re-measured after Plan A*,
+  below the large-file tables). The format gap is closed; the machine gap is not, because no laptop
+  is available to this repository's runs.
 
 **Parked for Phase 4 by plan §12, not Phase 1 debt** — §12 defers "drift monitoring schedule,
 retraining triggers … DPDP controls (retention, consent, deletion)" by name:
