@@ -1764,11 +1764,15 @@ def _consent_gated_actions(self: _ScoreFlow) -> _StageOutcome:
         _require(self._scored, "the scored rows"),
         ctx.config,
         gate,
-        primary_key=ctx.primary_key,
+        # The ledger is keyed by the data principal, which is the entity column: the key itself, or
+        # the first column of a composite key (Plan A M34, DEC-083) - never a snapshot's row key.
+        primary_key=keys.entity_column(ctx.primary_key),
         run_id=ctx.run_id,
         at=utc_now(),
     )
-    banded = actions.apply_actions(gated, config, run_id=ctx.run_id, primary_key=ctx.primary_key)
+    banded = actions.apply_actions(
+        gated, config, run_id=ctx.run_id, primary_key=ctx.row_key, entity_key=ctx.entity_key
+    )
     self._scored = banded
     self._write(CONSENT_REPORT_FILENAME, report)
     detail = (
