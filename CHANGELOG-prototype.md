@@ -36,6 +36,14 @@ repository so it can be diffed and tested.
 | E | **Win-back campaign copy** | Phase 3a §9 E | `copyBlock()` |
 | F | **Lineage block** on the Data page | Phase 2 §10 F | `lineageBlock()` |
 | R | **Reconciled against the built screens** | — | see below |
+| U1 | **Setup → Uplift problem type**, treatment-column picker, meta-learner step | Phase 3b §8 (plan B) | `setupHtml()`, `ptypesFor()`, `detectTreatment()` |
+| U2 | **Setup → TREATMENT_NOT_RANDOM**: the six checks inline, acknowledge to run | Phase 3b §8, plan B §4 | `upChecksHtml()`, `sampleTargeted()` |
+| U3 | **Advanced → uplift settings** inside stages 5 and 6 | Phase 3b §8, plan B §6 | `upStage5()`, `upStage6()` |
+| U4 | **Running → uplift training and uplift scoring** | Phase 3b §8 | `runSteps()` |
+| U5 | **Results → Model**: Qini curve with random line, AUUC with CI, uplift by decile | Phase 3b §8 | `upliftModelBlock()`, `qiniSvg()`, `decileBars()` |
+| U6 | **Results → Output**: four segments, Recommended to contact, expected incremental conversions, treat list | Phase 3b §8 | `upliftOutputBlock()`, `segmentChart()`, `treatListCsv()` |
+| U7 | **Campaign results** page: incrementality report, or "Results available on <date>" | Phase 3b §8, plan B §1.5 | `campaignPage()`, `campaignReport()` |
+| U8 | **Not-causal banner** on every output of an acknowledged run | Phase 3b §8, plan B §4 | `ncBanner()` |
 
 ---
 
@@ -229,6 +237,121 @@ logged in `docs/CROSS_BRANCH_REQUESTS.md`.
 
 ---
 
+## Revision 4 — Phase 3b uplift (plan B §8) · 2026-09-23
+
+Plan B milestone M44: "UI — Setup, Model, Output and Campaign results screens; prototype updated to
+match". Uplift lives on **Win-back Campaign**, where `plan.md` always put it: the use case's model
+steps already said "Pick best offer · Uplift model", and its output already held back a 10% control
+group. No use case was added, no setup step and no Advanced stage; uplift is a problem type, and
+everything below appears only in uplift state. Nothing on the Phase 1 path moved: the default
+win-back Model and Output pages (screenshots 14 and 17) are unchanged, and so is every screen of
+every other use case.
+
+**Setup**
+
+- **Uplift is a problem type**, `Uplift (who changes because of your action)` — the
+  `catalog.problem_types.uplift.label` of `configs/engine.yaml`, verbatim — detected when a treatment
+  column is chosen, with the one-line explanation *"Predicts who changes behaviour because of your
+  action."* in place of the generic "Metrics and models will switch…" warning. `change…` offers it
+  only when there is a treatment column; `PTYPES` itself is untouched (Classification stays first).
+- **Treatment column picker**, a field in step 2 shown only when a column matches
+  `uplift.treatment_column_hints` (`treatment, treated, contacted, is_treated`), with a **None**
+  option and the detected column pre-selected, as `GET /uploads/{id}/treatment-candidates` returns
+  `detected`. Hint: 1 means received the action, 0 means held out, and it must be randomly assigned.
+  The treated share reads *90% treated* for the sample and **—** for a real upload.
+- **Blocked reasons.** Uplift with no treatment column: *"Choose the treatment column"*. Clearing the
+  column keeps the problem type on Uplift (the choice was the user's) rather than silently switching
+  to Classification.
+- **Step 3 for uplift** offers the meta-learners (X-learner recommended, T-learner, S-learner as the
+  baseline) and the base model (AutoGluon fast, LightGBM), each with a hint.
+- **Advanced**: stage 5 carries bootstrap resamples and the hold-out share; stage 6 swaps the
+  High / Medium cuts for the segment cuts and the policy (budget, cost per contact, value per
+  conversion — empty is "—"), and shows the control group as read-only text: plan B §5 makes it
+  non-editable. The eight stage titles are unchanged.
+- **Non-random treatment (the 409).** *use a sample where offers were targeted* loads a file whose
+  checks fail inline: the six plan B §4 checks, TREATMENT_NOT_RANDOM failing at *AUC 0.74 against the
+  0.60 limit*, the message and suggestion, and an **acknowledge** checkbox (`#f-ack`). Run stays
+  disabled until it is ticked. *The check wording is the prototype's: `engine/uplift/checks.py` did
+  not exist when this was written. The build should adopt it, and a test should pin it once it
+  exists.*
+
+**Running and results**
+
+- The uplift run's steps: checking the treatment (six checks, *random assignment: AUC 0.52 ≤ 0.60*),
+  preparing features, training the X-learner, measuring on the hold-out (200 resamples), segmenting
+  and saving. Scoring with an uplift model segments the list and chooses who to contact.
+- The run's score is *AUUC 0.0125*. A scoring run copies its model's problem type (it previously got
+  `""`, because nothing detects a type without a target), which is what makes the uplift screens
+  follow a scored list.
+- **Champion.** An uplift run is labelled **Uplift champion** and the propensity champion keeps its
+  badge. *Open question:* whether an uplift champion should replace the propensity champion for the
+  use case is Stage A's registry decision; the prototype shows both. A not-causal run is never
+  promoted.
+- The flow keeps three blocks; the Output block reads *Recommended to contact: 4,000*. A win-back
+  scoring run adds a **Campaign results** link to the summary line instead of a fourth block.
+
+**Results → Model** (`upliftModelBlock`): four KPIs (learner, AUUC, Qini coefficient, uplift in the
+top 10%); an inline-SVG **Qini curve** drawn in `var(--c)` against a dashed `var(--faint)` random
+line, with axis captions; **AUUC with its 95% interval** as an interval bar, the verdict pill, and
+the sentence from `engine/uplift/metrics.py::_summary`, template for template (4 decimals, "95% CI a
+to b"); a link shows what a **null result** reads like (*No measurable uplift… includes zero…*).
+**Uplift by decile** is a diverging bar chart around a zero line, observed next to predicted — not
+`.vchart`, which cannot draw the negative sleeping-dog deciles — above the decile table (n, treated
+rate, control rate, observed and predicted uplift).
+
+**Results → Output** (`upliftOutputBlock`): the **four segments** with `SEGMENT_LABELS` and
+`SEGMENT_ACTIONS` from `engine/uplift/contracts.py`; **Recommended to contact** within the budget
+with its stop reason; **expected incremental conversions with a CI**; the model's own estimate;
+cost, value and net value, or "—"; and a caption saying whether the numbers were computed on the
+training run's hold-out or on every scored row. **Download treat list** (`#up-dl`) builds
+`winback_treat_list.csv` in the page with the contract's `scores.csv` columns — persuadables within
+budget only, never a sleeping dog, never a control-group row. Before a scoring run it is disabled:
+*"Score a list with this model to download who to contact."* The campaign copy block follows,
+unchanged.
+
+**Campaign results** (`#/uc/win-back-campaign/campaign`, a fourth tab once a scoring run is current):
+the scoring run, the outcomes file (or *use sample outcomes*), outcome column, window and treatment
+date column, each with a hint. A list scored today shows **"Results available on <send date +
+window>"** and measures nothing. The seeded 1 May 2026 campaign, once measured, shows treated and
+control n and rate, the absolute lift with its Newcombe interval, relative lift, incremental
+conversions with their interval, the p-value, the row accounting (still inside the window, without
+an outcome, suppressed or not treated) and a summary sentence — all computed in the page from the
+counts. Dates use a fixed month table: `nowStamp`'s en-IN ICU spells September "Sept" in Node and
+may not in Chromium. *The summary sentence is the prototype's; `engine/uplift/incrementality.py` was
+not written yet. The build should adopt it.*
+
+**Not causal.** After an acknowledged TREATMENT_NOT_RANDOM, Model and Output carry a `.ncbanner`
+with `NOT_CAUSAL_NOTE` verbatim, and the AUUC sentence is prefixed with it, as
+`UpliftEvaluation.summary` is. **One deliberate difference from the brief:** on Campaign results the
+banner does not repeat the note. The report compares treated customers with a control group the
+engine held out at random, so the measured lift *is* causal (`IncrementalityReport.causal` is true
+by contract); what is not causal is the model that chose the list. The banner says exactly that. The
+class is `.ncbanner`, not `.banner`, so the copy block's banner tests are unaffected.
+
+**Decisions and assumptions to confirm**
+
+- *N after control and suppression.* `N` is chosen among persuadables that are neither held out nor
+  suppressed, as `engine/uplift/actions.py` does (eligible = not suppressed and not control). On the
+  sample: 5,220 persuadables × 11,200 / 14,500 eligible = 4,032 candidates, budget 4,000.
+- *Expected incremental conversions* are `N × observed uplift in the same top share of the hold-out`
+  (`policy.py`). The engine's interval is a bootstrap; the prototype cannot resample, so its interval
+  is Newcombe's over the pro-rated top-share counts. Shape, not method.
+- *Qini and AUUC at decile resolution.* The engine integrates over every row (101 curve points); the
+  prototype has ten deciles, so its curve has 11 points. The definitions are the same.
+- *Segment counts move with the cuts* in Advanced by the share of the predicted-uplift curve (linear
+  through the decile means) above each cut; at the default cuts they are the sample's.
+- *Campaign results is shown on Win-back only.* The page applies to any scoring run with a control
+  group; the prototype shows it where plan B's acceptance test puts it.
+
+`tests/prototype/uplift.test.mjs` (14 tests) drives all of this. `consistency.test.mjs` adds six:
+the label, thresholds and defaults against the yaml `uplift:` block; the control share against
+`control_group_fraction`; `SEG_LABELS`, `SEG_ACTIONS` and `NOT_CAUSAL_NOTE` against
+`engine/uplift/contracts.py`; the four AUUC sentences against `metrics.py`; and the internal
+arithmetic. The three that read Phase 3b files **skip** on a branch that does not have them yet, and
+`PRODUCT_ROOT=<checkout>` points them at another checkout (all 62 pass against the Phase 3b tree).
+
+---
+
 ## What did not change
 
 The lifecycle overview, the seven use-case definitions, the eight advanced-settings
@@ -247,10 +370,25 @@ use one consistent set, checked by `tests/prototype/consistency.test.mjs`:
 - **11.8%** positive overall (10.9 / 11.4 / 11.6 / 12.0 / 12.3 / 12.6 per snapshot) →
   **14,160 positive examples**
 - 5 documents, **122 pages**, **1,600 chunks**, 300 reference questions, 91% pass rate
-  against an 85% threshold
+  against a 75% threshold
 - 12 message templates: 7 approved, 3 pending review, 2 blocked; the holdout adds up
   (1,450 control + 1,850 suppressed + 11,200 written to = 14,500 eligible)
 - RCA segments: 2,180 (32.1%) high, 3,410 (50.1%) medium, of the 6,800 at risk
+- **Uplift hold-out** (Revision 4): 320K rows × 0.30 = **96,000**, ten deciles of 9,600 (8,640
+  treated, 960 control — the 10% control share). Treated conversions per decile 1508, 1218, 1060,
+  949, 861, 798, 726, 670, 615, 512; control 38, 46, 53, 58, 61, 65, 67, 69, 72, 77; predicted uplift
+  0.142 … −0.022. They give 10.32% treated, 6.31% control, an average effect of **+4.01 pts**,
+  qini(1) = 0.03607, **AUUC 0.0125** (stored 95% CI 0.0098 to 0.0151) and **Qini coefficient 0.0113**
+  (0.0088 to 0.0137) by the trapezoid rule, and **+13.50 pts** in the top 10%.
+  Null example: AUUC 0.0006 (−0.0021 to 0.0034). TREATMENT_NOT_RANDOM: AUC 0.52 random, 0.74 targeted.
+- **Segments** of the 14,500 scored: 5,220 persuadables, 2,610 sure things, 5,510 lost causes, 1,160
+  sleeping dogs; of the hold-out: 57,600 / 9,600 / 17,600 / 11,200. Budget **4,000** → N = 4,000
+  (stop: budget) of 4,032 eligible persuadables, about **405** expected incremental conversions.
+- **Campaign of 1 May 2026** (the same holdout as the copy block): 1,232 of 11,200 treated (11.0%)
+  against 109 of 1,450 control (7.52%) → **+3.48 pts** (95% CI 1.91 to 4.86), +46.3% relative,
+  **390** incremental conversions (213 to 545), p = 5.0e-5, 1,850 suppressed. Mature on 30 Jul 2026;
+  a list scored on 23 Sep 2026 is available on 22 Dec 2026. Checked against an independent
+  Wilson/Newcombe oracle.
 
 Anything the product would have to invent is still `—`.
 
@@ -258,7 +396,7 @@ Anything the product would have to invent is still `—`.
 
 ```bash
 open marketing-ai-prototype.html          # no build step, no server needed
-make prototype-test                       # 42 jsdom tests
+make prototype-test                       # 62 jsdom tests (3 skip until Phase 3b's engine/uplift is present)
 make prototype-screenshots                # docs/prototype/*.png, desktop and mobile
 ```
 
@@ -267,7 +405,10 @@ targets and the notes above live inside the Phase 2 and Phase 3a marker blocks.
 `tests/prototype/` and `docs/prototype/` are new directories and belong to no other branch.
 
 Screenshots of every new state, desktop (1440px) and mobile (390px), are in
-`docs/prototype/`, plus two dark-mode shots. They were captured in a sandbox with no
+`docs/prototype/`, plus three dark-mode shots. Revision 4 added `19-uplift-setup-treatment` to
+`24-campaign-results-mature` (and `22-uplift-output-desktop-dark`); `ONLY=19,20 node
+scripts/prototype_screenshots.mjs` reshoots just those. The script is an ES module, so `NODE_PATH`
+does not reach it: `playwright` must resolve from a `node_modules` above the checkout. They were captured in a sandbox with no
 outbound access to Google Fonts, so they render in the stylesheet's fallback stack
 rather than Inter — the layout is exact, the typeface is not. The font link itself is
 unchanged.

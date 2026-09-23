@@ -496,6 +496,74 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .docrow .dn{font-weight:500;color:var(--ink);overflow-wrap:anywhere}
 .docrow .dv{color:var(--muted);text-align:right;font-feature-settings:"tnum"}
 .doclist{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden;margin-top:10px}
+
+/* uplift (Phase 3b §8) */
+.upwhy{flex-basis:100%;color:var(--ink2)}
+.ptype select{max-width:88px}
+.uphint{font-size:12px;color:var(--faint)}
+.upchecks{border:1px solid var(--line2);border-radius:10px;margin-top:14px;overflow:hidden;background:var(--surface)}
+.upchecks .uph{padding:10px 14px;background:var(--bad-t);color:var(--bad);font-size:12px;font-weight:600}
+.upchecks .checks li.warn .ck{color:var(--warn)}
+.upchecks .upmsg{padding:10px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--ink2)}
+.upchecks .upmsg b{color:var(--bad);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600}
+.upchecks .check{height:auto;padding:10px 14px;border-top:1px solid var(--line);background:var(--soft);align-items:flex-start}
+.upchecks .check input{margin-top:2px}
+.ncbanner{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border:1px solid var(--bad);border-radius:10px;background:var(--bad-t);color:var(--bad);font-size:13px;line-height:1.5}
+.ncbanner b{font-weight:600}
+.qini{display:block;width:100%;max-width:720px;height:auto;padding:12px 16px 0}
+.qini text{fill:var(--muted);font-size:10px;font-family:inherit}
+.qlegend{display:flex;gap:16px;flex-wrap:wrap;padding:6px 20px 12px;font-size:12px;color:var(--muted)}
+.qlegend i{display:inline-block;width:18px;height:0;border-top:2.5px solid var(--c);vertical-align:middle;margin-right:6px}
+.qlegend i.rnd{border-top:1.5px dashed var(--faint)}
+.ciband{padding:16px 20px 4px}
+.ciband .civ{font-size:22px;font-weight:600;color:var(--ink);margin-bottom:10px}
+.ciband .civ small{font-size:13px;font-weight:500;color:var(--muted);margin-left:8px}
+.ciband .cit{position:relative;height:12px;border-radius:6px;background:var(--track)}
+.ciband .cir{position:absolute;top:0;bottom:0;border-radius:6px;background:var(--ok-t);border:1px solid var(--ok)}
+.ciband.bad .cir{background:var(--bad-t);border-color:var(--bad)}
+.ciband .cip{position:absolute;top:-4px;bottom:-4px;width:3px;margin-left:-1px;border-radius:2px;background:var(--ink)}
+.ciband .ciz{position:absolute;top:-6px;bottom:-6px;width:1px;background:var(--ink2)}
+.ciband .cil{display:flex;justify-content:space-between;gap:12px;font-size:12px;color:var(--muted);margin-top:8px}
+.upverdict{font-size:13px;color:var(--ink2);padding:10px 20px 14px;line-height:1.5}
+.upverdict .pill{margin-right:6px}
+.dbars{padding:16px 20px;display:flex;flex-direction:column;gap:10px}
+.dbrow{display:grid;grid-template-columns:36px minmax(0,1fr) 240px;gap:14px;align-items:center;font-size:12px}
+.dbrow .dl{color:var(--muted);font-weight:600}
+.dbrow .dv{text-align:right;color:var(--ink2);font-feature-settings:"tnum";white-space:nowrap}
+.dbrow .dv span{color:var(--faint)}
+.dbar{position:relative;height:20px}
+.dbar .dz{position:absolute;top:-4px;bottom:-4px;width:1px;background:var(--line2)}
+.dbar .dob{position:absolute;top:1px;height:10px;border-radius:2px;background:var(--c)}
+.dbar .dob.neg{background:var(--bad)}
+.dbar .dpr{position:absolute;top:13px;height:5px;border-radius:2px;background:var(--faint)}
+.segbar{display:flex;height:14px;border-radius:7px;overflow:hidden;margin:16px 20px 6px;background:var(--track)}
+.segbar i{display:block;height:100%}
+.sg-persuadable{--sg:var(--ok)} .sg-sure_thing{--sg:var(--p)} .sg-lost_cause{--sg:var(--line2)} .sg-sleeping_dog{--sg:var(--bad)}
+.segbar i,.segrow .sw{background:var(--sg)}
+.segrows{display:flex;flex-direction:column;padding:4px 0 8px}
+.segrow{display:grid;grid-template-columns:12px minmax(120px,1fr) 70px 56px minmax(150px,1.5fr);gap:10px;align-items:center;padding:9px 20px;border-top:1px solid var(--line);font-size:13px}
+.segrow:first-child{border-top:0}
+.segrow .sw{width:12px;height:12px;border-radius:3px}
+.segrow .sn{font-weight:500;color:var(--ink)}
+.segrow .sn small{display:block;font-size:11px;font-weight:400;color:var(--muted)}
+.segrow .sc2,.segrow .sp{text-align:right;font-feature-settings:"tnum";color:var(--ink2)}
+.segrow .sa{font-size:12px;color:var(--muted)}
+.segrow.sg-sleeping_dog .sa{color:var(--bad)}
+.segrow.sg-persuadable .sa{color:var(--ok);font-weight:500}
+.upbig{padding:16px 20px 6px}
+.upbig .ub1{font-size:12px;color:var(--muted)}
+.upbig .ub2{font-size:28px;font-weight:700;line-height:1.2;margin-top:4px}
+.upbig .ub3{font-size:12px;color:var(--ink2);margin-top:4px}
+.updl{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:14px 20px;border-top:1px solid var(--line)}
+.crgrid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:14px 20px;padding:16px 20px}
+.crgrid .field{width:auto}
+.crwait{display:flex;flex-direction:column;gap:6px;padding:22px 20px;border-top:1px solid var(--line);background:var(--soft)}
+.crwait .cw1{font-size:20px;font-weight:600;color:var(--ink)}
+.crwait .cw2{font-size:13px;color:var(--muted);max-width:640px}
+.crsum{padding:14px 20px;font-size:13px;color:var(--ink2);line-height:1.55;border-top:1px solid var(--line)}
+@media (max-width:700px){.dbrow{grid-template-columns:30px minmax(0,1fr)}.dbrow .dv{grid-column:2;text-align:left}
+.segrow{grid-template-columns:12px minmax(0,1fr) 64px}.segrow .sp{display:none}.segrow .sa{grid-column:2/-1}
+.crgrid{grid-template-columns:1fr}}
 </style>
 </head>
 <body>
@@ -1148,6 +1216,297 @@ function lineageBlock(u){const s=st(u);
   return `<section class="card"><h3>Where this dataset came from</h3><div class="lineage">${nodes}</div>
     <p class="caption">Built from raw tables. Every id is stored with the run, so the same recipe can be replayed on next month's tables.</p></section>`;}
 
+/* ===== Phase 3b §8 — uplift ===== */
+/* catalog.problem_types.uplift.label in configs/engine.yaml, verbatim */
+const UPLIFT_PTYPE="Uplift (who changes because of your action)";
+const UPLIFT_WHY="Predicts who changes behaviour because of your action.";
+/* uplift.treatment_column_hints, in the order detection tries them */
+const TREAT_HINTS=["treatment","treated","contacted","is_treated"];
+/* the uplift: block of configs/engine.yaml (learner x_learner, base_model autogluon_fast, ...) */
+const UPLIFT_DEFAULTS={learner:"X-learner",base:"AutoGluon fast",persuadable:0.02,sleepingDog:-0.01,
+  minArmRows:1000,minArmPos:50,randomAucMax:0.60,bootstrap:200,testFraction:0.30};
+const UP_LEARNERS=["X-learner (recommended)","T-learner","S-learner (baseline)"];
+const UP_BASES=["AutoGluon fast","LightGBM"];
+/* engine/uplift/contracts.py SEGMENT_LABELS, SEGMENT_ACTIONS and NOT_CAUSAL_NOTE, verbatim */
+const SEG_IDS=["persuadable","sure_thing","lost_cause","sleeping_dog"];
+const SEG_LABELS={persuadable:"Persuadables",sure_thing:"Sure things",lost_cause:"Lost causes",sleeping_dog:"Sleeping dogs"};
+const SEG_ACTIONS={persuadable:"Treat",sure_thing:"Don't treat (converts anyway)",lost_cause:"Don't treat (won't convert)",sleeping_dog:"Never treat (contact makes it worse)"};
+const NOT_CAUSAL_NOTE="Not causal: the treatment was not randomly assigned, so these numbers describe who was contacted, not what contacting them changed.";
+const STOP_REASONS={budget:"Stopped at the contact budget.",all_persuadables:"Every eligible persuadable is included.",
+  value_below_cost:"Stopped where the next contact would cost more than it is expected to earn.",no_persuadables:"No eligible persuadable to contact."};
+/* The hold-out of the sample: 320K × 0.30 = 96,000 rows, ten deciles of 9,600 (8,640 treated, 960 control),
+   highest predicted uplift first. Conversions per arm and mean predicted uplift per decile. */
+const UPLIFT_DECILES=[[1508,38,0.142],[1218,46,0.098],[1060,53,0.071],[949,58,0.052],[861,61,0.038],
+  [798,65,0.026],[726,67,0.015],[670,69,0.006],[615,72,-0.004],[512,77,-0.022]]
+  .map(([yt,yc,pred],i)=>({decile:i+1,rows:9600,treated_rows:8640,control_rows:960,treated_conv:yt,control_conv:yc,predicted_uplift:pred}));
+/* Bootstrap intervals are resamples the prototype cannot rerun, so they are stored; the values they
+   surround are computed from the deciles above. randomAuc is TREATMENT_NOT_RANDOM's cross-validated AUC. */
+const UPLIFT_EVAL={auuc:{ci_low:0.0098,ci_high:0.0151},qini:{ci_low:0.0088,ci_high:0.0137},randomAuc:0.52,targetedAuc:0.74,
+  rows:"320K",treated:288000,control:32000,features:29};
+const UPLIFT_NULL={value:0.0006,ci_low:-0.0021,ci_high:0.0034,confidence_level:0.95};
+/* segments.json: every scored row of the sample list (14,500), and the 96,000-row hold-out of the training run */
+const UPLIFT_SEGS={persuadable:5220,sure_thing:2610,lost_cause:5510,sleeping_dog:1160};
+const UPLIFT_SEGS_TEST={persuadable:57600,sure_thing:9600,lost_cause:17600,sleeping_dog:11200};
+const UPLIFT_SEG_MEANS={persuadable:[0.071,0.121,0.050],sure_thing:[0.008,0.196,0.188],lost_cause:[0.004,0.021,0.017],sleeping_dog:[-0.019,0.052,0.071]};
+/* The policy runs on the rows that are neither suppressed nor held out (engine/uplift/actions.py). */
+const UPLIFT_POLICY={budgetWinback:4000};
+/* A past win-back scoring run (Phase 1, 10% control) and the outcomes file measured against it. */
+const CAMPAIGN_SEED={id:"r0501",at:"1 May 2026",date:"2026-05-01",mode:"score",rows:"14,500",best:"LightGBM + Claude copy",
+  file:"win_back_campaign_2026-05.csv",ptype:"",causal:true,seed:true};
+const CAMPAIGN_OUTCOMES={file:"winback_outcomes_2026-08.csv",treated:[11200,1232],control:[1450,109],suppressed:1850,missing:0};
+const MONTHS=["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+let AS_OF=null, UP_NULL_VIEW=false;
+const today=()=>AS_OF?new Date(AS_OF):new Date();
+const isoDay=d=>new Date(d).toISOString().slice(0,10);
+/* A fixed month table, not toLocaleString: ICU spells September "Sept" in Node and "Sep" elsewhere. */
+const fmtDay=d=>{const x=new Date(d);return `${x.getUTCDate()} ${MONTHS[x.getUTCMonth()]} ${x.getUTCFullYear()}`;};
+const addDays=(d,n)=>{const x=new Date(isoDay(d)+"T00:00:00Z");x.setUTCDate(x.getUTCDate()+n);return x;};
+const fmtI=n=>n==null?"—":Math.round(n).toLocaleString("en-US");
+const f4=v=>v==null?"—":(t=>t==="-0.0000"?"0.0000":t)(v.toFixed(4));
+const pts2=v=>v==null?"—":`${v>=0?"+":"−"}${Math.abs(v*100).toFixed(2)} pts`;
+const pct1=v=>v==null?"—":`${(v*100).toFixed(v<0.1?2:1)}%`;
+const hnum=k=>Number(String(HOLDOUT[k]).replace(/,/g,""));
+
+function detectTreatment(cols){const low=cols.map(c=>String(c).toLowerCase());
+  for(const h of TREAT_HINTS){const i=low.indexOf(h);if(i>=0)return cols[i];}return "";}
+const treatCandidates=s=>s.cols.filter(c=>TREAT_HINTS.includes(String(c).toLowerCase()));
+const ptypesFor=s=>s.treatment||s.ptype===UPLIFT_PTYPE?[...PTYPES,UPLIFT_PTYPE]:PTYPES;
+function isUplift(u){const s=st(u);return !SETUP[u.id].gen&&s.mode==="train"&&(s.ptype||detectType(u))===UPLIFT_PTYPE;}
+/* The run the uplift screens render from: the current run when it is an uplift run. A scoring run
+   carries its model's problem type, so scoring with an uplift model counts too. */
+function upliftRun(u){const r=st(u).current;return r&&r.ptype==="Uplift"?r:null;}
+/* The training run behind an uplift run: itself, or the model a scoring run used. */
+function modelRunOf(u,r){return r&&r.from?st(u).runs.find(x=>x.id===r.from)||r:r;}
+
+/* --- the metrics, from the deciles (engine/uplift/metrics.py definitions, at decile resolution) --- */
+const armTotals=(d=UPLIFT_DECILES)=>d.reduce((a,x)=>({n:a.n+x.rows,nt:a.nt+x.treated_rows,nc:a.nc+x.control_rows,yt:a.yt+x.treated_conv,yc:a.yc+x.control_conv}),{n:0,nt:0,nc:0,yt:0,yc:0});
+function ateOf(d=UPLIFT_DECILES){const t=armTotals(d);return t.yt/t.nt-t.yc/t.nc;}
+function qiniPoints(d=UPLIFT_DECILES){const n=armTotals(d).n;let Yt=0,Yc=0,Nt=0,Nc=0;
+  const out=[{fraction:0,qini:0,uplift_curve:0}];
+  d.forEach(x=>{Yt+=x.treated_conv;Yc+=x.control_conv;Nt+=x.treated_rows;Nc+=x.control_rows;
+    out.push({fraction:(Nt+Nc)/n,qini:(Yt-(Nc?Yc*Nt/Nc:0))/n,uplift_curve:(Nt&&Nc?Yt/Nt-Yc/Nc:0)*(Nt+Nc)/n});});
+  const end=out[out.length-1].qini;out.forEach(p=>{p.random=p.fraction*end;});return out;}
+const trapz=(p,f)=>p.slice(1).reduce((a,q,i)=>a+(f(q)+f(p[i]))/2*(q.fraction-p[i].fraction),0);
+function auucOf(p=qiniPoints()){const ate=ateOf();return trapz(p,q=>q.uplift_curve-q.fraction*ate);}
+const qiniCoefOf=(p=qiniPoints())=>trapz(p,q=>q.qini-q.random);
+const auucCI=()=>({value:auucOf(),...UPLIFT_EVAL.auuc,confidence_level:0.95});
+/* UpliftEvaluation.summary: engine/uplift/metrics.py::_summary, template for template */
+function upliftSummary(ci,causal=true){const lv=`${Math.round((ci.confidence_level||0.95)*100)}%`;let s;
+  if(ci.ci_low==null||ci.ci_high==null)s=`No measurable uplift: the AUUC (${f4(ci.value)}) has no ${lv} interval, so this model cannot be shown to target better than random.`;
+  else if(ci.ci_low>0)s=`Targeting by predicted uplift beats random targeting: AUUC ${f4(ci.value)} (${lv} CI ${f4(ci.ci_low)} to ${f4(ci.ci_high)}).`;
+  else if(ci.ci_high<0)s=`No measurable uplift: the AUUC interval (${f4(ci.ci_low)} to ${f4(ci.ci_high)}) lies below zero, so this model targets worse than random.`;
+  else s=`No measurable uplift: the AUUC interval (${f4(ci.ci_low)} to ${f4(ci.ci_high)}) includes zero, so this model cannot be shown to target better than random.`;
+  return causal?s:`${NOT_CAUSAL_NOTE} ${s}`;}
+/* Two-proportion inference: Wilson score intervals, Newcombe's hybrid interval for the difference
+   (method 10), and the pooled two-sided z-test. */
+const Z95=1.959963984540054;
+function wilson(x,n,z=Z95){const z2=z*z,c=(x+z2/2)/(n+z2),h=z/(n+z2)*Math.sqrt(x*(n-x)/n+z2/4);
+  return [x<=0?0:Math.max(0,c-h),x>=n?1:Math.min(1,c+h)];}
+function newcombe(x1,n1,x2,n2){const p1=x1/n1,p2=x2/n2,[l1,u1]=wilson(x1,n1),[l2,u2]=wilson(x2,n2),d=p1-p2;
+  return [d-Math.sqrt((p1-l1)**2+(u2-p2)**2),d+Math.sqrt((u1-p1)**2+(p2-l2)**2)];}
+function erfc(x){const z=Math.abs(x),t=1/(1+0.5*z);
+  const r=t*Math.exp(-z*z-1.26551223+t*(1.00002368+t*(0.37409196+t*(0.09678418+t*(-0.18628806+t*(0.27886807+t*(-1.13520398+t*(1.48851587+t*(-0.82215223+t*0.17087277)))))))));
+  return x>=0?r:2-r;}
+function zTest(x1,n1,x2,n2){const p=(x1+x2)/(n1+n2),se=Math.sqrt(p*(1-p)*(1/n1+1/n2));
+  return se?erfc(Math.abs((x1/n1-x2/n2)/se)/Math.SQRT2):null;}
+/* The top share of the hold-out, highest predicted uplift first; a partial decile is pro-rated. */
+function topShare(f,d=UPLIFT_DECILES){let left=Math.ceil(f*armTotals(d).n-1e-9);const o={rows:0,nt:0,yt:0,nc:0,yc:0,pred:0};
+  for(const x of d){if(left<=0)break;const k=Math.min(left,x.rows),w=k/x.rows;left-=k;
+    o.rows+=k;o.nt+=x.treated_rows*w;o.yt+=x.treated_conv*w;o.nc+=x.control_rows*w;o.yc+=x.control_conv*w;o.pred+=x.predicted_uplift*k;}
+  o.pred=o.rows?o.pred/o.rows:0;return o;}
+function upliftAt(f){const o=topShare(f);if(!o.nt||!o.nc)return null;const [lo,hi]=newcombe(o.yt,o.nt,o.yc,o.nc);
+  return {value:o.yt/o.nt-o.yc/o.nc,ci_low:lo,ci_high:hi};}
+/* Predicted uplift against population share: straight lines through the decile means. */
+function predCurve(d=UPLIFT_DECILES){const m=d.map(x=>x.predicted_uplift),n=m.length;
+  return [[0,m[0]+(m[0]-m[1])/2],...m.map((v,i)=>[(i+0.5)/n,v]),[1,m[n-1]-(m[n-2]-m[n-1])/2]];}
+function predAt(f){const c=predCurve();for(let i=1;i<c.length;i++)if(f<=c[i][0]){const [f0,v0]=c[i-1],[f1,v1]=c[i];return v0+(v1-v0)*(f-f0)/(f1-f0);}return c[c.length-1][1];}
+function shareAbove(x){const c=predCurve();if(x>=c[0][1])return 0;if(x<=c[c.length-1][1])return 1;
+  for(let i=1;i<c.length;i++)if(x>=c[i][1]){const [f0,v0]=c[i-1],[f1,v1]=c[i];return f0+(f1-f0)*(v0-x)/(v0-v1);}return 1;}
+/* segments.json for a run: the sample counts at the default cuts, moved with the cuts in Advanced. */
+function segCounts(kind,a){const b=kind==="scored"?UPLIFT_SEGS:UPLIFT_SEGS_TEST,tot=SEG_IDS.reduce((x,k)=>x+b[k],0);
+  const rp=shareAbove(a.upPers)/shareAbove(UPLIFT_DEFAULTS.persuadable),rd=(1-shareAbove(a.upSleep))/(1-shareAbove(UPLIFT_DEFAULTS.sleepingDog));
+  const p=Math.min(tot,Math.round(b.persuadable*rp)),d=Math.min(tot-p,Math.round(b.sleeping_dog*rd)),rest=tot-p-d;
+  const sure=Math.round(rest*b.sure_thing/(b.sure_thing+b.lost_cause));
+  return {persuadable:p,sure_thing:sure,lost_cause:rest-sure,sleeping_dog:d};}
+/* policy_recommendation.json: top N by uplift within budget, among eligible persuadables only. */
+function upliftPolicy(run){const a=run.adv,scored=run.mode==="score",segs=segCounts(scored?"scored":"test",a);
+  const rows=SEG_IDS.reduce((x,k)=>x+segs[k],0);
+  const eligShare=scored?(hnum("eligible")-hnum("control")-hnum("suppressed"))/hnum("eligible"):1;
+  const cand=Math.round(segs.persuadable*eligShare);let n=cand,reason=cand?"all_persuadables":"no_persuadables";
+  const money=a.upCost!=null&&a.upValue!=null&&a.upValue>0;
+  if(money&&cand){const pay=Math.round(cand*Math.min(1,shareAbove(a.upCost/a.upValue)/shareAbove(a.upPers)));if(pay<n){n=pay;reason="value_below_cost";}}
+  if(a.upBudget!=null&&a.upBudget<n){n=a.upBudget;reason="budget";}
+  const at=n?upliftAt(n/rows):{value:0,ci_low:0,ci_high:0};
+  const exp=at?{value:n*at.value,ci_low:n*at.ci_low,ci_high:n*at.ci_high}:null;
+  const cost=a.upCost!=null?n*a.upCost:null,value=exp&&a.upValue!=null?exp.value*a.upValue:null;
+  return {computed_on:scored?"scored":"test",rows,segs,eligible_persuadables:cand,n,stop_reason:reason,budget:a.upBudget,
+    predicted:n?n*topShare(n/rows).pred:0,expected:exp,cost_per_contact:a.upCost,value_per_conversion:a.upValue,
+    expected_cost:cost,expected_value:value,expected_net_value:cost!=null&&value!=null?value-cost:null,causal:run.causal!==false};}
+/* incrementality_report.json for a scoring run, from its counts and the outcomes file */
+function campaignReport(run,outcomes,asOf,cr=st(UC.find(x=>x.id==="win-back-campaign")).cr){
+  const win=cr.window,avail=addDays(run.date,win),mature=avail<=new Date(isoDay(asOf)+"T00:00:00Z");
+  const up=run.ptype==="Uplift";
+  const tRows=up?upliftPolicy(run).n:hnum("sent"),cRows=up?Math.round(tRows*hnum("control")/hnum("sent")):hnum("control");
+  const base={run_id:run.id,outcome_column:cr.outcome,outcome_window_days:win,as_of:isoDay(asOf),
+    results_available_on:mature?null:isoDay(avail),status:mature?"mature":"immature",causal:true,
+    rows_suppressed_or_untreated:hnum("eligible")-tRows-cRows,rows_without_outcome:0,rows_immature:0};
+  const nil={treated_rows:0,treated_conversions:0,treated_rate:null,control_rows:0,control_conversions:0,control_rate:null,
+    absolute_lift:null,relative_lift:null,incremental_conversions:null,p_value:null};
+  if(!outcomes)return {...base,...nil,measured:false,rows_immature:mature?0:tRows+cRows};
+  if(!mature)return {...base,...nil,measured:true,rows_immature:tRows+cRows,
+    summary:`Results available on ${fmtDay(avail)}: the ${win}-day outcome window has not ended for any customer yet.`};
+  if(!outcomes.treated)return {...base,...nil,measured:false};
+  const [nt,yt]=outcomes.treated,[nc,yc]=outcomes.control,tr=yt/nt,ctl=yc/nc,d=tr-ctl,[lo,hi]=newcombe(yt,nt,yc,nc),p=zTest(yt,nt,yc,nc);
+  const r={...base,measured:true,treated_rows:nt,treated_conversions:yt,treated_rate:tr,control_rows:nc,control_conversions:yc,control_rate:ctl,
+    absolute_lift:{value:d,ci_low:lo,ci_high:hi},relative_lift:ctl?d/ctl:null,incremental_conversions:{value:d*nt,ci_low:lo*nt,ci_high:hi*nt},
+    p_value:p,rows_without_outcome:outcomes.missing,rows_suppressed_or_untreated:outcomes.suppressed};
+  r.summary=lo>0?`The campaign worked: ${pct1(tr)} of treated customers converted against ${pct1(ctl)} of the control group, a lift of ${pts2(d)} (95% CI ${(lo*100).toFixed(2)} to ${(hi*100).toFixed(2)}), about ${fmtI(d*nt)} conversions that would not have happened without it.`
+    :hi<0?`The campaign did harm: ${pct1(tr)} of treated customers converted against ${pct1(ctl)} of the control group (95% CI ${(lo*100).toFixed(2)} to ${(hi*100).toFixed(2)} points).`
+    :`No measurable effect: ${pct1(tr)} of treated customers converted against ${pct1(ctl)} of the control group, and the 95% CI of the lift (${(lo*100).toFixed(2)} to ${(hi*100).toFixed(2)} points) includes zero.`;
+  return r;}
+
+/* --- renderers --- */
+function ncBanner(where){return `<div class="ncbanner" role="note"><span aria-hidden="true">⚠</span><span>${where==="campaign"
+  ?`<b>The model behind this list is not causal.</b> Its treatment was not randomly assigned, so who it chose may be wrong. The lift below is still causal: the control group was held out at random by the engine.`
+  :esc(NOT_CAUSAL_NOTE)}</span></div>`;}
+function qiniSvg(p){const W=640,H=300,L=52,R=14,T=12,B=46,max=Math.max(...p.map(q=>Math.max(q.qini,q.random)))*1.08;
+  const x=f=>(L+f*(W-L-R)).toFixed(1),y=v=>(T+(1-v/max)*(H-T-B)).toFixed(1);
+  const line=k=>p.map(q=>`${x(q.fraction)},${y(q[k])}`).join(" ");
+  const yt=[0,0.01,0.02,0.03].filter(v=>v<max);
+  return `<svg class="qini" viewBox="0 0 ${W} ${H}" role="img" aria-label="Qini curve of the model against random targeting">
+    ${yt.map(v=>`<line x1="${L}" y1="${y(v)}" x2="${W-R}" y2="${y(v)}" stroke="var(--line)"/><text x="${L-6}" y="${+y(v)+3}" text-anchor="end">${v.toFixed(2)}</text>`).join("")}
+    <line x1="${L}" y1="${T}" x2="${L}" y2="${y(0)}" stroke="var(--line2)"/>
+    ${[0,0.25,0.5,0.75,1].map(f=>`<text x="${x(f)}" y="${H-B+14}" text-anchor="middle">${Math.round(f*100)}%</text>`).join("")}
+    <polyline data-line="random" points="${line("random")}" fill="none" stroke="var(--faint)" stroke-width="1.5" stroke-dasharray="5 4"/>
+    <polyline data-line="model" points="${line("qini")}" fill="none" stroke="var(--c)" stroke-width="2.5" stroke-linejoin="round"/>
+    ${p.slice(1).map(q=>`<circle cx="${x(q.fraction)}" cy="${y(q.qini)}" r="2.5" fill="var(--c)"/>`).join("")}
+    <text x="${(L+W-R)/2}" y="${H-6}" text-anchor="middle">Share of customers targeted, highest predicted uplift first</text>
+    <text x="12" y="${(T+H-B)/2}" text-anchor="middle" transform="rotate(-90 12 ${(T+H-B)/2})">Incremental conversions per customer</text></svg>
+    <div class="qlegend"><span><i></i>This model</span><span><i class="rnd"></i>Random targeting</span></div>`;}
+function ciBar(ci,fmt,good,zero="zero = no better than random"){const lo=Math.min(0,ci.ci_low),hi=Math.max(0,ci.ci_high),pad=(hi-lo)*0.15,a=lo-pad,b=hi+pad,pos=v=>`${(100*(v-a)/(b-a)).toFixed(1)}%`;
+  return `<div class="ciband ${good?"":"bad"}"><div class="civ">${esc(fmt(ci.value))}<small>95% CI ${esc(fmt(ci.ci_low))} to ${esc(fmt(ci.ci_high))}</small></div>
+    <div class="cit"><span class="cir" style="left:${pos(ci.ci_low)};width:${(100*(ci.ci_high-ci.ci_low)/(b-a)).toFixed(1)}%"></span><span class="ciz" style="left:${pos(0)}"></span><span class="cip" style="left:${pos(ci.value)}"></span></div>
+    <div class="cil"><span>${ci.ci_low>0?"Whole interval above zero":ci.ci_high<0?"Whole interval below zero":"Interval includes zero"}</span><span>${esc(zero)}</span></div></div>`;}
+function decileBars(d){const obs=d.map(x=>x.treated_conv/x.treated_rows-x.control_conv/x.control_rows);
+  const lo=Math.min(0,...obs,...d.map(x=>x.predicted_uplift)),hi=Math.max(...obs,...d.map(x=>x.predicted_uplift)),span=hi-lo,z=100*(-lo)/span;
+  const bar=(v,cls)=>`<span class="${cls}${v<0?" neg":""}" style="left:${(v<0?z+100*v/span:z).toFixed(1)}%;width:${Math.max(0.6,100*Math.abs(v)/span).toFixed(1)}%"></span>`;
+  return `<div class="dbars">${d.map((x,i)=>`<div class="dbrow" data-up-decile="${x.decile}"><span class="dl">D${x.decile}</span>
+    <span class="dbar"><span class="dz" style="left:${z.toFixed(1)}%"></span>${bar(obs[i],"dob")}${bar(x.predicted_uplift,"dpr")}</span>
+    <span class="dv">${pts2(obs[i])} <span>· predicted ${pts2(x.predicted_uplift)}</span></span></div>`).join("")}</div>`;}
+function segmentChart(segs,run){const tot=SEG_IDS.reduce((a,k)=>a+segs[k],0);
+  return `<div class="segbar" role="img" aria-label="Customers by segment">${SEG_IDS.map(k=>`<i class="sg-${k}" style="width:${(100*segs[k]/tot).toFixed(2)}%"></i>`).join("")}</div>
+    <div class="segrows">${SEG_IDS.map(k=>`<div class="segrow sg-${k}" data-up-seg="${k}"><span class="sw"></span>
+      <span class="sn">${esc(SEG_LABELS[k])}<small>mean predicted uplift ${pts2(UPLIFT_SEG_MEANS[k][0])}</small></span>
+      <span class="sc2">${fmtI(segs[k])}</span><span class="sp">${(100*segs[k]/tot).toFixed(1)}%</span><span class="sa">${esc(SEG_ACTIONS[k])}</span></div>`).join("")}</div>`;}
+function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),p=qiniPoints(),a=run.adv,t=armTotals(),causal=run.causal!==false;
+  const auuc=auucCI(),qc=qiniCoefOf(p),u10=upliftAt(0.1),ci=UP_NULL_VIEW?UPLIFT_NULL:auuc,good=ci.ci_low>0;
+  const [alo,ahi]=newcombe(t.yt,t.nt,t.yc,t.nc);
+  const verdict=UP_NULL_VIEW?`<span class="pill bad">Not promoted</span>Its AUUC interval includes zero, so it can never become the uplift champion.`
+    :!causal?`<span class="pill bad">Not promoted</span>The treatment was not random, so this model can never become the uplift champion.`
+    :run.upChampion?`<span class="pill ok">Uplift champion</span>Its AUUC interval lies above zero.`:`<span class="pill warn">Not promoted</span>It did not beat the uplift champion on the same hold-out.`;
+  const tbl=table(["decile","n","treated rate","control rate","observed uplift","predicted uplift"],UPLIFT_DECILES.map(x=>[`D${x.decile}`,fmtI(x.rows),
+    pct1(x.treated_conv/x.treated_rows),pct1(x.control_conv/x.control_rows),f4(x.treated_conv/x.treated_rows-x.control_conv/x.control_rows),f4(x.predicted_uplift)]));
+  return `${causal?"":ncBanner()}
+    ${kpis([["Learner",run.learner],["AUUC",f4(auuc.value)],["Qini coefficient",f4(qc)],["Uplift in the top 10%",pts2(u10.value)]])}
+    <div class="row">
+      <section class="card"><h3>Qini curve</h3>${qiniSvg(p)}<p class="caption">Measured on the ${fmtI(t.n)}-customer hold-out the learners never saw. The dashed line is random targeting; the gap above it is what the model adds.</p></section>
+      <section class="card" id="up-auuc"><h3>AUUC${UP_NULL_VIEW?" · example with no measurable uplift":""}</h3>${ciBar(ci,f4,good)}
+        <p class="upverdict" data-up-summary>${esc(upliftSummary(ci,causal))}</p>
+        <p class="upverdict">${verdict}</p>
+        ${kvs([["Learner",`${run.learner} · ${run.baseModel}`],["Hold-out",`${fmtI(t.n)} rows · ${fmtI(t.nt)} treated · ${fmtI(t.nc)} control`],
+          ["Treated rate · control rate",`${pct1(t.yt/t.nt)} · ${pct1(t.yc/t.nc)}`],["Treating everyone gains",`${pts2(ateOf())} (95% CI ${(alo*100).toFixed(2)} to ${(ahi*100).toFixed(2)})`],
+          ["Qini coefficient",`${f4(qc)} (95% CI ${f4(UPLIFT_EVAL.qini.ci_low)} to ${f4(UPLIFT_EVAL.qini.ci_high)})`],["Bootstrap resamples",String(a.upBoot)]])}
+        <div class="updl"><button type="button" class="linkbtn" id="up-null">${UP_NULL_VIEW?"Back to this model":"What a model with no measurable uplift looks like"}</button></div></section>
+    </div>
+    <section class="card"><h3>Uplift by decile</h3>${decileBars(UPLIFT_DECILES)}
+      <p class="caption">Treated conversion rate minus control conversion rate in each tenth of the hold-out (top bar), against the model's prediction (thin bar). D1 is the highest predicted uplift; the bottom deciles are the sleeping dogs.</p>${tbl}</section>`;}
+function treatListRows(u){const run=upliftRun(u);if(!run||run.mode!=="score")return [];
+  const pol=upliftPolicy(run),top=pol.n/pol.rows,R=["months_since_churn ↓ (2)","offers_accepted ↑ (3)","churn_reason = Network","avg_monthly_spend ↑ (₹640)","preferred_channel = SMS"];
+  return Array.from({length:pol.n},(_,i)=>{const up=Math.max(run.adv.upPers,predAt((i+0.5)/pol.n*top)),pc=0.02+0.06*((i*37)%100)/100;
+    return {[run.pk||"customer_id"]:`C-${90001+i*3}`,uplift:up.toFixed(4),p_treated:(pc+up).toFixed(4),p_control:pc.toFixed(4),segment:"persuadable",band:SEG_LABELS.persuadable,
+      action:SEG_ACTIONS.persuadable,reason_1:R[i%5],reason_2:R[(i+1)%5],reason_3:R[(i+2)%5],suppressed_reason:"",control_group:"false",intended_treatment:"true"};});}
+function treatListCsv(u){const rows=treatListRows(u);if(!rows.length)return "";const cols=Object.keys(rows[0]);
+  return [cols.join(","),...rows.map(r=>cols.map(c=>`"${String(r[c]).replace(/"/g,'""')}"`).join(","))].join("\n");}
+function downloadTreatList(u){const csv=treatListCsv(u);if(!csv)return;
+  try{const b=new Blob([csv],{type:"text/csv"}),a=document.createElement("a");
+    a.href=URL.createObjectURL(b);a.download="winback_treat_list.csv";a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}catch(e){}}
+const UP_SAMPLE_ROWS=[["C-90112","0.1420","Persuadables","months_since_churn ↓ (2)","Treat"],["C-90147","0.1180","Persuadables","offers_accepted ↑ (3)","Treat"],
+  ["C-90183","0.0950","Persuadables","churn_reason = Network","Control (hold out)"],["C-90236","0.0080","Sure things","avg_monthly_spend ↑ (₹1,420)",SEG_ACTIONS.sure_thing],
+  ["C-90210","−0.0230","Sleeping dogs","complaints_90d ↑ (4)",SEG_ACTIONS.sleeping_dog]];
+function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),scored=run.mode==="score",e=pol.expected;
+  const money=v=>v==null?"—":`₹${fmtI(v)}`;
+  const on=scored?`every one of the ${fmtI(pol.rows)} scored customers`:`the ${fmtI(pol.rows)}-customer hold-out of the training run`;
+  return `${pol.causal?"":ncBanner()}
+    ${kpis([["Recommended to contact",fmtI(pol.n)],["Expected incremental conversions",e?fmtI(e.value):"—"],["Persuadables",fmtI(pol.segs.persuadable)],["Sleeping dogs, never contacted",fmtI(pol.segs.sleeping_dog)]])}
+    <div class="row">
+      <section class="card"><h3>Four segments</h3>${segmentChart(pol.segs,run)}<p class="caption" data-up-computed>Computed on ${on}. Persuadable at predicted uplift ≥ ${run.adv.upPers}; sleeping dog at ≤ ${run.adv.upSleep}.</p></section>
+      <section class="card"><h3>Who to contact</h3>
+        <div class="upbig"><div class="ub1">Recommended to contact</div><div class="ub2" data-up-n>${fmtI(pol.n)}</div><div class="ub3">${esc(STOP_REASONS[pol.stop_reason])}${pol.budget!=null?` Budget: ${fmtI(pol.budget)} contacts.`:""}</div></div>
+        ${kvs([["Eligible persuadables",fmtI(pol.eligible_persuadables)],
+          ["Expected incremental conversions",e?`${fmtI(e.value)} (95% CI ${fmtI(e.ci_low)} to ${fmtI(e.ci_high)})`:"—"],
+          ["The model's own estimate",fmtI(pol.predicted)],["Cost per contact",money(pol.cost_per_contact)],["Value per conversion",money(pol.value_per_conversion)],
+          ["Expected cost",money(pol.expected_cost)],["Expected value",money(pol.expected_value)],["Expected net value",money(pol.expected_net_value)]])}
+        <p class="caption">Only persuadables are ever contacted, highest uplift first; sleeping dogs never are. ${scored?"The control group and suppressed customers are taken out before the list is chosen.":"Expected conversions use the uplift observed in the same top share of the hold-out."}</p></section>
+    </div>
+    <section class="card"><h3>Treat list</h3>
+      <div class="updl"><button type="button" class="run sm" id="up-dl" ${scored?"":"disabled"}>Download treat list</button>
+        <span class="reason">${scored?`winback_treat_list.csv · ${fmtI(pol.n)} customers · persuadables within budget only`:"Score a list with this model to download who to contact."}</span></div>
+      ${table(["customer_id","uplift","segment","top_reason (SHAP on uplift)","action"],UP_SAMPLE_ROWS)}
+      <p class="caption">Sample rows of scores.csv. The download holds the Treat rows only, with every column of scores.csv.</p></section>`;}
+/* The 409 of POST /uplift/runs, inline: uplift_validation.json's six checks. The wording is the
+   prototype's; engine/uplift/checks.py should adopt it. */
+function upChecksHtml(u){const s=st(u),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
+  if(!(isUplift(u)&&s.targeted&&s.treatment))return "";
+  const li=(bad,code,t)=>`<li class="${bad?"bad":""}" data-up-check="${code}"><span class="ck">${bad?"✕":"✓"}</span><span>${esc(t)}</span></li>`;
+  return `<div class="upchecks" role="alert"><div class="uph">The uplift checks stopped this run: 1 error</div><ul class="checks">
+    ${li(0,"TREATMENT_COLUMN_MISSING",`Treatment column found: ${s.treatment}.`)}
+    ${li(0,"TREATMENT_NOT_BINARY","Every treatment value is 0 or 1.")}
+    ${li(0,"TREATMENT_ARM_TOO_SMALL",`Both arms are big enough: ${fmtI(E.treated)} treated and ${fmtI(E.control)} control, each above ${fmtI(D.minArmRows)} rows and ${D.minArmPos} conversions.`)}
+    ${li(1,"TREATMENT_NOT_RANDOM",`The features predict who was treated: AUC ${E.targetedAuc.toFixed(2)} against the ${D.randomAucMax.toFixed(2)} limit.`)}
+    ${li(0,"OUTCOME_WINDOW_IMMATURE","Every row's outcome window has ended.")}
+    ${li(0,"FEATURE_AFTER_TREATMENT","No feature is dated after the treatment date.")}</ul>
+    <div class="upmsg"><b>TREATMENT_NOT_RANDOM</b> The offer went to customers the features can pick out, so the treated and control groups differed before anything was sent. Use a campaign with a random control group, or acknowledge this and train anyway.</div>
+    <label class="check"><input type="checkbox" id="f-ack" ${s.ack?"checked":""}><span>Train anyway, and label every output not causal.<span class="uphint" style="display:block">The model can never become the uplift champion, and every page it feeds carries a not-causal banner.</span></span></label></div>`;}
+const unum=(key,label,step,min,max,hint,cls="sm")=>{const v=st(CUR).adv[key];
+  return `<div class="field ${cls}"><span class="sub">${esc(label)}</span><div class="control"><input type="number" data-up-num="${key}" step="${step}" min="${min}" max="${max}" value="${v==null?"":v}" placeholder="—"></div><span class="uphint">${esc(hint)}</span></div>`;};
+function upStage5(a){return [`AUUC · ${a.upBoot} bootstrap resamples · ${a.upTest}% hold-out${a.shap?` · top ${a.reasons} SHAP reasons on uplift`:""} · champion if +${a.champ}%`,
+  `<div class="frow">${unum("upBoot","Bootstrap resamples",10,10,5000,"Resamples behind every confidence interval. More is steadier and slower.")}${unum("upTest","Hold-out share (%)",5,10,50,"Customers kept back to measure uplift. The learners never see them.")}${num("reasons","Reasons per row",1,1,5)}${num("champ","Replace uplift champion if better by (%)",0.5,0,20)}${chk("shap","Explain the uplift of every row (SHAP)")}</div>`];}
+function upStage6(a){return [`Persuadable ≥ ${a.upPers} · sleeping dog ≤ ${a.upSleep} · budget ${a.upBudget==null?"—":fmtI(a.upBudget)}${a.supOpt?" · skip opted-out":""}${a.supRecent?` · skip contacted <${a.recentDays}d`:""} · ${a.control}% control group`,
+  `<div class="frow">${unum("upPers","Persuadable at uplift ≥",0.01,-1,1,"Customers at or above this are worth contacting.")}${unum("upSleep","Sleeping dog at uplift ≤",0.01,-1,1,"Customers at or below this are never contacted, whatever the budget.")}${unum("upBudget","Budget (contacts)",100,1,10000000,"The most customers to contact. Empty means every persuadable.")}${unum("upCost","Cost per contact (₹)",1,0,100000,"With a value per conversion, the list stops where a contact no longer pays for itself.")}${unum("upValue","Value per conversion (₹)",10,0,10000000,"What one extra conversion is worth to you.")}
+    <div class="field sm"><span class="sub">Control group holdout</span><div class="control" style="padding:0 12px;color:var(--muted)" data-up-control>${a.control}% · fixed</div><span class="uphint">Held out at random so campaign results can be measured. Not editable for uplift.</span></div>
+    ${num("recentDays","Recently contacted (days)",1,1,90)}${chk("supOpt","Suppress opted-out customers")}${chk("supRecent","Suppress recently contacted")}</div>`];}
+function campaignRuns(u){const s=st(u);return [...s.runs.filter(r=>r.mode==="score").slice().reverse(),CAMPAIGN_SEED];}
+function campaignPage(u){const s=st(u),cr=s.cr,runs=campaignRuns(u),run=runs.find(r=>r.id===cr.run)||runs[0];
+  const rep=campaignReport(run,cr.outcomes?(run.seed?CAMPAIGN_OUTCOMES:{}):null,today(),cr);
+  const nc=run.causal===false;
+  const hint=(t)=>`<span class="uphint">${esc(t)}</span>`;
+  const form=`<div class="crgrid">
+    <div class="field"><span class="sub">Scoring run</span><div class="control sel"><select id="cr-run">${runs.map(r=>`<option value="${r.id}" ${r.id===run.id?"selected":""}>Scored ${esc(r.rows)} rows · ${esc(r.at)}</option>`).join("")}</select></div>${hint("A run with a control group: every scoring run keeps one.")}</div>
+    <div class="field"><span class="sub">Outcomes file</span><div class="orline"><label class="control file ${cr.outcomes?"has":""}"><input type="file" id="cr-file" class="sr" accept=".csv,.parquet"><span class="fname">${cr.outcomes?esc(cr.file):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="cr-sample">use sample outcomes</button></span></div>${hint("One row per customer, with the outcome measured after the send.")}</div>
+    <div class="field"><span class="sub">Outcome column</span><div class="control sel"><select id="cr-outcome">${opt([cr.outcome],cr.outcome)}</select></div>${hint("1 or true when the customer converted inside the window.")}</div>
+    <div class="field"><span class="sub">Outcome window (days)</span><div class="control"><input type="number" id="cr-window" min="1" max="3650" step="1" value="${cr.window}"></div>${hint("How long after the send an outcome still counts.")}</div>
+    <div class="field"><span class="sub">Treatment date column</span><div class="control sel"><select id="cr-datecol">${opt(["treatment_date"],cr.dateCol,"None: use the send date")}</select></div>${hint("Per-customer send dates; without it every row uses the run's send date.")}</div></div>`;
+  const ok=rep.absolute_lift&&rep.absolute_lift.ci_low>0;
+  let result;
+  if(rep.status==="immature") result=`<div class="crwait" data-up-wait><span class="cw1">Results available on ${fmtDay(rep.results_available_on)}</span>
+    <span class="cw2">Sent ${esc(fmtDay(run.date))}. The ${rep.outcome_window_days}-day outcome window has not ended for any customer yet, so nothing is measured and no row is guessed.${rep.measured?` ${fmtI(rep.rows_immature)} rows are waiting for their window.`:""}</span></div>`;
+  else if(!rep.measured) result=`<div class="genbox"><span class="gb1">The outcome window has ended. Upload the outcomes file to measure this campaign.</span><span class="gb2">Treated customers are compared with the control group the run held out at random.</span></div>`;
+  else result=`${ciBar({value:rep.absolute_lift.value*100,ci_low:rep.absolute_lift.ci_low*100,ci_high:rep.absolute_lift.ci_high*100},v=>`${v>=0?"+":"−"}${Math.abs(v).toFixed(2)} pts`,ok,"zero = the campaign changed nothing")}
+    <p class="crsum" data-up-summary>${esc(rep.summary)}</p>
+    ${kvs([["Treated",`${fmtI(rep.treated_rows)} customers · ${pct1(rep.treated_rate)} converted`],["Control (held out at random)",`${fmtI(rep.control_rows)} customers · ${pct1(rep.control_rate)} converted`],
+      ["Absolute lift",`${pts2(rep.absolute_lift.value)} (95% CI ${(rep.absolute_lift.ci_low*100).toFixed(2)} to ${(rep.absolute_lift.ci_high*100).toFixed(2)})`],
+      ["Relative lift",`${rep.relative_lift>=0?"+":"−"}${Math.abs(rep.relative_lift*100).toFixed(1)}%`],
+      ["Incremental conversions",`${fmtI(rep.incremental_conversions.value)} (95% CI ${fmtI(rep.incremental_conversions.ci_low)} to ${fmtI(rep.incremental_conversions.ci_high)})`],
+      ["p-value (two-sided)",rep.p_value.toExponential(1)],["Rows still inside their window",fmtI(rep.rows_immature)],["Rows without an outcome",fmtI(rep.rows_without_outcome)],
+      ["Suppressed or not treated",fmtI(rep.rows_suppressed_or_untreated)]])}`;
+  const k=rep.absolute_lift;
+  return `${nc?ncBanner("campaign"):""}
+    ${kpis([["Treated",rep.treated_rate==null?"—":`${fmtI(rep.treated_rows)} · ${pct1(rep.treated_rate)}`],["Control",rep.control_rate==null?"—":`${fmtI(rep.control_rows)} · ${pct1(rep.control_rate)}`],
+      ["Lift",k?pts2(k.value):"—"],["Incremental conversions",rep.incremental_conversions?fmtI(rep.incremental_conversions.value):"—"]])}
+    <section class="card"><h3>Campaign</h3>${form}</section>
+    <section class="card"><h3>Did the campaign work?</h3>${result}
+      <p class="caption">Treated rate minus control rate, with a Newcombe interval. Only rows whose outcome window has ended are counted${run.ptype==="Uplift"?", inside the customers the policy meant to treat":""}.</p></section>`;}
+
 function pageHead(inner){return `<div class="head"><div class="titles">${inner}</div><div class="headtools">${clientPicker()}${LOGO}</div></div><div class="rule"></div>`;}
 
 function overview(){
@@ -1175,7 +1534,7 @@ const SETUP = {
  "fault-prediction":{models:["LSTM (sequence)","XGBoost on lag features","Random Forest","Isolation Forest (anomaly)"],target:"fault_next_72h",metrics:["PR-AUC","Recall","ROC-AUC","F1 score"],timeSplit:true,best:"LSTM (sequence)",score:"PR-AUC 0.71"},
  "payment-propensity":{models:["XGBoost","LightGBM","Random Forest","Logistic Regression"],target:"late_or_missed_payment",metrics:["ROC-AUC","PR-AUC","F1 score","Recall","Precision"],timeSplit:false,best:"XGBoost",score:"ROC-AUC 0.86"},
  "rca":{models:["XGBoost","LightGBM","Random Forest","Logistic Regression"],llm:"Claude summary",target:"churn_next_60d",metrics:["ROC-AUC","Recall","PR-AUC","F1 score"],timeSplit:true,best:"XGBoost + Claude summary",score:"ROC-AUC 0.82"},
- "win-back-campaign":{models:["LightGBM","XGBoost","Uplift forest","Logistic Regression"],llm:"Claude copy",target:"reactivated_90d",metrics:["ROC-AUC","Uplift (Qini)","Recall","F1 score"],timeSplit:false,best:"LightGBM + Claude copy",score:"ROC-AUC 0.78"}
+ "win-back-campaign":{models:["LightGBM","XGBoost","Uplift forest","Logistic Regression"],llm:"Claude copy",target:"reactivated_90d",metrics:["ROC-AUC","Uplift (Qini)","Recall","F1 score"],timeSplit:false,best:"LightGBM + Claude copy",score:"ROC-AUC 0.78",treatment:"treatment",budget:UPLIFT_POLICY.budgetWinback}
 };
 const AUTO="AutoML (recommended)";
 const STATE = {};
@@ -1188,11 +1547,14 @@ function defaultAdv(cfg){return cfg.gen
      metric:cfg.metrics[0],calib:"Isotonic",thr:"Auto",shap:true,reasons:3,fair:"",champ:1,
      hi:0.8,md:0.5,supOpt:true,supRecent:true,recentDays:14,control:10,
      drift:0.2,retrain:"On drift",alert:5,
-     retention:90,consentCol:"",approval:true};}
+     retention:90,consentCol:"",approval:true,
+     upLearner:UP_LEARNERS[0],upBase:UPLIFT_DEFAULTS.base,upBoot:UPLIFT_DEFAULTS.bootstrap,upTest:Math.round(UPLIFT_DEFAULTS.testFraction*100),
+     upPers:UPLIFT_DEFAULTS.persuadable,upSleep:UPLIFT_DEFAULTS.sleepingDog,upBudget:cfg.budget??null,upCost:null,upValue:null};}
 function st(u){
   if(!STATE[u.id]){const c=SETUP[u.id];
     STATE[u.id]={mode:"train",file:null,cols:[],preview:null,pk:"",target:"",ptype:"",model:AUTO,adv:defaultAdv(c),advOpen:false,view:"setup",current:null,scoreRun:"r1",
-      source:"file",docs:null,qa:null,pkExtra:"",pkParts:null,builtFrom:false,recipe:RECIPE,
+      source:"file",docs:null,qa:null,pkExtra:"",pkParts:null,builtFrom:false,recipe:RECIPE,treatment:"",ack:false,targeted:false,
+      cr:{run:"",outcomes:false,file:"",window:90,dateCol:"treatment_date",outcome:c.target},
       runs:[{id:"r1",at:"14 Sep 2026, 10:20",mode:"train",file:`${u.id.replace(/-/g,"_")}_history.csv`,rows:u.data.kp[0][1],model:AUTO,best:c.best,score:c.score,target:c.target,pk:c.gen?"question":"customer_id",champion:true}]};}
   return STATE[u.id];
 }
@@ -1217,13 +1579,21 @@ function blocker(u){const s=st(u),cfg=SETUP[u.id];
   if(!s.pk)return "Choose the primary key column";
   if(s.mode==="train"&&!s.target)return `Choose the ${cfg.tlabel?"reference answer":"target"} column`;
   if(s.mode==="score"&&!s.runs.some(r=>r.mode==="train"))return "Train a model first";
+  if(isUplift(u)&&!s.treatment)return "Choose the treatment column";
+  if(isUplift(u)&&s.targeted&&!s.ack)return "The treatment was not randomly assigned (TREATMENT_NOT_RANDOM). Acknowledge it to continue";
   return "";}
 function sampleFile(u){const s=st(u),cfg=SETUP[u.id];const feats=u.data.ft.map(f=>f[0]);
   const idc=cfg.gen?"question":"customer_id";
-  s.cols=s.mode==="train"?[idc,"snapshot_date",...feats,cfg.target]:[idc,"snapshot_date",...feats];
-  s.file={name:`${u.id.replace(/-/g,"_")}_${s.mode==="train"?"history":"this_week"}.csv`,size:"Sample dataset",rows:s.mode==="train"?u.data.kp[0][1]:"12,480",sample:true};
+  /* Phase 3b: a use case with a treatment column in its sample carries it, and its send date */
+  const treat=cfg.treatment&&s.mode==="train"?[cfg.treatment,"treatment_date"]:[];
+  const base=s.mode==="score"?s.runs.find(r=>r.id===s.scoreRun):null,upScore=!!(base&&base.ptype==="Uplift");
+  s.cols=s.mode==="train"?[idc,"snapshot_date",...feats,...treat,cfg.target]:[idc,"snapshot_date",...feats];
+  s.file={name:`${u.id.replace(/-/g,"_")}_${s.mode==="train"?"history":"this_week"}.csv`,size:"Sample dataset",rows:s.mode==="train"?u.data.kp[0][1]:upScore?HOLDOUT.eligible:"12,480",sample:true};
   s.pk=idc;s.target=s.mode==="train"?cfg.target:"";s.preview=null;s.adv.timeCol="snapshot_date";
+  s.treatment=s.mode==="train"?detectTreatment(s.cols):"";s.targeted=false;s.ack=false;
 }
+function sampleTargeted(u){const s=st(u);sampleFile(u);s.targeted=true;s.ack=false;
+  s.file.name=`${u.id.replace(/-/g,"_")}_targeted.csv`;}
 function sampleDocs(u){const s=st(u);s.docs=DOCS;
   s.file={name:"product_docs (5 files)",size:`${DOC_PAGES} pages · ${DOC_CHUNKS} chunks`,rows:DOC_CHUNKS,sample:true,docs:true};}
 function acceptReferenceSet(u,name,cols,rows){const s=st(u),train=s.mode==="train";
@@ -1252,7 +1622,7 @@ function predStep1(u){const s=st(u),o=onb(u),train=s.mode==="train";
     ${card("raw",train?"Build from raw tables":"Upload this month's tables",train?"Bring the tables you already have. We map them, build the features and the label, and write the dataset.":`The saved recipe ${RECIPE.name} v${RECIPE.version} maps and builds them exactly as last time.`)}</div>`;
   const body=s.source==="raw"
     ? `${obPanel(u)}${o.used?previewHtml(u):""}`
-    : `<div class="orline" style="margin-top:12px"><label class="control file ${s.file?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.file?esc(s.file.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sample">use the sample dataset</button></span></div>${previewHtml(u)}`;
+    : `<div class="orline" style="margin-top:12px"><label class="control file ${s.file?"has":""}"><input type="file" id="f-file" class="sr" accept=".csv,.parquet,.xlsx"><span class="fname">${s.file?esc(s.file.name):"Upload CSV or Parquet"}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="linkbtn" id="f-sample">use the sample dataset</button></span>${SETUP[u.id].treatment&&train?'<span>or <button type="button" class="linkbtn" id="f-sampletargeted">use a sample where offers were targeted</button></span>':""}</div>${previewHtml(u)}`;
   return `<div class="fstep ${s.file?"done":""}"><div class="stepno">1</div><div>
     <div class="flabel">Dataset</div><div class="fhint">Start from a file you have already prepared, or from the raw tables as they come out of your systems.</div>
     ${pick}${body}</div></div>`;}
@@ -1311,9 +1681,9 @@ function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
     ${stage(4,"Model search",`${a.strategy} · ${s.model===AUTO?`${a.algos.length} of ${cfg.models.length} algorithms`:s.model}${a.ensemble?" · ensembling":""} · ${a.trials} trials · ${a.limit} min · ${a.folds}-fold CV`,
       `${s.model===AUTO?`<div class="algos">${cfg.models.map(m=>`<label><input type="checkbox" data-algo="${esc(m)}" ${a.algos.includes(m)?"checked":""}> ${esc(m)}</label>`).join("")}</div>`:""}
        <div class="frow">${sel("strategy",["Fast","Balanced","Exhaustive"],"Search strategy")}${num("trials","Tuning trials",10,5,500)}${num("limit","Time limit (min)",5,5,240)}${num("folds","CV folds",1,2,10)}${sel("imbalance",["Auto","Class weights","Oversampling (SMOTE)","None"],"Class imbalance")}${chk("ensemble","Ensemble / stack the best models")}</div>`)}
-    ${stage(5,"Evaluation & explainability",`${a.metric} · calibration ${a.calib} · threshold ${a.thr}${a.shap?` · top ${a.reasons} SHAP reasons`:""}${a.fair?" · fairness by "+a.fair:""} · champion if +${a.champ}%`,
+    ${isUplift(u)?stage(5,"Evaluation & explainability",...upStage5(a)):stage(5,"Evaluation & explainability",`${a.metric} · calibration ${a.calib} · threshold ${a.thr}${a.shap?` · top ${a.reasons} SHAP reasons`:""}${a.fair?" · fairness by "+a.fair:""} · champion if +${a.champ}%`,
       `<div class="frow">${sel("metric",cfg.metrics,"Optimise for")}${sel("calib",["Isotonic","Platt","None"],"Probability calibration")}${sel("thr",["Auto","0.5","Manual (below)"],"Decision threshold")}${num("reasons","Reasons per row",1,1,5)}<div class="field"><span class="sub">Fairness check (sensitive column)</span><div class="control sel"><select data-adv="fair">${opt(featCols,a.fair,"None")}</select></div></div>${num("champ","Replace champion if better by (%)",0.5,0,20)}${chk("shap","Generate SHAP explanations per row")}</div>`)}
-    ${stage(6,"Actions & output",`High ≥ ${a.hi} · Medium ≥ ${a.md}${a.supOpt?" · skip opted-out":""}${a.supRecent?` · skip contacted <${a.recentDays}d`:""} · ${a.control}% control group`,
+    ${isUplift(u)?stage(6,"Actions & output",...upStage6(a)):stage(6,"Actions & output",`High ≥ ${a.hi} · Medium ≥ ${a.md}${a.supOpt?" · skip opted-out":""}${a.supRecent?` · skip contacted <${a.recentDays}d`:""} · ${a.control}% control group`,
       `<div class="frow">${num("hi","High-risk score ≥",0.05,0,1)}${num("md","Medium-risk score ≥",0.05,0,1)}${num("control","Control group holdout (%)",1,0,50)}${num("recentDays","Recently contacted (days)",1,1,90)}${chk("supOpt","Suppress opted-out customers")}${chk("supRecent","Suppress recently contacted")}</div>`)}
     ${stage(7,"Monitoring & retraining",`Drift alert PSI > ${a.drift} · retrain: ${a.retrain} · alert if score drops ${a.alert}%`,
       `<div class="frow">${num("drift","Drift alert (PSI above)",0.05,0.05,1)}${sel("retrain",["Manual","On drift","Weekly","Monthly"],"Retraining")}${num("alert","Performance alert (% drop)",1,1,50)}</div>`)}
@@ -1323,6 +1693,7 @@ function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
 }
 const PTYPES=["Classification (yes / no)","Regression (a number)","Forecasting (a number over time)","Clustering (no target)"];
 function detectType(u){const s=st(u),cfg=SETUP[u.id];if(cfg.gen)return "";if(!s.target)return "";
+  if(s.treatment&&s.mode==="train")return UPLIFT_PTYPE;
   if(s.file&&s.file.sample)return PTYPES[0];
   const i=s.cols.indexOf(s.target);const vals=(s.preview||[]).map(r=>r[i]).filter(v=>v!==undefined&&v!=="");
   const uniq=new Set(vals.map(v=>String(v).toLowerCase()));const numeric=vals.length&&vals.every(v=>!isNaN(parseFloat(v)));
@@ -1331,20 +1702,28 @@ function detectType(u){const s=st(u),cfg=SETUP[u.id];if(cfg.gen)return "";if(!s.
   return PTYPES[0];}
 function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg),train=s.mode==="train",why=blocker(u);
   const detected=detectType(u), ptype=s.ptype||detected;
-  const ptypeHtml = train&&!cfg.gen&&s.target ? `<div class="ptype"><span>Problem type</span><span class="pill">${esc(ptype)}</span><span>${s.ptype&&s.ptype!==detected?"set manually":"detected from the target column"}</span><select id="f-ptype" aria-label="Change problem type"><option value="">change…</option>${PTYPES.map(t=>`<option ${t===ptype?"disabled":""}>${esc(t)}</option>`).join("")}</select>${ptype!==PTYPES[0]?`<span style="flex-basis:100%;color:var(--warn)">${ptype.startsWith("Clustering")?"Clustering ignores the target and groups similar rows.":"Metrics and models will switch to "+ptype.split(" (")[0].toLowerCase()+" defaults."}</span>`:""}</div>` : "";
+  const upl=ptype===UPLIFT_PTYPE;
+  const ptypeHtml = train&&!cfg.gen&&s.target ? `<div class="ptype"><span>Problem type</span><span class="pill">${esc(ptype)}</span><span>${s.ptype&&s.ptype!==detected?"set manually":upl?"detected from the treatment column":"detected from the target column"}</span><select id="f-ptype" aria-label="Change problem type"><option value="">change…</option>${ptypesFor(s).map(t=>`<option ${t===ptype?"disabled":""}>${esc(t)}</option>`).join("")}</select>${upl?`<span class="upwhy">${esc(UPLIFT_WHY)}</span>`:ptype!==PTYPES[0]?`<span style="flex-basis:100%;color:var(--warn)">${ptype.startsWith("Clustering")?"Clustering ignores the target and groups similar rows.":"Metrics and models will switch to "+ptype.split(" (")[0].toLowerCase()+" defaults."}</span>`:""}</div>${upChecksHtml(u)}` : "";
+  const cands=train&&!cfg.gen?treatCandidates(s):[];
+  const treatField=cands.length?`<div class="field"><span class="sub">Treatment column</span><div class="control sel"><select id="f-treat">${opt(cands,s.treatment,"None")}</select></div><span class="uphint">1 means the customer received the action, 0 means held out. It must be randomly assigned.</span><span class="uphint" data-up-share>Treated share: ${s.treatment&&s.file&&s.file.sample?`${Math.round(100*UPLIFT_EVAL.treated/(UPLIFT_EVAL.treated+UPLIFT_EVAL.control))}% treated`:"—"}</span></div>`:"";
   const trainRuns=s.runs.filter(r=>r.mode==="train");
   const step1 = cfg.gen?genStep1(u):predStep1(u);
   const step2 = cfg.gen?genStep2(u):`<div class="fstep ${s.file?"":"locked"} ${s.pk&&(!train||s.target)?"done":""}"><div class="stepno">2</div><div>
         <div class="flabel">Columns</div><div class="fhint">${train?`The primary key identifies each row and is never used as a feature. The ${cfg.tlabel?"reference answer":"target"} is what the model learns to predict.`:"The primary key identifies each row so scores can be joined back to your systems."}</div>
         <div class="frow"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${opt(s.pkExtra?[s.pkExtra,...s.cols]:s.cols,s.pk,"Select a column…")}</select></div></div>
-        ${train?`<div class="field"><span class="sub">${esc(cfg.tlabel||"Target column")}</span><div class="control sel"><select id="f-target">${opt(s.cols.filter(c=>c!==s.pk),s.target,"Select a column…")}</select></div></div>`:""}</div>${ptypeHtml}</div></div>`;
-  const step3 = train
+        ${train?`<div class="field"><span class="sub">${esc(cfg.tlabel||"Target column")}</span><div class="control sel"><select id="f-target">${opt(s.cols.filter(c=>c!==s.pk&&c!==s.treatment),s.target,"Select a column…")}</select></div></div>`:""}${treatField}</div>${ptypeHtml}</div></div>`;
+  const step3 = train&&isUplift(u)
+   ? `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
+        <div class="flabel">Model</div><div class="fhint">A meta-learner estimates each customer's chance of converting with the action and without it. The difference is the uplift.</div>
+        <div class="frow"><div class="field"><span class="sub">Learner</span><div class="control sel"><select id="f-learner" data-adv="upLearner">${opt(UP_LEARNERS,s.adv.upLearner)}</select></div><span class="uphint">X-learner copes best when one arm is much smaller than the other.</span></div>
+          <div class="field"><span class="sub">Base model</span><div class="control sel"><select id="f-base" data-adv="upBase">${opt(UP_BASES,s.adv.upBase)}</select></div><span class="uphint">The model family inside each learner.</span></div></div></div></div>`
+   : train
    ? `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
         <div class="flabel">Model</div><div class="fhint">AutoML tries every selected ${cfg.gen?"LLM":"algorithm"} and keeps the best. Pick one only if you need to.</div>
         <div class="frow"><div class="field"><div class="control sel"><select id="f-model">${opt([AUTO,...cfg.models],s.model)}</select></div></div></div></div></div>`
    : `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
         <div class="flabel">Trained model</div><div class="fhint">The saved model that will score the uploaded rows.</div>
-        <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun">${trainRuns.map(r=>`<option value="${r.id}" ${r.id===s.scoreRun?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}</option>`).join("")}</select></div></div></div></div></div>`;
+        <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun">${trainRuns.map(r=>`<option value="${r.id}" ${r.id===s.scoreRun?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}${r.upChampion?" · Uplift champion":""}</option>`).join("")}</select></div></div></div></div></div>`;
   const adv = train ? `<details class="adv-wrap" id="f-adv" ${s.advOpen?"open":""}><summary>Advanced settings<span class="n">Each ${cfg.gen?"pipeline":"AutoML"} stage can be configured · defaults work for most data</span></summary>${stagesHtml(u)}</details>` : "";
   return `<div class="setup-grid">
     <section class="card"><div class="form-body">
@@ -1360,17 +1739,27 @@ function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg),train=s.m
   <p class="next">After the run, this page shows the pipeline: Data → Model → Output.</p>`;
 }
 function runsCard(u){const s=st(u);
-  return `<section class="card"><h3>Previous runs</h3><div class="runs-list">${s.runs.length?s.runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">No runs yet.</div>`}</div></section>`;
+  return `<section class="card"><h3>Previous runs</h3><div class="runs-list">${s.runs.length?s.runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}${r.upChampion?'<span class="champ">Uplift champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">No runs yet.</div>`}</div></section>`;
 }
 function flowBlocks(u,run){
   const items = [
     ["data","Data",run.file,`${run.rows} rows · key ${run.pk}${run.mode==="train"?` · target ${run.target}${run.ptype?" · "+run.ptype.toLowerCase():""}`:""}`],
-    ["model","Model",run.best,run.mode==="train"?(run.model===AUTO?`Selected by AutoML · ${run.score}`:run.score):`Champion model · ${run.score}`],
-    ["output","Output",run.mode==="train"?u.o:`${run.rows} rows scored`,`${u.out.kp[0][0]}: ${u.out.kp[0][1]}${run.mode==="train"?"":" · reasons + actions"}`]
+    ["model","Model",run.best,run.mode==="train"?(run.model===AUTO?`Selected by AutoML · ${run.score}`:run.score):`${run.ptype==="Uplift"?"Uplift model":"Champion model"} · ${run.score}`],
+    ["output","Output",run.mode==="train"?u.o:`${run.rows} rows scored`,run.ptype==="Uplift"?`Recommended to contact: ${fmtI(upliftPolicy(run).n)}`:`${u.out.kp[0][0]}: ${u.out.kp[0][1]}${run.mode==="train"?"":" · reasons + actions"}`]
   ];
   return items.map(([slug,lab,val,meta],i)=>`${i?'<div class="arrow" aria-hidden="true">→</div>':""}<a class="block" href="#/uc/${u.id}/${slug}"><div><div class="lab"><span>${String(i+1).padStart(2,"0")}&nbsp;&nbsp;${lab}</span><span class="bstate">✓ Done</span></div><div class="val">${esc(val)}</div><div class="meta">${esc(meta)}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`).join("");
 }
 function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
+  if(s.mode==="train"&&isUplift(u)){const nr=s.targeted,ci=auucCI(),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
+    return [["Checking the treatment",nr?`6 checks · TREATMENT_NOT_RANDOM acknowledged: AUC ${E.targetedAuc.toFixed(2)} > ${D.randomAucMax.toFixed(2)}`:`6 checks passed · random assignment: AUC ${E.randomAuc.toFixed(2)} ≤ ${D.randomAucMax.toFixed(2)}`],
+      ["Preparing features",`${E.features} features · ${a.upTest}% hold-out, stratified on treatment and outcome`],
+      [`Training the ${a.upLearner.split(" (")[0]}`,`${a.upBase} · a model per arm, then the effect models`],
+      [`Measuring uplift on the hold-out (${a.upBoot} resamples)`,`AUUC ${f4(ci.value)} (95% CI ${f4(ci.ci_low)} to ${f4(ci.ci_high)})`],
+      ["Segmenting and saving",`4 segments · ${nr?"not promoted: not causal":s.runs.some(r=>r.upChampion)?"not promoted: no better than the uplift champion":"set as uplift champion"}`]];}
+  const upBase=s.mode==="score"&&!cfg.gen?s.runs.find(r=>r.id===s.scoreRun):null;
+  if(upBase&&upBase.ptype==="Uplift"){const pol=upliftPolicy({mode:"score",adv:a,causal:upBase.causal});
+    return [["Validating columns","All expected features present"],["Loading uplift model",upBase.best],["Scoring rows",`${s.file.rows} rows · uplift, P(treated), P(control)`],
+      ["Segmenting and choosing who to contact",`Recommended to contact: ${fmtI(pol.n)} · ${HOLDOUT.control} held out as control`]];}
   if(s.mode==="train") return cfg.gen
     ? [["Reading documents",`${DOCS.length} documents · ${DOC_PAGES} pages`],
        ["Splitting into chunks",`${DOC_CHUNKS} chunks · ${a.chunk} tokens · ${a.overlap} overlap`],
@@ -1387,8 +1776,10 @@ function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
 function runningHtml(u){return `<div class="setup-grid"><section class="card"><h3>Running…</h3><ol class="progress" id="prog">${runSteps(u).map(([t],i)=>`<li id="ps-${i}"><span class="dot">${i+1}</span><div><div class="pt">${esc(t)}</div><div class="pd"></div></div></li>`).join("")}</ol></section>${runsCard(u)}</div>`;}
 function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id];
   return `<div class="results"><div class="summary"><span class="ok">✓ ${r.mode==="train"?(cfg.gen?"Assistant built":"Training complete"):(cfg.gen?"Evaluation complete":"Scoring complete")}</span>
-    <span>${r.mode==="train"?`Best model <b>${esc(r.best)}</b> · ${esc(r.score)}`:`<b>${esc(r.rows)}</b> rows scored with ${esc(r.best)}`}</span>
+    <span>${r.mode==="train"?`Best model <b>${esc(r.best)}</b> · ${esc(r.score)}`:`<b>${esc(r.rows)}</b> rows scored with ${esc(r.best)}${r.ptype==="Uplift"?` · Recommended to contact: <b>${fmtI(upliftPolicy(r).n)}</b>`:""}`}</span>
     ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}
+    ${r.mode==="train"&&r.ptype==="Uplift"?`<span class="muted">${r.upChampion?"Set as uplift champion":r.causal===false?"Not promoted: not causal":"Not promoted"}</span>`:""}
+    ${r.mode==="score"&&u.id==="win-back-campaign"?`<a class="linkbtn" id="f-campaign" href="#/uc/${u.id}/campaign">Campaign results</a>`:""}
     <span class="muted">${esc(r.file)} · ${esc(r.at)}</span><button class="again" id="f-again">Run again / change settings</button></div>
     <span class="cap">AI pipeline</span><div class="flow">${flowBlocks(u,r)}</div>
     ${cfg.gen?assistantResults(u):""}
@@ -1405,10 +1796,19 @@ function rerender(u){const m=document.querySelector("#app main");if(!m)return;co
 function bindDetail(u){
   const s=st(u), cfg=SETUP[u.id], $=id=>document.getElementById(id);
   const on=(id,ev,fn)=>{const el=$(id);if(el)el.addEventListener(ev,fn);};
-  document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{if(s.mode!==b.dataset.mode){s.mode=b.dataset.mode;s.file=null;s.cols=[];s.preview=null;s.target="";s.pk="";rerender(u);}}));
+  document.querySelectorAll(".seg button").forEach(b=>b.addEventListener("click",()=>{if(s.mode!==b.dataset.mode){s.mode=b.dataset.mode;s.file=null;s.cols=[];s.preview=null;s.target="";s.pk="";s.treatment="";s.targeted=false;s.ack=false;if(s.ptype===UPLIFT_PTYPE)s.ptype="";rerender(u);}}));
   on("f-sample","click",()=>{sampleFile(u);rerender(u);});
+  /* Phase 3b §8: treatment column, the targeted sample and its acknowledgement */
+  on("f-sampletargeted","click",()=>{sampleTargeted(u);rerender(u);});
+  on("f-treat","change",e=>{const was=isUplift(u);s.treatment=e.target.value;
+    if(!s.treatment&&was&&!s.ptype)s.ptype=UPLIFT_PTYPE;
+    if(s.treatment&&s.ptype===UPLIFT_PTYPE)s.ptype="";
+    if(!s.treatment)s.ack=false;rerender(u);});
+  on("f-ack","change",e=>{s.ack=e.target.checked;rerender(u);});
+  document.querySelectorAll("[data-up-num]").forEach(el=>el.addEventListener("change",()=>{
+    const k=el.dataset.upNum;s.adv[k]=el.value===""?null:+el.value;rerender(u);}));
   on("f-file","change",e=>{const f=e.target.files[0];if(!f)return;
-    s.file={name:f.name,size:fmtSize(f.size),rows:"—",sample:false};s.cols=[];s.preview=null;s.target="";s.pk="";s.ptype="";
+    s.file={name:f.name,size:fmtSize(f.size),rows:"—",sample:false};s.cols=[];s.preview=null;s.target="";s.pk="";s.ptype="";s.treatment="";s.targeted=false;s.ack=false;
     if(/\.csv$/i.test(f.name)){
       const CH=262144;
       f.slice(0,CH).text().then(t=>{
@@ -1420,7 +1820,8 @@ function bindDetail(u){
           s.preview=lines.slice(1,6).map(parseLine);
           if(cols.includes(cfg.target)&&s.mode==="train")s.target=cfg.target;
           const idc=cols.find(c=>/(^id$|_id$|^id_|_key$|customer|cust)/i.test(c));if(idc)s.pk=idc;
-          const tc=cols.find(c=>/date|time|month|week|day|ts$/i.test(c));if(tc)s.adv.timeCol=tc;}
+          const tc=cols.find(c=>/date|time|month|week|day|ts$/i.test(c));if(tc)s.adv.timeCol=tc;
+          if(s.mode==="train")s.treatment=detectTreatment(cols);}
         rerender(u);}).catch(()=>rerender(u));
     } else rerender(u);});
   on("f-pk","change",e=>{s.pk=e.target.value;if(s.target===s.pk)s.target="";rerender(u);});
@@ -1539,8 +1940,12 @@ function bindDetail(u){
     setTimeout(()=>{
       mark(steps.length-1,"done",steps[steps.length-1][1]);
       const base=s.mode==="score"?s.runs.find(r=>r.id===s.scoreRun)||s.runs[0]:null;
-      const run={id:"r"+(s.runs.length+1),at:nowStamp(),mode:s.mode,file:s.file.name,rows:s.file.rows,pk:s.pk,ptype:(s.ptype||detectType(u)||"").split(" (")[0],model:s.mode==="train"?s.model:base.model,
-        best:s.mode==="train"?(s.model===AUTO?cfg.best:s.model):base.best,score:s.mode==="train"?cfg.score:base.score,target:s.mode==="train"?s.target:base.target,champion:s.mode==="train",beat:false,lineage:!!s.builtFrom};
+      const upTrain=s.mode==="train"&&isUplift(u),learner=(s.adv.upLearner||"").split(" (")[0];
+      const run={id:"r"+(s.runs.length+1),at:nowStamp(),mode:s.mode,file:s.file.name,rows:s.file.rows,pk:s.pk,ptype:s.mode==="train"?(s.ptype||detectType(u)||"").split(" (")[0]:(base.ptype||""),model:s.mode==="train"?(upTrain?learner:s.model):base.model,
+        best:s.mode==="train"?(upTrain?`${learner} · ${s.adv.upBase}`:s.model===AUTO?cfg.best:s.model):base.best,score:s.mode==="train"?(upTrain?`AUUC ${f4(auucOf())}`:cfg.score):base.score,target:s.mode==="train"?s.target:base.target,champion:s.mode==="train"&&!upTrain,beat:false,lineage:!!s.builtFrom,
+        date:isoDay(today()),adv:{...s.adv},causal:s.mode==="train"?!(upTrain&&s.targeted):base.causal!==false,from:base?base.id:null,
+        learner:upTrain?learner:base&&base.learner,baseModel:upTrain?s.adv.upBase:base&&base.baseModel,treatment:upTrain?s.treatment:""};
+      if(upTrain)run.upChampion=run.causal&&!s.runs.some(r=>r.upChampion);
       if(run.champion){run.beat=s.runs.some(r=>r.champion);s.runs.forEach(r=>r.champion=false);}
       s.runs.push(run); s.current=run; if(run.mode==="train")s.scoreRun=run.id;
       setTimeout(()=>{ if(s.view==="running"){s.view="results";rerender(u);} }, reduce?100:500);
@@ -1549,11 +1954,17 @@ function bindDetail(u){
 }
 
 function mock(u, kind){
-  const K = {data:"Data",model:"Model",output:"Output"}[kind];
-  const title = {data:u.d,model:u.m,output:u.o}[kind];
-  const tabs = ["data","model","output"].map((t,i)=>`${i?'<span class="arr" aria-hidden="true">→</span>':""}<a class="tab ${t===kind?"on":""}" href="#/uc/${u.id}/${t}" ${t===kind?'aria-current="page"':""}><span class="n">0${i+1}</span>${{data:"Data",model:"Model",output:"Output"}[t]}</a>`).join("");
+  const NAMES = {data:"Data",model:"Model",output:"Output",campaign:"Campaign results"};
+  const K = NAMES[kind], up = upliftRun(u), cur = st(u).current;
+  const title = kind==="model"&&up ? `${u.name} uplift model` : {data:u.d,model:u.m,output:u.o,campaign:"Campaign results"}[kind];
+  /* Phase 3b: a fourth tab once a scoring run (every one keeps a control group) is current */
+  const camp = u.id==="win-back-campaign"&&(kind==="campaign"||!!(cur&&cur.mode==="score"));
+  const tabs = ["data","model","output",...(camp?["campaign"]:[])].map((t,i)=>`${i?'<span class="arr" aria-hidden="true">→</span>':""}<a class="tab ${t===kind?"on":""}" href="#/uc/${u.id}/${t}" ${t===kind?'aria-current="page"':""}><span class="n">0${i+1}</span>${NAMES[t]}</a>`).join("");
   let body = "";
-  if(kind==="data"){const x=u.data;
+  if(kind==="campaign"){ body = campaignPage(u); }
+  else if(kind==="model"&&up){ body = upliftModelBlock(u); }
+  else if(kind==="output"&&up){ body = `${upliftOutputBlock(u)}${u.id==="win-back-campaign"?copyBlock():""}`; }
+  else if(kind==="data"){const x=u.data;
     body = `${kpis(x.kp)}
     ${lineageBlock(u)}
     <div class="row">
@@ -1618,7 +2029,17 @@ function bindGlobal(){
     const c=copyCards()[+b.dataset.ccRe],t=c.text;c.text=c.alt;c.alt=t;
     c.status="Pending review";c.why="";c.by="";c.at="";render();}));
   const d=document.getElementById("cc-dl");
-  if(d)d.addEventListener("click",downloadMessages);}
+  if(d)d.addEventListener("click",downloadMessages);
+  /* Phase 3b §8: uplift output and the campaign results page */
+  const u=UC.find(x=>location.hash.startsWith(`#/uc/${x.id}/`));if(!u)return;
+  const s=st(u),$i=id=>document.getElementById(id),on=(id,ev,fn)=>{const el=$i(id);if(el)el.addEventListener(ev,fn);};
+  on("up-dl","click",()=>downloadTreatList(u));
+  on("up-null","click",()=>{UP_NULL_VIEW=!UP_NULL_VIEW;render();});
+  on("cr-run","change",e=>{s.cr.run=e.target.value;render();});
+  on("cr-sample","click",()=>{s.cr.outcomes=true;s.cr.file=CAMPAIGN_OUTCOMES.file;render();});
+  on("cr-file","change",e=>{const f=e.target.files[0];if(!f)return;s.cr.outcomes=true;s.cr.file=f.name;render();});
+  on("cr-window","change",e=>{s.cr.window=Math.max(1,Math.min(3650,+e.target.value||90));render();});
+  on("cr-datecol","change",e=>{s.cr.dateCol=e.target.value;render();});}
 
 function render(){
   const parts = location.hash.replace(/^#\/?/,"").split("/").filter(Boolean);
@@ -1628,6 +2049,7 @@ function render(){
     const u = UC.find(x=>x.id===parts[1]);
     if(!u){ html = overview(); }
     else if(["data","model","output"].includes(parts[2])){ html = mock(u,parts[2]); t = `${u.name} · ${parts[2][0].toUpperCase()+parts[2].slice(1)} · Marketing AI`; }
+    else if(parts[2]==="campaign"&&u.id==="win-back-campaign"){ html = mock(u,"campaign"); t = `${u.name} · Campaign results · Marketing AI`; }
     else { html = detail(u); t = `${u.name} · Marketing AI`; after = () => bindDetail(u); }
   } else html = overview();
   app.style.animation="none"; void app.offsetWidth; app.style.animation="";

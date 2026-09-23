@@ -3,7 +3,21 @@
    panel must have a mobile layout. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, body, click, HTML, repoText } from "./harness.mjs";
+import fs from "node:fs";
+import { pathToFileURL } from "node:url";
+import { load, go, ev, $, $$, body, click, set, HTML, ROOT, repoText } from "./harness.mjs";
+
+/* A product file that may not exist on this branch yet (Phase 3b's engine/uplift/ lands on
+   phase-3b-uplift). Null when absent; PRODUCT_ROOT points the check at another checkout. */
+const productText = (rel, has = () => true) => {
+  const roots = [ROOT, process.env.PRODUCT_ROOT && pathToFileURL(process.env.PRODUCT_ROOT.replace(/\/?$/, "/"))];
+  for (const root of roots.filter(Boolean)) {
+    const url = new URL(rel, root);
+    const text = fs.existsSync(url) ? fs.readFileSync(url, "utf8") : null;
+    if (text !== null && has(text)) return text;
+  }
+  return null;
+};
 
 const CSS = HTML.slice(HTML.indexOf("<style>"), HTML.indexOf("</style>"));
 
@@ -122,12 +136,15 @@ test("every new panel has a mobile layout", () => {
     ".ccgrid{grid-template-columns:1fr}",    // campaign copy
     ".lineage{flex-direction:column}",       // lineage flow
     ".headtools{order:-1;width:100%;",       // client picker stacks above the title
+    ".dbrow{grid-template-columns:30px minmax(0,1fr)}", // uplift by decile
+    ".segrow{grid-template-columns:12px minmax(0,1fr) 64px}", // four segments
+    ".crgrid{grid-template-columns:1fr}",    // campaign results form
   ]) {
     assert.ok(CSS.includes(rule), `no mobile rule for ${rule}`);
   }
   // and every one of those sits inside a max-width media query
   const mobile = CSS.split("@media (max-width:").slice(1).join(" ");
-  for (const sel of [".pick{", ".srcrow{", ".maprow{", ".featrow{", ".ccgrid{", ".lineage{"]) {
+  for (const sel of [".pick{", ".srcrow{", ".maprow{", ".featrow{", ".ccgrid{", ".lineage{", ".dbrow{", ".segrow{", ".crgrid{"]) {
     assert.ok(mobile.includes(sel), `${sel} mobile rule is outside a media query`);
   }
 });
@@ -140,4 +157,185 @@ test("a number the product has not measured is still an em dash", () => {
   assert.match(ev(dom, "usageLine(ASSISTANT_USAGE)"), /calls · .+ tokens · .*\$/);
   // but a document the prototype has not read still has no page or chunk count
   assert.ok(HTML.includes('size:"—",rows:"—"'), "a real upload starts with em dashes");
+});
+
+/* ---------- Phase 3b §8: uplift ---------- */
+
+test("the uplift label, defaults and thresholds are the product's", (t) => {
+  const yaml = productText("configs/engine.yaml", (y) => /^  uplift:\s+#/m.test(y)) || "";
+  const start = yaml.search(/^  uplift:\s+#/m);
+  if (start < 0) return t.skip("configs/engine.yaml has no uplift: block on this branch yet");
+  const dom = load("#/uc/win-back-campaign");
+  // "uplift:" appears three times in the file; the label is the problem-type catalogue's
+  assert.equal(ev(dom, "UPLIFT_PTYPE"), yaml.match(/^\s+uplift:\s+\{label: "([^"]+)"/m)[1]);
+  const next = yaml.slice(start + 1).search(/^  \w/m); // the block may be the file's last
+  const block = yaml.slice(start, next < 0 ? undefined : start + 1 + next);
+  const val = (k) => (block.match(new RegExp(`^\\s+${k}:\\s*([^#\\n]+?)\\s*(#|$)`, "m")) || [])[1];
+  const D = JSON.parse(ev(dom, "JSON.stringify(UPLIFT_DEFAULTS)"));
+  assert.equal(D.learner, { x_learner: "X-learner", t_learner: "T-learner", s_learner: "S-learner" }[val("learner")]);
+  assert.equal(D.base, { autogluon_fast: "AutoGluon fast", lightgbm: "LightGBM" }[val("base_model")]);
+  assert.equal(D.minArmRows, Number(val("min_arm_rows")));
+  assert.equal(D.minArmPos, Number(val("min_arm_positives")));
+  assert.equal(D.randomAucMax, Number(val("randomness_auc_max")));
+  assert.equal(D.bootstrap, Number(val("bootstrap_samples")));
+  assert.equal(D.testFraction, Number(val("test_fraction")));
+  assert.equal(D.persuadable, Number(val("persuadable_min_uplift")));
+  assert.equal(D.sleepingDog, Number(val("sleeping_dog_max_uplift")));
+  assert.deepEqual(JSON.parse(ev(dom, "JSON.stringify(TREAT_HINTS)")),
+    val("treatment_column_hints").replace(/[[\]]/g, "").split(",").map((x) => x.trim()));
+  assert.ok(ev(dom, "UP_LEARNERS[0]").startsWith(D.learner), "the default learner is listed first");
+  assert.ok(ev(dom, "UP_BASES").includes(D.base));
+  // policy defaults: no budget, cost or value unless a use case sets one
+  assert.equal(val("budget_contacts"), "null");
+  assert.equal(ev(dom, "defaultAdv(SETUP['payment-propensity']).upBudget"), null);
+  assert.equal(ev(dom, "defaultAdv(SETUP['payment-propensity']).upCost"), null);
+});
+
+test("the uplift control group is Phase 1's, and it is the holdout the copy block shows", () => {
+  const yaml = repoText("configs/engine.yaml");
+  const frac = Number(yaml.match(/control_group_fraction:\s*([\d.]+)/)[1]);
+  const dom = load("#/uc/win-back-campaign");
+  assert.equal(ev(dom, "defaultAdv(SETUP['win-back-campaign']).control"), Math.round(frac * 100));
+  const n = (k) => Number(ev(dom, `HOLDOUT.${k}`).replace(/,/g, ""));
+  assert.equal(n("control") / n("eligible"), frac, "1,450 of 14,500");
+  // the campaign measured on the Campaign results page is that same holdout
+  assert.equal(ev(dom, "CAMPAIGN_OUTCOMES.treated[0]"), n("sent"));
+  assert.equal(ev(dom, "CAMPAIGN_OUTCOMES.control[0]"), n("control"));
+  assert.equal(ev(dom, "CAMPAIGN_OUTCOMES.suppressed"), n("suppressed"));
+  assert.equal(ev(dom, "CAMPAIGN_SEED.rows"), ev(dom, "HOLDOUT.eligible"));
+});
+
+test("segment labels, actions and the not-causal note are the contract's, verbatim", (t) => {
+  const py = productText("engine/uplift/contracts.py");
+  if (!py) return t.skip("engine/uplift/contracts.py is not on this branch yet");
+  const dom = load("#/");
+  const pairs = (from, to) => Object.fromEntries([...py.slice(py.indexOf(from), py.indexOf(to))
+    .matchAll(/Segment\.(\w+): "([^"]+)"/g)].map((m) => [m[1].toLowerCase(), m[2]]));
+  assert.deepEqual(JSON.parse(ev(dom, "JSON.stringify(SEG_LABELS)")), pairs("SEGMENT_LABELS: Final", "SEGMENT_ACTIONS: Final"));
+  assert.deepEqual(JSON.parse(ev(dom, "JSON.stringify(SEG_ACTIONS)")), pairs("SEGMENT_ACTIONS: Final", '"""The recommended'));
+  assert.deepEqual(JSON.parse(ev(dom, "JSON.stringify(SEG_IDS)")), Object.keys(pairs("SEGMENT_LABELS: Final", "SEGMENT_ACTIONS: Final")),
+    "persuadables, sure things, lost causes, sleeping dogs, in that order");
+  const note = py.slice(py.indexOf("NOT_CAUSAL_NOTE: Final[str] = ("), py.indexOf("\n)", py.indexOf("NOT_CAUSAL_NOTE: Final[str] = (")));
+  assert.equal(ev(dom, "NOT_CAUSAL_NOTE"), [...note.matchAll(/"([^"]*)"/g)].map((m) => m[1]).join(""));
+});
+
+test("the AUUC sentence is metrics.py's, template for template", (t) => {
+  const py = productText("engine/uplift/metrics.py");
+  if (!py) return t.skip("engine/uplift/metrics.py is not on this branch yet");
+  const fn = py.slice(py.indexOf("def _summary("), py.indexOf("def evaluate_uplift("));
+  // the four branches in source order: no interval, above zero, below zero, straddling zero
+  const templates = fn.split("sentence = (").slice(1).map((chunk) =>
+    [...chunk.slice(0, chunk.indexOf("\n        )")).matchAll(/f?"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]).join(""));
+  assert.equal(templates.length, 4);
+  assert.match(fn, /return f"\{NOT_CAUSAL_NOTE\} \{sentence\}" if not causal else sentence/);
+  const dom = load("#/");
+  const f4 = (v) => ev(dom, `f4(${v})`);
+  const fill = (tpl, c) => tpl.replace("{level}", "95%").replace("{_fmt(auuc.value)}", f4(c.value))
+    .replace("{_fmt(auuc.ci_low)}", f4(c.ci_low)).replace("{_fmt(auuc.ci_high)}", f4(c.ci_high));
+  const cases = [
+    { value: 0.0031, ci_low: null, ci_high: null },
+    { value: 0.0125, ci_low: 0.0098, ci_high: 0.0151 },
+    { value: -0.0042, ci_low: -0.0071, ci_high: -0.0013 },
+    { value: 0.0006, ci_low: -0.0021, ci_high: 0.0034 },
+  ];
+  cases.forEach((c, i) => {
+    const js = ev(dom, `upliftSummary(${JSON.stringify({ ...c, confidence_level: 0.95 })})`);
+    assert.equal(js, fill(templates[i], c));
+    assert.equal(ev(dom, `upliftSummary(${JSON.stringify(c)},false)`), `${ev(dom, "NOT_CAUSAL_NOTE")} ${js}`);
+  });
+  assert.equal(f4(-0.00001), "0.0000", "_fmt never prints -0.0000");
+});
+
+test("the uplift numbers add up", () => {
+  const dom = load("#/uc/win-back-campaign");
+  const E = (x) => ev(dom, x);
+  const D = JSON.parse(E("JSON.stringify(UPLIFT_DECILES)"));
+  // 320K rows × the 0.30 hold-out = 96,000, in ten deciles, 90% treated like the 10% control holdout
+  assert.equal(D.length, 10);
+  assert.ok(D.every((d) => d.rows === d.treated_rows + d.control_rows));
+  assert.equal(D.reduce((a, d) => a + d.rows, 0), 320000 * E("UPLIFT_DEFAULTS.testFraction"));
+  assert.ok(D.every((d) => d.control_rows / d.rows === E("defaultAdv(SETUP['win-back-campaign']).control") / 100));
+  assert.equal(E("UPLIFT_EVAL.treated") + E("UPLIFT_EVAL.control"), 320000);
+  assert.equal(E("UPLIFT_EVAL.control") / 320000, 0.1);
+  assert.ok(D.every((d, i) => i === 0 || d.predicted_uplift < D[i - 1].predicted_uplift), "ranked by predicted uplift");
+  // the deciles' rates: 10.32% treated, 6.31% control, a 4.01-point average effect
+  const T = JSON.parse(E("JSON.stringify(armTotals())"));
+  assert.equal((T.yt / T.nt * 100).toFixed(2), "10.32");
+  assert.equal((T.yc / T.nc * 100).toFixed(2), "6.31");
+  assert.equal(E("ateOf()").toFixed(4), "0.0401");
+  // the Qini curve runs from 0 to 1 and ends on the random line
+  const P = JSON.parse(E("JSON.stringify(qiniPoints())"));
+  assert.deepEqual([P[0].fraction, P[0].qini, P[0].random], [0, 0, 0]);
+  assert.equal(P.at(-1).fraction, 1);
+  assert.equal(P.at(-1).qini, P.at(-1).random);
+  assert.equal(P.at(-1).qini.toFixed(5), "0.03607");
+  assert.ok(P.every((p) => Math.abs(p.random - p.fraction * P.at(-1).qini) < 1e-12), "the random line is f × qini(1)");
+  // AUUC and the Qini coefficient by the trapezoid rule, inside their stored intervals, above zero
+  const auuc = JSON.parse(E("JSON.stringify(auucCI())"));
+  assert.equal(auuc.value.toFixed(4), "0.0125");
+  assert.ok(auuc.ci_low > 0 && auuc.ci_low < auuc.value && auuc.value < auuc.ci_high);
+  const qc = E("qiniCoefOf()");
+  assert.equal(qc.toFixed(4), "0.0113");
+  assert.ok(E("UPLIFT_EVAL.qini.ci_low") < qc && qc < E("UPLIFT_EVAL.qini.ci_high"));
+  const nul = JSON.parse(E("JSON.stringify(UPLIFT_NULL)"));
+  assert.ok(nul.ci_low < 0 && nul.ci_high > 0 && nul.ci_low < nul.value && nul.value < nul.ci_high);
+  // segments: 14,500 scored and the 96,000 hold-out, each summing to its population
+  const sum = (o) => Object.values(o).reduce((a, b) => a + b, 0);
+  assert.equal(sum(JSON.parse(E("JSON.stringify(UPLIFT_SEGS)"))), Number(E("HOLDOUT.eligible").replace(/,/g, "")));
+  assert.equal(sum(JSON.parse(E("JSON.stringify(UPLIFT_SEGS_TEST)"))), 96000);
+  const a = "defaultAdv(SETUP['win-back-campaign'])";
+  assert.deepEqual(JSON.parse(E(`JSON.stringify(segCounts('scored',${a}))`)), JSON.parse(E("JSON.stringify(UPLIFT_SEGS)")),
+    "at the default cuts the counts are the sample's");
+  // the hold-out's persuadables sit where the decile means cross the persuadable cut
+  const share = E("UPLIFT_SEGS_TEST.persuadable") / 96000;
+  assert.ok(Math.abs(share - E("shareAbove(UPLIFT_DEFAULTS.persuadable)")) < 0.01);
+  // each segment's mean uplift is P(treated) − P(control), on the right side of the cuts
+  const M = JSON.parse(E("JSON.stringify(UPLIFT_SEG_MEANS)"));
+  assert.ok(Object.values(M).every(([u, pt, pc]) => Math.abs(u - (pt - pc)) < 1e-9));
+  assert.ok(M.persuadable[0] >= 0.02 && M.sleeping_dog[0] <= -0.01);
+  assert.ok(M.sure_thing[1] > M.lost_cause[1], "sure things convert anyway, lost causes do not");
+  // the policy: N within the eligible persuadables and within the budget
+  for (const mode of ["score", "train"]) {
+    const p = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'${mode}',adv:${a},causal:true}))`));
+    assert.equal(p.n, 4000);
+    assert.equal(p.stop_reason, "budget");
+    assert.ok(p.n <= p.eligible_persuadables && p.n <= p.segs.persuadable && p.n <= p.budget);
+    assert.ok(p.expected.ci_low > 0 && p.expected.ci_low < p.expected.value && p.expected.value < p.expected.ci_high);
+  }
+  const ps = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'score',adv:${a},causal:true}))`));
+  assert.equal(ps.eligible_persuadables, 5220 * 11200 / 14500, "persuadables outside the control group and suppression");
+  assert.equal(Math.round(ps.expected.value), 405);
+  // with no budget every eligible persuadable is chosen, and never more
+  const nb = JSON.parse(E(`JSON.stringify(upliftPolicy({mode:'score',adv:{...${a},upBudget:null},causal:true}))`));
+  assert.equal(nb.n, nb.eligible_persuadables);
+  assert.equal(nb.stop_reason, "all_persuadables");
+});
+
+test("the campaign report is computed from its counts", () => {
+  const dom = load("#/uc/win-back-campaign");
+  ev(dom, "AS_OF='2026-09-23T00:00:00Z'");
+  const r = JSON.parse(ev(dom, "JSON.stringify(campaignReport(CAMPAIGN_SEED,CAMPAIGN_OUTCOMES,today()))"));
+  assert.equal(r.status, "mature");
+  assert.equal(r.results_available_on, null);
+  assert.equal(r.treated_rate, 1232 / 11200);
+  assert.equal(r.control_rate, 109 / 1450);
+  assert.ok(Math.abs(r.absolute_lift.value - (r.treated_rate - r.control_rate)) < 1e-15, "lift = treated rate − control rate");
+  assert.ok(Math.abs(r.incremental_conversions.value - r.absolute_lift.value * r.treated_rows) < 1e-9,
+    "incremental conversions = lift × treated rows");
+  assert.ok(Math.abs(r.incremental_conversions.ci_low - r.absolute_lift.ci_low * r.treated_rows) < 1e-9);
+  assert.ok(Math.abs(r.relative_lift - r.absolute_lift.value / r.control_rate) < 1e-15);
+  // Newcombe and the z-test against the independent oracle (scratchpad intervals_oracle.py)
+  assert.equal((r.absolute_lift.ci_low * 100).toFixed(2), "1.91");
+  assert.equal((r.absolute_lift.ci_high * 100).toFixed(2), "4.86");
+  assert.ok(Math.abs(r.p_value - 5.0447e-5) / 5.0447e-5 < 1e-3);
+  assert.equal(r.treated_rows + r.control_rows + r.rows_suppressed_or_untreated, 14500);
+  // results_available_on = send date + outcome window, while the window is open
+  ev(dom, "STATE['win-back-campaign'].cr.window=180");
+  const w = JSON.parse(ev(dom, "JSON.stringify(campaignReport(CAMPAIGN_SEED,CAMPAIGN_OUTCOMES,today()))"));
+  assert.equal(w.status, "immature");
+  assert.equal(w.results_available_on, "2026-10-28");
+  assert.equal(w.absolute_lift, null, "nothing is measured before the window ends");
+  assert.equal(w.rows_immature, 11200 + 1450);
+  assert.equal(ev(dom, "fmtDay('2026-05-01')"), "1 May 2026");
+  assert.equal(ev(dom, "fmtDay(addDays('2026-05-01',90))"), "30 Jul 2026");
 });
