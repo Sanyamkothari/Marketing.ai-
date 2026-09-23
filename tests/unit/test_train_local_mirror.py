@@ -24,6 +24,7 @@ from __future__ import annotations
 
 import hashlib
 import sys
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -71,15 +72,20 @@ def record_saves(monkeypatch: Any, events: list[str]) -> None:
     publish after it by the order of events rather than by what happens to be on disk. `fit()`
     calls `save()` itself several times on the way; those calls are not the stage's and are not
     recorded, so the event list shows exactly where the stage's line sits relative to its save.
+
+    Only this thread's saves count. The patch is process-wide, and a job an earlier test started
+    can still be training on a worker thread when this test runs (seen in the image suite): its
+    save is not this run's, and recording it would put a third event in a two-event list.
     """
     from autogluon.tabular import TabularPredictor
 
     original = TabularPredictor.save
+    test_thread = threading.get_ident()
 
     def save(self: Any, *args: Any, **kwargs: Any) -> Any:
         caller = sys._getframe(1).f_globals.get("__name__")
         outcome = original(self, *args, **kwargs)
-        if caller == train_module.__name__:
+        if caller == train_module.__name__ and threading.get_ident() == test_thread:
             events.append("save")
         return outcome
 
@@ -135,8 +141,14 @@ def test_on_local_storage_the_publish_after_save_changes_nothing(tmp_path, monke
 
         monkeypatch.setattr(storage, name, recording)
 
+    test_thread = threading.get_ident()
+
     def spy(store: Any, key: str) -> tuple[str, ...]:
         nonlocal inside
+        if threading.get_ident() != test_thread:
+            # Another test's job still training on a worker thread (see `record_saves`): its
+            # publish is its own business, so it goes through untouched and unrecorded.
+            return publish_local_path(store, key)
         assert store is storage, "the train stage must publish through the store it wrote with"
         events.append("publish")
         before = snapshot(storage.root)
