@@ -576,7 +576,9 @@ def _leak_probe(
     the verdict for a broken time bound, a `derive` over the whole history or a widened snapshot
     frame is the one the whole spine would give. The entities given nothing are there for the leak
     no feature query was written to have: one that reads *other* entities' events would move them,
-    and a probe of only the injected entities could not see it.
+    and a probe of only the injected entities could not see it. The build's own features are cut
+    to the same entities by key (`_probed_features`), never by position: a `derive` makes that
+    frame a row per event rather than a row per snapshot.
     """
     import duckdb
     import pandas as pd
@@ -601,7 +603,7 @@ def _leak_probe(
     finally:
         con.close()
 
-    built = features.loc[rows].reset_index(drop=True)
+    built = _probed_features(features, snapshots[ENTITY_KEY], rows)
     role_of = {feature.name: feature.role for feature in spec.features}
     moved = {role_of[name] for name in built.columns if name in role_of and _moved(built[name], probed[name])}
     return {role: count for role, count in injected.items() if role in moved}
@@ -625,6 +627,26 @@ def _probe_rows(keys: pd.Series[Any], witnesses: Sequence[pd.Series[Any]]) -> np
         return np.ones(len(keys), dtype=bool)
     control = keys[~injected].drop_duplicates().head(_PROBE_CONTROL_ENTITIES)
     return (injected | keys.isin(control)).to_numpy(dtype=bool)
+
+
+def _probed_features(
+    features: pd.DataFrame, keys: pd.Series[Any], rows: npt.NDArray[np.bool_]
+) -> pd.DataFrame:
+    """The rows of `features` that belong to the entities of the probed snapshot `rows`, in the
+    order `features` has them.
+
+    Selected by entity rather than by position, because `features` is not one row per snapshot row:
+    a `derive` feature joins every snapshot row to every event of its role, so the frame the build
+    assembled has a row per event, not per snapshot, and a mask of the snapshot rows does not line up
+    with it. Every row of a probed entity is kept - its snapshot rows and every event row a `derive`
+    joined to them - which is exactly what `build_features` returns for the same entities on the
+    probe's side, so the two are compared like for like and a `derive` that gained the future rows
+    shows up as a frame that grew. When every snapshot row is probed nothing is selected at all: the
+    frame is compared whole, as the probe that rebuilt the whole spine compared it.
+    """
+    if bool(rows.all()):
+        return features.reset_index(drop=True)
+    return features.loc[features[ENTITY_KEY].isin(keys[rows].unique())].reset_index(drop=True)
 
 
 def _stack_future_rows(con: DuckDBPyConnection, role: str, frame: pd.DataFrame, extra: pd.DataFrame) -> None:

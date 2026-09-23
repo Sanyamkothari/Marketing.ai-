@@ -92,7 +92,12 @@ report, `sample.json` and `features.sql` are unchanged (§4).
    The build's read is the profiling read, kept to every row. It returns the same capped rows and
    the same whole-file fingerprint as `reader.profile` did, so the profile, the PII flags and the
    manifest's source fingerprints are unchanged. The profile is now computed in `apply_mappings`
-   instead of `write`. This removes one parse and one fingerprint of every source file.
+   instead of `write`. This removes one parse and one fingerprint of every source file. It holds
+   for the Setup screen's preview too: a preview that passes its checks reaches `write`, because
+   `sample.json` is what it shows and the PII flags decide what `sample.json` redacts. The preview
+   used to read every source, then read, fingerprint and profile it again at `write`; it now does
+   one profiled read. Only a build or preview that the checks stop before `write` pays for a
+   profile it did not pay for before.
 2. **The dataset is fingerprinted once**, from column types inferred once. `write_frame` takes the
    `types` the build has already inferred, and `build_manifest` takes the fingerprint that
    `write_frame` returned.
@@ -103,8 +108,11 @@ report, `sample.json` and `features.sql` are unchanged (§4).
    entities that received none. Every feature query joins an event to its own entity, so this
    gives the same result as rebuilding every row for every leak the probe was designed to catch.
    The control entities catch a query that reads other entities' events. If no snapshot row
-   matches an injected entity, the probe falls back to the whole spine. This is DEC-096, which
-   also has the tests.
+   matches an injected entity, the probe falls back to the whole spine. The build's own features
+   are cut to the probed entities by key, not by snapshot-row position: a `derive` feature over an
+   event table makes that frame one row per event, and it must still be reported as
+   FUTURE_EVENTS_LEAKED, as the whole-spine probe reported it. This is DEC-096, which also has the
+   tests.
 4. **Text casts without a per-cell Python call.** `cast_series` to a categorical or text type skips
    the `str()` loop for an integer column and for a column whose values are already all strings.
    The output is the same.
@@ -122,7 +130,30 @@ report, `sample.json` and `features.sql` are unchanged (§4).
   the same fingerprint, so correctness was not the obstacle. It would have been slower.
 * **Joining per-role feature results inside DuckDB.** All pandas merges together took 1.9 s of
   67.9 s in the final profile. The change would move row-order and dtype questions into the build
-  (the fingerprint depends on row order) to save about 3 % of the build.
+  (the fingerprint depends on row order) to save about 3 % of the build. It was also measured
+  directly (the table below): one DuckDB query joining a role's results onto the spine in spine
+  order, fetched with one `.df()`, returned a frame equal to the pandas path, dtypes included, and
+  was no faster.
+* **Not materialising a DataFrame per role, and Arrow instead of `.df()`.** Measured inside a real
+  build at one tenth of the size (load average about 2), twice per role, on the queries the build
+  runs. "Into DuckDB" runs the same query into a temporary DuckDB table, so no pandas frame is made
+  at all. It costs the same as the query plus `.df()`: nearly all of a feature stage is DuckDB
+  aggregating, not the conversion to pandas. Fetching through Arrow (`.arrow().to_pandas()`) was
+  no faster, and it is not the same frame. A nullable integer (`days_since_last_complaint`) came
+  back as `float64` instead of `Int64`, and the `DECIMAL` sums of `days_late` came back as Python
+  `Decimal` objects instead of `float64`. Either would change the dataset's column types and its
+  fingerprint, which are the dataset's identity. The build keeps `.df()` and the pandas merges.
+
+  | Role (features) | query + `.df()` | into DuckDB, no pandas | Arrow + `to_pandas` | pandas merge | DuckDB join, one `.df()` |
+  |---|---:|---:|---:|---:|---:|
+  | activity (7) | 1.28 / 1.43 | 1.28 / 1.32 | 1.27 / 1.28 | 0.08 / 0.10 | 1.52 / 1.37 |
+  | bills (23) | 1.02 / 1.39 | 1.24 / 1.68 | 1.49 / 1.55 | 0.22 / 0.22 | 1.96 / 2.09 |
+  | complaints (9) | 0.35 / 0.30 | 0.40 / 0.30 | 0.30 / 0.34 | 0.05 / 0.06 | 0.36 / 0.41 |
+  | payments (19) | 1.18 / 0.93 | 1.10 / 1.04 | 1.43 / 1.09 | 0.31 / 0.23 | 1.23 / 1.26 |
+  | usage (2) | 0.27 / 0.29 | 0.27 / 0.26 | 0.29 / 0.26 | 0.04 / 0.03 | 0.29 / 0.29 |
+
+  Seconds, first and second attempt, 240,000 spine rows per role. The "DuckDB join" column
+  includes the query itself, so it compares with "query + `.df()`" plus "pandas merge".
 * **A faster fingerprint canonicaliser.** Pre-formatting float columns in Python before `to_csv`
   gives byte-identical output. On a 100,000 × 64 dataset-shaped chunk it was 5–25 % faster, which
   was measured and is within the noise of this machine. The canonicaliser defines the identity of
@@ -215,5 +246,7 @@ tests (`test_onboarding_flow.py`, including the broken-time-bound leak test, `te
 existing assertion was edited. Two new test files cover the changes:
 `tests/unit/onboarding/test_build_speed.py` checks each shortcut against the long way it replaces,
 and checks that the probe's control entities catch a cross-entity leak that the injected entities
-alone miss. `tests/integration/test_onboarding_build_reads.py` fails if a build reads any source
+alone miss, and that a `derive` feature over an event table is reported as a leak (it once raised
+`IndexError` instead). `test_onboarding_flow.py` builds that `derive` recipe end to end and
+checks the build fails with FUTURE_EVENTS_LEAKED and writes no dataset. `tests/integration/test_onboarding_build_reads.py` fails if a build reads any source
 twice.

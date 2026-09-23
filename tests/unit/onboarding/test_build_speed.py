@@ -385,3 +385,58 @@ def test_the_probe_rebuilds_the_injected_entities_and_a_bounded_control_group(
 def test_the_probe_falls_back_to_every_row_rather_than_probing_nothing(witnesses: list[Any]) -> None:
     keys = pd.Series(["a", "b", "c"])
     assert build_module._probe_rows(keys, witnesses).tolist() == [True, True, True]
+
+
+_DERIVE = FeatureSpec(
+    features=(
+        FeatureDef(
+            name="usage_age_days",
+            role="usage",
+            function=AggFunction.DERIVE,
+            expression="days_between(snapshot_date, event_time)",
+        ),
+    ),
+)
+
+
+@pytest.mark.parametrize("control", [build_module._PROBE_CONTROL_ENTITIES, 0])
+def test_a_derive_over_an_event_role_is_reported_as_leaking_not_crashed_on(
+    monkeypatch: pytest.MonkeyPatch, control: int
+) -> None:
+    """A `derive` joins each snapshot row to every event of its role, with no time bound.
+
+    The features frame is therefore a row per event, not a row per snapshot, and a probe that picked
+    its rows with a mask of the snapshot rows raised `IndexError` on it instead of reporting the leak
+    the whole-spine probe reported. The probed entities' rows are selected by key, so it reports it.
+    """
+    monkeypatch.setattr(build_module, "_PROBE_CONTROL_ENTITIES", control)
+    views, snapshots = _probe_fixture()
+    con = duckdb.connect()
+    try:
+        for role, frame in views.items():
+            con.register(role, frame)
+        con.register(SNAPSHOT_VIEW, snapshots)
+        features = build_features(con, _DERIVE, inclusive=True)
+    finally:
+        con.close()
+    assert len(features) > len(snapshots)
+
+    leaked = build_module._leak_probe(
+        views, snapshots, _DERIVE, features, entity_role="entity", inclusive=True
+    )
+    assert leaked == {"usage": build_module._PROBE_ROWS}
+
+
+def test_the_probed_features_are_every_row_of_the_probed_entities_in_build_order() -> None:
+    features = pd.DataFrame(
+        {
+            "entity_key": ["a", "a", "b", "c", "c", "c"],
+            "snapshot_date": [1, 1, 1, 1, 2, 2],
+            "x": range(6),
+        }
+    )
+    keys = pd.Series(["a", "b", "c", "c"])
+    picked = build_module._probed_features(features, keys, np.array([True, False, True, True]))
+    assert picked["x"].tolist() == [0, 1, 3, 4, 5]
+    whole = build_module._probed_features(features, keys, np.ones(4, dtype=bool))
+    assert whole["x"].tolist() == list(range(6))
