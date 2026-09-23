@@ -19,11 +19,29 @@ on:
     # 03:00 UTC: off-peak for GitHub's shared runners, so a scheduled job is less likely to sit in
     # the queue. Note that GitHub only runs `schedule` on the default branch — a change to this file
     # on a feature branch is exercised through workflow_dispatch below, never by the cron.
+    #
+    # OWNER ACTION REQUIRED (Plan A M39): on 2026-09-23 the repository's default branch is NOT
+    # `main`, so this cron fires only while this file is on whichever branch is the default, and
+    # nothing guarantees `main` a nightly run. Switch the default branch to `main` (Settings ->
+    # General -> Default branch); no workflow can do that for itself. Until then the checkout `ref`
+    # below still makes a scheduled run test `main` - it just may never be scheduled.
     - cron: "0 3 * * *"
   workflow_dispatch:                    # manual runs: before a milestone sign-off, or to re-check a fix
+    inputs:
+      library:
+        description: "Also run the public dataset library's tests (library/tests: five small trainings)"
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+
+# The nightly is a statement about `main`, the branch every phase merges into (protocol §1), so the
+# cron checks out `main` by name rather than trusting whichever branch happens to be the default. A
+# manual run tests the branch it was started on: that is how a change to this file, or a fix still on
+# a branch, is tried before it merges.
+env:
+  NIGHTLY_REF: ${{ github.event_name == 'schedule' && 'main' || github.ref }}
 
 jobs:
   test-all:
@@ -36,6 +54,8 @@ jobs:
 
     steps:
       - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.NIGHTLY_REF }}
 
       # Identical to ci.yml on purpose: the nightly must fail because of the slow tests, never
       # because it installed the project differently from the gate that let the change through.
@@ -68,3 +88,56 @@ jobs:
       # would need an explicit `pytest -m bedrock` step, which is the point.
       - name: make test-all
         run: make test-all
+
+  # --- Plan A M39: the public dataset library -------------------------------------------------
+  # `library/tests` trains a real model on each committed `sample.csv` (`strategy: fast`, a one-minute
+  # budget each) to prove the library's datasets still train with no engine change. It sits outside
+  # pyproject's `testpaths`, so `make test-all` above never collects it, and it is opt-in here rather
+  # than part of every nightly because it adds five trainings (the sixth dataset, criteo-uplift, is
+  # checked but deliberately never trained) for a claim that only changes when the engine or a
+  # library config does.
+  #
+  # Two ways in, and nothing else runs it: set the repository variable NIGHTLY_LIBRARY_TESTS to
+  # `true` (Settings -> Secrets and variables -> Actions -> Variables) to add it to every scheduled
+  # run, or tick "library" when starting this workflow by hand. It needs no network beyond the
+  # install: every sample is committed, and a missing one skips with the `fetch.py` to run.
+  library:
+    name: library datasets (opt-in)
+    if: >-
+      (github.event_name == 'schedule' && vars.NIGHTLY_LIBRARY_TESTS == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.library)
+    runs-on: ubuntu-latest
+    # A few minutes on a developer machine (library/README.md). A shared runner is slower and may
+    # start from a cold venv cache; 45 still kills a training run that has hung.
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.NIGHTLY_REF }}
+
+      # The same install as the job above and as ci.yml, for the same reason: the library must fail
+      # because of the library, never because it was installed differently.
+      - name: Set up Python 3.11
+        id: python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-freeze.txt
+
+      - name: Cache the venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'requirements-freeze.txt') }}
+
+      - name: make setup
+        run: make setup
+
+      # `make library-test` keeps the filter `make test-all` uses: @slow is in (every library test
+      # trains), the two paid markers are out.
+      - name: make library-test
+        run: make library-test
