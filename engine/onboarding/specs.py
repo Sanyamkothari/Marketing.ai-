@@ -55,11 +55,11 @@ from engine.config import (
     WhereOp,
 )
 from engine.contracts import (
+    ONBOARDING_VALIDATION_CODES,
     Artefact,
     DatasetFingerprint,
     DatasetProfile,
     RunState,
-    Severity,
     ValidationCheck,
 )
 
@@ -150,94 +150,17 @@ def spec_hash(model: BaseModel, *, exclude: frozenset[str] | None = None) -> str
 # ---------------------------------------------------------------------------
 # The onboarding validation table (plan section 7)
 # ---------------------------------------------------------------------------
-ONBOARDING_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
-    {
-        "NO_ENTITY_SOURCE",
-        "MULTIPLE_ENTITY_SOURCES",
-        "ENTITY_KEY_UNMAPPED",
-        "ENTITY_DUPLICATE_KEYS",
-        "JOIN_KEY_UNMAPPED",
-        "EVENT_TIME_UNMAPPED",
-        "EVENT_TIME_UNPARSEABLE",
-        "DATE_FORMAT_AMBIGUOUS",
-        "JOIN_KEY_COVERAGE_LOW",
-        "KEY_FORMAT_MISMATCH",
-        "REQUIRED_STANDARD_COLUMN_UNMAPPED",
-        "MAPPING_LOW_CONFIDENCE",
-        "MAPPING_TYPE_CONFLICT",
-        "VALUE_UNMAPPED",
-        "SNAPSHOT_OUTSIDE_DATA_RANGE",
-        "TOO_LITTLE_HISTORY",
-        "LABEL_HORIZON_CENSORED",
-        "LABEL_DEGENERATE_SNAPSHOT",
-        "LABEL_ROLE_MISSING",
-        "FEATURE_ALL_NULL",
-        "FEATURE_NAME_COLLISION",
-        "TOO_MANY_FEATURES",
-        "ENTITY_ATTRIBUTES_NOT_TIME_VERSIONED",
-        "FUTURE_EVENTS_LEAKED",
-        "SOURCE_TOO_LARGE",
-        "TOO_MANY_SOURCES",
-    }
-)
-"""The plan section 7 table. `engine.contracts.VALIDATION_CODES` stays the Phase 1 table of 19."""
+OnboardingCheck = ValidationCheck
+"""One row of the build report: the Phase 1 `ValidationCheck`, under the name onboarding code uses.
 
-
-class OnboardingCheck(Artefact):
-    """One row of the build report, in the same shape as a Phase 1 `ValidationCheck`.
-
-    A build report holds both vocabularies in one list, because the full Phase 1 validation is
-    re-run on the assembled dataset and its findings are appended (plan section 7). That needs one
-    type that accepts both code tables, and `ValidationCheck._known_code` - which would have to be
-    the one - sits above this branch's block in `engine/contracts.py`, which
-    `PARALLEL_WORK_PROTOCOL.md` §4 forbids editing. So this is a separate model with the same five
-    fields, its own code table, and `from_validation_check` to carry a Phase 1 finding across
-    unchanged. `docs/CROSS_BRANCH_REQUESTS.md` asks for the two to be unified in a later reviewed
-    change on `main`; until then nothing is lost, because the field contract is identical (DEC-101).
-    """
-
-    code: str = Field(description="Onboarding or Phase 1 validation code, for example JOIN_KEY_COVERAGE_LOW.")
-    severity: Severity = Field(description="Whether this check blocks the build or is only reported.")
-    message: str = Field(description="Business-language message, with the numbers already filled in.")
-    suggestion: str = Field(default="", description="What the user can do about it.")
-    column: str | None = Field(default=None, description="Column the check is about, when it is about one.")
-    source_id: str | None = Field(
-        default=None, description="Source the check is about, when it is about one."
-    )
-    details: dict[str, Any] = Field(
-        default_factory=dict, description="Machine-readable numbers behind the message."
-    )
-    acknowledgeable: bool = Field(
-        default=False, description="Whether the UI may offer to acknowledge this check."
-    )
-    acknowledged: bool = Field(default=False, description="Whether the user acknowledged it.")
-
-    @model_validator(mode="after")
-    def _known_code(self) -> OnboardingCheck:
-        from engine.contracts import VALIDATION_CODES
-
-        if self.code not in ONBOARDING_VALIDATION_CODES | VALIDATION_CODES:
-            known = ", ".join(sorted(ONBOARDING_VALIDATION_CODES | VALIDATION_CODES))
-            raise ValueError(f"unknown validation code {self.code!r}; known codes: {known}")
-        if self.code == "FUTURE_EVENTS_LEAKED" and self.acknowledgeable:
-            raise ValueError(
-                "FUTURE_EVENTS_LEAKED is a bug in the engine, never something a user may wave through"
-            )
-        return self
-
-    @classmethod
-    def from_validation_check(cls, check: ValidationCheck) -> OnboardingCheck:
-        """A Phase 1 finding, carried into the build report unchanged."""
-        return cls(
-            code=check.code,
-            severity=check.severity,
-            message=check.message,
-            suggestion=check.suggestion,
-            column=check.column,
-            details=dict(check.details),
-            acknowledgeable=check.acknowledgeable,
-            acknowledged=check.acknowledged,
-        )
+This was a twin model with the same fields plus `source_id`, because `ValidationCheck` sat above this
+branch's block in `engine/contracts.py` and could not accept the onboarding codes (DEC-101). Plan A
+ruling D7 merged the two: `ValidationCheck` now carries `source_id`, accepts both code tables
+(`CHECK_CODES`) and refuses an acknowledgeable `FUTURE_EVENTS_LEAKED`, so a Phase 1 finding re-run on
+an assembled dataset goes into the build report as it is, with nothing to convert. The alias keeps
+every onboarding producer and route reading as it did; new code may use either name, and they are the
+same class. `ONBOARDING_VALIDATION_CODES` is re-exported from `engine.contracts` for the same reason.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -675,7 +598,7 @@ class BuildReport(Artefact):
     """`build_report.json` - everything the build review screen shows, already computed."""
 
     dataset_id: str = Field(description="Dataset this report belongs to.")
-    checks: tuple[OnboardingCheck, ...] = Field(
+    checks: tuple[ValidationCheck, ...] = Field(
         description=(
             "Onboarding checks, then the full Phase 1 validation re-run on the assembled dataset; "
             "errors first."

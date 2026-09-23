@@ -105,11 +105,13 @@ usable key, no target or too few rows is refused however the user answers.
 ### 4.3 What a finding carries
 
 ```
-code          the machine code, one of the 19 below
+code          the machine code; validation.json uses the 19 below, and the model also
+              accepts ONBOARDING_VALIDATION_CODES (section 5)
 severity      error | warning
 message       business language, numbers already filled in
 suggestion    what to do about it
 column        the column it is about, when it is about one
+source_id     the onboarding source it is about; null in validation.json
 details       the machine-readable numbers behind the message
 acknowledgeable / acknowledged
 ```
@@ -122,8 +124,10 @@ the finding, so the UI can offer the change rather than describe it.
 ## 5. The validation table
 
 Nineteen codes: the eighteen of plan §6.3 plus `SUPPRESSION_COLUMN_MISSING` (DEC-030, DEC-031).
-`engine.contracts.VALIDATION_CODES` is the closed set — a `ValidationCheck` with any other code is
-rejected before it can reach a user.
+`engine.contracts.VALIDATION_CODES` is the closed set a run's validation draws on. `ValidationCheck`
+also accepts the onboarding codes of `ONBOARDING_VALIDATION_CODES`, because a dataset's build report
+carries both in one list (Plan A ruling D7); a check with any other code is rejected before it can
+reach a user.
 
 | Code | Severity | Mode | Triggered when |
 |---|---|---|---|

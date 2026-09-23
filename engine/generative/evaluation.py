@@ -44,7 +44,7 @@ honestly metered in the uncommon one.
 
 CRITICAL, and the reason nothing below asserts a pass rate: under the fake backend, every score this
 module produces is a smoke number proving the evaluation runs end to end, never a quality gate.
-`GroundedFakeLLMClient`'s embeddings are hashed words with no semantics and its judges answer from a
+The grounded `FakeLLMClient`'s embeddings are hashed words with no semantics and its judges answer from a
 script (DEC-218, DEC-219). The tests in this package prove arithmetic, plumbing and the deterministic
 checks - never that the fake was retrieved from accurately, judged sensibly, or agreed with a
 reference answer. A quality claim about this module is a Bedrock claim, made with a real embedding

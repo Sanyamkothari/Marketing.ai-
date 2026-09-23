@@ -771,16 +771,17 @@ One category of a categorical column and how often it occurs.
 
 #### ValidationCheck
 
-One row of the validation table, already interpolated for the user.
+One row of a validation table, already interpolated for the user.  `validation.json` carries it, and so does a dataset's build report, which lists the onboarding findings and the Phase 1 findings re-run on the assembled dataset together - so a code from either table is accepted, and `source_id` names the raw source an onboarding finding is about.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
 | `schema_version` | integer | no | Version of the contract the file was written with. |
-| `code` | string | yes | Validation table code, for example PK_NOT_UNIQUE. |
+| `code` | string | yes | Code from either validation table, for example PK_NOT_UNIQUE or JOIN_KEY_COVERAGE_LOW. |
 | `severity` | Severity ("error" \| "warning" \| "info") | yes | Whether this check blocks the run or is only reported. |
 | `message` | string | yes | Business-language message, with the numbers already filled in. |
 | `suggestion` | string | no | What the user can do about it. |
 | `column` | string \| null | no | Column the check is about, when it is about one. |
+| `source_id` | string \| null | no | Onboarding source the check is about, when it is about one; null in validation.json. |
 | `details` | object | no | Machine-readable numbers behind the message. |
 | `acknowledgeable` | boolean | no | Whether the UI may offer to acknowledge this check. |
 | `acknowledged` | boolean | no | Whether the user acknowledged it through the run overrides. |

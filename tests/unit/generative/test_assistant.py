@@ -8,7 +8,7 @@ proved from the fake client's own call log - exactly one `embed` and no `complet
 it. Nothing else in this file is worth as much.
 
 **The two refusals are different mechanisms, and only the pair proves it.** The floor refuses
-without calling; `GroundedFakeMode.REFUSING` refuses after calling, with the extracts retrieved and
+without calling; `FakeLLMMode.REFUSING` refuses after calling, with the extracts retrieved and
 counted. Asserting either alone would leave `called_model` looking like a synonym for `refused`.
 The same-domain off-topic question - the one that shares the corpus's vocabulary and outscores
 several genuine questions under a bag of words - is deliberately not here: a lexical fake cannot
@@ -82,7 +82,7 @@ from engine.generative.index import build_index
 from engine.generative.prompts import load_prompt
 from engine.generative.retrieval import Retrieved, retrieve
 from engine.generative.vectorstore import LocalVectorStore, Match, VectorStore
-from engine.llm import GroundedFakeLLMClient, GroundedFakeMode, LLMCall
+from engine.llm import FakeLLMClient, FakeLLMMode, LLMCall
 from engine.storage import LocalStorage
 from engine.utils.ids import new_index_id
 from tests.fixtures.make_docs import build_knowledge_base
@@ -116,7 +116,7 @@ class KnowledgeIndex:
     root: Path
 
 
-def meter_for(client: GroundedFakeLLMClient) -> Meter:
+def meter_for(client: FakeLLMClient) -> Meter:
     """A meter over `client` with the cache off, so every call is a call the client records."""
     return Meter(client, job_id="x_20260101_abcdef01", llm=LlmConfig(), budget=BudgetConfig(cache=False))
 
@@ -144,12 +144,12 @@ def ask(
     index: KnowledgeIndex,
     question: str,
     *,
-    mode: GroundedFakeMode = GroundedFakeMode.GROUNDED,
+    mode: FakeLLMMode = FakeLLMMode.GROUNDED,
     judged: bool = True,
     history: tuple[Turn, ...] = (),
     config_root: Path | None = None,
     **overrides: object,
-) -> tuple[GroundedFakeLLMClient, Meter, AssistantAnswer]:
+) -> tuple[FakeLLMClient, Meter, AssistantAnswer]:
     """Answer `question` against `index`, handing back the client and the meter that paid for it.
 
     The client's own call log cannot by itself distinguish a call the flow routed through the
@@ -161,7 +161,7 @@ def ask(
     deterministic rules and skip the judges; it is what a test uses when a judge's verdict would
     otherwise decide the thing being asserted.
     """
-    client = GroundedFakeLLMClient(mode=mode)
+    client = FakeLLMClient(mode=mode)
     meter = meter_for(client)
     return (
         client,
@@ -181,11 +181,11 @@ def ask(
 
 def retrieved_for(index: KnowledgeIndex, question: str, **overrides: object) -> Retrieved:
     """What retrieval chooses for `question`, worked out the way the flow itself works it out."""
-    (vector,) = meter_for(GroundedFakeLLMClient()).embed([question])
+    (vector,) = meter_for(FakeLLMClient(mode=FakeLLMMode.GROUNDED)).embed([question])
     return retrieve(index.store, index.index_id, vector, config=rag(**overrides))
 
 
-def completes(client: GroundedFakeLLMClient) -> tuple[LLMCall, ...]:
+def completes(client: FakeLLMClient) -> tuple[LLMCall, ...]:
     """Every completion the client was asked for - what `called_model` has to agree with."""
     return tuple(call for call in client.calls if call.kind == "complete")
 
@@ -243,7 +243,7 @@ def knowledge_index(tmp_path_factory: pytest.TempPathFactory) -> KnowledgeIndex:
         use_case=BASE,
         storage=storage,
         store=store,
-        meter=meter_for(GroundedFakeLLMClient()),
+        meter=meter_for(FakeLLMClient(mode=FakeLLMMode.GROUNDED)),
     )
     return KnowledgeIndex(index_id=index_id, store=store, root=root / "data")
 
@@ -391,7 +391,7 @@ def test_a_citation_that_points_nowhere_is_dropped_and_the_claim_survives(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """The model saw the extracts and answered from them; only its reference is wrong."""
-    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.UNGROUNDED)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=FakeLLMMode.UNGROUNDED)
     assert not result.refused
     assert result.answer and result.answer != REFUSAL
     assert result.citations == ()
@@ -404,7 +404,7 @@ def test_every_check_on_one_answer_names_the_question_and_never_the_answer(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """One list whose `target` meant the question in one row and the answer in the next is unreadable."""
-    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.UNGROUNDED)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=FakeLLMMode.UNGROUNDED)
     assert result.guardrails
     assert {check.target for check in result.guardrails} <= {ANSWERED[:60], ANSWERED[:80]}
     assert all(check.target for check in result.guardrails)
@@ -593,7 +593,7 @@ def test_a_malformed_reply_never_reaches_the_caller_as_an_answer(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """Whatever else happens to it, an unparsed blob is not what the customer is shown."""
-    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.MALFORMED)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=FakeLLMMode.MALFORMED)
     assert result.refused
     assert result.called_model is True
     assert result.citations == ()
@@ -605,7 +605,7 @@ def test_a_malformed_reply_is_refused_in_the_operators_own_words(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """With the judges off, so it is the parser refusing and not a judge that could not read a verdict."""
-    client, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.MALFORMED, judged=False)
+    client, _, result = ask(knowledge_index, ANSWERED, mode=FakeLLMMode.MALFORMED, judged=False)
     assert result.refused
     assert result.answer == REFUSAL
     assert result.citations == ()
@@ -620,7 +620,7 @@ def test_a_refusal_the_model_made_called_the_model_where_a_refusal_the_floor_mad
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """The pair is the proof: without it `called_model` would look like a synonym for `refused` (DEC-219)."""
-    prompted_client, _, prompted = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.REFUSING)
+    prompted_client, _, prompted = ask(knowledge_index, ANSWERED, mode=FakeLLMMode.REFUSING)
     floored_client, _, floored = ask(knowledge_index, DISJOINT)
     assert prompted.refused and floored.refused
     assert prompted.called_model is True
@@ -636,7 +636,7 @@ def test_a_refusal_the_model_made_still_reports_what_was_put_in_front_of_it(
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """`retrieved` is what the extracts cost, not what the answer used, so a refusal still carries it."""
-    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.REFUSING)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=FakeLLMMode.REFUSING)
     assert result.retrieved == len(retrieved_for(knowledge_index, ANSWERED).matches)
     assert result.answer == REFUSAL
 
@@ -646,10 +646,10 @@ def test_a_refusal_the_model_made_still_reports_what_was_put_in_front_of_it(
 # ---------------------------------------------------------------------------
 @pytest.mark.parametrize(
     ("mode", "rule"),
-    [(GroundedFakeMode.BANNED, BANNED_PHRASES), (GroundedFakeMode.PII, PII_IN_OUTPUT)],
+    [(FakeLLMMode.BANNED, BANNED_PHRASES), (FakeLLMMode.PII, PII_IN_OUTPUT)],
 )
 def test_an_answer_a_rule_blocked_is_replaced_by_the_refusal_and_keeps_its_check(
-    knowledge_index: KnowledgeIndex, mode: GroundedFakeMode, rule: str
+    knowledge_index: KnowledgeIndex, mode: FakeLLMMode, rule: str
 ) -> None:
     """The blocked text is not shown, not cited and not forgotten: the check is what says it happened."""
     _, _, result = ask(knowledge_index, ANSWERED, mode=mode)
@@ -666,7 +666,7 @@ def test_a_blocked_answer_reports_the_checks_that_passed_beside_the_one_that_did
     knowledge_index: KnowledgeIndex,
 ) -> None:
     """A reviewer asking what was looked at gets the whole sweep, not only the rule that fired."""
-    _, _, result = ask(knowledge_index, ANSWERED, mode=GroundedFakeMode.BANNED)
+    _, _, result = ask(knowledge_index, ANSWERED, mode=FakeLLMMode.BANNED)
     assert len({check.rule for check in result.guardrails}) > 1
     assert any(check.outcome is GuardrailOutcome.PASSED for check in result.guardrails)
 

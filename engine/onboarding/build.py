@@ -682,9 +682,7 @@ def _phase_one_checks(
     )
     report = validate_frame(frame, params, mode=mode, upload_id=dataset_id)
     return tuple(
-        OnboardingCheck.from_validation_check(check)
-        for check in report.checks
-        if not (periodic and check.code in _PANEL_INAPPLICABLE_CODES)
+        check for check in report.checks if not (periodic and check.code in _PANEL_INAPPLICABLE_CODES)
     )
 
 

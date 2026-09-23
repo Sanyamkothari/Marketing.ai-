@@ -8,11 +8,14 @@ a model.
 
 Three properties matter more than the surface.
 
-**The fake is deterministic.** `FakeLLMClient` derives every answer from a SHA-256 of the exact
-request - model id, prompt, token ceiling, temperature - so the same call returns the same bytes
-in the same order on any machine, and a test can assert on a completion without a network, a key
-or a tolerance. It is not a simulation of a model and does not try to be: its text is visibly
-machine-made, and `FakeCompletion.text` is not a plausible summary of anything.
+**The fake is deterministic.** `FakeLLMClient` derives every answer from the exact request - by
+default a SHA-256 of model id, prompt, token ceiling and temperature - so the same call returns the
+same bytes in the same order on any machine, and a test can assert on a completion without a
+network, a key or a tolerance. It is not a simulation of a model and does not try to be: in its
+default `DIGEST` mode its text is visibly machine-made and not a plausible summary of anything. Its
+other modes (`FakeLLMMode`) read the prompt back so retrieval and grounding can be tested at all,
+and are still a function of the request alone; there is one fake with modes, not one per need
+(Plan A ruling D7).
 
 **The fake records what it was asked.** Every call appends an :class:`LLMCall` to `calls`, so a
 test can assert that a prompt was built once rather than per row, that a guardrail ran before the
@@ -56,8 +59,7 @@ __all__ = [
     "GROUNDED_FAKE_MODEL_ID",
     "BedrockLLMClient",
     "FakeLLMClient",
-    "GroundedFakeLLMClient",
-    "GroundedFakeMode",
+    "FakeLLMMode",
     "LLMCall",
     "LLMClient",
     "LLMCompletion",
@@ -70,10 +72,24 @@ APPROX_CHARS_PER_TOKEN: Final[int] = 4
 """The fake's token ratio. A stand-in for a real tokeniser, and named so nobody mistakes it for one."""
 
 FAKE_MODEL_ID: Final[str] = "fake-deterministic-v1"
-"""The id `FakeLLMClient` reports when no model is named. Not a real model, and it reads like it."""
+"""The id `FakeLLMClient` reports in `DIGEST` mode when no call names one. Not a real model; reads like it."""
+
+GROUNDED_FAKE_MODEL_ID: Final[str] = "fake-grounded-v1"
+"""The id `FakeLLMClient` reports in every other mode. Also not a real model, and reads like one too."""
 
 _EMBEDDING_DIMENSIONS: Final[int] = 16
-"""Small on purpose: an embedding from a hash carries no meaning, so a large one would only mislead."""
+"""The `DIGEST` width. Small on purpose: a hash embedding carries no meaning, and a wide one would mislead."""
+
+_GROUNDED_DIMENSIONS: Final[int] = 1024
+"""The lexical modes' width: enough to keep unrelated texts apart, narrow enough to cost nothing.
+
+Every word is hashed into one of these buckets, so the width is really a collision budget: at 256,
+enough unrelated words share a bucket that two chunks look alike for reasons neither of them is
+about. Measured over the reference set, widening to 1024 retrieves the right document for 40 of the
+45 answerable questions where 256 managed 34, and 4096 gains nothing further - the collisions that
+mattered are already gone. It is also the width of a real embedding model rather than a toy one,
+which keeps the shape of an index the same whichever backend built it.
+"""
 
 
 class LLMError(Exception):
@@ -157,16 +173,85 @@ class LLMClient(Protocol):
     def count_tokens(self, text: str, *, model_id: str | None = None) -> int: ...
 
 
+class FakeLLMMode(StrEnum):
+    """What `FakeLLMClient` answers from, and - past `GROUNDED` - which one rule it breaks.
+
+    `DIGEST` is the default and is the contracts-first fake exactly as it always was: every answer a
+    digest of the request, assertable byte for byte, visibly machine-made. Every other mode reads its
+    input and answers out of it (see :class:`FakeLLMClient`), because retrieval and grounding cannot
+    be tested against a hash. `GROUNDED` is the only one of those that should pass every check; each
+    of the rest breaks exactly one rule, so a test that sets one knows which failure it is asserting.
+    """
+
+    DIGEST = "digest"
+    GROUNDED = "grounded"
+    UNGROUNDED = "ungrounded"
+    PII = "pii"
+    OVERLONG = "overlong"
+    BANNED = "banned"
+    MALFORMED = "malformed"
+    REFUSING = "refusing"
+    FAILING_JUDGE = "failing_judge"
+
+
 class FakeLLMClient:
     """A deterministic `LLMClient` that reaches nothing and records everything.
 
-    Every answer is a function of the request alone, so two processes on two machines produce the
-    same bytes. `calls` is the log, in call order; `reset()` empties it between test cases.
+    Every answer is a function of the request and the mode alone, so two processes on two machines
+    produce the same bytes. `calls` is the log, in call order, in every mode; `reset()` empties it
+    between test cases.
+
+    There is one fake, with modes, rather than one fake per need (Plan A ruling D7). The two needs
+    are real and different, which is why the mode exists at all:
+
+    **`DIGEST` (the default) is the seam's fake.** It derives everything from a SHA-256 of the
+    request, which is exactly right for what the contracts-first task built it for - it is visibly
+    machine-made, it reaches nothing, and a test can assert on its bytes. It is also, by the same
+    design, unusable for testing retrieval: a hash embedding has no semantics, so the chunk that
+    answers a question sits no closer to it than any other, and a RAG test against one would be
+    asserting that a random number beat another random number. Nor can a digest be *grounded*:
+    `[fake completion 3f2a…]` quotes no extract and cites no chunk, so every grounding check would
+    pass for the wrong reason (DEC-214).
+
+    **Every other mode reads its input and answers out of it.** Embeddings carry lexical signal:
+    each text's words are hashed into `dimensions` buckets with a log term frequency and the result
+    is normalised, so two texts that share vocabulary really do sit close together, and retrieval,
+    the similarity floor and MMR are exercised for real. Completions come out of the prompt: for a
+    generating call it reads the numbered extracts, the evidence pack or the allowed placeholder list
+    it was handed and builds its reply from that, so a grounded answer is grounded, a citation names
+    an extract that exists, and an evidence reference names an id that is in the pack. `GROUNDED`
+    does all of that honestly; each other mode then breaks exactly one rule, which is how the
+    guardrails are tested.
+
+    `model_id` defaults to `FAKE_MODEL_ID` in `DIGEST` mode and to `GROUNDED_FAKE_MODEL_ID` in the
+    others, and `dimensions` to 16 and 1024 respectively - the values each behaviour has always
+    reported, so nothing that stored one sees it move. Plan §13.3 applies in every mode: with a fake
+    backend, no path that renders generated text may be reachable.
     """
 
-    def __init__(self, model_id: str = FAKE_MODEL_ID) -> None:
+    def __init__(
+        self,
+        model_id: str | None = None,
+        *,
+        mode: FakeLLMMode = FakeLLMMode.DIGEST,
+        dimensions: int | None = None,
+    ) -> None:
+        self._mode = FakeLLMMode(mode)
+        digest = self._mode is FakeLLMMode.DIGEST
+        if model_id is None:
+            model_id = FAKE_MODEL_ID if digest else GROUNDED_FAKE_MODEL_ID
+        if dimensions is None:
+            dimensions = _EMBEDDING_DIMENSIONS if digest else _GROUNDED_DIMENSIONS
+        if dimensions < 8:
+            raise ValueError(f"dimensions must be at least 8, got {dimensions}")
         self._model_id = model_id
+        self._dimensions = dimensions
         self._calls: list[LLMCall] = []
+
+    @property
+    def mode(self) -> FakeLLMMode:
+        """What this client answers from, and which rule - if any - it is asked to break."""
+        return self._mode
 
     @property
     def model_id(self) -> str:
@@ -191,17 +276,27 @@ class FakeLLMClient:
         max_tokens: int = 512,
         temperature: float = 0.0,
     ) -> LLMCompletion:
-        """A completion derived from a digest of the request; the same request always returns it.
+        """A completion that depends on the request and the mode alone; the same request returns it.
 
-        The text names itself as fake and carries the digest, so a fake answer that escapes into a
-        screen or a file is recognisable on sight rather than mistaken for a model's work.
+        In `DIGEST` mode the text names itself as fake and carries the digest, so a fake answer that
+        escapes into a screen or a file is recognisable on sight rather than mistaken for a model's
+        work. In every other mode it is built from the prompt, in whichever way the mode asks for.
         """
         if max_tokens < 1:
             raise LLMError("LLM_INVALID_REQUEST", "max_tokens must be at least 1.", model_id=model_id)
         chosen = model_id or self._model_id
-        digest = self._digest(chosen, system, prompt, str(max_tokens), f"{temperature:.4f}")
-        whole = f"[fake completion {digest[:16]}]"
-        text = whole[: max_tokens * APPROX_CHARS_PER_TOKEN]
+        if self._mode is FakeLLMMode.DIGEST:
+            digest = self._digest(chosen, system, prompt, str(max_tokens), f"{temperature:.4f}")
+            whole = f"[fake completion {digest[:16]}]"
+            text = whole[: max_tokens * APPROX_CHARS_PER_TOKEN]
+            # The fake reports the reason it really stopped, not a flattering constant: a caller
+            # that retries on a truncated answer has to be able to tell that this one was cut off.
+            stop_reason = "end_turn" if text == whole else "max_tokens"
+        else:
+            # Never truncated: `OVERLONG` exists to hand the length guardrail an answer that is too
+            # long, and a ceiling applied here would quietly make it pass.
+            text = self._body(system, prompt)
+            stop_reason = "end_turn"
         input_tokens = self._tokens(system) + self._tokens(prompt)
         output_tokens = self._tokens(text)
         self._calls.append(
@@ -222,19 +317,24 @@ class FakeLLMClient:
             input_tokens=input_tokens,
             output_tokens=output_tokens,
             cost_estimate_usd=None,
-            # The fake reports the reason it really stopped, not a flattering constant: a caller
-            # that retries on a truncated answer has to be able to tell that this one was cut off.
-            stop_reason="end_turn" if text == whole else "max_tokens",
+            stop_reason=stop_reason,
         )
 
     def embed(self, texts: Sequence[str], *, model_id: str | None = None) -> tuple[tuple[float, ...], ...]:
-        """One unit-length vector per text, derived from its digest; identical texts embed alike.
+        """One vector per text: a digest in `DIGEST` mode, hashed words in every other.
 
-        The vectors carry no meaning - a hash has no semantics - so a test may assert that two
-        identical strings embed identically and that two different ones do not, and nothing else.
+        A digest vector carries no meaning - a hash has no semantics - so a test may assert that two
+        identical strings embed identically and that two different ones do not, and nothing else. A
+        lexical vector does carry meaning: shared vocabulary means proximity. A text with no content
+        word in it gets the zero vector there, whose cosine similarity to everything is 0 - which is
+        what "nothing to match on" should mean, and is the one case where this client returns
+        something that is not unit length.
         """
         chosen = model_id or self._model_id
-        vectors = tuple(self._vector(chosen, text) for text in texts)
+        if self._mode is FakeLLMMode.DIGEST:
+            vectors = tuple(self._vector(chosen, text) for text in texts)
+        else:
+            vectors = tuple(self._lexical_vector(text) for text in texts)
         self._calls.append(
             LLMCall(
                 kind="embed",
@@ -246,7 +346,7 @@ class FakeLLMClient:
         return vectors
 
     def count_tokens(self, text: str, *, model_id: str | None = None) -> int:
-        """`APPROX_CHARS_PER_TOKEN` characters per token, rounded up. An approximation, not a tokeniser."""
+        """`APPROX_CHARS_PER_TOKEN` characters per token, rounded up, in every mode. Not a tokeniser."""
         chosen = model_id or self._model_id
         counted = self._tokens(text)
         self._calls.append(LLMCall(kind="count_tokens", model_id=chosen, input_tokens=counted))
@@ -263,23 +363,131 @@ class FakeLLMClient:
     def _vector(self, model_id: str, text: str) -> tuple[float, ...]:
         """A unit vector from the digest: four bytes per dimension, mapped into [-1, 1], normalised."""
         raw = hashlib.sha256(f"{model_id}\x00{text}".encode()).digest()
-        while len(raw) < _EMBEDDING_DIMENSIONS * 4:
+        while len(raw) < self._dimensions * 4:
             raw += hashlib.sha256(raw).digest()
-        words = struct.unpack(f">{_EMBEDDING_DIMENSIONS}I", raw[: _EMBEDDING_DIMENSIONS * 4])
+        words = struct.unpack(f">{self._dimensions}I", raw[: self._dimensions * 4])
         centred = [word / 0x7FFFFFFF - 1.0 for word in words]
         norm = math.sqrt(math.fsum(value * value for value in centred))
         if norm == 0.0:  # unreachable for SHA-256 output; a zero vector would break cosine distance
             return tuple(0.0 for _ in centred)
         return tuple(value / norm for value in centred)
 
+    def _lexical_vector(self, text: str) -> tuple[float, ...]:
+        """Each content word hashed into a bucket with a log term frequency, then normalised."""
+        buckets = [0.0] * self._dimensions
+        for word, count in Counter(_tokenise(text)).items():
+            digest = hashlib.blake2b(word.encode("utf-8"), digest_size=8).digest()
+            index = int.from_bytes(digest[:4], "big") % self._dimensions
+            # The sign bit spreads collisions in both directions, so two unrelated words that land
+            # in one bucket are as likely to cancel as to reinforce.
+            sign = 1.0 if digest[4] & 1 else -1.0
+            # Log term frequency: a word said ten times is more evidence than a word said once, but
+            # not ten times as much - which keeps a long chunk from drowning a short one that is
+            # actually about the question.
+            buckets[index] += sign * (1.0 + math.log(count))
+        norm = math.sqrt(math.fsum(value * value for value in buckets))
+        return tuple(value / norm for value in buckets) if norm else tuple(buckets)
+
+    # -- reading the prompt back, so the answer can come out of it ----------
+    def _body(self, system: str, user: str) -> str:
+        if self._mode is FakeLLMMode.MALFORMED:
+            return "Certainly! Here is the answer you asked for, in prose rather than in JSON."
+        shape = _prompt_shape(system, user)
+        if shape == "judge":
+            return self._judge()
+        if shape == "copy":
+            return self._copy(user)
+        if shape == "evidence":
+            return self._root_cause(user)
+        return self._answer(user)
+
+    def _judge(self) -> str:
+        failing = self._mode is FakeLLMMode.FAILING_JUDGE
+        return json.dumps(
+            {
+                "score": 0.10 if failing else 1.0,
+                "agrees": not failing,
+                "supported": 0 if failing else 3,
+                "unsupported": 3 if failing else 0,
+                "unsupported_claims": ["the text says something its source does not"] if failing else [],
+                "contradictions": [],
+                "missing": [],
+                "conflicting": [],
+                "categories": [],
+                "failures": [{"rule": "claims", "detail": "an invented figure"}] if failing else [],
+                "reason": "a fake judge, returning the verdict the test asked for",
+            }
+        )
+
+    def _answer(self, user: str) -> str:
+        extracts = _numbered_extracts(user)
+        if self._mode is FakeLLMMode.REFUSING or not extracts:
+            return json.dumps({"answer": _refusal_sentence(user), "refused": True, "citations": []})
+        number, text = extracts[0]
+        sentence = _first_sentence(text)
+        answer = sentence
+        if self._mode is FakeLLMMode.PII:
+            answer = f"{sentence} {_FAKE_PII}"
+        elif self._mode is FakeLLMMode.BANNED:
+            answer = f"{sentence} {_FAKE_BANNED}"
+        elif self._mode is FakeLLMMode.OVERLONG:
+            answer = " ".join([sentence] * 400)
+        citations = [{"chunk": number, "quote": " ".join(sentence.split()[:25])}]
+        if self._mode is FakeLLMMode.UNGROUNDED:
+            citations = [{"chunk": len(extracts) + 99, "quote": "a quote from an extract nobody supplied"}]
+        return json.dumps({"answer": answer, "refused": False, "citations": citations})
+
+    def _root_cause(self, user: str) -> str:
+        ids = _evidence_ids(user)
+        refs = [_FAKE_UNGROUNDED_REF] if self._mode is FakeLLMMode.UNGROUNDED else ids[:2] or ["r1"]
+        cause = "These rows share the strongest reason the model weighted, and the complaints echo it."
+        if self._mode is FakeLLMMode.PII:
+            cause = f"{cause} {_FAKE_PII}"
+        elif self._mode is FakeLLMMode.OVERLONG:
+            cause = " ".join([cause] * 400)
+        return json.dumps(
+            {
+                "headline": "One reason dominates this segment and the complaints agree with it",
+                "root_causes": [
+                    {"cause": cause, "evidence_refs": refs, "confidence": "medium" if ids else "low"}
+                ],
+                "recommended_actions": ["Route these rows to the team that owns the strongest reason."],
+                "caveats": ["The model found association, not cause, and this segment is not a trial."],
+            }
+        )
+
+    def _copy(self, user: str) -> str:
+        fields = _allowed_fields(user)
+        labels = _variant_labels(user)
+        opener = "{{" + fields[0] + "}}" if fields else "there"
+        required = _required_line(user)
+        variants: list[dict[str, str]] = []
+        for index, label in enumerate(labels):
+            body = f"Hi {opener}, we would be glad to have you back. Reply to this message to talk it over."
+            if index:
+                body = f"Hi {opener}, your line is ready whenever you are. Reply and we will pick it up."
+            if self._mode is FakeLLMMode.BANNED:
+                body = f"{body} {_FAKE_BANNED}"
+            elif self._mode is FakeLLMMode.PII:
+                body = f"{body} {_FAKE_PII}"
+            elif self._mode is FakeLLMMode.OVERLONG:
+                body = " ".join([body] * 60)
+            elif self._mode is FakeLLMMode.UNGROUNDED:
+                body = f"{body} Use code {{{{secret_offer_code}}}} before it expires."
+            whole = f"{body}\n{required}"
+            variants.append(
+                {"label": label, "subject": "A word about your connection", "text": whole, "body": whole}
+            )
+        return json.dumps({"variants": variants})
+
 
 def estimate_tokens(text: str) -> int:
     """`APPROX_CHARS_PER_TOKEN` characters to a token, rounded up.
 
     The one definition of "how long is this in tokens" that does not need a client: the chunker
-    sizes a chunk with it, the meter counts an embedding batch with it, and both fakes answer
-    `count_tokens` with it, so three parts of the system that have to agree cannot drift. It is an
-    approximation and every caller that stores its result says so.
+    sizes a chunk with it, the meter counts an embedding batch with it, and the fake answers
+    `count_tokens` with it in every mode, so three parts of the system that have to agree cannot
+    drift. It is an approximation and every caller that stores its result says so.
     """
     return -(-len(text) // APPROX_CHARS_PER_TOKEN)
 
@@ -304,25 +512,12 @@ def usage_from(calls: Sequence[LLMCall], *, cost_estimate_usd: float | None = No
 # ===========================================================================
 # Phase 3a implementations. `engine/llm.py` is Phase 3a's outright
 # (PARALLEL_WORK_PROTOCOL.md §3), so these sit below the shared seam rather
-# than inside a marker block; nothing above this line changed except the
-# optional `system` argument, which every existing caller may ignore.
+# than inside a marker block. What reads a prompt back for the lexical modes
+# of `FakeLLMClient` lives here too: those modes were a second fake class
+# until Plan A ruling D7 folded them into the first.
 # ===========================================================================
-GROUNDED_FAKE_MODEL_ID: Final[str] = "fake-grounded-v1"
-"""The id `GroundedFakeLLMClient` reports. Also not a real model, and it reads like one too."""
-
 BEDROCK_SERVICE: Final[Literal["bedrock-runtime"]] = "bedrock-runtime"
 """The boto3 service name. A `Literal`, because boto3-stubs resolves the client type from it."""
-
-_GROUNDED_DIMENSIONS: Final[int] = 1024
-"""Wide enough to keep unrelated texts apart, narrow enough that a vector costs nothing.
-
-Every word is hashed into one of these buckets, so the width is really a collision budget: at 256,
-enough unrelated words share a bucket that two chunks look alike for reasons neither of them is
-about. Measured over the reference set, widening to 1024 retrieves the right document for 40 of the
-45 answerable questions where 256 managed 34, and 4096 gains nothing further - the collisions that
-mattered are already gone. It is also the width of a real embedding model rather than a toy one,
-which keeps the shape of an index the same whichever backend built it.
-"""
 
 _WORD: Final[re.Pattern[str]] = re.compile(r"[a-z0-9']+")
 _SENTENCE: Final[re.Pattern[str]] = re.compile(r"(?<=[.!?])\s+")
@@ -376,23 +571,6 @@ _STOP_WORDS: Final[frozenset[str]] = frozenset(
 )
 
 
-class GroundedFakeMode(StrEnum):
-    """How `GroundedFakeLLMClient` should misbehave, so one guardrail at a time can be tested.
-
-    `GROUNDED` is the default and is the only mode that should pass every check; each of the others
-    breaks exactly one rule, so a test that sets one knows which failure it is asserting.
-    """
-
-    GROUNDED = "grounded"
-    UNGROUNDED = "ungrounded"
-    PII = "pii"
-    OVERLONG = "overlong"
-    BANNED = "banned"
-    MALFORMED = "malformed"
-    REFUSING = "refusing"
-    FAILING_JUDGE = "failing_judge"
-
-
 _FAKE_PII: Final[str] = "Write to priya.sharma@example.invalid or call +91 90000 12345."
 """An invented address and number, from ranges that resolve nowhere, for the PII guardrail to catch."""
 
@@ -406,241 +584,6 @@ _FAKE_UNGROUNDED_REF: Final[str] = "not_in_the_pack"
 def _tokenise(text: str) -> list[str]:
     """Lower-case words worth embedding, stop words dropped."""
     return [word for word in _WORD.findall(text.lower()) if word not in _STOP_WORDS and len(word) > 1]
-
-
-class GroundedFakeLLMClient:
-    """A second fake, for the one thing `FakeLLMClient` deliberately cannot do: be retrieved from.
-
-    `FakeLLMClient` derives everything from a digest, which is exactly right for the seam it was
-    built for - it is visibly machine-made, it reaches nothing, and a test can assert on its bytes.
-    It is also, by the same design, unusable for testing retrieval: a hash embedding has no
-    semantics, so the chunk that answers a question sits no closer to it than any other, and a RAG
-    test against one would be asserting that a random number beat another random number. Nor can a
-    digest be *grounded*: `[fake completion 3f2a…]` quotes no extract and cites no chunk, so every
-    grounding check would pass for the wrong reason (DEC-214).
-
-    So this client, and only this one, reads its input and answers out of it:
-
-    **Embeddings carry lexical signal.** Each text's words are hashed into `_GROUNDED_DIMENSIONS`
-    buckets with a log term frequency and the result is normalised, so two texts that share
-    vocabulary really do sit close together. Retrieval, the similarity floor and MMR are therefore
-    exercised for real.
-
-    **Completions come out of the prompt.** For a generating call it reads the numbered extracts,
-    the evidence pack or the allowed placeholder list it was handed and builds its reply from that,
-    so a grounded answer is grounded, a citation names an extract that exists, and an evidence
-    reference names an id that is in the pack.
-
-    `GroundedFakeMode` then asks it to break exactly one rule at a time, which is how the guardrails
-    are tested. Plan §13.3 still applies in full: with a fake backend, no path that renders
-    generated text may be reachable.
-    """
-
-    def __init__(
-        self,
-        *,
-        mode: GroundedFakeMode = GroundedFakeMode.GROUNDED,
-        model_id: str = GROUNDED_FAKE_MODEL_ID,
-        dimensions: int = _GROUNDED_DIMENSIONS,
-    ) -> None:
-        if dimensions < 8:
-            raise ValueError(f"dimensions must be at least 8, got {dimensions}")
-        self._mode = mode
-        self._model_id = model_id
-        self._dimensions = dimensions
-        self._calls: list[LLMCall] = []
-
-    @property
-    def mode(self) -> GroundedFakeMode:
-        """Which way this client is asked to misbehave."""
-        return self._mode
-
-    @property
-    def model_id(self) -> str:
-        """The model id this client reports when a call names none."""
-        return self._model_id
-
-    @property
-    def calls(self) -> tuple[LLMCall, ...]:
-        """Every call made so far, oldest first - the same log `FakeLLMClient` keeps."""
-        return tuple(self._calls)
-
-    def reset(self) -> None:
-        """Forget every recorded call; the answers themselves do not depend on history."""
-        self._calls.clear()
-
-    def complete(
-        self,
-        prompt: str,
-        *,
-        system: str = "",
-        model_id: str | None = None,
-        max_tokens: int = 512,
-        temperature: float = 0.0,
-    ) -> LLMCompletion:
-        """Answer the prompt from the prompt, in whichever way `mode` asks for."""
-        if max_tokens < 1:
-            raise LLMError("LLM_INVALID_REQUEST", "max_tokens must be at least 1.", model_id=model_id)
-        chosen = model_id or self._model_id
-        text = self._body(system, prompt)
-        input_tokens = self._tokens(system) + self._tokens(prompt)
-        output_tokens = self._tokens(text)
-        self._calls.append(
-            LLMCall(
-                kind="complete",
-                model_id=chosen,
-                prompt=prompt,
-                system=system,
-                max_tokens=max_tokens,
-                temperature=temperature,
-                input_tokens=input_tokens,
-                output_tokens=output_tokens,
-            )
-        )
-        return LLMCompletion(
-            text=text,
-            model_id=chosen,
-            input_tokens=input_tokens,
-            output_tokens=output_tokens,
-            cost_estimate_usd=None,
-            stop_reason="end_turn",
-        )
-
-    def embed(self, texts: Sequence[str], *, model_id: str | None = None) -> tuple[tuple[float, ...], ...]:
-        """Hash each text's words into buckets and normalise, so shared vocabulary means proximity.
-
-        A text with no content word in it gets the zero vector, whose cosine similarity to
-        everything is 0 - which is what "nothing to match on" should mean, and is the one case
-        where this client returns something that is not unit length.
-        """
-        chosen = model_id or self._model_id
-        vectors: list[tuple[float, ...]] = []
-        for text in texts:
-            buckets = [0.0] * self._dimensions
-            for word, count in Counter(_tokenise(text)).items():
-                digest = hashlib.blake2b(word.encode("utf-8"), digest_size=8).digest()
-                index = int.from_bytes(digest[:4], "big") % self._dimensions
-                # The sign bit spreads collisions in both directions, so two unrelated words that
-                # land in one bucket are as likely to cancel as to reinforce.
-                sign = 1.0 if digest[4] & 1 else -1.0
-                # Log term frequency: a word said ten times is more evidence than a word said once,
-                # but not ten times as much - which keeps a long chunk from drowning a short one
-                # that is actually about the question.
-                buckets[index] += sign * (1.0 + math.log(count))
-            norm = math.sqrt(math.fsum(value * value for value in buckets))
-            vectors.append(tuple(value / norm for value in buckets) if norm else tuple(buckets))
-        self._calls.append(
-            LLMCall(
-                kind="embed",
-                model_id=chosen,
-                texts=tuple(texts),
-                input_tokens=sum(self._tokens(text) for text in texts),
-            )
-        )
-        return tuple(vectors)
-
-    def count_tokens(self, text: str, *, model_id: str | None = None) -> int:
-        """The same approximation `FakeLLMClient` uses, so both fakes measure the same thing."""
-        chosen = model_id or self._model_id
-        counted = self._tokens(text)
-        self._calls.append(LLMCall(kind="count_tokens", model_id=chosen, input_tokens=counted))
-        return counted
-
-    @staticmethod
-    def _tokens(text: str) -> int:
-        return -(-len(text) // APPROX_CHARS_PER_TOKEN)
-
-    # -- reading the prompt back, so the answer can come out of it ----------
-    def _body(self, system: str, user: str) -> str:
-        if self._mode is GroundedFakeMode.MALFORMED:
-            return "Certainly! Here is the answer you asked for, in prose rather than in JSON."
-        shape = _prompt_shape(system, user)
-        if shape == "judge":
-            return self._judge()
-        if shape == "copy":
-            return self._copy(user)
-        if shape == "evidence":
-            return self._root_cause(user)
-        return self._answer(user)
-
-    def _judge(self) -> str:
-        failing = self._mode is GroundedFakeMode.FAILING_JUDGE
-        return json.dumps(
-            {
-                "score": 0.10 if failing else 1.0,
-                "agrees": not failing,
-                "supported": 0 if failing else 3,
-                "unsupported": 3 if failing else 0,
-                "unsupported_claims": ["the text says something its source does not"] if failing else [],
-                "contradictions": [],
-                "missing": [],
-                "conflicting": [],
-                "categories": [],
-                "failures": [{"rule": "claims", "detail": "an invented figure"}] if failing else [],
-                "reason": "a fake judge, returning the verdict the test asked for",
-            }
-        )
-
-    def _answer(self, user: str) -> str:
-        extracts = _numbered_extracts(user)
-        if self._mode is GroundedFakeMode.REFUSING or not extracts:
-            return json.dumps({"answer": _refusal_sentence(user), "refused": True, "citations": []})
-        number, text = extracts[0]
-        sentence = _first_sentence(text)
-        answer = sentence
-        if self._mode is GroundedFakeMode.PII:
-            answer = f"{sentence} {_FAKE_PII}"
-        elif self._mode is GroundedFakeMode.BANNED:
-            answer = f"{sentence} {_FAKE_BANNED}"
-        elif self._mode is GroundedFakeMode.OVERLONG:
-            answer = " ".join([sentence] * 400)
-        citations = [{"chunk": number, "quote": " ".join(sentence.split()[:25])}]
-        if self._mode is GroundedFakeMode.UNGROUNDED:
-            citations = [{"chunk": len(extracts) + 99, "quote": "a quote from an extract nobody supplied"}]
-        return json.dumps({"answer": answer, "refused": False, "citations": citations})
-
-    def _root_cause(self, user: str) -> str:
-        ids = _evidence_ids(user)
-        refs = [_FAKE_UNGROUNDED_REF] if self._mode is GroundedFakeMode.UNGROUNDED else ids[:2] or ["r1"]
-        cause = "These rows share the strongest reason the model weighted, and the complaints echo it."
-        if self._mode is GroundedFakeMode.PII:
-            cause = f"{cause} {_FAKE_PII}"
-        elif self._mode is GroundedFakeMode.OVERLONG:
-            cause = " ".join([cause] * 400)
-        return json.dumps(
-            {
-                "headline": "One reason dominates this segment and the complaints agree with it",
-                "root_causes": [
-                    {"cause": cause, "evidence_refs": refs, "confidence": "medium" if ids else "low"}
-                ],
-                "recommended_actions": ["Route these rows to the team that owns the strongest reason."],
-                "caveats": ["The model found association, not cause, and this segment is not a trial."],
-            }
-        )
-
-    def _copy(self, user: str) -> str:
-        fields = _allowed_fields(user)
-        labels = _variant_labels(user)
-        opener = "{{" + fields[0] + "}}" if fields else "there"
-        required = _required_line(user)
-        variants: list[dict[str, str]] = []
-        for index, label in enumerate(labels):
-            body = f"Hi {opener}, we would be glad to have you back. Reply to this message to talk it over."
-            if index:
-                body = f"Hi {opener}, your line is ready whenever you are. Reply and we will pick it up."
-            if self._mode is GroundedFakeMode.BANNED:
-                body = f"{body} {_FAKE_BANNED}"
-            elif self._mode is GroundedFakeMode.PII:
-                body = f"{body} {_FAKE_PII}"
-            elif self._mode is GroundedFakeMode.OVERLONG:
-                body = " ".join([body] * 60)
-            elif self._mode is GroundedFakeMode.UNGROUNDED:
-                body = f"{body} Use code {{{{secret_offer_code}}}} before it expires."
-            whole = f"{body}\n{required}"
-            variants.append(
-                {"label": label, "subject": "A word about your connection", "text": whole, "body": whole}
-            )
-        return json.dumps({"variants": variants})
 
 
 _EXTRACT: Final[re.Pattern[str]] = re.compile(
@@ -856,7 +799,7 @@ class BedrockLLMClient:
 
         `count_tokens` is not offered for every model, and a boto3 without the operation raises
         rather than answering. Neither is worth failing a run over, and the fallback is the same
-        `APPROX_CHARS_PER_TOKEN` ratio both fakes use, so a caller that compares them compares
+        `APPROX_CHARS_PER_TOKEN` ratio the fake uses in every mode, so a caller that compares them compares
         like with like.
         """
         chosen = model_id or self._model_id
@@ -874,21 +817,21 @@ class BedrockLLMClient:
 def build_client(
     config: LlmConfig,
     *,
-    fake_mode: GroundedFakeMode = GroundedFakeMode.GROUNDED,
+    fake_mode: FakeLLMMode = FakeLLMMode.GROUNDED,
     profile: str | None = None,
 ) -> LLMClient:
     """The client `generative.llm.backend` names.
 
-    The fake backend gets `GroundedFakeLLMClient` rather than `FakeLLMClient`: a generative flow
-    retrieves, cites and grounds, and a digest can do none of those (DEC-214). `fake_mode` is read
-    only when the backend is the fake, so a caller may pass one unconditionally without accidentally
-    asking Bedrock to misbehave. `profile` is read only when it is Bedrock, for the same reason: it
-    names an AWS CLI profile on this machine, and `None` is boto3's default chain.
+    The fake backend gets `FakeLLMClient` in `GROUNDED` mode rather than the `DIGEST` default: a
+    generative flow retrieves, cites and grounds, and a digest can do none of those (DEC-214).
+    `fake_mode` is read only when the backend is the fake, so a caller may pass one unconditionally
+    without accidentally asking Bedrock to misbehave. `profile` is read only when it is Bedrock, for
+    the same reason: it names an AWS CLI profile on this machine, and `None` is boto3's default chain.
     """
     from engine.config import LlmBackend
 
     if config.backend is LlmBackend.FAKE:
-        return GroundedFakeLLMClient(mode=fake_mode)
+        return FakeLLMClient(mode=fake_mode)
     return BedrockLLMClient(
         region=config.region,
         model_id=config.generation_model,
