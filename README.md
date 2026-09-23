@@ -676,3 +676,6 @@ observability and the two documents. The milestone table higher up this file sto
 is Phase 1's table; this paragraph is Phase 4a's.
 
 <!-- ---- END PHASE-4A ---- -->
+
+<!-- ---- PHASE-3B (uplift) — append only below this line ---- -->
+<!-- ---- END PHASE-3B ---- -->

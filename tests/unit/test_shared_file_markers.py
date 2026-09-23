@@ -5,9 +5,10 @@ editing above it, which works only while the blocks are there: a hurried merge t
 sends the next branch's code somewhere nobody agreed on, and nothing would notice until the
 three-way merge this whole protocol exists to keep boring.
 
-So the blocks are checked, not remembered. Each file must carry all three, exactly once, opened
-before it is closed, and in the order Phase 2, Phase 3a, Phase 4a - so "append at the end of your
-block" means the same place to every reader.
+So the blocks are checked, not remembered. Each file must carry every block, exactly once, opened
+before it is closed, and in the order Phase 2, Phase 3a, Phase 4a, Phase 3b - so "append at the end
+of your block" means the same place to every reader. Phase 3b (uplift) started after the other three
+had merged, so its block comes last in every file rather than in phase-number order (DEC-600).
 
 `docs/API.md` is in §4's list and deliberately absent from this one: it is generated and `make
 lint` fails on a hand-edit (DEC-014), so a block there would be deleted by the next `make
@@ -42,7 +43,7 @@ SHARED_FILES: Final[tuple[str, ...]] = (
 Phase 3a outright, and a file with one owner needs no blocks. The same goes for
 `engine/onboarding/specs.py`, which belongs to Phase 2."""
 
-PHASES: Final[tuple[str, ...]] = ("PHASE-2", "PHASE-3A", "PHASE-4A")
+PHASES: Final[tuple[str, ...]] = ("PHASE-2", "PHASE-3A", "PHASE-4A", "PHASE-3B")
 
 OPEN: Final[str] = "---- {phase} ("
 CLOSE: Final[str] = "---- END {phase} ----"

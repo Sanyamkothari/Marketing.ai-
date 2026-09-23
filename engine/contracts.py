@@ -1461,3 +1461,6 @@ def load_artefact(filename: str, payload: str | bytes) -> BaseModel:
 # rule (PARALLEL_WORK_PROTOCOL.md section 4) is about not disturbing another branch's code; two new
 # names and one new registry row add nothing above them that was not already there.
 # ---- END PHASE-4A ----
+
+# ---- PHASE-3B (uplift) — append only below this line ----
+# ---- END PHASE-3B ----
