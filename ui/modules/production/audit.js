@@ -4,6 +4,12 @@
 // `models.`), object type and id, outcome, and a date range - so what is on screen, what the CSV
 // holds and what a retained export covers are one query, never three that drift (DEC-794).
 //
+// v1: three filters a person understands come first - Who (people by name; it sends `actor_id`),
+// What (plain families, each the same action prefix the API filters by) and the date range - and the
+// rest sit behind "More filters". The query sent is unchanged. The table reads When / Who / What /
+// Result; the raw action stays in the row (small, monospace) and everything else - object, request
+// id, details - is in the row's own disclosure. Runs of identical failures collapse into one row.
+//
 // Dates are whole UTC days: "from" is that day's 00:00Z (inclusive) and "to" is the *next* day's
 // 00:00Z, because the API's `until` is exclusive and a person who picks "to 23 Sep" means to include
 // the 23rd. UTC, not the browser's zone, because the log is stored and exported in UTC and an Admin
@@ -11,25 +17,113 @@
 //
 // Pages of 50, newest first, with the total the API counts across every page; the CSV is a link the
 // signed-in download listener fetches with the token (DEC-793), so the audited read is attributed to
-// the Admin who took it. "Write a retained export" is `POST /audit/exports` over the same window
+// the Admin who took it. "Save a tamper-proof copy" is `POST /audit/exports` over the same window
 // (S3 Object Lock in COMPLIANCE mode, or JSON lines under the data directory locally, DEC-715): the
 // screen shows where it was written and its SHA-256, which is what a reviewer checks it against.
 //
 // Nothing here renders a data value: the log never holds one (DEC-705), and `details` has a closed
 // set of keys, each shown as `key=value` exactly as recorded.
 
-import { EM_DASH, errorBox, esc, fmtInt, fmtStamp } from "../../dom.js";
+import { EM_DASH, errorBox, esc, fmtInt, fmtStamp, present, techDetails } from "../../dom.js";
 import { auditCsvUrl, getAuditEvents, postAuditExport } from "./api.js";
+import {
+  knownPeople,
+  loadPeople,
+  personName,
+  refusal,
+  rowsTable,
+  selectField,
+  statusPill,
+  textField,
+} from "./controls.js";
 import { reasonFor } from "./session.js";
-import { adminHead, tabsHtml } from "./users.js";
+import { adminHead } from "./users.js";
 
 export const PAGE_SIZE = 50;
 
 const OUTCOMES = ["success", "denied", "failed"];
-const OUTCOME_CLASS = { success: "ok", denied: "warn", failed: "bad" };
+const OUTCOME_WORDS = { success: "Done", denied: "Refused", failed: "Failed" };
+
+/** "What": plain families, each exactly the action prefix `GET /audit/events` filters by. */
+export const FAMILIES = [
+  ["auth.", "Sign-ins and sign-outs"],
+  ["users.", "People and roles"],
+  ["models.", "Model approvals"],
+  ["runs.", "Training, scoring and downloads"],
+  ["uplift.", "Uplift models and campaign results"],
+  ["datasets.", "Datasets"],
+  ["sources.", "Source tables"],
+  ["mappings.", "Column mappings"],
+  ["onboarding_specs.", "Recipes"],
+  ["clients.", "Clients"],
+  ["schedules.", "Schedules"],
+  ["monitoring.", "Alerts and outcomes"],
+  ["privacy.", "Privacy requests"],
+  ["copy.", "Campaign copy"],
+  ["indexes.", "AI assistant"],
+  ["pilot.", "Reports and feedback"],
+  ["settings.", "Settings"],
+  ["audit.", "Use of the audit log"],
+];
+
+/** Plain words for the actions people look for most; any other reads "<family>: <verb>". */
+const ACTION_WORDS = {
+  "auth.login": "Signed in",
+  "auth.logout": "Signed out",
+  "users.create": "Added a person",
+  "users.update": "Changed a person",
+  "users.password_change": "Changed a password",
+  "models.approve": "Approved a model",
+  "models.reject": "Rejected a model",
+  "models.promote": "Put a model in use",
+  "runs.create": "Started a run",
+  "runs.cancel": "Cancelled a run",
+  "runs.scores_download": "Downloaded scored customers",
+  "runs.artefact_download": "Opened a run file",
+  "schedules.create": "Created a schedule",
+  "schedules.update": "Changed a schedule",
+  "schedules.delete": "Deleted a schedule",
+  "schedules.fire": "Ran a schedule",
+  "schedules.missed": "Recorded missed runs",
+  "monitoring.alert_acknowledge": "Took on an alert",
+  "monitoring.outcomes_upload": "Added campaign outcomes",
+  "privacy.erasure": "Erased a customer",
+  "privacy.erasure.complete": "Finished erasing a customer",
+  "privacy.access_request": "Exported a customer's data",
+  "privacy.consent.import": "Imported consent records",
+  "privacy.consent.lookup": "Looked up a customer's consent",
+  "privacy.retention.apply": "Deleted data past its keep-until date",
+  "copy.approve": "Approved campaign copy",
+  "copy.generate": "Wrote campaign copy",
+  "audit.download": "Downloaded the audit log",
+  "audit.export": "Saved a copy of the audit log",
+  "settings.aws_connection.update": "Changed the AI service connection",
+  "pilot.feedback_export": "Downloaded all feedback",
+};
+
+const FAMILY_WORDS = Object.fromEntries(FAMILIES);
+
+/** The plain label of an action, e.g. `users.update` → "Changed a person". */
+export function actionWords(action) {
+  if (!action) return EM_DASH;
+  if (ACTION_WORDS[action]) return ACTION_WORDS[action];
+  const cut = action.indexOf(".");
+  const family = cut > 0 ? FAMILY_WORDS[action.slice(0, cut + 1)] : null;
+  const verb = (cut > 0 ? action.slice(cut + 1) : action).replace(/[._]/g, " ");
+  return family ? `${family}: ${verb}` : verb;
+}
 
 /** The form's fields; `from`/`to` are `YYYY-MM-DD` as a date input gives them. */
-const emptyForm = () => ({ actor_id: "", action: "", object_type: "", object_id: "", outcome: "", from: "", to: "" });
+const emptyForm = () => ({
+  actor_id: "",
+  family: "",
+  action: "",
+  object_type: "",
+  object_id: "",
+  outcome: "",
+  from: "",
+  to: "",
+});
 
 const state = {
   form: emptyForm(),
@@ -60,11 +154,15 @@ export function dayAfter(day) {
   return at.toISOString().replace(".000Z", "Z");
 }
 
-/** The screen's form as `GET /audit/events` filters: trimmed, empty ones dropped, days made instants. */
+/**
+ * The screen's form as `GET /audit/events` filters: trimmed, empty ones dropped, days made instants.
+ * The typed action (More filters) wins over the "What" family, which is the same prefix filter.
+ */
 export function filtersOf(form) {
   const filters = {};
+  const merged = { ...form, action: (form.action || "").trim() || (form.family || "").trim() };
   for (const key of ["actor_id", "action", "object_type", "object_id", "outcome"]) {
-    const value = (form[key] || "").trim();
+    const value = (merged[key] || "").trim();
     if (value) filters[key] = value;
   }
   const since = dayStart(form.from);
@@ -79,104 +177,167 @@ const detailsText = (details) =>
     .map(([key, value]) => `${key}=${value === null ? EM_DASH : value}`)
     .join(" · ");
 
-function eventRow(event) {
-  const object = [event.object_type, event.object_id].filter(Boolean).join(" · ");
-  return `<tr>
-    <td>${esc(fmtStamp(event.occurred_at))}</td>
-    <td><span class="pb-mono">${esc(event.actor_id)}</span><div class="pb-small">${esc(event.actor_kind)}</div></td>
-    <td><span class="pb-mono">${esc(event.action)}</span></td>
-    <td>${object ? `<span class="pb-mono">${esc(object)}</span>` : EM_DASH}</td>
-    <td><span class="pill ${OUTCOME_CLASS[event.outcome] || "warn"}">${esc(event.outcome)}</span></td>
-    <td>${event.request_id ? `<span class="pb-mono">${esc(event.request_id)}</span>` : EM_DASH}</td>
-    <td>${Object.keys(event.details || {}).length ? `<span class="pb-mono">${esc(detailsText(event.details))}</span>` : EM_DASH}</td>
-  </tr>`;
+/** Who did it, as a name: a signed-in person, "someone not signed in", or Marketing AI itself. */
+function who(event) {
+  if (event.actor_kind === "anonymous") return "Someone not signed in";
+  const name = personName(event.actor_id);
+  return name === "you" ? "You" : name;
 }
 
-const input = (key, label, placeholder = "") =>
-  `<label class="pb-field"><span class="sub">${esc(label)}</span><input class="pb-input" name="${key}" value="${esc(
-    state.form[key],
-  )}" placeholder="${esc(placeholder)}" autocomplete="off" spellcheck="false"></label>`;
+/** Collapse runs of the same failure by the same actor (a script retrying a bad password, say). */
+export function collapseRepeats(events) {
+  const out = [];
+  for (const event of events) {
+    const prev = out[out.length - 1];
+    const same =
+      prev &&
+      event.outcome !== "success" &&
+      prev.event.outcome === event.outcome &&
+      prev.event.action === event.action &&
+      prev.event.actor_id === event.actor_id &&
+      detailsText(prev.event.details) === detailsText(event.details);
+    if (same) prev.count += 1;
+    else out.push({ event, count: 1 });
+  }
+  return out;
+}
+
+function eventRow({ event, count }) {
+  const object = [event.object_type, event.object_id].filter(Boolean).join(" · ");
+  const more = techDetails(
+    [
+      ["Action", event.action],
+      ["Object", object],
+      ["Who (id)", `${event.actor_id} (${event.actor_kind})`],
+      ["Request", event.request_id],
+      ["Details", Object.keys(event.details || {}).length ? detailsText(event.details) : null],
+      ["Event", event.event_id],
+    ],
+    "Details",
+  );
+  const repeated = count > 1 ? ` <span class="pb-small">× ${esc(fmtInt(count))} in a row</span>` : "";
+  return {
+    attrs: `data-event="${esc(event.event_id || "")}"`,
+    cells: [
+      esc(fmtStamp(event.occurred_at)),
+      esc(who(event)),
+      `${esc(actionWords(event.action))}${repeated}<div class="pb-small mono">${esc(event.action)}</div>${more}`,
+      statusPill(event.outcome),
+    ],
+  };
+}
+
+function whoField() {
+  const people = knownPeople();
+  if (!people) return textField("actor_id", "Who", { value: state.form.actor_id, placeholder: "a user id" });
+  const options = [["", "Anyone"], ...people];
+  if (state.form.actor_id && !people.some(([id]) => id === state.form.actor_id)) {
+    options.push([state.form.actor_id, state.form.actor_id]);
+  }
+  return selectField("actor_id", "Who", options, { value: state.form.actor_id });
+}
 
 function filterCard() {
   const f = state.form;
-  return `<section class="card"><h3>Filters</h3><form id="pb-audit-filters" novalidate>
+  const moreOpen = Boolean(f.action || f.object_type || f.object_id || f.outcome);
+  return `<section class="card"><h3>Find events</h3><div class="card-body"><form id="pb-audit-filters" class="pb-stack" novalidate>
     <div class="pb-filters">
-      ${input("actor_id", "Actor (user id)")}
-      ${input("action", "Action", "e.g. models.approve, or models. for all")}
-      ${input("object_type", "Object type", "e.g. model, run, user")}
-      ${input("object_id", "Object id")}
-      <label class="pb-field"><span class="sub">Outcome</span><select class="pb-input" name="outcome"><option value="">Any</option>${OUTCOMES.map(
-        (o) => `<option value="${o}"${f.outcome === o ? " selected" : ""}>${o}</option>`,
-      ).join("")}</select></label>
-      <label class="pb-field"><span class="sub">From (UTC day)</span><input class="pb-input" type="date" name="from" value="${esc(f.from)}"></label>
-      <label class="pb-field"><span class="sub">To (UTC day, included)</span><input class="pb-input" type="date" name="to" value="${esc(f.to)}"></label>
+      ${whoField()}
+      ${selectField("family", "What", [["", "Anything"], ...FAMILIES], { value: f.family })}
+      <label class="field pb-field"><span class="sub">From (UTC day)</span><span class="control"><input type="date" name="from" value="${esc(
+        f.from,
+      )}"></span></label>
+      <label class="field pb-field"><span class="sub">To (UTC day, included)</span><span class="control"><input type="date" name="to" value="${esc(
+        f.to,
+      )}"></span></label>
     </div>
-    <div class="actions" style="margin:0 20px 18px"><button type="submit" class="run" id="pb-audit-apply">Apply filters</button><button type="button" class="linkbtn" id="pb-audit-clear">Clear</button></div>
-  </form></section>`;
+    <details class="adv"${moreOpen ? " open" : ""}><summary>More filters</summary><div class="pb-adv-body"><div class="pb-filters">
+      ${textField("action", "Exact action", { value: f.action, placeholder: "e.g. models.approve, or models. for all" })}
+      ${textField("object_type", "Object type", { value: f.object_type, placeholder: "e.g. model, run, user" })}
+      ${textField("object_id", "Object id", { value: f.object_id })}
+      ${selectField("outcome", "Result", [["", "Any"], ...OUTCOMES.map((o) => [o, OUTCOME_WORDS[o]])], { value: f.outcome })}
+    </div></div></details>
+    <div class="pb-form-actions"><button type="submit" class="btn primary" id="pb-audit-apply">Search</button><button type="button" class="btn quiet" id="pb-audit-clear">Clear</button></div>
+  </form></div></section>`;
 }
 
-function exportLine(filters) {
+function exportActions(filters) {
   const csvRefused = reasonFor("GET", "/audit/events.csv");
   const exportRefused = reasonFor("POST", "/audit/exports");
   const csv = csvRefused
     ? `<span class="pb-small">${esc(csvRefused)}</span>`
-    : `<a class="linkbtn" id="pb-audit-csv" href="${esc(auditCsvUrl(filters))}" download="audit_events.csv">Download these events (CSV)</a>`;
+    : `<a class="btn secondary sm" id="pb-audit-csv" href="${esc(auditCsvUrl(filters))}" download="audit_events.csv"><span aria-hidden="true">⤓</span> Download CSV</a>`;
   const retained = exportRefused
     ? `<span class="pb-small">${esc(exportRefused)}</span>`
-    : `<button type="button" class="linkbtn" id="pb-audit-export" title="Covers the date range and the action filter: what POST /audit/exports accepts."${state.exporting ? " disabled" : ""}>${
-        state.exporting ? "Writing export…" : "Write a retained export"
-      }</button>`;
-  return `<div class="pb-row-actions">${csv}${retained}</div>`;
+    : `<button type="button" class="btn secondary sm" id="pb-audit-export"${state.exporting ? " disabled" : ""}>${
+        state.exporting ? "Saving…" : "Save a tamper-proof copy"
+      }</button><span class="pb-hint">Saves these dates and this "What" as a copy nobody can change, for compliance.</span>`;
+  const open = Boolean(state.exportResult || state.exportError || state.exporting);
+  return `<div class="pb-row-actions">${csv}<details class="pb-more-actions"${open ? " open" : ""}><summary class="btn quiet sm">More actions</summary><div class="pb-row-actions">${retained}</div></details></div>`;
 }
 
 function exportOutcome() {
   if (state.exportError) return errorBox(state.exportError);
   const r = state.exportResult;
   if (!r) return "";
-  return `<div class="pb-ok" role="status">Wrote ${esc(fmtInt(r.event_count))} event${r.event_count === 1 ? "" : "s"} to <span class="pb-mono">${esc(
-    r.location,
-  )}</span>${r.retain_until ? `, retained until ${esc(fmtStamp(r.retain_until))}` : ""}. SHA-256 <span class="pb-mono">${esc(r.sha256)}</span></div>`;
+  return `<div class="pb-ok" role="status">Saved a copy of ${esc(fmtInt(r.event_count))} event${r.event_count === 1 ? "" : "s"}${
+    r.retain_until ? `, kept until ${esc(fmtStamp(r.retain_until))}` : ""
+  }.${techDetails([
+    ["Where", r.location],
+    ["SHA-256", r.sha256],
+  ])}</div>`;
 }
 
 function resultsCard(filters) {
-  if (state.loadError) return `<section class="card"><h3>Events</h3>${errorBox(state.loadError)}</section>`;
-  if (!state.page) return `<section class="card"><h3>Events</h3><p class="loading" style="padding:16px 20px">Loading…</p></section>`;
+  if (state.loadError) {
+    return `<section class="card"><h3>Events</h3><div class="card-body">${errorBox(state.loadError, {
+      title: "We could not load the audit log.",
+      retry: true,
+    })}</div></section>`;
+  }
+  if (!state.page) return `<section class="card"><h3>Events</h3><p class="loading pb-pad">Loading…</p></section>`;
   const { events, total, offset } = state.page;
   const first = total ? offset + 1 : 0;
   const last = offset + events.length;
   const table = events.length
-    ? `<div class="tbl-wrap"><table>
-        <thead><tr><th>When</th><th>Actor</th><th>Action</th><th>Object</th><th>Outcome</th><th>Request</th><th>Details</th></tr></thead>
-        <tbody>${events.map(eventRow).join("")}</tbody></table></div>`
-    : `<p class="empty">No event matches these filters.</p>`;
-  return `<section class="card"><h3>Events · ${esc(fmtInt(total))}</h3>
-    <div class="kv" style="border-top:0;flex-wrap:wrap">${exportLine(filters)}</div>
-    ${exportOutcome() ? `<div style="padding:0 20px 12px">${exportOutcome()}</div>` : ""}
+    ? rowsTable(
+        [{ label: "When" }, { label: "Who" }, { label: "What" }, { label: "Result" }],
+        collapseRepeats(events).map(eventRow),
+        { cls: "pb-audit" },
+      )
+    : `<div class="empty-state"><p class="es-t">No event matches these filters.</p><p>Widen the dates, or choose "Anyone" and "Anything".</p></div>`;
+  const outcome = exportOutcome();
+  return `<section class="card"><h3>Events · ${esc(fmtInt(total))} <span class="sort-note">(newest first)</span></h3>
+    <div class="card-body">${exportActions(filters)}${outcome}</div>
     ${table}
     <div class="pb-pager"><span>${total ? `${esc(fmtInt(first))}–${esc(fmtInt(last))} of ${esc(fmtInt(total))}, newest first` : EM_DASH}</span>
-      <span class="pb-row-actions"><button type="button" id="pb-audit-prev"${offset <= 0 || state.loading ? " disabled" : ""}>‹ Newer</button><button type="button" id="pb-audit-next"${
+      <span class="pb-row-actions"><button type="button" class="btn secondary sm" id="pb-audit-prev"${
+        offset <= 0 || state.loading ? " disabled" : ""
+      }>‹ Newer</button><button type="button" class="btn secondary sm" id="pb-audit-next"${
         last >= total || state.loading ? " disabled" : ""
       }>Older ›</button></span></div>
   </section>`;
 }
 
 export function auditHtml() {
+  const refused = reasonFor("GET", "/audit/events");
   const head = adminHead(
     "Audit log",
-    "Every change, every sign-in and every download of customer rows, append-only. Filter dates are UTC days; times show in your own zone.",
+    "A permanent record of every sign-in, change and download. It cannot be edited. Times show in your own zone.",
   );
-  const refused = reasonFor("GET", "/audit/events");
-  if (refused) {
-    return `<main class="screen">${head}${tabsHtml("audit")}<div class="apierr" role="alert"><b>ROLE_REQUIRED</b>${esc(refused)}</div></main>`;
-  }
+  if (refused) return `<main class="screen pb-screen">${head}${refusal(refused)}</main>`;
   const filters = filtersOf(state.form);
-  return `<main class="screen">${head}${tabsHtml("audit")}<div class="stack">${filterCard()}${resultsCard(filters)}</div></main>`;
+  return `<main class="screen pb-screen">${head}<div class="stack">${filterCard()}${resultsCard(filters)}</div></main>`;
 }
 
 export async function loadEvents() {
   state.loading = true;
   try {
-    state.page = await getAuditEvents(filtersOf(state.form), PAGE_SIZE, state.offset);
+    const [page] = await Promise.all([
+      getAuditEvents(filtersOf(state.form), PAGE_SIZE, state.offset),
+      knownPeople() ? null : loadPeople(),
+    ]);
+    state.page = page;
     state.loadError = null;
   } catch (error) {
     state.loadError = error;
@@ -188,7 +349,7 @@ function readForm(form) {
   const next = emptyForm();
   for (const key of Object.keys(next)) {
     const field = form.elements.namedItem(key);
-    if (field) next[key] = field.value;
+    if (field && present(field.value)) next[key] = field.value;
   }
   return next;
 }
@@ -278,4 +439,3 @@ export function _resetAuditForTests() {
     exportError: null,
   });
 }
-

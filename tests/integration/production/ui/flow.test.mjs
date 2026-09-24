@@ -89,6 +89,10 @@ test("the Users screen lists everyone, and the last Admin cannot be disabled", a
   assert.match($('tr[data-row] td').textContent, /admin-person/);
   assert.match($("tr[data-row]").textContent, /\(you\)/);
   $('tr[data-row] [data-toggle="disable"]').click();
+  await until(() => $('tr[data-row] [data-toggle="disable"][data-confirm]'), 2000, "the confirm step");
+  assert.equal(calls.filter((c) => c.method === "PATCH").length, 0, "the first click only asks");
+  assert.match($("tr[data-row]").textContent, /Disable admin-person and sign them out\?/);
+  $('tr[data-row] [data-toggle="disable"][data-confirm]').click();
   await until(() => $(".apierr"), 2000, "the LAST_ADMIN refusal");
   assert.match($(".apierr").textContent, /This is the last active Admin\./);
   const patch = calls.filter((c) => c.method === "PATCH").pop();

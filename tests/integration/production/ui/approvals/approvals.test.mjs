@@ -53,22 +53,32 @@ test("the Approver sees the head-to-head, with the metric the challenger is wors
     if (row.better) assert.equal(tr.querySelector("[data-better]").getAttribute("data-better"), row.better);
   }
   assert.ok($("tr.pb-worse"), "the metric the champion wins on is highlighted");
-  assert.match(text(), new RegExp(`${item.head_to_head.rows_evaluated} held-out rows, both models`));
-  assert.match(text(), new RegExp(`started by ${item.trained_by}`));
+  const rows = Number(item.head_to_head.rows_evaluated).toLocaleString("en-US");
+  assert.match(text(), new RegExp(`Compared with the model in use on the same ${rows} customers`));
+  assert.match(text(), /Trained by another user on /, "a person by name, never by id");
+  assert.equal(text().includes(`started by ${item.trained_by}`), false);
+  const card = $(`[data-approval="${modelId}"]`);
+  assert.match([...card.querySelectorAll("details.tech")].map((d) => d.textContent).join(" "), new RegExp(item.trained_by), "the id under Technical details");
+  const main = item.head_to_head.metrics.find((row) => row.primary);
+  assert.equal(card.querySelector("tr[data-metric]").dataset.metric, main.metric, "the deciding measure first");
+  assert.match(card.querySelector("tr[data-metric]").textContent, /Main measure/);
+  assert.ok(card.querySelector("details.pb-measures tr[data-metric]"), "the rest behind Show all measures");
+  const screen = await import("../../../../../ui/modules/production/approvals.js");
+  assert.equal(screen.approvalsCount(), "1", "the count the top bar's badge shows");
 });
 
 test("approving needs a reason, and then the challenger becomes champion", async () => {
   const form = $(".pb-decide");
   submit(w, form);
-  await until(() => /REASON_REQUIRED/.test(text()), 2000, "the reason is asked for");
+  await until(() => $('[data-code="REASON_REQUIRED"]'), 2000, "the reason is asked for");
   assert.equal(last("POST", `/models/${modelId}/approve`), undefined, "nothing sent without a reason");
   setField(w, $(".pb-decide"), "reason", "beats the champion on ROC-AUC");
   submit(w, $(".pb-decide"));
-  await until(() => /approved: it is now the champion/.test(text()), 3000, "the confirmation");
+  await until(() => /was approved: it is now the model in use/.test(text()), 3000, "the confirmation");
   const sent = last("POST", `/models/${modelId}/approve`);
   assert.equal(sent.body.reason, "beats the champion on ROC-AUC");
   assert.equal(sent.auth, "Bearer tok-approver");
-  assert.match(text(), /No challenger is waiting for approval/);
+  assert.match(text(), /No model is waiting for approval/);
 });
 
 test("the trainer sees why they cannot decide, and has no button to press", async () => {
