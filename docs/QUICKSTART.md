@@ -40,9 +40,12 @@ time.
 **Download the code** (once):
 
 ```bash
-git clone https://github.com/Sanyamkothari/Marketing.ai-.git
+git clone --branch main https://github.com/Sanyamkothari/Marketing.ai-.git
 cd Marketing.ai-
 ```
+
+(`--branch main` matters: it fetches the finished product, whatever the repository's default branch
+is set to.)
 
 **Install** (once, about 2 to 15 minutes depending on your internet):
 
