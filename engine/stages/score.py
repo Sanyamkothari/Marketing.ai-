@@ -95,7 +95,7 @@ from engine.utils.logging import get_logger, log_stage
 from engine.utils.text import humanise_count
 
 if TYPE_CHECKING:
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     import pandas as pd
 
@@ -480,7 +480,28 @@ def _drift(
         )
         return None
     baseline = storage.read_model(key, DriftBaseline)
-    return compute_drift(baseline, prepared, config, run_id=run_id)
+    return compute_drift(
+        baseline, prepared, config, run_id=run_id, not_features=not_drift_features(version, storage=storage)
+    )
+
+
+def not_drift_features(version: ModelVersion, *, storage: Storage) -> frozenset[str]:
+    """The label and key columns of `version`, which a drift comparison must never read (DEC-957).
+
+    Read from the version's `schema.json`, the one record of the target the model was *trained*
+    with: on a built dataset that is the dataset's label, not `config.target.column`. Baselines
+    written before DEC-957 list that label as a feature, and it is empty in every scored file, so
+    left in it would report the largest PSI the metric can produce on every scoring run. A version
+    whose schema cannot be found excludes nothing; the baseline's own exclusions still apply.
+    """
+    from engine.config import key_columns
+    from engine.contracts import FeatureSchema
+
+    if not storage.exists(version.schema_key):
+        return frozenset()
+    schema = storage.read_model(version.schema_key, FeatureSchema)
+    target = () if schema.target is None else (schema.target,)
+    return frozenset((*target, *key_columns(schema.primary_key)))
 
 
 def _unmeasurable_drift(baseline: DriftBaseline, frame: pd.DataFrame) -> str | None:
@@ -514,6 +535,7 @@ def compute_drift(
     config: UseCaseConfig,
     *,
     run_id: str,
+    not_features: Iterable[str] = (),
 ) -> DriftReport | None:
     """Population stability index per feature against the training baseline (plan §6.3, predict).
 
@@ -549,12 +571,21 @@ def compute_drift(
     absence of data (DEC-051). The caller reports "drift not measured", which is exactly what it
     already does for a model version that stored no baseline at all; `_unmeasurable_drift` says
     which of the two it was, and the reason is logged at WARNING.
+
+    `not_features` are baseline entries that are skipped - the label and key columns
+    (`not_drift_features`). New baselines never list them; this is for the ones written before
+    DEC-957, which listed a built dataset's label and so reported it drifted on every scoring run.
     """
     from engine.contracts import DriftReport, FeatureDrift
     from engine.stages.register import _feature_shares
     from engine.utils.logging import get_logger
     from engine.utils.time import utc_now
 
+    skipped = frozenset(not_features)
+    if skipped & {feature.feature for feature in baseline.features}:
+        baseline = baseline.model_copy(
+            update={"features": tuple(f for f in baseline.features if f.feature not in skipped)}
+        )
     unmeasurable = _unmeasurable_drift(baseline, frame)
     if unmeasurable is not None:
         get_logger(__name__).warning(

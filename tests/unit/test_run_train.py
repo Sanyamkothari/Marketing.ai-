@@ -18,7 +18,7 @@ The real AutoGluon run lives in `tests/integration/test_train_flow.py`.
 from __future__ import annotations
 
 import hashlib
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
@@ -49,6 +49,7 @@ from engine.contracts import (
     DatasetProfile,
     DecileBin,
     DecileLift,
+    DriftBaseline,
     EvaluationReport,
     FairnessReport,
     FeatureImportance,
@@ -88,6 +89,7 @@ from engine.registry import LocalModelRegistry
 from engine.stages import evaluate, explain, ingest, prepare, register, train, validate
 from engine.stages.evaluate import EvaluationError
 from engine.stages.prepare import RowPlan
+from engine.stages.score import compute_drift
 from engine.stages.scorer import TrainError
 from engine.stages.train import TrainResult
 from engine.storage import LocalStorage, StorageError, run_key
@@ -861,6 +863,29 @@ def test_train_receives_the_recipe_built_from_the_prepared_feature_columns(
     assert recipe.target == TARGET
     assert recipe.primary_key == PRIMARY_KEY
     assert recipe.use_case_id == USE_CASE
+
+
+def test_a_datasets_own_label_is_in_neither_the_baseline_nor_the_scored_drift(
+    monkeypatch, resolved, storage, registry
+) -> None:
+    """A run on a built dataset trains on the dataset's label, not the template's target (DEC-957).
+
+    The template names `converted_30d`; the dataset names its label `converted_next_30d`. The
+    baseline used to reserve only the template's, so it summarised the label, and every scoring
+    file - where the label is empty - came back drifted on it at the largest PSI there is.
+    """
+    label = "converted_next_30d"
+    frame = make_frame().rename(columns={TARGET: label})
+    StageStubs(frame=frame).install(monkeypatch)
+    ctx = replace(make_context(resolved, storage, registry), target=label)
+
+    pipeline_for(storage, registry).run_train(ctx)
+
+    baseline = storage.read_model(run_key(RUN_ID, register.DRIFT_BASELINE_FILENAME), DriftBaseline)
+    assert [feature.feature for feature in baseline.features] == list(FEATURES)
+    scoring = frame.assign(**{label: None})
+    drift = compute_drift(baseline, scoring, resolved.config, run_id="r_20260922_0000cafe")
+    assert drift is not None and label not in {feature.feature for feature in drift.features}
 
 
 def test_evaluate_and_explain_both_read_the_test_split(stubs, resolved, storage, registry) -> None:

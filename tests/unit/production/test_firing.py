@@ -30,6 +30,7 @@ from engine.contracts import (
     FeatureDrift,
     JobSpec,
     ModelStatus,
+    PrepareReport,
     RunError,
     RunRecord,
     RunState,
@@ -413,6 +414,62 @@ def test_stable_data_raises_nothing(world: World) -> None:
     )
     assert report.reused_run_drift is True
     assert report.above_threshold is False
+
+
+def test_a_drift_json_that_measured_the_label_is_re_measured_without_it(world: World) -> None:
+    """A scoring run of a built dataset before DEC-957 measured the label, empty when scoring.
+
+    Reusing that `drift.json` would alert, and retrain under `on_drift`, on every firing. The check
+    re-measures the run's data instead, and the champion's baseline - which still lists the label,
+    as every baseline written before DEC-957 did - is compared without it.
+    """
+    run_id, champion_id = _scored(world, drifted=False)
+    champion = world.registry.get(champion_id)
+    legacy = world.storage.read_model(run_key(run_id, "drift.json"), DriftReport)
+    label = FeatureDrift(
+        feature="churn_next_60d",
+        psi=13.8155,
+        status=DriftStatus.DRIFTED,
+        null_rate_baseline=0,
+        null_rate_current=1,
+    )
+    world.storage.write_model(
+        run_key(run_id, "drift.json"),
+        legacy.model_copy(
+            update={
+                "features": (label, *legacy.features),
+                "max_psi": label.psi,
+                "drifted_features": (label.feature,),
+                "status": DriftStatus.DRIFTED,
+            }
+        ),
+    )
+    world.storage.write_model(
+        run_key(champion.run_id, "prepare.json"),
+        PrepareReport(
+            run_id=champion.run_id,
+            rows_in=1,
+            rows_out=1,
+            columns_in=1,
+            columns_out=1,
+            feature_columns=(),
+            dropped_columns=(),
+            row_removals=(),
+            transforms=(),
+            detail="nothing to replay",
+            prepared_at=datetime(2026, 6, 1, tzinfo=UTC),
+        ),
+    )
+
+    firing = ScheduleFirer(world.services()).fire(world.schedule(ScheduleKind.DRIFT_CHECK))
+
+    assert firing is not None
+    report = world.storage.read_model(
+        run_key(run_id, f"drift_checks/{firing.firing_id}.json"), DriftCheckReport
+    )
+    assert report.reused_run_drift is False
+    measured = {drift.feature for drift in report.drift.features}
+    assert measured and not measured & {"churn_next_60d", "entity_key"}
 
 
 def test_drift_above_the_threshold_alerts_and_retrains_under_on_drift(world: World) -> None:

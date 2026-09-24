@@ -555,14 +555,21 @@ def drift_against_champion(
     re-measured on the run's source with the champion's own recorded preparation. `None` when drift
     cannot be measured (no stored baseline, no preparation record, or no comparable features) - the
     same "not measured" the predict stage reports, never an invented zero.
+
+    A `drift.json` that measured the label or a key column (written before DEC-957, when a built
+    dataset's label stayed in the baseline) is not reused: it would raise a drift alert, and retrain
+    under `on_drift`, on every firing. The data is re-measured without those columns instead.
     """
     from engine.stages.prepare import replay
-    from engine.stages.score import ScoreError, _prepare_report, compute_drift
+    from engine.stages.score import ScoreError, _prepare_report, compute_drift, not_drift_features
 
+    not_features = not_drift_features(champion, storage=storage)
     if run.model_version_id == champion.model_id:
         drift_key = run_key(run.run_id, "drift.json")
         if storage.exists(drift_key):
-            return storage.read_model(drift_key, DriftReport), True
+            stored = storage.read_model(drift_key, DriftReport)
+            if not not_features & {feature.feature for feature in stored.features}:
+                return stored, True
     if champion.drift_baseline_key is None or not storage.exists(champion.drift_baseline_key):
         return None, False
     try:
@@ -573,7 +580,7 @@ def drift_against_champion(
         log_failure(_LOGGER, f"schedule.drift_unmeasured run_id={run.run_id}", exc)
         return None, False
     baseline = storage.read_model(champion.drift_baseline_key, DriftBaseline)
-    return compute_drift(baseline, prepared, config, run_id=run.run_id), False
+    return compute_drift(baseline, prepared, config, run_id=run.run_id, not_features=not_features), False
 
 
 # ---------------------------------------------------------------------------

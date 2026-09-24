@@ -1020,6 +1020,7 @@ class _TrainFlow:
             run_id=ctx.run_id,
             model_version_id=model_id,
             primary_key=ctx.key,
+            target=ctx.target,
         )
         self._write(register.DRIFT_BASELINE_FILENAME, baseline)
         champion = self._rescore_champion(recipe.model_search.metric, parts["test"])
