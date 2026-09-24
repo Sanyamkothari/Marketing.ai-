@@ -464,8 +464,8 @@ def test_the_run_reached_results_and_the_summary_carries_real_values(journey: Jo
     """ "...clicks Run...": Results, with the model and its score spelled out, no em dash."""
     assert "Training complete" in journey.train_summary
     assert EM_DASH not in journey.train_summary, journey.train_summary
-    assert "ROC-AUC" in journey.train_summary
-    score = re.search(r"ROC-AUC\s+([0-9.]+)", journey.train_summary)
+    assert "Ranking quality" in journey.train_summary  # ROC-AUC, by its plain name (v1)
+    score = re.search(r"Ranking quality\s+([0-9.]+)", journey.train_summary)
     assert score is not None, journey.train_summary
     assert 0.0 < float(score.group(1)) <= 1.0
 

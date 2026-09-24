@@ -155,7 +155,7 @@ LABELS: dict[str, str] = {
     "monitoring.performance_alert_drop_pct": "Performance alert (% drop)",
     "governance.retention_days": "Data retention (days)",
     "governance.consent_column": "Consent column (use rows where true)",
-    "governance.approval_required": "Require approval before a model becomes champion",
+    "governance.approval_required": "Require approval before a model becomes the model in use",
 }
 
 

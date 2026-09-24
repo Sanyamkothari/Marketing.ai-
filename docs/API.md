@@ -1720,7 +1720,7 @@ config units: fractions stay fractions, and `scale` is the factor the UI multipl
 |---|---|---|---|---|---|---|---|
 | `governance.retention_days` | Data retention (days) | number | 90 | 0 | 730 | 30 | - |
 | `governance.consent_column` | Consent column (use rows where true) | column-select | null | - | - | - | - |
-| `governance.approval_required` | Require approval before a model becomes champion | checkbox | true | - | - | - | - |
+| `governance.approval_required` | Require approval before a model becomes the model in use | checkbox | true | - | - | - | - |
 
 ### Other `configs/engine.yaml` keys
 

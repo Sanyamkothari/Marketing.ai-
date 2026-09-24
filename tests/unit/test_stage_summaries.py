@@ -24,7 +24,7 @@ SUMMARIES = (
     "ROC-AUC · calibration Isotonic · threshold Auto · top 3 SHAP reasons · champion if +1%",
     "High ≥ 0.8 · Medium ≥ 0.5 · skip opted-out · skip contacted <14d · 10% control group",
     "Drift alert PSI > 0.2 · retrain: On drift · alert if score drops 5%",
-    "Keep uploads 90 days · approval before champion",
+    "Keep uploads 90 days · approval before a model becomes the one in use",
 )
 
 

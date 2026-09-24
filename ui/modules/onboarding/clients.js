@@ -8,9 +8,10 @@
 // in `index.js`; `ui/chrome.js` draws it).
 //
 // Where it is drawn. Only on the screens whose content depends on the client - Home (where a person
-// starts and picks who they work for), a use case's Setup, Build data, the uplift Setup and the
-// Reports list - never on sign-in, account, admin, privacy, approvals or monitoring, where it would
-// mean nothing. The top bar leaves the whole slot out for a signed-out visitor, so the sign-in screen
+// starts and picks who they work for), a use case's Setup, Build data, the uplift Setup, the
+// Reports list and the privacy screens that act for one client (consent, erasure, access: they say
+// "For client: ... (chosen in the top bar)") - never on sign-in, account, admin, privacy retention,
+// approvals or monitoring, where it would mean nothing. The top bar leaves the whole slot out for a signed-out visitor, so the sign-in screen
 // never shows a refused client list.
 //
 // In demo mode the default is the demo's clean client (`GET /pilot/demo` names it), and the client the
@@ -186,6 +187,8 @@ export function perClientRoute(hash) {
   if (a === "uc") return Boolean(b) && (!c || c === "run"); // a use case's Setup (and its run view)
   if (a === "uplift") return Boolean(b) && (!c || c === "run"); // the uplift Setup
   if (a === "pilot") return !b || b === "kit"; // Reports and Build data
+  // Consent, erasure and access say "For client: ... (chosen in the top bar)", so the chooser is drawn.
+  if (a === "privacy") return b === "consent" || b === "erasure" || b === "access";
   return false;
 }
 

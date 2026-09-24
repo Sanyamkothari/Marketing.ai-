@@ -653,19 +653,25 @@ function tile(label, money, fmt) {
   }</div>${spread}</div>`;
 }
 
+/**
+ * One verdict line: the engine's own sentence (`summary`, the same words the PDF prints), or - only
+ * when it has none - one read off the range here. Never both: they said the same thing twice.
+ */
 function verdictCard(view) {
   const b = view.benefit;
-  const sentence = !b || !present(b.low) || !present(b.high)
-    ? "The campaign's effect was measured."
-    : b.low > 0
-      ? "The campaign worked."
-      : b.high < 0
-        ? "The campaign made things worse."
-        : "We cannot yet tell whether the campaign made a difference.";
+  const sentence = present(view.summary)
+    ? view.summary
+    : !b || !present(b.low) || !present(b.high)
+      ? "The campaign's effect was measured."
+      : b.low > 0
+        ? "The campaign worked."
+        : b.high < 0
+          ? "The campaign made things worse."
+          : "We cannot yet tell whether the campaign made a difference.";
   const tiles = tile(view.benefit_label, b, fmtPeople) + (view.net_value ? tile("Net value, after costs", view.net_value, fmtMoney) : "");
   return `<section class="card pe-verdict-card" data-verdict><div class="pe-body"><p class="pe-verdict">${esc(
     sentence,
-  )}</p><p>${esc(view.summary)}</p><div class="kpis pe-tiles">${tiles}</div></div></section>`;
+  )}</p><div class="kpis pe-tiles">${tiles}</div></div></section>`;
 }
 
 /** Client-side checks first (a blank or negative amount), each next to its own field. */

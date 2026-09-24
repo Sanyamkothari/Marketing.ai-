@@ -43,6 +43,7 @@ import {
   glossaryCode,
   glossaryMetric,
   headActions,
+  metricShortName,
   noticeCard,
   pageHead,
   present,
@@ -157,8 +158,11 @@ function problemTypePlain(uc, value) {
   return capital(inner ? inner[1] : label);
 }
 
-/** "ROC-AUC 0.955": a run's headline metric, three decimals at most; "" when it has none. */
+/** "Ranking quality 0.955": a run's headline metric, three decimals at most; "" when it has none. */
 const metricText = (label, score) => (present(score) && label ? `${label} ${fmtMetric(score)}` : "");
+
+/** A run's headline metric by its plain name (dom.js `METRIC_SHORT`, as on the Model page). */
+const runMetricLabel = (run) => metricShortName(run.headline_metric, run.headline_metric_label);
 
 /** The catalogue's plain name of a metric (help.yaml `metrics.<key>.name`), or "". */
 function metricName(key) {
@@ -167,12 +171,12 @@ function metricName(key) {
 }
 
 /**
- * The one sentence a finished training run leads with. ROC-AUC reads as what it measures - how often
+ * The one sentence a finished training run leads with. Ranking quality (ROC-AUC) reads as what it measures - how often
  * the model puts someone with the outcome above someone without it; any other metric by its value.
  */
 function trainVerdict(uc, run) {
   const model = run.best_model || "The model";
-  const metric = metricText(run.headline_metric_label, run.headline_score);
+  const metric = metricText(runMetricLabel(run), run.headline_score);
   if (!metric) return `${model} is trained.`;
   if (run.headline_metric === "roc_auc") {
     return `${model} ranks ${people(uc)} correctly ${Math.round(Number(run.headline_score) * 100)}% of the time (${metric}).`;
@@ -557,7 +561,7 @@ function runRow(uc, s, run) {
   const inUse = train && done && version && version.version.status === "champion";
   const rows = present(run.row_count) ? ` · ${fmtInt(run.row_count)} rows` : "";
   const data = isBuilt(run) ? `Built dataset${train ? rows : ""}` : `${run.file_name || "Uploaded file"}${train ? rows : ""}`;
-  const metric = train && done ? metricText(run.headline_metric_label, run.headline_score) : "";
+  const metric = train && done ? metricText(runMetricLabel(run), run.headline_score) : "";
   const named = metricName(run.headline_metric);
   const right = metric
     ? `<b${named ? ` title="${esc(named)}"` : ""}>${esc(metric)}</b>`
@@ -940,7 +944,7 @@ function flowBlocks(uc, s, run) {
       done ? run.best_model || "Model" : train ? "Not trained" : run.best_model || "Model",
       train
         ? done
-          ? [metricText(run.headline_metric_label, run.headline_score), run.model_choice === AUTOML ? "picked automatically" : ""]
+          ? [metricText(runMetricLabel(run), run.headline_score), run.model_choice === AUTOML ? "picked automatically" : ""]
               .filter(Boolean)
               .join(" · ")
           : ""
@@ -1007,7 +1011,7 @@ function outcome(uc, s, run) {
     return {
       head: `<span class="ok">✓ Training complete</span> <span class="vt">${esc(trainVerdict(uc, run))}</span>`,
       lines: [
-        named ? `<p class="vsub muted">${esc(`${run.headline_metric_label}: ${named}.`)}</p>` : "",
+        named && runMetricLabel(run) ? `<p class="vsub muted">${esc(`${runMetricLabel(run)}: ${named}.`)}</p>` : "",
         standingOf
           ? `<p class="vsub">${esc(standingOf.text)}${
               standingOf.link

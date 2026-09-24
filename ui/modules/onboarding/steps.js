@@ -178,8 +178,8 @@ function stepShell(id, title, line, done, open, body) {
 }
 
 /** A quiet button that opens another step ("Go to Mapping"). */
-const stepLink = (step, label) =>
-  `<button type="button" class="btn quiet sm" data-act="open-step" data-step="${esc(step)}">${esc(label)}</button>`;
+const stepLink = (step, label, kind = "quiet sm") =>
+  `<button type="button" class="btn ${kind}" data-act="open-step" data-step="${esc(step)}">${esc(label)}</button>`;
 
 /**
  * The confidence for one row: the suggester's measurement, read as "Sure" or "Check", or "Your
@@ -519,7 +519,8 @@ export function sourcesStep(state) {
     : "";
   const body = `
     <div class="btn-row ob-toolbar">${primary}${uploadLabel("Add more files", "secondary")}<span class="fhint">CSV or Parquet, one file per table</span>${
-      done ? `<span class="spacer"></span>${stepLink("mapping", "Continue to Mapping")}` : ""
+      // Once every table has its role, moving on is this step's one primary action.
+      done ? `<span class="spacer"></span>${stepLink("mapping", "Continue to Mapping", "primary")}` : ""
     }</div>
     ${uploadingLines(state)}
     ${state.sourcesError ? errorBox(state.sourcesError) : ""}

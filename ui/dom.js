@@ -289,6 +289,23 @@ export const glossaryMetric = (name) => safely(glossary.metric, name);
 /** A setting's plain entry (`{ meaning }`), or `null`. */
 export const glossarySetting = (path) => safely(glossary.setting, path);
 
+/**
+ * The short plain name a metric goes by on screen ("Ranking quality", not "ROC-AUC"); its help.yaml
+ * `metrics.<key>.name` is the longer explanation behind it. One list, so the Model page, the Results
+ * summary and the Previous runs rows all call a metric the same thing.
+ */
+export const METRIC_SHORT = {
+  roc_auc: "Ranking quality",
+  pr_auc: "Top-of-list precision",
+  f1: "Balance score",
+  recall: "Cases caught",
+  precision: "Flags that are right",
+  rmse: "Typical error",
+  mae: "Average error",
+};
+/** A metric's short plain name, else the label the engine gave it, else "". */
+export const metricShortName = (id, label) => (id && METRIC_SHORT[id]) || label || "";
+
 // --- states: error, not found, notice, empty, loading ------------------------------------------------
 
 export const GENERIC_ERROR = "Something went wrong while loading this page.";

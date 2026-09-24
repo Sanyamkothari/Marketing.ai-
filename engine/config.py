@@ -2197,7 +2197,7 @@ _SUMMARY_TEMPLATES: Final[Mapping[str, str]] = {
     "governance": (
         "Keep uploads {governance.retention_days} days"
         "{?governance.consent_column: · consent: {governance.consent_column}}"
-        "{?governance.approval_required: · approval before champion}"
+        "{?governance.approval_required: · approval before a model becomes the one in use}"
     ),
 }
 
@@ -2657,7 +2657,7 @@ def _stage_specs(bands: Sequence[Band]) -> tuple[StageSpec, ...]:
         ),
         FieldSpec(
             path="governance.approval_required",
-            label="Require approval before a model becomes champion",
+            label="Require approval before a model becomes the model in use",
             type=FieldType.BOOLEAN,
             widget=Widget.CHECKBOX,
             order=3,

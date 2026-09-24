@@ -32,6 +32,7 @@ import {
   headActions,
   journeyCrumb,
   kvs,
+  metricShortName,
   noticeCard,
   pageHead,
   present,
@@ -92,7 +93,7 @@ export function pageArtefacts(kind, run) {
 const TAB_LABEL = { data: "Data", model: "Model", output: "Output", campaign: "Campaign results" };
 const CRUMB_SEP = '<span class="sep" aria-hidden="true">›</span>';
 
-// The router's seams (run actions, the active top-bar goal) are reached lazily: `modules/router.js`
+// The router's seams (the active top-bar goal) are reached lazily: `modules/router.js`
 // touches `window` when it loads, and this file must stay importable by node's unit tests. In the
 // browser `app.js` has already loaded the router, so this resolves before the first page is drawn.
 let seams = null;
@@ -104,14 +105,6 @@ if (typeof window !== "undefined" && typeof document !== "undefined") {
     () => {},
   );
 }
-
-const runActions = (uc, run) => {
-  try {
-    return seams && seams.runActionsHtml ? seams.runActionsHtml(uc, run) : "";
-  } catch {
-    return "";
-  }
-};
 
 // The plain wording of the few help.yaml entries these pages lead with, used only until the pilot
 // module registers the catalogue (`registerGlossary`); the words are help.yaml's own.
@@ -148,24 +141,14 @@ const FALLBACK_TERMS = {
   lift: "How many times more cases a group contains than a random group of the same size. A lift of 3 means three times as many.",
   baseline: "A simple model used as a yardstick; the platform's model should beat it.",
 };
-/** The short label a metric goes by on these pages; its help.yaml name is its "?". */
-const METRIC_SHORT = {
-  roc_auc: "Ranking quality",
-  pr_auc: "Top-of-list precision",
-  f1: "Balance score",
-  recall: "Cases caught",
-  precision: "Flags that are right",
-  rmse: "Typical error",
-  mae: "Average error",
-};
-
 const codeEntry = (code) => glossaryCode(code) || FALLBACK_CODES[code] || null;
 const metricName = (id) => {
   const entry = glossaryMetric(id);
   return (entry && (entry.name || entry)) || FALLBACK_METRICS[id] || null;
 };
 const termText = (term) => glossaryTerm(term) || FALLBACK_TERMS[term] || null;
-const metricShort = (id, label) => METRIC_SHORT[id] || label || humanise(id);
+/** The short label a metric goes by on these pages (dom.js `METRIC_SHORT`); its help.yaml name is its "?". */
+const metricShort = (id, label) => metricShortName(id, label) || humanise(id);
 
 /** The key as the user named it: one column, or its columns joined by " + " for a two-column key. */
 const keyText = (pk) => (Array.isArray(pk) ? pk.join(" + ") : dash(pk));
@@ -334,7 +317,9 @@ function shell(uc, kind, run, body, { primary = null, secondary = [], tech = [],
     ? `${isScoring(run) ? "Scored" : "Trained"} ${when}`
     : "";
   const mode = isScoring(run) ? "score" : "train";
-  const actions = headActions({ primary, secondary: [].concat(secondary, runActions(uc, run) || []).filter(Boolean) });
+  // The header keeps only this page's own actions: a run action (the uplift module's flow block) is
+  // not merged in here - the tab bar already leads to "Campaign results".
+  const actions = headActions({ primary, secondary: [].concat(secondary).filter(Boolean) });
   const next = kinds[kinds.indexOf(kind) + 1];
   const nextButton =
     !primary && next && next !== "campaign"
@@ -1173,7 +1158,8 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref) {
   const outputTiles = tiles([
     [
       (summary.kpi && summary.kpi.label) || (uc.output && uc.output.kpi && uc.output.kpi.label) || "Customers to contact",
-      dash(summary.kpi && summary.kpi.display),
+      // A count reads exactly ("1,675"), not the engine's rounded display ("2K").
+      summary.kpi && Number.isInteger(summary.kpi.value) ? fmtInt(summary.kpi.value) : dash(summary.kpi && summary.kpi.display),
       kpiNote,
     ],
     ["Customers scored", dash(summary.rows_scored, fmtInt)],
