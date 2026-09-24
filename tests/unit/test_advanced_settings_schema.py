@@ -144,7 +144,7 @@ LABELS: dict[str, str] = {
     "evaluation.threshold.value": "Threshold value",
     "evaluation.reasons_per_row": "Reasons per row",
     "evaluation.fairness_column": "Fairness check (sensitive column)",
-    "evaluation.champion_min_improvement_pct": "Replace champion if better by (%)",
+    "evaluation.champion_min_improvement_pct": "Replace the model in use if better by (%)",
     "evaluation.shap": "Generate SHAP explanations per row",
     "actions.control_group_fraction": "Control group holdout (%)",
     "actions.suppression.recently_contacted_days": "Recently contacted (days)",

@@ -1692,7 +1692,7 @@ config units: fractions stay fractions, and `scale` is the factor the UI multipl
 | `evaluation.threshold.value` | Threshold value | number | 0.5 | 0.01 | 0.99 | 0.01 | - |
 | `evaluation.reasons_per_row` | Reasons per row | number | 3 | 1 | 5 | 1 | - |
 | `evaluation.fairness_column` | Fairness check (sensitive column) | column-select | null | - | - | - | - |
-| `evaluation.champion_min_improvement_pct` | Replace champion if better by (%) | number | 1.0 | 0 | 20 | 0.5 | - |
+| `evaluation.champion_min_improvement_pct` | Replace the model in use if better by (%) | number | 1.0 | 0 | 20 | 0.5 | - |
 | `evaluation.shap` | Generate SHAP explanations per row | checkbox | true | - | - | - | - |
 
 ### 6. Actions & output

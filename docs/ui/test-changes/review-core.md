@@ -16,3 +16,5 @@ Every assertion below changed because its text changed on purpose. No assertion 
 | tests/integration/test_acceptance.py (slow, not run here) | `test_the_run_reached_results_and_the_summary_carries_real_values` | `"ROC-AUC" in journey.train_summary` and `re.search(r"ROC-AUC\s+([0-9.]+)", ...)` | `"Ranking quality" in journey.train_summary` and `re.search(r"Ranking quality\s+([0-9.]+)", ...)` | The Results summary names the metric by its plain name, as the Model page does. The check that a real score between 0 and 1 is shown is unchanged. |
 
 `docs/API.md` (generated) carries the new label too; `python -m scripts.gen_api_docs --check` passes.
+| tests/unit/test_advanced_settings_schema.py | test_labels_orders_and_bounds | `"Replace champion if better by (%)"` | `"Replace the model in use if better by (%)"` | Plain wording on the settings screen (principle 5); display label only, the setting key is unchanged. |
+| tests/unit/test_stage_summaries.py | test_the_eight_rendered_summaries_are_verbatim (two rows) | `… · champion if +1%` / `… · champion if +2.5%` | `… · replace the model in use if +1%` / `… +2.5%` | Same label in the folded stage's summary line. |

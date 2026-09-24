@@ -2188,7 +2188,7 @@ _SUMMARY_TEMPLATES: Final[Mapping[str, str]] = {
         " · threshold {evaluation.threshold.mode}"
         "{?evaluation.shap: · top {evaluation.reasons_per_row} SHAP reasons}"
         "{?evaluation.fairness_column: · fairness by {evaluation.fairness_column}}"
-        " · champion if +{evaluation.champion_min_improvement_pct}%"
+        " · replace the model in use if +{evaluation.champion_min_improvement_pct}%"
     ),
     "monitoring": (
         "Drift alert PSI > {monitoring.drift_psi_threshold} · retrain: {monitoring.retraining}"
@@ -2551,7 +2551,7 @@ def _stage_specs(bands: Sequence[Band]) -> tuple[StageSpec, ...]:
         ),
         FieldSpec(
             path="evaluation.champion_min_improvement_pct",
-            label="Replace champion if better by (%)",
+            label="Replace the model in use if better by (%)",
             type=FieldType.NUMBER,
             widget=Widget.NUMBER,
             min=0,
