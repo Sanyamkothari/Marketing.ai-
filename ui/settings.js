@@ -4,7 +4,7 @@
 // bounds of every number and the per-stage summary line all come from the schema, so a new setting
 // added to the engine config appears on the screen without a change here (plan §9.2).
 
-import { esc } from "./dom.js";
+import { esc, glossarySetting } from "./dom.js";
 
 // --- paths -----------------------------------------------------------------------------------
 // A field's `path` is the dotted config path the API also accepts as an override key, including
@@ -231,6 +231,17 @@ function columnChoices(field, columns) {
   return source.map((name) => ({ value: name, label: name, enabled: true }));
 }
 
+/**
+ * The plain meaning of a setting (`configs/pilot/help.yaml`, read through the glossary seam), shown
+ * under its control; "" until the catalogue is registered, or when it has no entry. The catalogue
+ * writes list indexes as `[*]`.
+ */
+function captionFor(field) {
+  const entry = glossarySetting(String(field.path).replace(/\[\d+\]/g, "[*]"));
+  const meaning = entry && (typeof entry === "string" ? entry : entry.meaning);
+  return meaning ? `<span class="fcap">${esc(meaning)}</span>` : "";
+}
+
 function selectField(field, value) {
   return `<div class="field"><span class="sub">${esc(field.label)}</span><div class="control sel"><select data-path="${esc(
     field.path,
@@ -238,7 +249,7 @@ function selectField(field, value) {
     field.choices || [],
     value,
     null,
-  )}</select></div></div>`;
+  )}</select></div>${captionFor(field)}</div>`;
 }
 
 function columnSelectField(field, value, columns) {
@@ -248,7 +259,7 @@ function columnSelectField(field, value, columns) {
     columnChoices(field, columns),
     value,
     field.empty_label || "None",
-  )}</select></div></div>`;
+  )}</select></div>${captionFor(field)}</div>`;
 }
 
 function numberField(field, value) {
@@ -261,13 +272,14 @@ function numberField(field, value) {
     field.step,
   )}${attr("min", field.min)}${attr("max", field.max)} value="${trimNumber(
     scaled(field, value),
-  )}" aria-label="${esc(field.label)}"></div></div>`;
+  )}" aria-label="${esc(field.label)}"></div>${captionFor(field)}</div>`;
 }
 
+/** A checkbox is its own label: no empty `.sub` above it, so a "?" added to the field sits in `.check`. */
 function checkboxField(field, value) {
-  return `<div class="field"><span class="sub">&nbsp;</span><label class="check"><input type="checkbox" data-path="${esc(
+  return `<div class="field fcheck"><label class="check"><input type="checkbox" data-path="${esc(
     field.path,
-  )}" data-kind="boolean"${value ? " checked" : ""}> ${esc(field.label)}</label></div>`;
+  )}" data-kind="boolean"${value ? " checked" : ""}> ${esc(field.label)}</label>${captionFor(field)}</div>`;
 }
 
 function multiSelectField(field, value, choices, asChips) {
@@ -275,7 +287,7 @@ function multiSelectField(field, value, choices, asChips) {
   const visible = field.max_visible ? choices.slice(0, field.max_visible) : choices;
   const hidden = choices.length - visible.length;
   const head = field.label
-    ? `<span class="sub" style="width:100%;font-size:12px;color:var(--muted)">${esc(field.label)}${
+    ? `<span class="sub algos-head">${esc(field.label)}${
         selected.length ? ` · ${selected.length} selected` : ""
       }</span>`
     : "";
@@ -288,7 +300,7 @@ function multiSelectField(field, value, choices, asChips) {
           selected.includes(c.value) ? " checked" : ""
         }> ${asChips ? `<span class="colchip">${esc(c.label)}</span>` : esc(c.label)}</label>`,
     )
-    .join("")}${hidden > 0 ? `<span class="sub">+${hidden} more</span>` : ""}</div>`;
+    .join("")}${hidden > 0 ? `<span class="sub">+${hidden} more</span>` : ""}${captionFor(field)}</div>`;
 }
 
 /**
@@ -333,31 +345,36 @@ function widgetHtml(field, value, columns) {
   }
 }
 
-const inRow = (field) => field.widget !== "multi-select" && field.widget !== "column-multi-select";
+/** A widget that lists the file's columns has nothing to offer until there is a file. */
+const waitsForColumns = (field, columns) =>
+  Boolean(field.column_source) && !(columns[field.column_source] || []).length;
 
-/** A stage body: fields in the schema's own order, consecutive inline ones sharing one `.frow`. */
-function stageBody(stage, values, columns) {
+/**
+ * A stage body: the fields in the schema's own order, in one grid (a list of checkboxes spans the
+ * whole row). `advisory` picks which of the stage's fields: the ones the engine acts on, or the
+ * planned ones. A field that lists the file's columns waits for a file; one line says so.
+ */
+function stageBody(stage, values, columns, advisory) {
   const visible = (stage.fields || [])
-    .filter((field) => isVisible(field, values))
+    .filter((field) => Boolean(field.advisory) === advisory && isVisible(field, values))
     .slice()
     .sort((a, b) => (a.order || 0) - (b.order || 0));
   const out = [];
-  let row = [];
-  const flush = () => {
-    if (row.length) out.push(`<div class="frow">${row.join("")}</div>`);
-    row = [];
-  };
+  let waiting = 0;
   for (const field of visible) {
-    const html = fieldHtml(field, values, columns);
-    if (!html) continue;
-    if (inRow(field)) row.push(html);
-    else {
-      flush();
-      out.push(html);
+    if (waitsForColumns(field, columns)) {
+      waiting += 1;
+      continue;
     }
+    const html = fieldHtml(field, values, columns);
+    if (html) out.push(html);
   }
-  flush();
-  return out.join("");
+  const note = waiting
+    ? `<p class="stage-cap">${
+        waiting === 1 ? "One more setting appears" : `${waiting} more settings appear`
+      } once a file is uploaded: ${waiting === 1 ? "it lists" : "they list"} the file's columns.</p>`
+    : "";
+  return `<div class="sfields">${out.join("")}</div>${note}`;
 }
 
 /**
@@ -372,18 +389,71 @@ function parkedNote(stage) {
   return fields.length && fields.every((field) => field.advisory) ? `${fields[0].help} ` : "";
 }
 
-/** The collapsed stages of the prototype, one per stage the schema returned. */
+/** How many of a stage's working settings differ from the use case's own defaults. */
+export function changedCount(stage, values) {
+  return (stage.fields || []).filter((field) => {
+    if (field.advisory) return false;
+    const current = readPath(values, field.path);
+    return current !== undefined && !sameValue(current, field.default);
+  }).length;
+}
+
+/**
+ * A folded stage's one line: "Using recommended settings", or how many were changed followed by the
+ * stage's own summary, so a change (a time-based split, say) can be read without opening the stage.
+ */
+function foldedLine(stage, byPath, values) {
+  const changed = changedCount(stage, values);
+  if (!changed) return "Using recommended settings";
+  return `You changed ${changed} setting${changed === 1 ? "" : "s"} · ${stageSummary(stage, byPath, values)}`;
+}
+
+/** One folded stage. "Configure" is the disclosure's own label; the summary is the real control. */
+const stageShell = (id, title, line, body) =>
+  `<details class="stage-d" data-stage="${esc(id)}"><summary><span><div class="st">${esc(
+    title,
+  )}</div><div class="ss">${esc(line)}</div></span><span class="sc">Configure</span></summary>${body}</details>`;
+
+/**
+ * The stages, folded, one per stage the schema returned. The settings the engine does not act on yet
+ * (`field.advisory`) wait behind one toggle at the foot - whole stages and single fields alike - so
+ * nothing on the main list looks like a step that has to be done.
+ */
 export function stagesHtml(schema, values, columns) {
   const byPath = indexSchema(schema);
-  const stages = (schema.stages || []).map(
-    (stage) =>
-      `<details class="stage-d" data-stage="${esc(stage.id)}"><summary><span class="sn">${esc(
-        stage.number,
-      )}</span><span><div class="st">${esc(stage.title)}</div><div class="ss">${esc(
-        parkedNote(stage) + stageSummary(stage, byPath, values),
-      )}</div></span><span class="sc">Configure</span></summary>${stageBody(stage, values, columns)}</details>`,
-  );
-  return `<div class="stages">${stages.join("")}</div>`;
+  const stages = schema.stages || [];
+  const working = stages
+    .filter((stage) => (stage.fields || []).some((field) => !field.advisory))
+    .map((stage) =>
+      stageShell(
+        stage.id,
+        stage.title,
+        foldedLine(stage, byPath, values),
+        `<p class="stage-cap">${esc(stageSummary(stage, byPath, values))}</p>${stageBody(
+          stage,
+          values,
+          columns,
+          false,
+        )}`,
+      ),
+    );
+  const planned = stages.filter((stage) => (stage.fields || []).some((field) => field.advisory));
+  const count = planned.reduce((n, stage) => n + stage.fields.filter((field) => field.advisory).length, 0);
+  const plannedStages = planned.map((stage) => {
+    const whole = stage.fields.every((field) => field.advisory);
+    return stageShell(
+      whole ? stage.id : `${stage.id}--planned`,
+      stage.title,
+      whole ? parkedNote(stage) + stageSummary(stage, byPath, values) : stage.fields.find((f) => f.advisory).help,
+      stageBody(stage, values, columns, true),
+    );
+  });
+  const later = count
+    ? `<details class="planned" data-planned><summary>Show settings planned for a later release (${count})</summary><p class="stage-cap">They are recorded with each run but do not change results yet.</p><div class="stages plain">${plannedStages.join(
+        "",
+      )}</div></details>`
+    : "";
+  return `<div class="stages plain">${working.join("")}</div>${later}`;
 }
 
 /** Apply one control's change to the values object; returns the values for chaining. */
