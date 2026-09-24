@@ -25,8 +25,10 @@
 // by dispatching `hashchange`, and a guard repeats that once if `app.js`'s slower first paint lands
 // on top of ours - the overview's `GET /industries` can finish after `GET /auth/me` does.
 
-import { errorBox, pageHead } from "../../dom.js";
-import { registerModule, resolveRoute } from "../router.js";
+import { crumbs, errorBox, notFound, pageHead } from "../../dom.js";
+import { registerForYou } from "../../overview.js";
+import { announceModulesChanged, registerModule, resolveRoute } from "../router.js";
+import { getAlerts, getApprovals } from "./api.js";
 import { approvalsHtml, bindApprovals, loadApprovals } from "./approvals.js";
 import { auditHtml, bindAudit, loadEvents } from "./audit.js";
 import { alertsHtml, bindAlerts, loadAlerts, loadMissed, missedHtml } from "./alerts.js";
@@ -34,7 +36,7 @@ import { bindRunOutcomes, loadRunOutcomes, loadRuns, runOutcomesHtml, runsHtml }
 import { accessHtml, bindPrivacy, consentHtml, erasureHtml, loadPolicy, loadRegister } from "./privacy.js";
 import { bindRetention, loadPlan, retentionHtml } from "./retention.js";
 import { bindSchedule, bindSchedules, loadSchedule, loadSchedules, scheduleHtml, schedulesHtml } from "./schedules.js";
-import { ensureMe, goToSignIn, reasonFor, sessionStatus, SIGNIN_ROUTE } from "./session.js";
+import { can, currentMe, ensureMe, goToSignIn, onSession, reasonFor, sessionStatus, SIGNIN_ROUTE } from "./session.js";
 import { accountHtml, bindAccount, bindSignIn, ready, signInHtml } from "./signin.js";
 import { injectProductionStyles } from "./styles.js";
 import { bindUsers, loadUsers, usersHtml } from "./users.js";
@@ -50,14 +52,32 @@ function paint(app, html, after) {
   window.scrollTo(0, 0);
 }
 
+/**
+ * A screen of ours that could not be drawn. A route no screen matches (a mistyped link) is one calm
+ * card with a way back to Home; anything else leads with a plain sentence and "Try again" (the code
+ * and the server's words stay under Details, `errorBox`).
+ */
 function failure(app, error) {
+  if (error && error.code === "NO_SCREEN") {
+    paint(
+      app,
+      `<main class="screen">${pageHead(`${crumbs([{ label: "Not found" }])}<h1 class="h1">Page not found</h1>`)}${notFound(
+        "page",
+      )}</main>`,
+    );
+    return;
+  }
   paint(
     app,
     `<main class="screen">${pageHead(
-      `<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">This screen could not be loaded</h1>`,
-    )}${errorBox(error)}</main>`,
+      `${crumbs([{ label: "Error" }])}<h1 class="h1">This screen could not be loaded</h1>`,
+    )}${errorBox(error, { retry: true })}</main>`,
   );
 }
+
+/** The error for a hash under one of our prefixes that names no screen. */
+const noScreen = (parts) =>
+  Object.assign(new Error(`No screen matches #/${parts.join("/")}`), { code: "NO_SCREEN", status: 404 });
 
 /** A route of ours is still being shown only while the hash still names it: a slow load must not paint over a newer screen. */
 const stillOn = (parts) => window.location.hash.replace(/^#\/?/, "").split("/")[0] === parts[0];
@@ -101,7 +121,7 @@ async function renderAdmin(app, parts) {
     document.title = "Users · Marketing AI";
     return;
   }
-  failure(app, new Error(`No screen matches #/${parts.join("/")}`));
+  failure(app, noScreen(parts));
 }
 
 /**
@@ -141,7 +161,7 @@ async function renderPrivacy(app, parts) {
   if (!(await signedInOrAway(parts))) return;
   const entry = PRIVACY_SCREENS[parts[1] || "consent"];
   if (!entry) {
-    failure(app, new Error(`No screen matches #/${parts.join("/")}`));
+    failure(app, noScreen(parts));
     return;
   }
   const [html, bind, load, title] = entry;
@@ -171,7 +191,7 @@ async function renderMonitoring(app, parts) {
     if (id) await screen(app, () => runOutcomesHtml(id), bindRunOutcomes, () => loadRunOutcomes(id), "Outcomes");
     else await screen(app, runsHtml, () => {}, loadRuns, "Scoring runs");
   } else {
-    failure(app, new Error(`No screen matches #/${parts.join("/")}`));
+    failure(app, noScreen(parts));
   }
 }
 
@@ -193,6 +213,71 @@ export const productionModule = {
 };
 
 registerModule(productionModule);
+
+// --- Home's "For you" line: one next step for the role signed in ---------------------------------
+// An Approver reads how many models wait for them, an Analyst how many alerts are open; a Viewer is
+// pointed at the campaigns, an Admin who holds no other role at the users. Counted only for a role
+// that may act on them, read at most every half minute while Home is shown, and forgotten on a new
+// sign-in.
+
+const plural = (n, one, many) => `${n} ${n === 1 ? one : many}`;
+const counts = { approvals: null, alerts: null, at: 0, busy: false, who: null };
+const COUNT_STALE_MS = 30000;
+const mayApprove = () => can("POST", "/models/{model_id}/approve") && can("GET", "/approvals");
+const mayAcknowledge = () =>
+  can("POST", "/monitoring/alerts/{alert_id}/acknowledge") && can("GET", "/monitoring/alerts");
+
+async function readCounts() {
+  const [approvals, alerts] = await Promise.all([
+    mayApprove() ? getApprovals().then((body) => (body.items || []).length, () => null) : null,
+    mayAcknowledge()
+      ? getAlerts({ unacknowledged_only: true }).then((body) => (body.alerts || []).length, () => null)
+      : null,
+  ]);
+  return { approvals, alerts };
+}
+
+function refreshCounts() {
+  if (counts.busy || Date.now() - counts.at < COUNT_STALE_MS) return;
+  counts.busy = true;
+  const before = `${counts.approvals}/${counts.alerts}`;
+  readCounts()
+    .then((next) => Object.assign(counts, next))
+    .catch(() => {})
+    .finally(() => {
+      counts.busy = false;
+      counts.at = Date.now();
+      if (`${counts.approvals}/${counts.alerts}` !== before) announceModulesChanged();
+    });
+}
+
+/** The "For you" entries for whoever is signed in (or everyone, with sign-in off). */
+export function forYouItems() {
+  const status = sessionStatus();
+  const me = currentMe();
+  if (!me || !["signed-in", "off"].includes(status)) return [];
+  refreshCounts();
+  const items = [];
+  if (mayApprove() && counts.approvals) {
+    items.push({ text: `${plural(counts.approvals, "model", "models")} waiting for your approval`, href: "#/approvals" });
+  }
+  if (mayAcknowledge() && counts.alerts) {
+    items.push({ text: `${plural(counts.alerts, "open alert", "open alerts")} on your models`, href: "#/monitoring/alerts" });
+  }
+  if (items.length || status === "off") return items;
+  const roles = me.principal.roles || [];
+  if (roles.includes("approver")) return [{ text: "No models are waiting for your approval", href: "#/approvals" }];
+  if (roles.includes("analyst")) return [];
+  if (roles.includes("admin")) return [{ text: "Manage who can sign in", href: "#/admin/users" }];
+  return [{ text: "See the latest campaigns and their results", href: "#/monitoring/runs" }];
+}
+
+registerForYou(forYouItems);
+onSession((me) => {
+  const who = me && me.principal ? me.principal.user_id : null;
+  if (who === counts.who) return;
+  Object.assign(counts, { approvals: null, alerts: null, at: 0, who });
+});
 
 // --- a page loaded directly on one of our routes (see the module comment) -------------------------
 

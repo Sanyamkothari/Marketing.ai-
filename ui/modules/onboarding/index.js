@@ -2,10 +2,11 @@
 // wiring onboarding needs, and `ui/index.html`'s PHASE-2 block is where it is imported.
 //
 // Onboarding draws no screen of its own, so it claims no hash route. It registers the two things the
-// shared registry offers for exactly this case: a *header tool* (the client picker beside the logo on
-// every screen) and a *setup source* (the "Build from raw tables" card in Setup Step 1, and the
-// four-step panel it mounts). `ui/usecase.js` and `ui/dom.js` ask the registry for them; with this
-// file not loaded, both render exactly as they did before.
+// shared registry offers for exactly this case: a *header tool* (the client chooser, drawn by the top
+// bar `ui/chrome.js` in its context slot on the screens that depend on the client - see
+// `clients.js`) and a *setup source* (the "Build from raw tables" card in Setup Step 1, and the
+// four-step panel it mounts). `ui/usecase.js` and `ui/chrome.js` ask the registry for them; with
+// this file not loaded, both render exactly as they did before.
 
 import { registerHeaderTool, registerSetupSource } from "../router.js";
 import { clientPickerHtml } from "./clients.js";
