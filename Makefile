@@ -223,7 +223,7 @@ uplift-test: ## every Phase 3b suite: the uplift engine, its API, the flows and 
 	$(BIN)/python -m pytest tests/unit/uplift tests/integration/uplift -m "$(PAID_MARKERS)" -q
 # ---- END PHASE-3B ----
 # ---- PLAN-E (pilot) — append only below this line ----
-.PHONY: pilot-test pilot-generate pilot-check pilot-kit demo-seed demo
+.PHONY: pilot-test pilot-generate pilot-check pilot-kit demo-seed demo demo-signin
 
 pilot-test: ## every Plan E suite (M59-M64): kit, pre-flight, reports, value view, demo, feedback, screens
 	$(BIN)/python -m pytest tests/unit/pilot tests/integration/pilot -m "$(PAID_MARKERS)" -q
@@ -245,4 +245,11 @@ demo: demo-seed ## seed the demo if needed, then serve it on :8000 with demo mod
 	@echo "  Marketing AI demo: open http://localhost:8000 in your browser. Press Ctrl+C here to stop it."
 	@echo ""
 	MARKETING_AI_DEMO_MODE=true $(BIN)/uvicorn api.main:app --port 8000
+
+demo-signin: demo-seed ## the demo with sign-in on and one demo user per role (local demo only; passwords printed)
+	MARKETING_AI_AUTH_MODE=local $(BIN)/python -m scripts.demo_users
+	@echo ""
+	@echo "  Marketing AI demo with sign-in: open http://localhost:8000 and sign in as one of the users above. Ctrl+C stops it."
+	@echo ""
+	MARKETING_AI_DEMO_MODE=true MARKETING_AI_AUTH_MODE=local $(BIN)/uvicorn api.main:app --port 8000
 # ---- END PLAN-E ----

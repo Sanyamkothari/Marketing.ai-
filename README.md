@@ -1,5 +1,9 @@
 # Marketing AI
 
+> **New here? Run the demo on your laptop: [docs/QUICKSTART.md](docs/QUICKSTART.md).** It needs Python 3.11 and
+> about 20 minutes, and no AWS account, AI service or client data. How ready v1 is, and what to
+> say out loud when you demo it: [docs/V1_READINESS.md](docs/V1_READINESS.md).
+
 A **reusable marketing AI engine**. A business user selects a use case (e.g. Targeted Advertisement),
 uploads a CSV, picks the primary key and target column, and clicks Run. The engine validates the data,
 trains the best model with AutoML, evaluates it, explains it, and can later score new data. Results are
