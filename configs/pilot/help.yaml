@@ -211,6 +211,10 @@ codes:
     title: The "contacted" column has more than two values
     meaning: Each customer must be either contacted or held back; other values cannot be read.
     fix: Recode the column to 1 for contacted and 0 for held back.
+  TREATMENT_VARIES_WITHIN_ENTITY:
+    title: A customer is in both groups
+    meaning: In one campaign, some customers were contacted on one date and held back on another, so the two groups cannot be compared fairly.
+    fix: Keep each customer in one group for the whole campaign, or add a campaign column so each campaign is judged on its own.
   TREATMENT_ARM_TOO_SMALL:
     title: Too few customers in one group
     meaning: Either the contacted group or the held-back group is too small, or has too few outcomes, for a reliable comparison.
