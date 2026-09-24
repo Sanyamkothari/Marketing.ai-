@@ -88,19 +88,23 @@ diagnose a failure.
 
 ## Fresh-clone test
 
-A brand-new directory, a clean environment with no `uv` and no pip cache, following only the
-README and QUICKSTART:
+Twice, in a brand-new directory and a clean environment (no `uv`, no pip cache), following only the
+written instructions:
+
+1. **From the local checkout, following the README** (before QUICKSTART existed).
+2. **From GitHub, following [QUICKSTART.md](QUICKSTART.md) word for word.**
 
 | Step | Time | Result |
 |---|---|---|
-| `git clone` | 1 s | ok |
-| `make setup` (pip, no cache) | 1 min 14 s | ok, `setup ok: autogluon.tabular 1.6.3`. On a slower laptop connection, expect 5 to 15 minutes. |
-| `make demo-seed` | 1 min 53 s | ok. With 4,000 customers (DEC-960), about 3 to 4 minutes. |
-| `make demo`, open the printed address | seconds | **Failed** before fix 1 (JSON "Not Found" at `/`), ok after it. |
-| `make pilot-kit`, pre-flight | 16 s install | ok |
+| `git clone https://github.com/Sanyamkothari/Marketing.ai-.git` | 2 s | **Failed.** It fetches the repository's default branch, `claude/gracious-noether-y0njma`, which holds only the original plan, so `make setup` does not exist. QUICKSTART now clones with `--branch main`. Switching the default branch is the owner's to do. |
+| `git clone --branch main …` | 2 s | ok |
+| `make setup` (pip, no cache) | 71 s | ok, `setup ok: autogluon.tabular 1.6.3`. On a slower laptop connection, expect 5 to 15 minutes. |
+| `make demo-seed` (4,000 customers) | 2 min 36 s | ok |
+| `make demo`, open `http://localhost:8000` | seconds | **Failed** in run 1 (JSON "Not Found" at `/`); ok after fix 1. The churn campaign: 12.7 points fewer customers left, 95% range 7.7 to 17.8 points, p < 0.001. |
+| `make demo-signin` | seconds | ok: five demo users printed; `demo-lead` signs in with Analyst + Approver; the API refuses a caller who is not signed in. |
+| `make pilot-kit`, pre-flight on the demo raw tables | 16 s install | ok |
 
-No step needed a guess once fix 1 was in. None took over 5 minutes here; on a laptop, `make setup`
-may.
+No other step needed a guess, and none took over 5 minutes here; on a laptop, `make setup` may.
 
 ---
 
