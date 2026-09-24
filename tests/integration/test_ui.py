@@ -337,7 +337,11 @@ def test_the_pages_read_what_plan_section_7_assigns_them() -> None:
         "confusion_matrix.json",
         "leaderboard.json",
     } <= set(pages["model"])
-    assert {"decile_lift.json", "scoring_summary.json", "drift.json"} <= set(pages["output"])
+    # v1 (WP4): by run mode - a training run's Output reads the lift, a scoring run's the contact list;
+    # a scoring run writes no decile_lift.json, so its page never asks for one.
+    assert "decile_lift.json" in pages["output"]
+    assert {"scoring_summary.json", "drift.json"} <= set(pages["output_score"])
+    assert "decile_lift.json" not in pages["output_score"]
 
 
 def test_every_endpoint_the_ui_calls_exists_in_this_api(client: TestClient) -> None:
