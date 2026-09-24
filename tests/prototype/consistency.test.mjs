@@ -239,7 +239,7 @@ test("the uplift entry point and its words are ui/modules/uplift's (DEC-608)", (
     "The customers to score. The trained uplift model ranks them by how much the action changes their outcome.",
     "It needs a past campaign where the action was given at random.",
     "Scoring writes the treat list: persuadables within budget are Treat, sleeping dogs never are, and a control group is held out.",
-    "After the run: Model (Qini curve, AUUC) → Output (segments, treat list) → Campaign results.",
+    "After the run: Model (how well it finds the persuadable) → Output (segments, treat list) → Campaign results.",
     "No 0/1 column in this file looks like a treatment. Uplift needs one: 1 for customers who got the action, 0 for the randomly held-out control group.",
     ": it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.",
     "Pick a use case to train an uplift model on a campaign with a random control group."]) {

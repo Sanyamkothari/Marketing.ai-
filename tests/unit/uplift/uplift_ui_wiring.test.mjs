@@ -136,7 +136,7 @@ test("the output page reads the run and its uplift artefacts, and 404s become em
   for (const name of ["uplift_validation.json", "segments.json", "policy_recommendation.json"]) {
     assert.ok(paths.includes(`/runs/r1/uplift/${name}`), name);
   }
-  assert.match(app.innerHTML, /has not produced segments\.json yet/);
+  assert.match(app.innerHTML, /Available after training\./);
   assert.match(app.innerHTML, /href="http:\/\/api\.test\/runs\/r1\/scores\.csv"/);
   assert.ok(!/undefined|NaN/.test(app.innerHTML));
 });

@@ -256,6 +256,7 @@ test("an uplift run's Model and Output redirect to the uplift module's own scree
     assert.ok(html.includes(`data-redirect="${href}"`), `${kind} of ${run.run_id} redirects`);
     assert.ok(html.includes(`href="${href}"`), "and offers the link while it does");
     assert.ok(!text(html).includes("has not produced"));
+    assert.ok(!text(html).includes("Available after training."), "no empty uplift chart");
     noJunk(html);
   }
 });
@@ -269,6 +270,7 @@ test("an uplift run's Data page links its Model and Output tabs to the uplift sc
   assert.ok(!score.includes("/model/r-score"), "an uplift scoring run has no Model tab");
   assert.ok(!text(train).includes("has not produced"));
   assert.ok(!text(score).includes("has not produced"));
+  assert.ok(!text(train).includes("Available after training.") && !text(score).includes("Available after training."));
 });
 
 test("a Phase 1 run still gets the Phase 1 pages", () => {
@@ -354,7 +356,7 @@ test("scoring Output: the contact list is the one primary action, and nothing as
   assert.match(seen, /Subscriber Churn likelihood % Band Main reason Action/);
   assert.match(seen, /1000003 100% High Days since last activity is 240 \(raises it\) Retention call/);
   assert.match(seen, /Held back \(control group\)/);
-  for (const gone of ["decile", "Lift", ".json", "has not produced"]) {
+  for (const gone of ["decile", "Lift", ".json", "has not produced", "Available after training."]) {
     assert.ok(!seen.includes(gone), `the scoring Output shows ${gone}`);
   }
   assert.match(html, /href="#\/campaign\/telco-churn\/r-p1s"/, "Campaign results is a tab");
@@ -474,6 +476,6 @@ test("Data: glance tiles, lineage behind Details, the feature table sorted by mi
   assert.ok(!seen.includes("PARQUET") && !seen.includes("ds_1 (built)"), "file facts are in Technical details");
   assert.match(html, /Next: Model ›/);
   const bare = visible(pages.renderPage("data", telco, p1Train, {}, "#"));
-  assert.ok(!bare.includes(".json") && !bare.includes("has not produced"));
+  assert.ok(!bare.includes(".json") && !bare.includes("has not produced") && !bare.includes("Available after training."));
   noJunk(html);
 });

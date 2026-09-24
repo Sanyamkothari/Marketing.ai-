@@ -10,19 +10,23 @@ import { DATE_LOCALE, EM_DASH, NUMBER_LOCALE, fmtNum, present } from "../../dom.
 
 const MINUS = "−";
 
-/** A number with digit grouping and at most `places` decimals, in the one number locale. */
-const grouped = (value, places) =>
-  Number(value).toLocaleString(NUMBER_LOCALE, { maximumFractionDigits: places, minimumFractionDigits: 0 });
+/** A number with digit grouping and at most `places` decimals (exactly `places` when `fixed`). */
+const grouped = (value, places, fixed = false) =>
+  Number(value).toLocaleString(NUMBER_LOCALE, { maximumFractionDigits: places, minimumFractionDigits: fixed ? places : 0 });
 
-/** A signed number with a real minus sign, so "-0.4" and "+0.4" line up in a column. */
-export function signed(value, places = 1) {
+/**
+ * A signed number with a real minus sign, so "-0.4" and "+0.4" line up in a column. `fixed` keeps
+ * every one of the `places` decimals ("+5.0" rather than "+5") where numbers are read side by side.
+ */
+export function signed(value, places = 1, fixed = false) {
   const text = fmtNum(Math.abs(value), places);
-  if (Number(text) === 0) return "0";
-  return `${value < 0 ? MINUS : "+"}${grouped(Math.abs(value), places)}`;
+  if (Number(text) === 0) return grouped(0, places, fixed);
+  return `${value < 0 ? MINUS : "+"}${grouped(Math.abs(value), places, fixed)}`;
 }
 
-/** A difference of two rates, in percentage points: 0.023 -> "+2.3 pts". */
-export const fmtPts = (value, places = 1) => (present(value) ? `${signed(value * 100, places)} pts` : EM_DASH);
+/** A difference of two rates, in percentage points: 0.023 -> "+2.3 pts" (`fixed`: 0.05 -> "+5.0 pts"). */
+export const fmtPts = (value, places = 1, fixed = false) =>
+  present(value) ? `${signed(value * 100, places, fixed)} pts` : EM_DASH;
 
 /** A rate as a percentage with a fixed number of decimals, so rates line up: 0.39 -> "39.0%". */
 export const fmtRate = (value, places = 1) => (present(value) ? `${(Number(value) * 100).toFixed(places)}%` : EM_DASH);

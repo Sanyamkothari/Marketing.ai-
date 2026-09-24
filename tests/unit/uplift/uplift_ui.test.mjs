@@ -180,7 +180,29 @@ test("model page: Qini SVG with the random line, AUUC with its interval, ten dec
   assert.equal((html.match(/<rect class="(pos|neg)"/g) || []).length, 9, "the decile with no observed uplift gets no bar");
   assert.ok(!html.includes("unotcausal"));
   assert.ok(!html.includes("<campaign>"), "the use-case name is escaped");
+  // The caption names the model's line by its style, not a colour it is not drawn in.
+  assert.match(text(html), /The further the solid line sits above the dashed one/);
+  assert.ok(!html.includes("blue line"));
   noJunk(html);
+});
+
+test("a chart whose artefact is missing says when it comes, with no file name on screen", () => {
+  for (const html of [charts.qiniChart({ points: [] }), charts.decileChart([]), charts.segmentChart(null)]) {
+    assert.equal(html, '<div class="empty">Available after training.</div>');
+  }
+});
+
+test("a segment with no customers has no predicted uplift and shows none", () => {
+  const html = charts.segmentChart({
+    segments: [
+      { segment: "persuadable", label: "Persuadables", rows: 3500, share_pct: 35, mean_predicted_uplift: 0.157, action: "Treat" },
+      { segment: "sleeping_dog", label: "Sleeping dogs", rows: 0, share_pct: 0, mean_predicted_uplift: null, action: "Never treat" },
+    ],
+  });
+  assert.match(text(html), /35% of customers · uplift \+15\.7 pts/);
+  assert.match(html, /aria-label="Persuadables: 3,500 customers, 35%, predicted uplift \+15\.7 pts"/);
+  assert.match(text(html), / 0% of customers(?! ·)/);
+  assert.equal((html.match(/uplift /g) || []).length, 2, "only the persuadables carry an uplift (line and label)");
 });
 
 test("model page with no artefacts shows em dashes and says what is missing, never a number", () => {
@@ -217,7 +239,7 @@ test("output page of a scoring run: four segments, recommended contacts, CI, tre
     [
       ["Customers to contact", "150"],
       ["Extra customers expected to respond", "about 10"],
-      ["Held back to measure", EM],
+      ["All customers held back to measure the campaign", EM],
     ],
   );
   assert.match(text(html), /likely 3 to 16/);
@@ -227,7 +249,10 @@ test("output page of a scoring run: four segments, recommended contacts, CI, tre
   assert.match(html, /<a class="btn secondary" href="#\/campaign\/win-back\/r-score">Measure campaign results/);
   assert.match(html, /The contact budget is reached/);
   // 300 persuadables vs 150 contacted is explained in one line.
-  assert.match(text(html), /Contact 150 customers\. Of 300 persuadable customers, 30 are held back at random to measure the campaign or were opted out\./);
+  assert.match(text(html), /Contact 150 customers\. Of 300 persuadable customers, 30 persuadables held back at random to measure the campaign or opted out are not on the list\./);
+  // Each segment's small line carries its predicted uplift, signed, in points, one decimal.
+  assert.match(text(html), /30% of customers · uplift \+5\.0 pts/);
+  assert.match(text(html), /10% of customers · uplift −4\.0 pts/);
   assert.match(text(html), /120 more could be contacted/);
   // The segment formulas are behind Details, the meanings in words.
   assert.match(html, /<summary>How the segments are cut<\/summary>/);
@@ -235,11 +260,33 @@ test("output page of a scoring run: four segments, recommended contacts, CI, tre
   noJunk(html);
 });
 
+test("the output page's held-back counts say whom they count, so they reconcile", () => {
+  // 579 persuadables are off the list (held back or opted out); the tile's 720 is every customer
+  // held back; the persuadables held back are a part of those 720.
+  const segs = { ...segments, segments: segments.segments.map((sg) => (sg.segment === "persuadable" ? { ...sg, rows: 2804 } : sg)) };
+  const pol = { ...policy, eligible_persuadables: 2225, contacts_recommended: 2225, stop_reason: "all_persuadables", budget_contacts: null };
+  const summary = { rows_scored: 9000, control_group_rows: 720 };
+  const html = views.outputPageHtml(uc, scoreRun, { "segments.json": segs, "policy_recommendation.json": pol }, { summary });
+  assert.match(
+    text(html),
+    /Contact 2,225 customers\. Of 2,804 persuadable customers, 579 persuadables held back at random to measure the campaign or opted out are not on the list\. Those held back are among the 720 of all customers held back to measure the campaign\./,
+  );
+  const kpis = [...html.matchAll(/<div class="kpi"><div class="l">([^<]*)<\/div><div class="v">([^<]*)<\/div><div class="s">([^<]*)<\/div>/g)];
+  const held = kpis.find((m) => m[1] === "All customers held back to measure the campaign");
+  assert.ok(held, "the tile says it counts all customers");
+  assert.equal(held[2], "720");
+  assert.equal(held[3], "8.0% of all 9,000 customers, chosen at random");
+  // one persuadable off the list reads in the singular; with no summary the 720 sentence is left out
+  const one = views.contactLine({ ...pol, eligible_persuadables: 2803 }, segs, false);
+  assert.match(one, /1 persuadable held back at random to measure the campaign or opted out is not on the list\. /);
+});
+
 test("output page of a training run points at scoring runs instead of offering a download", () => {
   const html = views.outputPageHtml(uc, trainRun, {}, { scoreRuns: [{ ...scoreRun, row_count: 5 }] });
   assert.ok(!html.includes("Download contact list"));
   assert.match(html, /#\/uplift\/win-back\/output\/r-score/);
-  assert.match(html, /has not produced segments\.json yet/);
+  assert.match(html, /Available after training\./);
+  assert.ok(!html.includes("segments.json"), "no file name on screen");
   assert.match(html, /Score customers with this model/);
   noJunk(html);
 });
@@ -317,7 +364,7 @@ test("campaign results: a mature report shows lift with its interval and the p-v
   assert.match(text(html), /Contacted 900 180 20\.0%/);
   assert.match(text(html), /Not contacted \(control group\) 100 12 12\.0%/);
   // "Not part of the test" is explained by a line that adds up; the zero row is hidden.
-  assert.match(text(html), /Of 1,043 customers on this campaign's list: 900 contacted, 100 held back as the control group, 40 not part of the test \(opted out or not selected\), 3 with no row in the outcomes file\./);
+  assert.match(text(html), /Of 1,043 customers on this campaign's list: 900 contacted, 100 held back and measured as this campaign's control group, 40 not part of the test \(opted out or not selected\), 3 with no row in the outcomes file\./);
   assert.ok(!text(html).includes("Not yet known (outcome period still running)"));
   assert.match(html, /<a class="btn primary" href="#\/pilot\/value\/r-score">See the value in rupees/);
   assert.match(html, /<summary>Measure again with a new outcomes file<\/summary>/);
@@ -500,7 +547,10 @@ test("setup before a file: step 2 is one line, and score mode has its own footer
   assert.match(html, /After the run: Model/);
   const score = views.upliftScreenHtml(uc, { ...empty, mode: "score" });
   assert.match(score, /After scoring: download the contact list/);
+  assert.match(html, /After the run: Model \(how well it finds the persuadable\) → Output/);
+  assert.ok(!html.includes("Qini curve, AUUC"), "no metric names in the footer");
   assert.ok(!score.includes("Qini curve, AUUC"));
+  assert.ok(!score.includes("how well it finds the persuadable"));
 });
 
 test("setup blocks a run until the treatment and outcome are distinct columns", () => {
@@ -598,5 +648,13 @@ test("the stepper: Data · Model · Contact list · Campaign results, a step tha
   const tabs = [...html.matchAll(/class="tab(?: [^"]*)?"[^>]*>([^<]*)</g)].map((m) => m[1]);
   assert.deepEqual(tabs, ["Data", "Model", "Contact list", "Campaign results"]);
   assert.match(html, /<span class="tab off" aria-disabled="true"[^>]*>Model<\/span>/);
+  // The reason a step does not apply is not only a hover title: the step is focusable, it is
+  // described by a visible line under the tabs, and that line says why.
+  assert.match(html, /<span class="tab off" aria-disabled="true" tabindex="0" aria-describedby="ustep-why-model"[^>]*>Model<\/span>/);
+  assert.match(html, /<p class="note ustep-why"><span id="ustep-why-model">Model: A scoring run uses a model trained earlier\.<\/span><\/p>/);
+  const train = views.outputPageHtml(uc, trainRun, {}, {});
+  assert.match(train, /aria-describedby="ustep-why-campaign"[^>]*>Campaign results<\/span>/);
+  assert.match(train, /<span id="ustep-why-campaign">Campaign results: Measured on a scoring run\.<\/span>/);
+  assert.ok(!train.includes('id="ustep-why-model"'), "a step that applies has no reason line");
   assert.ok(html.indexOf("r-score<") > html.indexOf("<summary>Technical details</summary>"), "the run id is only in Technical details");
 });

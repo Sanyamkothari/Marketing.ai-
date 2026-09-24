@@ -68,6 +68,7 @@ details.adv.utable{padding:0 20px 16px;border-top:0}
 .useg .ua{font-size:12px;color:var(--muted);margin-top:4px}
 .useg .un{text-align:right;font-weight:500;font-feature-settings:"tnum"}
 .useg .un small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
+.useg .un small .uu{white-space:nowrap}
 .useg svg{display:block;width:100%;height:10px}
 .useg.persuadable{--seg:var(--ok)} .useg.sure_thing{--seg:var(--p)} .useg.lost_cause{--seg:var(--faint)} .useg.sleeping_dog{--seg:var(--bad)}
 @media (max-width:700px){.useg{grid-template-columns:1fr}.useg .un{text-align:left}}
@@ -108,6 +109,7 @@ main[data-module="uplift"] .progress li.done .pd.w,main[data-module="uplift"] .p
 .urunsfold{border-top:0;padding:12px 20px}
 .urunsfold .runs-list{margin:12px -20px -12px}
 .tabs .tab.off{color:var(--muted);background:var(--soft);border-color:var(--line);cursor:default}
+.tabs-bar .ustep-why{margin:0;flex-basis:100%;order:3}
 .card > details.adv.ufold{border-top:0;padding:16px 20px}
 .card > details.adv.ufold > summary{font-size:14px;font-weight:600;color:var(--ink);min-height:24px}
 .uwhatif .uform{padding:12px 0 0}

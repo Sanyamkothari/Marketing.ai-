@@ -2384,7 +2384,7 @@ function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg,u),train=s
       </form></div></section>
     ${runsCard(u)}
   </div>
-  ${train?`<p class="next">${u.up?"After the run: Model (Qini curve, AUUC) → Output (segments, treat list) → Campaign results.":"After the run, this page shows the pipeline: Data → Model → Output."}</p>`:""}`;
+  ${train?`<p class="next">${u.up?"After the run: Model (how well it finds the persuadable) → Output (segments, treat list) → Campaign results.":"After the run, this page shows the pipeline: Data → Model → Output."}</p>`:""}`;
 }
 function runsCard(u){const s=st(u),runs=u.up?s.runs.filter(r=>r.ptype==="Uplift"):s.runs;
   return `<section class="card"><h3>${u.up?"Previous uplift runs":"Previous runs"}</h3><div class="runs-list">${runs.length?runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">${u.up?"No uplift runs yet.":"No runs yet."}</div>`}</div></section>`;

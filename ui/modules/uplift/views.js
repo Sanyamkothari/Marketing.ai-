@@ -549,7 +549,7 @@ function setupBody(uc, s) {
   </div>
   <p class="next">${esc(
     train
-      ? "After the run: Model (Qini curve, AUUC) → Output (segments, treat list) → Campaign results."
+      ? "After the run: Model (how well it finds the persuadable) → Output (segments, treat list) → Campaign results."
       : "After scoring: download the contact list, run the campaign, then upload its outcomes to see the campaign results.",
   )}</p>`;
 }
@@ -806,15 +806,28 @@ function stepper(uc, run, kind) {
     ],
     ["campaign", "Campaign results", routes.campaign(uc.id, run.run_id), train ? "Measured on a scoring run" : ""],
   ];
+  // A step that does not apply says why in words everyone gets: the reason is printed under the
+  // tabs and tied to the step by `aria-describedby`, and the step is focusable (`aria-disabled`,
+  // not a link) so a keyboard reaches it and a screen reader reads the reason. The `title` stays
+  // for a mouse hover, but it is never the only place the reason is.
+  const offSteps = steps.filter(([key, , , off]) => off && key !== kind);
+  const whyId = (key) => `ustep-why-${key}`;
+  const why = offSteps.length
+    ? `<p class="note ustep-why">${offSteps
+        .map(([key, label, , off]) => `<span id="${whyId(key)}">${esc(`${label}: ${off}.`)}</span>`)
+        .join(" ")}</p>`
+    : "";
   return `<nav class="tabs" aria-label="Run pages">${steps
     .map(([key, label, href, off]) =>
       off && key !== kind
-        ? `<span class="tab off" aria-disabled="true" title="${esc(off)}">${esc(label)}</span>`
+        ? `<span class="tab off" aria-disabled="true" tabindex="0" aria-describedby="${whyId(key)}" title="${esc(off)}">${esc(
+            label,
+          )}</span>`
         : `<a class="tab ${key === kind ? "on" : ""}" href="${esc(href)}"${key === kind ? ' aria-current="page"' : ""}>${esc(
             label,
           )}</a>`,
     )
-    .join("")}</nav>`;
+    .join("")}</nav>${why}`;
 }
 
 const runWhen = (run) => `${run.mode === "train" ? "Trained" : "Scored"} ${fmtStamp(run.created_at)}`;
@@ -1010,7 +1023,7 @@ export function modelPageHtml(uc, run, art, ope) {
     ${verdict}${tileRow}
     <div class="row">
       <section class="card"><h3>Gain from targeting by the model vs at random</h3>${qini}<p class="caption">${esc(
-        `The further the blue line sits above the dashed one, the more the model's picks beat picking at random${
+        `The further the solid line sits above the dashed one, the more the model's picks beat picking at random${
           curve ? ` (${fmtInt(curve.rows_evaluated)} test customers)` : ""
         }.`,
       )}</p></section>
@@ -1034,8 +1047,14 @@ export function modelPageHtml(uc, run, art, ope) {
 
 // --- Output ------------------------------------------------------------------------------------
 
-/** "Contact 2,241 customers. Of 2,804 persuadable customers, 563 are held back … or were opted out." */
-export function contactLine(policy, segments, train) {
+/**
+ * "Contact 2,241 customers. Of 2,804 persuadable customers, 579 persuadables held back at random to
+ * measure the campaign or opted out are not on the list. Those held back are among the 720 of all
+ * customers held back to measure the campaign." Each held-back count names whom it counts, so the
+ * persuadables here, the tile's all-customer count (`heldBack`, `scoring_summary.json`'s
+ * `control_group_rows`) and the campaign page's measured control group read as parts of one group.
+ */
+export function contactLine(policy, segments, train, heldBack = null) {
   if (!policy || !present(policy.contacts_recommended)) return "";
   const persuadable = ((segments && segments.segments) || []).find((s) => s.segment === "persuadable");
   const p = persuadable && present(persuadable.rows) ? persuadable.rows : null;
@@ -1047,11 +1066,15 @@ export function contactLine(policy, segments, train) {
       : `Contact ${plural(r, "customer")}.`,
   ];
   if (present(p) && present(eligible) && p > eligible) {
+    const off = p - eligible;
     parts.push(
-      `Of ${plural(p, "persuadable customer")}, ${fmtInt(p - eligible)} ${
-        p - eligible === 1 ? "is" : "are"
-      } held back at random to measure the campaign or ${p - eligible === 1 ? "was" : "were"} opted out.`,
+      `Of ${plural(p, "persuadable customer")}, ${plural(off, "persuadable")} held back at random to measure the campaign or opted out ${
+        off === 1 ? "is" : "are"
+      } not on the list.`,
     );
+    if (present(heldBack) && heldBack > 0) {
+      parts.push(`Those held back are among the ${fmtInt(heldBack)} of all customers held back to measure the campaign.`);
+    }
   }
   if (present(eligible) && eligible > r) {
     parts.push(`${STOP_REASON[policy.stop_reason] || humanise(policy.stop_reason)} ${fmtInt(eligible - r)} more could be contacted.`);
@@ -1073,7 +1096,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
       ? {
           value: fmtInt(summary.control_group_rows),
           sub: present(summary.rows_scored) && summary.rows_scored
-            ? `${fmtRate(summary.control_group_rows / summary.rows_scored)} of customers, chosen at random`
+            ? `${fmtRate(summary.control_group_rows / summary.rows_scored)} of all ${fmtInt(summary.rows_scored)} customers, chosen at random`
             : "chosen at random",
         }
       : { value: EM_DASH, sub: train ? "Set when new customers are scored" : "" };
@@ -1085,9 +1108,14 @@ export function outputPageHtml(uc, run, art, extra = {}) {
       sub: expected ? fmtLikely(expected.ci_low, expected.ci_high) : "",
       tip: glossaryTerm("incremental"),
     },
-    { label: "Held back to measure", value: held.value, sub: held.sub, tip: glossaryTerm("control group") },
+    {
+      label: "All customers held back to measure the campaign",
+      value: held.value,
+      sub: held.sub,
+      tip: glossaryTerm("control group"),
+    },
   ]);
-  const line = contactLine(policy, segments, train);
+  const line = contactLine(policy, segments, train, summary ? summary.control_group_rows : null);
   const scope = policy
     ? policy.computed_on === "test"
       ? "Measured on the hold-out split of the training run."
@@ -1265,11 +1293,15 @@ export function campaignVerdict(report, roi) {
   };
 }
 
-/** Of N customers: contacted, held back, not part of the test, with the zero rows left out. */
+/**
+ * Of N customers: contacted, held back, not part of the test, with the zero rows left out. The
+ * held-back count is this campaign's measured control group - a part of the scoring run's whole
+ * control group the Contact list page counts - so it says so rather than "the control group".
+ */
 export function reconciliationLine(report) {
   const parts = [
     [report.treated_rows, "contacted"],
-    [report.control_rows, "held back as the control group"],
+    [report.control_rows, "held back and measured as this campaign's control group"],
     [report.rows_suppressed_or_untreated, "not part of the test (opted out or not selected)"],
     [report.rows_immature, "still inside the outcome period"],
     [report.rows_without_outcome, "with no row in the outcomes file"],

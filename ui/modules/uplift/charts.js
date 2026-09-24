@@ -1,7 +1,8 @@
 // The three uplift charts, as inline SVG strings (plan §9.3: no chart library, the prototype's look).
 //
-// Each function reads one artefact and nothing else, and each returns the prototype's empty-card
-// sentence when that artefact is missing - never a curve drawn from made-up points. Colours are the
+// Each function reads one artefact and nothing else, and each returns one empty-card sentence
+// ("Available after training.", no file name on screen) when that artefact is missing - never a
+// curve drawn from made-up points. Colours are the
 // custom properties `ui/index.html` defines (`--c` is the use case's type colour, `--bad` the
 // sleeping-dog red), so both themes work with no chart-specific palette.
 //
@@ -57,7 +58,7 @@ export function qiniChart(curve) {
     .filter((p) => present(p.fraction) && present(p.qini) && present(p.random))
     .slice()
     .sort((a, b) => a.fraction - b.fraction);
-  if (points.length < 2) return empty("This run has not produced qini_curve.json yet.");
+  if (points.length < 2) return empty("Available after training.");
   const values = points.flatMap((p) => [p.qini, p.random]);
   const ticks = niceTicks(Math.min(0, ...values), Math.max(0, ...values), 5);
   const lo = ticks[0];
@@ -113,7 +114,7 @@ export function qiniChart(curve) {
  */
 export function decileChart(deciles) {
   const rows = (deciles || []).slice().sort((a, b) => a.decile - b.decile);
-  if (!rows.length) return empty("This run has not produced uplift_evaluation.json yet.");
+  if (!rows.length) return empty("Available after training.");
   const values = rows.flatMap((d) => [d.observed_uplift, d.predicted_uplift]).filter(present);
   const ticks = niceTicks(Math.min(0, ...values), Math.max(0, ...values), 5);
   const lo = ticks[0];
@@ -167,17 +168,19 @@ export function decileChart(deciles) {
 
 /**
  * `segments.json` -> the four-segment chart: one bar per segment, sized by its share of customers,
- * with the count, the mean predicted uplift and the segment's action beside it.
+ * with the count, the mean predicted uplift and the segment's action beside it. The uplift reads
+ * "uplift +15.7 pts" (signed, points, one decimal); a segment with no customers has none and shows none.
  */
 export function segmentChart(report) {
   const segments = (report && report.segments) || [];
-  if (!segments.length) return empty("This run has not produced segments.json yet.");
+  if (!segments.length) return empty("Available after training.");
   const rows = segments
     .map((s) => {
       const share = present(s.share_pct) ? Math.max(0, Math.min(100, Number(s.share_pct))) : 0;
+      const uplift = present(s.mean_predicted_uplift) ? `uplift ${fmtPts(s.mean_predicted_uplift, 1, true)}` : "";
       const label = `${s.label}: ${present(s.rows) ? fmtInt(s.rows) : EM_DASH} customers, ${
         present(s.share_pct) ? fmtNum(s.share_pct, 1) : EM_DASH
-      }%`;
+      }%${uplift ? `, predicted ${uplift}` : ""}`;
       return `<div class="useg ${esc(s.segment)}"><div><div class="ul">${esc(s.label)}</div><div class="ua">${esc(
         s.action,
       )}</div></div><svg height="10" role="img" aria-label="${esc(
@@ -186,7 +189,9 @@ export function segmentChart(report) {
         2,
       )}%" height="10" rx="5" fill="var(--seg)"/></svg><div class="un">${
         present(s.rows) ? esc(fmtInt(s.rows)) : EM_DASH
-      }<small>${present(s.share_pct) ? `${esc(fmtNum(s.share_pct, 1))}% of customers` : EM_DASH}</small></div></div>`;
+      }<small>${present(s.share_pct) ? `${esc(fmtNum(s.share_pct, 1))}% of customers` : EM_DASH}${
+        uplift ? ` · <span class="uu">${esc(uplift)}</span>` : ""
+      }</small></div></div>`;
     })
     .join("");
   return `<div class="usegs">${rows}</div>`;
