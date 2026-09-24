@@ -138,8 +138,8 @@ test("DEC-608: Phase 1's change… never offers Uplift, not even for a file with
   assert.ok($(dom, "#f-model"), "the Phase 1 model step");
   assert.equal($(dom, "#f-learner"), null);
   assert.equal($(dom, ".upchecks"), null);
-  // Uplift is chosen by going to its screen, from the link under the header
-  const link = $(dom, ".uentry a");
+  // Uplift is chosen by going to its screen, from the related link in the header's actions
+  const link = $(dom, ".head-actions a.related");
   assert.equal(link.getAttribute("href"), UP);
   click(dom, link);
   await settle(dom);
@@ -351,8 +351,9 @@ test("Results → Output after scoring: who to contact within budget, and a trea
   await trainUplift(dom);
   await scoreUplift(dom);
   assert.match($(dom, ".summary").textContent, /14,500 rows scored with X-learner · AutoGluon fast · Recommended to contact: 4,000/);
-  assert.ok($(dom, "#f-campaign"), "a link to the campaign results, outside the three blocks");
-  assert.equal($$(dom, ".flow .block").length, 3);
+  // v1: Campaign results is the fourth block of a scoring run's flow
+  assert.ok($(dom, ".flow .block#f-campaign"), "the campaign results, as the fourth block");
+  assert.equal($$(dom, ".flow .block").length, 4);
   go(dom, `${UP}/output`);
   assert.deepEqual($$(dom, ".tabs .tab").map((t) => t.textContent.replace(/^\d+/, "")),
     ["Data", "Model", "Output", "Campaign results"]);
@@ -403,7 +404,7 @@ test("Campaign results: a list scored today says when its results will be ready"
   assert.equal($(dom, "#cr-run").value, ev(dom, `UPSTATE['${WB}'].current.id`), "the current run is chosen");
   // 23 Sep 2026 + 90 days
   assert.equal($(dom, "[data-up-wait] .cw1").textContent, "Results available on 22 Dec 2026");
-  assert.deepEqual(Object.values(kpiMap(dom)), ["—", "—", "—", "—"], "nothing is measured before the window ends");
+  assert.deepEqual(Object.values(kpiMap(dom)), ["—", "—"], "nothing is measured before the window ends");
   click(dom, "#cr-sample");
   assert.equal($(dom, "[data-up-wait] .cw1").textContent, "Results available on 22 Dec 2026");
   // incrementality.py::_summary's IMMATURE sentence, verbatim (the engine prints the ISO date and a bare count)
@@ -419,8 +420,10 @@ test("Campaign results: the 1 May campaign, measured once its window has ended",
   assert.match($(dom, "#cr-run").selectedOptions[0].textContent, /Scored 14,500 rows · 1 May 2026/);
   assert.match(body(dom), /Upload the outcomes file to measure this campaign\./);
   click(dom, "#cr-sample");
+  // v1: the verdict, in the words and sign of the rupee value view, then two labelled tiles
+  assert.equal($(dom, ".verdict .vline").textContent, "The campaign worked: about 390 extra customers came back.");
   assert.deepEqual(kpiMap(dom), {
-    "Treated": "11,200 · 11.0%", "Control": "1,450 · 7.52%", "Lift": "+3.48 pts", "Incremental conversions": "390",
+    "Contacted customers who came back": "11.0% of 11,200", "Control group who came back": "7.5% of 1,450",
   });
   assert.equal(kv(dom, "Absolute lift"), "+3.48 pts (95% CI 1.91 to 4.86)");
   assert.equal(kv(dom, "Relative lift"), "+46.3%");
@@ -511,7 +514,7 @@ test("the plain win-back sample is the Phase 1 path: no treatment column, a prop
   // DEC-608: uplift is not a choice on this Setup; it is a link to the uplift screen, under the header
   assert.equal($(dom, "#f-samplecampaign"), null, "the campaign files are on the uplift screen");
   assert.equal($(dom, "#f-sampletargeted"), null);
-  assert.equal($(dom, ".uentry a").getAttribute("href"), UP, "uplift is an explicit opt-in, on its own screen");
+  assert.equal($(dom, ".head-actions a.related").getAttribute("href"), UP, "uplift is an explicit opt-in, on its own screen");
   submit(dom);
   assert.equal($$(dom, ".progress .pt")[0].textContent === "Checking the treatment", false);
   await settle(dom);
@@ -599,13 +602,13 @@ test("Campaign results: an uploaded outcomes file is not measured with the sampl
   go(dom, `#/uc/${WB}/campaign`);
   await upload(dom, "#cr-file", "my_outcomes.csv", "customer_id,reactivated_90d\nC1,1\n");
   assert.equal($(dom, "#cr-file").closest("label").querySelector(".fname").textContent, "my_outcomes.csv");
-  assert.deepEqual(Object.values(kpiMap(dom)), ["—", "—", "—", "—"]);
+  assert.deepEqual(Object.values(kpiMap(dom)), ["—", "—"]);
   assert.match($(dom, "[data-up-unread]").textContent, /my_outcomes\.csv is not read by the prototype, so nothing is computed from it\./);
   assert.equal($(dom, "[data-up-summary]"), null);
   assert.doesNotMatch(body(dom), /11,200|1,232|\+3\.48/);
   // the sample link is still the way to a measured campaign
   click(dom, "#cr-sample");
-  assert.equal(kpiMap(dom).Lift, "+3.48 pts");
+  assert.equal(kv(dom, "Absolute lift"), "+3.48 pts (95% CI 1.91 to 4.86)");
 });
 
 /* ---------- Review round 2 ---------- */
@@ -911,7 +914,7 @@ test("Campaign results for a run with a 0% control group says the effect cannot 
   assert.doesNotMatch(body(dom), /The lift below is still causal/);
   // the seeded 1 May run kept its 10% control group and is measured as before
   set(dom, "#cr-run", "r0501");
-  assert.equal(kpiMap(dom).Lift, "+3.48 pts");
+  assert.equal(kv(dom, "Absolute lift"), "+3.48 pts (95% CI 1.91 to 4.86)");
 });
 
 /* ---------- Review round 4 ---------- */
@@ -1066,12 +1069,13 @@ test("Campaign results and Results date a run on the same day in Asia/Kolkata (I
 
 test("DEC-608: win-back's Setup links to its uplift screen, the product's entry point, in the product's words", async () => {
   const dom = winback();
-  const entry = () => $(dom, ".uentry");
-  // under the header, as ui/modules/uplift/index.js inserts it after the rule
-  assert.equal(entry().previousElementSibling.className, "rule");
-  assert.equal(entry().getAttribute("aria-label"), "Uplift");
-  assert.equal(entry().querySelector("a").innerHTML, "Uplift for <b>this use case</b> ›");
-  assert.equal(entry().querySelector("span").textContent, "predicts who changes behaviour because of your action");
+  // v1 (the audit's navigation section): a quiet related link in the use case's own header actions,
+  // never a pill injected under the rule
+  const entry = () => $(dom, ".head .head-actions a.related");
+  assert.equal($(dom, ".uentry"), null);
+  assert.equal(entry().textContent, "Also: target with uplift ›");
+  assert.equal(entry().getAttribute("title"), "Uplift predicts who changes behaviour because of your action");
+  assert.equal(entry().getAttribute("href"), UP);
   // on every state of the use case's screen: Setup, Running and Results
   click(dom, "#f-sample");
   submit(dom);
@@ -1083,23 +1087,22 @@ test("DEC-608: win-back's Setup links to its uplift screen, the product's entry 
     go(dom, `#/uc/${id}`);
     assert.equal(entry(), null, `${id} has no uplift link`);
   }
-  // the reviewer's ruling on DEC-666 (DEC-952): the Data / Model / Output pages carry the use-case link
-  // under their header, as the product's module inserts it after the rule (screenshots 14 and 17)
+  // the reviewer's ruling on DEC-666 (DEC-952): the Data / Model / Output pages carry the use-case link,
+  // since v1 in their header actions too (screenshots 14 and 17)
   for (const page of ["data", "model", "output", "campaign"]) {
     go(dom, `#/uc/${WB}/${page}`);
-    assert.equal(entry().previousElementSibling.className, "rule", `${page}: the link sits under the header`);
-    assert.equal(entry().querySelector("a").getAttribute("href"), UP, `${page} links to the uplift screen`);
+    assert.equal(entry().getAttribute("href"), UP, `${page} links to the uplift screen`);
   }
-  // and the Overview carries the product's "Uplift modelling" link (screenshot 01)
+  // Home carries no uplift pill: "Uplift models" is an entry of the top bar's Models menu (screenshot 25)
   go(dom, "#/");
-  assert.equal(entry().previousElementSibling.className, "rule");
-  assert.equal(entry().querySelector("a").innerHTML, "<b>Uplift modelling</b> ›");
-  assert.equal(entry().querySelector("a").getAttribute("href"), "#/uplift");
-  // the uplift screen: the product's header, a way back, and its own Setup
+  assert.equal($(dom, ".uentry"), null);
+  assert.equal($(dom, '#pb-bar #tn-models a[href="#/uplift"]').textContent, "Uplift models");
+  // the uplift screen: the product's header, the breadcrumb as the way back, and its own Setup
   go(dom, UP);
   assert.equal(dom.window.document.title, "Win-back Campaign · Uplift · Marketing AI");
   assert.equal($(dom, "h1").textContent, "Win-back Campaign · Uplift");
-  assert.equal($(dom, ".back").getAttribute("href"), `#/uc/${WB}`);
+  assert.deepEqual($$(dom, ".crumbs a, .crumbs .cur").map((e) => e.textContent), ["Home", "Customer Lifecycle", "Win-back Campaign", "Uplift"]);
+  assert.equal($(dom, ".crumbs a:last-of-type").getAttribute("href"), `#/uc/${WB}`);
   assert.equal($(dom, ".desc").textContent, "Uplift predicts who changes behaviour because of your action.");
   assert.deepEqual($$(dom, ".chips .chip").map((c) => c.textContent).slice(-1), ["Uplift"]);
   assert.deepEqual($$(dom, ".seg button").map((b) => b.textContent), ["Train uplift model", "Score new data"]);
@@ -1126,7 +1129,7 @@ test("DEC-608: the uplift screen has its own form and shares the use case's runs
     go(dom, `${UP}/${page}`);
     assert.ok($(dom, "[data-up-empty]"), `${page} before an uplift run`);
     assert.equal($(dom, ".vchart"), null);
-    assert.deepEqual($$(dom, ".crumbs a, .crumbs .cur").map((e) => e.textContent), ["Customer Lifecycle", "Win-back Campaign", "Uplift", page === "model" ? "Model" : "Output"]);
+    assert.deepEqual($$(dom, ".crumbs a, .crumbs .cur").map((e) => e.textContent), ["Home", "Customer Lifecycle", "Win-back Campaign", "Uplift", page === "model" ? "Model" : "Output"]);
   }
   go(dom, UP);
   click(dom, '.seg button[data-mode="train"]');

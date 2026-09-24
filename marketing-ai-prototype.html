@@ -16,6 +16,9 @@
   --ok:#15803D;--ok-t:#E8F6EE;--warn:#B45309;--warn-t:#FEF3C7;--bad:#B42318;--bad-t:#FDECEC;
   --brand-blue:#1E57BD;--brand-yellow:#FFD500;
   --track:#F3F4F6;
+  /* v1 aliases (no new colours): the primary button's fill and label */
+  --btn:var(--ink);--btn-ink:var(--surface);
+  color-scheme:light;
 }
 @media (prefers-color-scheme: dark){
   :root:not([data-theme="light"]){
@@ -25,6 +28,8 @@
     --p:#6E9BEA;--p-t:#1B2A44;--g:#A68BEA;--g-t:#2A2342;--h:#4CC3AC;--h-t:#16302B;
     --ok:#5BD08A;--ok-t:#16301F;--warn:#F2B35B;--warn-t:#3A2C14;--bad:#F2877B;--bad-t:#3B1C19;
     --brand-blue:#6E9BEA;--track:#232932;
+    --btn:var(--p);--btn-ink:var(--stage-ink);
+    color-scheme:dark;
   }
 }
 :root[data-theme="dark"]{
@@ -34,15 +39,18 @@
   --p:#6E9BEA;--p-t:#1B2A44;--g:#A68BEA;--g-t:#2A2342;--h:#4CC3AC;--h-t:#16302B;
   --ok:#5BD08A;--ok-t:#16301F;--warn:#F2B35B;--warn-t:#3A2C14;--bad:#F2877B;--bad-t:#3B1C19;
   --brand-blue:#6E9BEA;--track:#232932;
+  --btn:var(--p);--btn-ink:var(--stage-ink);
+  color-scheme:dark;
 }
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font-family:Inter,"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
 a{color:inherit;text-decoration:none}
-a:focus-visible{outline:2px solid var(--brand-blue);outline-offset:2px;border-radius:6px}
+a:focus-visible,button:focus-visible,select:focus-visible,input:focus-visible,textarea:focus-visible,summary:focus-visible,[tabindex]:focus-visible{outline:2px solid var(--brand-blue);outline-offset:2px}
+a:focus-visible{border-radius:6px}
 img,svg{max-width:100%}
-.screen{max-width:1440px;margin:24px auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:44px 64px 64px}
-@media (max-width:900px){.screen{margin:0;border-radius:0;border-left:0;border-right:0;padding:28px 20px 40px}}
+.screen{max-width:1440px;margin:24px auto;background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:44px 64px 96px}
+@media (max-width:900px){.screen{margin:0;border-radius:0;border-left:0;border-right:0;padding:28px 20px 96px}}
 
 /* header */
 .head{display:flex;justify-content:space-between;align-items:flex-start;gap:24px}
@@ -56,19 +64,19 @@ img,svg{max-width:100%}
 .crumbs{display:flex;flex-wrap:wrap;gap:8px;align-items:center;font-size:12px;font-weight:500;color:var(--muted)}
 .crumbs a:hover{color:var(--ink)}
 .crumbs .sep{color:var(--faint)} .crumbs .cur{color:var(--ink);font-weight:600}
-.over{font-size:11px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
+.over{font-size:12px;font-weight:600;letter-spacing:.12em;text-transform:uppercase}
 .chips{display:flex;gap:8px;flex-wrap:wrap}
 .chip{display:inline-flex;gap:6px;align-items:center;padding:4px 10px;border-radius:999px;font-size:12px;font-weight:500;white-space:nowrap}
 .chip.stage{background:var(--soft);border:1px solid var(--line)} .chip.stage span{color:var(--muted);font-weight:400}
 .t-P{--c:var(--p);--t:var(--p-t)} .t-G{--c:var(--g);--t:var(--g-t)} .t-H{--c:var(--h);--t:var(--h-t)}
-.chip.type{background:var(--t);color:var(--c)}
+.chip.type{background:var(--t);color:var(--c)} .chip.type.t-H{color:var(--ink2)}
 .back{font-size:12px;font-weight:500;color:var(--muted)} .back:hover{color:var(--ink)}
 
 /* overview */
 .bar{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap}
 .cap{font-size:12px;font-weight:500;color:var(--muted)}
 .legend{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-.legend .lbl{font-size:12px;color:var(--faint)}
+.legend .lbl{font-size:12px;color:var(--muted)}
 .timeline-wrap{overflow-x:auto;margin-top:40px;padding-bottom:8px}
 .timeline{display:grid;grid-template-columns:repeat(5,minmax(200px,1fr));column-gap:38px;min-width:1100px}
 .stage-col{display:flex;flex-direction:column;gap:12px;align-items:flex-start}
@@ -80,7 +88,7 @@ img,svg{max-width:100%}
 .uc::before{content:"";position:absolute;left:0;top:0;bottom:0;width:4px;background:var(--c)}
 .uc .chev{color:var(--faint);font-size:18px;line-height:1}
 .uc:hover{border-color:var(--c);background:var(--soft)} .uc:hover .chev{color:var(--c)}
-.hint{margin-top:48px;font-size:12px;color:var(--faint)}
+.hint{margin-top:48px;font-size:12px;color:var(--muted)}
 
 /* detail */
 .flow{display:grid;grid-template-columns:1fr 56px 1fr 56px 1fr;align-items:stretch;margin-top:16px}
@@ -104,7 +112,7 @@ img,svg{max-width:100%}
 .fstep{display:grid;grid-template-columns:28px minmax(0,1fr);gap:14px;padding:18px 0;border-top:1px solid var(--line)}
 .fstep:first-of-type{border-top:0;padding-top:4px}
 .fstep.locked{opacity:.4;pointer-events:none}
-.stepno{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--t);color:var(--c);font-size:11px;font-weight:600;margin-top:2px}
+.stepno{width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--t);color:var(--c);font-size:12px;font-weight:600;margin-top:2px}
 .fstep.done .stepno{background:var(--ok-t);color:var(--ok)}
 .flabel{font-size:13px;font-weight:600;color:var(--ink)}
 .fhint{font-size:12px;color:var(--muted);margin:2px 0 10px}
@@ -128,7 +136,8 @@ img,svg{max-width:100%}
 .control select{cursor:pointer}.control input[type=number]{padding-right:12px}
 .control select option{color:var(--ink);background:var(--surface)}
 .sr{position:absolute;width:1px;height:1px;opacity:0;overflow:hidden;pointer-events:none}
-.linkbtn{border:0;background:none;padding:0;font:inherit;font-size:12px;color:var(--brand-blue);text-decoration:underline;cursor:pointer}
+.linkbtn{border:0;background:none;padding:0;min-height:24px;font:inherit;font-size:13px;font-weight:500;color:var(--brand-blue);text-decoration:none;cursor:pointer}
+.linkbtn:hover{text-decoration:underline}
 .orline{display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:var(--muted)}
 .preview{margin-top:14px;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--soft)}
 .preview .pv-head{display:flex;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:8px 12px;font-size:12px;color:var(--muted)}
@@ -136,7 +145,7 @@ img,svg{max-width:100%}
 .preview table{font-size:12px;background:var(--surface)}
 .preview th{padding:7px 12px}.preview td{padding:7px 12px;color:var(--ink2);white-space:nowrap}
 .colchips{display:flex;flex-wrap:wrap;gap:6px;padding:0 12px 10px}
-.colchip{font-size:11px;padding:2px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--ink2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.colchip{font-size:12px;padding:2px 8px;border-radius:999px;background:var(--surface);border:1px solid var(--line);color:var(--ink2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .colchip.t{border-color:var(--c);color:var(--c)}
 details.adv{border-top:1px solid var(--line);padding:14px 0 0}
 details.adv summary{cursor:pointer;font-size:13px;font-weight:500;color:var(--ink2);list-style:none;display:flex;align-items:center;gap:8px}
@@ -147,9 +156,9 @@ details.adv .frow{padding-top:14px}
 .check{display:flex;align-items:center;gap:8px;font-size:13px;height:38px}
 .check input{width:16px;height:16px;accent-color:var(--brand-blue)}
 .actions{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding-top:20px;border-top:1px solid var(--line);margin-top:6px}
-.run{height:40px;padding:0 20px;border:0;border-radius:8px;background:var(--stage);color:var(--stage-ink);font:inherit;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
+.run{height:40px;padding:0 20px;border:0;border-radius:8px;background:var(--btn);color:var(--btn-ink);font:inherit;font-size:13px;font-weight:600;cursor:pointer;white-space:nowrap}
 .run:hover{opacity:.88}.run:focus-visible{outline:2px solid var(--brand-blue);outline-offset:2px}
-.run[disabled]{opacity:.45;cursor:not-allowed}
+.run[disabled]{background:var(--soft);color:var(--muted);box-shadow:inset 0 0 0 1px var(--line);opacity:1;cursor:not-allowed}
 .reason{font-size:13px;color:var(--muted)}
 .runs-list{display:flex;flex-direction:column}
 .runrow{display:flex;justify-content:space-between;gap:12px;padding:12px 20px;border-top:1px solid var(--line);font-size:13px;align-items:center}
@@ -157,29 +166,29 @@ details.adv .frow{padding-top:14px}
 .runrow .r1{font-weight:500;color:var(--ink)}.runrow .r2{font-size:12px;color:var(--muted);margin-top:2px}
 .runrow .r3{text-align:right;white-space:nowrap}
 .runrow .r3 b{display:block;font-weight:600}
-.champ{display:inline-block;font-size:11px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--ok-t);color:var(--ok);margin-left:6px;vertical-align:1px}
+.champ{display:inline-block;font-size:12px;font-weight:600;padding:2px 8px;border-radius:999px;background:var(--ok-t);color:var(--ok);margin-left:6px;vertical-align:1px}
 .empty{padding:16px 20px;font-size:13px;color:var(--muted)}
-.next{margin-top:24px;font-size:12px;color:var(--faint)}
+.next{margin-top:24px;font-size:12px;color:var(--muted)}
 .adv-wrap{border-top:1px solid var(--line);margin-top:4px;padding-top:6px}
 .adv-wrap>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:10px 0;font-size:13px;font-weight:500;color:var(--ink2)}
 .adv-wrap>summary::-webkit-details-marker{display:none}
 .adv-wrap>summary::before{content:"";width:7px;height:7px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
 .adv-wrap[open]>summary::before{transform:rotate(45deg)}
-.adv-wrap>summary .n{margin-left:auto;font-size:12px;font-weight:400;color:var(--faint)}
+.adv-wrap>summary .n{margin-left:auto;font-size:12px;font-weight:400;color:var(--muted)}
 .stages{border:1px solid var(--line);border-radius:10px;overflow:hidden;margin:6px 0 16px}
 .stage-d{border-top:1px solid var(--line)}
 .stage-d:first-child{border-top:0}
-.stage-d>summary{cursor:pointer;list-style:none;display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 16px;font-size:13px;background:var(--surface)}
+.stage-d>summary{cursor:pointer;list-style:none;display:grid;grid-template-columns:minmax(0,1fr) auto;gap:12px;align-items:center;padding:12px 16px;font-size:13px;background:var(--surface)}
 .stage-d>summary::-webkit-details-marker{display:none}
 .stage-d>summary:hover{background:var(--soft)}
-.stage-d>summary .sn{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:11px;font-weight:600;color:var(--muted)}
+.stage-d>summary .sn{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:12px;font-weight:600;color:var(--muted)}
 .stage-d>summary .st{font-weight:600;color:var(--ink)}
 .stage-d>summary .ss{font-size:12px;color:var(--muted);margin-top:1px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
-.stage-d>summary .sc{font-size:12px;color:var(--faint)}
+.stage-d>summary .sc{font-size:12px;color:var(--muted)}
 .stage-d[open]>summary .sc{color:var(--c)}
-.stage-d .frow{padding:4px 16px 16px 52px;background:var(--soft)}
+.stage-d .frow{padding:4px 16px 16px 16px;background:var(--soft)}
 .field.xs{width:130px}
-.algos{display:flex;flex-wrap:wrap;gap:8px 16px;padding:4px 16px 16px 52px;background:var(--soft)}
+.algos{display:flex;flex-wrap:wrap;gap:8px 16px;padding:4px 16px 16px 16px;background:var(--soft)}
 .algos label{display:flex;align-items:center;gap:7px;font-size:13px}
 .algos input{width:15px;height:15px;accent-color:var(--brand-blue)}
 .fstep .frow .field{width:220px}
@@ -195,14 +204,15 @@ details.adv .frow{padding-top:14px}
 .progress li.active .dot::after{content:"";width:8px;height:8px;border-radius:50%;background:var(--c);animation:pulse 1s ease-in-out infinite}
 @keyframes pulse{0%,100%{opacity:.3;transform:scale(.7)}50%{opacity:1;transform:scale(1)}}
 .progress li.done .dot{background:var(--ok-t);color:var(--ok);border-color:transparent}
-.progress .pt{font-size:13px;font-weight:500;color:var(--faint)}
+.progress .pt{font-size:13px;font-weight:500;color:var(--muted)}
 .progress li.active .pt,.progress li.done .pt{color:var(--ink)}
 .progress .pd{font-size:12px;color:var(--muted);margin-top:2px;min-height:14px}
 .progress li.done .pd{color:var(--ok)}
 /* results */
 .summary{display:flex;flex-wrap:wrap;align-items:center;gap:10px 18px;padding:14px 18px;border:1px solid var(--line);border-radius:10px;background:var(--soft);font-size:13px;margin-top:8px}
 .summary .ok{color:var(--ok);font-weight:600}.summary .muted{color:var(--muted)}
-.summary .again{margin-left:auto;color:var(--brand-blue);font-weight:500;background:none;border:0;padding:0;font:inherit;cursor:pointer;text-decoration:underline}
+.summary .again{color:var(--brand-blue);font-weight:500;background:none;border:0;padding:0;min-height:24px;font:inherit;cursor:pointer;text-decoration:none}
+.summary .again:hover{text-decoration:underline}
 .block .meta{font-size:12px;color:var(--muted);margin-top:8px}
 .block .lab{display:flex;justify-content:space-between;align-items:center;gap:8px}
 .bstate{font-size:12px;font-weight:500;letter-spacing:0;text-transform:none;color:var(--ok)}
@@ -213,15 +223,15 @@ details.adv .frow{padding-top:14px}
 .tabs-bar{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap}
 .tabs{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
 .tab{display:inline-flex;gap:6px;align-items:center;padding:7px 14px;border-radius:999px;border:1px solid var(--line2);font-size:13px;font-weight:500;color:var(--ink2)}
-.tab .n{color:var(--faint);font-size:12px;font-weight:600}
-.tab.on{background:var(--stage);border-color:var(--stage);color:var(--stage-ink)}
+.tab .n{color:var(--muted);font-size:12px;font-weight:600}
+.tab.on{background:var(--btn);border-color:var(--btn);color:var(--btn-ink)}
 .tab:not(.on):hover{border-color:var(--ink2)}
 .tabs .arr{color:var(--faint)}
-.note{font-size:12px;color:var(--faint)}
+.note{font-size:12px;color:var(--muted)}
 .stack{display:flex;flex-direction:column;gap:24px;margin-top:24px}
 .kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
 .kpi{border:1px solid var(--line);border-radius:10px;padding:18px 20px}
-.kpi .l{font-size:12px;color:var(--muted)} .kpi .v{font-size:22px;font-weight:600;margin-top:6px;line-height:1.2}
+.kpi .l{font-size:12px;color:var(--muted)} .kpi .v{font-size:22px;font-weight:600;margin-top:6px;line-height:1.2;font-feature-settings:"tnum"}
 .row{display:grid;grid-template-columns:minmax(0,1fr) 420px;gap:24px;align-items:stretch}
 .row.rev{grid-template-columns:420px minmax(0,1fr)}
 @media (max-width:1100px){.row,.row.rev{grid-template-columns:1fr}.kpis{grid-template-columns:repeat(2,1fr)}}
@@ -230,7 +240,7 @@ details.adv .frow{padding-top:14px}
 .card h4{margin:0;padding:13px 20px;font-size:13px;font-weight:600;background:var(--soft);border-bottom:1px solid var(--line);border-top:1px solid var(--line)}
 .tbl-wrap{overflow-x:auto}
 table{width:100%;border-collapse:collapse;font-size:13px}
-th{background:var(--soft);text-align:left;font-size:11px;font-weight:600;color:var(--muted);padding:10px 20px;white-space:nowrap}
+th{background:var(--soft);text-align:left;font-size:12px;font-weight:600;color:var(--muted);padding:10px 20px;white-space:nowrap}
 td{padding:12px 20px;border-top:1px solid var(--line);color:var(--ink2);vertical-align:middle}
 td:first-child{color:var(--ink);font-weight:500}
 table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-child(3){color:var(--muted)}
@@ -240,7 +250,7 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .kv .k{color:var(--muted)} .kv .v{font-weight:500;text-align:right}
 .steps{list-style:none;margin:0;padding:16px 20px;display:flex;flex-direction:column;gap:12px}
 .steps li{display:flex;gap:12px;align-items:center}
-.steps .no{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--t);color:var(--c);font-size:11px;font-weight:600}
+.steps .no{flex:none;width:24px;height:24px;border-radius:50%;display:grid;place-items:center;background:var(--t);color:var(--c);font-size:12px;font-weight:600}
 .steps .s1{font-size:13px;font-weight:500} .steps .s2{font-size:12px;color:var(--muted)}
 .bars{padding:18px 20px;display:flex;flex-direction:column;gap:14px}
 .brow{display:grid;grid-template-columns:200px 1fr 48px;gap:16px;align-items:center;font-size:13px}
@@ -248,16 +258,16 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .track{height:8px;border-radius:4px;background:var(--track);overflow:hidden}
 .track i{display:block;height:100%;border-radius:4px;background:var(--c)}
 .brow .pct{font-weight:500;text-align:right}
-.caption{font-size:12px;color:var(--faint);padding:0 20px 18px}
+.caption{font-size:12px;color:var(--muted);padding:0 20px 18px}
 .bars + .caption{padding-top:0}
 .cm{padding:18px 20px;display:grid;grid-template-columns:80px 1fr 1fr;gap:8px;align-items:center}
-.cm .hd{font-size:11px;font-weight:600;color:var(--muted);text-align:center}
-.cm .rl{font-size:11px;font-weight:600;color:var(--muted)}
+.cm .hd{font-size:12px;font-weight:600;color:var(--muted);text-align:center}
+.cm .rl{font-size:12px;font-weight:600;color:var(--muted)}
 .cm .cell{height:64px;border-radius:8px;display:flex;flex-direction:column;align-items:center;justify-content:center;background:var(--soft)}
 .cm .cell.good{background:var(--t)} .cm .cell b{font-size:16px;font-weight:600;color:var(--ink2)} .cm .cell.good b{color:var(--c)}
-.cm .cell small{font-size:11px;color:var(--muted)}
+.cm .cell small{font-size:12px;color:var(--muted)}
 .vchart{flex:1;display:flex;align-items:flex-end;gap:12px;padding:24px 20px 12px;min-height:240px;overflow-x:auto}
-.vcol{flex:1;min-width:34px;max-width:70px;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:11px}
+.vcol{flex:1;min-width:34px;max-width:70px;display:flex;flex-direction:column;align-items:center;gap:6px;font-size:12px}
 .vcol .bv{color:var(--ink2);font-weight:500}
 .vcol .bb{width:100%;max-width:40px;border-radius:4px 4px 0 0;background:var(--t)}
 .vcol.top .bb{background:var(--c)}
@@ -266,16 +276,12 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .pill.ok{background:var(--ok-t);color:var(--ok)} .pill.warn{background:var(--warn-t);color:var(--warn)} .pill.bad{background:var(--bad-t);color:var(--bad)}
 .spacer{flex:1}
 @media (prefers-reduced-motion:no-preference){ #app{animation:fade .18s ease-out} @keyframes fade{from{opacity:.4}to{opacity:1}} }
-/* --- header client picker (Phase 2 §10 A) --- */
-.headtools{display:flex;flex-direction:column;align-items:flex-end;gap:8px;flex:none}
+/* --- header client picker (Phase 2 §10 A), since v1 in the top bar's context slot (ui/index.html) --- */
 .clientpick{display:flex;align-items:center;gap:8px}
 .clientpick .clabel{font-size:12px;font-weight:500;color:var(--muted)}
 .clientpick .control{height:32px;width:186px;font-size:12px}
 .clientpick .control select{padding:0 28px 0 10px}
-.chint{font-size:11px;color:var(--faint);text-align:right}
-@media (max-width:700px){.head{flex-wrap:wrap;gap:12px}
-.headtools{order:-1;width:100%;flex-direction:row;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:8px}
-.clientpick .control{width:150px}.chint{order:3;width:100%;text-align:left}.logo{width:110px;height:30px}}
+@media (max-width:700px){.clientpick .clabel{display:none}.clientpick .control{width:150px}.clientpick .toggletip{display:none}}
 
 /* --- step 1 source choice + onboarding panel (Phase 2 §10 B) --- */
 .pick{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:2px}
@@ -286,7 +292,7 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .pickcard .pt1{font-size:13px;font-weight:600;color:var(--ink)}
 .pickcard.on .pt1{color:var(--c)}
 .pickcard .pt2{font-size:12px;color:var(--muted);line-height:1.45}
-.pickcard .ptag{position:absolute;top:12px;right:12px;font-size:11px;font-weight:600;color:var(--c)}
+.pickcard .ptag{position:absolute;top:12px;right:12px;font-size:12px;font-weight:600;color:var(--c)}
 .ob{border:1px solid var(--line2);border-radius:10px;margin-top:14px;overflow:hidden;background:var(--surface)}
 .ob>.obhead{display:flex;justify-content:space-between;align-items:baseline;gap:10px;flex-wrap:wrap;padding:14px 16px;background:var(--soft);border-bottom:1px solid var(--line)}
 .ob>.obhead .obt{font-size:13px;font-weight:600}
@@ -295,30 +301,31 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .obstep:first-of-type{border-top:0}
 .obsum{display:grid;grid-template-columns:24px minmax(0,1fr) auto;gap:12px;align-items:center;width:100%;padding:12px 16px;border:0;background:var(--surface);font:inherit;text-align:left;cursor:pointer}
 .obsum:hover{background:var(--soft)}
-.obtick{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:11px;font-weight:600;color:var(--muted)}
+.obtick{width:22px;height:22px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:12px;font-weight:600;color:var(--muted)}
 .obstep.done .obtick{background:var(--ok-t);border-color:transparent;color:var(--ok)}
 .obsum .ot{display:block;font-size:13px;font-weight:600;color:var(--ink)}
 .obsum .os{display:block;font-size:12px;color:var(--muted);margin-top:1px}
-.obsum .oc{font-size:12px;color:var(--faint)}
+.obsum .oc{font-size:12px;color:var(--muted)}
 .obstep.open .obsum .oc{color:var(--c)}
 .obbody{padding:4px 16px 18px;background:var(--soft);border-top:1px solid var(--line)}
 .obbody .sechd{font-size:12px;font-weight:600;color:var(--ink2);margin:16px 0 6px}
 .obbody .sechd:first-child{margin-top:12px}
 .obhint{font-size:12px;color:var(--muted);margin:2px 0 10px}
+.obhint.stage-note{margin:0;padding:0 16px 12px;background:var(--soft)}
 .drop{display:flex;flex-direction:column;align-items:center;gap:4px;padding:20px;border:1px dashed var(--line2);border-radius:10px;background:var(--surface);text-align:center;cursor:pointer;margin-top:10px}
 .drop:hover{border-color:var(--c)}
 .drop .d1{font-size:13px;font-weight:500}
 .drop .d2{font-size:12px;color:var(--muted)}
 .srctbl{border:1px solid var(--line);border-radius:8px;background:var(--surface);overflow:hidden}
-.srcrow{display:grid;grid-template-columns:minmax(150px,1.4fr) 104px 168px 152px 152px;gap:10px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
+.srcrow{display:grid;grid-template-columns:minmax(150px,1.4fr) 104px 200px;gap:10px;align-items:center;padding:10px 14px;border-top:1px solid var(--line)}
 .srcrow:first-child{border-top:0}
 .srcrow .sname{font-size:13px;font-weight:500;overflow-wrap:anywhere}
 .srcrow .srows{font-size:12px;color:var(--muted);font-feature-settings:"tnum"}
 .srcfoot{grid-column:1/-1;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-top:-2px}
-.srchint{font-size:12px;color:var(--faint)}
+.srchint{font-size:12px;color:var(--muted)}
 @media (max-width:1100px){.srcrow{grid-template-columns:1fr 1fr}.srcrow .sname{grid-column:1/-1}}
 @media (max-width:700px){.buildprog li{grid-template-columns:22px minmax(0,1fr)}.buildprog li .bn{grid-column:2}}
-.cov{display:inline-block;padding:3px 10px;border-radius:999px;font-size:11px;font-weight:500;background:var(--ok-t);color:var(--ok);white-space:nowrap}
+.cov{display:inline-block;padding:3px 10px;border-radius:999px;font-size:12px;font-weight:500;background:var(--ok-t);color:var(--ok);white-space:nowrap}
 .cov.warn{background:var(--warn-t);color:var(--warn)}
 .control.tiny{height:32px;font-size:12px}
 .control.tiny select{padding:0 26px 0 10px}
@@ -329,18 +336,19 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .mapcard>.mh{display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 14px;background:var(--surface);border-bottom:1px solid var(--line)}
 .mapcard>.mh .m1{font-size:13px;font-weight:600}
 .mapcard>.mh .m2{font-size:12px;color:var(--muted)}
-.maprow{display:grid;grid-template-columns:150px 18px 176px 92px minmax(120px,1fr) 108px;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line)}
+.maprow{display:grid;grid-template-columns:minmax(120px,160px) 18px 190px minmax(120px,1fr);gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line)}
 .maprow .mcol{font-size:12px;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 .maprow .marrow{color:var(--faint);text-align:center}
 .maprow .mtype{font-size:12px;color:var(--muted)}
-.maprow .msamp{font-size:12px;color:var(--faint);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.maprow .msamp{font-size:12px;color:var(--muted);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .maprow.need{background:var(--bad-t)}
+.maprow .srchint{grid-column:1/-1}
 .needmsg{grid-column:1/-1;font-size:12px;color:var(--bad);margin-top:2px}
 @media (max-width:1100px){.maprow{grid-template-columns:1fr 1fr}.maprow .marrow{display:none}.maprow .mcol{grid-column:1/-1}}
-.conf{display:inline-block;padding:3px 9px;border-radius:999px;font-size:11px;font-weight:600;font-feature-settings:"tnum";background:var(--ok-t);color:var(--ok)}
+.conf{display:inline-block;padding:3px 9px;border-radius:999px;font-size:12px;font-weight:600;font-feature-settings:"tnum";background:var(--ok-t);color:var(--ok)}
 .conf.amber{background:var(--warn-t);color:var(--warn)}
-.conf.grey{background:var(--soft);color:var(--faint);border:1px solid var(--line)}
-.vmapbtn{border:0;background:none;padding:0;font:inherit;font-size:11px;color:var(--brand-blue);text-decoration:underline;cursor:pointer}
+.conf.grey{background:var(--soft);color:var(--muted);border:1px solid var(--line)}
+.vmapbtn{border:0;background:none;padding:0;min-height:24px;font:inherit;font-size:12px;color:var(--brand-blue);text-decoration:underline;cursor:pointer}
 .vmap{margin:0 14px 12px;border:1px solid var(--line2);border-radius:8px;background:var(--soft);padding:12px 14px}
 .vmap .vt{font-size:12px;font-weight:600;margin-bottom:6px}
 .vmap .vrow{display:grid;grid-template-columns:110px 18px 1fr;gap:8px;align-items:center;font-size:12px;padding:4px 0;border-top:1px solid var(--line)}
@@ -355,8 +363,8 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .featrow input{width:15px;height:15px;accent-color:var(--brand-blue)}
 .featrow .fn{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;color:var(--ink);overflow-wrap:anywhere}
 .featrow .fd{color:var(--muted)}
-.featrow .fw{color:var(--faint);text-align:right;white-space:nowrap}
-.featrow.dropped .fn,.featrow.dropped .fd{color:var(--faint);text-decoration:line-through}
+.featrow .fw{color:var(--muted);text-align:right;white-space:nowrap}
+.featrow.dropped .fn,.featrow.dropped .fd{color:var(--muted);text-decoration:line-through}
 @media (max-width:900px){.featrow{grid-template-columns:18px 1fr}.featrow .fd,.featrow .fw{grid-column:2/-1;text-align:left}}
 .sentence{display:flex;flex-wrap:wrap;align-items:center;gap:6px;font-size:14px;line-height:2.1;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
 .sentence .control{height:32px;font-size:13px;width:auto}
@@ -368,15 +376,15 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .nullbars .nrow .nl{color:var(--ink2);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
 .nullbars .nrow .np{text-align:right;color:var(--muted);font-feature-settings:"tnum"}
 .posrate{display:flex;gap:10px;flex-wrap:wrap;padding:12px 14px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.posrate .pcol{flex:1;min-width:70px;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:11px}
+.posrate .pcol{flex:1;min-width:70px;display:flex;flex-direction:column;align-items:center;gap:4px;font-size:12px}
 .posrate .pcol .pv{font-weight:600;color:var(--ink2);font-feature-settings:"tnum"}
 .posrate .pcol .pl{color:var(--muted)}
 
 /* build & review */
 .buildprog{list-style:none;margin:10px 0 0;padding:0;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
-.buildprog li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--faint)}
+.buildprog li{display:grid;grid-template-columns:22px minmax(0,1fr) auto;gap:10px;align-items:center;padding:9px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 .buildprog li:first-child{border-top:0}
-.buildprog li .bd{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:10px;font-weight:600}
+.buildprog li .bd{width:18px;height:18px;border-radius:50%;display:grid;place-items:center;background:var(--soft);border:1px solid var(--line);font-size:12px;font-weight:600}
 .buildprog li.done{color:var(--ink2)}
 .buildprog li.done .bd{background:var(--ok-t);border-color:transparent;color:var(--ok)}
 .buildprog li.active{color:var(--ink)}
@@ -402,8 +410,8 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .lineage{display:flex;align-items:stretch;gap:0;flex-wrap:wrap;padding:14px 20px;overflow-x:auto}
 .lnode{flex:1;min-width:132px;display:flex;flex-direction:column;gap:3px;padding:10px 12px;border:1px solid var(--line);border-radius:8px;background:var(--soft)}
 .lnode .l1{font-size:12px;font-weight:600;color:var(--ink)}
-.lnode .l2{font-size:11px;color:var(--c);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
-.lnode .l3{font-size:11px;color:var(--muted)}
+.lnode .l2{font-size:12px;color:var(--c);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;overflow-wrap:anywhere}
+.lnode .l3{font-size:12px;color:var(--muted)}
 .larrow{display:flex;align-items:center;justify-content:center;width:26px;flex:none;color:var(--faint)}
 @media (max-width:700px){.lineage{flex-direction:column}.larrow{width:auto;height:22px;transform:rotate(90deg)}}
 
@@ -417,14 +425,14 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .cause{padding:12px 20px;border-top:1px solid var(--line)}
 .cause .ct{font-size:13px;font-weight:500;color:var(--ink)}
 .evchips{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
-.evchip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:4px 10px;border-radius:999px;font-size:11px;background:var(--soft);border:1px solid var(--line);color:var(--ink2)}
+.evchip{display:inline-flex;align-items:center;gap:6px;max-width:100%;padding:4px 10px;border-radius:999px;font-size:12px;background:var(--soft);border:1px solid var(--line);color:var(--ink2)}
 .evchip.reason{background:var(--t);border-color:transparent;color:var(--c);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 .evchip.quote{font-style:italic;color:var(--muted)}
 .rcfoot{padding:12px 20px;border-top:1px solid var(--line);background:var(--soft)}
 .rcfoot .fl{font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:6px}
 .rcfoot ul{margin:0;padding-left:18px;font-size:12px;color:var(--ink2)}
 .rcfoot ul li{margin:3px 0}
-.rcfoot .cav{font-size:12px;color:var(--faint);margin-top:10px}
+.rcfoot .cav{font-size:12px;color:var(--muted);margin-top:10px}
 .genbox{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:20px}
 .genbox .gb1{font-size:13px;color:var(--ink2)}
 .genbox .gb2{font-size:12px;color:var(--muted)}
@@ -440,12 +448,12 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .cccard .cch{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
 .cccard .cct{font-size:12px;font-weight:600;color:var(--ink)}
 .cccard .ccb{font-size:13px;color:var(--ink2);line-height:1.5}
-.cccard .ccm{font-size:11px;color:var(--faint);font-feature-settings:"tnum"}
-.cccard .ccwhy{font-size:11px;color:var(--bad)}
+.cccard .ccm{font-size:12px;color:var(--muted);font-feature-settings:"tnum"}
+.cccard .ccwhy{font-size:12px;color:var(--bad)}
 .cccard .ccact{display:flex;gap:8px;flex-wrap:wrap;margin-top:2px}
 .ccbtn{border:1px solid var(--line2);background:var(--surface);border-radius:8px;padding:5px 12px;font:inherit;font-size:12px;color:var(--ink2);cursor:pointer}
 .ccbtn:hover{border-color:var(--ink2)}
-.ccbtn[disabled]{opacity:.45;cursor:not-allowed}
+.ccbtn[disabled]{background:var(--soft);color:var(--muted);opacity:1;cursor:not-allowed}
 .ccgrouphd{grid-column:1/-1;font-size:12px;font-weight:600;color:var(--muted);margin-top:4px}
 
 /* assistant results (Phase 3a §9 C) */
@@ -461,7 +469,7 @@ table.eval td:nth-child(2){color:var(--ink);font-weight:600} table.eval td:nth-c
 .bubble.a{align-self:flex-start;background:var(--soft);border:1px solid var(--line);color:var(--ink2);border-bottom-left-radius:4px}
 .cites{display:flex;flex-wrap:wrap;gap:6px;margin-top:8px}
 details.cite{max-width:100%}
-details.cite summary{display:inline-flex;align-items:center;gap:6px;list-style:none;cursor:pointer;padding:3px 10px;border-radius:999px;font-size:11px;background:var(--surface);border:1px solid var(--line2);color:var(--ink2)}
+details.cite summary{display:inline-flex;align-items:center;gap:6px;list-style:none;cursor:pointer;padding:3px 10px;border-radius:999px;font-size:12px;background:var(--surface);border:1px solid var(--line2);color:var(--ink2)}
 details.cite summary::-webkit-details-marker{display:none}
 details.cite summary:hover{border-color:var(--c);color:var(--c)}
 details.cite[open] summary{border-color:var(--c);color:var(--c)}
@@ -471,16 +479,16 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .gusage{font-size:12px;color:var(--ink2)}
 .gusage b{color:var(--ink);font-weight:600}
 .gchecks{list-style:none;margin:8px 0 0;padding:0;display:flex;flex-direction:column;gap:6px}
-.gchecks li{display:flex;gap:8px;align-items:baseline;font-size:11px;color:var(--muted)}
-.gchecks .pill{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:10px}
+.gchecks li{display:flex;gap:8px;align-items:baseline;font-size:12px;color:var(--muted)}
+.gchecks .pill{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px}
 .gcounts{display:inline-flex;gap:6px;flex-wrap:wrap}
 .bubble.a.refused{border-color:var(--warn);background:var(--warn-t)}
-.gmeta{margin-top:8px;font-size:11px;color:var(--faint);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
-.gsim{font-weight:400;color:var(--faint)}
+.gmeta{margin-top:8px;font-size:12px;color:var(--muted);display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.gsim{font-weight:400;color:var(--muted)}
 .askrow{display:flex;gap:10px;margin-top:14px}
 .askrow input{flex:1;height:40px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;padding:0 14px}
 .askrow input:focus-visible{outline:2px solid var(--brand-blue);outline-offset:1px}
-.askrow button{height:40px;padding:0 18px;border:0;border-radius:8px;background:var(--stage);color:var(--stage-ink);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
+.askrow button{height:40px;padding:0 18px;border:0;border-radius:8px;background:var(--btn);color:var(--btn-ink);font:inherit;font-size:13px;font-weight:600;cursor:pointer}
 .holdout{font-size:12px;color:var(--muted);padding:0 20px 14px}
 .holdout b{color:var(--ink);font-weight:600}
 .approver{padding:0 20px 14px}
@@ -511,12 +519,12 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .uindex .s{font-size:12px;color:var(--muted);text-align:right}
 .upwhy{flex-basis:100%;color:var(--ink2)}
 .ptype select{max-width:88px}
-.uphint{font-size:12px;color:var(--faint)}
+.uphint{font-size:12px;color:var(--muted)}
 .upchecks{border:1px solid var(--line2);border-radius:10px;margin-top:14px;overflow:hidden;background:var(--surface)}
 .upchecks .uph{padding:10px 14px;background:var(--bad-t);color:var(--bad);font-size:12px;font-weight:600}
 .upchecks .checks li.warn .ck{color:var(--warn)}
 .upchecks .checks li.skip{color:var(--muted)}
-.upchecks .checks li.skip .ck{color:var(--faint)}
+.upchecks .checks li.skip .ck{color:var(--muted)}
 .upchecks .upmsg{padding:10px 14px;border-top:1px solid var(--line);font-size:12px;color:var(--ink2)}
 .upchecks .upmsg b{color:var(--bad);font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-weight:600}
 .upchecks .check{height:auto;padding:10px 14px;border-top:1px solid var(--line);background:var(--soft);align-items:flex-start}
@@ -524,7 +532,7 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .ncbanner{display:flex;gap:10px;align-items:flex-start;padding:12px 16px;border:1px solid var(--bad);border-radius:10px;background:var(--bad-t);color:var(--bad);font-size:13px;line-height:1.5}
 .ncbanner b{font-weight:600}
 .qini{display:block;width:100%;max-width:720px;height:auto;padding:12px 16px 0}
-.qini text{fill:var(--muted);font-size:10px;font-family:inherit}
+.qini text{fill:var(--muted);font-size:12px;font-family:inherit}
 .qlegend{display:flex;gap:16px;flex-wrap:wrap;padding:6px 20px 12px;font-size:12px;color:var(--muted)}
 .qlegend i{display:inline-block;width:18px;height:0;border-top:2.5px solid var(--c);vertical-align:middle;margin-right:6px}
 .qlegend i.rnd{border-top:1.5px dashed var(--faint)}
@@ -543,7 +551,7 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .dbrow{display:grid;grid-template-columns:36px minmax(0,1fr) 240px;gap:14px;align-items:center;font-size:12px}
 .dbrow .dl{color:var(--muted);font-weight:600}
 .dbrow .dv{text-align:right;color:var(--ink2);font-feature-settings:"tnum";white-space:nowrap}
-.dbrow .dv span{color:var(--faint)}
+.dbrow .dv span{color:var(--muted)}
 .dbar{position:relative;height:20px}
 .dbar .dz{position:absolute;top:-4px;bottom:-4px;width:1px;background:var(--line2)}
 .dbar .dob{position:absolute;top:1px;height:10px;border-radius:2px;background:var(--c)}
@@ -558,7 +566,7 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 .segrow:first-child{border-top:0}
 .segrow .sw{width:12px;height:12px;border-radius:3px}
 .segrow .sn{font-weight:500;color:var(--ink)}
-.segrow .sn small{display:block;font-size:11px;font-weight:400;color:var(--muted)}
+.segrow .sn small{display:block;font-size:12px;font-weight:400;color:var(--muted)}
 .segrow .sc2,.segrow .sp{text-align:right;font-feature-settings:"tnum";color:var(--ink2)}
 .segrow .sa{font-size:12px;color:var(--muted)}
 .segrow.sg-sleeping_dog .sa{color:var(--bad)}
@@ -577,10 +585,226 @@ details.cite .quote{margin-top:8px;padding:10px 12px;border-left:3px solid var(-
 @media (max-width:700px){.dbrow{grid-template-columns:30px minmax(0,1fr)}.dbrow .dv{grid-column:2;text-align:left}
 .segrow{grid-template-columns:12px minmax(0,1fr) 64px}.segrow .sp{display:none}.segrow .sa{grid-column:2/-1}
 .crgrid{grid-template-columns:1fr}}
+/* ==== v1 foundation (docs/ui/FOUNDATION.md): one set of components every screen shares ============
+   Tokens only (no new colour values). Spacing 4/8/12/16/24/32/48; type 12/13/14/15/20/22/28. */
+.skip{position:absolute;left:16px;top:-64px;z-index:100;padding:8px 16px;border-radius:8px;background:var(--surface);color:var(--ink);border:1px solid var(--line2);font-size:13px;font-weight:600}
+.skip:focus{top:8px}
+#app:focus{outline:none}
+.control :focus-visible{outline:none}
+@media (max-width:700px){.head{gap:12px}.logo{width:110px;height:30px}}
+.tnum,td.num,th.num{font-feature-settings:"tnum"}
+td.num,th.num{text-align:right}
+
+/* buttons: .btn + one of .primary / .secondary / .quiet / .danger, optionally .sm */
+.btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;height:40px;padding:0 20px;border:1px solid transparent;border-radius:8px;background:var(--surface);color:var(--ink);font:inherit;font-size:13px;font-weight:600;line-height:1;white-space:nowrap;cursor:pointer;text-decoration:none;transition:background .15s,border-color .15s}
+.btn.primary{background:var(--btn);border-color:var(--btn);color:var(--btn-ink)}
+.btn.primary:hover{opacity:.88}
+.btn.secondary{background:var(--surface);border-color:var(--line2);color:var(--ink)}
+.btn.secondary:hover{background:var(--soft);border-color:var(--ink2)}
+.btn.quiet{height:auto;min-height:24px;padding:0 4px;border:0;background:none;color:var(--brand-blue)}
+.btn.quiet:hover{text-decoration:underline}
+.btn.danger{background:var(--surface);border-color:var(--bad);color:var(--bad)}
+.btn.danger.confirm{background:var(--bad);border-color:var(--bad);color:var(--surface)}
+.btn.sm{height:32px;padding:0 12px}
+.btn.quiet.sm{height:auto;padding:0 4px}
+.btn[disabled],.btn[aria-disabled="true"]{background:var(--soft);border-color:var(--line);color:var(--muted);opacity:1;cursor:not-allowed}
+.btn.quiet[disabled]{background:none}
+.btn svg,.ico{width:16px;height:16px;flex:none}
+.btn-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
+
+/* page header: breadcrumb, H1, description, one chip, then the actions */
+.head-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:8px}
+.head-actions .related{font-size:13px;font-weight:500;color:var(--brand-blue)}
+.head-actions .related:hover{text-decoration:underline}
+
+/* cards and notices */
+.card-body{padding:16px 20px}
+.notice-card .notice-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:16px 20px}
+.notice-card h3{border-bottom:0;padding-bottom:0}
+.chip.neutral{background:var(--soft);border:1px solid var(--line);color:var(--ink2)}
+.count{display:inline-grid;place-items:center;min-width:20px;height:20px;padding:0 6px;border-radius:999px;background:var(--brand-blue);color:var(--surface);font-size:12px;font-weight:600;font-feature-settings:"tnum"}
+
+/* states: empty, error, not found, loading */
+.empty-state{display:flex;flex-direction:column;align-items:flex-start;gap:8px;padding:24px 20px}
+.empty-state .es-t{margin:0;font-size:14px;font-weight:600;color:var(--ink)}
+.empty-state p{margin:0;font-size:13px;color:var(--muted);max-width:640px}
+.empty-state .btn{margin-top:8px}
+.apierr .apierr-fix{margin:4px 0 0;color:var(--ink2)}
+.apierr .btn-row{margin-top:12px}
+.apierr details.tech{margin-top:12px;border-top-color:var(--line2)}
+.skel-screen .skel{display:block;background:var(--track);border-radius:6px}
+.skel-crumb{width:180px;height:12px}
+.skel-h1{width:320px;max-width:70%;height:28px}
+.skel-desc{width:520px;max-width:90%;height:14px}
+.skel-kpis{display:grid;grid-template-columns:repeat(4,1fr);gap:16px}
+.skel-kpi{height:84px;border-radius:10px}
+.skel-cards{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:24px}
+.skel-card{height:220px;border-radius:10px}
+.skel-list{display:flex;flex-direction:column;gap:8px}
+.skel-row{height:48px;border-radius:8px}
+@media (max-width:1100px){.skel-kpis{grid-template-columns:repeat(2,1fr)}.skel-cards{grid-template-columns:1fr}}
+@media (prefers-reduced-motion:no-preference){.skel-screen .skel{animation:skel 1.2s ease-in-out infinite}@keyframes skel{0%,100%{opacity:1}50%{opacity:.55}}}
+
+/* technical detail: ids, codes, hashes behind one closed disclosure */
+details.tech{border-top:1px solid var(--line);padding-top:12px;font-size:12px;color:var(--muted)}
+details.tech>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;gap:8px;min-height:24px;font-size:12px;font-weight:500;color:var(--ink2)}
+details.tech>summary::-webkit-details-marker{display:none}
+details.tech>summary::before{content:"";width:6px;height:6px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+details.tech[open]>summary::before{transform:rotate(45deg)}
+.tech-list{margin:8px 0 0;display:flex;flex-direction:column;gap:4px}
+.tech-list>div{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.tech-list dt{min-width:140px;color:var(--muted)}
+.tech-list dd{margin:0;display:flex;gap:8px;align-items:baseline;min-width:0}
+.tech code,.mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:12px;color:var(--ink2);overflow-wrap:anywhere}
+
+/* tables: at most 5 columns by default, the rest behind "Show more columns"; stacked below 700px */
+.tbl .more{display:none}
+details.tbl-more{padding:8px 20px;font-size:12px}
+details.tbl-more>summary{cursor:pointer;list-style:none;display:inline-flex;align-items:center;min-height:24px;color:var(--brand-blue);font-weight:500}
+details.tbl-more>summary::-webkit-details-marker{display:none}
+details.tbl-more[open] + .tbl-wrap .tbl .more{display:table-cell}
+.card h3 .sort-note{font-weight:400;color:var(--muted)}
+@media (max-width:700px){
+  .tbl-stack thead{display:none}
+  .tbl-stack,.tbl-stack tbody,.tbl-stack tr{display:block;width:100%}
+  .tbl-stack tr{border-top:1px solid var(--line);padding:8px 0}
+  .tbl-stack td{display:flex;justify-content:space-between;gap:12px;border-top:0;padding:4px 16px;text-align:right}
+  .tbl-stack td::before{content:attr(data-label);color:var(--muted);font-size:12px;font-weight:500;text-align:left}
+  .tbl-stack td:first-child{font-size:14px}
+  .tbl-stack td.more{display:none}
+  details.tbl-more[open] + .tbl-wrap .tbl-stack td.more{display:flex}
+}
+
+/* toggletip: a "?" that opens one short explanation */
+.toggletip{position:relative;display:inline-flex;vertical-align:middle}
+.tt-btn{position:relative;display:inline-grid;place-items:center;width:24px;height:24px;padding:0;border:0;background:none;cursor:pointer;color:var(--muted);font:inherit;font-size:12px;font-weight:600}
+.tt-btn::before{content:"";position:absolute;inset:3px;border:1px solid var(--line2);border-radius:50%}
+.tt-btn:hover{color:var(--ink)}
+.tt-pop{position:absolute;top:calc(100% + 4px);left:50%;transform:translateX(-50%);z-index:60;width:280px;max-width:calc(100vw - 32px);padding:12px 16px;border:1px solid var(--line);border-radius:10px;background:var(--surface);color:var(--ink2);box-shadow:0 8px 24px rgba(17,24,39,.12);font-size:13px;font-weight:400;line-height:1.5;text-align:left;white-space:normal}
+.tt-pop.right{left:auto;right:0;transform:none}
+.tt-pop[hidden]{display:none}
+
+/* menus and dialogs */
+.menu{position:relative}
+.menu-pop{position:absolute;top:calc(100% + 4px);left:0;z-index:60;display:flex;flex-direction:column;min-width:240px;padding:8px;border:1px solid var(--line);border-radius:10px;background:var(--surface);box-shadow:0 8px 24px rgba(17,24,39,.12)}
+.menu-pop.right{left:auto;right:0}
+.menu-pop[hidden]{display:none}
+.menu-pop a,.menu-pop button{display:flex;align-items:center;justify-content:space-between;gap:12px;min-height:36px;padding:0 12px;border:0;border-radius:6px;background:none;color:var(--ink);font:inherit;font-size:13px;font-weight:500;text-align:left;cursor:pointer;white-space:nowrap}
+.menu-pop a:hover,.menu-pop button:hover,.menu-pop a.on{background:var(--soft)}
+.menu-pop .mh{padding:8px 12px 4px;font-size:12px;font-weight:500;color:var(--muted)}
+.menu-pop .msep{height:1px;margin:4px 0;background:var(--line)}
+.dialog{max-width:440px;padding:20px;border:1px solid var(--line);border-radius:12px;background:var(--surface);box-shadow:0 12px 32px rgba(17,24,39,.16)}
+
+/* the top bar (ui/chrome.js): wordmark, six goals, then client, sample data, help and user */
+.topbar{position:sticky;top:0;z-index:50;background:var(--surface);border-bottom:1px solid var(--line)}
+.tb-row{max-width:1440px;margin:0 auto;min-height:56px;padding:0 24px;display:flex;align-items:center;gap:16px}
+.wordmark{flex:none;font-size:15px;font-weight:700;letter-spacing:-.01em;color:var(--ink)}
+.topnav{display:flex;align-items:center;min-width:0}
+.topnav>ul{display:flex;align-items:center;gap:4px;margin:0;padding:0;list-style:none}
+.tn-item{display:inline-flex;align-items:center;gap:8px;height:36px;padding:0 12px;border:0;border-radius:8px;background:none;color:var(--ink2);font:inherit;font-size:13px;font-weight:500;cursor:pointer;white-space:nowrap}
+.tn-item:hover{background:var(--soft);color:var(--ink)}
+.tn-item.on{background:var(--soft);color:var(--ink);font-weight:600;box-shadow:inset 0 -2px 0 var(--brand-blue)}
+.tn-item .chev{width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg)}
+.tb-context{position:relative;margin-left:auto;display:flex;align-items:center;gap:8px}
+.tb-utils{display:flex;align-items:center;gap:8px}
+.tb-menu-btn{display:none}
+@media (max-width:700px){
+  .tb-row{padding:0 16px;gap:8px;flex-wrap:wrap}
+  .tb-c{display:none}
+  .tb-menu-btn{display:inline-flex}
+  .topbar.open .tb-c{display:flex;order:10;width:100%;flex-direction:column;align-items:stretch;padding:8px 0}
+  .topbar.open .topnav>ul{flex-direction:column;align-items:stretch}
+  .topbar.open .tn-item{width:100%;justify-content:space-between}
+  .topbar.open .menu-pop{position:static;box-shadow:none;border:0;padding:0 0 0 12px;min-width:0}
+  .topbar.open .tb-utils{border-top:1px solid var(--line)}
+}
+/* dark mode: no light slabs; the active tab and the stage pills read as tinted surfaces */
+@media (prefers-color-scheme: dark){
+  :root:not([data-theme="light"]) .tab.on{background:var(--soft);border-color:var(--line2);border-top:3px solid var(--c,var(--brand-blue));color:var(--ink)}
+  :root:not([data-theme="light"]) .stage-pill{background:var(--soft);color:var(--ink);border-top:3px solid var(--c,var(--line2))}
+  :root:not([data-theme="light"]) .stage-pill .n{color:var(--muted)}
+}
+:root[data-theme="dark"] .tab.on{background:var(--soft);border-color:var(--line2);border-top:3px solid var(--c,var(--brand-blue));color:var(--ink)}
+:root[data-theme="dark"] .stage-pill{background:var(--soft);color:var(--ink);border-top:3px solid var(--c,var(--line2))}
+:root[data-theme="dark"] .stage-pill .n{color:var(--muted)}
+/* ==== end v1 foundation ==== */
+/* ==== v1 screens: the prototype's own layouts, drawn on the foundation above ==== */
+.notice-card{max-width:720px}
+.notice-card p{margin:0;padding:12px 20px 0;line-height:1.55;color:var(--ink2)}
+.notice-card p:last-child{padding-bottom:16px}
+/* the top bar's utilities: sample data chip, help and user */
+.tb-user{display:inline-flex;flex-direction:column;align-items:flex-start;line-height:1.2}
+.tb-user .ur{font-size:12px;font-weight:400;color:var(--muted)}
+/* verdict first: every results screen opens with one sentence and one primary action */
+.verdict{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16px 24px;padding:16px 20px;border:1px solid var(--line);border-radius:10px;background:var(--soft);font-size:13px}
+.verdict .vtext{display:flex;flex-direction:column;align-items:flex-start;gap:4px;min-width:0;max-width:760px}
+.verdict .vstate{font-size:12px;font-weight:600;color:var(--ok)}
+.verdict .vstate.warn{color:var(--warn)} .verdict .vstate.bad{color:var(--bad)} .verdict .vstate.wait{color:var(--muted)}
+.verdict .vline{margin:0;font-size:20px;font-weight:600;line-height:1.3;color:var(--ink)}
+.verdict .vsub{margin:0;font-size:13px;color:var(--ink2);line-height:1.5}
+.verdict .vsub .muted{color:var(--muted)}
+.verdict .btn-row{flex:none}
+.verdict .reason{max-width:360px}
+.kpis.two{grid-template-columns:repeat(2,minmax(0,1fr))}
+.flow.four{grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr}
+.stack>details.tech{margin:0}
+.card>details.tech{margin:0;padding:12px 20px 16px;border-top:1px solid var(--line)}
+details.tech>.tech-body{margin-top:12px;display:flex;flex-direction:column;gap:24px}
+details.show-tbl:not([open]) + .tbl-wrap{display:none}
+/* Home */
+.foryou{display:flex;align-items:center;gap:8px 12px;flex-wrap:wrap;margin:0;font-size:13px;color:var(--ink2)}
+.foryou .related{font-weight:500;color:var(--brand-blue)} .foryou .related:hover{text-decoration:underline}
+.desc .toggletip{margin-left:4px}
+/* Setup: one step at a time; settings for a later release behind one toggle */
+.fstep.later{padding:12px 0}
+.fstep.later .stepno{background:var(--soft);color:var(--muted);box-shadow:inset 0 0 0 1px var(--line)}
+.fstep.later .flabel{color:var(--ink2)}
+.fstep.later .fhint{margin-bottom:0}
+.stage-d>summary .sc.changed{color:var(--brand-blue)}
+details.later{border-top:1px solid var(--line)}
+details.later>summary{cursor:pointer;list-style:none;display:flex;align-items:center;gap:8px;padding:12px 16px;font-size:13px;font-weight:500;color:var(--ink2);background:var(--surface)}
+details.later>summary::-webkit-details-marker{display:none}
+details.later>summary::before{content:"";width:7px;height:7px;border-right:1.5px solid var(--muted);border-bottom:1.5px solid var(--muted);transform:rotate(-45deg);transition:transform .15s}
+details.later[open]>summary::before{transform:rotate(45deg)}
+details.later>summary .n{margin-left:auto;font-size:12px;font-weight:400;color:var(--muted)}
+.field.advisory{opacity:.62}
+.field.advisory .advisory-note{font-size:12px;color:var(--muted);line-height:1.35}
+/* Build from raw tables: fewer default columns, finished steps fold to one line, verdict-first build */
+.srctbl:not(.more-on) .more,.maps:not(.more-on) .more{display:none}
+.srctbl.more-on .srcrow{grid-template-columns:minmax(150px,1.4fr) 104px 168px 152px 152px}
+.maps.more-on .maprow{grid-template-columns:minmax(120px,160px) 18px 190px minmax(120px,1fr) 92px 72px}
+.srcbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin:0 0 8px}
+.srcbar details.tbl-more{padding:0}
+.mex{display:flex;align-items:center;gap:8px;min-width:0}
+.obact.top{margin:4px 0 12px}
+.obverdict{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12px 16px;padding:12px 16px;margin-top:12px;border:1px solid var(--line);border-radius:8px;background:var(--surface)}
+.obverdict .ov{display:flex;flex-direction:column;gap:4px}
+.obverdict .ov1{font-size:14px;font-weight:600;color:var(--ink)}
+.obverdict .ov2{font-size:12px;color:var(--muted)}
+.obbody details.tech{margin-top:12px}
+@media (max-width:1100px){.srctbl.more-on .srcrow,.maps.more-on .maprow{grid-template-columns:1fr 1fr}}
+@media (max-width:900px){.flow.four{grid-template-columns:1fr}}
+@media (max-width:700px){.timeline{grid-template-columns:1fr;min-width:0;row-gap:24px}.timeline-wrap{margin-top:24px}
+.stage-col:not(:last-child) .stage-pill::after{content:none}.kpis.two{grid-template-columns:1fr}
+.verdict .btn-row,.verdict .btn-row .btn{width:100%}}
+.setup-form{margin-top:18px}
+.flabel .opt{font-weight:400;color:var(--muted)}
+.kv.first{border-top:0}
+.row.one{grid-template-columns:1fr}
+.block .bstate.waiting{color:var(--muted)}
+.rule + .hint{margin-top:0}
+.hint + .uindex{margin-top:12px}
+.lnode .l2{color:var(--muted)}
+/* screens the prototype only names: Build data, Campaigns, Reports and the product's own pages */
+.list-card .tbl-wrap td .btn{white-space:nowrap}
+/* ==== end v1 screens ==== */
 </style>
 </head>
 <body>
-<div id="app"></div>
+<a class="skip" href="#app" data-skip>Skip to content</a>
+<header id="pb-bar" class="topbar" role="banner"></header>
+<div id="app" tabindex="-1"></div>
+<div id="status" class="sr" role="status" aria-live="polite"></div>
 <script>
 const LOGO = `<svg class="logo" viewBox="0 0 2576 690" role="img" aria-label="Minfy"><rect class="b" x="0" y="0" width="493" height="493"/><rect class="y" x="246" y="0" width="247" height="246"/><g fill="none" class="s" stroke-width="87"><path d="M719.5 493V338A121.5 121.5 0 0 1 962.5 338V493"/><path d="M961 493V338A121 121 0 0 1 1203 338V493"/><path d="M1548.5 493V338A120.5 120.5 0 0 1 1789.5 338V493"/><path d="M1962.5 493V182A121 121 0 0 1 2204.5 182"/><path d="M2291 354A120.75 120.75 0 0 0 2532.5 354"/><path d="M2532.5 182V520A120.5 120.5 0 0 1 2319.7 597.5"/></g><circle class="b" cx="1376" cy="61" r="61"/><rect class="b" x="1332" y="182" width="87" height="311"/><rect class="b" x="2006" y="268" width="156" height="86"/><rect class="y" x="2248" y="182" width="86" height="86"/></svg>`;
 const TYPES = {P:{stars:"★",label:"Predictive AI"},G:{stars:"★★",label:"Generative AI"},H:{stars:"★ + ★★",label:"Hybrid"}};
@@ -721,11 +945,100 @@ function bandPill(v){const cls=/High|Critical/.test(v)?"bad":/Medium/.test(v)?"w
 const kpis = arr => `<div class="kpis">${arr.map(([l,v])=>`<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(v)}</div></div>`).join("")}</div>`;
 const steps = arr => `<ol class="steps">${arr.map(([a,b],i)=>`<li><span class="no">${i+1}</span><span><div class="s1">${esc(a)}</div><div class="s2">${esc(b)}</div></span></li>`).join("")}</ol>`;
 
-/* ===== Phase 2 §10 A — client selector (visual only) ===== */
+/* ===== v1 shared pieces (ui/dom.js since WP0): breadcrumb, header actions, toggletip, details ===== */
+const HOME={label:"Home",href:"#/"};
+const JOURNEY={label:"Customer Lifecycle",href:"#/"};
+const crumbLink=({label,href})=>href?`<a href="${esc(href)}">${esc(label)}</a>`:`<span class="cur" aria-current="page">${esc(label)}</span>`;
+/* Every screen's breadcrumb: Home › ... › current. The root is always Home; the last item has no href. */
+function crumbs(items=[]){const trail=items.length?[HOME,...items.filter(Boolean)]:[{label:"Home"}];
+  return `<nav class="crumbs" aria-label="Breadcrumb">${trail.map(crumbLink).join('<span class="sep" aria-hidden="true">›</span>')}</nav>`;}
+/* One header button or link: an HTML string as it is, or {label, href | id, attrs}. */
+function actionHtml(a,kind){if(!a)return "";if(typeof a==="string")return a;
+  const rel=kind==="related",cls=rel?"related":`btn ${a.kind||kind}`,attrs=`${a.id?` id="${esc(a.id)}"`:""}${a.attrs?` ${a.attrs}`:""}`,label=`${esc(a.label)}${rel?" ›":""}`;
+  return a.href?`<a class="${cls}" href="${esc(a.href)}"${attrs}>${label}</a>`:`<button type="button" class="${cls}"${attrs}>${label}</button>`;}
+/* The header's actions in one order: at most one primary, then secondaries, then one quiet related link. */
+function headActions({primary=null,secondary=[],related=null}={}){
+  const parts=[actionHtml(primary,"primary"),...[].concat(secondary||[]).map(a=>actionHtml(a,"secondary")),actionHtml(related,"related")].filter(Boolean);
+  return parts.length?`<div class="head-actions">${parts.join("")}</div>`:"";}
+/* A "?" that opens one short explanation. */
+const toggletip=(text,label="")=>`<span class="toggletip"><button type="button" class="tt-btn" aria-expanded="false" aria-label="What does this mean?${label?` ${esc(label)}`:""}" data-toggletip>?</button><span class="tt-pop" role="status" hidden>${esc(text)}</span></span>`;
+/* Ids, hashes and codes behind one closed disclosure, each in monospace with a copy button. */
+const techDetails=(pairs,summary="Technical details")=>{const rows=pairs.filter(([,v])=>v!=null&&v!=="").map(([k,v])=>`<div><dt>${esc(k)}</dt><dd><code>${esc(v)}</code><button type="button" class="btn quiet sm" data-copy="${esc(v)}" aria-label="Copy ${esc(k)}">Copy</button></dd></div>`).join("");
+  return rows?`<details class="tech"><summary>${esc(summary)}</summary><dl class="tech-list">${rows}</dl></details>`:"";};
+/* A closed "Technical details" disclosure around markup that is more than a list of ids. */
+const techBlock=(summary,html,attrs="")=>`<details class="tech"${attrs?` ${attrs}`:""}><summary>${esc(summary)}</summary><div class="tech-body">${html}</div></details>`;
+/* The first thing on every results screen: what happened, in one sentence, and the one thing to do next. */
+function verdictCard({state="",tone="",line,sub="",actions="",cls="",attrs=""}){
+  return `<section class="verdict${cls?" "+cls:""}"${attrs?" "+attrs:""}><div class="vtext">${state?`<span class="vstate${tone?" "+tone:""}">${state}</span>`:""}<p class="vline">${line}</p>${sub?`<p class="vsub">${sub}</p>`:""}</div>${actions?`<div class="btn-row">${actions}</div>`:""}</section>`;}
+const emptyState=({title,text="",action=null})=>`<div class="empty-state"><p class="es-t">${esc(title)}</p>${text?`<p>${esc(text)}</p>`:""}${action?actionHtml(action,action.kind||"primary"):""}</div>`;
+const noticeCard=({title,text=[],action=null,attrs=""})=>`<section class="card notice-card" role="status"${attrs?" "+attrs:""}><h3>${esc(title)}</h3>${[].concat(text).map(t=>`<p>${esc(t)}</p>`).join("")}${action?`<div class="notice-actions">${actionHtml(action,action.kind||"secondary")}</div>`:""}</section>`;
+
+/* ===== Phase 2 §10 A — client selector (visual only), since v1 in the top bar ===== */
 const CLIENTS=["Demo Telecom","Northwind Mobile","Acme Broadband"];
 let CLIENT=CLIENTS[0];
-function clientPicker(){return `<div class="clientpick"><span class="clabel">Client</span><div class="control sel"><select id="f-client" aria-label="Client">${CLIENTS.map(c=>`<option ${c===CLIENT?"selected":""}>${esc(c)}</option>`).join("")}<option value="__new">+ New client</option></select></div></div>
-  <span class="chint">Tables, recipes and models are kept per client.</span>`;}
+const CLIENT_HINT="Tables, recipes and models are kept per client.";
+function clientPicker(){return `<div class="clientpick"><label class="clabel" for="f-client">Client</label><div class="control sel"><select id="f-client">${CLIENTS.map(c=>`<option ${c===CLIENT?"selected":""}>${esc(c)}</option>`).join("")}<option value="__new">+ New client</option></select></div>${toggletip(CLIENT_HINT,"Client")}</div>`;}
+
+/* ===== v1 top bar (ui/chrome.js): the wordmark, six goals, then client, sample data, help and user ===== */
+const NAV=[
+ {id:"home",label:"Home",href:"#/"},
+ {id:"build",label:"Build data",href:"#/pilot/kit"},
+ {id:"models",label:"Models",menu:[["Train or score: choose a use case on Home","#/"],["Uplift models","#/uplift"],["Waiting for approval","#/approvals",2],["Model health","#/monitoring/alerts"],["AI assistant and root-cause notes","#/generative/assistant"]]},
+ {id:"campaigns",label:"Campaigns",href:"#/monitoring/runs"},
+ {id:"reports",label:"Reports",href:"#/pilot"},
+ {id:"admin",label:"Admin",menu:[["Users","#/admin/users"],["Audit log","#/admin/audit"],["Privacy","#/privacy/consent"],["AI service","#/generative/connection"],["Export feedback","#/pilot/feedback"]]}];
+const HELP_MENU=[["Take the tour","pe-tour"],["Send feedback","pe-fb-btn"]];
+const TB={menu:null,panel:false};
+/* The goal a route belongs to (the plan's navigation table). The Output page of a scoring run is a Campaign. */
+function navFor(hash){const p=String(hash||"").replace(/^#\/?/,"").split("/").filter(Boolean),[a,b]=p;
+  if(!a)return "home";
+  if(a==="pilot")return b==="kit"?"build":b==="value"?"campaigns":"reports";
+  if(a==="monitoring")return b==="runs"?"campaigns":"models";
+  if(a==="uc"||a==="uplift"){const u=UC.find(x=>x.id===b);
+    if(p[2]==="campaign")return "campaigns";
+    if(u&&p[2]==="output"){const r=st(a==="uplift"?upView(u):u).current;if(r&&r.mode==="score")return "campaigns";}
+    return "models";}
+  if(a==="approvals")return "models";
+  if(a==="generative")return b==="copy"?"campaigns":b==="connection"?"admin":"models";
+  if(a==="admin"||a==="privacy")return "admin";
+  return null;}
+/* The client matters only where tables, recipes and models are picked: Setup, Build data, uplift Setup, Reports. */
+function perClient(hash){const p=String(hash||"").replace(/^#\/?/,"").split("/").filter(Boolean);
+  return (p[0]==="uc"&&!!p[1]&&!p[2])||(p[0]==="uplift"&&!!p[1]&&!p[2])||(p[0]==="pilot"&&(!p[1]||p[1]==="kit"));}
+function topBar(){const hash=location.hash||"#/",on=navFor(hash),chev='<span class="chev" aria-hidden="true"></span>';
+  const pop=(id,cls,inner)=>`<div class="menu-pop${cls}" id="${id}"${TB.menu===id?"":" hidden"}>${inner}</div>`;
+  const trigger=(id,label,here=false)=>`<button type="button" class="tn-item${here?" on":""}" data-menu="${id}" aria-expanded="${TB.menu===id}" aria-controls="${id}"${here?' aria-current="true"':""}>${label}${chev}</button>`;
+  const item=it=>{const here=on===it.id;
+    if(!it.menu)return `<li><a class="tn-item${here?" on":""}" href="${it.href}"${here?' aria-current="page"':""}>${esc(it.label)}</a></li>`;
+    const id=`tn-${it.id}`,count=it.menu.reduce((a,m)=>a+(m[2]||0),0);
+    const entries=it.menu.map(([l,h,n])=>`<a href="${h}">${esc(l)}${n?` <span class="count" aria-label="${n} waiting">${n}</span>`:""}</a>`).join("");
+    return `<li class="menu">${trigger(id,`${esc(it.label)}${count?` <span class="count" aria-label="${count} waiting">${count}</span>`:""}`,here)}${pop(id,"",entries)}</li>`;};
+  const help=`<div class="menu">${trigger("tn-help","Help")}${pop("tn-help"," right",HELP_MENU.map(([l,id])=>`<button type="button" id="${id}">${esc(l)}</button>`).join(""))}</div>`;
+  const user=`<div class="menu">${trigger("tn-user",'<span class="tb-user">A. Iyer<span class="ur">Admin</span></span>')}${pop("tn-user"," right",'<div class="mh">Signed in as A. Iyer</div><a href="#/account">Change password</a><div class="msep"></div><button type="button" id="pb-signout">Sign out</button>')}</div>`;
+  return `<div class="tb-row"><a class="wordmark" href="#/">Marketing AI</a><nav class="topnav tb-c" aria-label="Main"><ul>${NAV.map(item).join("")}</ul></nav><div class="tb-context">${perClient(hash)?clientPicker():""}</div><div class="tb-utils tb-c"><span class="chip neutral pe-demo">Sample data: Demo Telecom</span>${help}${user}</div><button type="button" class="btn secondary sm tb-menu-btn" data-tb-menu aria-expanded="${TB.panel}" aria-controls="pb-bar">Menu</button></div>`;}
+function paintTopBar(){const bar=document.getElementById("pb-bar");if(!bar)return;bar.innerHTML=topBar();bar.classList.toggle("open",TB.panel);
+  const c=document.getElementById("f-client");
+  if(c)c.addEventListener("change",e=>{if(e.target.value==="__new")e.target.value=CLIENT;else CLIENT=e.target.value;});}
+/* Menus, the mobile panel, toggletips, copy buttons and the skip link: one listener for the page. */
+function closeMenus(focus){if(!TB.menu)return;const id=TB.menu;TB.menu=null;const pop=document.getElementById(id);if(pop)pop.hidden=true;
+  const t=document.querySelector(`[data-menu="${id}"]`);if(t){t.setAttribute("aria-expanded","false");if(focus)t.focus();}}
+function closeTips(except){document.querySelectorAll("[data-toggletip][aria-expanded='true']").forEach(b=>{if(b===except)return;b.setAttribute("aria-expanded","false");if(b.nextElementSibling)b.nextElementSibling.hidden=true;});}
+document.addEventListener("click",e=>{const t=e.target;if(!t||!t.closest)return;
+  if(t.closest("[data-skip]")){e.preventDefault();document.getElementById("app").focus();return;}
+  const m=t.closest("[data-menu]");
+  if(m){const id=m.dataset.menu,opening=TB.menu!==id;closeMenus();if(opening){TB.menu=id;m.setAttribute("aria-expanded","true");const p=document.getElementById(id);if(p)p.hidden=false;}return;}
+  const panel=t.closest("[data-tb-menu]");
+  if(panel){TB.panel=!TB.panel;panel.setAttribute("aria-expanded",String(TB.panel));document.getElementById("pb-bar").classList.toggle("open",TB.panel);return;}
+  const tip=t.closest("[data-toggletip]");
+  if(tip){const open=tip.getAttribute("aria-expanded")!=="true";closeTips(tip);tip.setAttribute("aria-expanded",String(open));if(tip.nextElementSibling)tip.nextElementSibling.hidden=!open;return;}
+  const copy=t.closest("[data-copy]");
+  if(copy){try{navigator.clipboard.writeText(copy.dataset.copy).then(()=>{copy.textContent="Copied";},()=>{});}catch(err){}return;}
+  if(TB.menu&&!(t.closest(".menu-pop")&&!t.closest("a")))closeMenus();
+  if(!t.closest(".toggletip"))closeTips();});
+document.addEventListener("keydown",e=>{if(e.key!=="Escape")return;
+  if(TB.menu){closeMenus(true);return;}
+  const tip=document.querySelector("[data-toggletip][aria-expanded='true']");if(tip){closeTips();tip.focus();return;}
+  if(TB.panel){TB.panel=false;const bar=document.getElementById("pb-bar");bar.classList.remove("open");const b=bar.querySelector("[data-tb-menu]");if(b){b.setAttribute("aria-expanded","false");b.focus();}}});
 
 /* ===== Phase 2 §10 B — build a dataset from raw tables ===== */
 const ROLES=["Customers","Bills","Payments","Complaints","Usage","Campaign events","Orders","Activity","Other event"];
@@ -889,27 +1202,32 @@ function obSources(u){const o=onb(u),s=st(u),score=s.mode==="score";
   if(!o.loaded) return `<p class="obhint">Drop every table you have. We read the headers and the first rows only — nothing leaves this screen.</p>
     <label class="drop"><input type="file" id="ob-files" class="sr" accept=".csv,.parquet" multiple><span class="d1">Drop your tables here, or choose files</span><span class="d2">CSV or Parquet · any number of files</span></label>
     <p class="obhint" style="margin-top:10px">or <button type="button" class="linkbtn" id="ob-sample">use the sample tables</button></p>`;
+  /* v1: File, Rows and Role by default; the detected key and time columns and the coverage behind "Show more columns" */
   const rows=o.tables.map((t,i)=>`<div class="srcrow">
     <span class="sname">${esc(t.file)}</span>
     <span class="srows">${esc(t.rows)} rows</span>
-    ${tinySel(`data-ob-role="${i}"`,ROLES,t.role)}
-    ${tinySel(`data-ob-key="${i}"`,candidates(t,t.key),t.key)}
-    ${tinySel(`data-ob-time="${i}"`,candidates(t,t.time),t.time)}
+    ${tinySel(`data-ob-role="${i}" aria-label="Role of ${esc(t.file)}"`,ROLES,t.role)}
+    <span class="more">${tinySel(`data-ob-key="${i}" aria-label="Customer column of ${esc(t.file)}"`,candidates(t,t.key),t.key)}</span>
+    <span class="more">${tinySel(`data-ob-time="${i}" aria-label="Date column of ${esc(t.file)}"`,candidates(t,t.time),t.time)}</span>
     <span class="srcfoot"><span class="srchint">${esc(ROLE_HINT[t.role]||"")}</span>
-      ${t.cov==null?'<span class="cov warn">spine table</span>':`<span class="cov">${t.cov}% of rows match a customer</span>`}</span></div>`).join("");
+      <span class="more">${t.cov==null?'<span class="cov warn">spine table</span>':`<span class="cov">${t.cov}% of rows match a customer</span>`}</span></span></div>`).join("");
   return `<p class="obhint">${score?"These are this month's tables. The roles come from the saved recipe.":"Check the role we detected for each table. The role decides which features we can build from it."}</p>
-    <div class="srctbl">${rows}</div>
-    <p class="obhint" style="margin-top:10px">Key and time columns are the ones we detected. ${score?"":'<button type="button" class="linkbtn" id="ob-reset">Start over with different files</button>'}</p>`;}
+    <div class="srcbar">${moreToggle("src",o.srcMore,3)}${score?"":'<button type="button" class="btn quiet sm" id="ob-reset">Start over with different files</button>'}</div>
+    <div class="srctbl${o.srcMore?" more-on":""}">${rows}</div>
+    <div class="obact"><button type="button" class="btn primary sm" id="ob-confirm">Confirm roles</button><span class="reason">${o.tables.length} tables · the customer and date columns are the ones we detected</span></div>`;}
+/* "Show more columns (n)": a table's extra columns, kept open across redraws of the panel */
+const moreToggle=(key,open,n)=>`<details class="tbl-more" data-ob-more="${key}"${open?" open":""}><summary>${open?"Show fewer columns":`Show more columns (${n})`}</summary></details>`;
 
 function obMapping(u){const o=onb(u),m=mapsOf(u),needs=needsOf(u);
   const cards=(o.tables||[]).map(t=>{
     const rows=m[t.file]||[], targets=OUR_COLS[t.role]||[];
+    /* v1: Your column → Maps to, with example values; the type and the confidence behind "Show more columns" */
     const body=rows.map((r,i)=>`<div class="maprow">
       <span class="mcol">${esc(r.col)}</span><span class="marrow" aria-hidden="true">→</span>
-      ${tinySel(`data-ob-map="${esc(t.file)}|${i}"`,targets,r.to,"not used")}
-      <span class="mtype">${esc(r.type)}</span>
-      <span class="msamp">${esc(r.samp)}</span>
-      <span>${confPill(r.conf)}${r.flag==="vmap"&&r.to?` <button type="button" class="vmapbtn" id="ob-vmap">value map</button>`:""}</span>
+      ${tinySel(`data-ob-map="${esc(t.file)}|${i}" aria-label="${esc(r.col)} maps to"`,targets,r.to,"not used")}
+      <span class="mex"><span class="msamp">${esc(r.samp)}</span>${r.flag==="vmap"&&r.to?`<button type="button" class="vmapbtn" id="ob-vmap">value map</button>`:""}</span>
+      <span class="mtype more">${esc(r.type)}</span>
+      <span class="more">${confPill(r.conf)}</span>
       ${r.flag==="pii"&&!r.to?`<span class="srchint">${esc(PII_NOTE)}</span>`:""}
     </div>`).join("");
     const vm=(o.vmap&&t.file===VMAP.file)?`<div class="vmap"><div class="vt">${esc(VMAP.col)} → ${esc(VMAP.to)}</div>
@@ -918,16 +1236,18 @@ function obMapping(u){const o=onb(u),m=mapsOf(u),needs=needsOf(u);
       <label class="check" style="height:auto"><input type="checkbox" id="ob-invert" checked> Flip the values</label></div>`:"";
     const need=needs.filter(n=>n[0]===t.file).map(([,req])=>`<div class="maprow need">
       <span class="mcol">—</span><span class="marrow" aria-hidden="true">→</span>
-      ${tinySel(`data-ob-need="${esc(t.file)}|${esc(req)}"`,rows.filter(r=>!r.to).map(r=>r.col),"","choose a column…")}
-      <span class="mtype">required</span><span class="msamp">${esc(req)}</span><span>${confPill(0)}</span>
+      ${tinySel(`data-ob-need="${esc(t.file)}|${esc(req)}" aria-label="Column for ${esc(req)}"`,rows.filter(r=>!r.to).map(r=>r.col),"","choose a column…")}
+      <span class="mex"><span class="msamp">${esc(req)}</span></span><span class="mtype more">required</span><span class="more">${confPill(0)}</span>
       <span class="needmsg">${esc(REQ_MSG[req]||"This column is required.")}</span></div>`).join("");
     const mapped=rows.filter(r=>r.to).length;
     return `<div class="mapcard"><div class="mh"><span class="m1">${esc(t.file)}</span><span class="m2">${esc(t.role)} · ${mapped} of ${rows.length} columns mapped</span></div>${body}${need}${vm}</div>`;}).join("");
   const total=Object.values(m).reduce((a,r)=>a+r.length,0), done=Object.values(m).reduce((a,r)=>a+r.filter(x=>x.to).length,0);
-  return `<p class="obhint">Your column names on the left, ours on the right. Change anything that looks wrong — the confidence score is how sure we are.</p>
-    ${cards}
-    <div class="obact"><button type="button" class="run sm ${o.accepted?"ghost":""}" id="ob-accept" ${o.accepted?"disabled":""}>${o.accepted?"Suggestions accepted":"Accept all suggestions"}</button>
-      <span class="reason">${done} of ${total} columns mapped${needs.length?` · ${needs.length} required column${needs.length>1?"s":""} still missing`:""}</span></div>`;}
+  /* one primary at the top: accept every suggestion and save; a missing required column stops it and stays highlighted */
+  return `<p class="obhint">Your column names on the left, ours on the right. Change anything that looks wrong.</p>
+    <div class="obact top"><button type="button" class="btn ${o.accepted?"secondary":"primary"} sm" id="ob-accept" ${o.accepted?"disabled":""}>${o.accepted?"Suggestions accepted and saved":"Accept suggestions and save all"}</button>
+      <span class="reason">${done} of ${total} columns mapped${needs.length?` · ${needs.length} required column${needs.length>1?"s":""} still missing`:""}</span></div>
+    <div class="srcbar">${moreToggle("map",o.mapMore,2)}</div>
+    <div class="maps${o.mapMore?" more-on":""}">${cards}</div>`;}
 
 function obFeatures(u){const o=onb(u);
   const byRole={};o.feats.forEach(f=>{(byRole[f.role]=byRole[f.role]||[]).push(f);});
@@ -977,7 +1297,7 @@ function buildSteps(u){const o=onb(u),roles=[...new Set((o.tables||[]).map(t=>t.
 
 function obBuild(u){const o=onb(u);
   if(!o.built&&!o.building) return `<p class="obhint">We apply the mappings, build the snapshots, calculate every feature and check the result. Nothing is overwritten — the dataset is written as a new file.</p>
-    <div class="obact"><button type="button" class="run sm" id="ob-build">Build dataset</button><span class="reason">${fmtN(datasetRows(o))} rows · ${selFeats(o).length} features · ${snapCount(o)} snapshots</span></div>`;
+    <div class="obact"><button type="button" class="btn primary sm" id="ob-build">Build dataset</button><span class="reason">${fmtN(datasetRows(o))} rows · ${selFeats(o).length} features · ${snapCount(o)} snapshots</span></div>`;
   const steps=buildSteps(u);
   const list=`<ol class="buildprog" id="ob-prog">${steps.map(([t,d],i)=>`<li id="bp-${i}" class="${o.built?"done":""}"><span class="bd">${i+1}</span><span>${esc(t)}</span><span class="bn">${o.built?esc(d):""}</span></li>`).join("")}</ol>`;
   if(!o.built) return `<p class="obhint">Building…</p>${list}`;
@@ -986,13 +1306,18 @@ function obBuild(u){const o=onb(u);
   const snapRows=SNAPS.slice(0,snapCount(o)).map(([m,v])=>`<div class="rrow"><span class="r1">${esc(m)}</span><span class="r2">20,000 rows</span><span class="r3">${pc1(v)}% positive</span><span>${miniBar(v,max)}</span></div>`).join("");
   const dropRows=DROPPED.map(([n,why])=>`<div class="rrow"><span class="r1">${esc(n)}</span><span class="r2">dropped</span><span class="r3"></span><span class="msamp">${esc(why)}</span></div>`).join("");
   const checks=`<ul class="checks">${CHECKS.map(([t,ok])=>`<li class="${ok?"":"bad"}"><span class="ck">${ok?"✓":"✕"}</span><span>${esc(t)}</span></li>`).join("")}</ul>`;
-  return `${list}
+  /* v1: the verdict and "Use this dataset" first; the progress and the four report cards behind "Show build details" */
+  const passed=CHECKS.filter(c=>c[1]).length;
+  return `<div class="obverdict"><div class="ov"><span class="ov1">Your dataset is ready: ${fmtI(datasetRows(o))} rows × ${keptFeats(o).length} features.</span>
+      <span class="ov2">${passed===CHECKS.length?`All ${CHECKS.length} checks passed`:`${passed} of ${CHECKS.length} checks passed`} · ${pc1(SNAPS.slice(0,snapCount(o)).reduce((a,x)=>a+x[1],0)/snapCount(o))}% of rows are positive · ${DROPPED.length} features left out</span></div>
+      <div class="btn-row"><button type="button" class="btn primary sm" id="ob-use" ${o.used?"disabled":""}>${o.used?"Dataset in use":"Use this dataset"}</button>
+      <span class="reason">${o.used?"Step 2 is filled in below.":"Fills in the key, target and time column below."}</span></div></div>
+    <details class="tech" data-ob-details${o.details?" open":""}><summary>Show build details</summary>
+    ${list}
     <div class="report"><div class="rh">Sources</div>${srcRows}</div>
     <div class="report"><div class="rh">Snapshots · 11.8% positive overall</div>${snapRows}</div>
     <div class="report"><div class="rh">Features dropped (${DROPPED.length} of ${DROPPED.length+keptFeats(o).length})</div>${dropRows}</div>
-    <div class="report"><div class="rh">Checks</div>${checks}</div>
-    <div class="obact"><button type="button" class="run sm" id="ob-use" ${o.used?"disabled":""}>${o.used?"Dataset in use":"Use this dataset"}</button>
-      <span class="reason">${o.used?"Step 2 is filled in below.":`Fills in the key, target and time column below · ${fmtN(datasetRows(o))} rows × ${keptFeats(o).length} features`}</span></div>`;}
+    <div class="report"><div class="rh">Checks</div>${checks}</div></details>`;}
 
 function obPanel(u){const o=onb(u),s=st(u),m=mapsOf(u);
   const mapped=Object.values(m).reduce((a,r)=>a+r.filter(x=>x.to).length,0);
@@ -1005,13 +1330,14 @@ function obPanel(u){const o=onb(u),s=st(u),m=mapsOf(u);
     o.built?`${fmtN(datasetRows(o))} rows · ${keptFeats(o).length} features · ${CHECKS.length} checks passed`:"Not built yet"];
   const titles=["Sources","Mapping","Features & label","Build & review"];
   const bodies=[obSources,obMapping,obFeatures,obBuild];
+  /* v1: titled sub-steps without numbers; one open at a time, a finished one folds to its one-line summary and "Edit" */
   const steps=titles.map((t,i)=>{const n=i+1,open=o.open===n,lock=i>0&&!o.loaded;
     return `<div class="obstep ${done[i]?"done":""} ${open?"open":""}">
-      <button type="button" class="obsum" data-ob-open="${n}" aria-expanded="${open}"><span class="obtick">${done[i]?"✓":n}</span>
-        <span><span class="ot">${esc(t)}</span><span class="os">${esc(summ[i])}</span></span><span class="oc">${open?"Hide":lock?"Locked":"Open"}</span></button>
+      <button type="button" class="obsum" data-ob-open="${n}" aria-expanded="${open}"><span class="obtick" aria-hidden="true">${done[i]?"✓":""}</span>
+        <span><span class="ot">${esc(t)}</span><span class="os">${esc(summ[i])}</span></span><span class="oc">${open?"Hide":lock?"Add tables first":done[i]?"Edit":"Open"}</span></button>
       ${open&&!lock?`<div class="obbody">${bodies[i](u)}</div>`:""}</div>`;}).join("");
   return `<div class="ob"><div class="obhead"><span class="obt">Build a dataset from raw tables</span>
-    <span class="obh">${s.mode==="score"?`Saved recipe: ${esc(RECIPE.name)} v${RECIPE.version}`:"Four steps. You can go back to any of them before building."}</span></div>${steps}</div>`;}
+    <span class="obh">${s.mode==="score"?`Using the setup saved as ${esc(RECIPE.name)} v${RECIPE.version}`:"You can go back to any step before building."}</span></div>${steps}</div>`;}
 
 /* ===== Phase 3a §9 C — AI Onboarding Assistant ===== */
 const DOCS=[["broadband_setup_guide.pdf",48,612],["router_troubleshooting.pdf",32,410],
@@ -1113,7 +1439,7 @@ function rcaBlock(){
   if(!RCA_ON) return `<section class="card"><h3>Root causes</h3><div class="genbox">
     <span class="gb1">Root causes have not been written for this run yet.</span>
     <span class="gb2">We take the top drivers for each risk segment and the complaint notes behind them, and write three causes per segment. Nothing is sent to anyone.</span>
-    <button type="button" class="run sm" id="rca-gen">Generate root causes</button></div></section>`;
+    <button type="button" class="btn secondary sm" id="rca-gen">Generate root causes</button></div></section>`;
   const segs=RCA_SEGS.map(s=>`<div class="rcseg">
     <div class="rs"><span class="rsh">${esc(s.band)}</span><span class="rsn">${esc(s.n)} · <span class="segshare">${pc1(s.share)}% of customers at risk</span></span></div>
     <div class="rline">${esc(s.head)}</div>
@@ -1225,9 +1551,10 @@ function copyBlock(){const cards=copyCards();
 function lineageBlock(u){const s=st(u);
   if(!s.runs.some(r=>r.lineage)) return "";
   const nodes=LINEAGE.map(([t,id,meta],i)=>`${i?'<div class="larrow" aria-hidden="true">→</div>':""}
-    <div class="lnode"><span class="l1">${esc(t)}</span><span class="l2">${esc(id)}…</span><span class="l3">${esc(meta)}</span></div>`).join("");
-  return `<section class="card"><h3>Where this dataset came from</h3><div class="lineage">${nodes}</div>
-    <p class="caption">Built from raw tables. Every id is stored with the run, so the same recipe can be replayed on next month's tables.</p></section>`;}
+    <div class="lnode"><span class="l1">${esc(t)}</span><span class="l3">${esc(meta)}</span><span class="l2">${esc(id)}…</span></div>`).join("");
+  /* v1: behind Details, what each step holds first and its id after it */
+  return techBlock("Details: data lineage",`<section class="card"><h3>Where this dataset came from</h3><div class="lineage">${nodes}</div>
+    <p class="caption">Built from raw tables. Every id is stored with the run, so the same recipe can be replayed on next month's tables.</p></section>`,'data-keep="lineage"');}
 
 /* ===== Phase 3b §8 — uplift ===== */
 /* catalog.problem_types.uplift.label in configs/engine.yaml, verbatim */
@@ -1548,10 +1875,20 @@ function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),pct=holdoutPct
     :H==null?`${pct}% of ${run.file} · its rows were not counted in the page`:`${fmtI(H)} rows · ${pct}% of the ${fmtI(N)} in ${run.file}`;
   const tbl=table(["decile","n","treated rate","control rate","observed uplift","predicted uplift"],d.map((x,i)=>[`D${x.decile}`,fmtI(dn[i]),
     pct1(x.treated_conv/x.treated_rows),pct1(x.control_conv/x.control_rows),f4(x.treated_conv/x.treated_rows-x.control_conv/x.control_rows),f4(x.predicted_uplift)]));
+  /* v1: the verdict first, in plain words; AUUC, the Qini coefficient and the intervals behind "Technical metrics" */
+  const v = UP_NULL_VIEW ? {state:"Example",tone:"bad",line:"This model cannot be shown to target better than random.",sub:"An example of a model with no measurable uplift: its interval includes zero, so it is never used to choose who to contact."}
+    : !causal ? {state:"Not causal",tone:"warn",line:"The model found a pattern, but it describes who was contacted, not what contacting them changed.",sub:"The treatment was not given at random, so this version is never promoted."}
+    : good ? {state:"✓ Better than random",line:`Targeting with this model beats contacting at random: in the 10% it ranks highest, contacted customers converted ${(u10.value*100).toFixed(1)} points more often than the control group.`,
+        sub:`Measured on the ${H==null?"":`${fmtI(H)} `}customers held back from training. This version stays a candidate until you promote it on the Models page.`}
+    : {state:"No measurable uplift",tone:"bad",line:"This model cannot be shown to target better than random.",sub:"Try a longer period, a larger campaign or a bigger control group."};
+  v.actions=UP_NULL_VIEW?"":actionHtml({label:"Score customers with this model",href:pageHref(u),attrs:"data-go-score"},"primary");
   return `${causal?"":ncBanner()}
-    ${kpis([["Learner",run.learner],["AUUC",f4(auuc.value)],["Qini coefficient",f4(qc)],["Uplift in the top 10%",pts2(u10.value)]])}
-    <div class="row">
-      <section class="card"><h3>Qini curve</h3>${qiniSvg(p)}<p class="caption">Measured on the ${H==null?"":`${fmtI(H)}-customer `}hold-out the learners never saw. The dashed line is random targeting; the gap above it is what the model adds.</p></section>
+    ${verdictCard(v)}
+    <section class="card"><h3>How much better than random it targets</h3>${qiniSvg(p)}<p class="caption">Measured on the ${H==null?"":`${fmtI(H)}-customer `}hold-out the learners never saw. The dashed line is random targeting; the gap above it is what the model adds.</p></section>
+    <section class="card"><h3>Uplift by decile</h3>${decileBars(d)}
+      <p class="caption">Treated conversion rate minus control conversion rate in each tenth of the hold-out (top bar), against the model's prediction (thin bar). D1 is the highest predicted uplift; the bottom deciles are the sleeping dogs.</p><details class="tbl-more show-tbl" data-keep="uptable"><summary>Show table</summary></details>${tbl}</section>
+    ${techBlock("Technical metrics",`${kpis([["Learner",run.learner],["AUUC",f4(auuc.value)],["Qini coefficient",f4(qc)],["Uplift in the top 10%",pts2(u10.value)]])}
+    <div class="row one">
       <section class="card" id="up-auuc"><h3>AUUC${UP_NULL_VIEW?" · example with no measurable uplift":""}</h3>${ciBar(ci,f4,good)}
         <p class="upverdict" data-up-summary>${esc(upliftSummary(ci,causal))}</p>
         <p class="upverdict">${verdict}</p>
@@ -1563,10 +1900,8 @@ function upliftModelBlock(u){const run=modelRunOf(u,upliftRun(u)),pct=holdoutPct
           ["Bootstrap resamples",String(a.upBoot)]])}
         <p class="caption" data-up-at>Uplift in the top k%: the treated rate minus the control rate among the k% of the hold-out with the highest predicted uplift.</p>
         ${up?`<p class="caption" data-up-sample>The prototype does not train on ${esc(run.file)}: the rates, the curve and the intervals are the sample's; the row counts are the file's.</p>`:""}
-        <div class="updl"><button type="button" class="linkbtn" id="up-null">${UP_NULL_VIEW?"Back to this model":"What a model with no measurable uplift looks like"}</button></div></section>
-    </div>
-    <section class="card"><h3>Uplift by decile</h3>${decileBars(d)}
-      <p class="caption">Treated conversion rate minus control conversion rate in each tenth of the hold-out (top bar), against the model's prediction (thin bar). D1 is the highest predicted uplift; the bottom deciles are the sleeping dogs.</p>${tbl}</section>`;}
+        <div class="updl"><button type="button" class="btn quiet" id="up-null">${UP_NULL_VIEW?"Back to this model":"What a model with no measurable uplift looks like"}</button></div></section>
+    </div>`,`data-keep="upmetrics"${UP_NULL_VIEW?" open":""}`)}`;}
 function treatListRows(u){const run=upliftRun(u);if(!run||run.mode!=="score")return [];
   const pol=upliftPolicy(run),top=pol.n/pol.rows,R=["months_since_churn ↓ (2)","offers_accepted ↑ (3)","churn_reason = Network","avg_monthly_spend ↑ (₹640)","preferred_channel = SMS"];
   return Array.from({length:pol.n},(_,i)=>{const up=Math.max(run.adv.upPers,predAt((i+0.5)/pol.n*top)),pc=0.02+0.06*((i*37)%100)/100;
@@ -1585,7 +1920,15 @@ function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),score
   const on=!counted?`${scored?"a list":"a hold-out"} the page could not count (${esc(run.rows)} rows is an estimate), so no count is shown`
     :scored?`every one of the ${fmtI(pol.rows)} scored customers`:`the ${fmtI(pol.rows)}-customer hold-out of the training run`;
   const dl=scored&&counted;
+  /* v1: who to contact and the download first; on a training run, the way to a list is to score one */
+  const dlBtn=`<button type="button" class="btn ${scored?"primary":"secondary sm"}" id="up-dl" ${dl?"":"disabled"}>Download contact list (CSV)</button>
+        <span class="reason">${dl?`winback_treat_list.csv · ${fmtI(pol.n)} customers · persuadables within budget only`:scored?"The product builds this list from every scored row; the page could not count them.":"Score a list with this model to download who to contact."}</span>`;
+  const v = !counted ? {state:scored?"Scored":"Trained",tone:"warn",line:`The ${scored?"list":"hold-out"} could not be counted in the page, so nobody is chosen from it.`,actions:scored?dlBtn:""}
+    : scored ? {state:"✓ Ready to contact",line:`Contact ${fmtI(pol.n)} customers: the persuadables within your budget.`,sub:e?`About ${fmtI(e.value)} extra conversions expected (likely ${fmtI(e.ci_low)} to ${fmtI(e.ci_high)}). Sleeping dogs are never contacted.`:"",actions:dlBtn}
+    : {state:"✓ Trained",line:`On customers it never saw, this model would contact ${fmtI(pol.n)}: the persuadables within your budget.`,sub:"Score this month's customers to get the list to contact.",
+       actions:actionHtml({label:"Score customers with this model",href:pageHref(u),attrs:"data-go-score"},"primary")};
   return `${pol.causal?"":ncBanner()}
+    ${verdictCard(v)}
     ${kpis([["Recommended to contact",fmtI(pol.n)],["Expected incremental conversions",e?fmtI(e.value):"—"],["Persuadables",fmtI(counted?pol.segs.persuadable:null)],["Sleeping dogs, never contacted",fmtI(counted?pol.segs.sleeping_dog:null)]])}
     <div class="row">
       <section class="card"><h3>Four segments</h3>${counted?segmentChart(pol.segs,run):""}<p class="caption" data-up-computed>Computed on ${on}. Persuadable at predicted uplift ≥ ${run.adv.upPers}; sleeping dog at ≤ ${run.adv.upSleep}; in between, sure thing when P(convert without contact) ≥ ${sureCutText(run.adv)}, otherwise lost cause.</p>${up?`<p class="caption" data-up-sample>The prototype does not ${scored?"score":"train on"} ${esc(run.file)}: the segment shares and the uplift behind the expected conversions are the sample's, and the segments' mean predicted uplift is not shown; the row counts are the file's.</p>`:""}</section>
@@ -1598,8 +1941,7 @@ function upliftOutputBlock(u){const run=upliftRun(u),pol=upliftPolicy(run),score
         <p class="caption">Only persuadables are ever contacted, highest uplift first; sleeping dogs never are. ${scored?"The control group and suppressed customers are taken out before the list is chosen.":"Expected conversions use the uplift observed in the same top share of the hold-out."}</p></section>
     </div>
     <section class="card"><h3>Treat list</h3>
-      <div class="updl"><button type="button" class="run sm" id="up-dl" ${dl?"":"disabled"}>Download treat list</button>
-        <span class="reason">${dl?`winback_treat_list.csv · ${fmtI(pol.n)} customers · persuadables within budget only`:scored?"The product builds this list from every scored row; the page could not count them.":"Score a list with this model to download who to contact."}</span></div>
+      ${scored?"":`<div class="updl">${dlBtn}</div>`}
       ${table(["customer_id","uplift","segment","top_reason (SHAP on uplift)","action"],UP_SAMPLE_ROWS)}
       <p class="caption"${up?" data-up-sample-rows":""}>${up?`Illustrative sample rows, not rows of ${esc(run.file)}: the prototype does not ${scored?"score":"train on"} the file, so these customers and scores${dl?", and those in the download,":""} are the sample's. The product's download holds the Treat rows only, with every column of scores.csv.`
         :"Sample rows of scores.csv. The download holds the Treat rows only, with every column of scores.csv."}</p></section>`;}
@@ -1721,46 +2063,57 @@ function campaignPage(u){const s=st(u),cr=s.cr,runs=campaignRuns(u),run=runs.fin
     <div class="field"><span class="sub">Outcome column</span><div class="control sel"><select id="cr-outcome">${opt([cr.outcome],cr.outcome)}</select></div>${hint("1 or true when the customer converted inside the window.")}</div>
     <div class="field"><span class="sub">Outcome window (days)</span><div class="control"><input type="number" id="cr-window" min="1" max="3650" step="1" value="${cr.window}"></div>${hint("How long after the send an outcome still counts.")}</div>
     <div class="field"><span class="sub">Treatment date column</span><div class="control sel"><select id="cr-datecol">${opt(["treatment_date"],cr.dateCol,"None: use the send date")}</select></div>${hint("Per-customer send dates; without it every row uses the run's send date.")}</div></div>`;
-  const ok=rep.absolute_lift&&rep.absolute_lift.ci_low>0;
-  let result;
+  const L=rep.absolute_lift,ok=L&&L.ci_low>0,harm=L&&L.ci_high<0;
+  /* v1: the verdict first, in the words and sign the rupee value view uses; the statistics behind "Statistical details" */
+  let v;
   /* a run that held no control group back (a 0% control share): the engine's sentence, and nothing to measure */
-  if(noCtl){const adv=noControlAdvice(run);result=`<div class="genbox" data-up-nocontrol><span class="gb1" data-up-summary>${esc(rep.summary)}</span>${adv?`<span class="gb2">${esc(adv)}</span>`:""}</div>`;}
-  else if(unread) result=`<div class="genbox" data-up-unread><span class="gb1">${esc(cr.file)} is not read by the prototype, so nothing is computed from it.</span><span class="gb2">The product joins it to the run's treated and control customers and measures the lift from its rows. Use sample outcomes to see a measured campaign.</span></div>`;
-  else if(rep.status==="immature") result=`<div class="crwait" data-up-wait><span class="cw1">Results available on ${fmtDay(rep.results_available_on)}</span>
-    <span class="cw2">Sent ${esc(sentDay(run))}. The ${rep.outcome_window_days}-day outcome window has not ended for any customer yet, so nothing is measured and no row is guessed.</span></div>${rep.measured?`<p class="crsum" data-up-summary>${esc(rep.summary)}</p>`:""}`;
-  else if(!rep.measured) result=`<div class="genbox"><span class="gb1">The outcome window has ended. Upload the outcomes file to measure this campaign.</span><span class="gb2">Treated customers are compared with the control group the run held out at random.</span></div>`;
-  else result=`${ciBar({value:rep.absolute_lift.value*100,ci_low:rep.absolute_lift.ci_low*100,ci_high:rep.absolute_lift.ci_high*100},v=>`${v>=0?"+":"−"}${Math.abs(v).toFixed(2)} pts`,ok,"zero = the campaign changed nothing")}
+  if(noCtl){const adv=noControlAdvice(run);v={state:"Cannot be measured",tone:"warn",line:`<span data-up-summary>${esc(rep.summary)}</span>`,sub:adv?`<span class="gb2">${esc(adv)}</span>`:"",attrs:"data-up-nocontrol"};}
+  else if(unread) v={state:"We cannot yet tell",tone:"wait",line:"We cannot yet tell whether the campaign worked.",attrs:"data-up-unread",
+    sub:`${esc(cr.file)} is not read by the prototype, so nothing is computed from it. The product joins it to the run's treated and control customers and measures the lift from its rows. Use sample outcomes to see a measured campaign.`};
+  else if(rep.status==="immature") v={state:"We cannot yet tell whether it worked",tone:"wait",attrs:"data-up-wait",line:`<span class="cw1">Results available on ${fmtDay(rep.results_available_on)}</span>`,
+    sub:`<span class="cw2">Sent ${esc(sentDay(run))}. The ${rep.outcome_window_days}-day outcome window has not ended for any customer yet, so nothing is measured and no row is guessed.</span>`};
+  else if(!rep.measured) v={state:"Ready to measure",tone:"wait",line:"The outcome window has ended. Upload the outcomes file to measure this campaign.",sub:"Contacted customers are compared with the control group the run held out at random."};
+  else {const n=fmtI(Math.abs(rep.incremental_conversions.value));
+    v=ok?{state:"✓ Measured",line:`The campaign worked: about ${n} extra customers came back.`,sub:"Contacted customers came back more often than the control group, by more than chance explains."}
+      :harm?{state:"Measured",tone:"bad",line:`The campaign did harm: about ${n} fewer customers came back.`,sub:"Contacted customers came back less often than the control group, by more than chance explains."}
+      :{state:"Measured",tone:"wait",line:"We cannot yet tell whether the campaign worked.",sub:"Contacted and control customers came back at rates too close to rule out chance."};
+    v.actions=actionHtml({label:"See the value in rupees",href:`#/pilot/value/${run.id}`},"primary");}
+  const stats = rep.measured&&L ? `${ciBar({value:L.value*100,ci_low:L.ci_low*100,ci_high:L.ci_high*100},x=>`${x>=0?"+":"−"}${Math.abs(x).toFixed(2)} pts`,ok,"zero = the campaign changed nothing")}
     <p class="crsum" data-up-summary>${esc(rep.summary)}</p>
     ${kvs([["Treated",`${fmtI(rep.treated_rows)} customers · ${pct1(rep.treated_rate)} converted`],["Control (held out at random)",`${fmtI(rep.control_rows)} customers · ${pct1(rep.control_rate)} converted`],
-      ["Absolute lift",`${pts2(rep.absolute_lift.value)} (95% CI ${(rep.absolute_lift.ci_low*100).toFixed(2)} to ${(rep.absolute_lift.ci_high*100).toFixed(2)})`],
+      ["Absolute lift",`${pts2(L.value)} (95% CI ${(L.ci_low*100).toFixed(2)} to ${(L.ci_high*100).toFixed(2)})`],
       ["Relative lift",`${rep.relative_lift>=0?"+":"−"}${Math.abs(rep.relative_lift*100).toFixed(1)}%`],
       ["Incremental conversions",`${fmtI(rep.incremental_conversions.value)} (95% CI ${fmtI(rep.incremental_conversions.ci_low)} to ${fmtI(rep.incremental_conversions.ci_high)})`],
       ["p-value (two-sided)",rep.p_value.toExponential(1)],["Rows still inside their window",fmtI(rep.rows_immature)],["Rows without an outcome",fmtI(rep.rows_without_outcome)],
-      ["Suppressed or not treated",fmtI(rep.rows_suppressed_or_untreated)]])}`;
-  const k=rep.absolute_lift;
+      ["Suppressed or not treated",fmtI(rep.rows_suppressed_or_untreated)]])}`
+    : rep.measured&&!noCtl ? `<p class="crsum" data-up-summary>${esc(rep.summary)}</p>` : "";
+  /* two labelled tiles: whole people and 1-decimal rates */
+  const rate=(r,n)=>r==null?"—":`${(r*100).toFixed(1)}% of ${fmtI(n)}`;
   return `${nc?ncBanner(noCtl?undefined:"campaign"):""}
-    ${kpis([["Treated",rep.treated_rate==null?"—":`${fmtI(rep.treated_rows)} · ${pct1(rep.treated_rate)}`],["Control",rep.control_rate==null?"—":`${fmtI(rep.control_rows)} · ${pct1(rep.control_rate)}`],
-      ["Lift",k?pts2(k.value):"—"],["Incremental conversions",rep.incremental_conversions?fmtI(rep.incremental_conversions.value):"—"]])}
-    <section class="card"><h3>Campaign</h3>${form}</section>
-    <section class="card"><h3>Did the campaign work?</h3>${result}
-      <p class="caption">Treated rate minus control rate, with a Newcombe interval. Only rows whose outcome window has ended are counted${run.ptype==="Uplift"?", inside the customers the policy meant to treat":""}.</p></section>`;}
+    ${verdictCard(v)}
+    ${kpis([["Contacted customers who came back",rate(rep.treated_rate,rep.treated_rows)],["Control group who came back",rate(rep.control_rate,rep.control_rows)]]).replace('class="kpis"','class="kpis two"')}
+    <section class="card">${techBlock("Statistical details",`${stats}<p class="caption">Treated rate minus control rate, with a Newcombe interval. Only rows whose outcome window has ended are counted${run.ptype==="Uplift"?", inside the customers the policy meant to treat":""}.</p>`,'data-keep="stats"')}</section>
+    <section class="card"><h3>Campaign and outcomes</h3>${form}</section>`;}
 
-function pageHead(inner){return `<div class="head"><div class="titles">${inner}</div><div class="headtools">${clientPicker()}${LOGO}</div></div><div class="rule"></div>`;}
+/* The page header: breadcrumb, H1, one sentence, at most one chip, the actions; the right side is the logo only. */
+function pageHead(inner){return `<div class="head"><div class="titles">${inner}</div>${LOGO}</div><div class="rule"></div>`;}
 
 function overview(){
   const cols = STAGES.map(([s,k],i)=>{
     const cases = UC.filter(u=>u.stage===s);
     return `<div class="stage-col t-${k}">
       <div class="stage-pill"><span class="n">${String(i+1).padStart(2,"0")}</span>${esc(s)}</div>
-      ${typeChip(k)}
       <div class="uc-list">${cases.map(u=>`<a class="uc" href="#/uc/${u.id}"><span>${esc(u.name)}</span><span class="chev" aria-hidden="true">›</span></a>`).join("")}</div>
     </div>`;}).join("");
+  /* one toggletip replaces the legend and the per-stage type chips: the coloured edge codes the kind of AI */
+  const colours = "The coloured edge on each use case shows the kind of AI it uses: blue is Predictive AI (a score per customer), purple is Generative AI (written text), green is Hybrid (both).";
+  /* "For you": one next step for the signed-in role. The sample user is an Admin, so an Approver's step comes
+     first (the models waiting); an Analyst sees their open alerts instead, a Viewer nothing. */
+  const forYou = `<p class="foryou"><span class="chip neutral">For you</span><span>2 models are waiting for your approval.</span><a class="related" href="#/approvals">Review them ›</a></p>`;
   return `<main class="screen">
-    ${pageHead(`<h1 class="h1">Marketing AI</h1><p class="sub">Customer Lifecycle</p>`)}${upIndexEntry()}
-    <div class="bar"><span class="cap">Lifecycle stage → AI use cases</span>
-      <div class="legend"><span class="lbl">Legend</span>${typeChip("P")}${typeChip("G")}${typeChip("H")}</div></div>
+    ${pageHead(`${crumbs()}<h1 class="h1">Customer Lifecycle</h1><p class="desc">Pick what you want to predict or improve. Each use case walks you from your data to a list of customers to contact. ${toggletip(colours,"the colours")}</p>`)}
+    ${forYou}
     <div class="timeline-wrap"><div class="timeline">${cols}</div></div>
-    <p class="hint">Select a use case to see its Data → Model → Output pipeline.</p>
   </main>`;
 }
 
@@ -1812,8 +2165,10 @@ function modeHelp(cfg,mode,u){if(u&&u.up)return mode==="train"?`Uplift ${UPLIFT_
   if(cfg.help)return cfg.help[mode];return mode==="train"?"Upload historical data where the outcome is already known. The best model is trained and saved.":"Upload new records without the outcome. The saved model scores every row and recommends an action.";}
 function blocker(u){const s=st(u),cfg=SETUP[u.id];
   /* the uplift screen's own reasons, as ui/modules/uplift/views.js setupBlocker words them */
-  if(u.up){if(!s.file)return "Upload a dataset to continue";if(!s.pk)return "Choose the primary key column";
-    if(s.mode==="score")return trainRunsOf(u).length?"":"Train an uplift model first";
+  /* v1: in score mode the model comes first, so a missing model is named before missing data */
+  if(u.up){if(s.mode==="score"&&!trainRunsOf(u).length)return "Train an uplift model first";
+    if(!s.file)return "Upload a dataset to continue";if(!s.pk)return "Choose the primary key column";
+    if(s.mode==="score")return "";
     if(!s.target)return "Choose the outcome column";}
   if(cfg.gen){
     if(s.mode==="score"){
@@ -1825,10 +2180,10 @@ function blocker(u){const s=st(u),cfg=SETUP[u.id];
     if(s.qa&&!s.pk)return "Choose the primary key column";
     if(s.qa&&!s.target)return "Choose the reference answer column";
     return "";}
+  if(s.mode==="score"&&!s.runs.some(r=>r.mode==="train"))return "Train a model first";
   if(!s.file)return s.source==="raw"?"Build the dataset from your tables to continue":"Upload a dataset to continue";
   if(!s.pk)return "Choose the primary key column";
   if(s.mode==="train"&&!s.target)return `Choose the ${cfg.tlabel?"reference answer":"target"} column`;
-  if(s.mode==="score"&&!s.runs.some(r=>r.mode==="train"))return "Train a model first";
   if(isUplift(u)&&!s.treatment)return "Choose the treatment column";
   if(isUplift(u)&&s.treatment===s.target)return "The treatment and the outcome must be different columns";
   if(isUplift(u)){const errs=upErrors(u),hard=errs.filter(c=>!c.finding.acknowledgeable);
@@ -1873,7 +2228,7 @@ function useDataset(u){const s=st(u),o=onb(u);
   o.used=true;o.open=0;}
 function predStep1(u){const s=st(u),o=onb(u),train=s.mode==="train";
   if(u.up)return upStep1(u);
-  const card=(id,t,h)=>`<button type="button" class="pickcard ${s.source===id?"on":""}" data-src="${id}"><span class="pt1">${esc(t)}</span><span class="pt2">${esc(h)}</span>${s.source===id?'<span class="ptag">Selected</span>':""}</button>`;
+  const card=(id,t,h)=>`<button type="button" class="pickcard ${s.source===id?"on":""}" data-src="${id}"><span class="pt1">${esc(t)}</span><span class="pt2">${esc(h)}</span></button>`;
   const pick=`<div class="pick">${card("file","Upload a prepared file",`One row per customer${train?", including the outcome column":""}. CSV or Parquet.`)}
     ${card("raw",train?"Build from raw tables":"Upload this month's tables",train?"Bring the tables you already have. We map them, build the features and the label, and write the dataset.":`The saved recipe ${RECIPE.name} v${RECIPE.version} maps and builds them exactly as last time.`)}</div>`;
   const body=s.source==="raw"
@@ -1922,13 +2277,25 @@ const num=(key,label,step,min,max,cls="xs")=>`<div class="field ${cls}"><span cl
 const chk=(key,label)=>`<div class="field"><span class="sub">&nbsp;</span><label class="check"><input type="checkbox" data-adv="${key}" ${st(CUR).adv[key]?"checked":""}> ${esc(label)}</label></div>`;
 const txt=(key,label,hint)=>`<div class="field wide"><span class="sub">${esc(label)}</span><div class="control"><input type="text" data-adv="${key}" value="${esc(st(CUR).adv[key])}"></div>${hint?`<span class="sub" style="color:var(--faint)">${esc(hint)}</span>`:""}</div>`;
 let CUR=null;
+/* The settings a stage's body carries, read off its controls, and how many of them differ from the defaults. */
+const stageKeys=body=>[...new Set([...body.matchAll(/data-(?:adv|up-num)="(\w+)"/g)].map(m=>m[1]).concat(body.includes("data-excl=")?["excl"]:[],body.includes("data-algo=")?["algos"]:[]))];
+/* Settings the page fills in from the data (the detected time column; the time-based split of a dataset built
+   from raw tables) are recommendations too, not a person's change. */
+const changedIn=(u,keys)=>{const s=st(u),a=s.adv,d={...defaultAdv(SETUP[u.id]),timeCol:a.timeCol,...(s.builtFrom?{split:"Time-based"}:{})};
+  return keys.filter(k=>JSON.stringify(a[k])!==JSON.stringify(d[k])).length;};
+/* Advanced as a whole: every setting a person moved away from its default. */
+function advChanged(u){return changedIn(u,Object.keys(st(u).adv));}
 function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
-  const stage=(i,title,summ,body)=>`<details class="stage-d"><summary><span class="sn">${i}</span><span><div class="st">${esc(title)}</div><div class="ss">${esc(summ)}</div></span><span class="sc">Configure</span></summary>${body}</details>`;
+  /* v1: no stage numbers; each folded stage says whether it uses the recommended settings */
+  const stage=(i,title,summ,body)=>{const n=changedIn(u,stageKeys(body));
+    return `<details class="stage-d"><summary><span><div class="st">${esc(title)}</div><div class="ss">${esc(summ)}</div></span><span class="sc${n?" changed":""}">${n?`You changed ${n} setting${n>1?"s":""}`:"Using recommended settings"}</span></summary>${body}</details>`;};
+  /* A setting the engine records but does not act on yet (engine/config.py ADVISORY_PATHS): shown, plainly inert. */
+  const advisory=html=>html.replace(/^<div class="field/,'<div class="field advisory').replace(/<\/div>$/,'<span class="advisory-note">Coming later: recorded with the run, not used yet.</span></div>');
   if(cfg.gen) return `<div class="stages">
     ${stage(1,"Documents",`${a.chunk}-token chunks · ${a.overlap} overlap · PII: ${a.pii}`,`<div class="frow">${num("chunk","Chunk size (tokens)",64,128,2048)}${num("overlap","Overlap (tokens)",10,0,200)}${sel("pii",["Redact","Drop rows","Keep"],"PII handling")}</div>`)}
-    ${stage(2,"Retrieval",`${a.embed} · top-${a.topk}${a.hybrid?" · hybrid search":""} · floor ${a.minsim}`,`<div class="frow">${sel("embed",["Titan Text Embeddings v2","Cohere Embed v3"],"Embedding model")}${num("topk","Top-k chunks",1,1,20)}${num("minsim","Minimum similarity",0.05,0,1)}${chk("hybrid","Hybrid (keyword + vector) search")}</div><p class="obhint" style="padding:0 16px 4px 52px">Below the minimum similarity nothing is retrieved and the answer is the refusal message instead of a guess.</p>`)}
+    ${stage(2,"Retrieval",`${a.embed} · top-${a.topk}${a.hybrid?" · hybrid search":""} · floor ${a.minsim}`,`<div class="frow">${sel("embed",["Titan Text Embeddings v2","Cohere Embed v3"],"Embedding model")}${num("topk","Top-k chunks",1,1,20)}${num("minsim","Minimum similarity",0.05,0,1)}${chk("hybrid","Hybrid (keyword + vector) search")}</div><p class="obhint stage-note">Below the minimum similarity nothing is retrieved and the answer is the refusal message instead of a guess.</p>`)}
     ${stage(3,"Generation",`temperature ${a.temp} · ${a.maxtok} tokens${a.guard?" · guardrails on":""} · refusal message set`,`<div class="frow">${num("temp","Temperature",0.1,0,1)}${num("maxtok","Max answer tokens",50,100,2000)}${chk("guard","Bedrock Guardrails (PII, topics, tone)")}${txt("refusal","When nothing relevant is found, reply","Sent instead of a guess. Keep it short and say what happens next.")}</div>`)}
-    ${stage(4,"Evaluation",`${a.metric} · ${a.judge} · pass at ${a.passThr}%`,`<div class="frow">${sel("metric",cfg.metrics,"Primary metric")}${sel("judge",["LLM judge + human sample","LLM judge only","Human review only"],"Grading method")}${num("passThr","Pass threshold (%)",5,0,100)}</div><p class="obhint" style="padding:0 16px 4px 52px">The share of reference questions that must pass for the build to count as passing.</p>`)}
+    ${stage(4,"Evaluation",`${a.metric} · ${a.judge} · pass at ${a.passThr}%`,`<div class="frow">${sel("metric",cfg.metrics,"Primary metric")}${sel("judge",["LLM judge + human sample","LLM judge only","Human review only"],"Grading method")}${num("passThr","Pass threshold (%)",5,0,100)}</div><p class="obhint stage-note">The share of reference questions that must pass for the build to count as passing.</p>`)}
   </div>`;
   const timeCols=s.cols.filter(c=>/date|time|month|week|day|ts$/i.test(c));
   const featCols=s.cols.filter(c=>c!==s.pk&&c!==s.target&&!(s.pkParts||[]).includes(c));
@@ -1940,8 +2307,9 @@ function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
       `<div class="frow">${sel("missing",["Auto","Fill (median / mode)","Drop rows"],"Missing values")}${sel("outliers",["Clip (1st–99th pct)","Remove rows","Keep"],"Outliers")}${sel("pii",["Redact","Drop columns","Keep"],"PII handling")}${num("minpos","Min positive examples",50,50,100000)}${chk("dedupe","Remove duplicate rows")}${chk("leakage","Check for target leakage")}</div>${s.cols.length?excl:""}`)}
     ${stage(2,"Data split",`${a.split} · ${a.val}% val · ${a.test}% test${a.split==="Time-based"&&a.timeCol?" · by "+a.timeCol:""}${a.groupCol?" · grouped by "+a.groupCol:""}`,
       `<div class="frow">${sel("split",["Random (stratified)","Time-based"],"Split type")}${num("val","Validation (%)",5,5,40)}${num("test","Test (%)",5,5,40)}${timeField}<div class="field"><span class="sub">Group column (keep together)</span><div class="control sel"><select data-adv="groupCol">${opt(featCols,a.groupCol,"None")}</select></div></div></div>`)}
+    <details class="later"><summary>Show settings planned for a later release (6)<span class="n">Recorded with the run, not used yet</span></summary>
     ${stage(3,"Feature engineering",`${a.autofeat?"Auto features on":"Auto features off"} · encoding ${a.encoding} · text: ${a.text} · selection: ${a.fsel} · max ${a.maxfeat}`,
-      `<div class="frow">${chk("autofeat","Automatic feature engineering (dates, ratios, aggregates)")}${sel("encoding",["Auto","One-hot","Target encoding","Ordinal"],"Categorical encoding")}${sel("scaling",["Auto","Standard","Min-max","None"],"Numeric scaling")}${sel("text",["Ignore","TF-IDF","Embeddings"],"Text columns")}${sel("fsel",["Importance-based","Correlation filter","PCA (reduces explainability)","None"],"Feature selection")}${num("maxfeat","Max features",10,10,500)}</div>`)}
+      `<div class="frow">${chk("autofeat","Automatic feature engineering (dates, ratios, aggregates)")}${sel("encoding",["Auto","One-hot","Target encoding","Ordinal"],"Categorical encoding")}${sel("scaling",["Auto","Standard","Min-max","None"],"Numeric scaling")}${sel("text",["Ignore","TF-IDF","Embeddings"],"Text columns")}${sel("fsel",["Importance-based","Correlation filter","PCA (reduces explainability)","None"],"Feature selection")}${num("maxfeat","Max features",10,10,500)}</div>`)}</details>
     ${stage(4,"Model search",`${a.strategy} · ${s.model===AUTO?`${a.algos.length} of ${cfg.models.length} algorithms`:s.model}${a.ensemble?" · ensembling":""} · ${a.trials} trials · ${a.limit} min · ${a.folds}-fold CV`,
       `${s.model===AUTO?`<div class="algos">${cfg.models.map(m=>`<label><input type="checkbox" data-algo="${esc(m)}" ${a.algos.includes(m)?"checked":""}> ${esc(m)}</label>`).join("")}</div>`:""}
        <div class="frow">${sel("strategy",["Fast","Balanced","Exhaustive"],"Search strategy")}${num("trials","Tuning trials",10,5,500)}${num("limit","Time limit (min)",5,5,240)}${num("folds","CV folds",1,2,10)}${sel("imbalance",["Auto","Class weights","Oversampling (SMOTE)","None"],"Class imbalance")}${chk("ensemble","Ensemble / stack the best models")}</div>`)}
@@ -1950,7 +2318,7 @@ function stagesHtml(u){CUR=u;const s=st(u),cfg=SETUP[u.id],a=s.adv;
     ${isUplift(u)?stage(6,"Actions & output",...upStage6(a)):stage(6,"Actions & output",`High ≥ ${a.hi} · Medium ≥ ${a.md}${a.supOpt?" · skip opted-out":""}${a.supRecent?` · skip contacted <${a.recentDays}d`:""} · ${a.control}% control group`,
       `<div class="frow">${num("hi","High-risk score ≥",0.05,0,1)}${num("md","Medium-risk score ≥",0.05,0,1)}${num("control","Control group holdout (%)",1,0,50)}${num("recentDays","Recently contacted (days)",1,1,90)}${chk("supOpt","Suppress opted-out customers")}${chk("supRecent","Suppress recently contacted")}</div>`)}
     ${stage(7,"Monitoring & retraining",`Drift alert PSI > ${a.drift} · retrain: ${a.retrain} · alert if score drops ${a.alert}%`,
-      `<div class="frow">${num("drift","Drift alert (PSI above)",0.05,0.05,1)}${sel("retrain",["Manual","On drift","Weekly","Monthly"],"Retraining")}${num("alert","Performance alert (% drop)",1,1,50)}</div>`)}
+      `<div class="frow">${num("drift","Drift alert (PSI above)",0.05,0.05,1)}${advisory(sel("retrain",["Manual","On drift","Weekly","Monthly"],"Retraining"))}${num("alert","Performance alert (% drop)",1,1,50)}</div>`)}
     ${stage(8,"Governance & privacy",`Keep uploads ${a.retention} days${a.consentCol?" · consent: "+a.consentCol:""}${a.approval?" · approval before champion":""}`,
       `<div class="frow">${num("retention","Data retention (days)",30,0,730)}<div class="field"><span class="sub">Consent column (use rows where true)</span><div class="control sel"><select data-adv="consentCol">${opt(featCols,a.consentCol,"None")}</select></div></div>${chk("approval","Require approval before a model becomes champion")}</div>`)}
   </div>`;
@@ -1977,36 +2345,46 @@ function setupHtml(u){const s=st(u),cfg=SETUP[u.id],ml=modeLabels(cfg,u),train=s
   const noTreat=u.up&&train&&s.cols.length&&!cands.length?`<p class="seg-help" data-up-notreat>No 0/1 column in this file looks like a treatment. Uplift needs one: 1 for customers who got the action, 0 for the randomly held-out control group.</p>`:"";
   const treatField=cands.length?`<div class="field"><span class="sub">Treatment column</span><div class="control sel"><select id="f-treat">${opt(cands,s.treatment,"None")}</select></div><span class="uphint">1 means the customer received the action, 0 means held out. It must be randomly assigned.</span><span class="uphint" data-up-share>Treated share: ${s.treatment&&s.file&&s.file.sample?`${Math.round(100*UPLIFT_EVAL.treated/(UPLIFT_EVAL.treated+UPLIFT_EVAL.control))}% treated`:"—"}</span></div>`:"";
   const trainRuns=trainRunsOf(u);
+  /* v1: one step at a time. Until the data is in, the later steps are one line each (never greyed controls);
+     in score mode the model comes first and is always usable. */
+  const hasData=cfg.gen?(train?!!s.docs:!!s.qa):!!s.file;
+  const needs=cfg.gen?(train?"the documents":"the test questions"):"a dataset";
+  const later=(label)=>`<div class="fstep later"><div class="stepno">2</div><div><div class="flabel">${label}</div><div class="fhint">Available after you add ${needs}.</div></div></div>`;
   const step1 = cfg.gen?genStep1(u):predStep1(u);
-  const step2 = cfg.gen?genStep2(u):`<div class="fstep ${s.file?"":"locked"} ${s.pk&&(!train||s.target)?"done":""}"><div class="stepno">2</div><div>
+  const step2 = !hasData ? later(cfg.gen&&train?'Reference questions <span class="opt">· optional</span>':"Columns")
+   : cfg.gen?genStep2(u):`<div class="fstep ${s.pk&&(!train||s.target)?"done":""}"><div class="stepno">2</div><div>
         <div class="flabel">Columns</div><div class="fhint">${u.up?(train?"Which column identifies a customer, which one says whether they were treated, and which one is the outcome.":"Which column identifies a customer."):train?`The primary key identifies each row and is never used as a feature. The ${cfg.tlabel?"reference answer":"target"} is what the model learns to predict.`:"The primary key identifies each row so scores can be joined back to your systems."}</div>
         <div class="frow"><div class="field"><span class="sub">Primary key</span><div class="control sel"><select id="f-pk">${opt(s.pkExtra?[s.pkExtra,...s.cols]:s.cols,s.pk,"Select a column…")}</select></div></div>
         ${train?`<div class="field"><span class="sub">${esc(u.up?"Outcome column":cfg.tlabel||"Target column")}</span><div class="control sel"><select id="f-target">${opt(s.cols.filter(c=>c!==s.pk&&c!==s.treatment),s.target,"Select a column…")}</select></div></div>`:""}${treatField}</div>${noTreat}${ptypeHtml}</div></div>`;
-  const step3 = train&&isUplift(u)
-   ? `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
+  const step3 = train&&!hasData ? later("Model").replace('class="stepno">2<','class="stepno">3<')
+   : train&&isUplift(u)
+   ? `<div class="fstep done"><div class="stepno">3</div><div>
         <div class="flabel">Model</div><div class="fhint">A meta-learner estimates each customer's chance of converting with the action and without it. The difference is the uplift.</div>
         <div class="frow"><div class="field"><span class="sub">Learner</span><div class="control sel"><select id="f-learner" data-adv="upLearner">${opt(UP_LEARNERS,s.adv.upLearner)}</select></div><span class="uphint">X-learner copes best when one arm is much smaller than the other.</span></div>
           <div class="field"><span class="sub">Base model</span><div class="control sel"><select id="f-base" data-adv="upBase">${opt(UP_BASES,s.adv.upBase)}</select></div><span class="uphint">The model family inside each learner.</span></div></div></div></div>`
    : train
-   ? `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
-        <div class="flabel">Model</div><div class="fhint">AutoML tries every selected ${cfg.gen?"LLM":"algorithm"} and keeps the best. Pick one only if you need to.</div>
-        <div class="frow"><div class="field"><div class="control sel"><select id="f-model">${opt([AUTO,...cfg.models],s.model)}</select></div></div></div></div></div>`
-   : `<div class="fstep ${s.file?"":"locked"} done"><div class="stepno">3</div><div>
+   ? `<div class="fstep done"><div class="stepno">3</div><div>
+        <div class="flabel">Model</div><div class="fhint">${cfg.gen?"Every selected AI model is tried and the best is kept.":"Every selected algorithm is tried and the best is kept."} Pick one only if you need to.</div>
+        <div class="frow"><div class="field"><div class="control sel"><select id="f-model" aria-label="Model">${opt([AUTO,...cfg.models],s.model)}</select></div></div></div></div></div>`
+   : `<div class="fstep ${trainRuns.length?"done":""}"><div class="stepno">1</div><div>
         <div class="flabel">${u.up?"Trained uplift model":"Trained model"}</div><div class="fhint">${u.up?"The saved uplift model that will rank the uploaded customers.":"The saved model that will score the uploaded rows."}</div>
-        <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun">${trainRuns.length||!u.up?trainRuns.map(r=>`<option value="${r.id}" ${r.id===(scoreBase(u)||{}).id?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}</option>`).join(""):'<option value="">No trained uplift model yet</option>'}</select></div></div></div></div></div>`;
-  const adv = train ? `<details class="adv-wrap" id="f-adv" ${s.advOpen?"open":""}><summary>Advanced settings<span class="n">Each ${cfg.gen?"pipeline":"AutoML"} stage can be configured · defaults work for most data</span></summary>${stagesHtml(u)}</details>` : "";
+        <div class="frow"><div class="field wide"><div class="control sel"><select id="f-scorerun" aria-label="${u.up?"Trained uplift model":"Trained model"}">${trainRuns.length||!u.up?trainRuns.map(r=>`<option value="${r.id}" ${r.id===(scoreBase(u)||{}).id?"selected":""}>${esc(r.best)} · ${esc(r.score)} · ${esc(r.at)}${r.champion?" · Champion":""}</option>`).join(""):'<option value="">No trained uplift model yet</option>'}</select></div></div></div>
+        ${u.up&&!trainRuns.length?`<div class="btn-row"><button type="button" class="btn secondary sm" data-mode-go="train">Train an uplift model</button></div>`:""}</div></div>`;
+  /* score mode: the model first, then the data, then its columns (numbered in that order) */
+  const renum=(html,n)=>html.replace(/class="stepno">\d+</,`class="stepno">${n}<`);
+  const steps = train ? `${step1}${step2}${step3}` : `${step3}${renum(step1,2)}${renum(step2,3)}`;
+  const adv = train&&hasData ? `<details class="adv-wrap" id="f-adv" ${s.advOpen?"open":""}><summary>Advanced settings<span class="n">${advChanged(u)?`You changed ${advChanged(u)} setting${advChanged(u)>1?"s":""}`:"Using recommended settings"}</span></summary>${stagesHtml(u)}</details>` : "";
   return `<div class="setup-grid">
     <section class="card"><div class="form-body">
       <div class="seg" role="group" aria-label="Mode"><button type="button" data-mode="train" class="${train?"on":""}">${esc(ml.train)}</button><button type="button" data-mode="score" class="${train?"":"on"}">${esc(ml.score)}</button></div>
       <p class="seg-help">${esc(modeHelp(cfg,s.mode,u))}</p>
-      <form id="f-setup" novalidate style="margin-top:18px">
-        ${step1}
-        ${step2}${step3}${adv}
-        <div class="actions"><button type="submit" class="run" id="f-run" ${why?"disabled":""}>${u.up?(train?"Train uplift model":"Score customers"):train?(cfg.gen?"Build assistant":"Run training"):(cfg.gen?"Run evaluation":"Score data")}</button><span class="reason">${esc(why)}</span></div>
+      <form id="f-setup" class="setup-form" novalidate>
+        ${steps}${adv}
+        <div class="actions"><button type="submit" class="run btn primary" id="f-run" ${why?"disabled":""}>${u.up?(train?"Train uplift model":"Score customers"):train?(cfg.gen?"Build assistant":"Run training"):(cfg.gen?"Run evaluation":"Score data")}</button><span class="reason">${esc(why)}</span></div>
       </form></div></section>
     ${runsCard(u)}
   </div>
-  <p class="next">${u.up?"After the run: Model (Qini curve, AUUC) → Output (segments, treat list) → Campaign results.":"After the run, this page shows the pipeline: Data → Model → Output."}</p>`;
+  ${train?`<p class="next">${u.up?"After the run: Model (Qini curve, AUUC) → Output (segments, treat list) → Campaign results.":"After the run, this page shows the pipeline: Data → Model → Output."}</p>`:""}`;
 }
 function runsCard(u){const s=st(u),runs=u.up?s.runs.filter(r=>r.ptype==="Uplift"):s.runs;
   return `<section class="card"><h3>${u.up?"Previous uplift runs":"Previous runs"}</h3><div class="runs-list">${runs.length?runs.slice().reverse().map(r=>`<div class="runrow"><div><div class="r1">${esc(r.mode==="train"?r.best:"Scored "+r.rows+" rows")}${r.champion?'<span class="champ">Champion</span>':""}</div><div class="r2">${esc(r.file)} · ${esc(r.at)}</div></div><div class="r3"><b>${esc(r.mode==="train"?r.score:r.model)}</b><span style="font-size:12px;color:var(--muted)">${r.mode==="train"?"train":"score"}</span></div></div>`).join(""):`<div class="empty">${u.up?"No uplift runs yet.":"No runs yet."}</div>`}</div></section>`;
@@ -2017,7 +2395,12 @@ function flowBlocks(u,run){
     ["model","Model",run.best,run.mode==="train"?(run.model===AUTO?`Selected by AutoML · ${run.score}`:run.score):`${run.ptype==="Uplift"?"Uplift model":"Champion model"} · ${run.score}`],
     ["output","Output",run.mode==="train"?u.o:`${run.rows} rows scored`,run.ptype==="Uplift"?`Recommended to contact: ${fmtI(upliftPolicy(run).n)}`:`${u.out.kp[0][0]}: ${u.out.kp[0][1]}${run.mode==="train"?"":" · reasons + actions"}`]
   ];
-  return items.map(([slug,lab,val,meta],i)=>`${i?'<div class="arrow" aria-hidden="true">→</div>':""}<a class="block" href="${pageHref(u,slug)}"><div><div class="lab"><span>${String(i+1).padStart(2,"0")}&nbsp;&nbsp;${lab}</span><span class="bstate">✓ Done</span></div><div class="val">${esc(val)}</div><div class="meta">${esc(meta)}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`).join("");
+  /* v1: "Campaign results" is the fourth block of a win-back scoring run (was a link beside the summary) */
+  const camp=run.mode==="score"&&baseUC(u).id==="win-back-campaign";
+  const blocks=items.map(([slug,lab,val,meta],i)=>`${i?'<div class="arrow" aria-hidden="true">→</div>':""}<a class="block" href="${pageHref(u,slug)}"><div><div class="lab"><span>${lab}</span><span class="bstate">✓ Done</span></div><div class="val">${esc(val)}</div><div class="meta">${esc(meta)}</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`).join("");
+  if(!camp)return blocks;
+  const when=fmtDay(addDays(run.date,st(u).cr.window));
+  return `${blocks}<div class="arrow" aria-hidden="true">→</div><a class="block" id="f-campaign" href="${pageHref(u,"campaign")}"><div><div class="lab"><span>Campaign results</span><span class="bstate waiting">Waiting</span></div><div class="val">Did the campaign work?</div><div class="meta">Results on ${esc(when)}, once the outcome window ends</div></div><div class="go"><span>Record outcomes</span><span aria-hidden="true">›</span></div></a>`;
 }
 function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
   if(s.mode==="train"&&isUplift(u)){const nr=s.targeted,ci=auucCI(a.upTest),D=UPLIFT_DEFAULTS,E=UPLIFT_EVAL;
@@ -2049,42 +2432,68 @@ function runSteps(u){const s=st(u),cfg=SETUP[u.id],a=s.adv;
     : [["Validating columns","All expected features present"],["Loading champion model",cfg.best],["Scoring rows",`${s.file.rows} rows scored`],["Generating reasons & actions",`Top SHAP reason per row · high ≥ ${a.hi}, medium ≥ ${a.md}`]];
 }
 function runningHtml(u){return `<div class="setup-grid"><section class="card"><h3>Running…</h3><ol class="progress" id="prog">${runSteps(u).map(([t],i)=>`<li id="ps-${i}"><span class="dot">${i+1}</span><div><div class="pt">${esc(t)}</div><div class="pd"></div></div></li>`).join("")}</ol></section>${runsCard(u)}</div>`;}
-function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id];
-  return `<div class="results"><div class="summary"><span class="ok">✓ ${r.mode==="train"?(cfg.gen?"Assistant built":u.up?"Uplift model trained":"Training complete"):(cfg.gen?"Evaluation complete":"Scoring complete")}</span>
-    <span>${r.mode==="train"?`Best model <b>${esc(r.best)}</b> · ${esc(r.score)}`:`<b>${esc(r.rows)}</b> rows scored with ${esc(r.best)}${r.ptype==="Uplift"?` · Recommended to contact: <b>${fmtI(upliftPolicy(r).n)}</b>`:""}`}</span>
-    ${r.mode==="train"&&r.champion?`<span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}${r.mode==="train"&&r.ptype==="Uplift"?`<span class="muted">${r.causal===false?"Not promoted: not causal":"Candidate · promote it on the Models page"}</span>`:""}${r.mode==="score"&&u.id==="win-back-campaign"?`<a class="linkbtn" id="f-campaign" href="${pageHref(u,"campaign")}">Campaign results</a>`:""}
-    <span class="muted">${esc(r.file)} · ${esc(r.at)}</span><button class="again" id="f-again">Run again / change settings</button></div>
-    <span class="cap">${u.up?"Uplift pipeline":"AI pipeline"}</span><div class="flow">${flowBlocks(u,r)}</div>
+/* The verdict a finished run leads with, and its one primary action (the audit's top 5, item 3). */
+function runVerdict(u,r){const cfg=SETUP[u.id],train=r.mode==="train",upl=r.ptype==="Uplift";
+  if(train){
+    if(cfg.gen)return {line:st(u).qa?`The assistant is built and answered ${EVAL.pass}% of the reference questions well enough to pass.`:"The assistant is built. Add reference questions to find out how well it answers.",
+      primary:{label:"Evaluate it with new questions",id:"f-next"}};
+    if(upl)return r.causal===false
+      ? {line:"The uplift model is trained, but its numbers describe who was contacted, not what contacting them changed.",tone:"warn",primary:{label:"Score customers with this model",id:"f-next"}}
+      : {line:"The uplift model is trained: it can tell who changes because you contact them.",primary:{label:"Score customers with this model",id:"f-next"}};
+    return {line:r.champion?"Your model is ready. It now scores this use case's customers.":"Your model is trained.",primary:{label:"Score new customers with this model",id:"f-next"}};}
+  if(cfg.gen)return {line:`${r.rows} test questions were answered and graded.`,primary:{label:"See the answers",href:pageHref(u,"output")}};
+  if(upl){const n=upliftPolicy(r).n;
+    return n==null?{line:"The list is scored, but the page could not count its customers, so nobody is chosen from it.",tone:"warn",primary:{label:"Download contact list (CSV)",id:"f-download",attrs:"disabled"}}
+      :{line:`Contact ${fmtI(n)} customers: the persuadables within your budget.`,primary:{label:"Download contact list (CSV)",id:"f-download"}};}
+  return {line:"Your contact list is ready: every customer has a score, a reason and a suggested action.",primary:{label:"Download contact list (CSV)",id:"f-download"}};}
+function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id],v=runVerdict(u,r);
+  const state=`✓ ${r.mode==="train"?(cfg.gen?"Assistant built":u.up?"Uplift model trained":"Training complete"):(cfg.gen?"Evaluation complete":"Scoring complete")}`;
+  const sub=`${r.mode==="train"?`Best model <b>${esc(r.best)}</b> · ${esc(r.score)}`:`<b>${esc(r.rows)}</b> rows scored with ${esc(r.best)}${r.ptype==="Uplift"?` · Recommended to contact: <b>${fmtI(upliftPolicy(r).n)}</b>`:""}`}${r.mode==="train"&&r.champion?` · <span class="muted">Set as champion${r.beat?" · beat previous champion":""}</span>`:""}${r.mode==="train"&&r.ptype==="Uplift"?` · <span class="muted">${r.causal===false?"Not promoted: not causal":"Candidate · promote it on the Models page"}</span>`:""}<br><span class="muted">${esc(r.file)} · ${esc(r.at)}</span>`;
+  const again=`<button type="button" class="again btn quiet" id="f-again">Change settings and ${r.mode==="train"?(cfg.gen?"build":"train"):"score"} again</button>`;
+  return `<div class="results">${verdictCard({cls:"summary",state,tone:v.tone||"",line:esc(v.line),sub,actions:`${actionHtml(v.primary,"primary")}${again}`})}
+    <span class="cap">${u.up?"Uplift pipeline":"AI pipeline"}</span><div class="flow${r.mode==="score"&&baseUC(u).id==="win-back-campaign"?" four":""}">${flowBlocks(u,r)}</div>
     ${cfg.gen?assistantResults(u):""}
     <div class="runs-below">${runsCard(u)}</div></div>`;
 }
-/* DEC-608's entry point, under the use case's header, as ui/modules/uplift/index.js inserts it after the
-   rule: one link to the use case's uplift screen. Only a use case with uplift sample content has one. */
-const upEntry=u=>upliftOffered(u)?`<nav class="uentry" aria-label="Uplift"><a href="${pageHref(upView(u))}">Uplift for <b>this use case</b> ›</a><span>${esc(UPLIFT_EXPLANATION)}</span></nav>`:"";
-/* The Overview's entry, as ui/modules/uplift/index.js inserts it after the Overview's rule (DEC-608;
-   drawn since the reviewer's ruling on DEC-666, DEC-952). */
-const upIndexEntry=()=>`<nav class="uentry" aria-label="Uplift"><a href="#/uplift"><b>Uplift modelling</b> ›</a><span>Predicts who changes behaviour because of your action.</span></nav>`;
+/* DEC-608's entry point, since v1 a quiet related link in the use case's own header actions (the audit's
+   "Also: target with uplift ›"), never an injected pill. Only a use case with uplift sample content has
+   one (upliftOffered: never on a generative, notice, planned or error screen). */
+const upRelated=u=>upliftOffered(baseUC(u))?{label:"Also: target with uplift",href:pageHref(upView(baseUC(u))),attrs:`title="Uplift ${esc(UPLIFT_EXPLANATION)}"`}:null;
 const upChip=()=>`<span class="chip type">Uplift</span>`;
+/* The breadcrumb above a use-case screen: Home › journey › use case (› Uplift) › the page. */
+function ucCrumbs(u,page){const b=baseUC(u),items=[JOURNEY];
+  if(u.up){items.push({label:b.name,href:pageHref(b)});items.push(page?{label:"Uplift",href:pageHref(u)}:{label:"Uplift"});}
+  else items.push(page?{label:b.name,href:pageHref(b)}:{label:b.name});
+  if(page)items.push({label:page});
+  return crumbs(items);}
 function detail(u){const s=st(u);
   const body = s.view==="running"?runningHtml(u):s.view==="results"?resultsHtml(u):setupHtml(u);
-  /* the uplift screen's header is ui/modules/uplift/views.js upliftScreenHtml's */
+  /* the uplift screen's header is ui/modules/uplift/views.js upliftScreenHtml's: one chip, the breadcrumb is the way back */
   if(u.up)return `<main class="screen t-${u.k}" data-module="uplift">
-    ${pageHead(`<a class="back" href="${pageHref(baseUC(u))}">‹&nbsp; ${esc(u.name)}</a><h1 class="h1">${esc(u.name)} · Uplift</h1><p class="desc">Uplift ${esc(UPLIFT_EXPLANATION)}.</p><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}${upChip()}</div>`)}
+    ${pageHead(`${ucCrumbs(u)}<h1 class="h1">${esc(u.name)} · Uplift</h1><p class="desc">Uplift ${esc(UPLIFT_EXPLANATION)}.</p><div class="chips">${upChip()}</div>`)}
     ${body}
   </main>`;
   return `<main class="screen t-${u.k}">
-    ${pageHead(`<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">${esc(u.name)}</h1><p class="desc">${esc(u.desc)}</p><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}</div>`)}${upEntry(u)}
+    ${pageHead(`${ucCrumbs(u)}<h1 class="h1">${esc(u.name)}</h1><p class="desc">${esc(u.desc)}</p><div class="chips">${typeChip(u.k)}</div>${headActions({related:upRelated(u)})}`)}
     ${body}
   </main>`;
 }
-/* #/uplift: every use case, as the product's upliftIndexHtml lists them. The prototype has uplift sample
-   content for Win-back only, so the others are listed without a link rather than with win-back's numbers. */
+/* #/uplift: every use case, as the product's upliftIndexHtml lists them, each with its status. The prototype
+   has uplift sample content for Win-back only, so the others are listed without a link rather than with
+   win-back's numbers; the generative assistant, which has no customer outcome to lift, is greyed. */
 function upliftIndex(){
-  const rows=UC.map(u=>upliftOffered(u)?`<a href="${pageHref(upView(u))}"><span>${esc(u.name)}</span><span class="s">${esc(u.stage)} ›</span></a>`
-    :`<div class="off"><span>${esc(u.name)}</span><span class="s">${esc(u.stage)} · no uplift sample in this prototype</span></div>`).join("");
-  return `<main class="screen" data-module="uplift">${pageHead(`<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">Uplift modelling</h1><p class="desc">Uplift ${esc(UPLIFT_EXPLANATION)}: it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.</p>`)}
-    <div class="uindex">${rows}</div><p class="hint">Pick a use case to train an uplift model on a campaign with a random control group.</p></main>`;}
-function rerender(u){const m=document.querySelector("#app main");if(!m)return;const open=[...document.querySelectorAll(".stage-d[open]")].map(d=>d.querySelector(".st").textContent);m.outerHTML=detail(u);document.querySelectorAll(".stage-d").forEach(d=>{if(open.includes(d.querySelector(".st").textContent))d.open=true;});bindDetail(u);}
+  const status=u=>{const t=trainRunsOf(upView(u));return t.length?`Uplift model trained ${t[t.length-1].at.split(",")[0]}`:"No uplift model yet";};
+  const rows=UC.map(u=>upliftOffered(u)?`<a href="${pageHref(upView(u))}"><span>${esc(u.name)}</span><span class="s">${esc(status(u))} ›</span></a>`
+    :`<div class="off"><span>${esc(u.name)}</span><span class="s">${SETUP[u.id].gen?"Not available for a generative use case":"No uplift sample in this prototype"}</span></div>`).join("");
+  return `<main class="screen" data-module="uplift">${pageHead(`${crumbs([JOURNEY,{label:"Uplift modelling"}])}<h1 class="h1">Uplift modelling</h1><p class="desc">Uplift ${esc(UPLIFT_EXPLANATION)}: it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.</p>`)}
+    <p class="hint">Pick a use case to train an uplift model on a campaign with a random control group.</p><div class="uindex">${rows}</div></main>`;}
+function rerender(u){const m=document.querySelector("#app main");if(!m)return;const open=[...document.querySelectorAll(".stage-d[open]")].map(d=>d.querySelector(".st").textContent);
+  /* disclosures a person opened stay open across a redraw of the same screen */
+  const kept=[...document.querySelectorAll("#app details[data-keep][open]")].map(d=>d.dataset.keep),later=!!document.querySelector("details.later[open]");
+  m.outerHTML=detail(u);document.querySelectorAll(".stage-d").forEach(d=>{if(open.includes(d.querySelector(".st").textContent))d.open=true;});
+  const l=document.querySelector("details.later");if(l&&later)l.open=true;
+  document.querySelectorAll("#app details[data-keep]").forEach(d=>{if(kept.includes(d.dataset.keep))d.open=true;});
+  bindDetail(u);}
 function bindDetail(u){
   const s=st(u), cfg=SETUP[u.id], $=id=>document.getElementById(id);
   const on=(id,ev,fn)=>{const el=$(id);if(el)el.addEventListener(ev,fn);};
@@ -2129,6 +2538,11 @@ function bindDetail(u){
   document.querySelectorAll("[data-algo]").forEach(el=>el.addEventListener("change",()=>{
     const m=el.dataset.algo; s.adv.algos=el.checked?[...new Set([...s.adv.algos,m])]:s.adv.algos.filter(x=>x!==m); if(!s.adv.algos.length){s.adv.algos=[m];} rerender(u);}));
   on("f-again","click",()=>{s.view="setup";rerender(u);});
+  /* v1: the results screen's one primary action */
+  const setMode=m=>{s.mode=m;s.file=null;s.cols=[];s.preview=null;s.target="";s.pk="";s.treatment="";s.targeted=false;s.ack=false;};
+  on("f-next","click",()=>{const r=s.current;s.view="setup";setMode(r.mode==="train"?"score":"train");if(r.mode==="train")s.scoreRun=r.id;rerender(u);});
+  on("f-download","click",()=>{if(s.current&&s.current.ptype==="Uplift")downloadTreatList(u);else downloadCsv(`${u.id.replace(/-/g,"_")}_contact_list.csv`,u.out.cols,u.out.rows);});
+  document.querySelectorAll("[data-mode-go]").forEach(b=>b.addEventListener("click",()=>{setMode(b.dataset.modeGo);rerender(u);}));
   /* --- Phase 2 §10 B / Phase 3a §9 C: new setup controls --- */
   document.querySelectorAll("[data-src]").forEach(b=>b.addEventListener("click",()=>{
     if(s.source===b.dataset.src)return;
@@ -2182,7 +2596,11 @@ function bindDetail(u){
     const [file,req]=el.dataset.obNeed.split("|");if(!el.value)return;
     const row=o.maps[file].find(r=>r.col===el.value);if(row){row.to=req;row.conf=Math.max(row.conf,0.86);}rerender(u);}));
   on("ob-vmap","click",()=>{o.vmap=!o.vmap;rerender(u);});
-  on("ob-accept","click",()=>{o.accepted=true;rerender(u);});
+  /* v1: accepting every suggestion saves them; with nothing required still missing, the step folds and the next opens */
+  on("ob-accept","click",()=>{o.accepted=true;if(!needsOf(u).length)o.open=3;rerender(u);});
+  on("ob-confirm","click",()=>{o.rolesOk=true;o.open=2;rerender(u);});
+  document.querySelectorAll("[data-ob-more]").forEach(d=>d.addEventListener("toggle",()=>{const k=d.dataset.obMore==="src"?"srcMore":"mapMore";if(o[k]!==d.open){o[k]=d.open;rerender(u);}}));
+  document.querySelectorAll("[data-ob-details]").forEach(d=>d.addEventListener("toggle",()=>{o.details=d.open;}));
   document.querySelectorAll("[data-ob-feat]").forEach(el=>el.addEventListener("change",()=>{
     const f=o.feats.find(x=>x.name===el.dataset.obFeat);if(f)f.on=el.checked;rerender(u);}));
   on("ob-add-role","change",e=>{o.addRole=e.target.value;o.addCol=(OUR_COLS[o.addRole]||[]).filter(c=>c!=="customer_id"&&c!=="event_date")[0]||"";rerender(u);});
@@ -2251,54 +2669,77 @@ function mock(u, kind){
   const title = kind==="model"&&(up||u.up) ? `${u.name} uplift model` : {data:u.d,model:u.m,output:u.o,campaign:"Campaign results"}[kind];
   /* Phase 3b: a fourth tab once a scoring run is current (one that held no control group back says so there) */
   const camp = u.id==="win-back-campaign"&&(kind==="campaign"||!!(cur&&cur.mode==="score"));
-  const tabs = ["data","model","output",...(camp?["campaign"]:[])].map((t,i)=>`${i?'<span class="arr" aria-hidden="true">→</span>':""}<a class="tab ${t===kind?"on":""}" href="${pageHref(u,t)}" ${t===kind?'aria-current="page"':""}><span class="n">0${i+1}</span>${NAMES[t]}</a>`).join("");
+  /* v1: tabs are words only (no 01/02/03); the run's id and file go to Details at the foot of the page */
+  const order = ["data","model","output",...(camp?["campaign"]:[])];
+  const tabs = order.map(t=>`<a class="tab ${t===kind?"on":""}" href="${pageHref(u,t)}" ${t===kind?'aria-current="page"':""}>${NAMES[t]}</a>`).join("");
+  const nextKind = order[order.indexOf(kind)+1];
+  const run = cur||st(u).runs.find(r=>r.mode==="train")||st(u).runs[0];
   let body = "";
   if(kind==="campaign"){ body = campaignPage(u); }
   else if(kind==="model"&&up){ body = upliftModelBlock(u); }
   else if(kind==="output"&&up){ body = `${upliftOutputBlock(u)}${u.id==="win-back-campaign"?copyBlock():""}`; }
   /* an uplift page before any uplift run: nothing to show, and never Phase 1's figures under an uplift header */
-  else if(u.up&&kind!=="data"){ body = `<section class="card"><div class="empty" data-up-empty>No uplift run yet. <a class="linkbtn" href="${pageHref(u)}">Train an uplift model</a> to see ${kind==="model"?"its Qini curve and AUUC":"its segments and who to contact"}.</div></section>`; }
+  else if(u.up&&kind!=="data"){ body = `<section class="card" data-up-empty>${emptyState({title:"No uplift run yet",text:`Train an uplift model to see ${kind==="model"?"how much better than random it targets":"its segments and who to contact"}.`,action:{label:"Train an uplift model",href:pageHref(u)}})}</section>`; }
   else if(kind==="data"){const x=u.data;
     body = `${kpis(x.kp)}
-    ${lineageBlock(u)}
     <div class="row">
-      <section class="card"><h3>Input datasets</h3>${table(["dataset","source","rows","refresh"],x.ds)}<h4>${esc(x.tt)}</h4>${kvs(x.target).replace('class="kv"','class="kv" style="border-top:0"')}</section>
-      <section class="card"><h3>Data pipeline</h3>${steps(x.pipe)}<h4>Data quality</h4>${kvs(x.q).replace('class="kv"','class="kv" style="border-top:0"')}</section>
+      <section class="card"><h3>Input datasets</h3>${table(["dataset","source","rows","refresh"],x.ds)}<h4>${esc(x.tt)}</h4>${kvs(x.target).replace('class="kv"','class="kv first"')}</section>
+      <section class="card"><h3>Data pipeline</h3>${steps(x.pipe)}<h4>Data quality</h4>${kvs(x.q).replace('class="kv"','class="kv first"')}</section>
     </div>
-    <section class="card"><h3>${esc(x.ftt)}</h3>${table(x.fcols,x.ft)}</section>`;
+    <section class="card"><h3>${esc(x.ftt)}</h3>${table(x.fcols,x.ft)}</section>
+    ${lineageBlock(u)}`;
   } else if(kind==="model"){const x=u.model;const max=Math.max(...x.br.map(b=>b[1]));
-    const side = x.steps ? `<section class="card"><h3>${esc(x.pt)}</h3>${steps(x.steps)}</section>`
-      : `<section class="card"><h3>Confusion matrix</h3><div class="cm">
+    const cm = x.cm ? `<section class="card"><h3>Confusion matrix</h3><div class="cm">
           <span></span><span class="hd">Predicted +</span><span class="hd">Predicted −</span>
           <span class="rl">Actual +</span><div class="cell good"><b>${x.cm[0]}</b><small>True positive</small></div><div class="cell"><b>${x.cm[1]}</b><small>False negative</small></div>
           <span class="rl">Actual −</span><div class="cell"><b>${x.cm[2]}</b><small>False positive</small></div><div class="cell good"><b>${x.cm[3]}</b><small>True negative</small></div>
-        </div><p class="caption">Test set, decision threshold 0.5</p></section>`;
-    body = `${kpis(x.kp)}
-    <div class="row rev">
-      <section class="card"><h3>${esc(x.st)}</h3>${kvs(x.setup)}</section>
+        </div><p class="caption">Test set, decision threshold 0.5</p></section>` : "";
+    /* the verdict: how the model compares with its baseline, measure by measure (the table below, in one sentence) */
+    const n=v=>{const f=parseFloat(String(v));return isNaN(f)?null:f;}, comp=x.ev.filter(r=>n(r[2])!=null), wins=comp.filter(r=>n(r[1])>n(r[2])).length;
+    const base=x.base.replace(/^baseline \((.*)\)$/,"$1");
+    body = `${verdictCard({state:"✓ Trained",line:esc(wins===comp.length?`The model beats the ${base} baseline on every measure we compared.`:`The model beats the ${base} baseline on ${wins} of ${comp.length} measures.`),
+        sub:`${esc(x.ev[0][0])} <b>${esc(x.ev[0][1])}</b> against ${esc(x.ev[0][2])} for the baseline, measured on customers the model never saw.`,
+        actions:actionHtml({label:SETUP[u.id].gen?"Evaluate it with new questions":"Score new customers with this model",href:pageHref(u),attrs:'data-go-score'},"primary")})}
+    ${kpis(x.kp)}
+    <div class="row">
       <section class="card"><h3>${esc(x.evt)}</h3>${table(["metric","model",x.base],x.ev,"eval")}</section>
-    </div>
-    <div class="row">
       <section class="card"><h3>${esc(x.bt)}</h3><div class="bars">${x.br.map(([l,v])=>`<div class="brow"><span class="lab">${esc(l)}</span><span class="track"><i style="width:${Math.round(100*v/max)}%"></i></span><span class="pct">${v}%</span></div>`).join("")}</div><p class="caption">${esc(x.cap)}</p></section>
-      ${side}
-    </div>`;
-  } else {const x=u.out;const max=Math.max(...x.vals);
-    body = `${kpis(x.kp)}
-    <div class="row">
-      <section class="card"><h3>${esc(x.ct)}</h3><div class="vchart">${x.vals.map((v,i)=>`<div class="vcol ${i<3?"top":""}"><span class="bv">${v}${x.unit}</span><span class="bb" style="height:${Math.max(3,Math.round(160*v/max))}px"></span><span class="bl">${esc(x.lb[i])}</span></div>`).join("")}</div><p class="caption">${esc(x.cap)}</p></section>
-      <section class="card"><h3>Deployment &amp; monitoring</h3>${kvs(x.dep)}</section>
     </div>
+    ${x.steps?`<section class="card"><h3>${esc(x.pt)}</h3>${steps(x.steps)}</section>`:""}
+    ${techBlock("Technical details: training setup",`<div class="row${cm?"":" one"}"><section class="card"><h3>${esc(x.st)}</h3>${kvs(x.setup)}</section>${cm}</div>`)}`;
+  } else {const x=u.out;const max=Math.max(...x.vals);const gen=SETUP[u.id].gen;
+    /* who to contact first; the download is the page's one primary unless the page writes AI text of its own */
+    const dl={label:"Download contact list (CSV)",id:"f-download-out"};
+    body = `${verdictCard({state:"✓ Scored",line:esc(OUT_VERDICT[u.id]),sub:`${esc(x.kp[1][0])}: <b>${esc(x.kp[1][1])}</b> · ${esc(x.kp[2][0])}: <b>${esc(x.kp[2][1])}</b>`,
+        actions:gen?"":actionHtml(dl,u.id==="rca"||u.id==="win-back-campaign"?"secondary":"primary")})}
+    ${kpis(x.kp)}
+    <section class="card"><h3>${esc(x.ct)}</h3><div class="vchart">${x.vals.map((v,i)=>`<div class="vcol ${i<3?"top":""}"><span class="bv">${v}${x.unit}</span><span class="bb" style="height:${Math.max(3,Math.round(160*v/max))}px"></span><span class="bl">${esc(x.lb[i])}</span></div>`).join("")}</div><p class="caption">${esc(x.cap)}</p></section>
     ${u.id==="rca"?rcaBlock():""}${u.id==="win-back-campaign"?copyBlock():""}
-    <section class="card"><h3>${esc(x.tt)}</h3>${table(x.cols,x.rows,"",x.band)}</section>`;
+    <section class="card"><h3>${esc(x.tt)}</h3>${table(x.cols,x.rows,"",x.band)}</section>
+    ${techBlock("Settings used for this run",`<section class="card"><h3>Deployment &amp; monitoring</h3>${kvs(x.dep)}</section>`)}`;
   }
+  const next = nextKind&&kind!=="campaign" ? {label:`Next: ${NAMES[nextKind]} ›`,href:pageHref(u,nextKind)} : null;
   return `<main class="screen t-${u.k}"${u.up?' data-module="uplift"':""}>
-    ${pageHead(`<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Customer Lifecycle</a><span class="sep">›</span><a href="#/uc/${u.id}">${esc(u.name)}</a><span class="sep">›</span>${u.up?`<a href="${pageHref(u)}">Uplift</a><span class="sep">›</span>`:""}<span class="cur">${K}</span></nav>
-      <span class="over" style="color:var(--c)">${K}</span><h1 class="h1">${esc(title)}</h1><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}${u.up?upChip():""}</div>`)}${u.up?"":upEntry(u)}
+    ${pageHead(`${ucCrumbs(u,K)}<h1 class="h1">${esc(title)}</h1><div class="chips">${u.up?upChip():typeChip(u.k)}</div>${headActions({secondary:next?[next]:[],related:u.up?null:upRelated(u)})}`)}
     <div class="tabs-bar"><nav class="tabs" aria-label="Pipeline">${tabs}</nav><span class="note">Illustrative sample, AWS reference stack</span></div>
-    <div class="stack">${body}</div>
+    <div class="stack">${body}
+    ${run&&kind!=="campaign"?techDetails([["Run id",run.id],["Dataset file",run.file],["Recorded",run.at]],"Details: this run"):""}</div>
   </main>`;
 }
+/* The one sentence each Output page leads with (the illustrative sample's own numbers). */
+const OUT_VERDICT={
+ "targeted-advertisement":"184K customers are worth showing the ad to: the top three deciles convert 1.8 to 3.2 times more often than average.",
+ "ai-onboarding-assistant":"The assistant settles 78% of onboarding questions without a person.",
+ "order-fulfillment":"1,340 orders are at risk of missing their delivery date. Act on them before the customer notices.",
+ "fault-prediction":"412 assets are likely to fail in the next 72 hours. Service the critical ones first.",
+ "payment-propensity":"9.2K accounts are likely to pay late. Remind them before the due date.",
+ "rca":"6.8K customers are at risk of leaving, most of them because of network issues.",
+ "win-back-campaign":"14.5K churned customers can get a win-back offer, with a personal message each."};
 
+/* A CSV of what the screen shows, saved by the browser. */
+function downloadCsv(name,cols,rows){const csv=[cols.join(","),...rows.map(r=>r.map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","))].join("\n");
+  try{const b=new Blob([csv],{type:"text/csv"}),a=document.createElement("a");
+    a.href=URL.createObjectURL(b);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);}catch(e){}}
 function downloadMessages(){const rows=copyCards().filter(c=>tplStatus(c)==="Approved");
   const csv=["band,channel,variant,offer,message",...rows.map(c=>[c.band,c.ch,c.v,c.offer,c.text]
     .map(v=>`"${String(v).replace(/"/g,'""')}"`).join(","))].join("\n");
@@ -2306,8 +2747,11 @@ function downloadMessages(){const rows=copyCards().filter(c=>tplStatus(c)==="App
     a.href=URL.createObjectURL(b);a.download="winback_messages_approved.csv";a.click();
     setTimeout(()=>URL.revokeObjectURL(a.href),1000);}catch(e){}}
 function bindGlobal(){
-  const c=document.getElementById("f-client");
-  if(c)c.addEventListener("change",e=>{if(e.target.value==="__new")e.target.value=CLIENT;else CLIENT=e.target.value;});
+  /* v1: links that open a use case's Setup in a given state (Build data → raw tables; a model page → score mode) */
+  document.querySelectorAll("[data-go-raw]").forEach(a=>a.addEventListener("click",()=>{const u=UC.find(x=>x.id===a.dataset.goRaw);if(!u)return;
+    const s=st(u);s.view="setup";s.mode="train";if(s.source!=="raw"){s.source="raw";s.file=null;s.cols=[];s.preview=null;s.pk="";s.target="";const o=onb(u);if(!o.open)o.open=1;}}));
+  document.querySelectorAll("[data-go-score]").forEach(a=>a.addEventListener("click",()=>{const m=location.hash.match(/^#\/(uc|uplift)\/([^/]+)/),b=m&&UC.find(x=>x.id===m[2]);if(!b)return;
+    const s=st(m[1]==="uplift"?upView(b):b);s.view="setup";if(s.mode!=="score"){s.mode="score";s.file=null;s.cols=[];s.preview=null;s.target="";s.pk="";s.treatment="";s.targeted=false;s.ack=false;}}));
   const g=document.getElementById("rca-gen");
   if(g)g.addEventListener("click",()=>{RCA_ON=true;render();});
   const appr=document.getElementById("cc-approver");
@@ -2329,6 +2773,7 @@ function bindGlobal(){
   const u=m[1]==="uplift"?upView(u0):u0;
   const s=st(u),$i=id=>document.getElementById(id),on=(id,ev,fn)=>{const el=$i(id);if(el)el.addEventListener(ev,fn);};
   on("up-dl","click",()=>downloadTreatList(u));
+  on("f-download-out","click",()=>downloadCsv(`${u.id.replace(/-/g,"_")}_contact_list.csv`,u.out.cols,u.out.rows));
   on("up-null","click",()=>{UP_NULL_VIEW=!UP_NULL_VIEW;UP_NULL_HASH=location.hash;render();});
   on("cr-run","change",e=>{s.cr.run=e.target.value;render();});
   on("cr-sample","click",()=>{s.cr.outcomes=true;s.cr.sample=true;s.cr.file=CAMPAIGN_OUTCOMES.file;render();});
@@ -2336,12 +2781,55 @@ function bindGlobal(){
   on("cr-window","change",e=>{s.cr.window=Math.max(1,Math.min(3650,+e.target.value||90));render();});
   on("cr-datecol","change",e=>{s.cr.dateCol=e.target.value;render();});}
 
+/* ===== v1: the goal screens the top bar opens (Build data, Campaigns, Reports), drawn from the sample ===== */
+const listTable=(cols,rows)=>`<div class="tbl-wrap"><table class="tbl tbl-stack"><thead><tr>${cols.map(c=>`<th scope="col"${c.num?' class="num"':""}>${esc(c.label)}</th>`).join("")}</tr></thead><tbody>${rows.map(r=>`<tr>${r.map((v,j)=>`<td data-label="${esc(cols[j].label)}"${cols[j].num?' class="num"':""}>${v}</td>`).join("")}</tr>`).join("")}</tbody></table></div>`;
+function buildDataScreen(){
+  const pred=UC.filter(u=>!SETUP[u.id].gen);
+  return `<main class="screen">${pageHead(`${crumbs([{label:"Build data"}])}<h1 class="h1">Build data</h1><p class="desc">Get your data ready: ask your IT team for the tables, then build a dataset for any use case that predicts something.</p>`)}
+    <div class="stack">
+    <section class="card list-card"><h3>Build a dataset from raw tables</h3>${listTable([{label:"Use case"},{label:"Stage"},{label:""}],
+      pred.map(u=>[esc(u.name),esc(u.stage),`<a class="btn secondary sm" href="#/uc/${u.id}" data-go-raw="${u.id}">Start with raw tables</a>`]))}</section>
+    <section class="card notice-card"><h3>Data request kit</h3><p>The templates list every table and column we need, with a plain description of each. Send them to whoever looks after your customer data.</p>
+      <div class="notice-actions"><button type="button" class="btn secondary sm" id="pe-kit">Download the kit (ZIP)</button></div>
+      ${techBlock("For your IT team",`<p class="obhint">Before sending anything, run the pre-flight check on your own machine. Nothing is uploaded.</p><p class="mono"><code>python -m scripts.preflight &lt;folder&gt; --use-case &lt;use case&gt;</code></p>`)}</section>
+    <section class="card list-card"><h3>Data readiness reports <span class="sort-note">(newest first)</span></h3>${listTable([{label:"Report"},{label:"Checked on"},{label:"Result"},{label:""}],
+      [["Customer tables · Demo Telecom","20 Sep 2026",'<span class="pill ok">Ready</span>','<a class="btn quiet sm" href="#/pilot/view/readiness/demo">Open</a>']])}</section>
+    </div></main>`;}
+function campaignsScreen(){
+  const rows=[];
+  UC.forEach(u=>[u,upView(u)].forEach(v=>{if(v.up&&!upliftOffered(u))return;
+    st(v).runs.filter(r=>r.mode==="score"&&(r.ptype==="Uplift")===!!v.up).forEach(r=>rows.push([r,v]));}));
+  const wb=UC.find(u=>u.id==="win-back-campaign");
+  const status=(r,v)=>{if(baseUC(v).id!==wb.id)return '<span class="pill warn">No results yet</span>';
+    const on=addDays(r.date,st(v).cr.window);return on<=today()?'<span class="pill ok">Ready to measure</span>':`<span class="pill warn">Results on ${fmtDay(on)}</span>`;};
+  const body=[...rows.reverse().map(([r,v])=>[esc(v.up?`${v.name} · Uplift`:v.name),esc(r.at.split(",")[0]),`<span class="tnum">${esc(r.rows)}</span>`,status(r,v),`<a class="btn quiet sm" href="${pageHref(v,baseUC(v).id===wb.id?"campaign":"output")}">${baseUC(v).id===wb.id?"Add results":"Who to contact"}</a>`]),
+    [esc(wb.name),esc(CAMPAIGN_SEED.at),`<span class="tnum">${esc(CAMPAIGN_SEED.rows)}</span>`,'<span class="pill ok">Ready to measure</span>',`<a class="btn quiet sm" href="${pageHref(wb,"campaign")}">View results</a>`]];
+  return `<main class="screen">${pageHead(`${crumbs([{label:"Campaigns"}])}<h1 class="h1">Campaigns</h1><p class="desc">Every list you scored, and whether you can see yet what the campaign changed.</p>`)}
+    <div class="stack"><section class="card list-card"><h3>Scored lists <span class="sort-note">(newest first)</span></h3>${listTable([{label:"Use case"},{label:"Scored on"},{label:"Customers scored",num:true},{label:"Results"},{label:""}],body)}</section></div></main>`;}
+function reportsScreen(){
+  const rows=UC.flatMap(u=>st(u).runs.filter(r=>r.mode==="train"&&r.ptype!=="Uplift").map(r=>[esc(u.name),esc(r.at.split(",")[0]),r.champion?'<span class="pill ok">In use</span>':'<span class="pill warn">Candidate</span>',`<a class="btn quiet sm" href="${pageHref(u,"model")}">Open</a>`]));
+  return `<main class="screen">${pageHead(`${crumbs([{label:"Reports"}])}<h1 class="h1">Reports</h1><p class="desc">Model results and campaign value, ready to open or save as a PDF.</p>`)}
+    <div class="stack"><section class="card list-card"><h3>Model results <span class="sort-note">(newest first)</span></h3>${listTable([{label:"Use case"},{label:"Trained on"},{label:"Status"},{label:""}],rows)}</section>
+    <section class="card list-card"><h3>Campaign value</h3>${emptyState({title:"No campaign value report yet",text:"Measure a campaign's results first; its value in rupees appears here.",action:{label:"Go to Campaigns",href:"#/monitoring/runs"}})}</section></div></main>`;}
+/* A product screen the prototype names in the top bar but does not draw: one calm card and a way home. */
+const PRODUCT_SCREENS={approvals:"Waiting for approval",monitoring:"Model health",generative:"AI assistant and root-cause notes",admin:"Admin",privacy:"Privacy",account:"Change your password",pilot:"Reports"};
+function productScreen(parts){const name=parts[0]==="generative"&&parts[1]==="connection"?"AI service":parts[0]==="admin"?(parts[1]==="audit"?"Audit log":"Users"):parts[0]==="pilot"&&parts[1]==="value"?"Value in rupees":PRODUCT_SCREENS[parts[0]]||"This screen";
+  return `<main class="screen">${pageHead(`${crumbs([{label:name}])}<h1 class="h1">${esc(name)}</h1>`)}
+    ${noticeCard({title:"Drawn by the product, not by this prototype",text:[`${name} follows the same patterns as every screen here: the page header, a verdict first, plain words, and technical detail behind Details.`,"See docs/ui/after for how it looks in the product."],action:{label:"Back to Home",href:"#/"}})}</main>`;}
 function render(){
   if(UP_NULL_VIEW&&location.hash!==UP_NULL_HASH)UP_NULL_VIEW=false;
   const parts = location.hash.replace(/^#\/?/,"").split("/").filter(Boolean);
   const app = document.getElementById("app");
+  /* a redraw of the same screen keeps what a person opened; a new screen starts closed, at the top */
+  const same = render.last===location.hash, kept = same?[...app.querySelectorAll("details[data-keep][open]")].map(d=>d.dataset.keep):[];
+  if(!same){TB.menu=null;TB.panel=false;}
+  render.last = location.hash;
   let html, t = "Marketing AI · Minfy", after = null;
-  if(parts[0]==="uc"){
+  if(parts[0]==="pilot"&&parts[1]==="kit"){ html = buildDataScreen(); t = "Build data · Marketing AI"; }
+  else if(parts[0]==="pilot"&&!parts[1]){ html = reportsScreen(); t = "Reports · Marketing AI"; }
+  else if(parts[0]==="monitoring"&&parts[1]==="runs"){ html = campaignsScreen(); t = "Campaigns · Marketing AI"; }
+  else if(PRODUCT_SCREENS[parts[0]]){ html = productScreen(parts); t = "Marketing AI · Minfy"; }
+  else if(parts[0]==="uc"){
     const u = UC.find(x=>x.id===parts[1]);
     if(!u){ html = overview(); }
     else if(["data","model","output"].includes(parts[2])){ html = mock(u,parts[2]); t = `${u.name} · ${parts[2][0].toUpperCase()+parts[2].slice(1)} · Marketing AI`; }
@@ -2355,7 +2843,9 @@ function render(){
     else { html = detail(u); t = `${u.name} · Uplift · Marketing AI`; after = () => bindDetail(u); }
   } else html = overview();
   app.style.animation="none"; void app.offsetWidth; app.style.animation="";
-  app.innerHTML = html; document.title = t; if(after) after(); bindGlobal(); window.scrollTo(0,0);
+  app.innerHTML = html; document.title = t;
+  app.querySelectorAll("details[data-keep]").forEach(d=>{if(kept.includes(d.dataset.keep))d.open=true;});
+  paintTopBar(); if(after) after(); bindGlobal(); if(!same) window.scrollTo(0,0);
 }
 window.addEventListener("hashchange", render);
 render();
