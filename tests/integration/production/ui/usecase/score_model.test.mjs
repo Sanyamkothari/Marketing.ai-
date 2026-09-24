@@ -109,9 +109,9 @@ test("right after training, Score mode starts on the model just trained, not the
   rerender();
   scoreMode();
   assert.equal(select().value, ids.justTrained);
-  assert.match(select().selectedOptions[0].textContent, /ROC-AUC/);
+  assert.match(select().selectedOptions[0].textContent, / · trained /);
   const champion = [...select().options].find((o) => o.value === ids.champion);
-  assert.match(champion.textContent, /· Champion$/, "the champion is still offered, just not first");
+  assert.match(champion.textContent, /· in use$/, "the champion is still offered, just not first");
 });
 
 const pick = (id) => {

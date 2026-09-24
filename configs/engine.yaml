@@ -47,7 +47,7 @@ catalog:
 
   automl_choice:                        # the step-3 first option; value is a sentinel, never a display string
     value: "__automl__"                 # str
-    label: "AutoML (recommended)"       # str (prototype AUTO)
+    label: "Best model, picked automatically (recommended)"  # str (prototype AUTO)
 
   column_name_patterns:                 # case-insensitive regexes used by ingest/profile detection (M2)
     time_like: "date|time|month|week|day|_ts$|_at$"                  # plan §4.2 verbatim
@@ -159,7 +159,7 @@ defaults:
       formula: "count_rows()"           # str; mini-grammar, §4.6 (DEC-007)
 
   ui:                                   # Setup-screen copy (prototype verbatim); {entity} is substituted (DEC-022)
-    target_label: "Target column"       # str; step-2 label (generative: "Reference answer column")
+    target_label: "What to predict (outcome column)"  # str; step-2 label (generative: "Reference answer column")
     mode_labels:
       train: "Train a model"            # str
       score: "Score new data"           # str
@@ -170,8 +170,8 @@ defaults:
       train: "One row per {entity}, including the outcome column. CSV or Parquet."
       score: "One row per {entity}. CSV or Parquet."
     columns_hint:
-      train: "The primary key identifies each row and is never used as a feature. The target is what the model learns to predict."
-      score: "The primary key identifies each row so scores can be joined back to your systems."
+      train: "The ID column identifies each row and is never used to predict. The outcome column is what the model learns to predict."
+      score: "The ID column identifies each row so scores can be joined back to your systems."
     run_button:
       train: "Run training"             # str
       score: "Score data"               # str

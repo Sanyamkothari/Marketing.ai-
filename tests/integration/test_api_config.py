@@ -166,7 +166,7 @@ def test_use_case_body_validates_and_carries_the_setup_screen(client: TestClient
     assert len(body.running_rows.train) == 5
     assert len(body.running_rows.score) == 4
     assert body.problem_type_label == "Classification (yes / no)"
-    assert body.target.label == "Target column"
+    assert body.target.label == "What to predict (outcome column)"
     assert body.setup.template_url == f"/use-cases/{DEMO_ID}/template.csv"
     assert body.setup.template_readme_url == f"/use-cases/{DEMO_ID}/template_README.md"
 
@@ -174,7 +174,7 @@ def test_use_case_body_validates_and_carries_the_setup_screen(client: TestClient
 def test_model_choices_start_with_automl_and_use_catalog_labels(client: TestClient) -> None:
     body = UseCaseResponse.model_validate(client.get(f"/use-cases/{DEMO_ID}").json())
     first = body.setup.model_choices[0]
-    assert (first.value, first.label) == ("__automl__", "AutoML (recommended)")
+    assert (first.value, first.label) == ("__automl__", "Best model, picked automatically (recommended)")
     assert "Random Forest" in [choice.label for choice in body.setup.model_choices]
     assert all(choice.enabled for choice in body.setup.model_choices)
 
