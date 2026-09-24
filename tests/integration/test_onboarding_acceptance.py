@@ -392,7 +392,8 @@ def journey(
     seen.build_leak_check = build_and_use(page, log)
     seen.pk_after_use = selected_text(page, "#f-pk")
     seen.target_after_use = selected_text(page, "#f-target")
-    seen.problem_type = page.locator(".ptype .pill").inner_text().strip()
+    # v1 (WP2): the kind of prediction sits in the folded Advanced settings, so it is read, not seen.
+    seen.problem_type = (page.locator(".ptype .pill").text_content() or "").strip()
     # The advanced settings are folded away, so the split line is read, not seen.
     split_line = page.locator('.stage-d[data-stage="data_split"] .ss').text_content()
     seen.split_after_use = (split_line or "").strip()
@@ -524,8 +525,8 @@ def test_the_training_run_read_the_built_dataset(journey: Journey) -> None:
     """ "train": Results, on the dataset rather than a file, keyed on both columns."""
     assert "Training complete" in journey.train_summary, journey.train_summary
     value, meta = journey.data_block
-    assert value.endswith("(built)"), value
-    assert f"key {KEY_LABEL}" in meta and f"target {LABEL}" in meta, meta
+    assert value == "Built dataset", value
+    assert f"ID {KEY_LABEL}" in meta and f"predicting {LABEL}" in meta, meta
 
 
 def test_the_data_page_shows_where_the_dataset_came_from(journey: Journey) -> None:

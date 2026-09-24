@@ -499,7 +499,7 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     page.locator(".flow .block").nth(2).click()
     # v1 (WP4): Phase 1's Output link of an uplift run redirects to the uplift module's own Output.
     expect(page.locator("main[data-module=uplift]")).to_be_attached()
-    expect(page.locator(".tab.on")).to_contain_text("Output")
+    expect(page.locator(".tab.on")).to_contain_text("Contact list")
     seen.score_run = run_id_of(page.url)
     seen.screens["phase1_score_output"] = capture(page, console, shots, "12-phase1-score-output")
     page.locator(".tabs .tab", has_text="Campaign results").click()
