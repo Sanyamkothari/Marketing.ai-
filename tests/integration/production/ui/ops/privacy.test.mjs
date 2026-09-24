@@ -11,6 +11,7 @@ import { chooseFile, created, installOps, ok, refused, setField, submit } from "
 
 const typed = fixture("typed");
 const erasure = fixture("erasure");
+let erasureRetried = false; // the real request failed on one store, then its retry finished it (DEC-863)
 const plan = fixture("retention_plan");
 const access = fixture("access_export");
 let privacyConfigured = true;
@@ -35,7 +36,21 @@ const { w, calls, forms, saved } = installOps({
           : created(fixture("import_ok")),
     ],
     ["POST", "/privacy/consent/lookup", () => ok(fixture("lookup"))],
-    ["POST", "/privacy/erasure", () => created(erasure)],
+    ["POST", "/privacy/erasure", () => refused(202, fixture("erasure_accepted"))],
+    [
+      "POST",
+      "/privacy/erasure/{request_id}/retry",
+      () => {
+        erasureRetried = true;
+        return refused(202, fixture("erasure_retry_accepted"));
+      },
+    ],
+    [
+      "GET",
+      "/privacy/erasure/{request_id}/progress",
+      () => ok(fixture(erasureRetried ? "erasure_progress" : "erasure_failed_progress")),
+    ],
+    ["GET", "/privacy/erasure/{request_id}", () => ok(erasureRetried ? erasure : fixture("erasure_failed"))],
     ["GET", "/privacy/erasure", () => ok(fixture("erasures"))],
     ["GET", "/privacy/retrain-flags", () => ok(fixture("retrain_flags"))],
     [
@@ -60,6 +75,8 @@ const { w, calls, forms, saved } = installOps({
 await import("../../../../../ui/app.js");
 await import("../../../../../ui/modules/production/index.js");
 const session = await import("../../../../../ui/modules/production/session.js");
+const privacyScreen = await import("../../../../../ui/modules/production/privacy.js");
+privacyScreen._setErasurePollForTests(5);
 
 const text = () => ($("#app") || {}).textContent || "";
 const last = (method, path) => calls.filter((c) => c.method === method && c.path === path).pop();
@@ -130,7 +147,7 @@ test("a lookup sends the id in the body only and answers by hash, per purpose, w
   nowhereBut(typed.looked_up, last("POST", "/privacy/consent/lookup").body);
 });
 
-test("an erasure is sent only once confirmed, and its outcome is shown per store with the audit reference", async () => {
+test("an erasure is sent only once confirmed, runs in the background, and a failed store is retried", async () => {
   w.location.hash = "#/privacy/erasure";
   await until(() => $("#pb-erasure") && /Erasure register ·/.test(cardTitles()), 3000, "the erasure screen");
   const form = $("#pb-erasure");
@@ -145,11 +162,33 @@ test("an erasure is sent only once confirmed, and its outcome is shown per store
   setField(w, confirmed, "client_id", "cl_1");
   setField(w, confirmed, "confirm", true);
   submit(w, confirmed);
-  await until(() => /Per store/.test(text()), 3000, "the outcome");
+  // the real request: the uploads store kept failing after every retry, so it ends failed
+  await until(() => $("#pb-erasure-retry"), 3000, "the failed request and its retry form");
+  const failed = fixture("erasure_failed");
   assert.deepEqual(last("POST", "/privacy/erasure").body, { principal_id: typed.erased, client_id: "cl_1" });
   nowhereBut(typed.erased, last("POST", "/privacy/erasure").body);
+  assert.match(text(), /ERASURE_STORE_FAILED/);
+  assert.match(text(), new RegExp(`Erasure request ${failed.request_id} did not complete`));
+  const uploads = $('tr[data-store="uploads"]');
+  assert.ok(uploads, "the failing store's progress row");
+  assert.match(uploads.textContent, /failed/);
+  assert.match(uploads.textContent, /STORE_WRITE_FAILED/);
+  assert.match(uploads.textContent, /3$/, "three attempts");
+  assert.ok(count("GET", `/privacy/erasure/${failed.request_id}/progress`) >= 1, "the progress was polled");
+  assert.equal(count("GET", `/privacy/erasure/${failed.request_id}`), 1, "the audited record is read once");
+
+  // the retry needs the id again, and sends it in the body only
+  const retry = $("#pb-erasure-retry");
+  submit(w, retry);
+  await until(() => /PRINCIPAL_ID_REQUIRED/.test(text()), 2000, "the id is asked for again");
+  assert.equal(count("POST", `/privacy/erasure/${failed.request_id}/retry`), 0);
+  setField(w, $("#pb-erasure-retry"), "principal_id", typed.erased);
+  submit(w, $("#pb-erasure-retry"));
+  await until(() => /Per store/.test(text()), 3000, "the completion report");
+  nowhereBut(typed.erased, last("POST", `/privacy/erasure/${failed.request_id}/retry`).body);
   for (const store of Object.keys(erasure.store_counts)) assert.match(text(), new RegExp(store));
   for (const model of erasure.models_flagged) assert.match(text(), new RegExp(model));
+  assert.ok($$('tr[data-store] .pill').every((p) => p.textContent === "done"), "every store done");
   assert.match(text(), /flagged for retraining at the next scheduled cycle \(not now\)/);
   assert.match(text(), new RegExp(`Audit: privacy\\.erasure on ${erasure.request_id}`));
   assert.ok(count("GET", "/privacy/erasure") >= 2, "the register re-reads after an erasure");

@@ -34,16 +34,28 @@ Uplift is a problem type of its own (`problem_type: uplift`, metric `auuc`). It 
 
 ## 2. The data contract
 
-One file, one row per customer, recording one past campaign (plan B §3):
+One file, one row per customer - or one row per customer per snapshot date - recording one past
+campaign (plan B §3):
 
 | Column | Required | What it must be | Checked by |
 |---|---|---|---|
-| Primary key | yes | One column that identifies the customer, unique per row | Phase 1 validation |
+| Primary key | yes | One column that identifies the customer, unique per row; or two - the customer and the snapshot date - unique together (M53) | Phase 1 validation |
 | Treatment | yes | `1` = received the action, `0` = held out. Only 0/1 (also `true`/`false`, `"0"`/`"1"`); no blanks. **Randomly assigned.** | `TREATMENT_COLUMN_MISSING`, `TREATMENT_NOT_BINARY`, `TREATMENT_NOT_RANDOM` |
 | Outcome | yes | Binary (converted or not), measured **after** the treatment | Phase 1 validation; the uplift engine refuses a non-binary outcome |
 | Features | yes, at least one | Measured **before** the treatment date (the point-in-time rule) | `FEATURE_AFTER_TREATMENT` when dates are present |
 | `treatment_date` | optional | When each customer was treated. Needed for the maturity and point-in-time checks. | `OUTCOME_WINDOW_IMMATURE`, `FEATURE_AFTER_TREATMENT` |
-| `campaign_id` | optional | Which campaign a row belongs to. Never used as a feature. | none |
+| `campaign_id` | optional | Which campaign a row belongs to. Never used as a feature. With a two-column key, a customer may change arm between campaigns but not within one. | `TREATMENT_VARIES_WITHIN_ENTITY` |
+
+**Two-column keys (M53).** A file may hold each customer at several snapshot dates, keyed by the
+customer and the snapshot date (`"primary_key": ["customer_id", "snapshot_date"]`, Plan A's
+DEC-083). The **entity** is the key's first column, exactly as for a Phase 1 periodic dataset
+(`engine.keys.entity_column`). Treatment and control stay **per customer**: a customer treated at
+one snapshot and held out at another, within one campaign, is refused
+(`TREATMENT_VARIES_WITHIN_ENTITY`). The arms are counted in customers, the randomness check keeps a
+customer's snapshots in one cross-validation fold, the hold-out is drawn by customer (every snapshot
+of a customer is in training or in the hold-out, never both; `split.json` names the `group_column`),
+and neither key column nor the joined row key is ever a feature. Scoring and campaign results read
+both columns: `scores.csv` writes each key column, and the outcomes file is joined on both.
 
 The treatment column is either configured (`uplift.treatment_column`) or detected. Detection only
 happens when nothing is configured: the first column whose name matches one of
@@ -70,9 +82,10 @@ yet: the request takes an `upload_id`, not a `dataset_id`.
 
 ---
 
-## 3. The six checks
+## 3. The uplift checks
 
-Phase 1's validation runs first, unchanged. Then six uplift checks run on the same upload
+Phase 1's validation runs first, unchanged. Then the uplift checks - plan B §4's six, and since M53
+a seventh for two-column keys - run on the same upload
 (`engine/uplift/checks.py`, plan B §4). Both reports are written (`validation.json` and
 `uplift_validation.json`), and a run needs both to pass. `POST /uplift/runs` runs them **before**
 the run exists and answers `409` with both reports when something blocks. The run's own validate
@@ -82,25 +95,32 @@ stage runs them again.
 |---|---|---|
 | `TREATMENT_COLUMN_MISSING` | error | No configured or hinted treatment column is in the file: there is no experiment to learn from. |
 | `TREATMENT_NOT_BINARY` | error | Some treatment values are not 0/1, blanks included. Those rows are in neither arm, or in some third arm. The count is reported. |
+| `TREATMENT_VARIES_WITHIN_ENTITY` | error | Two-column keys only (M53): a customer is treated at some snapshots and held out at others within one campaign (`uplift.campaign_id_column`, when configured and present). Treatment is assigned per customer. Cannot be acknowledged. |
 | `TREATMENT_ARM_TOO_SMALL` | error | The treated or the control arm has fewer than `min_arm_rows` rows (default 1,000) or fewer than `min_arm_positives` conversions (default 50). Counted after immature rows are dropped. |
 | `TREATMENT_NOT_RANDOM` | error, **can be acknowledged** | The features predict who was treated, so the campaign was targeted, not randomised. |
 | `OUTCOME_WINDOW_IMMATURE` | warning | Some customers were treated too recently for their outcome to be final. Those rows are dropped and counted, never guessed. |
 | `FEATURE_AFTER_TREATMENT` | error | A date-like column has values later than the row's treatment date, so the "before" snapshot already contains the campaign's effect. |
 
 A check that cannot run because an earlier one failed is skipped, not failed twice. With no
-treatment column there are no arms to count.
+treatment column there are no arms to count, and with customers in both arms
+(`TREATMENT_VARIES_WITHIN_ENTITY`) there are no per-customer arms to count or to predict.
 
-**What each finding says.** This table is the normative list of the six codes (DEC-673): plan B asks
-for them in Phase 1's check registry and `docs/DATA_CONTRACT.md`, which Phase 3b does not own; the
-request to list them there is in `docs/CROSS_BRANCH_REQUESTS.md`. Every finding carries a code, a
-message and a suggestion (and a `details` object with the counts); the texts below are
-`engine/uplift/checks.py`'s, with `<…>` for the values filled in.
+`uplift_validation.json` also records the arm sizes the checks counted (`treated_rows`,
+`control_rows`, and for a two-column key `entity_column`, `treated_entities`, `control_entities`),
+which Phase 1's Data page shows for an uplift run (M53).
+
+**What each finding says.** This table is the normative list of the uplift codes (DEC-673); since
+M53 `docs/DATA_CONTRACT.md` §11 repeats it for the business user, and a test keeps both in step with
+`UPLIFT_VALIDATION_CODES`. Every finding carries a code, a message and a suggestion (and a `details`
+object with the counts); the texts below are `engine/uplift/checks.py`'s, with `<…>` for the values
+filled in.
 
 | Code | Message | Suggestion |
 |---|---|---|
 | `TREATMENT_COLUMN_MISSING` (configured column absent) | The treatment column '`<column>`' is not in this file. | Choose the column that records who received the campaign in Setup, or upload the file that contains it. |
 | `TREATMENT_COLUMN_MISSING` (nothing configured, no hint found) | No column in this file says which customers received the campaign. Looked for `<hints>`. | Add a column with 1 for customers who were contacted and 0 for the randomly held-out customers, or choose the column in Setup. |
 | `TREATMENT_NOT_BINARY` | '`<column>`' should be 1 for treated customers and 0 for held-out customers, but `<n>` of `<rows>` rows (`<share>`) are blank or hold another value. | Record every customer as 1 (treated) or 0 (held out); true and false work too. Remove customers whose treatment is unknown from the file. |
+| `TREATMENT_VARIES_WITHIN_ENTITY` | `<n>` of `<customers>` customers (`<share>`) are treated in some snapshots and held out in others[ within one campaign ('`<campaign column>`')], according to '`<column>`'. Treatment and control are assigned per customer ('`<entity column>`'), so such a customer would be compared with itself. | Give each customer the same treatment value in every snapshot of a campaign, or upload one campaign's snapshots at a time. |
 | `TREATMENT_ARM_TOO_SMALL` | There are too few customers to measure what the campaign changed[ after leaving out `<n>` customers whose outcome is not final yet]: the `<treated/control>` group has `<n>` customers (at least `<min_arm_rows>` needed); only `<n>` customers in the `<arm>` had a positive '`<target>`' (at least `<min_arm_positives>` needed). | Use a longer period or a larger campaign, or hold out a bigger control group next time. |
 | `TREATMENT_NOT_RANDOM` | Who was treated can be predicted from the customers' own data (AUC `<auc>`, where a random assignment scores about 0.50 and the limit is `<threshold>`). The strongest sign(s) was/were `<features>`. The campaign looks targeted, so comparing treated with untreated customers would mix what the campaign changed with how the chosen customers already differed. | Use data from a campaign with a randomly chosen hold-out group. If you go ahead anyway, every uplift result will be labelled not causal. |
 | `OUTCOME_WINDOW_IMMATURE` | `<n>` customers were treated less than `<days>` days before `<date>`, so their outcome is not final yet. [`<n>` rows have no readable date in '`<column>`', so their outcome cannot be shown to be final.] They are left out of training and evaluation. | Nothing to fix now. Re-run on or after `<date>` to include every customer. (With only undated rows: Fill in '`<column>`' for every customer to include them.) |
@@ -134,7 +154,9 @@ training and counted in `rows_immature`.
 
 Training happens on a random **hold-out** split. By default 30% of the rows (`uplift.test_fraction`)
 are kept aside, stratified on treatment and outcome together. Every number on the Model page is
-measured on those rows, which the model never saw.
+measured on those rows, which the model never saw. With a two-column key the hold-out is drawn by
+customer instead - whole customers, stratified on their arm and on whether they converted at any
+snapshot - so no customer has snapshots on both sides (M53).
 
 **Learners** (`engine/uplift/learners.py`), chosen by `uplift.learner`:
 
@@ -292,7 +314,7 @@ the actions (`engine/uplift/actions.py`):
 3. Persuadables not chosen get `Don't treat (below cost)` or `Don't treat (over budget)`.
 4. Everyone else gets their segment's action. The `band` column holds the segment label.
 
-`scores.csv` columns: the key, `uplift`, `p_treated`, `p_control`, `segment`, `band`, `action`,
+`scores.csv` columns: the key (each column of a two-column key), `uplift`, `p_treated`, `p_control`, `segment`, `band`, `action`,
 `reason_1…n`, `suppressed_reason`, `control_group`, `intended_treatment`. The Output page's
 **Download treat list** is this file.
 
@@ -302,6 +324,27 @@ customer. The campaign-results comparison (section 9) is made inside this set, s
 the same rule. Customers with exactly the same predicted uplift are ordered by a per-customer hash
 seeded by the run (DEC-606). A budget that cuts through a block of ties therefore takes a random part
 of it, not the first rows of the file.
+
+With a two-column key the control group and suppression are decided **per customer**, as for a
+Phase 1 periodic run: a customer is held out at every snapshot of the scoring file or at none.
+
+**Drift (M53).** Every scoring run writes `uplift_drift.json`:
+
+* **Feature drift** is Phase 1's PSI, computed by Phase 1's own code
+  (`engine.stages.score.compute_drift`) against the `drift_baseline.json` the uplift training run
+  stored over the raw columns its model uses, with `monitoring.drift_psi_threshold`. A model trained
+  before M53 stored no baseline; its feature drift is `null` with the reason, never an invented zero.
+* **Treated share.** When the scoring file carries the model's treatment column with 0/1 values (a
+  re-scored campaign, the next wave of the same experiment), its treated share is compared with the
+  training data's: within tolerance when `|current − training| ≤ uplift.drift_treated_share_tolerance`
+  (default 0.05). The rule is an absolute difference, not a significance test, because a test's
+  verdict depends on the file's size: on a million rows a z-test calls a 0.2-point difference
+  significant, on two hundred it misses a 10-point one. The two-proportion p-value is recorded
+  beside it, for information. A file without the column - the usual scoring file, whose campaign
+  has not happened yet - is `not_applicable`, with the reason.
+
+Phase 1's Data and Output pages show it for an uplift scoring run, and `scoring_summary.json`
+carries the feature drift verdict as it does for a Phase 1 run.
 
 ---
 
@@ -480,7 +523,13 @@ make test            # the fast suite, which includes the fast uplift tests
 ```
 
 The UI module's node tests run when `node` is installed. Otherwise they are skipped and the reason is
-printed.
+printed. So does `tests/unit/uplift/phase1_pages_uplift.test.mjs` (M53), which renders Phase 1's
+Data, Model and Output pages (`ui/pages.js`) from uplift artefacts.
+
+Two-column keys end to end - train, grouped hold-out, the mixed-arm refusal, composite scoring,
+drift and campaign results joined on both columns - are `tests/integration/uplift/test_uplift_two_column_keys.py`;
+the checks, the grouped split and the drift rules on their own are
+`tests/unit/uplift/test_uplift_two_column_keys.py` and `tests/unit/uplift/test_uplift_drift.py`.
 
 The real-browser journey (DEC-660) drives the product in Chromium: an uplift upload, the
 not-random acknowledgement, training, the Model and Output pages checked number for number against
@@ -511,6 +560,7 @@ only when `problem_type` is `uplift` (DEC-601).
 | `min_arm_rows`, `min_arm_positives` | 1,000; 50 | yes, recorded in `run.json`'s `overrides` (a small random arm cannot fake causality, but on a very small arm the percentile bootstrap intervals are less reliable than their 95% says; DEC-680) | no |
 | `randomness_auc_max` | 0.60 | **no** (DEC-607) | no |
 | `bootstrap_samples`, `test_fraction`, `time_limit_minutes` | 200; 0.30; 10 | yes | no |
+| `drift_treated_share_tolerance` | 0.05 (absolute difference in treated share; section 8, M53) | yes | no |
 | `segments.*` (the three cuts) | 0.02; −0.01; base rate | yes | **yes** |
 | `policy.*` (budget, cost, value) | none | yes | **yes** |
 
@@ -525,10 +575,12 @@ not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns
   supported. The artefacts are designed so they can be added without renaming anything: DEC-668
   describes the extension path.
 * **Binary outcome only.** Converted or not. Revenue or other continuous outcomes are not modelled.
-* **Single-column primary key.** Plan B's contract allows one row per customer per snapshot using
-  Plan A M34's two-column keys. M34 is on `main` and Phase 1 runs use them, but uplift runs and
-  campaign results still take one key column: a composite key is refused by name with
-  `COMPOSITE_KEY_NOT_SUPPORTED`, never reduced to its first column (DEC-800).
+* **Two-column keys: uploads train, datasets score.** Since M53 `POST /uplift/runs` takes a
+  two-column key (customer + snapshot date) on an uploaded file, and uplift scoring and campaign
+  results read both columns. Phase 1's `POST /runs` still takes a composite key only with a built
+  dataset (DEC-083), so a scoring file with several snapshots per customer is scored through a
+  dataset; a scoring file with one row per customer is scored with the customer column alone.
+  `POST /uplift/runs` itself still takes an `upload_id`, not a `dataset_id`.
 * **Randomised data only for causal claims.** Nothing here corrects a targeted campaign. It is
   labelled not causal instead.
 * **Criteo was not run here.** The Criteo Uplift use case is configured for this problem type
@@ -540,8 +592,9 @@ not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns
   uplift at the same ranking depth. That is an approximation when suppression is related to uplift.
 * **Scoring cost.** Every scored row is explained with TreeSHAP, as in Phase 1. On a very large file
   this takes minutes.
-* **No drift monitoring** for uplift models yet: no drift baseline is stored and scoring runs write
-  no `drift.json`.
+* **Drift** is measured on scoring runs (`uplift_drift.json`, section 8), not by Phase 4b's
+  scheduled drift check: that check replays Phase 1's `prepare.json`, which an uplift model does not
+  have, so for an uplift champion it reports drift as not measured.
 * **Training runs write no `prepare.json`.** The feature spec is on the model card instead. Phase 1's
   Data page therefore shows no prepare report for an uplift run.
 
@@ -593,11 +646,11 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `UPLIFT_VALIDATION_FAILED` | 409 | `POST /uplift/runs` | Phase 1's checks pass, but an uplift check blocks (the message names the codes; see section 3). | Fix the file, or acknowledge `TREATMENT_NOT_RANDOM` to train a model labelled not causal. |
 | `UPLOAD_MODE_MISMATCH` | 409 | `POST /uplift/runs` | The file was uploaded for scoring. | Upload it again with `mode=train`. |
 | `OVERRIDE_UNKNOWN_PATH` | 422 | `POST /uplift/runs` | An override names a setting a run may not change, such as `uplift.randomness_auc_max` (DEC-607). | Change it in the use-case file, or leave it out. |
-| `ARTEFACT_UNKNOWN` | 404 | `GET /runs/{id}/uplift/{name}` | `name` is not an uplift artefact. | Use one of the names in section 5 to 10 (`uplift_evaluation.json`, `qini_curve.json`, …). |
+| `ARTEFACT_UNKNOWN` | 404 | `GET /runs/{id}/uplift/{name}` (and, since M53, `GET /runs/{id}/artefacts/{name}`, which whitelists the same names) | `name` is not an uplift artefact. | Use one of the names in section 5 to 10 (`uplift_evaluation.json`, `qini_curve.json`, …). |
 | `ARTEFACT_NOT_FOUND` | 404 | `GET /runs/{id}/uplift/{name}` | The run has not written that file (a scoring run writes no `uplift_evaluation.json`, and campaign results or OPE exist only once asked for). | Ask the run that writes it, or create it first. |
 | `RUN_NOT_SCORED` | 409 | `POST /runs/{id}/campaign-results` | The run is not a finished scoring run, or has no scores file. | Measure a campaign against the scoring run that chose its customers. |
 | `CAMPAIGN_RESULTS_INVALID` | 422 | `POST /runs/{id}/campaign-results` | The outcomes file or the request cannot be measured: `bands` on an uplift run, an outcome column that is missing or not 0/1, duplicate keys, and so on (the message names it). | Correct the file or the request as the message says. |
-| `COMPOSITE_KEY_NOT_SUPPORTED` | 422 | `POST /runs/{id}/campaign-results` | The run's primary key has several columns (section 15). | Combine them into one column. |
+| `UPLIFT_REQUIRES_UPLIFT_ROUTE` | 422 | `POST /runs` | A training run whose problem type is uplift - by override or by the use case's own configuration - was sent to Phase 1's route, which cannot run the uplift checks first (M53). | Start it with `POST /uplift/runs`. Scoring an uplift model stays on `POST /runs`. |
 | `CAMPAIGN_RESULTS_NOT_FOUND` | 404 | `GET /runs/{id}/campaign-results` | No campaign has been measured for this run yet. | `POST` the outcomes file first. |
 | `RUN_NOT_UPLIFT` | 409 | `POST /runs/{id}/uplift/ope` | The run is not a finished uplift training run, so it has no hold-out to replay. | Use an uplift training run. |
 | `OPE_INVALID` | 422 | `POST /runs/{id}/uplift/ope` | The rule or the logged data cannot be evaluated (the message says why). | Correct the rule as the message says. |

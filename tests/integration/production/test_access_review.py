@@ -173,6 +173,9 @@ def test_a_prod_app_built_with_no_settings_reports_auth_off_at_startup(
     monkeypatch.setenv("MARKETING_AI_AUTH_MODE", "off")
     monkeypatch.setenv("MARKETING_AI_DATA_DIR", str(tmp_path))
     monkeypatch.setenv("MARKETING_AI_CORS_ORIGINS", "https://marketing.example.com")
+    monkeypatch.setenv(
+        "MARKETING_AI_PRIVACY_SALT", "a-prod-privacy-salt-01"
+    )  # prod refuses to start without it (DEC-860)
     app = create_app()
     with caplog.at_level(logging.WARNING, logger="api.access"), TestClient(app) as client:
         started = [record for record in caplog.records if "access control is off" in record.getMessage()]

@@ -45,6 +45,7 @@ PRODUCTION_DIR: Final[Path] = UI_DIR / "modules" / "production"
 PRODUCTION_MODULES: Final[tuple[str, ...]] = (
     "alerts.js",
     "api.js",
+    "approvals.js",  # Plan D M54: the Approver's screen
     "audit.js",
     "boot.js",
     "controls.js",

@@ -19,10 +19,14 @@ checks block, else `UPLIFT_VALIDATION_FAILED`; the finding that blocked - `TREAT
 for example - is in the report. Acknowledging it is a resend with
 `overrides.validation.acknowledged`, the same mechanism Phase 1 uses.
 
-**Uplift artefacts have their own whitelist.** `GET /runs/{id}/artefacts/{name}` serves the Phase 1
-and generative registries and cannot grow a third without editing above the shared-file blocks, so
-`GET /runs/{id}/uplift/{name}` serves `engine.uplift.contracts.UPLIFT_ARTEFACTS` and nothing else -
-a whitelist, never a path join.
+**Uplift artefacts have their own whitelist.** `GET /runs/{id}/uplift/{name}` serves
+`engine.uplift.contracts.UPLIFT_ARTEFACTS` and nothing else - a whitelist, never a path join. Since
+M53 Phase 1's `GET /runs/{id}/artefacts/{name}` whitelists the same registry, so Phase 1's Data and
+Model pages read an uplift run where they read every other run; this route stays as an alias.
+
+**Two-column keys (M53).** `primary_key` may name the customer and the snapshot date. The uplift
+checks then refuse a customer treated in one snapshot and held out in another
+(`TREATMENT_VARIES_WITHIN_ENTITY`), and campaign results join the outcomes file on every key column.
 
 **Campaign results are measured against what the run did.** The scores file of a finished scoring
 run says who was treated, who was held out and - for an uplift run - who the policy intended to
@@ -38,11 +42,11 @@ from __future__ import annotations
 import io
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
-from fastapi import APIRouter, Query, Response
+from fastapi import APIRouter, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep
-from api.routes.runs import ARTEFACT_NAME, load_run, read_frame
+from api.routes.runs import ARTEFACT_NAME, load_run, read_frame, requested_by
 from api.routes.uploads import (
     UPLOAD_VALIDATION_FILENAME,
     http_error,
@@ -63,8 +67,9 @@ from api.schemas import (
     UpliftRunRequest,
     UpliftValidationErrorResponse,
 )
-from engine.config import ProblemType, RunMode, get_catalog, resolve_config, sole_key
+from engine.config import ProblemType, RunMode, get_catalog, resolve_config
 from engine.contracts import RunRecord, RunState, Severity
+from engine.keys import normalise_key, split_config_for_key
 from engine.pipeline import Pipeline
 from engine.runs import build_job_fn, create_run, job_spec_for, write_job_spec
 from engine.stages import export, ingest, validate
@@ -181,12 +186,17 @@ def create_uplift_run(
     jobs: JobsDep,
     settings: SettingsDep,
     response: Response,
+    request: Request,
 ) -> RunCreatedResponse | JSONResponse:
     """Phase 1's checks and the six uplift checks, synchronously; `409` with both reports, or `202`."""
     from engine.uplift.checks import run_uplift_checks
 
     configured = use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before any read
     resolved = resolve_config(body.use_case, _uplift_overrides(body, configured.problem_type), root=root)
+    # A key of customer + snapshot date (DEC-083) splits by customer, recorded as derived in
+    # run_config.json; the uplift flow draws its own hold-out by customer too (M53, DEC-855).
+    primary_key = normalise_key(body.primary_key)
+    resolved = split_config_for_key(resolved, primary_key)
     config = resolved.config
     catalog = get_catalog(root)
     upload = load_upload(storage, body.upload_id)
@@ -201,7 +211,7 @@ def create_uplift_run(
     report = validate.validate_for_training(
         frame,
         config,
-        primary_key=body.primary_key,
+        primary_key=primary_key,
         target=body.target,
         acknowledged=config.validation.acknowledged,
         upload_id=upload.upload_id,
@@ -210,7 +220,7 @@ def create_uplift_run(
     checked = run_uplift_checks(
         frame,
         config,
-        primary_key=body.primary_key,
+        primary_key=primary_key,
         target=body.target,
         upload_id=upload.upload_id,
         acknowledged=config.validation.acknowledged,
@@ -230,10 +240,11 @@ def create_uplift_run(
         profile=profile,
         report=report,
         mode=RunMode.TRAIN,
-        primary_key=body.primary_key,
+        primary_key=primary_key,
         target=body.target,
         model_choice=config.uplift.learner.value,
         model_version_id=None,
+        requested_by=requested_by(request),
     )
     storage.write_model(
         run_key(record.run_id, UPLIFT_VALIDATION_FILENAME),
@@ -351,7 +362,8 @@ def create_campaign_results(
             scores,
             outcomes,
             run_id=run_id,
-            primary_key=sole_key(record.primary_key, what="A run"),
+            # Every key column, so a run keyed by customer + snapshot date is joined on both (M53).
+            primary_key=record.primary_key,
             outcome_column=body.outcome_column,
             positive_label=body.positive_label,
             intended_column=INTENDED_TREATMENT_COLUMN if uplift_run else None,

@@ -559,7 +559,7 @@ def consent_gate_for_run(
     engine = ledger_engine_for(storage, current)
     if engine is None:
         return None
-    ledger = ConsentLedger(engine, salt=privacy_salt(current), create=False)
+    ledger = ConsentLedger(engine, salt=privacy_salt(current, engine=engine), create=False)
     for client in clients:
         if ledger.has_ledger(client, purpose):
             return ConsentGate(ledger=ledger, client_id=client, purpose=purpose)

@@ -14,20 +14,24 @@ by the `register` stage; the atomic swap that demotes the incumbent and crowns t
 * `promote` overrides the champion rule by hand, from any state the registry deems eligible. It takes
   a required `reason`, because a champion swap nobody can account for later is worse than no swap.
 
-**"Who" is not an identity.** Phase 1 has no authentication (plan §1.3), so `approved_by` and
-`promoted_by` are strings the caller typed. This module neither verifies them nor invents one when
-they are absent: both fields are required, and a request without them is a `422`. Storing a name the
-API made up would put a fabricated identity in the audit trail; storing an unverified one at least
-records what the caller claimed.
+**"Who" is an identity when sign-in is on** (Plan D M54, DEC-862). Phase 1 had no authentication
+(plan §1.3), so `approved_by` and `promoted_by` were strings the caller typed. Both fields are still
+required, and with sign-in off they are still stored as typed. With sign-in on, the registry records
+the signed-in username instead, whatever the body says, so the row cannot name somebody else.
+
+**Separation of duties** (DEC-862). Whoever started the training run that produced a version cannot
+approve or promote it: **403 `SEPARATION_OF_DUTIES`**. `POST /models/{id}/reject` (Plan D) turns a
+waiting challenger down with a reason. Every decision - approved, rejected, promoted - is recorded with
+its reason in `model_decision` (`engine.approvals`), which the Approvals screen reads.
 """
 
 from __future__ import annotations
 
 from typing import Annotated, Final
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
-from api.deps import RegistryDep
+from api.deps import RegistryDep, StorageDep
 from api.routes.uploads import http_error
 from api.schemas import (
     ErrorResponse,
@@ -36,8 +40,11 @@ from api.schemas import (
     ModelPromoteRequest,
     ModelVersionResponse,
 )
+from engine.access.roles import Principal
+from engine.approvals import DecisionKind, record_decision, separation_refusal, trainer_of
 from engine.contracts import ModelStatus, ModelVersion
-from engine.registry import RegistryError
+from engine.registry import ModelRegistry, RegistryError
+from engine.storage import Storage
 
 router: APIRouter = APIRouter(tags=["models"])
 
@@ -78,7 +85,9 @@ def list_models(registry: RegistryDep, use_case: UseCaseQuery = None) -> ModelLi
     responses=_TRANSITION_ERRORS,
     summary="Approve a version that is waiting for a human, making it champion",
 )
-def approve_model(model_id: str, body: ModelApproveRequest, registry: RegistryDep) -> ModelVersionResponse:
+def approve_model(
+    model_id: str, body: ModelApproveRequest, request: Request, registry: RegistryDep, storage: StorageDep
+) -> ModelVersionResponse:
     """`pending_approval` -> `champion`; any other status is a `409 INVALID_TRANSITION`.
 
     A pending version whose promotion decision was measured against a champion that no longer
@@ -92,10 +101,12 @@ def approve_model(model_id: str, body: ModelApproveRequest, registry: RegistryDe
     authentication); the registry stores it verbatim so the row names whoever claimed the decision
     (DEC-055).
     """
+    principal, champion = _check_decider(request, registry, storage, model_id)
     try:
-        version = registry.approve(model_id, by=body.approved_by)
+        version = registry.approve(model_id, by=_decider_name(principal, body.approved_by))
     except RegistryError as exc:
         raise registry_http(exc) from exc
+    _record(request, version, "approved", principal, body.reason, champion)
     return as_response(version)
 
 
@@ -105,18 +116,75 @@ def approve_model(model_id: str, body: ModelApproveRequest, registry: RegistryDe
     responses=_TRANSITION_ERRORS,
     summary="Make a version champion by hand, recording who did it and why",
 )
-def promote_model(model_id: str, body: ModelPromoteRequest, registry: RegistryDep) -> ModelVersionResponse:
+def promote_model(
+    model_id: str, body: ModelPromoteRequest, request: Request, registry: RegistryDep, storage: StorageDep
+) -> ModelVersionResponse:
     """The manual override of plan §8: the champion rule is bypassed, so the reason is mandatory.
 
     `body.promoted_by` carries the same caveat as `approve`'s `approved_by` - a caller-supplied string,
     not a verified identity. `body.reason` is stored as the version's `promotion_note`, which is the
     only record of why the rule was overridden.
     """
+    principal, champion = _check_decider(request, registry, storage, model_id)
     try:
-        version = registry.promote(model_id, by=body.promoted_by, note=body.reason)
+        version = registry.promote(model_id, by=_decider_name(principal, body.promoted_by), note=body.reason)
     except RegistryError as exc:
         raise registry_http(exc) from exc
+    _record(request, version, "promoted", principal, body.reason, champion)
     return as_response(version)
+
+
+def _principal(request: Request) -> Principal | None:
+    principal = getattr(request.state, "principal", None)
+    return principal if isinstance(principal, Principal) else None
+
+
+def _check_decider(
+    request: Request, registry: ModelRegistry, storage: Storage, model_id: str
+) -> tuple[Principal | None, str | None]:
+    """The caller and the current champion's id; 404 for an unknown version, 403 for its trainer (DEC-862)."""
+    from api.access import set_audit_context  # api.access imports the routers' package
+
+    try:
+        version = registry.get(model_id)
+    except RegistryError as exc:
+        raise registry_http(exc) from exc
+    principal = _principal(request)
+    if principal is not None:
+        refusal = separation_refusal(principal, trainer_of(storage, version))
+        if refusal is not None:
+            set_audit_context(request, details={"reason_code": "SEPARATION_OF_DUTIES"})
+            raise http_error(403, "SEPARATION_OF_DUTIES", refusal)
+    champion = registry.get_champion(version.use_case_id)
+    return principal, None if champion is None else champion.model_id
+
+
+def _decider_name(principal: Principal | None, typed: str) -> str:
+    """The signed-in username when sign-in is on; what was typed otherwise (DEC-862)."""
+    return principal.username if principal is not None and principal.kind == "user" else typed
+
+
+def _record(
+    request: Request,
+    version: ModelVersion,
+    decision: DecisionKind,
+    principal: Principal | None,
+    reason: str | None,
+    champion_id: str | None,
+) -> None:
+    """Append the decision to `model_decision`; an app without access control has nobody to record."""
+    if principal is None:
+        return
+    from api.access import get_platform_engine
+
+    record_decision(
+        get_platform_engine(request),
+        version,
+        decision,
+        principal=principal,
+        reason=reason,
+        champion_id=champion_id,
+    )
 
 
 def as_response(version: ModelVersion) -> ModelVersionResponse:

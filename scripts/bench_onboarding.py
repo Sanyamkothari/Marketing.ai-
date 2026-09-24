@@ -174,6 +174,23 @@ def write_sources(root: Path, customers: int, usage_rows: int, seed: int) -> Non
     This is a module-level function rather than a closure because the spawned child process has to
     import it by name.
     """
+    try:
+        _write_sources(root, customers, usage_rows, seed)
+    finally:
+        # The fingerprint's render pool (`engine.stages.ingest`) is shut down by an `atexit` hook,
+        # and a multiprocessing child never runs `atexit`: on its way out it joins its own children
+        # instead - the pool's idle workers, which wait for work for ever. Without this the child
+        # wrote every document and then never exited, so any table of more than one fingerprint
+        # chunk hung the benchmark at "generating" (found in M55). `shutdown(wait=False)`, which
+        # the atexit hook uses, was measured not to be enough here; the pool is joined.
+        from engine.stages import ingest
+
+        pool = ingest._pool
+        if pool is not None:
+            pool.shutdown(wait=True)
+
+
+def _write_sources(root: Path, customers: int, usage_rows: int, seed: int) -> None:
     from engine.onboarding.sources import profile_source
     from engine.stages.ingest import read_upload
 
@@ -360,6 +377,7 @@ def measure_build(
     sources: Sequence[SourceSpec],
     mappings: Sequence[MappingSpec],
     profiler: cProfile.Profile | None = None,
+    full_leak_check: bool = False,
 ) -> Measurement:
     """Time one `build_dataset`, then read back the status document it wrote.
 
@@ -368,6 +386,9 @@ def measure_build(
     number pretending to be the same one.
 
     `profiler`, when given, is enabled around the build call and nothing else.
+
+    `full_leak_check` runs the full future-data leak check (every snapshot row rebuilt) instead of
+    the narrowed default (ruling R1, DEC-870); the build is otherwise identical.
     """
     registry = LocalDatasetRegistry(storage)
     dataset_id = registry.new_dataset_id(CLIENT, USE_CASE)
@@ -385,6 +406,7 @@ def measure_build(
             registry=registry,
             dataset_id=dataset_id,
             mode=RunMode.TRAIN,
+            full_leak_check=full_leak_check,
         )
     finally:
         if profiler is not None:
@@ -506,6 +528,12 @@ def print_report(
     censored = len(report.snapshots) - measurement.snapshots_built
     print(f"snapshots    : {measurement.snapshots_built} built, {censored} censored")
     print(f"features     : {len(report.features)} built, {measurement.features_dropped} dropped for nulls")
+    if report.leak_check is not None:
+        check = report.leak_check
+        print(
+            f"leak check   : {check.scope} ({check.reason}) · "
+            f"{check.rows_probed:,} of {check.rows_total:,} snapshot rows rebuilt"
+        )
     print(f"peak memory  : {peak_mb:,.0f} MB")
     for line in textwrap.wrap(PEAK_MEMORY_BASIS, width=62):
         print(f"               {line}")
@@ -561,6 +589,7 @@ def record(
         "rows_out": report.rows_out,
         "passed": report.passed,
         "dataset_fingerprint": measurement.fingerprint,
+        "leak_check": None if report.leak_check is None else report.leak_check.model_dump(mode="json"),
         "peak_memory_mb": round(peak_mb, 1),
         "target": target,
         "verdict": verdict,
@@ -632,6 +661,11 @@ def _parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--json", type=Path, default=None, help="also write the measurement to this file as JSON"
     )
+    parser.add_argument(
+        "--full-leak-check",
+        action="store_true",
+        help="run the full future-data leak check, every snapshot row rebuilt (default: the narrowed one)",
+    )
     return parser
 
 
@@ -692,7 +726,13 @@ def main(argv: Sequence[str] | None = None) -> int:
         )
         profiler = cProfile.Profile() if args.profile is not None else None
         measurement = measure_build(
-            storage, config, spec=spec, sources=sources, mappings=mappings, profiler=profiler
+            storage,
+            config,
+            spec=spec,
+            sources=sources,
+            mappings=mappings,
+            profiler=profiler,
+            full_leak_check=args.full_leak_check,
         )
         print(f"measured     : {measurement.seconds:,.1f} s · {measurement.report.rows_out:,} rows out")
         print()

@@ -68,6 +68,11 @@ DETAIL_KEYS: Final[frozenset[str]] = frozenset(
         # DEC-726: an audit export's window and the chain position it covered.
         "window_start",
         "window_end",
+        # Plan D M54 (DEC-861): which scope a failed sign-in locked, or which lock refused one.
+        "lockout",
+        # Plan D M54 (DEC-863): a background erasure's progress and the stores it retried.
+        "attempt",
+        "failed_stores",
     }
 )
 """The only keys `AuditEvent.details` accepts. A new key is a reviewed change to this set, never a

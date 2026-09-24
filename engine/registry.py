@@ -80,7 +80,7 @@ class ModelRegistry(Protocol):
 
     def promote(self, model_id: str, *, by: str, note: str) -> ModelVersion: ...
 
-    def archive(self, model_id: str) -> ModelVersion: ...
+    def archive(self, model_id: str, *, expected_status: ModelStatus | None = None) -> ModelVersion: ...
 
 
 def should_promote(
@@ -413,10 +413,23 @@ class SqlRegistryStore:
             session.refresh(row)
             return row.to_contract()
 
-    def archive(self, model_id: str) -> ModelVersion:
-        """Retire a version; archiving an archived version is a no-op."""
+    def archive(self, model_id: str, *, expected_status: ModelStatus | None = None) -> ModelVersion:
+        """Retire a version; archiving an archived version is a no-op.
+
+        `expected_status`, when given, is checked inside the same lock and session as the write:
+        a version whose status is anything else is refused with `INVALID_TRANSITION` and left as it
+        is. Rejecting a challenger passes `PENDING_APPROVAL`, so an approval that crowned it a
+        moment earlier cannot be undone by the reject that read it as still waiting - which would
+        archive the champion and leave the use case with none (DEC-869).
+        """
         with self._lock, Session(self._engine) as session:
             row = self._require(session, model_id)
+            if expected_status is not None and row.status != expected_status:
+                raise RegistryError(
+                    "INVALID_TRANSITION",
+                    f"Model {model_id} is {row.status}, not {expected_status}; it was not archived.",
+                    model_id=model_id,
+                )
             row.status = str(ModelStatus.ARCHIVED)
             session.add(row)
             session.commit()

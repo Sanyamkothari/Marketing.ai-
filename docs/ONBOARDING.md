@@ -262,6 +262,20 @@ second time against tables containing extra rows dated *after* the last snapshot
 value moves, the build fails with `FUTURE_EVENTS_LEAKED`. That error is not a warning and cannot be
 acknowledged or waved through — a build that has seen the future is not a build with a caveat.
 
+That second computation comes in two sizes. The **full check** recomputes every row of the
+dataset. The **narrow check** recomputes only the customers who were given a future-dated event,
+plus up to 500 customers who were given none, which is much cheaper on a large client. A bug in
+the way a feature matches events to customers can move a customer outside both groups, and only the
+full check sees that. So:
+
+* The **first build of a recipe** for a client always runs the full check. "The same recipe" means
+  the same features, outcome definition, snapshot rule and column mappings. Next month's replay of
+  a recipe, with new files, is the same recipe. Change any of those and the next build is a first
+  build again.
+* Later builds run the narrow check, unless the build is asked for the full one
+  (`"full_leak_check": true` in `POST /datasets`).
+* The build report says which check ran, why, and how many rows it recomputed (section 7).
+
 One honest exception, and the report tells you about it: attributes taken from your customer master
 are as they are in the file you uploaded, because a master usually holds today's values with no
 history. See `ENTITY_ATTRIBUTES_NOT_TIME_VERSIONED` in section 7.
@@ -411,6 +425,11 @@ headline: how many rows, how many customers, how long it took, and whether it pa
 
 **Errors stop the build. Warnings do not.** If anything blocking was found there is no dataset and
 no manifest, only the report, because reading the report is your next action either way.
+
+Under the tables, a **Future-data check** line says which leak check ran (section 4), full or
+narrow, and why. For example: "Full future-data check: all 1,500 snapshot rows were rebuilt with
+events dated after the last snapshot added, because this is the first build of this recipe for this
+client."
 
 Here is a real report, from the engine's own end-to-end test on four synthetic tables — 500
 customers, a customer master, a billing table, a complaints table and an activity log, with the

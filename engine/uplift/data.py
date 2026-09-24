@@ -42,7 +42,7 @@ import re
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Final
 
-from engine.config import ColumnType, PiiHandling
+from engine.config import ColumnType, PiiHandling, PrimaryKey, key_columns
 
 if TYPE_CHECKING:
     from collections.abc import Iterable, Sequence
@@ -236,7 +236,7 @@ def _label_key(value: object) -> str:
 # Which columns may be features
 # ---------------------------------------------------------------------------
 def reserved_feature_exclusions(
-    config: UseCaseConfig, *, primary_key: str, target: str, treatment_column: str | None
+    config: UseCaseConfig, *, primary_key: PrimaryKey, target: str, treatment_column: str | None
 ) -> tuple[str, ...]:
     """Every configured column that describes the experiment or the run and so is never a feature.
 
@@ -244,10 +244,17 @@ def reserved_feature_exclusions(
     consent, user exclusions) plus the columns Phase 1 itself reserves and keeps out of its features
     (the configured target, the fairness column and the two suppression columns), so an uplift
     model never learns from a column a propensity model on the same file is forbidden to use.
+
+    A two-column key (customer + snapshot date, DEC-083) reserves both columns and the joined row
+    key `engine.keys.ROW_KEY_COLUMN`, exactly as Phase 1's prepare does (M53).
     """
+    from engine.keys import ROW_KEY_COLUMN
+
     uplift = config.uplift
+    columns = key_columns(primary_key)
     candidates: Iterable[str | None] = (
-        primary_key,
+        *columns,
+        *((ROW_KEY_COLUMN,) if len(columns) > 1 else ()),
         target,
         treatment_column,
         *uplift.reserved_columns(),
@@ -311,7 +318,7 @@ def candidate_feature_columns(
     frame: pd.DataFrame,
     config: UseCaseConfig,
     *,
-    primary_key: str,
+    primary_key: PrimaryKey,
     target: str,
     treatment_column: str | None,
 ) -> tuple[str, ...]:
@@ -460,7 +467,7 @@ def fit_feature_spec(
     frame: pd.DataFrame,
     config: UseCaseConfig,
     *,
-    primary_key: str,
+    primary_key: PrimaryKey,
     target: str,
     treatment_column: str | None,
     validation: ValidationReport | None = None,
@@ -538,13 +545,27 @@ def apply_feature_spec(frame: pd.DataFrame, spec: FeatureSpec) -> pd.DataFrame:
 # ---------------------------------------------------------------------------
 # The hold-out
 # ---------------------------------------------------------------------------
-def split_holdout(t: IntArray, y: IntArray, *, test_fraction: float, seed: int) -> tuple[IntArray, IntArray]:
+def split_holdout(
+    t: IntArray,
+    y: IntArray,
+    *,
+    test_fraction: float,
+    seed: int,
+    groups: Sequence[object] | npt.NDArray[Any] | None = None,
+) -> tuple[IntArray, IntArray]:
     """`(train positions, test positions)`, both sorted, stratified on the four `(t, y)` cells.
 
     Stratifying on treatment *and* outcome keeps the hold-out's treated share and both arms'
     conversion rates equal to the file's, which is what makes its Qini curve comparable across runs.
     Each cell sends `round(test_fraction * size)` rows (halves up) to the test side, drawn with
     `np.random.default_rng(seed)`.
+
+    **Grouped by entity (M53, DEC-855).** With `groups` - one entity id per row, for a two-column
+    key where a customer appears at several snapshot dates - whole entities are drawn instead of
+    rows: every snapshot of a customer lands on the same side, so the hold-out never grades the
+    model on a customer it was fitted on. The cells are then the entity's treatment (constant per
+    entity; `TREATMENT_VARIES_WITHIN_ENTITY` refuses data where it is not) and whether the entity
+    converted at any snapshot. Without `groups` the result is exactly what it always was.
     """
     import numpy as np
 
@@ -554,6 +575,8 @@ def split_holdout(t: IntArray, y: IntArray, *, test_fraction: float, seed: int) 
         raise ValueError("t and y must be one-dimensional arrays of the same length.")
     if not 0.0 < test_fraction < 1.0:
         raise ValueError("test_fraction must lie strictly between 0 and 1.")
+    if groups is not None:
+        return _grouped_holdout(treatment, outcome, groups, test_fraction=test_fraction, seed=seed)
     rng = np.random.default_rng(seed)
     test_parts: list[IntArray] = []
     for arm in (0, 1):
@@ -566,3 +589,43 @@ def split_holdout(t: IntArray, y: IntArray, *, test_fraction: float, seed: int) 
     mask = np.ones(len(treatment), dtype=bool)
     mask[test] = False
     return np.asarray(np.flatnonzero(mask), dtype=np.int_), np.asarray(test, dtype=np.int_)
+
+
+def _grouped_holdout(
+    treatment: npt.NDArray[Any],
+    outcome: npt.NDArray[Any],
+    groups: Sequence[object] | npt.NDArray[Any],
+    *,
+    test_fraction: float,
+    seed: int,
+) -> tuple[IntArray, IntArray]:
+    """:func:`split_holdout` over entities: stratified on (entity arm, entity ever converted)."""
+    import numpy as np
+    import pandas as pd
+
+    labels = pd.Series(np.asarray(groups, dtype=object))
+    if len(labels) != len(treatment):
+        raise ValueError("groups must name one entity per row.")
+    if bool(labels.isna().any()):
+        raise ValueError("Every row needs an entity to be split by entity.")
+    codes, uniques = pd.factorize(labels, sort=True)
+    entity_arm = np.zeros(len(uniques), dtype=np.int_)
+    entity_converted = np.zeros(len(uniques), dtype=np.int_)
+    np.maximum.at(entity_arm, codes, treatment.astype(np.int_))
+    np.maximum.at(entity_converted, codes, outcome.astype(np.int_))
+    rng = np.random.default_rng(seed)
+    test_entities: list[IntArray] = []
+    for arm in (0, 1):
+        for label in (0, 1):
+            cell = np.flatnonzero((entity_arm == arm) & (entity_converted == label))
+            size = math.floor(len(cell) * test_fraction + 0.5)
+            if size:
+                test_entities.append(rng.permutation(cell)[:size])
+    chosen = np.zeros(len(uniques), dtype=bool)
+    if test_entities:
+        chosen[np.concatenate(test_entities)] = True
+    in_test = chosen[codes]
+    return (
+        np.asarray(np.flatnonzero(~in_test), dtype=np.int_),
+        np.asarray(np.flatnonzero(in_test), dtype=np.int_),
+    )

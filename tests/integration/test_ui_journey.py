@@ -11,13 +11,13 @@ Two layers are pinned here:
 * statically, no use-case screen names a journey label or links the bare `#/` as its root any more;
 * behaviourally, `journeyFor` and the two renderers are run under node against this app's own
   `GET /industries` response, and every expectation is read from the industry files, not typed
-  here. Node is not a Python dependency, so that half skips cleanly where it is absent.
+  here. Node is not a Python dependency, so that half skips cleanly where it is absent (and fails
+  under `REQUIRE_JSDOM=1`, as CI sets it).
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Final
@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from api.main import UI_DIR, create_app
 from engine.config import DEFAULT_INDUSTRY, list_industries, load_industry
+from tests.fixtures.node import skip_without_node
 
 pytestmark = pytest.mark.integration
 
@@ -82,9 +83,7 @@ def test_no_use_case_screen_names_its_journey(name: str) -> None:
 
 @pytest.fixture(scope="module")
 def journeys(config_root: Path) -> dict[str, dict[str, object]]:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not installed; the static half of this module still runs")
+    node = skip_without_node()  # the static half of this module runs either way
     with TestClient(create_app(config_root=config_root)) as client:
         payload = client.get("/industries").json()
     ids = sorted({card for i in list_industries() for card in _cards(i)} | {"no-such-use-case"})

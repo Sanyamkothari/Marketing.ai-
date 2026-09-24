@@ -5,7 +5,8 @@ by `ui/settings.js`, which names no setting (plan §9.2). So "the six inactive `
 are rendered disabled under Coming later" is only true if the schema the route serves marks them
 *and* the module turns that mark into a disabled control. The first half is a JSON assertion; the
 second is run here in node against the real module and the schema the route really served, so
-neither half can drift without this failing. Skipped when node is not installed.
+neither half can drift without this failing. Skipped when node is not installed (failed instead
+under `REQUIRE_JSDOM=1`, as CI sets it: `tests/fixtures/node.py`).
 
 The API half pins the behaviour D2 keeps: an override of an inactive setting is still accepted
 and recorded on the run, even though the screen itself never sends one.
@@ -14,7 +15,6 @@ and recorded on the run, even though the screen itself never sends one.
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from collections.abc import Iterator
 from pathlib import Path
@@ -27,6 +27,7 @@ from api.main import UI_DIR, create_app
 from engine.config import ADVISORY_NOTE
 from engine.contracts import RunRecord
 from engine.storage import LocalStorage, run_key
+from tests.fixtures.node import skip_without_node
 from tests.integration.test_api_runs import (
     install_m2_job_stub,
     install_validate_stub,
@@ -37,8 +38,6 @@ from tests.integration.test_api_uploads import DEMO_ID, install_ingest_stub
 from tests.unit.test_inactive_settings import INACTIVE, MOVED
 
 pytestmark = pytest.mark.integration
-
-NODE: Final[str | None] = shutil.which("node")
 
 RENDER_SCRIPT: Final[str] = """
 import { readFileSync } from "node:fs";
@@ -84,11 +83,11 @@ def served_use_case(client: TestClient) -> dict[str, Any]:
 
 
 def render(schema: dict[str, Any], base: dict[str, Any], moved: dict[str, Any], tmp_path: Path) -> Any:
-    assert NODE is not None
+    node = skip_without_node()
     script = tmp_path / "render.mjs"
     script.write_text(RENDER_SCRIPT, encoding="utf-8")
     completed = subprocess.run(
-        [NODE, str(script), str(UI_DIR / "settings.js")],
+        [node, str(script), str(UI_DIR / "settings.js")],
         input=json.dumps({"schema": schema, "base": base, "moved": moved}),
         capture_output=True,
         text=True,
@@ -114,7 +113,6 @@ def test_the_route_serves_the_six_as_advisory_under_coming_later(client: TestCli
 # ---------------------------------------------------------------------------
 # The form `ui/settings.js` generates from it
 # ---------------------------------------------------------------------------
-@pytest.mark.skipif(NODE is None, reason="node is not installed")
 def test_the_generated_form_disables_exactly_the_advisory_controls(
     client: TestClient, tmp_path: Path
 ) -> None:
@@ -135,7 +133,6 @@ def test_the_generated_form_disables_exactly_the_advisory_controls(
             assert "<input disabled" not in html and "<select disabled" not in html, path
 
 
-@pytest.mark.skipif(NODE is None, reason="node is not installed")
 def test_a_stage_of_only_inactive_settings_says_so_while_folded(client: TestClient, tmp_path: Path) -> None:
     """Folded, the feature-engineering stage shows only its summary line; the note leads it."""
     body = served_use_case(client)
@@ -147,7 +144,6 @@ def test_a_stage_of_only_inactive_settings_says_so_while_folded(client: TestClie
     assert "Coming later" not in model_stage
 
 
-@pytest.mark.skipif(NODE is None, reason="node is not installed")
 def test_the_form_never_sends_an_inactive_setting_as_an_override(client: TestClient, tmp_path: Path) -> None:
     body = served_use_case(client)
     moved = {**MOVED, "model_search.tuning_trials": 9}

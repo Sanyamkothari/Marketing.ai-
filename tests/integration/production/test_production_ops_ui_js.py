@@ -40,6 +40,7 @@ from engine.contracts import RunState
 from engine.runs import update_run
 from engine.scheduling.scheduler import LocalScheduler
 from engine.storage import run_key
+from tests.fixtures.node import skip_without_jsdom
 from tests.integration.production.schedules_support import Api, build_api
 from tests.integration.production.test_monitoring_api import MATURE, backwards_outcomes
 from tests.integration.production.test_privacy_erasure_api import Api as ErasureApi
@@ -252,13 +253,40 @@ def write_privacy_fixtures(out: Path, root: Path, config_root: Path, monkeypatch
         "access_export",
         {"disposition": access.headers["content-disposition"], "size": len(access.content)},
     )
-    outcome = _ok(
+    # Plan D (DEC-863): a background job. First a request whose uploads store keeps failing - its
+    # accepted answer, its failed progress and record - then its retry, which finishes it.
+    storage = erasing.flaky("uploads/", failures=10_000)
+    failed_accepted = _ok(
         erasing.client.post(
             "/privacy/erasure", json={"principal_id": SENTINEL, "client_id": CLIENT}, headers=erasing.admin
         ),
-        201,
+        202,
     )
-    assert SENTINEL not in json.dumps(outcome)
+    request_id = failed_accepted["request_id"]
+    failed_record = erasing.finish(request_id)
+    assert failed_record["error_code"] == "ERASURE_STORE_FAILED", failed_record
+    _write(out, "erasure_accepted", failed_accepted)
+    _write(out, "erasure_failed", failed_record)
+    _write(
+        out,
+        "erasure_failed_progress",
+        _ok(erasing.client.get(f"/privacy/erasure/{request_id}/progress", headers=erasing.admin)),
+    )
+    storage.failures = 0
+    retried = _ok(
+        erasing.client.post(
+            f"/privacy/erasure/{request_id}/retry", json={"principal_id": SENTINEL}, headers=erasing.admin
+        ),
+        202,
+    )
+    _write(out, "erasure_retry_accepted", retried)
+    outcome = erasing.finish(request_id)
+    _write(
+        out,
+        "erasure_progress",
+        _ok(erasing.client.get(f"/privacy/erasure/{request_id}/progress", headers=erasing.admin)),
+    )
+    assert SENTINEL not in json.dumps([failed_accepted, failed_record, retried, outcome])
     _write(out, "erasure", outcome)
     _write(out, "erasures", _ok(erasing.client.get("/privacy/erasure", headers=erasing.admin)))
     _write(out, "retrain_flags", _ok(erasing.client.get("/privacy/retrain-flags", headers=erasing.admin)))
@@ -329,17 +357,15 @@ def test_the_ops_fixtures_are_what_the_ui_expects(
     assert _read(out, "privacy_not_configured")["detail"]["code"] == "PRIVACY_NOT_CONFIGURED"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_privacy_and_monitoring_screens_in_jsdom(
     tmp_path: Path, config_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if not (NODE_DIR / "node_modules" / "jsdom").is_dir():
-        pytest.skip(f"jsdom is not installed: cd {NODE_DIR} && npm install --no-audit --no-fund")
+    node = skip_without_jsdom(NODE_DIR)
     out = write_ops_fixtures(tmp_path, config_root, monkeypatch)
     tests = sorted(str(p) for p in OPS_DIR.glob("*.test.mjs"))
     assert tests, "no jsdom test was found"
     result = subprocess.run(
-        ["node", "--test", *tests],
+        [node, "--test", *tests],
         cwd=NODE_DIR,
         env={**os.environ, "PB_FIXTURES": str(out)},
         capture_output=True,

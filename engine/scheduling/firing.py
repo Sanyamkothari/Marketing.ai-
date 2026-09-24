@@ -14,7 +14,9 @@ API does, not a scheduler's private imitation of it (DEC-766):
   run's register stage applies the champion rule and `governance.approval_required` exactly as for a
   run a person started, so with approval required a retrain yields a `candidate` or a
   `pending_approval` version and **never** a champion. Nothing here promotes or approves anything,
-  and the firing acts as `SYSTEM_SCHEDULER`, which could not approve if it tried.
+  and a scheduled firing acts as `SYSTEM_SCHEDULER`, which could not approve if it tried. A "fire
+  now" acts as the person who asked (`FiringServices.principal`, DEC-889), who is then the run's
+  `requested_by` and so cannot approve its challenger either (DEC-862).
 * **drift_check** - take the latest finished scoring run of the client and use case, and compare its
   data with the *champion's* training baseline: reuse the run's own `drift.json` when the champion
   scored it, otherwise re-measure with the champion's recorded preparation (`prepare.replay`) and
@@ -193,6 +195,8 @@ class FiringServices:
     job_client_tag: str | None = None
     """`Settings.client_id`: the `client` cost-allocation tag every job carries (DEC-324)."""
     principal: Principal = SYSTEM_SCHEDULER
+    """Who the firing acts as: a run's `requested_by` and the engine's audit actor. The scheduler for a
+    firing nobody started; the caller for the API's "fire now" (DEC-889)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +300,7 @@ def start_dataset_run(
     version: ModelVersion | None,
     client_tag: str | None,
     now: datetime | None = None,
+    requested_by: str | None = None,
 ) -> RunRecord:
     """Validate a built dataset, write the run directory and its job spec, and submit the job.
 
@@ -373,6 +378,7 @@ def start_dataset_run(
         model_choice=catalog.automl_choice.value,
         model_version_id=None if version is None else version.model_id,
         now=now,
+        requested_by=requested_by,
     )
     spec = job_spec_for(record, upload=source, client_id=client_tag)
     write_job_spec(storage, spec)
@@ -490,6 +496,12 @@ def build_dataset_from_spec(
             dataset_id=dataset_id,
             mode=mode,
             cancel=cancel or CancelToken(),
+            # Ruling R1 (DEC-871): a recipe never built for this client gets the full leak check.
+            first_build_of_recipe=build.is_first_build_of_recipe(
+                inputs.spec,
+                inputs.mappings,
+                client_store.list_datasets(spec.client_id, spec.use_case),
+            ),
         )
         if not report.passed:
             raise FiringError(
@@ -1052,6 +1064,7 @@ class ScheduleFirer:
             version=version,
             client_tag=services.job_client_tag,
             now=services.clock(),
+            requested_by=services.principal.user_id,  # Plan D, DEC-862
         )
 
     def _dataset(self, schedule: Schedule, config: UseCaseConfig, *, mode: RunMode) -> DatasetManifest:

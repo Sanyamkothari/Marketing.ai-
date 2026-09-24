@@ -22,36 +22,66 @@ use case ungated. The result is cached per root, like `load_engine_config`.
 
 from __future__ import annotations
 
+import hashlib
+import os
+import secrets
+import threading
 from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from sqlalchemy import inspect, text
+from sqlalchemy.engine import Engine
+from sqlalchemy.exc import IntegrityError
+from sqlmodel import Session
 
 from engine.config import ConfigError, config_root, list_use_case_ids, load_yaml
-from engine.settings import Settings
+from engine.platform_db import PLATFORM_SETTING_TABLE, PlatformSettingRow, create_tables
+from engine.settings import ENV_VARS, Settings, SettingsError
+from engine.utils.logging import get_logger
+from engine.utils.time import utc_now
 
 __all__ = [
-    "DEFAULT_SALT",
+    "MIN_SALT_LENGTH",
     "PRIVACY_FILENAME",
+    "SALT_FILENAME",
     "ErasureMode",
     "ErasurePolicy",
     "LifecyclePolicy",
     "PrivacyConfig",
     "Purpose",
     "RetentionPolicy",
+    "check_privacy_salt",
     "load_privacy_config",
     "privacy_config_or_none",
     "privacy_salt",
+    "salt_fingerprint",
 ]
 
 PRIVACY_FILENAME: Final[str] = "privacy.yaml"
 SCHEMA_VERSION: Final[int] = 1
 
-DEFAULT_SALT: Final[str] = "local"
-"""The principal-hash salt of a deployment that names no client (a laptop)."""
+SALT_FILENAME: Final[str] = "privacy_salt"
+"""The generated salt of a deployment whose platform database is a local file (DEC-860)."""
+
+MIN_SALT_LENGTH: Final[int] = 16
+"""A salt shorter than this is refused: it would be guessable, which is what R3 exists to prevent."""
+
+SALT_FINGERPRINT_KEY: Final[str] = "privacy_salt_fingerprint"
+"""The `platform_setting` key the salt's fingerprint is kept under (DEC-883)."""
+
+_FINGERPRINT_DOMAIN: Final[bytes] = b"marketing-ai/privacy-salt-fingerprint\x00"
+
+_HASHED_TABLES: Final[tuple[str, ...]] = ("consent_record", "erasure_request")
+"""Tables holding principal hashes: rows in them before a fingerprint exists were made with the old salt."""
+
+_LOGGER = get_logger(__name__)
 
 _CACHE: dict[Path, PrivacyConfig] = {}
+_VERIFIED: dict[Engine, str] = {}
+"""Engine -> the fingerprint already checked against it in this process, so the check is one query."""
+_VERIFY_LOCK: Final[threading.Lock] = threading.Lock()
 
 
 class _Model(BaseModel):
@@ -188,11 +218,160 @@ def privacy_config_or_none(root: Path | None = None) -> PrivacyConfig | None:
     return load_privacy_config(root)
 
 
-def privacy_salt(settings: Settings) -> str:
-    """The per-deployment salt every principal hash in M48 uses: the client id, else `local`.
+def privacy_salt(settings: Settings, *, engine: Engine | None = None) -> str:
+    """The per-deployment secret salt every principal hash in M48 uses (ruling R3, DEC-860).
 
     The same salt for the consent ledger, the erasure register and the audit log, so an operator
     holding a customer id can find all three with one hash, while the same id at two clients (two
-    deployments) never produces a joinable value (DEC-705, DEC-733).
+    deployments, two salts) never produces a joinable value (DEC-705, DEC-733).
+
+    It is a **secret**, read through `Settings.privacy_salt` (`MARKETING_AI_PRIVACY_SALT`, from the
+    application secret on a deployment), and there is **no default in code**: the client id it used
+    to be is written on every artefact, so anyone holding a hash and a customer list could test ids
+    against it. Without the setting:
+
+    * on `env=prod`, `SettingsError` - the API refuses to start (`check_privacy_salt`);
+    * where the platform database is a local SQLite file (a laptop, a test), a random salt is
+      generated once and kept beside that file as `privacy_salt` (0600), so hashes stay stable across
+      restarts and the salt travels with the ledger it protects - `engine` names that database;
+    * anywhere else (Postgres on `dev`/`staging`), `SettingsError`: there is no local file to keep a
+      generated salt in, and a salt that changed with every container would orphan every hash.
+
+    **A changed salt is refused** (DEC-883). With an `engine`, the salt's fingerprint - a domain-
+    separated SHA-256 of it (`salt_fingerprint`), never the salt - is kept in that database's
+    `platform_setting` table the first time, and compared every time after: a different salt raises
+    `SettingsError` `SETTING_INVALID` naming `MARKETING_AI_PRIVACY_SALT`, because every consent record
+    and erasure request already stored was hashed with the other one and would silently stop matching.
+    When no fingerprint is kept yet but those tables already hold rows (a Phase 4b database, whose
+    hashes were salted with the client id), a WARNING says they must be re-imported, and the new
+    fingerprint is recorded.
     """
-    return settings.client_id or DEFAULT_SALT
+    salt = _configured_salt(settings, engine)
+    if engine is not None:
+        _check_fingerprint(engine, salt)
+    return salt
+
+
+def salt_fingerprint(salt: str) -> str:
+    """What `platform_setting` keeps to recognise the salt: a domain-separated SHA-256, never the salt."""
+    return hashlib.sha256(_FINGERPRINT_DOMAIN + salt.encode("utf-8")).hexdigest()
+
+
+def _configured_salt(settings: Settings, engine: Engine | None) -> str:
+    if settings.privacy_salt is not None:
+        return settings.privacy_salt.get_secret_value().strip()
+    if settings.env == "prod":
+        raise _salt_required(f"{ENV_VARS['privacy_salt']} must be set on env=prod")
+    location = _local_salt_path(engine)
+    if location is None:
+        raise _salt_required(
+            f"{ENV_VARS['privacy_salt']} must be set: the platform database is not a local file, "
+            "so there is nowhere to keep a generated salt"
+        )
+    return _read_or_create_salt(location)
+
+
+def _check_fingerprint(engine: Engine, salt: str) -> None:
+    """Record the salt's fingerprint in `engine`'s database, or refuse a salt that is not the recorded one.
+
+    On SQLite the table is created when missing (it is this code's file). On Postgres Alembic owns the
+    schema (`0005_plan_d`); a database not migrated that far has nowhere to keep it and is not checked.
+    """
+    fingerprint = salt_fingerprint(salt)
+    with _VERIFY_LOCK:
+        if _VERIFIED.get(engine) == fingerprint:
+            return
+    create_tables(engine, (PLATFORM_SETTING_TABLE,))
+    inspector = inspect(engine)
+    if not inspector.has_table(PLATFORM_SETTING_TABLE):
+        return
+    with Session(engine) as session:
+        row = session.get(PlatformSettingRow, SALT_FINGERPRINT_KEY)
+        if row is None:
+            if _holds_hashes(engine, [name for name in _HASHED_TABLES if inspector.has_table(name)]):
+                _LOGGER.warning(
+                    "privacy: the platform database holds consent or erasure records hashed before a "
+                    "salt fingerprint was kept; they were made with the old salt (the client id) and "
+                    "must be re-imported under %s",
+                    ENV_VARS["privacy_salt"],
+                )
+            session.add(PlatformSettingRow(key=SALT_FINGERPRINT_KEY, value=fingerprint, updated_at=utc_now()))
+            try:
+                session.commit()
+                stored = fingerprint
+            except IntegrityError:  # another thread recorded one first: compare against it
+                session.rollback()
+                recorded = session.get(PlatformSettingRow, SALT_FINGERPRINT_KEY)
+                stored = fingerprint if recorded is None else recorded.value
+        else:
+            stored = row.value
+    if stored != fingerprint:
+        raise SettingsError(
+            "SETTING_INVALID",
+            f"{ENV_VARS['privacy_salt']} is not the salt this platform database's hashes were made with: "
+            "the stored consent records and erasure requests were hashed with a different salt and "
+            "would no longer match anyone. Set the original salt again.",
+            env_var=ENV_VARS["privacy_salt"],
+        )
+    with _VERIFY_LOCK:
+        _VERIFIED[engine] = fingerprint
+
+
+def _holds_hashes(engine: Engine, tables: list[str]) -> bool:
+    with engine.connect() as connection:
+        return any(
+            connection.execute(text(f"SELECT 1 FROM {table} LIMIT 1")).first() is not None for table in tables
+        )
+
+
+def check_privacy_salt(settings: Settings) -> None:
+    """Refuse a production deployment that has no privacy salt (R3). Called when the API starts."""
+    if settings.env == "prod" and settings.privacy_salt is None:
+        raise _salt_required(
+            f"{ENV_VARS['privacy_salt']} must be set on env=prod; the API does not start without it"
+        )
+
+
+def _salt_required(message: str) -> SettingsError:
+    return SettingsError("SETTING_REQUIRED", f"{message}.", env_var=ENV_VARS["privacy_salt"])
+
+
+def _local_salt_path(engine: Engine | None) -> Path | None:
+    """`privacy_salt` beside the SQLite file `engine` opens, or None for anything else."""
+    if engine is None or engine.dialect.name != "sqlite":
+        return None
+    database = engine.url.database
+    if not database or database == ":memory:":
+        return None
+    return Path(database).resolve().parent / SALT_FILENAME
+
+
+def _read_or_create_salt(path: Path) -> str:
+    """The salt in `path`, creating it with 32 random bytes (0600) the first time; a race keeps the first."""
+    try:
+        return _read_salt(path)
+    except FileNotFoundError:
+        pass
+    path.parent.mkdir(parents=True, exist_ok=True)
+    value = secrets.token_urlsafe(32)
+    try:
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        return _read_salt(path)
+    with os.fdopen(descriptor, "w", encoding="ascii") as handle:
+        handle.write(value)
+    _LOGGER.warning(
+        "privacy: no %s set; generated a local salt beside the platform database", ENV_VARS["privacy_salt"]
+    )
+    return value
+
+
+def _read_salt(path: Path) -> str:
+    value = path.read_text(encoding="ascii").strip()
+    if len(value) < MIN_SALT_LENGTH:
+        raise SettingsError(
+            "SETTING_INVALID",
+            f"The generated privacy salt beside the platform database is damaged; set {ENV_VARS['privacy_salt']}.",
+            env_var=ENV_VARS["privacy_salt"],
+        )
+    return value

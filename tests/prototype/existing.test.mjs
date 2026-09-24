@@ -2,7 +2,7 @@
    Phase 2 and Phase 3a add screens; they do not redraw the old ones. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, HTML } from "./harness.mjs";
+import { load, go, ev, settle, $, $$, HTML } from "./harness.mjs";
 
 test("the lifecycle overview is unchanged", () => {
   const dom = load("#/");
@@ -69,7 +69,7 @@ test("the three setup steps and the run states still exist", async () => {
   assert.equal($(dom, "#f-run").disabled, false);
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
   assert.ok($(dom, ".progress"), "running state renders a progress list");
-  await new Promise((r) => setTimeout(r, 1200));
+  await settle(dom);
   assert.ok($(dom, ".results"), "results state renders");
   assert.equal($$(dom, ".flow .block").length, 3);
 });

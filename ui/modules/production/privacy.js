@@ -11,8 +11,11 @@
 //   answer is shown in full - rows and cells per store, files rewritten or deleted, the models flagged
 //   for retraining at their next scheduled cycle (never at once, plan M48.3) - with the `er_` id that
 //   is the audit event's object, and a link that opens the audit viewer filtered to it.
-// * A failed erasure is `500` with the engine's code; the message names the `er_` id, and the
-//   register below re-reads, where the row reads `failed` (DEC-752).
+// * Erasure is a background job (Plan D M54, DEC-863): the `POST` answers `202` with the `er_` id, the
+//   screen polls `GET /privacy/erasure/{id}/progress` (a plain read) and draws each store's files done
+//   and attempts, then reads the full record once (an audited read) as the completion report. A request
+//   that ends `failed` - a store that kept failing after its retries - offers "Retry", which needs the
+//   id typed again: it was never kept, and the server checks it against the request's hash.
 // * A consent file is all or nothing unless "import the valid rows" is ticked (DEC-751): a refused
 //   file answers `422` with the same report, so every problem is listed by row and column at once.
 // * The access export is a zip the server returns and never stores (DEC-753); the screen saves it at
@@ -22,6 +25,8 @@
 
 import { EM_DASH, errorBox, esc, fmtInt, fmtSize, fmtStamp } from "../../dom.js";
 import {
+  getErasure,
+  getErasureProgress,
   getErasures,
   getPrivacyPolicy,
   getRetrainFlags,
@@ -29,6 +34,7 @@ import {
   postConsentImport,
   postConsentLookup,
   postErasure,
+  postErasureRetry,
 } from "./api.js";
 import { bindAuditLinks } from "./audit.js";
 import { actionButton, auditReference, fieldValue, mono, refusal, statusPill, tabStrip, textField } from "./controls.js";
@@ -61,7 +67,8 @@ const state = {
   lookupError: null,
   // erasure
   erasing: false,
-  erasure: null,
+  erasure: null, // the completion report (the request's record)
+  erasureJob: null, // { request_id, principal_hash, status, error_code, progress[] } while it runs
   erasureError: null,
   register: null,
   registerError: null,
@@ -256,10 +263,55 @@ function modelsFlagged(models) {
     .join(", ")}</p>`;
 }
 
+/** How often a running erasure is asked how far it has got. A test sets it lower. */
+let erasurePollMs = 1500;
+const TERMINAL = new Set(["completed", "completed_with_exceptions", "failed"]);
+
+function progressTable(progress) {
+  if (!progress || !progress.length) return `<p class="pb-small">Searching every store for the id…</p>`;
+  return `<div class="tbl-wrap"><table><thead><tr><th>Store</th><th>Status</th><th>Files done</th><th>Attempts</th></tr></thead><tbody>${progress
+    .map(
+      (p) =>
+        `<tr data-store="${esc(p.store)}"><td>${esc(p.store)}</td><td>${statusPill(p.status)}${
+          p.error_code ? ` ${mono(p.error_code)}` : ""
+        }</td><td>${esc(fmtInt(p.files_done))} of ${esc(fmtInt(p.files_total))}</td><td>${esc(fmtInt(p.attempts))}</td></tr>`,
+    )
+    .join("")}</tbody></table></div>`;
+}
+
+function retryForm(job) {
+  return `<form id="pb-erasure-retry" class="pb-form wide" novalidate autocomplete="off" data-request="${esc(job.request_id)}">
+    <p class="fhint" style="margin:0">Some stores could not be rewritten after every retry. Type the same id again to run the request again: it was never stored, and the server checks it is the same person.</p>
+    <div class="frow">${principalField("principal_id")}</div>
+    <div class="actions">${actionButton("POST", "/privacy/erasure/{request_id}/retry", {
+      type: "submit",
+      attrs: 'id="pb-erasure-retry-submit"',
+      label: state.erasing ? "Retrying…" : "Retry",
+      busy: state.erasing,
+    })}</div>
+  </form>`;
+}
+
+function erasureRunning(job) {
+  return `<div class="pb-ok" role="status">Erasure ${mono(job.request_id)} ${statusPill(job.status)} · principal ${mono(
+    job.principal_hash,
+  )}</div><h4>Progress</h4>${progressTable(job.progress)}`;
+}
+
 function erasureOutcome() {
-  if (state.erasureError) return errorBox(state.erasureError);
+  if (state.erasureError && !state.erasureJob) return errorBox(state.erasureError);
+  const job = state.erasureJob;
+  if (job && !state.erasure) return `${erasureRunning(job)}${state.erasureError ? errorBox(state.erasureError) : ""}`;
   const r = state.erasure;
   if (!r) return "";
+  if (r.status === "failed") {
+    return `${errorBox({
+      code: r.error_code || "ERASURE_FAILED",
+      message: `Erasure request ${r.request_id} did not complete and is recorded as failed.`,
+    })}<h4>Progress</h4>${progressTable(r.progress)}${
+      r.error_code === "ERASURE_STORE_FAILED" ? retryForm(r) : ""
+    }${state.erasureError ? errorBox(state.erasureError) : ""}${auditReference("privacy.erasure.complete", r.request_id)}`;
+  }
   const totals = [
     ["Rows deleted", r.rows_deleted],
     ["Rows tombstoned", r.rows_tombstoned],
@@ -267,7 +319,7 @@ function erasureOutcome() {
     ["Files rewritten", r.files_rewritten],
     ["Files deleted", r.files_deleted],
     ["Consent rows deleted", r.consent_records_deleted],
-  ];
+  ].filter(([, v]) => v !== undefined && v !== null);
   return `<div class="pb-ok" role="status">Erasure ${mono(r.request_id)} ${statusPill(r.status)} · mode ${esc(r.mode)} · principal ${mono(
     r.principal_hash,
   )}</div>
@@ -275,6 +327,7 @@ function erasureOutcome() {
       .map(([l, v]) => `<div class="kpi"><div class="l">${esc(l)}</div><div class="v">${esc(fmtInt(v))}</div></div>`)
       .join("")}</div>
     <h4>Per store</h4>${storeTable(r.store_counts)}
+    ${(r.progress || []).length ? `<h4>Progress</h4>${progressTable(r.progress)}` : ""}
     ${modelsFlagged(r.models_flagged)}
     ${
       (r.unrewritable_keys || []).length
@@ -443,14 +496,66 @@ async function submitErasure(form, repaint) {
   }
   state.erasing = true;
   state.erasureError = null;
+  state.erasureJob = null;
   repaint();
+  let accepted = null;
   try {
-    state.erasure = await postErasure(payload);
+    accepted = await postErasure(payload);
   } catch (error) {
     state.erasureError = error;
   }
   state.erasing = false;
-  await loadRegister(); // a failed erasure is in the register too, as `failed` (DEC-752)
+  if (accepted) await followErasure(accepted, repaint);
+  else repaint();
+}
+
+async function submitRetry(form, repaint) {
+  const requestId = form.getAttribute("data-request");
+  const principal = form.elements.namedItem("principal_id").value.trim();
+  if (!principal) {
+    state.erasureError = missingId();
+    repaint();
+    return;
+  }
+  state.erasing = true;
+  state.erasureError = null;
+  repaint();
+  let accepted = null;
+  try {
+    accepted = await postErasureRetry(requestId, { principal_id: principal });
+  } catch (error) {
+    state.erasureError = error;
+  }
+  state.erasing = false;
+  if (accepted) {
+    state.erasure = null;
+    await followErasure(accepted, repaint);
+  } else repaint();
+}
+
+/** Poll the progress of an accepted request until it ends, then read its record once (DEC-863). */
+async function followErasure(accepted, repaint) {
+  state.erasureJob = { ...accepted, progress: [] };
+  repaint();
+  for (;;) {
+    try {
+      const progress = await getErasureProgress(accepted.request_id);
+      state.erasureJob = { ...state.erasureJob, ...progress };
+    } catch (error) {
+      state.erasureError = error;
+      repaint();
+      return;
+    }
+    repaint();
+    if (TERMINAL.has(state.erasureJob.status)) break;
+    await new Promise((resolve) => setTimeout(resolve, erasurePollMs));
+  }
+  try {
+    state.erasure = await getErasure(accepted.request_id);
+  } catch (error) {
+    state.erasureError = error;
+  }
+  await loadRegister(); // the register and the flags carry the finished request too
   repaint();
 }
 
@@ -481,6 +586,7 @@ const SUBMITS = {
   "pb-consent-import": submitImport,
   "pb-consent-lookup": submitLookup,
   "pb-erasure": submitErasure,
+  "pb-erasure-retry": submitRetry,
   "pb-access": submitAccess,
 };
 
@@ -499,6 +605,11 @@ export function bindPrivacy(root, repaint) {
   });
 }
 
+/** Test seam: how long the erasure screen waits between progress reads. */
+export function _setErasurePollForTests(ms) {
+  erasurePollMs = ms;
+}
+
 /** Test seam: forget screen state between cases. */
 export function _resetPrivacyForTests() {
   Object.assign(state, {
@@ -512,6 +623,7 @@ export function _resetPrivacyForTests() {
     lookupError: null,
     erasing: false,
     erasure: null,
+    erasureJob: null,
     erasureError: null,
     register: null,
     registerError: null,

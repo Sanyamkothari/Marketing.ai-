@@ -165,8 +165,32 @@ export const postRetentionApply = (planResponse) =>
     }),
   );
 
-/** `{principal_id, client_id?}` → 201 `ErasureOutcome`. */
+// --- approvals (Plan D M54, DEC-862, DEC-864) ---------------------------------------------------
+
+/** `ApprovalListResponse`: the challengers waiting, each with its head-to-head and whether you may decide. */
+export const getApprovals = () => request("/approvals");
+
+/** `{approved_by, reason}` → the version, now champion. `403 SEPARATION_OF_DUTIES` for its trainer. */
+export const postApprove = (modelId, payload) =>
+  request(`/models/${encodeURIComponent(modelId)}/approve`, json("POST", payload));
+
+/** `{reason}` → `{version, is_champion, decision}`: the challenger archived, the reason recorded. */
+export const postReject = (modelId, payload) =>
+  request(`/models/${encodeURIComponent(modelId)}/reject`, json("POST", payload));
+
+/** `{principal_id, client_id?}` → 202 `ErasureAccepted`: a background job erases (Plan D, DEC-863). */
 export const postErasure = (payload) => request("/privacy/erasure", json("POST", payload));
+
+/** `{principal_id}` again (it is never stored) → 202 `ErasureAccepted`; only a failed request. */
+export const postErasureRetry = (requestId, payload) =>
+  request(`/privacy/erasure/${encodeURIComponent(requestId)}/retry`, json("POST", payload));
+
+/** Status and per-store progress of one request; a plain read, so it can be polled. */
+export const getErasureProgress = (requestId) =>
+  request(`/privacy/erasure/${encodeURIComponent(requestId)}/progress`);
+
+/** One request's full record - the completion report. An audited read: asked once, at the end. */
+export const getErasure = (requestId) => request(`/privacy/erasure/${encodeURIComponent(requestId)}`);
 
 /** The erasure register, newest first. */
 export const getErasures = () => request("/privacy/erasure");

@@ -195,9 +195,12 @@ from api.routes.auth import router as auth_router  # noqa: E402
 PHASE_APP_HOOKS.append(install_access)
 PHASE_ROUTERS.extend((auth_router, audit_router))
 # M48: the DPDP controls - consent ledger, retention, erasure and access requests (DEC-746).
+from api.routes.privacy import install_privacy_checks  # noqa: E402
 from api.routes.privacy import router as privacy_router  # noqa: E402
 
 PHASE_ROUTERS.append(privacy_router)
+# Plan D M54 (R3, DEC-860): a production API refuses to start without its secret privacy salt.
+PHASE_APP_HOOKS.append(install_privacy_checks)
 # M49: schedules, monitoring and outcomes. The hook starts the scheduler `scheduler_backend` names
 # with the app and stops it with the app - and does nothing at all for `none`, the default (DEC-782).
 from api.routes.monitoring import router as monitoring_router  # noqa: E402
@@ -206,6 +209,10 @@ from api.routes.schedules import router as schedules_router  # noqa: E402
 
 PHASE_APP_HOOKS.append(install_scheduling)
 PHASE_ROUTERS.extend((schedules_router, monitoring_router))
+# Plan D M54 (DEC-862, DEC-864): the Approver's screen - challengers waiting, and rejecting one.
+from api.routes.approvals import router as approvals_router  # noqa: E402
+
+PHASE_ROUTERS.append(approvals_router)
 # ---- END PHASE-4B ----
 # ---- PHASE-3B (uplift) — append only below this line ----
 # Uplift: the treatment picker, `POST /uplift/runs`, uplift artefacts, campaign results and OPE.

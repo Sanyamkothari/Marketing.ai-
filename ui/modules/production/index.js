@@ -13,7 +13,8 @@
 // * `#/account` - change your own password;
 // * `#/admin/users`, `#/admin/audit` - the Admin screens (M46 users, M47 audit viewer, DEC-794);
 // * `#/privacy/{consent,erasure,access,retention}` - the DPDP controls, Admin (M48);
-// * `#/monitoring/{schedules[/<id>],alerts,missed,runs[/<run_id>]}` - M49, Viewer to read.
+// * `#/monitoring/{schedules[/<id>],alerts,missed,runs[/<run_id>]}` - M49, Viewer to read;
+// * `#/approvals` - challengers waiting for an Approver, with the head-to-head (Plan D M54).
 //
 // A data principal's id never appears in any of these routes (DEC-746): the privacy screens take it
 // in a form and send it in a request body, so the hash - and so the browser history - never holds it.
@@ -26,6 +27,7 @@
 
 import { errorBox, pageHead } from "../../dom.js";
 import { registerModule, resolveRoute } from "../router.js";
+import { approvalsHtml, bindApprovals, loadApprovals } from "./approvals.js";
 import { auditHtml, bindAudit, loadEvents } from "./audit.js";
 import { alertsHtml, bindAlerts, loadAlerts, loadMissed, missedHtml } from "./alerts.js";
 import { bindRunOutcomes, loadRunOutcomes, loadRuns, runOutcomesHtml, runsHtml } from "./outcomes.js";
@@ -39,7 +41,7 @@ import { bindUsers, loadUsers, usersHtml } from "./users.js";
 
 injectProductionStyles();
 
-export const ROUTES = [SIGNIN_ROUTE, "account", "admin", "privacy", "monitoring"];
+export const ROUTES = [SIGNIN_ROUTE, "account", "admin", "privacy", "monitoring", "approvals"];
 const MARK = "data-pb-screen";
 
 function paint(app, html, after) {
@@ -150,6 +152,11 @@ async function renderPrivacy(app, parts) {
   }, title);
 }
 
+async function renderApprovals(app, parts) {
+  if (!(await signedInOrAway(parts))) return;
+  await screen(app, approvalsHtml, bindApprovals, loadApprovals, "Approvals");
+}
+
 async function renderMonitoring(app, parts) {
   if (!(await signedInOrAway(parts))) return;
   const [, section, id] = parts;
@@ -177,6 +184,7 @@ export const productionModule = {
       else if (parts[0] === "account") await renderAccount(app, parts);
       else if (parts[0] === "privacy") await renderPrivacy(app, parts);
       else if (parts[0] === "monitoring") await renderMonitoring(app, parts);
+      else if (parts[0] === "approvals") await renderApprovals(app, parts);
       else await renderAdmin(app, parts);
     } catch (error) {
       failure(app, error);

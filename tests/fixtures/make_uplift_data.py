@@ -123,6 +123,69 @@ def make_uplift_data(
     return UpliftDataset(frame=frame, truth=truth)
 
 
+SNAPSHOT_DATES: tuple[str, ...] = ("2026-01-31", "2026-02-28", "2026-03-31")
+"""Month-ends of :func:`make_uplift_snapshots`, one campaign wave after each."""
+
+
+def make_uplift_snapshots(
+    customers: int = 4_000,
+    *,
+    snapshots: tuple[str, ...] = SNAPSHOT_DATES,
+    seed: int = 7,
+    treat_share: float = 0.5,
+    effect_scale: float = 1.0,
+    mixed_customers: int = 0,
+    outcome_column: str = "reactivated_90d",
+    treatment_column: str = "treatment",
+    with_treatment_date: bool = False,
+) -> UpliftDataset:
+    """One row per customer per snapshot date, keyed by `(customer_id, snapshot_date)` (M53).
+
+    The design a two-column uplift key describes: a customer is assigned to the treated or the
+    held-out group ONCE, with `treat_share` (a persistent hold-out), and then observed at every
+    snapshot - features drawn afresh each month, the same planted segments and probabilities as
+    :func:`make_uplift_data`, and a fresh outcome per snapshot. `mixed_customers` flips the arm of
+    that many customers at their last snapshot, which `TREATMENT_VARIES_WITHIN_ENTITY` must refuse.
+    `with_treatment_date` adds a `treatment_date` one day after each snapshot, as a campaign wave
+    sent the day after its snapshot would have.
+
+    The truth frame carries `customer_id` and `snapshot_date` too, so it joins on both.
+    """
+    rng = np.random.default_rng(seed)
+    ids = np.array([f"C{index:07d}" for index in range(customers)])
+    arm = (rng.random(customers) < treat_share).astype(int)
+    frames: list[pd.DataFrame] = []
+    truths: list[pd.DataFrame] = []
+    for position, day in enumerate(snapshots):
+        wave = make_uplift_data(
+            customers,
+            seed=seed * 1_000 + position + 1,
+            effect_scale=effect_scale,
+            outcome_column=outcome_column,
+            treatment_column=treatment_column,
+        )
+        frame = wave.frame.copy()
+        truth = wave.truth.copy()
+        treatment = arm.copy()
+        if mixed_customers and position == len(snapshots) - 1:
+            treatment[:mixed_customers] = 1 - treatment[:mixed_customers]
+        probability = np.where(treatment == 1, truth["p_treated"].to_numpy(), truth["p_control"].to_numpy())
+        frame["customer_id"] = ids
+        frame[treatment_column] = treatment
+        frame[outcome_column] = (rng.random(customers) < probability).astype(int)
+        frame.insert(1, "snapshot_date", day)
+        if with_treatment_date:
+            frame["treatment_date"] = (pd.Timestamp(day) + pd.Timedelta(days=1)).date().isoformat()
+        truth["customer_id"] = ids
+        truth.insert(1, "snapshot_date", day)
+        truth["propensity"] = treat_share
+        frames.append(frame)
+        truths.append(truth)
+    return UpliftDataset(
+        frame=pd.concat(frames, ignore_index=True), truth=pd.concat(truths, ignore_index=True)
+    )
+
+
 def make_winback_campaign(
     n: int = 12_000,
     *,

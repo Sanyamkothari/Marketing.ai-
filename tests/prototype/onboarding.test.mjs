@@ -3,7 +3,7 @@
    Phase 2 §10 F — the lineage block on the Data page. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, body, click, set, wait } from "./harness.mjs";
+import { load, go, ev, $, $$, body, click, set, settle } from "./harness.mjs";
 
 /** Open a use case, choose "Build from raw tables", load the sample tables. */
 function opened(id = "rca") {
@@ -172,7 +172,7 @@ test("build: a progress list per role, then a report, then Use this dataset", as
     "Features: Complaints", "Features: Usage", "Features: Activity",
     "Build labels", "Assemble dataset", "Validate", "Write dataset",
   ]);
-  await wait(1200);
+  await settle(dom);
   assert.equal($$(dom, ".buildprog li.done").length, 12);
   const reports = $$(dom, ".report .rh").map((e) => e.textContent);
   assert.deepEqual(reports, ["Sources", "Snapshots · 11.8% positive overall",
@@ -191,7 +191,7 @@ test("Use this dataset fills step 2 and collapses the panel", async () => {
   const dom = opened();
   openStep(dom, 4);
   click(dom, "#ob-build");
-  await wait(1200);
+  await settle(dom);
   click(dom, "#ob-use");
   assert.equal($$(dom, ".obbody").length, 0, "the panel is collapsed");
   assert.equal($(dom, "#f-pk").value, "customer_id + snapshot_date");
@@ -225,10 +225,10 @@ test("Phase 2 §10 F — a run built from raw tables gets a lineage block", asyn
   go(dom, "#/uc/rca");
   openStep(dom, 4);
   click(dom, "#ob-build");
-  await wait(1200);
+  await settle(dom);
   click(dom, "#ob-use");
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
-  await wait(1200);
+  await settle(dom);
   go(dom, "#/uc/rca/data");
   const nodes = $$(dom, ".lnode");
   assert.deepEqual(nodes.map((n) => n.querySelector(".l1").textContent),

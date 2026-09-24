@@ -4,7 +4,7 @@
    Phase 3a §9 E — win-back campaign copy. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, body, click, set, wait, upload } from "./harness.mjs";
+import { load, go, ev, $, $$, body, click, set, settle, upload } from "./harness.mjs";
 
 /* ---------- A. client selector ---------- */
 
@@ -125,7 +125,7 @@ test("assistant results: index summary, pass rate, worst ten, try it, cost line"
   click(dom, "#f-sampledocs");
   click(dom, "#f-sampleqa");
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
-  await wait(1600);
+  await settle(dom);
   assert.ok($(dom, ".results"), "the assistant reaches the results state");
   // eval pass rate against the threshold, with a bar
   assert.equal($(dom, ".evalbar .ebv").textContent, "91% passed");
@@ -170,7 +170,7 @@ test("assistant Try it answers a saved question and refuses anything else", asyn
   click(dom, "#f-sampledocs");
   click(dom, "#f-sampleqa");
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
-  await wait(1600);
+  await settle(dom);
   assert.equal($$(dom, ".chatpanel .bubble.q").length, 3);
   // a question the saved set covers comes back grounded, with its citations
   $(dom, "#g-question").value = "the router light is red, what now?";
@@ -197,7 +197,7 @@ test("the pass threshold is a setting, and the result says which side of it the 
   set(dom, '[data-adv="passThr"]', "95");
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
   assert.ok($$(dom, ".progress .pt").some((e) => e.textContent === "Grading the answers"));
-  await wait(1600);
+  await settle(dom);
   assert.equal($(dom, ".evalbar .ebm").style.left, "95%");
   assert.equal($(dom, ".evalbar .ebverdict").textContent, "Below the 95% threshold.");
   assert.ok($(dom, ".evalbar .ebverdict").classList.contains("bad"));

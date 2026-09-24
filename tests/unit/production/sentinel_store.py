@@ -48,7 +48,8 @@ from tests.unit.test_run_score import (
 )
 
 SENTINEL = "ZQX-SENTINEL-7731"
-SALT = "acme"
+SALT = "sentinel-store-salt-0001"
+"""The deployment's secret privacy salt (DEC-860): never the client id, at least 16 characters."""
 CLIENT = "cl_1"
 CREATED = datetime(2026, 9, 1, tzinfo=UTC)
 

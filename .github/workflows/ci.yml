@@ -50,9 +50,13 @@ jobs:
           --health-timeout 3s
           --health-retries 30
 
+    # M56: the same rule for the JS halves of the suite. They skip with a reason where node or jsdom
+    # is missing; here both are installed below, so REQUIRE_JSDOM turns that skip into a failure
+    # (tests/fixtures/node.py, DEC-877).
     env:
       MARKETING_AI_REQUIRE_POSTGRES: "1"
       MARKETING_AI_TEST_DATABASE_URL: postgresql+psycopg://marketing:marketing@localhost:55432/marketing
+      REQUIRE_JSDOM: "1"
 
     steps:
       - uses: actions/checkout@v5
@@ -95,6 +99,31 @@ jobs:
       - name: make lint
         run: make lint
 
+      # M56 (DEC-877). Node drives every jsdom suite: the two pytest wraps (Phase 4b's screens), the
+      # node-only checks (the uplift module, the settings form, the journey links) and the
+      # prototype's own suite. `cache: npm` keeps npm's download cache keyed on every lockfile under
+      # tests/, so `npm ci` below installs from disk on a hit; node_modules itself is not cached,
+      # because `npm ci` deletes it first by design.
+      - name: Set up node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: tests/**/package-lock.json
+
+      # Every directory under tests/ with a lockfile holds jsdom suites. Found rather than listed, so
+      # a new suite cannot be added without being installed here; `npm ci` fails if a lockfile is
+      # missing or out of step with its package.json, which `npm install` would quietly rewrite.
+      - name: npm ci in every jsdom suite
+        run: |
+          locks=$(find tests -name package-lock.json -not -path '*/node_modules/*' | sort)
+          test -n "$locks" || { echo "no package-lock.json under tests/"; exit 1; }
+          for lock in $locks; do
+            dir=$(dirname "$lock")
+            echo "npm ci in $dir"
+            (cd "$dir" && npm ci --no-audit --no-fund) || exit 1
+          done
+
       # PYTEST_ADDOPTS rather than a changed `test` target (protocol §4 keeps setup/test/test-all/lint
       # fixed): pytest appends it to pyproject's addopts, so the fast suite runs exactly as before and
       # also leaves a JUnit report for the next step to read.
@@ -108,6 +137,32 @@ jobs:
       # above wrote rather than running anything again, so it costs a parse, not minutes.
       - name: make check-readme
         run: make check-readme JUNIT=${{ runner.temp }}/junit-fast.xml
+
+      # M56 (DEC-878): the same report, read for skips. REQUIRE_JSDOM and MARKETING_AI_REQUIRE_POSTGRES
+      # turn the skips their fixtures know about into failures; this also catches a skip added
+      # later by some other route, and a suite that stopped being selected at all (each pattern
+      # must match at least one test that ran).
+      - name: The jsdom and Postgres tests ran, and none was skipped
+        run: >-
+          .venv/bin/python -m scripts.check_no_skips --junit ${{ runner.temp }}/junit-fast.xml
+          --id 'test_production_ui_js::test_the_production_ui_modules_in_jsdom$'
+          --id 'test_production_ops_ui_js::test_the_privacy_and_monitoring_screens_in_jsdom$'
+          --id 'test_approvals_ui_js::test_the_approvals_screen_in_jsdom$'
+          --id '^tests\.integration\.test_inactive_settings_ui::'
+          --id '^tests\.integration\.test_ui_journey::'
+          --id '^tests\.unit\.uplift\.test_uplift_ui::test_(every_module_file_parses|node_suite_passes)'
+          --id '^tests\.unit\.uplift\.test_phase1_pages_uplift::test_node_suite_passes$'
+          --id '\[postgres\]$'
+          --id '^tests\.unit\.test_postgres_metadata::'
+          --id 'test_alembic_migrations::test_the_migrations_match_the_models_on_postgres$'
+          --id 'test_platform_migration::test_the_postgres_audit_table_refuses_update_delete_and_truncate$'
+
+      # The prototype's own jsdom suite (tests/prototype) is node --test only, with no pytest wrap,
+      # so it is its own step. Its harness waits for the page to settle (no file read in flight, no
+      # page timer left to fire) instead of sleeping a fixed time, which is what made uplift tests
+      # fail on a busy machine - as a shared runner is (DEC-875, DEC-876).
+      - name: make prototype-test
+        run: make prototype-test
 
   # --- Phase 4a -------------------------------------------------------------
   # Two jobs the main gate cannot do. `infra` needs node and a second virtualenv; `image` needs a

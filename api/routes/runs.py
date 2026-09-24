@@ -60,7 +60,16 @@ from api.schemas import (
     UploadRecord,
     ValidationErrorResponse,
 )
-from engine.config import PrimaryKey, RunMode, UseCaseConfig, get_catalog, resolve_config, sole_key
+from engine.config import (
+    PrimaryKey,
+    ProblemType,
+    ResolvedConfig,
+    RunMode,
+    UseCaseConfig,
+    get_catalog,
+    resolve_config,
+    sole_key,
+)
 from engine.contracts import (
     ARTEFACT_REGISTRY,
     TABULAR_SCHEMAS,
@@ -107,6 +116,7 @@ from engine.stages.score import (
     resolve_model_version,
 )
 from engine.storage import Storage, StorageError, run_key, upload_key
+from engine.uplift.contracts import UPLIFT_ARTEFACTS
 from engine.utils.logging import get_logger, log_failure
 
 router: APIRouter = APIRouter(tags=["runs"])
@@ -193,6 +203,8 @@ DATASET_NOT_FOUND: Final[str] = "DATASET_NOT_FOUND"
 DATASET_NOT_BUILT: Final[str] = "DATASET_NOT_BUILT"
 DATASET_USE_CASE_MISMATCH: Final[str] = "DATASET_USE_CASE_MISMATCH"
 DATASET_CLIENT_MISMATCH: Final[str] = "DATASET_CLIENT_MISMATCH"
+UPLIFT_REQUIRES_UPLIFT_ROUTE: Final[str] = "UPLIFT_REQUIRES_UPLIFT_ROUTE"
+"""An uplift training run asked of `POST /runs`, which cannot run the uplift checks first (M53)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -328,6 +340,7 @@ def create_run_endpoint(
     from api.access import require_roles_for_run_overrides
 
     require_roles_for_run_overrides(request, use_case=own, resolved=config)
+    _refuse_uplift_training(body.mode, resolved)
     catalog = get_catalog(root)
 
     upload: UploadRecord | None = None
@@ -410,6 +423,7 @@ def create_run_endpoint(
         target=target,
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
+        requested_by=requested_by(request),
     )
     spec = job_spec_for(record, upload=source, client_id=settings.client_id)
     write_job_spec(storage, spec)
@@ -501,6 +515,9 @@ def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
     """
     known = name in ARTEFACT_REGISTRY or name in TABULAR_SCHEMAS
     known = known or name in GENERATIVE_ARTEFACTS or name in GENERATIVE_TABULAR_SCHEMAS
+    # Uplift runs write their artefacts into the run's own directory too, so Phase 1's Data, Model and
+    # Output pages read them here like any other (M53; `GET /runs/{id}/uplift/{name}` stays an alias).
+    known = known or name in UPLIFT_ARTEFACTS
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     load_run(storage, run_id)
@@ -545,6 +562,26 @@ def _require_upload_id(upload_id: str | None) -> str:
     if upload_id is None:  # pragma: no cover - RunRequest refuses this shape before the route sees it
         raise http_error(422, "RUN_REQUEST_INCOMPLETE", "upload_id is required for this kind of run.")
     return upload_id
+
+
+def _refuse_uplift_training(mode: RunMode, resolved: ResolvedConfig) -> None:
+    """`422 UPLIFT_REQUIRES_UPLIFT_ROUTE` for a training run whose problem type resolves to uplift.
+
+    An uplift run needs its treatment column chosen and the uplift checks passed *before* the run
+    exists, which only `POST /uplift/runs` does; here the run's own validate stage would find out
+    late and in generic words (docs/UPLIFT.md §3). Scoring an uplift model stays on this route: a
+    scoring file needs no treatment column and is checked against the model's schema.
+    """
+    if mode is not RunMode.TRAIN or resolved.config.problem_type is not ProblemType.UPLIFT:
+        return
+    overridden = resolved.sources.get("problem_type") == "override"
+    raise http_error(
+        422,
+        UPLIFT_REQUIRES_UPLIFT_ROUTE,
+        "An uplift model is trained through POST /uplift/runs, which checks the treatment column and "
+        "that it was randomly assigned before the run starts.",
+        path="overrides.problem_type" if overridden else None,
+    )
 
 
 def _require_primary_key(primary_key: PrimaryKey | None) -> PrimaryKey:
@@ -617,6 +654,18 @@ def validation_conflict(report: ValidationReport) -> JSONResponse:
         validation=report,
     )
     return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
+
+
+def requested_by(request: Request) -> str | None:
+    """Who is starting a run: the principal `api.access.enforce_access` resolved, or None without one.
+
+    Recorded on `run.json` so the approval screen can keep the person who trained a model from
+    approving it (Plan D M54, DEC-862). Read from the request state rather than through
+    `api.access.current_principal`, which would raise on an app built without access control.
+    """
+    principal = getattr(request.state, "principal", None)
+    user_id = getattr(principal, "user_id", None)
+    return user_id if isinstance(user_id, str) else None
 
 
 def load_run(storage: Storage, run_id: str) -> RunRecord:

@@ -178,8 +178,11 @@ the other side.
 `/marketing-ai/<env>/<field>`, and the leaf may also be spelled as the environment-variable name
 (`S3_BUCKET` or `MARKETING_AI_S3_BUCKET` both resolve to `s3_bucket`). "Needed by" names the backend
 that refuses to start without it. "Written by `cdk deploy`" marks the parameters
-`infra/compute.py` publishes for you — and, for the twelve Phase 4b rows at the foot of the table,
-`infra/operations.py` (§11) — and everything else is a default you may override.
+`infra/compute.py` publishes for you — and, for the twelve Phase 4b rows near the foot of the table,
+`infra/operations.py` (§11) — and everything else is a default you may override. The six Plan D
+rows at the very foot are the privacy salt (DEC-860) and the sign-in throttle (DEC-861, DEC-867;
+`docs/PRODUCTION.md` §1.1). `tests/unit/test_docs_honesty.py` fails if a `Settings` field's
+variable is missing from this document.
 
 | Field | Environment variable | SSM parameter | Default | Needed by | Written by `cdk deploy` |
 |---|---|---|---|---|---|
@@ -228,6 +231,13 @@ that refuses to start without it. "Written by `cdk deploy`" marks the parameters
 | `scheduler_role_arn` | `MARKETING_AI_SCHEDULER_ROLE_ARN` | `scheduler_role_arn` | none | eventbridge | yes, `marketing-ai-<env>-scheduler` |
 | `alert_backend` | `MARKETING_AI_ALERT_BACKEND` | `alert_backend` | `log` | always | yes, `sns` |
 | `alert_sns_topic_arn` | `MARKETING_AI_ALERT_SNS_TOPIC_ARN` | `alert_sns_topic_arn` | none | `alert_backend=sns` | yes, `marketing-ai-<env>-alerts` |
+| `privacy_salt` | `MARKETING_AI_PRIVACY_SALT` | **the secret only**, §3.3 | none; a laptop generates one into its data directory | a prod API refuses to start without it | yes, into the secret, from the database stack's generated `PrivacySalt` secret (`marketing-ai/<env>/privacy-salt`) |
+| `login_max_failures_per_account` | `MARKETING_AI_LOGIN_MAX_FAILURES_PER_ACCOUNT` | `login_max_failures_per_account` | `5`, between 1 and 1000 | `auth_mode=local` | no |
+| `login_max_failures_per_address` | `MARKETING_AI_LOGIN_MAX_FAILURES_PER_ADDRESS` | `login_max_failures_per_address` | `20`, between 1 and 100000 | `auth_mode=local` | no |
+| `login_failure_window_seconds` | `MARKETING_AI_LOGIN_FAILURE_WINDOW_SECONDS` | `login_failure_window_seconds` | `900`, between 1 and 86400 | `auth_mode=local` | no |
+| `login_lockout_seconds` | `MARKETING_AI_LOGIN_LOCKOUT_SECONDS` | `login_lockout_seconds` | `900`, between 1 and 86400 | `auth_mode=local` | no |
+| `trusted_proxy_hops` | `MARKETING_AI_TRUSTED_PROXY_HOPS` | `trusted_proxy_hops` | `0` (the peer address), between 0 and 5 | the per-address sign-in limit behind a load balancer | yes, `1`: the ALB is the one proxy in front of the tasks (DEC-867) |
+| `demo_mode` | `MARKETING_AI_DEMO_MODE` | `demo_mode` | `false` | nothing; `true` serves the seeded synthetic "Demo Telecom" client for a demo (Plan E, DEC-901) | no: never on a client deployment |
 
 Three fields are tuples filled from one comma-separated value: `sagemaker_subnet_ids`,
 `sagemaker_security_group_ids` and `cors_origins`.
@@ -252,9 +262,13 @@ own defaults live in one place, `infra/context.py`, next to every other knob.
 
 ### 3.3 The one secret
 
-`postgres_dsn` is the only `SecretStr` in the model and the only value that is not in Parameter
-Store. It lives in the Secrets Manager document `marketing-ai/<env>/app`, whose keys are `Settings`
-field names, and the task role may read that one ARN and nothing else.
+`postgres_dsn` and `privacy_salt` are the two `SecretStr` fields in the model and the only values
+that are not in Parameter Store. They live in the one Secrets Manager document the task reads,
+`marketing-ai/<env>/app`, whose keys are `Settings` field names, and the task role may read that one
+ARN and nothing else. `privacy_salt` arrives there by a deploy-time reference to the database
+stack's `PrivacySalt` secret (`marketing-ai/<env>/privacy-salt`), which is generated once, never
+rotated and retained when the stack is destroyed: a new salt would leave every principal hash
+already written unmatchable (DEC-860).
 
 The database's own credential is a **separate** secret, `marketing-ai/<env>/db`. The task can never
 read it. That is the secret RDS knows about and the one the AWS single-user rotation function
@@ -1075,8 +1089,10 @@ would fail closed — turning every absent artefact into a 403 that looks like a
 - **Sign-in is the built-in user store, not an identity provider.** `auth_mode` is `off` or `local`;
   the client's SSO or Cognito (plan prerequisite P5) is a third value that does not exist yet. The
   local store hashes passwords with PBKDF2 and stores only a digest of each session token, but it
-  has no multi-factor authentication, no lockout or rate limit on failed sign-ins, and no
-  federation. Until P5 is decided and built, keep a dev deployment's URL to the people testing it,
+  has no multi-factor authentication and no federation. Failed sign-ins are rate limited per
+  username and per client address (`docs/PRODUCTION.md` §1.1; the deployment writes
+  `trusted_proxy_hops=1` so the address counted is the client's, not the ALB's), but the counts are
+  in memory per task, so a restart forgets them and N tasks allow N times the limit. Until P5 is decided and built, keep a dev deployment's URL to the people testing it,
   and treat HTTP-only dev (no certificate) as sending passwords in clear text — because it does.
 - **The first Admin's password crosses the ECS API** on a deployment (§11.2). That is acceptable
   for dev with an immediate password change and not for prod.
@@ -1254,6 +1270,8 @@ half and writes the parameters that switch each feature on, so a deployment made
 all of them without a hand-edited parameter.
 
 ### 11.1 The settings, and where a deployment gets them
+
+What each setting does for an operator (sign-in, the first Admin, roles, audit export, retention, schedules and alerts) is explained in [`docs/PRODUCTION.md`](PRODUCTION.md).
 
 The twelve Phase 4b rows of §3.2 are the whole configuration surface. On a deployment:
 
