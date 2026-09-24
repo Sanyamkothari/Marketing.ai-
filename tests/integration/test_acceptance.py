@@ -336,7 +336,7 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
 
     # 1. Open the product, land on the Overview, walk into the use case.
     page.goto(f"{server}/ui/", wait_until="domcontentloaded")
-    expect(page.get_by_role("heading", name="Marketing AI")).to_be_visible()
+    expect(page.get_by_role("heading", name="Customer Lifecycle")).to_be_visible()
     page.get_by_role("link", name=USE_CASE_NAME).click()
     expect(page.get_by_role("heading", name=USE_CASE_NAME)).to_be_visible()
     expect(page.locator("#f-file")).to_be_attached()
