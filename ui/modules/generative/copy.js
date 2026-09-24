@@ -3,31 +3,54 @@
 //
 // `CopyBatch.require_human_review` is not a UI convenience - `DEC-205` sets it true by default
 // because this text is written to be sent to a customer, so the screen's one job beyond showing the
-// copy is to make the review real: every template's guardrail outcome is on screen rather than
+// copy is to make the review real: a template's failed or warned guardrail is on screen rather than
 // folded into a pass/fail dot, a blocked template is shown blocked rather than hidden (a card that
 // silently disappeared would read as "nothing to review" instead of "a rule refused this"), and the
 // control holdout - the customers this campaign deliberately does not write to - is a number here,
 // not a fact left to the CSV. Nothing this screen does sends anything: approving a template records
 // that a named person accepted it (DEC-055's unverified-claim pattern, same as model approval), and
 // the actual export is the CSV download, same as `scores.csv` is for a predictive run.
+//
+// v1 UI: one primary action - "Generate campaign copy" until copy exists, then "Download messages (CSV)"
+// (every message that was not blocked; the screen says to send only the approved versions).The approver's name is the signed-in person's, read-only; it is typed only when sign-in
+// is off. Judge scores, every passed check and the cost sit under closed disclosures.
 
 import { ApiError, getArtefacts, getRun } from "../../api.js";
-import { dash, errorBox, esc, fmtInt, fmtNum, fmtStamp, journeyCrumb, kpis, pageHead, stageChip, typeChip } from "../../dom.js";
-import { backendBadge, copyStatusPill, guardrailCounts, guardrailList, usageLine } from "./gdom.js";
+import {
+  emptyState,
+  errorBox,
+  esc,
+  fmtInt,
+  fmtNum,
+  fmtStamp,
+  headActions,
+  journeyCrumb,
+  pageHead,
+  skeleton,
+  techDetails,
+} from "../../dom.js";
+import {
+  backendBadge,
+  copyStatusPill,
+  costAndChecks,
+  flaggedChecks,
+  gTypeChip,
+  guardrailList,
+  progressList,
+  termTip,
+} from "./gdom.js";
 import { copyMessagesUrl, postApproveTemplate, postCampaignCopy, postRegenerateTemplate } from "./api.js";
 import { readPath } from "../../settings.js";
 
 const POLL_MS = 2000;
 const STATE = new Map();
 
-const ARTEFACTS = [
-  "scoring_summary.json",
-  "run_config.json",
-  "copy_status.json",
-  "copy_batch.json",
-  "guardrail_report.json",
-  "llm_usage.json",
-];
+const ARTEFACTS = ["run_config.json", "copy_status.json", "copy_batch.json", "guardrail_report.json", "llm_usage.json"];
+
+// The wording `configs/pilot/help.yaml` gives these terms, for when the catalogue is not registered.
+const BAND_TIP = "A group of customers with similar scores (High, Medium, Low) that share one suggested action.";
+const CONTROL_TIP =
+  "Customers chosen at random and deliberately not contacted, so the campaign's effect can be measured against them.";
 
 function stateFor(runId) {
   if (!STATE.has(runId)) {
@@ -38,24 +61,12 @@ function stateFor(runId) {
       generating: false,
       generateError: null,
       approverName: "",
+      approverLocked: false,
       busy: {},
       actionError: null,
     });
   }
   return STATE.get(runId);
-}
-
-// --- context tiles -----------------------------------------------------------------------------
-
-function kpiTiles(uc, s) {
-  const summary = s.art["scoring_summary.json"];
-  const batch = s.art["copy_batch.json"];
-  return kpis([
-    [uc.output.kpi.label, dash(summary && summary.kpi && summary.kpi.display)],
-    ["Eligible for copy", dash(batch && batch.audience.rows, fmtInt)],
-    ["Control holdout", dash(batch && batch.holdout.control_rows, fmtInt)],
-    ["Suppressed", dash(batch && batch.holdout.suppressed_rows, fmtInt)],
-  ]);
 }
 
 // --- one template --------------------------------------------------------------------------------
@@ -68,45 +79,45 @@ function judgeLine(template) {
   return scores.join(" · ");
 }
 
-function templateCard(runId, s, template) {
+function templateCard(s, template) {
   const busy = s.busy[template.template_id];
   const canApprove = template.status === "pending_review" && s.approverName.trim() && !busy;
-  const canRegenerate = !busy;
+  const flagged = flaggedChecks(template.guardrails);
   return `<div class="gtpl${template.status === "blocked" ? " blocked" : ""}">
-    <div class="gtpl-head"><span>${esc(template.channel.toUpperCase())} · Variant ${esc(
+    <div class="gtpl-head"><span>${esc(template.channel.toUpperCase())} · Version ${esc(
       template.variant,
     )}</span>${copyStatusPill(template.status)}</div>
     ${template.subject ? `<div class="gtpl-subj">${esc(template.subject)}</div>` : ""}
     <div class="gtpl-body">${esc(template.text)}</div>
-    <div class="gtpl-meta">${esc(judgeLine(template))}</div>
     ${template.block_reason ? `<div class="gtpl-block-reason">${esc(template.block_reason)}</div>` : ""}
-    ${guardrailList(template.guardrails)}
+    ${guardrailList(flagged)}
     ${
       template.status === "approved"
-        ? `<div class="gtpl-meta">Approved by ${esc(template.approved_by)} · ${esc(
-            fmtStamp(template.approved_at),
-          )}</div>`
+        ? `<div class="gtpl-meta">Approved by ${esc(template.approved_by)} · ${esc(fmtStamp(template.approved_at))}</div>`
         : ""
     }
     <div class="gtpl-actions">
       ${
         template.status === "approved"
           ? ""
-          : `<button type="button" class="g-approve" data-approve="${esc(
-              template.template_id,
-            )}"${canApprove ? "" : " disabled"}>${busy === "approve" ? "Approving…" : "Approve"}</button>`
+          : `<button type="button" class="btn secondary sm g-approve" data-approve="${esc(template.template_id)}"${
+              canApprove ? "" : " disabled"
+            }>${busy === "approve" ? "Approving…" : "Approve"}</button>`
       }
-      <button type="button" class="g-regen" data-regen="${esc(template.template_id)}"${
-        canRegenerate ? "" : " disabled"
+      <button type="button" class="btn quiet sm g-regen" data-regen="${esc(template.template_id)}"${
+        busy ? " disabled" : ""
       }>${busy === "regenerate" ? "Regenerating…" : "Regenerate"}</button>
     </div>
+    <details class="tech"><summary>Scores and checks</summary><p>${esc(judgeLine(template))}</p>${guardrailList(
+      template.guardrails,
+    )}</details>
   </div>`;
 }
 
-function bandSection(runId, s, band, templates) {
-  return `<div class="gband-h">${esc(band)} band</div><div class="ggrid">${templates
-    .map((t) => templateCard(runId, s, t))
-    .join("")}</div>`;
+function bandSection(s, band, templates) {
+  return `<section><h4 class="gband-h">${esc(band)} band ${termTip("band", BAND_TIP)}</h4><div class="ggrid">${templates
+    .map((t) => templateCard(s, t))
+    .join("")}</div></section>`;
 }
 
 function templatesByBand(batch) {
@@ -122,125 +133,145 @@ function templatesByBand(batch) {
   return order.map((band) => [band, grouped.get(band)]);
 }
 
-function copyCard(uc, s) {
-  const batch = s.art["copy_batch.json"];
-  const status = s.art["copy_status.json"];
-  const running = status && (status.state === "pending" || status.state === "running");
-  if (batch) {
-    const approved = batch.templates.filter((t) => t.status === "approved").length;
-    const pending = batch.templates.filter((t) => t.status === "pending_review").length;
-    const blocked = batch.templates.filter((t) => t.status === "blocked").length;
-    const bands = new Set(batch.templates.map((t) => t.band)).size;
-    const channels = new Set(batch.templates.map((t) => t.channel)).size;
-    const canDownload = batch.messages_rendered > 0;
-    return `<section class="card"><h3>Campaign copy</h3>
-      <div style="padding:16px 20px 0">
-        <div class="gnotice">Nothing is sent from here. ${
-          batch.require_human_review ? "Approved messages are exported for your campaign tool." : "Every template is usable as generated; human review is off for this use case."
-        }</div>
-        <p class="gholdout-note">Holds back <b>${fmtInt(batch.holdout.control_rows)}</b> customers as a control group and suppresses <b>${fmtInt(
-          batch.holdout.suppressed_rows,
-        )}</b> more by consent or recent contact${
-          batch.holdout.out_of_band_rows
-            ? ` (${fmtInt(batch.holdout.out_of_band_rows)} fell outside a band this batch writes for)`
-            : ""
-        }.</p>
-        <div class="gseg-row">
-          <span>${fmtInt(batch.templates.length)} templates · ${bands} band${
-            bands === 1 ? "" : "s"
-          } × ${channels} channel${channels === 1 ? "" : "s"}</span>
-          <span>${approved} approved · ${pending} pending review · ${blocked} blocked</span>
-          <a class="linkbtn" href="${esc(copyMessagesUrl(s.runId))}"${
-            canDownload ? " download" : ' aria-disabled="true" style="pointer-events:none;opacity:.5"'
-          }>Download messages</a>
-        </div>
-        <div class="field sm" style="margin:14px 0 4px"><span class="sub">Your name, for the approval record</span><div class="control"><input type="text" id="g-approver" value="${esc(
-          s.approverName,
-        )}" placeholder="Required to approve"></div></div>
-        ${s.actionError ? errorBox(s.actionError) : ""}
-      </div>
-      <div style="padding:6px 20px 20px">${templatesByBand(batch)
-        .map(([band, templates]) => bandSection(s.runId, s, band, templates))
-        .join("")}</div>
-      <p class="caption">Scores come from the copy judges. A blocked message is never exported, whatever its scores.</p>
-    </section>`;
-  }
-  if (running) {
-    const stages = status.stages || [];
-    const rows = stages.length
-      ? stages
-          .map(
-            (st, i) =>
-              `<li class="${st.state === "running" ? "active" : st.state === "done" ? "done" : st.state === "failed" ? "failed" : ""}"><span class="dot">${
-                i + 1
-              }</span><div><div class="pt">${esc(st.title)}</div><div class="pd">${esc(st.detail)}</div></div></li>`,
-          )
-          .join("")
-      : `<li class="active"><span class="dot">1</span><div><div class="pt">Starting…</div><div class="pd"></div></div></li>`;
-    return `<section class="card"><h3>Campaign copy</h3><ol class="progress">${rows}</ol></section>`;
-  }
-  if (status && status.state === "failed") {
-    return `<section class="card"><h3>Campaign copy</h3><div class="empty">${esc(
-      status.error_message || "The last attempt failed.",
-    )}</div><div style="padding:0 20px 20px">${generateButton(s)}</div></section>`;
-  }
-  return `<section class="card"><h3>Campaign copy</h3><div style="padding:18px 20px">
-    <p class="desc" style="margin:0 0 14px">Copy has not been written for this run yet.</p>
-    <p class="desc" style="margin:0 0 14px;color:var(--muted)">We write templates per band and channel from the fields this use case whitelists, check them against the guardrails, and hold every one for review. Nothing is sent to anyone.</p>
-    ${s.generateError ? errorBox(s.generateError) : ""}
-    ${generateButton(s)}
-  </div></section>`;
+function approverField(s) {
+  const locked = s.approverLocked;
+  const missing = !s.approverName.trim();
+  return `<div class="gapprover"><label for="g-approver">Approved by</label><div class="control"><input type="text" id="g-approver" value="${esc(
+    s.approverName,
+  )}"${locked ? " readonly" : ' placeholder="Your name"'} aria-describedby="g-approver-help" autocomplete="name"></div><p class="fhint" id="g-approver-help">${
+    locked
+      ? "Your name is recorded with each message you approve."
+      : missing
+        ? "Type your name to approve messages. It is recorded with each one."
+        : "Recorded with each message you approve."
+  }</p></div>`;
 }
 
-const generateButton = (s) =>
-  `<button type="button" class="run" id="g-generate-copy"${s.generating ? " disabled" : ""}>${
+function summaryHtml(s, batch) {
+  const approved = batch.templates.filter((t) => t.status === "approved").length;
+  const pending = batch.templates.filter((t) => t.status === "pending_review").length;
+  const blocked = batch.templates.filter((t) => t.status === "blocked").length;
+  const bands = new Set(batch.templates.map((t) => t.band)).size;
+  const channels = new Set(batch.templates.map((t) => t.channel)).size;
+  const total = batch.templates.length;
+  const verdict = total
+    ? `<p class="gverdict">${fmtInt(approved)} of ${fmtInt(total)} messages approved</p><p class="gverdict-sub">${fmtInt(
+        pending,
+      )} waiting for review · ${fmtInt(blocked)} blocked · ${bands} band${bands === 1 ? "" : "s"} × ${channels} channel${
+        channels === 1 ? "" : "s"
+      }</p>`
+    : `<p class="gverdict">No messages were written for this run</p><p class="gverdict-sub">None of the customers it scored fell in a band this use case writes for. Score a newer file, or check the bands in the use case's settings.</p>`;
+  return `<div class="gsummary">
+    <div>${verdict}</div>
+    <p>Nothing is sent from here. ${
+      batch.require_human_review
+        ? "The download holds every message that was not blocked: send only the versions you approved."
+        : "Human review is off for this use case, so every message can be used as written."
+    }</p>
+    <p class="tnum">Holds back <b>${fmtInt(batch.holdout.control_rows)}</b> customers as a control group ${termTip(
+      "control group",
+      CONTROL_TIP,
+    )} and skips <b>${fmtInt(batch.holdout.suppressed_rows)}</b> more because of consent or recent contact${
+      batch.holdout.out_of_band_rows
+        ? ` (${fmtInt(batch.holdout.out_of_band_rows)} fell outside the bands this batch writes for)`
+        : ""
+    }.</p>
+    ${total ? approverField(s) : ""}
+    ${s.actionError ? errorBox(s.actionError) : ""}
+  </div>`;
+}
+
+// Written out, not built by `emptyState`: the gate (`production/gate.js`) and its test find the id.
+const generateAction = (s) =>
+  `<button type="button" class="btn primary run" id="g-generate-copy"${s.generating ? " disabled" : ""}>${
     s.generating ? "Starting…" : "Generate campaign copy"
   }</button>`;
 
-function usageCard(s) {
-  const usage = s.art["llm_usage.json"];
-  const guardrails = s.art["guardrail_report.json"];
-  if (!usage && !guardrails) return "";
-  return `<section class="card"><h3>Cost &amp; guardrails</h3><div style="padding:16px 20px">${usageLine(
-    usage,
-  )}${
-    guardrails
-      ? `<div style="margin-top:6px">${guardrailCounts(guardrails.checks)} <span style="font-size:12px;color:var(--muted)">across ${fmtInt(
-          guardrails.summary.checked,
-        )} generated text${guardrails.summary.checked === 1 ? "" : "s"}</span></div>`
-      : ""
-  }</div></section>`;
+const generateErrorHtml = (s) => (s.generateError ? `<div class="gbody">${errorBox(s.generateError)}</div>` : "");
+
+function copyCard(s) {
+  const batch = s.art["copy_batch.json"];
+  const status = s.art["copy_status.json"];
+  const running = status && (status.state === "pending" || status.state === "running");
+  const details = costAndChecks(s.art["llm_usage.json"], s.art["guardrail_report.json"]);
+  if (batch) {
+    const bands = templatesByBand(batch);
+    return `<section class="card"><h3>Messages to review</h3>${summaryHtml(s, batch)}
+      ${
+        bands.length
+          ? `<div class="gbands">${bands
+              .map(([band, templates]) => bandSection(s, band, templates))
+              .join("")}</div><p class="caption">A blocked message is never in the download, whatever its scores.</p>`
+          : ""
+      }
+      ${details}
+    </section>`;
+  }
+  if (running) {
+    return `<section class="card"><h3>Writing campaign copy…</h3>${progressList(status)}</section>`;
+  }
+  if (status && status.state === "failed") {
+    return `<section class="card"><h3>Campaign copy</h3>${emptyState({
+      title: "The last attempt did not finish.",
+      text: status.error_message || "",
+      action: generateAction(s),
+    })}${generateErrorHtml(s)}${details}</section>`;
+  }
+  return `<section class="card"><h3>Campaign copy</h3>${emptyState({
+    title: "No campaign copy has been written for this run yet.",
+    text: "We write messages for each band and channel from the customer details this use case allows, check them against the safety rules, and hold every one for your review. Nothing is sent to anyone.",
+    action: generateAction(s),
+  })}${generateErrorHtml(s)}</section>`;
+}
+
+function downloadAction(s) {
+  const batch = s.art["copy_batch.json"];
+  if (!batch) return null;
+  // The file is every message that was not blocked, as written (`copy_messages.csv`); approving
+  // records a decision and does not rewrite it, so the label says "messages", not "approved".
+  return batch.messages_rendered > 0
+    ? { label: "Download messages (CSV)", href: copyMessagesUrl(s.runId), attrs: 'download id="g-download-copy"' }
+    : `<span class="btn primary" aria-disabled="true" id="g-download-copy">Download messages (CSV)</span><span class="reason">No message could be written for these customers.</span>`;
 }
 
 // --- shell -------------------------------------------------------------------------------------
 
+function crumbTrail(uc) {
+  return `<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}<span class="sep" aria-hidden="true">›</span><a href="#/uc/${esc(
+    uc.id,
+  )}">${esc(uc.name)}</a><span class="sep" aria-hidden="true">›</span><span class="cur" aria-current="page">Campaign copy</span></nav>`;
+}
+
 export function copyHtml(uc, s) {
   const run = s.run;
-  if (!run) return `<main class="screen t-${esc(uc.marker)}">${pageHead(`<h1 class="h1">${esc(uc.name)}</h1>`)}<p class="loading">Loading the run…</p></main>`;
+  if (!run) return skeleton("page", { title: "Campaign copy" });
   const config = s.art["run_config.json"] && s.art["run_config.json"].config;
   const llm = config && readPath(config, "generative.llm");
-  return `<main class="screen t-${esc(uc.marker)}">
+  const contacts = `#/uc/${encodeURIComponent(uc.id)}/output/${encodeURIComponent(run.run_id)}`;
+  return `<main class="screen gscreen t-${esc(uc.marker)}">
     ${pageHead(
-      `<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}<span class="sep">›</span><a href="#/uc/${esc(
-        uc.id,
-      )}">${esc(uc.name)}</a><span class="sep">›</span><span class="cur">Campaign copy</span></nav>
-      <span class="over" style="color:var(--c)">Personalised offers</span><h1 class="h1">${esc(
-        uc.pages.output,
-      )}</h1><div class="chips">${stageChip(uc.lifecycle_stage)}${typeChip(uc)}</div>`,
+      `${crumbTrail(uc)}<h1 class="h1">Campaign copy</h1><p class="desc">Messages written for the customers this scoring run picked, held for your review before anyone downloads them.</p><div class="chips">${gTypeChip(
+        uc,
+      )}</div>${headActions({ primary: downloadAction(s), related: { label: "See who to contact", href: contacts } })}`,
     )}
     ${backendBadge(llm)}
-    <p class="note" style="margin:-8px 0 16px">Scoring run ${esc(run.run_id)} · ${esc(fmtStamp(run.created_at))}</p>
     <div class="stack">
-      ${kpiTiles(uc, s)}
-      ${copyCard(uc, s)}
-      ${usageCard(s)}
+      ${copyCard(s)}
+      ${techDetails([
+        ["Scoring run", run.run_id],
+        ["Run created", fmtStamp(run.created_at)],
+      ])}
     </div>
   </main>`;
 }
 
 // --- controller ----------------------------------------------------------------------------------
 
-export function createCopyController(uc, runId, rerender) {
+/**
+ * `options.signedInName()` is the signed-in person's display name, or `null` when nobody is signed
+ * in (sign-in off): then the approver types a name, as before.
+ */
+export function createCopyController(uc, runId, rerender, options = {}) {
   const s = stateFor(runId);
   let timer = null;
   const stop = () => {
@@ -248,7 +279,24 @@ export function createCopyController(uc, runId, rerender) {
     timer = null;
   };
 
+  function adoptSignedInName() {
+    let name = null;
+    try {
+      name = typeof options.signedInName === "function" ? options.signedInName() : null;
+    } catch {
+      name = null;
+    }
+    if (name) {
+      s.approverName = name;
+      s.approverLocked = true;
+    } else if (s.approverLocked) {
+      s.approverName = "";
+      s.approverLocked = false;
+    }
+  }
+
   async function load() {
+    adoptSignedInName();
     const [detail, art] = await Promise.all([getRun(runId), getArtefacts(runId, ARTEFACTS)]);
     s.run = detail.run;
     s.art = art;
@@ -329,11 +377,35 @@ export function createCopyController(uc, runId, rerender) {
     rerender();
   }
 
+  /** Enable or disable each Approve as the typed name appears or goes, without redrawing the field. */
+  function syncApproveButtons(root) {
+    const batch = s.art["copy_batch.json"];
+    if (!batch) return;
+    const named = Boolean(s.approverName.trim());
+    for (const button of root.querySelectorAll("[data-approve]")) {
+      const template = batch.templates.find((t) => t.template_id === button.dataset.approve);
+      const ok = named && template && template.status === "pending_review" && !s.busy[template.template_id];
+      if ("pbGate" in button.dataset) continue; // a role that may not approve stays as the gate left it
+      button.disabled = !ok;
+    }
+    const help = root.querySelector("#g-approver-help");
+    if (help && !s.approverLocked) {
+      help.textContent = named
+        ? "Recorded with each message you approve."
+        : "Type your name to approve messages. It is recorded with each one.";
+    }
+  }
+
   function bind(root) {
     const generateBtn = root.querySelector("#g-generate-copy");
     if (generateBtn) generateBtn.addEventListener("click", () => generate());
     const approver = root.querySelector("#g-approver");
-    if (approver) approver.addEventListener("input", (event) => (s.approverName = event.target.value));
+    if (approver && !s.approverLocked) {
+      approver.addEventListener("input", (event) => {
+        s.approverName = event.target.value;
+        syncApproveButtons(root);
+      });
+    }
     root.querySelectorAll("[data-approve]").forEach((button) =>
       button.addEventListener("click", () => approve(button.dataset.approve)),
     );

@@ -1,34 +1,35 @@
-// The RCA (Root Cause Analysis) screen (prototypes 12-13): a finished churn run, then - on request -
-// plain-language causes for each risk segment.
+// The root-cause notes screen (RCA, prototypes 12-13): a finished churn run, then - on request -
+// plain-language causes for each risk group.
 //
 // `RootCauseSummary` is written *over* a finished run, never inside it (DEC-211), so this screen has
-// two honest states rather than one screen that guesses: before generation, the Root causes card is
-// the only thing that says nothing has been written yet, and every number around it still comes from
-// the run's own `decile_lift.json` and `scoring_summary.json` - the churn model's output, not the
-// LLM's. After generation, every `RootCause` on screen carries the evidence-pack ids it was built
-// from (rule 1: grounded or nothing), rendered as the reason or the complaint quote itself rather
-// than a bare id, because "trust me" is not what an evidence reference is for. The prototype's
-// "Deployment & monitoring" card (SageMaker, Amazon SES, a retraining cadence) is Phase 4a's AWS
-// reference stack, marked "Illustrative sample" on the mock itself - nothing in `contracts.py` backs
-// it yet, so it is left out here rather than invented (plan §13.3: no value nobody measured).
+// two honest states rather than one screen that guesses: before generation, the notes card is the
+// only thing that says nothing has been written yet. After generation, every `RootCause` on screen
+// carries the evidence-pack ids it was built from (rule 1: grounded or nothing), rendered as the
+// reason or the complaint quote itself rather than a bare id, because "trust me" is not what an
+// evidence reference is for. The prototype's "Deployment & monitoring" card (a reference cloud
+// stack, marked as a sample on the mock itself) is not backed by `contracts.py`, so it is left out
+// here rather than invented (plan §13.3: no value nobody measured).
+//
+// v1 UI: the churn model's own tiles and decile chart belong to the run's Output page, linked as "See
+// the scores"; this screen no longer repeats them, so it reads only what the root-cause job writes.
+// Cost and the guardrail totals sit in one closed "Cost and safety checks"; the run id under
+// Technical details.
 
 import { ApiError, getArtefacts, getRun } from "../../api.js";
 import {
-  EM_DASH,
-  columnBar,
-  dash,
+  emptyState,
   errorBox,
   esc,
   fmtInt,
-  fmtN,
   fmtNum,
   fmtStamp,
+  headActions,
   journeyCrumb,
   pageHead,
-  stageChip,
-  typeChip,
+  skeleton,
+  techDetails,
 } from "../../dom.js";
-import { backendBadge, confidencePill, evidenceChip, guardrailCounts, usageLine } from "./gdom.js";
+import { backendBadge, confidencePill, costAndChecks, evidenceChip, gTypeChip, guardrailCounts, progressList } from "./gdom.js";
 import { postRootCause } from "./api.js";
 import { readPath } from "../../settings.js";
 
@@ -36,8 +37,6 @@ const POLL_MS = 2000;
 const STATE = new Map();
 
 const ARTEFACTS = [
-  "decile_lift.json",
-  "scoring_summary.json",
   "run_config.json",
   "root_cause_status.json",
   "root_cause_summary.json",
@@ -52,55 +51,6 @@ function stateFor(runId) {
   return STATE.get(runId);
 }
 
-// --- churn context: what the model already measured, before any LLM ran -------------------------
-
-function kpiTiles(s) {
-  const summary = s.art["scoring_summary.json"];
-  const rca = s.art["root_cause_summary.json"];
-  const topSegment = rca && rca.segments[0];
-  return `<div class="kpis">
-    <div class="kpi"><div class="l">Rows scored</div><div class="v">${dash(
-      summary && summary.rows_scored,
-      fmtN,
-    )}</div></div>
-    <div class="kpi"><div class="l">Control group</div><div class="v">${dash(
-      summary && summary.control_group_rows,
-      fmtInt,
-    )}</div></div>
-    <div class="kpi"><div class="l">Segments</div><div class="v">${dash(
-      rca && rca.segments.length,
-      String,
-    )}</div></div>
-    <div class="kpi"><div class="l">Largest segment</div><div class="v">${
-      topSegment ? esc(topSegment.segment) : EM_DASH
-    }</div></div>
-  </div>`;
-}
-
-function decileChart(s) {
-  const lift = s.art["decile_lift.json"];
-  const bins = (lift && lift.bins) || [];
-  const values = (lift && lift.values) || [];
-  if (!values.length) {
-    return `<section class="card"><h3>Actual churn rate by risk decile</h3><div class="empty">This run has not produced decile_lift.json yet.</div></section>`;
-  }
-  const max = Math.max(...values);
-  const chart = `<div class="vchart">${values
-    .map((v, i) => {
-      const bin = bins[i] || {};
-      const top = i < 3;
-      return `<div class="vcol ${top ? "top" : ""}"><span class="bv">${fmtNum(v, 2)}${esc(
-        lift.unit,
-      )}</span>${columnBar(max ? (160 * v) / max : 0, top, `${bin.label || ""} ${fmtNum(v, 2)}${lift.unit}`)}<span class="bl">${esc(
-        bin.label || "",
-      )}</span></div>`;
-    })
-    .join("")}</div>`;
-  return `<section class="card"><h3>Actual churn rate by risk decile</h3>${chart}<p class="caption">${esc(
-    lift.caption,
-  )}</p></section>`;
-}
-
 // --- root causes -----------------------------------------------------------------------------
 
 function evidenceLookup(pack) {
@@ -112,9 +62,9 @@ function evidenceLookup(pack) {
 
 function causeHtml(cause, lookup) {
   const refs = cause.evidence_refs.map((id) => lookup.get(id)).filter(Boolean).map(evidenceChip).join("");
-  return `<div class="gcause"><div style="display:flex;justify-content:space-between;gap:10px;align-items:baseline">
-    <b>${esc(cause.cause)}</b>${confidencePill(cause.confidence)}</div>
-    <div style="margin-top:6px">${refs}</div></div>`;
+  return `<div class="gcause"><div class="gcause-h"><b>${esc(cause.cause)}</b>${confidencePill(cause.confidence)}</div>${
+    refs ? `<div class="gcause-refs">${refs}</div>` : ""
+  }</div>`;
 }
 
 function segmentCard(seg) {
@@ -124,120 +74,97 @@ function segmentCard(seg) {
     ? `Built from ${fmtInt(pack.complaints.length)} complaint note${pack.complaints.length === 1 ? "" : "s"} across ${fmtInt(
         stats.rows,
       )} customers.`
-    : `No complaint text was available for this segment; causes rest on the model's drivers alone.`;
+    : `No complaint notes were available for this group, so the reasons rest on the model's drivers alone.`;
   if (!seg.summary) {
-    return `<div class="gsegment"><div class="gsegment-h"><h4>${esc(seg.segment)}</h4><span>${fmtInt(
+    return `<div class="gsegment"><div class="gsegment-h"><h4>${esc(seg.segment)}</h4><span class="tnum">${fmtInt(
       stats.rows,
     )} customers</span></div><div class="gsegment-body"><div class="empty">${esc(
-      seg.blocked_reason || "No summary was stored for this segment.",
-    )}</div>${
-      seg.guardrails.length ? `<div>${guardrailCounts(seg.guardrails)}</div>` : ""
-    }</div></div>`;
+      seg.blocked_reason || "No notes were stored for this group.",
+    )}</div>${seg.guardrails.length ? `<div>${guardrailCounts(seg.guardrails)}</div>` : ""}</div></div>`;
   }
   const lookup = evidenceLookup(pack);
-  return `<div class="gsegment"><div class="gsegment-h"><h4>${esc(seg.segment)}</h4><span>${fmtInt(
+  return `<div class="gsegment"><div class="gsegment-h"><h4>${esc(seg.segment)}</h4><span class="tnum">${fmtInt(
     stats.rows,
-  )} customers · ${fmtNum(stats.share_pct, 1)}% of scored rows</span></div>
+  )} customers · ${fmtNum(stats.share_pct, 1)}% of those scored</span></div>
     <div class="gsegment-body">
-      <p style="margin:0;font-weight:600">${esc(seg.summary.headline)}</p>
+      <p class="gheadline">${esc(seg.summary.headline)}</p>
       ${seg.summary.root_causes.map((c) => causeHtml(c, lookup)).join("")}
       ${
         seg.summary.recommended_actions.length
-          ? `<div><b style="font-size:12px">What to do</b><ul class="gactions-list">${seg.summary.recommended_actions
+          ? `<div><span class="gactions-h">What to do</span><ul class="gactions-list">${seg.summary.recommended_actions
               .map((a) => `<li>${esc(a)}</li>`)
               .join("")}</ul></div>`
           : ""
       }
-      ${
-        seg.summary.caveats.length
-          ? `<div class="gcaveat">${seg.summary.caveats.map(esc).join(" · ")}</div>`
-          : ""
-      }
+      ${seg.summary.caveats.length ? `<div class="gcaveat">${seg.summary.caveats.map(esc).join(" · ")}</div>` : ""}
       <div class="gseg-row"><span>${esc(complaintNote)}</span>${guardrailCounts(seg.guardrails)}</div>
     </div></div>`;
 }
 
-function rootCausesCard(uc, s) {
-  const rca = s.art["root_cause_summary.json"];
-  const status = s.art["root_cause_status.json"];
-  const running = status && (status.state === "pending" || status.state === "running");
-  if (rca) {
-    return `<section class="card"><h3>Root causes</h3><div style="padding:18px 20px 0">${rca.segments
-      .map(segmentCard)
-      .join("")}<p class="caption" style="padding:0 0 4px">Written from the model drivers and the complaint notes, ${fmtStamp(
-      rca.generated_at,
-    )}. Read each segment's caveats before acting on it.</p></div></section>`;
-  }
-  if (running) {
-    const stages = status.stages || [];
-    const rows = stages.length
-      ? stages
-          .map(
-            (st, i) =>
-              `<li class="${st.state === "running" ? "active" : st.state === "done" ? "done" : st.state === "failed" ? "failed" : ""}"><span class="dot">${
-                i + 1
-              }</span><div><div class="pt">${esc(st.title)}</div><div class="pd">${esc(st.detail)}</div></div></li>`,
-          )
-          .join("")
-      : `<li class="active"><span class="dot">1</span><div><div class="pt">Starting…</div><div class="pd"></div></div></li>`;
-    return `<section class="card"><h3>Root causes</h3><ol class="progress">${rows}</ol></section>`;
-  }
-  if (status && status.state === "failed") {
-    return `<section class="card"><h3>Root causes</h3><div class="empty">${esc(
-      status.error_message || "The last attempt failed.",
-    )}</div><div style="padding:0 20px 20px">${generateButton(s)}</div></section>`;
-  }
-  return `<section class="card"><h3>Root causes</h3><div style="padding:18px 20px">
-    <p class="desc" style="margin:0 0 14px">Root causes have not been written for this run yet.</p>
-    <p class="desc" style="margin:0 0 14px;color:var(--muted)">We take the top drivers for each risk segment and the complaint notes behind them, and write causes per segment. Nothing is sent to anyone.</p>
-    ${s.generateError ? errorBox(s.generateError) : ""}
-    ${generateButton(s)}
-  </div></section>`;
-}
-
-const generateButton = (s) =>
-  `<button type="button" class="run" id="g-generate-rca"${s.generating ? " disabled" : ""}>${
+// Written out, not built by `emptyState`: the gate (`production/gate.js`) and its test find the id.
+const generateAction = (s) =>
+  `<button type="button" class="btn primary run" id="g-generate-rca"${s.generating ? " disabled" : ""}>${
     s.generating ? "Starting…" : "Generate root causes"
   }</button>`;
 
-function usageCard(s) {
-  const usage = s.art["llm_usage.json"];
-  const guardrails = s.art["guardrail_report.json"];
-  if (!usage && !guardrails) return "";
-  return `<section class="card"><h3>Cost &amp; guardrails</h3><div style="padding:16px 20px">${usageLine(
-    usage,
-  )}${
-    guardrails
-      ? `<div style="margin-top:6px">${guardrailCounts(guardrails.checks)} <span style="font-size:12px;color:var(--muted)">across ${fmtInt(
-          guardrails.summary.checked,
-        )} generated text${guardrails.summary.checked === 1 ? "" : "s"}</span></div>`
-      : ""
-  }</div></section>`;
+const generateErrorHtml = (s) => (s.generateError ? `<div class="gbody">${errorBox(s.generateError)}</div>` : "");
+
+function rootCausesCard(s) {
+  const rca = s.art["root_cause_summary.json"];
+  const status = s.art["root_cause_status.json"];
+  const running = status && (status.state === "pending" || status.state === "running");
+  const details = costAndChecks(s.art["llm_usage.json"], s.art["guardrail_report.json"]);
+  if (rca) {
+    return `<section class="card"><h3>Reasons by risk group</h3><div class="gsegments">${rca.segments
+      .map(segmentCard)
+      .join("")}<p class="caption">Written from the model's top reasons and the complaint notes, ${esc(
+      fmtStamp(rca.generated_at),
+    )}. Read each group's caveats before acting on it.</p></div>${details}</section>`;
+  }
+  if (running) {
+    return `<section class="card"><h3>Writing root-cause notes…</h3>${progressList(status)}</section>`;
+  }
+  if (status && status.state === "failed") {
+    return `<section class="card"><h3>Root-cause notes</h3>${emptyState({
+      title: "The last attempt did not finish.",
+      text: status.error_message || "",
+      action: generateAction(s),
+    })}${generateErrorHtml(s)}${details}</section>`;
+  }
+  return `<section class="card"><h3>Root-cause notes</h3>${emptyState({
+    title: "No root-cause notes have been written for this run yet.",
+    text: "We take the top reasons behind each risk group's scores and the complaint notes behind them, and write the likely causes per group. Nothing is sent to anyone.",
+    action: generateAction(s),
+  })}${generateErrorHtml(s)}</section>`;
 }
 
 // --- shell -------------------------------------------------------------------------------------
 
+function crumbTrail(uc) {
+  return `<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}<span class="sep" aria-hidden="true">›</span><a href="#/uc/${esc(
+    uc.id,
+  )}">${esc(uc.name)}</a><span class="sep" aria-hidden="true">›</span><span class="cur" aria-current="page">Root-cause notes</span></nav>`;
+}
+
 export function rcaHtml(uc, s) {
   const run = s.run;
+  if (!run) return skeleton("page", { title: "Root-cause notes" });
   const config = s.art["run_config.json"] && s.art["run_config.json"].config;
   const llm = config && readPath(config, "generative.llm");
-  if (!run) return `<main class="screen t-${esc(uc.marker)}">${pageHead(`<h1 class="h1">${esc(uc.name)}</h1>`)}<p class="loading">Loading the run…</p></main>`;
-  return `<main class="screen t-${esc(uc.marker)}">
+  const scores = `#/uc/${encodeURIComponent(uc.id)}/output/${encodeURIComponent(run.run_id)}`;
+  return `<main class="screen gscreen t-${esc(uc.marker)}">
     ${pageHead(
-      `<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}<span class="sep">›</span><a href="#/uc/${esc(
-        uc.id,
-      )}">${esc(uc.name)}</a><span class="sep">›</span><span class="cur">Root causes</span></nav>
-      <span class="over" style="color:var(--c)">Root cause analysis</span><h1 class="h1">${esc(
-        uc.pages.output,
-      )}</h1><div class="chips">${stageChip(uc.lifecycle_stage)}${typeChip(uc)}</div>`,
+      `${crumbTrail(uc)}<h1 class="h1">Root-cause notes</h1><p class="desc">Plain-language reasons why customers in each risk group may leave, and what to do about it, written from this run's scores and complaint notes.</p><div class="chips">${gTypeChip(
+        uc,
+      )}</div>${headActions({ related: { label: "See the scores", href: scores } })}`,
     )}
     ${backendBadge(llm)}
-    <p class="note" style="margin:-8px 0 16px">Scoring run ${esc(run.run_id)} · ${esc(fmtStamp(run.created_at))}</p>
     <div class="stack">
-      ${kpiTiles(s)}
-      ${decileChart(s)}
-      ${rootCausesCard(uc, s)}
-      ${usageCard(s)}
+      ${rootCausesCard(s)}
+      ${techDetails([
+        ["Run", run.run_id],
+        ["Run created", fmtStamp(run.created_at)],
+      ])}
     </div>
   </main>`;
 }
