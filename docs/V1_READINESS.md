@@ -110,15 +110,27 @@ No other step needed a guess, and none took over 5 minutes here; on a laptop, `m
 
 ## Checks on `main`
 
+Final state, after Parts 1 to 3 (and a concurrent change from another session, the Model page's
+SHAP beeswarm, merged in), at `d7b91c9`:
+
 | Check | Result |
 |---|---|
 | `make lint` (ruff, black, mypy --strict, generated-file drift) | clean |
-| `make test-all` with Postgres and jsdom required (`MARKETING_AI_REQUIRE_POSTGRES=1`, `REQUIRE_JSDOM=1`) | _final two runs: see below_ |
+| `make test-all`, run 1, Postgres and jsdom required (`MARKETING_AI_REQUIRE_POSTGRES=1`, `REQUIRE_JSDOM=1`) | **8,508 passed, 0 failed**, 6 skipped, 11 xfailed (40 min 45 s) |
+| `make test-all`, run 2, same settings, its own Postgres database | **8,508 passed, 0 failed**, 6 skipped, 11 xfailed (40 min 49 s) |
+| `scripts/check_no_skips` on both runs' reports (the CI gate) | 91 must-run jsdom and Postgres tests ran, none skipped |
 | `make infra-lint`, `make infra-test` | clean; 257 passed |
-| Prototype suite (`make prototype-test`) | 89 passed |
+| Prototype suite (`make prototype-test`) | 90 passed |
+| The slow browser journeys (Phase 1 prepared file, raw tables, pilot demo, uplift) | pass, inside `make test-all` |
 
-**Skips.** The only skips in the full suite are 6 optional cross-checks against the `scikit-uplift`
-and `causalml` libraries, which the project does not install. No Postgres or jsdom test was skipped.
+**Skips.** The only skips are 6 optional cross-checks against the `scikit-uplift` and `causalml`
+libraries, which the project does not install. The 7 deselected tests are the `@bedrock` and `@aws`
+tests that bill a real account, excluded by the Makefile on purpose. The 11 xfails are known,
+documented expected failures.
+
+**Along the way.** Earlier full runs found two test failures, both caused by the work itself: a new UI
+module missing from the list of modules the page may load, and the word "Bedrock" in a notice. Both
+were fixed before the final runs.
 
 ---
 
