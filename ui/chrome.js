@@ -114,6 +114,12 @@ function activeId() {
 
 // --- drawing -----------------------------------------------------------------------------------------
 
+/** Whether the signed-in person may call `method path`, from the same provider the bar hides items by.
+ * With no provider (sign-in off, or not resolved yet) everyone may, as the bar shows everything. */
+export function canAccess(method, path) {
+  return allowed([method, path]);
+}
+
 function allowed(need) {
   if (!need || !access || typeof access.can !== "function") return true;
   try {

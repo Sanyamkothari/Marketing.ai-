@@ -22,6 +22,8 @@
 // `boot.js`: ES modules evaluate their imports in source order, so a slot or access provider that
 // `boot.js` registers finds `chrome.js` already evaluated. `chrome.js` imports only `dom.js`.
 import { addNavSlot, refreshChrome, setAccess, setActiveNav as markActiveNav } from "../chrome.js";
+// Screens ask this before drawing a control the person could not use (a Viewer's Setup is read-only).
+export { canAccess } from "../chrome.js";
 
 const registered = [];
 
