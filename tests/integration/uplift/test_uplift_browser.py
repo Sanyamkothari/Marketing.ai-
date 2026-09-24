@@ -324,18 +324,41 @@ class Screen:
     rows: dict[str, str] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
+    disclosed: str = ""
+    """The text of the closed `<details>` the capture opened, as a user reads it after clicking."""
 
 
-def capture(page: Any, console: Console, shots: Path, name: str, **extra: Any) -> Screen:
+def disclose(page: Any, summary: str) -> str:
+    """Open the one closed `<details>` whose summary reads exactly `summary`, the way a user clicks it,
+    and return its text. Rows behind it render only once it is open (`inner_text` of a closed
+    disclosure is empty), so the numbers under "Technical metrics" and the like are read from here."""
+    toggle = page.locator("details > summary").filter(has_text=re.compile(rf"^\s*{re.escape(summary)}\s*$"))
+    assert toggle.count() == 1, f"expected one {summary!r} disclosure, found {toggle.count()}"
+    details = toggle.locator("xpath=..")
+    assert details.get_attribute("open") is None, f"{summary!r} should start closed"
+    toggle.click()
+    sync_api.expect(details).to_have_attribute("open", "")
+    return str(details.inner_text())
+
+
+def capture(
+    page: Any, console: Console, shots: Path, name: str, disclosures: tuple[str, ...] = (), **extra: Any
+) -> Screen:
+    """The screen as it first appears (text, tiles, screenshot), then with `disclosures` opened for
+    the key-value rows, which are read after every named `<details>` is open."""
     page.wait_for_timeout(300)  # a late re-render or entry link lands inside this
     page.screenshot(path=str(shots / f"{name}.png"), full_page=True)
+    text = page.locator("#app").inner_text()
+    shown = tiles(page)
+    disclosed = "\n".join(disclose(page, summary) for summary in disclosures)
     return Screen(
         url=page.url,
-        text=page.locator("#app").inner_text(),
-        tiles=tiles(page),
+        text=text,
+        tiles=shown,
         rows=key_values(page),
         problems=console.take(),
         extra=extra,
+        disclosed=disclosed,
     )
 
 
@@ -446,6 +469,7 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         console,
         shots,
         "07-model",
+        disclosures=("Technical metrics", "Training setup"),
         qini_model=page.locator(".uchart polyline.model").count(),
         qini_random=page.locator(".uchart polyline.rand").count(),
         qini_points=len((page.locator(".uchart polyline.model").get_attribute("points") or "").split()),
@@ -458,12 +482,21 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     with page.expect_response(lambda r: r.url.endswith("/uplift/ope") and r.request.method == "POST"):
         page.locator("#u-ope button[type=submit]").click()
     expect(page.get_by_text("Treat the top 30% of customers by predicted uplift").first).to_be_visible()
-    seen.screens["model_ope"] = capture(page, console, shots, "08-model-ope")
+    seen.screens["model_ope"] = capture(
+        page, console, shots, "08-model-ope", disclosures=("How this was estimated",)
+    )
 
     page.locator(".tabs .tab", has_text="Contact list").click()
     expect(page.locator(".tab.on")).to_contain_text("Contact list")
     expect(page.locator(".usegs")).to_be_visible()
-    seen.screens["output"] = capture(page, console, shots, "09-output", segments=segment_rows(page))
+    seen.screens["output"] = capture(
+        page,
+        console,
+        shots,
+        "09-output",
+        disclosures=("More about this recommendation",),
+        segments=segment_rows(page),
+    )
 
     # The uplift Setup's own score mode offers the model just trained (DEC-609: candidates too).
     page.goto(f"{server.base_url}/ui/#/uplift/{USE_CASE}", wait_until="domcontentloaded")
@@ -474,7 +507,8 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         console,
         shots,
         "10-uplift-score-setup",
-        models=page.locator("#u-model option").all_inner_texts(),
+        # One model: the choice is folded under "Change model", so its option is hidden text.
+        models=page.locator("#u-model option").all_text_contents(),
     )
 
     # 4. Score through Phase 1's own use-case screen, with the uplift model from its dropdown.
@@ -512,7 +546,12 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     page.locator(".tabs .tab", has_text="Contact list").click()
     expect(page.locator(".usegs")).to_be_visible()
     seen.screens["score_output"] = capture(
-        page, console, shots, "14-score-output", segments=segment_rows(page)
+        page,
+        console,
+        shots,
+        "14-score-output",
+        disclosures=("More about this recommendation",),
+        segments=segment_rows(page),
     )
     with page.expect_download() as download_info:
         page.get_by_role("link", name="Download contact list (CSV)").click()
@@ -560,6 +599,7 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         console,
         shots,
         "16-campaign-mature",
+        disclosures=("Statistical details", "How it was measured"),
         report=server.artefact(seen.score_run, "incrementality_report.json"),
     )
 
@@ -645,8 +685,9 @@ def test_no_screen_logged_an_error_or_an_unexpected_failed_request(journey: Jour
 
 def test_no_screen_rendered_a_placeholder_for_a_value(journey: Journey) -> None:
     for name, screen in journey.screens.items():
-        leaked = re.findall(r"\b(?:undefined|NaN|null|Infinity)\b|\[object Object\]", screen.text)
-        assert not leaked, (name, leaked)
+        for text in (screen.text, screen.disclosed):  # what shows first, and what Details open
+            leaked = re.findall(r"\b(?:undefined|NaN|null|Infinity)\b|\[object Object\]", text)
+            assert not leaked, (name, leaked)
 
 
 def test_no_uplift_screen_scrolls_sideways_on_a_phone(journey: Journey) -> None:
