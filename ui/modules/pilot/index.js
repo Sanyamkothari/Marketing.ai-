@@ -2,47 +2,84 @@
 // block, after `app.js`, the same way the uplift module is.
 //
 // It adds, without editing any other workstream's screen:
-//   * the Pilot screen, `#/pilot/...` (registered with `modules/router.js`);
-//   * a thin bar above every screen: a "Demo Telecom" badge when demo mode is on, a link to the Pilot
-//     screen and "Take the tour";
-//   * the feedback button on every screen;
+//   * Reports (`#/pilot`), Build data (`#/pilot/kit`) and the report viewers (registered with
+//     `modules/router.js`);
+//   * in the top bar (through its slots): the "Sample data: Demo Telecom" chip in demo mode, and the
+//     Help menu - "Take the tour" when the demo is seeded, and "Send feedback";
+//   * the plain-language catalogue as the router's glossary, so every screen's error leads with the
+//     catalogue's title for its code;
 //   * "What does this mean?" beside every warning code and every advanced setting;
 //   * the guided tour, offered once to a first-time visitor of the demo.
 //
-// `GET /pilot/demo` and `GET /pilot/help` are read once at start. If either fails the rest still
-// works: no demo badge, or no help buttons, rather than a broken page.
+// `GET /pilot/demo` and `GET /pilot/help` are read once at start (and again on the next route
+// change if the first try failed, for instance before signing in). If either fails the rest still
+// works: no chip or tour, or no help buttons, rather than a broken page.
 
 import { esc } from "../../dom.js";
-import { registerModule } from "../router.js";
+import {
+  announceModulesChanged,
+  refreshTopBar,
+  registerGlossary,
+  registerModule,
+  registerNavSlot,
+} from "../router.js";
 import { getDemo, getHelp } from "./api.js";
-import { mountFeedback } from "./feedback.js";
+import { feedbackMenuItem, mountFeedback } from "./feedback.js";
 import { installHelp } from "./help.js";
 import { renderPilot } from "./screen.js";
 import { injectPilotStyles } from "./styles.js";
-import { maybeStartTour, startTour } from "./tour.js";
+import { maybeStartTour, startTour, tourAvailable } from "./tour.js";
 
 let demo = null;
+let demoLoading = false;
+let helpLoaded = false;
+let helpLoading = false;
 
-function mountBar() {
-  if (document.getElementById("pe-bar")) return;
-  const app = document.getElementById("app");
-  if (!app || !app.parentNode) return;
-  const bar = document.createElement("div");
-  bar.id = "pe-bar";
-  bar.className = "pe-bar";
-  app.parentNode.insertBefore(bar, app);
-  paintBar();
+function demoChip() {
+  if (!demo || !demo.demo_mode) return "";
+  const label = demo.seeded ? `Sample data: ${demo.manifest.client_name}` : "Sample data: not loaded";
+  return `<span class="chip neutral pe-demo" title="Everything shown belongs to a made-up client">${esc(label)}</span>`;
 }
 
-function paintBar() {
-  const bar = document.getElementById("pe-bar");
-  if (!bar) return;
-  const badge =
-    demo && demo.demo_mode
-      ? `<span class="pe-demo">${esc(demo.seeded ? `Demo: ${demo.manifest.client_name}, synthetic data` : "Demo mode (not seeded)")}</span>`
-      : "";
-  bar.innerHTML = `<div class="pe-bar-in">${badge}<a href="#/pilot">Pilot</a><button type="button" data-pe-tour-start>Take the tour</button></div>`;
-  bar.querySelector("[data-pe-tour-start]").addEventListener("click", () => startTour(demo));
+function helpEntries() {
+  const tour = tourAvailable(demo) ? `<button type="button" data-pe-tour-start>Take the tour</button>` : "";
+  return `${tour}${feedbackMenuItem()}`;
+}
+
+function loadDemo() {
+  if (demoLoading) return;
+  demoLoading = true;
+  getDemo()
+    .then((payload) => {
+      demo = payload;
+      refreshTopBar();
+      // Reports and Build data show the sample data's own rows: draw them again now it is known.
+      if (/^#\/pilot(\/|$)/.test(window.location.hash)) announceModulesChanged();
+      if (demo && demo.demo_mode && demo.seeded) maybeStartTour(demo);
+    })
+    .catch(() => {
+      demo = null;
+    })
+    .finally(() => {
+      demoLoading = false;
+    });
+}
+
+function loadHelp() {
+  if (helpLoading || helpLoaded) return;
+  helpLoading = true;
+  getHelp()
+    .then((catalogue) => {
+      helpLoaded = true;
+      registerGlossary(catalogue);
+      installHelp(catalogue);
+    })
+    .catch(() => {
+      // no catalogue, no help buttons: every screen works as it did
+    })
+    .finally(() => {
+      helpLoading = false;
+    });
 }
 
 registerModule({
@@ -51,22 +88,27 @@ registerModule({
   render: (app, parts) => renderPilot(app, parts, demo),
 });
 
+registerNavSlot("demo", { html: demoChip });
+registerNavSlot("help", { html: helpEntries });
+
 injectPilotStyles();
-mountBar();
 mountFeedback();
 
-getDemo()
-  .then((payload) => {
-    demo = payload;
-    paintBar();
-    maybeStartTour(demo);
-  })
-  .catch(() => {
-    demo = null;
-  });
+document.addEventListener("click", (event) => {
+  const start = event.target && event.target.closest && event.target.closest("[data-pe-tour-start]");
+  if (!start) return;
+  event.preventDefault();
+  // Close the Help menu the way the top bar does (Escape), so focus returns to "Help" after the tour.
+  const escape = new KeyboardEvent("keydown", { key: "Escape", bubbles: true });
+  escape.peInternal = true;
+  document.dispatchEvent(escape);
+  startTour(demo);
+});
 
-getHelp()
-  .then((catalogue) => installHelp(catalogue))
-  .catch(() => {
-    // no catalogue, no help buttons: every screen works as it did
-  });
+window.addEventListener("hashchange", () => {
+  if (!demo) loadDemo();
+  if (!helpLoaded) loadHelp();
+});
+
+loadDemo();
+loadHelp();
