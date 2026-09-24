@@ -395,7 +395,7 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
     at = mark("pipeline_pages", at)
 
     # 6. The second half of the sentence: score a new file with the model just trained.
-    page.locator(".crumbs a").nth(1).click()
+    page.locator(".crumbs a").nth(2).click()  # Home › journey › the use case (v1 breadcrumb)
     expect(page.locator(".summary")).to_be_visible()
     page.locator("#f-again").click()
     page.get_by_role("button", name="Score new data").click()
