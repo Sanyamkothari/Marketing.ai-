@@ -181,7 +181,18 @@ export const SCREENS = [
     id: "feedback", group: "chrome-home", title: "Feedback dialog (button on every screen)",
     roles: "Any role", files: ["ui/modules/pilot/feedback.js"],
     route: () => "#/",
-    states: { full: { base: "demo", act: async (page) => click(page, "#pe-fb-btn") } },
+    // v1: "Send feedback" lives in the top bar's Help menu (behind Menu below 700px).
+    states: {
+      full: {
+        base: "demo",
+        act: async (page) => {
+          const menu = page.locator("[data-tb-menu]").first();
+          if (await menu.isVisible().catch(() => false)) await click(page, "[data-tb-menu]");
+          await click(page, '[data-menu="tn-help"]');
+          await click(page, "#pe-fb-btn");
+        },
+      },
+    },
   },
   {
     id: "ai-notice", group: "chrome-home", title: "AI service not connected notice (generative use case)",
