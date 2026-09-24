@@ -126,7 +126,8 @@ const noJunk = (html) => {
 };
 
 test("formats: CI, points, dates, p-values, and the em dash for anything missing", () => {
-  assert.equal(format.fmtCi(cv(0.0123, 0.0041, 0.0205)), "0.0123 (95% CI 0.0041 to 0.0205)");
+  // Metrics carry at most three decimals (docs/UI_AUDIT.md §3 NUMBERS).
+  assert.equal(format.fmtCi(cv(0.0123, 0.0041, 0.0205)), "0.012 (95% CI 0.004 to 0.021)");
   assert.equal(format.fmtCi(cv(0.5, null, null)), `0.5 (95% CI ${EM})`);
   assert.equal(format.fmtCi(null), EM);
   assert.equal(format.fmtPts(0.023), "+2.3 pts");
@@ -136,6 +137,11 @@ test("formats: CI, points, dates, p-values, and the em dash for anything missing
   assert.equal(format.fmtDay(null), EM);
   assert.equal(format.fmtP(0.0001), "< 0.001");
   assert.equal(format.fmtP(0.0421), "0.042");
+  // People are whole and grouped; rates carry one fixed decimal.
+  assert.equal(format.fmtCount(280.857), "281");
+  assert.equal(format.fmtCount(-1204.4), "−1,204");
+  assert.equal(format.fmtRate(0.39), "39.0%");
+  assert.equal(format.fmtLikely(167.8, 373.7), "likely 168 to 374");
 });
 
 test("niceTicks covers the range with round steps", () => {
@@ -161,8 +167,15 @@ test("model page: Qini SVG with the random line, AUUC with its interval, ten dec
   assert.match(html, /data-module="uplift"/);
   assert.match(html, /<polyline class="model"/);
   assert.match(html, /<polyline class="rand"/);
-  assert.match(html, /0\.0123/);
-  assert.match(text(html), /95% CI 0\.0041 to 0\.0205/);
+  // The finding first, in words; AUUC and its interval only behind "Technical metrics".
+  assert.match(text(html), /Contacting the top 10% the model picks: \+8 points more responses/);
+  const metrics = html.slice(html.indexOf("<summary>Technical metrics</summary>"));
+  assert.ok(html.indexOf("AUUC") >= html.indexOf("<summary>Technical metrics</summary>"), "AUUC appears before Technical metrics");
+  assert.match(text(metrics), /0\.012 \(95% CI 0\.004 to 0\.021\)/);
+  const tiles = [...html.matchAll(/<div class="kpi"><div class="l">([^<]*)<\/div><div class="v">([^<]*)<\/div>/g)].map((m) => m[1]);
+  assert.deepEqual(tiles, ["Top 10% gain", "Top 30% gain", "Everyone contacted", "Model beats random targeting"]);
+  assert.match(html, /<details class="adv utable"><summary>Show table<\/summary>/);
+  assert.match(html, /id="u-ope-share"[^>]*value="10"/, "What if… is pre-filled with 10");
   assert.equal((html.match(/<g role="img" aria-label="Decile/g) || []).length, 10);
   assert.equal((html.match(/<rect class="(pos|neg)"/g) || []).length, 9, "the decile with no observed uplift gets no bar");
   assert.ok(!html.includes("unotcausal"));
@@ -174,8 +187,8 @@ test("model page with no artefacts shows em dashes and says what is missing, nev
   const html = views.modelPageHtml(uc, trainRun, {}, null);
   const kpis = [...html.matchAll(/<div class="v">([^<]*)<\/div>/g)].map((m) => m[1]);
   assert.deepEqual(kpis, [EM, EM, EM, EM]);
-  assert.match(html, /has not produced qini_curve\.json yet/);
-  assert.match(html, /has not produced uplift_evaluation\.json yet/);
+  assert.match(html, /The gain chart is not available for this run/);
+  assert.match(html, /The model&#39;s test results are not available|The model's test results are not available/);
   noJunk(html);
 });
 
@@ -202,24 +215,32 @@ test("output page of a scoring run: four segments, recommended contacts, CI, tre
   assert.deepEqual(
     kpis.map((m) => [m[1], m[2]]),
     [
-      ["Recommended to contact", "150"],
-      ["Expected incremental conversions", "9.5"],
-      ["Eligible persuadables", "270"],
-      ["Expected net value", EM],
+      ["Customers to contact", "150"],
+      ["Extra customers expected to respond", "about 10"],
+      ["Held back to measure", EM],
     ],
   );
-  assert.match(text(html), /9\.5 \(95% CI 3\.1 to 15\.9\)/);
-  assert.match(html, /href="\/runs\/r-score\/scores\.csv">Download treat list \(CSV\)/);
-  assert.match(html, /#\/campaign\/win-back\/r-score/);
+  assert.match(text(html), /likely 3 to 16/);
+  assert.match(text(html), /10 \(95% CI 3 to 16\)/, "the interval stays under Details");
+  // The primary action is the download; the campaign link is the secondary.
+  assert.match(html, /<a class="btn primary" href="\/runs\/r-score\/scores\.csv" download>Download contact list \(CSV\)/);
+  assert.match(html, /<a class="btn secondary" href="#\/campaign\/win-back\/r-score">Measure campaign results/);
   assert.match(html, /The contact budget is reached/);
+  // 300 persuadables vs 150 contacted is explained in one line.
+  assert.match(text(html), /Contact 150 customers\. Of 300 persuadable customers, 30 are held back at random to measure the campaign or were opted out\./);
+  assert.match(text(html), /120 more could be contacted/);
+  // The segment formulas are behind Details, the meanings in words.
+  assert.match(html, /<summary>How the segments are cut<\/summary>/);
+  assert.match(text(html), /Sleeping dogs: Contact makes them less likely to respond/);
   noJunk(html);
 });
 
 test("output page of a training run points at scoring runs instead of offering a download", () => {
   const html = views.outputPageHtml(uc, trainRun, {}, { scoreRuns: [{ ...scoreRun, row_count: 5 }] });
-  assert.ok(!html.includes("Download treat list"));
+  assert.ok(!html.includes("Download contact list"));
   assert.match(html, /#\/uplift\/win-back\/output\/r-score/);
   assert.match(html, /has not produced segments\.json yet/);
+  assert.match(html, /Score customers with this model/);
   noJunk(html);
 });
 
@@ -251,7 +272,10 @@ test("campaign results: an immature report says when results arrive and shows no
   const html = views.campaignPageHtml(uc, scoreRun, { report, form: {} });
   assert.match(html, /Results available on 01 Oct 2026/);
   assert.ok(!html.includes("Absolute lift"));
-  assert.match(html, /Upload campaign outcomes/);
+  assert.ok(!html.includes('class="kpi"'), "no tile before the window has elapsed");
+  // A report exists, so the upload is folded and the value view is not offered yet.
+  assert.match(html, /<summary>Measure again with a new outcomes file<\/summary>/);
+  assert.ok(!html.includes("See the value in rupees"));
   noJunk(html);
 });
 
@@ -281,17 +305,109 @@ test("campaign results: a mature report shows lift with its interval and the p-v
     computed_at: "2026-11-20T00:00:00Z",
   };
   const html = views.campaignPageHtml(uc, scoreRun, { report, form: {} });
-  assert.match(text(html), /\+8\.00 pts|\+8 pts/);
-  assert.match(text(html), /95% CI \+1\.1 pts to \+13\.9 pts/);
-  assert.match(html, /0\.041/);
-  assert.match(html, /\+66\.7%/);
+  // The statistics sit in "Statistical details", closed.
+  const stats = html.slice(html.indexOf("<summary>Statistical details</summary>"));
+  assert.ok(html.indexOf("p-value") > html.indexOf("<summary>Statistical details</summary>"));
+  assert.match(text(stats), /\+8\.00 pts|\+8 pts/);
+  assert.match(text(stats), /95% CI \+1\.1 pts to \+13\.9 pts/);
+  assert.match(stats, /0\.041/);
+  assert.match(stats, /\+66\.7%/);
   assert.ok(!html.includes("Results available on"));
+  // Rows are named for people, whole numbers and one-decimal rates.
+  assert.match(text(html), /Contacted 900 180 20\.0%/);
+  assert.match(text(html), /Not contacted \(control group\) 100 12 12\.0%/);
+  // "Not part of the test" is explained by a line that adds up; the zero row is hidden.
+  assert.match(text(html), /Of 1,043 customers on this campaign's list: 900 contacted, 100 held back as the control group, 40 not part of the test \(opted out or not selected\), 3 with no row in the outcomes file\./);
+  assert.ok(!text(html).includes("Not yet known (outcome period still running)"));
+  assert.match(html, /<a class="btn primary" href="#\/pilot\/value\/r-score">See the value in rupees/);
+  assert.match(html, /<summary>Measure again with a new outcomes file<\/summary>/);
+  assert.match(html, /<nav class="crumbs"[^>]*><a href="#\/">Home<\/a>.*<a href="#\/monitoring\/runs">Campaigns<\/a>/);
   noJunk(html);
+});
+
+/** `GET /pilot/roi/{run}` for a measured campaign: `benefit` is already turned round for an outcome to prevent. */
+const roiOf = (good, incremental) => ({
+  status: "measured",
+  outcome_is_good: good,
+  incremental,
+  benefit: good ? incremental : { value: -incremental.value, low: -incremental.high, high: -incremental.low },
+  benefit_label: good ? "Extra customers because of the campaign" : "Customers kept by the campaign",
+});
+
+const churnReport = {
+  run_id: "r-score",
+  outcome_column: "churn_next_60d",
+  outcome_window_days: 60,
+  as_of: "2026-09-24T05:54:52Z",
+  status: "mature",
+  results_available_on: null,
+  treated_rows: 1800,
+  treated_conversions: 582,
+  treated_rate: 0.3233,
+  control_rows: 200,
+  control_conversions: 78,
+  control_rate: 0.39,
+  absolute_lift: cv(-0.0667, -0.1389, 0.0019),
+  relative_lift: -0.171,
+  incremental_conversions: cv(-120.0, -250.04, 3.36),
+  p_value: 0.057,
+  rows_immature: 0,
+  rows_without_outcome: 0,
+  rows_suppressed_or_untreated: 0,
+  causal: true,
+  summary: "Treated customers converted at 32.3% against 39.0% for the control group.",
+  computed_at: "2026-09-24T05:54:52Z",
+};
+
+test("campaign results of a churn campaign speak of customers kept, in the value view's sign", () => {
+  const roi = roiOf(false, { value: -120.0, low: -250.04, high: 3.36 });
+  const html = views.campaignPageHtml(uc, { ...scoreRun, problem_type: "binary_classification" }, {
+    report: churnReport,
+    roi,
+    form: {},
+    title: "Retention offers",
+  });
+  const seen = text(html);
+  assert.match(
+    seen,
+    /We cannot yet tell whether the campaign kept customers: most likely 120 kept, but the range \(−3 to 250\) includes zero\./,
+  );
+  const tiles = [...html.matchAll(/<div class="kpi"><div class="l">([^<]*)<\/div><div class="v">([^<]*)<\/div>/g)];
+  assert.deepEqual(
+    tiles.map((m) => [m[1], m[2]]),
+    [
+      ["Customers kept by the campaign", "120"],
+      ["Share lost: contacted vs not contacted", "32.3% vs 39.0%"],
+    ],
+  );
+  for (const wrong of ["fewer conversions", "Incremental conversions", "−120", "converted"]) {
+    assert.ok(!seen.includes(wrong), `a churn campaign reads "${wrong}"`);
+  }
+  // A Phase 1 run: its Output step is the Phase 1 page, and there is no Uplift chip.
+  assert.match(html, /href="#\/uc\/win-back\/output\/r-score">Output</);
+  assert.ok(!html.includes('class="chip type"'));
+  assert.match(html, /<h1 class="h1">Retention offers<\/h1>/);
+  noJunk(html);
+});
+
+test("campaign verdicts: worked, did harm, and the direction of an outcome to prevent", () => {
+  const worked = views.campaignVerdict(null, roiOf(true, { value: 280.86, low: 167.8, high: 373.7 }));
+  assert.equal(worked.tone, "ok");
+  assert.equal(worked.title, "The campaign worked: about 281 extra customers responded because of it (likely 168 to 374).");
+  const kept = views.campaignVerdict(null, roiOf(false, { value: -120, low: -250, high: -10 }));
+  assert.equal(kept.title, "The campaign worked: it kept about 120 customers (likely 10 to 250).");
+  const harm = views.campaignVerdict(null, roiOf(false, { value: 40, low: 10, high: 70 }));
+  assert.equal(harm.tone, "bad");
+  assert.equal(harm.title, "The campaign did harm: about 40 more customers were lost than without it (likely −70 to −10).");
+  // Without the value view the sentence states the difference in rates, never a count of conversions.
+  const plain = views.campaignVerdict(churnReport, null);
+  assert.match(plain.title, /differs from the control group by −6\.7 points/);
 });
 
 test("campaign results on a training run explain that a scoring run is needed", () => {
   const html = views.campaignPageHtml(uc, trainRun, { form: {} });
   assert.match(html, /measured on a scoring run/);
+  assert.match(html, /href="#\/uplift\/win-back\/score">Score new data/);
   assert.ok(!html.includes("u-camp-file"));
 });
 
@@ -338,19 +454,59 @@ test("setup: the uplift explanation once a treatment is picked, and TREATMENT_NO
   assert.match(html, /predicts who changes behaviour because of your action/);
   assert.match(html, /data-uack="TREATMENT_NOT_RANDOM"/);
   assert.match(html, /50% treated · named like a treatment/);
-  assert.match(html, /1 problem must be fixed or acknowledged/);
+  assert.match(html, /1 thing to fix before training\./);
+  // The code is in data-code, the pill is inline, the randomness measure is merged into the refusal, red.
+  assert.match(html, /<div class="vitem" data-code="TREATMENT_NOT_RANDOM"><span class="pill bad" data-code="TREATMENT_NOT_RANDOM">Must fix<\/span>/);
+  assert.match(html, /<span class="pill bad" data-code="RANDOMNESS">Not random<\/span><span>Randomness measured 0\.71 \(0\.5 = random\)\.<\/span>/);
+  assert.equal((html.match(/data-code="RANDOMNESS"/g) || []).length, 1, "one randomness line");
+  // The acknowledgement sits next to the Train button.
+  assert.ok(html.indexOf("data-uack") < html.indexOf('id="u-run"') && html.indexOf("data-uack") > html.indexOf('class="vlist"'));
+  assert.match(html, /Column that says who was contacted \(1\) or held back \(0\)/);
   assert.equal(views.setupBlocker(state), "");
   const acked = views.upliftScreenHtml(uc, { ...state, acknowledged: ["TREATMENT_NOT_RANDOM"] });
   assert.match(acked, /data-uack="TREATMENT_NOT_RANDOM" checked/);
-  assert.match(acked, /0 problems must be fixed/);
+  assert.match(acked, /Nothing left to fix before training/);
   assert.match(acked, /Not causal: the treatment was not randomly assigned/);
   noJunk(html);
+});
+
+test("setup: a passing randomness check is a green pill, and warnings are folded and grouped", () => {
+  const warning = (message) => ({ code: "LOW_POSITIVE_RATE", severity: "warning", message, details: {}, acknowledged: false });
+  const state = {
+    view: "setup",
+    mode: "train",
+    upload: { upload_id: "u1", profile: { file_name: "c.csv", row_count: 10, column_count: 2, file_size_bytes: 10, columns: [] } },
+    pk: "id",
+    target: "y",
+    treatment: "t",
+    models: [],
+    runs: [],
+    validation: { checks: [warning("Few converted."), warning("Few converted in March.")] },
+    upliftValidation: { checks: [], randomness_auc: 0.503 },
+    acknowledged: [],
+  };
+  const html = views.validationHtml(state);
+  assert.match(html, /Nothing left to fix before training \(1 warning can be ignored\)\./);
+  assert.match(html, /<span class="pill ok" data-code="RANDOMNESS">Looks random<\/span>/);
+  assert.match(html, /<details class="uwarns"><summary>Show 1 warning<\/summary>/);
+  assert.match(html, /\(2 times\)/);
+});
+
+test("setup before a file: step 2 is one line, and score mode has its own footer", () => {
+  const empty = { view: "setup", mode: "train", upload: null, models: [], runs: [], acknowledged: [] };
+  const html = views.upliftScreenHtml(uc, empty);
+  assert.ok(!html.includes('id="u-pk"'), "no empty dropdowns before a file");
+  assert.match(html, /Available once a file is uploaded\./);
+  assert.match(html, /After the run: Model/);
+  const score = views.upliftScreenHtml(uc, { ...empty, mode: "score" });
+  assert.match(score, /After scoring: download the contact list/);
+  assert.ok(!score.includes("Qini curve, AUUC"));
 });
 
 test("setup blocks a run until the treatment and outcome are distinct columns", () => {
   const base = { upload: { profile: {} }, pk: "id", mode: "train", target: "y", treatment: "" };
   assert.equal(views.setupBlocker({ ...base, upload: null }), "Upload a dataset to continue");
-  assert.equal(views.setupBlocker(base), "Choose the treatment column");
+  assert.equal(views.setupBlocker(base), "Choose the column that says who was contacted");
   assert.match(views.setupBlocker({ ...base, treatment: "y" }), /different columns/);
   assert.equal(views.setupBlocker({ ...base, mode: "score", modelVersionId: "" }), "Train an uplift model first");
 });
@@ -360,26 +516,87 @@ test("only AUUC model versions count as uplift models", () => {
   assert.equal(views.upliftVersions(versions).length, 1);
 });
 
-test("the index page links every use case to its uplift setup", () => {
-  const html = views.upliftIndexHtml({
-    industries: [{ stages: [{ name: "Retention", use_cases: [{ id: "a", name: "A" }, { id: "b", name: "B" }] }] }],
-  });
+test("the index page links every use case to its uplift setup, with a status, and greys out the rest", () => {
+  const html = views.upliftIndexHtml(
+    {
+      industries: [
+        {
+          stages: [
+            {
+              name: "Retention",
+              use_cases: [
+                { id: "a", name: "A" },
+                { id: "b", name: "B" },
+                { id: "g", name: "G", ai_type: "generative" },
+                { id: "p", name: "P", status: "planned" },
+              ],
+            },
+          ],
+        },
+      ],
+    },
+    { a: { created_at: "2026-09-24T05:54:59Z", approved: true }, b: null },
+  );
   assert.match(html, /href="#\/uplift\/a"/);
   assert.match(html, /href="#\/uplift\/b"/);
+  assert.ok(!html.includes('href="#/uplift/g"') && !html.includes('href="#/uplift/p"'));
+  assert.match(html, /Writes text, so uplift does not apply/);
+  assert.match(html, /Coming soon/);
+  assert.match(text(html), /Uplift model trained 24 Sep(t)? 2026 \(approved\)/);
+  assert.match(html, /No uplift model yet/);
+  assert.match(html, /<h1 class="h1">Measure what a campaign changes \(uplift\)<\/h1>/);
+  assert.ok(html.indexOf("Pick a use case") < html.indexOf('class="uindex"'), "the hint is above the list");
 });
 
 test("a finished scoring run's Campaign results block says when it applies instead of saying done", () => {
   const done = { ...scoreRun, state: "done", row_count: 5 };
   const html = views.upliftScreenHtml(uc, { view: "results", detail: { run: done }, runs: [] });
-  const blocks = [...html.matchAll(/<span>\d\d&nbsp;&nbsp;([^<]*)<\/span><span class="bstate([^"]*)">([^<]*)<\/span>/g)];
+  const blocks = [...html.matchAll(/<div class="lab"><span>([^<]*)<\/span><span class="bstate([^"]*)">([^<]*)<\/span>/g)];
   assert.deepEqual(
     blocks.map((m) => [m[1], m[3]]),
     [
       ["Data", "✓ Done"],
-      ["Output", "✓ Done"],
+      ["Contact list", "✓ Done"],
       ["Campaign results", "After the campaign"],
     ],
   );
   assert.equal(blocks[2][2], " waiting");
+  assert.match(html, /<a class="btn primary" href="#" download>Download contact list \(CSV\)<\/a>/);
   noJunk(html);
+});
+
+test("a finished training run leads with the gain sentence and offers scoring as the primary action", () => {
+  const done = { ...trainRun, state: "done", best_model: "X-learner (LightGBM)" };
+  const html = views.upliftScreenHtml(uc, { view: "results", detail: { run: done }, runs: [], evaluation });
+  assert.match(text(html), /Uplift model trained Contacting the top 10% the model picks raises the response rate by about 8 points\./);
+  assert.match(html, /<a class="btn primary" href="#\/uplift\/win-back\/score">Score customers with this model<\/a>/);
+  assert.ok(!text(html).includes("AUUC"), "no metric code on the results screen");
+  noJunk(html);
+});
+
+test("running: plain step names, a warning in --warn, and a two-step cancel", () => {
+  const status = {
+    stages: [
+      { group_label: "Validating data", state: "done", detail: "2 warnings · treatment column treatment" },
+      { group_label: "Preparing features", state: "done", detail: "train 7K · test 3K · stratified on treatment and outcome" },
+      { group_label: "Training candidate models", state: "running", detail: "" },
+    ],
+  };
+  const s = { view: "running", detail: { run: { ...trainRun, state: "running" }, status }, runs: [] };
+  const html = views.upliftScreenHtml(uc, s);
+  assert.match(html, /Checking the campaign data/);
+  assert.match(html, /<div class="pd w"[^>]*>2 warnings to review<\/div>/);
+  assert.match(html, /Learning group about 7,000 · testing group about 3,000 customers/);
+  assert.match(html, /<button type="button" class="btn danger sm" id="u-cancel">Cancel run<\/button>/);
+  const confirming = views.upliftScreenHtml(uc, { ...s, confirmCancel: true });
+  assert.match(confirming, /id="u-cancel">Yes, cancel run</);
+  assert.match(confirming, /id="u-cancel-keep"/);
+});
+
+test("the stepper: Data · Model · Contact list · Campaign results, a step that does not apply is not a link", () => {
+  const html = views.outputPageHtml(uc, scoreRun, {}, {});
+  const tabs = [...html.matchAll(/class="tab(?: [^"]*)?"[^>]*>([^<]*)</g)].map((m) => m[1]);
+  assert.deepEqual(tabs, ["Data", "Model", "Contact list", "Campaign results"]);
+  assert.match(html, /<span class="tab off" aria-disabled="true"[^>]*>Model<\/span>/);
+  assert.ok(html.indexOf("r-score<") > html.indexOf("<summary>Technical details</summary>"), "the run id is only in Technical details");
 });

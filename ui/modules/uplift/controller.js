@@ -5,16 +5,37 @@
 // state change calls `rerender()`, which repaints and re-binds. Every number a view shows comes
 // from a response stored on that state; nothing here computes a metric of its own.
 
-import { ApiError, cancelRun, getModels, getRun, getRuns, postRun, postUpload, scoresUrl } from "../../api.js";
+import {
+  ApiError,
+  cancelRun,
+  getArtefact,
+  getModels,
+  getRun,
+  getRuns,
+  postRun,
+  postUpload,
+  scoresUrl,
+} from "../../api.js";
+// The campaign's value view and the demo manifest are the pilot module's endpoints; its calls are
+// reused rather than repeated, so the Campaign results page reads the value view's own words and sign.
+import { getDemo, getRoi } from "../pilot/api.js";
 import {
   getCampaignResults,
   getTreatmentCandidates,
+  getUpliftArtefact,
   getUpliftArtefacts,
   postCampaignResults,
   postOpe,
   postUpliftRun,
 } from "./api.js";
-import { MODEL_ARTEFACTS, OUTPUT_ARTEFACTS, routes, upliftVersions } from "./views.js";
+import {
+  DEFAULT_TOP_SHARE_PCT,
+  MODEL_ARTEFACTS,
+  OUTPUT_ARTEFACTS,
+  routes,
+  upliftUnavailable,
+  upliftVersions,
+} from "./views.js";
 
 const POLL_MS = 2000;
 
@@ -40,6 +61,17 @@ function producedBy(run, names) {
 async function artefactsOf(runId, run, names) {
   const fetched = await getUpliftArtefacts(runId, producedBy(run, names));
   return Object.fromEntries(names.map((name) => [name, name in fetched ? fetched[name] : null]));
+}
+
+/** One artefact of a run when its record lists it (or lists nothing); `null` otherwise or on a failure. */
+async function optional(run, name, fetch) {
+  if (producedBy(run, [name]).length === 0) return null;
+  try {
+    return await fetch();
+  } catch (error) {
+    if (error instanceof ApiError) return null;
+    throw error;
+  }
 }
 
 /** An uplift use case's runs, newest first as the API lists them. Errors leave the list empty. */
@@ -99,6 +131,9 @@ function setupState(useCaseId) {
       submitError: null,
       runId: null,
       detail: null,
+      evaluation: null,
+      scoresHref: null,
+      confirmCancel: false,
     });
   }
   return SETUP_STATE.get(useCaseId);
@@ -128,18 +163,47 @@ export function createSetupController(uc, rerender) {
     }
   }
 
-  function showSetup() {
+  const FRESH = {
+    upload: null,
+    pk: "",
+    target: "",
+    treatment: "",
+    candidates: null,
+    validation: null,
+    upliftValidation: null,
+    acknowledged: [],
+    submitError: null,
+    uploadError: null,
+  };
+
+  function showSetup(mode = null) {
     stop();
     s.view = "setup";
     s.runId = null;
     s.detail = null;
+    s.confirmCancel = false;
+    // `#/uplift/<uc>/score` ("Score customers with this model") opens Setup in score mode.
+    if (mode && mode !== s.mode) Object.assign(s, { ...FRESH, mode });
+  }
+
+  /** What the Results headline quotes: the evaluation of a finished training run. */
+  async function loadFinished() {
+    const run = s.detail && s.detail.run;
+    s.evaluation = null;
+    s.scoresHref = run && run.mode === "score" ? scoresUrl(run.run_id) : null;
+    if (!run || run.state !== "done" || run.mode !== "train") return;
+    s.evaluation = await optional(run, "uplift_evaluation.json", () =>
+      getUpliftArtefact(run.run_id, "uplift_evaluation.json"),
+    );
   }
 
   async function loadRun(runId) {
     s.runId = runId;
+    s.confirmCancel = false;
     s.detail = await getRun(runId);
     const state = s.detail.run.state;
     s.view = state === "pending" || state === "running" ? "running" : "results";
+    if (s.view === "results") await loadFinished();
   }
 
   function poll() {
@@ -159,7 +223,9 @@ export function createSetupController(uc, rerender) {
       }
       stop();
       s.view = "results";
+      s.confirmCancel = false;
       await refreshLists();
+      await loadFinished();
       rerender();
     }, POLL_MS);
   }
@@ -259,19 +325,7 @@ export function createSetupController(uc, rerender) {
     root.querySelectorAll("[data-umode]").forEach((button) =>
       button.addEventListener("click", () => {
         if (s.mode === button.dataset.umode) return;
-        Object.assign(s, {
-          mode: button.dataset.umode,
-          upload: null,
-          pk: "",
-          target: "",
-          treatment: "",
-          candidates: null,
-          validation: null,
-          upliftValidation: null,
-          acknowledged: [],
-          submitError: null,
-          uploadError: null,
-        });
+        Object.assign(s, { ...FRESH, mode: button.dataset.umode });
         rerender();
       }),
     );
@@ -314,14 +368,25 @@ export function createSetupController(uc, rerender) {
       if (s.submitting) return;
       submit();
     });
+    // Two steps: "Cancel run" asks, "Yes, cancel run" (the same id) cancels.
     on("u-cancel", "click", async () => {
       if (!s.runId) return;
+      if (!s.confirmCancel) {
+        s.confirmCancel = true;
+        rerender();
+        return;
+      }
+      s.confirmCancel = false;
       try {
         await cancelRun(s.runId);
         s.detail = await getRun(s.runId);
       } catch (error) {
         s.submitError = error;
       }
+      rerender();
+    });
+    on("u-cancel-keep", "click", () => {
+      s.confirmCancel = false;
       rerender();
     });
   }
@@ -332,7 +397,11 @@ export function createSetupController(uc, rerender) {
 // --- Model page ----------------------------------------------------------------------------------
 
 export function createModelController(runId, rerender) {
-  const s = { run: null, art: null, ope: { report: null, topSharePct: "", submitting: false, error: null } };
+  const s = {
+    run: null,
+    art: null,
+    ope: { report: null, topSharePct: String(DEFAULT_TOP_SHARE_PCT), submitting: false, error: null },
+  };
 
   async function load() {
     const detail = await getRun(runId);
@@ -374,12 +443,20 @@ export function createModelController(runId, rerender) {
 // --- Output page ---------------------------------------------------------------------------------
 
 export function createOutputController(uc, runId) {
-  const s = { run: null, art: null, scoreRuns: [], scoresHref: scoresUrl(runId) };
+  const s = { run: null, art: null, scoreRuns: [], scoresHref: scoresUrl(runId), summary: null };
 
   async function load() {
     const [detail, runs] = await Promise.all([getRun(runId), upliftRuns(uc.id)]);
     s.run = detail.run;
-    s.art = await artefactsOf(runId, s.run, OUTPUT_ARTEFACTS);
+    const [art, summary] = await Promise.all([
+      artefactsOf(runId, s.run, OUTPUT_ARTEFACTS),
+      // How many customers were held back at random, for the "Held back to measure" tile.
+      s.run.mode === "score"
+        ? optional(s.run, "scoring_summary.json", () => getArtefact(runId, "scoring_summary.json"))
+        : null,
+    ]);
+    s.art = art;
+    s.summary = summary;
     s.scoreRuns = runs.filter((r) => r.mode === "score");
   }
 
@@ -400,6 +477,8 @@ export function createCampaignController(uc, runId, rerender) {
   const s = {
     run: null,
     report: null,
+    roi: null,
+    title: "",
     loadError: null,
     upload: null,
     uploading: false,
@@ -409,15 +488,47 @@ export function createCampaignController(uc, runId, rerender) {
     submitError: null,
   };
 
+  /**
+   * The value view of this campaign (`GET /pilot/roi/{run}`): which way round its outcome counts and
+   * the "customers gained" figure, so the verdict here uses the value view's words and sign. Without
+   * it (the endpoint absent, or nothing measured) the page states the difference in rates only.
+   */
+  async function loadRoi() {
+    s.roi = null;
+    if (!s.report || s.report.status === "immature") return;
+    try {
+      const roi = await getRoi(runId);
+      s.roi = roi && roi.status === "measured" ? roi : null;
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+    }
+  }
+
+  /** The campaign's name, from the demo manifest when it lists this run. */
+  async function loadTitle() {
+    try {
+      const demo = await getDemo();
+      const campaigns = (demo && demo.manifest && demo.manifest.campaigns) || [];
+      const mine = campaigns.find((c) => c.score_run_id === runId);
+      s.title = (mine && mine.title) || "";
+    } catch (error) {
+      if (!(error instanceof ApiError)) throw error;
+    }
+  }
+
   async function load() {
     const detail = await getRun(runId);
     s.run = detail.run;
-    if (s.run.mode !== "score") return;
-    try {
-      s.report = await getCampaignResults(runId);
-    } catch (error) {
-      s.loadError = error;
+    const title = loadTitle();
+    if (s.run.mode === "score") {
+      try {
+        s.report = await getCampaignResults(runId);
+      } catch (error) {
+        s.loadError = error;
+      }
+      await loadRoi();
     }
+    await title;
   }
 
   async function upload(file) {
@@ -482,6 +593,7 @@ export function createCampaignController(uc, runId, rerender) {
         try {
           s.report = await postCampaignResults(runId, payload());
           s.loadError = null;
+          await loadRoi();
         } catch (error) {
           s.submitError = error;
         }
@@ -492,4 +604,34 @@ export function createCampaignController(uc, runId, rerender) {
   }
 
   return { state: s, load, bind };
+}
+
+// --- Uplift index --------------------------------------------------------------------------------
+
+/**
+ * Each use case's newest uplift model, for the index's status line: `{created_at, approved}`, or
+ * `null` for none. Asked for after the list is painted; `onStatus(id, status)` fills one row.
+ */
+export async function loadIndexStatuses(payload, onStatus) {
+  const industry = ((payload && payload.industries) || [])[0];
+  const cards = industry ? (industry.stages || []).flatMap((stage) => stage.use_cases || []) : [];
+  await Promise.all(
+    cards
+      .filter((u) => !upliftUnavailable(u))
+      .map(async (u) => {
+        let status = null;
+        try {
+          const versions = upliftVersions((await getModels(u.id)).versions);
+          const newest = versions
+            .slice()
+            .sort((a, b) => String(b.version.created_at).localeCompare(String(a.version.created_at)))[0];
+          status = newest
+            ? { created_at: newest.version.created_at, approved: versions.some((v) => v.is_champion) }
+            : null;
+        } catch (error) {
+          if (!(error instanceof ApiError)) throw error;
+        }
+        onStatus(u.id, status);
+      }),
+  );
 }
