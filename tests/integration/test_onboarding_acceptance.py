@@ -416,7 +416,7 @@ def journey(
     at = mark("lineage", at)
 
     # 5. A month later: this month's tables through the saved recipe, scored with the new model.
-    page.locator(".crumbs a").nth(1).click()
+    page.locator(".crumbs a").nth(2).click()  # Home › journey › the use case (v1 breadcrumb)
     expect(page.locator(".summary")).to_be_visible()
     page.locator("#f-again").click()
     page.get_by_role("button", name="Score new data").click()

@@ -40,6 +40,19 @@ USE_CASE_SCREENS: Final[tuple[str, ...]] = (
 )
 """Every screen that belongs to one use case, and so to the journey that lists it."""
 
+HOME: Final[str] = '<a href="#/">Home</a>'
+SEP: Final[str] = '<span class="sep" aria-hidden="true">›</span>'
+"""v1 (docs/ui/FOUNDATION.md): every breadcrumb starts at Home, then the journey."""
+
+
+def _trail(href: str, label: str) -> str:
+    return f'{HOME}{SEP}<a href="{href}">{label}</a>'
+
+
+def _nav(inner: str) -> str:
+    return f'<nav class="crumbs" aria-label="Breadcrumb">{inner}</nav>'
+
+
 SCRIPT: Final[str] = """
 import { journeyFor } from %(overview)s;
 import { backLink, journeyCrumb } from %(dom)s;
@@ -116,11 +129,11 @@ def test_every_card_goes_back_to_the_journey_that_lists_it(journeys: dict[str, d
 
 
 def test_a_telecom_screen_reads_exactly_as_it_did(journeys: dict[str, dict[str, object]]) -> None:
-    """The default journey keeps the bare `#/` and its own label, so Phase 1's screens are unchanged."""
+    """The default journey keeps the bare `#/` and its own label, after the Home root (v1)."""
     label = load_industry(DEFAULT_INDUSTRY).journey_label
     for card in _cards(DEFAULT_INDUSTRY):
-        assert journeys[card]["back"] == f'<a class="back" href="#/">‹&nbsp; {label}</a>', card
-        assert journeys[card]["crumb"] == f'<a href="#/">{label}</a>', card
+        assert journeys[card]["back"] == _nav(_trail("#/", label)), card
+        assert journeys[card]["crumb"] == _trail("#/", label), card
 
 
 def test_another_industrys_screen_names_and_opens_that_industry(
@@ -132,8 +145,8 @@ def test_another_industrys_screen_names_and_opens_that_industry(
         label = load_industry(industry_id).journey_label
         for card in (c for c in _cards(industry_id) if _owner(c) == industry_id):
             href = f"#/industry/{industry_id}"
-            assert journeys[card]["back"] == f'<a class="back" href="{href}">‹&nbsp; {label}</a>', card
-            assert journeys[card]["crumb"] == f'<a href="{href}">{label}</a>', card
+            assert journeys[card]["back"] == _nav(_trail(href, label)), card
+            assert journeys[card]["crumb"] == _trail(href, label), card
 
 
 def test_a_use_case_no_file_lists_goes_back_to_the_default_journey(
@@ -146,6 +159,7 @@ def test_a_use_case_no_file_lists_goes_back_to_the_default_journey(
 
 
 def test_with_no_industry_the_root_is_the_bare_overview(journeys: dict[str, dict[str, object]]) -> None:
-    """What the overview then shows is the "Marketing AI" heading and no journey, so that is the name."""
+    """With no journey the breadcrumb is its root alone: Home, the bare overview (v1)."""
     assert journeys[""]["journey"] is None
-    assert journeys[""]["back"] == '<a class="back" href="#/">‹&nbsp; Marketing AI</a>'
+    assert journeys[""]["back"] == _nav(HOME)
+    assert journeys[""]["crumb"] == HOME
