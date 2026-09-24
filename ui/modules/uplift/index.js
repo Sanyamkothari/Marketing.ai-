@@ -273,18 +273,6 @@ registerRunAction({
     )}" data-action="campaign-results"><div><div class="lab"><span>Campaign results</span><span class="bstate waiting">After the campaign</span></div><div class="val">Contacted vs not contacted</div><div class="meta">Upload outcomes once the campaign has run</div></div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`,
 });
 
-/**
- * The pill this module used to insert under a use case's header (retired in v1: the related link
- * above replaces it). Nothing draws it any more; it stays, word for word, only because the design
- * prototype still draws the same pill and tests/prototype/consistency.test.mjs pins the two together.
- * WP9 removes it together with the prototype's `upEntry()`.
- */
-export const retiredEntryHtml = (ucId) =>
-  // prettier-ignore
-  `<a href="${esc(routes.setup(ucId))}">Uplift for <b>this use case</b> ›</a><span>${esc(
-      UPLIFT_EXPLANATION,
-    )}</span>`;
-
 // --- the deep-link repaint guard ----------------------------------------------------------------
 
 function guard(app) {

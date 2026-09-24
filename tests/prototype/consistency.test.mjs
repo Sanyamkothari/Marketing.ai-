@@ -221,9 +221,8 @@ test("the uplift entry point and its words are ui/modules/uplift's (DEC-608)", (
   const explanation = views.match(/export const UPLIFT_EXPLANATION = "([^"]+)";/)[1];
   assert.equal(ev(dom, "UPLIFT_EXPLANATION"), explanation);
   // v1 (WP9): the entry is a quiet related link in the use case's header actions, in the audit's words,
-  // never an injected pill. index.js carries either the pre-v1 pill (until WP5 lands) or the new words.
-  const pill = "`<a href=\"${esc(routes.setup(ucId))}\">Uplift for <b>this use case</b> ›</a><span>${esc(\n      UPLIFT_EXPLANATION,\n    )}</span>`";
-  assert.ok(index.includes("Also: target with uplift") || index.includes(pill),
+  // never an injected pill - exactly the markup index.js registers as its related run action.
+  assert.ok(index.includes('`<a class="related" href="${esc(routes.setup(uc.id))}">Also: target with uplift ›</a>`'),
     "index.js's entry link moved: update the prototype's upRelated()");
   assert.equal($(dom, ".uentry"), null, "no injected pill under the header");
   assert.equal($(dom, ".head-actions a.related").outerHTML,
