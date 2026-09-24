@@ -33,6 +33,7 @@ import pytest
 from api.main import create_app
 from engine.pilot.data_request import DataRequest
 from engine.pilot.demo import DemoManifest
+from engine.pilot.document import ReportDocument
 from engine.pilot.feedback import FeedbackCategory
 from tests.integration.test_ui import PLACEHOLDERS, SAMPLE_VALUES
 
@@ -48,7 +49,7 @@ EXPECTED_FILES: Final[frozenset[str]] = frozenset(
 SHARED_IMPORTS: Final[frozenset[str]] = frozenset({"dom.js", "api.js", "modules/router.js"})
 """What outside its own folder the module may import (paths relative to `ui/`)."""
 
-API_PREFIXES: Final[tuple[str, ...]] = ("/pilot", "/datasets", "/runs", "/models")
+API_PREFIXES: Final[tuple[str, ...]] = ("/pilot", "/datasets", "/runs", "/models", "/clients", "/auth")
 
 RUPEE: Final[str] = "₹"
 PILOT_SAMPLE_VALUES: Final[tuple[str, ...]] = tuple(v for v in SAMPLE_VALUES if v != RUPEE)
@@ -158,10 +159,129 @@ FIELD_READS: Final[tuple[tuple[str, str, str, str, str, Path_], ...]] = (
     ("feedback.js", "screen: route()", "POST", "/pilot/feedback", "body", ("screen",)),
     ("feedback.js", "category,", "POST", "/pilot/feedback", "body", ("category",)),
     ("feedback.js", "text }", "POST", "/pilot/feedback", "body", ("text",)),
+    # v1 (WP8): names, clients, tags and verdicts instead of ids
+    ("screen.js", "r.client_id", "GET", "/runs", "response", ("runs", "[]", "client_id")),
+    ("screen.js", "r.use_case_id", "GET", "/runs", "response", ("runs", "[]", "use_case_id")),
+    ("screen.js", "d.client_id", "GET", "/datasets", "response", ("datasets", "[]", "client_id")),
+    ("screen.js", "d.target", "GET", "/datasets", "response", ("datasets", "[]", "target")),
+    (
+        "screen.js",
+        "c.version.approved_at",
+        "GET",
+        "/models",
+        "response",
+        ("versions", "[]", "version", "approved_at"),
+    ),
+    (
+        "screen.js",
+        "c.version.created_at",
+        "GET",
+        "/models",
+        "response",
+        ("versions", "[]", "version", "created_at"),
+    ),
+    ("screen.js", "clients.value.clients", "GET", "/clients", "response", ("clients",)),
+    ("screen.js", "cl.client_id", "GET", "/clients", "response", ("clients", "[]", "client_id")),
+    ("screen.js", "found.name", "GET", "/clients", "response", ("clients", "[]", "name")),
+    ("screen.js", "payload.industries", "GET", "/industries", "response", ("industries",)),
+    ("screen.js", "industry.stages", "GET", "/industries", "response", ("industries", "[]", "stages")),
+    (
+        "screen.js",
+        "stage.use_cases",
+        "GET",
+        "/industries",
+        "response",
+        ("industries", "[]", "stages", "[]", "use_cases"),
+    ),
+    (
+        "screen.js",
+        "u.ai_type",
+        "GET",
+        "/industries",
+        "response",
+        ("industries", "[]", "stages", "[]", "use_cases", "[]", "ai_type"),
+    ),
+    (
+        "screen.js",
+        "u.status",
+        "GET",
+        "/industries",
+        "response",
+        ("industries", "[]", "stages", "[]", "use_cases", "[]", "status"),
+    ),
+    ("screen.js", "m.client_name", "GET", "/pilot/demo", "response", ("manifest", "client_name")),
+    ("screen.js", "m.broken_client_id", "GET", "/pilot/demo", "response", ("manifest", "broken_client_id")),
+    ("screen.js", "m.campaigns", "GET", "/pilot/demo", "response", ("manifest", "campaigns")),
+    (
+        "screen.js",
+        "c.score_run_id",
+        "GET",
+        "/pilot/demo",
+        "response",
+        ("manifest", "campaigns", "[]", "score_run_id"),
+    ),
+    (
+        "screen.js",
+        "campaign.title",
+        "GET",
+        "/pilot/demo",
+        "response",
+        ("manifest", "campaigns", "[]", "title"),
+    ),
+    ("screen.js", "v.status", "GET", "/pilot/roi/{run_id}", "response", ("status",)),
+    ("screen.js", "v.use_case_id", "GET", "/pilot/roi/{run_id}", "response", ("use_case_id",)),
+    (
+        "screen.js",
+        "v.results_available_on",
+        "GET",
+        "/pilot/roi/{run_id}",
+        "response",
+        ("results_available_on",),
+    ),
+    (
+        "screen.js",
+        "view.value.outcome_is_good",
+        "GET",
+        "/pilot/roi/{run_id}",
+        "response",
+        ("outcome_is_good",),
+    ),
+    ("screen.js", "view.benefit_label", "GET", "/pilot/roi/{run_id}", "response", ("benefit_label",)),
+    ("screen.js", "b.low", "GET", "/pilot/roi/{run_id}", "response", ("benefit", "low")),
+    ("screen.js", "view.net_value", "GET", "/pilot/roi/{run_id}", "response", ("net_value", "high")),
+    ("screen.js", "view.summary", "GET", "/pilot/roi/{run_id}", "response", ("summary",)),
+    ("screen.js", "doc.facts", "GET", "/pilot/readiness/{dataset_id}", "response", ("facts",)),
+    ("screen.js", "doc.facts", "GET", "/pilot/results", "response", ("facts",)),
+    ("screen.js", "report.blocks", "GET", "/pilot/readiness/{dataset_id}", "response", ("blocks",)),
+    (
+        "screen.js",
+        "verdict.state",
+        "GET",
+        "/pilot/readiness/{dataset_id}",
+        "response",
+        ("blocks", "[]", "state"),
+    ),
+    (
+        "screen.js",
+        "report.client_name",
+        "GET",
+        "/pilot/readiness/{dataset_id}",
+        "response",
+        ("client_name",),
+    ),
+    ("screen.js", "report.client_name", "GET", "/pilot/results", "response", ("client_name",)),
+    ("api.js", "me.permissions", "GET", "/auth/me", "response", ("permissions",)),
+    ("api.js", "p.method", "GET", "/auth/me", "response", ("permissions", "[]", "method")),
+    ("api.js", "p.path", "GET", "/auth/me", "response", ("permissions", "[]", "path")),
+    ("api.js", "found.allowed", "GET", "/auth/me", "response", ("permissions", "[]", "allowed")),
 )
 """Every field the screens read from (or send to) an endpoint, beside the code that does it."""
 
-UNTYPED_JSON: Final[dict[tuple[str, str], type[Any]]] = {("GET", "/pilot/data-request"): DataRequest}
+UNTYPED_JSON: Final[dict[tuple[str, str], type[Any]]] = {
+    ("GET", "/pilot/data-request"): DataRequest,
+    ("GET", "/pilot/readiness/{dataset_id}"): ReportDocument,
+    ("GET", "/pilot/results"): ReportDocument,
+}
 """Routes that answer JSON without declaring its schema in OpenAPI (a `Response` built by hand, because
 the same route also answers Markdown): the model the JSON is dumped from stands in."""
 

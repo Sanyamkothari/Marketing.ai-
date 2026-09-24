@@ -73,6 +73,12 @@ export const roiUrl = (runId, format) => url(`/pilot/roi/${encodeURIComponent(ru
 /** A report's HTML, fetched through the wrapped `fetch` so a sign-in is carried. */
 export const getReportHtml = (href) => orNull(request(href));
 
+/**
+ * A report's laid-out document (`format=json`): its title, facts and verdict, for the viewer's own
+ * header. A 404 is thrown rather than swallowed, so the viewer can say which thing is missing.
+ */
+export const getReportDoc = (href) => request(href);
+
 export const getRoi = (runId) => orNull(request(`/pilot/roi/${encodeURIComponent(runId)}`));
 export const putRoi = (runId, inputs) => request(`/pilot/roi/${encodeURIComponent(runId)}`, send("PUT", inputs));
 
@@ -80,3 +86,21 @@ export const listDatasets = () => request("/datasets");
 export const listScoringRuns = () => request(`/runs${q({ mode: "score", limit: 50 })}`);
 export const listModels = () => request("/models");
 export const getDataRequest = () => request("/pilot/data-request?format=json");
+export const listClients = () => request("/clients");
+
+/**
+ * Whether this browser may make a call, read from `GET /auth/me` as the production session's `can()`
+ * reads it: a route `/auth/me` does not list, or an API without `/auth/me` (404), is allowed - the
+ * server stays the one that refuses. Signed out, or any other failure, is not.
+ */
+export async function mayCall(method, path) {
+  let me;
+  try {
+    me = await request("/auth/me");
+  } catch (error) {
+    return error instanceof ApiError && error.status === 404;
+  }
+  const listed = me && Array.isArray(me.permissions) ? me.permissions : [];
+  const found = listed.find((p) => p.method === method && p.path === path);
+  return found ? Boolean(found.allowed) : true;
+}

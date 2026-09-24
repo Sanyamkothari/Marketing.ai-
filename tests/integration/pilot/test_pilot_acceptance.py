@@ -314,7 +314,7 @@ def test_the_tour_walks_the_six_screens(page: Any, server: str, manifest: DemoMa
 def test_the_pilot_screen_lists_the_reports_and_shows_one_in_place(
     page: Any, server: str, manifest: DemoManifest
 ) -> None:
-    page.goto(f"{server}/ui/#/pilot")
+    page.goto(f"{server}/ui/#/pilot/kit")
     page.get_by_text("Data request kit").wait_for(timeout=30_000)
     page.goto(f"{server}/ui/#/pilot/view/readiness/{manifest.broken_dataset_id}")
     frame = page.frame_locator("iframe.pe-frame")
@@ -343,12 +343,15 @@ def test_every_setting_gets_its_explanation(page: Any, server: str, manifest: De
 
 def test_a_warning_pill_painted_by_any_screen_gets_its_explanation(page: Any, server: str) -> None:
     """The validation lists belong to other workstreams; whatever paints a pill, the button follows."""
-    page.goto(f"{server}/ui/#/pilot")
+    page.goto(f"{server}/ui/#/pilot/kit")
     page.get_by_text("Data request kit").wait_for(timeout=30_000)
     page.evaluate(
         "document.querySelector('#app .screen').insertAdjacentHTML('beforeend',"
-        ' \'<div class="vitem"><span class="pill warn">PII_DETECTED</span></div>\')'
+        ' \'<div class="vitem"><span class="pill warn">PII_DETECTED</span></div>'
+        '<div class="vcoded" data-code="PII_DETECTED"><b>Personal details</b></div>\')'
     )
+    # A screen that shows the plain title keeps the code in `data-code`; it is explained too.
+    page.locator(".vcoded .pe-q").wait_for(timeout=10_000)
     button = page.locator(".vitem .pe-q")
     button.wait_for(timeout=10_000)
     button.click()
@@ -360,6 +363,8 @@ def test_a_warning_pill_painted_by_any_screen_gets_its_explanation(page: Any, se
 
 def test_feedback_from_the_screen_is_recorded(page: Any, server: str, data_dir: Path) -> None:
     page.goto(f"{server}/ui/#/pilot")
+    # "Send feedback" lives in the top bar's Help menu (v1 WP8): open the menu, then the entry.
+    page.locator("#pb-bar [data-menu='tn-help']").click()
     page.locator("#pe-fb-btn").click()
     page.locator("#pe-fb textarea").fill("The value page is clear; call 9876543210")
     page.locator("#pe-fb button[type='submit']").click()
