@@ -1,4 +1,4 @@
-"""Plan E's acceptance, end to end, on the seeded demo (slow: the seed trains two models, ~2 min).
+"""Plan E's acceptance, end to end, on the seeded demo (slow: the seed trains two models, ~2.5 min).
 
 Plan E §4: a colleague outside the project, given only the data request kit and the demo, can
 understand what data to send, run the pre-flight checker on the demo raw tables, read the data

@@ -1194,9 +1194,9 @@ ready, not a number (DEC-908).
 #### M63 — Demo mode, the tour and the tooltips
 
 `scripts/seed_demo.py` seeds a synthetic "Demo Telecom" through the platform's own API: raw tables
-uploaded and mapped, a dataset built, a churn model trained and made champion, next month scored with
-a control group, a win-back uplift model trained, and both campaigns measured on simulated outcomes
-(about two minutes). It writes `pilot/demo/demo.json` (`engine/pilot/demo.py`) and keeps the raw
+for 4,000 subscribers uploaded and mapped, a dataset built, a churn model trained and made champion,
+next month scored with a control group of 400, a win-back uplift model trained, and both campaigns
+measured on simulated outcomes (about two and a half minutes; DEC-960). It writes `pilot/demo/demo.json` (`engine/pilot/demo.py`) and keeps the raw
 tables, clean and with one planted problem, under `pilot/demo/raw/<variant>/` for the pre-flight
 check. No public or non-commercial dataset is used (DEC-910). With `MARKETING_AI_DEMO_MODE=true`
 (`Settings.demo_mode`, off by default, DEC-901) the screens open on the demo. The UI module
