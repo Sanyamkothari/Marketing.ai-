@@ -8,10 +8,11 @@ They live here rather than in `engine/contracts.py` because that file's artefact
 immutable mapping built above the shared-file blocks (PARALLEL_WORK_PROTOCOL.md §4). Uplift keeps a
 registry of its own, :data:`UPLIFT_ARTEFACTS`, and `api/routes/uplift.py` serves from it (DEC-602).
 
-Uplift validation findings have the same five fields as `engine.contracts.ValidationCheck`, but
-their own code table: `ValidationCheck` accepts only the Phase 1 table, which tests pin at nineteen
-codes. Phase 2 met the same wall with `OnboardingCheck` (DEC-101); the request to unify all three
-behind a code registry is in `docs/CROSS_BRANCH_REQUESTS.md` (DEC-603).
+Uplift validation findings have the same fields as `engine.contracts.ValidationCheck` except the
+onboarding-only `source_id`. Their codes live in the platform's one code registry
+(`engine.contracts.CHECK_CODE_TABLES`, DEC-950): `UPLIFT_VALIDATION_CODES` is defined there and
+re-exported here, `ValidationCheck` accepts it like every other table, and `UpliftCheck` accepts only
+the codes of its own table.
 """
 
 from __future__ import annotations
@@ -25,7 +26,13 @@ from typing import Any, Final, Literal
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from engine.config import Metric
-from engine.contracts import Artefact, DriftReport, Severity
+from engine.contracts import (
+    UPLIFT_VALIDATION_CODES,
+    Artefact,
+    DriftReport,
+    Severity,
+    check_code_table,
+)
 from engine.uplift.config import UpliftBaseModel, UpliftLearner
 
 __all__ = [
@@ -137,20 +144,8 @@ SEGMENT_ACTIONS: Final[Mapping[Segment, str]] = MappingProxyType(
 # ---------------------------------------------------------------------------
 # uplift_validation.json
 # ---------------------------------------------------------------------------
-UPLIFT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
-    {
-        "TREATMENT_COLUMN_MISSING",
-        "TREATMENT_NOT_BINARY",
-        "TREATMENT_VARIES_WITHIN_ENTITY",
-        "TREATMENT_ARM_TOO_SMALL",
-        "TREATMENT_NOT_RANDOM",
-        "OUTCOME_WINDOW_IMMATURE",
-        "FEATURE_AFTER_TREATMENT",
-    }
-)
-"""Plan B §4's six codes, plus `TREATMENT_VARIES_WITHIN_ENTITY` for two-column keys (M53, DEC-854).
-
-Phase 1's table is `engine.contracts.VALIDATION_CODES`."""
+# `UPLIFT_VALIDATION_CODES` (Plan B §4's six codes plus M53's `TREATMENT_VARIES_WITHIN_ENTITY`) is one
+# table of the platform's code registry in `engine.contracts` (DEC-950), imported above.
 
 
 class UpliftCheck(Artefact):
@@ -173,7 +168,7 @@ class UpliftCheck(Artefact):
 
     @model_validator(mode="after")
     def _known_code(self) -> UpliftCheck:
-        if self.code not in UPLIFT_VALIDATION_CODES:
+        if check_code_table(self.code) != "uplift":
             known = ", ".join(sorted(UPLIFT_VALIDATION_CODES))
             raise ValueError(f"unknown uplift validation code {self.code!r}; known codes: {known}")
         return self

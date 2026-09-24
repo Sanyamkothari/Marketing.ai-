@@ -16,9 +16,10 @@ demo trains while anybody watches.
 4. Next month's tables replayed through the same recipe and scored: bands, actions, reasons and a
    10% control group.
 5. The churn campaign measured: outcomes are *simulated* for the scored customers - a customer
-   leaves with a chance equal to their score, and contact cuts it by a planted quarter - and
-   uploaded through outcome ingestion (the synthetic tables are dated in the past, so the 60-day
-   window has passed).
+   leaves with a chance equal to their score, and contact cuts it by a planted quarter - uploaded
+   and measured through Campaign results (`POST /runs/{id}/campaign-results`), joined on both key
+   columns, customer and snapshot date (Plan D M53, DEC-951). The synthetic tables are dated in the
+   past, so the 60-day window after each snapshot has passed.
 6. A win-back uplift model trained on a past randomised campaign (`tests/fixtures/make_uplift_data.py`),
    made champion of the win-back use case, a new campaign scored with it, and that campaign measured
    on simulated outcomes the generator knows the true effect of.
@@ -251,8 +252,15 @@ def _scores(client: TestClient, run_id: str) -> pd.DataFrame:
     return pd.read_csv(io.BytesIO(response.content), dtype=str)
 
 
+CHURN_OUTCOME_WINDOW_DAYS = 60
+"""The churn label's horizon: whether a customer left within 60 days of the snapshot they were scored at."""
+
+
 def _churn_outcomes(scores: pd.DataFrame, score_field: str, target: str, *, seed: int) -> pd.DataFrame:
-    """Simulated: a customer leaves with probability = their score; contact removes CONTACT_EFFECT of it."""
+    """Simulated: a customer leaves with probability = their score; contact removes CONTACT_EFFECT of it.
+
+    Keyed like the scores - customer and snapshot date, as `scores.csv` wrote them - with the snapshot
+    date also as the contact date, which is when a monthly campaign goes out."""
     rng = np.random.default_rng(seed)
     leave = scores[score_field].astype(float).clip(0.0, 1.0).to_numpy()
     control = scores["control_group"].str.lower().eq("true").to_numpy()
@@ -260,7 +268,12 @@ def _churn_outcomes(scores: pd.DataFrame, score_field: str, target: str, *, seed
     contacted = ~control & ~suppressed
     leave = np.where(contacted, leave * (1.0 - CONTACT_EFFECT), leave)
     return pd.DataFrame(
-        {"entity_key": scores["entity_key"], target: (rng.random(len(scores)) < leave).astype(int)}
+        {
+            "entity_key": scores["entity_key"],
+            "snapshot_date": scores["snapshot_date"],
+            "contacted_on": scores["snapshot_date"],
+            target: (rng.random(len(scores)) < leave).astype(int),
+        }
     )
 
 
@@ -369,18 +382,27 @@ def seed(data_dir: Path | None, *, rng_seed: int, force: bool) -> DemoManifest:
         _wait_run(client, score["run_id"])
         churn_scores = _scores(client, score["run_id"])
 
-        # the churn campaign, measured through outcome ingestion (the dataset's key is composite, which
-        # the uplift route refuses): the tables are dated in the past, so the 60-day window has passed
+        # the churn campaign, measured on the Campaign results page's route: since M53 it joins on both
+        # key columns. The tables are dated in the past, so the 60-day window has passed (DEC-951).
         target = trained["target"]
         outcomes = _churn_outcomes(churn_scores, "churn_prob", target, seed=rng_seed)
-        _ok(
-            client.post(
-                f"/runs/{score['run_id']}/outcomes",
-                files={"file": ("churn_outcomes.csv", outcomes.to_csv(index=False).encode(), "text/csv")},
-                data={"outcome_column": target},
-            ),
-            201,
+        churn_outcomes_upload = _upload(
+            client, outcomes, use_case=CHURN_USE_CASE, mode="score", name="churn_outcomes.csv"
         )
+        churn_results = _ok(
+            client.post(
+                f"/runs/{score['run_id']}/campaign-results",
+                json={
+                    "upload_id": churn_outcomes_upload,
+                    "outcome_column": target,
+                    "treatment_date_column": "contacted_on",
+                    "outcome_window_days": CHURN_OUTCOME_WINDOW_DAYS,
+                    "campaign_id": "demo-retention-apr",
+                },
+            )
+        )
+        if churn_results["status"] != "mature":
+            raise SeedError(f"the churn campaign's results should be mature, not {churn_results['status']}")
 
         # --- the win-back uplift campaign ------------------------------------------------------------
         history = make_uplift_data(10_000, seed=rng_seed % 1000 + 7)

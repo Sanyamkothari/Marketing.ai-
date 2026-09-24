@@ -1756,7 +1756,7 @@ function overview(){
       <div class="uc-list">${cases.map(u=>`<a class="uc" href="#/uc/${u.id}"><span>${esc(u.name)}</span><span class="chev" aria-hidden="true">›</span></a>`).join("")}</div>
     </div>`;}).join("");
   return `<main class="screen">
-    ${pageHead(`<h1 class="h1">Marketing AI</h1><p class="sub">Customer Lifecycle</p>`)}
+    ${pageHead(`<h1 class="h1">Marketing AI</h1><p class="sub">Customer Lifecycle</p>`)}${upIndexEntry()}
     <div class="bar"><span class="cap">Lifecycle stage → AI use cases</span>
       <div class="legend"><span class="lbl">Legend</span>${typeChip("P")}${typeChip("G")}${typeChip("H")}</div></div>
     <div class="timeline-wrap"><div class="timeline">${cols}</div></div>
@@ -2061,6 +2061,9 @@ function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id];
 /* DEC-608's entry point, under the use case's header, as ui/modules/uplift/index.js inserts it after the
    rule: one link to the use case's uplift screen. Only a use case with uplift sample content has one. */
 const upEntry=u=>upliftOffered(u)?`<nav class="uentry" aria-label="Uplift"><a href="${pageHref(upView(u))}">Uplift for <b>this use case</b> ›</a><span>${esc(UPLIFT_EXPLANATION)}</span></nav>`:"";
+/* The Overview's entry, as ui/modules/uplift/index.js inserts it after the Overview's rule (DEC-608;
+   drawn since the reviewer's ruling on DEC-666, DEC-952). */
+const upIndexEntry=()=>`<nav class="uentry" aria-label="Uplift"><a href="#/uplift"><b>Uplift modelling</b> ›</a><span>Predicts who changes behaviour because of your action.</span></nav>`;
 const upChip=()=>`<span class="chip type">Uplift</span>`;
 function detail(u){const s=st(u);
   const body = s.view==="running"?runningHtml(u):s.view==="results"?resultsHtml(u):setupHtml(u);
@@ -2290,7 +2293,7 @@ function mock(u, kind){
   }
   return `<main class="screen t-${u.k}"${u.up?' data-module="uplift"':""}>
     ${pageHead(`<nav class="crumbs" aria-label="Breadcrumb"><a href="#/">Customer Lifecycle</a><span class="sep">›</span><a href="#/uc/${u.id}">${esc(u.name)}</a><span class="sep">›</span>${u.up?`<a href="${pageHref(u)}">Uplift</a><span class="sep">›</span>`:""}<span class="cur">${K}</span></nav>
-      <span class="over" style="color:var(--c)">${K}</span><h1 class="h1">${esc(title)}</h1><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}${u.up?upChip():""}</div>`)}
+      <span class="over" style="color:var(--c)">${K}</span><h1 class="h1">${esc(title)}</h1><div class="chips">${stageChip(u.stage)}${typeChip(u.k)}${u.up?upChip():""}</div>`)}${u.up?"":upEntry(u)}
     <div class="tabs-bar"><nav class="tabs" aria-label="Pipeline">${tabs}</nav><span class="note">Illustrative sample, AWS reference stack</span></div>
     <div class="stack">${body}</div>
   </main>`;

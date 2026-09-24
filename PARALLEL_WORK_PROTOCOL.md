@@ -92,7 +92,8 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-700…799 | Phase 4b — production: access, audit, privacy, scheduling (`docs/PHASE4B_PLAN.md`) | claimed 2026-09-23 |
   | DEC-800…899 | trunk, continued (the integration of the parallel branches onwards) | claimed 2026-09-23; the integrations used DEC-800…801, and Plan D (DEC-850…899) claimed 2026-09-23 |
   | DEC-900…949 | Plan E — pilot readiness (M59–M64) | claimed 2026-09-23 |
-  | DEC-950 up | unallocated | — |
+  | DEC-950…999 | v1 readiness: rulings, demo, quick start and the UI clean-up (on `main`) | claimed 2026-09-24 |
+  | DEC-1000 up | unallocated | — |
 
   A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.
 - `docs/API.md` is generated; never hand-edit. Run `gen_api_docs` after adding models.

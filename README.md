@@ -1276,9 +1276,9 @@ docs/pilot/                       # DATA_REQUEST.md, templates/, PLAYBOOK.md, US
    client's and Minfy's to supply.
 4. **Nothing is scheduled.** The `pilot_feedback` export and the reports are produced on request
    only; no schedule sends them.
-5. **The churn demo campaign is measured through outcome ingestion**
-   (`POST /runs/{id}/outcomes`), because campaign results (`POST /runs/{id}/campaign-results`)
-   refuse the demo dataset's composite key. The win-back campaign goes through campaign results.
+5. ~~The churn demo campaign is measured through outcome ingestion.~~ **Done (DEC-951).** Since
+   Plan D M53 campaign results join on both key columns, so the seed measures the churn campaign on
+   its Campaign results page (`POST /runs/{id}/campaign-results`), like the win-back one.
 
 Decisions are DEC-900 … DEC-912 in [`docs/DECISIONS.md`](docs/DECISIONS.md). What Plan E changed
 above its blocks is announced in [`docs/CROSS_BRANCH_REQUESTS.md`](docs/CROSS_BRANCH_REQUESTS.md).

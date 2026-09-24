@@ -1,4 +1,5 @@
-"""One check contract: `ValidationCheck` is what `validation.json` and a build report both carry.
+"""One check contract and one code registry: `ValidationCheck` is what `validation.json` and a build
+report both carry, and every code table - uplift's included since DEC-950 - is one registry.
 
 Phase 2 kept a twin of the Phase 1 model, `OnboardingCheck`, because the Phase 1 one sat outside its
 branch (DEC-101). Plan A ruling D7 merged them, and these tests pin what the merge promised: the one
@@ -14,15 +15,19 @@ import pytest
 from pydantic import ValidationError
 
 from engine.contracts import (
+    CHECK_CODE_TABLES,
     CHECK_CODES,
     EXTENSION_VALIDATION_CODES,
     ONBOARDING_VALIDATION_CODES,
+    UPLIFT_VALIDATION_CODES,
     VALIDATION_CODES,
     Severity,
     ValidationCheck,
     ValidationReport,
+    check_code_table,
 )
 from engine.onboarding import specs
+from engine.uplift import contracts as uplift_contracts
 
 
 def test_the_old_name_is_the_same_class() -> None:
@@ -34,11 +39,34 @@ def test_the_build_report_carries_the_phase_one_contract() -> None:
     assert specs.BuildReport.model_fields["checks"].annotation == tuple[ValidationCheck, ...]
 
 
-def test_the_known_codes_are_both_tables_and_the_phase_one_table_has_not_grown() -> None:
-    # Plan A M36 added a third table beside the Phase 1 one (DEC-095); the union takes all three.
-    assert CHECK_CODES == VALIDATION_CODES | ONBOARDING_VALIDATION_CODES | EXTENSION_VALIDATION_CODES
+def test_the_known_codes_are_every_table_and_the_phase_one_table_has_not_grown() -> None:
+    # Plan A M36 added a third table beside the Phase 1 one (DEC-095); the one-registry ruling
+    # (DEC-950) added the uplift table as the fourth. The union takes all of them.
+    assert CHECK_CODES == (
+        VALIDATION_CODES | ONBOARDING_VALIDATION_CODES | EXTENSION_VALIDATION_CODES | UPLIFT_VALIDATION_CODES
+    )
     assert len(VALIDATION_CODES) == 19
     assert not (VALIDATION_CODES & ONBOARDING_VALIDATION_CODES)
+
+
+def test_one_registry_holds_every_table_and_no_code_is_in_two() -> None:
+    """DEC-950: one code registry; a code means one thing wherever it appears."""
+    assert set(CHECK_CODE_TABLES) == {"validation", "extension", "onboarding", "uplift"}
+    assert sum(len(table) for table in CHECK_CODE_TABLES.values()) == len(CHECK_CODES)
+    for name, table in CHECK_CODE_TABLES.items():
+        assert all(check_code_table(code) == name for code in table)
+    assert check_code_table("NOT_A_CODE") is None
+
+
+def test_the_uplift_table_is_the_registrys_own_not_a_copy() -> None:
+    assert uplift_contracts.UPLIFT_VALIDATION_CODES is UPLIFT_VALIDATION_CODES
+    assert CHECK_CODE_TABLES["uplift"] is UPLIFT_VALIDATION_CODES
+
+
+def test_an_uplift_check_still_takes_only_uplift_codes() -> None:
+    assert uplift_contracts.UpliftCheck(code="TREATMENT_NOT_RANDOM", severity=Severity.ERROR, message="x")
+    with pytest.raises(ValidationError, match="unknown uplift validation code"):
+        uplift_contracts.UpliftCheck(code="PK_NOT_UNIQUE", severity=Severity.ERROR, message="x")
 
 
 @pytest.mark.parametrize("code", sorted(CHECK_CODES))

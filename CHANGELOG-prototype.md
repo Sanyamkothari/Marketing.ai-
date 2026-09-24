@@ -570,6 +570,16 @@ which no screenshot shows.
 
 ---
 
+## Revision 5 — the uplift entry links, drawn (DEC-952) · 2026-09-24
+
+- **Drawn: the Overview link.** *Uplift modelling ›* with *Predicts who changes behaviour because of
+  your action.*, under the Overview's rule, as `ui/modules/uplift/index.js` inserts it. Screenshot 01
+  is re-shot.
+- **Drawn: the use-case link on Win-back's pages.** *Uplift for this use case ›* under the header of
+  the Data, Model, Output and Campaign results pages, as the product decorates every `#/uc/<id>`
+  page. Screenshots 14 and 17 are re-shot. Revision 4's "Not drawn, deliberately" item is resolved
+  by the reviewer's ruling.
+
 ## What did not change
 
 The lifecycle overview, the seven use-case definitions, the eight advanced-settings

@@ -69,6 +69,8 @@ the uplift Setup screen renders both. The merge is mechanical once the registry 
 
 **Re-filed 2026-09-23 (Plan D M58)** to the human reviewer. Only half is done: M53 added the uplift codes, `TREATMENT_VARIES_WITHIN_ENTITY` included, to `docs/DATA_CONTRACT.md` §11, with a test that fails when the document and `UPLIFT_VALIDATION_CODES` drift apart (DEC-854). The three registries are still separate. Needed from: the human reviewer, a ruling on whether `ValidationCheck`, `OnboardingCheck` and `UpliftCheck` share one code registry (DEC-101, DEC-603). With a yes, the merge is a reviewed change on `main`.
 
+**Resolved 2026-09-24 (v1 readiness, DEC-950).** Ruling: yes, one registry. `engine.contracts.CHECK_CODE_TABLES` holds the Phase 1, extension, onboarding and uplift tables, disjoint by an import-time check; `CHECK_CODES` is their union, so `ValidationCheck` accepts an uplift code, and `UpliftCheck` checks its code against the same registry (uplift table only). `UPLIFT_VALIDATION_CODES` is defined in `engine/contracts.py` and re-exported from `engine.uplift.contracts`. Artefact files and API responses are unchanged: `uplift_validation.json` stays its own file, since writing the uplift findings into `validation.json` would change what `POST /runs` returns. `tests/unit/test_one_check_contract.py`.
+
 ### 2026-09-23 — phase-3b-uplift → human reviewer: may the prototype's screenshots 01, 14 and 17 change to show the uplift entry link?
 
 **What is needed.** A ruling. The product adds **Uplift modelling ›** under the Overview's header
@@ -82,6 +84,8 @@ in `CHANGELOG-prototype.md` (Revision 4, "Not drawn, deliberately"). With a yes,
 links and three re-shot screenshots.
 
 **Re-filed 2026-09-23 (Plan D M58)** to the human reviewer. It is a ruling only the reviewer can give, and Plan D did not touch the prototype (DEC-875 changed only the test harness). Needed from: the human reviewer, yes or no on drawing the two uplift links in the prototype and re-shooting screenshots 01, 14 and 17 (DEC-666).
+
+**Resolved 2026-09-24 (v1 readiness, DEC-952).** Ruling: yes. The prototype draws **Uplift modelling ›** under the Overview's header and **Uplift for this use case ›** under the Data / Model / Output / Campaign results pages of Win-back, as the product's module inserts them. Screenshots 01, 14 and 17 are re-shot, and the DEC-608 prototype test now asserts the links rather than their absence.
 
 ### 2026-09-22 — contracts-first → human reviewer: the three phase plans
 

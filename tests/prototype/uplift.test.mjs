@@ -1078,18 +1078,23 @@ test("DEC-608: win-back's Setup links to its uplift screen, the product's entry 
   assert.ok($(dom, ".progress") && entry(), "Running keeps the link");
   await settle(dom);
   assert.ok($(dom, ".results") && entry(), "Results keeps the link");
-  // nowhere else: no other use case has uplift sample content, and the Data / Model / Output pages
-  // (screenshots 14 and 17) are drawn as before
+  // no other use case has uplift sample content
   for (const id of ["targeted-advertisement", "ai-onboarding-assistant", "order-fulfillment", "fault-prediction", "payment-propensity", "rca"]) {
     go(dom, `#/uc/${id}`);
     assert.equal(entry(), null, `${id} has no uplift link`);
   }
+  // the reviewer's ruling on DEC-666 (DEC-952): the Data / Model / Output pages carry the use-case link
+  // under their header, as the product's module inserts it after the rule (screenshots 14 and 17)
   for (const page of ["data", "model", "output", "campaign"]) {
     go(dom, `#/uc/${WB}/${page}`);
-    assert.equal(entry(), null, `${page} has no uplift link`);
+    assert.equal(entry().previousElementSibling.className, "rule", `${page}: the link sits under the header`);
+    assert.equal(entry().querySelector("a").getAttribute("href"), UP, `${page} links to the uplift screen`);
   }
+  // and the Overview carries the product's "Uplift modelling" link (screenshot 01)
   go(dom, "#/");
-  assert.equal(entry(), null, "the overview is screenshot 01, unchanged (see CHANGELOG Revision 4, DEC-608)");
+  assert.equal(entry().previousElementSibling.className, "rule");
+  assert.equal(entry().querySelector("a").innerHTML, "<b>Uplift modelling</b> ›");
+  assert.equal(entry().querySelector("a").getAttribute("href"), "#/uplift");
   // the uplift screen: the product's header, a way back, and its own Setup
   go(dom, UP);
   assert.equal(dom.window.document.title, "Win-back Campaign · Uplift · Marketing AI");

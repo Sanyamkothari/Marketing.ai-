@@ -5,8 +5,8 @@ checker and the in-app tooltips all ask this module, so a warning reads the same
 laptop, in the PDF and beside the pill on the screen.
 
 Which codes: every *check* code a client's data can raise - the Phase 1 validation table, the
-Phase 2 onboarding table and its extension (`engine.contracts.CHECK_CODES`), the Phase 3b uplift
-checks (`engine.uplift.contracts.UPLIFT_VALIDATION_CODES`), the two drift verdicts that are worth a
+Phase 2 onboarding table, its extension and the Phase 3b uplift checks - the one code registry,
+`engine.contracts.CHECK_CODES` (DEC-950) - the two drift verdicts that are worth a
 sentence, the threshold fallback note and the pre-flight checker's own codes. Engine and HTTP error
 codes (a missing run, a refused sign-in) are not data problems a client analyst fixes and are not
 here; they keep the message and suggestion the API already sends (DEC-902).
@@ -89,15 +89,8 @@ def known_codes() -> frozenset[str]:
     """Every code the catalogue must explain: the engine's check codes plus Plan E's own."""
     from engine.contracts import CHECK_CODES
     from engine.pilot.preflight import PREFLIGHT_CODES
-    from engine.uplift.contracts import UPLIFT_VALIDATION_CODES
 
-    return frozenset(
-        CHECK_CODES
-        | UPLIFT_VALIDATION_CODES
-        | set(DRIFT_CODES.values())
-        | {THRESHOLD_FALLBACK_CODE}
-        | PREFLIGHT_CODES
-    )
+    return frozenset(CHECK_CODES | set(DRIFT_CODES.values()) | {THRESHOLD_FALLBACK_CODE} | PREFLIGHT_CODES)
 
 
 def code_help(code: str, root: Path | None = None) -> CodeHelp | None:

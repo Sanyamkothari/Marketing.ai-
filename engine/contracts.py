@@ -39,6 +39,7 @@ from engine.config import (
 __all__ = [
     "ARTEFACT_REGISTRY",
     "CHECK_CODES",
+    "CHECK_CODE_TABLES",
     "EXTENSION_VALIDATION_CODES",
     "MODEL_DIRECTORY",
     "NO_CHAMPION_AT_DECISION",
@@ -46,6 +47,7 @@ __all__ = [
     "SCORE_ARTEFACTS",
     "TABULAR_SCHEMAS",
     "TRAIN_ARTEFACTS",
+    "UPLIFT_VALIDATION_CODES",
     "VALIDATION_CODES",
     "ActionCount",
     "Artefact",
@@ -487,9 +489,10 @@ that mentions a contact somewhere inside it.
 
 # The one check contract (Plan A ruling D7). Phase 2 once kept a twin of this model, `OnboardingCheck`,
 # because this one sat outside its branch (DEC-101); that name is now an alias of this class in
-# `engine.onboarding.specs`. The two code tables stay two constants - `VALIDATION_CODES` above is the
-# Phase 1 table of 19 and nothing here grows it - and `CHECK_CODES` is their union. Both onboarding
-# constants live in this file's PHASE-2 block, which `_known_code` reads at call time, not import time.
+# `engine.onboarding.specs`. The code tables stay separate constants - `VALIDATION_CODES` above is the
+# Phase 1 table of 19 and nothing here grows it - and `CHECK_CODES` is their union: the one code
+# registry, `CHECK_CODE_TABLES` (DEC-950), which also holds the uplift table. The registry lives in
+# this file's PHASE-2 block, which `_known_code` reads at call time, not import time.
 class ValidationCheck(Artefact):
     """One row of a validation table, already interpolated for the user.
 
@@ -1552,11 +1555,44 @@ Defined here rather than in `engine.onboarding.specs` (which re-exports it) beca
 has to accept these codes and `engine.onboarding.specs` imports this module, not the other way round.
 """
 
-CHECK_CODES: Final[frozenset[str]] = (
-    VALIDATION_CODES | ONBOARDING_VALIDATION_CODES | EXTENSION_VALIDATION_CODES
+UPLIFT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "TREATMENT_COLUMN_MISSING",
+        "TREATMENT_NOT_BINARY",
+        "TREATMENT_VARIES_WITHIN_ENTITY",
+        "TREATMENT_ARM_TOO_SMALL",
+        "TREATMENT_NOT_RANDOM",
+        "OUTCOME_WINDOW_IMMATURE",
+        "FEATURE_AFTER_TREATMENT",
+    }
 )
-"""Every code a `ValidationCheck` may carry: the Phase 1 table, the onboarding table and the codes later
-milestones added beside the Phase 1 table (`EXTENSION_VALIDATION_CODES`, DEC-095)."""
+"""Plan B §4's six uplift codes, plus `TREATMENT_VARIES_WITHIN_ENTITY` for two-column keys (M53,
+DEC-854). Defined here, beside the other tables, since the one-registry ruling (DEC-950);
+`engine.uplift.contracts` re-exports it."""
+
+CHECK_CODE_TABLES: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
+    {
+        "validation": VALIDATION_CODES,
+        "extension": EXTENSION_VALIDATION_CODES,
+        "onboarding": ONBOARDING_VALIDATION_CODES,
+        "uplift": UPLIFT_VALIDATION_CODES,
+    }
+)
+"""The one code registry (DEC-950): every check code the platform can write, grouped by the table it
+came from. The tables are disjoint - a code means one thing wherever it appears - and the four
+constants above stay importable under their old names, so no producer had to change."""
+
+CHECK_CODES: Final[frozenset[str]] = frozenset().union(*CHECK_CODE_TABLES.values())
+"""Every code a `ValidationCheck` may carry: the union of the one registry's tables."""
+
+if sum(len(table) for table in CHECK_CODE_TABLES.values()) != len(CHECK_CODES):  # pragma: no cover
+    raise RuntimeError("the check-code tables overlap; a code must belong to exactly one table")
+
+
+def check_code_table(code: str) -> str | None:
+    """The registry table `code` belongs to (`validation`, `extension`, `onboarding` or `uplift`)."""
+    return next((name for name, table in CHECK_CODE_TABLES.items() if code in table), None)
+
 
 _NEVER_ACKNOWLEDGEABLE: Final[frozenset[str]] = frozenset({"FUTURE_EVENTS_LEAKED"})
 """Codes no user may acknowledge, whatever the producer asks for (Phase 2 plan section 7)."""
