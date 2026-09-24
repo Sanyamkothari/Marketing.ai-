@@ -90,7 +90,7 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-500…599 | Phase 5 — Evolve (reserved by plan B) | reserved; unused |
   | DEC-600…699 | Phase 3b — uplift (plan B assigns it this range and reserves the DEC-500s for Phase 5) | claimed 2026-09-23; used to DEC-680 |
   | DEC-700…799 | Phase 4b — production: access, audit, privacy, scheduling (`docs/PHASE4B_PLAN.md`) | claimed 2026-09-23 |
-  | DEC-800…899 | trunk, continued (the integration of the parallel branches onwards) | claimed 2026-09-23; the integrations used DEC-800…801, and Plan D (DEC-850…899) claimed 2026-09-23 |
+  | DEC-800…899 | trunk, continued (the integration of the parallel branches onwards) | claimed 2026-09-23; the integrations used DEC-800…801, the Model page beeswarm DEC-802, and Plan D (DEC-850…899) claimed 2026-09-23 |
   | DEC-900…949 | Plan E — pilot readiness (M59–M64) | claimed 2026-09-23 |
   | DEC-950…999 | v1 readiness: rulings, demo, quick start and the UI clean-up (on `main`) | claimed 2026-09-24 |
   | DEC-1000 up | unallocated | — |

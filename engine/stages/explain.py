@@ -48,18 +48,20 @@ from __future__ import annotations
 
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from functools import lru_cache
 from typing import TYPE_CHECKING, Final, Protocol, cast
 
 from engine.config import ModelFamily
 from engine.contracts import (
+    BeeswarmFeature,
     Direction,
     FeatureImportance,
     FeatureImportanceItem,
     Reason,
     ReasonMethod,
     RowExplanation,
+    ShapBeeswarm,
 )
 from engine.stages.scorer import load_scorer, to_numpy_dtypes
 from engine.stages.train import family_for_model_name
@@ -81,6 +83,9 @@ if TYPE_CHECKING:
     FloatArray = npt.NDArray[np.float64]
 
 __all__ = [
+    "BEESWARM_FEATURES",
+    "BEESWARM_MAX_ROWS",
+    "BEESWARM_UNAVAILABLE_CAPTION",
     "EXPLAIN_MAX_ROWS",
     "GENERAL_SUFFIX",
     "IMPORTANCE_CAPTION",
@@ -89,10 +94,13 @@ __all__ = [
     "MISSING_VALUE",
     "REASON_COLUMN_PREFIX",
     "ROW_EXPLANATIONS_FILENAME",
+    "SHAP_BEESWARM_FILENAME",
     "TOP_FEATURES",
+    "MeasuredContributions",
     "ReasonMethod",
     "RowReasons",
     "RowScorer",
+    "build_beeswarm",
     "build_feature_importance",
     "build_row_explanations",
     "explain_detail",
@@ -107,6 +115,7 @@ __all__ = [
     "reasons_for_row",
     "row_explanation_schema",
     "row_reasons",
+    "unavailable_beeswarm",
     "unavailable_importance",
     "with_reason_columns",
     "write_row_explanations",
@@ -175,6 +184,25 @@ _IMPORTANCE_BUDGET_SHARE: Final[float] = 0.1
 _NUM_SHUFFLE_SETS: Final[int] = 5
 _UNRANKED: Final[int] = 1_000_000
 
+BEESWARM_FEATURES: Final[int] = 15
+"""Features the Details beeswarm plots, largest mean absolute contribution first (DEC-802)."""
+
+BEESWARM_MAX_ROWS: Final[int] = 2000
+"""Rows the beeswarm plots at most - one dot per row per feature - drawn as a seeded sample."""
+
+SHAP_BEESWARM_FILENAME: Final[str] = "shap_beeswarm.json"
+
+BEESWARM_UNAVAILABLE_CAPTION: Final[str] = "Per-row contributions could not be measured for this model."
+
+_BEESWARM_BINS: Final[int] = 100
+"""Horizontal bins the swarm layout stacks dots in, per feature - the count `shap`'s own plot uses."""
+
+_BEESWARM_TICKS: Final[int] = 5
+_OFFSET_DECIMALS: Final[int] = 3
+_COLOUR_DECIMALS: Final[int] = 3
+_SHAP_AXIS_LABEL: Final[str] = "SHAP value (impact on model output)"
+_PERMUTATION_AXIS_LABEL: Final[str] = "Change in score when the feature is replaced by a typical value"
+
 GENERAL_SUFFIX: Final[str] = "(general)"
 """What a general reason's sentence ends with, so a reader can tell it from a measured one."""
 
@@ -233,6 +261,21 @@ class _TreeModel(Protocol):
 
 
 @dataclass(frozen=True)
+class MeasuredContributions:
+    """What the first tier to answer measured, per row and per uploaded feature (DEC-802).
+
+    `rows` are the rows that tier explained, with the frame's own columns; `totals` holds one signed
+    contribution per row for every feature, generated columns already summed back onto the column
+    they came from. It is kept so the beeswarm is drawn from the very numbers the reasons were cut
+    from, rather than from a second, possibly different, measurement.
+    """
+
+    rows: pd.DataFrame
+    totals: Mapping[str, Sequence[float]]
+    method: ReasonMethod
+
+
+@dataclass(frozen=True)
 class RowReasons:
     """The per-row reasons and the tier that produced them.
 
@@ -248,6 +291,7 @@ class RowReasons:
     explanations: tuple[RowExplanation, ...]
     method: ReasonMethod
     fallback_rows: int = 0
+    measured: MeasuredContributions | None = field(default=None, compare=False, repr=False)
 
 
 @dataclass(frozen=True)
@@ -462,6 +506,7 @@ def reasons_for(
     importance: FeatureImportance | None = None,
     max_rows: int | None = EXPLAIN_MAX_ROWS,
     kernel_max_rows: int | None = KERNEL_SHAP_MAX_ROWS,
+    keep_measured: bool = False,
 ) -> RowReasons:
     """Run the tiers in order and turn the first one that works into `RowExplanation`s.
 
@@ -470,6 +515,10 @@ def reasons_for(
     alone, which is the only expensive-per-row tier; `None` there lifts its cap too. The default
     pair is the train flow's: a five-thousand-row sample, of which KernelSHAP would explain a
     thousand.
+
+    `keep_measured` returns what the first tier measured as `RowReasons.measured`, for the train
+    flow's beeswarm (DEC-802). It is off by default because the rows it holds on to are a copy of
+    the frame, which a scoring run of every row has no use for.
 
     `importance` is the global chart, when one was computed: it settles the tie-break between two
     equally strong contributions, chooses which features the permutation tier perturbs, and ranks
@@ -497,6 +546,7 @@ def reasons_for(
     blank: dict[int, RowExplanation] = {}
     strength: dict[str, float] = {}
     primary: ReasonMethod | None = None
+    measured: MeasuredContributions | None = None
     pending = list(range(len(sample)))
 
     attempted = False
@@ -507,9 +557,13 @@ def reasons_for(
         outcome = tier(sample.iloc[pending], not attempted)
         if outcome is None:
             continue  # the tier declined outright; the next one sees the same rows
-        attempted = True  # whether or not it moved anything: the rows below are now a RETRY
         found = outcome.found
         totals = _aggregate_columns(found.values, _source_map(_names(found.values), features))
+        if keep_measured and not attempted:
+            # The first measurement is the one the beeswarm plots; a retry only re-measures the rows
+            # it left at zero, and mixing the two would put two methods on one axis (DEC-802).
+            measured = MeasuredContributions(rows=found.rows, totals=totals, method=found.method)
+        attempted = True  # whether or not it moved anything: the rows below are now a RETRY
         _accumulate_strength(strength, totals)
         covered = [pending[position] for position in outcome.positions]
         still: list[int] = []
@@ -564,7 +618,9 @@ def reasons_for(
         if explanation.method is not method or explanation.method is ReasonMethod.GENERAL
     )
     log_stage(_LOGGER, "explain.reasons", rows=len(explanations), seconds=time.perf_counter() - started)
-    return RowReasons(explanations=explanations, method=method, fallback_rows=fallback_rows)
+    return RowReasons(
+        explanations=explanations, method=method, fallback_rows=fallback_rows, measured=measured
+    )
 
 
 def _names(values: pd.DataFrame) -> list[str]:
@@ -1261,6 +1317,212 @@ def _require_full_coverage(keys: Sequence[str], by_key: Mapping[str, tuple[Reaso
 def _reason_slot(reasons: tuple[Reason, ...], slot: int) -> Reason | None:
     """The reason for one slot, or `None` when this row had fewer reasons than the header has slots."""
     return reasons[slot] if slot < len(reasons) else None
+
+
+# ---------------------------------------------------------------------------
+# shap_beeswarm.json - the Model page's Details plot
+# ---------------------------------------------------------------------------
+def build_beeswarm(
+    measured: MeasuredContributions | None,
+    *,
+    run_id: str,
+    seed: int,
+    rank: Mapping[str, int] | None = None,
+) -> ShapBeeswarm:
+    """The beeswarm artefact: the top 15 features, one dot per sampled row, every coordinate final.
+
+    `measured` is what the first per-row tier measured (:attr:`RowReasons.measured`), so the plot and
+    the reasons are the same numbers. At most :const:`BEESWARM_MAX_ROWS` of its rows are kept, a seeded
+    sample in the frame's own order. Features are ranked by mean absolute contribution over that
+    sample - the beeswarm's own ordering, which can differ from the permutation chart's - with the
+    global chart's `rank`, then the name, breaking ties.
+
+    Everything the page needs is computed here (DEC-802): each dot's x is its contribution, its
+    swarm offset is laid out the way `shap`'s own beeswarm lays it out, and its colour is the row's
+    value scaled 0 to 1 between the feature's 5th and 95th percentiles. No key and no raw value is
+    written, so the file identifies nobody.
+
+    A failure here is never fatal, exactly as for the importance chart (DEC-068): a run that produced
+    a real model is not discarded over a plot, so the stage logs a WARNING and writes the empty one.
+    """
+    if measured is None or not measured.totals or len(measured.rows.index) == 0:
+        return unavailable_beeswarm(run_id)
+    try:
+        return _beeswarm(measured, run_id=run_id, seed=seed, rank=rank)
+    except Exception:
+        _LOGGER.warning("explain: the beeswarm could not be built; the Details plot is empty", exc_info=True)
+        return unavailable_beeswarm(run_id)
+
+
+def _beeswarm(
+    measured: MeasuredContributions, *, run_id: str, seed: int, rank: Mapping[str, int] | None
+) -> ShapBeeswarm:
+    """:func:`build_beeswarm` for a measurement that has rows; may raise, which the caller absorbs."""
+    import numpy as np
+
+    explained = len(measured.rows.index)
+    positions = list(_sample_positions(explained, BEESWARM_MAX_ROWS, seed))
+    rows = measured.rows.iloc[positions]
+    values: dict[str, FloatArray] = {
+        feature: np.asarray(
+            np.round(
+                np.nan_to_num(
+                    np.asarray(contributions, dtype=np.float64)[positions], nan=0.0, posinf=0.0, neginf=0.0
+                ),
+                _CONTRIBUTION_DECIMALS,
+            ),
+            dtype=np.float64,
+        )
+        for feature, contributions in measured.totals.items()
+    }
+    strength = {feature: float(np.mean(np.abs(column))) for feature, column in values.items()}
+    ranks: Mapping[str, int] = {} if rank is None else rank
+    chosen = sorted(values, key=lambda name: (-strength[name], ranks.get(name, _UNRANKED), name))
+    chosen = chosen[:BEESWARM_FEATURES]
+
+    features: list[BeeswarmFeature] = []
+    for position, feature in enumerate(chosen):
+        column = values[feature]
+        numeric, colours = (
+            _beeswarm_colours(rows[feature]) if feature in rows.columns else (False, (None,) * len(column))
+        )
+        features.append(
+            BeeswarmFeature(
+                rank=position + 1,
+                feature=feature,
+                mean_abs_contribution=round(strength[feature], _CONTRIBUTION_DECIMALS),
+                numeric=numeric,
+                contributions=tuple(float(value) for value in column),
+                offsets=_swarm_offsets(column, seed + position),
+                colours=colours,
+            )
+        )
+    low = min(min(item.contributions) for item in features)
+    high = max(max(item.contributions) for item in features)
+    ticks = _axis_ticks(low, high)
+    shap_values = measured.method in {ReasonMethod.TREE_SHAP, ReasonMethod.KERNEL_SHAP}
+    return ShapBeeswarm(
+        run_id=run_id,
+        method=measured.method,
+        rows_explained=explained,
+        rows_sampled=len(positions),
+        top_n=len(features),
+        x_min=ticks[0],
+        x_max=ticks[-1],
+        ticks=ticks,
+        x_label=_SHAP_AXIS_LABEL if shap_values else _PERMUTATION_AXIS_LABEL,
+        features=tuple(features),
+        caption=_beeswarm_caption(measured.method, len(positions), explained, shap_values=shap_values),
+    )
+
+
+def unavailable_beeswarm(run_id: str) -> ShapBeeswarm:
+    """The empty plot: no dots, and a caption that says so rather than an invented swarm."""
+    return ShapBeeswarm(
+        run_id=run_id,
+        method=None,
+        rows_explained=0,
+        rows_sampled=0,
+        top_n=0,
+        x_min=-1.0,
+        x_max=1.0,
+        ticks=(),
+        x_label="",
+        features=(),
+        caption=BEESWARM_UNAVAILABLE_CAPTION,
+    )
+
+
+def _beeswarm_caption(method: ReasonMethod, sampled: int, explained: int, *, shap_values: bool) -> str:
+    """The caption names the method that ran and the sample it ran on, never one the engine did not use."""
+    sample = (
+        f"all {explained:,} test rows explained"
+        if sampled == explained
+        else f"{sampled:,} of the {explained:,} test rows explained, a seeded sample"
+    )
+    head = (
+        f"{method} values, one dot per row: {sample}."
+        if shap_values
+        else f"SHAP could not be computed for this model; these are the {method} contributions the "
+        f"per-row reasons use, one dot per row: {sample}."
+    )
+    return (
+        f"{head} Features are ordered by mean absolute contribution. Colour is the feature's value, "
+        f"low to high; grey means missing or not numeric."
+    )
+
+
+def _beeswarm_colours(column: pd.Series) -> tuple[bool, tuple[float | None, ...]]:
+    """Each row's value scaled 0 (low) to 1 (high), and whether the feature has a numeric value at all.
+
+    The scale runs between the 5th and 95th percentiles and clips outside them, as `shap`'s plot
+    does, so one extreme row cannot wash every other dot into the same colour; a feature too
+    concentrated for that widens to the 1st and 99th, then to its whole range, and a constant sits
+    in the middle. A date is scaled by time, a boolean as 0 and 1; anything else is not numeric and
+    every dot is grey, as is a missing value.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if pd.api.types.is_datetime64_any_dtype(column):
+        numbers = (column - column.min()).dt.total_seconds().to_numpy(dtype=np.float64, na_value=np.nan)
+    elif pd.api.types.is_bool_dtype(column) or pd.api.types.is_numeric_dtype(column):
+        numbers = column.to_numpy(dtype=np.float64, na_value=np.nan)
+    else:
+        return False, (None,) * len(column)
+    finite = numbers[np.isfinite(numbers)]
+    if len(finite) == 0:
+        return True, (None,) * len(column)
+    low, high = np.percentile(finite, [5, 95])
+    if low == high:
+        low, high = np.percentile(finite, [1, 99])
+    if low == high:
+        low, high = float(finite.min()), float(finite.max())
+    scaled = np.full(len(numbers), 0.5) if low == high else np.clip((numbers - low) / (high - low), 0.0, 1.0)
+    return True, tuple(
+        round(float(value), _COLOUR_DECIMALS) if math.isfinite(number) else None
+        for value, number in zip(scaled, numbers, strict=True)
+    )
+
+
+def _swarm_offsets(values: FloatArray, seed: int) -> tuple[float, ...]:
+    """Each dot's vertical offset, -1 to 1, in the layout `shap`'s beeswarm uses.
+
+    The feature's range is cut into :data:`_BEESWARM_BINS` bins; within a bin, dots are stacked
+    alternately above and below the centre line - 0, +1, -1, +2, -2 ... - in a seeded order, so the
+    height of a pile shows how many rows share that contribution. Offsets are divided by the tallest
+    pile plus one, so the densest bin of each feature fills its band and no two bands overlap.
+    """
+    import numpy as np
+
+    count = len(values)
+    if count == 0:
+        return ()
+    low, high = float(values.min()), float(values.max())
+    bins = np.round(_BEESWARM_BINS * (values - low) / (high - low + 1e-8))
+    order = np.random.default_rng(seed).permutation(count)
+    order = order[np.argsort(bins[order], kind="stable")]
+    ordered = bins[order]
+    starts = np.concatenate(([0], np.flatnonzero(np.diff(ordered)) + 1))
+    first = np.repeat(starts, np.diff(np.concatenate((starts, [count]))))
+    layer = np.arange(count) - first
+    stacked = np.ceil(layer / 2) * ((layer % 2) * 2 - 1)
+    offsets = np.empty(count, dtype=np.float64)
+    offsets[order] = stacked
+    tallest = float(np.max(np.abs(offsets)))
+    return tuple(round(float(offset) / (tallest + 1.0), _OFFSET_DECIMALS) + 0.0 for offset in offsets)
+
+
+def _axis_ticks(low: float, high: float) -> tuple[float, ...]:
+    """About five round ticks covering `low..high` and zero; the first and last are the axis ends."""
+    low, high = min(low, 0.0), max(high, 0.0)
+    if high == low:
+        return (-1.0, 0.0, 1.0)
+    raw = (high - low) / _BEESWARM_TICKS
+    magnitude = 10.0 ** math.floor(math.log10(raw))
+    step = next(factor * magnitude for factor in (1.0, 2.0, 2.5, 5.0, 10.0) if factor * magnitude >= raw)
+    first, last = math.floor(low / step + 1e-9), math.ceil(high / step - 1e-9)
+    return tuple(round(index * step, 12) + 0.0 for index in range(first, last + 1))
 
 
 # ---------------------------------------------------------------------------

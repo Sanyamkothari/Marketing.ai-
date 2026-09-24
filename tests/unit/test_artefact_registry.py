@@ -56,6 +56,7 @@ BEYOND_PLAN_SECTION_7 = {
     "run_config.json",  # plan section 5: the merged configuration a run resolved to
     "run_manifest.json",  # DEC-042: one flat, queryable record per run
     "job_spec.json",  # DEC-324: the declarative description a remote job is handed
+    "shap_beeswarm.json",  # DEC-802: the Model page's Details beeswarm, laid out at explain time
 }
 
 

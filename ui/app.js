@@ -25,7 +25,7 @@ import {
 } from "./dom.js";
 import { mountChrome } from "./chrome.js";
 import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
-import { isUplift, pageArtefacts, renderPage } from "./pages.js";
+import { bindPage, isUplift, pageArtefacts, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
 import { MODULES_CHANGED, resolveRoute } from "./modules/router.js";
 import { aiNoticeHtml, needsAiNotice } from "./availability.js";
@@ -227,7 +227,7 @@ async function showPage(id, kind, runId) {
   const detail = await getRun(chosen);
   const art = await getArtefacts(chosen, pageArtefacts(kind, detail.run));
   const extra = { ...(await lineageOf(kind, detail.run)), ...(await upliftChartsFor(kind, detail.run)) };
-  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), extra));
+  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), extra), () => bindPage(kind, app));
   return uc;
 }
 

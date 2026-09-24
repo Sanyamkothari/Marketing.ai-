@@ -126,7 +126,7 @@ Contract schema version: 1.
 
 One file per stage in `data/runs/<run_id>/`. Every field below is what the UI renders.
 
-A training run writes: `baseline.json`, `best_model.json`, `confusion_matrix.json`, `decile_lift.json`, `drift_baseline.json`, `evaluation.json`, `fairness.json`, `feature_importance.json`, `leaderboard.json`, `model/`, `prepare.json`, `profile.json`, `row_explanations.parquet`, `run.json`, `run_config.json`, `run_manifest.json`, `schema.json`, `split.json`, `status.json`, `validation.json`.
+A training run writes: `baseline.json`, `best_model.json`, `confusion_matrix.json`, `decile_lift.json`, `drift_baseline.json`, `evaluation.json`, `fairness.json`, `feature_importance.json`, `leaderboard.json`, `model/`, `prepare.json`, `profile.json`, `row_explanations.parquet`, `run.json`, `run_config.json`, `run_manifest.json`, `schema.json`, `shap_beeswarm.json`, `split.json`, `status.json`, `validation.json`.
 
 A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explanations.parquet`, `run.json`, `run_config.json`, `run_manifest.json`, `scores.csv`, `scores.parquet`, `scoring_summary.json`, `status.json`, `validation.json`.
 
@@ -1246,6 +1246,41 @@ One feature on the global importance chart.
 | `share_pct` | number | yes | Importance as a percentage, normalised over the returned rows. |
 | `stddev` | number \| null | no | Standard deviation of the importance estimate. |
 | `p_value` | number \| null | no | P-value of the permutation importance estimate. |
+
+### `shap_beeswarm.json`
+
+`shap_beeswarm.json` - the per-customer contributions behind the Model page's Details plot.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `run_id` | string | yes | Run this plot belongs to. |
+| `method` | ReasonMethod ("TreeSHAP" \| "KernelSHAP" \| "permutation" \| "general") \| null | yes | Tier that measured the contributions; null when none could be measured. |
+| `computed_on` | "test" | no | Split the rows were sampled from. |
+| `rows_explained` | integer | yes | Rows the tier measured before the plot's sample was drawn. |
+| `rows_sampled` | integer | yes | Rows plotted: one dot per row on every feature. |
+| `top_n` | integer | yes | Features plotted, at most fifteen. |
+| `x_min` | number | yes | Left end of the axis: the first tick, at or below every contribution. |
+| `x_max` | number | yes | Right end of the axis: the last tick, at or above every contribution. |
+| `ticks` | list[number] | yes | Axis ticks, ascending, zero among them; empty when nothing is plotted. |
+| `x_label` | string | yes | Axis title, naming what a contribution measures. |
+| `features` | list[BeeswarmFeature] | yes | Features, largest mean contribution first. |
+| `caption` | string | yes | Caption under the plot, naming the method and the sample. |
+
+#### BeeswarmFeature
+
+One row of the beeswarm: a feature and one dot per sampled customer (DEC-802).  The three tuples are parallel - position `i` of each is the same customer - so the file carries no key and no raw value: a dot is a contribution, a vertical offset and a colour, nothing more.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `schema_version` | integer | no | Version of the contract the file was written with. |
+| `rank` | integer | yes | Rank by mean absolute contribution, one is the largest. |
+| `feature` | string | yes | Feature name, as the client's file spells it. |
+| `mean_abs_contribution` | number | yes | Mean absolute contribution over the sampled rows. |
+| `numeric` | boolean | yes | Whether the colour carries the feature's value; false draws every dot grey. |
+| `contributions` | list[number] | yes | Signed contribution per sampled row: the dot's x. |
+| `offsets` | list[number] | yes | Swarm offset per row, -1 to 1, computed at explain time so the page only scales it. |
+| `colours` | list[number \| null] | yes | Feature value per row scaled 0 (low) to 1 (high) between its 5th and 95th percentiles; null when the value is missing or the feature is not numeric. |
 
 ### `drift_baseline.json`
 
