@@ -17,4 +17,8 @@ infra/.cdk.staging
 # the repository itself (the docs, the Makefile, the workflows, the generated observability files);
 # so the docs and the workflows are in the context, and only what no test reads stays out.
 docs/prototype
+# UI screenshots and their upload files (docs/UI_AUDIT.md): no test reads them.
+docs/ui/before
+docs/ui/after
+docs/ui/fixtures
 plan.md
