@@ -473,7 +473,7 @@ def test_the_results_blocks_name_the_data_and_the_model(journey: Journey) -> Non
     assert len(journey.train_blocks) == 3, journey.train_blocks
     (_, data_value, data_meta), (_, model_value, model_meta), _ = journey.train_blocks
     assert data_value == "history.csv"
-    assert f"key {PRIMARY_KEY}" in data_meta and f"target {TARGET}" in data_meta
+    assert f"ID {PRIMARY_KEY}" in data_meta and f"predicting {TARGET}" in data_meta
     assert EM_DASH not in data_meta, data_meta
     assert model_value and EM_DASH not in model_value, model_value
     assert EM_DASH not in model_meta, model_meta

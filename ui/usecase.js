@@ -119,6 +119,7 @@ export function useCaseState(uc) {
       submitError: null,
       submitting: false,
       cancelAsk: false,
+      runGated: false,
       runs: [],
       models: [],
       clientRuns: [],
@@ -275,12 +276,14 @@ const trainedVersions = (s) => s.models;
 const latestDone = (s) => s.runs.find((run) => run.state === "done") || null;
 
 /**
- * Whether this person may start a run: the top bar's access provider (`registerAccess`), read through
- * the router when it offers `canAccess(method, path)`; with no provider everyone may (sign-in off).
+ * Whether this person may start a run. The top bar's access provider (`registerAccess`) answers when
+ * the router offers `canAccess(method, path)`; until it does, the role gate's own verdict is read off
+ * the painted Run button (`production/gate.js` marks a control it disabled with `data-pb-gate`, from
+ * the same permission table), remembered in `s.runGated`. With neither, everyone may (sign-in off).
  */
-function mayRun() {
+function mayRun(s) {
   const can = seams.canAccess;
-  if (typeof can !== "function") return true;
+  if (typeof can !== "function") return !s.runGated;
   try {
     return can("POST", "/runs") !== false;
   } catch {
@@ -771,7 +774,7 @@ function setupForm(uc, s) {
 }
 
 function setupHtml(uc, s) {
-  if (mayRun()) return `<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
+  if (mayRun(s)) return `<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
   // A role that may not start runs: what it can do first, the (gated) form folded away below.
   const latest = latestDone(s);
   return `<div class="uc-viewer">${noticeCard({
@@ -924,8 +927,8 @@ function flowBlocks(uc, s, run) {
       dataName(run),
       [
         rows ? `${rows} rows` : "",
-        keyColumns(run.primary_key).length ? `key ${keyLabel(run.primary_key)}` : "",
-        train && run.target ? `target ${run.target}` : "",
+        keyColumns(run.primary_key).length ? `ID ${keyLabel(run.primary_key)}` : "",
+        train && run.target ? `predicting ${run.target}` : "",
       ]
         .filter(Boolean)
         .join(" · "),
@@ -933,11 +936,14 @@ function flowBlocks(uc, s, run) {
     [
       "model",
       "Model",
-      run.best_model || (done ? "Model" : "Not trained"),
+      // A run that did not finish has no model to name, whatever its record carried over.
+      done ? run.best_model || "Model" : train ? "Not trained" : run.best_model || "Model",
       train
-        ? [metricText(run.headline_metric_label, run.headline_score), run.model_choice === AUTOML ? "picked automatically" : ""]
-            .filter(Boolean)
-            .join(" · ")
+        ? done
+          ? [metricText(run.headline_metric_label, run.headline_score), run.model_choice === AUTOML ? "picked automatically" : ""]
+              .filter(Boolean)
+              .join(" · ")
+          : ""
         : [version && version.is_champion ? "Approved model" : "Trained model", trainedOn].filter(Boolean).join(" · "),
     ],
     [
@@ -945,7 +951,9 @@ function flowBlocks(uc, s, run) {
       "Output",
       train ? uc.pages.output : rows ? `${rows} rows scored` : uc.pages.output,
       train
-        ? `Who to contact: available after scoring new ${people(uc)} with this model.`
+        ? done
+          ? `Who to contact: available after scoring new ${people(uc)} with this model.`
+          : ""
         : present(s.kpiDisplay)
           ? `${uc.output.kpi.label}: ${s.kpiDisplay}`
           : "The list of who to contact, with reasons and actions.",
@@ -1687,6 +1695,19 @@ export function createController(uc, rerender) {
 
     // Last, so none of the queries above reaches into the panel: it binds its own events.
     if (s.view === "setup") mountSource(root);
+
+    // The role gate disables Run in a microtask after this paint; once it has, a role that may not
+    // start runs gets the read-only layout (and the full form again after a sign-in as one that may).
+    if (s.view === "setup" && typeof seams.canAccess !== "function") {
+      setTimeout(() => {
+        const run = root.querySelector("#f-run");
+        const gated = Boolean(run && run.dataset.pbGate);
+        if (run && gated !== s.runGated && s.view === "setup") {
+          s.runGated = gated;
+          rerender();
+        }
+      }, 0);
+    }
   }
 
   return { state: s, bind, refreshLists, loadRun, poll, stop, sync };
