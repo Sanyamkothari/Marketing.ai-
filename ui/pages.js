@@ -28,6 +28,7 @@ import {
   table,
   typeChip,
 } from "./dom.js";
+import { getArtefact } from "./api.js";
 import { indexSchema, readPath } from "./settings.js";
 
 export const PAGE_ARTEFACTS = {
@@ -44,6 +45,13 @@ export const PAGE_ARTEFACTS = {
   ],
   output: ["decile_lift.json", "scoring_summary.json", "drift.json", "run_config.json", "prepare.json"],
 };
+
+/**
+ * The Model page's Details beeswarm. It is fetched only when the section is opened: the default view
+ * stays the importance chart, and a plot of up to 2,000 rows x 15 features is not worth loading for
+ * a reader who never asks for it (DEC-802).
+ */
+export const BEESWARM_ARTEFACT = "shap_beeswarm.json";
 
 const TAB_LABEL = { data: "Data", model: "Model", output: "Output" };
 
@@ -362,6 +370,12 @@ function modelPage(uc, run, art, byPath) {
     : `<div class="empty">This run has not produced feature_importance.json yet.</div>`;
   const importanceTitle = importance ? `Feature importance (${importance.method})` : "Feature importance";
 
+  // Collapsed by default; `bindPage` loads the plot the first time it is opened.
+  const shapOn = config ? readPath(config, "evaluation.shap") : undefined;
+  const detailsCard = `<section class="card"><details class="more" data-beeswarm="${esc(
+    run.run_id,
+  )}" data-shap="${esc(String(shapOn))}"><summary><span class="mt">Details</span><span class="ms">Beeswarm: every row's contribution to the score, top 15 features</span></summary><div class="more-body"><p class="caption">Loading…</p></div></details></section>`;
+
   const matrixCard = matrix
     ? `<div class="cm">
           <span></span><span class="hd">Predicted +</span><span class="hd">Predicted −</span>
@@ -422,7 +436,116 @@ function modelPage(uc, run, art, byPath) {
       <section class="card"><h3>${esc(importanceTitle)}</h3>${bars}</section>
       <section class="card"><h3>Confusion matrix</h3>${matrixCard}</section>
     </div>
+    ${detailsCard}
     ${boardCard}${fairnessCard}`;
+}
+
+// --- Model: the Details beeswarm ---------------------------------------------------------------
+// Every coordinate comes from `shap_beeswarm.json`: a dot's x is its contribution, its offset and
+// its colour were laid out at explain time. This code only scales those numbers to the SVG's size.
+
+const BS = { width: 960, label: 190, legend: 90, row: 28, top: 10, radius: 2.4, steps: 5 };
+
+const bsLabel = (name) => (name.length > 28 ? `${name.slice(0, 27)}…` : name);
+
+/** The colour class for one dot: five steps of one hue, low to high, grey when there is no value. */
+const bsClass = (colour) =>
+  colour === null || colour === undefined ? "na" : `c${Math.min(BS.steps - 1, Math.floor(colour * BS.steps))}`;
+
+export function beeswarmHtml(bs) {
+  const features = (bs && bs.features) || [];
+  if (!features.length) {
+    return `<div class="empty">${esc((bs && bs.caption) || "No beeswarm was drawn for this run.")}</div>`;
+  }
+  const x0 = BS.label + 12;
+  const x1 = BS.width - BS.legend - 16;
+  const span = bs.x_max - bs.x_min || 1;
+  const px = (v) => x0 + ((v - bs.x_min) / span) * (x1 - x0);
+  const bottom = BS.top + features.length * BS.row;
+  const height = bottom + 52;
+  const r = BS.radius;
+
+  const paths = { na: [], c0: [], c1: [], c2: [], c3: [], c4: [] };
+  const rows = features.map((item, i) => {
+    const centre = BS.top + (i + 0.5) * BS.row;
+    item.contributions.forEach((value, j) => {
+      const x = px(value).toFixed(1);
+      const y = (centre + item.offsets[j] * BS.row * 0.45).toFixed(1);
+      paths[bsClass(item.colours[j])].push(`M${x} ${y}m${-r} 0a${r} ${r} 0 1 0 ${2 * r} 0a${r} ${r} 0 1 0 ${-2 * r} 0`);
+    });
+    const tip = `${item.feature}: mean absolute contribution ${fmtNum(item.mean_abs_contribution, 6)} across ${fmtInt(
+      item.contributions.length,
+    )} rows${item.numeric ? "" : " (not numeric, drawn grey)"}`;
+    return {
+      grid: `<line class="bs-grid" x1="${x0}" x2="${x1}" y1="${centre}" y2="${centre}"/>`,
+      label: `<text class="bs-lab" x="${BS.label}" y="${centre}" dy="0.35em" text-anchor="end">${esc(
+        bsLabel(item.feature),
+      )}</text>`,
+      hit: `<rect class="bs-hit" x="0" y="${centre - BS.row / 2}" width="${x1}" height="${BS.row}"><title>${esc(
+        tip,
+      )}</title></rect>`,
+    };
+  });
+
+  const ticks = (bs.ticks || [])
+    .map(
+      (t) =>
+        `<line class="bs-tick" x1="${px(t)}" x2="${px(t)}" y1="${bottom}" y2="${bottom + 4}"/><text class="bs-num" x="${px(
+          t,
+        )}" y="${bottom + 18}" text-anchor="middle">${esc(fmtNum(t, 6))}</text>`,
+    )
+    .join("");
+  const zero = bs.x_min <= 0 && bs.x_max >= 0 ? `<line class="bs-zero" x1="${px(0)}" x2="${px(0)}" y1="${BS.top}" y2="${bottom}"/>` : "";
+  const dots = ["na", "c0", "c1", "c2", "c3", "c4"]
+    .filter((k) => paths[k].length)
+    .map((k) => `<path class="bs-${k}" d="${paths[k].join("")}"/>`)
+    .join("");
+
+  const lx = x1 + 34;
+  const cell = 16;
+  const ly = BS.top + 18;
+  const legend = `<g class="bs-legend"><text class="bs-num" x="${lx + 5}" y="${ly - 6}" text-anchor="middle">High</text>${[4, 3, 2, 1, 0]
+    .map((k, i) => `<rect class="bs-c${k}" x="${lx}" y="${ly + i * cell}" width="10" height="${cell}"/>`)
+    .join("")}<text class="bs-num" x="${lx + 5}" y="${ly + 5 * cell + 14}" text-anchor="middle">Low</text><text class="bs-num" transform="translate(${
+    lx + 26
+  } ${ly + (5 * cell) / 2}) rotate(-90)" text-anchor="middle">Feature value</text></g>`;
+
+  const aria = `Beeswarm of ${bs.method || "measured"} contributions for ${fmtInt(bs.rows_sampled)} rows across ${
+    features.length
+  } features`;
+  return `<div class="bswarm"><svg viewBox="0 0 ${BS.width} ${height}" role="img" aria-label="${esc(aria)}">
+      ${rows.map((row) => row.grid).join("")}${zero}${dots}${rows.map((row) => row.label).join("")}
+      <line class="bs-axis" x1="${x0}" x2="${x1}" y1="${bottom}" y2="${bottom}"/>${ticks}
+      <text class="bs-num" x="${(x0 + x1) / 2}" y="${bottom + 40}" text-anchor="middle">${esc(bs.x_label)}</text>
+      ${legend}${rows.map((row) => row.hit).join("")}
+    </svg></div><p class="caption">${esc(bs.caption)}</p>`;
+}
+
+/** What the Details section says when the run has no beeswarm, worded by why it has none. */
+function noBeeswarm(shap) {
+  return shap === "false"
+    ? "Per-row reasons (evaluation.shap) are switched off for this use case, so this run has no beeswarm."
+    : `This run has not produced ${BEESWARM_ARTEFACT}.`;
+}
+
+/** Wire a painted page: on the Model page, load the beeswarm the first time Details is opened. */
+export function bindPage(kind, root) {
+  if (kind !== "model") return;
+  root.querySelectorAll("details[data-beeswarm]").forEach((details) => {
+    let loaded = false;
+    details.addEventListener("toggle", async () => {
+      if (!details.open || loaded) return;
+      loaded = true;
+      const body = details.querySelector(".more-body");
+      try {
+        const bs = await getArtefact(details.dataset.beeswarm, BEESWARM_ARTEFACT);
+        body.innerHTML = bs ? beeswarmHtml(bs) : `<div class="empty">${esc(noBeeswarm(details.dataset.shap))}</div>`;
+      } catch (error) {
+        loaded = false;
+        body.innerHTML = errorBox(error);
+      }
+    });
+  });
 }
 
 // --- Output ------------------------------------------------------------------------------------

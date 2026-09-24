@@ -13,7 +13,7 @@ import {
 } from "./api.js";
 import { backLink, errorBox, esc, pageHead } from "./dom.js";
 import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
-import { PAGE_ARTEFACTS, renderPage } from "./pages.js";
+import { PAGE_ARTEFACTS, bindPage, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
 import { MODULES_CHANGED, resolveRoute } from "./modules/router.js";
 
@@ -134,7 +134,9 @@ async function showPage(id, kind, runId) {
   loading(uc.pages[kind]);
   const detail = await getRun(chosen);
   const art = await getArtefacts(chosen, PAGE_ARTEFACTS[kind]);
-  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), await lineageOf(kind, detail.run)));
+  paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), await lineageOf(kind, detail.run)), () =>
+    bindPage(kind, app),
+  );
 }
 
 /**

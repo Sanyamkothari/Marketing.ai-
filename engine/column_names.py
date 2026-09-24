@@ -55,7 +55,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from engine.config import Recipe
-    from engine.contracts import FeatureImportance, Reason, RowExplanation
+    from engine.contracts import FeatureImportance, Reason, RowExplanation, ShapBeeswarm
     from engine.storage import Storage
 
 __all__ = [
@@ -67,6 +67,7 @@ __all__ = [
     "is_safe_name",
     "load_for_model",
     "present_explanations",
+    "restore_beeswarm",
     "restore_importance",
     "safe_base",
     "save_for_model",
@@ -229,6 +230,16 @@ def restore_importance(importance: FeatureImportance, names: ColumnNames) -> Fea
         item.model_copy(update={"feature": names.original(item.feature)}) for item in importance.items
     )
     return importance.model_copy(update={"items": items})
+
+
+def restore_beeswarm(beeswarm: ShapBeeswarm, names: ColumnNames) -> ShapBeeswarm:
+    """The beeswarm with every feature under the name the client's file gave it."""
+    if names.is_identity:
+        return beeswarm
+    features = tuple(
+        item.model_copy(update={"feature": names.original(item.feature)}) for item in beeswarm.features
+    )
+    return beeswarm.model_copy(update={"features": features})
 
 
 def internal_importance(importance: FeatureImportance | None, names: ColumnNames) -> FeatureImportance | None:

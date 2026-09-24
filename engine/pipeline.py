@@ -61,6 +61,7 @@ from engine.column_names import (
     internal_importance,
     load_for_model,
     present_explanations,
+    restore_beeswarm,
     restore_importance,
     save_for_model,
 )
@@ -977,6 +978,7 @@ class _TrainFlow:
                 primary_key=names.internal(ctx.row_key),
                 seed=self._seed,
                 importance=measured,
+                keep_measured=True,
             )
             reasons = _presented(
                 reasons, names, _free_text_columns(_require(self._frame, "the uploaded rows"), self._profile)
@@ -986,6 +988,14 @@ class _TrainFlow:
                 reasons.explanations, run_id=ctx.run_id, storage=self._storage
             )
             self._artefacts[explain.ROW_EXPLANATIONS_FILENAME] = key
+            # The Details beeswarm, from the contributions the reasons were just cut from (DEC-802).
+            beeswarm = explain.build_beeswarm(
+                reasons.measured,
+                run_id=ctx.run_id,
+                seed=self._seed,
+                rank={item.feature: item.rank for item in measured.items},
+            )
+            self._write(explain.SHAP_BEESWARM_FILENAME, restore_beeswarm(beeswarm, names))
             rows = len(reasons.explanations)
         return _StageOutcome(explain.explain_detail(importance, self._reasons), rows)
 

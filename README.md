@@ -106,7 +106,7 @@ marketing-ai/
 │   │   ├── train.py              # AutoGluon training + leaderboard
 │   │   ├── scorer.py             # the fitted model: calibration and the decision threshold (DEC-043)
 │   │   ├── evaluate.py           # metrics, confusion matrix, calibration, decile lift, fairness
-│   │   ├── explain.py            # feature importance + per-row SHAP reasons
+│   │   ├── explain.py            # feature importance + per-row SHAP reasons + the Details beeswarm
 │   │   ├── register.py           # model versions, champion rule and head-to-head promotion
 │   │   ├── score.py              # batch scoring with the champion, schema check and drift
 │   │   ├── actions.py            # risk bands, suppression, control group, action mapping

@@ -52,6 +52,7 @@ __all__ = [
     "BandCount",
     "BaselineComparison",
     "BaselineMetric",
+    "BeeswarmFeature",
     "BestModel",
     "CalibrationSummary",
     "CarriedColumn",
@@ -102,6 +103,7 @@ __all__ = [
     "ScoreRow",
     "ScoringSummary",
     "Severity",
+    "ShapBeeswarm",
     "SplitPart",
     "SplitReport",
     "StageKey",
@@ -936,6 +938,61 @@ class RowExplanation(Artefact):
     )
 
 
+class BeeswarmFeature(Artefact):
+    """One row of the beeswarm: a feature and one dot per sampled customer (DEC-802).
+
+    The three tuples are parallel - position `i` of each is the same customer - so the file carries
+    no key and no raw value: a dot is a contribution, a vertical offset and a colour, nothing more.
+    """
+
+    rank: int = Field(description="Rank by mean absolute contribution, one is the largest.")
+    feature: str = Field(description="Feature name, as the client's file spells it.")
+    mean_abs_contribution: float = Field(description="Mean absolute contribution over the sampled rows.")
+    numeric: bool = Field(
+        description="Whether the colour carries the feature's value; false draws every dot grey."
+    )
+    contributions: tuple[float, ...] = Field(description="Signed contribution per sampled row: the dot's x.")
+    offsets: tuple[float, ...] = Field(
+        description="Swarm offset per row, -1 to 1, computed at explain time so the page only scales it."
+    )
+    colours: tuple[float | None, ...] = Field(
+        description="Feature value per row scaled 0 (low) to 1 (high) between its 5th and 95th "
+        "percentiles; null when the value is missing or the feature is not numeric."
+    )
+
+    @model_validator(mode="after")
+    def _parallel(self) -> BeeswarmFeature:
+        if not len(self.contributions) == len(self.offsets) == len(self.colours):
+            raise ValueError("contributions, offsets and colours must have one entry per sampled row each")
+        return self
+
+
+class ShapBeeswarm(Artefact):
+    """`shap_beeswarm.json` - the per-customer contributions behind the Model page's Details plot.
+
+    Written by the train flow's explain stage from the contributions the per-row reasons were
+    measured with, so the plot and the reasons can never disagree. Every coordinate is computed
+    there; the page scales numbers to pixels and does no arithmetic on the data (DEC-802).
+    """
+
+    run_id: str = Field(description="Run this plot belongs to.")
+    method: ReasonMethod | None = Field(
+        description="Tier that measured the contributions; null when none could be measured."
+    )
+    computed_on: Literal["test"] = Field(default="test", description="Split the rows were sampled from.")
+    rows_explained: int = Field(description="Rows the tier measured before the plot's sample was drawn.")
+    rows_sampled: int = Field(description="Rows plotted: one dot per row on every feature.")
+    top_n: int = Field(description="Features plotted, at most fifteen.")
+    x_min: float = Field(description="Left end of the axis: the first tick, at or below every contribution.")
+    x_max: float = Field(description="Right end of the axis: the last tick, at or above every contribution.")
+    ticks: tuple[float, ...] = Field(
+        description="Axis ticks, ascending, zero among them; empty when nothing is plotted."
+    )
+    x_label: str = Field(description="Axis title, naming what a contribution measures.")
+    features: tuple[BeeswarmFeature, ...] = Field(description="Features, largest mean contribution first.")
+    caption: str = Field(description="Caption under the plot, naming the method and the sample.")
+
+
 # ---------------------------------------------------------------------------
 # 5.10 drift_baseline.json, drift.json
 # ---------------------------------------------------------------------------
@@ -1406,6 +1463,7 @@ ARTEFACT_REGISTRY: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
         "baseline.json": BaselineComparison,
         "fairness.json": FairnessReport,
         "feature_importance.json": FeatureImportance,
+        "shap_beeswarm.json": ShapBeeswarm,
         "drift_baseline.json": DriftBaseline,
         "drift.json": DriftReport,
         "scoring_summary.json": ScoringSummary,
@@ -1444,6 +1502,7 @@ TRAIN_ARTEFACTS: Final[frozenset[str]] = frozenset(
         "baseline.json",
         "fairness.json",
         "feature_importance.json",
+        "shap_beeswarm.json",
         "drift_baseline.json",
         "schema.json",
         "run_manifest.json",
