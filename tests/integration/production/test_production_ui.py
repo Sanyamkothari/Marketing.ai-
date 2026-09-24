@@ -88,6 +88,15 @@ REQUIRED_GATES: Final[dict[str, tuple[str, str]]] = {
     "approve campaign copy": ("POST", "/runs/{run_id}/campaign-copy/templates/{template_id}/approve"),
     "settings": ("PUT", "/connection/aws"),
     "build an assistant": ("POST", "/use-cases/{use_case_id}/indexes"),
+    # v1 (C13): what a Viewer could still press before
+    "measure a campaign's results": ("POST", "/runs/{run_id}/campaign-results"),
+    "save a campaign's value inputs": ("PUT", "/pilot/roi/{run_id}"),
+    "export all feedback": ("GET", "/pilot/feedback/export"),
+    "add a client": ("POST", "/clients"),
+    "add a raw table": ("POST", "/clients/{client_id}/sources"),
+    "remove a raw table": ("DELETE", "/clients/{client_id}/sources/{source_id}"),
+    "save a mapping": ("PUT", "/clients/{client_id}/mappings/{mapping_id}"),
+    "build a dataset": ("POST", "/datasets"),
 }
 """The actions M46 names ("hide or disable every action the user cannot take"), by the route each calls."""
 

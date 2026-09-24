@@ -94,7 +94,7 @@ export function saveBlob(blob, name) {
   const save = document.createElement("a");
   save.href = objectUrl;
   save.download = name;
-  save.style.display = "none";
+  save.hidden = true;
   document.body.appendChild(save);
   save.click();
   save.remove();

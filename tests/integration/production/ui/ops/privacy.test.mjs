@@ -136,25 +136,29 @@ test("a lookup sends the id in the body only and answers by hash, per purpose, w
   const form = $("#pb-consent-lookup");
   setField(w, form, "principal_id", typed.looked_up);
   submit(w, form);
-  await until(() => /Ledger rows, oldest first/.test(text()), 2000, "the answer");
+  await until(() => /Consent history, oldest first/.test(text()), 2000, "the answer");
   const lookup = fixture("lookup");
   assert.match(text(), new RegExp(lookup.principal_hash));
   const states = Object.fromEntries(lookup.purposes.map((p) => [p.purpose, p.state]));
   assert.equal(states.marketing_communication, "withdrawn");
-  assert.ok($$(".pill.bad").some((p) => p.textContent === "withdrawn"));
-  assert.ok($$(".pill").some((p) => p.textContent === "no record"));
+  const answer = (purpose) => $(`.pb-consent-answer tr[data-purpose="${purpose}"] .pill`);
+  assert.equal(answer("marketing_communication").dataset.status, "withdrawn");
+  assert.ok(answer("marketing_communication").classList.contains("bad"));
+  assert.match(answer("marketing_communication").textContent, /^No, they withdrew consent$/);
+  assert.equal(answer("account_servicing").dataset.status, "none");
+  assert.match(answer("account_servicing").textContent, /^No, there is no consent on record$/);
   assert.match(text(), /privacy\.consent\.lookup/);
   nowhereBut(typed.looked_up, last("POST", "/privacy/consent/lookup").body);
 });
 
 test("an erasure is sent only once confirmed, runs in the background, and a failed store is retried", async () => {
   w.location.hash = "#/privacy/erasure";
-  await until(() => $("#pb-erasure") && /Erasure register ·/.test(cardTitles()), 3000, "the erasure screen");
+  await until(() => $("#pb-erasure") && /Erasure requests ·/.test(cardTitles()), 3000, "the erasure screen");
   const form = $("#pb-erasure");
   setField(w, form, "principal_id", typed.erased);
   setField(w, form, "client_id", "cl_1");
   submit(w, form);
-  await until(() => /CONFIRMATION_REQUIRED/.test(text()), 2000, "the confirmation request");
+  await until(() => $('[data-code="CONFIRMATION_REQUIRED"]'), 2000, "the confirmation request");
   assert.equal(count("POST", "/privacy/erasure"), 0, "nothing sent unconfirmed");
 
   const confirmed = $("#pb-erasure");
@@ -171,7 +175,8 @@ test("an erasure is sent only once confirmed, runs in the background, and a fail
   assert.match(text(), new RegExp(`Erasure request ${failed.request_id} did not complete`));
   const uploads = $('tr[data-store="uploads"]');
   assert.ok(uploads, "the failing store's progress row");
-  assert.match(uploads.textContent, /failed/);
+  assert.equal(uploads.querySelector(".pill").dataset.status, "failed");
+  assert.match(uploads.textContent, /Failed/);
   assert.match(uploads.textContent, /STORE_WRITE_FAILED/);
   assert.match(uploads.textContent, /3$/, "three attempts");
   assert.ok(count("GET", `/privacy/erasure/${failed.request_id}/progress`) >= 1, "the progress was polled");
@@ -180,15 +185,15 @@ test("an erasure is sent only once confirmed, runs in the background, and a fail
   // the retry needs the id again, and sends it in the body only
   const retry = $("#pb-erasure-retry");
   submit(w, retry);
-  await until(() => /PRINCIPAL_ID_REQUIRED/.test(text()), 2000, "the id is asked for again");
+  await until(() => $('[data-code="PRINCIPAL_ID_REQUIRED"]'), 2000, "the id is asked for again");
   assert.equal(count("POST", `/privacy/erasure/${failed.request_id}/retry`), 0);
   setField(w, $("#pb-erasure-retry"), "principal_id", typed.erased);
   submit(w, $("#pb-erasure-retry"));
-  await until(() => /Per store/.test(text()), 3000, "the completion report");
+  await until(() => /Where they were found/.test(text()), 3000, "the completion report");
   nowhereBut(typed.erased, last("POST", `/privacy/erasure/${failed.request_id}/retry`).body);
   for (const store of Object.keys(erasure.store_counts)) assert.match(text(), new RegExp(store));
   for (const model of erasure.models_flagged) assert.match(text(), new RegExp(model));
-  assert.ok($$('tr[data-store] .pill').every((p) => p.textContent === "done"), "every store done");
+  assert.ok($$('tr[data-store] .pill').every((p) => p.dataset.status === "done" && p.textContent === "Done"), "every store done");
   assert.match(text(), /flagged for retraining at the next scheduled cycle \(not now\)/);
   assert.match(text(), new RegExp(`Audit: privacy\\.erasure on ${erasure.request_id}`));
   assert.ok(count("GET", "/privacy/erasure") >= 2, "the register re-reads after an erasure");
@@ -217,28 +222,53 @@ test("an access request downloads the zip under the server's name and shows its 
   nowhereBut(typed.erased, last("POST", "/privacy/access-requests").body);
 });
 
+test("the forms name the client chosen in the top bar, and Advanced overrides it (no CLIENT_ID_REQUIRED)", async () => {
+  // What the onboarding module's client picker offers through the router's setup-source seam.
+  const router = await import("../../../../../ui/modules/router.js");
+  router.registerSetupSource({
+    name: "test-clients",
+    card: () => ({ title: "", text: "" }),
+    mount: () => {},
+    context: () => ({ clientId: "c_demo_telecom_1", clientName: "Demo Telecom" }),
+  });
+  w.location.hash = "#/privacy/consent";
+  await until(() => $("#pb-consent-lookup") && /For client: Demo Telecom/.test(text()), 3000, "the chosen client");
+  setField(w, $("#pb-consent-lookup"), "principal_id", typed.looked_up);
+  submit(w, $("#pb-consent-lookup"));
+  await until(() => /Consent history, oldest first/.test(text()), 2000, "the answer");
+  assert.equal(last("POST", "/privacy/consent/lookup").body.client_id, "c_demo_telecom_1");
+
+  w.location.hash = "#/privacy/access";
+  await until(() => $("#pb-access") && /For client: Demo Telecom/.test(text()), 3000, "the access screen");
+  setField(w, $("#pb-access"), "principal_id", typed.erased);
+  setField(w, $("#pb-access"), "client_id", "acme");
+  submit(w, $("#pb-access"));
+  await until(() => last("POST", "/privacy/access-requests").body.client_id === "acme", 2000, "the override");
+  nowhereBut(typed.erased, last("POST", "/privacy/access-requests").body);
+});
+
 test("retention shows the dry run, and applies exactly that plan once confirmed", async () => {
   w.location.hash = "#/privacy/retention";
   await until(() => $("#pb-retention-apply"), 3000, "the dry run");
   const keys = new Set(plan.plan.items.map((item) => item.key));
-  const drawn = $$("tbody tr").filter((tr) => keys.has(tr.querySelector("td").textContent));
+  const drawn = $$("tbody tr[data-key]").filter((tr) => keys.has(tr.dataset.key) && tr.textContent.includes(tr.dataset.key));
   assert.equal(drawn.length, plan.plan.items.length, "every file that would go");
   for (const skip of plan.plan.skipped) assert.match(text(), new RegExp(skip.reason_code));
   assert.match(text(), new RegExp(plan.plan_hash));
   submit(w, $("#pb-retention-apply"));
-  await until(() => /CONFIRMATION_REQUIRED/.test(text()), 2000, "the confirmation request");
+  await until(() => $('[data-code="CONFIRMATION_REQUIRED"]'), 2000, "the confirmation request");
   assert.equal(count("POST", "/privacy/retention/apply"), 0);
 
   setField(w, $("#pb-retention-apply"), "confirm", true);
   submit(w, $("#pb-retention-apply"));
-  await until(() => /Deleted \d+ file\(s\)/.test(text()), 2000, "the result");
+  await until(() => /Deleted \d+ files?/.test(text()), 2000, "the result");
   assert.deepEqual(last("POST", "/privacy/retention/apply").body, {
     plan_id: plan.plan.plan_id,
     planned_at: plan.plan.planned_at,
     plan_hash: plan.plan_hash,
   });
   const result = fixture("retention_applied").result;
-  assert.match(text(), new RegExp(`Deleted ${result.deleted.length} file\\(s\\)`));
+  assert.match(text(), new RegExp(`Deleted ${result.deleted.length} file${result.deleted.length === 1 ? "" : "s"}`));
   assert.equal($("#pb-retention-apply"), null, "an applied plan cannot be applied again");
   assert.match(text(), /This plan has been applied/);
 });
@@ -271,7 +301,7 @@ test("a Viewer is told why, and the privacy API is not even asked", async () => 
   assert.equal($('#pb-bar a[href="#/privacy/consent"]'), null, "no Privacy link for a Viewer");
   const before = [count("GET", "/privacy/purposes"), count("GET", "/privacy/erasure")];
   w.location.hash = "#/privacy/erasure";
-  await until(() => /ROLE_REQUIRED/.test(text()), 3000, "the refusal");
+  await until(() => $('[data-code="ROLE_REQUIRED"]'), 3000, "the refusal");
   assert.match(text(), /Only an Admin can see the privacy policy\./);
   await settle(2);
   assert.deepEqual([count("GET", "/privacy/purposes"), count("GET", "/privacy/erasure")], before, "nothing was read");

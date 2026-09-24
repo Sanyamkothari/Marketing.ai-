@@ -131,6 +131,92 @@ test("signing in as someone who may ungates in place, keeping the screen's own d
   assert.ok(!notes().includes("Only an Analyst can start a run."));
 });
 
+/** The uplift Setup, campaign results, value view, feedback export, client picker and raw-tables panel
+ * (v1, WP7), reduced to their controls - the real ids and data attributes those screens draw. */
+const MORE = `<main class="screen">
+  <form id="u-form"><label class="control file"><input type="file" id="u-file" class="sr"><span class="fname">Choose file</span></label>
+    <button type="submit" class="run" id="u-run">Train</button></form>
+  <button type="button" class="cancel" id="u-cancel">Cancel</button>
+  <form id="u-camp"><label class="control file"><input type="file" id="u-camp-file" class="sr"></label>
+    <button type="submit" class="run" id="u-camp-run">Measure</button></form>
+  <form class="pe-form" data-pe-roi><input name="cost_per_contact" value="10"><button type="submit" class="pe-btn primary">Save values</button></form>
+  <p><a href="http://localhost/pilot/feedback/export">export all feedback</a></p>
+  <div class="control sel"><select id="f-client" aria-label="Client"><option value="c1">Demo</option><option value="__new__">+ New client</option></select></div>
+  <button type="button" class="linkbtn" id="f-client-add">Add</button>
+  <label class="control file"><input type="file" class="sr" multiple data-act="pick-files"><span class="fname">Add source files</span></label>
+  <table><tr><td><button type="button" class="linkbtn" data-act="delete-source" data-source="s1">Remove</button></td></tr>
+    <tr><td><button type="button" class="linkbtn" data-act="delete-source" data-source="s2">Remove</button></td></tr></table>
+  <button type="button" class="linkbtn" data-act="confirm-role" data-source="s1">Confirm</button>
+  <div class="control sel"><select data-act="set-role" data-source="s1"><option>entity</option></select></div>
+  <button type="button" class="linkbtn" data-act="accept-all" data-source="s1">Accept all</button>
+  <button type="button" class="linkbtn" data-act="save-mapping" data-source="s1">Save mapping</button>
+  <button type="button" class="run" data-act="preview">Preview</button>
+  <button type="button" class="run" data-act="build">Build</button>
+  <button type="button" class="run" data-act="use-dataset">Use this dataset</button>
+</main>`;
+
+const reasonOf = (method, path) => me.permissions.find((p) => p.method === method && p.path === path).reason;
+
+test("a Viewer is refused the uplift, campaign, value, feedback, new-client and raw-tables controls too", async () => {
+  await paint(MORE);
+  const refused = {
+    "#u-file": ["POST", "/uploads"],
+    "#u-run": ["POST", "/runs"],
+    "#u-cancel": ["POST", "/runs/{run_id}/cancel"],
+    "#u-camp-file": ["POST", "/uploads"],
+    "#u-camp-run": ["POST", "/runs/{run_id}/campaign-results"],
+    '[data-pe-roi] button[type="submit"]': ["PUT", "/pilot/roi/{run_id}"],
+    "[data-pe-roi] input": ["PUT", "/pilot/roi/{run_id}"],
+    '#f-client option[value="__new__"]': ["POST", "/clients"],
+    "#f-client-add": ["POST", "/clients"],
+    '[data-act="pick-files"]': ["POST", "/clients/{client_id}/sources"],
+    '[data-act="confirm-role"]': ["PATCH", "/clients/{client_id}/sources/{source_id}"],
+    '[data-act="set-role"]': ["PATCH", "/clients/{client_id}/sources/{source_id}"],
+    '[data-act="accept-all"]': ["PUT", "/clients/{client_id}/mappings/{mapping_id}"],
+    '[data-act="save-mapping"]': ["PUT", "/clients/{client_id}/mappings/{mapping_id}"],
+    '[data-act="preview"]': ["POST", "/clients/{client_id}/onboarding-specs/{spec_id}/preview"],
+    '[data-act="build"]': ["POST", "/datasets"],
+    '[data-act="use-dataset"]': ["POST", "/runs"],
+  };
+  for (const [sel, [method, path]] of Object.entries(refused)) {
+    assert.equal($(sel).disabled, true, sel);
+    assert.equal($(sel).title, reasonOf(method, path), sel);
+  }
+  for (const remove of $$('[data-act="delete-source"]')) {
+    assert.equal(remove.disabled, true);
+    assert.equal(remove.title, reasonOf("DELETE", "/clients/{client_id}/sources/{source_id}"));
+  }
+  assert.equal($('#f-client option[value="c1"]').disabled, false, "choosing a client is not refused");
+  const feedback = $('a[href$="/pilot/feedback/export"]');
+  assert.equal(feedback.getAttribute("aria-disabled"), "true");
+  assert.equal(feedback.title, reasonOf("GET", "/pilot/feedback/export"));
+  for (const [method, path] of [
+    ["POST", "/uploads"],
+    ["PUT", "/pilot/roi/{run_id}"],
+    ["GET", "/pilot/feedback/export"],
+    ["POST", "/clients"],
+    ["POST", "/datasets"],
+  ]) {
+    assert.ok(notes().includes(reasonOf(method, path)), `${method} ${path} is explained in place`);
+  }
+  // One sentence per kind of control, not one per row: the Remove buttons carry theirs as a title.
+  assert.equal(notes().filter((n) => n === reasonOf("DELETE", "/clients/{client_id}/sources/{source_id}")).length, 0);
+});
+
+test("an Analyst may use all of them but the feedback export; an Admin only the export", async () => {
+  await as("me_analyst");
+  await paint(MORE);
+  for (const sel of ["#u-file", "#u-run", "#u-camp-run", '[data-pe-roi] button[type="submit"]', "#f-client-add", '[data-act="build"]']) {
+    assert.equal($(sel).disabled, false, sel);
+  }
+  assert.equal($('#f-client option[value="__new__"]').disabled, false);
+  assert.equal($('a[href$="/pilot/feedback/export"]').hasAttribute("aria-disabled"), true);
+  await as("me_admin");
+  await paint(MORE);
+  assert.equal($('a[href$="/pilot/feedback/export"]').hasAttribute("aria-disabled"), false);
+  assert.equal($("#u-run").disabled, true);
+});
+
 test("a gate is idempotent: applying twice adds no second note", async () => {
   const before = $$(".pb-why").length;
   gate.applyGates($("#app"));

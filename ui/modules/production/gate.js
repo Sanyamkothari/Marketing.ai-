@@ -67,6 +67,49 @@ export const ACTION_CONTROLS = [
   { selector: "#c-save", method: "PUT", path: "/connection/aws" },
   { selector: "#c-reset", method: "DELETE", path: "/connection/aws" },
   { selector: "#c-test", method: "POST", path: "/connection/aws/test" },
+  // --- uplift Setup and campaign results (uplift/views.js): upload, train or score, cancel, measure ---
+  { selector: "#u-file", method: "POST", path: "/uploads" },
+  { selector: "#u-run", method: "POST", path: "/runs" },
+  { selector: "#u-cancel", method: "POST", path: "/runs/{run_id}/cancel" },
+  { selector: "#u-camp-file", method: "POST", path: "/uploads" },
+  { selector: "#u-camp-run", method: "POST", path: "/runs/{run_id}/campaign-results" },
+  // --- a campaign's value inputs (pilot/screen.js): the ROI form's Save ------------------------------
+  { selector: '[data-pe-roi] button[type="submit"]', method: "PUT", path: "/pilot/roi/{run_id}" },
+  { selector: "[data-pe-roi] input", method: "PUT", path: "/pilot/roi/{run_id}", explain: false },
+  // --- every person's feedback, as one download (pilot/screen.js) ---------------------------------
+  { selector: 'a[href$="/pilot/feedback/export"]', method: "GET", path: "/pilot/feedback/export" },
+  // --- the client picker (onboarding/clients.js): "+ New client" --------------------------------------
+  { selector: '#f-client option[value="__new__"]', method: "POST", path: "/clients", explain: false },
+  { selector: "#f-client-add", method: "POST", path: "/clients" },
+  // --- Build from raw tables (onboarding/steps.js): the panel's data-act controls -------------------
+  { selector: '[data-act="pick-files"]', method: "POST", path: "/clients/{client_id}/sources" },
+  { selector: '[data-act="confirm-role"]', method: "PATCH", path: "/clients/{client_id}/sources/{source_id}" },
+  {
+    selector: '[data-act="set-role"]',
+    method: "PATCH",
+    path: "/clients/{client_id}/sources/{source_id}",
+    explain: false,
+  },
+  {
+    selector: '[data-act="delete-source"]',
+    method: "DELETE",
+    path: "/clients/{client_id}/sources/{source_id}",
+    explain: false,
+  },
+  {
+    selector: '[data-act="accept-all"]',
+    method: "PUT",
+    path: "/clients/{client_id}/mappings/{mapping_id}",
+    explain: false,
+  },
+  { selector: '[data-act="save-mapping"]', method: "PUT", path: "/clients/{client_id}/mappings/{mapping_id}" },
+  {
+    selector: '[data-act="preview"]',
+    method: "POST",
+    path: "/clients/{client_id}/onboarding-specs/{spec_id}/preview",
+  },
+  { selector: '[data-act="build"]', method: "POST", path: "/datasets" },
+  { selector: '[data-act="use-dataset"]', method: "POST", path: "/runs" },
 ];
 
 const GATE = "pbGate"; // dataset key: the reason this control is gated
@@ -160,8 +203,10 @@ const INSTALLED = Symbol.for("marketing-ai.production.gates");
 /**
  * Re-apply after every paint of `root` and after every change of who is signed in; swallow events
  * on gated controls. Mutations this function makes itself are not observed (it disconnects first).
+ * `root` is the whole body by default, not only `#app`: since v1 the client picker ("+ New client")
+ * lives in the top bar (`ui/chrome.js`), which is drawn outside `#app`.
  */
-export function installGates(doc = document, root = doc.getElementById("app")) {
+export function installGates(doc = document, root = doc.body || doc.getElementById("app")) {
   if (!root || doc[INSTALLED]) return null;
   doc[INSTALLED] = true;
   for (const type of ["click", "submit", "change"]) doc.addEventListener(type, blockGated, true);
