@@ -89,7 +89,7 @@ function mayConnect() {
   }
 }
 
-export const AI_NOTICE_TITLE = "AI writing is switched off in this demo";
+export const AI_NOTICE_TITLE = "Needs AI service connection";
 export const CONNECT_HREF = "#/generative/connection";
 
 /** The notice card alone: a title, two sentences and one button that depends on the role. */
