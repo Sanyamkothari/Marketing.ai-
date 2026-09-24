@@ -81,6 +81,9 @@ KEY_LABEL: Final[str] = "entity_key + snapshot_date"
 SAVED: Final[re.Pattern[str]] = re.compile(r"^Saved$")
 """A mapping card's saved state, matched whole: "Not saved yet" contains the word too."""
 LABEL: Final[str] = "churn_next_60d"
+ROLE_LABELS: Final[list[str]] = ["Activity", "Bills", "Complaints", "Subscriber table"]
+"""The four tables' roles as the Sources step words them, sorted: the entity role reads as the use
+case's own noun (`uc.entity`, "subscriber" for telco churn) plus "table" (v1 UI, WP3)."""
 
 CUSTOMERS: Final[int] = 600
 """Enough customers that twelve monthly snapshots clear validation with room to spare (`min_rows`
@@ -483,7 +486,7 @@ def test_the_first_build_of_the_new_recipe_ran_the_full_leak_check(journey: Jour
 
 def test_every_raw_table_got_its_proposed_role(journey: Journey) -> None:
     """ "upload raw tables -> accept suggested roles": each table's first-ranked role, confirmed."""
-    assert journey.roles == ["Activity", "Bills", "Complaints", "Entity"]
+    assert journey.roles == ROLE_LABELS
 
 
 def test_use_this_dataset_filled_step_two_from_the_manifest(journey: Journey) -> None:
@@ -532,7 +535,7 @@ def test_the_data_page_shows_where_the_dataset_came_from(journey: Journey) -> No
 
 def test_next_months_tables_replayed_the_recipe_without_a_mapping_to_review(journey: Journey) -> None:
     """ "next month's tables": roles from the saved recipe, and the mapping step stays closed."""
-    assert journey.score_roles == ["Activity", "Bills", "Complaints", "Entity"]
+    assert journey.score_roles == ROLE_LABELS
     assert "replayed exactly as it was" in journey.score_mapping_note, journey.score_mapping_note
     assert journey.score_pk_after_use == KEY_LABEL
 
