@@ -241,5 +241,8 @@ demo-seed: ## seed Demo Telecom into MARKETING_AI_DATA_DIR (or data/): trains on
 	$(BIN)/python -m scripts.seed_demo
 
 demo: demo-seed ## seed the demo if needed, then serve it on :8000 with demo mode on
+	@echo ""
+	@echo "  Marketing AI demo: open http://localhost:8000 in your browser. Press Ctrl+C here to stop it."
+	@echo ""
 	MARKETING_AI_DEMO_MODE=true $(BIN)/uvicorn api.main:app --port 8000
 # ---- END PLAN-E ----

@@ -571,7 +571,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"Demo Telecom seeded in {time.monotonic() - started:.0f}s: client {manifest.client_id}, "
         f"champion {manifest.champion_model_id}, campaigns {', '.join(c.score_run_id for c in manifest.campaigns)}."
     )
-    print("Start it with: MARKETING_AI_DEMO_MODE=true make run   (then open http://localhost:8000/ui)")
+    print("Start it with: make demo   (then open http://localhost:8000)")
     return 0
 
 

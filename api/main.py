@@ -17,7 +17,7 @@ from typing import Final
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.routes import ALL_ROUTERS
@@ -140,6 +140,14 @@ def create_app(
         # The UI is plain HTML and ES modules: a module cannot be fetched over `file://`, so the
         # same process that answers the API also serves them (DEC-024 keeps CORS open regardless).
         app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
+
+        # `/` is the address uvicorn prints and the one a person types. It sends them to the screens
+        # rather than to a JSON 404 (DEC-953). A plain Starlette route like the mount above: not part
+        # of the API, so no access policy, no OpenAPI entry and no audit row.
+        async def _to_ui(_request: Request) -> RedirectResponse:
+            return RedirectResponse("/ui/")
+
+        app.add_route("/", _to_ui, include_in_schema=False)
 
     @app.get("/healthz", response_model=HealthResponse, tags=["health"], summary="Liveness probe")
     def healthz() -> HealthResponse:

@@ -14,9 +14,10 @@
 // shared file itself (the same reason `ui/modules/router.js` is not edited here either).
 
 import { getIndustries, getUseCase } from "../../api.js";
-import { errorBox, esc, pageHead } from "../../dom.js";
+import { backLink, errorBox, esc, pageHead } from "../../dom.js";
 import { journeyFor } from "../../overview.js";
 import { registerModule } from "../router.js";
+import { aiNoticeHtml, needsAiNotice } from "../../availability.js";
 import { assistantHtml, createAssistantController } from "./assistant.js";
 import { connectionHtml, createConnectionController } from "./connection.js";
 import { createCopyController, copyHtml } from "./copy.js";
@@ -127,6 +128,16 @@ registerModule({
     // parts[0] is always "generative"; parts[1] picks the screen.
     const [, kind, useCaseId, thirdSegment] = parts;
     try {
+      // In a demo with no AI service these screens would show the fake backend's stand-in text:
+      // one notice instead (DEC-954). The connection screen stays, since it is how one connects.
+      if (kind !== "connection" && useCaseId) {
+        const uc = await useCase(useCaseId);
+        if (await needsAiNotice(uc)) {
+          paint(app, aiNoticeHtml(uc, backLink(uc)));
+          document.title = `${uc.name} · Marketing AI`;
+          return;
+        }
+      }
       if (kind === "connection") {
         await renderConnection(app);
         document.title = "AWS connection · Marketing AI";

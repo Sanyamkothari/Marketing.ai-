@@ -100,6 +100,10 @@ export function bindSignIn(root, parts, repaint) {
       state.notice = null;
       state.username = "";
       window.location.hash = nextRoute(parts);
+      // Start the page again as the person who just signed in: the client list, the demo status and
+      // the help catalogue were read at load, before there was a token, and would otherwise keep
+      // their signed-out answers (DEC-955). The token is in session storage and survives the reload.
+      reloadAfterSignIn();
     } catch (error) {
       state.busy = false;
       state.error = error;
@@ -172,3 +176,12 @@ export function bindAccount(root, repaint) {
 
 /** Both screens wait for the boot-time `GET /auth/me`, so they never flash the wrong state. */
 export const ready = () => ensureMe();
+
+/** A full reload, where the browser offers one (jsdom does not; there nothing was loaded before). */
+function reloadAfterSignIn() {
+  try {
+    if (!/jsdom/i.test(window.navigator.userAgent || "")) window.location.reload();
+  } catch {
+    // no reload: the screens repaint on the route change as before
+  }
+}

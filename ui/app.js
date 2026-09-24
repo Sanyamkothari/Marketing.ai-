@@ -16,6 +16,7 @@ import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
 import { isUplift, pageArtefacts, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
 import { MODULES_CHANGED, resolveRoute } from "./modules/router.js";
+import { aiNoticeHtml, needsAiNotice } from "./availability.js";
 
 const app = document.getElementById("app");
 const PAGES = ["data", "model", "output"];
@@ -98,6 +99,13 @@ async function showOverview(industryId) {
 
 async function showUseCase(id, runId) {
   const uc = await useCase(id);
+  // A use case that is only AI-written text (the assistant) has nothing to show in a demo with no
+  // AI service: one notice rather than a training form that does not apply to it (DEC-954).
+  if (uc.ai_type === "generative" && (await needsAiNotice(uc))) {
+    active = null;
+    paint(aiNoticeHtml(uc, backLink(uc)));
+    return;
+  }
   active = uc.id;
   const controller = controllerFor(uc);
   controller.stop();
