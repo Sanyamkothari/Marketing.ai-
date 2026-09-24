@@ -98,6 +98,10 @@ details.pb-reveal[open]>summary{margin-bottom:16px}
 .pb-more-actions>summary::-webkit-details-marker{display:none}
 .pb-more-actions[open]>summary{margin-bottom:8px}
 .pb-danger-row{margin-top:16px}
+/* Disable / Delete before they are confirmed: a quiet button in the "bad" text colour; only the
+   confirm step's "Yes, …" is the filled .btn.danger.confirm */
+.btn.quiet.pb-quiet-bad{color:var(--bad)}
+.btn.quiet.pb-quiet-bad[disabled]{color:var(--muted)}
 .pb-report{margin-top:16px}
 .pb-report details.tech{margin-top:12px}
 .pb-lookup{margin-top:16px}

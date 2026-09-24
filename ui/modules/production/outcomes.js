@@ -26,7 +26,10 @@
 //   means the run was not gated, and the card is simply left out.
 //
 // v1: the list reads Use case / Scored on / Customers scored / Results, with the run id and client
-// behind "Show more columns"; a card that has nothing to show yet is not drawn.
+// behind "Show more columns"; a card that has nothing to show yet is not drawn. The use case links to
+// the run's Campaign results page (`#/campaign/<use case>/<run>`, ui/modules/uplift), and Results reads
+// "Measured" when either screen measured the run: its campaign results exist (`GET
+// /runs/{run_id}/campaign-results` answers 200, 404 before) or outcomes were added here.
 
 import { getRun } from "../../api.js";
 import {
@@ -45,7 +48,14 @@ import {
   present,
   techDetails,
 } from "../../dom.js";
-import { getConsentReport, getIncrementalityInput, getOutcomes, getScoringRuns, postOutcomes } from "./api.js";
+import {
+  getConsentReport,
+  getIncrementalityInput,
+  getOutcomes,
+  getScoringRuns,
+  hasCampaignResults,
+  postOutcomes,
+} from "./api.js";
 import {
   actionButton,
   bindFileNames,
@@ -65,13 +75,14 @@ import { runHref } from "./schedules.js";
 
 export const OUTCOME_FILE_TYPES = ".csv,.parquet,.pq";
 
-/** How many of the newest finished runs are asked whether results were added (a plain read each). */
+/** How many of the newest finished runs are asked whether they were measured (two plain reads each). */
 export const RESULTS_CHECKED = 20;
 
 const state = {
   runs: null,
   runsError: null,
-  measured: {}, // run id → true (results added) | false (not yet)
+  measured: {}, // run id → true (campaign results or outcomes added) | false (neither yet)
+  outcomesAdded: {}, // run id → true | false: outcomes added on this screen (`GET /runs/{id}/outcomes`)
   runId: null,
   run: null,
   runError: null,
@@ -84,13 +95,21 @@ const state = {
   uploaded: false,
 };
 
-/** Did this run's results come back? `getOutcomes` is null until they do; `null` here means "unknown". */
+/** The Campaign results page of a scoring run (ui/modules/uplift's `#/campaign/<use case>/<run>`). */
+export const campaignHref = (useCaseId, runId) =>
+  `#/campaign/${encodeURIComponent(useCaseId)}/${encodeURIComponent(runId)}`;
+
+/**
+ * Was this run measured? `{ outcomes, campaign }`, each true, false or `null` for "unknown" (a read
+ * that failed): outcomes added here (`getOutcomes` is null until they are), and campaign results
+ * measured on the Campaign results page (`hasCampaignResults`: 200 yes, 404 no).
+ */
 async function measuredOf(runId) {
-  try {
-    return Boolean(await getOutcomes(runId));
-  } catch {
-    return null;
-  }
+  const [outcomes, campaign] = await Promise.all([
+    getOutcomes(runId).then(Boolean, () => null),
+    hasCampaignResults(runId).catch(() => null),
+  ]);
+  return { outcomes, campaign };
 }
 
 export async function loadRuns() {
@@ -104,7 +123,10 @@ export async function loadRuns() {
   const done = state.runs.filter((run) => run.state === "done").slice(0, RESULTS_CHECKED);
   const answers = await Promise.all(done.map((run) => measuredOf(run.run_id)));
   done.forEach((run, i) => {
-    if (answers[i] !== null) state.measured[run.run_id] = answers[i];
+    const { outcomes, campaign } = answers[i];
+    if (outcomes !== null) state.outcomesAdded[run.run_id] = outcomes;
+    if (outcomes === true || campaign === true) state.measured[run.run_id] = true;
+    else if (outcomes === false && campaign === false) state.measured[run.run_id] = false;
   });
 }
 
@@ -156,23 +178,22 @@ function campaignScreen(title, desc, readRoute, body, { crumb = null, actions = 
 function resultsPill(run) {
   if (run.state !== "done") return statusPill(run.state);
   const measured = state.measured[run.run_id];
-  if (measured === true) return `<span class="pill ok" data-status="added">Added</span>`;
+  if (measured === true) return `<span class="pill ok" data-status="measured">Measured</span>`;
   if (measured === false) return `<span class="pill pb-pill-none" data-status="not_added">Not added yet</span>`;
   return EM_DASH;
 }
 
 function runRow(run) {
   const done = run.state === "done";
-  const measured = state.measured[run.run_id];
+  const toAdd = state.outcomesAdded[run.run_id] === false;
   const action = done
-    ? `<a class="btn ${measured === false ? "secondary" : "quiet"} sm" href="${runHref(run.run_id)}">${
-        measured === false ? "Add results" : "View results"
-      }</a>`
+    ? `<a class="btn ${toAdd ? "secondary" : "quiet"} sm" href="${runHref(run.run_id)}">${toAdd ? "Add outcomes" : "View results"}</a>`
     : EM_DASH;
+  const name = esc(run.use_case_name || run.use_case_id);
   return {
     attrs: `data-run="${esc(run.run_id)}"`,
     cells: [
-      done ? `<a href="${runHref(run.run_id)}">${esc(run.use_case_name || run.use_case_id)}</a>` : esc(run.use_case_name || run.use_case_id),
+      done && run.use_case_id ? `<a href="${campaignHref(run.use_case_id, run.run_id)}" data-campaign>${name}</a>` : name,
       esc(fmtDate(run.finished_at || run.created_at)),
       present(run.row_count) ? esc(fmtInt(run.row_count)) : EM_DASH,
       resultsPill(run),
@@ -438,6 +459,7 @@ export function bindRunOutcomes(root, repaint) {
       state.report = await postOutcomes(runId, file, fieldValue(form, "outcome_column"));
       state.uploaded = true;
       state.measured[runId] = true;
+      state.outcomesAdded[runId] = true;
       state.incrementality = await getIncrementalityInput(runId);
     } catch (error) {
       state.uploadError = error;
@@ -453,6 +475,7 @@ export function _resetOutcomesForTests() {
     runs: null,
     runsError: null,
     measured: {},
+    outcomesAdded: {},
     runId: null,
     run: null,
     runError: null,

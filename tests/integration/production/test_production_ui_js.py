@@ -80,6 +80,10 @@ def write_fixtures(tmp_path: Path) -> Path:
         assert events.status_code == 200, events.text
         assert events.json()["total"] > 2, "the fixture needs more than one page of events"
         _write(out, "audit_page", events.json())
+        demote = client.patch(f"/users/{ids['admin']}", json={"roles": ["viewer"]}, headers=admin)
+        assert demote.status_code == 409, demote.text
+        assert demote.json()["detail"]["code"] == "LAST_ADMIN", demote.text
+        _write(out, "last_admin_demote", demote.json())
         _write(out, "ids", ids)
         connection = client.get("/connection/aws", headers=bearer(app, ids["viewer"]))
         assert connection.status_code == 200, connection.text
@@ -87,6 +91,10 @@ def write_fixtures(tmp_path: Path) -> Path:
         industries = client.get("/industries", headers=bearer(app, ids["viewer"]))
         assert industries.status_code == 200, industries.text
         _write(out, "industries", industries.json())
+        # last: the viewer's own reads above need the account enabled
+        disabled = client.patch(f"/users/{ids['viewer']}", json={"disabled": True}, headers=admin)
+        assert disabled.status_code == 200, disabled.text
+        _write(out, "user_disabled", disabled.json())
     off = local_app(tmp_path / "off", auth_mode="off")
     with TestClient(off) as client:
         response = client.get("/auth/me")

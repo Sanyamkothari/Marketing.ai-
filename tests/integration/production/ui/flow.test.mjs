@@ -7,12 +7,19 @@ import assert from "node:assert/strict";
 import { $, $$, fixture, installPage, settle, signedInServer, until } from "./harness.mjs";
 
 const login = fixture("login_ok");
+const ids = fixture("ids");
 const tokens = {};
 const answers = {
   "GET /industries": () => ({ status: 200, body: fixture("industries") }),
   "GET /connection/aws": () => ({ status: 200, body: fixture("connection") }),
   "GET /users": () => ({ status: 200, body: fixture("users") }),
-  "PATCH /users/{id}": () => ({ status: 409, body: fixture("last_admin") }),
+  // as the real app answered: the last Admin can be neither disabled nor demoted; anyone else can be disabled
+  "PATCH /users/{id}": (request) =>
+    "roles" in request.body
+      ? { status: 409, body: fixture("last_admin_demote") }
+      : request.path.endsWith(`/${ids.admin}`)
+        ? { status: 409, body: fixture("last_admin") }
+        : { status: 200, body: fixture("user_disabled") },
   "POST /users": (request) => ({
     status: 201,
     body: { ...fixture("users").users[3], username: request.body.username, roles: request.body.roles },
@@ -83,21 +90,46 @@ test("signing in keeps the token for the tab and every later call carries it", a
   assert.ok($('#pb-bar a[href="#/admin/audit"]'));
 });
 
-test("the Users screen lists everyone, and the last Admin cannot be disabled", async () => {
+test("the Users screen lists everyone; Disable is quiet red and asks twice; the last Admin cannot be demoted", async () => {
   w.location.hash = "#/admin/users";
   await until(() => $$("tr[data-row]").length === 4, 3000, "four users");
   assert.match($('tr[data-row] td').textContent, /admin-person/);
   assert.match($("tr[data-row]").textContent, /\(you\)/);
-  $('tr[data-row] [data-toggle="disable"]').click();
-  await until(() => $('tr[data-row] [data-toggle="disable"][data-confirm]'), 2000, "the confirm step");
+  const own = () => $(`tr[data-row="${ids.admin}"]`);
+  const other = () => $(`tr[data-row="${ids.viewer}"]`);
+  assert.equal(own(), $("tr[data-row]"), "your own row comes first");
+  assert.equal(own().querySelector('[data-toggle="disable"]'), null, "no Disable on your own row");
+  assert.ok(own().querySelector('[data-edit="roles"]'), "your roles can still be changed");
+
+  const disable = other().querySelector('[data-toggle="disable"]');
+  assert.deepEqual([...disable.classList].sort(), ["btn", "pb-quiet-bad", "quiet", "sm"], "quiet, red text, not filled");
+  disable.click();
+  await until(() => other().querySelector('[data-toggle="disable"][data-confirm]'), 2000, "the confirm step");
   assert.equal(calls.filter((c) => c.method === "PATCH").length, 0, "the first click only asks");
-  assert.match($("tr[data-row]").textContent, /Disable admin-person and sign them out\?/);
-  $('tr[data-row] [data-toggle="disable"][data-confirm]').click();
-  await until(() => $(".apierr"), 2000, "the LAST_ADMIN refusal");
-  assert.match($(".apierr").textContent, /This is the last active Admin\./);
-  const patch = calls.filter((c) => c.method === "PATCH").pop();
+  assert.match(other().textContent, /Disable viewer-person and sign them out\?/);
+  const yes = other().querySelector('[data-toggle="disable"][data-confirm]');
+  assert.ok(yes.classList.contains("danger") && yes.classList.contains("confirm"), "only the confirm step is filled red");
+  yes.click();
+  await until(() => $(".pb-ok"), 2000, "the confirmation");
+  assert.match($(".pb-ok").textContent, /Disabled and signed out\./);
+  let patch = calls.filter((c) => c.method === "PATCH").pop();
+  assert.equal(patch.path, `/users/${ids.viewer}`);
   assert.deepEqual(patch.body, { disabled: true });
   assert.equal(patch.auth, `Bearer ${login.token}`);
+
+  own().querySelector('[data-edit="roles"]').click();
+  await until(() => $('form[data-form="roles"]'), 2000, "the roles form");
+  const form = $('form[data-form="roles"]');
+  form.querySelector('input[value="admin"]').checked = false;
+  form.querySelector('input[value="viewer"]').checked = true;
+  submit(form);
+  await until(() => $(".apierr"), 2000, "the LAST_ADMIN refusal");
+  assert.match($(".apierr").textContent, /This is the last active Admin\./);
+  patch = calls.filter((c) => c.method === "PATCH").pop();
+  assert.equal(patch.path, `/users/${ids.admin}`);
+  assert.deepEqual(patch.body, { roles: ["viewer"] });
+  assert.equal(patch.auth, `Bearer ${login.token}`);
+  assert.equal($(".pb-ok"), null, "the earlier confirmation is gone");
 });
 
 test("adding a user sends the roles ticked and never keeps the password on screen", async () => {
@@ -118,6 +150,14 @@ test("the audit viewer shows a page, filters it, pages it, and offers the same q
   const page = fixture("audit_page");
   assert.match($(".pb-pager").textContent, new RegExp(`1–2 of ${page.total}`));
   assert.match($("tbody").textContent, new RegExp(page.events[0].action.replace(".", "\\.")));
+  // the row reads plain words; the raw action code is only in the row's Details
+  const row = $(`tr[data-event="${page.events[0].event_id}"]`);
+  const visible = row.cloneNode(true);
+  visible.querySelectorAll("details").forEach((d) => d.remove());
+  assert.match(visible.textContent, /Changed a person/);
+  assert.equal(visible.textContent.includes(page.events[0].action), false, "no raw code outside Details");
+  assert.equal(visible.querySelector(".mono"), null);
+  assert.match(row.querySelector("details").textContent, new RegExp(page.events[0].action.replace(".", "\\.")));
   const form = $("#pb-audit-filters");
   form.elements.namedItem("action").value = "users.";
   form.elements.namedItem("outcome").value = "failed";

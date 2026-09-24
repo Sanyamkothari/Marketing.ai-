@@ -136,6 +136,9 @@ def write_monitoring_fixtures(out: Path, root: Path, config_root: Path) -> None:
     viewer, analyst = api.as_("viewer"), api.as_("analyst")
 
     _write(out, "schedules", _ok(api.client.get("/schedules", headers=viewer)))
+    none = _ok(api.client.get("/schedules", params={"client_id": "c_nobody_here"}, headers=viewer))
+    assert none["schedules"] == [], none
+    _write(out, "schedules_none", none)
     _write(
         out, "schedule_score", _ok(api.client.get(f"/schedules/{schedule['schedule_id']}", headers=viewer))
     )
@@ -196,6 +199,27 @@ def write_monitoring_fixtures(out: Path, root: Path, config_root: Path) -> None:
         _ok(api.client.post(f"/monitoring/alerts/{report['alert_id']}/acknowledge", headers=analyst)),
     )
     _write(out, "alerts_all", _ok(api.client.get("/monitoring/alerts", headers=viewer)))
+    # the same run measured on its Campaign results page (ui/modules/uplift): 404 before, the report after
+    no_campaign = api.client.get(f"/runs/{run_id}/campaign-results", headers=viewer)
+    assert no_campaign.status_code == 404, no_campaign.text
+    _write(out, "campaign_results_missing", no_campaign.json())
+    campaign_upload = _ok(
+        api.client.post(
+            "/uploads",
+            files={"file": ("outcomes.csv", backwards_outcomes(scores), "text/csv")},
+            data={"use_case": USE_CASE, "mode": "score"},
+            headers=analyst,
+        ),
+        201,
+    )
+    _ok(
+        api.client.post(
+            f"/runs/{run_id}/campaign-results",
+            json={"upload_id": campaign_upload["upload_id"], "outcome_column": "churn_next_60d"},
+            headers=analyst,
+        )
+    )
+    _write(out, "campaign_results", _ok(api.client.get(f"/runs/{run_id}/campaign-results", headers=viewer)))
     _write(
         out,
         "ids",
@@ -344,6 +368,8 @@ def test_the_ops_fixtures_are_what_the_ui_expects(
     assert _read(out, "outcomes_missing")["detail"]["code"] == "OUTCOME_REPORT_NOT_FOUND"
     assert _read(out, "incrementality_missing")["detail"]["code"] == "INCREMENTALITY_INPUT_NOT_FOUND"
     assert _read(out, "consent_report_missing")["detail"]["code"] == "CONSENT_REPORT_NOT_FOUND"
+    assert _read(out, "campaign_results_missing")["detail"]["code"] == "CAMPAIGN_RESULTS_NOT_FOUND"
+    assert _read(out, "campaign_results")["run_id"] == _read(out, "ids")["run_id"]
     kinds = {alert["kind"] for alert in _read(out, "alerts_open")["alerts"]}
     assert {"performance_drop", "schedule_missed"} <= kinds
 

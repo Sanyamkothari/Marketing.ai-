@@ -310,6 +310,21 @@ export function postOutcomes(runId, file, outcomeColumn = "") {
 export const getOutcomes = (runId) =>
   orNull(request(`/runs/${encodeURIComponent(runId)}/outcomes`), ["OUTCOME_REPORT_NOT_FOUND"]);
 
+/**
+ * Was this scoring run's campaign measured on its Campaign results page (`#/campaign/<uc>/<run>`)?
+ * `GET /runs/{run_id}/campaign-results` answers 200 with the report once it was, 404 before; only
+ * that answer is read here, never the report. Anything else is thrown, so "unknown" stays unknown.
+ */
+export async function hasCampaignResults(runId) {
+  try {
+    await request(`/runs/${encodeURIComponent(runId)}/campaign-results`);
+    return true;
+  } catch (error) {
+    if (error instanceof ApiError && Number(error.status) === 404) return false;
+    throw error;
+  }
+}
+
 /** `IncrementalityInput`, or null when the run held out no control group (or has no outcomes yet). */
 export const getIncrementalityInput = (runId) =>
   orNull(request(`/runs/${encodeURIComponent(runId)}/incrementality-input`), ["INCREMENTALITY_INPUT_NOT_FOUND"]);

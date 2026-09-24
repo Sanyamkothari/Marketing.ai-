@@ -7,8 +7,10 @@
 // v1: three filters a person understands come first - Who (people by name; it sends `actor_id`),
 // What (plain families, each the same action prefix the API filters by) and the date range - and the
 // rest sit behind "More filters". The query sent is unchanged. The table reads When / Who / What /
-// Result; the raw action stays in the row (small, monospace) and everything else - object, request
-// id, details - is in the row's own disclosure. Runs of identical failures collapse into one row.
+// Result. "What" is plain words only - every action the API audits has its own, and one it does not
+// know yet reads as a verb and a thing ("Created a …"), never as a code; the raw action (`auth.login`)
+// and everything else - object, request id, details - is in the row's own Details. Runs of identical
+// failures collapse into one row.
 //
 // Dates are whole UTC days: "from" is that day's 00:00Z (inclusive) and "to" is the *next* day's
 // 00:00Z, because the API's `until` is exclusive and a person who picks "to 23 Sep" means to include
@@ -66,51 +68,200 @@ export const FAMILIES = [
   ["audit.", "Use of the audit log"],
 ];
 
-/** Plain words for the actions people look for most; any other reads "<family>: <verb>". */
+/** Plain words for every action the API audits (`api/access_policy.py`, the routes' own tables). */
 const ACTION_WORDS = {
   "auth.login": "Signed in",
   "auth.logout": "Signed out",
+  "auth.me": "Checked who is signed in",
   "users.create": "Added a person",
   "users.update": "Changed a person",
+  "users.list": "Looked at the people list",
+  "users.roles_change": "Changed a person's roles",
   "users.password_change": "Changed a password",
+  "users.password_reset": "Reset a password",
+  "approvals.list": "Looked at models waiting for approval",
   "models.approve": "Approved a model",
   "models.reject": "Rejected a model",
   "models.promote": "Put a model in use",
+  "models.list": "Looked at the models",
   "runs.create": "Started a run",
   "runs.cancel": "Cancelled a run",
+  "runs.list": "Looked at the runs",
+  "runs.read": "Looked at a run",
+  "runs.root_cause": "Asked why a run's results changed",
   "runs.scores_download": "Downloaded scored customers",
   "runs.artefact_download": "Opened a run file",
+  "uplift.runs_create": "Started an uplift run",
+  "uplift.artefact_download": "Opened an uplift run file",
+  "uplift.campaign_results": "Measured a campaign's results",
+  "uplift.campaign_results_read": "Looked at a campaign's results",
+  "uplift.ope": "Tried out a targeting rule",
+  "uploads.create": "Uploaded a file",
+  "uploads.profile": "Checked an uploaded file",
+  "uploads.treatment_candidates": "Checked an upload for campaign columns",
+  "datasets.create": "Built a dataset",
+  "datasets.list": "Looked at the datasets",
+  "datasets.read": "Looked at a dataset",
+  "datasets.report": "Looked at a dataset's report",
+  "datasets.sample": "Looked at a dataset's sample rows",
+  "datasets.features_sql": "Downloaded a dataset's SQL",
+  "datasets.lineage": "Looked at where a dataset came from",
+  "sources.create": "Added a source table",
+  "sources.update": "Changed a source table",
+  "sources.delete": "Removed a source table",
+  "sources.list": "Looked at the source tables",
+  "mappings.save": "Saved a column mapping",
+  "mappings.suggest": "Asked for suggested column mappings",
+  "mappings.list": "Looked at the column mappings",
+  "onboarding_specs.create": "Saved a recipe",
+  "onboarding_specs.list": "Looked at the recipes",
+  "onboarding_specs.preview": "Previewed a recipe",
+  "onboarding_specs.replay": "Re-ran a recipe",
+  "clients.create": "Added a client",
+  "clients.create_default": "Set up the first client",
+  "clients.list": "Looked at the clients",
+  "clients.read": "Looked at a client",
+  "industries.list": "Looked at the use cases",
+  "use_cases.read": "Looked at a use case",
+  "use_cases.standard_schema": "Looked at a use case's standard columns",
+  "use_cases.template": "Downloaded a data template",
+  "use_cases.template_readme": "Downloaded a data template's notes",
+  "reference_sets.create": "Added reference material",
   "schedules.create": "Created a schedule",
   "schedules.update": "Changed a schedule",
   "schedules.delete": "Deleted a schedule",
+  "schedules.enable": "Resumed a schedule",
+  "schedules.disable": "Paused a schedule",
   "schedules.fire": "Ran a schedule",
   "schedules.missed": "Recorded missed runs",
+  "schedules.list": "Looked at the schedules",
+  "schedules.read": "Looked at a schedule",
+  "schedules.firings": "Looked at a schedule's history",
+  "schedules.retraining_sync": "Updated the retraining schedules",
   "monitoring.alert_acknowledge": "Took on an alert",
+  "monitoring.alerts_list": "Looked at the alerts",
+  "monitoring.missed_firings": "Looked at missed runs",
   "monitoring.outcomes_upload": "Added campaign outcomes",
+  "monitoring.outcomes_read": "Looked at a campaign's outcomes",
+  "monitoring.incrementality_read": "Looked at a campaign's effect",
   "privacy.erasure": "Erased a customer",
   "privacy.erasure.complete": "Finished erasing a customer",
+  "privacy.erasure.retry": "Retried erasing a customer",
+  "privacy.erasure.list": "Looked at the erasure requests",
+  "privacy.erasure.read": "Looked at an erasure request",
+  "privacy.erasure.progress": "Checked an erasure's progress",
   "privacy.access_request": "Exported a customer's data",
   "privacy.consent.import": "Imported consent records",
+  "privacy.consent.record": "Recorded a customer's consent",
   "privacy.consent.lookup": "Looked up a customer's consent",
+  "privacy.consent_report.read": "Looked at who a run left out",
+  "privacy.policy.read": "Looked at the privacy rules",
+  "privacy.retention.plan": "Checked what is past its keep-until date",
   "privacy.retention.apply": "Deleted data past its keep-until date",
+  "privacy.retrain_flags.list": "Looked at models to retrain after an erasure",
   "copy.approve": "Approved campaign copy",
   "copy.generate": "Wrote campaign copy",
+  "copy.regenerate": "Rewrote campaign copy",
+  "copy.messages_download": "Downloaded campaign messages",
+  "indexes.ask": "Asked the AI assistant",
+  "indexes.create": "Built a knowledge index",
+  "indexes.evaluate": "Tested a knowledge index",
+  "indexes.list": "Looked at the knowledge indexes",
+  "indexes.read": "Looked at a knowledge index",
+  "pilot.feedback_create": "Sent feedback",
+  "pilot.feedback_export": "Downloaded all feedback",
+  "pilot.data_request_read": "Looked at the data request",
+  "pilot.demo_read": "Looked at the demo",
+  "pilot.demo_raw_download": "Downloaded the demo data",
+  "pilot.help_read": "Opened the help",
+  "pilot.readiness_read": "Looked at the pilot readiness check",
+  "pilot.results_read": "Looked at the pilot results",
+  "pilot.roi_read": "Looked at a campaign's value",
+  "pilot.roi_inputs_save": "Saved a campaign's value inputs",
+  "pilot.template_read": "Looked at a report template",
+  "settings.aws_connection.read": "Looked at the AI service connection",
+  "settings.aws_connection.update": "Changed the AI service connection",
+  "settings.aws_connection.test": "Tested the AI service connection",
+  "settings.aws_connection.reset": "Reset the AI service connection",
+  "audit.query": "Searched the audit log",
   "audit.download": "Downloaded the audit log",
   "audit.export": "Saved a copy of the audit log",
-  "settings.aws_connection.update": "Changed the AI service connection",
-  "pilot.feedback_export": "Downloaded all feedback",
+  "health.read": "Checked the service is up",
+  "request.unmatched": "Asked for an address that does not exist",
+  "request.no_policy": "Made a request with no access rule",
 };
 
-const FAMILY_WORDS = Object.fromEntries(FAMILIES);
+/** An action not listed above: its last verb in the past tense … */
+const VERB_WORDS = {
+  create: "Created",
+  update: "Changed",
+  delete: "Deleted",
+  save: "Saved",
+  list: "Looked at",
+  read: "Looked at",
+  preview: "Previewed",
+  replay: "Re-ran",
+  approve: "Approved",
+  reject: "Rejected",
+  generate: "Wrote",
+  regenerate: "Rewrote",
+  download: "Downloaded",
+  export: "Exported",
+  import: "Imported",
+  enable: "Turned on",
+  disable: "Turned off",
+  test: "Tested",
+  reset: "Reset",
+  upload: "Uploaded",
+  cancel: "Cancelled",
+  retry: "Retried",
+};
 
-/** The plain label of an action, e.g. `users.update` → "Changed a person". */
+/** … and the thing its family names. */
+const FAMILY_NOUNS = {
+  "auth.": "sign-in",
+  "users.": "a person",
+  "approvals.": "approvals",
+  "models.": "a model",
+  "runs.": "a run",
+  "uplift.": "an uplift run",
+  "uploads.": "an upload",
+  "datasets.": "a dataset",
+  "sources.": "a source table",
+  "mappings.": "a column mapping",
+  "onboarding_specs.": "a recipe",
+  "clients.": "a client",
+  "use_cases.": "a use case",
+  "reference_sets.": "reference material",
+  "schedules.": "a schedule",
+  "monitoring.": "monitoring",
+  "privacy.": "a privacy request",
+  "copy.": "campaign copy",
+  "indexes.": "a knowledge index",
+  "pilot.": "the pilot",
+  "settings.": "the settings",
+  "audit.": "the audit log",
+};
+
+const words = (text) => String(text).replace(/[._]+/g, " ").trim();
+const sentence = (text) => (text ? text.charAt(0).toUpperCase() + text.slice(1) : text);
+
+/**
+ * The plain label of an action, e.g. `users.update` → "Changed a person". One not listed above reads
+ * as its verb and the thing its family names - `datasets.create` → "Created a dataset", `feeds.archive`
+ * → "Archive feeds" - never as the bare code, which is in the row's Details.
+ */
 export function actionWords(action) {
   if (!action) return EM_DASH;
   if (ACTION_WORDS[action]) return ACTION_WORDS[action];
   const cut = action.indexOf(".");
-  const family = cut > 0 ? FAMILY_WORDS[action.slice(0, cut + 1)] : null;
-  const verb = (cut > 0 ? action.slice(cut + 1) : action).replace(/[._]/g, " ");
-  return family ? `${family}: ${verb}` : verb;
+  const prefix = cut > 0 ? action.slice(0, cut + 1) : "";
+  const parts = (cut > 0 ? action.slice(cut + 1) : action).split(/[._]+/).filter(Boolean);
+  const last = parts[parts.length - 1] || "";
+  const middle = parts.slice(0, -1).join(" ");
+  const noun = middle || FAMILY_NOUNS[prefix] || words(prefix) || "something";
+  if (VERB_WORDS[last]) return `${VERB_WORDS[last]} ${noun}`;
+  return sentence(`${parts.join(" ")}${prefix || middle ? ` ${FAMILY_NOUNS[prefix] || words(prefix)}` : ""}`.trim());
 }
 
 /** The form's fields; `from`/`to` are `YYYY-MM-DD` as a date input gives them. */
@@ -221,7 +372,7 @@ function eventRow({ event, count }) {
     cells: [
       esc(fmtStamp(event.occurred_at)),
       esc(who(event)),
-      `${esc(actionWords(event.action))}${repeated}<div class="pb-small mono">${esc(event.action)}</div>${more}`,
+      `${esc(actionWords(event.action))}${repeated}${more}`,
       statusPill(event.outcome),
     ],
   };

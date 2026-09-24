@@ -14,6 +14,8 @@ const tokens = {
   "tok-admin": fixture("me_admin"),
 };
 let measured = false;
+let campaignMeasured = false; // measured on the run's Campaign results page (ui/modules/uplift)
+let noSchedules = false;
 const firings = fixture("firings_drift").firings;
 
 const { w, calls, forms } = installOps({
@@ -22,7 +24,7 @@ const { w, calls, forms } = installOps({
   hash: "#/monitoring/schedules",
   table: [
     ["GET", "/industries", () => ok(fixture("industries"))],
-    ["GET", "/schedules", () => ok(fixture("schedules"))],
+    ["GET", "/schedules", () => ok(noSchedules ? fixture("schedules_none") : fixture("schedules"))],
     ["POST", "/schedules", () => created(fixture("schedule_score"))],
     ["POST", "/schedules/retraining/sync", () => ok(fixture("retraining_sync"))],
     [
@@ -60,6 +62,11 @@ const { w, calls, forms } = installOps({
       () => (measured ? ok(fixture("incrementality")) : refused(404, fixture("incrementality_missing"))),
     ],
     ["POST", "/runs/{id}/outcomes", () => ((measured = true), created(fixture("outcome_report")))],
+    [
+      "GET",
+      "/runs/{id}/campaign-results",
+      () => (campaignMeasured ? ok(fixture("campaign_results")) : refused(404, fixture("campaign_results_missing"))),
+    ],
     ["GET", "/privacy/runs/{id}/consent-report", () => refused(404, fixture("consent_report_missing"))],
     ["GET", "/audit/events", () => ok({ events: [], total: 0, offset: 0, limit: 50 })],
   ],
@@ -136,10 +143,14 @@ test("Run now shows the firing as recorded; Pause and Delete (asked twice) call 
   assert.ok(last("POST", `/schedules/${ids.drift_schedule}/disable`));
 
   const deletes = () => calls.filter((c) => c.method === "DELETE").length;
-  rowOf(ids.score_schedule).querySelector("[data-delete]").click();
+  const del = rowOf(ids.score_schedule).querySelector("[data-delete]");
+  assert.deepEqual([...del.classList].sort(), ["btn", "pb-quiet-bad", "quiet", "sm"], "quiet, red text, not filled");
+  del.click();
   await settle(2);
   assert.equal(deletes(), 0, "the first click only asks");
   assert.match(rowOf(ids.score_schedule).textContent, /Delete it and its history\?/);
+  const yes = rowOf(ids.score_schedule).querySelector("[data-delete-yes]");
+  assert.ok(yes.classList.contains("danger") && yes.classList.contains("confirm"), "only the confirm step is filled red");
   rowOf(ids.score_schedule).querySelector("[data-delete-yes]").click();
   await until(() => deletes() === 1, 2000, "the delete");
   assert.equal(last("DELETE", `/schedules/${ids.score_schedule}`).auth, "Bearer tok-analyst");
@@ -207,6 +218,37 @@ test("alerts open on the open ones; acknowledging says who, and the list re-read
   assert.equal(last("GET", "/monitoring/alerts").query.unacknowledged_only, undefined, "false is left out");
 });
 
+test("the Campaigns list links each run to its Campaign results page and reads Measured once it was measured", async () => {
+  const run = fixture("run").run;
+  const row = () => $(`tr[data-run="${ids.run_id}"]`);
+  const campaignReads = () => calls.filter((c) => c.method === "GET" && /\/campaign-results$/.test(c.path));
+  w.location.hash = "#/monitoring/runs";
+  await until(() => row() && row().querySelector("[data-status]"), 3000, "the run and its results");
+  const link = row().querySelector("a[data-campaign]");
+  assert.equal(link.getAttribute("href"), `#/campaign/${run.use_case_id}/${ids.run_id}`);
+  assert.equal(link.textContent, run.use_case_name || run.use_case_id);
+  const pill = () => row().querySelector("[data-status]");
+  assert.equal(pill().dataset.status, "not_added");
+  assert.equal(pill().textContent, "Not added yet");
+  const action = row().querySelector(`a[href="#/monitoring/runs/${ids.run_id}"]`);
+  assert.equal(action.textContent, "Add outcomes");
+  assert.ok(campaignReads().some((c) => c.path === `/runs/${ids.run_id}/campaign-results`));
+  const done = fixture("runs")
+    .runs.filter((r) => r.state === "done")
+    .slice(0, 20)
+    .map((r) => `/runs/${r.run_id}/campaign-results`);
+  assert.ok(campaignReads().every((c) => done.includes(c.path)), "only the 20 newest finished runs are asked");
+
+  campaignMeasured = true; // measured on the Campaign results page, no outcomes added here
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  w.location.hash = "#/monitoring/runs";
+  await until(() => row() && pill() && pill().dataset.status === "measured", 3000, "Measured");
+  assert.equal(pill().textContent, "Measured");
+  assert.equal(row().querySelector(`a[href="#/monitoring/runs/${ids.run_id}"]`).textContent, "Add outcomes");
+  campaignMeasured = false;
+});
+
 test("a finished scoring run: no outcomes yet, then an upload measures it against the test score", async () => {
   w.location.hash = "#/monitoring/runs";
   await until(() => heading() === "Campaigns" && /^Campaigns ·/.test(cardTitles()), 3000, "the scored lists");
@@ -264,4 +306,27 @@ test("an Admin is not an Analyst: the Privacy link is offered, running a schedul
   w.location.hash = "#/monitoring/schedules";
   await until(() => $$("tr[data-schedule]").length > 0 && $$(".pb-why").length > 0, 3000, "the list");
   assert.ok($$(".pb-why").some((n) => n.textContent === "Only an Analyst can run a schedule now."));
+});
+
+test("with nothing scheduled: one primary (the open form's Create schedule), no More actions, the sync still reachable", async () => {
+  session.storeToken("tok-analyst", null);
+  await session.loadMe();
+  noSchedules = true;
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  w.location.hash = "#/monitoring/schedules";
+  await until(() => /Nothing runs on its own yet\./.test(text()), 3000, "the empty state");
+  const primaries = $$("main .btn.primary");
+  assert.equal(primaries.length, 1, "one primary");
+  assert.equal(primaries[0].id, "pb-schedule-create-submit");
+  const open = $("#pb-schedule-new-open");
+  assert.ok(open.classList.contains("secondary"));
+  assert.equal(open.getAttribute("aria-expanded"), "true", "the form it controls is open");
+  assert.equal($("main .pb-more-actions"), null);
+  // Still reachable with nothing scheduled (no capability removed), as a quiet action, not a primary.
+  const sync = $("#pb-retraining-sync");
+  assert.ok(sync, "Update retraining schedules now stays reachable");
+  assert.ok(sync.classList.contains("quiet") && !sync.classList.contains("primary"));
+  assert.equal(/More actions/.test(text()), false);
+  noSchedules = false;
 });

@@ -12,8 +12,10 @@
 //   straight to the sign-in form (DEC-791) rather than failing on the next click.
 //
 // v1: the list comes first; "Add user" is the one primary action and opens the form (at once when
-// nobody has an account). Disabling someone is set apart in red and asks twice. "Added" names who
-// added the person, never their id; the bootstrap account reads "Set up at install".
+// nobody has an account). Disabling someone is set apart as a quiet red button and asks twice; only the
+// "Yes, disable" of that second step is filled red. Your own row offers no Disable: signing yourself
+// out everywhere is never one click away. "Added" names who added the person, never their id; the
+// bootstrap account reads "Set up at install".
 //
 // Passwords are read from their inputs on submit and never kept in state or echoed back; setting
 // your own password here needs your current one, exactly as `POST /users/{id}/password` requires.
@@ -123,7 +125,7 @@ function rowMessage(user) {
   return spanRow(COLUMNS, error ? errorBox(error) : `<div class="pb-ok" role="status">${esc(notice)}</div>`);
 }
 
-function actionsFor(user) {
+function actionsFor(user, own) {
   if (!can("PATCH", "/users/{user_id}")) {
     return `<span class="pb-small">${esc(reasonFor("PATCH", "/users/{user_id}") || EM_DASH)}</span>`;
   }
@@ -137,7 +139,9 @@ function actionsFor(user) {
   }
   const toggle = user.disabled
     ? `<button type="button" class="btn secondary sm" data-toggle="enable" data-user="${id}">Enable</button>`
-    : `<button type="button" class="btn danger sm" data-toggle="disable" data-user="${id}">Disable</button>`;
+    : own
+      ? ""
+      : `<button type="button" class="btn quiet sm pb-quiet-bad" data-toggle="disable" data-user="${id}">Disable</button>`;
   return `<div class="pb-row-actions"><button type="button" class="btn quiet sm" data-edit="roles" data-user="${id}">Change roles</button><button type="button" class="btn quiet sm" data-edit="password" data-user="${id}">Set password</button><span class="spacer"></span>${toggle}</div>`;
 }
 
@@ -161,7 +165,7 @@ function userRow(user, me) {
         ? `<span class="pill bad" data-status="disabled">Disabled</span>`
         : `<span class="pill ok" data-status="active">Active</span>`,
       esc(addedText(user)),
-      actionsFor(user),
+      actionsFor(user, own),
     ],
     after: `${editPanel(user, me)}${rowMessage(user)}`,
   };

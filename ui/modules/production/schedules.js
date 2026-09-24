@@ -20,9 +20,13 @@
 // * The run history is the server's, newest first, missed slots included (`status=missed`), and
 //   each run links to that run's campaign screen.
 //
-// v1: the list comes first with one primary "New schedule"; the form asks for the use case, what it
-// does, how often and whether to start now, and keeps the ids and the cron line under Advanced (the
-// payload is unchanged). Delete is set apart and asks twice - a second "Yes, delete" in the row -
+// v1: the list comes first with one primary: "New schedule" in the header, or - once the form is open,
+// which it always is while nothing is scheduled - the form's own "Create schedule", the header button
+// then secondary. The empty state is the sentence and that form, no "More actions": the retraining
+// sync sits on its own quiet line there, so it stays reachable with nothing scheduled. The form asks
+// for the use case, what it does, how often and whether to start now, and keeps the ids and the cron
+// line under Advanced (the payload is unchanged). Delete is a quiet red button set apart that asks
+// twice - a second, red-filled "Yes, delete" in the row -
 // because `window.confirm` is a browser dialog no test (and no screen reader flow) handles well, and
 // a schedule's history goes with it. Codes such as `DATASET_COMPOSITE_KEY_NOT_WIRED` read as plain
 // words; the code itself is under "Show more columns" or Details.
@@ -329,7 +333,7 @@ function rowActions(s) {
     attrs: `data-fire="${id}"`,
     label: "Run now",
   })}${toggle}<span class="spacer"></span>${actionButton("DELETE", "/schedules/{schedule_id}", {
-    cls: "btn danger sm",
+    cls: "btn quiet sm pb-quiet-bad",
     attrs: `data-delete="${id}"`,
     explain: false,
     label: "Delete",
@@ -378,9 +382,11 @@ function scheduleRow(s) {
   };
 }
 
-function moreActions() {
+/** "Update retraining schedules now": under More actions in the list, and on its own quiet line in
+ * the empty state - a use case set to retrain on its own has no schedule until it runs. */
+function moreActions({ inline = false } = {}) {
   const button = actionButton("POST", "/schedules/retraining/sync", {
-    cls: "btn secondary sm",
+    cls: inline ? "btn quiet sm" : "btn secondary sm",
     attrs: 'id="pb-retraining-sync"',
     label: state.syncing ? "Updating…" : "Update retraining schedules now",
     busy: state.syncing,
@@ -393,6 +399,8 @@ function moreActions() {
           r.updated.length,
         )} updated, ${esc(r.removed.length)} removed.</span>`
       : "";
+  const hint = `<span class="pb-hint">Brings the retraining schedules in line with each use case's settings now, instead of at the next restart.</span>`;
+  if (inline) return `<div class="card-body"><div class="pb-row-actions">${button}${hint}${result}</div></div>`;
   const open = state.syncing || r || state.syncError;
   return `<div class="card-body"><details class="pb-more-actions"${open ? " open" : ""}><summary class="btn quiet sm">More actions</summary><div class="pb-row-actions">${button}<span class="pb-hint">Brings the retraining schedules in line with each use case's settings now, instead of at the next restart.</span>${result}</div></details></div>`;
 }
@@ -418,7 +426,7 @@ function listCard() {
       )} · ${esc(useCaseName(state.created.use_case_id))}</a>; next run ${esc(fmtStamp(state.created.next_due_at))} your time.</div></div>`
     : "";
   if (!state.schedules.length) {
-    return `<section class="card">${title(0)}${created}<div class="empty-state"><p class="es-t">Nothing runs on its own yet.</p><p>Schedule monthly scoring or a check on new customers, so you don't have to remember. Use the form below.</p></div>${moreActions()}</section>`;
+    return `<section class="card">${title(0)}${created}<div class="empty-state"><p class="es-t">Nothing runs on its own yet.</p><p>Schedule monthly scoring or a check on new customers, so you don't have to remember. Use the form below.</p></div>${moreActions({ inline: true })}</section>`;
   }
   const sorted = [...state.schedules].sort(
     (a, b) => Number(!a.enabled) - Number(!b.enabled) || String(a.next_due_at).localeCompare(String(b.next_due_at)),
@@ -438,7 +446,7 @@ export const schedulesHtml = () =>
     headActions({
       primary: actionButton("POST", "/schedules", {
         cls: newOpen() ? "btn secondary" : "btn primary", // the form's own button is the primary once open
-        attrs: `id="pb-schedule-new-open" aria-controls="pb-schedule-new" aria-expanded="${state.newOpen}"`,
+        attrs: `id="pb-schedule-new-open" aria-controls="pb-schedule-new" aria-expanded="${newOpen()}"`,
         label: "New schedule",
       }),
     }),
@@ -540,7 +548,7 @@ function factsCard(s) {
           "data-delete-no",
         )
       : actionButton("DELETE", "/schedules/{schedule_id}", {
-          cls: "btn danger sm",
+          cls: "btn quiet sm pb-quiet-bad",
           attrs: `data-delete="${esc(s.schedule_id)}"`,
           label: "Delete this schedule",
         });
