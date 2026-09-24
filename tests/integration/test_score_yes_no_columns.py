@@ -150,3 +150,25 @@ def test_the_yes_no_flags_are_recorded_as_the_text_the_model_was_fitted_on(
     for name in YES_NO_COLUMNS:
         assert recorded[name].inferred_type.value == "string", name
         assert set(recorded[name].categories) == {"No", "Yes"}, name
+
+
+@pytest.mark.parametrize("dtype", ["object", "string", "category"])
+def test_a_text_flag_is_still_text_in_every_pandas_text_dtype(dtype: str) -> None:
+    """A Parquet upload keeps `category` columns categorical (review of DEC-956): still the same tokens."""
+    import pandas as pd
+
+    from engine.config import ColumnType
+    from engine.stages.validate import _text_flag_still_text
+
+    frame = pd.DataFrame({"Partner": pd.Series(["Yes", "No", "Yes"], dtype=dtype)})
+    assert _text_flag_still_text(frame, "Partner", ColumnType.STRING, ColumnType.BOOLEAN)
+
+
+def test_a_flag_stored_as_real_booleans_is_still_a_change() -> None:
+    import pandas as pd
+
+    from engine.config import ColumnType
+    from engine.stages.validate import _text_flag_still_text
+
+    frame = pd.DataFrame({"Partner": pd.Series([True, False, True], dtype="bool")})
+    assert not _text_flag_still_text(frame, "Partner", ColumnType.STRING, ColumnType.BOOLEAN)

@@ -1539,6 +1539,9 @@ def _text_flag_still_text(frame: pd.DataFrame, name: str, expected: ColumnType, 
     if expected not in _TEXTUAL_TYPES or actual is not ColumnType.BOOLEAN or name not in frame.columns:
         return False
     dtype = frame[name].dtype
+    if isinstance(dtype, pd.CategoricalDtype):
+        # A Parquet upload keeps pandas `category` columns categorical; the tokens are still text.
+        dtype = dtype.categories.dtype
     return bool(pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype))
 
 
