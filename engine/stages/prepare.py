@@ -1268,14 +1268,25 @@ def _grouped_positions(df: pd.DataFrame, config: UseCaseConfig, *, seed: int) ->
 def _positive_mask(df: pd.DataFrame, target: str, config: UseCaseConfig) -> pd.Series[bool]:
     """Which rows carry the positive label, comparing labels as normalised strings.
 
-    `target.positive_label` wins when it is configured. Otherwise the label is auto-detected (plan
-    §5 allows omitting it): `true` over `false`, `1` over `0`, `yes` over `no`, and failing all three
-    the rarer of the two labels, which is the marketing convention for the event being predicted.
+    `target.positive_label` wins when it is configured, unless the target holds exactly two values
+    and the label is neither. Otherwise the label is auto-detected (plan §5 allows omitting it):
+    `true` over `false`, `1` over `0`, `yes` over `no`, and failing all three the rarer of the two
+    labels, which is the marketing convention for the event being predicted.
+
+    The configured label describes `target.column`, but a run may predict another column - a dataset
+    run takes its outcome from the dataset's manifest (`churn_next_60d`, 0/1) while the use case
+    still says `Churn`/`Yes`. Trusting the label regardless counted no positive at all and wrote
+    `positive_rate 0.0` into split.json for a target 18.6 % positive; falling back instead is what
+    `validate.resolve_positive_label` (DEC-056) and `train.class_labels` already do (DEC-958). A
+    one-valued target keeps the configured label: its zero positives are then the truth.
     """
     keys = df[target].map(_label_key)
     configured = config.target.positive_label
     if configured is not None:
-        return keys.eq(_label_key(configured))
+        wanted = _label_key(configured)
+        present = set(df[target].dropna().map(_label_key))
+        if wanted in present or len(present) != 2:
+            return keys.eq(wanted)
     counts = keys.value_counts()
     labels = list(counts.index)
     for conventional in ("true", "1", "yes"):
