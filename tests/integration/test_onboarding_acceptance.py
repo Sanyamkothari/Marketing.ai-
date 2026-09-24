@@ -342,7 +342,7 @@ def journey(
 
     # 1. The product opens on the default client; a new one is created from the header's picker.
     page.goto(f"{server}/ui/", wait_until="domcontentloaded")
-    expect(page.get_by_role("heading", name="Marketing AI")).to_be_visible()
+    expect(page.get_by_role("heading", name="Customer Lifecycle")).to_be_visible()
     expect(page.locator("#f-client")).to_be_visible(timeout=ACTION_TIMEOUT_MS)
     seen.default_client = selected_text(page, "#f-client")
     page.locator("#f-client").select_option(label="+ New client")
