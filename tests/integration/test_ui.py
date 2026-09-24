@@ -33,6 +33,7 @@ MODULES: Final[tuple[str, ...]] = (
     "api.js",
     "app.js",
     "availability.js",  # what this environment can offer; the AI-service notice (DEC-954)
+    "chrome.js",  # the one top bar (v1, docs/ui/FOUNDATION.md)
     "dom.js",
     "overview.js",
     "pages.js",
