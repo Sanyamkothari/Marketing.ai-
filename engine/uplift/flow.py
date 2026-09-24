@@ -770,6 +770,7 @@ class UpliftTrainFlow(_TrainFlow):
             run_id=ctx.run_id,
             model_version_id=model_id,
             primary_key=ctx.key,
+            target=ctx.target,
         )
         self._write(register.DRIFT_BASELINE_FILENAME, baseline)
         champion = ctx.registry.get_champion(ctx.config.id)

@@ -107,7 +107,7 @@ def _feature_drift(
 ) -> tuple[DriftReport | None, str | None]:
     """Phase 1's `compute_drift` against the version's baseline, or `(None, why not)`."""
     from engine.contracts import DriftBaseline
-    from engine.stages.score import compute_drift
+    from engine.stages.score import compute_drift, not_drift_features
 
     key = version.drift_baseline_key
     if key is None or not storage.exists(key):
@@ -117,7 +117,9 @@ def _feature_drift(
     except (StorageError, ValueError):
         _LOGGER.warning("uplift drift: the baseline of %s could not be read", version.model_id)
         return None, NO_BASELINE
-    report = compute_drift(baseline, frame, config, run_id=run_id)
+    # Never the label or the key, even from a baseline written before DEC-957 that lists them.
+    not_features = not_drift_features(version, storage=storage)
+    report = compute_drift(baseline, frame, config, run_id=run_id, not_features=not_features)
     return report, None if report is not None else NOTHING_TO_COMPARE
 
 

@@ -523,6 +523,7 @@ def drift_baseline(
     run_id: str,
     model_version_id: str,
     primary_key: PrimaryKey | None = None,
+    target: str | None = None,
 ) -> DriftBaseline:
     """Summarise the training distribution per feature, so scoring runs can measure drift.
 
@@ -533,8 +534,15 @@ def drift_baseline(
 
     `primary_key` is optional so the stub's signature still calls: pass it whenever it is known, so
     the baseline covers exactly the columns `schema.json` lists.
+
+    `target` is the run's label column, which is not always `config.target.column`: a run on a
+    built dataset trains on the dataset's own label (`churn_next_60d`, say) while the use case still
+    names the template's. The label is empty in every file that is scored, so a baseline that kept
+    it reported the largest PSI the metric can produce on every scoring run (DEC-957).
     """
     excluded: tuple[str, ...] = () if primary_key is None else key_columns(primary_key)
+    if target is not None:
+        excluded = (*excluded, target)
     features = tuple(
         _feature_baseline(train, name) for name in _feature_columns(train, config, excluded=excluded)
     )
