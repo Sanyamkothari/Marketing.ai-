@@ -146,6 +146,17 @@ left a screen was moved, grouped or put behind a disclosure. The audit is
 - **One design system.** The same header, spacing, type scale, cards, buttons and colours from the
   existing theme tokens on every screen. Keyboard focus is visible, and every screen works at 390 px
   and in dark mode.
+- **Checked by an independent review** of every after-shot against the ten principles. It confirmed
+  the logo-only header on every screen and found a few gaps, which were fixed before the final shots:
+  - Campaign results appeared twice on a scoring run's Output page.
+  - The Campaigns list said "Not added yet" for campaigns that were measured.
+  - "ROC-AUC", "2K" and three `.json` file names were still on screen.
+  - The per-segment predicted uplift had been dropped from the uplift contact list, and is restored.
+  - "Update retraining schedules now" became unreachable with no schedules, and is reachable again.
+- **Moved or reworded, not removed:**
+  - A use case's lifecycle stage now shows on Home only, not as a chip on its own screens.
+  - The Fairness card appears only when fairness was evaluated.
+  - Accounts made by the installer say "Set up at install" instead of a creation date.
 - **The prototype matches the product.** `marketing-ai-prototype.html` was updated, with its tests
   and screenshots (CHANGELOG-prototype Revision 6).
 
