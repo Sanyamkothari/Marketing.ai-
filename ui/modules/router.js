@@ -18,6 +18,11 @@
 // the hash - so with no module registered, which is the state of this branch, the UI behaves
 // exactly as it did before this file existed.
 
+// The top bar's store (v1 seams, at the end of this file). Imported first, before the Phase 4b block's
+// `boot.js`: ES modules evaluate their imports in source order, so a slot or access provider that
+// `boot.js` registers finds `chrome.js` already evaluated. `chrome.js` imports only `dom.js`.
+import { addNavSlot, refreshChrome, setAccess, setActiveNav as markActiveNav } from "../chrome.js";
+
 const registered = [];
 
 /**
@@ -74,9 +79,9 @@ export function resolveRoute(parts) {
 // The header tool itself is kept by `ui/dom.js`, which draws the header: `dom.js` must not import
 // this file (see `setHeaderTool`), so the edge runs from here to there.
 
-import { headerToolHtml as drawnHeaderTool, setHeaderTool } from "../dom.js";
+import { MODULES_EVENT, headerToolHtml as drawnHeaderTool, setGlossary, setHeaderTool } from "../dom.js";
 
-export const MODULES_CHANGED = "marketing-ai:modules-changed";
+export const MODULES_CHANGED = MODULES_EVENT;
 
 const extensions = { setupSource: null, headerTool: null };
 let announcing = false;
@@ -114,7 +119,11 @@ export function setupSource() {
   return extensions.setupSource;
 }
 
-/** Something drawn at the right of every page header, beside the logo: `{ name, html() }`. */
+/**
+ * The top bar's context slot - the client picker - `{ name, html() }`. Since v1 the top bar
+ * (`ui/chrome.js`) draws it at its right end; the page header's right side is the logo alone. `html()`
+ * may return `""` on a route where the tool means nothing.
+ */
 export function registerHeaderTool(tool) {
   const { name, html } = tool || {};
   if (!name || typeof html !== "function") throw new Error("registerHeaderTool needs { name, html() }");
@@ -151,3 +160,85 @@ import "./production/boot.js";
 // The pilot module (`modules/pilot/index.js`, route `pilot`) is loaded by its own `<script>` in
 // index.html's PLAN-E block, as the uplift module is, for the same reason: it imports this file.
 // ---- END PLAN-E ----
+
+// ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----
+// How a module fills the top bar and the shared screens without editing them. `registerNavSlot`,
+// `registerAccess` and `registerGlossary` only forward to `chrome.js` / `dom.js`, which are evaluated
+// before `production/boot.js` (see the import at the top), so they are safe to call from boot.
+// `registerRunAction` keeps its list here: call it from a module's entry point, as `registerModule`.
+
+/**
+ * Fill a top-bar slot: `name` is "models", "admin", "demo", "help", "user" or "badge:approvals"
+ * (see `chrome.js`); `slot` is `{ html(), bind?(bar) }`. Several registrations under one name are
+ * drawn in registration order. The bar redraws on every route change and `MODULES_CHANGED`; call
+ * `refreshTopBar()` when only the slot's own state changed.
+ */
+export function registerNavSlot(name, slot) {
+  const { html, bind } = slot || {};
+  if (!name || typeof html !== "function" || (bind !== undefined && typeof bind !== "function")) {
+    throw new Error("registerNavSlot needs (name, { html(), bind?(bar) })");
+  }
+  addNavSlot(name, { html, bind });
+}
+
+/**
+ * Who may see what in the top bar: `{ can(method, path), status?() }` - `can` as the production
+ * session's, `status()` returning "signed-out" to draw the wordmark and the user slot only. With no
+ * provider every item is drawn (a deployment without sign-in).
+ */
+export function registerAccess(provider) {
+  if (!provider || typeof provider.can !== "function") throw new Error("registerAccess needs { can(method, path) }");
+  setAccess(provider);
+}
+
+/**
+ * The plain-language catalogue (`GET /pilot/help`): `{ code, term, metric, setting }` as lookup
+ * functions or maps, or the catalogue itself. `errorBox` then leads with a code's title, and screens
+ * read `glossaryCode` / `glossaryTerm` / `glossaryMetric` / `glossarySetting` from `dom.js`.
+ */
+export function registerGlossary(glossary) {
+  if (!glossary || typeof glossary !== "object") {
+    throw new Error("registerGlossary needs { code, term, metric, setting }");
+  }
+  setGlossary(glossary);
+}
+
+const runActions = [];
+
+/**
+ * An action offered on a run's results (a button in the Output page's header, or a flow block):
+ * `{ name, applies(uc, run), html(uc, run) }`. `name` must be unique.
+ */
+export function registerRunAction(action) {
+  const { name, applies, html } = action || {};
+  if (!name || typeof applies !== "function" || typeof html !== "function") {
+    throw new Error("registerRunAction needs { name, applies(uc, run), html(uc, run) }");
+  }
+  if (runActions.some((a) => a.name === name)) throw new Error(`A run action named "${name}" is already registered`);
+  runActions.push({ name, applies, html });
+  announceModulesChanged();
+}
+
+/** The markup of every run action that applies to this run, in registration order; `""` for none. */
+export function runActionsHtml(uc, run) {
+  return runActions
+    .map((action) => {
+      try {
+        return action.applies(uc, run) ? action.html(uc, run) || "" : "";
+      } catch {
+        return "";
+      }
+    })
+    .join("");
+}
+
+/** Mark a top-bar goal active for the current route only ("campaigns" on a scoring run's Output). */
+export function setActiveNav(id) {
+  markActiveNav(id);
+}
+
+/** Redraw the top bar now that a slot's own state changed (a count, the signed-in user). */
+export function refreshTopBar() {
+  refreshChrome();
+}
+// ---- END V1-UI ----
