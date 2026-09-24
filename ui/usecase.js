@@ -91,6 +91,10 @@ export function useCaseState(uc) {
       problemType: "",
       model: AUTOML,
       modelVersionId: "",
+      // Score mode's model choice (DEC-959): what the user picked, and for which header client, and
+      // the training run they started from this screen - both kept only for this page's lifetime.
+      modelPick: null,
+      trained: null,
       values,
       datasetSplit: null,
       advOpen: false,
@@ -102,6 +106,7 @@ export function useCaseState(uc) {
       submitting: false,
       runs: [],
       models: [],
+      clientRuns: [],
       view: "setup",
       runId: null,
       detail: null,
@@ -499,7 +504,10 @@ function setupHtml(uc, s) {
           s.model,
           null,
         )}</select></div></div></div></div></div>`
-    : `<div class="fstep ${hasData ? "" : "locked"} done"><div class="stepno">3</div><div>
+    : // Never locked, unlike training's Step 3: the raw-tables card replays the chosen model's
+      // recipe, so the model is chosen before there is any data, and a locked select left a model
+      // trained on another client's tables with no way to pick a different one (DEC-959).
+      `<div class="fstep done"><div class="stepno">3</div><div>
         <div class="flabel">Trained model</div><div class="fhint">The saved model that will score the uploaded rows.</div>
         <div class="frow"><div class="field" style="width:360px"><div class="control sel"><select id="f-scorerun" aria-label="Trained model">${
           versions.length
@@ -748,17 +756,72 @@ export function createController(uc, rerender) {
     timer = null;
   };
 
+  /** The client picked in the header, when a setup source is registered to have one. */
+  function clientId() {
+    const extension = setupSource();
+    return extension ? extension.context().clientId : null;
+  }
+
   async function refreshLists() {
+    const client = clientId();
     try {
-      const [runs, models] = await Promise.all([getRuns(uc.id), getModels(uc.id)]);
+      const [runs, models, clientRuns] = await Promise.all([
+        getRuns(uc.id),
+        getModels(uc.id),
+        client ? getRuns(uc.id, { mode: "train", clientId: client }) : { runs: [] },
+      ]);
       s.runs = runs.runs || [];
       s.models = models.versions || [];
-      if (!s.modelVersionId && s.models.length) {
-        const champion = s.models.find((v) => v.is_champion) || s.models[0];
-        s.modelVersionId = champion.version.model_id;
-      }
+      s.clientRuns = clientRuns.runs || [];
+      settleModel();
     } catch (error) {
       if (!(error instanceof ApiError)) throw error;
+    }
+  }
+
+  /**
+   * The model Score mode starts on (DEC-959), in this order: the one the user just trained here -
+   * unless it was built from another client's tables than the header names - then the newest one
+   * trained on the header client's tables, then the champion. The champion alone was wrong twice
+   * over: a model trained a minute ago on a prepared file waits for approval, so the champion -
+   * trained on other columns - refused that same file with SCHEMA_MISMATCH; and a newly created
+   * client was offered another client's model, whose recipe the raw-tables card cannot replay.
+   * `GET /models` names each version's training run, and `GET /runs?client_id=` that client's runs.
+   */
+  function defaultModelId(client) {
+    const trainedBy = (runIds) => s.models.find((v) => runIds.includes(v.version.run_id));
+    const trained =
+      s.trained && (!s.trained.clientId || s.trained.clientId === client) && trainedBy([s.trained.runId]);
+    const own = client && trainedBy(s.clientRuns.map((run) => run.run_id));
+    const chosen = trained || own || s.models.find((v) => v.is_champion) || s.models[0];
+    return chosen ? chosen.version.model_id : "";
+  }
+
+  /** Keep the user's own pick while it exists and the header client is the one it was made for;
+   * otherwise follow the default, which moves as models are trained and clients change. */
+  function settleModel() {
+    const client = clientId();
+    const pick = s.modelPick;
+    const kept =
+      pick && pick.clientId === client && s.models.some((v) => v.version.model_id === pick.id) ? pick.id : "";
+    const next = kept || defaultModelId(client);
+    if (next === s.modelVersionId) return;
+    s.modelVersionId = next;
+    modelChanged();
+  }
+
+  /**
+   * A different score model makes what the form showed for the last one stale: its validation
+   * report (a SCHEMA_MISMATCH box named the old model's columns) and its error. The raw-tables panel
+   * replays the chosen model's own recipe, so a different model is a different panel too.
+   */
+  function modelChanged() {
+    if (s.mode !== "score") return;
+    s.validation = null;
+    s.submitError = null;
+    if (s.source === RAW) {
+      s.dataset = null;
+      resetColumns();
     }
   }
 
@@ -827,6 +890,11 @@ export function createController(uc, rerender) {
     }
     try {
       const created = await postRun(body);
+      if (s.mode === "train") {
+        // The model this run registers is the one to score with next, over any earlier pick.
+        s.trained = { runId: created.run_id, clientId: body.client_id || null };
+        s.modelPick = null;
+      }
       s.validation = null;
       s.submitting = false;
       s.runId = created.run_id;
@@ -967,8 +1035,7 @@ export function createController(uc, rerender) {
    */
   function sync() {
     const extension = setupSource();
-    const clientId = extension ? extension.context().clientId : null;
-    if (s.dataset && s.dataset.clientId !== clientId) {
+    if (s.dataset && s.dataset.clientId !== clientId()) {
       s.dataset = null;
       if (s.source === RAW) resetColumns();
     }
@@ -976,6 +1043,7 @@ export function createController(uc, rerender) {
       s.source = FILE;
       resetColumns();
     }
+    settleModel();
   }
 
   /** Mount the setup source's panel into this paint's placeholder, when the raw card is chosen. */
@@ -1040,13 +1108,9 @@ export function createController(uc, rerender) {
     });
     on("f-scorerun", "change", (event) => {
       s.modelVersionId = event.target.value;
-      // The raw-tables panel replays the chosen model's own recipe, so a different model is a
-      // different panel.
-      if (s.source === RAW) {
-        s.dataset = null;
-        resetColumns();
-        rerender();
-      }
+      s.modelPick = { id: s.modelVersionId, clientId: clientId() };
+      modelChanged();
+      rerender();
     });
     on("f-adv", "toggle", (event) => {
       s.advOpen = event.target.open;
