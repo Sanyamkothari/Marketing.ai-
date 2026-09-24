@@ -7,9 +7,11 @@ takes a few minutes, because it really does what a pilot does - which is the poi
 visitor then clicks through show artefacts the engine made, not pictures of them, and nothing in the
 demo trains while anybody watches.
 
-1. Raw tables for 2,000 synthetic subscribers (`tests/fixtures/raw/make_raw.py`), plus the month
+1. Raw tables for 4,000 synthetic subscribers (`tests/fixtures/raw/make_raw.py`), plus the month
    after them and one broken extract with a single planted problem (the customer table repeats some
    customer IDs, `ENTITY_DUPLICATE_KEYS`), all kept under `pilot/demo/raw/` for the pre-flight check.
+   4,000 rather than 2,000 so the churn campaign's control group (400) is large enough for Campaign
+   results to show the planted effect with a range that excludes zero on almost every seed (DEC-960).
 2. The client "Demo Telecom": every table uploaded, its detected role confirmed, the suggested
    mapping saved, the use case's suggested features and churn definition kept, a dataset built.
 3. A churn model trained on it (the fast search), approved and made champion.
@@ -66,8 +68,11 @@ logger = logging.getLogger("seed_demo")
 
 CHURN_USE_CASE = "telco-churn"
 WINBACK_USE_CASE = "win-back-campaign"
-CUSTOMERS = 2_000
-USAGE_ROWS = 40_000
+CUSTOMERS = 4_000
+USAGE_ROWS = 80_000
+"""A tenth of the customers are the churn campaign's control group. At 2,000 that was 200, and about
+one seed in six put zero inside the effect's 95% range; at 4,000 about one in a hundred does, and the
+seed still takes about two and a half minutes (DEC-960). Usage rows scale with it, twenty per customer."""
 TIMEOUT_S = 1_800.0
 TABLE_ROLES = {
     "customers": "entity",
