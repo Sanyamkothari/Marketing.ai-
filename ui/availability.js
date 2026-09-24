@@ -2,7 +2,7 @@
 // calm notice instead of a broken, empty or placeholder screen (DEC-954).
 //
 // Today that is one feature: text written by an AI service. The assistant, root-cause notes and
-// campaign copy call an LLM. Without Amazon Bedrock they run on the deterministic fake, which a
+// campaign copy call an LLM. Without a connected AI service they run on the deterministic fake, which a
 // developer wants (it is how the tests run) but a demo visitor must never mistake for real output.
 // So in demo mode, when the use case's resolved `generative.llm.backend` is `fake`, those screens are
 // replaced by the notice below. Outside demo mode nothing changes: the fake backend keeps its
@@ -46,5 +46,5 @@ export async function needsAiNotice(uc) {
 export function aiNoticeHtml(uc, backHtml) {
   return `<main class="screen" data-ai-notice>${pageHead(
     `${backHtml}<h1 class="h1">${esc(uc.name)}</h1>${uc.description ? `<p class="desc">${esc(uc.description)}</p>` : ""}`,
-  )}<section class="card notice-card" role="status"><h3>Needs AI service connection</h3><p>This feature writes text with an AI service (Amazon Bedrock). This demo is not connected to one, so the screen is switched off rather than showing placeholder text.</p><p class="muted">Everything else in the demo works without it. To turn it on, an administrator connects the platform to Amazon Bedrock (see <b>docs/GENERATIVE.md</b>).</p></section></main>`;
+  )}<section class="card notice-card" role="status"><h3>Needs AI service connection</h3><p>This feature writes text with an AI service. This demo is not connected to one, so the screen is switched off rather than showing placeholder text.</p><p class="muted">Everything else in the demo works without it. To turn it on, an administrator connects the platform to its AI service (see <b>docs/GENERATIVE.md</b>).</p></section></main>`;
 }

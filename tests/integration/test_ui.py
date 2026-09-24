@@ -32,6 +32,7 @@ DEMO_ID: Final[str] = "targeted-advertisement"
 MODULES: Final[tuple[str, ...]] = (
     "api.js",
     "app.js",
+    "availability.js",  # what this environment can offer; the AI-service notice (DEC-954)
     "dom.js",
     "overview.js",
     "pages.js",
