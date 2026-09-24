@@ -17,7 +17,7 @@ from typing import Final
 
 from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.routes import ALL_ROUTERS
@@ -141,6 +141,14 @@ def create_app(
         # same process that answers the API also serves them (DEC-024 keeps CORS open regardless).
         app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
 
+        # `/` is the address uvicorn prints and the one a person types. It sends them to the screens
+        # rather than to a JSON 404 (DEC-953). A plain Starlette route like the mount above: not part
+        # of the API, so no access policy, no OpenAPI entry and no audit row.
+        async def _to_ui(_request: Request) -> RedirectResponse:
+            return RedirectResponse("/ui/")
+
+        app.add_route("/", _to_ui, include_in_schema=False)
+
     @app.get("/healthz", response_model=HealthResponse, tags=["health"], summary="Liveness probe")
     def healthz() -> HealthResponse:
         """The engine version this process serves (DEC-024)."""
@@ -195,9 +203,12 @@ from api.routes.auth import router as auth_router  # noqa: E402
 PHASE_APP_HOOKS.append(install_access)
 PHASE_ROUTERS.extend((auth_router, audit_router))
 # M48: the DPDP controls - consent ledger, retention, erasure and access requests (DEC-746).
+from api.routes.privacy import install_privacy_checks  # noqa: E402
 from api.routes.privacy import router as privacy_router  # noqa: E402
 
 PHASE_ROUTERS.append(privacy_router)
+# Plan D M54 (R3, DEC-860): a production API refuses to start without its secret privacy salt.
+PHASE_APP_HOOKS.append(install_privacy_checks)
 # M49: schedules, monitoring and outcomes. The hook starts the scheduler `scheduler_backend` names
 # with the app and stops it with the app - and does nothing at all for `none`, the default (DEC-782).
 from api.routes.monitoring import router as monitoring_router  # noqa: E402
@@ -206,6 +217,10 @@ from api.routes.schedules import router as schedules_router  # noqa: E402
 
 PHASE_APP_HOOKS.append(install_scheduling)
 PHASE_ROUTERS.extend((schedules_router, monitoring_router))
+# Plan D M54 (DEC-862, DEC-864): the Approver's screen - challengers waiting, and rejecting one.
+from api.routes.approvals import router as approvals_router  # noqa: E402
+
+PHASE_ROUTERS.append(approvals_router)
 # ---- END PHASE-4B ----
 # ---- PHASE-3B (uplift) — append only below this line ----
 # Uplift: the treatment picker, `POST /uplift/runs`, uplift artefacts, campaign results and OPE.
@@ -213,5 +228,12 @@ from api.routes.uplift import router as uplift_router  # noqa: E402
 
 PHASE_ROUTERS.append(uplift_router)
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# Pilot readiness: the data request kit, the readiness, results and value reports, demo mode and
+# the feedback loop. Reads artefacts only; no route here trains, scores or changes a check.
+from api.routes.pilot import router as pilot_router  # noqa: E402
+
+PHASE_ROUTERS.append(pilot_router)
+# ---- END PLAN-E ----
 
 app: FastAPI = create_app()

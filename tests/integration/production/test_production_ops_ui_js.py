@@ -40,6 +40,7 @@ from engine.contracts import RunState
 from engine.runs import update_run
 from engine.scheduling.scheduler import LocalScheduler
 from engine.storage import run_key
+from tests.fixtures.node import skip_without_jsdom
 from tests.integration.production.schedules_support import Api, build_api
 from tests.integration.production.test_monitoring_api import MATURE, backwards_outcomes
 from tests.integration.production.test_privacy_erasure_api import Api as ErasureApi
@@ -135,6 +136,9 @@ def write_monitoring_fixtures(out: Path, root: Path, config_root: Path) -> None:
     viewer, analyst = api.as_("viewer"), api.as_("analyst")
 
     _write(out, "schedules", _ok(api.client.get("/schedules", headers=viewer)))
+    none = _ok(api.client.get("/schedules", params={"client_id": "c_nobody_here"}, headers=viewer))
+    assert none["schedules"] == [], none
+    _write(out, "schedules_none", none)
     _write(
         out, "schedule_score", _ok(api.client.get(f"/schedules/{schedule['schedule_id']}", headers=viewer))
     )
@@ -195,6 +199,27 @@ def write_monitoring_fixtures(out: Path, root: Path, config_root: Path) -> None:
         _ok(api.client.post(f"/monitoring/alerts/{report['alert_id']}/acknowledge", headers=analyst)),
     )
     _write(out, "alerts_all", _ok(api.client.get("/monitoring/alerts", headers=viewer)))
+    # the same run measured on its Campaign results page (ui/modules/uplift): 404 before, the report after
+    no_campaign = api.client.get(f"/runs/{run_id}/campaign-results", headers=viewer)
+    assert no_campaign.status_code == 404, no_campaign.text
+    _write(out, "campaign_results_missing", no_campaign.json())
+    campaign_upload = _ok(
+        api.client.post(
+            "/uploads",
+            files={"file": ("outcomes.csv", backwards_outcomes(scores), "text/csv")},
+            data={"use_case": USE_CASE, "mode": "score"},
+            headers=analyst,
+        ),
+        201,
+    )
+    _ok(
+        api.client.post(
+            f"/runs/{run_id}/campaign-results",
+            json={"upload_id": campaign_upload["upload_id"], "outcome_column": "churn_next_60d"},
+            headers=analyst,
+        )
+    )
+    _write(out, "campaign_results", _ok(api.client.get(f"/runs/{run_id}/campaign-results", headers=viewer)))
     _write(
         out,
         "ids",
@@ -252,13 +277,40 @@ def write_privacy_fixtures(out: Path, root: Path, config_root: Path, monkeypatch
         "access_export",
         {"disposition": access.headers["content-disposition"], "size": len(access.content)},
     )
-    outcome = _ok(
+    # Plan D (DEC-863): a background job. First a request whose uploads store keeps failing - its
+    # accepted answer, its failed progress and record - then its retry, which finishes it.
+    storage = erasing.flaky("uploads/", failures=10_000)
+    failed_accepted = _ok(
         erasing.client.post(
             "/privacy/erasure", json={"principal_id": SENTINEL, "client_id": CLIENT}, headers=erasing.admin
         ),
-        201,
+        202,
     )
-    assert SENTINEL not in json.dumps(outcome)
+    request_id = failed_accepted["request_id"]
+    failed_record = erasing.finish(request_id)
+    assert failed_record["error_code"] == "ERASURE_STORE_FAILED", failed_record
+    _write(out, "erasure_accepted", failed_accepted)
+    _write(out, "erasure_failed", failed_record)
+    _write(
+        out,
+        "erasure_failed_progress",
+        _ok(erasing.client.get(f"/privacy/erasure/{request_id}/progress", headers=erasing.admin)),
+    )
+    storage.failures = 0
+    retried = _ok(
+        erasing.client.post(
+            f"/privacy/erasure/{request_id}/retry", json={"principal_id": SENTINEL}, headers=erasing.admin
+        ),
+        202,
+    )
+    _write(out, "erasure_retry_accepted", retried)
+    outcome = erasing.finish(request_id)
+    _write(
+        out,
+        "erasure_progress",
+        _ok(erasing.client.get(f"/privacy/erasure/{request_id}/progress", headers=erasing.admin)),
+    )
+    assert SENTINEL not in json.dumps([failed_accepted, failed_record, retried, outcome])
     _write(out, "erasure", outcome)
     _write(out, "erasures", _ok(erasing.client.get("/privacy/erasure", headers=erasing.admin)))
     _write(out, "retrain_flags", _ok(erasing.client.get("/privacy/retrain-flags", headers=erasing.admin)))
@@ -316,6 +368,8 @@ def test_the_ops_fixtures_are_what_the_ui_expects(
     assert _read(out, "outcomes_missing")["detail"]["code"] == "OUTCOME_REPORT_NOT_FOUND"
     assert _read(out, "incrementality_missing")["detail"]["code"] == "INCREMENTALITY_INPUT_NOT_FOUND"
     assert _read(out, "consent_report_missing")["detail"]["code"] == "CONSENT_REPORT_NOT_FOUND"
+    assert _read(out, "campaign_results_missing")["detail"]["code"] == "CAMPAIGN_RESULTS_NOT_FOUND"
+    assert _read(out, "campaign_results")["run_id"] == _read(out, "ids")["run_id"]
     kinds = {alert["kind"] for alert in _read(out, "alerts_open")["alerts"]}
     assert {"performance_drop", "schedule_missed"} <= kinds
 
@@ -329,17 +383,15 @@ def test_the_ops_fixtures_are_what_the_ui_expects(
     assert _read(out, "privacy_not_configured")["detail"]["code"] == "PRIVACY_NOT_CONFIGURED"
 
 
-@pytest.mark.skipif(shutil.which("node") is None, reason="node is not installed")
 def test_the_privacy_and_monitoring_screens_in_jsdom(
     tmp_path: Path, config_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    if not (NODE_DIR / "node_modules" / "jsdom").is_dir():
-        pytest.skip(f"jsdom is not installed: cd {NODE_DIR} && npm install --no-audit --no-fund")
+    node = skip_without_jsdom(NODE_DIR)
     out = write_ops_fixtures(tmp_path, config_root, monkeypatch)
     tests = sorted(str(p) for p in OPS_DIR.glob("*.test.mjs"))
     assert tests, "no jsdom test was found"
     result = subprocess.run(
-        ["node", "--test", *tests],
+        [node, "--test", *tests],
         cwd=NODE_DIR,
         env={**os.environ, "PB_FIXTURES": str(out)},
         capture_output=True,

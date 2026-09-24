@@ -14,7 +14,9 @@ API does, not a scheduler's private imitation of it (DEC-766):
   run's register stage applies the champion rule and `governance.approval_required` exactly as for a
   run a person started, so with approval required a retrain yields a `candidate` or a
   `pending_approval` version and **never** a champion. Nothing here promotes or approves anything,
-  and the firing acts as `SYSTEM_SCHEDULER`, which could not approve if it tried.
+  and a scheduled firing acts as `SYSTEM_SCHEDULER`, which could not approve if it tried. A "fire
+  now" acts as the person who asked (`FiringServices.principal`, DEC-889), who is then the run's
+  `requested_by` and so cannot approve its challenger either (DEC-862).
 * **drift_check** - take the latest finished scoring run of the client and use case, and compare its
   data with the *champion's* training baseline: reuse the run's own `drift.json` when the champion
   scored it, otherwise re-measure with the champion's recorded preparation (`prepare.replay`) and
@@ -193,6 +195,8 @@ class FiringServices:
     job_client_tag: str | None = None
     """`Settings.client_id`: the `client` cost-allocation tag every job carries (DEC-324)."""
     principal: Principal = SYSTEM_SCHEDULER
+    """Who the firing acts as: a run's `requested_by` and the engine's audit actor. The scheduler for a
+    firing nobody started; the caller for the API's "fire now" (DEC-889)."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -296,6 +300,7 @@ def start_dataset_run(
     version: ModelVersion | None,
     client_tag: str | None,
     now: datetime | None = None,
+    requested_by: str | None = None,
 ) -> RunRecord:
     """Validate a built dataset, write the run directory and its job spec, and submit the job.
 
@@ -373,6 +378,7 @@ def start_dataset_run(
         model_choice=catalog.automl_choice.value,
         model_version_id=None if version is None else version.model_id,
         now=now,
+        requested_by=requested_by,
     )
     spec = job_spec_for(record, upload=source, client_id=client_tag)
     write_job_spec(storage, spec)
@@ -490,6 +496,12 @@ def build_dataset_from_spec(
             dataset_id=dataset_id,
             mode=mode,
             cancel=cancel or CancelToken(),
+            # Ruling R1 (DEC-871): a recipe never built for this client gets the full leak check.
+            first_build_of_recipe=build.is_first_build_of_recipe(
+                inputs.spec,
+                inputs.mappings,
+                client_store.list_datasets(spec.client_id, spec.use_case),
+            ),
         )
         if not report.passed:
             raise FiringError(
@@ -543,14 +555,21 @@ def drift_against_champion(
     re-measured on the run's source with the champion's own recorded preparation. `None` when drift
     cannot be measured (no stored baseline, no preparation record, or no comparable features) - the
     same "not measured" the predict stage reports, never an invented zero.
+
+    A `drift.json` that measured the label or a key column (written before DEC-957, when a built
+    dataset's label stayed in the baseline) is not reused: it would raise a drift alert, and retrain
+    under `on_drift`, on every firing. The data is re-measured without those columns instead.
     """
     from engine.stages.prepare import replay
-    from engine.stages.score import ScoreError, _prepare_report, compute_drift
+    from engine.stages.score import ScoreError, _prepare_report, compute_drift, not_drift_features
 
+    not_features = not_drift_features(champion, storage=storage)
     if run.model_version_id == champion.model_id:
         drift_key = run_key(run.run_id, "drift.json")
         if storage.exists(drift_key):
-            return storage.read_model(drift_key, DriftReport), True
+            stored = storage.read_model(drift_key, DriftReport)
+            if not not_features & {feature.feature for feature in stored.features}:
+                return stored, True
     if champion.drift_baseline_key is None or not storage.exists(champion.drift_baseline_key):
         return None, False
     try:
@@ -561,7 +580,7 @@ def drift_against_champion(
         log_failure(_LOGGER, f"schedule.drift_unmeasured run_id={run.run_id}", exc)
         return None, False
     baseline = storage.read_model(champion.drift_baseline_key, DriftBaseline)
-    return compute_drift(baseline, prepared, config, run_id=run.run_id), False
+    return compute_drift(baseline, prepared, config, run_id=run.run_id, not_features=not_features), False
 
 
 # ---------------------------------------------------------------------------
@@ -1052,6 +1071,7 @@ class ScheduleFirer:
             version=version,
             client_tag=services.job_client_tag,
             now=services.clock(),
+            requested_by=services.principal.user_id,  # Plan D, DEC-862
         )
 
     def _dataset(self, schedule: Schedule, config: UseCaseConfig, *, mode: RunMode) -> DatasetManifest:

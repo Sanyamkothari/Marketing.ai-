@@ -29,7 +29,14 @@ from typing import Final
 
 from fastapi import APIRouter, HTTPException, Request, Response
 
-from api.access import PrincipalDep, UserStoreDep, get_user_store, set_audit_context
+from api.access import (
+    PrincipalDep,
+    UserStoreDep,
+    client_address,
+    get_login_throttle,
+    get_user_store,
+    set_audit_context,
+)
 from api.access_policy import RoutePolicy, all_policies, refusal_message, register
 from api.deps import SettingsDep
 from api.routes.uploads import http_error
@@ -48,6 +55,7 @@ from api.schemas import (
 )
 from engine.access.identity import bearer_token
 from engine.access.roles import Principal, Role, effective_roles
+from engine.access.throttle import LockScope, account_key
 from engine.access.users import AccessError, UserRecord
 from engine.audit.events import content_hash
 
@@ -102,6 +110,17 @@ _ERRORS: dict[int | str, dict[str, object]] = {
     409: {"model": ErrorResponse},
     422: {"model": ErrorResponse},
 }
+_LOGIN_ERRORS: dict[int | str, dict[str, object]] = {**_ERRORS, 429: {"model": ErrorResponse}}
+
+_LOCKED: Final[dict[LockScope, str]] = {
+    # An Admin's password reset (or re-enabling the user) lifts an account lock (DEC-867), so the
+    # account sentence may offer it; it does nothing for an address lock, so that one does not.
+    "account": (
+        "Too many sign-in attempts failed. Try again in {minutes} minute(s), "
+        "or ask an Admin to reset your password."
+    ),
+    "address": "Too many sign-in attempts failed from this network. Try again in {minutes} minute(s).",
+}
 
 _BAD_CREDENTIALS: Final[str] = "The username or password is not right."
 
@@ -153,9 +172,17 @@ def _roles_detail(roles: frozenset[Role]) -> str:
 # ---------------------------------------------------------------------------
 # /auth
 # ---------------------------------------------------------------------------
-@router.post("/auth/login", response_model=LoginResponse, responses=_ERRORS, summary="Sign in")
+@router.post("/auth/login", response_model=LoginResponse, responses=_LOGIN_ERRORS, summary="Sign in")
 def login(body: LoginRequest, request: Request, settings: SettingsDep) -> LoginResponse:
-    """Exchange a username and password for a bearer token (DEC-711, DEC-720)."""
+    """Exchange a username and password for a bearer token (DEC-711, DEC-720).
+
+    Rate limited per username and per client address (Plan D M54, DEC-861): while either is locked
+    the answer is **429 `LOGIN_LOCKED`** with `Retry-After`, and the password is not checked at all.
+    The failure that starts a lock-out is audited with `lockout` naming the scope(s) it locked, and
+    every refused attempt while locked is audited as `denied` with `reason_code: LOGIN_LOCKED`.
+    Attempts on one username are taken one at a time (DEC-867), so parallel guesses cannot get more
+    than the account's limit of 401s before the 429s start.
+    """
     if settings.auth_mode != "local":
         set_audit_context(request, outcome="failed", details={"reason_code": "AUTH_OFF"})
         raise http_error(
@@ -164,11 +191,34 @@ def login(body: LoginRequest, request: Request, settings: SettingsDep) -> LoginR
             "Sign-in is switched off on this deployment: everyone acts as the local operator.",
         )
     users = get_user_store(request)
-    try:
-        user = users.check_credentials(body.username, body.password)
-    except AccessError as exc:
-        set_audit_context(request, outcome="failed", object_id=exc.user_id, details={"reason_code": exc.code})
-        raise http_error(401, "BAD_CREDENTIALS", _BAD_CREDENTIALS) from None
+    throttle = get_login_throttle(request)
+    account, address = account_key(body.username), client_address(request, settings)
+    # One attempt per account at a time (DEC-867): the lock check, the password check and the count
+    # happen under the account's mutex, so parallel guesses cannot all slip past the lock check.
+    with throttle.attempt(account):
+        lock = throttle.locked(account, address)
+        if lock is not None:
+            known = users.find_by_username(body.username)
+            set_audit_context(
+                request,
+                outcome="denied",
+                object_id=None if known is None else known.user_id,
+                details={"reason_code": "LOGIN_LOCKED", "lockout": lock.scope},
+            )
+            minutes = -(-lock.retry_after_seconds // 60)
+            exc = http_error(429, "LOGIN_LOCKED", _LOCKED[lock.scope].format(minutes=minutes))
+            exc.headers = {"Retry-After": str(lock.retry_after_seconds)}
+            raise exc
+        try:
+            user = users.check_credentials(body.username, body.password)
+        except AccessError as exc:
+            started = throttle.record_failure(account, address)
+            details: dict[str, str | int | float | bool | None] = {"reason_code": exc.code}
+            if started:
+                details["lockout"] = ",".join(started)
+            set_audit_context(request, outcome="failed", object_id=exc.user_id, details=details)
+            raise http_error(401, "BAD_CREDENTIALS", _BAD_CREDENTIALS) from None
+        throttle.record_success(account)
     issued = users.create_session(user.user_id)
     principal = _as_principal(user)
     view = principal_view(principal, display_name=user.display_name)
@@ -310,6 +360,9 @@ def update_user(
     except AccessError as exc:
         set_audit_context(request, details={"reason_code": exc.code})
         raise access_http(exc) from None
+    if before.disabled and not after.disabled:
+        # Re-enabled by an Admin: whatever lock-out built up meanwhile is lifted (DEC-867).
+        get_login_throttle(request).clear(account_key(after.username))
     view = user_view(after)
     set_audit_context(request, after_hash=content_hash(view))
     return view
@@ -355,4 +408,8 @@ def change_password(
     except AccessError as exc:
         set_audit_context(request, details={"reason_code": exc.code})
         raise access_http(exc) from None
+    if not own:
+        # An Admin's reset lifts the target's sign-in lock-out (DEC-867): the 429 tells a locked-out
+        # user to ask for exactly this, and every guess made so far was at the old password.
+        get_login_throttle(request).clear(account_key(target.username))
     return Response(status_code=204)

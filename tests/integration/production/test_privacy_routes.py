@@ -53,6 +53,9 @@ from tests.unit.test_run_score import (
 pytestmark = pytest.mark.integration
 
 SALT = "acme"
+"""The deployment's client id."""
+PRIVACY_SALT = "privacy-routes-salt-0001"
+"""The deployment's secret privacy salt (DEC-860), which every principal hash here uses."""
 PURPOSE = "marketing_communication"
 PERSON = "C-555-PRIVATE"
 
@@ -62,7 +65,7 @@ class World:
 
     def __init__(self, root: Path, **settings: Any) -> None:
         self.root = root
-        self.app: FastAPI = local_app(root, **({"client_id": SALT} | settings))
+        self.app: FastAPI = local_app(root, **({"client_id": SALT, "privacy_salt": PRIVACY_SALT} | settings))
         self.client = TestClient(self.app, raise_server_exceptions=False)
         self.admin = bearer(self.app, make_user(self.app, "admin", [Role.ADMIN]))
         self.viewer = bearer(self.app, make_user(self.app, "viewer", [Role.VIEWER]))
@@ -161,7 +164,7 @@ def test_a_recorded_consent_is_stored_and_answered_as_a_hash_only(world: World) 
     response = _record(world, "granted", 2)
     assert response.status_code == 201, response.text
     body = response.json()
-    assert body["principal_hash"] == principal_hash(PERSON, salt=SALT)
+    assert body["principal_hash"] == principal_hash(PERSON, salt=PRIVACY_SALT)
     assert (body["client_id"], body["purpose"], body["status"]) == (SALT, PURPOSE, "granted")
     assert PERSON not in response.text
     (event,) = world.events_of(response)
@@ -191,7 +194,7 @@ def test_the_latest_record_decides_and_a_lookup_is_audited_under_its_own_id(worl
     (event,) = world.events_of(response)
     assert body["lookup_id"] == response.headers["x-request-id"] == event.object_id
     assert (event.action, event.object_type) == ("privacy.consent.lookup", "consent_lookup")
-    assert event.details["principal_hash"] == principal_hash(PERSON, salt=SALT)
+    assert event.details["principal_hash"] == principal_hash(PERSON, salt=PRIVACY_SALT)
     assert PERSON.encode() not in platform_bytes(world.root)
 
     # as of before the withdrawal, the grant decided
@@ -326,6 +329,7 @@ def test_a_ledger_imported_through_the_api_gates_the_next_scoring_run(
     tmp_path: Path, config_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MARKETING_AI_CLIENT_ID", SALT)  # what the pipeline's own settings read
+    monkeypatch.setenv("MARKETING_AI_PRIVACY_SALT", PRIVACY_SALT)
     StageStubs().install(monkeypatch)
     world = World(tmp_path / "data")
     assert _import(world, consent_csv()).status_code == 201
@@ -352,6 +356,7 @@ def test_with_an_empty_ledger_the_run_is_phase_1(
     tmp_path: Path, config_root: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("MARKETING_AI_CLIENT_ID", SALT)
+    monkeypatch.setenv("MARKETING_AI_PRIVACY_SALT", PRIVACY_SALT)
     StageStubs().install(monkeypatch)
     world = World(tmp_path / "data")
     # the platform database and its consent table exist, but this client recorded nothing

@@ -14,6 +14,8 @@ const tokens = {
   "tok-admin": fixture("me_admin"),
 };
 let measured = false;
+let campaignMeasured = false; // measured on the run's Campaign results page (ui/modules/uplift)
+let noSchedules = false;
 const firings = fixture("firings_drift").firings;
 
 const { w, calls, forms } = installOps({
@@ -22,7 +24,7 @@ const { w, calls, forms } = installOps({
   hash: "#/monitoring/schedules",
   table: [
     ["GET", "/industries", () => ok(fixture("industries"))],
-    ["GET", "/schedules", () => ok(fixture("schedules"))],
+    ["GET", "/schedules", () => ok(noSchedules ? fixture("schedules_none") : fixture("schedules"))],
     ["POST", "/schedules", () => created(fixture("schedule_score"))],
     ["POST", "/schedules/retraining/sync", () => ok(fixture("retraining_sync"))],
     [
@@ -60,6 +62,11 @@ const { w, calls, forms } = installOps({
       () => (measured ? ok(fixture("incrementality")) : refused(404, fixture("incrementality_missing"))),
     ],
     ["POST", "/runs/{id}/outcomes", () => ((measured = true), created(fixture("outcome_report")))],
+    [
+      "GET",
+      "/runs/{id}/campaign-results",
+      () => (campaignMeasured ? ok(fixture("campaign_results")) : refused(404, fixture("campaign_results_missing"))),
+    ],
     ["GET", "/privacy/runs/{id}/consent-report", () => refused(404, fixture("consent_report_missing"))],
     ["GET", "/audit/events", () => ok({ events: [], total: 0, offset: 0, limit: 50 })],
   ],
@@ -125,9 +132,10 @@ test("a new schedule sends only what was chosen; the cron line only for a custom
 
 test("Run now shows the firing as recorded; Pause and Delete (asked twice) call their routes", async () => {
   rowOf(ids.drift_schedule).querySelector("[data-fire]").click();
-  await until(() => /Fired:/.test(text()), 2000, "the firing");
+  await until(() => /Ran now:/.test(text()), 2000, "the firing");
   assert.equal(last("POST", `/schedules/${ids.drift_schedule}/fire`).auth, "Bearer tok-analyst");
-  assert.match(text(), new RegExp(`Fired: ${fixture("fired").status}`));
+  assert.equal($(".pb-ok .pill").dataset.status, fixture("fired").status);
+  assert.equal($(".pb-ok [data-code]").dataset.code, fixture("fired").result_code, "the code, in words");
   assert.match(text(), new RegExp(fixture("fired").result_code));
 
   rowOf(ids.drift_schedule).querySelector("[data-disable]").click();
@@ -135,10 +143,14 @@ test("Run now shows the firing as recorded; Pause and Delete (asked twice) call 
   assert.ok(last("POST", `/schedules/${ids.drift_schedule}/disable`));
 
   const deletes = () => calls.filter((c) => c.method === "DELETE").length;
-  rowOf(ids.score_schedule).querySelector("[data-delete]").click();
+  const del = rowOf(ids.score_schedule).querySelector("[data-delete]");
+  assert.deepEqual([...del.classList].sort(), ["btn", "pb-quiet-bad", "quiet", "sm"], "quiet, red text, not filled");
+  del.click();
   await settle(2);
   assert.equal(deletes(), 0, "the first click only asks");
   assert.match(rowOf(ids.score_schedule).textContent, /Delete it and its history\?/);
+  const yes = rowOf(ids.score_schedule).querySelector("[data-delete-yes]");
+  assert.ok(yes.classList.contains("danger") && yes.classList.contains("confirm"), "only the confirm step is filled red");
   rowOf(ids.score_schedule).querySelector("[data-delete-yes]").click();
   await until(() => deletes() === 1, 2000, "the delete");
   assert.equal(last("DELETE", `/schedules/${ids.score_schedule}`).auth, "Bearer tok-analyst");
@@ -154,7 +166,7 @@ test("Sync retraining schedules reports what the server created, updated and rem
 test("one schedule: its firing history with the missed slots, filtered by status", async () => {
   w.location.hash = `#/monitoring/schedules/${ids.drift_schedule}`;
   await until(() => $("#pb-firings-filter") && $$("tbody tr").length === firings.length, 3000, "the history");
-  assert.equal($$(".pill.bad").filter((p) => p.textContent === "missed").length, 5);
+  assert.equal($$('.pill.bad[data-status="missed"]').filter((p) => p.textContent === "Missed").length, 5);
   const filter = $("#pb-firings-filter");
   setField(w, filter, "status", "missed", { change: true });
   await until(() => last("GET", `/schedules/${ids.drift_schedule}/firings`).query.status === "missed", 2000, "the filter");
@@ -164,14 +176,14 @@ test("one schedule: its firing history with the missed slots, filtered by status
 
 test("editing a schedule sends its whole cadence, zone and parameters", async () => {
   w.location.hash = `#/monitoring/schedules/${ids.score_schedule}`;
-  await until(() => /Score new data ·/.test(cardTitles()) && $("#pb-schedule-edit"), 3000, "the edit form");
+  await until(() => /^Score new data ·/.test(heading()) && $("#pb-schedule-edit"), 3000, "the edit form");
   const form = $("#pb-schedule-edit");
   assert.equal(form.elements.namedItem("preset").value, "monthly");
   assert.equal(form.elements.namedItem("onboarding_spec_id").value, "sp_sched");
   setField(w, form, "preset", "custom");
   setField(w, form, "cron", "0 6 1 * *");
   submit(w, form);
-  await until(() => /Saved; next due/.test(text()), 2000, "the save");
+  await until(() => /Saved\. Next run/.test(text()), 2000, "the save");
   assert.deepEqual(last("PATCH", `/schedules/${ids.score_schedule}`).body, {
     cadence: "0 6 1 * *",
     timezone: "Asia/Kolkata",
@@ -194,9 +206,9 @@ test("alerts open on the open ones; acknowledging says who, and the list re-read
   await until(() => heading() === "Alerts" && $$("tr[data-alert]").length === open.length, 3000, "the open alerts");
   assert.equal(last("GET", "/monitoring/alerts").query.unacknowledged_only, "true");
   const drop = open.find((a) => a.kind === "performance_drop");
-  assert.match($(`tr[data-alert="${drop.alert_id}"]`).textContent, /Performance drop/);
+  assert.match($(`tr[data-alert="${drop.alert_id}"]`).textContent, /The model did worse on real outcomes/);
   $(`tr[data-alert="${drop.alert_id}"] [data-ack]`).click();
-  await until(() => /Acknowledged by/.test(text()), 2000, "the acknowledgement");
+  await until(() => /Marked as being dealt with by you/.test(text()), 2000, "the acknowledgement");
   assert.ok(last("POST", `/monitoring/alerts/${drop.alert_id}/acknowledge`));
   assert.match($(".pb-ok").textContent, new RegExp(fixture("alert_acknowledged").acknowledged_by));
 
@@ -206,9 +218,40 @@ test("alerts open on the open ones; acknowledging says who, and the list re-read
   assert.equal(last("GET", "/monitoring/alerts").query.unacknowledged_only, undefined, "false is left out");
 });
 
+test("the Campaigns list links each run to its Campaign results page and reads Measured once it was measured", async () => {
+  const run = fixture("run").run;
+  const row = () => $(`tr[data-run="${ids.run_id}"]`);
+  const campaignReads = () => calls.filter((c) => c.method === "GET" && /\/campaign-results$/.test(c.path));
+  w.location.hash = "#/monitoring/runs";
+  await until(() => row() && row().querySelector("[data-status]"), 3000, "the run and its results");
+  const link = row().querySelector("a[data-campaign]");
+  assert.equal(link.getAttribute("href"), `#/campaign/${run.use_case_id}/${ids.run_id}`);
+  assert.equal(link.textContent, run.use_case_name || run.use_case_id);
+  const pill = () => row().querySelector("[data-status]");
+  assert.equal(pill().dataset.status, "not_added");
+  assert.equal(pill().textContent, "Not added yet");
+  const action = row().querySelector(`a[href="#/monitoring/runs/${ids.run_id}"]`);
+  assert.equal(action.textContent, "Add outcomes");
+  assert.ok(campaignReads().some((c) => c.path === `/runs/${ids.run_id}/campaign-results`));
+  const done = fixture("runs")
+    .runs.filter((r) => r.state === "done")
+    .slice(0, 20)
+    .map((r) => `/runs/${r.run_id}/campaign-results`);
+  assert.ok(campaignReads().every((c) => done.includes(c.path)), "only the 20 newest finished runs are asked");
+
+  campaignMeasured = true; // measured on the Campaign results page, no outcomes added here
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  w.location.hash = "#/monitoring/runs";
+  await until(() => row() && pill() && pill().dataset.status === "measured", 3000, "Measured");
+  assert.equal(pill().textContent, "Measured");
+  assert.equal(row().querySelector(`a[href="#/monitoring/runs/${ids.run_id}"]`).textContent, "Add outcomes");
+  campaignMeasured = false;
+});
+
 test("a finished scoring run: no outcomes yet, then an upload measures it against the test score", async () => {
   w.location.hash = "#/monitoring/runs";
-  await until(() => /^Scoring runs ·/.test(cardTitles()), 3000, "the scoring runs");
+  await until(() => heading() === "Campaigns" && /^Campaigns ·/.test(cardTitles()), 3000, "the scored lists");
   assert.ok($(`a[href="#/monitoring/runs/${ids.run_id}"]`));
   assert.deepEqual(last("GET", "/runs").query, { mode: "score", limit: "100" });
   w.location.hash = `#/monitoring/runs/${ids.run_id}`;
@@ -230,8 +273,8 @@ test("a finished scoring run: no outcomes yet, then an upload measures it agains
   assert.match(text(), new RegExp(`Performance on real outcomes · ${report.metric_label}`));
   assert.match($(".apierr").textContent, /PERFORMANCE_DROP/);
   assert.ok($('.apierr a[href="#/monitoring/alerts"]'));
-  assert.match(text(), /Incrementality input/);
-  assert.match(text(), /Treated minus control/);
+  assert.match(text(), /Campaign effect \(contacted vs control group\)/);
+  assert.match(text(), /Difference vs control group/);
   assert.equal($$("tbody tr").some((tr) => /· control/.test(tr.textContent)), true, "by band");
 });
 
@@ -263,4 +306,27 @@ test("an Admin is not an Analyst: the Privacy link is offered, running a schedul
   w.location.hash = "#/monitoring/schedules";
   await until(() => $$("tr[data-schedule]").length > 0 && $$(".pb-why").length > 0, 3000, "the list");
   assert.ok($$(".pb-why").some((n) => n.textContent === "Only an Analyst can run a schedule now."));
+});
+
+test("with nothing scheduled: one primary (the open form's Create schedule), no More actions, the sync still reachable", async () => {
+  session.storeToken("tok-analyst", null);
+  await session.loadMe();
+  noSchedules = true;
+  w.location.hash = "#/monitoring/alerts";
+  await until(() => heading() === "Alerts", 3000, "another screen");
+  w.location.hash = "#/monitoring/schedules";
+  await until(() => /Nothing runs on its own yet\./.test(text()), 3000, "the empty state");
+  const primaries = $$("main .btn.primary");
+  assert.equal(primaries.length, 1, "one primary");
+  assert.equal(primaries[0].id, "pb-schedule-create-submit");
+  const open = $("#pb-schedule-new-open");
+  assert.ok(open.classList.contains("secondary"));
+  assert.equal(open.getAttribute("aria-expanded"), "true", "the form it controls is open");
+  assert.equal($("main .pb-more-actions"), null);
+  // Still reachable with nothing scheduled (no capability removed), as a quiet action, not a primary.
+  const sync = $("#pb-retraining-sync");
+  assert.ok(sync, "Update retraining schedules now stays reachable");
+  assert.ok(sync.classList.contains("quiet") && !sync.classList.contains("primary"));
+  assert.equal(/More actions/.test(text()), false);
+  noSchedules = false;
 });

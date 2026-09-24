@@ -8,14 +8,15 @@ through the markup only - no request is made to the API by the test itself.
 
 The journey, in order:
 
-1. Overview -> the module's "Uplift modelling" entry link -> Win-back Campaign -> uplift Setup.
+1. Overview -> the top bar's Models › "Uplift models" -> Win-back Campaign -> uplift Setup.
 2. Upload a randomised campaign (`make_uplift_data`), see the treatment column detected and the
    Uplift problem type explained, click "Train uplift model", watch Running, reach Results.
 3. Model page: the Qini chart with its random line, AUUC with its interval, the decile bars, an
    off-policy estimate. Output page: four segments, "Recommended to contact", expected incremental
    conversions with an interval.
 4. Score a new file through Phase 1's own use-case screen ("Score new data", the uplift model in the
-   dropdown), open its Output page, follow the module's "Campaign results for this run" link.
+   dropdown), open its Output page, then follow the "Campaign results" block the module offers on
+   the run's Results (a run action, `runActionsHtml`).
 5. Campaign results: download the treat list, upload outcomes (`make_winback_campaign` +
    `outcomes_for`), judge them as of a date before the 90-day window has elapsed ("Results available
    on <date>"), then after it (the lift with its interval).
@@ -323,18 +324,41 @@ class Screen:
     rows: dict[str, str] = field(default_factory=dict)
     problems: list[str] = field(default_factory=list)
     extra: dict[str, Any] = field(default_factory=dict)
+    disclosed: str = ""
+    """The text of the closed `<details>` the capture opened, as a user reads it after clicking."""
 
 
-def capture(page: Any, console: Console, shots: Path, name: str, **extra: Any) -> Screen:
+def disclose(page: Any, summary: str) -> str:
+    """Open the one closed `<details>` whose summary reads exactly `summary`, the way a user clicks it,
+    and return its text. Rows behind it render only once it is open (`inner_text` of a closed
+    disclosure is empty), so the numbers under "Technical metrics" and the like are read from here."""
+    toggle = page.locator("details > summary").filter(has_text=re.compile(rf"^\s*{re.escape(summary)}\s*$"))
+    assert toggle.count() == 1, f"expected one {summary!r} disclosure, found {toggle.count()}"
+    details = toggle.locator("xpath=..")
+    assert details.get_attribute("open") is None, f"{summary!r} should start closed"
+    toggle.click()
+    sync_api.expect(details).to_have_attribute("open", "")
+    return str(details.inner_text())
+
+
+def capture(
+    page: Any, console: Console, shots: Path, name: str, disclosures: tuple[str, ...] = (), **extra: Any
+) -> Screen:
+    """The screen as it first appears (text, tiles, screenshot), then with `disclosures` opened for
+    the key-value rows, which are read after every named `<details>` is open."""
     page.wait_for_timeout(300)  # a late re-render or entry link lands inside this
     page.screenshot(path=str(shots / f"{name}.png"), full_page=True)
+    text = page.locator("#app").inner_text()
+    shown = tiles(page)
+    disclosed = "\n".join(disclose(page, summary) for summary in disclosures)
     return Screen(
         url=page.url,
-        text=page.locator("#app").inner_text(),
-        tiles=tiles(page),
+        text=text,
+        tiles=shown,
         rows=key_values(page),
         problems=console.take(),
         extra=extra,
+        disclosed=disclosed,
     )
 
 
@@ -400,13 +424,14 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     targeted = workdir / "targeted.csv"
     make_uplift_data(TARGETED_ROWS, seed=21, targeted=True).frame.to_csv(targeted, index=False)
 
-    # 1. Overview -> the module's entry link -> the use case's uplift Setup.
+    # 1. Overview -> the top bar's Models menu -> "Uplift models" -> the use case's uplift Setup.
     page.goto(f"{server.base_url}/ui/", wait_until="domcontentloaded")
-    entry = page.locator(".uentry a", has_text="Uplift modelling")
-    expect(entry).to_be_visible()
+    models = page.locator("#pb-bar nav[aria-label=Main] button", has_text="Models")
+    expect(models).to_be_visible()
     seen.screens["overview"] = capture(page, console, shots, "01-overview")
-    entry.click()
-    expect(page.get_by_role("heading", name="Uplift modelling")).to_be_visible()
+    models.click()
+    page.locator("#pb-bar a", has_text="Uplift models").click()
+    expect(page.get_by_role("heading", name="Measure what a campaign changes (uplift)")).to_be_visible()
     seen.screens["index"] = capture(page, console, shots, "02-uplift-index")
     page.get_by_role("link", name=USE_CASE_NAME).click()
     expect(page.locator("#u-file")).to_be_attached()
@@ -444,21 +469,34 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         console,
         shots,
         "07-model",
+        disclosures=("Technical metrics", "Training setup"),
         qini_model=page.locator(".uchart polyline.model").count(),
         qini_random=page.locator(".uchart polyline.rand").count(),
         qini_points=len((page.locator(".uchart polyline.model").get_attribute("points") or "").split()),
         decile_bars=page.locator(".uchart rect.pos, .uchart rect.neg").count(),
     )
+    # "What if…" is folded and pre-filled with 10.
+    page.locator("summary", has_text="What if we contacted only the top customers?").click()
+    expect(page.locator("#u-ope-share")).to_have_value("10")
     page.fill("#u-ope-share", "30")
     with page.expect_response(lambda r: r.url.endswith("/uplift/ope") and r.request.method == "POST"):
         page.locator("#u-ope button[type=submit]").click()
-    expect(page.get_by_text("Treat the top 30% of customers by predicted uplift")).to_be_visible()
-    seen.screens["model_ope"] = capture(page, console, shots, "08-model-ope")
+    expect(page.get_by_text("Treat the top 30% of customers by predicted uplift").first).to_be_visible()
+    seen.screens["model_ope"] = capture(
+        page, console, shots, "08-model-ope", disclosures=("How this was estimated",)
+    )
 
-    page.locator(".tabs .tab", has_text="Output").click()
-    expect(page.locator(".tab.on")).to_contain_text("Output")
+    page.locator(".tabs .tab", has_text="Contact list").click()
+    expect(page.locator(".tab.on")).to_contain_text("Contact list")
     expect(page.locator(".usegs")).to_be_visible()
-    seen.screens["output"] = capture(page, console, shots, "09-output", segments=segment_rows(page))
+    seen.screens["output"] = capture(
+        page,
+        console,
+        shots,
+        "09-output",
+        disclosures=("More about this recommendation",),
+        segments=segment_rows(page),
+    )
 
     # The uplift Setup's own score mode offers the model just trained (DEC-609: candidates too).
     page.goto(f"{server.base_url}/ui/#/uplift/{USE_CASE}", wait_until="domcontentloaded")
@@ -469,7 +507,8 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         console,
         shots,
         "10-uplift-score-setup",
-        models=page.locator("#u-model option").all_inner_texts(),
+        # One model: the choice is folded under "Change model", so its option is hidden text.
+        models=page.locator("#u-model option").all_text_contents(),
     )
 
     # 4. Score through Phase 1's own use-case screen, with the uplift model from its dropdown.
@@ -490,26 +529,32 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         page, console, shots, "11-phase1-score-results", models=phase1_models
     )
     seen.seconds["score"] = round(time.monotonic() - at, 1)
+    seen.score_run = run_id_of(page.url)
     page.locator(".flow .block").nth(2).click()
-    expect(page.locator(".tab.on")).to_contain_text("Output")
-    campaign_link = page.locator(".uentry a", has_text="Campaign results for this run")
-    expect(campaign_link).to_be_visible()
+    # v1 (WP4): Phase 1's Output link of an uplift run redirects to the uplift module's own Output.
+    expect(page.locator("main[data-module=uplift]")).to_be_attached()
+    expect(page.locator(".tab.on")).to_contain_text("Contact list")
     seen.score_run = run_id_of(page.url)
     seen.screens["phase1_score_output"] = capture(page, console, shots, "12-phase1-score-output")
-    campaign_link.click()
+    page.locator(".tabs .tab", has_text="Campaign results").click()
     expect(page.locator("main[data-module=uplift]")).to_be_attached()
     console.phase1 = False
 
     # 5. Campaign results: nothing yet; the uplift Output tab with the treat list; outcomes.
     expect(page.locator("#u-camp-file")).to_be_attached()
     seen.screens["campaign_empty"] = capture(page, console, shots, "13-campaign-empty")
-    page.locator(".tabs .tab", has_text="Output").click()
+    page.locator(".tabs .tab", has_text="Contact list").click()
     expect(page.locator(".usegs")).to_be_visible()
     seen.screens["score_output"] = capture(
-        page, console, shots, "14-score-output", segments=segment_rows(page)
+        page,
+        console,
+        shots,
+        "14-score-output",
+        disclosures=("More about this recommendation",),
+        segments=segment_rows(page),
     )
     with page.expect_download() as download_info:
-        page.get_by_role("link", name="Download treat list (CSV)").click()
+        page.get_by_role("link", name="Download contact list (CSV)").click()
     treat_list = workdir / "treat_list.csv"
     download_info.value.save_as(treat_list)
     seen.treat_list = pd.read_csv(treat_list, dtype={PRIMARY_KEY: str})
@@ -526,6 +571,7 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     page.select_option("#u-camp-outcome", TARGET)
     page.select_option("#u-camp-date", "treatment_date")
     page.fill("#u-camp-window", "90")
+    page.locator("#u-camp details.adv > summary", has_text="Advanced").click()
 
     def measure(as_of: str) -> None:
         page.fill("#u-camp-asof", as_of)
@@ -553,6 +599,7 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         console,
         shots,
         "16-campaign-mature",
+        disclosures=("Statistical details", "How it was measured"),
         report=server.artefact(seen.score_run, "incrementality_report.json"),
     )
 
@@ -565,7 +612,14 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
         page.locator("#u-run").click()
     assert refused.value.status == 409, refused.value.text()
     expect(page.locator(f"[data-uack={NOT_RANDOM}]")).to_be_visible()
-    seen.screens["refusal"] = capture(page, console, shots, "17-not-random-refusal")
+    seen.screens["refusal"] = capture(
+        page,
+        console,
+        shots,
+        "17-not-random-refusal",
+        refused_codes=page.locator(f".vitem[data-code={NOT_RANDOM}]").count(),
+        randomness_pill=page.locator(".vlist [data-code=RANDOMNESS]").get_attribute("class"),
+    )
     page.locator(f"[data-uack={NOT_RANDOM}]").check()
     expect(page.locator(".ptype .uwarn")).to_be_visible()
     seen.screens["acknowledged"] = capture(page, console, shots, "18-not-random-acknowledged")
@@ -575,7 +629,7 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     page.locator(".flow .block").nth(1).click()
     expect(page.locator(".unotcausal")).to_be_visible()
     seen.screens["targeted_model"] = capture(page, console, shots, "19-not-causal-model")
-    page.locator(".tabs .tab", has_text="Output").click()
+    page.locator(".tabs .tab", has_text="Contact list").click()
     expect(page.locator(".usegs")).to_be_visible()
     seen.screens["targeted_output"] = capture(page, console, shots, "20-not-causal-output")
     context.close()
@@ -631,8 +685,9 @@ def test_no_screen_logged_an_error_or_an_unexpected_failed_request(journey: Jour
 
 def test_no_screen_rendered_a_placeholder_for_a_value(journey: Journey) -> None:
     for name, screen in journey.screens.items():
-        leaked = re.findall(r"\b(?:undefined|NaN|null|Infinity)\b|\[object Object\]", screen.text)
-        assert not leaked, (name, leaked)
+        for text in (screen.text, screen.disclosed):  # what shows first, and what Details open
+            leaked = re.findall(r"\b(?:undefined|NaN|null|Infinity)\b|\[object Object\]", text)
+            assert not leaked, (name, leaked)
 
 
 def test_no_uplift_screen_scrolls_sideways_on_a_phone(journey: Journey) -> None:
@@ -652,9 +707,11 @@ def test_no_card_is_cut_off_at_the_edge_of_a_phone(journey: Journey) -> None:
 # --- the journey, step by step --------------------------------------------------------------------
 
 
-def test_the_overview_links_to_uplift_and_the_index_lists_the_use_case(journey: Journey) -> None:
-    assert "Uplift modelling" in journey.screens["overview"].text
-    assert USE_CASE_NAME in journey.screens["index"].text
+def test_the_top_bar_leads_to_uplift_and_the_index_lists_the_use_case(journey: Journey) -> None:
+    index = journey.screens["index"].text
+    assert "Uplift modelling" in index  # the breadcrumb
+    assert USE_CASE_NAME in index
+    assert "Uplift model" in index  # each row says whether a model exists
 
 
 def test_setup_detects_the_treatment_column_and_explains_the_problem_type(journey: Journey) -> None:
@@ -673,9 +730,9 @@ def test_running_showed_progress_and_results_name_the_model(journey: Journey, se
     results = journey.screens["results"].text
     assert "Uplift model trained" in results
     assert run["best_model"] in results
-    shown = re.search(r"AUUC\s+(\S+)", results)
-    assert shown is not None, results
-    assert close(numbers(shown.group(1))[0], run["headline_score"], 4)
+    # The headline is the finding in words; AUUC is on the Model page, under Technical metrics.
+    assert "Contacting the top 10% the model picks" in results, results
+    assert "Score customers with this model" in results
 
 
 def test_the_model_page_draws_the_qini_curve_against_random(journey: Journey, server: Server) -> None:
@@ -693,9 +750,11 @@ def test_the_model_page_shows_auuc_with_its_interval_from_the_artefact(
 ) -> None:
     model = journey.screens["model"]
     auuc = server.artefact(journey.train_run, "uplift_evaluation.json")["auuc"]
-    assert close(numbers(model.tiles["AUUC"])[0], auuc["value"], 4), model.tiles
-    level, low, high = numbers(model.tiles["AUUC interval"])
-    assert level == 95 and close(low, auuc["ci_low"], 4) and close(high, auuc["ci_high"], 4), model.tiles
+    # AUUC and its interval sit under "Technical metrics", at three decimals.
+    value, level, low, high = numbers(model.rows["AUUC"])
+    assert close(value, auuc["value"], 3), model.rows
+    assert level == 95 and close(low, auuc["ci_low"], 3) and close(high, auuc["ci_high"], 3), model.rows
+    assert "AUUC" not in model.text, "the metric code stays behind Details"
     evaluation = server.artefact(journey.train_run, "uplift_evaluation.json")
     assert model.rows["Hold-out rows"] == f"{evaluation['rows_evaluated']:,}"
     assert model.rows["Bootstrap resamples"] == str(evaluation["bootstrap_samples"])
@@ -717,16 +776,18 @@ def test_the_output_page_shows_segments_and_the_recommendation(journey: Journey,
 def check_output(screen: Screen, server: Server, run_id: str) -> None:
     policy = server.artefact(run_id, "policy_recommendation.json")
     segments = server.artefact(run_id, "segments.json")
-    assert screen.tiles["Recommended to contact"] == f"{policy['contacts_recommended']:,}"
-    assert screen.tiles["Eligible persuadables"] == f"{policy['eligible_persuadables']:,}"
+    assert screen.tiles["Customers to contact"] == f"{policy['contacts_recommended']:,}"
+    recommended = numbers(screen.rows["Recommended to contact"])
+    assert recommended == [policy["contacts_recommended"], policy["eligible_persuadables"]], screen.rows
     expected = policy["expected_incremental_conversions"]
-    assert close(numbers(screen.tiles["Expected incremental conversions"])[0], expected["value"], 1)
+    # People are whole: "about 247".
+    assert close(numbers(screen.tiles["Extra customers expected to respond"])[0], expected["value"], 0)
     row = numbers(screen.rows["Expected incremental conversions"])
-    assert close(row[0], expected["value"], 1) and row[1] == 95, screen.rows
-    assert close(row[2], expected["ci_low"], 1) and close(row[3], expected["ci_high"], 1), screen.rows
+    assert close(row[0], expected["value"], 0) and row[1] == 95, screen.rows
+    assert close(row[2], expected["ci_low"], 0) and close(row[3], expected["ci_high"], 0), screen.rows
     # No cost or value is configured, so none may be printed.
     assert policy["expected_net_value"] is None
-    assert screen.tiles["Expected net value"] == EM_DASH
+    assert "Expected net value" not in screen.tiles and "Expected net value" not in screen.rows
     assert screen.rows["Cost per contact"] == EM_DASH
     shown = screen.extra["segments"]
     assert len(shown) == 4, shown
@@ -739,7 +800,8 @@ def test_both_score_screens_offer_the_uplift_model(journey: Journey) -> None:
         journey.screens["uplift_score_setup"].extra["models"],
         journey.screens["phase1_score_results"].extra["models"],
     ):
-        assert len(models) == 1 and models[0].startswith("X-learner (LightGBM) · AUUC"), models
+        assert len(models) == 1 and "X-learner (LightGBM)" in models[0], models
+    assert journey.screens["uplift_score_setup"].extra["models"][0].startswith("Uplift model trained ")
 
 
 def test_phase1_scoring_of_the_uplift_model_came_back(journey: Journey, server: Server) -> None:
@@ -781,12 +843,20 @@ def test_a_mature_campaign_shows_the_lift_with_its_interval(journey: Journey) ->
     report = screen.extra["report"]
     assert report["status"] == "mature" and report["causal"] is True
     lift = report["absolute_lift"]
-    assert close(numbers(screen.tiles["Absolute lift"])[0], lift["value"] * 100, 2), screen.tiles
-    row = numbers(screen.rows["Absolute lift"])
-    assert close(row[0], lift["value"] * 100, 2) and row[1] == 95, screen.rows
-    assert close(row[2], lift["ci_low"] * 100, 2) and close(row[3], lift["ci_high"] * 100, 2), screen.rows
+    # A verdict first, in the value view's words: a win-back outcome is one to have more of.
+    assert "The campaign" in screen.text or "We cannot yet tell" in screen.text, screen.text
     inc = report["incremental_conversions"]
-    assert close(numbers(screen.tiles["Incremental conversions"])[0], inc["value"], 1), screen.tiles
+    tile = screen.tiles["Extra customers because of the campaign"]
+    assert close(numbers(tile)[0], inc["value"], 0), screen.tiles
+    rates = numbers(screen.tiles["Response rate: contacted vs not contacted"])
+    assert close(rates[0], report["treated_rate"] * 100, 1) and close(
+        rates[1], report["control_rate"] * 100, 1
+    )
+    # The statistics are under "Statistical details", at one decimal.
+    row = numbers(screen.rows["Absolute lift"])
+    assert close(row[0], lift["value"] * 100, 1) and row[1] == 95, screen.rows
+    assert close(row[2], lift["ci_low"] * 100, 1) and close(row[3], lift["ci_high"] * 100, 1), screen.rows
+    assert "p-value" not in screen.text and "Incremental conversions" not in screen.text
     assert f"{report['treated_rows']:,}" in screen.text and f"{report['control_rows']:,}" in screen.text
     assert screen.rows["Outcome window"] == "90 days"
     assert screen.rows["Judged as of"] == "15 Aug 2026, 11:59 pm"
@@ -794,11 +864,14 @@ def test_a_mature_campaign_shows_the_lift_with_its_interval(journey: Journey) ->
 
 
 def test_a_targeted_file_is_refused_until_acknowledged(journey: Journey) -> None:
-    refusal = journey.screens["refusal"].text
-    assert NOT_RANDOM in refusal
-    assert "1 problem must be fixed or acknowledged" in refusal, refusal
+    refused = journey.screens["refusal"]
+    refusal = refused.text
+    assert refused.extra["refused_codes"] == 1, "the code is kept in data-code"
+    assert "Who was contacted does not look random" in refusal or "can be predicted" in refusal, refusal
+    assert "1 thing to fix before training" in refusal, refusal
+    assert "bad" in (refused.extra["randomness_pill"] or ""), "a failed randomness check is red"
     acknowledged = journey.screens["acknowledged"].text
-    assert "0 problems must be fixed or acknowledged" in acknowledged, acknowledged
+    assert "Nothing left to fix before training" in acknowledged, acknowledged
     assert "Not causal: the treatment was not randomly assigned" in acknowledged
 
 

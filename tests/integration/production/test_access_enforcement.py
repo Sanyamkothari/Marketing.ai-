@@ -148,7 +148,13 @@ def test_auth_off_is_the_local_operator_everywhere(tmp_path: Path) -> None:
 
 def test_auth_off_on_prod_fails_closed_but_stays_up(tmp_path: Path, caplog: pytest.LogCaptureFixture) -> None:
     client = TestClient(
-        local_app(tmp_path, auth_mode="off", env="prod", cors_origins=("https://example.invalid",))
+        local_app(
+            tmp_path,
+            auth_mode="off",
+            env="prod",
+            cors_origins=("https://example.invalid",),
+            privacy_salt="a-prod-privacy-salt-01",  # a prod API does not start without one (DEC-860)
+        )
     )
     with caplog.at_level(logging.WARNING, logger="api.access"):
         response = client.get("/runs")

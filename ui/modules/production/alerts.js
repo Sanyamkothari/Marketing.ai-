@@ -1,29 +1,58 @@
 // Alerts and missed runs (Phase 4b M49): what went wrong on its own, and who is dealing with it.
 //
 // Alerts are `GET /monitoring/alerts` - drift above its threshold, a performance drop beyond
-// `monitoring.performance_alert_drop_pct`, a failed scheduled job, missed slots - newest first, with
-// the server's own message (it holds ids, codes and counts only, DEC-770). "Acknowledge" is Analyst
-// work (DEC-784): it says someone is dealing with it, the first acknowledgement stands, and a Viewer
-// sees the button refused in place. The list opens on the open alerts, because an acknowledged alert
-// is history, not work; one click shows everything.
+// `monitoring.performance_alert_drop_pct`, a failed scheduled job, missed slots - with the server's own
+// message (it holds ids, codes and counts only, DEC-770). "I'm on it" acknowledges one: Analyst work
+// (DEC-784); it says someone is dealing with it, the first acknowledgement stands, and a Viewer sees
+// the button refused in place. The list opens on the open alerts, because an acknowledged alert is
+// history, not work; one click shows everything.
+//
+// v1: five columns - severity, what happened in words, use case, when, and the action - with the
+// server's message, the schedule and the run behind each row's own disclosure; open critical alerts
+// sort first. A code inside a message (`DATASET_COMPOSITE_KEY_NOT_WIRED`) reads as plain words; the
+// message as the server wrote it stays under Details.
 //
 // Missed runs are `GET /monitoring/missed-firings`: every due slot nobody fired (the scheduler was
-// down, the machine asleep), across all schedules. A schedule's own history (`schedules.js`) shows
-// its missed slots among its firings; this is the one place to see all of them at once.
+// down, the machine asleep), across all schedules. The Schedules screen offers this view only when
+// there are some; the route itself always answers.
 
-import { EM_DASH, errorBox, esc, fmtStamp } from "../../dom.js";
+import { EM_DASH, errorBox, esc, fmtStamp, glossaryCode, techDetails } from "../../dom.js";
 import { getAlerts, getMissedFirings, postAlertAcknowledge } from "./api.js";
-import { actionButton, fieldValue, mono, statusPill } from "./controls.js";
-import { KIND_LABEL, monitoringScreen, runHref } from "./schedules.js";
+import {
+  actionButton,
+  codeWords,
+  fieldValue,
+  loadPeople,
+  loadUseCaseNames,
+  mono,
+  personName,
+  plainCode,
+  rowsTable,
+  selectField,
+  statusPill,
+  useCaseName,
+} from "./controls.js";
+import { KIND_LABEL, monitoringScreen, runHref, setMissedCount } from "./schedules.js";
 
+/** What happened, in words; drift uses the catalogue's own title when it has one. */
 export const ALERT_KIND_LABEL = {
-  drift_above_threshold: "Drift above threshold",
-  performance_drop: "Performance drop",
-  scheduled_job_failed: "Scheduled job failed",
-  schedule_missed: "Schedule missed",
+  drift_above_threshold: "New customers look very different",
+  performance_drop: "The model did worse on real outcomes",
+  scheduled_job_failed: "A scheduled job failed",
+  schedule_missed: "Scheduled runs were missed",
+};
+
+const kindWords = (kind) => {
+  if (kind === "drift_above_threshold") {
+    const entry = glossaryCode("DRIFT_DRIFTED");
+    if (entry && entry.title) return entry.title;
+  }
+  return ALERT_KIND_LABEL[kind] || String(kind || EM_DASH).replace(/_/g, " ");
 };
 
 export const ALERTS_SHOWN = 200;
+
+const SEVERITY_RANK = { critical: 0, warning: 1, info: 2 };
 
 const state = {
   alerts: null,
@@ -36,14 +65,13 @@ const state = {
   missedError: null,
 };
 
-const scheduleLink = (id) =>
-  id ? `<a class="pb-mono" href="#/monitoring/schedules/${encodeURIComponent(id)}">${esc(id)}</a>` : EM_DASH;
-
-const runLink = (id) => (id ? `<a class="pb-mono" href="${runHref(id)}">${esc(id)}</a>` : EM_DASH);
-
 export async function loadAlerts() {
   try {
-    const body = await getAlerts({ ...state.filters, limit: ALERTS_SHOWN });
+    const [body] = await Promise.all([
+      getAlerts({ ...state.filters, limit: ALERTS_SHOWN }),
+      loadUseCaseNames(),
+      loadPeople(),
+    ]);
     state.alerts = body.alerts || [];
     state.alertsError = null;
   } catch (error) {
@@ -53,102 +81,166 @@ export async function loadAlerts() {
 
 export async function loadMissed() {
   try {
-    state.missed = (await getMissedFirings({ limit: 500 })).firings || [];
+    const [body] = await Promise.all([getMissedFirings({ limit: 500 }), loadUseCaseNames()]);
+    state.missed = body.firings || [];
+    setMissedCount(state.missed.length);
     state.missedError = null;
   } catch (error) {
     state.missedError = error;
   }
 }
 
+const CODE_IN_TEXT = /\b[A-Z][A-Z0-9]*(?:_[A-Z0-9]+)+\b/g;
+
+/** A server message with any known code replaced by its plain words (the original goes under Details). */
+export function plainMessage(message) {
+  return String(message || "").replace(CODE_IN_TEXT, (code) => {
+    const words = plainCode(code);
+    return words ? (words.charAt(0).toLowerCase() + words.slice(1)).replace(/\.$/, "") : code;
+  });
+}
+
+/** Open first, then critical before warning before info, then newest. */
+const byUrgency = (a, b) =>
+  Number(Boolean(a.acknowledged_at)) - Number(Boolean(b.acknowledged_at)) ||
+  (SEVERITY_RANK[a.severity] ?? 3) - (SEVERITY_RANK[b.severity] ?? 3) ||
+  String(b.created_at).localeCompare(String(a.created_at));
+
 function acknowledgement(alert) {
   if (alert.acknowledged_at) {
-    return `<span class="pb-small">Acknowledged by ${esc(alert.acknowledged_by || EM_DASH)}<br>${esc(
-      fmtStamp(alert.acknowledged_at),
-    )}</span>`;
+    return `<span class="pb-small">Taken on by ${esc(personName(alert.acknowledged_by))}<br>${esc(fmtStamp(alert.acknowledged_at))}</span>`;
   }
-  const error =
-    state.ackError && state.ackError.alertId === alert.alert_id ? errorBox(state.ackError.error) : "";
+  const error = state.ackError && state.ackError.alertId === alert.alert_id ? errorBox(state.ackError.error) : "";
   return `${actionButton("POST", "/monitoring/alerts/{alert_id}/acknowledge", {
-    cls: "linkbtn",
+    cls: "btn secondary sm",
     attrs: `data-ack="${esc(alert.alert_id)}"`,
-    label: state.acking === alert.alert_id ? "Acknowledging…" : "Acknowledge",
+    label: state.acking === alert.alert_id ? "Saving…" : "I'm on it",
     busy: state.acking === alert.alert_id,
   })}${error}`;
 }
 
-function alertRow(alert) {
-  return `<tr data-alert="${esc(alert.alert_id)}"><td>${esc(fmtStamp(alert.created_at))}</td><td>${statusPill(alert.severity)}</td>
-    <td>${esc(ALERT_KIND_LABEL[alert.kind] || alert.kind)}</td><td>${esc(alert.use_case_id)}${
-      alert.client_id ? `<div class="pb-small">${esc(alert.client_id)}</div>` : ""
-    }</td>
-    <td>${esc(alert.message)}</td><td>${scheduleLink(alert.schedule_id)}</td><td>${runLink(alert.run_id)}</td>
-    <td>${acknowledgement(alert)}</td></tr>`;
+function whatHappened(alert) {
+  const links = [
+    alert.run_id ? `<a href="${runHref(alert.run_id)}">See the run</a>` : "",
+    alert.schedule_id ? `<a href="#/monitoring/schedules/${encodeURIComponent(alert.schedule_id)}">Open the schedule</a>` : "",
+  ]
+    .filter(Boolean)
+    .join(" · ");
+  const plain = plainMessage(alert.message);
+  return `<details class="pb-rowdetails"><summary>${esc(kindWords(alert.kind))}</summary><p>${esc(plain)}</p>${
+    links ? `<p>${links}</p>` : ""
+  }${techDetails(
+    [
+      ["Message", plain !== alert.message ? alert.message : null],
+      ["Alert", alert.alert_id],
+      ["Kind", alert.kind],
+      ["Schedule", alert.schedule_id],
+      ["Run", alert.run_id],
+      ["Model", alert.model_id],
+      ["Client", alert.client_id],
+    ],
+    "Details",
+  )}</details>`;
 }
 
-function filterCard() {
+function alertRow(alert) {
+  return {
+    attrs: `data-alert="${esc(alert.alert_id)}"`,
+    cells: [
+      statusPill(alert.severity),
+      whatHappened(alert),
+      esc(useCaseName(alert.use_case_id)),
+      esc(fmtStamp(alert.created_at)),
+      acknowledgement(alert),
+    ],
+  };
+}
+
+function filterForm() {
   const f = state.filters;
   return `<form id="pb-alert-filters" class="pb-filters" novalidate>
-    <label class="pb-field"><span class="sub">Kind</span><select class="pb-input" name="kind"><option value="">Any</option>${Object.entries(
-      ALERT_KIND_LABEL,
-    )
-      .map(([kind, label]) => `<option value="${kind}"${f.kind === kind ? " selected" : ""}>${esc(label)}</option>`)
-      .join("")}</select></label>
-    <label class="check" style="align-self:end"><input type="checkbox" name="unacknowledged_only"${
-      f.unacknowledged_only ? " checked" : ""
-    }> Open alerts only</label>
+    ${selectField("kind", "What happened", [["", "Anything"], ...Object.keys(ALERT_KIND_LABEL).map((kind) => [kind, kindWords(kind)])], {
+      value: f.kind,
+    })}
+    <label class="check"><input type="checkbox" name="unacknowledged_only"${f.unacknowledged_only ? " checked" : ""}> Open alerts only</label>
   </form>`;
 }
 
 function alertsCard() {
-  if (state.alertsError) return `<section class="card"><h3>Alerts</h3>${filterCard()}${errorBox(state.alertsError)}</section>`;
-  if (!state.alerts) return `<section class="card"><h3>Alerts</h3><p class="loading" style="padding:16px 20px">Loading…</p></section>`;
+  const title = (n) =>
+    `<h3>${n === null ? "Alerts" : `${esc(n)} alert${n === 1 ? "" : "s"}${n >= ALERTS_SHOWN ? ` (newest ${ALERTS_SHOWN})` : ""}`} <span class="sort-note">(open and most serious first)</span></h3>`;
+  if (state.alertsError) {
+    return `<section class="card">${title(null)}<div class="card-body">${filterForm()}${errorBox(state.alertsError, { retry: true })}</div></section>`;
+  }
+  if (!state.alerts) return `<section class="card">${title(null)}<p class="loading pb-pad">Loading…</p></section>`;
   const table = state.alerts.length
-    ? `<div class="tbl-wrap"><table><thead><tr><th>Raised</th><th>Severity</th><th>What</th><th>Use case</th><th>Message</th><th>Schedule</th><th>Run</th><th></th></tr></thead>
-        <tbody>${state.alerts.map(alertRow).join("")}</tbody></table></div>`
-    : `<p class="empty">${state.filters.unacknowledged_only ? "No open alert." : "No alert has been raised."}</p>`;
-  return `<section class="card"><h3>Alerts · ${esc(state.alerts.length)}${
-    state.alerts.length >= ALERTS_SHOWN ? ` (newest ${ALERTS_SHOWN})` : ""
-  }</h3>${filterCard()}${
-    state.acked
-      ? `<div style="padding:0 20px 12px"><div class="pb-ok" role="status">Acknowledged by ${esc(
-          state.acked.acknowledged_by || EM_DASH,
-        )}: ${esc(state.acked.message)}</div></div>`
-      : ""
-  }${table}</section>`;
+    ? rowsTable(
+        [{ label: "Severity" }, { label: "What happened" }, { label: "Use case" }, { label: "Raised" }, { label: "", sr: "Action" }],
+        [...state.alerts].sort(byUrgency).map(alertRow),
+        { cls: "pb-alerts" },
+      )
+    : state.filters.unacknowledged_only
+      ? `<div class="empty-state"><p class="es-t">No open alerts.</p><p>You'll see one here if a scheduled job fails, results drop, or new customers look very different.</p></div>`
+      : `<div class="empty-state"><p class="es-t">No alert has been raised yet.</p><p>You'll see one here if a scheduled job fails, results drop, or new customers look very different.</p></div>`;
+  const acked = state.acked
+    ? `<div class="pb-ok" role="status">Marked as being dealt with by ${esc(personName(state.acked.acknowledged_by))}: ${esc(
+        kindWords(state.acked.kind),
+      )}.${techDetails([["Acknowledged by", state.acked.acknowledged_by]])}</div>`
+    : "";
+  return `<section class="card">${title(state.alerts.length)}<div class="card-body">${filterForm()}${acked}</div>${table}</section>`;
 }
 
 export const alertsHtml = () =>
   monitoringScreen(
     "alerts",
     "Alerts",
-    "Drift, performance drops, failed and missed scheduled work. Acknowledge one to say it is being dealt with.",
+    "Problems Marketing AI found on its own: results that dropped, new customers that look different, and scheduled work that failed or was missed.",
     ["GET", "/monitoring/alerts"],
     alertsCard,
   );
 
 function missedRow(f) {
-  return `<tr><td>${esc(fmtStamp(f.scheduled_for))}</td><td>${scheduleLink(f.schedule_id)}</td><td>${esc(
-    KIND_LABEL[f.kind] || f.kind,
-  )}</td><td>${esc(f.use_case_id)}</td><td>${f.client_id ? mono(f.client_id) : EM_DASH}</td><td>${statusPill(
-    f.status,
-  )} ${mono(f.error_code)}</td><td>${esc(fmtStamp(f.fired_at))}</td></tr>`;
+  return {
+    cells: [
+      esc(fmtStamp(f.scheduled_for)),
+      esc(KIND_LABEL[f.kind] || f.kind),
+      esc(useCaseName(f.use_case_id)),
+      `<a href="#/monitoring/schedules/${encodeURIComponent(f.schedule_id)}">Open the schedule</a>`,
+      `${statusPill(f.status)}${f.error_code ? `<div class="pb-small">${codeWords(f.error_code)}</div>` : ""}`,
+      mono(f.error_code),
+      f.client_id ? mono(f.client_id) : EM_DASH,
+      esc(fmtStamp(f.fired_at)),
+    ],
+  };
 }
 
 function missedCard() {
-  if (state.missedError) return `<section class="card"><h3>Missed runs</h3>${errorBox(state.missedError)}</section>`;
-  if (!state.missed) return `<section class="card"><h3>Missed runs</h3><p class="loading" style="padding:16px 20px">Loading…</p></section>`;
+  const title = (n) => `<h3>Missed runs${n === null ? "" : ` · ${esc(n)}`} <span class="sort-note">(newest first)</span></h3>`;
+  if (state.missedError) return `<section class="card">${title(null)}<div class="card-body">${errorBox(state.missedError, { retry: true })}</div></section>`;
+  if (!state.missed) return `<section class="card">${title(null)}<p class="loading pb-pad">Loading…</p></section>`;
   const table = state.missed.length
-    ? `<div class="tbl-wrap"><table><thead><tr><th>Due</th><th>Schedule</th><th>Work</th><th>Use case</th><th>Client</th><th>Status</th><th>Recorded</th></tr></thead>
-        <tbody>${state.missed.map(missedRow).join("")}</tbody></table></div>`
-    : `<p class="empty">No scheduled slot has been missed.</p>`;
-  return `<section class="card"><h3>Missed runs · ${esc(state.missed.length)}, newest first</h3>${table}</section>`;
+    ? rowsTable(
+        [
+          { label: "Due" },
+          { label: "What" },
+          { label: "Use case" },
+          { label: "Schedule" },
+          { label: "Result" },
+          { label: "Code", more: true },
+          { label: "Client", more: true },
+          { label: "Recorded", more: true },
+        ],
+        state.missed.map(missedRow),
+      )
+    : `<div class="empty-state"><p class="es-t">No scheduled run has been missed.</p></div>`;
+  return `<section class="card">${title(state.missed.length)}${table}</section>`;
 }
 
 export const missedHtml = () =>
   monitoringScreen(
     "missed",
     "Missed runs",
-    "Due slots nobody fired - the scheduler was stopped or the machine asleep. One catch-up run follows, never one per slot.",
+    "Runs that should have happened while Marketing AI was switched off. It runs each schedule once to catch up, never once per missed run.",
     ["GET", "/monitoring/missed-firings"],
     missedCard,
   );

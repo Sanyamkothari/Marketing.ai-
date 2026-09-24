@@ -305,6 +305,22 @@ def test_a_mirror_is_offered_every_write(store: SqlRegistryStore, storage: Local
     assert isinstance(mirror, ModelMirror)
 
 
+def test_an_archive_expecting_another_status_is_the_stores_refusal_and_mirrors_nothing(
+    store: SqlRegistryStore, storage: LocalStorage
+) -> None:
+    """`expected_status` reaches the store, whose lock decides it (DEC-869)."""
+    write_run_artefacts(storage)
+    mirror = RecordingMirror()
+    registry = S3ModelRegistry(store, storage, mirror=mirror)
+    registry.register(make_version("m_1", 1, status=ModelStatus.PENDING_APPROVAL))
+    registry.approve("m_1", by="ops@telco")
+    with pytest.raises(RegistryError) as excinfo:
+        registry.archive("m_1", expected_status=ModelStatus.PENDING_APPROVAL)
+    assert excinfo.value.code == "INVALID_TRANSITION"
+    assert store.get("m_1").status is ModelStatus.CHAMPION
+    assert mirror.seen == ["m_1:pending_approval", "m_1:champion"], "a refused archive is not mirrored"
+
+
 def test_a_failing_mirror_never_fails_a_registry_write(
     store: SqlRegistryStore, storage: LocalStorage
 ) -> None:

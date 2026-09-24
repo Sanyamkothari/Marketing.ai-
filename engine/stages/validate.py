@@ -1523,6 +1523,28 @@ def types_compatible(expected: ColumnType, actual: ColumnType) -> bool:
     return any(expected in group and actual in group for group in _COMPATIBLE_GROUPS)
 
 
+def _text_flag_still_text(frame: pd.DataFrame, name: str, expected: ColumnType, actual: ColumnType) -> bool:
+    """A column fitted as text whose scoring values are two boolean tokens *still held as text*.
+
+    `schema.json` types a fitted column by the dtype the model saw (`register._inferred_type`), so a
+    `Yes`/`No` flag is `string` there; this check types the scoring file with ingest's inference,
+    which reads the same two tokens as `boolean`. Both are right about their own question, and the
+    values are identical, so before DEC-956 a Telco model refused a second Telco file. The bridge is
+    drawn on the scoring column's dtype rather than in `types_compatible`: a `boolean` that arrived
+    as 0/1 numbers or a real bool dtype is a genuine change for a model fitted on text, and still
+    fails. Drawing it here also covers every `schema.json` already on disk (DEC-956).
+    """
+    import pandas as pd
+
+    if expected not in _TEXTUAL_TYPES or actual is not ColumnType.BOOLEAN or name not in frame.columns:
+        return False
+    dtype = frame[name].dtype
+    if isinstance(dtype, pd.CategoricalDtype):
+        # A Parquet upload keeps pandas `category` columns categorical; the tokens are still text.
+        dtype = dtype.categories.dtype
+    return bool(pd.api.types.is_object_dtype(dtype) or pd.api.types.is_string_dtype(dtype))
+
+
 @check("SCHEMA_MISMATCH", severity=Severity.ERROR, modes=_SCORE_ONLY)
 def check_schema_mismatch(frame: pd.DataFrame, params: CheckParams) -> CheckResult:
     """Compare the frame's columns against the schema the champion was fitted with (DEC-057)."""
@@ -1545,7 +1567,9 @@ def check_schema_mismatch(frame: pd.DataFrame, params: CheckParams) -> CheckResu
             "actual": present[column.name].value,
         }
         for column in schema.columns
-        if column.name in present and not types_compatible(column.inferred_type, present[column.name])
+        if column.name in present
+        and not types_compatible(column.inferred_type, present[column.name])
+        and not _text_flag_still_text(frame, column.name, column.inferred_type, present[column.name])
     ]
     details: dict[str, object] = {
         "missing": missing,

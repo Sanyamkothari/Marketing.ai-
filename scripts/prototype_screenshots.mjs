@@ -19,11 +19,11 @@ const open = async (page, hash) => {
   await page.waitForTimeout(120);
 };
 const click = async (page, sel) => { await page.click(sel); await page.waitForTimeout(80); };
-/* DEC-608: uplift is not a Phase 1 Setup choice. Its screens are reached from the "Uplift for this use
-   case" link under win-back's header, so every uplift recipe starts by following that link. */
+/* DEC-608: uplift is not a Phase 1 Setup choice. Its screens are reached from the "Also: target with
+   uplift" related link in win-back's header actions (v1), so every uplift recipe starts by following it. */
 const openUplift = async (p) => {
   await open(p, "#/uc/win-back-campaign");
-  await click(p, ".uentry a");
+  await click(p, ".head-actions a.related");
   await p.waitForSelector('main[data-module="uplift"] #f-samplecampaign', { timeout: 10000 });
 };
 const trainUplift = async (p) => {
@@ -42,7 +42,8 @@ const scoreUplift = async (p) => {
 
 /* Each new state, as a named recipe that leaves the page where it should be shot. */
 const STATES = [
-  ["01-client-selector", async (p) => { await open(p, "#/"); }],
+  /* v1: the client chooser lives in the top bar, on per-client screens such as Build data */
+  ["01-client-selector", async (p) => { await open(p, "#/pilot/kit"); }],
   ["02-setup-step1-choice", async (p) => { await open(p, "#/uc/rca"); }],
   ["03-onboarding-sources", async (p) => {
     await open(p, "#/uc/rca");
@@ -69,7 +70,9 @@ const STATES = [
     await click(p, "#ob-sample");
     await click(p, '[data-ob-open="4"]');
     await click(p, "#ob-build");
-    await p.waitForSelector(".report", { timeout: 15000 });
+    await p.waitForSelector("#ob-use", { timeout: 15000 });
+    await click(p, "[data-ob-details] > summary"); // the verdict first; the report behind Show build details
+    await p.waitForSelector(".report", { timeout: 5000 });
     await p.waitForTimeout(200);
   }],
   ["07-dataset-in-use", async (p) => {
@@ -168,6 +171,13 @@ const STATES = [
     await open(p, "#/uc/win-back-campaign/campaign");
     await click(p, "#cr-sample");
   }],
+  /* v1: Home with the top bar's Models menu open (desktop), and the mobile Menu panel open (mobile) */
+  ["25-home-models-menu", async (p) => {
+    await open(p, "#/");
+    const mobile = p.viewportSize().width < 700;
+    await click(p, mobile ? "[data-tb-menu]" : '[data-menu="tn-models"]');
+    if (mobile) await click(p, '[data-menu="tn-models"]');
+  }],
   ["12-rca-before-generation", async (p) => { await open(p, "#/uc/rca/output"); }],
   ["13-rca-root-causes", async (p) => {
     await open(p, "#/uc/rca/output");
@@ -187,6 +197,8 @@ const STATES = [
     // navigate through the router rather than the overlapping flow arrow,
     // so the in-memory run (and its lineage) survives
     await p.evaluate(() => { location.hash = "#/uc/rca/data"; });
+    await p.waitForSelector('details[data-keep="lineage"]', { timeout: 10000 });
+    await click(p, 'details[data-keep="lineage"] > summary'); // v1: the lineage sits behind Details
     await p.waitForSelector(".lineage", { timeout: 10000 });
     await p.waitForTimeout(200);
   }],
@@ -209,6 +221,9 @@ for (const [name, drive] of STATES.filter(([n]) => !ONLY || ONLY.some((o) => n.s
     });
     const page = await ctx.newPage();
     await drive(page);
+    // v1: the top bar is sticky, so a page scrolled by a click would draw it mid-shot; shoot from the top
+    await page.evaluate(() => window.scrollTo(0, 0));
+    await page.waitForTimeout(50);
     await page.screenshot({ path: path.join(OUT, `${name}-${suffix}.png`), fullPage: true });
     await ctx.close();
     n++;

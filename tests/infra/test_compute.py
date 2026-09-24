@@ -105,7 +105,8 @@ def test_the_credential_rotates(dev_templates: dict[str, Template]) -> None:
 def test_the_application_secret_is_a_separate_document(dev_templates: dict[str, Template]) -> None:
     secrets = resources(dev_templates["database"], "AWS::SecretsManager::Secret")
     names = {resource["Properties"]["Name"] for resource in secrets.values()}
-    assert names == {"marketing-ai/dev/db", "marketing-ai/dev/app"}
+    # Plan D (DEC-860) adds the generated privacy salt, which the application secret references.
+    assert names == {"marketing-ai/dev/db", "marketing-ai/dev/app", "marketing-ai/dev/privacy-salt"}
 
 
 def test_the_composed_url_is_a_deploy_time_reference_not_a_literal(

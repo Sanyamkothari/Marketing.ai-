@@ -21,12 +21,16 @@ agree with whatever `steps.js` happens to say today:
 
 from __future__ import annotations
 
+import json
 import re
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Final
 
 import pytest
 from fastapi import FastAPI
+from fastapi.testclient import TestClient
 from pydantic import BaseModel
 
 from api.routes import clients as clients_routes
@@ -447,11 +451,22 @@ UI_READS: Final[dict[str, tuple[str, ...]]] = {
     "DatasetChecksResponse": ("checks",),
     "BuildStatus": ("state", "stages", "error", "detail"),
     "BuildStage": ("group_label", "state", "detail"),
-    "BuildReport": ("sources", "snapshots", "features", "checks", "passed", "error_count", "warning_count"),
+    "BuildReport": (
+        "sources",
+        "snapshots",
+        "features",
+        "checks",
+        "passed",
+        "error_count",
+        "warning_count",
+        "leak_check",
+        "rows_out",
+    ),
+    "LeakCheckRecord": ("scope", "summary"),
     "SourceStat": ("source_id", "role", "rows", "join_coverage"),
     "SnapshotStat": ("date", "entities", "positive_rate", "censored"),
     "FeatureStat": ("name", "null_fraction", "dropped", "reason"),
-    "DatasetManifest": ("target", "columns", "primary_key", "snapshot_mode"),
+    "DatasetManifest": ("target", "columns", "primary_key", "snapshot_mode", "snapshot_dates"),
     "DatasetColumn": ("name", "type"),
 }
 """Every wire field the three modules reach for, by the model that sends it.
@@ -579,3 +594,99 @@ def test_every_path_is_confirmed_by_a_router_and_not_by_a_transcript(openapi: di
     long as the transcription repeated it."""
     uncovered = called_paths() - served_paths(openapi)
     assert not uncovered, f"no router declares: {sorted(uncovered)}"
+
+
+# ---------------------------------------------------------------------------
+# v1 UI (WP3): the steps rendered in Node against the real standard schema
+# ---------------------------------------------------------------------------
+RENDER_SCRIPT: Final[str] = r"""
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+const [stepsPath, schemaPath] = process.argv.slice(2);
+const steps = await import(pathToFileURL(stepsPath).href);
+const schema = JSON.parse(readFileSync(schemaPath, "utf8"));
+const roles = schema.roles.roles;
+const entityRole = Object.keys(roles).find((id) => roles[id].kind === "entity");
+const eventRole = Object.keys(roles).find((id) => roles[id].kind === "event" && (roles[id].typical_columns || []).length);
+const column = (name) => ({ name, inferred_type: "string", sample_values: ["a", "b"], top_categories: [] });
+const source = (id, role, file) => ({
+  source: { source_id: id, file_name: file, role, rows: 1234567 },
+  profile: { role_candidates: [{ role }], key_candidates: [], time_candidates: [], profile: { columns: [column("A"), column("B")] } },
+});
+const noEntity = { code: "NO_ENTITY_SOURCE", severity: "error", message: "No customer table.", suggestion: "" };
+const mapping = (id) => ({ mapping_id: `map_${id}`, columns: [], unmapped_source: ["A", "B"], missing_required: [], value_maps: {} });
+const state = {
+  schema, schemaError: null, entity: "subscriber", open: "mapping", keep: {},
+  sources: [source("s1", entityRole, "customers.csv"), source("s2", eventRole, "bills.csv")],
+  sourcesLoading: false, sourcesError: null, uploading: [], uploadErrors: [], rolesBusy: false,
+  rowMenu: null, confirmDelete: null,
+  mappings: { s1: mapping("s1"), s2: mapping("s2") }, mappingSuggested: {}, mappingLoading: {},
+  mappingError: {}, mappingSaving: {}, mappingSaved: { s2: true }, mappingChecks: { s2: [noEntity] },
+  mapOpen: { s1: true, s2: true }, touched: {}, saveAll: null,
+  features: [], featureChecked: {}, featureForm: null, featureSchema: null, vocabularyError: null,
+  label: schema.label, snapshotSchema: null, snapshot: null, specChecks: [], preview: null,
+  previewLoading: false, previewError: null, datasetId: null, building: false, dataset: null,
+  buildError: null, buildChecks: [], buildReport: null, inUse: false, collapsed: false, replay: null,
+};
+const html = steps.mappingStep(state);
+const select = /data-source="s2" data-column="A"[^>]*>(.*?)<\/select>/s.exec(html);
+const eventOptions = select ? [...select[1].matchAll(/<option value="([^"]*)"[^>]*>([^<]*)</g)].map((o) => [o[1], o[2]]) : [];
+console.log(JSON.stringify({
+  mapping: html,
+  sources: steps.sourcesStep({ ...state, open: "sources" }),
+  eventOptions,
+  typical: roles[eventRole].typical_columns.map((c) => c.name),
+}));
+"""
+
+
+@pytest.fixture(scope="module")
+def rendered(onboarding_app: FastAPI, tmp_path_factory: pytest.TempPathFactory) -> dict[str, object]:
+    """`mappingStep` and `sourcesStep` drawn by Node from the schema the API really serves."""
+    node = shutil.which("node")
+    if not node:
+        pytest.skip("node is not installed")
+    work = tmp_path_factory.mktemp("render")
+    schema = TestClient(onboarding_app).get("/use-cases/telco-churn/standard-schema")
+    assert schema.status_code == 200, schema.text
+    (work / "schema.json").write_text(schema.text, encoding="utf-8")
+    (work / "render.mjs").write_text(RENDER_SCRIPT, encoding="utf-8")
+    done = subprocess.run(
+        [node, str(work / "render.mjs"), str(ONBOARDING_DIR / "steps.js"), str(work / "schema.json")],
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert done.returncode == 0, done.stderr
+    result: dict[str, object] = json.loads(done.stdout)
+    return result
+
+
+def test_an_event_tables_maps_to_options_are_named_not_objects(rendered: dict[str, object]) -> None:
+    """A role's `typical_columns` are objects: each option's value is the column's `name` and its
+    label the description - never "[object Object]"."""
+    assert "[object Object]" not in str(rendered["mapping"])
+    options = rendered["eventOptions"]
+    assert isinstance(options, list) and options
+    labels = dict(options)
+    typical = rendered["typical"]
+    assert isinstance(typical, list)
+    assert set(typical) <= set(labels), (typical, labels)
+    assert all(labels[name] and labels[name] != name for name in typical), labels
+
+
+def test_a_stale_no_entity_source_check_is_hidden_once_an_entity_table_exists(
+    rendered: dict[str, object],
+) -> None:
+    assert 'data-code="NO_ENTITY_SOURCE"' not in str(rendered["mapping"])
+
+
+def test_the_sources_step_reads_as_plain_words_with_one_number_locale(rendered: dict[str, object]) -> None:
+    """Roles in words (the entity role is the use case's own noun), counts grouped the en-US way,
+    the extra columns behind "Show more columns", and Remove behind the row menu."""
+    sources = str(rendered["sources"])
+    assert "Subscriber table" in sources
+    assert "1,234,567" in sources and "12,34,567" not in sources
+    assert "Show more columns" in sources
+    assert 'data-act="row-menu"' in sources and 'data-act="delete-source"' not in sources

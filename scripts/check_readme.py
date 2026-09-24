@@ -204,6 +204,30 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/uplift/test_uplift_api.py",
     ),
     "M44": ("tests/unit/uplift/test_uplift_ui.py",),
+    # --- Plan D (hardening) ------------------------------------------------------------------
+    # The tests each milestone wrote, as README's Plan D table lists them. M56's two files are the
+    # skip check it added and the container-file test whose M56 cases pin node, `npm ci` and
+    # REQUIRE_JSDOM in ci.yml (a failure there fails the evidence). M57 and M58 are unmapped on
+    # purpose: what is left of M57 is a laptop measurement and a network-blocked Criteo run
+    # (`tests/unit/test_bench_1m.py` proves only the tooling), and M58 is documentation and owner
+    # actions. No test can prove either, so they are reported, never flagged.
+    "M53": (
+        "tests/unit/uplift/test_uplift_two_column_keys.py",
+        "tests/integration/uplift/test_uplift_two_column_keys.py",
+        "tests/unit/uplift/test_phase1_pages_uplift.py",
+        "tests/unit/uplift/test_uplift_drift.py",
+    ),
+    "M54": (
+        "tests/integration/production/test_login_rate_limit.py",
+        "tests/unit/production/test_login_throttle.py",
+        "tests/unit/production/test_privacy_config.py",
+        "tests/integration/production/test_approvals.py",
+        "tests/integration/production/test_approvals_ui_js.py",
+        "tests/integration/production/test_privacy_erasure_api.py",
+        "tests/unit/production/test_plan_d_migration.py",
+    ),
+    "M55": ("tests/unit/onboarding/test_leak_check.py", "tests/integration/test_onboarding_leak_check.py"),
+    "M56": ("tests/unit/test_check_no_skips.py", "tests/unit/test_container_files.py"),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

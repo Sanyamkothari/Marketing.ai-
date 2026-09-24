@@ -4,20 +4,48 @@
    Phase 3a §9 E — win-back campaign copy. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, body, click, set, wait, upload } from "./harness.mjs";
+import { load, go, ev, $, $$, body, click, set, settle, upload } from "./harness.mjs";
 
 /* ---------- A. client selector ---------- */
 
-test("the client selector sits in the header of every screen", () => {
+test("the client selector sits in the top bar on every per-client screen", () => {
   const dom = load("#/");
-  for (const hash of ["#/", "#/uc/rca", "#/uc/rca/data", "#/uc/win-back-campaign/output"]) {
+  // v1: the page header's right side is the logo only; the chooser is in the top bar, where a client matters
+  for (const hash of ["#/uc/rca", "#/uplift/win-back-campaign", "#/pilot/kit", "#/pilot"]) {
     go(dom, hash);
-    const sel = $(dom, ".headtools #f-client");
+    const sel = $(dom, "#pb-bar .tb-context #f-client");
     assert.ok(sel, `no client selector on ${hash}`);
     assert.equal(sel.value, "Demo Telecom");
     assert.equal([...sel.options].at(-1).textContent, "+ New client");
-    assert.equal($(dom, ".chint").textContent, "Tables, recipes and models are kept per client.");
+    assert.equal($(dom, "#pb-bar .clientpick .tt-pop").textContent, "Tables, recipes and models are kept per client.");
+    assert.equal($(dom, "#app .head #f-client"), null, "never in the page header");
   }
+  for (const hash of ["#/", "#/uc/rca/data", "#/uc/win-back-campaign/output"]) {
+    go(dom, hash);
+    assert.equal($(dom, "#f-client"), null, `${hash} is not a per-client screen`);
+  }
+});
+
+test("one top bar: the six goals, the active one following the route, and the logo alone in the header", () => {
+  const dom = load("#/");
+  const items = () => $$(dom, '#pb-bar nav[aria-label="Main"] .tn-item').map((e) => e.textContent.replace(/\d+/g, "").trim());
+  assert.deepEqual(items(), ["Home", "Build data", "Models", "Campaigns", "Reports", "Admin"]);
+  const active = () => $(dom, "#pb-bar .tn-item.on").textContent.replace(/\d+/g, "").trim();
+  for (const [hash, goal] of [["#/", "Home"], ["#/uc/rca", "Models"], ["#/uplift", "Models"], ["#/pilot/kit", "Build data"],
+    ["#/monitoring/runs", "Campaigns"], ["#/uc/win-back-campaign/campaign", "Campaigns"], ["#/pilot", "Reports"]]) {
+    go(dom, hash);
+    assert.equal(active(), goal, hash);
+    assert.ok($(dom, "#app .head > .logo"), `${hash}: the logo sits in the header`);
+    assert.equal($$(dom, "#app .head > *").length, 2, `${hash}: titles and the logo, nothing else`);
+  }
+  assert.ok($(dom, "#pb-bar .pe-demo"), "the sample-data chip");
+  // menus open and close, with aria-expanded
+  const models = $(dom, '[data-menu="tn-models"]');
+  models.click();
+  assert.equal(models.getAttribute("aria-expanded"), "true");
+  assert.equal($(dom, "#tn-models").hidden, false);
+  dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal($(dom, "#tn-models").hidden, true);
 });
 
 test("switching client changes nothing else on the page", () => {
@@ -125,7 +153,7 @@ test("assistant results: index summary, pass rate, worst ten, try it, cost line"
   click(dom, "#f-sampledocs");
   click(dom, "#f-sampleqa");
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
-  await wait(1600);
+  await settle(dom);
   assert.ok($(dom, ".results"), "the assistant reaches the results state");
   // eval pass rate against the threshold, with a bar
   assert.equal($(dom, ".evalbar .ebv").textContent, "91% passed");
@@ -170,7 +198,7 @@ test("assistant Try it answers a saved question and refuses anything else", asyn
   click(dom, "#f-sampledocs");
   click(dom, "#f-sampleqa");
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
-  await wait(1600);
+  await settle(dom);
   assert.equal($$(dom, ".chatpanel .bubble.q").length, 3);
   // a question the saved set covers comes back grounded, with its citations
   $(dom, "#g-question").value = "the router light is red, what now?";
@@ -197,7 +225,7 @@ test("the pass threshold is a setting, and the result says which side of it the 
   set(dom, '[data-adv="passThr"]', "95");
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
   assert.ok($$(dom, ".progress .pt").some((e) => e.textContent === "Grading the answers"));
-  await wait(1600);
+  await settle(dom);
   assert.equal($(dom, ".evalbar .ebm").style.left, "95%");
   assert.equal($(dom, ".evalbar .ebverdict").textContent, "Below the 95% threshold.");
   assert.ok($(dom, ".evalbar .ebverdict").classList.contains("bad"));

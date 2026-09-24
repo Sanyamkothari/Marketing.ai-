@@ -272,6 +272,41 @@ def test_the_baseline_covers_the_feature_columns_only(config: UseCaseConfig) -> 
     assert baseline.created_at.tzinfo is not None
 
 
+def test_the_runs_own_label_is_never_a_baseline_feature(config: UseCaseConfig) -> None:
+    """A built dataset trains on its own label, not the template's target column (DEC-957)."""
+    frame = train_frame()
+    frame["converted_next_30d"] = [index % 3 == 0 for index in range(len(frame.index))]
+    baseline = drift_baseline(
+        frame,
+        config,
+        run_id=TRAIN_RUN,
+        model_version_id=MODEL_ID,
+        primary_key=PRIMARY_KEY,
+        target="converted_next_30d",
+    )
+    assert "converted_next_30d" not in features_of(baseline)
+    assert list(features_of(baseline)) == list(features_of(baseline_of(train_frame(), config)))
+
+
+def test_a_label_listed_by_an_older_baseline_is_not_compared(config: UseCaseConfig) -> None:
+    """Baselines written before DEC-957 list a built dataset's label, which scoring files leave empty."""
+    frame = train_frame()
+    frame["converted_next_30d"] = [index % 3 == 0 for index in range(len(frame.index))]
+    legacy = baseline_of(frame, config)
+    assert "converted_next_30d" in features_of(legacy), "the fixture reproduces an old baseline"
+    scoring = train_frame().assign(converted_next_30d=None)
+
+    measured = compute_drift(legacy, scoring, config, run_id=SCORE_RUN)
+    skipped = compute_drift(
+        legacy, scoring, config, run_id=SCORE_RUN, not_features={"converted_next_30d", PRIMARY_KEY}
+    )
+
+    assert measured is not None and measured.status is DriftStatus.DRIFTED, "what the bug reported"
+    assert skipped is not None
+    assert "converted_next_30d" not in {drift.feature for drift in skipped.features}
+    assert (skipped.status, skipped.drifted_features) == (DriftStatus.STABLE, ())
+
+
 def test_the_baseline_is_deterministic(config: UseCaseConfig) -> None:
     frame = train_frame()
     first = baseline_of(frame, config)

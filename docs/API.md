@@ -8,6 +8,7 @@ Contract schema version: 1.
 
 | Method | Path | Summary | Response model |
 |---|---|---|---|
+| GET | `/approvals` | Challengers waiting for an Approver, with the head-to-head and who may decide | ApprovalListResponse |
 | GET | `/audit/events` | Read the audit log | AuditEventPage |
 | GET | `/audit/events.csv` | Download the audit log as CSV | - |
 | POST | `/audit/exports` | Export the audit log (JSON lines; S3 Object Lock when configured) | AuditExportResult |
@@ -48,16 +49,30 @@ Contract schema version: 1.
 | GET | `/models` | Registered model versions, newest first, with the champion flagged | ModelListResponse |
 | POST | `/models/{model_id}/approve` | Approve a version that is waiting for a human, making it champion | ModelVersionResponse |
 | POST | `/models/{model_id}/promote` | Make a version champion by hand, recording who did it and why | ModelVersionResponse |
+| POST | `/models/{model_id}/reject` | Turn down a challenger waiting for approval, with a reason | ModelDecisionResponse |
 | GET | `/monitoring/alerts` | List alerts | AlertListResponse |
 | POST | `/monitoring/alerts/{alert_id}/acknowledge` | Acknowledge an alert | Alert |
 | GET | `/monitoring/missed-firings` | Scheduled runs that were missed, across schedules | FiringListResponse |
+| GET | `/pilot/data-request` | The client-facing data request for the pilot's use cases | - |
+| GET | `/pilot/demo` | Whether demo mode is on, and what the seeded demo contains | PilotDemoResponse |
+| GET | `/pilot/demo/raw/{variant}` | The demo's raw tables as a zip, for trying the pre-flight check (clean or broken) | - |
+| POST | `/pilot/feedback` | Record feedback on a screen (stored with the platform's data; contact details masked) | PilotFeedbackResponse |
+| GET | `/pilot/feedback/export` | Export every feedback entry for the pilot team (pilot_feedback.csv or .jsonl) | - |
+| GET | `/pilot/help` | The plain-language help: every warning code, every setting, the glossary | HelpCatalogue |
+| GET | `/pilot/readiness/{dataset_id}` | The data readiness report of one dataset build: verdict, coverage, history, problems and fixes | - |
+| GET | `/pilot/results` | The business results report of a use case's champion, or of one model | - |
+| GET | `/pilot/roi/{run_id}` | A campaign's measured effect and its value in rupees, as a range | - |
+| PUT | `/pilot/roi/{run_id}` | Save a campaign's value inputs (what an extra customer is worth, offer and contact costs) | RoiView |
+| GET | `/pilot/templates/{role}` | The header-only CSV template of one requested table | - |
 | POST | `/privacy/access-requests` | Export everything held about one person, as a zip | - |
 | POST | `/privacy/consent` | Record one consent given or withdrawn | ConsentRecord |
 | POST | `/privacy/consent/imports` | Import a consent CSV (all or nothing unless partial) | ConsentImportReport |
 | POST | `/privacy/consent/lookup` | Look up one person's consent (the id goes in the body, never the URL) | ConsentLookupResponse |
 | GET | `/privacy/erasure` | The erasure register, newest first | ErasureRequestList |
-| POST | `/privacy/erasure` | Erase one person from every store (the id goes in the body) | ErasureOutcome |
+| POST | `/privacy/erasure` | Erase one person from every store, as a background job (the id goes in the body) | ErasureAccepted |
 | GET | `/privacy/erasure/{request_id}` | One erasure request | ErasureRequestRecord |
+| GET | `/privacy/erasure/{request_id}/progress` | How far an erasure request has got, store by store | ErasureProgressResponse |
+| POST | `/privacy/erasure/{request_id}/retry` | Run a failed erasure request again (the id goes in the body again) | ErasureAccepted |
 | GET | `/privacy/purposes` | The consent purposes and the erasure policy | PrivacyPolicyResponse |
 | POST | `/privacy/retention/apply` | Run the retention job on a reviewed dry run | RetentionApplyResponse |
 | GET | `/privacy/retention/plan` | Retention dry run: what the job would delete now | RetentionPlanResponse |
@@ -151,6 +166,7 @@ A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explana
 | `artefacts` | object of string -> string | no | Artefact filename mapped to its storage key. |
 | `error` | RunError \| null | no | Failure detail; set when the state is failed. |
 | `engine_version` | string | yes | Version of the engine package that produced the run. |
+| `requested_by` | string \| null | no | `Principal.user_id` of whoever started the run (the firing principal for a scheduled run); null for a run started before this was recorded. Separation of duties reads it. |
 
 #### RunError
 
@@ -484,6 +500,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `bootstrap_samples` | integer | no |  |
 | `test_fraction` | number | no |  |
 | `time_limit_minutes` | integer | no |  |
+| `drift_treated_share_tolerance` | number | no |  |
 | `segments` | UpliftSegmentsConfig | no | Where the four segments are cut. A Phase 5 agent may propose new cuts. |
 | `policy` | UpliftPolicyConfig | no | The budget the targeting recommendation works within. A Phase 5 agent may propose budgets. |
 
@@ -1710,7 +1727,7 @@ config units: fractions stay fractions, and `scale` is the factor the UI multipl
 | `evaluation.threshold.value` | Threshold value | number | 0.5 | 0.01 | 0.99 | 0.01 | - |
 | `evaluation.reasons_per_row` | Reasons per row | number | 3 | 1 | 5 | 1 | - |
 | `evaluation.fairness_column` | Fairness check (sensitive column) | column-select | null | - | - | - | - |
-| `evaluation.champion_min_improvement_pct` | Replace champion if better by (%) | number | 1.0 | 0 | 20 | 0.5 | - |
+| `evaluation.champion_min_improvement_pct` | Replace the model in use if better by (%) | number | 1.0 | 0 | 20 | 0.5 | - |
 | `evaluation.shap` | Generate SHAP explanations per row | checkbox | true | - | - | - | - |
 
 ### 6. Actions & output
@@ -1738,7 +1755,7 @@ config units: fractions stay fractions, and `scale` is the factor the UI multipl
 |---|---|---|---|---|---|---|---|
 | `governance.retention_days` | Data retention (days) | number | 90 | 0 | 730 | 30 | - |
 | `governance.consent_column` | Consent column (use rows where true) | column-select | null | - | - | - | - |
-| `governance.approval_required` | Require approval before a model becomes champion | checkbox | true | - | - | - | - |
+| `governance.approval_required` | Require approval before a model becomes the model in use | checkbox | true | - | - | - | - |
 
 ### Other `configs/engine.yaml` keys
 
@@ -1897,6 +1914,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `uplift.bootstrap_samples` | int 10..5000; resamples behind every uplift confidence interval |
 | `uplift.test_fraction` | float 0.1..0.5; hold-out share the uplift metrics are measured on |
 | `uplift.time_limit_minutes` | int 1..240; AutoGluon budget across all base models (autogluon_fast only) |
+| `uplift.drift_treated_share_tolerance` | float 0..0.5; uplift_drift.json flags a scoring file whose treated share differs from training's by more than this (absolute; M53) |
 | `uplift.segments` | agent_editable: true (plan B §12) |
 | `uplift.segments.persuadable_min_uplift` | float; predicted uplift at or above this = persuadable |
 | `uplift.segments.sleeping_dog_max_uplift` | float; predicted uplift at or below this = sleeping dog (never treated) |

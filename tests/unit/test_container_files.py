@@ -152,6 +152,30 @@ def test_ci_makes_the_postgres_tests_fail_rather_than_skip(workflows: dict[str, 
     assert any(scope.get("MARKETING_AI_REQUIRE_POSTGRES") == "1" for scope in scopes)
 
 
+def test_ci_runs_the_jsdom_suites_rather_than_skipping_them(
+    workflows: dict[str, dict[str, object]], repo_root: Path
+) -> None:
+    """M56 (DEC-877): node is set up, every jsdom suite under tests/ has a lockfile for `npm ci`, the
+    skip is a failure, the prototype suite has its step, and the report is read for skips."""
+    jobs = workflows["ci"]["jobs"]
+    assert isinstance(jobs, dict)
+    job = jobs["lint-test"]
+    steps = job["steps"]
+    scopes = [job.get("env", {}), *(step.get("env", {}) for step in steps)]
+    assert any(scope.get("REQUIRE_JSDOM") == "1" for scope in scopes)
+    node = [step for step in steps if str(step.get("uses", "")).startswith("actions/setup-node@")]
+    assert node and str(node[0]["with"]["node-version"]) == "22"
+    runs = [str(step.get("run", "")) for step in steps]
+    assert any("npm ci" in run and "package-lock.json" in run for run in runs)
+    assert any("make prototype-test" in run for run in runs)
+    assert any("scripts.check_no_skips" in run for run in runs)
+    for package in (repo_root / "tests").rglob("package.json"):
+        if "node_modules" not in package.parts:
+            assert (
+                package.parent / "package-lock.json"
+            ).is_file(), f"`npm ci` needs a lockfile beside {package}"
+
+
 def test_ci_synthesises_the_infrastructure_for_real(workflows: dict[str, dict[str, object]]) -> None:
     jobs = workflows["ci"]["jobs"]
     assert isinstance(jobs, dict)

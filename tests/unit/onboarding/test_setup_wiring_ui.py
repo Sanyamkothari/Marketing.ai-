@@ -86,12 +86,20 @@ def test_the_phase_1_files_ask_the_registry_and_never_import_onboarding() -> Non
 
 def test_dom_js_keeps_the_header_slot_and_the_router_fills_it() -> None:
     """`dom.js` is reached from `modules/production/boot.js` while `router.js` is still evaluating,
-    so it may not import the router (DEC-790): it keeps the slot, and `registerHeaderTool` fills it."""
+    so it may not import the router (DEC-790): it keeps the slot, and `registerHeaderTool` fills it.
+    Since v1 the top bar (`chrome.js`) draws the tool and the page header is the logo alone on the
+    right (docs/ui/FOUNDATION.md); `chrome.js`, like `dom.js`, never imports the router."""
     dom = code(UI / "dom.js")
     assert "modules/onboarding" not in dom and "modules/router.js" not in dom
     for name in ("setHeaderTool", "headerToolHtml"):
         assert re.search(rf"export function {name}\b", dom), name
-    assert re.search(r"pageHead\(inner\) \{[^}]*headerToolHtml\(\)", dom)
+    assert not re.search(
+        r"pageHead\(inner\) \{[^}]*headerToolHtml\(\)", dom
+    ), "the header's right side is the logo only"
+    chrome = code(UI / "chrome.js")
+    assert "modules/onboarding" not in chrome and "router.js" not in chrome
+    assert re.search(r'import \{[^}]*\bheaderToolHtml\b[^}]*\} from "\./dom\.js"', chrome)
+    assert re.search(r"export function topBarHtml\(\) \{.*?headerToolHtml\(\)", chrome, re.DOTALL)
     router = code(UI / "modules" / "router.js")
     assert re.search(r'import \{[^}]*\bsetHeaderTool\b[^}]*\} from "\.\./dom\.js"', router)
     register = router[router.index("export function registerHeaderTool") :]

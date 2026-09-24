@@ -2,7 +2,7 @@
    Phase 2 and Phase 3a add screens; they do not redraw the old ones. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, $, $$, HTML } from "./harness.mjs";
+import { load, go, ev, settle, $, $$, HTML } from "./harness.mjs";
 
 test("the lifecycle overview is unchanged", () => {
   const dom = load("#/");
@@ -16,10 +16,15 @@ test("the lifecycle overview is unchanged", () => {
      "#/uc/order-fulfillment", "#/uc/fault-prediction", "#/uc/payment-propensity",
      "#/uc/rca", "#/uc/win-back-campaign"],
   );
-  assert.equal($(dom, ".h1").textContent, "Marketing AI");
-  assert.equal($(dom, ".sub").textContent, "Customer Lifecycle");
-  assert.equal($(dom, ".hint").textContent,
-    "Select a use case to see its Data → Model → Output pipeline.");
+  // v1: the breadcrumb root is Home, the H1 is the journey, one sentence says what to do, and one
+  // toggletip about the colours replaces the legend and the per-stage type chips
+  assert.equal($(dom, ".crumbs").textContent, "Home");
+  assert.equal($(dom, ".h1").textContent, "Customer Lifecycle");
+  assert.match($(dom, ".desc").textContent, /^Pick what you want to predict or improve\./);
+  assert.match($(dom, ".desc .tt-pop").textContent, /Predictive AI.*Generative AI.*Hybrid/);
+  assert.equal($(dom, ".legend"), null);
+  assert.equal($(dom, ".stage-col .chip.type"), null);
+  assert.ok($(dom, ".foryou"), "a 'For you' line with one next step");
 });
 
 test("every use-case definition text is unchanged", () => {
@@ -69,7 +74,7 @@ test("the three setup steps and the run states still exist", async () => {
   assert.equal($(dom, "#f-run").disabled, false);
   $(dom, "#f-setup").dispatchEvent(new dom.window.Event("submit", { cancelable: true }));
   assert.ok($(dom, ".progress"), "running state renders a progress list");
-  await new Promise((r) => setTimeout(r, 1200));
+  await settle(dom);
   assert.ok($(dom, ".results"), "results state renders");
   assert.equal($$(dom, ".flow .block").length, 3);
 });

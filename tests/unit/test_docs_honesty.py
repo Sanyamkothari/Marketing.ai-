@@ -257,3 +257,36 @@ def test_every_environment_variable_named_is_real(document: tuple[str, str]) -> 
         "follows this document gets no error and no effect - which is the failure DEC-304 exists "
         "to make impossible to ship."
     )
+
+
+def test_every_setting_has_a_row_in_the_deployment_field_table(deployment_doc: str) -> None:
+    """A `Settings` field nobody documented is one a deployment cannot know to set (DEC-867).
+
+    Checked as a row of the §3.2 table - field, then its variable - rather than as a mention
+    anywhere, so a variable quoted in passing does not stand in for the row that says its default,
+    who needs it and whether `cdk deploy` writes it.
+    """
+    missing = [
+        variable
+        for field, variable in ENV_VARS.items()
+        if not re.search(rf"^\| `{re.escape(field)}` \| `{re.escape(variable)}` \|", deployment_doc, re.M)
+    ]
+    assert not missing, (
+        f"{DEPLOYMENT_DOC}'s field table (§3.2) has no row for {missing}. Add one in the existing "
+        "format: field, environment variable, SSM parameter, default, needed by, written by cdk deploy."
+    )
+
+
+def test_the_operator_guide_describes_the_sign_in_throttle(repo_root: Path) -> None:
+    """`docs/PRODUCTION.md` once said there was no rate limiting; now it has to say how it works."""
+    guide = (repo_root / "docs/PRODUCTION.md").read_text(encoding="utf-8")
+    assert "no login rate limiting" not in guide.lower()
+    for field in (
+        "login_max_failures_per_account",
+        "login_max_failures_per_address",
+        "login_failure_window_seconds",
+        "login_lockout_seconds",
+        "trusted_proxy_hops",
+    ):
+        assert ENV_VARS[field] in guide, field
+    assert "trusted_proxy_hops=1" in guide, "why a deployment behind the ALB trusts one hop"

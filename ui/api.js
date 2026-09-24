@@ -71,7 +71,13 @@ export const postRun = (payload) =>
     body: JSON.stringify(payload),
   });
 
-export const getRuns = (useCaseId) => request(`/runs?use_case=${encodeURIComponent(useCaseId)}`);
+/** `mode` and `clientId` narrow the history with the filters `GET /runs` already takes. */
+export function getRuns(useCaseId, { mode, clientId } = {}) {
+  const query = new URLSearchParams({ use_case: useCaseId });
+  if (mode) query.set("mode", mode);
+  if (clientId) query.set("client_id", clientId);
+  return request(`/runs?${query}`);
+}
 
 export const getRun = (runId) => request(`/runs/${encodeURIComponent(runId)}`);
 

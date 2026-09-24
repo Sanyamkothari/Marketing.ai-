@@ -1290,6 +1290,51 @@ def test_types_compatible(expected: ColumnType, actual: ColumnType, compatible: 
     assert v.types_compatible(expected, actual) is compatible
 
 
+def _flag_schema() -> FeatureSchema:
+    """One `Partner` column recorded as `register` records a Yes/No flag: typed by its dtype."""
+    return FeatureSchema(
+        use_case_id="telco-churn",
+        model_version_id="m_telco-churn_1",
+        primary_key="customerID",
+        target="Churn",
+        problem_type=ProblemType.BINARY_CLASSIFICATION,
+        columns=(
+            FeatureSchemaColumn(name="Partner", inferred_type=ColumnType.STRING, categories=("No", "Yes")),
+        ),
+        row_count_at_fit=100,
+        created_at=FIXED_NOW,
+    )
+
+
+@pytest.mark.parametrize(
+    "values",
+    [["Yes", "No", "Yes", None], ["yes", "no", "no", "yes"], ["Y", "N", "N", "Y"]],
+)
+def test_a_text_flag_fitted_as_string_is_not_a_changed_type(values: list[str | None]) -> None:
+    """DEC-956: `schema.json` says `string` for a Yes/No flag, ingest's inference says `boolean`."""
+    frame = pd.DataFrame({"customerID": ["C-1", "C-2", "C-3", "C-4"], "Partner": values})
+    assert v.derive_facts(frame).types["Partner"] is ColumnType.BOOLEAN
+
+    result = v.check_schema_mismatch(frame, v.CheckParams(primary_key="customerID", schema=_flag_schema()))
+
+    assert result.findings == ()
+
+
+@pytest.mark.parametrize(
+    "values",
+    [[1, 0, 1, 0], [True, False, True, False]],
+    ids=["zero-one-numbers", "real-bool-dtype"],
+)
+def test_a_flag_that_stopped_being_text_is_still_a_changed_type(values: list[object]) -> None:
+    """The DEC-956 bridge is for the same text read two ways, not for a column recoded as numbers."""
+    frame = pd.DataFrame({"customerID": ["C-1", "C-2", "C-3", "C-4"], "Partner": values})
+
+    result = v.check_schema_mismatch(frame, v.CheckParams(primary_key="customerID", schema=_flag_schema()))
+
+    (finding,) = result.findings
+    assert finding.details["type_changed"] == [{"name": "Partner", "expected": "string", "actual": "boolean"}]
+
+
 def test_score_mode_runs_the_pk_checks_but_no_training_checks() -> None:
     use_case_id = USE_CASE_IDS[0]
     config = config_for(use_case_id)

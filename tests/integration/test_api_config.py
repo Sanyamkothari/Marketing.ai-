@@ -166,7 +166,7 @@ def test_use_case_body_validates_and_carries_the_setup_screen(client: TestClient
     assert len(body.running_rows.train) == 5
     assert len(body.running_rows.score) == 4
     assert body.problem_type_label == "Classification (yes / no)"
-    assert body.target.label == "Target column"
+    assert body.target.label == "What to predict (outcome column)"
     assert body.setup.template_url == f"/use-cases/{DEMO_ID}/template.csv"
     assert body.setup.template_readme_url == f"/use-cases/{DEMO_ID}/template_README.md"
 
@@ -174,7 +174,7 @@ def test_use_case_body_validates_and_carries_the_setup_screen(client: TestClient
 def test_model_choices_start_with_automl_and_use_catalog_labels(client: TestClient) -> None:
     body = UseCaseResponse.model_validate(client.get(f"/use-cases/{DEMO_ID}").json())
     first = body.setup.model_choices[0]
-    assert (first.value, first.label) == ("__automl__", "AutoML (recommended)")
+    assert (first.value, first.label) == ("__automl__", "Best model, picked automatically (recommended)")
     assert "Random Forest" in [choice.label for choice in body.setup.model_choices]
     assert all(choice.enabled for choice in body.setup.model_choices)
 
@@ -370,6 +370,17 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/uplift/{name}",
         "/runs/{run_id}/campaign-results",
         "/runs/{run_id}/uplift/ope",
+        # Plan E (pilot readiness): help, the data request kit, the reports, demo mode, feedback
+        "/pilot/help",
+        "/pilot/data-request",
+        "/pilot/templates/{role}",
+        "/pilot/readiness/{dataset_id}",
+        "/pilot/results",
+        "/pilot/roi/{run_id}",
+        "/pilot/demo",
+        "/pilot/demo/raw/{variant}",
+        "/pilot/feedback",
+        "/pilot/feedback/export",
         # Phase 4b M46/M47: sign-in, user management and the audit viewer
         "/auth/login",
         "/auth/logout",
@@ -405,6 +416,11 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/monitoring/alerts",
         "/monitoring/alerts/{alert_id}/acknowledge",
         "/monitoring/missed-firings",
+        # Plan D M54: the Approver's screen, rejecting a challenger, and background erasure
+        "/approvals",
+        "/models/{model_id}/reject",
+        "/privacy/erasure/{request_id}/retry",
+        "/privacy/erasure/{request_id}/progress",
     }
 
 

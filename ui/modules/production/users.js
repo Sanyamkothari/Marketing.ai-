@@ -2,7 +2,7 @@
 //
 // Everything on it is a call to `api/routes/auth.py`, and every rule it shows is the server's:
 // * Roles are a set (DEC-703). Viewer is implied by any role, so the checkboxes list all four and the
-//   server adds Viewer; Admin does not imply Approver or Analyst, and the hint under the checkboxes
+//   server adds Viewer; Admin does not imply Approver or Analyst, and the line under the checkboxes
 //   says so, because "the Admin cannot approve" otherwise reads like a bug.
 // * The last enabled Admin cannot be disabled or demoted (`409 LAST_ADMIN`, DEC-712); the server's
 //   sentence is shown in place, under the row that was being changed.
@@ -11,75 +11,89 @@
 //   a removed role disappears from the screen, or - when the session was revoked - the browser goes
 //   straight to the sign-in form (DEC-791) rather than failing on the next click.
 //
+// v1: the list comes first; "Add user" is the one primary action and opens the form (at once when
+// nobody has an account). Disabling someone is set apart as a quiet red button and asks twice; only the
+// "Yes, disable" of that second step is filled red. Your own row offers no Disable: signing yourself
+// out everywhere is never one click away. "Added" names who added the person, never their id; the
+// bootstrap account reads "Set up at install".
+//
 // Passwords are read from their inputs on submit and never kept in state or echoed back; setting
 // your own password here needs your current one, exactly as `POST /users/{id}/password` requires.
 
-import { EM_DASH, errorBox, esc, fmtStamp, pageHead } from "../../dom.js";
+import { EM_DASH, errorBox, esc, fmtDate, headActions, noticeCard } from "../../dom.js";
 import { getUsers, patchUser, postPassword, postUser } from "./api.js";
-import { can, currentMe, loadMe, reasonFor } from "./session.js";
+import { dangerConfirm, personName, refusal, rememberPeople, rowsTable, screenHead, spanRow } from "./controls.js";
+import { can, currentMe, loadMe, reasonFor, sessionStatus } from "./session.js";
 import { ROLE_LABEL, roleChips } from "./userbar.js";
 
 export const ROLES = ["viewer", "analyst", "approver", "admin"];
 
 export const ROLE_HINT = {
-  viewer: "see every result",
-  analyst: "upload, build, train, score and generate",
-  approver: "approve champions and campaign copy",
-  admin: "users, the audit log and settings",
+  viewer: "Sees every result and report.",
+  analyst: "Uploads data, trains and scores models, and writes campaign copy.",
+  approver: "Approves new models and campaign copy.",
+  admin: "Manages people, the audit log, privacy and settings.",
 };
+
+const COLUMNS = 5;
 
 const state = {
   users: null,
   loadError: null,
+  adding: false, // the Add user form is open
   createError: null,
   creating: false,
   created: null, // username of the last user added, for the confirmation line
   editing: null, // { userId, mode: "roles" | "password" }
+  confirmDisable: null, // user id awaiting "Yes, disable"
   rowError: null, // { userId, error }
   rowNotice: null, // { userId, text }
   busy: false,
 };
 
-export const tabsHtml = (current) =>
-  `<div class="tabs-bar" style="margin-bottom:8px"><div class="tabs">${[
-    ["users", "Users", "#/admin/users"],
-    ["audit", "Audit log", "#/admin/audit"],
-  ]
-    .map(([key, label, href]) => `<a class="tab${key === current ? " on" : ""}" href="${href}">${label}</a>`)
-    .join("")}</div></div>`;
+/** The Admin screens' header: Home › Admin › <title>. */
+export const adminHead = (title, desc, actions = "") =>
+  screenHead({ trail: [{ label: "Admin", href: "#/admin/users" }], title, desc, actions });
 
-export const adminHead = (title, desc) =>
-  pageHead(
-    `<a class="back" href="#/">‹&nbsp; Customer Lifecycle</a><h1 class="h1">${esc(title)}</h1><p class="desc">${desc}</p>`,
-  );
+/** Kept for callers of the earlier tab strip; the top bar's Admin menu now links the Admin screens. */
+export const tabsHtml = () => "";
 
 function roleBoxes(name, checked) {
-  return `<div class="pb-roles" role="group" aria-label="Roles">${ROLES.map(
+  return `<fieldset class="pb-fieldset"><legend class="sub">Roles</legend><div class="pb-roles" role="group" aria-label="Roles">${ROLES.map(
     (role) =>
-      `<label title="${esc(ROLE_HINT[role])}"><input type="checkbox" name="${esc(name)}" value="${role}"${
-        checked.includes(role) ? " checked" : ""
-      }>${esc(ROLE_LABEL[role])}</label>`,
-  ).join("")}</div><p class="fhint" style="margin:6px 0 0">Viewer is implied by any role. Admin does not include Approver or Analyst: grant them separately.</p>`;
+      `<label><input type="checkbox" name="${esc(name)}" value="${role}"${checked.includes(role) ? " checked" : ""}><span>${esc(
+        ROLE_LABEL[role],
+      )}</span><span class="pb-hint">${esc(ROLE_HINT[role])}</span></label>`,
+  ).join("")}</div><p class="pb-hint">Everyone can see results. Admin does not include Approver or Analyst: tick them separately.</p></fieldset>`;
 }
 
-function createCard() {
+const input = (id, label, { type = "text", attrs = "", hint = "" } = {}) =>
+  `<label class="field pb-field"><span class="sub">${esc(label)}</span><span class="control"><input id="${id}" type="${type}" ${attrs}></span>${
+    hint ? `<span class="pb-hint">${esc(hint)}</span>` : ""
+  }</label>`;
+
+function addCard() {
   const refused = reasonFor("POST", "/users");
-  if (refused) return `<section class="card"><h3>Add a user</h3><p class="empty">${esc(refused)}</p></section>`;
-  return `<section class="card"><h3>Add a user</h3><div class="form-body">
-    <form id="pb-create" class="pb-form wide" novalidate autocomplete="off">
+  const open = state.adding || (state.users && !state.users.length);
+  const body = refused
+    ? `<p class="pb-note">${esc(refused)}</p>`
+    : `<form id="pb-create" class="pb-stack" novalidate autocomplete="off">
       <div class="frow">
-        <label class="pb-field field"><span class="sub">Username</span><input class="pb-input" id="pb-new-username" autocapitalize="none" spellcheck="false" required></label>
-        <label class="pb-field field"><span class="sub">Display name (optional)</span><input class="pb-input" id="pb-new-display"></label>
-        <label class="pb-field field"><span class="sub">First password · 12+ characters</span><input class="pb-input" id="pb-new-password" type="password" autocomplete="new-password" required></label>
+        ${input("pb-new-username", "Username", { attrs: 'autocapitalize="none" spellcheck="false" required' })}
+        ${input("pb-new-display", "Display name (optional)")}
+        ${input("pb-new-password", "First password", {
+          type: "password",
+          attrs: 'autocomplete="new-password" required',
+          hint: "At least 12 characters.",
+        })}
       </div>
       ${roleBoxes("pb-new-role", ["viewer"])}
-      <div class="actions"><button type="submit" class="run" id="pb-create-submit"${state.creating ? " disabled" : ""}>${
+      <div class="pb-form-actions"><button type="submit" class="btn primary" id="pb-create-submit"${state.creating ? " disabled" : ""}>${
         state.creating ? "Adding…" : "Add user"
-      }</button><span class="reason">Give the password to the person another way; they can change it after signing in.</span></div>
+      }</button><button type="button" class="btn quiet" data-add-close>Cancel</button><span class="reason">Give the password to the person another way; they can change it after signing in.</span></div>
     </form>
-    ${state.createError ? errorBox(state.createError) : ""}
-    ${state.created ? `<div class="pb-ok" role="status">${esc(state.created)} was added.</div>` : ""}
-  </div></section>`;
+    ${state.createError ? errorBox(state.createError) : ""}`;
+  return `<section class="card" id="pb-add"${open ? "" : " hidden"}><h3>Add a user</h3><div class="card-body">${body}</div></section>`;
 }
 
 function editPanel(user, me) {
@@ -88,71 +102,130 @@ function editPanel(user, me) {
   const own = me && me.principal.user_id === user.user_id;
   const body =
     editing.mode === "roles"
-      ? `<form class="pb-form wide" data-form="roles" data-user="${esc(user.user_id)}">${roleBoxes(
+      ? `<form class="pb-stack" data-form="roles" data-user="${esc(user.user_id)}">${roleBoxes(
           "pb-edit-role",
           user.roles,
-        )}<div class="pb-row-actions"><button type="submit" class="run" data-save>Save roles</button><button type="button" class="linkbtn" data-cancel>Cancel</button>${
+        )}<div class="pb-row-actions"><button type="submit" class="btn primary sm" data-save>Save roles</button><button type="button" class="btn quiet sm" data-cancel>Cancel</button>${
           own ? `<span class="reason">Changing your own roles signs you out.</span>` : ""
         }</div></form>`
-      : `<form class="pb-form wide" data-form="password" data-user="${esc(user.user_id)}" autocomplete="off"><div class="frow">${
+      : `<form class="pb-stack" data-form="password" data-user="${esc(user.user_id)}" autocomplete="off"><div class="frow">${
           own
-            ? `<label class="pb-field field"><span class="sub">Your current password</span><input class="pb-input" data-current type="password" autocomplete="current-password"></label>`
+            ? `<label class="field pb-field"><span class="sub">Your current password</span><span class="control"><input data-current type="password" autocomplete="current-password"></span></label>`
             : ""
-        }<label class="pb-field field"><span class="sub">New password · 12+ characters</span><input class="pb-input" data-password type="password" autocomplete="new-password"></label></div><div class="pb-row-actions"><button type="submit" class="run" data-save>Set password</button><button type="button" class="linkbtn" data-cancel>Cancel</button><span class="reason">${
+        }<label class="field pb-field"><span class="sub">New password</span><span class="control"><input data-password type="password" autocomplete="new-password"></span><span class="pb-hint">At least 12 characters.</span></label></div><div class="pb-row-actions"><button type="submit" class="btn primary sm" data-save>Set password</button><button type="button" class="btn quiet sm" data-cancel>Cancel</button><span class="reason">${
           own ? "This signs you out everywhere." : "This signs them out everywhere."
         }</span></div></form>`;
-  return `<tr class="pb-edit-row"><td colspan="6" class="pb-edit">${body}</td></tr>`;
+  return `<tr class="pb-edit-row"><td colspan="${COLUMNS}" class="pb-edit">${body}</td></tr>`;
 }
 
 function rowMessage(user) {
   const error = state.rowError && state.rowError.userId === user.user_id ? state.rowError.error : null;
   const notice = state.rowNotice && state.rowNotice.userId === user.user_id ? state.rowNotice.text : null;
   if (!error && !notice) return "";
-  return `<tr><td colspan="6">${error ? errorBox(error) : `<div class="pb-ok" role="status">${esc(notice)}</div>`}</td></tr>`;
+  return spanRow(COLUMNS, error ? errorBox(error) : `<div class="pb-ok" role="status">${esc(notice)}</div>`);
+}
+
+function actionsFor(user, own) {
+  if (!can("PATCH", "/users/{user_id}")) {
+    return `<span class="pb-small">${esc(reasonFor("PATCH", "/users/{user_id}") || EM_DASH)}</span>`;
+  }
+  const id = esc(user.user_id);
+  if (state.confirmDisable === user.user_id) {
+    return `<div class="pb-row-actions">${dangerConfirm(
+      `Disable ${user.username} and sign them out?`,
+      `<button type="button" class="btn danger confirm sm" data-toggle="disable" data-confirm data-user="${id}">Yes, disable</button>`,
+      "data-toggle-keep",
+    )}</div>`;
+  }
+  const toggle = user.disabled
+    ? `<button type="button" class="btn secondary sm" data-toggle="enable" data-user="${id}">Enable</button>`
+    : own
+      ? ""
+      : `<button type="button" class="btn quiet sm pb-quiet-bad" data-toggle="disable" data-user="${id}">Disable</button>`;
+  return `<div class="pb-row-actions"><button type="button" class="btn quiet sm" data-edit="roles" data-user="${id}">Change roles</button><button type="button" class="btn quiet sm" data-edit="password" data-user="${id}">Set password</button><span class="spacer"></span>${toggle}</div>`;
+}
+
+/** "24 Sept 2026 by admin-person", or "Set up at install" for the account the installer made. */
+function addedText(user) {
+  if (user.created_by === "system:bootstrap") return "Set up at install";
+  const when = fmtDate(user.created_at);
+  const who = user.created_by ? personName(user.created_by) : null;
+  return who ? `${when} by ${who}` : when;
 }
 
 function userRow(user, me) {
   const own = me && me.principal.user_id === user.user_id;
-  const mayChange = can("PATCH", "/users/{user_id}");
-  const actions = mayChange
-    ? `<div class="pb-row-actions"><button type="button" class="linkbtn" data-edit="roles" data-user="${esc(
-        user.user_id,
-      )}">Change roles</button><button type="button" class="linkbtn" data-toggle="${
-        user.disabled ? "enable" : "disable"
-      }" data-user="${esc(user.user_id)}">${user.disabled ? "Enable" : "Disable"}</button><button type="button" class="linkbtn" data-edit="password" data-user="${esc(
-        user.user_id,
-      )}">Set password</button></div>`
-    : `<span class="pb-small">${esc(reasonFor("PATCH", "/users/{user_id}") || EM_DASH)}</span>`;
-  return `<tr data-row="${esc(user.user_id)}">
-    <td>${esc(user.username)}${own ? ` <span class="pb-small">(you)</span>` : ""}</td>
-    <td>${esc(user.display_name || EM_DASH)}</td>
-    <td>${roleChips(user.roles)}</td>
-    <td>${user.disabled ? `<span class="pill bad">Disabled</span>` : `<span class="pill ok">Active</span>`}</td>
-    <td>${esc(fmtStamp(user.created_at))}<div class="pb-small">by ${esc(user.created_by)}</div></td>
-    <td>${actions}</td>
-  </tr>${editPanel(user, me)}${rowMessage(user)}`;
+  const name = user.display_name && user.display_name !== user.username ? `<div class="pb-small">${esc(user.display_name)}</div>` : "";
+  return {
+    attrs: `data-row="${esc(user.user_id)}"`,
+    cells: [
+      `${esc(user.username)}${own ? ` <span class="pb-small">(you)</span>` : ""}${name}`,
+      roleChips(user.roles),
+      user.disabled
+        ? `<span class="pill bad" data-status="disabled">Disabled</span>`
+        : `<span class="pill ok" data-status="active">Active</span>`,
+      esc(addedText(user)),
+      actionsFor(user, own),
+    ],
+    after: `${editPanel(user, me)}${rowMessage(user)}`,
+  };
 }
 
+/** Active people first, then by username. */
+const byStatusThenName = (a, b) =>
+  Number(Boolean(a.disabled)) - Number(Boolean(b.disabled)) || String(a.username).localeCompare(String(b.username));
+
 function listCard(me) {
-  if (state.loadError) return `<section class="card"><h3>People</h3>${errorBox(state.loadError)}</section>`;
-  if (!state.users) return `<section class="card"><h3>People</h3><p class="loading" style="padding:16px 20px">Loading…</p></section>`;
-  if (!state.users.length) {
-    return `<section class="card"><h3>People</h3><p class="empty">Nobody has an account yet. Add the first user above, or run <code class="colchip">python -m scripts.create_user</code> on the server.</p></section>`;
+  if (state.loadError) {
+    return `<section class="card"><h3>People</h3><div class="card-body">${errorBox(state.loadError, {
+      title: "We could not load the people list.",
+      retry: true,
+    })}</div></section>`;
   }
-  return `<section class="card"><h3>People · ${state.users.length}</h3><div class="tbl-wrap"><table>
-    <thead><tr><th>Username</th><th>Name</th><th>Roles</th><th>Status</th><th>Added</th><th></th></tr></thead>
-    <tbody>${state.users.map((user) => userRow(user, me)).join("")}</tbody></table></div></section>`;
+  if (!state.users) return `<section class="card"><h3>People</h3><p class="loading pb-pad">Loading…</p></section>`;
+  const created = state.created ? `<div class="card-body"><div class="pb-ok" role="status">${esc(state.created)} was added.</div></div>` : "";
+  if (!state.users.length) {
+    return `<section class="card"><h3>People</h3><div class="empty-state"><p class="es-t">Nobody has an account yet.</p><p>Add the first person with the form below. Everyone you add signs in with their own username and password.</p></div>
+      <div class="card-body"><details class="tech"><summary>For administrators</summary><p>An account can also be created on the server with <code>python -m scripts.create_user</code>.</p></details></div></section>`;
+  }
+  const rows = [...state.users].sort(byStatusThenName).map((user) => userRow(user, me));
+  return `<section class="card"><h3>People · ${state.users.length} <span class="sort-note">(active first, then by name)</span></h3>${created}${rowsTable(
+    [{ label: "Person" }, { label: "Roles" }, { label: "Status" }, { label: "Added" }, { label: "", sr: "Actions" }],
+    rows,
+    { cls: "pb-users" },
+  )}</section>`;
+}
+
+function signInOffNotice() {
+  if (sessionStatus() !== "off") return "";
+  return noticeCard({
+    title: "Sign-in is turned off",
+    text: "Everyone uses Marketing AI without an account on this installation, so the people below cannot sign in yet. An administrator can turn sign-in on.",
+  });
 }
 
 export function usersHtml() {
   const me = currentMe();
   const refused = reasonFor("GET", "/users");
+  const mayAdd = !refused && !reasonFor("POST", "/users");
   const head = adminHead(
     "Users",
-    "Who can sign in and what each may do. Every change here is written to the audit log.",
+    "Who can sign in and what each person may do. Every change here is written to the audit log.",
+    refused
+      ? ""
+      : headActions({
+          primary: mayAdd
+            ? {
+                label: "Add user",
+                id: "pb-add-open",
+                kind: state.adding || (state.users && !state.users.length) ? "secondary" : "primary",
+                attrs: `aria-controls="pb-add" aria-expanded="${state.adding}"`,
+              }
+            : null,
+        }),
   );
-  if (refused) return `<main class="screen">${head}${tabsHtml("users")}<div class="apierr" role="alert"><b>ROLE_REQUIRED</b>${esc(refused)}</div></main>`;
-  return `<main class="screen">${head}${tabsHtml("users")}<div class="stack">${createCard()}${listCard(me)}</div></main>`;
+  if (refused) return `<main class="screen pb-screen">${head}${refusal(refused)}</main>`;
+  return `<main class="screen pb-screen">${head}<div class="stack">${signInOffNotice()}${listCard(me)}${addCard()}</div></main>`;
 }
 
 /** Load the list. Keeps the previous list on screen while it reloads. */
@@ -160,6 +233,7 @@ export async function loadUsers() {
   try {
     const body = await getUsers();
     state.users = body.users || [];
+    rememberPeople(state.users);
     state.loadError = null;
   } catch (error) {
     state.loadError = error;
@@ -167,7 +241,7 @@ export async function loadUsers() {
 }
 
 function selectedRoles(form, name) {
-  return [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((input) => input.value);
+  return [...form.querySelectorAll(`input[name="${name}"]:checked`)].map((field) => field.value);
 }
 
 /** After a change to the signed-in person: re-read `/auth/me` - a revoked session goes to sign-in. */
@@ -181,6 +255,7 @@ async function run(userId, action, repaint, notice) {
   state.busy = true;
   state.rowError = null;
   state.rowNotice = null;
+  state.confirmDisable = null;
   try {
     await action();
     state.editing = null;
@@ -212,6 +287,7 @@ export function bindUsers(root, repaint) {
       try {
         const user = await postUser(payload);
         state.created = user.username;
+        state.adding = false;
         await loadUsers();
       } catch (error) {
         state.createError = error;
@@ -226,9 +302,25 @@ export function bindUsers(root, repaint) {
   main.addEventListener("click", (event) => {
     const target = event.target;
     if (!target || !target.closest) return;
+    if (target.closest("#pb-add-open")) {
+      state.adding = !state.adding;
+      state.createError = null;
+      repaint();
+      if (state.adding) {
+        const field = document.getElementById("pb-new-username");
+        if (field) field.focus();
+      }
+      return;
+    }
+    if (target.closest("[data-add-close]")) {
+      state.adding = false;
+      repaint();
+      return;
+    }
     const edit = target.closest("[data-edit]");
     if (edit) {
       state.editing = { userId: edit.dataset.user, mode: edit.dataset.edit };
+      state.confirmDisable = null;
       state.rowError = null;
       state.rowNotice = null;
       repaint();
@@ -239,10 +331,24 @@ export function bindUsers(root, repaint) {
       repaint();
       return;
     }
+    if (target.closest("[data-toggle-keep]")) {
+      state.confirmDisable = null;
+      repaint();
+      return;
+    }
     const toggle = target.closest("[data-toggle]");
     if (toggle && !state.busy) {
       const userId = toggle.dataset.user;
       const disabled = toggle.dataset.toggle === "disable";
+      if (disabled && !("confirm" in toggle.dataset)) {
+        // the first click only asks: disabling signs the person out everywhere
+        state.confirmDisable = userId;
+        state.editing = null;
+        state.rowError = null;
+        state.rowNotice = null;
+        repaint();
+        return;
+      }
       run(userId, () => patchUser(userId, { disabled }), repaint, disabled ? "Disabled and signed out." : "Enabled.");
     }
   });
@@ -269,10 +375,12 @@ export function _resetUsersForTests() {
   Object.assign(state, {
     users: null,
     loadError: null,
+    adding: false,
     createError: null,
     creating: false,
     created: null,
     editing: null,
+    confirmDisable: null,
     rowError: null,
     rowNotice: null,
     busy: false,

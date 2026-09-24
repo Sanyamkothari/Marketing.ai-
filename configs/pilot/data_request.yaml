@@ -1,0 +1,108 @@
+# configs/pilot/data_request.yaml
+# The words of the client-facing data request (Plan E, M59). Everything that is a FACT about the
+# engine - which tables a use case reads, which columns, how much history - comes from the use-case
+# configs and configs/roles.yaml through engine/pilot/data_request.py; this file holds only the
+# wording those facts are dressed in, so the request can be reworded without touching code.
+# `make pilot-generate` renders docs/pilot/DATA_REQUEST.md from it; `tests/unit/pilot/` fails when
+# the committed file is stale, when a PII kind the engine detects is missing from `do_not_send`, or
+# when a sentence uses a word engine/pilot/plain.py calls jargon.
+
+schema_version: 1
+
+# The recommended first pilot (Plan E): one telecom client, churn first, then win-back with a
+# control group.
+default_use_cases: [telco-churn, win-back-campaign]
+
+# One entry per role in configs/roles.yaml. `file` is the name we ask for; `what` says what one row
+# is, in the client's words.
+tables:
+  entity:          {title: Customers,            file: customers.csv,       what: "One row per customer: who they are and what they have, as of the extract date."}
+  bills:           {title: Bills,                file: bills.csv,           what: "One row per invoice."}
+  payments:        {title: Payments,             file: payments.csv,        what: "One row per payment received."}
+  complaints:      {title: Complaints,           file: complaints.csv,      what: "One row per complaint or support ticket."}
+  usage:           {title: Usage,                file: usage.csv,           what: "One row per usage record (for example one row per customer per day)."}
+  campaign_events: {title: Campaign events,      file: campaign_events.csv, what: "One row per campaign contact: sent, opened, clicked or converted, and whether the customer was in the contacted or the held-back group."}
+  orders:          {title: Orders,               file: orders.csv,          what: "One row per order."}
+  plan_changes:    {title: Plan changes,         file: plan_changes.csv,    what: "One row per change of plan, tariff or package."}
+  activity:        {title: Activity,             file: activity.csv,        what: "One row each time the customer did something: a recharge, a call, a login, an app visit."}
+  other_event:     {title: Other events,         file: other_events.csv,    what: "Any other dated table about customers."}
+
+# Plain names of the kinds engine/pii.py detects. Every detector kind must appear here.
+do_not_send:
+  name: "Names (first, last or full)"
+  phone: "Phone or mobile numbers"
+  email: "E-mail addresses"
+  aadhaar: "Aadhaar numbers"
+  pan: "PAN numbers"
+  address: "Postal addresses and PIN codes tied to an address"
+  ssn: "Any other national ID number"
+  passport: "Passport or driving-licence numbers"
+do_not_send_notes:
+  - "Notes and remarks columns often contain phone numbers or e-mail addresses typed by an agent. Remove them, or strip contact details, before sending."
+  - "Bank account and card numbers are never needed."
+
+formats:
+  - "CSV (comma-separated, UTF-8, with one header row) or Parquet. One file per table."
+  - "Dates as YYYY-MM-DD (for example 2026-08-31). Date and time as YYYY-MM-DD HH:MM:SS."
+  - "Numbers without thousands separators or currency symbols (1499.00, not ₹1,499)."
+  - "Yes/no columns as Y and N, or 1 and 0 - the same way in every file."
+  - "Keep the column names the same from one extract to the next."
+
+pseudonymisation:
+  - "Replace every customer ID with a code before the files leave your systems. Use the same method, with the same secret key, in every file, so a customer has the same code in the bills file as in the customer file."
+  - "A good method is a keyed hash: code = HMAC-SHA256(secret key, customer ID), written as 64 hexadecimal characters. Keep the secret key on your side; Minfy never needs it."
+  - "Keep the key safe: when the pilot suggests an action for customer code X, only you can find customer X."
+  - "Do not use phone numbers, e-mail addresses or account numbers as the customer ID, even pseudonymised by hand."
+
+preflight:
+  - "Before sending, run the pre-flight checker on the folder of files: python -m scripts.preflight <folder> --use-case telco-churn (from the unzipped pilot kit)."
+  - "It reads the files on your laptop only. Nothing is uploaded; it writes one page, preflight_report.html, next to the files."
+  - "It lists row counts, date ranges, how well the tables link up, columns that look like personal details, and format problems. Fix anything marked as a problem and run it again."
+
+# What each use case learns from, in the client's words (the use-case configs describe the label
+# for engineers). A use case not listed here falls back to its config's label description.
+outcomes:
+  telco-churn: "whether the customer did anything at all in the 60 days after the date we predict from - no activity at all means they left"
+  win-back-campaign: "whether a customer who had gone quiet did something again within 90 days"
+
+# Column meanings for the client. The configs describe standard columns for the mapping screen; a
+# column listed here reads this sentence in the data request instead.
+column_meanings:
+  signup_date: "When the customer joined."
+  plan_type: "The plan or product the customer is on (for example prepaid or postpaid)."
+  region: "Where the customer is, in your own geography (circle, zone or state)."
+  monthly_charges: "What the customer is billed in a normal month."
+  marketing_opt_in: "Whether the customer agreed to marketing contact (Y or N). A do-not-disturb flag is fine too; tell us which one it is."
+  last_contacted_at: "Date of the last marketing contact, so nobody is contacted too often."
+  churn_reason: "Why the customer left, in your own reason codes; blank while they are active."
+  preferred_channel: "How the customer prefers to be contacted: SMS, e-mail or call."
+  tenure_months: "Months since the customer joined. Not needed if you send the join date."
+  segment: "Your own customer segment, if you have one."
+  text: "The complaint in the customer's own words. Optional: remove phone numbers and e-mail addresses typed into it."
+  treatment: "Whether the customer was in the contacted group (Y) or the held-back group (N) of that campaign."
+  campaign_id: "Which campaign the contact belongs to."
+  event_type: "What happened, in your own codes (for example sent, opened, converted, or recharge, call, login)."
+  status: "Your own invoice status (for example paid or overdue)."
+  resolved_time: "When the complaint was closed; blank while it is still open."
+  days_late: "Days after the due date the payment arrived; 0 or less means on time."
+
+# Engine words that reach the request through config descriptions, and the client's words for them.
+# Applied, longest first, to every sentence the request takes from a use-case config or roles.yaml.
+plain_phrases:
+  "the snapshot date": "the prediction date"
+  "snapshot dates": "prediction dates"
+  "snapshot date": "prediction date"
+  "snapshots": "prediction dates"
+  "snapshot": "prediction date"
+  "subscribers": "customers"
+  "subscriber": "customer"
+
+# Tables a use case needs beyond its features and outcome, and why. Win-back is run with a control
+# group (Plan E §1), and measuring a campaign needs its contacts: who was contacted or held back,
+# in which campaign, and what happened.
+extra_tables:
+  win-back-campaign:
+    - role: campaign_events
+      need: required
+      columns: [treatment, campaign_id, event_type]
+      why: "the contacted and held-back groups of past campaigns, which show how many customers a campaign really brought back"

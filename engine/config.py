@@ -2188,7 +2188,7 @@ _SUMMARY_TEMPLATES: Final[Mapping[str, str]] = {
         " · threshold {evaluation.threshold.mode}"
         "{?evaluation.shap: · top {evaluation.reasons_per_row} SHAP reasons}"
         "{?evaluation.fairness_column: · fairness by {evaluation.fairness_column}}"
-        " · champion if +{evaluation.champion_min_improvement_pct}%"
+        " · replace the model in use if +{evaluation.champion_min_improvement_pct}%"
     ),
     "monitoring": (
         "Drift alert PSI > {monitoring.drift_psi_threshold} · retrain: {monitoring.retraining}"
@@ -2197,7 +2197,7 @@ _SUMMARY_TEMPLATES: Final[Mapping[str, str]] = {
     "governance": (
         "Keep uploads {governance.retention_days} days"
         "{?governance.consent_column: · consent: {governance.consent_column}}"
-        "{?governance.approval_required: · approval before champion}"
+        "{?governance.approval_required: · approval before a model becomes the one in use}"
     ),
 }
 
@@ -2551,7 +2551,7 @@ def _stage_specs(bands: Sequence[Band]) -> tuple[StageSpec, ...]:
         ),
         FieldSpec(
             path="evaluation.champion_min_improvement_pct",
-            label="Replace champion if better by (%)",
+            label="Replace the model in use if better by (%)",
             type=FieldType.NUMBER,
             widget=Widget.NUMBER,
             min=0,
@@ -2657,7 +2657,7 @@ def _stage_specs(bands: Sequence[Band]) -> tuple[StageSpec, ...]:
         ),
         FieldSpec(
             path="governance.approval_required",
-            label="Require approval before a model becomes champion",
+            label="Require approval before a model becomes the model in use",
             type=FieldType.BOOLEAN,
             widget=Widget.CHECKBOX,
             order=3,
@@ -3751,3 +3751,5 @@ ResolvedConfig.model_rebuild()
 # `UseCaseConfig.model_rebuild()` above runs before this block, so a forward reference to a class
 # defined here would fail it. That module imports nothing from this one (DEC-601).
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# ---- END PLAN-E ----

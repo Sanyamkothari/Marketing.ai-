@@ -128,6 +128,12 @@ class UpliftConfig(BaseModel):
     time_limit_minutes: Annotated[int, Field(ge=1, le=240)] = Field(
         default=10, json_schema_extra=_editable(False)
     )
+    drift_treated_share_tolerance: Annotated[float, Field(ge=0.0, le=0.5)] = Field(
+        default=0.05, json_schema_extra=_editable(False)
+    )
+    """How far a scoring file's treated share may move from training's before the uplift drift check
+    says so: `|current - training| <= tolerance` (M53, DEC-857). An absolute difference, not a
+    significance test, because on a large file a z-test flags differences too small to matter."""
     segments: UpliftSegmentsConfig = UpliftSegmentsConfig()
     policy: UpliftPolicyConfig = UpliftPolicyConfig()
 

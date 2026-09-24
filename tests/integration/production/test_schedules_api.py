@@ -10,6 +10,7 @@ submitted, and a run's end is written by the test. The one test that trains is i
 
 from __future__ import annotations
 
+import logging
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -22,8 +23,8 @@ from fastapi.testclient import TestClient
 from moto import mock_aws
 
 from api.routes.schedules import app_request, get_scheduler
-from engine.access.roles import SYSTEM_SCHEDULER
-from engine.contracts import RunRecord, RunState
+from engine.access.roles import SYSTEM_SCHEDULER, Role
+from engine.contracts import ModelStatus, RunRecord, RunState
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.runs import update_run
 from engine.scheduling.alerts import AlertKind, AlertQuery, AlertStore
@@ -31,7 +32,7 @@ from engine.scheduling.retraining import MANAGED_BY_RETRAINING
 from engine.scheduling.scheduler import EventBridgeScheduler, LocalScheduler, NullScheduler
 from engine.scheduling.schedules import Schedule
 from engine.storage import run_key
-from tests.integration.production.access_support import local_app
+from tests.integration.production.access_support import bearer, local_app, make_user
 from tests.integration.production.schedules_support import Api, build_api, code_of
 from tests.unit.production.scheduling_support import USE_CASE, register_champion
 from tests.unit.production.test_firing import training_frame
@@ -406,6 +407,55 @@ def test_a_manual_retrain_starts_a_training_run_and_never_touches_the_champion(a
     assert current is not None and current.model_id == champion.model_id
 
 
+def test_whoever_fires_a_retrain_by_hand_trained_its_challenger_and_cannot_approve_it(api: Api) -> None:
+    """DEC-889: "fire now" acts as the caller, so separation of duties (DEC-862) holds for it too.
+
+    A person holding Analyst and Approver fires a retrain; the run records them as `requested_by`
+    (not `system:scheduler`), and the challenger it produces - registered here as the register stage
+    would, since nothing trains - is refused to them and approved by another Approver.
+    """
+    trainer_id = make_user(api.app, "analyst-and-approver", [Role.ANALYST, Role.APPROVER])
+    trainer = bearer(api.app, trainer_id)
+    champion = register_champion(api.world, training_frame(api.world))
+    made = create(
+        api, "analyst", use_case_id=USE_CASE, kind="retrain", cadence="monthly", client_id=api.world.client_id
+    ).json()
+    fired = api.client.post(f"/schedules/{made['schedule_id']}/fire", headers=trainer)
+    assert fired.status_code == 201, fired.text
+    firing = fired.json()
+    assert (firing["status"], firing["result_code"]) == ("running", "TRAINING_STARTED"), firing
+    run = api.world.storage.read_model(run_key(firing["run_id"], "run.json"), RunRecord)
+    assert run.requested_by == trainer_id != SYSTEM_SCHEDULER.user_id
+    (event,) = api.events("schedules.fire")
+    assert event.actor_id == trainer_id
+
+    challenger = api.world.registry.register(
+        champion.model_copy(
+            update={
+                "model_id": f"m_{USE_CASE}_2",
+                "version": 2,
+                "run_id": firing["run_id"],
+                "status": ModelStatus.PENDING_APPROVAL,
+                "measured_against_champion_id": champion.model_id,
+                "promoted_at": None,
+                "promoted_by": None,
+                "promotion_note": None,
+                "previous_champion_id": None,
+            }
+        )
+    )
+    path = f"/models/{challenger.model_id}/approve"
+    body = {"approved_by": "x", "reason": "beats the champion"}
+    refused = api.client.post(path, json=body, headers=trainer)
+    assert refused.status_code == 403, refused.text
+    assert code_of(refused) == "SEPARATION_OF_DUTIES"
+    assert api.world.registry.get(challenger.model_id).status is ModelStatus.PENDING_APPROVAL
+
+    approved = api.client.post(path, json=body, headers=api.as_("approver"))
+    assert approved.status_code == 200, approved.text
+    assert api.world.registry.get(challenger.model_id).status is ModelStatus.CHAMPION
+
+
 # ---------------------------------------------------------------------------
 # managed retraining schedules
 # ---------------------------------------------------------------------------
@@ -430,6 +480,89 @@ def test_retraining_sync_creates_the_managed_schedule_which_can_be_paused_not_ed
     assert paused.status_code == 200 and paused.json()["enabled"] is False
     (event,) = api.events("schedules.retraining_sync")[-1:]
     assert event.details["count"] == 1
+
+
+def recipe_body(api: Api, *, labelled: bool) -> dict[str, Any]:
+    """`POST /clients/{id}/onboarding-specs`'s body for the world's recipe, with or without its label."""
+    spec = api.world.spec.model_dump(mode="json")
+    body = {
+        field: spec[field]
+        for field in (
+            "use_case",
+            "entity_source_id",
+            "event_source_ids",
+            "mapping_ids",
+            "feature_spec",
+            "label_spec",
+            "snapshot_spec",
+        )
+    }
+    if not labelled:
+        body["label_spec"] = None
+    return body
+
+
+def save_recipe(api: Api, *, labelled: bool) -> Any:
+    return api.client.post(
+        f"/clients/{api.world.client_id}/onboarding-specs",
+        json=recipe_body(api, labelled=labelled),
+        headers=api.as_("analyst"),
+    )
+
+
+def managed_schedules(api: Api) -> list[Schedule]:
+    return list(api.world.store.list(managed_by=MANAGED_BY_RETRAINING))
+
+
+@pytest.fixture
+def local_api(tmp_path: Path, config_root: Path) -> Api:
+    """A `local` backend whose startup never ran (no `with TestClient`), so nothing synced before the save."""
+    return build_api(tmp_path, config_root, scheduler_backend="local", scheduler_tick_seconds=3600)
+
+
+def test_saving_a_labelled_recipe_creates_its_retraining_schedule_at_once(local_api: Api) -> None:
+    assert managed_schedules(local_api) == [], "startup did not run, so nothing is synced yet"
+    unlabelled = save_recipe(local_api, labelled=False)
+    assert unlabelled.status_code == 201, unlabelled.text
+    assert (
+        managed_schedules(local_api) == []
+    ), "a recipe with no label trains nothing, so asks for no schedule"
+
+    labelled = save_recipe(local_api, labelled=True)
+    assert labelled.status_code == 201, labelled.text
+    (managed,) = managed_schedules(local_api)
+    assert (managed.client_id, managed.use_case_id) == (local_api.world.client_id, USE_CASE)
+    assert managed.kind.value == "drift_check" and managed.enabled
+
+    again = save_recipe(local_api, labelled=True)
+    assert again.status_code == 201, again.text
+    assert [schedule.schedule_id for schedule in managed_schedules(local_api)] == [managed.schedule_id]
+    synced = local_api.client.post("/schedules/retraining/sync", headers=local_api.as_("analyst")).json()
+    assert (synced["created"], synced["updated"], synced["removed"]) == ([], [], []), "same as the route"
+
+
+def test_a_failed_sync_is_logged_and_does_not_fail_the_save(
+    local_api: Api, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture
+) -> None:
+    def broken(*args: Any, **kwargs: Any) -> Any:
+        raise RuntimeError("customer value that must never reach the log")
+
+    monkeypatch.setattr("api.routes.schedules.sync_retraining_schedules", broken)
+    with caplog.at_level(logging.ERROR, logger="api.routes.schedules"):
+        response = save_recipe(local_api, labelled=True)
+    assert response.status_code == 201, response.text
+    saved = {spec.spec_id for spec in local_api.world.client_store.list_specs(local_api.world.client_id)}
+    assert response.json()["spec_id"] in saved, "the recipe was saved all the same"
+    messages = [record.getMessage() for record in caplog.records]
+    assert "scheduling.recipe_retraining_sync error=RuntimeError" in messages
+    assert not any("customer value" in message for message in messages)
+    assert managed_schedules(local_api) == []
+
+
+def test_backend_none_saves_a_labelled_recipe_without_touching_the_schedules(api: Api) -> None:
+    response = save_recipe(api, labelled=True)
+    assert response.status_code == 201, response.text
+    assert managed_schedules(api) == [], "startup syncs nothing for none, and neither does a save"
 
 
 # ---------------------------------------------------------------------------

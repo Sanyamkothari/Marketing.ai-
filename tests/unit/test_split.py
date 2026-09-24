@@ -146,6 +146,35 @@ def test_the_positive_label_is_auto_detected_when_the_config_omits_it() -> None:
     assert sum(part.positive_rows or 0 for part in report.parts) == 30
 
 
+def test_a_configured_label_the_run_target_does_not_hold_falls_back_to_auto_detection() -> None:
+    """DEC-958: a dataset run predicts its manifest's 0/1 column while the use case says `Yes`.
+
+    The demo's telco-churn run wrote `positive_rows 0` for a target 18.6 % positive, because the
+    configured label of `target.column` was matched against another column's values.
+    """
+    frame = labelled_frame(200, positive_rate=0.2)
+    frame = frame.rename(columns={"converted": "churn_next_60d"})
+    frame["entity_key"] = [index // 4 for index in range(200)]
+    config = config_for(
+        target={"column": "Churn", "positive_label": "Yes"},
+        split={"group_column": "entity_key"},
+    )
+
+    parts, report = split_dataset(frame, config, run_id=RUN_ID, target="churn_next_60d")
+
+    assert sum(part.positive_rows or 0 for part in report.parts) == 40
+    for part in report.parts:
+        assert part.positive_rows == int(parts[part.name]["churn_next_60d"].sum())
+
+
+def test_a_configured_label_on_a_one_valued_target_still_counts_no_positive() -> None:
+    frame = labelled_frame(60, positive_rate=0.0)
+
+    _, report = split_dataset(frame, config_for(), run_id=RUN_ID, target="converted")
+
+    assert [part.positive_rows for part in report.parts] == [0, 0, 0]
+
+
 # ---------------------------------------------------------------------------
 # group column
 # ---------------------------------------------------------------------------

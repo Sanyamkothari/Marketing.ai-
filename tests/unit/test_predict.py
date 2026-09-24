@@ -48,7 +48,7 @@ from engine.jobs import CancelToken
 from engine.registry import LocalModelRegistry
 from engine.stages.actions import assign_bands
 from engine.stages.prepare import fit_transforms, prepare_rows, split_dataset
-from engine.stages.register import drift_baseline
+from engine.stages.register import drift_baseline, feature_schema
 from engine.stages.score import (
     PREPARE_REPORT_FILENAME,
     SCORE_ERRORS,
@@ -816,6 +816,45 @@ def test_a_baseline_key_whose_file_is_gone_still_scores(
 
     assert result.drift is None
     assert len(result.scores) == 3
+
+
+def test_the_label_an_older_baseline_lists_is_left_out_of_the_drift_report(
+    storage: LocalStorage,
+    registry: LocalModelRegistry,
+    config: UseCaseConfig,
+    predictor: RecordingPredictor,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A model trained on a built dataset before DEC-957 stored its label in the baseline.
+
+    The label is the dataset's own (`converted_next_30d`), not the use case's `target.column`, and a
+    scoring file never has it: the report used to lead with it at the largest PSI there is. The
+    model's `schema.json` names the label it was trained with, and that is what is left out.
+    """
+    label = "converted_next_30d"
+    trained = training_frame().assign(**{label: [index % 2 for index in range(100)]})
+    legacy = drift_baseline(
+        trained, config, run_id=TRAIN_RUN, model_version_id=MODEL_ID, primary_key=PRIMARY_KEY
+    )
+    assert label in {feature.feature for feature in legacy.features}, "the fixture is an old baseline"
+    storage.write_model(run_key(TRAIN_RUN, "drift_baseline.json"), legacy)
+    storage.write_model(
+        run_key(TRAIN_RUN, "schema.json"),
+        feature_schema(trained, config, primary_key=PRIMARY_KEY, target=label, model_version_id=MODEL_ID),
+    )
+    write_prepare_report(storage, prepare_report())
+    patch_loader(monkeypatch, predictor)
+    register_champion(
+        registry,
+        predictor_key=store_model(storage),
+        drift_baseline_key=run_key(TRAIN_RUN, "drift_baseline.json"),
+    )
+
+    result = score(scoring_frame(), config, storage, registry)
+
+    assert result.drift is not None
+    assert {drift.feature for drift in result.drift.features} == set(FEATURES)
+    assert label not in result.drift.drifted_features
 
 
 def test_the_detail_line_reports_rows_the_model_and_drift(

@@ -8,10 +8,11 @@ They live here rather than in `engine/contracts.py` because that file's artefact
 immutable mapping built above the shared-file blocks (PARALLEL_WORK_PROTOCOL.md §4). Uplift keeps a
 registry of its own, :data:`UPLIFT_ARTEFACTS`, and `api/routes/uplift.py` serves from it (DEC-602).
 
-Uplift validation findings have the same five fields as `engine.contracts.ValidationCheck`, but
-their own code table: `ValidationCheck` accepts only the Phase 1 table, which tests pin at nineteen
-codes. Phase 2 met the same wall with `OnboardingCheck` (DEC-101); the request to unify all three
-behind a code registry is in `docs/CROSS_BRANCH_REQUESTS.md` (DEC-603).
+Uplift validation findings have the same fields as `engine.contracts.ValidationCheck` except the
+onboarding-only `source_id`. Their codes live in the platform's one code registry
+(`engine.contracts.CHECK_CODE_TABLES`, DEC-950): `UPLIFT_VALIDATION_CODES` is defined there and
+re-exported here, `ValidationCheck` accepts it like every other table, and `UpliftCheck` accepts only
+the codes of its own table.
 """
 
 from __future__ import annotations
@@ -25,7 +26,13 @@ from typing import Any, Final, Literal
 from pydantic import AwareDatetime, BaseModel, Field, model_validator
 
 from engine.config import Metric
-from engine.contracts import Artefact, Severity
+from engine.contracts import (
+    UPLIFT_VALIDATION_CODES,
+    Artefact,
+    DriftReport,
+    Severity,
+    check_code_table,
+)
 from engine.uplift.config import UpliftBaseModel, UpliftLearner
 
 __all__ = [
@@ -35,6 +42,7 @@ __all__ = [
     "QINI_CURVE_FILENAME",
     "SEGMENTS_FILENAME",
     "UPLIFT_ARTEFACTS",
+    "UPLIFT_DRIFT_FILENAME",
     "UPLIFT_EVALUATION_FILENAME",
     "UPLIFT_MODEL_CARD_FILENAME",
     "UPLIFT_VALIDATION_CODES",
@@ -52,9 +60,11 @@ __all__ = [
     "SegmentReport",
     "SegmentSummary",
     "SegmentThresholds",
+    "TreatmentShareDrift",
     "UpliftAtK",
     "UpliftCheck",
     "UpliftDecile",
+    "UpliftDriftReport",
     "UpliftEvaluation",
     "UpliftModelCard",
     "UpliftValidationReport",
@@ -67,6 +77,8 @@ SEGMENTS_FILENAME: Final[str] = "segments.json"
 POLICY_FILENAME: Final[str] = "policy_recommendation.json"
 INCREMENTALITY_FILENAME: Final[str] = "incrementality_report.json"
 OPE_FILENAME: Final[str] = "ope_report.json"
+UPLIFT_DRIFT_FILENAME: Final[str] = "uplift_drift.json"
+"""Written by a scoring run of an uplift model: feature PSI and the treated-share check (M53)."""
 UPLIFT_MODEL_CARD_FILENAME: Final[str] = "uplift_model.json"
 """Written inside the run's `model/` directory, beside the pickled learner."""
 
@@ -132,17 +144,8 @@ SEGMENT_ACTIONS: Final[Mapping[Segment, str]] = MappingProxyType(
 # ---------------------------------------------------------------------------
 # uplift_validation.json
 # ---------------------------------------------------------------------------
-UPLIFT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
-    {
-        "TREATMENT_COLUMN_MISSING",
-        "TREATMENT_NOT_BINARY",
-        "TREATMENT_ARM_TOO_SMALL",
-        "TREATMENT_NOT_RANDOM",
-        "OUTCOME_WINDOW_IMMATURE",
-        "FEATURE_AFTER_TREATMENT",
-    }
-)
-"""Plan B §4, verbatim. Phase 1's table is `engine.contracts.VALIDATION_CODES`."""
+# `UPLIFT_VALIDATION_CODES` (Plan B §4's six codes plus M53's `TREATMENT_VARIES_WITHIN_ENTITY`) is one
+# table of the platform's code registry in `engine.contracts` (DEC-950), imported above.
 
 
 class UpliftCheck(Artefact):
@@ -165,7 +168,7 @@ class UpliftCheck(Artefact):
 
     @model_validator(mode="after")
     def _known_code(self) -> UpliftCheck:
-        if self.code not in UPLIFT_VALIDATION_CODES:
+        if check_code_table(self.code) != "uplift":
             known = ", ".join(sorted(UPLIFT_VALIDATION_CODES))
             raise ValueError(f"unknown uplift validation code {self.code!r}; known codes: {known}")
         return self
@@ -197,6 +200,29 @@ class UpliftValidationReport(Artefact):
         default=0, description="Rows whose outcome window had not elapsed; dropped before training."
     )
     checked_at: AwareDatetime = Field(description="UTC time the checks ran.")
+    treated_rows: int | None = Field(
+        default=None,
+        description=(
+            "Treated rows the arm checks counted (after immature rows were dropped); null when the "
+            "treatment column is missing or not 0/1, or in a report written before M53."
+        ),
+    )
+    control_rows: int | None = Field(
+        default=None, description="Control rows the arm checks counted; null exactly when treated_rows is."
+    )
+    entity_column: str | None = Field(
+        default=None,
+        description=(
+            "Entity column of a two-column key (customer + snapshot date): treatment is assigned per "
+            "entity and the arms are counted in entities. Null for a one-column key."
+        ),
+    )
+    treated_entities: int | None = Field(
+        default=None, description="Distinct treated entities; set only with a two-column key."
+    )
+    control_entities: int | None = Field(
+        default=None, description="Distinct control entities; set only with a two-column key."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +533,60 @@ class UpliftModelCard(Artefact):
     trained_at: AwareDatetime = Field(description="UTC time the model was trained.")
 
 
+# ---------------------------------------------------------------------------
+# uplift_drift.json
+# ---------------------------------------------------------------------------
+class TreatmentShareDrift(Artefact):
+    """Whether new data's treated share is close to the training data's (M53, DEC-857).
+
+    Only a file that carries the model's treatment column, with 0/1 values, can be compared; for
+    any other file the status is `not_applicable` and `reason` says why - nothing is estimated.
+    """
+
+    status: Literal["within_tolerance", "outside_tolerance", "not_applicable"] = Field(
+        description="The verdict of the absolute-difference rule, or not_applicable."
+    )
+    treatment_column: str = Field(description="The model's treatment column.")
+    training_treated_share: float = Field(description="Share of training rows that were treated.")
+    current_treated_share: float | None = Field(
+        default=None, description="Share of this file's rows that are treated; null when not applicable."
+    )
+    absolute_difference: float | None = Field(
+        default=None, description="|current - training|; null when not applicable."
+    )
+    tolerance: float = Field(description="`uplift.drift_treated_share_tolerance` the difference is held to.")
+    p_value: float | None = Field(
+        default=None,
+        description=(
+            "Two-sided two-proportion z-test p-value, for information only: on a large file it flags "
+            "differences too small to matter, so the verdict is the absolute difference."
+        ),
+    )
+    rows_compared: int = Field(default=0, description="Rows of this file with a 0/1 treatment value.")
+    training_rows: int = Field(description="Rows the training share was measured on.")
+    reason: str | None = Field(default=None, description="Why the check did not apply; null when it did.")
+
+
+class UpliftDriftReport(Artefact):
+    """`uplift_drift.json` - a scoring run's data against its uplift model's training data (M53).
+
+    Feature drift is Phase 1's PSI (`engine.stages.score.compute_drift`) against the baseline the
+    uplift training run stored; `features` is null - and `features_reason` says why - when no
+    baseline exists (a model trained before M53) or there is nothing to compare.
+    """
+
+    run_id: str = Field(description="Scoring run this report belongs to.")
+    model_version_id: str = Field(description="Uplift model version that scored the file.")
+    training_run_id: str = Field(description="Training run of that model version.")
+    features: DriftReport | None = Field(description="Phase 1's per-feature PSI report, or null.")
+    features_reason: str | None = Field(
+        default=None, description="Why feature drift was not measured; null when it was."
+    )
+    treatment: TreatmentShareDrift = Field(description="The treated-share check.")
+    summary: str = Field(description="One line for the Data and Output pages.")
+    computed_at: AwareDatetime = Field(description="UTC time the report was computed.")
+
+
 UPLIFT_ARTEFACTS: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
     {
         UPLIFT_VALIDATION_FILENAME: UpliftValidationReport,
@@ -516,6 +596,7 @@ UPLIFT_ARTEFACTS: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
         POLICY_FILENAME: PolicyRecommendation,
         INCREMENTALITY_FILENAME: IncrementalityReport,
         OPE_FILENAME: OpeReport,
+        UPLIFT_DRIFT_FILENAME: UpliftDriftReport,
     }
 )
 """Uplift artefact filename -> its model. Served by `api/routes/uplift.py` (DEC-602)."""

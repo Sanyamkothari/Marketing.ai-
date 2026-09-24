@@ -8,8 +8,10 @@ and owns the one thing an engine module cannot: the scheduler's life inside the 
 **Who (DEC-780).** Reading schedules and their history is Viewer, like every other result. Creating,
 changing, pausing, deleting and firing one is Analyst: a schedule is recurring scoring or training,
 and starting that work by hand is `POST /runs`, which is Analyst (DEC-716). No schedule route is
-Approver or Admin - a firing acts as `SYSTEM_SCHEDULER`, which holds Analyst only and can never
-approve what it trains (DEC-760), so scheduling a retrain grants nothing the Analyst did not have.
+Approver or Admin - a scheduled firing acts as `SYSTEM_SCHEDULER`, which holds Analyst only and can
+never approve what it trains (DEC-760), so scheduling a retrain grants nothing the Analyst did not
+have. A "fire now" acts as the person who asked (DEC-889): they are the challenger's `requested_by`,
+so the separation of duties that stops a trainer approving their own model stops them too.
 
 **"Fire now" runs in the request, and is audited once (DEC-781).** `POST /schedules/{id}/fire` calls
 `ScheduleFirer.fire(trigger=manual)` in FastAPI's worker thread and answers `201` with the firing as
@@ -18,8 +20,8 @@ finished, or `failed` with its `error_code` (the request itself succeeded - the 
 firing, which also raised its `scheduled_job_failed` alert). The dataset build of a score or retrain
 happens inside the request; the run itself goes to the job runner like any other. The firer is given
 `audit_log=None`, so the engine writes no event of its own and the middleware's one event for the
-request carries `firing_audit_details` through `set_audit_context` - one request, one event (M47).
-Firings the scheduler starts on its own are audited by the engine as `system:scheduler`.
+request carries `firing_audit_details` through `set_audit_context` - one request, one event (M47),
+whose actor is the caller, as is the firing's principal (DEC-889). Firings the scheduler starts on its own are audited by the engine as `system:scheduler`.
 
 **The scheduler's life (DEC-782).** `install_scheduling` is a `PHASE_APP_HOOKS` entry that adds a
 startup and a shutdown handler. At startup it reads `settings.scheduler_backend`:
@@ -46,10 +48,10 @@ end. The local scheduler settles on every tick; with no local scheduler nothing 
 `GET /schedules/{id}/firings` settles first. Settling writes only what the run already decided
 (and the `scheduled_job_failed` alert for a failed run); it is never audited as the reader's act.
 
-**The managed retraining schedules are synced on demand as well as at startup (DEC-783).** Saving an
-onboarding recipe is Phase 2's route, which this branch does not edit, so `POST
-/schedules/retraining/sync` is how a person makes a new recipe's `monitoring.retraining` schedule
-exist now rather than at the next restart. It is idempotent, and it never touches a person's own
+**The managed retraining schedules are synced on demand as well as at startup (DEC-783).** `POST
+/schedules/retraining/sync` syncs every recipe's; saving a labelled recipe syncs its own client and
+use case through `sync_recipe_retraining` (DEC-880), so its `monitoring.retraining` schedule exists
+at once rather than at the next restart. Both are idempotent, and neither touches a person's own
 schedules.
 """
 
@@ -66,7 +68,7 @@ from typing import Annotated, Any, Final
 from fastapi import APIRouter, FastAPI, Query, Request, Response
 from sqlalchemy.engine import Engine
 
-from api.access import PrincipalDep, get_audit_log, set_audit_context
+from api.access import PrincipalDep, current_principal, get_audit_log, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import get_config_root, get_jobs, get_registry, get_settings, get_storage
 from api.routes.clients import get_client_store
@@ -84,6 +86,7 @@ from api.schemas import (
 from engine.access.roles import Role
 from engine.audit.events import content_hash
 from engine.clients import ClientStore, ClientStoreError
+from engine.onboarding.specs import OnboardingSpec
 from engine.platform_db import platform_engine
 from engine.scheduling.alerts import AlertSink, AlertStore, build_alert_sink
 from engine.scheduling.firing import FiringServices, ScheduleFirer, firing_audit_details
@@ -314,8 +317,16 @@ def get_firer(request: Request) -> ScheduleFirer:
 
 
 def _manual_firer(request: Request) -> ScheduleFirer:
-    """The firer "fire now" uses: the scheduler's services without the engine's own audit event."""
-    return ScheduleFirer(replace(get_firer(request).services, audit_log=None))
+    """The firer "fire now" uses: the scheduler's services, acting as the caller, without its own audit event.
+
+    The firing acts as the person who clicked, not as `SYSTEM_SCHEDULER`: a retrain records them as
+    `requested_by` on the challenger's `run.json`, so separation of duties keeps them from approving
+    the model they started (DEC-889). The audit actor is theirs too, through the middleware's one
+    event (`audit_log=None`, DEC-781). Only a firing nobody started acts as the scheduler.
+    """
+    return ScheduleFirer(
+        replace(get_firer(request).services, audit_log=None, principal=current_principal(request))
+    )
 
 
 def get_scheduler(request: Request) -> Scheduler:
@@ -356,13 +367,48 @@ def schedule_error(exc: ScheduleError) -> Exception:
 # The scheduler's life in the API process (DEC-782)
 # ---------------------------------------------------------------------------
 def _sync_managed(
-    request: Request, scheduler: Scheduler
+    request: Request, scheduler: Scheduler, *, only: tuple[str, str] | None = None
 ) -> tuple[int, tuple[str, ...], tuple[str, ...], tuple[str, ...]]:
+    """Sync the managed retraining schedules; `only` narrows it to one `(client_id, use_case_id)`."""
     targets = retraining_targets(get_client_store(request), get_config_root(request))
+    if only is not None:
+        targets = tuple(target for target in targets if (target.client_id, target.use_case_id) == only)
     result = sync_retraining_schedules(
         get_schedule_store(request), scheduler, targets, now=scheduling_clock(request)()
     )
     return len(targets), result.created, result.updated, result.removed
+
+
+def sync_recipe_retraining(request: Request, spec: OnboardingSpec) -> None:
+    """After a recipe is saved: its client x use case's managed retraining schedules, now (DEC-880).
+
+    Phase 2's save routes (`POST /clients/{id}/onboarding-specs` and `.../replay`) call this, so a
+    labelled recipe's `monitoring.retraining` schedule exists at once rather than at the next start
+    (DEC-783). It is the code `POST /schedules/retraining/sync` runs, narrowed to the recipe's own
+    client and use case, so saving one recipe pushes nothing for anybody else's.
+
+    Nothing to do for a recipe with no label (it trains nothing, so `retraining_targets` never lists
+    it) or for `scheduler_backend=none`, where startup syncs nothing either and saving a recipe
+    touches no scheduling table (DEC-782). Best-effort: a failure is logged with its class name only
+    and the save stands; the next start or `POST /schedules/retraining/sync` repairs it.
+    """
+    if spec.label_spec is None:
+        return
+    try:
+        if get_settings(request).scheduler_backend == "none":
+            return
+        targets, created, updated, removed = _sync_managed(
+            request, get_scheduler(request), only=(spec.client_id, spec.use_case)
+        )
+        _LOGGER.info(
+            "scheduling.recipe_retraining_sync targets=%d created=%d updated=%d removed=%d",
+            targets,
+            len(created),
+            len(updated),
+            len(removed),
+        )
+    except Exception as exc:  # never fails the save; retried by the next start or by the sync route
+        log_failure(_LOGGER, "scheduling.recipe_retraining_sync", exc, level=logging.ERROR)
 
 
 def start_scheduling(app: FastAPI) -> None:

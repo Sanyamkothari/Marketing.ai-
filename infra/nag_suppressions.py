@@ -284,6 +284,19 @@ SUPPRESSIONS: Final[tuple[Suppression, ...]] = (
     ),
     Suppression(
         stack="database",
+        path="PrivacySalt/Resource",
+        rule="AwsSolutions-SMG4",
+        reason=(
+            "Plan D (DEC-860): this secret is the salt of every principal hash the product stores - "
+            "the consent ledger, the erasure register, the audit trail. It is not a credential and "
+            "grants access to nothing; rotating it would not limit an exposure but would make every "
+            "hash already written unmatchable, so an erased person's request could no longer be found "
+            "and a consent could no longer be checked. It is generated once, encrypted with the "
+            "deployment's key and retained."
+        ),
+    ),
+    Suppression(
+        stack="database",
         path="ApplicationSecret/Resource",
         rule="AwsSolutions-SMG4",
         reason=(

@@ -99,6 +99,7 @@ def apply_uplift_actions(
     *,
     run_id: str,
     primary_key: str,
+    entity_key: str | None = None,
     causal: bool,
     prediction_columns: tuple[str, str, str] = ("uplift", "p_treated", "p_control"),
     thresholds: SegmentThresholds,
@@ -114,7 +115,10 @@ def apply_uplift_actions(
     run's `policy_recommendation.json` with `computed_on="scored"`. `causal` is the trained model's
     flag and is copied onto the recommendation; `observed_top_share` is passed to
     :func:`engine.uplift.policy.recommend_policy` (without it, expected incremental conversions are
-    null). `now` is the reference time of the recency rule, as in Phase 1.
+    null). `now` is the reference time of the recency rule, as in Phase 1. `primary_key` names one
+    row (the row key of a composite key); `entity_key`, set for a composite key, is passed to Phase 1's
+    `apply_actions` so the control group and suppression are decided per customer, not per snapshot
+    (DEC-083, M53).
     """
     import numpy as np
     import pandas as pd
@@ -149,7 +153,9 @@ def apply_uplift_actions(
     # Phase 1's suppression and control group, unchanged, on a copy whose score column is the uplift.
     work = frame.copy()
     work[config.actions.score_field] = uplift
-    acted = apply_actions(work, config, run_id=run_id, primary_key=primary_key, now=now)
+    acted = apply_actions(
+        work, config, run_id=run_id, primary_key=primary_key, entity_key=entity_key, now=now
+    )
 
     segments = assign_segments(uplift, p_control, thresholds)
     suppressed = acted[SUPPRESSED_REASON_COLUMN].notna().to_numpy(dtype=bool)

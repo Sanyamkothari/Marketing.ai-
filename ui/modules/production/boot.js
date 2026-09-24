@@ -1,5 +1,6 @@
 // Phase 4b's first half, loaded before any screen draws (M46): the bearer token on every call, the
-// user bar, role-aware controls and signed-in downloads.
+// top bar's user menu, Admin menu and role visibility (`userbar.js`, through `ui/chrome.js`),
+// role-aware controls and signed-in downloads.
 //
 // Imported for its side effects from the Phase 4b block of `ui/modules/router.js`, not from
 // `index.html`, and that is the whole reason this file exists apart from `index.js` (DEC-790):

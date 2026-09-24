@@ -21,10 +21,10 @@ SUMMARIES = (
     "Random (stratified) · 15% val · 15% test",
     "Auto features on · encoding Auto · text: Ignore · selection: Importance-based · max 100",
     "Balanced · 4 of 4 algorithms · ensembling · 50 trials · 30 min · 5-fold CV",
-    "ROC-AUC · calibration Isotonic · threshold Auto · top 3 SHAP reasons · champion if +1%",
+    "ROC-AUC · calibration Isotonic · threshold Auto · top 3 SHAP reasons · replace the model in use if +1%",
     "High ≥ 0.8 · Medium ≥ 0.5 · skip opted-out · skip contacted <14d · 10% control group",
     "Drift alert PSI > 0.2 · retrain: On drift · alert if score drops 5%",
-    "Keep uploads 90 days · approval before champion",
+    "Keep uploads 90 days · approval before a model becomes the one in use",
 )
 
 
@@ -107,7 +107,7 @@ def test_conditional_and_filter_forms() -> None:
     assert stages[2].summary.startswith("Auto features off · encoding One-hot")
     # {?path: ...} suppressed for shap; the fairness segment appears.
     assert stages[4].summary == (
-        "ROC-AUC · calibration None · threshold Manual (below) · fairness by region · champion if +2.5%"
+        "ROC-AUC · calibration None · threshold Manual (below) · fairness by region · replace the model in use if +2.5%"
     )
     assert stages[7].summary == "Keep uploads 0 days · consent: marketing_opt_in"
 

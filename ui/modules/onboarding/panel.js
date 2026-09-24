@@ -37,23 +37,53 @@ import {
   setSourceRole,
   suggestMapping,
 } from "./api.js";
-import { buildStep, featuresStep, mappingStep, sourcesStep } from "./steps.js";
+import { buildStep, featuresStep, flaggedColumns, foldedLine, mappingStep, sourcesStep } from "./steps.js";
 import { present } from "../../dom.js";
 
 const POLL_MS = 2000;
 
-function initialState(clientId, useCaseId, replay) {
+/** `CSS.escape` where the browser has it (jsdom may not); only ids and data values reach it. */
+function cssEscape(value) {
+  const text = String(value);
+  if (typeof CSS !== "undefined" && CSS.escape) return CSS.escape(text);
+  return text.replace(/["\\\]\[]/g, (ch) => `\\${ch}`);
+}
+
+function initialState(clientId, useCaseId, replay, entity) {
   return {
     clientId,
     useCaseId,
+    entity,
     open: "sources",
+
+    // v1 UI: which folded pieces are open (`details[data-keep]`), the row menu and the remove
+    // confirmation, the mapping cards opened or closed by hand, the columns the user re-pointed, and
+    // the last "Accept suggestions and save all" run.
+    keep: {},
+    rowMenu: null,
+    confirmDelete: null,
+    rolesBusy: false,
+    mapOpen: {},
+    touched: {},
+    saveAll: null,
+    collapsed: false,
 
     // Score mode (Plan A M35): this month's files through a saved recipe. `null` in train mode.
     // `spec` is the saved `OnboardingSpec`; `uploadedIds` the files uploaded on this panel;
     // `settledIds` the mappings the user saved after a replay reopened them; `response` the last
     // `POST .../replay` answer, whose `spec_id` is what the build runs once nothing is missing.
     replay: replay
-      ? { spec: replay.spec, uploadedIds: [], settledIds: [], response: null, running: false, error: null }
+      ? {
+          spec: replay.spec,
+          uploadedIds: [],
+          settledIds: [],
+          response: null,
+          running: false,
+          error: null,
+          // `code|column` of the checks the model's own training build raised, or null when that
+          // report could not be read: score mode then shows only the warnings that differ.
+          trainingKeys: replay.trainingKeys || null,
+        }
       : null,
 
     schema: null,
@@ -63,6 +93,7 @@ function initialState(clientId, useCaseId, replay) {
     sourcesLoading: true,
     sourcesError: null,
     uploading: [],
+    uploadErrors: [], // [{name, error}] - files the last upload could not add
 
     mappingSuggested: {}, // sourceId -> the untouched MappingSpec `suggestMapping` returned
     mappings: {}, // sourceId -> the working copy the mapping table edits
@@ -115,25 +146,87 @@ function initialState(clientId, useCaseId, replay) {
  * a file missing a column last month's mapping read, and builds for scoring. Nothing else about the
  * recipe is asked again.
  */
-export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady, replay = null }) {
-  const state = initialState(clientId, useCaseId, replay);
+export function onboardingPanel(
+  container,
+  { clientId, useCaseId, onDatasetReady, replay = null, entity = null },
+) {
+  const state = initialState(clientId, useCaseId, replay, entity);
   let pollTimer = null;
+  let focusNext = null;
+  let firstRead = true;
+
+  /** A selector that finds "the same control" in the next paint, so a repaint never drops focus. */
+  function focusKey(el) {
+    if (!el || !container.contains(el) || el === container) return null;
+    if (el.id) return `#${cssEscape(el.id)}`;
+    const attrs = ["act", "source", "column", "field", "feature", "step", "value", "standard"]
+      .filter((name) => el.dataset && el.dataset[name] !== undefined)
+      .map((name) => `[data-${name}="${cssEscape(el.dataset[name])}"]`)
+      .join("");
+    if (attrs) return `${el.tagName.toLowerCase()}${attrs}`;
+    if (el.tagName !== "SUMMARY") return null;
+    const keep = el.parentElement && el.parentElement.dataset ? el.parentElement.dataset.keep : null;
+    if (keep) return `details[data-keep="${cssEscape(keep)}"] > summary`;
+    const step = el.parentElement && el.parentElement.dataset ? el.parentElement.dataset.step : null;
+    if (step) return `.stage-d[data-step="${cssEscape(step)}"] > summary`;
+    return null;
+  }
+
+  /** The key a folded piece is remembered by: its `data-keep`, or its table's scope for "Show more
+   * columns" (drawn by `dom.js`'s `dataTable`, which takes no attributes). */
+  function keepKeyOf(details) {
+    if (details.dataset.keep) return details.dataset.keep;
+    if (!details.classList.contains("tbl-more")) return null;
+    const scope = details.closest("[data-keep-scope]");
+    return scope ? `${scope.dataset.keepScope}:more` : null;
+  }
 
   function rerender() {
+    const active = typeof document !== "undefined" ? document.activeElement : null;
+    const refocus = focusNext || focusKey(active);
+    focusNext = null;
     container.innerHTML = panelHtml(state);
     container.querySelectorAll(".stage-d").forEach((details) => {
       details.open = state.open === details.dataset.step;
       details.addEventListener("toggle", () => {
         // Both directions: collapsing the open step has to clear `state.open`, or the next render
-        // reopens the step the user just closed.
-        if (details.open) state.open = details.dataset.step;
-        else if (state.open === details.dataset.step) state.open = null;
+        // reopens the step the user just closed. Opening one step closes the others (one at a time).
+        // A toggle queued on an element an earlier paint already replaced is stale: ignored.
+        if (!details.isConnected) return;
+        if (details.open) {
+          if (state.open !== details.dataset.step) {
+            state.open = details.dataset.step;
+            container.querySelectorAll(".stage-d").forEach((other) => {
+              if (other !== details && other.open) other.open = false;
+            });
+          }
+        } else if (state.open === details.dataset.step) state.open = null;
       });
     });
+    container.querySelectorAll("details").forEach((details) => {
+      const key = keepKeyOf(details);
+      if (!key) return;
+      if (key in state.keep) details.open = state.keep[key];
+      details.addEventListener("toggle", () => {
+        if (details.isConnected) state.keep[key] = details.open;
+      });
+    });
+    if (refocus) {
+      const target = container.querySelector(refocus);
+      if (target && typeof target.focus === "function") target.focus({ preventScroll: true });
+    }
   }
 
   function panelHtml(s) {
+    if (s.collapsed) return foldedLine(s);
     return `<div class="stages">${sourcesStep(s)}${mappingStep(s)}${featuresStep(s)}${buildStep(s)}</div>`;
+  }
+
+  /** Open one step (and only it), as a "Go to …" / "Continue" button asks. */
+  function openStep(step) {
+    state.open = step;
+    focusNext = `.stage-d[data-step="${cssEscape(step)}"] > summary`;
+    rerender();
   }
 
   // --- schema and the two generated-form vocabularies ------------------------------------------
@@ -245,9 +338,12 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       }));
       state.sourcesError = null; // a read that succeeded answers the failure the last one reported
       if (!state.replay) syncFeatures();
+      // A client whose tables are already confirmed opens on the first step still to do.
+      if (firstRead && !state.replay && state.open === "sources" && allRolesConfirmed()) state.open = "mapping";
     } catch (error) {
       state.sourcesError = error;
     }
+    firstRead = false;
     state.sourcesLoading = false;
     rerender();
     await ensureMappingsLoaded();
@@ -276,6 +372,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
 
   async function uploadFiles(fileList) {
     state.sourcesError = null;
+    state.uploadErrors = [];
     for (const file of Array.from(fileList)) {
       state.uploading = [...state.uploading, file.name];
       rerender();
@@ -283,7 +380,9 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
         const created = await createSource(clientId, file);
         if (state.replay) state.replay.uploadedIds = [...state.replay.uploadedIds, created.source_id];
       } catch (error) {
-        state.sourcesError = error;
+        // Kept apart from `sourcesError`: the re-read that follows clears that one, and a file the
+        // API refused has to stay on screen until the next upload.
+        state.uploadErrors = [...state.uploadErrors, { name: file.name, error }];
       }
       state.uploading = state.uploading.filter((name) => name !== file.name);
     }
@@ -382,12 +481,74 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     const row = button.closest("tr");
     const select = row && row.querySelector('select[data-act="set-role"]');
     if (!select || !select.value) return;
-    return setRoleFor(button.dataset.source, select.value);
+    return setRoleFor(button.dataset.source, select.value).then(() => {
+      if (!state.sourcesError && allRolesConfirmed()) openStep("mapping");
+    });
+  }
+
+  /**
+   * "Confirm roles": every proposed role, confirmed the way the row's own Confirm does it (the same
+   * `PATCH` per source), then one re-read. Moves on to Mapping once every table has its role.
+   */
+  async function confirmAllRoles() {
+    const proposed = state.sources.filter(
+      (entry) => !entry.source.role && ((entry.profile && entry.profile.role_candidates) || []).length,
+    );
+    if (!proposed.length) return;
+    state.rolesBusy = true;
+    rerender();
+    for (const entry of proposed) {
+      const sourceId = entry.source.source_id;
+      try {
+        await setSourceRole(clientId, sourceId, entry.profile.role_candidates[0].role);
+        delete state.mappings[sourceId];
+        delete state.mappingSuggested[sourceId];
+        delete state.mappingSaved[sourceId];
+        delete state.mappingChecks[sourceId];
+      } catch (error) {
+        state.sourcesError = error;
+        break;
+      }
+    }
+    state.rolesBusy = false;
+    await loadSources();
+    if (!state.sourcesError && allRolesConfirmed()) openStep("mapping");
+  }
+
+  function allRolesConfirmed() {
+    if (!state.schema || !state.sources.length) return false;
+    const roles = state.schema.roles.roles;
+    const entityRole = Object.keys(roles).find((id) => roles[id].kind === "entity");
+    return state.sources.every((e) => e.source.role) && state.sources.some((e) => e.source.role === entityRole);
+  }
+
+  function toggleRowMenu(sourceId) {
+    state.rowMenu = state.rowMenu === sourceId ? null : sourceId;
+    state.confirmDelete = null;
+    if (state.rowMenu) focusNext = `[data-act="ask-delete"][data-source="${cssEscape(sourceId)}"]`;
+    rerender();
+  }
+
+  function askDelete(sourceId) {
+    state.rowMenu = null;
+    state.confirmDelete = sourceId;
+    focusNext = `[data-act="cancel-delete"]`;
+    rerender();
+  }
+
+  function closeMenus(returnTo) {
+    const sourceId = returnTo || state.rowMenu || state.confirmDelete;
+    state.rowMenu = null;
+    state.confirmDelete = null;
+    if (sourceId) focusNext = `[data-act="row-menu"][data-source="${cssEscape(sourceId)}"]`;
+    rerender();
   }
 
   /** Deleting a source re-derives the same coverage numbers a role change does, so this re-reads
    * the client's sources for the same reason `setRoleFor` does. */
   async function deleteSourceFor(sourceId) {
+    state.confirmDelete = null;
+    state.rowMenu = null;
     try {
       await deleteSource(clientId, sourceId);
       delete state.mappings[sourceId];
@@ -477,6 +638,9 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     }
     state.mappings[sourceId] = { ...mapping, columns, unmapped_source: unmapped };
     state.mappingSaved[sourceId] = false;
+    const touched = { ...(state.touched[sourceId] || {}), [columnName]: true };
+    for (const other of freed) touched[other] = true;
+    state.touched[sourceId] = touched;
     rerender();
   }
 
@@ -508,7 +672,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     rerender();
   }
 
-  async function saveMappingFor(sourceId) {
+  async function saveMappingFor(sourceId, { advance = true } = {}) {
     const mapping = state.mappings[sourceId];
     if (!mapping) return;
     state.mappingSaving[sourceId] = true;
@@ -533,12 +697,51 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       await runReplay();
       return;
     }
+    if (state.mappingSaved[sourceId]) state.mapOpen[sourceId] = false;
+    if (advance && allMappingsSaved() && state.open === "mapping") state.open = "features";
     rerender();
+  }
+
+  function allMappingsSaved() {
+    const mappable = state.sources.filter((entry) => entry.source.role);
+    return mappable.length > 0 && mappable.every((entry) => state.mappingSaved[entry.source.source_id]);
   }
 
   function acceptAllFor(sourceId) {
     if (state.mappingSuggested[sourceId]) state.mappings[sourceId] = state.mappingSuggested[sourceId];
+    delete state.touched[sourceId];
     void saveMappingFor(sourceId);
+  }
+
+  /**
+   * "Accept suggestions and save all": every unsaved table's suggestion, saved one after another -
+   * except a table with a match below the confident threshold, which is left open with that match
+   * marked "Check this match" for the user. A table the user already edited is saved as edited.
+   */
+  async function saveAllMappings() {
+    const pending = state.sources.filter(
+      (entry) =>
+        entry.source.role && state.mappings[entry.source.source_id] && !state.mappingSaved[entry.source.source_id],
+    );
+    const run = { running: true, saved: 0, stopped: [] };
+    state.saveAll = run;
+    rerender();
+    for (const entry of pending) {
+      const sourceId = entry.source.source_id;
+      const edited = state.touched[sourceId] && Object.keys(state.touched[sourceId]).length;
+      if (!edited && state.mappingSuggested[sourceId]) state.mappings[sourceId] = state.mappingSuggested[sourceId];
+      if (flaggedColumns(state, sourceId).length) {
+        run.stopped.push(sourceId);
+        state.mapOpen[sourceId] = true;
+        continue;
+      }
+      await saveMappingFor(sourceId, { advance: false });
+      if (state.mappingSaved[sourceId]) run.saved += 1;
+      else state.mapOpen[sourceId] = true;
+    }
+    run.running = false;
+    if (allMappingsSaved()) state.open = "features";
+    rerender();
   }
 
   // --- features & label --------------------------------------------------------------------------
@@ -561,6 +764,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       whereOp: "",
       whereValue: "",
     };
+    focusNext = "#ob-f-description";
     rerender();
   }
 
@@ -788,6 +992,7 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
       sample = [];
     }
     state.inUse = true;
+    state.collapsed = true;
     state.open = null;
     rerender();
     onDatasetReady({
@@ -805,15 +1010,33 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
 
   function onClick(event) {
     const el = event.target.closest("[data-act]");
+    if (state.rowMenu && !event.target.closest(".ob-rowmenu")) {
+      state.rowMenu = null;
+      if (!el) rerender();
+    }
     if (!el) return;
     const act = el.dataset.act;
     if (act === "delete-source") deleteSourceFor(el.dataset.source);
+    else if (act === "row-menu") toggleRowMenu(el.dataset.source);
+    else if (act === "ask-delete") askDelete(el.dataset.source);
+    else if (act === "cancel-delete") closeMenus(state.confirmDelete);
     else if (act === "confirm-role") confirmRoleFor(el);
-    else if (act === "accept-all") acceptAllFor(el.dataset.source);
+    else if (act === "confirm-roles") confirmAllRoles();
+    else if (act === "open-step") openStep(el.dataset.step);
+    else if (act === "toggle-map") {
+      state.mapOpen[el.dataset.source] = el.getAttribute("aria-expanded") !== "true";
+      rerender();
+    } else if (act === "save-all-mappings") saveAllMappings();
+    else if (act === "unfold") {
+      state.collapsed = false;
+      state.open = "build";
+      rerender();
+    } else if (act === "accept-all") acceptAllFor(el.dataset.source);
     else if (act === "save-mapping") saveMappingFor(el.dataset.source);
     else if (act === "open-add-feature") openAddFeature();
     else if (act === "cancel-add-feature") {
       state.featureForm = null;
+      focusNext = `[data-act="open-add-feature"]`;
       rerender();
     } else if (act === "save-feature") saveFeatureFromDraft();
     else if (act === "preview") runPreview();
@@ -836,8 +1059,24 @@ export function onboardingPanel(container, { clientId, useCaseId, onDatasetReady
     else if (act === "set-snapshot") setSnapshotField(el);
   }
 
+  /** Escape closes the row menu, the remove confirmation and the add-a-measure dialog, and hands
+   * focus back to what opened it. */
+  function onKeydown(event) {
+    if (event.key !== "Escape") return;
+    if (state.rowMenu || state.confirmDelete) {
+      event.stopPropagation();
+      closeMenus();
+    } else if (state.featureForm) {
+      event.stopPropagation();
+      state.featureForm = null;
+      focusNext = `[data-act="open-add-feature"]`;
+      rerender();
+    }
+  }
+
   container.addEventListener("click", onClick);
   container.addEventListener("change", onChange);
+  container.addEventListener("keydown", onKeydown);
 
   rerender();
   loadSchema();

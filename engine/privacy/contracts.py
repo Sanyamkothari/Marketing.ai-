@@ -19,7 +19,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from enum import StrEnum
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
 
@@ -304,9 +304,25 @@ class ErasureOutcome(_Doc):
     consent_records_deleted: int = Field(
         default=0, description="Hashed ledger rows removed (policy `delete`)."
     )
+    failed_stores: tuple[str, ...] = Field(
+        default=(),
+        description="Stores that still failed after every retry (Plan D, DEC-863); the request is `failed`.",
+    )
     requested_by: str = Field(description="`Principal.user_id` of whoever asked.")
     requested_at: AwareDatetime = Field(description="When the request was received, UTC.")
     completed_at: AwareDatetime | None = Field(default=None, description="When it finished, UTC.")
+
+
+class StoreProgress(_Doc):
+    """How far a background erasure has got in one store (Plan D M54, DEC-863)."""
+
+    store: str = Field(description="The store, e.g. `uploads`, `runs`, or `consent_ledger`.")
+    status: Literal["pending", "running", "done", "failed"] = Field(description="Where this store stands.")
+    files_total: int = Field(default=0, description="Files in this store that held the principal.")
+    files_done: int = Field(default=0, description="Of those, files rewritten or deleted so far.")
+    attempts: int = Field(default=0, description="Attempts made on this store, retries included.")
+    error_code: str | None = Field(default=None, description="Why the store failed, after its last attempt.")
+    updated_at: AwareDatetime | None = Field(default=None, description="When this row last changed.")
 
 
 class ErasureRequestRecord(_Doc):
@@ -328,6 +344,13 @@ class ErasureRequestRecord(_Doc):
     requested_at: AwareDatetime
     completed_at: AwareDatetime | None = None
     error_code: str | None = None
+    # Plan D M54 (DEC-863): an added, defaulted field - a background erasure's progress per store.
+    progress: tuple[StoreProgress, ...] = Field(default=(), description="Per-store progress, in store order.")
+    # Plan D (DEC-882): an added, defaulted field - kept so a retry deletes the same consent history.
+    history_all_clients: bool = Field(
+        default=False,
+        description="Whether the consent history is deleted under every client (no client was named).",
+    )
 
 
 class RetrainFlag(_Doc):

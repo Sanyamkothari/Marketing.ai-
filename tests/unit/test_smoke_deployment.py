@@ -145,7 +145,13 @@ def test_the_real_app_in_every_sign_in_state(
     from api.main import create_app
     from engine.settings import Settings
 
-    extra: dict[str, Any] = {"cors_origins": ("https://example.invalid",)} if env == "prod" else {}
+    # A prod deployment always carries its privacy salt (the database stack generates it, DEC-860);
+    # without one the API refuses to start, which is a different failure from the one probed here.
+    extra: dict[str, Any] = (
+        {"cors_origins": ("https://example.invalid",), "privacy_salt": "a-prod-privacy-salt-01"}
+        if env == "prod"
+        else {}
+    )
     settings = Settings.model_validate({"auth_mode": auth_mode, "env": env, "data_dir": tmp_path, **extra})
     client = TestClient(create_app(data_dir=tmp_path, settings=settings))
 

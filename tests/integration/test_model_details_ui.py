@@ -32,18 +32,17 @@ pytestmark = pytest.mark.integration
 
 NODE: Final[str | None] = shutil.which("node")
 
-# `pages.js` imports `api.js`, which reads `window` at load; a stub is all node needs to import it.
+# `pages.js` is importable under node as it is; `api.js`, which needs `window`, is loaded on demand.
 SCRIPT: Final[str] = """
-globalThis.window = { location: { origin: "http://localhost" } };
 const pages = await import(%(pages)s);
 let text = "";
 for await (const chunk of process.stdin) text += chunk;
-const { full, empty, uc, run } = JSON.parse(text);
+const { full, empty, uc, run, art } = JSON.parse(text);
 process.stdout.write(JSON.stringify({
   artefact: pages.BEESWARM_ARTEFACT,
   full: pages.beeswarmHtml(full),
   empty: pages.beeswarmHtml(empty),
-  page: pages.renderPage("model", uc, run, {}, "", {}),
+  page: pages.renderPage("model", uc, run, art, "", {}),
 }));
 """
 
@@ -87,6 +86,15 @@ def rendered() -> dict[str, str]:
             "pages": {"model": "Model"},
         },
         "run": {"run_id": "r_20260924_00000001", "mode": "train", "created_at": None},
+        # A finished training run, as far as the page needs one: a model and its importance chart.
+        "art": {
+            "best_model.json": {"display_name": "LightGBM"},
+            "feature_importance.json": {
+                "method": "permutation",
+                "caption": "Permutation importance on the test split (%)",
+                "items": [{"rank": 1, "feature": "tenure", "share_pct": 100.0}],
+            },
+        },
     }
     done = subprocess.run(
         [NODE, "--input-type=module", "-e", SCRIPT % {"pages": json.dumps((UI_DIR / "pages.js").as_uri())}],
@@ -107,14 +115,15 @@ def test_the_page_fetches_the_registered_artefact(rendered: dict[str, str]) -> N
 
 def test_details_is_collapsed_and_names_the_run_it_loads(rendered: dict[str, str]) -> None:
     page = rendered["page"]
-    details = re.search(r"<details[^>]*>", page)
+    details = re.search(r'<details class="bs-details"[^>]*>', page)
     assert details is not None
-    assert 'class="more"' in details.group(0)
+    assert 'class="bs-details"' in details.group(0)
     assert " open" not in details.group(0)
     assert 'data-beeswarm="r_20260924_00000001"' in details.group(0)
-    assert "<summary>" in page and "Details" in page
-    # The default view is still there, ahead of the section.
-    assert page.index("Feature importance") < page.index("<details")
+    assert "<summary>" in page and ">Details<" in page
+    assert "push each customer's score" in page
+    # The default view - what drives the score - is still there, ahead of the section.
+    assert page.index("What drives the score") < page.index('<details class="bs-details"')
 
 
 def test_every_dot_in_the_file_is_drawn_once(rendered: dict[str, str]) -> None:
@@ -124,7 +133,8 @@ def test_every_dot_in_the_file_is_drawn_once(rendered: dict[str, str]) -> None:
     # The numeric feature is coloured in steps of one hue; the category is grey throughout.
     assert 'class="bs-na"' in html
     assert re.search(r'<path class="bs-c[0-4]"', html)
-    assert ">tenure</text>" in html and ">plan</text>" in html
+    # Labels read as words, the way the rest of the page names a column.
+    assert ">Tenure</text>" in html and ">Plan</text>" in html
     assert "SHAP value (impact on model output)" in html
     assert "TreeSHAP values, one dot per row" in html
 

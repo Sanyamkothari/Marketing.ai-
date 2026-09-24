@@ -43,6 +43,6 @@ test("the settings screen keeps every control the screen drew", async () => {
 test("the sign-in route says there is nothing to sign in to", async () => {
   w.location.hash = "#/signin";
   await until(() => $("[data-pb-screen]"), 2000, "the sign-in screen");
-  assert.match($("#app").textContent, /Access control is off on this deployment/);
+  assert.match($("#app").textContent, /Sign-in is turned off on this installation/);
   assert.equal($("#pb-signin"), null);
 });

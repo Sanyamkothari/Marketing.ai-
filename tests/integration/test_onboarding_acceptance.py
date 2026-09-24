@@ -81,6 +81,9 @@ KEY_LABEL: Final[str] = "entity_key + snapshot_date"
 SAVED: Final[re.Pattern[str]] = re.compile(r"^Saved$")
 """A mapping card's saved state, matched whole: "Not saved yet" contains the word too."""
 LABEL: Final[str] = "churn_next_60d"
+ROLE_LABELS: Final[list[str]] = ["Activity", "Bills", "Complaints", "Subscriber table"]
+"""The four tables' roles as the Sources step words them, sorted: the entity role reads as the use
+case's own noun (`uc.entity`, "subscriber" for telco churn) plus "table" (v1 UI, WP3)."""
 
 CUSTOMERS: Final[int] = 600
 """Enough customers that twelve monthly snapshots clear validation with room to spare (`min_rows`
@@ -272,8 +275,11 @@ def open_step(screen: sync_api.Page, step: str) -> sync_api.Locator:
     return details
 
 
-def build_and_use(screen: sync_api.Page, log: Path) -> None:
-    """Build step: start the build, wait for its report, and take the dataset into Step 2."""
+def build_and_use(screen: sync_api.Page, log: Path) -> str:
+    """Build step: start the build, wait for its report, and take the dataset into Step 2.
+
+    Returns the build review's future-data check line (ruling R1, DEC-870), read before the dataset
+    is taken into Step 2."""
     build = open_step(screen, "build")
     button = build.locator('[data-act="build"]')
     sync_api.expect(button).to_be_enabled(timeout=UPLOAD_TIMEOUT_MS)
@@ -283,8 +289,10 @@ def build_and_use(screen: sync_api.Page, log: Path) -> None:
         sync_api.expect(use).to_be_enabled(timeout=BUILD_TIMEOUT_MS)
     except AssertionError:
         pytest.fail(f"the dataset build did not pass:\n{screen_report(screen, log)}")
+    leak_check = (screen.locator("#f-onboarding [data-leak-check]").first.text_content() or "").strip()
     use.click()
     sync_api.expect(screen.locator("#f-pk")).to_have_value(KEY_LABEL, timeout=ACTION_TIMEOUT_MS)
+    return leak_check
 
 
 def selected_text(screen: sync_api.Page, selector: str) -> str:
@@ -302,6 +310,7 @@ class Journey:
     chosen_client: str = ""
     roles: list[str] = field(default_factory=list)
     pk_after_use: str = ""
+    build_leak_check: str = ""
     target_after_use: str = ""
     problem_type: str = ""
     split_after_use: str = ""
@@ -333,7 +342,7 @@ def journey(
 
     # 1. The product opens on the default client; a new one is created from the header's picker.
     page.goto(f"{server}/ui/", wait_until="domcontentloaded")
-    expect(page.get_by_role("heading", name="Marketing AI")).to_be_visible()
+    expect(page.get_by_role("heading", name="Customer Lifecycle")).to_be_visible()
     expect(page.locator("#f-client")).to_be_visible(timeout=ACTION_TIMEOUT_MS)
     seen.default_client = selected_text(page, "#f-client")
     page.locator("#f-client").select_option(label="+ New client")
@@ -380,10 +389,11 @@ def journey(
     at = mark("mapping", at)
 
     # Suggested features and the default churn definition are kept: step 3 is left as it opened.
-    build_and_use(page, log)
+    seen.build_leak_check = build_and_use(page, log)
     seen.pk_after_use = selected_text(page, "#f-pk")
     seen.target_after_use = selected_text(page, "#f-target")
-    seen.problem_type = page.locator(".ptype .pill").inner_text().strip()
+    # v1 (WP2): the kind of prediction sits in the folded Advanced settings, so it is read, not seen.
+    seen.problem_type = (page.locator(".ptype .pill").text_content() or "").strip()
     # The advanced settings are folded away, so the split line is read, not seen.
     split_line = page.locator('.stage-d[data-stage="data_split"] .ss').text_content()
     seen.split_after_use = (split_line or "").strip()
@@ -405,12 +415,13 @@ def journey(
     # 4. The Data page's lineage block.
     first_block.click()
     expect(page.locator(".tab.on")).to_contain_text("Data")
+    page.get_by_text("Details: data lineage").click()  # behind a disclosure since v1 (WP4)
     expect(page.locator(".lineage")).to_be_visible()
     seen.lineage = [text.strip() for text in page.locator(".lineage .lin .lt").all_inner_texts()]
     at = mark("lineage", at)
 
     # 5. A month later: this month's tables through the saved recipe, scored with the new model.
-    page.locator(".crumbs a").nth(1).click()
+    page.locator(".crumbs a").nth(2).click()  # Home › journey › the use case (v1 breadcrumb)
     expect(page.locator(".summary")).to_be_visible()
     page.locator("#f-again").click()
     page.get_by_role("button", name="Score new data").click()
@@ -443,7 +454,7 @@ def journey(
     page.locator(".flow .block").nth(2).click()
     expect(page.locator(".tab.on")).to_contain_text("Output")
     with page.expect_download() as scores_info:
-        page.get_by_role("link", name="Download all scored rows (CSV)").click()
+        page.get_by_role("link", name="Download contact list (CSV)").click()
     scores = workdir / "scores.csv"
     scores_info.value.save_as(scores)
     with scores.open(encoding="utf-8", newline="") as handle:
@@ -466,9 +477,17 @@ def test_the_header_starts_on_the_default_client_and_a_new_one_can_be_created(jo
     assert journey.chosen_client == CLIENT_NAME
 
 
+def test_the_first_build_of_the_new_recipe_ran_the_full_leak_check(journey: Journey) -> None:
+    """Ruling R1 (DEC-871): a new client's first build of its recipe runs the full future-data check,
+    and the build review says so in the engine's words."""
+    assert journey.build_leak_check.startswith("Future-data check"), journey.build_leak_check
+    assert "Full future-data check" in journey.build_leak_check
+    assert "first build of this recipe" in journey.build_leak_check
+
+
 def test_every_raw_table_got_its_proposed_role(journey: Journey) -> None:
     """ "upload raw tables -> accept suggested roles": each table's first-ranked role, confirmed."""
-    assert journey.roles == ["Activity", "Bills", "Complaints", "Entity"]
+    assert journey.roles == ROLE_LABELS
 
 
 def test_use_this_dataset_filled_step_two_from_the_manifest(journey: Journey) -> None:
@@ -506,8 +525,8 @@ def test_the_training_run_read_the_built_dataset(journey: Journey) -> None:
     """ "train": Results, on the dataset rather than a file, keyed on both columns."""
     assert "Training complete" in journey.train_summary, journey.train_summary
     value, meta = journey.data_block
-    assert value.endswith("(built)"), value
-    assert f"key {KEY_LABEL}" in meta and f"target {LABEL}" in meta, meta
+    assert value == "Built dataset", value
+    assert f"ID {KEY_LABEL}" in meta and f"predicting {LABEL}" in meta, meta
 
 
 def test_the_data_page_shows_where_the_dataset_came_from(journey: Journey) -> None:
@@ -517,7 +536,7 @@ def test_the_data_page_shows_where_the_dataset_came_from(journey: Journey) -> No
 
 def test_next_months_tables_replayed_the_recipe_without_a_mapping_to_review(journey: Journey) -> None:
     """ "next month's tables": roles from the saved recipe, and the mapping step stays closed."""
-    assert journey.score_roles == ["Activity", "Bills", "Complaints", "Entity"]
+    assert journey.score_roles == ROLE_LABELS
     assert "replayed exactly as it was" in journey.score_mapping_note, journey.score_mapping_note
     assert journey.score_pk_after_use == KEY_LABEL
 

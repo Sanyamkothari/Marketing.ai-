@@ -17,7 +17,9 @@ Two tests stub `engine.onboarding.build.build_dataset` through `monkeypatch`, an
 they are about what this route does when the build engine *stops without saying so*, which is a
 state no real build can be asked to produce on demand and which - left unhandled - leaves the Build
 screen polling "queued" for ever. Everything else, including the preview and the full build, runs
-the real engine end to end.
+the real engine end to end. A third stubs it for one request only, to make a build fail and show that a
+failed build does not stand in for the first build of its recipe (ruling R1, DEC-871); the build after
+it is real.
 """
 
 from __future__ import annotations
@@ -818,6 +820,80 @@ def test_create_dataset_with_a_good_spec_returns_202_and_a_pollable_id(full_clie
     assert final["manifest"]["dataset_id"] == dataset_id
     assert final["manifest"]["spec_id"] == spec["spec_id"]
     assert final["manifest"]["n_rows"] > 0
+
+
+def _built_leak_check(
+    client: TestClient, ctx: dict[str, str], spec_id: str, **options: Any
+) -> dict[str, Any]:
+    """Build `spec_id` in score mode to `done` and return its report's `leak_check`, with the recipe
+    hash its manifest recorded beside it."""
+    response = client.post(
+        "/datasets", json={"client_id": ctx["client_id"], "spec_id": spec_id, "mode": "score", **options}
+    )
+    assert response.status_code == 202, response.text
+    dataset_id = response.json()["dataset_id"]
+    final = _poll_until_finished(client, dataset_id, timeout=BUILD_TIMEOUT_S)
+    assert final["status"]["state"] == "done", final["status"]
+    report = client.get(f"/datasets/{dataset_id}/report")
+    assert report.status_code == 200, report.text
+    check: dict[str, Any] = report.json()["leak_check"]
+    assert final["manifest"]["recipe_hash"] == check["recipe_hash"]
+    return check
+
+
+def test_the_first_build_of_a_recipe_runs_the_full_leak_check_and_later_ones_the_narrow(
+    full_client: TestClient,
+) -> None:
+    """Ruling R1 (DEC-870, DEC-871) through the route: the first build of a recipe for a client is
+    the full check whatever was asked, a later build of the same recipe is the narrowed default,
+    `full_leak_check: true` asks for the full one again, and a second spec saying the same thing
+    under a new id is the same recipe."""
+    ctx = _buildable_client(full_client)
+    spec_id = _create_spec(full_client, ctx)["spec_id"]
+
+    first = _built_leak_check(full_client, ctx, spec_id)
+    assert (first["scope"], first["reason"]) == ("full", "first_build_of_recipe")
+    assert first["rows_probed"] == first["rows_total"] > 0
+    assert first["summary"].startswith("Full future-data check")
+
+    second = _built_leak_check(full_client, ctx, spec_id)
+    assert (second["scope"], second["reason"]) == ("narrow", "default")
+    assert second["recipe_hash"] == first["recipe_hash"]
+
+    asked = _built_leak_check(full_client, ctx, spec_id, full_leak_check=True)
+    assert (asked["scope"], asked["reason"]) == ("full", "option")
+    assert asked["rows_probed"] == asked["rows_total"]
+
+    same_recipe = _create_spec(full_client, ctx)["spec_id"]
+    assert same_recipe != spec_id
+    again = _built_leak_check(full_client, ctx, same_recipe)
+    assert (again["scope"], again["reason"]) == ("narrow", "default")
+
+
+def test_a_failed_build_does_not_count_as_the_first_build_of_its_recipe(
+    full_client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Only a registered dataset vouches for a recipe, and only a build that passed is registered."""
+    ctx = _buildable_client(full_client)
+    spec_id = _create_spec(full_client, ctx)["spec_id"]
+    real = build.build_dataset
+    seen: list[bool] = []
+
+    def failing(**kwargs: Any) -> Any:
+        seen.append(kwargs["first_build_of_recipe"])
+        raise RuntimeError("the build stopped")
+
+    monkeypatch.setattr(build, "build_dataset", failing)
+    response = full_client.post(
+        "/datasets", json={"client_id": ctx["client_id"], "spec_id": spec_id, "mode": "score"}
+    )
+    assert response.status_code == 202, response.text
+    assert _poll_until_finished(full_client, response.json()["dataset_id"])["status"]["state"] == "failed"
+    monkeypatch.setattr(build, "build_dataset", real)
+
+    after = _built_leak_check(full_client, ctx, spec_id)
+    assert seen == [True]
+    assert (after["scope"], after["reason"]) == ("full", "first_build_of_recipe")
 
 
 @pytest.mark.parametrize("subset", [[], ["src_anything"]])

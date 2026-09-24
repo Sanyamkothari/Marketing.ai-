@@ -21,6 +21,7 @@ machine.
 .venv/bin/python -m scripts.bench_onboarding --customers 20000 --usage-rows 500000 \
     --workspace /tmp/bench-20k --json run.json
 # add --profile run.prof to see which engine functions the time goes to
+# add --full-leak-check to run the full future-data leak check instead of the narrowed one (§8)
 ```
 
 `scripts/bench_onboarding.py` times one `build_dataset` call. It prints the time of each stage (the
@@ -281,3 +282,67 @@ checks the build fails with FUTURE_EVENTS_LEAKED and writes no dataset. `tests/i
 twice. `tests/unit/test_fingerprint_parallel.py` holds the parallel rendering of §6 to equality with the
 in-process fingerprint: on a mixed-type frame of five chunks, with a pool whose workers fail, on
 one core, and for a single chunk.
+
+## 8. The full leak check (M55, ruling R1)
+
+Ruling R1 kept DEC-096's narrowed leak probe as the default and added the **full** check, which
+rebuilds every snapshot row. A build runs the full check when it is asked for (`full_leak_check:
+true`) and always on a client's first build of a recipe (DEC-870, DEC-871). The full check keeps
+DEC-096's DuckDB view stacking, so it never copies an event table. What it adds is one more
+aggregation of every feature over the whole spine, at the `validate` stage.
+
+Measured on the M37 tables (20,000 customers, 500,000 usage rows, 12 snapshots, 60 features,
+240,000 rows out), one build after the other on the same `--workspace`, on the same shared 4-CPU
+container. **This machine was not idle**: other agents' test suites held the 1-minute load average
+at 11 to 13 throughout, so the absolute seconds are high. The difference between the two runs is
+the useful number.
+
+| Check | Rows the probe rebuilt | Probe (INFO log) | `validate` stage | Build total | Peak RSS |
+|---|---:|---:|---:|---:|---:|
+| narrow (default) | 6,456 of 240,000 | 1.0 s | 21.3 s | 101.7 s | 1,318 MB |
+| full (`--full-leak-check`) | 240,000 of 240,000 | 18.6 s | 37.3 s | 112.8 s | 1,229 MB |
+
+Both builds passed and wrote the same dataset (`sha256:v1:6af67bf2d92c…`, the fingerprint §4
+recorded for these tables). The full check cost about 17.6 s more for the probe under this load,
+and its peak memory was no higher. The feature stages it repeats took about 60 s at the target size
+(§6), so a full-check build there should take roughly a minute longer than the 275.9 s in §6. That
+is an estimate and has not been measured: the target size was not run for M55, because this machine
+was shared throughout.
+
+`tests/integration/test_onboarding_leak_check.py::test_the_full_check_passes_on_the_benchmark_tables`
+(`@slow`, run by the nightly `make test-all`) builds these tables with the full check and asserts
+that every snapshot row was probed and nothing leaked (DEC-873).
+
+**The generator no longer hangs.** In M55's runs, `prepare_sources` hung after writing every
+document whenever a table had more than one fingerprint chunk (100,000 rows). The fingerprint's render pool
+is shut down by an `atexit` hook, and a multiprocessing child never runs `atexit`: on its way out
+it joins its own children, the pool's idle workers, which wait for work indefinitely. The
+generator now joins the pool before it returns. A `--workspace` that had already been generated
+was not affected, because it skips generation.
+
+## One million rows on a laptop (Phase 1 plan §11, Plan D M57)
+
+Plan §11 asks for "1M rows in under the time limit on a laptop". Every earlier one-million-row
+figure (README, *Large-file handling*) was measured on a 4-CPU container. `scripts/bench_1m.py`
+runs `scripts/bench_large_file.py` at 1,000,000 CSV rows, reads the numbers it printed, names the
+machine (CPU model, the CPUs the process may use, RAM, OS, Python) and, with `--record`, appends the
+row below. `--kind` is required, so a container run is never recorded as the laptop run.
+
+```bash
+# on the laptop, idle, from a checkout that has run `make setup`
+.venv/bin/python -m scripts.bench_1m --kind laptop --label "<make and model, RAM>" --record
+```
+
+Ingest is `read_upload` + `profile_dataset` (the whole-file fingerprint included); score is the whole
+score flow (plan §6.2), which re-reads the file as its own first stage, so the two are not additive.
+Peak memory is the benchmark process's high-water mark (on macOS `ru_maxrss` is bytes, not KiB; the
+benchmark converts it since Plan D).
+
+| date | kind | machine | CPU, cores, RAM, OS, Python | ingest (1M CSV rows) | score (1M rows) | peak memory |
+|---|---|---|---|---|---|---|
+<!-- bench_1m rows: appended by scripts/bench_1m.py --record -->
+
+**Status: the laptop row is an owner action.** This work runs in a cloud container with no laptop to
+hand, so the command above has not been run on one, and no laptop number is claimed anywhere. Until a
+`laptop` row is in the table, plan §11's laptop criterion is **not met**; the container figures in
+README remain the only one-million-row measurements.

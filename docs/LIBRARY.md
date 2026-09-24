@@ -81,6 +81,13 @@ ingested, validated, prepared, split, trained, evaluated, explained, banded and 
 ran end to end on the first attempt with no overrides at all. That is the claim, and it held. The
 sixth, Criteo Uplift, was not run for reasons that have nothing to do with the engine (DEC-406).
 
+**Criteo Uplift after Plan D M57 (2026-09-23).** Re-tested once more for Plan D M57: `go.criteo.net`
+answered 403 and the `huggingface.co` and `ailab.criteo.com` tunnels were refused with 403, so the run
+was skipped, as the plan says to when the network stays blocked. Any future run is **internal
+validation, non-commercial licence** (ruling R2, DEC-852): its report is committed to
+[`run_report.md`](../library/criteo-uplift/run_report.md) marked that way, and Criteo is never used in
+demos, screenshots, sales material or the demo dataset.
+
 **Criteo Uplift after Phase 3b (2026-09-23).** Of the two reasons DEC-406 recorded, the first — the
 question is uplift and the engine could only answer propensity — is gone: Phase 3b added the
 `uplift` problem type ([`docs/UPLIFT.md`](UPLIFT.md)), and

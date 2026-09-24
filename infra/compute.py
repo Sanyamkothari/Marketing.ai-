@@ -99,6 +99,14 @@ leaves room for the burst a training request causes before a new task is in serv
 SCALE_COOLDOWN_SECONDS: Final[int] = 120
 """Chosen: long enough that a new task has finished its slow import before the next decision."""
 
+ALB_PROXY_HOPS: Final[int] = 1
+"""Proxies between a client and the API: the load balancer, and nothing else.
+
+The service security group admits the API port from the load balancer's group only
+(`infra/network.py`), so every request arrives through exactly one proxy that appends the client's
+address to `X-Forwarded-For`. Published as `trusted_proxy_hops` (DEC-867); with the setting's
+default of 0 the sign-in throttle would see the ALB's private address for everybody."""
+
 
 class ComputeStack(Stack):
     """The ECS cluster, the task definition, the load balancer, and the deployment's parameters."""
@@ -366,6 +374,11 @@ class ComputeStack(Stack):
             "log_format": "json",
             "metrics_backend": "emf",
             "cors_origins": self.cors_origins(),
+            # The API is reachable only through the load balancer, whose address is every
+            # request's peer. One trusted hop makes the sign-in throttle count the address the ALB
+            # appended to X-Forwarded-For - the real client - instead of locking every user out
+            # together behind the ALB's own private address (DEC-867).
+            "trusted_proxy_hops": str(ALB_PROXY_HOPS),
             **values,
         }
         if context.client_id:

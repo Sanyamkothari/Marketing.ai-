@@ -16,7 +16,11 @@ the SQL does not spell - a `derive` feature that reads a client's whole event hi
 frame whose dates were widened after the queries were compiled. So after the frame is built, the
 same feature spec is run a second time against tables carrying extra rows dated *after the last
 snapshot*, and any feature whose value moves is FUTURE_EVENTS_LEAKED: an error, never a warning, and
-never acknowledgeable. A build that has seen the future is not a build with a caveat.
+never acknowledgeable. A build that has seen the future is not a build with a caveat. The probe
+rebuilds either every snapshot row (the full check) or the rows of the entities that can move plus
+a control group (the narrowed check, DEC-096). Ruling R1 keeps the narrowed check as the default and
+forces the full one on a recipe's first build or when asked (DEC-870, DEC-871); the report says which
+ran and why.
 
 **What stops a build.** `engine.onboarding.validate`'s checks are pure functions that never raise and
 never decide; deciding is this module's job. Any check of severity `error` means `passed=False`, no
@@ -62,6 +66,9 @@ from engine.onboarding.specs import (
     DatasetColumn,
     FeatureSpec,
     FeatureStat,
+    LeakCheckReason,
+    LeakCheckRecord,
+    LeakCheckScope,
     MappingSpec,
     OnboardingCheck,
     OnboardingSpec,
@@ -71,6 +78,7 @@ from engine.onboarding.specs import (
     SourceSpec,
     SourceStat,
     TransformKind,
+    recipe_hash,
 )
 from engine.onboarding.transforms import TransformError, cast_series, derive
 from engine.onboarding.validate import OnboardingCheckParams, SourceFacts, run_onboarding_checks
@@ -79,7 +87,7 @@ from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
     import datetime
-    from collections.abc import Mapping, Sequence
+    from collections.abc import Iterable, Mapping, Sequence
 
     import numpy as np
     import numpy.typing as npt
@@ -90,8 +98,9 @@ if TYPE_CHECKING:
     from engine.jobs import CancelToken
     from engine.onboarding.datasets import DatasetRegistry
     from engine.onboarding.sources import SourceReader
+    from engine.onboarding.specs import DatasetManifest
 
-__all__ = ["BUILD_STAGES", "build_dataset"]
+__all__ = ["BUILD_STAGES", "build_dataset", "is_first_build_of_recipe"]
 
 logger = get_logger(__name__)
 
@@ -544,6 +553,15 @@ def _null_fractions(frame: pd.DataFrame, names: Sequence[str]) -> dict[str, floa
 # ---------------------------------------------------------------------------
 # Stage 6: the leak probe
 # ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class _Probe:
+    """What one run of the leak probe found, and how much of the spine it rebuilt to find it."""
+
+    leaked: dict[str, int]
+    rows_probed: int
+    rows_total: int
+
+
 def _leak_probe(
     views: Mapping[str, pd.DataFrame],
     snapshots: pd.DataFrame,
@@ -552,7 +570,25 @@ def _leak_probe(
     *,
     entity_role: str,
     inclusive: bool,
+    full: bool = False,
 ) -> dict[str, int]:
+    """`_run_leak_probe`'s verdict alone: event role to the future rows it was given, for every role
+    whose features moved."""
+    return _run_leak_probe(
+        views, snapshots, spec, features, entity_role=entity_role, inclusive=inclusive, full=full
+    ).leaked
+
+
+def _run_leak_probe(
+    views: Mapping[str, pd.DataFrame],
+    snapshots: pd.DataFrame,
+    spec: FeatureSpec,
+    features: pd.DataFrame,
+    *,
+    entity_role: str,
+    inclusive: bool,
+    full: bool,
+) -> _Probe:
     """Rebuild every feature against event tables carrying rows dated after the last snapshot.
 
     This is the check the SQL assertion cannot make. `assert_point_in_time` reads the generated query
@@ -579,6 +615,11 @@ def _leak_probe(
     and a probe of only the injected entities could not see it. The build's own features are cut
     to the same entities by key (`_probed_features`), never by position: a `derive` makes that
     frame a row per event rather than a row per snapshot.
+
+    `full` is the check ruling R1 keeps beside the narrowed one (DEC-870): every snapshot row is
+    rebuilt, still over the same stacked views, and the build's features are compared whole. It is
+    what catches a leak that moves only an entity outside both groups - a join that reads one
+    other, particular entity's events - which the narrowed rows cannot see (DEC-872).
     """
     import duckdb
     import pandas as pd
@@ -597,7 +638,7 @@ def _leak_probe(
             if ENTITY_KEY in extra.columns:
                 witnesses.append(extra[ENTITY_KEY])
             _stack_future_rows(con, role, frame, extra)
-        rows = _probe_rows(snapshots[ENTITY_KEY], witnesses)
+        rows = _full_rows(len(snapshots)) if full else _probe_rows(snapshots[ENTITY_KEY], witnesses)
         con.register(SNAPSHOT_VIEW, snapshots.loc[rows].reset_index(drop=True))
         probed = build_features(con, spec, inclusive=inclusive)
     finally:
@@ -606,7 +647,18 @@ def _leak_probe(
     built = _probed_features(features, snapshots[ENTITY_KEY], rows)
     role_of = {feature.name: feature.role for feature in spec.features}
     moved = {role_of[name] for name in built.columns if name in role_of and _moved(built[name], probed[name])}
-    return {role: count for role, count in injected.items() if role in moved}
+    return _Probe(
+        leaked={role: count for role, count in injected.items() if role in moved},
+        rows_probed=int(rows.sum()),
+        rows_total=len(snapshots),
+    )
+
+
+def _full_rows(count: int) -> npt.NDArray[np.bool_]:
+    """Every snapshot row: the full leak check (DEC-870), which is the probe as it was before DEC-096."""
+    import numpy as np
+
+    return np.ones(count, dtype=bool)
 
 
 def _probe_rows(keys: pd.Series[Any], witnesses: Sequence[pd.Series[Any]]) -> npt.NDArray[np.bool_]:
@@ -718,6 +770,69 @@ def _moved(built: pd.Series[Any], probed: pd.Series[Any]) -> bool:
             atol=0.0,
             equal_nan=True,
         )
+    )
+
+
+# ---------------------------------------------------------------------------
+# Which leak check runs (ruling R1: DEC-870, DEC-871)
+# ---------------------------------------------------------------------------
+def is_first_build_of_recipe(
+    spec: OnboardingSpec, mappings: Iterable[MappingSpec], earlier: Iterable[DatasetManifest]
+) -> bool:
+    """True unless `earlier` holds a build of this client's same recipe (`specs.recipe_hash`).
+
+    `earlier` is what the caller's store has registered for the client - `ClientStore.list_datasets`
+    - and a dataset is registered only once its build passed, so "an earlier build" means an earlier
+    *successful* build: a build that failed, a preview (never registered) and a dataset built before
+    M55 (no `recipe_hash` on its manifest) do not count, and the next build runs the full check.
+    """
+    recipe = recipe_hash(spec, mappings)
+    return not any(
+        manifest.client_id == spec.client_id and manifest.recipe_hash == recipe for manifest in earlier
+    )
+
+
+def _leak_check_choice(
+    *, full_leak_check: bool, first_build_of_recipe: bool
+) -> tuple[LeakCheckScope, LeakCheckReason]:
+    """The scope the probe runs at and why. The first build of a recipe is full whatever was asked,
+    so that reason wins when both apply: it is the one a reviewer checks R1 against."""
+    if first_build_of_recipe:
+        return "full", "first_build_of_recipe"
+    if full_leak_check:
+        return "full", "option"
+    return "narrow", "default"
+
+
+_LEAK_CHECK_BECAUSE: Final[Mapping[LeakCheckReason, str]] = {
+    "first_build_of_recipe": "this is the first build of this recipe for this client",
+    "option": "the full check was asked for",
+    "default": "the full check was not asked for, and it is required only on a recipe's first build",
+}
+
+
+def _leak_check_record(
+    probe: _Probe, *, scope: LeakCheckScope, reason: LeakCheckReason, recipe: str, entity: str
+) -> LeakCheckRecord:
+    if scope == "full":
+        summary = (
+            f"Full future-data check: all {probe.rows_total:,} snapshot rows were rebuilt with events "
+            f"dated after the last snapshot added, because {_LEAK_CHECK_BECAUSE[reason]}."
+        )
+    else:
+        summary = (
+            f"Narrow future-data check: {probe.rows_probed:,} of {probe.rows_total:,} snapshot rows "
+            f"were rebuilt with events dated after the last snapshot added - every {entity} given such "
+            f"an event and up to {_PROBE_CONTROL_ENTITIES} given none - because "
+            f"{_LEAK_CHECK_BECAUSE[reason]}."
+        )
+    return LeakCheckRecord(
+        scope=scope,
+        reason=reason,
+        recipe_hash=recipe,
+        rows_total=probe.rows_total,
+        rows_probed=probe.rows_probed,
+        summary=summary,
     )
 
 
@@ -862,6 +977,7 @@ def _report(
     frame: pd.DataFrame | None,
     duration_s: float,
     features_sql_path: str | None,
+    leak_check: LeakCheckRecord | None = None,
 ) -> BuildReport:
     ordered = sorted(checks, key=lambda check: _SEVERITY_RANK[check.severity])
     errors = sum(1 for c in ordered if c.severity is Severity.ERROR and not c.acknowledged)
@@ -888,6 +1004,7 @@ def _report(
         warning_count=sum(1 for c in ordered if c.severity is Severity.WARNING),
         passed=errors == 0,
         built_at=utc_now(),
+        leak_check=leak_check,
     )
 
 
@@ -911,6 +1028,8 @@ def build_dataset(
     mode: RunMode,
     cancel: CancelToken | None = None,
     sample_entities: int | None = None,
+    full_leak_check: bool = False,
+    first_build_of_recipe: bool = False,
 ) -> BuildReport:
     """Execute `spec` and return the report; write the dataset only if nothing blocking was found.
 
@@ -935,6 +1054,14 @@ def build_dataset(
 
     The report is returned and written whatever happens. A build whose checks found an error writes
     `build_report.json` and nothing else: there is no dataset, and the report is what the user reads.
+
+    `full_leak_check` and `first_build_of_recipe` decide which future-data leak check runs (ruling
+    R1, DEC-870/871): the full one, which rebuilds every snapshot row, when either is true, else the
+    narrowed one (DEC-096). This function has no client store, so it cannot tell a recipe's first
+    build for itself; a caller that registers datasets answers it with `is_first_build_of_recipe`
+    over the client's registered manifests (`api.routes.datasets`, `engine.scheduling.firing`). The
+    report's `leak_check` records which ran and why, and the manifest records the `recipe_hash`
+    that the next build's answer is read from.
     """
     import duckdb
 
@@ -947,6 +1074,10 @@ def build_dataset(
     label = None if mode is RunMode.SCORE else spec.label_spec
     target = None if label is None else label.name
     keys = [ENTITY_KEY, SNAPSHOT_COLUMN]
+    recipe = recipe_hash(spec, mappings)
+    leak_scope, leak_reason = _leak_check_choice(
+        full_leak_check=full_leak_check, first_build_of_recipe=first_build_of_recipe
+    )
 
     status = _StatusWriter(
         registry,
@@ -1115,13 +1246,26 @@ def build_dataset(
         began = perf_counter()
         status.start("validate")
         _cancelled(cancel)
-        leaked = _leak_probe(
+        probe_began = perf_counter()
+        probe = _run_leak_probe(
             views,
             snapshots,
             spec.feature_spec,
             features,
             entity_role=entity_role,
             inclusive=spec.snapshot_spec.inclusive_snapshot_time,
+            full=leak_scope == "full",
+        )
+        leaked = probe.leaked
+        logger.info(
+            "onboarding.build.leak_probe scope=%s reason=%s rows_probed=%d rows_total=%d "
+            "leaked_roles=%d seconds=%.3f",
+            leak_scope,
+            leak_reason,
+            probe.rows_probed,
+            probe.rows_total,
+            len(leaked),
+            perf_counter() - probe_began,
         )
         checks.extend(
             run_onboarding_checks(
@@ -1161,6 +1305,9 @@ def build_dataset(
             frame=frame,
             duration_s=perf_counter() - started,
             features_sql_path=features_sql_path,
+            leak_check=_leak_check_record(
+                probe, scope=leak_scope, reason=leak_reason, recipe=recipe, entity=config.entity
+            ),
         )
         _cancelled(cancel)
         status.finish(
@@ -1200,6 +1347,7 @@ def build_dataset(
                 snapshot_column=SNAPSHOT_COLUMN,
                 target=target,
                 fingerprint=fingerprint,
+                recipe_hash=recipe,
             ),
         )
         registry.write_report(dataset_id, report)

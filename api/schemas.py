@@ -344,7 +344,14 @@ class ModelApproveRequest(StrictBase):
 
     approved_by: str = Field(
         min_length=1,
-        description="Caller-supplied name of the approver. Unverified: Phase 1 has no authentication.",
+        description=(
+            "Caller-supplied name of the approver. With sign-in on it is replaced by the signed-in "
+            "username (Plan D, DEC-862); with sign-in off it is unverified."
+        ),
+    )
+    # Plan D M54 (DEC-862): an added, optional field; the Approvals screen always sends one.
+    reason: str | None = Field(
+        default=None, max_length=2000, description="Why the version is approved; kept in the decision record."
     )
 
 
@@ -750,6 +757,7 @@ from engine.privacy.contracts import (  # noqa: E402
     RetentionPlan,
     RetentionResult,
     RetrainFlag,
+    StoreProgress,
 )
 
 ConsentRecordResponse = ConsentRecord
@@ -759,7 +767,30 @@ ConsentImportResponse = ConsentImportReport
 """`POST /privacy/consent/imports`: rows read, rows written, and every problem by row and column."""
 
 ErasureResponse = ErasureOutcome
-"""`POST /privacy/erasure`: what was erased, where, and which models were flagged for retraining."""
+"""What an erasure did, where, and which models were flagged for retraining (the job's outcome)."""
+
+
+class ErasureAccepted(StrictBase):
+    """`POST /privacy/erasure` (and `/retry`): the request is queued; follow its progress by id (DEC-863)."""
+
+    request_id: str = Field(description="The erasure request's id; the audit events' object id.")
+    status: str = Field(description="`queued`: a background job will carry it out.")
+    principal_hash: str = Field(description="Salted hash of the principal's id; never the id.")
+    client_id: str | None = Field(default=None, description="Client the request was made for.")
+    progress_url: str = Field(description="Where to follow it: `GET /privacy/erasure/{id}/progress`.")
+
+
+class ErasureProgressResponse(StrictBase):
+    """`GET /privacy/erasure/{id}/progress`: status and per-store progress, and nothing about the person."""
+
+    request_id: str
+    status: str = Field(
+        description="`queued`, `in_progress`, `completed`, `completed_with_exceptions` or `failed`."
+    )
+    error_code: str | None = None
+    progress: tuple[StoreProgress, ...]
+    completed_at: AwareDatetime | None = None
+
 
 ConsentReportResponse = ConsentReport
 """`GET /privacy/runs/{run_id}/consent-report`: how the consent ledger gated one scoring run."""
@@ -870,6 +901,12 @@ class ErasureRequestBody(StrictBase):
         description="Client the request came from; recorded, and scopes the consent-history deletion. "
         "Every store is searched whatever it is.",
     )
+
+
+class ErasureRetryBody(StrictBase):
+    """Body of `POST /privacy/erasure/{request_id}/retry`: the person's id again (it is never stored)."""
+
+    principal_id: str = Field(min_length=1, max_length=256, description=_PRINCIPAL_ID_DESCRIPTION)
 
 
 class ErasureRequestList(StrictBase):
@@ -989,6 +1026,39 @@ class AlertListResponse(StrictBase):
 
 
 # --- end M49 -------------------------------------------------------------------------------------
+from engine.approvals import ApprovalItem, ModelDecision  # noqa: E402
+
+
+# Plan D M54 (DEC-862, DEC-864): the Approver's screen. The approvals models themselves live in
+# `engine.approvals`, like the privacy contracts live in `engine.privacy.contracts`.
+class ModelRejectRequest(StrictBase):
+    """Body of `POST /models/{model_id}/reject`: a challenger waiting for approval is turned down."""
+
+    rejected_by: str | None = Field(
+        default=None,
+        max_length=200,
+        description="Ignored when sign-in is on (the signed-in person is recorded); a label otherwise.",
+    )
+    reason: str = Field(min_length=3, max_length=2000, description="Why it is rejected. Required.")
+
+
+class ApprovalListResponse(StrictBase):
+    """`GET /approvals`: every challenger waiting for an Approver, and whether the caller may decide."""
+
+    items: tuple[ApprovalItem, ...]
+    separation_enforced: bool = Field(
+        description="False with sign-in off: one local operator holds every role, so the trainer cannot be told apart."
+    )
+
+
+class ModelDecisionResponse(StrictBase):
+    """The version as it now stands and the decision just recorded."""
+
+    version: ModelVersion
+    is_champion: bool
+    decision: ModelDecision
+
+
 # ---- END PHASE-4B ----
 # ---- PHASE-3B (uplift) — append only below this line ----
 # The bodies of `api/routes/uplift.py` (plan B §8). The artefacts those routes return are the engine's
@@ -1022,7 +1092,12 @@ class UpliftRunRequest(StrictBase):
 
     use_case: str = Field(description="Use case the run belongs to.")
     upload_id: str = Field(description="Upload uploaded in train mode.")
-    primary_key: str = Field(description="Column that identifies a customer.")
+    primary_key: PrimaryKey = Field(
+        description=(
+            "Column that identifies a customer, or two columns - the customer and the snapshot date - "
+            "for a file with one row per customer per snapshot. Treatment is assigned per customer."
+        )
+    )
     target: str = Field(description="Binary outcome column.")
     treatment_column: str | None = Field(
         default=None,
@@ -1082,3 +1157,41 @@ class OpeRequest(StrictBase):
 
 
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# The bodies of `api/routes/pilot.py` (Plan E, M59-M64). The reports themselves are the engine's own
+# models in `engine/pilot/`; only the request shapes and the two envelopes live here.
+from engine.pilot.demo import DemoManifest  # noqa: E402
+from engine.pilot.feedback import FeedbackCategory  # noqa: E402
+
+
+class PilotDemoResponse(StrictBase):
+    """`GET /pilot/demo`: whether demo mode is on, and the seeded demo when there is one."""
+
+    demo_mode: bool = Field(
+        description="MARKETING_AI_DEMO_MODE: the screens show the demo client and the tour."
+    )
+    seeded: bool = Field(description="A demo has been seeded into this deployment's storage.")
+    manifest: DemoManifest | None = Field(
+        default=None, description="What the seed made; null when not seeded."
+    )
+    how_to_seed: str = Field(default="", description="The command that seeds one, when none is seeded.")
+
+
+class PilotFeedbackRequest(StrictBase):
+    """`POST /pilot/feedback`: what a person thought of one screen."""
+
+    screen: str = Field(
+        max_length=200, description="The page's route, for example #/pilot/value/r_20260923_ab12cd34."
+    )
+    category: FeedbackCategory = Field(description="confusing, wrong, idea, praise or other.")
+    text: str = Field(default="", max_length=1000, description="Their words; contact details are masked.")
+
+
+class PilotFeedbackResponse(StrictBase):
+    """`POST /pilot/feedback`: the stored entry's id, and what was masked out of the text."""
+
+    feedback_id: str
+    redacted: tuple[str, ...] = ()
+
+
+# ---- END PLAN-E ----

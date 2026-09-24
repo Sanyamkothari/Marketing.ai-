@@ -845,3 +845,49 @@ primary key is `(entity_key, snapshot_date)` for a periodic build and `entity_ke
 
 [`ONBOARDING.md`](ONBOARDING.md) is the guide a business user reads for how the roles, the mapping,
 the features, the outcome and the snapshot dates are decided, and what each build-report check means.
+
+---
+
+## 11. What an uplift run needs on top (Phase 3b)
+
+An uplift run (`POST /uplift/runs`, [`UPLIFT.md`](UPLIFT.md)) asks a different question of the same
+file: not "who will convert?" but "who converts *because* of the campaign?". That needs an
+experiment in the file, so after the validation table of section 5 has run, seven uplift checks run
+on the same upload ([`engine/uplift/checks.py`](../engine/uplift/checks.py)). They are written to
+`uplift_validation.json`, and a run needs both reports to pass. `docs/UPLIFT.md` §3 is the
+normative text; this table repeats it here because this is the page a user reads when a file is
+refused.
+
+**What the file must have, in addition to section 1:**
+
+- **A treatment column**: 1 (or `true`) for a customer who received the campaign, 0 (or `false`) for
+  a customer in the **randomly** chosen hold-out group. Chosen at Setup, configured as
+  `uplift.treatment_column`, or found by name (`treatment`, `treated`, `contacted`, `is_treated`).
+- **The outcome after the campaign**, in the target column, as a yes/no.
+- **Customer data from before the campaign.** With `uplift.treatment_date_column` set, a date-like
+  column later than the treatment date is refused.
+- **Optionally, one row per customer per snapshot date**: a two-column key of the customer and the
+  snapshot date. Treatment and control are then assigned **per customer** - a customer is treated
+  at every snapshot of a campaign or at none - and the hold-out keeps every snapshot of a customer
+  on one side (M53).
+
+| Code | Severity | Blocks | Message | Suggestion |
+|---|---|---|---|---|
+| `TREATMENT_COLUMN_MISSING` | error | yes | "The treatment column '{column}' is not in this file." — or, with none configured: "No column in this file says which customers received the campaign. Looked for {hints}." | "Choose the column that records who received the campaign in Setup, or upload the file that contains it." — or: "Add a column with 1 for customers who were contacted and 0 for the randomly held-out customers, or choose the column in Setup." |
+| `TREATMENT_NOT_BINARY` | error | yes | "'{column}' should be 1 for treated customers and 0 for held-out customers, but {n} of {rows} rows ({share}) are blank or hold another value." | "Record every customer as 1 (treated) or 0 (held out); true and false work too. Remove customers whose treatment is unknown from the file." |
+| `TREATMENT_VARIES_WITHIN_ENTITY` | error | yes (cannot be acknowledged) | "{n} of {customers} customers ({share}) are treated in some snapshots and held out in others[ within one campaign ('{campaign column}')], according to '{column}'. Treatment and control are assigned per customer ('{entity column}'), so such a customer would be compared with itself." | "Give each customer the same treatment value in every snapshot of a campaign, or upload one campaign's snapshots at a time." |
+| `TREATMENT_ARM_TOO_SMALL` | error | yes | "There are too few customers to measure what the campaign changed[ after leaving out {n} customers whose outcome is not final yet]: the {treated/control} group has {n} customers (at least {min_arm_rows} needed); only {n} customers in the {arm} had a positive '{target}' (at least {min_arm_positives} needed)." | "Use a longer period or a larger campaign, or hold out a bigger control group next time." |
+| `TREATMENT_NOT_RANDOM` | error | unless acknowledged | "Who was treated can be predicted from the customers' own data (AUC {auc}, where a random assignment scores about 0.50 and the limit is {threshold}). The strongest sign(s) was/were {features}. The campaign looks targeted, so comparing treated with untreated customers would mix what the campaign changed with how the chosen customers already differed." | "Use data from a campaign with a randomly chosen hold-out group. If you go ahead anyway, every uplift result will be labelled not causal." |
+| `OUTCOME_WINDOW_IMMATURE` | warning | no | "{n} customers were treated less than {days} days before {date}, so their outcome is not final yet. [{n} rows have no readable date in '{column}', so their outcome cannot be shown to be final.] They are left out of training and evaluation." — or, with the date column absent: "The treatment date column '{column}' is not in this file, so it cannot be checked whether every customer's outcome is final." | "Nothing to fix now. Re-run on or after {date} to include every customer." (only undated rows: "Fill in '{column}' for every customer to include them."; column absent: "Add the treatment date to the file, or clear the treatment date setting if outcomes are already final.") |
+| `FEATURE_AFTER_TREATMENT` | error | yes | "'{column}' is later than the treatment date in {n} of {rows} rows, so this data was captured after the campaign reached customers. Other columns may already show what the campaign changed, which would make its effect look larger or smaller than it was." | "Upload customer data as it was before the treatment date. If this column only records the outcome, exclude it in Data preparation." |
+
+**With a two-column key**, `TREATMENT_ARM_TOO_SMALL` counts customers (distinct values of the key's
+first column), not rows; the randomness check's cross-validation keeps each customer's snapshots in
+one fold; and the snapshot date is one of the columns `FEATURE_AFTER_TREATMENT` compares with the
+treatment date. When `TREATMENT_VARIES_WITHIN_ENTITY` fires, the arm-size and randomness checks are
+skipped: with customers in both arms there are no per-customer arms to count.
+
+**Only `TREATMENT_NOT_RANDOM` can be acknowledged** (`validation.acknowledged:
+["TREATMENT_NOT_RANDOM"]`), and the run then labels every result not causal. A scoring file of an
+uplift model needs no treatment column; when it has one, its treated share is compared with the
+training data's in `uplift_drift.json` (`UPLIFT.md` §8).

@@ -570,12 +570,107 @@ which no screenshot shows.
 
 ---
 
+## Revision 5 — the uplift entry links, drawn (DEC-952) · 2026-09-24
+
+- **Drawn: the Overview link.** *Uplift modelling ›* with *Predicts who changes behaviour because of
+  your action.*, under the Overview's rule, as `ui/modules/uplift/index.js` inserts it. Screenshot 01
+  is re-shot.
+- **Drawn: the use-case link on Win-back's pages.** *Uplift for this use case ›* under the header of
+  the Data, Model, Output and Campaign results pages, as the product decorates every `#/uc/<id>`
+  page. Screenshots 14 and 17 are re-shot. Revision 4's "Not drawn, deliberately" item is resolved
+  by the reviewer's ruling.
+
+## Revision 6 — the v1 UI: one top bar, logo-only header, verdict first · 2026-09-24
+
+The prototype now shows the product's new UI (Part 3, the UI plan's navigation, design rules and top 5,
+built on the WP0 foundation: `ui/index.html`, `ui/dom.js`, `ui/chrome.js`, `docs/ui/FOUNDATION.md`). Every
+flow that worked before still works; the illustrative numbers and the engine-pinned sentences are unchanged.
+Assertion changes are listed in `docs/ui/test-changes/WP9.md`. All 53 screenshots are re-shot, and one is new
+(25).
+
+**Chrome and header**
+- **One top bar** (`topBar()`, as `ui/chrome.js`): the wordmark, then Home · Build data · Models ▾ ·
+  Campaigns · Reports · Admin ▾; on the right the client chooser, the *Sample data: Demo Telecom* chip, Help ▾
+  (Take the tour, Send feedback) and the user menu (Change password, Sign out). The active goal follows the
+  route (`navFor()`): the Output of a scoring run and Campaign results count as Campaigns. Menus use
+  `aria-expanded` and close on Escape. Below 700px it is one row (wordmark, chooser, Menu) with the goals
+  in a panel. There is also a *Skip to content* link and a `#status` live region.
+- **The page header's right side is the logo only.** The client chooser (`#f-client`, "+ New client") moved
+  into the top bar and shows only on per-client screens (Setup, uplift Setup, Build data, Reports). Its hint
+  is now a `?` toggletip.
+- **Breadcrumbs start with Home** (`crumbs()`, `ucCrumbs()`). Every *‹ Customer Lifecycle* back link and
+  the 11px *DATA / MODEL* eyebrows are gone. There is at most one chip (the AI type, or *Uplift*) and
+  `headActions()` holds the header's buttons.
+- **The uplift pill is gone.** *Also: target with uplift ›* is now a quiet related link in the header actions
+  of Win-back's Setup and run pages (`upRelated()`). Home has no pill; *Uplift models* sits in the Models
+  menu.
+
+**Components and tokens (ported from `ui/index.html`)**: the `--btn`/`--btn-ink` aliases and
+`color-scheme`; the `.btn` set (`primary`, `secondary`, `quiet`, `danger`, `sm`) with `.run` kept as the
+primary alias; disabled buttons on `--soft` with muted text instead of 45% opacity; one `:focus-visible`
+ring; no text on `--faint` and nothing below 12px; the dark-mode `.tab.on` and `.stage-pill` fix; the Hybrid
+chip text on `--ink2`; `details.tech`, `details.tbl-more`, `.tbl-stack`, `.toggletip`, `.menu`,
+`.empty-state`, `.notice-card`, `.skel-*`, and the `.topbar` rules. On top of these, the prototype's own
+layouts: `.verdict`, `.kpis.two`, `.flow.four`, `.fstep.later`, `details.later`, the fold-to-summary panel
+and the "Show more columns" tables for the raw-table sources and mapping.
+
+**Screens**
+- **Home**: H1 *Customer Lifecycle* with *Pick what you want to predict or improve…*. One colour toggletip
+  replaces the legend and the per-stage type chips. A *For you* line gives one next step for the role. The
+  stages stack below 700px.
+- **Setup**: one step at a time. Before a file is chosen, Columns and Model are one line each (*Available
+  after you add a dataset.*), never greyed controls. In score mode the trained model comes first and is
+  always usable, and `blocker()` names a missing model before missing data. Advanced appears once there is
+  data. Stages are unnumbered, and each folded stage says *Using recommended settings* or *You changed N
+  settings*. Settings the engine records but does not use yet (`ADVISORY_PATHS`: Feature engineering and
+  Retraining) sit behind *Show settings planned for a later release (6)* or are marked *Coming later*. The
+  *Selected* tag is gone.
+- **Results**: a verdict card (`runVerdict()`) with one primary action: *Score new customers with this
+  model* after training (`#f-next`), *Download contact list (CSV)* after scoring (`#f-download`), and a
+  quiet *Change settings and … again* (`#f-again`). Flow blocks drop their 01/02/03. A win-back scoring run
+  gets **Campaign results as its fourth block** (`#f-campaign`).
+- **Build from raw tables**: Sources shows File, Rows and Role, with the key column, time column and
+  coverage behind *Show more columns (3)*, and one primary *Confirm roles*. Mapping shows Your column → Maps
+  to → Example values, with type and confidence behind *Show more columns (2)*, and one primary at the top,
+  *Accept suggestions and save all*; it folds on to Features when nothing required is missing. Sub-steps are
+  unnumbered, and finished ones fold to their summary with *Edit*. Build leads with *Your dataset is ready:
+  120,000 rows × 14 features* and *Use this dataset*, with the progress and the four report cards behind
+  *Show build details*.
+- **Data / Model / Output pages**: tabs are words only, and each page has a *Next: … ›* button. The run id,
+  file and time move to *Details: this run*. Data lineage (file facts first, ids after) sits behind
+  *Details: data lineage*. The Model page leads with a verdict against its baseline and *Score new customers
+  with this model*; the training setup and confusion matrix are under *Technical details*. The Output page
+  leads with one sentence per use case (`OUT_VERDICT`) and *Download contact list (CSV)*; its deployment
+  settings are under *Settings used for this run*. On RCA, *Generate root causes* is secondary.
+- **Uplift**: the uplift screen has one *Uplift* chip and the breadcrumb as its way back. The index puts its
+  hint above the list, with a status per use case, and greys the generative one. **Model** leads with a
+  plain verdict (*Targeting with this model beats contacting at random: …*) and *Score customers with this
+  model*, shows the Qini curve and the decile bars (the table behind *Show table*), and puts AUUC, the Qini
+  coefficient, the intervals and the example with no measurable uplift behind *Technical metrics*.
+  **Output** leads with *Contact 4,000 customers: …* and *Download contact list (CSV)* (`#up-dl`).
+- **Campaign results**: a verdict in the words and sign of the rupee value view (*The campaign worked: about
+  390 extra customers came back.* / *The campaign did harm…* / *We cannot yet tell…*), or *Results
+  available on …* while the window is open. The primary is *See the value in rupees*. There are two tiles,
+  *Contacted customers who came back* and *Control group who came back* (1-decimal rates, whole people).
+  The interval bar, the engine's sentence and every statistic sit behind *Statistical details*, and the form
+  follows as *Campaign and outcomes*.
+- **New, small**: *Build data* (`#/pilot/kit`: the raw-table list, the data request kit with *For your IT
+  team*, readiness reports), *Campaigns* (`#/monitoring/runs`: every scored list with its result status)
+  and *Reports* (`#/pilot`). The top bar's other entries (approvals, model health, admin, privacy, AI
+  service, value in rupees) open one calm *Drawn by the product* card with *Back to Home*.
+
+**Not changed here, on purpose**: the sentences `tests/prototype/consistency.test.mjs` pins to
+`ui/modules/uplift/views.js` (*Uplift modelling*, *Uplift pipeline*, the uplift index intro, the Setup help
+lines). The plan changes them together with `views.js` once WP5 has merged. The uplift KPI labels on
+Output are also kept until WP5 settles the product's tile set.
+
 ## What did not change
 
-The lifecycle overview, the seven use-case definitions, the eight advanced-settings
+The lifecycle overview's stages and use cases, the seven use-case definitions, the eight advanced-settings
 stages for predictive use cases, the three-state Setup → Running → Results flow, the
-Data / Model / Output pages, the colour tokens (`#2F6FDB`, `#7A55D3`, `#12957F`), dark
-mode and the mobile layout. `tests/prototype/existing.test.mjs` pins each of these.
+Data / Model / Output pages and their tiles, the colour tokens (`#2F6FDB`, `#7A55D3`, `#12957F`), dark
+mode and the mobile layout. `tests/prototype/existing.test.mjs` pins each of these. (Revision 6 redrew
+their headers, order and disclosures, not their content.)
 
 ## Illustrative numbers
 

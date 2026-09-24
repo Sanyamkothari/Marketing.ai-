@@ -1,0 +1,388 @@
+# configs/pilot/help.yaml
+# The plain-language catalogue (Plan E, M60 and M63). ONE source for three readers:
+#   * the data readiness report (every problem it lists carries `meaning` and `fix` from here),
+#   * the in-app "What does this mean?" tooltips (every warning pill and every advanced setting),
+#   * the pre-flight checker's report on the client's own laptop.
+# Written for a client analyst, not a data scientist: no model jargon unless `terms` explains it.
+# `tests/unit/pilot/test_help.py` fails when a code the engine can raise has no entry here, when an
+# entry names a code the engine cannot raise, or when a text uses a word from `plain_language.jargon`
+# (engine/pilot/plain.py) that the same entry does not explain.
+#
+# Shape: codes.<CODE> = {title, meaning, fix}; settings.<dotted path, list index as [*]> = {meaning};
+# terms.<term> = one-line explanation, shown wherever a report uses the term.
+
+schema_version: 1
+
+codes:
+  # --- Phase 1: the prepared file (validation.json) ----------------------------------------------
+  PK_MISSING:
+    title: The customer ID column is missing
+    meaning: The file has no column that identifies each customer, so rows cannot be told apart or joined to anything else.
+    fix: Add the customer ID column (pseudonymised is fine) and choose it as the key on the setup screen.
+  PK_NOT_UNIQUE:
+    title: The same customer ID appears on more than one row
+    meaning: The prepared file should have one row per customer; repeated IDs mean some customers would be counted twice.
+    fix: Remove the repeated rows, or keep only the latest row for each customer, then upload the file again.
+  PK_NULLS:
+    title: Some rows have no customer ID
+    meaning: Rows without an ID cannot be scored against a customer or followed up later.
+    fix: Fill in the missing IDs or remove those rows before uploading.
+  TARGET_MISSING:
+    title: The outcome column is missing
+    meaning: To learn, the platform needs a column that says what happened to each customer in the past (for example, whether they left).
+    fix: Add the outcome column named in the template, or build it from raw tables with "Build from raw tables".
+  TARGET_NOT_BINARY:
+    title: The outcome column has more than two values
+    meaning: The outcome must be yes or no for each customer; other values make it impossible to learn what a "yes" looks like.
+    fix: Recode the outcome to two values (for example 1 for left and 0 for stayed) and upload again.
+  TARGET_CONSTANT:
+    title: Every customer has the same outcome
+    meaning: If nobody (or everybody) left, there is nothing to tell apart and nothing to learn.
+    fix: Send a longer period, or a period in which the outcome actually happened to some customers.
+  TARGET_TOO_FEW_POSITIVES:
+    title: Too few customers had the outcome
+    meaning: The platform needs a minimum number of past examples (for example, customers who left) to learn a reliable pattern.
+    fix: Send more history or more customers so that more examples of the outcome are included.
+  TARGET_IMBALANCE_SEVERE:
+    title: The outcome is very rare
+    meaning: Only a very small share of customers had the outcome. The platform can still learn, but results will be less certain.
+    fix: No action is required. If you can, send more history so there are more examples of the outcome.
+  ROWS_TOO_FEW:
+    title: Too few rows
+    meaning: The file has fewer customers than the minimum the platform needs to learn and to test what it learned.
+    fix: Send more customers or a longer period.
+  LEAKAGE_SUSPECTED:
+    title: A column seems to contain the answer
+    meaning: One column predicts the outcome almost perfectly, which usually means it was recorded after the outcome happened (for example a "closure date" when predicting who will leave). A result built on it would look excellent and fail in real use.
+    fix: Remove that column, or send the value as it was before the outcome date.
+  TIME_COLUMN_MISSING:
+    title: The date column is missing
+    meaning: This use case learns from the past and tests on the most recent period, so every row needs the date it describes.
+    fix: Add the date column the upload template lists, or choose a random split in the settings.
+  TIME_COLUMN_UNPARSEABLE:
+    title: The dates cannot be read
+    meaning: Too many values in the date column are not recognisable dates.
+    fix: Write dates as YYYY-MM-DD (for example 2026-08-31) and upload again.
+  HIGH_NULL_COLUMN:
+    title: A column is mostly empty
+    meaning: Most rows have no value in this column, so it carries little information.
+    fix: Nothing is required; you can acknowledge the warning. If the column should be filled, check how the file was exported.
+  CONSTANT_COLUMN:
+    title: A column has the same value on every row
+    meaning: A column that never changes cannot help tell customers apart, so it will not be used.
+    fix: Nothing is required; you can acknowledge the warning or remove the column.
+  HIGH_CARDINALITY_ID_LIKE:
+    title: A column looks like an ID
+    meaning: Almost every row has a different value, as an account number or reference would. Such a column cannot teach anything general about customers.
+    fix: Exclude the column in the settings, or acknowledge the warning if it is meaningful.
+  PII_DETECTED:
+    title: Personal details were found
+    meaning: A column looks like names, phone numbers, email addresses, Aadhaar or PAN numbers. The platform masks or drops it and never learns from it, but it should not have been sent.
+    fix: Remove the column from the next extract. Keep only the pseudonymised customer ID.
+  PII_IN_FREE_TEXT:
+    title: Contact details were found inside free text
+    meaning: A notes or remarks column mentions phone numbers or email addresses. They are masked wherever the text is shown or summarised.
+    fix: If you can, strip contact details from notes before the next extract.
+  SCHEMA_MISMATCH:
+    title: The new file does not match the one the model learned from
+    meaning: Columns the model needs are missing or have changed type since training, so the file cannot be scored as it is.
+    fix: Export the new file with the same columns and formats as the training file.
+  CONSENT_COLUMN_MISSING:
+    title: The marketing consent column is missing
+    meaning: This use case only contacts customers who agreed to marketing, and the column that records that agreement is not in the file.
+    fix: Add the consent column (true or false for each customer), or turn off the consent setting if consent is handled elsewhere.
+  SUPPRESSION_COLUMN_MISSING:
+    title: A column used to avoid over-contacting is missing
+    meaning: The platform skips customers who opted out or were contacted recently, but the column it needs for that is not in the file, so nobody will be skipped for that reason.
+    fix: Add the opt-in or last-contact column, or acknowledge the warning if suppression is handled elsewhere.
+
+  # --- Phase 2: raw tables (the onboarding checks in build_report.json) --------------------------
+  NO_ENTITY_SOURCE:
+    title: The customer table is missing
+    meaning: One table must list every customer once. Without it there is nothing to build a row for.
+    fix: Upload the customer table (one row per customer) and mark it as the customer table.
+  MULTIPLE_ENTITY_SOURCES:
+    title: More than one table is marked as the customer table
+    meaning: Only one table can hold one row per customer.
+    fix: Keep the table that lists every customer and change the others to the kind of events they record.
+  ENTITY_KEY_UNMAPPED:
+    title: The customer table has no customer ID column
+    meaning: The platform does not know which column in the customer table identifies each customer.
+    fix: On the mapping screen, map the column that holds the customer ID.
+  ENTITY_DUPLICATE_KEYS:
+    title: The customer table repeats customer IDs
+    meaning: The customer table should have exactly one row per customer; some IDs appear more than once.
+    fix: Send one row per customer (for example, the latest record), or let the platform keep the latest row where it offers to.
+  JOIN_KEY_UNMAPPED:
+    title: An event table has no customer ID column
+    meaning: The platform cannot attach this table's rows (bills, complaints, usage…) to customers.
+    fix: On the mapping screen, map the column of that table that holds the customer ID.
+  EVENT_TIME_UNMAPPED:
+    title: An event table has no date column
+    meaning: Each bill, complaint or usage record needs the date it happened, so it can be counted only when it happened before the date being predicted from.
+    fix: On the mapping screen, map the column that says when each row happened.
+  EVENT_TIME_UNPARSEABLE:
+    title: The dates in an event table cannot be read
+    meaning: Too many values in the date column are not recognisable dates.
+    fix: Export dates as YYYY-MM-DD, or pick the right date format on the mapping screen.
+  DATE_FORMAT_AMBIGUOUS:
+    title: The date format is unclear
+    meaning: Dates such as 03/04/2026 could mean 3 April or 4 March. Reading them the wrong way would shift events by months.
+    fix: Confirm the format on the mapping screen, or export dates as YYYY-MM-DD so there is no doubt.
+  JOIN_KEY_COVERAGE_LOW:
+    title: Many rows do not match a known customer
+    meaning: A large share of this table's rows carry customer IDs that are not in the customer table, so they cannot be used.
+    fix: Check that every file uses the same customer IDs, pseudonymised the same way (same method, same secret key), and that the customer table covers every customer in the other files.
+  KEY_FORMAT_MISMATCH:
+    title: Customer IDs are written differently in two tables
+    meaning: The same customers appear in both tables, but their IDs are written differently (for example with leading zeros or a prefix in one of them).
+    fix: Export the IDs the same way in every file, or apply the transformation the mapping screen suggests.
+  REQUIRED_STANDARD_COLUMN_UNMAPPED:
+    title: A required column is not mapped
+    meaning: This use case needs a column that none of your columns has been matched to yet.
+    fix: Map the column on the mapping screen, or send it in the next extract.
+  MAPPING_LOW_CONFIDENCE:
+    title: A column match needs your confirmation
+    meaning: The platform guessed which of your columns means what, but it is not sure about this one.
+    fix: Check the suggested match on the mapping screen and correct it if it is wrong.
+  MAPPING_TYPE_CONFLICT:
+    title: A column holds the wrong kind of value
+    meaning: A column was matched to something that should be a number or a date, but its values are not.
+    fix: Map a different column, or correct the export so the column holds the expected kind of value.
+  VALUE_UNMAPPED:
+    title: Some values were not recognised
+    meaning: A column uses codes the platform does not know (for example plan names or yes/no spellings).
+    fix: On the mapping screen, say what each unrecognised value means, or whether to leave it blank.
+  SNAPSHOT_OUTSIDE_DATA_RANGE:
+    title: A chosen date is outside the data
+    meaning: The platform was asked to describe customers on a date the data does not cover.
+    fix: Pick dates inside the period the files cover, or send data that covers the date.
+  TOO_LITTLE_HISTORY:
+    title: Not enough history
+    meaning: To learn, the platform needs some history before each date it predicts from and enough time after it to see the outcome. The files cover a shorter period than that.
+    fix: Send a longer history. The data request lists the minimum number of months for this use case.
+  LABEL_HORIZON_CENSORED:
+    title: The most recent dates are too recent to know the outcome
+    meaning: For the latest dates, the period in which the outcome would happen has not finished yet, so those dates were left out of learning.
+    fix: Nothing is required. This is expected for the most recent weeks.
+  LABEL_DEGENERATE_SNAPSHOT:
+    title: At one date, everyone or nobody had the outcome
+    meaning: One of the dates the platform learns from has no examples of the outcome (or only examples), which usually points to a gap in the data.
+    fix: Check that the activity or campaign file covers that period completely.
+  LABEL_ROLE_MISSING:
+    title: The table that defines the outcome is missing
+    meaning: The outcome for this use case is worked out from one kind of table (for example the activity log) and that table was not uploaded.
+    fix: Upload the table named in the data request.
+  FEATURE_ALL_NULL:
+    title: A calculated measure came out empty
+    meaning: One of the measures built from your tables (for example "complaints in the last 90 days") is empty for almost every customer, so it was dropped.
+    fix: Nothing is required. If the measure matters, check that its table covers the right period.
+  FEATURE_NAME_COLLISION:
+    title: Two measures have the same name
+    meaning: Two of the measures being built share a name, so one would overwrite the other.
+    fix: Rename one of them on the features screen.
+  TOO_MANY_FEATURES:
+    title: Too many measures were selected
+    meaning: More measures were selected than the platform builds in one dataset.
+    fix: Remove the measures that matter least on the features screen.
+  ENTITY_ATTRIBUTES_NOT_TIME_VERSIONED:
+    title: Customer details are only as they are today
+    meaning: The customer table shows details as they are today, not as they were on each past date. A detail that changed recently (such as the plan) may make past predictions look better than they will be.
+    fix: If you can, send customer details with the date they were valid from. Otherwise, acknowledge the warning.
+  FUTURE_EVENTS_LEAKED:
+    title: Information from the future reached a past date
+    meaning: The platform found events after a prediction date inside the measures for that date. This is a fault in the platform, not in your data.
+    fix: Please report this to the Minfy team; it cannot be waved through.
+  SOURCE_TOO_LARGE:
+    title: A file is too large
+    meaning: One table has more rows than the platform reads from a single file.
+    fix: Send a shorter period, or only the customers and dates this use case needs.
+  TOO_MANY_SOURCES:
+    title: Too many tables
+    meaning: More tables were uploaded than one dataset can combine.
+    fix: Remove the tables this use case does not need, or combine tables that hold the same kind of row.
+
+  # --- Phase 3b: uplift (uplift_validation.json) ---------------------------------------------------
+  TREATMENT_COLUMN_MISSING:
+    title: The column saying who was contacted is missing
+    meaning: Measuring what a campaign changed needs a column that says, for each customer, whether they received the campaign or were held back.
+    fix: Add the treatment column (1 for contacted, 0 for held back) to the campaign file.
+  TREATMENT_NOT_BINARY:
+    title: The "contacted" column has more than two values
+    meaning: Each customer must be either contacted or held back; other values cannot be read.
+    fix: Recode the column to 1 for contacted and 0 for held back.
+  TREATMENT_VARIES_WITHIN_ENTITY:
+    title: A customer is in both groups
+    meaning: In one campaign, some customers were contacted on one date and held back on another, so the two groups cannot be compared fairly.
+    fix: Keep each customer in one group for the whole campaign, or add a campaign column so each campaign is judged on its own.
+  TREATMENT_ARM_TOO_SMALL:
+    title: Too few customers in one group
+    meaning: Either the contacted group or the held-back group is too small, or has too few outcomes, for a reliable comparison.
+    fix: Use a campaign with a larger held-back group, or wait for more outcomes before measuring.
+  TREATMENT_NOT_RANDOM:
+    title: Who was contacted does not look random
+    meaning: Customer details predict who was contacted, so the contacted and held-back groups were not chosen by chance. A comparison between them could reflect who was picked rather than what the campaign did.
+    fix: Use a campaign where a random share was held back, or acknowledge that results are descriptive only.
+  OUTCOME_WINDOW_IMMATURE:
+    title: The outcome period has not finished
+    meaning: For some customers, not enough time has passed since the campaign to know whether they responded.
+    fix: Wait until the outcome period has passed; the report shows the date results will be ready.
+  FEATURE_AFTER_TREATMENT:
+    title: A column was recorded after the campaign
+    meaning: A column seems to describe customers after they were contacted, so it could reflect the campaign itself.
+    fix: Remove that column, or send its value as it was before the campaign date.
+
+  # --- Phase 1: scoring drift (scoring_summary.json drift_status) --------------------------------
+  DRIFT_WATCH:
+    title: The new customers look a little different
+    meaning: Some measures in the file being scored have moved away from what the model learned on. Scores are still usable.
+    fix: No action now. If it persists for a few months, retrain on recent data.
+  DRIFT_DRIFTED:
+    title: The new customers look very different
+    meaning: Several measures have moved far from what the model learned on, so scores may be less reliable.
+    fix: Check that the new file was exported the same way; if it was, retrain the model on recent data.
+
+  # --- Phase 1: the decision threshold (model/scorer.json, evaluation.json threshold_detail) ------
+  THRESHOLD_FALLBACK:
+    title: The automatic cut-off was replaced by the top 10%
+    meaning: The automatic way of choosing which customers to flag would have flagged almost everyone, so the platform flags the top 10% of scores instead.
+    fix: Nothing is required. If a different share suits your campaign budget, set the cut-off in the settings.
+
+  # --- Plan E: the pre-flight checker (scripts/preflight.py, run on the client's side) -----------
+  PREFLIGHT_FILE_UNREADABLE:
+    title: A file could not be read
+    meaning: The file is not a readable CSV or Parquet file (for example it is compressed, password-protected, or in an unusual text encoding).
+    fix: Save it as a CSV in UTF-8 with a header row, or as Parquet, and run the check again.
+  PREFLIGHT_FILE_SKIPPED:
+    title: A file was skipped
+    meaning: Only CSV and Parquet files are checked; this file has another type.
+    fix: Export it as CSV or Parquet if it is part of the data request; otherwise remove it from the folder.
+  PREFLIGHT_TABLE_NOT_RECOGNISED:
+    title: A table's contents were not recognised
+    meaning: The checker could not tell which table of the data request this file is (customers, bills, complaints, usage or campaign events).
+    fix: Name the file after the table it holds (for example bills.csv), or check it holds the columns the data request lists.
+  PREFLIGHT_TABLE_MISSING:
+    title: A requested table was not found
+    meaning: The data request lists this table, and none of the files looks like it.
+    fix: Add the table to the folder, or tell Minfy why it cannot be sent.
+  PREFLIGHT_KEY_NOT_FOUND:
+    title: No customer ID column was found
+    meaning: The checker could not find a column that looks like a customer ID in this table, so it cannot be linked to the customer table.
+    fix: Include the pseudonymised customer ID in every table, with the same column name in each file.
+
+settings:
+  actions.bands[*].min_score:
+    meaning: Customers whose score is at or above this value go into this band and get its action. Raising it makes the band smaller and more certain.
+  actions.control_group_fraction:
+    meaning: A random share of eligible customers is deliberately not contacted, so the campaign's real effect can be measured by comparing the two groups later.
+  actions.suppression.recently_contacted_days:
+    meaning: Customers contacted within this many days are skipped, so nobody is contacted too often.
+  actions.suppression.suppress_opted_out:
+    meaning: Customers who opted out of marketing are never put on a contact list.
+  actions.suppression.suppress_recently_contacted:
+    meaning: Skip customers who were contacted recently (see the number of days).
+  evaluation.calibration:
+    meaning: Adjusts scores so that a score of 0.3 means roughly a 30% chance. Leave the default unless advised otherwise.
+  evaluation.champion_min_improvement_pct:
+    meaning: A new model replaces the one in use only if it is better by at least this much, so the model in use does not change for tiny gains.
+  evaluation.fairness_column:
+    meaning: Optionally compare results across the groups of one column (for example region), to see whether the model works equally well for each.
+  evaluation.reasons_per_row:
+    meaning: How many reasons are listed next to each customer's score.
+  evaluation.shap:
+    meaning: Work out, for each customer, which of their details raised or lowered their score, so every score comes with its reasons.
+  evaluation.threshold.mode:
+    meaning: How the cut-off between "flag" and "do not flag" is chosen. Automatic picks the cut-off that best balances catching cases against false alarms.
+  evaluation.threshold.value:
+    meaning: The fixed cut-off used when the threshold is set manually.
+  features.auto_feature_engineering:
+    meaning: Recorded with the run for a later release; it does not change results yet.
+  features.categorical_encoding:
+    meaning: Recorded with the run for a later release; it does not change results yet.
+  features.max_features:
+    meaning: Recorded with the run for a later release; it does not change results yet.
+  features.numeric_scaling:
+    meaning: Recorded with the run for a later release; it does not change results yet.
+  features.selection:
+    meaning: Recorded with the run for a later release; it does not change results yet.
+  features.text_columns:
+    meaning: Recorded with the run for a later release; it does not change results yet.
+  governance.approval_required:
+    meaning: A newly trained model is only used after a named person approves it.
+  governance.consent_column:
+    meaning: The column that says whether a customer agreed to marketing. Only customers marked true are contacted.
+  governance.retention_days:
+    meaning: How long uploaded data and results are kept before they are deleted.
+  model_search.candidates:
+    meaning: Which kinds of model the platform may try. Keeping the recommended choice lets it try them all and keep the best.
+  model_search.ensemble:
+    meaning: Combine the best few models into one, which is usually a little more accurate.
+  model_search.folds:
+    meaning: How many times the training data is re-split to check each model. More is steadier but slower.
+  model_search.imbalance:
+    meaning: How the platform deals with an outcome that is rare (for example, when only a few customers leave).
+  model_search.metric:
+    meaning: The measure used to pick the best model. The default suits this use case.
+  model_search.strategy:
+    meaning: How hard the platform searches for a good model. Faster searches finish sooner; thorough ones may find a slightly better model.
+  model_search.time_limit_minutes:
+    meaning: The longest the search for a model may run.
+  model_search.tuning_trials:
+    meaning: How many variations of each model are tried. More can help a little and takes longer.
+  monitoring.drift_psi_threshold:
+    meaning: How far new customers may move from the ones the model learned on before a warning is raised. Lower values warn sooner.
+  monitoring.performance_alert_drop_pct:
+    meaning: An alert is raised when measured results fall by more than this share compared with the test results.
+  monitoring.retraining:
+    meaning: Recorded with the run for a later release; it does not change results yet.
+  prepare.deduplicate:
+    meaning: Remove rows that are exact copies of each other before learning.
+  prepare.exclude_columns:
+    meaning: Columns listed here are never used to learn from (for example internal codes).
+  prepare.missing_values:
+    meaning: What to do with empty cells before learning. The default lets the platform handle them.
+  prepare.outliers:
+    meaning: What to do with extreme values (for example a bill a hundred times the usual amount).
+  prepare.pii_handling:
+    meaning: What happens to columns that look like personal details. They are masked or dropped and never learned from.
+  split.group_column:
+    meaning: Rows with the same value here (for example the same customer) are kept together when the data is divided into learning and testing parts.
+  split.test_fraction:
+    meaning: The share of customers kept aside to test the model on data it never saw.
+  split.time_column:
+    meaning: The date column used to test on the most recent period.
+  split.type:
+    meaning: How customers are divided into learning and testing parts - at random, or by date so the test is on the most recent period.
+  split.validation_fraction:
+    meaning: The share of customers used to choose between models during learning.
+  validation.leakage_check:
+    meaning: Look for columns that contain the answer (recorded after the outcome), which would make results look better than they will be.
+  validation.min_positive:
+    meaning: The fewest past examples of the outcome needed before the platform will learn.
+
+terms:
+  model: A set of rules learned from past customers that gives each customer a score.
+  score: A number from 0 to 1; higher means the outcome is more likely for that customer.
+  champion: The model currently approved for use.
+  decile: One tenth of customers, after sorting them from highest to lowest score. Decile 1 is the top 10%.
+  lift: How many times more cases a group contains than a random group of the same size. A lift of 3 means three times as many.
+  baseline: A simple model used as a yardstick; the platform's model should beat it.
+  control group: Customers chosen at random and deliberately not contacted, so the campaign's effect can be measured against them.
+  incremental: Caused by the campaign - the difference between contacted customers and the control group.
+  confidence interval: The range the true value very probably lies in. A range that does not include zero means the effect is real, not luck.
+  band: A group of customers with similar scores (High, Medium, Low) that share one suggested action.
+  reason: A customer detail that raised or lowered that customer's score.
+  pseudonymised: Customer IDs replaced by codes that only you can link back to real customers.
+
+# Plain names of the metrics a report may quote, and what a random pick would score on each (null
+# when there is no fixed random value). Only the model's primary metric is quoted, beside the
+# simple yardstick model's value from baseline.json.
+metrics:
+  roc_auc: {name: "How well it ranks customers with the outcome above those without (1 is perfect)", random: 0.5}
+  pr_auc: {name: "How precise its top of the list is, across all list lengths (1 is perfect)", random: null}
+  f1: {name: "Balance between catching cases and avoiding false alarms (1 is perfect)", random: null}
+  recall: {name: "Share of all cases it catches at the chosen cut-off", random: null}
+  precision: {name: "Share of flagged customers who really have the outcome", random: null}
+  rmse: {name: "Typical size of its error, in the outcome's own units (lower is better)", random: null}
+  mae: {name: "Average size of its error, in the outcome's own units (lower is better)", random: null}
+  auuc: {name: "How much better than a random pick it finds customers an offer changes (0 is no better)", random: 0.0}

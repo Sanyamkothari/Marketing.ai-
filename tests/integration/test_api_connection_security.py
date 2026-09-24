@@ -38,6 +38,7 @@ from typing import Any
 import httpx
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import SecretStr
 
 import api.routes.connection as connection_routes
 from api.main import create_app
@@ -515,7 +516,12 @@ def test_the_connection_screen_answers_on_prod(
     Phase 4b (DEC-702): a prod deployment answers a non-public route only with sign-in configured,
     so this deployment has `auth_mode=local` and the screen is read by a signed-in Viewer.
     """
-    settings = Settings(env="prod", auth_mode="local", cors_origins=("https://marketing.example.com",))
+    settings = Settings(
+        env="prod",
+        auth_mode="local",
+        cors_origins=("https://marketing.example.com",),
+        privacy_salt=SecretStr("a-prod-privacy-salt-01"),  # a prod API does not start without one (DEC-860)
+    )
     app = create_app(config_root=config_root)
     # Set after construction: `create_app(settings=...)` would also reconfigure the process's logging,
     # and that would leak into every test that runs after this one.

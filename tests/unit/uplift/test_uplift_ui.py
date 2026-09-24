@@ -3,8 +3,9 @@
 Two layers. The node tests (`uplift_ui.test.mjs`, `uplift_ui_wiring.test.mjs`) render every uplift
 screen from artefact fixtures and drive the module's routes through `ui/modules/router.js` with a
 stubbed `fetch`; they need nothing but `node`, and are skipped - with the reason printed - where
-there is none. The static checks below need nothing at all: they pin what a regression could break
-silently in a browser too - a file that no longer parses, an import that no longer resolves, an
+there is none (failed instead under `REQUIRE_JSDOM=1`, as CI sets it: `tests/fixtures/node.py`).
+The static checks below need nothing at all: they pin what a regression could break silently in a
+browser too - a file that no longer parses, an import that no longer resolves, an
 endpoint outside the Stage F contract, a prototype sample value, a placeholder other than the em
 dash, and the one line in each shared file's PHASE-3B block.
 """
@@ -13,12 +14,13 @@ from __future__ import annotations
 
 import posixpath
 import re
-import shutil
 import subprocess
 from pathlib import Path, PurePosixPath
 from typing import Final
 
 import pytest
+
+from tests.fixtures.node import skip_without_node
 
 REPO: Final[Path] = Path(__file__).resolve().parents[3]
 UI_DIR: Final[Path] = REPO / "ui"
@@ -62,9 +64,6 @@ API_PATH: Final[re.Pattern[str]] = re.compile(r"[`\"'](/[^`\"'\s]*)[`\"']")
 LINE_COMMENT: Final[re.Pattern[str]] = re.compile(r"(?<![:\"'`])//[^\n]*")
 BLOCK_COMMENT: Final[re.Pattern[str]] = re.compile(r"/\*.*?\*/", re.DOTALL)
 
-NODE: Final[str | None] = shutil.which("node")
-needs_node = pytest.mark.skipif(NODE is None, reason="node is not installed; the JS checks need it")
-
 
 def module_files() -> list[Path]:
     return sorted(MODULE_DIR.glob("*.js"))
@@ -85,22 +84,20 @@ def block(text: str, start: str, end: str) -> str:
 # ---------------------------------------------------------------------------
 # node: parse, render, route
 # ---------------------------------------------------------------------------
-@needs_node
 @pytest.mark.parametrize("name", sorted(EXPECTED_FILES))
 def test_every_module_file_parses(name: str) -> None:
-    assert NODE is not None
+    node = skip_without_node()
     result = subprocess.run(
-        [NODE, "--check", str(MODULE_DIR / name)], capture_output=True, text=True, timeout=60, check=False
+        [node, "--check", str(MODULE_DIR / name)], capture_output=True, text=True, timeout=60, check=False
     )
     assert result.returncode == 0, result.stderr
 
 
-@needs_node
 @pytest.mark.parametrize("name", NODE_TESTS)
 def test_node_suite_passes(name: str) -> None:
-    assert NODE is not None
+    node = skip_without_node()
     result = subprocess.run(
-        [NODE, "--test", str(HERE / name)], capture_output=True, text=True, timeout=120, check=False
+        [node, "--test", str(HERE / name)], capture_output=True, text=True, timeout=120, check=False
     )
     assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
     assert "# fail 0" in result.stdout

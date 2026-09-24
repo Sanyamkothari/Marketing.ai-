@@ -165,8 +165,32 @@ export const postRetentionApply = (planResponse) =>
     }),
   );
 
-/** `{principal_id, client_id?}` → 201 `ErasureOutcome`. */
+// --- approvals (Plan D M54, DEC-862, DEC-864) ---------------------------------------------------
+
+/** `ApprovalListResponse`: the challengers waiting, each with its head-to-head and whether you may decide. */
+export const getApprovals = () => request("/approvals");
+
+/** `{approved_by, reason}` → the version, now champion. `403 SEPARATION_OF_DUTIES` for its trainer. */
+export const postApprove = (modelId, payload) =>
+  request(`/models/${encodeURIComponent(modelId)}/approve`, json("POST", payload));
+
+/** `{reason}` → `{version, is_champion, decision}`: the challenger archived, the reason recorded. */
+export const postReject = (modelId, payload) =>
+  request(`/models/${encodeURIComponent(modelId)}/reject`, json("POST", payload));
+
+/** `{principal_id, client_id?}` → 202 `ErasureAccepted`: a background job erases (Plan D, DEC-863). */
 export const postErasure = (payload) => request("/privacy/erasure", json("POST", payload));
+
+/** `{principal_id}` again (it is never stored) → 202 `ErasureAccepted`; only a failed request. */
+export const postErasureRetry = (requestId, payload) =>
+  request(`/privacy/erasure/${encodeURIComponent(requestId)}/retry`, json("POST", payload));
+
+/** Status and per-store progress of one request; a plain read, so it can be polled. */
+export const getErasureProgress = (requestId) =>
+  request(`/privacy/erasure/${encodeURIComponent(requestId)}/progress`);
+
+/** One request's full record - the completion report. An audited read: asked once, at the end. */
+export const getErasure = (requestId) => request(`/privacy/erasure/${encodeURIComponent(requestId)}`);
 
 /** The erasure register, newest first. */
 export const getErasures = () => request("/privacy/erasure");
@@ -285,6 +309,21 @@ export function postOutcomes(runId, file, outcomeColumn = "") {
 /** `OutcomeReport`, or null before any outcomes were uploaded. */
 export const getOutcomes = (runId) =>
   orNull(request(`/runs/${encodeURIComponent(runId)}/outcomes`), ["OUTCOME_REPORT_NOT_FOUND"]);
+
+/**
+ * Was this scoring run's campaign measured on its Campaign results page (`#/campaign/<uc>/<run>`)?
+ * `GET /runs/{run_id}/campaign-results` answers 200 with the report once it was, 404 before; only
+ * that answer is read here, never the report. Anything else is thrown, so "unknown" stays unknown.
+ */
+export async function hasCampaignResults(runId) {
+  try {
+    await request(`/runs/${encodeURIComponent(runId)}/campaign-results`);
+    return true;
+  } catch (error) {
+    if (error instanceof ApiError && Number(error.status) === 404) return false;
+    throw error;
+  }
+}
 
 /** `IncrementalityInput`, or null when the run held out no control group (or has no outcomes yet). */
 export const getIncrementalityInput = (runId) =>

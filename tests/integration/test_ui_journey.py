@@ -11,13 +11,13 @@ Two layers are pinned here:
 * statically, no use-case screen names a journey label or links the bare `#/` as its root any more;
 * behaviourally, `journeyFor` and the two renderers are run under node against this app's own
   `GET /industries` response, and every expectation is read from the industry files, not typed
-  here. Node is not a Python dependency, so that half skips cleanly where it is absent.
+  here. Node is not a Python dependency, so that half skips cleanly where it is absent (and fails
+  under `REQUIRE_JSDOM=1`, as CI sets it).
 """
 
 from __future__ import annotations
 
 import json
-import shutil
 import subprocess
 from pathlib import Path
 from typing import Final
@@ -27,6 +27,7 @@ from fastapi.testclient import TestClient
 
 from api.main import UI_DIR, create_app
 from engine.config import DEFAULT_INDUSTRY, list_industries, load_industry
+from tests.fixtures.node import skip_without_node
 
 pytestmark = pytest.mark.integration
 
@@ -38,6 +39,19 @@ USE_CASE_SCREENS: Final[tuple[str, ...]] = (
     "modules/generative/copy.js",
 )
 """Every screen that belongs to one use case, and so to the journey that lists it."""
+
+HOME: Final[str] = '<a href="#/">Home</a>'
+SEP: Final[str] = '<span class="sep" aria-hidden="true">›</span>'
+"""v1 (docs/ui/FOUNDATION.md): every breadcrumb starts at Home, then the journey."""
+
+
+def _trail(href: str, label: str) -> str:
+    return f'{HOME}{SEP}<a href="{href}">{label}</a>'
+
+
+def _nav(inner: str) -> str:
+    return f'<nav class="crumbs" aria-label="Breadcrumb">{inner}</nav>'
+
 
 SCRIPT: Final[str] = """
 import { journeyFor } from %(overview)s;
@@ -82,9 +96,7 @@ def test_no_use_case_screen_names_its_journey(name: str) -> None:
 
 @pytest.fixture(scope="module")
 def journeys(config_root: Path) -> dict[str, dict[str, object]]:
-    node = shutil.which("node")
-    if node is None:
-        pytest.skip("node is not installed; the static half of this module still runs")
+    node = skip_without_node()  # the static half of this module runs either way
     with TestClient(create_app(config_root=config_root)) as client:
         payload = client.get("/industries").json()
     ids = sorted({card for i in list_industries() for card in _cards(i)} | {"no-such-use-case"})
@@ -117,11 +129,11 @@ def test_every_card_goes_back_to_the_journey_that_lists_it(journeys: dict[str, d
 
 
 def test_a_telecom_screen_reads_exactly_as_it_did(journeys: dict[str, dict[str, object]]) -> None:
-    """The default journey keeps the bare `#/` and its own label, so Phase 1's screens are unchanged."""
+    """The default journey keeps the bare `#/` and its own label, after the Home root (v1)."""
     label = load_industry(DEFAULT_INDUSTRY).journey_label
     for card in _cards(DEFAULT_INDUSTRY):
-        assert journeys[card]["back"] == f'<a class="back" href="#/">‹&nbsp; {label}</a>', card
-        assert journeys[card]["crumb"] == f'<a href="#/">{label}</a>', card
+        assert journeys[card]["back"] == _nav(_trail("#/", label)), card
+        assert journeys[card]["crumb"] == _trail("#/", label), card
 
 
 def test_another_industrys_screen_names_and_opens_that_industry(
@@ -133,8 +145,8 @@ def test_another_industrys_screen_names_and_opens_that_industry(
         label = load_industry(industry_id).journey_label
         for card in (c for c in _cards(industry_id) if _owner(c) == industry_id):
             href = f"#/industry/{industry_id}"
-            assert journeys[card]["back"] == f'<a class="back" href="{href}">‹&nbsp; {label}</a>', card
-            assert journeys[card]["crumb"] == f'<a href="{href}">{label}</a>', card
+            assert journeys[card]["back"] == _nav(_trail(href, label)), card
+            assert journeys[card]["crumb"] == _trail(href, label), card
 
 
 def test_a_use_case_no_file_lists_goes_back_to_the_default_journey(
@@ -147,6 +159,7 @@ def test_a_use_case_no_file_lists_goes_back_to_the_default_journey(
 
 
 def test_with_no_industry_the_root_is_the_bare_overview(journeys: dict[str, dict[str, object]]) -> None:
-    """What the overview then shows is the "Marketing AI" heading and no journey, so that is the name."""
+    """With no journey the breadcrumb is its root alone: Home, the bare overview (v1)."""
     assert journeys[""]["journey"] is None
-    assert journeys[""]["back"] == '<a class="back" href="#/">‹&nbsp; Marketing AI</a>'
+    assert journeys[""]["back"] == _nav(HOME)
+    assert journeys[""]["crumb"] == HOME

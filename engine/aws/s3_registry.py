@@ -36,7 +36,7 @@ from engine.storage import Storage, StorageError, published_model_key
 from engine.utils.logging import get_logger, log_failure
 
 if TYPE_CHECKING:
-    from engine.contracts import ModelVersion
+    from engine.contracts import ModelStatus, ModelVersion
 
 __all__ = ["ModelMirror", "S3ModelRegistry"]
 
@@ -116,9 +116,12 @@ class S3ModelRegistry:
         self._mirror(promoted)
         return promoted
 
-    def archive(self, model_id: str) -> ModelVersion:
-        """Retire a version. The published files are left alone: a lifecycle rule owns their end."""
-        archived = self._store.archive(model_id)
+    def archive(self, model_id: str, *, expected_status: ModelStatus | None = None) -> ModelVersion:
+        """Retire a version. The published files are left alone: a lifecycle rule owns their end.
+
+        `expected_status` is the store's check, made under the store's lock (DEC-869).
+        """
+        archived = self._store.archive(model_id, expected_status=expected_status)
         self._mirror(archived)
         return archived
 

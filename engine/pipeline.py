@@ -1030,6 +1030,7 @@ class _TrainFlow:
             run_id=ctx.run_id,
             model_version_id=model_id,
             primary_key=ctx.key,
+            target=ctx.target,
         )
         self._write(register.DRIFT_BASELINE_FILENAME, baseline)
         champion = self._rescore_champion(recipe.model_search.metric, parts["test"])
@@ -1086,6 +1087,9 @@ class _TrainFlow:
         value = next((item.value for item in report.metrics if item.id is metric), None)
         if value is None:
             return _unavailable(champion, f"{metric.value} has no value on this run's test split")
+        # Every catalog metric of the re-score, not only the one the rule compares, so the Approver's
+        # head-to-head (Plan D M54, DEC-864) shows both models on the same held-out rows.
+        self._manifest.add_metrics({item.id.value: item.value for item in report.metrics}, prefix="champion_")
         self._manifest.add_metrics({metric.value: value}, prefix="champion_")
         _LOGGER.info(
             "register: champion %s re-scored on this run's test split: %s=%s",
@@ -1921,3 +1925,5 @@ def uplift_flow_for(pipeline: Pipeline, ctx: StageContext, mode: RunMode) -> _Tr
 
 
 # ---- END PHASE-3B ----
+# ---- PLAN-E (pilot) — append only below this line ----
+# ---- END PLAN-E ----
