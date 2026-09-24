@@ -411,6 +411,7 @@ def journey(
     # 4. The Data page's lineage block.
     first_block.click()
     expect(page.locator(".tab.on")).to_contain_text("Data")
+    page.get_by_text("Details: data lineage").click()  # behind a disclosure since v1 (WP4)
     expect(page.locator(".lineage")).to_be_visible()
     seen.lineage = [text.strip() for text in page.locator(".lineage .lin .lt").all_inner_texts()]
     at = mark("lineage", at)
@@ -449,7 +450,7 @@ def journey(
     page.locator(".flow .block").nth(2).click()
     expect(page.locator(".tab.on")).to_contain_text("Output")
     with page.expect_download() as scores_info:
-        page.get_by_role("link", name="Download all scored rows (CSV)").click()
+        page.get_by_role("link", name="Download contact list (CSV)").click()
     scores = workdir / "scores.csv"
     scores_info.value.save_as(scores)
     with scores.open(encoding="utf-8", newline="") as handle:

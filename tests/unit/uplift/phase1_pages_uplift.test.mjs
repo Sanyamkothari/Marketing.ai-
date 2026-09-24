@@ -1,4 +1,5 @@
-/* Phase 1's Data, Model and Output pages (ui/pages.js) on an uplift run (M53).
+/* Phase 1's Data, Model and Output pages (ui/pages.js) on an uplift run (M53), and since v1 (WP4) on
+   Phase 1 runs too: plain words first, one primary action, no artefact file name on screen.
    `pages.js` is pure - strings in, strings out - so each page is rendered here exactly as the
    browser renders it, from uplift artefact fixtures. Run by tests/unit/uplift/test_phase1_pages_uplift.py,
    or directly: `node --test tests/unit/uplift/phase1_pages_uplift.test.mjs`. No npm install is needed. */
@@ -168,16 +169,32 @@ const noJunk = (html) => {
 const PHASE1_ONLY = ["prepare.json", "drift.json", "decile_lift.json"];
 
 test("an uplift run never requests an artefact it does not write", () => {
-  for (const kind of ["data", "model", "output"]) {
-    const names = pages.pageArtefacts(kind, trainRun);
-    for (const name of PHASE1_ONLY) assert.ok(!names.includes(name), `${kind} asks for ${name}`);
-    assert.deepEqual(names, pages.UPLIFT_PAGE_ARTEFACTS[kind]);
-    assert.deepEqual(pages.pageArtefacts(kind, phase1Run), pages.PAGE_ARTEFACTS[kind]);
+  for (const run of [trainRun, scoreRun]) {
+    const names = pages.pageArtefacts("data", run);
+    for (const name of PHASE1_ONLY) assert.ok(!names.includes(name), `data asks for ${name}`);
   }
+  assert.deepEqual(pages.pageArtefacts("data", trainRun), pages.UPLIFT_PAGE_ARTEFACTS.data);
+  assert.deepEqual(pages.pageArtefacts("data", scoreRun), pages.UPLIFT_PAGE_ARTEFACTS.data_score);
   assert.ok(pages.pageArtefacts("data", trainRun).includes("uplift_validation.json"));
-  assert.ok(pages.pageArtefacts("model", trainRun).includes("qini_curve.json"));
-  assert.ok(pages.pageArtefacts("model", trainRun).includes("uplift_evaluation.json"));
-  assert.ok(pages.pageArtefacts("output", trainRun).includes("uplift_drift.json"));
+  assert.ok(!pages.pageArtefacts("data", trainRun).includes("uplift_drift.json"), "a training run writes no drift");
+  assert.ok(pages.pageArtefacts("data", scoreRun).includes("uplift_drift.json"));
+  // v1 (WP4): an uplift run's Model and Output are the uplift module's screens; nothing is read here.
+  for (const kind of ["model", "output"]) {
+    assert.deepEqual(pages.pageArtefacts(kind, trainRun), []);
+    assert.deepEqual(pages.pageArtefacts(kind, scoreRun), []);
+  }
+});
+
+test("a Phase 1 run reads by its mode: a scoring run never asks for decile_lift.json", () => {
+  const phase1Score = { ...phase1Run, mode: "score" };
+  for (const kind of ["data", "model", "output"]) {
+    assert.deepEqual(pages.pageArtefacts(kind, phase1Run), pages.PAGE_ARTEFACTS[kind]);
+    assert.deepEqual(pages.pageArtefacts(kind, phase1Score), pages.PAGE_ARTEFACTS[`${kind}_score`]);
+  }
+  assert.ok(pages.pageArtefacts("output", phase1Run).includes("decile_lift.json"));
+  assert.ok(!pages.pageArtefacts("output", phase1Score).includes("decile_lift.json"));
+  assert.ok(pages.pageArtefacts("output", phase1Score).includes("scoring_summary.json"));
+  assert.ok(!pages.pageArtefacts("data", phase1Score).includes("split.json"), "a scoring run writes no split");
 });
 
 test("data page: treatment and control in customers and rows, the randomness check, a grouped split", () => {
@@ -213,7 +230,8 @@ test("data page: a failed, acknowledged randomness check and its finding are sho
   const art = { "uplift_validation.json": { ...upliftValidation, causal: false, randomness_auc: 0.71, checks: [finding] } };
   const seen = text(pages.renderPage("data", uc, trainRun, art, "#"));
   assert.match(seen, /Targeted, acknowledged \(AUC 0\.71\)/);
-  assert.match(seen, /TREATMENT_NOT_RANDOM error \(acknowledged\)/);
+  // v1: the finding leads in words; the code stays in its own (hidden-by-default) column.
+  assert.match(seen, /Treatment not random Error \(acknowledged\) Who was treated can be predicted\. TREATMENT_NOT_RANDOM/);
   assert.match(seen, /Not causal/);
 });
 
@@ -227,60 +245,42 @@ test("data page of a scoring run: the drift card, honest about the treated share
   noJunk(html);
 });
 
-test("model page: the Qini curve and AUUC instead of ROC and lift", () => {
-  const art = { "uplift_evaluation.json": evaluation, "qini_curve.json": curve };
-  const html = pages.renderPage("model", uc, trainRun, art, "#", { qiniChart: charts.qiniChart });
-  const seen = text(html);
-  assert.match(html, /<svg[^>]*aria-label="Qini curve/);
-  assert.match(seen, /AUUC 0\.0123/);
-  assert.match(seen, /0\.0123 \(95% CI 0\.0041 to 0\.0205\)/);
-  assert.match(seen, /Qini coefficient 0\.0087/);
-  assert.match(seen, /Uplift in the top 10%/);
-  for (const phase1 of ["Confusion matrix", "ROC", "Model search", "Decision threshold"]) {
-    assert.ok(!seen.includes(phase1), `an uplift Model page shows ${phase1}`);
+test("an uplift run's Model and Output redirect to the uplift module's own screens", () => {
+  for (const [kind, run] of [
+    ["model", trainRun],
+    ["output", scoreRun],
+    ["output", trainRun],
+  ]) {
+    const html = pages.renderPage(kind, uc, run, {}, "#", { qiniChart: charts.qiniChart });
+    const href = `#/uplift/win-back-campaign/${kind}/${run.run_id}`;
+    assert.ok(html.includes(`data-redirect="${href}"`), `${kind} of ${run.run_id} redirects`);
+    assert.ok(html.includes(`href="${href}"`), "and offers the link while it does");
+    assert.ok(!text(html).includes("has not produced"));
+    noJunk(html);
   }
-  noJunk(html);
 });
 
-test("model page without the uplift module lists the curve's points instead of drawing it", () => {
-  const html = pages.renderPage("model", uc, trainRun, { "qini_curve.json": curve }, "#");
-  assert.ok(!html.includes('aria-label="Qini curve'));
-  assert.match(text(html), /share targeted model random/);
-  assert.match(text(html), /10% 0\.95% 0\.3% .* 100% 3% 3%/);
-});
-
-test("model page with nothing written says what is missing, never a number", () => {
-  const html = pages.renderPage("model", uc, trainRun, {}, "#");
-  const seen = text(html);
-  assert.match(seen, /has not produced qini_curve\.json yet/);
-  assert.match(seen, /has not produced uplift_evaluation\.json yet/);
-  assert.match(seen, new RegExp(`AUUC ${EM}`));
-  noJunk(html);
-});
-
-test("output page: segments, the targeting recommendation, drift and the treat list", () => {
-  const art = {
-    "scoring_summary.json": summary,
-    "segments.json": { computed_on: "scored", causal: true, segments: [] },
-    "policy_recommendation.json": policy,
-    "uplift_drift.json": drift,
-  };
-  const html = pages.renderPage("output", uc, scoreRun, art, "/runs/r-score/scores.csv");
-  const seen = text(html);
-  assert.match(seen, /Persuadables recommended to contact 1,200/);
-  assert.match(seen, /Persuadables Treat 1,500 30%/);
-  assert.match(seen, /Contacts recommended 1,200/);
-  assert.match(seen, /80\.5 \(95% CI 41\.1 to 120\.9\)/);
-  assert.match(seen, /Drift against the training data/);
-  assert.match(seen, /customer_id \+ snapshot_date uplift segment top reason action/);
-  assert.match(seen, /C0000001\|2026-04-30 0\.0712 Persuadables/);
-  assert.ok(!seen.includes("Lift (top decile)"), "no propensity wording on an uplift run");
-  assert.ok(html.includes('href="/runs/r-score/scores.csv"'));
-  noJunk(html);
+test("an uplift run's Data page links its Model and Output tabs to the uplift screens", () => {
+  const train = pages.renderPage("data", uc, trainRun, {}, "#");
+  assert.ok(train.includes('href="#/uplift/win-back-campaign/model/r-train"'));
+  assert.ok(train.includes('href="#/uplift/win-back-campaign/output/r-train"'));
+  const score = pages.renderPage("data", uc, scoreRun, {}, "#");
+  assert.ok(score.includes('href="#/campaign/win-back-campaign/r-score"'), "a scoring run has Campaign results");
+  assert.ok(!score.includes("/model/r-score"), "an uplift scoring run has no Model tab");
+  assert.ok(!text(train).includes("has not produced"));
+  assert.ok(!text(score).includes("has not produced"));
 });
 
 test("a Phase 1 run still gets the Phase 1 pages", () => {
-  const html = pages.renderPage("model", uc, phase1Run, {}, "#");
+  const evaluation = {
+    primary_metric: "roc_auc",
+    primary_metric_label: "ROC-AUC",
+    headline_score: 0.91,
+    metrics: [{ id: "roc_auc", label: "ROC-AUC", value: 0.91 }],
+  };
+  const matrix = { true_positive: 1, false_negative: 2, false_positive: 3, true_negative: 4, threshold: 0.5 };
+  const html = pages.renderPage("model", uc, phase1Run, { "evaluation.json": evaluation, "confusion_matrix.json": matrix }, "#");
+  assert.match(text(html), /How good is this model\?/);
   assert.match(text(html), /Confusion matrix/);
   assert.ok(!text(html).includes("Qini"));
 });
@@ -289,4 +289,191 @@ test("problem types are labelled for the runs list", () => {
   assert.equal(pages.problemTypeLabel(uc, "binary_classification"), "Classification (yes / no)");
   assert.equal(pages.problemTypeLabel(uc, "uplift"), "Uplift");
   assert.equal(pages.problemTypeLabel(uc, null), EM);
+});
+
+// --- v1 (WP4): Phase 1's own pages, plain words first ------------------------------------------------
+// The same pure renderer, on Phase 1 runs: one primary action per page, no artefact file name on
+// screen, codes and ids only inside "Technical details".
+
+const telco = {
+  ...uc,
+  id: "telco-churn",
+  name: "Telco Customer Churn",
+  entity: "subscriber",
+  pages: { data: "Profile", model: "Churn model", output: "Churn risk" },
+  output: { kpi: { label: "Subscribers at risk" } },
+  config: {
+    suggested_features: [{ name: "days_since_last_activity", description: "Days since the subscriber last did anything." }],
+    label: { description: "No activity of any kind in the 60 days after the snapshot date." },
+  },
+};
+const p1Train = { ...trainRun, run_id: "r-p1t", problem_type: "binary_classification", primary_key: KEY, dataset_id: "ds_1" };
+const p1Score = { ...p1Train, run_id: "r-p1s", mode: "score", target: null };
+const visible = (html) => text(html.split("data-tech>")[0]);
+const primaries = (html) => (html.match(/class="btn primary"/g) || []).length;
+
+const scoring = {
+  rows_scored: 2000,
+  score_field: "churn_prob",
+  control_group_rows: 200,
+  kpi: { label: "Subscribers at risk", formula: 'count_where_band_in(["High","Medium"])', display: "855" },
+  bands: [
+    { name: "High", action: "Retention call", rows: 851, share_pct: 42.5 },
+    { name: "Medium", action: "Upgrade offer", rows: 4, share_pct: 0.2 },
+    { name: "Low", action: "No action", rows: 1145, share_pct: 57.2 },
+  ],
+  actions: [{ action: "Control (hold out)", rows: 200, share_pct: 10 }],
+  suppressed: [],
+  drift_status: "drifted",
+  rows_with_fallback_reasons: 0,
+  sample_rows: [
+    {
+      primary_key: "1000003|2025-03-30",
+      score: 0.9981,
+      band: "High",
+      action: "Retention call",
+      reasons: [{ feature: "days_since_last_activity", value: "240", direction: "up", text: "days_since_last_activity ↑ (240)" }],
+      suppressed_reason: null,
+    },
+  ],
+};
+
+test("scoring Output: the contact list is the one primary action, and nothing asks for a lift", () => {
+  const art = {
+    "scoring_summary.json": scoring,
+    "drift.json": { baseline_run_id: "r-p1t", status: "drifted", max_psi: 13.8 },
+  };
+  const html = pages.renderPage("output", telco, p1Score, art, "/runs/r-p1s/scores.csv");
+  const seen = visible(html);
+  assert.equal(primaries(html), 1);
+  assert.match(html, /<a class="btn primary" href="\/runs\/r-p1s\/scores\.csv"[^>]*>.*Download contact list \(CSV\)<\/a>/);
+  assert.match(seen, /Subscribers at risk 855 High 851 \+ Medium 4/);
+  assert.match(seen, /Customers scored 2,000/);
+  assert.match(seen, /Held back to measure results 200 \(10%\)/);
+  assert.match(seen, /The new customers look very different/);
+  assert.match(seen, /Subscriber Churn likelihood % Band Main reason Action/);
+  assert.match(seen, /1000003 100% High Days since last activity is 240 \(raises it\) Retention call/);
+  assert.match(seen, /Held back \(control group\)/);
+  for (const gone of ["decile", "Lift", ".json", "has not produced"]) {
+    assert.ok(!seen.includes(gone), `the scoring Output shows ${gone}`);
+  }
+  assert.match(html, /href="#\/campaign\/telco-churn\/r-p1s"/, "Campaign results is a tab");
+  noJunk(html);
+});
+
+test("training Output: one lift tile in words and 'Score new customers with this model'", () => {
+  const lift = {
+    unit: "x",
+    values: [5.0382, 3.3893, 0.6718, 0.2595],
+    bins: [{ label: "D1" }, { label: "D2" }, { label: "D3" }, { label: "D4" }],
+  };
+  const html = pages.renderPage("output", telco, p1Train, { "decile_lift.json": lift }, "#");
+  const seen = visible(html);
+  assert.equal(primaries(html), 1);
+  assert.match(html, /class="btn primary" href="#\/uc\/telco-churn">Score new customers with this model/);
+  assert.match(
+    seen,
+    /Lift in the top 10% 5× The 10% of subscribers with the highest scores had the outcome 5 times as often as a random 10%\./,
+  );
+  assert.match(seen, /3\.4×/);
+  assert.ok(!seen.includes("0.3×"), "values are labelled on D1 to D3 only");
+  assert.ok(!seen.includes("Download contact list"));
+  const empty = visible(pages.renderPage("output", telco, p1Train, {}, "#"));
+  assert.match(empty, /The lift chart appears when training finishes/);
+  assert.ok(!empty.includes(".json"));
+});
+
+test("Model: a verdict, the fallback cut-off by its title, a calm baseline warning, codes only in details", () => {
+  const evaluation = {
+    primary_metric: "roc_auc",
+    primary_metric_label: "ROC-AUC",
+    headline_score: 0.9554,
+    rows_evaluated: 3300,
+    metrics: [
+      { id: "roc_auc", label: "ROC-AUC", value: 0.9554 },
+      { id: "recall", label: "Recall", value: 0.8046 },
+    ],
+    threshold: 0.8123,
+    threshold_mode: "auto",
+    threshold_detail:
+      "Auto, fell back to the top 10% of validation scores (THRESHOLD_FALLBACK: F1 flagged every row): 0.8123",
+  };
+  const baseline = {
+    baseline_name: "baseline (logistic regression)",
+    rows: [{ id: "roc_auc", label: "ROC-AUC", model_value: 0.9554, baseline_value: 0.9604, model_better: false }],
+  };
+  const importance = { items: Array.from({ length: 10 }, (_, i) => ({ feature: `f_${i}`, share_pct: i + 1 })) };
+  const art = {
+    "evaluation.json": evaluation,
+    "baseline.json": baseline,
+    "feature_importance.json": importance,
+    "fairness.json": { evaluated: false, reason_not_evaluated: "No sensitive column was configured." },
+    "best_model.json": { display_name: "LightGBM", hyperparameters_summary: "53 leaves" },
+  };
+  const html = pages.renderPage("model", telco, p1Train, art, "#");
+  const seen = visible(html);
+  assert.match(seen, /It ranks a subscriber who has the outcome above one who does not 96% of the time\./);
+  assert.match(seen, /The automatic cut-off was replaced by the top 10%/);
+  assert.ok(!seen.includes("THRESHOLD_FALLBACK"), "the code is not shown outside Technical details");
+  assert.match(text(html), /THRESHOLD_FALLBACK/, "it is kept in Technical details");
+  assert.match(seen, /A simpler yardstick model scored slightly higher/);
+  assert.match(seen, /Model LightGBM Ranking quality 0\.955 Cases caught 80%/);
+  assert.match(seen, /What drives the score \(largest first\) F 9 /);
+  assert.match(seen, /Show all 10/);
+  assert.ok(!seen.includes("Fairness") && !seen.includes("sensitive column"), "no fairness card unless evaluated");
+  assert.match(html, /Next: Output ›/);
+  assert.equal(primaries(html), 1);
+  noJunk(html);
+});
+
+test("Model of a scoring run: points to the training run instead of empty cards", () => {
+  const html = pages.renderPage("model", telco, p1Score, { "drift.json": { baseline_run_id: "r-p1t" } }, "#");
+  assert.match(html, /href="#\/uc\/telco-churn\/model\/r-p1t">Open the training run's Model page/);
+  assert.ok(!visible(html).includes(".json"));
+  assert.equal(primaries(html), 1);
+});
+
+test("Data: glance tiles, lineage behind Details, the feature table sorted by missing values", () => {
+  const profile = {
+    file_name: "ds_1 (built)",
+    file_format: "parquet",
+    row_count: 22000,
+    column_count: 18,
+    missing_value_rate_pct: 5.14,
+    columns: [
+      { name: "customer_id", distinct_count: 2000, null_rate: 0, inferred_type: "integer" },
+      { name: "days_since_last_activity", null_rate: 0, inferred_type: "integer" },
+      { name: "usage_mb_30d", null_rate: 0.4687, inferred_type: "float" },
+    ],
+  };
+  const prepare = {
+    feature_columns: ["days_since_last_activity", "usage_mb_30d"],
+    transforms: [
+      { kind: "clip_percentile", columns: ["usage_mb_30d"], parameters: { applied: true } },
+      { kind: "clip_percentile", columns: ["days_since_last_activity"], parameters: { applied: true } },
+    ],
+  };
+  const node = (id, label) => ({ id, label, detail: "" });
+  const lineage = {
+    sources: [node("src_1", "customers.csv")],
+    mappings: [node("map_1", "Mapping map_1")],
+    spec: node("spec_1", "Recipe"),
+    dataset: node("ds_1", "Dataset"),
+  };
+  const run = { ...p1Train, primary_key: ["customer_id", "snapshot_date"] };
+  const html = pages.renderPage("data", telco, run, { "profile.json": profile, "prepare.json": prepare }, "#", { lineage });
+  const seen = visible(html);
+  assert.match(seen, /Rows 22,000 One per subscriber per date Subscribers 2,000 Details used to predict 2 Missing values 5\.1%/);
+  assert.match(seen, /Built from 1 table: customers\.csv\./);
+  assert.match(html, /<details class="tech" data-lineage><summary>Details: data lineage<\/summary><div class="lineage">/);
+  assert.match(seen, /Extreme values capped on 2 columns/);
+  assert.match(seen, /Usage MB 30 days 46\.9% .* Days since last activity Days since the subscriber last did anything\. 0%/);
+  assert.match(seen, /No activity of any kind in the 60 days after the snapshot date\./);
+  assert.ok(!seen.includes("Label source"), "a built dataset's label has no uploaded source");
+  assert.ok(!seen.includes("Date range"), "an unknown date range is hidden");
+  assert.ok(!seen.includes("PARQUET") && !seen.includes("ds_1 (built)"), "file facts are in Technical details");
+  assert.match(html, /Next: Model ›/);
+  const bare = visible(pages.renderPage("data", telco, p1Train, {}, "#"));
+  assert.ok(!bare.includes(".json") && !bare.includes("has not produced"));
+  noJunk(html);
 });

@@ -234,6 +234,11 @@ def tiles(screen: sync_api.Page) -> dict[str, str]:
     return found
 
 
+def open_details(screen: sync_api.Page) -> None:
+    """Open every disclosure on the page, as a user reading "Technical details" would (v1, WP4)."""
+    screen.eval_on_selector_all("main details", "els => els.forEach((e) => { e.open = true; })")
+
+
 def key_values(screen: sync_api.Page) -> list[tuple[str, str]]:
     """Every `.kv` row on the page as (key, value); a list because keys repeat across cards."""
     rows = []
@@ -385,9 +390,11 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
     # `.tab.on` names the page the router actually painted, so waiting on it cannot read the
     # previous page's tiles while the hash route is still changing.
     expect(page.locator(".tab.on")).to_contain_text("Data")
+    open_details(page)  # the file's facts sit in Technical details since v1 (WP4)
     seen.data_tiles, seen.data_rows = tiles(page), key_values(page)
     page.locator(".tabs .tab").nth(1).click()
     expect(page.locator(".tab.on")).to_contain_text("Model")
+    open_details(page)  # the training setup sits in Technical details since v1 (WP4)
     seen.model_tiles, seen.model_rows = tiles(page), key_values(page)
     page.locator(".tabs .tab").nth(2).click()
     expect(page.locator(".tab.on")).to_contain_text("Output")
@@ -421,7 +428,7 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
     expect(page.locator(".tab.on")).to_contain_text("Output")
     seen.score_output_tiles = tiles(page)
     with page.expect_download() as scores_info:
-        page.get_by_role("link", name="Download all scored rows (CSV)").click()
+        page.get_by_role("link", name="Download contact list (CSV)").click()
     scores = workdir / "scores.csv"
     scores_info.value.save_as(scores)
     with scores.open(encoding="utf-8", newline="") as handle:
@@ -484,7 +491,7 @@ def test_the_data_page_renders_the_profile_and_the_split(journey: Journey) -> No
     """Data page: `profile.json`, `prepare.json` and `split.json`, as numbers."""
     assert journey.data_tiles.get("Rows") not in (None, EM_DASH), journey.data_tiles
     assert journey.data_tiles.get("Missing values") not in (None, EM_DASH), journey.data_tiles
-    features = journey.data_tiles.get("Features", EM_DASH)
+    features = journey.data_tiles.get("Details used to predict", EM_DASH)
     assert features.isdigit() and int(features) > 0, journey.data_tiles
     assert ("Rows", f"{TRAIN_ROWS:,}") in journey.data_rows, journey.data_rows
     assert ("Columns", "10") in journey.data_rows, journey.data_rows
@@ -493,10 +500,10 @@ def test_the_data_page_renders_the_profile_and_the_split(journey: Journey) -> No
 
 def test_the_model_page_renders_the_trained_model(journey: Journey) -> None:
     """Model page: `best_model.json` and `evaluation.json`, as the algorithm and its metric."""
-    algorithm = journey.model_tiles.get("Algorithm", EM_DASH)
+    algorithm = journey.model_tiles.get("Model", EM_DASH)
     assert algorithm not in ("", EM_DASH), journey.model_tiles
-    assert journey.model_tiles.get("Last trained") not in (None, EM_DASH), journey.model_tiles
-    headline = journey.model_tiles.get("ROC-AUC", EM_DASH)
+    assert journey.model_tiles.get("Trained") not in (None, EM_DASH), journey.model_tiles
+    headline = journey.model_tiles.get("Ranking quality", EM_DASH)  # ROC-AUC, in plain words (v1)
     assert re.fullmatch(r"[0-9.]+", headline), journey.model_tiles
     assert 0.0 < float(headline) <= 1.0
     assert ("Target", TARGET) in journey.model_rows, journey.model_rows
@@ -505,7 +512,7 @@ def test_the_model_page_renders_the_trained_model(journey: Journey) -> None:
 
 def test_the_output_page_of_the_training_run_renders_the_lift(journey: Journey) -> None:
     """Output page after training: `decile_lift.json` is what that run produced, and it is drawn."""
-    lift = journey.train_output_tiles.get("Lift (top decile)", EM_DASH)
+    lift = journey.train_output_tiles.get("Lift in the top 10%", EM_DASH)
     assert lift not in ("", EM_DASH), journey.train_output_tiles
     assert re.search(r"[0-9]", lift), lift
 
@@ -531,8 +538,8 @@ def test_the_output_page_of_the_scoring_run_renders_the_kpi(journey: Journey) ->
     """Output page after scoring: `scoring_summary.json`'s KPI, row count and control group."""
     kpi = journey.score_output_tiles.get("Target audience", EM_DASH)
     assert kpi not in ("", EM_DASH), journey.score_output_tiles
-    assert journey.score_output_tiles.get("Rows scored") == f"{SCORE_ROWS:,}", journey.score_output_tiles
-    control = journey.score_output_tiles.get("Control group", EM_DASH)
+    assert journey.score_output_tiles.get("Customers scored") == f"{SCORE_ROWS:,}", journey.score_output_tiles
+    control = journey.score_output_tiles.get("Held back to measure results", EM_DASH)
     assert control not in ("", EM_DASH), journey.score_output_tiles
 
 

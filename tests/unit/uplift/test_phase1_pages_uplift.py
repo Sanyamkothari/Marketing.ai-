@@ -39,7 +39,9 @@ def uplift_page_artefacts() -> dict[str, list[str]]:
 def test_the_uplift_pages_read_only_registered_artefacts() -> None:
     known = set(ARTEFACT_REGISTRY) | set(TABULAR_SCHEMAS) | set(UPLIFT_ARTEFACTS)
     pages = uplift_page_artefacts()
-    assert set(pages) == {"data", "model", "output"}
+    # v1 (WP4): an uplift run's Model and Output redirect to the uplift module's screens, so only the
+    # Data page reads here - by the run's mode.
+    assert set(pages) == {"data", "data_score"}
     for page, names in pages.items():
         assert names, page
         assert not [name for name in names if name not in known], page
@@ -48,9 +50,8 @@ def test_the_uplift_pages_read_only_registered_artefacts() -> None:
 
 def test_the_uplift_pages_read_the_uplift_artefacts_m53_names() -> None:
     pages = uplift_page_artefacts()
-    assert {"uplift_validation.json", "uplift_drift.json"} <= set(pages["data"])
-    assert {"uplift_evaluation.json", "qini_curve.json"} <= set(pages["model"])
-    assert {"scoring_summary.json", "segments.json", "uplift_drift.json"} <= set(pages["output"])
+    assert "uplift_validation.json" in pages["data"]
+    assert "uplift_drift.json" in pages["data_score"]
 
 
 def test_node_suite_passes() -> None:

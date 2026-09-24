@@ -491,12 +491,12 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     )
     seen.seconds["score"] = round(time.monotonic() - at, 1)
     page.locator(".flow .block").nth(2).click()
+    # v1 (WP4): Phase 1's Output link of an uplift run redirects to the uplift module's own Output.
+    expect(page.locator("main[data-module=uplift]")).to_be_attached()
     expect(page.locator(".tab.on")).to_contain_text("Output")
-    campaign_link = page.locator(".uentry a", has_text="Campaign results for this run")
-    expect(campaign_link).to_be_visible()
     seen.score_run = run_id_of(page.url)
     seen.screens["phase1_score_output"] = capture(page, console, shots, "12-phase1-score-output")
-    campaign_link.click()
+    page.locator(".tabs .tab", has_text="Campaign results").click()
     expect(page.locator("main[data-module=uplift]")).to_be_attached()
     console.phase1 = False
 
