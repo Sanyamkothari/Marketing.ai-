@@ -182,3 +182,35 @@ test("a production deployment with sign-in off is named in the bar, in the serve
   assert.match(html, /Sign-in is not configured/);
   assert.ok(html.includes(message));
 });
+
+test("the user menu names the person and one role, never the implied Viewer, with Sign out set apart", async () => {
+  const { userBarHtml, mainRole } = await import("../../../../ui/modules/production/userbar.js");
+  const admin = fixture("me_admin");
+  const html = userBarHtml(admin, "signed-in");
+  const holder = w.document.createElement("div");
+  holder.innerHTML = html;
+  assert.match(holder.textContent, /Signed in as admin-person/);
+  assert.equal(holder.querySelector(".um-role").textContent, "Admin");
+  assert.doesNotMatch(holder.textContent, /Viewer/, "Viewer is implied by any role and not shown beside it");
+  assert.ok(holder.querySelector('a[href="#/account"]'), "Change password");
+  const signout = holder.querySelector("#pb-signout");
+  assert.ok(signout && signout.previousElementSibling.classList.contains("msep"), "Sign out after a separator");
+  assert.equal(signout, holder.querySelector(".menu-pop").lastElementChild, "Sign out at the bottom");
+  assert.equal(mainRole(["viewer"]), "Viewer", "a Viewer alone is labelled Viewer");
+  assert.equal(mainRole(["viewer", "analyst", "approver"]), "Approver");
+});
+
+test("sign-in off is a neutral chip whose toggletip says access control is off; signed out is Sign in", async () => {
+  const { userBarHtml } = await import("../../../../ui/modules/production/userbar.js");
+  const holder = w.document.createElement("div");
+  holder.innerHTML = userBarHtml(fixture("me_off"), "off");
+  const chip = holder.querySelector("button[data-toggletip]");
+  assert.equal(chip.textContent, "Sign-in off");
+  assert.ok(chip.classList.contains("neutral"), "not a warning");
+  assert.match(chip.nextElementSibling.textContent, /Access control is off: everyone has every role\./);
+  assert.equal(holder.querySelector("#pb-signout"), null);
+  holder.innerHTML = userBarHtml(null, "signed-out");
+  const link = holder.querySelector("a");
+  assert.equal(link.getAttribute("href"), "#/signin/uc%2Fsome-use-case");
+  assert.match(link.textContent, /Not signed in\. Sign in/, "the accessible name says the state, then the action");
+});
