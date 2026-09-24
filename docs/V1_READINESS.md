@@ -122,6 +122,35 @@ and `causalml` libraries, which the project does not install. No Postgres or jsd
 
 ---
 
+## What changed in the UI
+
+Part 3 made the product usable without training, changing UI and presentation only. No engine
+logic, check, champion rule or API contract changed, and no capability was removed: anything that
+left a screen was moved, grouped or put behind a disclosure. The audit is
+[`UI_AUDIT.md`](UI_AUDIT.md). Before/after screenshots of every screen are in
+[`ui/before/`](ui/before/) and [`ui/after/`](ui/after/), indexed in [`ui/README.md`](ui/README.md).
+
+- **One top bar, by goal.** Home · Build data · Models · Campaigns · Reports · Admin replaces two
+  unrelated strips of links. Admin items and approvals appear only to the roles allowed to use them.
+  The client picker, the sample-data chip, Help (tour, feedback) and the user menu sit at its right.
+- **The header's right side is the logo alone** (the owner's request).
+- **Verdict first, one primary action per screen.** Results say what happened in a sentence and offer
+  the next step: score new customers, download the contact list, see the value in rupees.
+- **Plain language.** No internal codes, file names, ids or phase numbers on screen. They sit under
+  Technical details. Labels and explanations come from `configs/pilot/help.yaml`. Campaign results
+  say "customers kept" for an outcome to prevent, matching the value view.
+- **Progressive disclosure.** Advanced settings, settings planned for later, technical metrics and
+  lineage are collapsed. Tables show a few columns, with "Show more columns".
+- **Calm states.** Loading skeletons, helpful empty states, errors with "Try again", and one notice
+  for a feature this environment cannot offer.
+- **One design system.** The same header, spacing, type scale, cards, buttons and colours from the
+  existing theme tokens on every screen. Keyboard focus is visible, and every screen works at 390 px
+  and in dark mode.
+- **The prototype matches the product.** `marketing-ai-prototype.html` was updated, with its tests
+  and screenshots (CHANGELOG-prototype Revision 6).
+
+---
+
 ## What v1 does not include
 
 - **AWS deployment.** The infrastructure is written and tested offline, but nothing is deployed;

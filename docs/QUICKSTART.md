@@ -106,33 +106,34 @@ and sign in as one of these demo users. They exist only in your local demo.
 
 ## 4. Try this first: a 10-step tour
 
-The demo opens with a short guided tour. You can take it again any time with **Take the tour**.
+The demo opens with a short guided tour. You can take it again any time from **Help → Take the tour**
+in the top bar.
 These ten steps show the whole product in about fifteen minutes.
 
 1. **Home.** The use cases for a telecom business, laid out along the customer lifecycle. The top
    bar has the six areas of the product and the client you are working on (**Demo Telecom**).
 2. **Open Telco Customer Churn.** This is the demo's main use case: which subscribers are likely to
    leave in the next 60 days.
-3. **See the trained model.** Open its latest training run's **Model** page: how good the model
-   is, compared with a simple yardstick, and which customer facts matter most.
-4. **See who to contact.** Open the **Output** of the scoring run: every customer gets a risk band,
-   an action and a reason in plain words. **Download the contact list** as a CSV.
-5. **See whether the campaign worked.** From the Output, open **Campaign results**: contacted
-   customers compared with a randomly held-back control group.
+3. **See the trained model.** Under **Previous runs**, open the training run, then its **Model**
+   page: how good the model is in plain words, compared with a simple yardstick, and which customer
+   facts matter most. The technical figures are under **Technical details**.
+4. **See who to contact.** Open the scoring run (**Campaigns** in the top bar lists them): every
+   customer gets a risk band, an action and a reason in plain words. **Download contact list (CSV)**.
+5. **See whether the campaign worked.** Open its **Campaign results** step: contacted customers
+   compared with a randomly held-back control group, in customers kept.
 6. **See the value in rupees.** Under **Reports**, open the churn campaign's **value view**. The
    value is always a range, because the measurement has one.
 7. **Build a dataset from raw tables.** Under **Build data**, see what a client is asked to send,
    and open the **data readiness report**. The demo also holds a broken extract with one planted
    problem (duplicate customer IDs); its readiness report shows how a problem is explained.
-8. **Uplift: who to contact, and who to leave alone.** Open **Win-back Campaign → Uplift for this
-   use case**. It sorts customers into persuadables, sure things, lost causes and sleeping dogs,
-   and recommends contacting only the persuadables.
+8. **Uplift: who to contact, and who to leave alone.** Open **Win-back Campaign → Also: target
+   with uplift ›** (or **Models → Uplift models**). It sorts customers into persuadables, sure
+   things, lost causes and sleeping dogs, and recommends contacting only the persuadables.
 9. **Approvals.** Under **Models**, open **Waiting for approval**. A new model only replaces the
    current one after an Approver agrees; with `make demo-signin`, sign in as `demo-lead`, train a
    model, and see that you cannot approve it yourself.
 10. **Ask "What does this mean?"** Wherever you see a **?** beside a warning or a setting, click it
-    for a one-line plain-language explanation. The **Feedback** button on every screen records
-    what you think.
+    for a one-line plain-language explanation. **Help → Send feedback** records what you think.
 
 **What the demo does not include:** the AI-written features (the onboarding assistant, root-cause
 notes and campaign copy) need a connection to an AI service and show a "Needs AI service
