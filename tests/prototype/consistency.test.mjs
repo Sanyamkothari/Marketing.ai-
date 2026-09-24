@@ -135,7 +135,7 @@ test("every new panel has a mobile layout", () => {
     ".report .rrow{grid-template-columns:1fr 1fr}", // build report
     ".ccgrid{grid-template-columns:1fr}",    // campaign copy
     ".lineage{flex-direction:column}",       // lineage flow
-    ".headtools{order:-1;width:100%;",       // client picker stacks above the title
+    ".tb-row{padding:0 16px;gap:8px;flex-wrap:wrap}", // the top bar: wordmark, client picker and Menu in one row
     ".dbrow{grid-template-columns:30px minmax(0,1fr)}", // uplift by decile
     ".segrow{grid-template-columns:12px minmax(0,1fr) 64px}", // four segments
     ".crgrid{grid-template-columns:1fr}",    // campaign results form
@@ -180,7 +180,7 @@ test("the uplift label, defaults and thresholds are the product's", (t) => {
     assert.equal($(dom, "#f-samplecampaign"), null, `${id}'s Phase 1 Setup offers an uplift sample`);
   }
   go(dom, "#/uc/win-back-campaign");
-  const link = $(dom, ".uentry a");
+  const link = $(dom, ".head-actions a.related");
   assert.ok(link, "and it is reachable elsewhere: the uplift screen, linked from the use case's Setup");
   go(dom, link.getAttribute("href"));
   click(dom, "#f-samplecampaign");
@@ -220,10 +220,14 @@ test("the uplift entry point and its words are ui/modules/uplift's (DEC-608)", (
   const dom = load("#/uc/win-back-campaign");
   const explanation = views.match(/export const UPLIFT_EXPLANATION = "([^"]+)";/)[1];
   assert.equal(ev(dom, "UPLIFT_EXPLANATION"), explanation);
-  // the link under a use case's header, and the route it leads to
-  assert.ok(index.includes("`<a href=\"${esc(routes.setup(ucId))}\">Uplift for <b>this use case</b> ›</a><span>${esc(\n      UPLIFT_EXPLANATION,\n    )}</span>`"),
-    "index.js's entry link markup moved: update the prototype's upEntry()");
-  assert.equal($(dom, ".uentry").innerHTML, `<a href="#/uplift/win-back-campaign">Uplift for <b>this use case</b> ›</a><span>${explanation}</span>`);
+  // v1 (WP9): the entry is a quiet related link in the use case's header actions, in the audit's words,
+  // never an injected pill. index.js carries either the pre-v1 pill (until WP5 lands) or the new words.
+  const pill = "`<a href=\"${esc(routes.setup(ucId))}\">Uplift for <b>this use case</b> ›</a><span>${esc(\n      UPLIFT_EXPLANATION,\n    )}</span>`";
+  assert.ok(index.includes("Also: target with uplift") || index.includes(pill),
+    "index.js's entry link moved: update the prototype's upRelated()");
+  assert.equal($(dom, ".uentry"), null, "no injected pill under the header");
+  assert.equal($(dom, ".head-actions a.related").outerHTML,
+    `<a class="related" href="#/uplift/win-back-campaign" title="Uplift ${explanation}">Also: target with uplift ›</a>`);
   assert.match(views, /setup: \(ucId\) => `#\/uplift\/\$\{encodeURIComponent\(ucId\)\}`/);
   assert.match(views, /index: \(\) => "#\/uplift"/);
   // the uplift screen's header, mode and button labels, and the index page

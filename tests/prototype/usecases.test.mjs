@@ -8,16 +8,44 @@ import { load, go, ev, $, $$, body, click, set, settle, upload } from "./harness
 
 /* ---------- A. client selector ---------- */
 
-test("the client selector sits in the header of every screen", () => {
+test("the client selector sits in the top bar on every per-client screen", () => {
   const dom = load("#/");
-  for (const hash of ["#/", "#/uc/rca", "#/uc/rca/data", "#/uc/win-back-campaign/output"]) {
+  // v1: the page header's right side is the logo only; the chooser is in the top bar, where a client matters
+  for (const hash of ["#/uc/rca", "#/uplift/win-back-campaign", "#/pilot/kit", "#/pilot"]) {
     go(dom, hash);
-    const sel = $(dom, ".headtools #f-client");
+    const sel = $(dom, "#pb-bar .tb-context #f-client");
     assert.ok(sel, `no client selector on ${hash}`);
     assert.equal(sel.value, "Demo Telecom");
     assert.equal([...sel.options].at(-1).textContent, "+ New client");
-    assert.equal($(dom, ".chint").textContent, "Tables, recipes and models are kept per client.");
+    assert.equal($(dom, "#pb-bar .clientpick .tt-pop").textContent, "Tables, recipes and models are kept per client.");
+    assert.equal($(dom, "#app .head #f-client"), null, "never in the page header");
   }
+  for (const hash of ["#/", "#/uc/rca/data", "#/uc/win-back-campaign/output"]) {
+    go(dom, hash);
+    assert.equal($(dom, "#f-client"), null, `${hash} is not a per-client screen`);
+  }
+});
+
+test("one top bar: the six goals, the active one following the route, and the logo alone in the header", () => {
+  const dom = load("#/");
+  const items = () => $$(dom, '#pb-bar nav[aria-label="Main"] .tn-item').map((e) => e.textContent.replace(/\d+/g, "").trim());
+  assert.deepEqual(items(), ["Home", "Build data", "Models", "Campaigns", "Reports", "Admin"]);
+  const active = () => $(dom, "#pb-bar .tn-item.on").textContent.replace(/\d+/g, "").trim();
+  for (const [hash, goal] of [["#/", "Home"], ["#/uc/rca", "Models"], ["#/uplift", "Models"], ["#/pilot/kit", "Build data"],
+    ["#/monitoring/runs", "Campaigns"], ["#/uc/win-back-campaign/campaign", "Campaigns"], ["#/pilot", "Reports"]]) {
+    go(dom, hash);
+    assert.equal(active(), goal, hash);
+    assert.ok($(dom, "#app .head > .logo"), `${hash}: the logo sits in the header`);
+    assert.equal($$(dom, "#app .head > *").length, 2, `${hash}: titles and the logo, nothing else`);
+  }
+  assert.ok($(dom, "#pb-bar .pe-demo"), "the sample-data chip");
+  // menus open and close, with aria-expanded
+  const models = $(dom, '[data-menu="tn-models"]');
+  models.click();
+  assert.equal(models.getAttribute("aria-expanded"), "true");
+  assert.equal($(dom, "#tn-models").hidden, false);
+  dom.window.document.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "Escape" }));
+  assert.equal($(dom, "#tn-models").hidden, true);
 });
 
 test("switching client changes nothing else on the page", () => {
