@@ -982,6 +982,12 @@ function flowBlocks(uc, s, run) {
   });
   // After a scoring run: what the phase modules offer next (campaign results, AI copy), as a fourth block.
   const next = !train && done ? runActionsHtml(uc, run) : "";
+  // An action that is itself a flow step (Campaign results) brings its own arrow and block: it is the
+  // fourth block, not a box inside one.
+  if (next && next.includes('class="block')) {
+    const arrow = '<div class="arrow" aria-hidden="true">→</div>';
+    return { html: blocks.join(arrow) + next, count: blocks.length + (next.match(/class="block/g) || []).length };
+  }
   if (next) {
     blocks.push(
       `<div class="block next-step"><div><div class="lab"><span>After the campaign</span></div><div class="val">Measure the results</div><div class="meta">Once the campaign has run, add who responded to see what it changed.</div></div><div class="go next-actions">${next}</div></div>`,
@@ -1264,7 +1270,9 @@ export function createController(uc, rerender) {
     s.kpiDisplay = null;
     if (!run.artefacts || !run.artefacts["scoring_summary.json"]) return;
     const summary = await getArtefact(run.run_id, "scoring_summary.json");
-    s.kpiDisplay = summary && summary.kpi ? summary.kpi.display : null;
+    // A count is shown exactly ("1,675"), not as the engine's rounded display ("2K").
+    const kpi = summary && summary.kpi;
+    s.kpiDisplay = !kpi ? null : Number.isInteger(kpi.value) ? fmtInt(kpi.value) : kpi.display;
   }
 
   async function loadRun(runId) {
