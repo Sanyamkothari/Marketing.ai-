@@ -73,6 +73,9 @@ export const ACTION_CONTROLS = [
   { selector: "#u-cancel", method: "POST", path: "/runs/{run_id}/cancel" },
   { selector: "#u-camp-file", method: "POST", path: "/uploads" },
   { selector: "#u-camp-run", method: "POST", path: "/runs/{run_id}/campaign-results" },
+  // --- step 4 of a use case, "Measure the campaign" (measure/index.js): upload outcomes, learn -----
+  { selector: "[data-measure-file]", method: "POST", path: "/runs/{run_id}/measure" },
+  { selector: "[data-measure-learn]", method: "POST", path: "/runs/{run_id}/measure/learn" },
   // --- a campaign's value inputs (pilot/screen.js): the ROI form's Save ------------------------------
   { selector: '[data-pe-roi] button[type="submit"]', method: "PUT", path: "/pilot/roi/{run_id}" },
   { selector: "[data-pe-roi] input", method: "PUT", path: "/pilot/roi/{run_id}", explain: false },

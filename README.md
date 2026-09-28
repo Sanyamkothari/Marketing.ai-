@@ -1349,6 +1349,20 @@ every later file. The first screen and Manual setup do not change.
 
 Decisions are DEC-1000 … DEC-1033 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
+## Plan H — One simple product (M80–M84)
+
+[`docs/plans/MARKETING_AI_PLAN_H_SIMPLE.md`](docs/plans/MARKETING_AI_PLAN_H_SIMPLE.md) keeps the engine
+and hides the complexity: one generic journey, four pages (Home, Connections, Results, Settings) and a
+three-step flow, plus a fourth step after a campaign.
+
+- **M83 — Measure a campaign (step 4).** On a scoring run's Results, upload who responded (customer
+  ID and a 1/0 column) to see how many extra conversions the campaign caused compared with the
+  customers held back, in one plain sentence. "Learn who to contact next time" then trains an uplift
+  model from it and gives its contact list. Offered for every use case that contacts customers
+  (`actions.contacts_customers`); see `docs/UPLIFT.md` §9.
+
+Decisions are DEC-1130 … DEC-1135 so far.
+
 <!-- ---- END PLAN-G ---- -->
 
 <!-- ---- PLAN-D (hardening) — append only below this line ---- -->
