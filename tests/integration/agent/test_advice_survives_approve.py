@@ -101,3 +101,47 @@ def test_a_ready_session_on_the_helpers_suggestions_is_approved(
     session, applied = _approve(client, frame, use_case)
     assert session["status"] == "ready"
     assert applied.status_code == 200, applied.text
+
+
+def _few_dates() -> pd.DataFrame:
+    frame = generate(GenerationSpec(use_case_id="fault-prediction", rows=2_000))
+    frame["snapshot_date"] = np.where(np.arange(len(frame)) % 2 == 0, "2026-08-01", "2026-08-02")
+    return frame
+
+
+def test_a_date_column_with_too_few_dates_is_split_at_random_and_approved(client: TestClient) -> None:
+    session, applied = _approve(client, _few_dates(), "fault-prediction")
+    split = next(p for p in session["proposals"] if p["path"] == "split.type")
+    assert "fewer than three different dates" in split["reason"]
+    assert session["status"] == "ready"
+    assert applied.status_code == 200, applied.text
+
+
+def test_preview_with_a_split_by_date_but_not_its_column_is_refused_not_left_for_approve(
+    client: TestClient,
+) -> None:
+    """Ticking 'Test on the newest rows' but not its date column: 422 on Preview, never 'ready'
+    followed by 409 TIME_COLUMN_MISSING on Approve."""
+    use_case = "targeted-advertisement"
+    frame = generate(GenerationSpec(use_case_id=use_case, rows=2_000))
+    response = client.post(
+        "/uploads",
+        files={"file": ("history.csv", frame.to_csv(index=False).encode(), "text/csv")},
+        data={"use_case": use_case, "mode": "train"},
+    )
+    assert response.status_code == 201, response.text
+    base = f"/uploads/{response.json()['upload_id']}/agent-session"
+    session = client.post(base, json={"use_case": use_case}).json()["session"]
+    assert any(p["path"] == "split.type" for p in session["proposals"])
+    boxes = [
+        {
+            "proposal_id": p["proposal_id"],
+            "state": "rejected" if p["path"] == "split.time_column" else "accepted",
+        }
+        for p in session["proposals"]
+        if p["state"] == "pending"
+    ]
+    refused = client.post(f"{base}/decisions", json={"decisions": boxes})
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["code"] == "TIME_COLUMN_MISSING"
+    assert client.get(base).json()["session"]["status"] != "ready"

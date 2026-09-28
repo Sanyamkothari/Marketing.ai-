@@ -7,8 +7,12 @@ touches data. The API stores the result at `uploads/<upload_id>/agent/agent_sess
 * `decide` accepts or rejects proposals. A setting's value may be edited to another value the
   settings schema allows; a recipe step or a role may only be accepted or rejected. The settings
   accepted after a decision must resolve together, and one setting has at most one accepted
-  value: accepting another suggestion for the same setting rejects the one accepted before, and
-  accepting two different values for it at once is refused.
+  value: accepting a suggestion for a setting rejects any other accepted for it, and when one
+  decision accepts several, the latest suggestion wins (a chat request over the helper's own).
+  A split by date is decided with its date column: a decision that leaves the data split by date
+  without a date column in the file is refused.
+* `accept_recommended` accepts what the helper is sure of, but never a setting the person has
+  already accepted a value for.
 * `answer` records a question's answer. An option that carries a proposal adds it, accepted by the
   user; answering again withdraws what the previous answer added. Answering who the ID or the
   outcome is re-runs the advisor with that role fixed, because every check downstream depends on
@@ -50,7 +54,14 @@ from engine.agent.contracts import (
 )
 from engine.agent.recommend import setting_allowed, settings_fields
 from engine.agent.tools import AgentContext, AgentToolError
-from engine.config import ConfigError, advanced_settings_schema, resolve_config
+from engine.agent.untrusted import display_name
+from engine.config import (
+    ConfigError,
+    RunMode,
+    SplitType,
+    advanced_settings_schema,
+    resolve_config,
+)
 from engine.utils.time import utc_now
 
 __all__ = [
@@ -246,41 +257,89 @@ def decide(
             resolve_config(ctx.use_case_id, after, root=ctx.config_root)
         except ConfigError as exc:
             raise SessionError(exc.code, exc.message) from exc
+    gap = _split_gap(ctx, proposals)
+    if gap is not None and _split_gap(ctx, session.proposals) is None:
+        raise SessionError("TIME_COLUMN_MISSING", gap)
     return with_summary(session.model_copy(update={"proposals": proposals}), ctx, clock=clock)
+
+
+_SPLIT_PATHS = frozenset({"split.type", "split.time_column"})
+
+
+def _quoted(proposals: Sequence[Proposal]) -> str:
+    return " and ".join(f"'{p.title}'" for p in proposals)
+
+
+def _split_gap(ctx: AgentContext, proposals: Sequence[Proposal]) -> str | None:
+    """Why these decisions would split the data by date with no date column to split by, or None.
+
+    `resolve_config` accepts a split by date with no column, but the Run button refuses it
+    (`TIME_COLUMN_MISSING`), so accepting a split by date while rejecting its column (or rejecting
+    the random split a file without the date column needs) would reach "ready" and then fail. While
+    a split suggestion is still pending the pair is being decided, so nothing is said yet.
+    """
+    if ctx.mode is not RunMode.TRAIN:
+        return None
+    splits = [p for p in proposals if p.kind is ProposalKind.SETTING and p.path in _SPLIT_PATHS]
+    if any(p.state is ProposalState.PENDING for p in splits):
+        return None
+    try:
+        config = resolve_config(ctx.use_case_id, run_overrides(proposals), root=ctx.config_root).config
+    except ConfigError:
+        return None  # `decide` reports the config's own refusal
+    if config.split.type is not SplitType.TIME_BASED:
+        return None
+    column = config.split.time_column
+    hidden = {
+        p.step.column
+        for p in proposals
+        if p.state is ProposalState.ACCEPTED
+        and p.step is not None
+        and p.step.kind is RecipeStepKind.DROP_COLUMN
+    }
+    if column and column in ctx.frame.columns and column not in hidden:
+        return None
+    if not column:
+        problem = "no date column is chosen"
+    elif column in hidden:
+        problem = f"'{display_name(column)}' is hidden"
+    else:
+        problem = f"this file has no '{display_name(column)}' column"
+    message = f"The data would be split by date, but {problem}."
+    rejected = [p for p in splits if p.state is ProposalState.REJECTED]
+    chosen = [p for p in splits if p.state is ProposalState.ACCEPTED]
+    if rejected:
+        message += f" Accept {_quoted(rejected)}"
+        message += f", or reject {_quoted(chosen)} as well." if chosen else "."
+    elif chosen:
+        message += f" Reject {_quoted(chosen)}."
+    return message
 
 
 def _one_value_per_setting(proposals: Sequence[Proposal], decided_now: set[str]) -> tuple[Proposal, ...]:
     """At most one accepted setting per path, so the run and the summary agree on its value.
 
-    A setting accepted in this decision rejects any accepted before it for the same path; the same
-    value accepted twice at once keeps the later one; two different values at once are refused.
+    A setting accepted in this decision rejects any other accepted for the same path. When this
+    decision accepts several for one path (the helper's ticked suggestion and the person's chat
+    request, sent together by Preview), the one latest in the session wins - the order in which
+    `run_overrides` reads them, so a chat request made after the helper's suggestion wins.
     """
-    latest: dict[str, Proposal] = {}
+    winner: dict[str, str] = {}
     for proposal in proposals:
         if (
-            proposal.proposal_id not in decided_now
-            or proposal.state is not ProposalState.ACCEPTED
-            or proposal.kind is not ProposalKind.SETTING
-            or proposal.path is None
+            proposal.proposal_id in decided_now
+            and proposal.state is ProposalState.ACCEPTED
+            and proposal.kind is ProposalKind.SETTING
+            and proposal.path is not None
         ):
-            continue
-        earlier = latest.get(proposal.path)
-        if earlier is not None and json.dumps(earlier.value, sort_keys=True) != json.dumps(
-            proposal.value, sort_keys=True
-        ):
-            raise SessionError(
-                "AGENT_SETTING_CONFLICT",
-                f"Two suggestions give '{proposal.path}' different values; accept only one of them.",
-            )
-        latest[proposal.path] = proposal
-    winners = {p.proposal_id for p in latest.values()}
+            winner[proposal.path] = proposal.proposal_id
     return tuple(
         (
             _decided(p, ProposalState.REJECTED)
             if p.kind is ProposalKind.SETTING
             and p.state is ProposalState.ACCEPTED
-            and p.path in latest
-            and p.proposal_id not in winners
+            and p.path in winner
+            and p.proposal_id != winner[p.path]
             else p
         )
         for p in proposals
@@ -290,11 +349,23 @@ def _one_value_per_setting(proposals: Sequence[Proposal], decided_now: set[str])
 def accept_recommended(
     session: AgentSession, ctx: AgentContext, *, clock: Callable[[], datetime] = utc_now
 ) -> AgentSession:
-    """Accept every pending suggestion the helper is sure of (and uncertain ones when the use case says so)."""
+    """Accept every pending suggestion the helper is sure of (and uncertain ones when the use case says so).
+
+    A setting the person already accepted a value for is skipped: its pending suggestion stays for
+    them to decide, so this never rejects their choice on their behalf (DEC-1010).
+    """
     tick_uncertain = ctx.config.agent.tick_uncertain
+    # A value the person has accepted for a setting is theirs: the helper's default never replaces it.
+    settled = {
+        p.path
+        for p in session.proposals
+        if p.kind is ProposalKind.SETTING and p.state is ProposalState.ACCEPTED and p.path
+    }
     chosen: dict[tuple[str, str], Proposal] = {}
     for p in session.proposals:
         if p.state is ProposalState.PENDING and (p.confidence.value == "sure" or tick_uncertain):
+            if p.kind is ProposalKind.SETTING and p.path in settled:
+                continue  # left pending, for the person to decide
             # Two pending suggestions for one setting: the later one, never a conflict.
             key = ("path", p.path) if p.kind is ProposalKind.SETTING and p.path else ("id", p.proposal_id)
             chosen.pop(key, None)

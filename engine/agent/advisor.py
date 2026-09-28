@@ -742,8 +742,13 @@ def _facts(
     roles: ToolResult,
     *,
     exclude: Iterable[str] = (),
+    checks: ToolResult | None = None,
 ) -> DataFacts:
-    """What `recommend_settings` may know; `exclude` are columns no setting may name (suspected leaks)."""
+    """What `recommend_settings` may know; `exclude` are columns no setting may name (suspected leaks).
+
+    `checks` is the Run button's check of the prepared file: a date column it cannot read is told
+    from one it reads but that has too few dates, so a suggestion never says the wrong one.
+    """
     columns = {column.name: column for column in prepared.profile.columns}
     ordered = list(prepared.profile.time_column_candidates) + [
         name
@@ -770,6 +775,9 @@ def _facts(
     }
     consent = tuple(c for c in _names(roles, "consent") if c not in taken)
     evidence = tuple(r.evidence_id for r in (roles, outcome) if r is not None)
+    trouble, trouble_evidence = _time_column_trouble(
+        prepared, columns, time_columns, reserved, set(exclude), checks
+    )
     return DataFacts(
         rows=prepared.profile.row_count,
         positive_rate=float(rate) if isinstance(rate, (int, float)) else None,
@@ -777,7 +785,43 @@ def _facts(
         consent_candidates=consent,
         evidence_ids=evidence,
         columns=tuple(str(c) for c in prepared.frame.columns),
+        time_column_trouble=trouble,
+        time_column_evidence_ids=trouble_evidence,
     )
+
+
+def _time_column_trouble(
+    prepared: AgentContext,
+    columns: Mapping[str, Any],
+    time_columns: Sequence[str],
+    reserved: set[str | None],
+    leaks: set[str],
+    checks: ToolResult | None,
+) -> tuple[str | None, tuple[str, ...]]:
+    """Why the use case's own date column is in the file but not a usable date column, and the proof."""
+    name = prepared.config.split.time_column
+    if not name or name not in prepared.frame.columns or name in time_columns:
+        return None, ()
+    measured = (checks.evidence_id,) if checks is not None else ()
+    if checks is not None and any(
+        check["code"] == "TIME_COLUMN_UNPARSEABLE"
+        and check["severity"] == "error"
+        and check["column"] == name
+        for check in _rows(checks, "checks")
+    ):
+        return "unreadable", measured  # the Run button refuses it whatever the split type
+    if name in leaks:
+        return "leak", measured
+    if name in reserved:
+        return "reserved", ()
+    column = columns.get(name)
+    if (
+        column is not None
+        and column.inferred_type in {ColumnType.DATE, ColumnType.DATETIME}
+        and column.distinct_count < _MIN_TIME_DISTINCT
+    ):
+        return "few", ()
+    return "unusable", ()
 
 
 def _describe_outcome(builder: _Builder, column: str, ctx: AgentContext | None = None) -> ToolResult:
@@ -855,7 +899,9 @@ def advise(
                 _leak_questions(builder, checks)
                 # A column the person may hide is never the one a suggested setting depends on.
                 leaks = [str(check["column"]) for check in _leaks(checks)]
-                _settings(builder, prepared, outcome, roles, key, outcome_column, exclude=leaks)
+                _settings(
+                    builder, prepared, outcome, roles, key, outcome_column, exclude=leaks, checks=checks
+                )
             if stop is None:
                 stop = _unfixed_stop(builder, checks, prepared, key, outcome_column)
     status = (
@@ -885,9 +931,10 @@ def _settings(
     target: str | None,
     *,
     exclude: Iterable[str] = (),
+    checks: ToolResult | None = None,
 ) -> None:
     config = prepared.config
-    facts = _facts(builder, prepared, outcome, roles, exclude=exclude)
+    facts = _facts(builder, prepared, outcome, roles, exclude=exclude, checks=checks)
     schema = advanced_settings_schema(
         config, columns=tuple(str(c) for c in prepared.frame.columns), primary_key=key, target=target
     )

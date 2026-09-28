@@ -75,6 +75,13 @@ class DataFacts:
     evidence_ids: tuple[str, ...]
     columns: tuple[str, ...] = ()
     """Every column of the file, so a date column that is there but unusable is told from a missing one."""
+    time_column_trouble: str | None = None
+    """Why the use case's own date column, though in the file, is not in `time_columns`: `unreadable`
+    (the Run button's check cannot read it as dates), `few` (it reads as dates but has fewer than
+    three), `leak` (a question asks whether to hide it), `reserved` (it has another job) or
+    `unusable` (it does not read as a date column)."""
+    time_column_evidence_ids: tuple[str, ...] = ()
+    """The tool results that measured `time_column_trouble`, when they are not in `evidence_ids`."""
 
 
 @dataclass(frozen=True)
@@ -162,33 +169,46 @@ def _split_rules(config: UseCaseConfig, facts: DataFacts, resolves: Resolves) ->
     ]
 
 
+_TROUBLE_REASONS: Final[dict[str, str]] = {
+    "unreadable": "'{name}', the date this use case splits by, cannot be read as dates in this file",
+    "few": "'{name}', the date this use case splits by, has fewer than three different dates in this file",
+    "leak": "'{name}', the date this use case splits by, may give the answer away (see the question about it)",
+    "reserved": "'{name}', the date this use case splits by, is the column that says who was contacted recently",
+    "unusable": "'{name}', the date this use case splits by, is not read as a date column in this file",
+}
+
+
 def _random_split(configured: str | None, facts: DataFacts) -> list[SettingRecommendation]:
-    """A random split for a use case that splits by date when the file gives it no usable date."""
+    """A random split for a use case that splits by date when the file gives it no usable date.
+
+    The reason says what is actually wrong with the use case's date column: missing, unreadable,
+    too few dates, possibly a leak or reserved. Only an unreadable one is also cleared, because the
+    Run button checks a configured date column's values whatever the split type.
+    """
     name = display_name(configured) if configured else ""
-    if configured is not None and configured in facts.columns:
-        reason = (
-            f"'{name}', the date this use case splits by, does not hold usable dates in this file, "
-            "so the newest rows cannot be held back for testing."
-        )
-    elif configured is not None and facts.time_columns:
-        reason = (
-            f"The file has no '{name}' column, which this use case splits by, and its other dates cannot "
-            "stand in for it, so the newest rows cannot be held back for testing."
-        )
+    trouble = facts.time_column_trouble if configured is not None and configured in facts.columns else None
+    evidence = (*facts.evidence_ids, *facts.time_column_evidence_ids) if trouble else facts.evidence_ids
+    if trouble is not None:
+        reason = _TROUBLE_REASONS.get(trouble, _TROUBLE_REASONS["unusable"]).format(name=name)
+    elif configured is not None:
+        reason = f"The file has no '{name}' column, which this use case splits by"
+        if facts.time_columns:
+            reason += ", and its other dates cannot stand in for it"
+    elif facts.time_columns:
+        reason = "This use case cannot split by the dates in this file"
     else:
-        reason = "The file has no date column, so the newest rows cannot be held back for testing."
+        reason = "The file has no date column"
     recs = [
         SettingRecommendation(
             "split.type",
             SplitType.RANDOM_STRATIFIED.value,
             "Split the rows at random",
-            reason,
+            f"{reason}, so the newest rows cannot be held back for testing.",
             AgentConfidence.SURE,
-            facts.evidence_ids,
+            evidence,
         )
     ]
-    if configured is not None and configured in facts.columns:
-        # The Run button checks the dates of a configured time column whatever the split type.
+    if trouble == "unreadable":
         recs.append(
             SettingRecommendation(
                 "split.time_column",
@@ -196,7 +216,7 @@ def _random_split(configured: str | None, facts: DataFacts) -> list[SettingRecom
                 f"Stop reading '{name}' as the date of each row",
                 "The rows are split at random instead, and its values cannot be read as dates.",
                 AgentConfidence.SURE,
-                facts.evidence_ids,
+                evidence,
             )
         )
     return recs
