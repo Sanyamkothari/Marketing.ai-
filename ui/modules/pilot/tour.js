@@ -1,7 +1,8 @@
 // The guided tour of the sample data (Plan E M63; v1: offered, never forced).
 //
-// Six steps, one per place in the top bar a first-time user needs: Home → Models (Setup, then a
-// training run's results) → Campaigns (who to contact, then the campaign's results) → Reports. Each
+// Six steps a first-time user needs: Home → a use case's Setup, then a training run's results → who
+// to contact, then the campaign's results → the reports (Plan H: the bar is Home, Connections,
+// Results and Settings; the steps are named for what they show, not for a menu). Each
 // step opens the demo's own screen (its use case, its training run, its scoring run), read from
 // `GET /pilot/demo`, outlines the part of the screen it talks about and puts its card away from it
 // (a bottom sheet on a phone). The tour exists only when demo mode is on *and* the demo is seeded.
@@ -25,37 +26,37 @@ export function tourSteps(demo) {
   return [
     {
       title: "Home",
-      text: "Every use case, laid out by customer lifecycle stage. The bar at the top takes you anywhere: Home, Build data, Models, Campaigns, Reports and Admin.",
+      text: "Every use case, laid out by goal. The bar at the top takes you anywhere: Home, Connections, Results and Settings.",
       hash: "#/",
       targets: ["#pb-bar .topnav", ".timeline-wrap", ".uc-list"],
     },
     {
-      title: "Models: set up a model",
-      text: "Choose the data: upload a prepared file, or build it from raw tables (Build data has the request to send your client). Keep the recommended settings and click Run training.",
+      title: "Set up a model",
+      text: "Guided setup checks your file and recommends the settings; you approve, then click Run training.",
       hash: m ? `#/uc/${uc}` : null,
       targets: ["#f-run", ".setup-grid", ".pick"],
     },
     {
-      title: "Models: training results",
+      title: "Training results",
       text: "Each run reads Data, Model, Output: what was checked, which model won and how good it is, and what to do next.",
       hash: m ? `#/uc/${uc}/run/${encodeURIComponent(m.train_run_id)}` : null,
       targets: [".flow", ".tabs"],
     },
     {
-      title: "Campaigns: who to contact",
-      text: "Next month's customers, scored: a band, an action and a reason for every customer, and a control group held back to measure the effect. Every scoring run is listed under Campaigns.",
+      title: "Who to contact",
+      text: "Next month's customers, scored: a band, an action and a reason for every customer, and a control group held back to measure the effect. Every run is listed under Results.",
       hash: m ? `#/uc/${uc}/output/${encodeURIComponent(m.score_run_id)}` : null,
       targets: [".head-actions .btn.primary", ".kpis", "main.screen .card"],
     },
     {
-      title: "Campaigns: results",
+      title: "Campaign results",
       text: "After the outcome period, the customers you contacted are compared with the control group: whether the campaign made a measurable difference, with a range.",
       hash: m ? `#/campaign/${uc}/${encodeURIComponent(m.score_run_id)}` : null,
       targets: ["[data-verdict]", ".kpis", "main.screen .card"],
     },
     {
       title: "Reports",
-      text: "Model results and each campaign's value in rupees, ready to share as a page or a PDF. Data readiness reports are under Build data.",
+      text: "Model results and each campaign's value in rupees, ready to share as a page or a PDF.",
       hash: "#/pilot",
       targets: ["[data-pe-reports]"],
     },

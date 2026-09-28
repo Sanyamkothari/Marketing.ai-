@@ -1,8 +1,9 @@
 // Home: the use-case catalogue, rendered from `GET /industries` (plan §9.1; v1 docs/UI_AUDIT.md 5.1).
 //
 // One journey at a time. The API lists every industry file and names the one to open on
-// (`default_industry`, telecom); the "Industry" chooser in the header switches journey through the URL
-// (`#/industry/<id>`), so a chosen industry survives a reload and the back button.
+// (`default_industry`). Plan H M81 (DEC-1110): that is the generic journey, the same for every
+// business, and Home offers no choice of industry any more (`SHOW_INDUSTRY_CHOOSER`). The other
+// journeys stay reachable by URL (`#/industry/<id>`), and the chooser comes back with the flag.
 //
 // The header is breadcrumb "Home", the journey's own label as the H1 and one sentence of what to do.
 // The AI type of each use case is its card's coloured edge, explained once by "What do the colours
@@ -65,7 +66,11 @@ export function industryOptions(payload) {
   }));
 }
 
+/** Plan H: one journey for every business, so Home draws no "Industry" chooser. */
+export const SHOW_INDUSTRY_CHOOSER = false;
+
 function industryChooser(payload, current) {
+  if (!SHOW_INDUSTRY_CHOOSER) return "";
   const options = industryOptions(payload);
   if (options.length < 2) return "";
   return `<div class="ov-industry"><label for="industry-select">Industry</label><div class="control sel"><select id="industry-select">${options

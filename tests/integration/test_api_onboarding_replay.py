@@ -28,6 +28,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
+from engine.config import DEFAULT_INDUSTRY
 from tests.fixtures.raw.make_raw import RawTables, make_next_month, make_raw
 
 pytestmark = pytest.mark.integration
@@ -171,7 +172,8 @@ def test_the_default_client_is_demo_and_is_created_only_once(client: TestClient)
     second = ok(client.post("/clients/default"))
     assert first == second
     assert first["name"] == "Demo"
-    assert first["industry"] == "telecom"
+    # Plan H M81 (DEC-1110): the default journey, and so the default client's industry, is `generic`.
+    assert first["industry"] == DEFAULT_INDUSTRY == "generic"
     listed = [row["client_id"] for row in ok(client.get("/clients"))["clients"]]
     assert listed.count(first["client_id"]) == 1
 

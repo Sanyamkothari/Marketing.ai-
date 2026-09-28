@@ -182,7 +182,9 @@ export function selectedClient() {
   if (!source || typeof source.context !== "function") return null;
   try {
     const context = source.context() || {};
-    return context.clientId ? { id: context.clientId, name: context.clientName || context.clientId } : null;
+    return context.clientId
+      ? { id: context.clientId, name: context.clientName || context.clientId, single: Boolean(context.singleCompany) }
+      : null;
   } catch {
     return null;
   }
@@ -191,9 +193,13 @@ export function selectedClient() {
 /** "For client: Demo Telecom", and a different client id under Advanced. */
 function clientBlock(purpose = "") {
   const client = selectedClient();
-  const line = client
-    ? `<p class="pb-for-client">For client: <b>${esc(client.name)}</b> <span class="pb-small">(chosen in the top bar)</span></p>`
-    : `<p class="pb-for-client">For this installation's own client.</p>`;
+  // Plan H (one company): there is no client to name, so the line says nothing about one.
+  const line =
+    client && !client.single
+      ? `<p class="pb-for-client">For client: <b>${esc(client.name)}</b> <span class="pb-small">(chosen in the top bar)</span></p>`
+      : client
+        ? ""
+        : `<p class="pb-for-client">For this installation's own client.</p>`;
   return `${line}<details class="adv"><summary>Advanced</summary><div class="pb-adv-body">${textField(
     "client_id",
     "A different client id",

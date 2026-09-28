@@ -121,7 +121,7 @@ test("with no setup mode registered, the Setup view is exactly today's", async (
   assert.ok($("#f-file"), "the prepared-file upload is there");
 });
 
-test("the agent module adds a tab strip; Manual setup is still today's screen, unchanged", async () => {
+test("the agent module adds a tab strip that opens on Guided setup; Manual setup is still today's screen", async () => {
   await import("../../../../../ui/modules/agent/index.js");
   rerender();
   const tabs = $$(".setup-tabs [data-setup-tab]");
@@ -129,7 +129,13 @@ test("the agent module adds a tab strip; Manual setup is still today's screen, u
     tabs.map((b) => b.textContent),
     ["Guided setup (recommended)", "Manual setup"],
   );
-  assert.equal($('[data-setup-tab="manual"]').getAttribute("aria-pressed"), "true", "Manual setup is where the page starts");
+  // Plan H M82 (DEC-1114): Guided setup is where the page starts; Manual setup is one click away.
+  assert.equal(controller.state.setupTab, null, "nothing picked yet");
+  assert.equal($('[data-setup-tab="guided"]').getAttribute("aria-pressed"), "true", "Guided setup is where the page starts");
+  assert.ok($("#ag-file"), "the Guided upload step is drawn first");
+  assert.equal($("#f-file"), null, "Manual setup's form is not");
+  $('[data-setup-tab="manual"]').click();
+  assert.equal($('[data-setup-tab="manual"]').getAttribute("aria-pressed"), "true");
   assert.equal($(".setup-grid").outerHTML, manualBefore, "Manual setup is byte-identical");
 });
 

@@ -46,7 +46,8 @@ const modelId = item.version.model_id;
 
 test("the Approver sees the head-to-head, with the metric the challenger is worse on marked", async () => {
   await until(() => $(`[data-approval="${modelId}"]`), 3000, "the challenger");
-  assert.ok($('#pb-bar a[href="#/approvals"]'), "Approvals in the user bar for an Approver");
+  // Plan H M82 (DEC-1113): no "Waiting for approval" item any more; the count is a badge on Results.
+  await until(() => $('#pb-bar a.tn-item[href="#/results"] .count'), 3000, "the approvals count on Results");
   for (const row of item.head_to_head.metrics) {
     const tr = $(`tr[data-metric="${row.metric}"]`);
     assert.ok(tr, `a row for ${row.metric}`);
