@@ -7,21 +7,30 @@ onboarding `FeatureDef`s and computed by the onboarding feature engine
 (`engine.onboarding.features.build_features`), whose every query carries the point-in-time guard and
 is re-read by `assert_point_in_time` before it runs.
 
+**Entity-wise.** An entity's output depends only on its own rows and the step's frozen parameters,
+never on other entities or a statistic of the whole file (DEC-1023): the preview (the first 1,000
+entities), the Approve on the full file and a scoring file split differently read the same entity
+the same way. Every rule below keeps to that.
+
 **The rows.** The file's own rows are the events of one role (`events`): the entity key is the step's
-column, the event time is `time_column`. A row with no key, no readable date or (with a separate
-snapshot column) no readable snapshot belongs to no entity at no time; it is counted as a failure
+column, the event time is `time_column`. A row with no key or no readable date, or whose entity has
+no readable snapshot on any of its rows, belongs to no entity at no time; it is counted as a failure
 and left out, and more failures than the use case's `max_conversion_failure_pct` stop the step. A
-key column holding the same ID as a number on some rows and as text on others (a CSV read in
-chunks) is read as text, `7` and `"7"` alike, so every part of the step sees one entity.
+row with a blank snapshot of its own still counts when another row of its entity has one. An
+untyped (object) key column is read as text on every row, so the number 7 and the text `"7"` (a CSV
+read in chunks) are one entity, and a key's form never depends on another entity's rows.
 
 **Dates.** A value with a UTC offset, or a time-zone-aware column, is converted to UTC before its
-zone is dropped, so `12:00+05:00` is before `09:00Z`; a value without one is kept as written. A
-date outside pandas' range (the `9999-12-31` "no end" sentinel) is an empty date. The day/month
-order of each date column read from text is the one its own values prove (a first part above 12
-means day first); when they prove nothing, the step's frozen `dayfirst` is used, decided at planning
-from every date column the step reads. When nothing in the file proved it then, `dayfirst` is null,
-and a date column whose values read differently either way stops the step with
-`RECIPE_VALUES_UNCONVERTED` instead of being guessed.
+zone is dropped, so `12:00+05:00` is before `09:00Z`; a value without one is kept as written, and a
+zoned value that cannot be read in UTC is empty rather than read at its clock time. A date outside
+pandas' range (the `9999-12-31` "no end" sentinel) is an empty date. The day/month order of every
+date column is frozen per column at planning (`dayfirst`: a map of column to true, false or null):
+the order its own values prove (a first part above 12 means day first), else the order the file's
+date columns prove when they agree, else null. The combine only reads it, each value on its own, so
+a value such as `04/25/2024` in a day-first column still reads the only way it can. A column whose
+order is null and which holds a value that reads differently either way stops the step with
+`RECIPE_VALUES_UNCONVERTED` instead of being guessed. A single `dayfirst` (true, false or null)
+applies to every date column.
 
 **The snapshot.** Each entity is described as of one date, its *snapshot*: the latest value of
 `snapshot_column` among its rows, or - when the file has no separate snapshot column - the latest
@@ -33,26 +42,33 @@ when the outcome started to be measured; the proposal says so.
 
 **The outcome.** The outcome is read, not aggregated: it is the value on the entity's latest row by
 snapshot date, ties broken by the time column and then by position in the file, empty values skipped.
-`latest` breaks a tie between rows of the same date the same way: the later row in the file.
-A scoring file usually has no outcome column; then the combined rows have none either.
+`latest` is the value on the latest row by the time column; between rows of the same date it takes
+the later snapshot, then the later row in the file, so a same-date tie goes to the row the outcome
+would read. (The two are different rules: across dates, `latest` follows the time column and the
+outcome the snapshot.) A scoring file usually has no outcome column; then the combined rows have
+none either.
 
 **Features.** The parameters freeze a list of `{name, function, column}` when the user approves the
 step, so next month's file is combined into exactly the same columns (DEC-1006). `plan_combine`
 chooses them by type: numbers get `sum`, `mean`, `max` and `latest`; categories `latest` (not for free
 text) and `nunique`; an ID-like column (an order number) `nunique` only; another date column
 `days_since_last` (days from its latest value on or before the snapshot to the snapshot; a value
-after the snapshot is not known at the snapshot, so it is ignored). A date column that already holds a value after its
-entity's snapshot on a row dated on or before it was written after the snapshot - a "last order
-date" overwritten by the export - so whether it is empty would give the answer away: the plan
-leaves it out, as it leaves out a date column whose day/month order nothing in the file proves. The
+after the snapshot is not known at the snapshot, so it is ignored). A date column that already holds
+a value after its entity's snapshot on a row dated on or before it was written after the snapshot -
+a "last order date" overwritten by the export - so whether it is empty would give the answer away:
+the plan leaves it out, as it leaves out a date column whose order is null and needed. That rule
+also leaves out an honest per-event date such as a refund date that fell after the snapshot; the
+runtime masking would make it safe, so this is conservative. On a training file (the full leak
+check) a kept date column found written after the snapshot in this file stops the step with
+`FUTURE_EVENTS_LEAKED`, since the leak probe re-dates only the time column and cannot see it. The
 event time `days_since_first`, and `days_since_last` when the snapshot is a separate column (with
 one date column it would be 0 on every row); plus `row_count`. Consent, opt-out and last-contact
 columns are carried under their own name (whatever its spelling) as their latest value;
 personal-data columns are left out.
 
 **Determinism.** DuckDB runs single-threaded here, so the same rows give the same values in the same
-order; ties in `latest` are settled before DuckDB sees them (only the later row of a same-date tie
-keeps its value in the column `latest` reads). The output is sorted by entity key.
+order; ties in `latest` are settled before DuckDB sees them (only one row of a same-date tie keeps
+its value in the column `latest` reads). The output is sorted by entity key.
 
 **The leak check.** On a training file the full future-data check of onboarding ruling R1 runs
 (`engine.onboarding.build._run_leak_probe` with `full=True`: every entity rebuilt with real rows
@@ -69,7 +85,6 @@ import warnings
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
-from functools import cached_property
 from typing import Any, Final, Literal
 
 import numpy as np
@@ -184,9 +199,15 @@ class CombineSpec:
     key: str
     time_column: str
     snapshot_column: str | None
-    dayfirst: bool | None  # null: nothing in the planned file proved the day/month order
+    dayfirst: bool | Mapping[str, bool | None] | None  # per date column; null: nothing proved it
     outcome: str | None
     features: tuple[CombineFeature, ...]
+
+    def order(self, column: str) -> bool | None:
+        """The frozen day/month order of `column` (True: day first); None when it was not decided."""
+        if isinstance(self.dayfirst, Mapping):
+            return self.dayfirst.get(column)
+        return self.dayfirst
 
     @property
     def snapshot_output(self) -> str:
@@ -230,8 +251,15 @@ class CombineSpec:
         if outcome is not None and not isinstance(outcome, str):
             raise refuse("the outcome must be a column name or null.")
         dayfirst = params.get("dayfirst", False)
-        if dayfirst is not None and not isinstance(dayfirst, bool):
-            raise refuse("dayfirst must be true, false or null.")
+        if isinstance(dayfirst, Mapping):
+            if not all(
+                isinstance(column, str) and (order is None or isinstance(order, bool))
+                for column, order in dayfirst.items()
+            ):
+                raise refuse("dayfirst maps each date column to true, false or null.")
+            dayfirst = dict(dayfirst)
+        elif dayfirst is not None and not isinstance(dayfirst, bool):
+            raise refuse("dayfirst must be true, false, null or a map of date columns to one of those.")
         raw = params.get("features")
         if not isinstance(raw, list) or not raw:
             raise refuse("list the columns to build.")
@@ -267,6 +295,10 @@ class CombineSpec:
             raise refuse("two new columns would have the same name.")
         if key in {time_column, snapshot, outcome}:
             raise refuse("the ID column cannot also be the date or the outcome.")
+        if isinstance(dayfirst, dict) and not set(dayfirst) <= set(spec.reads):
+            raise refuse(
+                f"dayfirst names {sorted(set(dayfirst) - set(spec.reads))[0]!r}, which the step does not read."
+            )
         return spec
 
 
@@ -362,7 +394,7 @@ def plan_combine(
     kinds = {str(raw): kind(str(raw)) for raw in frame.columns}
     dates = [time_column, *([snapshot_column] if snapshot_column is not None else [])]
     others = [name for name, how in kinds.items() if how == "date"]
-    dayfirst, left_out = _plan_dates(frame, key, dates, others)
+    orders, left_out = _plan_dates(frame, key, dates, others)
 
     add(ROW_COUNT, "count", None)
     stem = _safe(time_column)
@@ -388,7 +420,7 @@ def plan_combine(
     return {
         "time_column": time_column,
         "snapshot_column": snapshot_column,
-        "dayfirst": dayfirst,
+        "dayfirst": {name: order for name, order in orders.items() if name not in left_out},
         "outcome": outcome,
         "features": [feature.as_json() for feature in features],
     }
@@ -396,33 +428,30 @@ def plan_combine(
 
 def _plan_dates(
     frame: pd.DataFrame, key: str, dates: Sequence[str], others: Sequence[str]
-) -> tuple[bool | None, set[str]]:
-    """The frozen day/month order, and the other date columns the plan leaves out.
+) -> tuple[dict[str, bool | None], set[str]]:
+    """Each date column's frozen day/month order, and the other date columns the plan leaves out.
 
-    The order is the one the values of the step's date columns prove (`dates`: the time and snapshot
-    columns; `others`: the date columns turned into days since); null when they prove none and the
-    time or snapshot column has a date that reads differently either way; false when no date needs
-    it. An other date column is left out when its own order is unproven and would matter, or when it
-    holds a date after its entity's snapshot on a row dated on or before that snapshot.
+    A column's order is the one its own values prove; else the one the file's date columns prove
+    (`dates`: the time and snapshot columns; `others`: the date columns turned into days since),
+    when they agree; else null. Frozen per column, so the combine never decides it again from a
+    whole file (DEC-1023: an entity's output depends only on its own rows and the parameters). An
+    other date column is left out when its order is null and its values need one, or when it holds
+    a date after its entity's snapshot on a row dated on or before that snapshot.
     """
-    orders = {name: _order(frame[name]) for name in (*dates, *others)}
-    proven = {order for order, _ in orders.values() if order is not None}
-    dayfirst: bool | None = False
-    if len(proven) == 1:
-        dayfirst = proven.pop()
-    elif any(orders[name][1] for name in dates):
-        dayfirst = None
-    settled = len(proven) == 1
-    left_out = {name for name in others if orders[name] == (None, True) and not settled}
+    found = {name: _order(frame[name]) for name in (*dates, *others)}
+    proven = {order for order, _ in found.values() if order is not None}
+    settled = next(iter(proven)) if len(proven) == 1 else None
+    orders = {name: own if own is not None else settled for name, (own, _) in found.items()}
+    left_out = {name for name in others if orders[name] is None and found[name][1]}
     remaining = [name for name in others if name not in left_out]
     if remaining:
-        line = _timeline(frame, key, dates[0], dates[1] if len(dates) > 1 else None, bool(dayfirst))
-        counted = line.usable & (line.event_time <= line.known_by)
+        # An unproven time or snapshot order stops the combine itself; here any order will do.
+        guessed = {name: bool(order) for name, order in orders.items()}
+        line = _timeline(frame, key, dates[0], dates[1] if len(dates) > 1 else None, guessed)
         for name in remaining:
-            values = _dates(frame[name], bool(dayfirst), name)
-            if bool((counted & (values > line.known_by)).any()):
+            if _written_after(line, _dates(frame[name], guessed[name], name)):
                 left_out.add(name)  # written after the snapshot: its blanks would give the answer away
-    return dayfirst, left_out
+    return orders, left_out
 
 
 # ---------------------------------------------------------------------------
@@ -439,14 +468,14 @@ def _key_text(value: Any) -> str:
 
 
 def _keys(series: pd.Series[Any]) -> pd.Series[Any]:
-    """The entity key; as text when it mixes kinds of value (`7` and `"7"`), so both are one entity.
+    """The entity key; an untyped (object) column as text, so `7` and `"7"` are one entity.
 
     pandas groups the number 7 and the text "7" apart while DuckDB reads both as "7"; a CSV read in
-    chunks gives exactly that mix when one chunk of an ID column is all digits.
+    chunks gives exactly that mix when one chunk of an ID column is all digits. Every value of an
+    object column becomes text, whatever the other rows hold, so a key never changes form because
+    of another entity's rows (DEC-1023).
     """
-    if series.dtype != object:
-        return series
-    if pd.api.types.infer_dtype(series, skipna=True) in _ONE_KIND:
+    if series.dtype != object or pd.api.types.infer_dtype(series, skipna=True) in {"string", "empty"}:
         return series
     return series.map(_key_text, na_action="ignore")
 
@@ -497,11 +526,12 @@ def _utc(texts: pd.Series[Any], dayfirst: bool) -> pd.Series[Any]:
     return parsed.dt.tz_localize(None).astype("datetime64[ns]")
 
 
-def _dates(series: pd.Series[Any], frozen: bool | None, column: str) -> pd.Series[Any]:
+def _dates(series: pd.Series[Any], order: bool | None, column: str) -> pd.Series[Any]:
     """`column` as naive `datetime64[ns]`: zoned values in UTC, others as written, out of range NaT.
 
-    Text is read in the day/month order its own values prove, else in the frozen one; with neither,
-    a value that reads differently either way stops the step rather than being guessed.
+    Text is read in the column's frozen day/month `order`, each value on its own; with no order
+    frozen, a value that reads differently either way stops the step rather than being guessed. A
+    zoned value that cannot be read in UTC is empty, never read at its clock time.
     """
     if pd.api.types.is_datetime64_any_dtype(series):
         values = series
@@ -511,23 +541,23 @@ def _dates(series: pd.Series[Any], frozen: bool | None, column: str) -> pd.Serie
             values = values.where((values >= pd.Timestamp.min) & (values <= pd.Timestamp.max))
         return values.astype("datetime64[ns]")
     distinct, text = _distinct_text(series)
-    order, needed = (None, False) if pd.api.types.is_numeric_dtype(series) else _order_of(text)
-    if order is None and frozen is None and needed:
+    if order is None and not pd.api.types.is_numeric_dtype(series) and _order_of(text)[1]:
         raise CombineError(
             "RECIPE_VALUES_UNCONVERTED",
             f"The dates in '{column}' could be read day first or month first, and nothing in the file "
-            "shows which, so they are not guessed. Read the column as dates with the order decided "
-            "before combining the rows.",
+            "showed which when the step was planned, so they are not guessed. Export the column with "
+            "the year first (2011-09-10) and upload the file again.",
             column=column,
         )
-    dayfirst = order if order is not None else bool(frozen)
-    values = parse_dates(series, dayfirst=dayfirst).values.astype("datetime64[ns]")
+    values = parse_dates(series, dayfirst=bool(order)).values.astype("datetime64[ns]")
     zoned = text.str.contains(_ZONED)
     if not zoned.any():
         return values
-    lookup = pd.Series(_utc(text[zoned], dayfirst).to_numpy(), index=pd.Index(distinct[zoned], dtype=object))
-    mapped = pd.Series(series.map(lookup), index=series.index, dtype="datetime64[ns]")
-    return values.mask(mapped.notna(), mapped)
+    lookup = pd.Series(
+        _utc(text[zoned], bool(order)).to_numpy(), index=pd.Index(distinct[zoned], dtype=object)
+    )
+    in_utc = pd.Series(series.map(lookup), index=series.index, dtype="datetime64[ns]")
+    return values.mask(series.isin(lookup.index), in_utc)
 
 
 def _numbers(series: pd.Series[Any]) -> tuple[pd.Series[Any], int]:
@@ -546,52 +576,77 @@ def _text(series: pd.Series[Any]) -> pd.Series[Any]:
 
 @dataclass(frozen=True)
 class _Timeline:
-    """Each row's entity key, date and snapshot, and whether it is usable: a key, a readable date
-    and a readable snapshot."""
+    """Each row's entity key, date, snapshot and its entity's snapshot, and whether it is usable."""
 
     keys: pd.Series[Any]
     event_time: pd.Series[Any]
     snapshot_at: pd.Series[Any]
+    known_by: pd.Series[Any]
+    """The row's entity snapshot: the latest readable snapshot over the entity's rows, else NaT."""
     usable: pd.Series[Any]
+    """A key, a readable date and an entity with a snapshot (not necessarily on this row)."""
 
-    @cached_property
-    def known_by(self) -> pd.Series[Any]:
-        """Each row's entity snapshot (the latest over its usable rows); NaT for a row of no entity."""
-        latest = self.snapshot_at[self.usable].groupby(self.keys[self.usable]).max()
-        mapped = self.keys.where(self.usable).map(latest)
-        return pd.Series(mapped, index=self.keys.index, dtype="datetime64[ns]")
+    @property
+    def dated(self) -> pd.Series[Any]:
+        """Rows that give their entity a snapshot: a key and a readable snapshot."""
+        return self.keys.notna() & self.snapshot_at.notna()
 
 
 def _timeline(
-    frame: pd.DataFrame, key: str, time_column: str, snapshot_column: str | None, dayfirst: bool | None
+    frame: pd.DataFrame,
+    key: str,
+    time_column: str,
+    snapshot_column: str | None,
+    orders: Mapping[str, bool | None],
 ) -> _Timeline:
     keys = _keys(frame[key])
-    event_time = _dates(frame[time_column], dayfirst, time_column)
+    event_time = _dates(frame[time_column], orders.get(time_column), time_column)
     snapshot_at = (
-        event_time if snapshot_column is None else _dates(frame[snapshot_column], dayfirst, snapshot_column)
+        event_time
+        if snapshot_column is None
+        else _dates(frame[snapshot_column], orders.get(snapshot_column), snapshot_column)
     )
-    usable = keys.notna() & event_time.notna() & snapshot_at.notna()
-    return _Timeline(keys, event_time, snapshot_at, usable)
+    dated = keys.notna() & snapshot_at.notna()
+    latest = snapshot_at[dated].groupby(keys[dated]).max()
+    known_by = pd.Series(keys.where(keys.notna()).map(latest), index=keys.index, dtype="datetime64[ns]")
+    usable = keys.notna() & event_time.notna() & known_by.notna()
+    return _Timeline(keys, event_time, snapshot_at, known_by, usable)
+
+
+def _written_after(line: _Timeline, values: pd.Series[Any]) -> bool:
+    """Whether a date column holds a date after its entity's snapshot on a row counted at it."""
+    counted = line.usable & (line.event_time <= line.known_by)
+    return bool((counted & (values > line.known_by)).any())
 
 
 # ---------------------------------------------------------------------------
 # Running
 # ---------------------------------------------------------------------------
-def _last_of_ties(values: pd.Series[Any], group: pd.Series[Any]) -> pd.Series[Any]:
-    """`values` with only the last known value of each (entity, date) kept, for `latest`."""
-    known = values.notna()
-    earlier = group[known].duplicated(keep="last").reindex(values.index, fill_value=False)
-    return values.mask(earlier.astype(bool))
+def _last_of_ties(values: pd.Series[Any], group: pd.Series[Any], snapshot: pd.Series[Any]) -> pd.Series[Any]:
+    """`values` with one known value kept per (entity, date) group, for `latest`.
+
+    The kept value is from the row with the latest snapshot, then the later row in the file: among
+    rows of one date, the order the outcome also uses (`_outcome`).
+    """
+    known = values.notna().to_numpy()
+    rows = pd.DataFrame({"g": group.to_numpy(), "s": snapshot.to_numpy(), "pos": np.arange(len(values))})
+    rows = rows[known].sort_values(["s", "pos"], kind="stable", na_position="first")
+    kept = rows["pos"][~rows["g"].duplicated(keep="last")].to_numpy()
+    earlier = np.ones(len(values), dtype=bool)
+    earlier[kept] = False
+    return values.mask(earlier)
 
 
 def _event_columns(
-    frame: pd.DataFrame, spec: CombineSpec, line: _Timeline, max_failure_pct: float
+    frame: pd.DataFrame, spec: CombineSpec, line: _Timeline, max_failure_pct: float, *, guard: bool
 ) -> tuple[dict[tuple[str, str], str], dict[str, pd.Series[Any]]]:
     """Each source column under a plain alias, converted for what the features do with it.
 
     A column is read under up to three aliases: as it is (`all`), for `latest` with same-date ties
-    settled by the later row in the file (`latest`), and for another date's `days_since_last` with
-    the dates after the entity's snapshot emptied (`known`).
+    settled (`latest`, see `_last_of_ties`), and for another date's `days_since_last` with the dates
+    after the entity's snapshot emptied (`known`). With `guard` (a training file's full leak check),
+    a date column that holds a date after its entity's snapshot on a row counted at it stops the
+    step: the plan left such columns out, and this file's copy was overwritten after the snapshot.
     """
     rows = line.usable
     uses: dict[str, set[str]] = {}
@@ -622,7 +677,17 @@ def _event_columns(
                     column=column,
                 )
         elif "days_since_last" in functions:
-            converted = _dates(frame[column], spec.dayfirst, column)[rows]
+            every = _dates(frame[column], spec.order(column), column)
+            if guard and _written_after(line, every):
+                raise CombineError(
+                    "RECIPE_STEP_INVALID",
+                    f"FUTURE_EVENTS_LEAKED: '{column}' holds dates after the snapshot on rows dated "
+                    "before it, so it was written after the snapshot and whether it is empty could give "
+                    "the answer away. It was not like this when the step was planned; plan the combine "
+                    "again on this file.",
+                    column=column,
+                )
+            converted = every[rows]
         else:
             converted = _text(series)
         converted = converted.reset_index(drop=True)
@@ -632,7 +697,7 @@ def _event_columns(
             if group is None:
                 ties = pd.DataFrame({"k": line.keys[rows].to_numpy(), "t": line.event_time[rows].to_numpy()})
                 group = pd.Series(ties.groupby(["k", "t"], sort=False).ngroup().to_numpy())
-            put(column, "latest", _last_of_ties(converted, group))
+            put(column, "latest", _last_of_ties(converted, group, line.snapshot_at[rows]))
         if "days_since_last" in functions:
             known = converted
             if pd.api.types.is_datetime64_any_dtype(converted):
@@ -704,30 +769,34 @@ def combine_rows(
     for column in spec.reads:
         if column not in frame.columns:
             raise CombineError("RECIPE_COLUMN_MISSING", f"The file has no column '{column}'.", column=column)
-    line = _timeline(frame, key, spec.time_column, spec.snapshot_column, spec.dayfirst)
+    line = _timeline(
+        frame, key, spec.time_column, spec.snapshot_column, {name: spec.order(name) for name in spec.reads}
+    )
     usable = line.usable
     failed = int((~usable).sum())
     if len(frame) and failed / len(frame) * 100.0 > max_failure_pct:
-        dates, column = f"'{spec.time_column}'", spec.time_column
+        what, column = f"no readable '{spec.time_column}'", spec.time_column
         if spec.snapshot_column is not None:
-            dates += f" or '{spec.snapshot_column}'"
-            if int(line.snapshot_at.isna().sum()) > int(line.event_time.isna().sum()):
+            what += f", or no readable '{spec.snapshot_column}' on any row of their '{key}'"
+            unsnapshotted = line.keys.notna() & line.event_time.notna() & line.known_by.isna()
+            if int(unsnapshotted.sum()) > int(line.event_time.isna().sum()):
                 column = spec.snapshot_column
         raise CombineError(
             "RECIPE_VALUES_UNCONVERTED",
-            f"{failed} of {len(frame)} rows have no '{key}' or no readable date in {dates} "
+            f"{failed} of {len(frame)} rows have no '{key}', {what} "
             f"({failed / len(frame):.1%}), more than the {max_failure_pct:g}% limit.",
             column=column,
         )
+    dated = line.dated
     snapshots = (
         pd.DataFrame(
-            {"entity_key": line.keys[usable].to_numpy(), "snapshot_date": line.snapshot_at[usable].to_numpy()}
+            {"entity_key": line.keys[dated].to_numpy(), "snapshot_date": line.snapshot_at[dated].to_numpy()}
         )
         .groupby("entity_key", sort=True)["snapshot_date"]
         .max()
         .reset_index()
     )
-    aliases, values = _event_columns(frame, spec, line, max_failure_pct)
+    aliases, values = _event_columns(frame, spec, line, max_failure_pct, guard=leak_check == "full")
     events = pd.DataFrame(
         {
             "entity_key": line.keys[usable].to_numpy(),
