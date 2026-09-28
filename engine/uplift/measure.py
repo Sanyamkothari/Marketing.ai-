@@ -9,7 +9,7 @@ it, as pure functions the API route (`api/routes/measure.py`) and the tests shar
 
 * **Whether a use case has step 4 at all** (:func:`measure_offered`): only when its actions are
   contacts with customers (`actions.contacts_customers`, true unless the use-case YAML says false,
-  as the operational order-fulfilment and fault-prediction use cases do), a control group is held
+  as operational use cases that never contact a customer do), a control group is held
   back (`actions.control_group_fraction > 0`) and the use case is not an AI-written-text one.
   Decided by configuration, never by use-case id.
 * **What the result says in one plain line** (:func:`campaign_verdict`): "The campaign added about N
