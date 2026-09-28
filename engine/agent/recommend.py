@@ -14,6 +14,7 @@ off a check (`validation.leakage_check`) or removes human approval (`governance.
 
 from __future__ import annotations
 
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
@@ -94,8 +95,11 @@ def setting_allowed(path: str, value: Any, fields: dict[str, FieldSpec]) -> bool
         return path in EXTRA_OVERRIDABLE_PATHS
     if field.advisory:
         return False
-    if field.choices and value is not None and value not in {choice.value for choice in field.choices}:
-        return False
+    if field.choices and value is not None:
+        allowed = {json.dumps(choice.value) for choice in field.choices}
+        values = value if isinstance(value, (list, tuple)) else [value]  # a multi-select holds a list
+        if not values or any(json.dumps(item) not in allowed for item in values):
+            return False
     if isinstance(value, (int, float)) and not isinstance(value, bool):
         if field.min is not None and value < field.min:
             return False

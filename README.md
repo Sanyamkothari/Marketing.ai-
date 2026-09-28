@@ -1324,8 +1324,14 @@ every later file. The first screen and Manual setup do not change.
   plain stop when the data cannot work. `engine/agent/recommend.py` suggests settings from one
   measured fact each and never loosens a safeguard. `tests/fixtures/agent_bench/` pins the advice
   for sixteen files, including a deliberately messy one.
+- **M74 — sessions, chat and Approve.** `/uploads/{id}/agent-session` starts Guided setup (rules
+  only), records decisions and answers, answers questions in a chat that can only read the data
+  and suggest settings, previews the prepared rows, and on Approve prepares the copy and returns
+  the ID, outcome and settings for the ordinary Run. Every number in a chat reply must come from
+  the data the helper looked at, or the reply is replaced (`engine/agent/loop.py`,
+  `engine/agent/grounding.py`).
 
-Decisions are DEC-1000 … DEC-1016 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Decisions are DEC-1000 … DEC-1018 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 <!-- ---- END PLAN-G ---- -->
 

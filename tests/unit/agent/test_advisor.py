@@ -131,3 +131,16 @@ def test_a_scoring_file_without_a_schema_is_not_checked() -> None:
 
 def test_the_golden_file_is_readable_json(repo_root: Path) -> None:
     assert (repo_root / "tests/fixtures/agent_bench/expected.json").read_text(encoding="utf-8").endswith("\n")
+
+
+def test_a_multi_select_setting_is_checked_item_by_item() -> None:
+    from engine.agent.recommend import setting_allowed, settings_fields
+    from engine.config import advanced_settings_schema, load_use_case
+
+    fields = settings_fields(advanced_settings_schema(load_use_case("targeted-advertisement")))
+    assert setting_allowed("model_search.candidates", ["XGBoost", "LightGBM"], fields)
+    assert not setting_allowed("model_search.candidates", ["XGBoost", "MagicNet"], fields)
+    assert not setting_allowed("model_search.candidates", [], fields)
+    assert setting_allowed("model_search.strategy", "fast", fields)
+    assert not setting_allowed("model_search.strategy", "reckless", fields)
+    assert not setting_allowed("governance.approval_required", False, fields)

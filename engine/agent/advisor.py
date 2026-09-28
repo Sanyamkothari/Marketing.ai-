@@ -126,6 +126,7 @@ class Advice:
 @dataclass
 class _Builder:
     ctx: AgentContext
+    prefix: str = ""
     results: list[ToolResult] = field(default_factory=list)
     proposals: list[Proposal] = field(default_factory=list)
     questions: list[Question] = field(default_factory=list)
@@ -138,15 +139,17 @@ class _Builder:
     def call(
         self, tool: str, args: Mapping[str, Any] | None = None, ctx: AgentContext | None = None
     ) -> ToolResult:
-        result = call_tool(ctx or self.ctx, tool, args, evidence_id=f"e{next(iter(self._evidence))}")
+        result = call_tool(
+            ctx or self.ctx, tool, args, evidence_id=f"{self.prefix}e{next(iter(self._evidence))}"
+        )
         self.results.append(result)
         return result
 
     def proposal_id(self) -> str:
-        return f"p{next(iter(self._proposal))}"
+        return f"{self.prefix}p{next(iter(self._proposal))}"
 
     def question_id(self) -> str:
-        return f"q{next(iter(self._question))}"
+        return f"{self.prefix}q{next(iter(self._question))}"
 
     def propose(self, **values: Any) -> Proposal:
         proposal = Proposal(proposal_id=self.proposal_id(), **values)
@@ -565,9 +568,15 @@ def _facts(
     )
 
 
-def advise(ctx: AgentContext, *, primary_key: str | None = None, target: str | None = None) -> Advice:
-    """Look at the file and propose everything; `primary_key` / `target` are the user's answers so far."""
-    builder = _Builder(ctx)
+def advise(
+    ctx: AgentContext, *, primary_key: str | None = None, target: str | None = None, id_prefix: str = ""
+) -> Advice:
+    """Look at the file and propose everything; `primary_key` / `target` are the user's answers so far.
+
+    `id_prefix` keeps evidence, proposal and question ids unique when a session asks more than once.
+    A scoring file gets no fixes of its own: it is prepared by the model's saved recipe (DEC-1006).
+    """
+    builder = _Builder(ctx, prefix=id_prefix)
     config = ctx.config
     profile = builder.call("get_profile")
     roles = builder.call("find_roles")
@@ -590,8 +599,9 @@ def advise(ctx: AgentContext, *, primary_key: str | None = None, target: str | N
         )
         if name
     }
-    issues = builder.call("find_format_issues")
-    _format_proposals(builder, issues, protected)
+    if ctx.mode is RunMode.TRAIN:
+        issues = builder.call("find_format_issues")
+        _format_proposals(builder, issues, protected)
     can_check = outcome_column is not None if ctx.mode is RunMode.TRAIN else ctx.schema is not None
     if stop is None and can_check:
         ticked = [p for p in builder.proposals if _ticked(p, config.agent.tick_uncertain)]

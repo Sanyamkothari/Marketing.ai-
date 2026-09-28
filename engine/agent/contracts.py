@@ -336,6 +336,16 @@ class AgentSession(Artefact):
     )
     transcript: tuple[ChatMessage, ...] = Field(default=(), description="The chat, oldest first.")
     summary: AgentSummary = Field(default_factory=AgentSummary, description="The pre-Approve summary.")
+    stop_reason: str | None = Field(
+        default=None,
+        description="Why the data cannot work as it is, in plain words; set when status is `stopped`.",
+    )
+    assumptions: tuple[str, ...] = Field(default=(), description="What the advisor took as given.")
+    engine_hidden: tuple[str, ...] = Field(
+        default=(), description="Columns the engine will leave out by itself, with why (one line each)."
+    )
+    rounds: int = Field(default=1, ge=1, description="How many times the advisor has looked at the file.")
+    llm_calls: int = Field(default=0, ge=0, description="Model calls the chat has made in this session.")
     applied_upload_id: str | None = Field(default=None, description="The derived upload `apply` wrote.")
     created_at: AwareDatetime = Field(description="When the session started.")
     updated_at: AwareDatetime = Field(description="When it last changed.")
@@ -365,6 +375,8 @@ class AgentSession(Artefact):
             raise ValueError("question ids repeat")
         if self.status is SessionStatus.APPLIED and self.applied_upload_id is None:
             raise ValueError("an applied session names the upload it wrote")
+        if (self.status is SessionStatus.STOPPED) != (self.stop_reason is not None):
+            raise ValueError("stop_reason is set exactly when the session is stopped")
         return self
 
     @property

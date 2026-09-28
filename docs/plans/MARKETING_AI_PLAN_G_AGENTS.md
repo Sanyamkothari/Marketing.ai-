@@ -303,14 +303,13 @@ These are the existing `Guardrails` plus two new deterministic rules:
 
 | Method and path | Does |
 |---|---|
-| `POST /uploads/{upload_id}/agent-session` | Start a session for `{use_case, mode}`; runs the advisor; returns `AgentSession` |
-| `GET /agent-sessions/{id}` | Current proposals, questions, settings, summary, transcript (masked) |
-| `POST /agent-sessions/{id}/messages` `{text}` | One chat turn; returns the reply and the changed proposals. 503 `AGENT_CHAT_UNAVAILABLE` when no AI service is connected in demo mode |
-| `POST /agent-sessions/{id}/proposals/{pid}` `{state, value?}` | Accept, reject or edit one proposal |
-| `POST /agent-sessions/{id}/proposals:accept-all` | Accept every pending proposal |
-| `POST /agent-sessions/{id}/questions/{qid}` `{option}` | Answer a question; the advisor re-runs on the new facts |
-| `POST /agent-sessions/{id}/preview` | Before/after rows and impact numbers on a sample |
-| `POST /agent-sessions/{id}/apply` | Run the recipe, create the derived upload, and return the **run request pre-fill**: `{upload_id, primary_key, target, overrides, acknowledged, summary}`. 409 `AGENT_UNDECIDED` while anything is pending. |
+| `POST /uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for `{use_case}`; runs the advisor; returns the session. One session per upload (DEC-1007), so every path is scoped to the upload (DEC-1018) |
+| `GET /uploads/{upload_id}/agent-session` | Current proposals, questions, summary and transcript (masked) |
+| `POST /uploads/{upload_id}/agent-session/decisions` | Accept or reject proposals (a setting may be edited to another allowed value); `accept_recommended` accepts every `sure` one |
+| `POST /uploads/{upload_id}/agent-session/answers` | Answer a question; answering a role re-runs the advisor with the role fixed |
+| `POST /uploads/{upload_id}/agent-session/messages` | One chat turn; returns the session with the reply and any new pending setting proposal |
+| `POST /uploads/{upload_id}/agent-session/preview` | Before/after rows and impact numbers on the preview rows |
+| `POST /uploads/{upload_id}/agent-session/apply` | Run the recipe, create the derived upload, and return the **run request pre-fill**: `{upload_id, primary_key, target, overrides, summary, receipt}`. 409 `AGENT_UNDECIDED` while anything is pending; 409 with the checks when Run would fail. |
 | `POST /uploads/{upload_id}/checks` | Dry-run validation for `{use_case, primary_key, target, overrides}`; returns `ValidationReport` without starting a run. Also useful to Manual setup. |
 
 **Access, audit and budget:**

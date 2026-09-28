@@ -108,6 +108,13 @@ Contract schema version: 1.
 | GET | `/schedules/{schedule_id}/firings` | A schedule's firing history, newest first | FiringListResponse |
 | POST | `/uplift/runs` | Validate an upload as an experiment and, when it passes, start an uplift training run | RunCreatedResponse |
 | POST | `/uploads` | Store a CSV or Parquet file, profile it and return everything the Setup screen renders | UploadResponse |
+| GET | `/uploads/{upload_id}/agent-session` | The Guided-setup session of an upload | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for an upload: the helper's suggestions and questions | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/answers` | Answer one of the helper's questions | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/apply` | Approve: prepare the data with the accepted steps and return what Run needs | ApplyResponse |
+| POST | `/uploads/{upload_id}/agent-session/decisions` | Accept or reject the helper's suggestions | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/messages` | Ask the helper something; its reply is checked before it is kept | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/preview` | The first rows before and after the accepted steps, and what each step did | PreviewResponse |
 | POST | `/uploads/{upload_id}/checks` | Run the data checks for an upload without starting a run | ValidationReport |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
 | GET | `/uploads/{upload_id}/treatment-candidates` | The 0/1 columns of an upload that could record who was treated | TreatmentCandidatesResponse |

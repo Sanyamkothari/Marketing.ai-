@@ -383,6 +383,13 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/pilot/feedback/export",
         # Plan G (use-case agents): the dry-run data checks (M71, DEC-1011)
         "/uploads/{upload_id}/checks",
+        # Plan G M74: the Guided-setup session, one per upload (DEC-1018)
+        "/uploads/{upload_id}/agent-session",
+        "/uploads/{upload_id}/agent-session/decisions",
+        "/uploads/{upload_id}/agent-session/answers",
+        "/uploads/{upload_id}/agent-session/messages",
+        "/uploads/{upload_id}/agent-session/preview",
+        "/uploads/{upload_id}/agent-session/apply",
         # Phase 4b M46/M47: sign-in, user management and the audit viewer
         "/auth/login",
         "/auth/logout",
