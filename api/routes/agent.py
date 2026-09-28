@@ -35,6 +35,7 @@ from engine.agent.contracts import (
     DataRecipe,
     ProposalState,
     RecipeReceipt,
+    RecipeStepKind,
     SessionStatus,
     recipe_hash,
 )
@@ -58,6 +59,7 @@ from engine.generative.budget import Meter
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import build_client
 from engine.pii import redact_cells
+from engine.stages import ingest
 from engine.storage import Storage, upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.time import utc_now
@@ -319,6 +321,20 @@ def _load_context(
                 ).frame
             except RecipeError as exc:
                 recipe_error = exc
+            else:
+                if any(step.kind is RecipeStepKind.COMBINE_ROWS for step in recipe.steps):
+                    # Combined rows are other rows: the profile the helper reads must describe them.
+                    profile = ingest.profile_dataset(
+                        frame,
+                        config,
+                        upload_id=upload_id,
+                        file_name=profile.file_name,
+                        file_format=profile.file_format,
+                        file_size_bytes=profile.file_size_bytes,
+                        delimiter=profile.delimiter,
+                        encoding=profile.encoding,
+                        row_count=len(frame),
+                    )
     ctx = AgentContext(
         use_case_id=config.id,
         config=config,

@@ -74,3 +74,8 @@ agent:                                  # Plan G: this use case's Guided-setup h
     - "Recency, frequency and spend describe the shopper before the snapshot and are the useful signals."
   column_hints:
     target_synonyms: [reactivated, reordered, returned]
+  # Level 3 (M76): a win-back file is often the order log itself, one row per order. With `reshape`
+  # the helper offers to combine it into one row per shopper, counting only orders on or before each
+  # shopper's snapshot date; it is off in the defaults because most use cases' files are one row per
+  # customer already, and a repeating ID there is a mistake to stop on, not a log to combine.
+  levels: [clean, derive, reshape]

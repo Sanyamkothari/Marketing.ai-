@@ -10,6 +10,8 @@ touches data. The API stores the result at `uploads/<upload_id>/agent/agent_sess
   user. Answering who the ID or the outcome is re-runs the advisor with that role fixed, because
   every check downstream depends on it; decisions already made carry over to the new advice when
   the same proposal comes back (same kind and subject), and nothing the user chose is dropped.
+  Answering "combine the rows?" (M76) re-runs it too: with Combine the rest of the advice is about
+  the combined file; with Stop a repeating ID stops the session.
 * `status_of` is the one rule for where a session is: stopped when the data cannot work, ready
   when nothing is left to decide, needs review otherwise.
 """
@@ -29,6 +31,8 @@ from engine.agent.contracts import (
     ProposalKind,
     ProposalState,
     Question,
+    RecipeStep,
+    RecipeStepKind,
     SessionStatus,
 )
 from engine.agent.recommend import setting_allowed, settings_fields
@@ -42,6 +46,7 @@ __all__ = [
     "answer",
     "decide",
     "identity",
+    "reshape_of",
     "roles_of",
     "start_session",
     "status_of",
@@ -88,6 +93,33 @@ def roles_of(session: AgentSession) -> tuple[str | None, str | None]:
         return str(live[-1].value) if live else None
 
     return pick(ROLE_PRIMARY_KEY), pick(ROLE_TARGET)
+
+
+def _combines(proposal: Proposal | None) -> bool:
+    return (
+        proposal is not None
+        and proposal.step is not None
+        and proposal.step.kind is RecipeStepKind.COMBINE_ROWS
+    )
+
+
+def _is_combine_question(question: Question) -> bool:
+    """The M76 question "combine the rows?": one of its options adds a `combine_rows` step."""
+    return any(_combines(option.proposal) for option in question.options)
+
+
+def reshape_of(session: AgentSession) -> tuple[RecipeStep | None, bool]:
+    """(the `combine_rows` step the user accepted, whether they declined combining), for `advise`."""
+    accepted = [
+        p.step for p in session.proposals if p.state is ProposalState.ACCEPTED and _combines(p) and p.step
+    ]
+    declined = any(
+        _is_combine_question(q)
+        and q.answer is not None
+        and not any(_combines(o.proposal) for o in q.options if o.option_id == q.answer)
+        for q in session.questions
+    )
+    return (accepted[-1] if accepted else None), declined
 
 
 def with_summary(
@@ -275,14 +307,22 @@ def answer(
         proposals = [p for p in proposals if identity(p) != identity(chosen)]
         proposals.append(_decided(chosen, ProposalState.ACCEPTED))
     updated = session.model_copy(update={"questions": questions, "proposals": tuple(proposals)})
-    if chosen is not None and chosen.kind is ProposalKind.ROLE:
+    if (chosen is not None and chosen.kind is ProposalKind.ROLE) or _is_combine_question(question):
         key, target = roles_of(updated)
+        combine, declined = reshape_of(updated)
         try:
-            advice = advise(ctx, primary_key=key, target=target, id_prefix=f"a{session.rounds + 1}-")
+            advice = advise(
+                ctx,
+                primary_key=key,
+                target=target,
+                id_prefix=f"a{session.rounds + 1}-",
+                combine=combine,
+                combine_declined=declined,
+            )
         except AgentToolError as exc:
             raise SessionError(exc.code, exc.message) from exc
         updated = _merge(updated, advice, clock())
-        role_keys = {identity(chosen)}
+        role_keys = {identity(chosen)} if chosen is not None and chosen.kind is ProposalKind.ROLE else set()
         updated = updated.model_copy(
             update={
                 "proposals": tuple(

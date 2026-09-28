@@ -337,6 +337,23 @@ def _find_roles(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
     }
 
 
+def _describe_repeats(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
+    """How often each value of an ID column repeats: the evidence behind "combine the rows?" (M76)."""
+    series = ctx.column(args.column)
+    counts = series.dropna().value_counts()
+    ids = len(counts)
+    present = int(counts.sum())
+    return {
+        "column": args.column,
+        "rows": len(series),
+        "empty": int(series.isna().sum()),
+        "ids": ids,
+        "rows_per_id": round(present / ids, 1) if ids else None,
+        "most_rows": int(counts.max()) if ids else 0,
+        "ids_on_several_rows": int((counts > 1).sum()),
+    }
+
+
 def _check_data(ctx: AgentContext, args: CheckArgs) -> dict[str, Any]:
     try:
         resolved = resolve_config(ctx.use_case_id, dict(args.overrides), root=ctx.config_root)
@@ -411,6 +428,13 @@ TOOLS: Final[Mapping[str, Tool]] = {
             ToolKind.READ,
             NoArgs,
             _find_roles,
+        ),
+        Tool(
+            "describe_repeats",
+            "How many rows each value of an ID column has: whether the file holds several rows per customer.",
+            ToolKind.READ,
+            ColumnArgs,
+            _describe_repeats,
         ),
         Tool(
             "check_data",
