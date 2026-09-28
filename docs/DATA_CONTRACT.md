@@ -917,7 +917,9 @@ future-data check (rows re-dated after the snapshot must change nothing), a scor
 one, and the receipt says which ran.
 
 When a scoring file cannot be prepared, `POST /runs` answers 409 with one of these errors. None can
-be acknowledged: a file prepared differently from the training data would be scored wrongly.
+be acknowledged: a file prepared differently from the training data would be scored wrongly. A
+column the recipe only hides is the exception: a scoring file without it has nothing to hide, so the
+step is skipped (`skipped: true` in the receipt) rather than refused.
 
 | Code | Severity | Acknowledgeable | Message | Suggestion |
 |---|---|---|---|---|

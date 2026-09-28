@@ -97,7 +97,7 @@ is `apply`.
 |---|---|---|
 | `get_profile` | `offset` (default 0) | Rows, and up to 50 columns per call (`columns_total`, `columns_offset` page through wider files): type, empty share, distinct count, unique/constant/ID-like/date-like, personal-data kinds; key and date candidates. |
 | `inspect_column` | `column` | Counts, masked examples and top values, and the outcome rate per bucket of the column. A personal-data column shows no values at all - not even its minimum or maximum. |
-| `find_format_issues` | `columns` (optional) | Per text column, at most one issue: `number_as_text`, `mixed_dates`, `boolean_as_text`, `category_variants` or `untrimmed_text`, with counts, masked examples and the parameters a fix would use. Personal-data columns are skipped. |
+| `find_format_issues` | `columns` (optional) | Per text column, at most one issue: `number_as_text`, `mixed_dates`, `boolean_as_text`, `category_variants` or `untrimmed_text`, with counts, masked examples and the parameters a fix would use. The decimal mark is the one most values prove (a value counts only when it reads one way and not the other; `1,200` counts as grouping); when the values cannot tell (only `1.200`-style values, or a tie), no number fix is proposed. Category merge keys are the stripped spellings as written, so `normalise_text` finds every one. Personal-data columns are skipped. |
 | `describe_outcome` | `column` | How many rows are "yes" by the engine's own label rule. |
 | `describe_repeats` | `column` | How often each value of an ID column repeats: IDs, rows per ID, the most rows, IDs on several rows (the evidence behind "combine the rows?"). |
 | `find_roles` | — | Which columns could be the ID, the outcome (exact, case-insensitive, synonym), the date, consent, opt-out and last contact. |
@@ -186,13 +186,13 @@ identically.
 
 | Kind | Parameters | Does |
 |---|---|---|
-| `parse_number` | `decimal` (`.` or `,`), `percent_to_fraction` | `"₹1,200"`, `"Rs. 1,20,000"`, `"45%"` (→ 0.45), `"(300)"` (→ −300), `"1.200,50"` → number. |
-| `parse_date` | `dayfirst` (must be decided) | Mixed styles → datetime, each value parsed on its own; a value with a UTC offset keeps its clock time. |
-| `map_boolean` | `true_values`, `false_values` | Listed spellings (compared trimmed, case-folded) → 1 / 0; anything else fails. |
+| `parse_number` | `decimal` (`.` or `,`), `percent_to_fraction` | `"₹1,200"`, `"Rs. 1,20,000"`, `"45%"` (→ 0.45), `"(300)"` (→ −300), `"1.200,50"` → number. A grouping mark counts only where grouping puts it (`1,200.50`, `1,20,000`; `1.200,50` under `,`), so a value in the other convention (`"1,5"` under `.`, `"1.5"` under `,`) fails and is counted instead of being read as 15. A real number inside a text column (a chunked CSV read) is read by its value, not its text. |
+| `parse_date` | `dayfirst` (must be decided) | Mixed styles → datetime, each value parsed on its own; a value with a UTC offset is converted to UTC before the offset is dropped, a value without one is kept as written. A value with no digit (`now`, `today`) is never a date: it fails and is counted. |
+| `map_boolean` | `true_values`, `false_values` | Listed spellings (compared trimmed, case-folded) → 1 / 0; a real number matches a numeric spelling by value (1.0 is `"1"`); anything else fails. |
 | `normalise_text` | `strip`, `merge` (frozen at approval) | Trim; replace listed spellings by their canonical one. |
 | `combine_rows` | the step's `column` is the entity key; `time_column`, `snapshot_column`, `dayfirst`, `outcome`, `features` (a frozen `{name, function, column}` list) | Level 3: many rows per entity into one (DEC-1023 … DEC-1025), computed by the onboarding feature engine with its point-in-time guard. Only rows dated on or before the entity's snapshot count; the outcome is read from the latest row, not aggregated; numbers get sum/mean/max/latest, categories latest/nunique, dates days-since, plus a row count. Entity-wise rather than row-wise: an entity's output depends only on its own rows and the frozen parameters. A training Approve runs onboarding's full future-data leak probe, a scoring replay the narrow one, a preview none. Needs the `reshape` level. |
 | `derive` | `expression` | A new column from `engine.onboarding.transforms.derive`'s whitelist: names, numbers, `+ - * /`, `days_between`, `months_between`, `year`, `month`, `coalesce`, `lower`, `abs`, and `snapshot_date`. At most 300 characters; no repeated text. Needs the `derive` level. Not proposed by the advisor today. |
-| `drop_column` | — | Hide a column from the model. |
+| `drop_column` | — | Hide a column from the model. A file without the column has nothing to hide: the step is skipped and its receipt says `skipped: true`, so a hidden column (a leak, often unknown when scoring) need not be in a scoring file. |
 
 `recipe_hash` covers kinds, columns and parameters only (not reasons or ids).
 
@@ -202,7 +202,9 @@ Steps are numbered 1…n and run in a fixed order: parse and tidy → combine �
 `RECIPE_STEP_INVALID`: an unknown parameter, an undecided date order, a spelling that means both yes
 and no, a step above the use case's `levels`, a step that changes the ID or the outcome, a derived
 column that reads the outcome or `snapshot_date` without a snapshot column, or a name clash. A
-column the file lacks is `RECIPE_COLUMN_MISSING`. `run_recipe` works on a copy and counts, per step,
+column the file lacks is `RECIPE_COLUMN_MISSING`, except for a `drop_column` step, which is skipped
+(a column the file has but an earlier step used up is still refused). A parser that cannot run on a
+column's values (never expected; a coded guard) is `RECIPE_STEP_INVALID`, not a 500. `run_recipe` works on a copy and counts, per step,
 the values it changed and could not convert (examples masked); more failures than
 `max_conversion_failure_pct` of a column's non-empty values stop the run with
 `RECIPE_VALUES_UNCONVERTED`.
