@@ -145,14 +145,20 @@ def test_industry_available_entries_have_files_and_matching_stage_names() -> Non
 
     Telecom used to have to list every file in `configs/use_cases/` itself; since DEC-085 (D3) the
     union over all industry files must, so no use case is shipped that no overview can open.
+
+    Plan H M81 (DEC-1111): the generic journey lists use cases the industry files also list, under
+    goals that group lifecycle stages (`lifecycle_stages`), so the union is a set and the stage rule
+    reads the stage's accepted names - its own name when it groups nothing.
     """
-    available: list[str] = []
+    available: set[str] = set()
     for industry_id in list_industries():
         for stage, ref in load_industry(industry_id).all_refs():
             if ref.status is UseCaseStatus.AVAILABLE:
-                available.append(ref.id)
+                available.add(ref.id)
                 assert ref.name is None and ref.description is None
-                assert load_use_case(ref.id).lifecycle_stage == stage.name
+                assert load_use_case(ref.id).lifecycle_stage in stage.accepted_lifecycle_stages
+                if not stage.lifecycle_stages:
+                    assert load_use_case(ref.id).lifecycle_stage == stage.name
     assert sorted(available) == sorted(list_use_case_ids())
 
 

@@ -20,6 +20,12 @@
 // `GET /auth/me` permission list); it opens a small form under the chooser: "Client name", Enter or
 // "Add client" adds, Escape or "Cancel" closes, and an empty name is explained under the field.
 //
+// Plan H M81 (DEC-1112): the product works for one company, so the chooser is not drawn anywhere
+// (`SINGLE_COMPANY`). Everything underneath stays: every onboarding call still names a client - the
+// default one (`POST /clients/default`, created the first time), or the demo's own client when demo
+// mode is on - and a choice remembered in this browser from before is ignored. Setting
+// `SINGLE_COMPANY` to false brings the chooser back exactly as it was.
+//
 // The top bar is repainted wholesale, so events are read off `document` with one delegated listener
 // each rather than bound per paint. A change of client is a change to what the current screen shows -
 // the Setup form's raw-tables panel belongs to one client - so it asks the router to repaint.
@@ -27,6 +33,9 @@
 import { announceModulesChanged } from "../router.js";
 import { createClient, ensureDefaultClient, listClients } from "./api.js";
 import { errorBox, esc, toggletip } from "../../dom.js";
+
+/** Plan H: one company, no chooser; the default client is used silently. */
+export const SINGLE_COMPANY = true;
 
 const STORAGE_KEY = "marketing-ai.client";
 const NEW_CLIENT = "__new__";
@@ -132,7 +141,7 @@ async function load() {
     state.practiceId = manifest ? manifest.broken_client_id || null : null;
     const demoClient = manifest && state.clients.find((c) => c.client_id === manifest.client_id);
     if (demoClient) fallback = demoClient;
-    const wanted = remembered();
+    const wanted = SINGLE_COMPANY ? null : remembered();
     state.current = state.clients.some((c) => c.client_id === wanted) ? wanted : fallback.client_id;
     state.error = null;
   } catch (error) {
@@ -207,6 +216,7 @@ function newClientForm() {
 
 /** The top bar's context slot: "Client: [name ▾]", or nothing where the client means nothing. */
 export function clientPickerHtml() {
+  if (SINGLE_COMPANY) return "";
   if (typeof window === "undefined" || !perClientRoute(window.location.hash)) return "";
   injectStyles();
   if (state.loading) {

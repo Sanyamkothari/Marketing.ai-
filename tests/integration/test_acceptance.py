@@ -344,6 +344,8 @@ def journey(page: sync_api.Page, server: str, workdir: Path, config_root: Path) 
     expect(page.get_by_role("heading", name="Customer Lifecycle")).to_be_visible()
     page.get_by_role("link", name=USE_CASE_NAME).click()
     expect(page.get_by_role("heading", name=USE_CASE_NAME)).to_be_visible()
+    # Plan H M82 (DEC-1114): Setup opens on Guided setup; this journey is the Manual one, one click away.
+    page.get_by_role("button", name="Manual setup").click()
     expect(page.locator("#f-file")).to_be_attached()
     at = mark("open_ui", started)
 

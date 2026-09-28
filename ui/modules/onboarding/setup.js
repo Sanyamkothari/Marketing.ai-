@@ -19,7 +19,7 @@
 import { getRun } from "../../api.js";
 import { emptyState, errorBox, esc, fmtDate, techDetails } from "../../dom.js";
 import { getDataset, getDatasetReport, listOnboardingSpecs } from "./api.js";
-import { currentClient } from "./clients.js";
+import { SINGLE_COMPANY, currentClient } from "./clients.js";
 import { onboardingPanel } from "./panel.js";
 
 const mounted = new Map();
@@ -27,7 +27,8 @@ const mounted = new Map();
 /** What the Setup form needs to know about the source's own state: which client it builds for. */
 export function setupContext() {
   const client = currentClient();
-  return { clientId: client ? client.client_id : null, clientName: client ? client.name : null };
+  // `singleCompany` (Plan H): the client is the installation's own, so no screen names it.
+  return { clientId: client ? client.client_id : null, clientName: client ? client.name : null, singleCompany: SINGLE_COMPANY };
 }
 
 /** The second Step 1 card, in the Setup form's own words for each mode. */

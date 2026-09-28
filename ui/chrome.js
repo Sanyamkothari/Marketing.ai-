@@ -1,6 +1,14 @@
 // The top bar: one role-aware bar above every screen (v1, docs/ui/FOUNDATION.md).
 //
-//   [Marketing AI]  Home  Build data  Models ▾  Campaigns  Reports  Admin ▾     [Client ▾] [chip] [Help ▾] [user]
+//   [Marketing AI]  Home  Connections  Results (2)  Settings          [chip] [Help ▾] [user]
+//
+// Plan H M82 (DEC-1113): exactly four places. Home is the journey, Connections the cloud services,
+// Results every run (with the approvals count as its badge), Settings everything else - privacy,
+// schedules, the AI service, admin, the advanced tools. The screens that used to be top-level items
+// (Build data, Reports, Campaigns, Model health, Schedules, Privacy, Admin, Uplift, Waiting for
+// approval) keep their routes; they are opened from Results, from a run, or from Settings. The
+// "admin" and "models" slots are no longer drawn in the bar: the Settings page reads them
+// (`navSlotHtml`), so the role checks their owners make still decide what is offered.
 //
 // It is `<header id="pb-bar" class="topbar">` - the id the Phase 4b user bar had, so every test that
 // reads `#pb-bar a[href=...]` keeps reading the same place - drawn *before* `#app`, outside the area
@@ -12,13 +20,14 @@
 // nothing here imports the router back, so the graph stays acyclic (DEC-790).
 //
 // Slots (each `{ html(), bind?(bar) }`; several registrations under one name are drawn in order):
-//   "models"   extra entries (`<a>` elements) at the end of the Models menu
-//   "admin"    the Admin menu's entries; the Admin item is drawn only when this slot has any
+//   "models"   extra model tools (`<a>` elements); drawn on the Settings page, not in the bar
+//   "admin"    the admin entries (Users, Audit log, ...); drawn on the Settings page, not in the bar
 //   "demo"     the sample-data chip, right side
 //   "help"     the Help menu's entries; Help is drawn only when this slot has any
 //   "user"     the user menu (or "Sign in", or the sign-in-off chip), far right
-//   "badge:approvals"  a count shown on Models and on "Waiting for approval" ("" for none)
-// The context slot (the client picker) is the registered header tool, `headerToolHtml()`.
+//   "badge:approvals"  a count shown on Results ("" for none)
+// The context slot is the registered header tool, `headerToolHtml()` (Plan H: it draws nothing, as
+// there is one company and no client to choose).
 //
 // Until a module fills "user", an older strip mounted before `#app` (Phase 4b's `#pb-bar` user bar,
 // Plan E's `#pe-bar`) is adopted into the bar's second row, so nothing it offered is lost.
@@ -34,25 +43,17 @@ let sub = null;
 let lastHtml = "";
 let scheduled = false;
 
-/** The six goals. `need` is the `[method, path]` a role must be allowed (via `registerAccess`). */
+/** The four places (Plan H M82). `need` is the `[method, path]` a role must be allowed (via
+ * `registerAccess`); `badge` names the slot whose count is drawn beside the label. */
 export const NAV_ITEMS = [
   { id: "home", label: "Home", href: "#/" },
-  { id: "build", label: "Build data", href: "#/pilot/kit" },
-  {
-    id: "models",
-    label: "Models",
-    menu: [
-      { label: "Train or score: choose a use case on Home", href: "#/" },
-      { label: "Uplift models", href: "#/uplift" },
-      { label: "Waiting for approval", href: "#/approvals", need: ["GET", "/approvals"], badge: "badge:approvals" },
-      { label: "Model health", href: "#/monitoring/alerts", need: ["GET", "/schedules"] },
-    ],
-    slot: "models",
-  },
-  { id: "campaigns", label: "Campaigns", href: "#/monitoring/runs" },
-  { id: "reports", label: "Reports", href: "#/pilot" },
-  { id: "admin", label: "Admin", menu: [], slot: "admin" },
+  { id: "connections", label: "Connections", href: "#/connections" },
+  { id: "results", label: "Results", href: "#/results", badge: "badge:approvals" },
+  { id: "settings", label: "Settings", href: "#/settings" },
 ];
+
+/** The goals screens still name with `setActiveNav` from before Plan H, and where they live now. */
+const OLD_GOALS = { campaigns: "results", reports: "results", models: "home", build: "settings", admin: "settings" };
 
 // --- what the router forwards ---------------------------------------------------------------------
 
@@ -69,7 +70,7 @@ export function setAccess(provider) {
   refreshChrome();
 }
 
-/** Mark a goal active for the current route only (a scoring run's Output page is a Campaign). */
+/** Mark a goal active for the current route only (a scoring run's Output page is a Result). */
 export function setActiveNav(id) {
   active = { id, hash: currentHash() };
   refreshChrome();
@@ -89,27 +90,27 @@ export function refreshChrome() {
 
 const currentHash = () => (typeof window === "undefined" ? "#/" : window.location.hash || "#/");
 
-/** The goal a route belongs to (the plan's navigation table), or `null` (sign-in, account). */
+/** The place a route belongs to (Plan H M82), or `null` (sign-in, account). */
 export function navFor(hash) {
   const parts = String(hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
   const [a, b] = parts;
-  if (!a || a === "industry") return "home";
+  if (!a || a === "industry" || a === "uc") return "home";
+  if (a === "connections") return "connections";
+  if (a === "results" || a === "campaign" || a === "approvals") return "results";
   if (a === "pilot") {
-    if (b === "kit" || (b === "view" && parts[2] === "readiness")) return "build";
-    if (b === "value") return "campaigns";
-    return "reports";
+    if (b === "kit" || (b === "view" && parts[2] === "readiness")) return "settings";
+    return "results";
   }
-  if (a === "campaign") return "campaigns";
-  if (a === "monitoring") return b === "runs" ? "campaigns" : "models";
-  if (a === "uc" || a === "uplift" || a === "approvals") return "models";
-  if (a === "generative") return b === "copy" ? "campaigns" : b === "connection" ? "admin" : "models";
-  if (a === "admin" || a === "privacy") return "admin";
+  if (a === "monitoring") return b === "runs" ? "results" : "settings";
+  if (a === "generative") return b === "copy" ? "results" : b === "connection" ? "settings" : "home";
+  if (a === "settings" || a === "admin" || a === "privacy" || a === "uplift") return "settings";
   return null;
 }
 
 function activeId() {
   const hash = currentHash();
-  return active.hash === hash && active.id ? active.id : navFor(hash);
+  const id = active.hash === hash && active.id ? active.id : navFor(hash);
+  return OLD_GOALS[id] || id;
 }
 
 // --- drawing -----------------------------------------------------------------------------------------
@@ -127,6 +128,11 @@ function allowed(need) {
   } catch {
     return true;
   }
+}
+
+/** The access provider's `status()` ("off", "signed-in", "signed-out", ...), or null without one. */
+export function accessStatus() {
+  return sessionState();
 }
 
 function sessionState() {
@@ -147,6 +153,11 @@ function slotHtml(name) {
       }
     })
     .join("");
+}
+
+/** A slot's markup, for a screen that draws it instead of the bar (the Settings page, Plan H). */
+export function navSlotHtml(name) {
+  return slotHtml(name);
 }
 
 const chev = `<span class="chev" aria-hidden="true"></span>`;
@@ -170,7 +181,7 @@ function menuItem(item, on) {
   const extra = item.slot ? slotHtml(item.slot) : "";
   if (!entries && !extra) return "";
   const open = ui.menu === menuId;
-  const count = item.id === "models" ? badge("badge:approvals") : "";
+  const count = item.badge ? badge(item.badge) : "";
   return `<li class="menu"><button type="button" class="tn-item${on ? " on" : ""}" data-menu="${menuId}" aria-expanded="${open}" aria-controls="${menuId}"${
     on ? ` aria-current="true"` : ""
   }>${esc(item.label)}${count}${chev}</button><div class="menu-pop" id="${menuId}"${open ? "" : " hidden"}>${entries}${extra}</div></li>`;
@@ -189,7 +200,7 @@ export function topBarHtml() {
         const here = on === item.id;
         return `<li><a class="tn-item${here ? " on" : ""}" href="${esc(item.href)}"${here ? ` aria-current="page"` : ""}>${esc(
           item.label,
-        )}</a></li>`;
+        )}${item.badge ? badge(item.badge) : ""}</a></li>`;
       }).join("");
   const nav = items ? `<nav class="topnav tb-c" aria-label="Main"><ul>${items}</ul></nav>` : "";
   const context = signedOut ? "" : headerToolHtml();

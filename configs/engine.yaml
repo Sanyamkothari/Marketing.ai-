@@ -142,6 +142,7 @@ defaults:
       recently_contacted_column: last_contacted_at   # str | null (config-only)
       recently_contacted_days: 14       # int 1..90 step 1
     control_group_fraction: 0.10        # float 0..0.50 step 0.01; UI shows *100 as "%" (DEC-005); seeded by run_id
+    contacts_customers: true            # bool; false for operational use cases: no "Measure the campaign" step (Plan H, DEC-1130)
 
   monitoring:                           # [UI 7] Monitoring & retraining
     drift_psi_threshold: 0.20           # float 0.05..1.00 step 0.05

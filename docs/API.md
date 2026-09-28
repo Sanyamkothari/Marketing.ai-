@@ -1847,6 +1847,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `actions.bands` | list[Band]; strictly descending min_score, last must be 0.0, unique names (DEC-008) |
 | `actions.suppression.opt_out_column` | str \| null; rows where falsey are suppressed (config-only) |
 | `actions.suppression.recently_contacted_column` | str \| null (config-only) |
+| `actions.contacts_customers` | bool; false for operational use cases: no "Measure the campaign" step (Plan H, DEC-1130) |
 | `monitoring` | [UI 7] Monitoring & retraining |
 | `governance` | [UI 8] Governance & privacy |
 | `output` | non-UI (plan §5) |

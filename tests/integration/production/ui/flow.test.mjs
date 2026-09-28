@@ -51,6 +51,7 @@ const { w, calls } = installPage(server, { hash: "#/" });
 await import("../../../../ui/app.js");
 await import("../../../../ui/modules/generative/index.js");
 await import("../../../../ui/modules/production/index.js");
+await import("../../../../ui/modules/simple/index.js"); // Plan H: Settings is where Admin lives now
 const session = await import("../../../../ui/modules/production/session.js");
 
 const bar = () => ($("#pb-bar") || {}).textContent || "";
@@ -86,8 +87,12 @@ test("signing in keeps the token for the tab and every later call carries it", a
   assert.equal(later.auth, `Bearer ${login.token}`);
   assert.match(bar(), /Signed in as admin-person/);
   assert.match(bar(), /Admin/);
-  assert.ok($('#pb-bar a[href="#/admin/users"]'));
-  assert.ok($('#pb-bar a[href="#/admin/audit"]'));
+  // Plan H M82 (DEC-1113): the bar is the four places; an Admin's Users and Audit log are on Settings.
+  assert.equal($('#pb-bar a[href="#/admin/users"]'), null);
+  w.location.hash = "#/settings";
+  await until(() => $("[data-settings-admin]"), 3000, "the Settings page's Admin group");
+  assert.ok($('[data-settings-admin] a[href="#/admin/users"]'));
+  assert.ok($('[data-settings-admin] a[href="#/admin/audit"]'));
 });
 
 test("the Users screen lists everyone; Disable is quiet red and asks twice; the last Admin cannot be demoted", async () => {

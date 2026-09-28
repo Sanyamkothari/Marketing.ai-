@@ -12,9 +12,11 @@ read off the page.
 
 The journey, screen by screen:
 
-1. The header's client picker stands on the default client ("Demo"); a new client is created from
-   it, the way a consultant starting on a new account would.
-2. Telco Customer Churn -> Setup Step 1 -> "Build from raw tables", and the four-step panel opens
+1. Plan H M81 (DEC-1112): the product works for one company, so there is no client picker; the
+   default client is used silently underneath (it was: the header's picker stood on "Demo" and a
+   new client was created from it).
+2. Telco Customer Churn -> Manual setup (Plan H M82: Setup opens on Guided setup) -> Step 1 ->
+   "Build from raw tables", and the four-step panel opens
    inline. The client's raw tables (`tests/fixtures/raw/make_raw.py`: the customer master with the
    client's own column names, one row per invoice, one per ticket, one per login) go into its file
    input. Every proposed role is confirmed, every suggested mapping accepted, the suggested features
@@ -75,8 +77,6 @@ sync_api = pytest.importorskip(
 REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[2]
 USE_CASE: Final[str] = "telco-churn"
 USE_CASE_NAME: Final[str] = "Telco Customer Churn"
-CLIENT_NAME: Final[str] = "Acceptance Telecom"
-DEFAULT_CLIENT: Final[str] = "Demo"
 KEY_LABEL: Final[str] = "entity_key + snapshot_date"
 SAVED: Final[re.Pattern[str]] = re.compile(r"^Saved$")
 """A mapping card's saved state, matched whole: "Not saved yet" contains the word too."""
@@ -306,8 +306,8 @@ def selected_text(screen: sync_api.Page, selector: str) -> str:
 class Journey:
     """What the browser saw, collected once so each clause of the sentence is asserted on its own."""
 
-    default_client: str = ""
-    chosen_client: str = ""
+    pickers_on_home: int = -1
+    pickers_on_setup: int = -1
     roles: list[str] = field(default_factory=list)
     pk_after_use: str = ""
     build_leak_check: str = ""
@@ -340,17 +340,11 @@ def journey(
         seen.seconds[step] = round(time.monotonic() - since, 1)
         return time.monotonic()
 
-    # 1. The product opens on the default client; a new one is created from the header's picker.
+    # 1. The product opens on Home; one company, so there is no client picker (Plan H M81).
     page.goto(f"{server}/ui/", wait_until="domcontentloaded")
     expect(page.get_by_role("heading", name="Customer Lifecycle")).to_be_visible()
-    expect(page.locator("#f-client")).to_be_visible(timeout=ACTION_TIMEOUT_MS)
-    seen.default_client = selected_text(page, "#f-client")
-    page.locator("#f-client").select_option(label="+ New client")
-    page.locator("#f-client-name").fill(CLIENT_NAME)
-    page.locator("#f-client-add").click()
-    expect(page.locator("#f-client")).to_be_visible()
-    expect(page.locator("#f-client option:checked")).to_have_text(CLIENT_NAME)
-    seen.chosen_client = selected_text(page, "#f-client")
+    expect(page.locator(".stage-pill").first).to_be_visible(timeout=ACTION_TIMEOUT_MS)
+    seen.pickers_on_home = page.locator("[data-client-picker], #f-client").count()
     at = mark("create_client", started)
 
     # 2. The use case, Step 1's second card, and the client's raw tables into the panel.
@@ -359,6 +353,8 @@ def journey(
         expect(page.get_by_role("heading", name=USE_CASE_NAME)).to_be_visible(timeout=ACTION_TIMEOUT_MS)
     except AssertionError:
         pytest.fail(f"the use case did not open:\n{screen_report(page, log)}")
+    page.get_by_role("button", name="Manual setup").click()  # Plan H M82: Guided setup opens first
+    seen.pickers_on_setup = page.locator("[data-client-picker], #f-client").count()
     page.locator('.pickcard[data-source="raw"]').click()
     panel = page.locator("#f-onboarding")
     files = page.locator('#f-onboarding input[data-act="pick-files"]')
@@ -470,11 +466,12 @@ def journey(
 # --- the sentence, clause by clause ------------------------------------------------------------------
 
 
-def test_the_header_starts_on_the_default_client_and_a_new_one_can_be_created(journey: Journey) -> None:
-    """ "create client": the picker stands on "Demo" before anyone has made a client, and the one
-    created from it is the one every later step builds for."""
-    assert journey.default_client == DEFAULT_CLIENT
-    assert journey.chosen_client == CLIENT_NAME
+def test_one_company_no_client_picker_and_the_default_client_underneath(journey: Journey) -> None:
+    """ "create client", since Plan H M81 (DEC-1112): the product works for one company, so no screen
+    offers a client picker, and every later step - build, train, score - runs on the default client
+    the app creates by itself (the build and the runs below succeeding is the proof)."""
+    assert journey.pickers_on_home == 0
+    assert journey.pickers_on_setup == 0
 
 
 def test_the_first_build_of_the_new_recipe_ran_the_full_leak_check(journey: Journey) -> None:
