@@ -1371,6 +1371,11 @@ three-step flow, plus a fourth step after a campaign.
   the older screens still reachable by URL, and the rough edges still open. Two fixes came out of
   it: the AI service screen highlights Connections in the top bar, and two first requests on an
   empty data folder no longer race to create the database tables (a 500 on a fresh install).
+  Every other rough edge the audit listed is now fixed too: the "Also: target with uplift" link is
+  gone from use cases (uplift is step 4; the workbench is under Settings → Advanced), breadcrumbs
+  start with the page the top bar marks, a run opened from Results stays under Results, the Results
+  badge updates without a reload, Manual setup can also pick data from a connection, and the
+  helper quotes values one way (DEC-1117 … DEC-1119).
 
 - **M83 — Measure a campaign (step 4).** On a scoring run's Results, upload who responded (customer
   ID and a 1/0 column) to see how many extra conversions the campaign caused compared with the
@@ -1392,7 +1397,7 @@ three-step flow, plus a fourth step after a campaign.
   ordinary upload. Passwords and keys are encrypted with `MARKETING_AI_CONNECTIONS_KEY` (generated
   on a laptop, required in production) and never returned. See `docs/CONNECTIONS.md`.
 
-Decisions are DEC-1100 … DEC-1116 and DEC-1130 … DEC-1135.
+Decisions are DEC-1100 … DEC-1119 and DEC-1130 … DEC-1135.
 
 <!-- ---- END PLAN-G ---- -->
 
