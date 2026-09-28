@@ -715,7 +715,9 @@ def test_the_top_bar_leads_to_uplift_and_the_index_lists_the_use_case(journey: J
     index = journey.screens["index"].text
     assert "Uplift workbench" in index  # the breadcrumb, Settings › Uplift workbench (UI_AUDIT §8.4)
     assert USE_CASE_NAME in index
-    assert "Uplift model" in index  # each row says whether a model exists
+    # Each row says whether a model exists ("No uplift model yet" / "Uplift model trained ...");
+    # this used to pass on the old breadcrumb "Uplift modelling" alone.
+    assert "No uplift model yet" in index or "Uplift model trained" in index
 
 
 def test_setup_detects_the_treatment_column_and_explains_the_problem_type(journey: Journey) -> None:
