@@ -25,10 +25,13 @@ characters, cuts long names and long lists, and the prompt says that file conten
 instructions. A prompt that would still be longer than `MAX_PROMPT_CHARS` is not sent.
 
 A malformed reply, an unknown tool or bad arguments are fed back once as an error the model can
-correct; a second failure ends the turn with the same plain fallback. The session is never left
+correct; a second failure ends the turn with the same plain fallback. Anything else a step raises
+ends the turn plainly too (`AGENT_TURN_FAILED`), so the calls already made are returned and metered
+rather than lost in a 500 (review fix). The session is never left
 half-changed. Every call goes through `Meter`, so cost is metered by purpose (`data_agent`), and
 the session's own `agent.max_llm_calls_per_session` stops a runaway chat. Each reply carries a
-`TurnLog` - calls, actions, refusals and the rule that replaced it - and no content.
+`TurnLog` - calls, actions, refusals and the rule that replaced it - and no content: an action name
+that is not a known tool, `propose_setting` or `reply` is logged as `unknown`, never verbatim.
 """
 
 from __future__ import annotations
@@ -51,7 +54,7 @@ from engine.agent.contracts import (
     ToolResult,
     TurnLog,
 )
-from engine.agent.grounding import grounded_numbers, ungrounded_numbers
+from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounded_numbers
 from engine.agent.recommend import setting_allowed, settings_fields
 from engine.agent.session import roles_of
 from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind, call_tool
@@ -63,6 +66,7 @@ from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, render
 from engine.llm import LLMError
 from engine.pii import redact_text
+from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 __all__ = [
@@ -75,6 +79,8 @@ __all__ = [
     "chat_turn",
 ]
 
+_LOGGER = get_logger(__name__)
+
 HELPER_PROMPT: Final[str] = "data_agent"
 PROPOSE_TOOL: Final[str] = "propose_setting"
 MAX_REPLY_CHARS: Final[int] = 800
@@ -86,6 +92,10 @@ NEVER_SUGGESTED_BY_CHAT: Final[frozenset[str]] = frozenset({"prepare.exclude_col
 """Hiding a column is a recipe step the person approves from the advisor, never a chat setting."""
 
 FALLBACK: Final[str] = "I could not answer that from what I have checked."
+TURN_FAILED: Final[str] = "AGENT_TURN_FAILED"
+"""What ended a turn whose step raised something unexpected; the calls it made are still counted."""
+LOGGED_UNKNOWN: Final[str] = "unknown"
+"""What the turn log records for an action name that is not a tool, `propose_setting` or `reply`."""
 CHAT_REASON: Final[str] = "You asked for this change."
 """The reason shown with a chat suggestion whose own reason failed a check."""
 UNAVAILABLE: Final[str] = (
@@ -105,6 +115,11 @@ class TurnResult:
     proposals: tuple[Proposal, ...]
     llm_calls: int
     blocked_by: str | None
+
+
+def _logged(name: str) -> str:
+    """The action name as the turn log keeps it: a known action, never text the model made up."""
+    return name if name in TOOLS or name in {PROPOSE_TOOL, "reply"} else LOGGED_UNKNOWN
 
 
 def _chat_made(session: AgentSession) -> frozenset[str]:
@@ -179,7 +194,7 @@ def _parse(text: str) -> dict[str, Any]:
         body = body[body.find("{") :]
     try:
         value = json.loads(body)
-    except ValueError as exc:
+    except (ValueError, RecursionError) as exc:  # a reply nested ~1,000 deep exhausts the decoder
         raise AgentToolError("AGENT_REPLY_MALFORMED", "Reply with one JSON object and nothing else.") from exc
     if not isinstance(value, dict) or not isinstance(value.get("action"), str):
         raise AgentToolError("AGENT_REPLY_MALFORMED", 'The object needs an "action".')
@@ -233,13 +248,14 @@ def chat_turn(
     checker = _Checker(
         grounded=grounded_numbers(
             [
-                *(r.result for r in session.tool_results if r.evidence_id not in chat),
                 *(f"{p.title} {p.reason}" for p in advisor),
                 *(q.text for q in session.questions),
                 *session.engine_hidden,
                 *session.assumptions,
                 message,
             ]
+        ).union(
+            *(evidence_numbers(r.result, r.args) for r in session.tool_results if r.evidence_id not in chat)
         ),
         names=(*columns, *names.values()),
         guardrails=guardrails,
@@ -289,7 +305,7 @@ def chat_turn(
         try:
             action = _parse(completion.text)
             name = str(action["action"])
-            actions.append(name[:40])
+            actions.append(_logged(name))
             raw_args = action.get("args")
             args: dict[str, Any] = dict(raw_args) if isinstance(raw_args, dict) else {}
             if name == "reply":
@@ -315,7 +331,7 @@ def chat_turn(
                 raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name[:40]!r}.")
             result = call_tool(ctx, name, args, evidence_id=f"{prefix}e{len(results) + 1}")
             results.append(result)
-            checker.grounded = checker.grounded | grounded_numbers([result.result])
+            checker.grounded = checker.grounded | evidence_numbers(result.result, result.args)
             feedback.append({"evidence_id": result.evidence_id, "tool": name, "result": result.result})
         except AgentToolError as exc:
             errors.append(exc.code)
@@ -323,6 +339,11 @@ def chat_turn(
             if strikes > 1:
                 return finish(FALLBACK, blocked_by=exc.code)
             feedback.append({"error": exc.code, "message": exc.message})
+        except Exception as exc:
+            # A model's odd input must never cost a paid call that nobody records (DEC-1017, DEC-1029).
+            _LOGGER.warning("agent chat step failed: %s", type(exc).__name__)
+            errors.append(TURN_FAILED)
+            return finish(FALLBACK, blocked_by=TURN_FAILED)
         del step
     return finish(FALLBACK, blocked_by="too_many_steps")
 
@@ -381,7 +402,8 @@ def _reply(
     finish: Callable[..., TurnResult],
 ) -> TurnResult:
     text = str(action.get("text") or "").strip()
-    cited = tuple(str(e) for e in action.get("evidence_ids", []) or [] if isinstance(e, str))
+    raw = action.get("evidence_ids")  # anything but a list of strings cites nothing
+    cited = tuple(e for e in raw if isinstance(e, str)) if isinstance(raw, list) else ()
     known = {r.evidence_id for r in (*session.tool_results, *results)}
     evidence = tuple(e for e in cited if e in known)
     if not text:

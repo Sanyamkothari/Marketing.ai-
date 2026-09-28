@@ -151,6 +151,15 @@ def _clean_float(value: float | None) -> float | None:
     return round(float(value), 6)
 
 
+def _masked(value: Any, limit: int) -> str:
+    """One cell for a tool result: personal data masked on the whole cell first, then cut to `limit`.
+
+    Cutting first would leave half an email or phone number that no longer matches its pattern and
+    so passes unmasked (the order `validate.sample_values` documents, DEC-095).
+    """
+    return redact_cells([str(value)])[0][:limit]
+
+
 def _column_profiles(ctx: AgentContext) -> dict[str, Any]:
     return {column.name: column for column in ctx.profile.columns}
 
@@ -220,7 +229,7 @@ def _relation_to_target(ctx: AgentContext, name: str) -> dict[str, Any] | None:
         for key, rows, rate in zip(labels, summary["size"].tolist(), summary["mean"].tolist(), strict=True):
             buckets.append(
                 {
-                    "bucket": redact_cells([str(key)[:60]])[0],
+                    "bucket": _masked(key, 60),
                     "rows": int(rows),
                     "positive_rate": _clean_float(float(rate)),
                 }
@@ -295,10 +304,10 @@ def _inspect_column(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
         result["top_values"] = []
     else:
         present = series.dropna().astype(str)
-        result["examples"] = list(redact_cells(v[:80] for v in present.drop_duplicates().head(5)))
+        result["examples"] = [_masked(v, 80) for v in present.drop_duplicates().head(5)]
         counts = present.value_counts().head(MAX_BUCKETS)
         result["top_values"] = [
-            {"value": redact_cells([str(value)[:60]])[0], "rows": int(rows)} for value, rows in counts.items()
+            {"value": _masked(value, 60), "rows": int(rows)} for value, rows in counts.items()
         ]
     result["relation_to_outcome"] = _relation_to_target(ctx, name)
     return result

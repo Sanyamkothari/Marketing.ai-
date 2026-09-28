@@ -239,8 +239,11 @@ The chat is the only place a language model is involved (DEC-1001, DEC-1017).
   not `prepare.exclude_columns` (hiding a column is a recipe step, never a chat setting);
 - `{"action": "reply", "text": …, "evidence_ids": […]}` - ends the turn.
 
-A malformed reply, an unknown or writing tool, or bad arguments are fed back once; a second failure
-ends the turn plainly. At most `max_tool_steps_per_turn` actions per turn.
+A malformed reply (including one nested too deep to decode), an unknown or writing tool, or bad
+arguments are fed back once; a second failure ends the turn plainly. `evidence_ids` that is not a
+list cites nothing. Anything else a step raises ends the turn plainly with `blocked_by:
+AGENT_TURN_FAILED`, so the turn still returns and its model calls are still counted and metered.
+At most `max_tool_steps_per_turn` actions per turn.
 
 ### 7.2 Grounding (`numbers_grounded`)
 
@@ -248,10 +251,12 @@ ends the turn plainly. At most `max_tool_steps_per_turn` actions per turn.
 advisor's proposals and questions, the assumptions and hidden columns, or the person's own message.
 Formatting is forgiven (`4.2%` = 0.042, `3,000` = 3000, `12.5` for 12.4837, `40k` for 40,123);
 invention is not. A number written with letters attached (`40k`, `3x`, `1e5`, `1m`) is still
-checked; only small ordinals ("the 2nd step"), `0` and `1` pass anywhere. A quoted number is skipped
-only when the quoted text is exactly a column name. What the model itself wrote - the reason it gave
-for a suggested setting - is **never** evidence, so a number cannot be laundered from one step into
-the next.
+checked; so are a decimal without its leading zero (`.73`) and a percent glued to a word (`is73%`).
+Only small ordinals ("the 2nd step") and a bare `0` or `1` pass anywhere; `0%`, `1%` and `100%` are
+claims and must be grounded. A quoted number is skipped only when the quoted text is exactly a column
+name. What the model itself wrote - the reason it gave for a suggested setting, or a number it passed
+as a tool argument (`get_profile`'s `offset`, a `check_data` override) even when the result echoes
+it - is **never** evidence, so a number cannot be laundered from one step into the next.
 
 ### 7.3 Guardrails
 
@@ -259,7 +264,9 @@ A reply, and the reason given with a chat suggestion, must pass the numbers chec
 guardrails (`configs/guardrails.yaml`: personal data, banned phrases, length ≤ 800 characters for a
 reply, 200 for a reason). A failing reply is replaced by "I could not answer that from what I have
 checked." plus the next open decision; a failing reason by "You asked for this change.". Each reply
-stores a `TurnLog` (`llm_calls`, `tools`, `error_codes`, `blocked_by`) and no content.
+stores a `TurnLog` (`llm_calls`, `tools`, `error_codes`, `blocked_by`) and no content: `tools` holds
+only known action names (a read tool, `propose_setting`, `reply`); any other name the model writes is
+logged as `unknown`.
 
 ### 7.4 Untrusted file content (prompt injection)
 
@@ -280,7 +287,8 @@ guardrails. It cannot change data, hide or add a column, approve anything or rea
 ### 7.5 Personal data
 
 Tool results carry counts and masked examples only (`engine.pii.redact_cells`); personal-data
-columns show no values. The person's message is masked with `engine.pii.redact_text` **before** it
+columns show no values. A cell is masked whole **before** it is cut to length, so no half of an
+email or phone number survives the cut. The person's message is masked with `engine.pii.redact_text` **before** it
 is stored or put in a prompt, so the stored transcript - which a Viewer can read - is masked.
 
 ### 7.6 Budget and bounds
