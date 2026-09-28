@@ -34,6 +34,16 @@ Contract schema version: 1.
 | GET | `/connection/aws` | The AWS identity Bedrock is called as, and whether this caller may change it | AwsConnectionState |
 | PUT | `/connection/aws` | Choose the AWS identity: the default chain, or an AWS CLI profile by name (local only) | AwsConnectionState |
 | POST | `/connection/aws/test` | Check the AWS identity and whether each configured Bedrock model is enabled - free, no tokens | ConnectionReport |
+| GET | `/connections` | Every saved connection, oldest first | ConnectionList |
+| POST | `/connections` | Save a new connection; its secrets are encrypted and never returned | ConnectionView |
+| GET | `/connections/kinds` | Every kind of connection, with its set-up form and whether its add-on is installed | ConnectionKinds |
+| DELETE | `/connections/{connection_id}` | Forget a connection and its encrypted secrets; imported uploads stay | - |
+| GET | `/connections/{connection_id}` | One saved connection, without its secrets | ConnectionView |
+| PUT | `/connections/{connection_id}` | Change a connection; a secret left blank keeps its saved value | ConnectionView |
+| GET | `/connections/{connection_id}/browse` | List folders and CSV/Parquet files (stores) or schemas and tables (databases); at most 500 | BrowseResult |
+| POST | `/connections/{connection_id}/import` | Import a table or file as an ordinary upload (a snapshot), exactly like POST /uploads | UploadResponse |
+| POST | `/connections/{connection_id}/preview` | The first 20 rows of a table or file, personal data masked | Preview |
+| POST | `/connections/{connection_id}/test` | Test a connection step by step: reach, sign in, list, read a sample, read-only check | ConnectionTestResponse |
 | GET | `/datasets` | Dataset manifests, newest first | DatasetListResponse |
 | POST | `/datasets` | Validate a recipe and, when it passes, start building a dataset from it | DatasetCreatedResponse |
 | GET | `/datasets/{dataset_id}` | One dataset: its manifest, once built, and the status the Build screen polls | DatasetGetResponse |

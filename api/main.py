@@ -241,6 +241,11 @@ PHASE_ROUTERS.append(pilot_router)
 from api.routes.agent import router as agent_router  # noqa: E402
 
 PHASE_ROUTERS.append(agent_router)
+# Plan H M80: connections - set up, test, browse and import from S3, databases and the optional
+# add-ons. An import ends in the same code as `POST /uploads` (DEC-1100).
+from api.routes.connections import router as connections_router  # noqa: E402
+
+PHASE_ROUTERS.append(connections_router)
 # ---- END PLAN-G ----
 
 app: FastAPI = create_app()

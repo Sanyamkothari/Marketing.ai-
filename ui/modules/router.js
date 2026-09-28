@@ -202,6 +202,9 @@ export function setupModes(uc) {
     }
   });
 }
+// Plan H M80 (shares this block): the Connections module (`modules/connections/index.js`, route
+// `connections`) is loaded by its own `<script>` in index.html's PLAN-G block, as the agent module is,
+// because it imports this file for `registerModule` and `registerNavSlot`.
 // ---- END PLAN-G ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----

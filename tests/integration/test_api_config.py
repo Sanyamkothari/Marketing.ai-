@@ -390,6 +390,14 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/uploads/{upload_id}/agent-session/messages",
         "/uploads/{upload_id}/agent-session/preview",
         "/uploads/{upload_id}/agent-session/apply",
+        # Plan H M80: connections - set up, test, browse, preview and import (DEC-1100)
+        "/connections/kinds",
+        "/connections",
+        "/connections/{connection_id}",
+        "/connections/{connection_id}/test",
+        "/connections/{connection_id}/browse",
+        "/connections/{connection_id}/preview",
+        "/connections/{connection_id}/import",
         # Phase 4b M46/M47: sign-in, user management and the audit viewer
         "/auth/login",
         "/auth/logout",

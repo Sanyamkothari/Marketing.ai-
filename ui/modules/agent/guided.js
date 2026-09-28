@@ -36,6 +36,7 @@ import {
   glossaryCode,
   present,
 } from "../../dom.js";
+import { createConnectionPicker } from "../connections/picker.js";
 import { postAnswer, postApply, postDecisions, postMessage, postPreview, startSession } from "./api.js";
 import { injectAgentStyles } from "./styles.js";
 
@@ -61,7 +62,8 @@ const GROUPS = [
 
 function fresh() {
   return {
-    phase: "upload", // upload | uploading | starting | session
+    phase: "upload", // upload | picking | uploading | starting | session
+    picker: null, // "Pick from a connection" (Plan H M80) while phase is "picking"
     fileName: "",
     upload: null,
     uploadError: null,
@@ -139,16 +141,23 @@ function uploadStep(entry, n) {
     g.phase === "uploading" ? "Reading the file…" : g.phase === "starting" ? "The helper is checking your data…" : "";
   const locked = Boolean(busy || g.applied);
   const hint = `${modeCopy(uc, entry.mode).dataset_hint || ""} The helper reads it and suggests fixes. Nothing changes until you approve, and your file itself is never changed.`;
+  // Plan H M80: or pick a table or file from a saved connection; its import is an ordinary upload.
+  const source =
+    g.phase === "picking" && g.picker
+      ? g.picker.html()
+      : `<div class="orline"><label class="control file${g.upload ? " has" : ""}"><input type="file" id="ag-file" class="sr" accept=".csv,.parquet"${
+          locked ? " disabled" : ""
+        }><span class="fname">${esc(g.fileName || "Upload CSV or Parquet")}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <button type="button" class="btn quiet sm" id="ag-from-conn"${
+          locked ? " disabled" : ""
+        }>Pick from a connection</button></span><span>or <a class="btn quiet sm" href="${esc(
+          templateUrl(uc.setup.template_url),
+        )}" download>Download template</a></span></div>`;
   return step(
     n,
     "Your data",
     Boolean(g.upload),
     `<div class="fhint">${esc(hint.trim())}</div>
-    <div class="orline"><label class="control file${g.upload ? " has" : ""}"><input type="file" id="ag-file" class="sr" accept=".csv,.parquet"${
-      locked ? " disabled" : ""
-    }><span class="fname">${esc(g.fileName || "Upload CSV or Parquet")}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <a class="btn quiet sm" href="${esc(
-      templateUrl(uc.setup.template_url),
-    )}" download>Download template</a></span></div>
+    ${source}
     ${busy ? `<div class="loading" role="status">${esc(busy)}</div>` : ""}
     ${g.uploadError ? errorBox(g.uploadError) : ""}`,
   );
@@ -452,6 +461,33 @@ async function uploadFile(entry, file) {
     draw(entry);
     return;
   }
+  await startHelper(entry);
+}
+
+/** "Pick from a connection" (Plan H M80): the picker's import answers exactly what `POST /uploads`
+ * does, and from there everything is as after a file upload. */
+function pickFromConnection(entry) {
+  const g = entry.state;
+  Object.assign(g, fresh(), { phase: "picking" });
+  g.picker = createConnectionPicker({
+    useCaseId: entry.host.uc.id,
+    mode: entry.mode,
+    redraw: () => draw(entry),
+    onCancel: () => {
+      Object.assign(entry.state, fresh());
+      draw(entry);
+    },
+    onImported: (upload, name) => {
+      Object.assign(entry.state, fresh(), { upload, fileName: name });
+      startHelper(entry);
+    },
+  });
+  draw(entry);
+  g.picker.start();
+}
+
+async function startHelper(entry) {
+  const g = entry.state;
   g.phase = "starting";
   draw(entry);
   try {
@@ -585,6 +621,9 @@ function restart(entry) {
 function bind(entry) {
   const main = entry.main;
   const g = entry.state;
+  if (g.phase === "picking" && g.picker) g.picker.bind(main);
+  const fromConnection = main.querySelector("#ag-from-conn");
+  if (fromConnection) fromConnection.addEventListener("click", () => pickFromConnection(entry));
   const file = main.querySelector("#ag-file");
   if (file) {
     file.addEventListener("change", (event) => {
