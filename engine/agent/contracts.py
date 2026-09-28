@@ -97,7 +97,12 @@ class DecidedBy(StrEnum):
 
 
 class RecipeStepKind(StrEnum):
-    """The only things a recipe can do (Plan G §6.2). Each is stateless and row-wise (DEC-1004)."""
+    """The only things a recipe can do (Plan G §6.2). Each is stateless (DEC-1004).
+
+    Every kind but one is row-wise. `combine_rows` (level 3, M76) is entity-wise: it turns the rows
+    of one entity into one row, and its output for an entity depends only on that entity's own rows
+    and the step's frozen parameters - never on another entity or a statistic of the whole file.
+    """
 
     DROP_COLUMN = "drop_column"
     PARSE_NUMBER = "parse_number"
@@ -105,6 +110,7 @@ class RecipeStepKind(StrEnum):
     MAP_BOOLEAN = "map_boolean"
     NORMALISE_TEXT = "normalise_text"
     DERIVE = "derive"
+    COMBINE_ROWS = "combine_rows"
 
 
 class SessionStatus(StrEnum):
@@ -153,6 +159,8 @@ class RecipeStep(StrictBase):
             raise ValueError("a derive step must name new_column")
         if self.kind is RecipeStepKind.DROP_COLUMN and self.new_column is not None:
             raise ValueError("a drop_column step creates no column")
+        if self.kind is RecipeStepKind.COMBINE_ROWS and self.new_column is not None:
+            raise ValueError("a combine_rows step names its new columns in params.features")
         return self
 
 
@@ -215,6 +223,13 @@ class StepReceipt(StrictBase):
     failed: Annotated[int, Field(ge=0, description="Non-empty values it could not convert.")]
     examples_failed: tuple[str, ...] = Field(
         default=(), description="Up to five masked examples of failures."
+    )
+    leak_check: str | None = Field(
+        default=None,
+        description=(
+            "`combine_rows` only: which future-data check ran on the combined rows and what it found; "
+            "null for every other step and on a preview."
+        ),
     )
 
 

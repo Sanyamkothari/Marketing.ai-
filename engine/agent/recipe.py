@@ -3,12 +3,15 @@
 The helper never edits a file. It proposes `RecipeStep`s; once the user approves them, this module
 runs them - and only this module does. Three rules hold for every run:
 
-* **Fixed order.** Parsing and tidying steps run first, then derived columns, then drops, so a
-  derived column always reads cleaned values and a drop never removes something a later step needs.
-  `check_recipe` refuses a recipe written in another order rather than silently re-sorting it.
+* **Fixed order.** Parsing and tidying steps run first, then combining rows (level 3), then derived
+  columns, then drops, so the rows are combined from cleaned values, a derived column reads the
+  combined ones, and a drop never removes something a later step needs. `check_recipe` refuses a
+  recipe written in another order rather than silently re-sorting it.
 * **Stateless.** Every step's output for a row depends only on that row and the step's parameters
   (DEC-1004), so the same recipe gives the same result on next month's file and nothing learnt from
-  the test rows can leak into training.
+  the test rows can leak into training. `combine_rows` is the one step that reads several rows: its
+  output for an entity depends only on that entity's own rows and the step's frozen parameters
+  (`engine.agent.reshape`), which keeps the same guarantee one level up.
 * **Counted.** Every step reports how many values it changed and how many it could not convert, with
   masked examples. A step that fails on more than `max_failure_pct` of a column's non-empty values
   stops the run with `RECIPE_VALUES_UNCONVERTED`; a column the recipe needs and the file lacks stops
@@ -30,6 +33,7 @@ import pandas as pd
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, StepReceipt, recipe_hash
 from engine.agent.formats import ParseOutcome, map_booleans, normalise_texts, parse_dates, parse_numbers
+from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
 from engine.onboarding.transforms import TransformError, derive
 from engine.utils.time import utc_now
 
@@ -47,13 +51,15 @@ STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
     RecipeStepKind.PARSE_DATE: 1,
     RecipeStepKind.MAP_BOOLEAN: 1,
     RecipeStepKind.NORMALISE_TEXT: 1,
-    RecipeStepKind.DERIVE: 2,
-    RecipeStepKind.DROP_COLUMN: 3,
+    RecipeStepKind.COMBINE_ROWS: 2,
+    RecipeStepKind.DERIVE: 3,
+    RecipeStepKind.DROP_COLUMN: 4,
 }
-"""Parse and tidy, then derive, then drop (Plan G §6.3)."""
+"""Parse and tidy, then combine rows, then derive, then drop (Plan G §6.3, M76)."""
 
 _LEVEL_OF: Final[dict[RecipeStepKind, AgentLevel]] = {
     RecipeStepKind.DERIVE: AgentLevel.DERIVE,
+    RecipeStepKind.COMBINE_ROWS: AgentLevel.RESHAPE,
 }
 """The level a step kind needs; every kind not listed is `clean`."""
 
@@ -113,6 +119,7 @@ def check_recipe(
     available = list(columns)
     protected = {name for name in (primary_key, target) if name}
     phase = 0
+    combined = False
     created: set[str] = set()
     for expected, step in enumerate(steps, start=1):
         if step.order != expected:
@@ -122,7 +129,8 @@ def check_recipe(
         if STEP_PHASE[step.kind] < phase:
             raise RecipeError(
                 "RECIPE_STEP_INVALID",
-                "Steps run in a fixed order: fix values first, then add new columns, then hide columns.",
+                "Steps run in a fixed order: fix values first, then combine rows, then add new columns, "
+                "then hide columns.",
                 order=step.order,
             )
         phase = STEP_PHASE[step.kind]
@@ -133,6 +141,14 @@ def check_recipe(
                 f"This use case's helper may not use {step.kind.value} steps.",
                 order=step.order,
             )
+        if step.kind is RecipeStepKind.COMBINE_ROWS:
+            if combined:
+                raise RecipeError(
+                    "RECIPE_STEP_INVALID", "The rows can be combined only once.", order=step.order
+                )
+            combined = True
+            available = _check_combine(step, available, primary_key=primary_key, target=target)
+            continue
         if step.column in protected and step.kind is not RecipeStepKind.DERIVE:
             raise RecipeError(
                 "RECIPE_STEP_INVALID",
@@ -187,6 +203,40 @@ def check_recipe(
             available.append(step.new_column)
 
 
+def _check_combine(
+    step: RecipeStep, available: list[str], *, primary_key: str | None, target: str | None
+) -> list[str]:
+    """Refuse a combine keyed on another column or one that reads the outcome; return the columns
+    after it."""
+    if primary_key is not None and step.column != primary_key:
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"Rows are combined per ID column '{primary_key}', not per '{step.column}'.",
+            column=step.column,
+            order=step.order,
+        )
+    try:
+        spec = CombineSpec.from_params(step.column, _params(step))
+    except CombineError as exc:
+        raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
+    if target is not None and (spec.outcome not in {None, target} or target in spec.reads):
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"The outcome column '{target}' is read as the outcome only, never combined into a new column.",
+            column=target,
+            order=step.order,
+        )
+    for column in spec.reads:
+        if column not in available:
+            raise RecipeError(
+                "RECIPE_COLUMN_MISSING",
+                f"The file has no column '{column}'.",
+                column=column,
+                order=step.order,
+            )
+    return list(spec.output_columns(with_outcome=spec.outcome in available))
+
+
 def _check_params(step: RecipeStep) -> None:
     params = _params(step)
     kind = step.kind
@@ -203,6 +253,9 @@ def _check_params(step: RecipeStep) -> None:
         RecipeStepKind.MAP_BOOLEAN: frozenset({"true_values", "false_values"}),
         RecipeStepKind.NORMALISE_TEXT: frozenset({"strip", "merge"}),
         RecipeStepKind.DERIVE: frozenset({"expression"}),
+        RecipeStepKind.COMBINE_ROWS: frozenset(
+            {"time_column", "snapshot_column", "dayfirst", "outcome", "features"}
+        ),
     }
     unknown = set(params) - allowed[kind]
     if unknown:
@@ -292,9 +345,15 @@ def run_recipe(
     max_failure_pct: float,
     snapshot_column: str | None = None,
     derived_upload_id: str | None = None,
+    leak_check: LeakCheck | None = None,
     clock: Callable[[], datetime] = utc_now,
 ) -> RecipeRun:
-    """Check, then run, `steps` on a copy of `frame`. Raises `RecipeError` instead of guessing."""
+    """Check, then run, `steps` on a copy of `frame`. Raises `RecipeError` instead of guessing.
+
+    `leak_check` is the future-data check a `combine_rows` step runs after combining: `full` on a
+    training file (the recipe's first build, onboarding ruling R1), `narrow` on a scoring file, and
+    none on a preview.
+    """
     check_recipe(
         steps,
         columns=[str(c) for c in frame.columns],
@@ -313,6 +372,30 @@ def run_recipe(
                 )
             )
             work = work.drop(columns=[step.column])
+            continue
+        if step.kind is RecipeStepKind.COMBINE_ROWS:
+            try:
+                combined = combine_rows(
+                    work,
+                    key=step.column,
+                    params=_params(step),
+                    max_failure_pct=max_failure_pct,
+                    leak_check=leak_check,
+                )
+            except CombineError as exc:
+                raise RecipeError(exc.code, exc.message, column=exc.column, order=step.order) from exc
+            receipts.append(
+                StepReceipt(
+                    order=step.order,
+                    kind=step.kind,
+                    column=step.column,
+                    rows=combined.rows_in,
+                    changed=combined.entities,
+                    failed=combined.failed,
+                    leak_check=combined.leak_check,
+                )
+            )
+            work = combined.frame
             continue
         outcome = _apply(work, step, snapshot_column)
         if step.kind is not RecipeStepKind.DERIVE:
