@@ -68,7 +68,7 @@ scoring: POST /runs mode=score ──► replay the model's recipe ──► val
 | `api/routes/agent.py` | The HTTP routes (§8). |
 | `api/routes/agent_recipes.py` | Derived uploads, attaching a recipe to a run, replaying it for scoring. |
 | `configs/prompts/data_agent.v1.md` | The chat prompt. |
-| `ui/modules/agent/` | The *Guided setup* tab (M75, DEC-1019 … DEC-1022), registered through `router.js`'s `registerSetupMode`; Manual setup stays the default tab for now. |
+| `ui/modules/agent/` | The *Guided setup* tab (M75, DEC-1019 … DEC-1022), registered through `router.js`'s `registerSetupMode`; since Plan H it is the tab a use case opens on, with Manual setup one click away (DEC-1114). |
 
 ### 2.2 A session
 
@@ -481,6 +481,5 @@ distinct value; the preview runs on 1,000 rows (or entities). Reproduce with
   plan's rule is conservative: it also leaves out an honest per-event date (a refund or delivery
   date) that fell after the snapshot on the preview, although the combine's masking would make it
   safe, so that signal is lost.
-- `make agent-eval` (the benchmark on Bedrock) is not built yet; Guided setup is not yet the default
-  tab (DEC-1019).
+- `make agent-eval` (the benchmark on Bedrock) is not built yet.
 - Chat is English only.

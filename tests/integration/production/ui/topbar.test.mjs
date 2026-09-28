@@ -98,6 +98,7 @@ test("the active place follows the route", async () => {
     ["#/uc/telco-churn", "Home"],
     ["#/uc/telco-churn/model/r1", "Home"],
     ["#/connections", "Connections"],
+    ["#/generative/connection", "Connections"],
     ["#/results", "Results"],
     ["#/monitoring/runs", "Results"],
     ["#/campaign/telco-churn/r2", "Results"],

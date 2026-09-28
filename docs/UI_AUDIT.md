@@ -1313,3 +1313,86 @@ Package 0 lands first. Packages 1 to 8 then run in parallel worktrees with disjo
 3. **Verdict first, with one primary action on every results screen** (contact list, campaign verdict, rupee value). `run-output--full--desktop.png`, `usecase-results--full--desktop.png`, `campaign-results--full--desktop.png`, `uplift-output--full--desktop.png`, `pilot-value--full--desktop.png`
 4. **Technical detail behind Details, plain words in front** (C4, C5, C6, tables). `run-data--full--desktop.png`, `run-model--full--desktop.png`, `uplift-model--full--desktop.png`, `admin-audit--full--desktop.png`, `monitoring-alerts--full--desktop.png`
 5. **Setup and Build data one step at a time** (locked steps hidden, readable Sources and Mapping, Advanced tamed, model first when scoring). `usecase-setup-train--full--desktop.png`, `usecase-setup-advanced--full--mobile.png`, `build-raw-1-sources--full--desktop.png`, `build-raw-2-mapping--full--desktop.png`, `usecase-setup-score--empty--desktop.png`
+
+---
+
+## 8. Plan H: the four-page product (M84)
+
+Plan H (`docs/plans/MARKETING_AI_PLAN_H_SIMPLE.md`) keeps the engine and hides the complexity. This section records the screens after M80 to M83, as a new user meets them.
+
+- **Date:** 28 Sep 2026, on the code at `0d6750c` (branch `m84-docs`).
+- **How:** `python -m scripts.capture_start_here` starts the app on an empty temporary data folder, uploads a synthetic, deliberately messy Targeted Advertisement file through Guided setup, trains and scores through the API (the one-minute search), and shoots 1280 x 800 screens into `docs/screenshots/start_here/` (used by `docs/START_HERE.md`). The hidden screens below were opened by URL on the same kind of server. Sign-in off, light mode, desktop only.
+- **Where the routes are decided:** the top bar and the place each route belongs to are `ui/chrome.js` (`NAV_ITEMS`, `navFor`); screens claim their routes through `ui/modules/router.js` (`registerModule`) from `ui/modules/*/index.js`; `ui/app.js` owns `#/`, `#/industry/<id>` and `#/uc/...`.
+
+### 8.1 What a new user sees
+
+| Place | Route | What is on it |
+|---|---|---|
+| **Home** | `#/` | The generic journey ("Customer Lifecycle") with five goals left to right: Win customers, Keep them paying, Stop them leaving, Win them back, Run smoothly. Eleven use-case cards. No industry picker (`SHOW_INDUSTRY_CHOOSER = false`), no client picker (`SINGLE_COMPANY`), no demo numbers. Empty start: "No models yet. Choose a use case below and upload your data to train the first one." Later a "For you" line ("1 model waiting for your approval"). `01_home.png`. |
+| **A use case** | `#/uc/<id>` | Opens on **Guided setup (recommended)**, Manual setup one click away (DEC-1114). Train a model / Score new data. Step 1 "Your data": upload, **Pick from a connection**, Download template. Then Data fixes and Summary, Approve, and the Setup form's own Run button. `05_guided_setup_start.png`, `06_guided_setup_suggestions.png`. |
+| **A run** | `#/uc/<id>/run/<run>` | The verdict, the Data / Model / Output blocks and, for a finished scoring run of a use case that contacts customers, a fourth block **4 Measure** and the panel **4 · Measure the campaign** (M83); then the links Model health, Schedule and the report (M82, `registerResultLink`). `08_run_results.png`, `09_measure_campaign.png`. |
+| **Connections** | `#/connections`, `#/connections/new/<kind>`, `#/connections/<id>` | Your connections (empty state), the AI service card ("Open and test"), and "Add a connection": Amazon S3, S3-compatible, PostgreSQL, Amazon Redshift, MySQL / MariaDB, and Snowflake, BigQuery and Azure Blob marked **Needs the add-on** until installed. The form's one button is Save and test; the test shows five named steps. `02_connections_empty.png`, `03_connections_add.png`, `04_connection_form.png`. |
+| **Results** | `#/results` | Every run, newest first (use case, what the run did, status, outcome, started). A notice with **Review** when models wait for approval, and the count as a badge on "Results". "All reports ›" links to the Reports hub. `07_results.png`. |
+| **Settings** | `#/settings` | Services and data (AI service → Connections, Privacy, Schedules), Admin (only while sign-in is on), **Advanced tools** folded (Uplift workbench, Data request kit, Build from raw tables, Model health, Document assistant), About (version, "Sign-in is off"). `10_settings.png`. |
+
+### 8.2 What moved under Settings, or into the flow
+
+| Was | Now |
+|---|---|
+| Top-level Privacy, Schedules | Settings → Services and data (`#/privacy/consent`, `#/monitoring/schedules`) |
+| Top-level Admin (Users, Audit log) | Settings → Admin, drawn only when signed in (`status === "signed-in"`) |
+| AI service (in the Admin menu) | Connections → AI service card → `#/generative/connection` |
+| Uplift page | Settings → Advanced tools → Uplift workbench (`#/uplift`); in the flow as step 4 "Measure the campaign" |
+| Build data (data request kit, readiness reports) | Settings → Advanced tools → Data request kit (`#/pilot/kit`) |
+| Build from raw tables | Manual setup, Step 1 card; Settings → Advanced tools says how to get there |
+| Model health (alerts) | Settings → Advanced tools → Model health, and a link under each finished run |
+| Schedules | Settings, and a "Schedule" link under each finished run |
+| Reports, Campaigns | Results ("All reports ›"), the report link under a run, step 4's "Open the full campaign report" |
+| Waiting for approval | A badge and a notice on Results, a "For you" line on Home |
+| Industry picker, client picker | Gone from the screens; the generic journey and the default client stay underneath |
+
+### 8.3 Hidden, but still reachable by URL
+
+Each keeps its route, and the top bar still marks a place for it (`navFor` in `ui/chrome.js`):
+
+| Route | Owner | Bar marks | Linked from |
+|---|---|---|---|
+| `#/industry/<id>` (banking, telecom, ...) | `ui/app.js`, `ui/overview.js` | Home | nowhere (URL only) |
+| `#/uc/ai-onboarding-assistant`, `#/generative/assistant/<uc>` | `ui/app.js`, `modules/generative` | Home | Settings → Advanced → Document assistant |
+| `#/uc/<id>/data`, `/model`, `/output` `[/<run>]` | `ui/app.js`, `ui/pages.js` | Home | a run's flow blocks ("View details") |
+| `#/generative/connection` | `modules/generative` | Connections (Settings before M84) | Connections → AI service |
+| `#/generative/rca/<uc>/<run>`, `#/generative/copy/<uc>/<run>` | `modules/generative` | Home / Results | a run's actions |
+| `#/campaign/<uc>/<run>` | `modules/uplift` | Results | step 4's Details |
+| `#/uplift`, `#/uplift/<uc>/...` | `modules/uplift` | Settings | Settings → Advanced; "Also: target with uplift ›" on a use case |
+| `#/pilot`, `#/pilot/view/results/<uc>`, `#/pilot/value/<run>` | `modules/pilot` | Results | Results ("All reports"), a run's report link |
+| `#/pilot/kit`, `#/pilot/view/readiness/<id>` | `modules/pilot` | Settings | Settings → Advanced → Data request kit |
+| `#/approvals` | `modules/production` | Results | the Results notice, Home's "For you" |
+| `#/monitoring/alerts`, `/missed`, `/schedules` | `modules/production` | Settings | Settings, a run's links |
+| `#/monitoring/runs` (Outcomes, the old "Campaigns") | `modules/production` | Results | the campaign page's breadcrumb, the Reports hub |
+| `#/privacy/consent`, `/erasure`, `/access`, `/retention` | `modules/production` | Settings | Settings → Privacy |
+| `#/admin/users`, `#/admin/audit` | `modules/production` | Settings | Settings → Admin (signed in only); with sign-in off, URL only |
+| `#/signin`, `#/account` | `modules/production` | none | the user menu when sign-in is on |
+
+### 8.4 Rough edges seen while taking the screenshots
+
+Fixed in M84 (one line): **the AI service screen marked Settings.** `#/generative/connection` is opened from Connections ("Open and test"), and Settings says the AI service "is on Connections", but `navFor` marked Settings, so the bar jumped. `navFor` now returns `connections` for it, and `tests/integration/production/ui/topbar.test.mjs` has the case.
+
+Not fixed, listed for the owners:
+
+1. **The Results badge goes stale in the same tab** (`modules/production/approvals.js`). The approvals count is read once per sign-in state (`onSession`). Train a model and open Results without reloading: the notice says "1 model is waiting for approval" but the bar's Results badge is empty (`07_results.png`). *Fix:* recount when the Results page loads (it already fetches `waitingForApproval()`), or when a training run finishes.
+2. **A run opened from Results marks Home** (`navFor`: every `#/uc/...` is Home). The person clicks a row on Results and the bar jumps to Home (`08_run_results.png`). *Fix:* keep Results marked when the run was opened from Results (`setActiveNav("results")` on arrival).
+3. **The breadcrumb repeats Home.** A use case reads "Home › Customer Lifecycle › Targeted Advertisement"; both first crumbs open the same page (`05_guided_setup_start.png`). *Fix:* drop the journey crumb while there is one journey.
+4. **Results rows do not look clickable** (`modules/simple/pages.js` `resultsHtml`). The use-case name is the only link, and it is drawn in body-text colour. *Fix:* link colour on `.sp-runs a`, or a trailing "Open ›".
+5. **Step numbers do not add up** (the use-case page). The Plan H flow is 1 Choose data, 2 Guided setup, 3 Run & results, 4 Measure; the screen shows Guided setup's own 1 Your data, 2 Data fixes, 3 Summary, then run blocks DATA / MODEL / OUTPUT without numbers, then "4 MEASURE" and "4 · Measure the campaign". *Fix:* drop the "4" from the block and the panel ("Measure the campaign"), or number the run blocks as one sequence.
+6. **The "4 MEASURE" block label wraps** beside "After the campaign" at 1280 px (`modules/measure/index.js` `blockHtml`), and the file name in the DATA block breaks mid-word ("synthetic_score.cs / v", `08_run_results.png`). *Fix:* put the state under the label; ellipsis on a long file name.
+7. **The Measure panel's heading is indented further than its text** (`modules/measure/styles.js`, `09_measure_campaign.png`). *Fix:* one left padding for the heading and the body.
+8. **"Also: target with uplift ›" on every use case** (`modules/uplift/index.js`, the related link on the use-case header). Plan H moved the Uplift workbench under Settings → Advanced and made uplift step 4, yet the first link a new user sees on a use case opens the workbench. *Fix:* hide it, or show it only on a finished scoring run next to step 4.
+9. **Connections puts "Add a connection" below the fold** (`modules/connections/page.js` `listHtml`). On an empty install at 1280 x 800 the person sees "No connections yet", then the AI service card; the services to add start at the bottom edge (`02_connections_empty.png`), although the empty state says "Pick a service below". *Fix:* draw "Add a connection" before the AI service section.
+10. **Manual setup cannot pick from a connection** (DEC-1109, `ui/usecase.js`). Guided setup offers "Pick from a connection"; Manual setup only an upload and Build from raw tables. *Fix:* a setup-source seam for Manual Step 1, as the decision notes.
+11. **Settings → "Build from raw tables" links to Home** (`modules/simple/pages.js`, `href: "#/"`): a link that does not open what it names. *Fix:* make the entry plain text, or link to a use case's Manual setup.
+12. **Breadcrumbs still name the old places.** Screens now under Settings read "Home › Uplift modelling", "Home › Build data", "Home › Model health › Schedules", "Home › Admin › Users", "Home › AI service connection"; the campaign page reads "Home › Campaigns › …" (linking `#/monitoring/runs`). The bar marks Settings or Results meanwhile. *Fix:* start those crumbs with the place that holds them ("Settings › Uplift workbench", "Results › …").
+13. **Pilot and client words on hidden screens.** The Reports hub (`#/pilot`) has a "Client" column ("—" on every row with one company) and "Feedback from the pilot team"; Build data (`#/pilot/kit`) says "Ask your client for the right tables" and has an "Industry" column ("Every business" on every row). Plan H has one company and one journey. *Fix:* drop the two columns; "your data team" for "your client".
+14. **The Reports hub offers "Open the latest report" when there is none** (`#/pilot` before any approved model): the primary button sits above "No approved model yet". *Fix:* hide it until a report exists.
+15. **The Advanced tools card has an empty band above its summary** (`modules/simple/pages.js`, the card's padding plus `details.adv > summary` padding, `10_settings.png`). *Fix:* no card padding around a `details.adv`.
+16. **Guided setup's quoting is noisy.** A reason reads `("'Basic' → 'BASIC'", "'PREMIUM' → 'premium'")`: double quotes around single-quoted values (`06_guided_setup_suggestions.png`). The text is the API's (`engine/agent/advisor.py`). *Fix:* one quoting style for values in reasons.
+17. **Backend, seen once: the first visit to Schedules on an empty data folder logged a 500**, "table schedule already exists" (`engine/platform_db.create_tables`: two first requests racing to create the SQLite tables). The screen still drew. *Fixed in M84:* `create_tables` holds a lock and treats "already exists" as success (`tests/unit/production/test_platform_db_create.py`).
