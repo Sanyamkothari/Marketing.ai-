@@ -40,7 +40,7 @@ test("the bar is the four places with no sign-in chip; Settings says sign-in is 
   assert.equal($("[data-settings-admin]"), null, "no Admin group while sign-in is off");
   assert.equal($('#app a[href="#/admin/users"]'), null);
   assert.ok($('#app a[href="#/privacy/consent"]'), "Privacy is still offered");
-  assert.ok($('#app a[href="#/generative/connection"]'), "and the AI service");
+  assert.ok($('#app a[href="#/connections"]'), "and the AI service");
 });
 
 test("the settings screen keeps every control the screen drew", async () => {

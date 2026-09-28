@@ -56,7 +56,7 @@ async function show(hash) {
 const text = (el) => (el ? el.textContent.replace(/\s+/g, " ").trim() : "");
 const card = (id) => $(`[data-cn-connection="${id}"]`);
 
-test("the page is registered at #/connections and reachable from the top bar's Admin menu", () => {
+test("the page is registered at #/connections, the top bar's Connections item", () => {
   assert.deepEqual(
     router.phaseModules().find((m) => m.name === "connections"),
     { name: "connections", routes: ["connections"] },

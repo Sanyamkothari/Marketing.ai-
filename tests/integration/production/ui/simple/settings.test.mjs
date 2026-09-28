@@ -16,7 +16,7 @@ const hrefs = (sel) => $$(`${sel} a`).map((a) => a.getAttribute("href"));
 test("Settings groups what a new user does not need, each a link to a screen that already exists", async () => {
   await until(() => $("[data-settings-main]") && $("[data-signin-off]"), 3000, "the Settings page");
   assert.equal($("main h1").textContent, "Settings");
-  assert.deepEqual(hrefs("[data-settings-main]"), ["#/generative/connection", "#/privacy/consent", "#/monitoring/schedules"]);
+  assert.deepEqual(hrefs("[data-settings-main]"), ["#/connections", "#/privacy/consent", "#/monitoring/schedules"]);
   assert.deepEqual(
     $$("[data-settings-main] a").map((a) => a.textContent),
     ["AI service", "Privacy", "Schedules"],
@@ -67,5 +67,5 @@ test("with sign-in on, an Admin gets Users and Audit log, and a role that may no
   assert.equal(viewer.querySelector("[data-settings-admin]"), null);
   assert.equal(viewer.querySelector('a[href="#/privacy/consent"]'), null);
   assert.equal(viewer.querySelector('a[href="#/monitoring/schedules"]'), null);
-  assert.equal(viewer.querySelector('a[href="#/generative/connection"]'), null, "testing the AI service is a POST");
+  assert.equal(viewer.querySelector('a[href="#/connections"]'), null, "testing the AI service is a POST");
 });

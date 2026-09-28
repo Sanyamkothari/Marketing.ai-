@@ -145,7 +145,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
   );
   const main = [
     can("POST", "/connection/aws/test")
-      ? entry({ label: "AI service", href: "#/generative/connection", text: "Connect the AI service that writes campaign copy and answers questions." })
+      ? entry({ label: "AI service", href: "#/connections", text: "Connect the AI service that writes campaign copy and answers questions: it is on Connections, with your data." })
       : "",
     can("GET", "/privacy/purposes")
       ? entry({ label: "Privacy", href: "#/privacy/consent", text: "Consent, requests to erase or see a person's data, and how long data is kept." })
