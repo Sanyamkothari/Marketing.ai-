@@ -2,9 +2,9 @@
 //
 //   [Marketing AI]  Home  Connections  Results (2)  Settings          [chip] [Help ▾] [user]
 //
-// Plan H M82 (DEC-1113): exactly four places. Home is the journey, Connections the cloud services,
-// Results every run (with the approvals count as its badge), Settings everything else - privacy,
-// schedules, the AI service, admin, the advanced tools. The screens that used to be top-level items
+// Plan H M82 (DEC-1113): exactly four places. Home is the journey, Connections the cloud services
+// and the AI service (M80), Results every run (with the approvals count as its badge), Settings
+// everything else - privacy, schedules, admin, the advanced tools. The screens that used to be top-level items
 // (Build data, Reports, Campaigns, Model health, Schedules, Privacy, Admin, Uplift, Waiting for
 // approval) keep their routes; they are opened from Results, from a run, or from Settings. The
 // "admin" and "models" slots are no longer drawn in the bar: the Settings page reads them
@@ -102,7 +102,7 @@ export function navFor(hash) {
     return "results";
   }
   if (a === "monitoring") return b === "runs" ? "results" : "settings";
-  if (a === "generative") return b === "copy" ? "results" : b === "connection" ? "settings" : "home";
+  if (a === "generative") return b === "copy" ? "results" : b === "connection" ? "connections" : "home";
   if (a === "settings" || a === "admin" || a === "privacy" || a === "uplift") return "settings";
   return null;
 }
