@@ -59,6 +59,19 @@ test("every run, newest first, with its use case, what it did, its status and it
   assert.match($("[data-results] h3").textContent, /newest first/);
 });
 
+test("each row reads as something to open: the name in link colour and a trailing Open ›", () => {
+  const runs = fixture("runs").runs;
+  rows().forEach((tr, i) => {
+    const open = tr.querySelector("a[data-run-open]");
+    assert.ok(open, `row ${i} has an Open link`);
+    assert.equal(open.textContent, "Open ›");
+    assert.equal(open.getAttribute("href"), `#/uc/${runs[i].use_case_id}/run/${runs[i].run_id}`, "a real link to the run");
+    assert.match(open.getAttribute("aria-label"), /^Open the run: /, "a screen reader hears which run");
+  });
+  const css = w.document.getElementById("sp-styles").textContent;
+  assert.match(css, /\.sp \.sp-runs a\{color:var\(--brand-blue\)/, "links in the runs table use the link colour");
+});
+
 test("models waiting for approval: one notice with one way to them", async () => {
   world.waiting = fixture("approvals");
   await open("#/results");

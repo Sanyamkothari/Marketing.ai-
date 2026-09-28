@@ -3,6 +3,7 @@
    the version and that sign-in is off - and, from its pure builder, the Admin group an Admin gets
    once sign-in is on. */
 import { test } from "node:test";
+import fs from "node:fs";
 import assert from "node:assert/strict";
 import { $, $$, until } from "../harness.mjs";
 import { fixture, installWholePage } from "./fake.mjs";
@@ -30,16 +31,38 @@ test("the advanced tools are folded away: uplift, the data kit, raw tables, Mode
   assert.equal(details.open, false, "closed until asked for");
   assert.equal(details.querySelector("summary").textContent, "Advanced tools");
   assert.deepEqual(
-    $$("[data-settings-advanced] a").map((a) => a.textContent),
+    $$("[data-settings-advanced] .sp-entry").map((li) => (li.querySelector("a, .sp-label") || {}).textContent),
     ["Uplift workbench", "Data request kit", "Build from raw tables", "Model health", "Document assistant"],
   );
   assert.deepEqual(hrefs("[data-settings-advanced]"), [
     "#/uplift",
     "#/pilot/kit",
-    "#/",
     "#/monitoring/alerts",
     "#/uc/ai-onboarding-assistant",
   ]);
+});
+
+test("Build from raw tables is plain text saying where it is, not a link to Home", () => {
+  const raw = $("[data-settings-advanced] [data-raw-tables]");
+  assert.ok(raw, "the entry is there");
+  assert.equal(raw.querySelector("a"), null, "no link that does not open what it names");
+  assert.equal($('[data-settings-advanced] a[href="#/"]'), null);
+  assert.match(raw.textContent, /Open a use case, choose Manual setup, then Build from raw tables\./);
+});
+
+test("the Advanced tools card has no padding band above its summary", () => {
+  const details = $("[data-settings-advanced] > details.adv");
+  assert.ok(details, "the disclosure is the card's only child");
+  const css = w.document.getElementById("sp-styles").textContent;
+  assert.match(css, /\.sp \.card>details\.adv\{border-top:0;padding:0\}/, "the global details.adv padding is undone in a card");
+  assert.ok(details.matches(".sp .card>details.adv"), "the rule reaches the Advanced tools disclosure");
+  // It undoes ui/index.html's global rule, which gave the band, and outranks it: (0,3,1) over (0,1,1).
+  // jsdom does not cascade shorthands reliably, so the rules are read here; the screenshot shows it.
+  const page = fs.readFileSync(new URL("../../../../../ui/index.html", import.meta.url), "utf8");
+  assert.match(page, /^details\.adv\{border-top:1px solid var\(--line\);padding:14px 0 0\}$/m, "the global rule it undoes");
+});
+
+test("the assistant's id is a real use case", () => {
   const assistant = fixture("industries").industries.flatMap((i) => i.stages.flatMap((s) => s.use_cases));
   assert.ok(assistant.some((u) => u.id === "ai-onboarding-assistant"), "the assistant's id is a real use case");
 });

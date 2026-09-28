@@ -8,8 +8,9 @@
 // Settings is where everything a new user does not need went: the AI service, Privacy, Schedules,
 // Admin (only while sign-in is on) and, folded under "Advanced tools", the uplift workbench, the data
 // request kit, building a dataset from raw tables, Model health and the document assistant. Every
-// entry is a link to a screen that already exists; an entry the person's role may not open is left
-// out, by the same access check the top bar used for these screens.
+// entry is a link to a screen that already exists, except "Build from raw tables", which lives inside
+// a use case's Manual setup and so is one plain sentence saying how to get there; an entry the
+// person's role may not open is left out, by the same access check the top bar used for these screens.
 //
 // Both builders are pure (`resultsHtml`, `settingsHtml`): what they draw comes from their arguments,
 // so the jsdom tests can call them with stubbed answers.
@@ -105,14 +106,29 @@ export function resultsHtml({ runs = null, error = null, waiting = null } = {}) 
       action: { label: "Go to Home", href: "#/" },
     })}</section>`;
   } else {
-    const rows = runs.map((run) => [
-      `<a href="${esc(runHref(run))}" data-run="${esc(run.run_id)}">${esc(run.use_case_name || run.use_case_id)}</a>`,
-      esc(modeWords(run)),
-      statusPill(run.state),
-      esc(outcomeText(run)),
-      esc(run.created_at ? fmtStamp(run.created_at) : EM_DASH),
-    ]);
-    const cols = [{ label: "Use case" }, { label: "Run" }, { label: "Status" }, { label: "Outcome" }, { label: "Started" }];
+    const rows = runs.map((run) => {
+      const name = run.use_case_name || run.use_case_id;
+      const started = run.created_at ? fmtStamp(run.created_at) : EM_DASH;
+      return [
+        `<a href="${esc(runHref(run))}" data-run="${esc(run.run_id)}">${esc(name)}</a>`,
+        esc(modeWords(run)),
+        statusPill(run.state),
+        esc(outcomeText(run)),
+        esc(started),
+        // A second, visible way in: the row reads as something to open, not only as text.
+        `<a class="sp-open" href="${esc(runHref(run))}" data-run-open aria-label="${esc(
+          `Open the run: ${name}, ${modeWords(run).toLowerCase()}, started ${started}`,
+        )}">Open ›</a>`,
+      ];
+    });
+    const cols = [
+      { label: "Use case" },
+      { label: "Run" },
+      { label: "Status" },
+      { label: "Outcome" },
+      { label: "Started" },
+      { label: "", num: true },
+    ];
     const more =
       runs.length >= RUNS_SHOWN
         ? `<p class="sp-note">Showing the latest ${fmtInt(RUNS_SHOWN)} runs. Older runs are on each use case's page.</p>`
@@ -165,12 +181,11 @@ export function settingsHtml({ can = () => true, status = null, version = null }
   const advanced = [
     entry({ label: "Uplift workbench", href: "#/uplift", text: "Train an uplift model by hand from a past campaign." }),
     entry({ label: "Data request kit", href: "#/pilot/kit", text: "What data to ask for, with templates, and data readiness reports." }),
-    entry({
-      label: "Build from raw tables",
-      href: "#/",
-      text: "Open a use case, choose Manual setup, then Build from raw tables.",
-      attrs: "data-raw-tables",
-    }),
+    // Plain text, not a link: building from raw tables lives inside a use case's Manual setup, and
+    // no single screen opens it (a link to Home did not open what it named).
+    `<li class="sp-entry" data-raw-tables><span class="sp-label">Build from raw tables</span><span class="sp-text">${esc(
+      "Open a use case, choose Manual setup, then Build from raw tables.",
+    )}</span></li>`,
     can("GET", "/schedules")
       ? entry({ label: "Model health", href: "#/monitoring/alerts", text: "Alerts for every model: data that changed, results that dropped, missed runs." })
       : "",
@@ -204,11 +219,16 @@ const CSS = `
 .sp .sp-entry:first-child{border-top:0}
 .sp .sp-entry a{font-weight:600;color:var(--brand-blue)}
 .sp .sp-entry a:hover{text-decoration:underline}
+.sp .sp-entry .sp-label{font-weight:600;color:var(--ink)}
 .sp .sp-text{font-size:13px;color:var(--muted);line-height:1.45}
 .sp details.adv>summary{padding:16px 20px;font-size:14px;font-weight:600;color:var(--ink);cursor:pointer}
 .sp details.adv[open]>summary{border-bottom:1px solid var(--line)}
 .sp .sp-about{padding:12px 20px;font-size:13px;color:var(--ink2);line-height:1.5}
 .sp .sp-about p{margin:0 0 4px}
+.sp .sp-runs a{color:var(--brand-blue);font-weight:600}
+.sp .sp-runs a:hover{text-decoration:underline}
+.sp .sp-runs a.sp-open{font-weight:500;white-space:nowrap}
+.sp .card>details.adv{border-top:0;padding:0}
 .sp .sp-note{margin:0;padding:12px 20px;border-top:1px solid var(--line);font-size:12px;color:var(--muted)}
 .sp .notice-card{margin-bottom:16px}
 .sp .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}

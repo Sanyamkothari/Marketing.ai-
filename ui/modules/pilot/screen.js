@@ -1,4 +1,5 @@
-// The pilot's screens (Plan E; v1 navigation): what the pilot hands to the client.
+// The report and data-kit screens (Plan E; v1 navigation). One company since Plan H: no client or
+// industry column.
 //
 //   #/pilot                            Reports: every model results report and every campaign's value
 //   #/pilot/kit                        Build data: the data request kit, a dataset from raw tables, and
@@ -41,7 +42,6 @@ import {
   getReportDoc,
   getReportHtml,
   getRoi,
-  listClients,
   listDatasets,
   listModels,
   listScoringRuns,
@@ -153,15 +153,6 @@ function useCaseIndex(industries) {
 
 const ucName = (index, id) => (index.byId.get(id) || {}).name || id;
 
-/** The client a row belongs to, in the chooser's own words. */
-function clientName(clients, demo, id) {
-  if (!present(id)) return null;
-  const m = demo && demo.manifest;
-  if (m && id === m.broken_client_id) return `${m.client_name}: practice data with problems`;
-  const found = clients.value ? clients.value.clients.find((cl) => cl.client_id === id) : null;
-  return found ? found.name : m && id === m.client_id ? m.client_name : id;
-}
-
 const cell = (text) => (present(text) ? esc(text) : "—");
 
 function reportActions(openHref, openLabel, pdfHref) {
@@ -198,11 +189,14 @@ async function renderReports(app, demo) {
   document.title = "Reports · Marketing AI";
   const { main, live } = screen;
   const industriesP = settle(getIndustries());
-  const clientsP = settle(listClients());
+  // "Open the latest report" is offered only once a report exists: an approved model's results
+  // report, or the value of a campaign that has been measured. A scored campaign is listed at once,
+  // but its value page is only "appears once the results are measured" until then.
   let latest = null;
   const consider = (when, href) => {
     if (present(when) && (!latest || String(when) > latest.when)) latest = { when: String(when), href };
   };
+  let scoredRuns = [];
 
   const results = (async () => {
     const [models, industries] = await Promise.all([settle(listModels()), industriesP]);
@@ -253,7 +247,7 @@ async function renderReports(app, demo) {
   })();
 
   const value = (async () => {
-    const [runs, industries, clients] = await Promise.all([settle(listScoringRuns()), industriesP, clientsP]);
+    const [runs, industries] = await Promise.all([settle(listScoringRuns()), industriesP]);
     if (!live()) return;
     const index = useCaseIndex(industries);
     if (runs.error) {
@@ -276,12 +270,11 @@ async function renderReports(app, demo) {
       );
       return;
     }
+    scoredRuns = scored;
     const rows = scored.map((r) => {
       const href = `#/pilot/value/${encodeURIComponent(r.run_id)}`;
-      consider(r.finished_at || r.created_at, href);
       return [
         `<span class="pe-name">${esc(campaignTitle(demo, r.run_id) || r.use_case_name || ucName(index, r.use_case_id))}</span>`,
-        cell(clientName(clients, demo, r.client_id)),
         esc(fmtDate(r.finished_at || r.created_at)),
         reportActions(href, "Value in rupees", roiUrl(r.run_id, "pdf")),
       ];
@@ -289,11 +282,13 @@ async function renderReports(app, demo) {
     fill(
       main,
       "value",
-      dataTable([{ label: "Campaign" }, { label: "Client" }, { label: "Scored on" }, { label: "Report", num: true }], rows),
+      dataTable([{ label: "Campaign" }, { label: "Scored on" }, { label: "Report", num: true }], rows),
     );
   })();
 
   await Promise.all([results, value]);
+  if (!live()) return;
+  await considerMeasured(scoredRuns, latest, consider);
   if (!live()) return;
   const actions = main.querySelector("[data-pe-head-actions]");
   if (actions && latest) actions.outerHTML = headActions({ primary: { label: "Open the latest report", href: latest.href } });
@@ -302,11 +297,30 @@ async function renderReports(app, demo) {
   if (await mayCall("GET", "/pilot/feedback/export")) {
     const foot = main.querySelector("[data-pe-export]");
     if (foot && live()) {
-      foot.innerHTML = `Feedback from the pilot team: <a class="btn quiet sm" href="${esc(
+      foot.innerHTML = `Feedback: <a class="btn quiet sm" href="${esc(
         feedbackExportUrl(),
       )}" data-pe-feedback-export>Export all feedback</a>`;
     }
   }
+}
+
+/** How many of the newest scored campaigns the hub asks `GET /pilot/roi` about. */
+const MEASURED_LOOKUPS = 3;
+
+/**
+ * Offer the newest measured campaign's value page as the latest report when it is newer than
+ * `latest`. Only campaigns newer than `latest` are asked about, at most `MEASURED_LOOKUPS` of them.
+ */
+async function considerMeasured(scored, latest, consider) {
+  const when = (r) => String(r.finished_at || r.created_at || "");
+  const newer = scored.filter((r) => present(r.finished_at || r.created_at) && (!latest || when(r) > latest.when));
+  const asked = newer.slice(0, MEASURED_LOOKUPS);
+  const views = await Promise.all(asked.map((r) => settle(getRoi(r.run_id))));
+  const found = asked.find((r, i) => {
+    const v = views[i].value;
+    return Boolean(v && v.status === "measured");
+  });
+  if (found) consider(when(found), `#/pilot/value/${encodeURIComponent(found.run_id)}`);
 }
 
 function campaignTitle(demo, runId) {
@@ -338,7 +352,7 @@ function kitBody(request, demo) {
           <a class="btn quiet sm" href="${esc(demoRawUrl("broken"))}" download>Sample tables with a planted problem</a></div>`
       : "";
   return `<div class="pe-body">
-    <p>What to ask your client for, in plain words: the tables and columns we need, how much history, how to hide customer identities, and what never to send.</p>
+    <p>What to ask your data team for, in plain words: the tables and columns we need, how much history, how to hide customer identities, and what never to send.</p>
     ${list}
     <details class="adv"><summary>For your IT team</summary><div>
       ${templates}
@@ -355,42 +369,42 @@ function buildBody(index) {
   if (!predictive.length) {
     return emptyState({
       title: "No use case can build a dataset yet",
-      text: "Use cases that learn from your client's data appear here.",
+      text: "Use cases that learn from your data appear here.",
       action: { label: "Go to Home", href: "#/", kind: "secondary" },
     });
   }
   return dataTable(
-    [{ label: "Use case" }, { label: "Industry" }, { label: "Set up", num: true }],
+    [{ label: "Use case" }, { label: "Set up", num: true }],
     predictive.map((u) => [
       `<span class="pe-name">${esc(u.name)}</span>`,
-      esc(u.industry),
       `<span class="pe-acts"><a class="btn secondary sm" href="#/uc/${encodeURIComponent(u.id)}">Set up</a></span>`,
     ]),
   );
 }
 
-function readinessBody(datasets, index, clients, demo) {
+function readinessBody(datasets, index, demo) {
   const rows = [];
   const m = demo && demo.manifest;
   if (m && m.broken_dataset_id) {
-    rows.push({ id: m.broken_dataset_id, uc: m.use_case_id, client: m.broken_client_id, train: true, n: null, when: null });
+    rows.push({ id: m.broken_dataset_id, uc: m.use_case_id, practice: true, train: true, n: null, when: null });
   }
   for (const d of datasets.value.datasets) {
-    rows.push({ id: d.dataset_id, uc: d.use_case, client: d.client_id, train: present(d.target), n: d.n_rows, when: d.built_at });
+    rows.push({ id: d.dataset_id, uc: d.use_case, practice: false, train: present(d.target), n: d.n_rows, when: d.built_at });
   }
   rows.sort((a, b) => String(b.when || "").localeCompare(String(a.when || "")));
   if (!rows.length) {
     return emptyState({
       title: "No dataset has been built yet",
-      text: "Once your client's tables are built into a dataset, its readiness report appears here: what arrived, how it links up, and exactly what to fix.",
+      text: "Once your tables are built into a dataset, its readiness report appears here: what arrived, how it links up, and exactly what to fix.",
       action: { label: "Download the data request", href: dataRequestUrl(), kind: "secondary" },
     });
   }
   return dataTable(
-    [{ label: "Dataset" }, { label: "Client" }, { label: "Rows", num: true }, { label: "Built" }, { label: "Report", num: true }],
+    [{ label: "Dataset" }, { label: "Rows", num: true }, { label: "Built" }, { label: "Report", num: true }],
     rows.map((r) => [
-      `<span class="pe-name">${esc(ucName(index, r.uc))}</span><span class="chip neutral">${r.train ? "For training" : "For scoring"}</span>`,
-      cell(clientName(clients, demo, r.client)),
+      `<span class="pe-name">${esc(ucName(index, r.uc))}</span><span class="chip neutral">${r.train ? "For training" : "For scoring"}</span>${
+        r.practice ? `<span class="chip neutral">Practice data with problems</span>` : ""
+      }`,
       present(r.n) ? esc(fmtInt(r.n)) : "—",
       present(r.when) ? esc(fmtDate(r.when)) : "—",
       reportActions(`#/pilot/view/readiness/${encodeURIComponent(r.id)}`, "Open", readinessUrl(r.id, "pdf")),
@@ -404,19 +418,18 @@ async function renderKit(app, demo) {
     `<main class="screen">${head(
       [{ label: "Build data" }],
       "Build data",
-      "Ask your client for the right tables, turn them into a dataset, and check it is ready before a model learns from it.",
+      "Ask your data team for the right tables, turn them into a dataset, and check it is ready before a model learns from it.",
       headActions({ primary: { label: "Download the data request", href: dataRequestUrl(), attrs: "download" } }),
     )}${demoNotice(demo)}<div data-pe-error></div>
     <div class="stack">
       ${card("kit", "Data request kit")}
-      ${card("build", "Build a dataset from raw tables", `<div class="pe-body"><p>Choose the use case the data is for. Its Setup screen maps your client's tables, builds the dataset and checks it.</p></div>`)}
+      ${card("build", "Build a dataset from raw tables", `<div class="pe-body"><p>Choose the use case the data is for. Its Setup screen maps your tables, builds the dataset and checks it.</p></div>`)}
       ${card("readiness", `Data readiness${sortNote("newest first")}`)}
     </div></main>`,
   );
   document.title = "Build data · Marketing AI";
   const { main, live } = screen;
   const industriesP = settle(getIndustries());
-  const clientsP = settle(listClients());
 
   const kit = settle(getDataRequest()).then((request) => {
     if (!live()) return;
@@ -428,14 +441,14 @@ async function renderKit(app, demo) {
     if (industries.error) showError(main, industries.error);
     fill(main, "build", industries.error ? unavailable : buildBody(useCaseIndex(industries)));
   });
-  const readiness = Promise.all([settle(listDatasets()), industriesP, clientsP]).then(([datasets, industries, clients]) => {
+  const readiness = Promise.all([settle(listDatasets()), industriesP]).then(([datasets, industries]) => {
     if (!live()) return;
     if (datasets.error) {
       showError(main, datasets.error);
       fill(main, "readiness", unavailable);
       return;
     }
-    fill(main, "readiness", readinessBody(datasets, useCaseIndex(industries), clients, demo));
+    fill(main, "readiness", readinessBody(datasets, useCaseIndex(industries), demo));
   });
   await Promise.all([kit, build, readiness]);
   screen.commit();

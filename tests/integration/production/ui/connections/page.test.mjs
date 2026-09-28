@@ -97,6 +97,11 @@ test("the catalogue offers every service; one without its add-on says so; the AI
   assert.equal(ai.querySelector("a").getAttribute("href"), "#/generative/connection");
 });
 
+test("the services to add come before the AI service, right under the person's connections", () => {
+  const sections = $$("main.cn section.cn-sec h2").map((h) => h.id);
+  assert.deepEqual(sections, ["cn-yours", "cn-add", "cn-ai"]);
+});
+
 test("Test connection shows every step with its fix", async () => {
   card(ids.pg).querySelector("[data-cn-test]").click();
   await until(() => card(ids.pg).querySelector("[data-cn-report]"), 2000, "the report");

@@ -161,10 +161,10 @@ function listHtml() {
   const ai = state.kinds.filter((k) => !k.creatable && k.screen);
   return `<main class="screen cn">${head}
     <section class="cn-sec" aria-labelledby="cn-yours"><h2 id="cn-yours">Your connections</h2>${saved}</section>
-    ${ai.length ? `<section class="cn-sec" aria-labelledby="cn-ai"><h2 id="cn-ai">AI service</h2><div class="cn-grid">${ai.map(aiCard).join("")}</div></section>` : ""}
     <section class="cn-sec" aria-labelledby="cn-add"><h2 id="cn-add">Add a connection</h2><p>Files in cloud storage, or tables in a database.</p><div class="cn-grid">${data
       .map(kindCard)
       .join("")}</div></section>
+    ${ai.length ? `<section class="cn-sec" aria-labelledby="cn-ai"><h2 id="cn-ai">AI service</h2><div class="cn-grid">${ai.map(aiCard).join("")}</div></section>` : ""}
   </main>`;
 }
 

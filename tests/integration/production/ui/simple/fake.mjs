@@ -22,7 +22,8 @@ export function pageScripts() {
 
 /**
  * Install the page. `world` holds what can change between tests: `runs` (the `GET /runs` body for the
- * whole history), `waiting` (the approvals body, or null for a refusal).
+ * whole history), `waiting` (the approvals body, or null for a refusal), and optionally `models` (the
+ * `GET /models` body; the empty app's by default) and `roi` (run id to its `GET /pilot/roi/{run}` body).
  */
 export async function installWholePage({ hash = "#/", world }) {
   const clients = { list: fixture("clients_empty") };
@@ -31,8 +32,17 @@ export async function installWholePage({ hash = "#/", world }) {
     const ok = (body) => ({ status: 200, body });
     if (method === "GET" && p === "/industries") return ok(fixture("industries"));
     if (method === "GET" && p.startsWith("/use-cases/")) return ok(fixture("use_case"));
-    if (method === "GET" && p === "/models") return ok(fixture("models"));
-    if (method === "GET" && p === "/runs") return ok(query.use_case ? fixture("runs_empty") : world.runs);
+    if (method === "GET" && p === "/models") return ok(world.models || fixture("models"));
+    if (method === "GET" && p === "/runs") {
+      if (query.use_case) return ok(fixture("runs_empty"));
+      return ok(query.mode ? { runs: world.runs.runs.filter((r) => r.mode === query.mode) } : world.runs);
+    }
+    if (method === "GET" && p === "/datasets") return ok(fixture("datasets_empty"));
+    if (method === "GET" && p === "/pilot/data-request") return ok(fixture("data_request"));
+    if (method === "GET" && p.startsWith("/pilot/roi/")) {
+      const body = (world.roi || {})[decodeURIComponent(p.slice("/pilot/roi/".length))];
+      return body ? ok(body) : { status: 404, body: { detail: { code: "RUN_NOT_FOUND", message: "No such run." } } };
+    }
     if (method === "GET" && p === "/auth/me") return ok(fixture("me_off"));
     if (method === "GET" && p === "/pilot/demo") return ok(fixture("demo"));
     if (method === "GET" && p === "/pilot/help") return ok(fixture("help"));
