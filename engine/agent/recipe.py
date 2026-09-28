@@ -15,7 +15,8 @@ runs them - and only this module does. Three rules hold for every run:
 * **Counted.** Every step reports how many values it changed and how many it could not convert, with
   masked examples. A step that fails on more than `max_failure_pct` of a column's non-empty values
   stops the run with `RECIPE_VALUES_UNCONVERTED`; a column the recipe needs and the file lacks stops
-  it with `RECIPE_COLUMN_MISSING`. Nothing is guessed.
+  it with `RECIPE_COLUMN_MISSING`. Nothing is guessed. A `drop_column` step needs nothing: a hidden
+  column the file lacks is already hidden, so the step is skipped and its receipt says so.
 
 The input frame is never modified; `run_recipe` works on a copy.
 """
@@ -144,6 +145,7 @@ def check_recipe(
     the target - that would hand the model the answer.
     """
     available = list(columns)
+    file_columns = frozenset(columns)
     protected = {name for name in (primary_key, target) if name}
     phase = 0
     combined = False
@@ -210,6 +212,11 @@ def check_recipe(
                 )
             created.add(new)
             available.append(new)
+        elif step.kind is RecipeStepKind.DROP_COLUMN and step.column not in file_columns:
+            # Hiding a column the file does not have leaves nothing to hide: a column hidden at setup
+            # (a leak, often unknown until after the outcome) need not be in a later scoring file.
+            # A column the file has but an earlier step used up is still refused below.
+            pass
         elif step.column not in available:
             raise RecipeError(
                 "RECIPE_COLUMN_MISSING",
@@ -217,9 +224,9 @@ def check_recipe(
                 column=step.column,
                 order=step.order,
             )
-        if step.kind is RecipeStepKind.DROP_COLUMN:
+        elif step.kind is RecipeStepKind.DROP_COLUMN:
             available.remove(step.column)
-        elif step.new_column is not None and step.kind is not RecipeStepKind.DERIVE:
+        elif step.new_column is not None:
             if step.new_column in available:
                 raise RecipeError(
                     "RECIPE_STEP_INVALID",
@@ -402,12 +409,20 @@ def run_recipe(
     receipts: list[StepReceipt] = []
     for step in steps:
         if step.kind is RecipeStepKind.DROP_COLUMN:
+            absent = step.column not in work.columns
             receipts.append(
                 StepReceipt(
-                    order=step.order, kind=step.kind, column=step.column, rows=len(work), changed=0, failed=0
+                    order=step.order,
+                    kind=step.kind,
+                    column=step.column,
+                    rows=len(work),
+                    changed=0,
+                    failed=0,
+                    skipped=absent,
                 )
             )
-            work = work.drop(columns=[step.column])
+            if not absent:
+                work = work.drop(columns=[step.column])
             continue
         if step.kind is RecipeStepKind.COMBINE_ROWS:
             try:
@@ -433,7 +448,17 @@ def run_recipe(
             )
             work = combined.frame
             continue
-        outcome = _apply(work, step, snapshot_column)
+        try:
+            outcome = _apply(work, step, snapshot_column)
+        except (TypeError, ValueError) as exc:
+            # A parser tripping over a column type it was not written for (a category column, an
+            # unexpected object): a coded refusal naming the step, never a 500 at Approve or scoring.
+            raise RecipeError(
+                "RECIPE_STEP_INVALID",
+                f"Step {step.order} ({step.kind.value}) cannot run on the values in '{step.column}'.",
+                column=step.column,
+                order=step.order,
+            ) from exc
         if step.kind is not RecipeStepKind.DERIVE:
             non_empty = int(work[step.column].notna().sum())
             if non_empty and outcome.failed / non_empty * 100.0 > max_failure_pct:

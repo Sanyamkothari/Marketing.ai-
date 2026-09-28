@@ -232,6 +232,13 @@ class StepReceipt(StrictBase):
             "null for every other step and on a preview."
         ),
     )
+    skipped: bool = Field(
+        default=False,
+        description=(
+            "`drop_column` only: true when the file did not have the column, so there was nothing to "
+            "hide - a column hidden at setup need not be in a later scoring file."
+        ),
+    )
 
 
 class RecipeReceipt(Artefact):

@@ -193,3 +193,42 @@ def test_check_recipe_alone_touches_no_data() -> None:
         target="converted_30d",
         levels=LEVELS,
     )
+
+
+def test_a_hidden_column_absent_from_a_later_file_is_skipped() -> None:
+    """A column Guided setup hid (a leak, often not known at scoring time) used to be required in
+    every scoring file: the drop step raised RECIPE_COLUMN_MISSING, a 409 nobody could acknowledge."""
+    steps = (
+        _step(1, RecipeStepKind.PARSE_NUMBER, "bill", decimal="."),
+        _step(2, RecipeStepKind.DROP_COLUMN, "email"),
+    )
+    frame = _frame().drop(columns=["email"])
+    run = _run(frame, steps)
+    assert "email" not in run.frame.columns
+    drop = run.receipt.steps[1]
+    assert (drop.kind, drop.column, drop.changed, drop.skipped) == (
+        RecipeStepKind.DROP_COLUMN,
+        "email",
+        0,
+        True,
+    )
+    assert run.receipt.steps[0].skipped is False
+    assert _run(_frame(), steps).receipt.steps[1].skipped is False
+    check_recipe(steps, columns=list(frame.columns), primary_key="customer_id", target=None, levels=LEVELS)
+
+
+def test_the_id_and_the_outcome_still_cannot_be_dropped_when_absent() -> None:
+    with pytest.raises(RecipeError) as caught:
+        _run(
+            _frame().drop(columns=["converted_30d"]), (_step(1, RecipeStepKind.DROP_COLUMN, "converted_30d"),)
+        )
+    assert caught.value.code == "RECIPE_STEP_INVALID"
+
+
+def test_a_categorical_column_is_tidied_not_crashed_on() -> None:
+    """A Parquet `category` column used to raise TypeError inside normalise_text: a 500 at scoring."""
+    frame = _frame()
+    frame["city"] = frame["city"].astype("category")
+    run = _run(frame, (_step(1, RecipeStepKind.NORMALISE_TEXT, "city", strip=True, merge={"delhi": "DL"}),))
+    assert run.frame["city"].tolist() == ["Delhi", "DL", "Pune", "Pune"]
+    assert run.receipt.steps[0].changed == 1

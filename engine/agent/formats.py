@@ -74,8 +74,18 @@ BOOLEAN_FALSE: Final[frozenset[str]] = frozenset({"false", "f", "no", "n", "0"})
 _CURRENCY_RE: Final[re.Pattern[str]] = re.compile(
     "|".join(re.escape(token) for token in CURRENCY_TOKENS), flags=re.IGNORECASE
 )
-_EU_NUMBER_RE: Final[re.Pattern[str]] = re.compile(r"^[+-]?\d{1,3}(\.\d{3})+(,\d+)?$|^[+-]?\d+,\d{1,2}$")
 _PLAIN_NUMBER_RE: Final[re.Pattern[str]] = re.compile(r"^[+-]?(\d+(\.\d*)?|\.\d+)([eE][+-]?\d+)?$")
+_PLAIN_COMMA_RE: Final[re.Pattern[str]] = re.compile(r"^[+-]?(\d+(,\d*)?|,\d+)([eE][+-]?\d+)?$")
+_GROUPED_RE: Final[dict[str, re.Pattern[str]]] = {
+    # 1,200.50 / 1,000,000 and the Indian 1,20,000; the first group never starts with 0.
+    ".": re.compile(r"^([1-9]\d{0,2}(,\d{3})+|[1-9]\d?(,\d{2})*,\d{3})(\.\d*)?$"),
+    # 1.200,50 / 1.000.000
+    ",": re.compile(r"^[1-9]\d{0,2}(\.\d{3})+(,\d*)?$"),
+}
+"""A grouping mark is accepted only where grouping puts it; anything else is not a number."""
+_COMMA_THOUSANDS_RE: Final[re.Pattern[str]] = re.compile(r"^[1-9]\d{0,2}(,\d{3})+$")
+"""`1,200`: a comma before exactly three digits reads as grouping when the column says nothing else."""
+_NUMERIC_TYPES: Final[tuple[type, ...]] = (int, float, np.number)
 
 _DATE_STYLES: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     ("iso", re.compile(r"^\d{4}-\d{1,2}-\d{1,2}([ T]\d{1,2}:\d{2}(:\d{2})?)?")),
@@ -87,6 +97,7 @@ _DATE_STYLES: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     ("compact", re.compile(r"^\d{8}$")),
 )
 _NUMERIC_DAY_MONTH: Final[re.Pattern[str]] = re.compile(r"^(\d{1,2})[/.-](\d{1,2})[/.-]\d{2,4}")
+_HAS_DIGIT_RE: Final[re.Pattern[str]] = re.compile(r"\d")
 
 
 class FormatIssueKind(StrEnum):
@@ -158,6 +169,27 @@ def _present(series: pd.Series[Any]) -> tuple[np.ndarray[Any, Any], pd.Series[An
     return np.flatnonzero(notna)[keep], text[keep]
 
 
+def _numeric_cells(series: pd.Series[Any], positions: np.ndarray[Any, Any]) -> np.ndarray[Any, Any]:
+    """Which of the cells at `positions` are real numbers (not text, not booleans).
+
+    A chunked CSV read can hand a text column that mixes Python floats with strings; such a cell is
+    read by its value, never through `str()` - `"1200.0"` is not evidence of a decimal point, and
+    under a comma decimal mark it would read as 12000.
+    """
+    if pd.api.types.is_bool_dtype(series):
+        return np.zeros(len(positions), dtype=bool)
+    if pd.api.types.is_numeric_dtype(series):
+        return np.ones(len(positions), dtype=bool)
+    if not pd.api.types.is_object_dtype(series):
+        return np.zeros(len(positions), dtype=bool)
+    raw = series.to_numpy(dtype=object)[positions]
+    return np.fromiter(
+        (isinstance(v, _NUMERIC_TYPES) and not isinstance(v, (bool, np.bool_)) for v in raw),
+        dtype=bool,
+        count=len(raw),
+    )
+
+
 def _per_value(cells: pd.Series[Any], fn: Callable[[str], Any]) -> list[Any]:
     """`fn` of every cell, computed once per distinct value; the order of `cells`."""
     values = cells.tolist()
@@ -187,6 +219,23 @@ def _is_text(series: pd.Series[Any]) -> bool:
 # ---------------------------------------------------------------------------
 # Numbers
 # ---------------------------------------------------------------------------
+def _plain_number(core: str, decimal: str) -> str | None:
+    """`core` (no sign, symbol or spaces) as text `float()` reads, or None when it is not a number
+    written with `decimal` as the decimal mark.
+
+    A grouping mark is removed only where grouping puts it, so a value written in the other
+    convention - `1,5` under a decimal point, `1.5` under a decimal comma - fails and is counted,
+    instead of being read as 15.
+    """
+    if decimal == ",":
+        if _PLAIN_COMMA_RE.match(core):
+            return core.replace(",", ".")
+        return core.replace(".", "").replace(",", ".") if _GROUPED_RE[","].match(core) else None
+    if _PLAIN_NUMBER_RE.match(core):
+        return core
+    return core.replace(",", "") if _GROUPED_RE["."].match(core) else None
+
+
 def _number_one(text: str, decimal: str, percent_to_fraction: bool) -> float | None:
     raw = text.strip()
     if not raw:
@@ -203,11 +252,10 @@ def _number_one(text: str, decimal: str, percent_to_fraction: bool) -> float | N
     elif raw.startswith("+"):
         raw = raw[1:].strip()
     raw = raw.replace(" ", "").replace(" ", "").replace("'", "")
-    # Grouping marks go; the decimal mark becomes a point.
-    raw = raw.replace(".", "").replace(",", ".") if decimal == "," else raw.replace(",", "")
-    if not _PLAIN_NUMBER_RE.match(raw):
+    plain = _plain_number(raw, decimal)
+    if plain is None:
         return None
-    number = float(raw)
+    number = float(plain)
     if percent and percent_to_fraction:
         number = number / 100.0
     return -number if negative else number
@@ -218,19 +266,23 @@ def parse_numbers(
 ) -> ParseOutcome:
     """Text to float: currency symbols, thousands separators, `%` and `(negative)` handled.
 
-    `decimal` is `"."` (1,200.50) or `","` (1.200,50). Numbers already numeric pass through.
+    `decimal` is `"."` (1,200.50) or `","` (1.200,50). Numbers already numeric pass through, and so
+    does a real number inside a text column: it is read by its value, not by its text.
     """
     if decimal not in {".", ","}:
         raise ValueError("decimal must be '.' or ','")
     if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
         return ParseOutcome(values=series.astype("float64"), changed=0, failed=0, failed_examples=())
     positions, cells = _present(series)
-    numbers = _per_value(cells, lambda text: _number_one(text, decimal, percent_to_fraction))
+    numeric = _numeric_cells(series, positions)
+    text = cells[~numeric]
+    numbers = _per_value(text, lambda value: _number_one(value, decimal, percent_to_fraction))
     parsed = np.array([np.nan if number is None else number for number in numbers], dtype="float64")
     failed = np.array([number is None for number in numbers], dtype=bool)
     values = np.full(len(series), np.nan, dtype="float64")
-    values[positions] = parsed
-    failures = cells[failed].head(MAX_EXAMPLES).tolist()
+    values[positions[~numeric]] = parsed
+    values[positions[numeric]] = series.to_numpy(dtype=object)[positions[numeric]].astype("float64")
+    failures = text[failed].head(MAX_EXAMPLES).tolist()
     return ParseOutcome(
         values=pd.Series(values, index=series.index, dtype="float64"),
         changed=int((~failed).sum()),  # text became a number, whatever it looked like
@@ -239,20 +291,48 @@ def parse_numbers(
     )
 
 
-def _decimal_style(cells: pd.Series[Any]) -> str:
-    eu = int(cells.str.strip().str.match(_EU_NUMBER_RE).sum())
-    us = int(
-        cells.str.contains(r"\d,\d{3}(?!\d)", regex=True).sum()
-        + cells.str.contains(r"\.\d", regex=True).sum()
-    )
-    return "," if eu > us else "."
-
-
-def _number_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
-    if cells.empty:
+def _decimal_vote(text: str) -> str | None:
+    """What one value says about the decimal mark: '.', ',', '?' (it reads both ways, differently) or
+    None (it says nothing - no mark, or not a number either way)."""
+    point = _number_one(text, ".", False)
+    comma = _number_one(text, ",", False)
+    if point is None and comma is None:
         return None
-    decimal = _decimal_style(cells)
-    parsed = parse_numbers(cells, decimal=decimal)
+    if comma is None:
+        return "."
+    if point is None:
+        return ","
+    if point == comma:
+        return None
+    # Only `1,200` and `1.200` read both ways. A comma before exactly three digits is grouping (a
+    # decimal comma with three decimals is rare in money); `1.200` is 1.2 or 1200 and proves nothing.
+    return "." if "," in text else "?"
+
+
+def _decimal_style(cells: pd.Series[Any]) -> str | None:
+    """The decimal mark the values prove, by majority; None when they cannot tell.
+
+    A value counts only when it reads one way and not the other, so `1.200,50` is never evidence for
+    a decimal point. With no evidence either way the mark is `.` unless some value reads differently
+    under the two marks (`1.200`) - then, as with an undecided day/month order, nothing is guessed.
+    """
+    votes = Counter(_per_value(cells, _decimal_vote))
+    if votes["."] != votes[","]:
+        return "." if votes["."] > votes[","] else ","
+    return "." if not votes["."] and not votes["?"] else None
+
+
+def _number_issue(name: str, present: pd.Series[Any]) -> FormatIssue | None:
+    """`present` is the column's non-empty cells as they are - text, and real numbers a chunked read
+    may have mixed in, which count as converted but are no evidence of a decimal mark."""
+    if present.empty:
+        return None
+    cells = present.astype(str)
+    numeric = _numeric_cells(present, np.arange(len(present)))
+    decimal = _decimal_style(cells[~numeric])
+    if decimal is None:
+        return None  # 1.200 could be 1.2 or 1200: the column is left as text rather than misread
+    parsed = parse_numbers(present, decimal=decimal)
     convertible = int(parsed.values.notna().sum())
     if convertible / len(cells) < MIN_CONVERT_SHARE:
         return None
@@ -308,35 +388,47 @@ def date_order(cells: pd.Series[Any]) -> bool | None:
 
 
 def _one_datetime(text: str, dayfirst: bool) -> pd.Timestamp | None:
+    if not _HAS_DIGIT_RE.search(text):
+        return None  # "now" / "today": pandas reads them as the current time
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         try:
-            stamp = pd.to_datetime(text, format="mixed", dayfirst=dayfirst, errors="coerce")
+            stamp = pd.to_datetime(text, format="mixed", dayfirst=dayfirst, errors="coerce", utc=True)
         except (ValueError, TypeError, OverflowError):
             return None
     if stamp is None or pd.isna(stamp):
         return None
-    return stamp.tz_localize(None) if stamp.tzinfo is not None else stamp
+    return stamp.tz_localize(None)
 
 
 def _to_datetimes(cells: pd.Series[Any], *, dayfirst: bool) -> pd.Series[Any]:
-    """Each value parsed on its own, as `datetime64[ns]`; a value with a UTC offset keeps its clock time.
+    """Each value parsed on its own, as naive `datetime64[ns]`.
 
-    `pd.to_datetime(format="mixed")` does this in one call unless the column mixes UTC offsets (or
-    offsets and none), where it returns objects - or, in later pandas, raises - and the step used to
-    fail with a 500. That case falls back to one value at a time with the same rule (M77).
+    A value with a UTC offset is converted to UTC before the offset is dropped, so two values written
+    in different zones compare as the instants they are; a value with no offset is kept as written.
+    The rule is per value (DEC-1004): it does not depend on what else the column holds. A value with
+    no digit is never a date - pandas would read `now` and `today` as the time of the run, a
+    different value on every run and later than every real event - so it fails and is counted.
+
+    `pd.to_datetime(format="mixed", utc=True)` does this in one call; should it raise on some
+    spelling, the column falls back to one value at a time with the same rule (M77).
     """
     distinct = pd.Series(list(dict.fromkeys(cells.tolist())), dtype=object)
+    dated = distinct.map(lambda text: bool(_HAS_DIGIT_RE.search(str(text)))).to_numpy(dtype=bool)
     parsed: pd.Series[Any] | None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         try:
-            parsed = pd.to_datetime(distinct, format="mixed", dayfirst=dayfirst, errors="coerce")
+            parsed = pd.to_datetime(
+                distinct.where(dated), format="mixed", dayfirst=dayfirst, errors="coerce", utc=True
+            )
         except (ValueError, TypeError, OverflowError):
             parsed = None
     if parsed is None or not pd.api.types.is_datetime64_any_dtype(parsed):
         stamps = [_one_datetime(str(text), dayfirst) for text in distinct]
         parsed = pd.Series([pd.NaT if s is None else s for s in stamps], dtype="datetime64[ns]")
+    elif parsed.dt.tz is not None:
+        parsed = parsed.dt.tz_localize(None)
     # Each distinct spelling parsed once (format="mixed" parses values independently), then spread.
     lookup = pd.Series(parsed.array, index=pd.Index(distinct, dtype=object))
     spread = lookup.reindex(pd.Index(cells.tolist(), dtype=object))
@@ -404,8 +496,21 @@ def map_booleans(
         key = text.strip().casefold()
         return 1.0 if key in truthy else 0.0 if key in falsy else np.nan
 
+    # A real number (a 0/1 flag read as floats because of a blank) matches a spelling that is a
+    # number by value: 1.0 is the spelling "1", not the text "1.0".
+    true_numbers = {float(v) for v in truthy if _PLAIN_NUMBER_RE.match(v)}
+    false_numbers = {float(v) for v in falsy if _PLAIN_NUMBER_RE.match(v)}
+
+    def one_number(value: Any) -> float:
+        number = float(value)
+        return 1.0 if number in true_numbers else 0.0 if number in false_numbers else np.nan
+
     positions, cells = _present(series)
-    parsed = np.array(_per_value(cells, one), dtype="float64")
+    numeric = _numeric_cells(series, positions)
+    parsed = np.empty(len(cells), dtype="float64")
+    parsed[~numeric] = np.array(_per_value(cells[~numeric], one), dtype="float64")
+    raw = series.to_numpy(dtype=object)[positions[numeric]]
+    parsed[numeric] = np.array(_per_value(pd.Series(raw, dtype=object), one_number), dtype="float64")
     failed = np.isnan(parsed)
     values = np.full(len(series), np.nan, dtype="float64")
     values[positions] = parsed
@@ -456,6 +561,8 @@ def normalise_texts(series: pd.Series[Any], *, merge: Mapping[str, str], strip: 
     tidy = np.array(_per_value(cells, one), dtype=object)
     differs = tidy != cells.to_numpy(dtype=object)
     if differs.any():
+        if isinstance(out.dtype, pd.CategoricalDtype):
+            out = out.astype(object)  # a Parquet dictionary column: a new spelling is not a category yet
         out.iloc[positions[differs]] = tidy[differs]
     return ParseOutcome(values=out, changed=int(differs.sum()), failed=0, failed_examples=())
 
@@ -473,12 +580,14 @@ def _category_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
     for spellings in groups.values():
         # File order, so a tie goes to the spelling the file uses first, not to whichever sorts first.
         stripped = list(dict.fromkeys(" ".join(s.split()) for s in spellings))
-        if len(stripped) < 2:
+        if len({s.strip() for s in spellings}) < 2:
             continue
         canonical = max(stripped, key=lambda s: sum(counts[o] for o in spellings if " ".join(o.split()) == s))
         for spelling in spellings:
-            if " ".join(spelling.split()) != canonical:
-                merge[" ".join(spelling.split())] = canonical
+            # Keyed by the spelling `normalise_texts` looks up - the value stripped, inner spaces as
+            # written - so `new  delhi` is merged too, not only its collapsed form.
+            if spelling.strip() != canonical:
+                merge[spelling.strip()] = canonical
     untrimmed = [s for s in counts if s != s.strip()]
     if not merge and not untrimmed:
         return None
@@ -517,11 +626,12 @@ def find_format_issues(
         series = frame[name]
         if not _is_text(series):
             continue
-        cells = _text_cells(series)
+        positions, cells = _present(series)
         if cells.empty:
             continue
+        present = series.iloc[positions]  # the numbers detector reads real numbers by value
         for detector in (_number_issue, _date_issue, _boolean_issue, _category_issue):
-            issue = detector(str(name), cells)
+            issue = detector(str(name), present if detector is _number_issue else cells)
             if issue is not None:
                 issues.append(issue)
                 break

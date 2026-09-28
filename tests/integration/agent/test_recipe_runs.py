@@ -238,6 +238,21 @@ def test_a_scoring_file_missing_a_recipe_column_is_a_409_naming_it(
     assert (check["code"], check["column"]) == ("RECIPE_COLUMN_MISSING", "ad_ctr_90d")
 
 
+def test_a_scoring_file_without_a_hidden_column_scores(client: TestClient, data_dir: Path) -> None:
+    """A column Guided setup hid (here a post-outcome score) need not be in the scoring file: the
+    drop step is skipped and says so in the receipt, instead of a 409 asking for the leaky column."""
+    recipe = _recipe(_messy(), target=None)
+    steps = (
+        *recipe.steps,
+        RecipeStep(order=3, kind=RecipeStepKind.DROP_COLUMN, column="campaign_result_score"),
+    )
+    _seed_model(data_dir, recipe.model_copy(update={"steps": steps, "recipe_hash": recipe_hash(steps)}))
+    scoring = _messy("scoring", rows=800)
+    assert "campaign_result_score" not in scoring.columns
+    response = _score(client, _upload(client, scoring, mode="score"))
+    assert response.status_code == 202, response.text
+
+
 def test_a_scoring_file_whose_values_cannot_be_read_is_a_409(client: TestClient, data_dir: Path) -> None:
     _seed_model(data_dir, _recipe(_messy(), target=None))
     scoring = _messy("scoring", rows=800)

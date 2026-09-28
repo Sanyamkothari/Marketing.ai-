@@ -213,17 +213,22 @@ def test_parse_numbers_matches_the_row_by_row_loop(decimal: str) -> None:
     series = pd.Series(_MESSY * 3, dtype=object)
     expected: list[float] = []
     failures: list[str] = []
+    changed = 0
     for value in series:
         if _empty(value):
             expected.append(math.nan)
             continue
+        if isinstance(value, int | float):  # a real number is read by its value and not "changed"
+            expected.append(float(value))
+            continue
         number = _number_one(str(value), decimal, True)
         expected.append(math.nan if number is None else number)
+        changed += number is not None
         if number is None:
             failures.append(str(value))
     out = parse_numbers(series, decimal=decimal)
     assert out.values.tolist() == pytest.approx(expected, nan_ok=True)
-    assert (out.failed, out.changed) == (len(failures), sum(not math.isnan(v) for v in expected))
+    assert (out.failed, out.changed) == (len(failures), changed)
     assert list(out.failed_examples) == failures[:5]
 
 
@@ -272,5 +277,141 @@ def test_dates_with_different_utc_offsets_parse_instead_of_failing() -> None:
     series = pd.Series(["2024-01-01T23:00:00+05:30", "2024-01-02T00:00:00+01:00", "2024-01-03", "03/01/2024"])
     out = parse_dates(series, dayfirst=True)
     assert out.failed == 0
-    assert out.values.tolist()[0] == pd.Timestamp("2024-01-01 23:00:00")  # the clock time as written
+    assert out.values.tolist()[0] == pd.Timestamp("2024-01-01 17:30:00")  # converted to UTC
     assert find_format_issues(pd.DataFrame({"when": series}))[0].kind is FormatIssueKind.MIXED_DATES
+
+
+# ---------------------------------------------------------------------------
+# Adversarial review of Plan G (recipe fixer): each test reproduces one confirmed defect
+# ---------------------------------------------------------------------------
+@pytest.mark.parametrize(
+    ("values", "first"),
+    [
+        (["1.200,50", "2.300,75", "3.100,00"], 1200.5),
+        (["€1.200,50", "€2.300,75", "€15,20"], 1200.5),
+        (["12,50", "7,25", "1.200,50"], 12.5),
+    ],
+)
+def test_european_numbers_are_detected_with_a_comma_decimal_mark(values: list[str], first: float) -> None:
+    """A thousands dot (`1.200,50`) or a currency prefix (`€1.200,50`) used to vote for '.', so the
+    proposed step read 1.200,50 as 1.2005 and reported no failures."""
+    (issue,) = find_format_issues(pd.DataFrame({"spend": values}))
+    assert issue.kind is FormatIssueKind.NUMBER_AS_TEXT
+    assert issue.params["decimal"] == ","
+    parsed = parse_numbers(pd.Series(values), decimal=issue.params["decimal"])
+    assert parsed.failed == 0
+    assert parsed.values.iloc[0] == pytest.approx(first)
+
+
+def test_a_decimal_mark_the_values_cannot_decide_is_not_guessed() -> None:
+    """`1.200` is 1.2 or 1200: with nothing in the column to tell, no number fix is proposed."""
+    frame = pd.DataFrame({"spend": ["1.200", "2.500", "3.750"]})
+    assert FormatIssueKind.NUMBER_AS_TEXT not in _kinds(frame).values()
+    us = pd.DataFrame({"spend": ["1.200", "2.500", "3.75"]})  # 3.75 decides it
+    (issue,) = find_format_issues(us)
+    assert issue.params["decimal"] == "."
+
+
+def test_numeric_cells_in_a_text_column_are_read_by_value() -> None:
+    """A chunked CSV read can hand an object column of Python floats and strings: `str(1200.0)` was
+    then read as 12000 under a comma decimal mark, and 1.0 / 0.0 never matched a yes / no spelling."""
+    mixed = pd.Series([1200.0, "1.200,50", None, 7], dtype=object)
+    comma = parse_numbers(mixed, decimal=",")
+    assert comma.values.tolist()[:2] == pytest.approx([1200.0, 1200.5])
+    assert comma.values.iloc[3] == 7.0
+    assert (comma.failed, comma.changed) == (0, 1)
+    (issue,) = find_format_issues(pd.DataFrame({"amount": [1200.0, 800.0, "1.200,50", "2.300,75"]}))
+    assert issue.params["decimal"] == ","
+
+    flags = map_booleans(
+        pd.Series([1.0, 0.0, float("nan"), 1.0], dtype=object),
+        true_values=["1", "yes"],
+        false_values=["0", "no"],
+    )
+    assert flags.values.tolist()[:2] == [1.0, 0.0]
+    assert (flags.failed, flags.changed) == (0, 3)
+    floats = map_booleans(pd.Series([1.0, 0.0, float("nan")]), true_values=["1"], false_values=["0"])
+    assert (floats.failed, floats.values.tolist()[:2]) == (0, [1.0, 0.0])
+
+
+@pytest.mark.parametrize(
+    ("decimal", "text"),
+    [
+        (".", "1,5"),
+        (".", "12,5%"),
+        (".", "450,00"),
+        (".", "1,2,3"),
+        (".", "1.200,50"),
+        (",", "1.5"),
+        (",", "1.200.5"),
+        (",", "1,200.50"),
+        (",", "12.50"),
+    ],
+)
+def test_a_number_in_the_other_convention_fails_instead_of_being_misread(decimal: str, text: str) -> None:
+    outcome = parse_numbers(pd.Series([text]), decimal=decimal)
+    assert outcome.failed == 1
+    assert math.isnan(outcome.values.iloc[0])
+
+
+@pytest.mark.parametrize(
+    ("decimal", "text", "expected"),
+    [
+        (".", "1,200.50", 1200.5),
+        (".", "12,34,567.5", 1234567.5),
+        (".", "1,000,000", 1_000_000.0),
+        (",", "1.200,50", 1200.5),
+        (",", "1.000.000", 1_000_000.0),
+        (",", "3,25", 3.25),
+    ],
+)
+def test_grouping_in_the_chosen_convention_still_reads(decimal: str, text: str, expected: float) -> None:
+    outcome = parse_numbers(pd.Series([text]), decimal=decimal)
+    assert (outcome.failed, outcome.values.iloc[0]) == (0, pytest.approx(expected))
+
+
+def test_relative_date_words_are_failures_not_the_current_time() -> None:
+    """'now' / 'today' used to become the wall-clock time of the run - a different value every run
+    and a date after every real event in a training file."""
+    series = pd.Series(["03/01/2024", "today", "now", " Today "])
+    first = parse_dates(series, dayfirst=True)
+    assert first.values.iloc[0] == pd.Timestamp("2024-01-03")
+    assert first.values.iloc[1:].isna().all()
+    assert first.failed == 3
+    mixed_offsets = pd.Series(["2024-01-01T23:00:00+05:30", "2024-01-02T00:00:00+01:00", "now"])
+    assert pd.isna(parse_dates(mixed_offsets, dayfirst=True).values.iloc[2])
+
+
+def test_dates_with_utc_offsets_are_converted_to_utc_and_naive_ones_kept() -> None:
+    """Each aware value is converted to UTC before its zone is dropped, whatever the other rows hold
+    (DEC-1004); a value with no offset is kept as written."""
+    series = pd.Series(["2024-01-01T23:00:00+05:30", "2024-01-02T00:00:00+01:00", "2024-01-03 10:00"])
+    out = parse_dates(series, dayfirst=True)
+    assert out.values.tolist() == [
+        pd.Timestamp("2024-01-01 17:30:00"),
+        pd.Timestamp("2024-01-01 23:00:00"),
+        pd.Timestamp("2024-01-03 10:00:00"),
+    ]
+    same_offset = parse_dates(pd.Series(["2024-01-01T23:00:00+05:30"]), dayfirst=True)
+    assert same_offset.values.iloc[0] == pd.Timestamp("2024-01-01 17:30:00")
+
+
+def test_normalise_texts_accepts_a_categorical_column() -> None:
+    """A pandas-written Parquet keeps a dictionary column as `category`; assigning a new spelling
+    raised TypeError and the request ended with a 500."""
+    series = pd.Series([" Delhi", "delhi", "Pune", None], dtype="category")
+    outcome = normalise_texts(series, merge={"delhi": "Delhi"})
+    assert outcome.values.tolist()[:3] == ["Delhi", "Delhi", "Pune"]
+    assert outcome.changed == 2
+
+
+def test_category_merge_keys_are_the_spellings_the_parser_sees() -> None:
+    """Merge keys used to be whitespace-collapsed ('new delhi'), so 'new  delhi' was never merged and
+    re-detection reported the same variants after the approved fix."""
+    frame = pd.DataFrame({"city": ["New Delhi"] * 5 + ["new  delhi"] * 3 + ["NEW DELHI", "Pune"]})
+    (issue,) = find_format_issues(frame)
+    assert issue.kind is FormatIssueKind.CATEGORY_VARIANTS
+    assert issue.convertible == 4
+    fixed = normalise_texts(frame["city"], merge=issue.params["merge"], strip=True)
+    assert fixed.values.value_counts().to_dict() == {"New Delhi": 9, "Pune": 1}
+    assert find_format_issues(pd.DataFrame({"city": fixed.values})) == ()
