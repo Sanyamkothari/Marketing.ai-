@@ -204,7 +204,7 @@ export function setupModes(uc) {
 }
 
 // Plan H M83: a *run panel* - a full-width section under a run's Results flow, for a step that needs
-// more room than a flow block ("4 Measure the campaign": an upload and its result). `ui/usecase.js`
+// more room than a flow block ("Measure the campaign": an upload and its result). `ui/usecase.js`
 // draws `runPanelsHtml(uc, run)` below the flow blocks; the module owns the panel's markup, its
 // events (delegated, so a repaint of the screen needs no re-binding) and its own in-place redraws.
 const runPanelList = [];

@@ -37,9 +37,10 @@ nightly (`make test-all`, which adds the `@slow` AutoGluon and browser journeys)
   YAML file under `configs/industries/`, chosen on the overview (Plan A M38).
 - **Generative features** on the fake LLM by default and on Bedrock when configured: the onboarding
   assistant, root-cause summaries per risk segment and win-back copy with a judge (Phase 3a).
-- **Uplift modelling.** From *Uplift modelling ›* on the overview: train S-, T- or X-learners on a
-  past randomised campaign, read the Qini curve and AUUC, get a budgeted treat list that leaves the
-  sleeping dogs alone, and measure a campaign's incremental conversions once its outcomes mature
+- **Uplift modelling.** Step 4 of a use case, *Measure the campaign*, learns who to contact next
+  time; by hand, from *Settings → Advanced → Uplift workbench* (`#/uplift`): train S-, T- or
+  X-learners on a past randomised campaign, read the Qini curve and AUUC, get a budgeted treat list
+  that leaves the sleeping dogs alone, and measure a campaign's incremental conversions once its outcomes mature
   (Phase 3b; `tests/integration/uplift/`). Since M53 an uplift file may hold each customer at
   several snapshot dates, keyed by customer + snapshot date: treatment must be the same for a
   customer across a campaign's snapshots (`TREATMENT_VARIES_WITHIN_ENTITY`), the hold-out keeps each

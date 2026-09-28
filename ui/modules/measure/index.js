@@ -1,8 +1,10 @@
 // Step 4 of a use case, "Measure the campaign" (Plan H M83), on a finished scoring run's Results.
 //
 // WHAT THE PERSON SEES
-//   * In the Results flow, a fourth block "4 Measure" (the router's run-action seam) that jumps to
-//     the step below the flow.
+//   * In the Results flow, a fourth block "Measure" (the router's run-action seam) that jumps to
+//     the step below the flow; its state ("After the campaign", "Measured") sits under the label.
+//     Neither the block nor the panel carries a number: the page's other steps (Guided setup's 1-3,
+//     the unnumbered Data / Model / Output blocks) would not add up to it (UI_AUDIT §8.4 item 5).
 //   * Below the flow, the step itself (the router's run-panel seam): one sentence, one upload button;
 //     after the upload, one big plain result ("The campaign added about 180 conversions", "No clear
 //     effect yet", "Outcome window not over yet"), the contacted and held-back response rates, the
@@ -127,9 +129,9 @@ function blockHtml(uc, run) {
     : '<span class="bstate waiting">After the campaign</span>';
   return `<a class="block" href="${esc(routes.run(uc, run))}" data-measure-jump="${esc(
     run.run_id,
-  )}" data-action="measure"><div><div class="lab"><span>4 Measure</span>${state}</div><div class="val">Did contacting them change anything?</div><div class="meta">${
+  )}" data-action="measure"><div><div class="lab measure-lab"><span>Measure</span>${state}</div><div class="val">Did contacting them change anything?</div><div class="meta">${
     measured ? "See the result below" : "Upload who responded, below"
-  }</div></div><div class="go"><span>Go to step 4</span><span aria-hidden="true">↓</span></div></a>`;
+  }</div></div><div class="go"><span>Go to the step</span><span aria-hidden="true">↓</span></div></a>`;
 }
 
 function uploadButton(st, label, kind) {
@@ -259,7 +261,7 @@ function panelHtml(st) {
   if (!st.view && st.loading) body = `<p class="muted" role="status">Loading…</p>`;
   else if (!st.view) body = errorBox(st.error, { title: "This step could not be loaded." });
   else body = st.view.report ? resultHtml(st) : askHtml(st);
-  return `${open}><h3 id="measure-h">4 · Measure the campaign</h3>${body}</section>`;
+  return `${open}><h3 id="measure-h">Measure the campaign</h3>${body}</section>`;
 }
 
 // --- events (delegated once) -----------------------------------------------------------------------

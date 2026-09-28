@@ -1054,9 +1054,15 @@ function flowBlocks(uc, s, run) {
       state = '<span class="bstate waiting">Not completed</span>';
       extra = " pending";
     }
+    // A file name is one long word: it is cut with an ellipsis on one line, whole in its tooltip,
+    // instead of breaking mid-word ("synthetic_score.cs / v", UI_AUDIT §8.4 item 6).
+    const val =
+      slug === "data"
+        ? `<div class="val fname" title="${esc(value)}">${esc(value)}</div>`
+        : `<div class="val">${esc(value)}</div>`;
     return `<a class="block${extra}" href="#/uc/${esc(uc.id)}/${slug}/${esc(run.run_id)}"><div><div class="lab"><span>${esc(
       label,
-    )}</span>${state}</div><div class="val">${esc(value)}</div>${
+    )}</span>${state}</div>${val}${
       meta ? `<div class="meta">${esc(meta)}</div>` : ""
     }</div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`;
   });
@@ -1177,7 +1183,7 @@ function resultsHtml(uc, s) {
     ["Error code", run.error && run.error.code],
   ]);
   const flow = flowBlocks(uc, s, run);
-  // A step that needs a full-width section under the flow (Plan H M83: "4 Measure the campaign").
+  // A step that needs a full-width section under the flow (Plan H M83: step 4, "Measure the campaign").
   const panels = run.mode === "score" && run.state === "done" ? runPanelsHtml(uc, run) : "";
   return `<div class="results"><section class="summary rsum"><div class="vline">${told.head}</div>${told.lines.join(
     "",
@@ -1195,7 +1201,8 @@ export function useCaseHtml(uc, s) {
   const body =
     s.view === "running" ? runningHtml(uc, s) : s.view === "results" ? resultsHtml(uc, s) : setupHtml(uc, s);
   // A related link the phase modules offer for the use case itself (`registerRunAction`, asked with
-  // no run): uplift's "target with uplift", for one. Drawn quietly, after the description.
+  // no run), drawn quietly after the description. None offers one today: Plan H made uplift step 4
+  // ("Measure the campaign") and put its workbench under Settings → Advanced (UI_AUDIT §8.4 item 8).
   const related = runActionsHtml(uc, null);
   return `<main class="screen t-${esc(uc.marker)}">
     ${pageHead(
@@ -1275,6 +1282,7 @@ details.more-runs>summary{padding:12px 20px;border-top:1px solid var(--line);fon
 .rsum .vsub.muted{font-size:13px;color:var(--muted)}
 .rsum .btn-row{margin-top:8px}
 .flow.four{grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr}
+.block .val.fname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .block.next-step{background:var(--soft)}
 .flow-actions{margin-top:16px}
 .block .next-actions{flex-wrap:wrap;gap:8px 16px;justify-content:flex-start}

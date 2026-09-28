@@ -4,7 +4,11 @@
 
 const CSS = `
 .card.measure{margin-top:24px;padding:24px}
-.card.measure h3{margin:0 0 8px}
+/* One left edge for the heading and the body: the card pads both, so the heading drops .card h3's own
+   band padding (16px 20px, for cards with none) and keeps only its rule underneath (UI_AUDIT §8.4 item 7). */
+.card.measure h3{margin:0 0 12px;padding:0 0 12px}
+/* The flow block's state goes under its label, not beside it, so neither wraps at 1280px (item 6). */
+.block .lab.measure-lab{flex-direction:column;align-items:flex-start;justify-content:flex-start;gap:4px}
 .measure-lead{margin:0;font-size:15px;line-height:1.5;color:var(--ink);max-width:760px}
 .measure-hint{margin:4px 0 0;font-size:13px}
 .measure .btn-row{margin-top:16px}
