@@ -15,6 +15,7 @@ actually written to justify.
 | Plan C: Phase 4b first deployment, access control, privacy and scheduling | [`docs/PHASE4B_PLAN.md`](../PHASE4B_PLAN.md) (left where it was committed; `PARALLEL_WORK_PROTOCOL.md` §4 cites that path) | `phase-4b-production`, M46 … M52 |
 | Plan D: leftovers and hardening | [`MARKETING_AI_PLAN_D_HARDENING.md`](MARKETING_AI_PLAN_D_HARDENING.md) (committed unchanged, as it was handed over) | `plan-d-hardening`, M53 … M58, DEC-850 … 899 |
 | Plan G: use-case agents (Guided setup) | [`MARKETING_AI_PLAN_G_AGENTS.md`](MARKETING_AI_PLAN_G_AGENTS.md) | new branch from `main`, M70 … M77, DEC-1000 … 1099 |
+| Plan H: one simple product (generic journey, four pages, Connections) | [`MARKETING_AI_PLAN_H_SIMPLE.md`](MARKETING_AI_PLAN_H_SIMPLE.md) | same branch as Plan G, M80 … M84, DEC-1100 … 1199 |
 | The parallel-work protocol (the contract between the phase branches, not a phase plan) | [`PARALLEL_WORK_PROTOCOL.md`](../../PARALLEL_WORK_PROTOCOL.md) | all |
 
 ## Missing
