@@ -21,7 +21,7 @@
 // rest behind "Show all measures"; 3 decimals and Better / Worse; ids under Details. The count of
 // models this person may decide is offered to the top bar's "Waiting for approval" badge.
 
-import { EM_DASH, errorBox, esc, fmtDate, fmtInt, fmtMetric, glossaryMetric, techDetails } from "../../dom.js";
+import { EM_DASH, RESULTS_CRUMB, RUN_FINISHED_EVENT, errorBox, esc, fmtDate, fmtInt, fmtMetric, glossaryMetric, techDetails } from "../../dom.js";
 import { refreshTopBar, registerNavSlot } from "../router.js";
 import { getApprovals, postApprove, postReject } from "./api.js";
 import {
@@ -62,15 +62,33 @@ function countFrom(items) {
 
 registerNavSlot("badge:approvals", { html: approvalsCount });
 
-/** An Approver (or anyone, with sign-in off) learns the count once per sign-in; nobody else asks. */
+/** Whether this person may decide models (an Approver, or anyone with sign-in off): only they ask. */
+function mayDecide(me, status) {
+  const approver = status === "off" || (me && me.principal && (me.principal.roles || []).includes("approver"));
+  return Boolean(approver) && !reasonFor("GET", "/approvals") && can("POST", "/models/{model_id}/approve");
+}
+
+/**
+ * Ask `GET /approvals` again and redraw the badge, for someone who may decide; nobody else asks. The
+ * count used to be read once per sign-in, so it went stale in the tab that trained the model
+ * (docs/UI_AUDIT.md §8.4 item 1). It is read again when Results opens, when a training run finishes
+ * (`RUN_FINISHED_EVENT`, from the use-case screen), and after a decision here (`loadApprovals`).
+ */
+export function recountApprovals() {
+  if (!mayDecide(currentMe(), sessionStatus())) return Promise.resolve();
+  return getApprovals()
+    .then((body) => countFrom(body.items))
+    .catch(() => {});
+}
+
+/** An Approver (or anyone, with sign-in off) learns the count once per sign-in, then on the events above. */
 let countedFor = null;
 onSession((me, status) => {
   const who = me && me.principal ? me.principal.user_id : status;
   if (who === countedFor) return;
   countedFor = who;
   waiting = null;
-  const approver = status === "off" || (me && me.principal && (me.principal.roles || []).includes("approver"));
-  if (!approver || reasonFor("GET", "/approvals") || !can("POST", "/models/{model_id}/approve")) {
+  if (!mayDecide(me, status)) {
     refreshTopBar();
     return;
   }
@@ -78,6 +96,16 @@ onSession((me, status) => {
     .then((body) => countFrom(body.items))
     .catch(() => {});
 });
+
+if (typeof window !== "undefined") {
+  window.addEventListener("hashchange", () => {
+    if (/^#\/results\/?$/.test(window.location.hash)) recountApprovals();
+  });
+  window.addEventListener(RUN_FINISHED_EVENT, (event) => {
+    const run = event && event.detail;
+    if (run && run.mode === "train" && run.state === "done") recountApprovals();
+  });
+}
 
 export async function loadApprovals() {
   try {
@@ -281,6 +309,7 @@ function listHtml() {
 
 export function approvalsHtml() {
   const head = screenHead({
+    trail: [RESULTS_CRUMB],
     title: "Waiting for approval",
     desc: "Models waiting for your approval: new models that beat the one in use, and the first model of a use case.",
   });

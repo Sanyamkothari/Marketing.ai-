@@ -28,7 +28,7 @@
 // answers `CLIENT_ID_REQUIRED`; a different client can be typed under Advanced. Hashes, request ids
 // and codes sit under Details; purposes, stores and statuses are words.
 
-import { EM_DASH, errorBox, esc, fmtDate, fmtInt, fmtSize, fmtStamp, techDetails } from "../../dom.js";
+import { EM_DASH, SETTINGS_CRUMB, errorBox, esc, fmtDate, fmtInt, fmtSize, fmtStamp, techDetails } from "../../dom.js";
 import { setupSource } from "../router.js";
 import {
   getErasure,
@@ -78,13 +78,10 @@ export const PRIVACY_TABS = [
 const LEGAL =
   "These are engineering controls that support India's DPDP Act. They are not legal advice; your compliance team decides how they are used.";
 
-/** Home › Admin › Privacy › <title>. */
+/** Settings › Privacy › <title> (Privacy is a Settings entry, Plan H M82). */
 export const privacyHead = (title, desc = "") =>
   screenHead({
-    trail: [
-      { label: "Admin", href: "#/admin/users" },
-      { label: "Privacy", href: "#/privacy/consent" },
-    ],
+    trail: [SETTINGS_CRUMB, { label: "Privacy", href: "#/privacy/consent" }],
     title,
     desc,
   });

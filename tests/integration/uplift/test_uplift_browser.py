@@ -713,7 +713,7 @@ def test_no_card_is_cut_off_at_the_edge_of_a_phone(journey: Journey) -> None:
 
 def test_the_top_bar_leads_to_uplift_and_the_index_lists_the_use_case(journey: Journey) -> None:
     index = journey.screens["index"].text
-    assert "Uplift modelling" in index  # the breadcrumb
+    assert "Uplift workbench" in index  # the breadcrumb, Settings › Uplift workbench (UI_AUDIT §8.4)
     assert USE_CASE_NAME in index
     assert "Uplift model" in index  # each row says whether a model exists
 

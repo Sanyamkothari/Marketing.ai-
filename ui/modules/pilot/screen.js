@@ -16,6 +16,8 @@
 
 import { getIndustries } from "../../api.js";
 import {
+  RESULTS_CRUMB,
+  SETTINGS_CRUMB,
   announceStatus,
   crumbs,
   dataTable,
@@ -185,7 +187,7 @@ async function renderReports(app, demo) {
   const screen = mount(
     app,
     `<main class="screen">${head(
-      [{ label: "Reports" }],
+      [RESULTS_CRUMB, { label: "Reports" }],
       "Reports",
       "What the models found and what each campaign was worth, ready to share as a page or a PDF.",
       `<div data-pe-head-actions></div>`,
@@ -402,7 +404,7 @@ async function renderKit(app, demo) {
   const screen = mount(
     app,
     `<main class="screen">${head(
-      [{ label: "Build data" }],
+      [SETTINGS_CRUMB, { label: "Build data" }],
       "Build data",
       "Ask your client for the right tables, turn them into a dataset, and check it is ready before a model learns from it.",
       headActions({ primary: { label: "Download the data request", href: dataRequestUrl(), attrs: "download" } }),
@@ -495,10 +497,12 @@ if (typeof window !== "undefined") {
 async function renderReport(app, kind, id) {
   const readiness = kind === "readiness";
   const noun = readiness ? "Data readiness" : "Model results";
+  // Build data is under Settings, the Reports hub under Results (`navFor`): the crumbs start there.
+  const place = readiness ? SETTINGS_CRUMB : RESULTS_CRUMB;
   const parent = readiness ? { label: "Build data", href: "#/pilot/kit" } : { label: "Reports", href: "#/pilot" };
   const screen = mount(
     app,
-    `<main class="screen">${head([parent, { label: noun }], noun, null)}<div data-pe-body>${loadingRows}</div></main>`,
+    `<main class="screen">${head([place, parent, { label: noun }], noun, null)}<div data-pe-body>${loadingRows}</div></main>`,
   );
   document.title = `${noun} · Marketing AI`;
   const { main, live } = screen;
@@ -540,10 +544,10 @@ async function renderReport(app, kind, id) {
       ],
       "Details",
     )}`;
-    headHtml = head([parent, { label: noun }], noun, null);
+    headHtml = head([place, parent, { label: noun }], noun, null);
   } else if (error) {
     body = errorBox(error, { retry: true });
-    headHtml = head([parent, { label: noun }], noun, null);
+    headHtml = head([place, parent, { label: noun }], noun, null);
   } else {
     const report = doc.value;
     const name = fact(report, "Use case") || ucName(index, id);
@@ -570,7 +574,7 @@ async function renderReport(app, kind, id) {
         : report.client_name;
     }
     headHtml = pageHead(
-      `${crumbs([parent, { label: title }])}<div class="pe-headline"><h1 class="h1">${esc(title)}</h1>${pill}</div>${
+      `${crumbs([place, parent, { label: title }])}<div class="pe-headline"><h1 class="h1">${esc(title)}</h1>${pill}</div>${
         sub ? `<p class="sub">${esc(sub)}</p>` : ""
       }${headActions(actions)}`,
     );
@@ -727,8 +731,9 @@ async function renderValue(app, runId, rerender, demo) {
   // figures someone is typing.
   if (dirtyRun === runId && mounted && mounted.hash === window.location.hash && app.firstElementChild === mounted.main) return;
   dirtyRun = null;
+  // Results › <campaign> › Value in rupees, as the campaign page reads (the bar marks Results).
   const crumbsFor = (name, href) => [
-    { label: "Campaigns", href: "#/monitoring/runs" },
+    RESULTS_CRUMB,
     name ? { label: name, href } : null,
     { label: "Value in rupees" },
   ];
@@ -853,7 +858,7 @@ export async function renderPilot(app, parts, demo) {
     }
   } catch (error) {
     mounted = null;
-    app.innerHTML = `<main class="screen">${head([{ label: "Reports" }], "Reports", null)}${errorBox(error, {
+    app.innerHTML = `<main class="screen">${head([RESULTS_CRUMB, { label: "Reports" }], "Reports", null)}${errorBox(error, {
       retry: true,
     })}</main>`;
   }

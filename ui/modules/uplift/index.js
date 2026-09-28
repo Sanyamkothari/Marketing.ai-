@@ -27,7 +27,7 @@
 // few times per navigation). The observer adds nothing to other modules' screens.
 
 import { ApiError, getIndustries, getUseCase } from "../../api.js";
-import { crumbs, errorBox, esc, notFound, pageHead, skeleton } from "../../dom.js";
+import { RESULTS_CRUMB, SETTINGS_CRUMB, crumbs, errorBox, esc, notFound, pageHead, skeleton } from "../../dom.js";
 import { journeyFor } from "../../overview.js";
 import { registerModule, registerRunAction, setActiveNav } from "../router.js";
 import { campaignStep } from "../measure/rule.js";
@@ -40,6 +40,7 @@ import {
 } from "./controller.js";
 import { injectUpliftStyles } from "./styles.js";
 import {
+  INDEX_LABEL,
   UPLIFT_EXPLANATION,
   campaignPageHtml,
   campaignTitle,
@@ -110,10 +111,10 @@ function failure(app, error, parts) {
     ? { href: routes.campaigns(), label: "all campaigns" }
     : ucId && !/USE_CASE/.test(api.code)
       ? { href: routes.setup(ucId), label: "uplift Setup" }
-      : { href: routes.index(), label: "Uplift modelling" };
+      : { href: routes.index(), label: INDEX_LABEL };
   const trail = campaign
-    ? crumbs([{ label: "Campaigns", href: routes.campaigns() }, { label: "Not found" }])
-    : crumbs([{ label: "Uplift modelling", href: routes.index() }, { label: api.status === 404 ? "Not found" : "Error" }]);
+    ? crumbs([RESULTS_CRUMB, { label: "Not found" }])
+    : crumbs([SETTINGS_CRUMB, { label: INDEX_LABEL, href: routes.index() }, { label: api.status === 404 ? "Not found" : "Error" }]);
   if (api.status === 404) {
     const what = campaign ? "campaign" : /RUN/.test(api.code) ? "run" : /USE_CASE/.test(api.code) ? "use case" : "page";
     paint(

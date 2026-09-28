@@ -34,6 +34,7 @@
 import { getRun } from "../../api.js";
 import {
   EM_DASH,
+  RESULTS_CRUMB,
   errorBox,
   esc,
   fmtDate,
@@ -164,9 +165,10 @@ export async function loadRunOutcomes(runId) {
   }
 }
 
-/** Home › Campaigns › …, with no Model health tabs: a campaign is not a monitoring job. */
+/** Results › Campaigns › …, with no Model health tabs: a campaign is not a monitoring job. The top
+ * bar marks Results for these screens (Plan H M82), so the breadcrumb starts there. */
 function campaignScreen(title, desc, readRoute, body, { crumb = null, actions = "" } = {}) {
-  const trail = crumb ? [{ label: "Campaigns", href: "#/monitoring/runs" }] : [];
+  const trail = crumb ? [RESULTS_CRUMB, { label: "Campaigns", href: "#/monitoring/runs" }] : [RESULTS_CRUMB];
   const refused = reasonFor(readRoute[0], readRoute[1]);
   const head = screenHead({ trail, title, crumb, desc, actions: refused ? "" : actions });
   if (refused) return `<main class="screen pb-screen">${head}${refusal(refused)}</main>`;

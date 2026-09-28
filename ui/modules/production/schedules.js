@@ -33,6 +33,7 @@
 
 import {
   EM_DASH,
+  SETTINGS_CRUMB,
   errorBox,
   esc,
   fmtDate,
@@ -121,13 +122,22 @@ export function setMissedCount(n) {
   missedCount = n;
 }
 
-export const monitoringHead = (title, desc, actions = "") =>
-  screenHead({ trail: [{ label: "Model health", href: "#/monitoring/alerts" }], title, desc, actions });
+/** The crumbs before a Model health screen. Settings lists Schedules and Model health (the alerts) as
+ * entries of their own (Plan H M82), so a trail starts at Settings and names the entry it came from. */
+export const MONITORING_TRAILS = {
+  alerts: [SETTINGS_CRUMB, { label: "Model health", href: "#/monitoring/alerts" }],
+  missed: [SETTINGS_CRUMB, { label: "Model health", href: "#/monitoring/alerts" }],
+  schedules: [SETTINGS_CRUMB],
+  schedule: [SETTINGS_CRUMB, { label: "Schedules", href: "#/monitoring/schedules" }],
+};
 
-/** A Model health screen, or the server's reason it may not be read. */
-export function monitoringScreen(tab, title, desc, readRoute, body, actions = "") {
+export const monitoringHead = (title, desc, actions = "", trail = MONITORING_TRAILS.alerts) =>
+  screenHead({ trail, title, desc, actions });
+
+/** A Model health screen, or the server's reason it may not be read. `trail` defaults to the tab's. */
+export function monitoringScreen(tab, title, desc, readRoute, body, actions = "", trail = null) {
   const refused = reasonFor(readRoute[0], readRoute[1]);
-  const head = monitoringHead(title, desc, refused ? "" : actions);
+  const head = monitoringHead(title, desc, refused ? "" : actions, trail || MONITORING_TRAILS[tab] || MONITORING_TRAILS.alerts);
   const tabs = tabStrip(
     tab,
     MONITORING_TABS.filter(([key]) => key !== "missed" || tab === "missed" || missedCount > 0),
@@ -607,6 +617,7 @@ export function scheduleHtml(scheduleId) {
       return `${KIND_HELP[s.kind] ? `<p class="pb-desc">${esc(KIND_HELP[s.kind])}</p>` : ""}${message}${factsCard(s)}${historyCard()}${editCard(s)}`;
     },
     actions,
+    MONITORING_TRAILS.schedule,
   );
 }
 

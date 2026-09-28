@@ -36,13 +36,16 @@ USE_CASE_SCREENS: Final[tuple[str, ...]] = (
     "pages.js",
     "modules/generative/assistant.js",
     "modules/generative/rca.js",
-    "modules/generative/copy.js",
 )
-"""Every screen that belongs to one use case, and so to the journey that lists it."""
+"""Every screen that belongs to one use case, and so to the journey that lists it.
+
+Campaign copy (`modules/generative/copy.js`) is not one any more: the top bar marks it Results, so its
+breadcrumb starts at Results and goes back to the scoring run (docs/UI_AUDIT.md §8.4 item 12)."""
 
 HOME: Final[str] = '<a href="#/">Home</a>'
 SEP: Final[str] = '<span class="sep" aria-hidden="true">›</span>'
-"""v1 (docs/ui/FOUNDATION.md): every breadcrumb starts at Home, then the journey."""
+"""v1 (docs/ui/FOUNDATION.md): every breadcrumb starts at Home, then the journey - unless the journey
+is the default one, which opens the page Home opens (docs/UI_AUDIT.md §8.4 item 3)."""
 
 
 def _trail(href: str, label: str) -> str:
@@ -128,12 +131,19 @@ def test_every_card_goes_back_to_the_journey_that_lists_it(journeys: dict[str, d
         }, card
 
 
-def test_a_telecom_screen_reads_exactly_as_it_did(journeys: dict[str, dict[str, object]]) -> None:
-    """The default journey keeps the bare `#/` and its own label, after the Home root (v1)."""
+def test_a_default_journey_screen_names_home_once(journeys: dict[str, dict[str, object]]) -> None:
+    """The default journey is the bare `#/`, the page Home opens, so its crumb is Home alone.
+
+    It used to read "Home › Customer Lifecycle", two crumbs opening one page (docs/UI_AUDIT.md §8.4
+    item 3): Plan H has one journey (DEC-1110). The journey itself still resolves to `#/` and its label,
+    which the "Back to ..." buttons use.
+    """
     label = load_industry(DEFAULT_INDUSTRY).journey_label
     for card in _cards(DEFAULT_INDUSTRY):
-        assert journeys[card]["back"] == _nav(_trail("#/", label)), card
-        assert journeys[card]["crumb"] == _trail("#/", label), card
+        assert journeys[card]["journey"] == {"href": "#/", "label": label}, card
+        assert journeys[card]["back"] == _nav(HOME), card
+        assert journeys[card]["crumb"] == HOME, card
+        assert label not in str(journeys[card]["back"]), card
 
 
 def test_another_industrys_screen_names_and_opens_that_industry(

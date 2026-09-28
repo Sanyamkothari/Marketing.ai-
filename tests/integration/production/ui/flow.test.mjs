@@ -55,6 +55,9 @@ await import("../../../../ui/modules/simple/index.js"); // Plan H: Settings is w
 const session = await import("../../../../ui/modules/production/session.js");
 
 const bar = () => ($("#pb-bar") || {}).textContent || "";
+/** The breadcrumb as [label, href] pairs (href null for the current page), and the place the bar marks. */
+const crumbTrail = () => $$("#app .crumbs a, #app .crumbs .cur").map((e) => [e.textContent, e.getAttribute("href")]);
+const marked = () => (($("#pb-bar .tn-item.on") || {}).textContent || "").trim().replace(/\s*\d+$/, "");
 const submit = (form) => form.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
 
 test("with sign-in on, the first thing on screen is the sign-in form", async () => {
@@ -98,6 +101,9 @@ test("signing in keeps the token for the tab and every later call carries it", a
 test("the Users screen lists everyone; Disable is quiet red and asks twice; the last Admin cannot be demoted", async () => {
   w.location.hash = "#/admin/users";
   await until(() => $$("tr[data-row]").length === 4, 3000, "four users");
+  // docs/UI_AUDIT.md §8.4 item 12: under Settings, where the bar marks it, not "Home › Admin › Users"
+  assert.deepEqual(crumbTrail(), [["Settings", "#/settings"], ["Users", null]]);
+  assert.equal(marked(), "Settings");
   assert.match($('tr[data-row] td').textContent, /admin-person/);
   assert.match($("tr[data-row]").textContent, /\(you\)/);
   const own = () => $(`tr[data-row="${ids.admin}"]`);
@@ -152,6 +158,7 @@ test("adding a user sends the roles ticked and never keeps the password on scree
 test("the audit viewer shows a page, filters it, pages it, and offers the same query as CSV", async () => {
   w.location.hash = "#/admin/audit";
   await until(() => $$("tbody tr").length === 2, 3000, "a page of events");
+  assert.deepEqual(crumbTrail(), [["Settings", "#/settings"], ["Audit log", null]]);
   const page = fixture("audit_page");
   assert.match($(".pb-pager").textContent, new RegExp(`1–2 of ${page.total}`));
   assert.match($("tbody").textContent, new RegExp(page.events[0].action.replace(".", "\\.")));
@@ -200,6 +207,9 @@ test("a Viewer's AWS connection screen explains, in place, why they cannot test 
   w.location.hash = "#/generative/connection";
   await until(() => $("#c-test"), 3000, "the connection screen");
   await settle(2);
+  // opened from Connections, and the bar marks Connections: so does the breadcrumb (§8.4 item 12)
+  assert.deepEqual(crumbTrail(), [["Connections", "#/connections"], ["AI service", null]]);
+  assert.equal(marked(), "Connections");
   assert.equal($("#c-test").disabled, true);
   assert.ok($$(".pb-why").some((n) => n.textContent === "Only an Admin can test the AWS connection."));
   assert.match(bar(), /Signed in as viewer-person/);

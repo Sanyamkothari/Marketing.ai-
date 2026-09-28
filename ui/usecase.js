@@ -47,6 +47,7 @@ import {
   noticeCard,
   pageHead,
   present,
+  RUN_FINISHED_EVENT,
   sortNote,
   techDetails,
   typeChip,
@@ -1419,6 +1420,8 @@ export function createController(uc, rerender) {
       await refreshLists();
       rerender();
       const run = s.detail.run;
+      // Whoever shows what a finished run changes (the approvals badge on Results) reads it again.
+      window.dispatchEvent(new window.CustomEvent(RUN_FINISHED_EVENT, { detail: run }));
       announceStatus(
         run.state === "done"
           ? run.mode === "train"
