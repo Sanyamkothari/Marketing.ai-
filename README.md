@@ -1368,7 +1368,14 @@ three-step flow, plus a fourth step after a campaign.
   approval; Settings holds the AI service, privacy, schedules and the advanced tools. Setup opens on
   Guided setup. Every older screen still opens by its URL.
 
-Decisions are DEC-1110 … DEC-1116 and DEC-1130 … DEC-1135 so far.
+- **M80 — Connections.** `#/connections` connects Amazon S3 or S3-compatible storage (Google Cloud
+  Storage, Cloudflare R2, MinIO), PostgreSQL / Redshift and MySQL / MariaDB, with Snowflake, BigQuery
+  and Azure Blob as optional add-ons, plus the AI service. Each connection is tested step by step
+  with a plain fix for every failure; Guided setup can then pick a table or file, imported as an
+  ordinary upload. Passwords and keys are encrypted with `MARKETING_AI_CONNECTIONS_KEY` (generated
+  on a laptop, required in production) and never returned. See `docs/CONNECTIONS.md`.
+
+Decisions are DEC-1100 … DEC-1116 and DEC-1130 … DEC-1135 so far.
 
 <!-- ---- END PLAN-G ---- -->
 
