@@ -11,8 +11,14 @@ A number written with a unit or a multiplier is still a number: `40k` must be gr
 the digits). A number inside quotes is skipped only when the quoted text is exactly the name of a
 column of the file (`'ad_ctr_90d'`, `'Q3 2024 spend'`); any other quoted number is a claim like any
 other (M77: `'73%'` and a number between two apostrophes, as in "it's 73% ... don't", used to pass).
-`0` and `1` are allowed anywhere: "turn yes into 1 and no into 0" is not a statistic; nor is a small
-ordinal ("the 2nd suggestion").
+A bare `0` or `1` is allowed anywhere: "turn yes into 1 and no into 0" is not a statistic; nor is a
+small ordinal ("the 2nd suggestion"). Their percent forms are claims: `0%`, `1%` and `100%` must be
+grounded like any other number, and so must a decimal without its leading zero (`.73`) and a
+percent glued to a word (`is73%`) - review fixes; digits inside a name (`Q3`, `ctr_90d`) stay names.
+
+A tool result grounds only what the engine measured: a number the model itself passed as an
+argument (`get_profile`'s `offset`, a `check_data` override) is dropped from that result's numbers
+even when the result echoes it (`evidence_numbers`), so it cannot be laundered through a lookup.
 """
 
 from __future__ import annotations
@@ -21,11 +27,17 @@ import re
 from collections.abc import Iterable
 from typing import Any, Final
 
-__all__ = ["grounded_numbers", "numbers_in", "ungrounded_numbers"]
+__all__ = ["evidence_numbers", "grounded_numbers", "numbers_in", "ungrounded_numbers"]
 
 _QUOTED: Final[re.Pattern[str]] = re.compile(r"'([^'\n]*)'|\"([^\"\n]*)\"|`([^`\n]*)`")
-_NUMBER: Final[re.Pattern[str]] = re.compile(r"(?<![\w.])[-+]?\d[\d,]*(?:\.\d+)?%?[^\W_]*")
-_SPLIT: Final[re.Pattern[str]] = re.compile(r"^([-+]?\d[\d,]*(?:\.\d+)?%?)([^\W_]*)$")
+_NUMBER: Final[re.Pattern[str]] = re.compile(
+    # A number standing alone, with or without a leading zero (`0.73`, `.73`) ...
+    r"(?:(?<![\w.])[-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?"
+    # ... or a percent glued to a word (`is73%`); other digits inside a word (`Q3`, `ctr_90d`) are names.
+    r"|(?<=[^\W\d])\d[\d,]*(?:\.\d+)?%)"
+    r"[^\W_]*"
+)
+_SPLIT: Final[re.Pattern[str]] = re.compile(r"^([-+]?(?:\d[\d,]*(?:\.\d+)?|\.\d+)%?)([^\W_]*)$")
 _EXPONENT: Final[re.Pattern[str]] = re.compile(r"^[eE][-+]?\d+$")
 _MULTIPLIERS: Final[dict[str, float]] = {
     "k": 1e3,
@@ -115,6 +127,22 @@ def grounded_numbers(sources: Iterable[Any]) -> frozenset[float]:
     return frozenset(out)
 
 
+def evidence_numbers(result: Any, args: Any) -> frozenset[float]:
+    """The numbers one tool result grounds: every number in it, except those its arguments supplied.
+
+    The model chooses a tool's arguments, and a result may echo them (`get_profile`'s
+    `columns_offset`, a `check_data` override named in a check message). A number the model typed
+    is not something the engine measured, so it never becomes evidence (DEC-1027), even when the
+    result repeats it or shows it as a percent.
+    """
+    supplied = grounded_numbers([args])
+    return frozenset(
+        number
+        for number in grounded_numbers([result])
+        if not any(abs(number - given) <= abs(given) * 0.005 + 1e-9 for given in supplied)
+    )
+
+
 def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[str] = ()) -> list[str]:
     """The number tokens in `text` that no grounded value explains, in order.
 
@@ -125,13 +153,9 @@ def ungrounded_numbers(text: str, grounded: frozenset[float], names: Iterable[st
         parsed = _parse(token)
         if parsed is None:
             continue
-        meanings, _ = parsed
-        if (
-            len(meanings) <= 2
-            and any(value in _ALWAYS for value, _ in meanings)
-            and not _has_multiplier(token)
-        ):
-            continue
+        meanings, percent = parsed
+        if not percent and meanings[0][0] in _ALWAYS and not _has_multiplier(token):
+            continue  # a bare 0 or 1; `0%`, `1%` and `100%` are claims like any other
         if _is_small_ordinal(token):
             continue  # "the 2nd step" counts things on the screen; it states no measurement
         explained = any(

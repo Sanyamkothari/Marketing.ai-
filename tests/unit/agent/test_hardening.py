@@ -194,7 +194,7 @@ def test_each_reply_carries_a_turn_log(started: tuple[Any, Any]) -> None:
     log = turn.reply.turn
     assert log is not None
     assert log.llm_calls == 3
-    assert log.tools == ("delete_rows", "describe_outcome", "reply")
+    assert log.tools == ("unknown", "describe_outcome", "reply")  # a made-up action name is not kept
     assert log.error_codes == ("AGENT_TOOL_UNKNOWN",)
     assert log.blocked_by == "numbers_grounded"
 
