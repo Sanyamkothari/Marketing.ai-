@@ -28,7 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from engine.agent.checks import check_plan
 from engine.agent.contracts import ToolResult
 from engine.agent.formats import find_format_issues
-from engine.agent.untrusted import MAX_PROMPT_LIST, resolve_column
+from engine.agent.untrusted import MAX_PROMPT_LIST, quoted, resolve_column
 from engine.config import ConfigError, PrimaryKey, RunMode, UseCaseConfig, resolve_config
 from engine.contracts import DatasetProfile, FeatureSchema
 from engine.pii import redact_cells
@@ -84,7 +84,9 @@ class AgentContext:
         """The file's column `name` means: exact, or the one column whose shown (cleaned, cut) name it is."""
         found = resolve_column(name, self.frame.columns)
         if found is None:
-            raise AgentToolError("AGENT_COLUMN_UNKNOWN", f"There is no column {name[:80]!r} in this file.")
+            raise AgentToolError(
+                "AGENT_COLUMN_UNKNOWN", f"There is no column {quoted(name[:80])} in this file."
+            )
         return found
 
     def column(self, name: str) -> pd.Series[Any]:

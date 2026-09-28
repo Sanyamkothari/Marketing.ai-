@@ -54,7 +54,7 @@ from engine.agent.contracts import (
 )
 from engine.agent.recommend import setting_allowed, settings_fields
 from engine.agent.tools import AgentContext, AgentToolError
-from engine.agent.untrusted import display_name
+from engine.agent.untrusted import display_name, plain_value, quoted
 from engine.config import (
     ConfigError,
     RunMode,
@@ -218,7 +218,9 @@ def _check_edit(ctx: AgentContext, session: AgentSession, proposal: Proposal, va
         ctx.config, columns=tuple(str(c) for c in ctx.frame.columns), primary_key=key, target=target
     )
     if not setting_allowed(proposal.path, value, settings_fields(schema)):
-        raise SessionError("AGENT_VALUE_NOT_ALLOWED", f"{value!r} is not a value this setting can take.")
+        raise SessionError(
+            "AGENT_VALUE_NOT_ALLOWED", f"{plain_value(value)} is not a value this setting can take."
+        )
     try:
         resolve_config(ctx.use_case_id, {proposal.path: value}, root=ctx.config_root)
     except ConfigError as exc:
@@ -240,7 +242,7 @@ def decide(
         proposal = by_id.get(proposal_id)
         if proposal is None:
             raise SessionError(
-                "AGENT_PROPOSAL_UNKNOWN", f"There is no suggestion {proposal_id!r} in this session."
+                "AGENT_PROPOSAL_UNKNOWN", f"There is no suggestion {quoted(proposal_id)} in this session."
             )
         if state is ProposalState.PENDING:
             raise SessionError("AGENT_DECISION_INVALID", "A suggestion is either accepted or rejected.")
@@ -455,10 +457,14 @@ def answer(
     _refuse_if_closed(session)
     question = next((q for q in session.questions if q.question_id == question_id), None)
     if question is None:
-        raise SessionError("AGENT_QUESTION_UNKNOWN", f"There is no question {question_id!r} in this session.")
+        raise SessionError(
+            "AGENT_QUESTION_UNKNOWN", f"There is no question {quoted(question_id)} in this session."
+        )
     option = next((o for o in question.options if o.option_id == option_id), None)
     if option is None:
-        raise SessionError("AGENT_OPTION_UNKNOWN", f"{option_id!r} is not one of this question's answers.")
+        raise SessionError(
+            "AGENT_OPTION_UNKNOWN", f"{quoted(option_id)} is not one of this question's answers."
+        )
     questions = tuple(
         q.model_copy(update={"answer": option_id}) if q is question else q for q in session.questions
     )

@@ -58,8 +58,14 @@ Every network call has a timeout: at most 10 seconds to connect or sign in, 60 s
 
 ## Using a connection
 
-Guided setup, step 1: **Pick from a connection** → choose the connection → open folders or schemas →
-pick a CSV / Parquet file or a table → see its first 20 rows (personal details masked) → **Import**.
+Step 1 of Guided setup and of Manual setup: **Pick from a connection** → choose the connection → open
+folders or schemas → pick a CSV / Parquet file or a table → see its first 20 rows (personal details
+masked) → **Import**. Both use the same picker (`ui/modules/connections/picker.js`): Guided setup draws
+it itself; Manual setup gets it through the *upload-source* seam (`registerUploadSource` in
+`ui/modules/router.js`, registered by `ui/modules/connections/source.js`), which offers "or Pick from a
+connection" beside the file upload once at least one usable connection exists, and otherwise a short
+line linking to the Connections page. The imported upload then fills Manual Step 1 exactly as a file
+upload does (ID and outcome detected, Run posts its `upload_id`).
 The import is `POST /connections/{id}/import`, which streams the data into the upload store and ends in
 the same code as `POST /uploads` (`api.routes.uploads.finish_upload`), so the helper, the checks, runs,
 recipes and scoring treat it exactly as an uploaded file. A table is imported as CSV, bounded by the use

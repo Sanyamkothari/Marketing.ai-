@@ -12,6 +12,11 @@
 // which fills Step 2 exactly as an upload's profile does. Run then posts `dataset_id` instead of
 // `upload_id`, and nothing after the `202` knows the difference.
 //
+// The prepared-file card can have other ways to get its upload too - an *upload source*
+// (`registerUploadSource`, modules/router.js; today "Pick from a connection", UI audit §8.4 item 10).
+// Its result is the same `{upload_id, profile}` a file upload answers, so it fills Step 1 through the
+// same `adoptUpload()` and everything after it is the file upload's own.
+//
 // v1 (docs/ui/FOUNDATION.md, WP2): one step at a time - before there is data only Step 1 is drawn,
 // the later steps are one line each; Score mode asks for the model first. Results lead with one
 // verdict and one primary action; ids, codes and engine wording sit behind "Technical details".
@@ -60,7 +65,14 @@ import {
   stagesHtml,
   writePath,
 } from "./settings.js";
-import { resultLinksHtml, runActionsHtml, runPanelsHtml, setupModes, setupSource } from "./modules/router.js";
+import {
+  resultLinksHtml,
+  runActionsHtml,
+  runPanelsHtml,
+  setupModes,
+  setupSource,
+  uploadSources,
+} from "./modules/router.js";
 import * as seams from "./modules/router.js";
 
 const AUTOML = "__automl__";
@@ -102,6 +114,10 @@ export function useCaseState(uc) {
       upload: null,
       uploadError: null,
       uploading: false,
+      // An upload source (UI audit §8.4 item 10): the one whose panel has the file control's place
+      // (`null`: the file control), and the name the upload it gave is shown under.
+      uploadSource: null,
+      uploadFrom: null,
       pk: "",
       target: "",
       problemType: "",
@@ -237,6 +253,15 @@ const datasetOf = (s) => (s.source === RAW ? s.dataset : null);
 
 /** What Step 1 has produced for the chosen card: an upload, a built dataset, or nothing yet. */
 const dataOf = (s) => (s.source === RAW ? s.dataset : s.upload);
+
+/** The upload source whose panel is open in Step 1, when it is still registered; else `null`. */
+const openUploadSource = (s) =>
+  (s.source === FILE && s.uploadSource && uploadSources().find((source) => source.name === s.uploadSource)) || null;
+
+/** The upload's name for the file control: the source's label ("history.csv (from Exports)") for an
+ * upload a source gave, else the file's own name. */
+const uploadName = (s, profile) =>
+  s.uploadFrom && s.upload && s.uploadFrom.uploadId === s.upload.upload_id ? s.uploadFrom.label : profile.file_name;
 
 /** The key as a list of columns: an upload's is one, a periodic dataset's is two (DEC-083). */
 const keyColumns = (pk) => (Array.isArray(pk) ? pk : pk ? [pk] : []);
@@ -618,13 +643,22 @@ function uploadStep(uc, s, n, card) {
   const copy = modeCopy(uc, s);
   const profile = profileOf(s);
   const raw = s.source === RAW && card;
-  const uploadControl = `<div class="orline"><label class="control file ${
-    s.upload ? "has" : ""
-  }"><input type="file" id="f-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
-    profile ? profile.file_name : "Upload CSV or Parquet",
-  )}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <a class="btn quiet sm" href="${esc(
-    templateUrl(uc.setup.template_url),
-  )}" download>Download template</a></span></div>
+  // Each upload source draws its offer into its own element here after every paint (`bind`).
+  const entries = mayRun(s)
+    ? uploadSources()
+        .map((source) => `<span class="up-src" data-upload-entry="${esc(source.name)}"></span>`)
+        .join("")
+    : "";
+  const open = openUploadSource(s);
+  const uploadControl = open
+    ? `<div id="f-upload-source" data-upload-panel="${esc(open.name)}"></div>`
+    : `<div class="orline"><label class="control file ${
+        s.upload ? "has" : ""
+      }"><input type="file" id="f-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
+        profile ? uploadName(s, profile) : "Upload CSV or Parquet",
+      )}</span><span class="ico" aria-hidden="true">⤒</span></label>${entries}<span>or <a class="btn quiet sm" href="${esc(
+        templateUrl(uc.setup.template_url),
+      )}" download>Download template</a></span></div>
     ${s.uploading ? `<div class="loading" role="status">Reading the file…</div>` : ""}
     ${s.uploadError ? errorBox(s.uploadError) : ""}
     ${previewHtml(s)}`;
@@ -1592,6 +1626,7 @@ export function createController(uc, rerender) {
   function chooseSource(source) {
     if (s.source === source) return;
     s.source = source;
+    s.uploadSource = null;
     resetColumns();
     const data = dataOf(s);
     if (data && source === RAW) adoptDataset();
@@ -1611,6 +1646,7 @@ export function createController(uc, rerender) {
     if (s.mode === mode) return;
     s.mode = mode;
     s.upload = null;
+    s.uploadSource = null;
     // A dataset built for training is not a scoring input, nor the other way round.
     s.source = FILE;
     s.dataset = null;
@@ -1654,6 +1690,7 @@ export function createController(uc, rerender) {
       s.source = FILE;
       resetColumns();
     }
+    if (s.uploadSource && !openUploadSource(s)) s.uploadSource = null;
     settleModel();
   }
 
@@ -1698,6 +1735,7 @@ export function createController(uc, rerender) {
     const byPath = indexSchema(schema);
     releaseTimeSplit();
     s.source = FILE;
+    s.uploadSource = null;
     s.dataset = null;
     s.upload = prepared;
     s.uploadError = null;
@@ -1728,6 +1766,54 @@ export function createController(uc, rerender) {
     const modes = setupModes(uc);
     const mode = modes.find((m) => m.name === activeTab(s, modes));
     if (mode) mode.mount({ main, aside: root.querySelector("#f-mode-aside") }, host);
+  }
+
+  /**
+   * An upload source's result - what `POST /uploads` answers - fills Step 1 exactly as a file upload
+   * does: the same state, the same `adoptUpload()`, so Step 2's detection and pickers are the upload's.
+   */
+  function uploadFromSource(result, label) {
+    s.uploadSource = null;
+    s.uploading = false;
+    s.uploadError = null;
+    s.upload = result;
+    s.uploadFrom = { uploadId: result.upload_id, label: label || result.profile.file_name };
+    resetColumns();
+    adoptUpload();
+    rerender();
+  }
+
+  /** Draw each upload source's offer into Step 1, or the open source's panel in the file control's place. */
+  function mountUploadSources(root) {
+    const sources = uploadSources();
+    if (!sources.length) return;
+    const panel = root.querySelector("#f-upload-source");
+    const open = openUploadSource(s);
+    if (panel && open) {
+      open.panel(panel, {
+        uc,
+        mode: s.mode,
+        onUpload: uploadFromSource,
+        onCancel() {
+          s.uploadSource = null;
+          rerender();
+        },
+      });
+      return;
+    }
+    root.querySelectorAll("[data-upload-entry]").forEach((slot) => {
+      const source = sources.find((candidate) => candidate.name === slot.dataset.uploadEntry);
+      if (!source) return;
+      source.entry(slot, {
+        uc,
+        mode: s.mode,
+        disabled: s.uploading,
+        open() {
+          s.uploadSource = source.name;
+          rerender();
+        },
+      });
+    });
   }
 
   /** Mount the setup source's panel into this paint's placeholder, when the raw card is chosen. */
@@ -1905,6 +1991,7 @@ export function createController(uc, rerender) {
 
     // Last, so none of the queries above reaches into the panel: it binds its own events.
     if (s.view === "setup") mountSource(root);
+    if (s.view === "setup") mountUploadSources(root);
     if (s.view === "setup") mountMode(root);
 
     // The role gate disables Run in a microtask after this paint; once it has, a role that may not

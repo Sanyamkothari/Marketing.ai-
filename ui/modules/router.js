@@ -274,6 +274,35 @@ export function resultLinksHtml(uc, run) {
 // Plan H M80 (shares this block): the Connections module (`modules/connections/index.js`, route
 // `connections`) is loaded by its own `<script>` in index.html's PLAN-G block, as the agent module is,
 // because it imports this file for `registerModule` and `registerNavSlot`.
+
+// UI audit §8.4 item 10: an *upload source* - another way to get the ordinary upload Manual setup's
+// Step 1 takes (today, "Pick from a connection"). Unlike the setup source above, whose result is a
+// built dataset, an upload source ends in exactly what `POST /uploads` answers, so Step 2 on is the
+// file upload's own. `ui/usecase.js` hands each source two places to draw, after every paint:
+//
+//     entry(container, { uc, mode, disabled, open() })       // beside the file control: the offer
+//     panel(container, { uc, mode, onUpload(upload, label), onCancel() })   // in its place, once open
+//
+// `open()` asks the form to swap the file control for the source's panel; `onUpload` fills Step 1 with
+// the upload (`{ upload_id, profile }`) and closes it, `onCancel` closes it. Several sources are drawn
+// in registration order.
+const uploadSourceList = [];
+
+/** Register an upload source: `{ name, entry(container, ctx), panel(container, ctx) }`; `name` is unique. */
+export function registerUploadSource(source) {
+  const { name, entry, panel } = source || {};
+  if (!name || typeof entry !== "function" || typeof panel !== "function") {
+    throw new Error("registerUploadSource needs { name, entry(container, ctx), panel(container, ctx) }");
+  }
+  if (uploadSourceList.some((s) => s.name === name)) throw new Error(`An upload source named "${name}" is already registered`);
+  uploadSourceList.push({ name, entry, panel });
+  announceModulesChanged();
+}
+
+/** Every registered upload source, in registration order; `[]` for none (Step 1 is the file control). */
+export function uploadSources() {
+  return uploadSourceList.slice();
+}
 // ---- END PLAN-G ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----

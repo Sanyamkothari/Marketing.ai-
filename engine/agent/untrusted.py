@@ -27,6 +27,8 @@ __all__ = [
     "clean_text",
     "display_name",
     "for_prompt",
+    "plain_value",
+    "quoted",
     "resolve_column",
 ]
 
@@ -56,6 +58,35 @@ def clean_text(text: str, limit: int = MAX_TEXT_CHARS) -> str:
 def display_name(name: object) -> str:
     """A column name as it is shown to a person or a model: cleaned and at most `MAX_NAME_CHARS`."""
     return clean_text(str(name), MAX_NAME_CHARS) or "(unnamed column)"
+
+
+def quoted(value: object) -> str:
+    """`value` in single quotes - the one way a value is quoted in text for a person (`'Basic'`).
+
+    Spaces are kept as they are (a leading space can be the point of an example); a tab, a newline
+    or another invisible character is written as its escape (`\\t`). Never Python's `repr`, which
+    switches to double quotes for a value with an apostrophe and doubles every backslash.
+    """
+    shown = "".join(ch if ch.isprintable() else repr(ch)[1:-1] for ch in str(value))
+    return f"'{shown}'"
+
+
+def plain_value(value: Any) -> str:
+    """A setting's value as a person reads it: `'monthly'`, `10`, `true`, `'a', 'b'` - no Python syntax."""
+    if value is None:
+        return "an empty value"
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return ", ".join(plain_value(item) for item in value) or "an empty list"
+    if isinstance(value, Mapping):
+        return (
+            ", ".join(f"{quoted(key)} → {plain_value(item)}" for key, item in value.items())
+            or "an empty list"
+        )
+    return quoted(value)
 
 
 def resolve_column(name: str, columns: Iterable[object]) -> str | None:

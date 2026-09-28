@@ -41,6 +41,7 @@ from typing import Any, Final
 import numpy as np
 import pandas as pd
 
+from engine.agent.untrusted import quoted
 from engine.pii import REDACTION_MARKER_PATTERN, redact_cells
 
 __all__ = [
@@ -553,7 +554,7 @@ def _boolean_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
         non_empty=len(cells),
         convertible=len(cells),
         failed=0,
-        examples=_masked([f"{s} ({spellings[s]})" for s, _ in spellings.most_common()]),
+        examples=_masked([f"{quoted(s)} ({spellings[s]})" for s, _ in spellings.most_common()]),
         failed_examples=(),
         params={"true_values": true_values, "false_values": false_values},
         notes=(f"{len(spellings)} spellings of yes / no",),
@@ -616,7 +617,7 @@ def _category_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
         non_empty=len(cells),
         convertible=affected,
         failed=0,
-        examples=_masked([f"{a!r} → {b!r}" for a, b in examples]),
+        examples=_masked([f"{quoted(a)} → {quoted(b)}" for a, b in examples]),
         failed_examples=(),
         params={"strip": True, "merge": dict(sorted(merge.items()))},
         notes=(f"{len(merge)} spellings merge into others",) if merge else ("values have extra spaces",),
