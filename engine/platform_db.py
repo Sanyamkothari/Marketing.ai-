@@ -23,6 +23,7 @@ from typing import Final
 
 from sqlalchemy import Column, DateTime, event
 from sqlalchemy.engine import Engine
+from sqlalchemy.exc import OperationalError
 from sqlmodel import Field as SQLField
 from sqlmodel import SQLModel, create_engine
 
@@ -129,8 +130,23 @@ def platform_engine(settings: Settings, *, data_dir: Path | None = None) -> Engi
     return postgres_engine(PostgresConfig.from_settings(settings))
 
 
+_CREATE_LOCK: Final = threading.Lock()
+
+
 def create_tables(engine: Engine, names: Iterable[str]) -> None:
-    """Create exactly the named tables if they are missing (DEC-340). Never used against Postgres."""
+    """Create exactly the named tables if they are missing (DEC-340). Never used against Postgres.
+
+    `create_all` checks then creates, so two first requests at once could both try to create a
+    table and one would fail with "table ... already exists" (a 500 on an empty data folder). The
+    lock serialises this process; a table another process created in between is not an error.
+    """
     if engine.dialect.name != "sqlite":
         return
-    SQLModel.metadata.create_all(engine, tables=[SQLModel.metadata.tables[name] for name in names])
+    tables = [SQLModel.metadata.tables[name] for name in names]
+    with _CREATE_LOCK:
+        try:
+            SQLModel.metadata.create_all(engine, tables=tables)
+        except OperationalError as exc:
+            if "already exists" not in str(exc.orig):
+                raise
+            SQLModel.metadata.create_all(engine, tables=tables)  # the rest, now that one exists
