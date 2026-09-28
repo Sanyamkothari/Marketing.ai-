@@ -42,8 +42,8 @@ async function call(path, { method = "GET", body } = {}) {
 const session = (uploadId, tail = "") => `/uploads/${enc(uploadId)}/agent-session${tail}`;
 
 /** Start (or restart) Guided setup for an upload: `{ session, chat: { backend, generation_model_id } }`. */
-export const startSession = (uploadId, useCaseId) =>
-  call(session(uploadId), { method: "POST", body: { use_case: useCaseId } });
+export const startSession = (uploadId, useCaseId, modelVersionId = null) =>
+  call(session(uploadId), { method: "POST", body: { use_case: useCaseId, model_version_id: modelVersionId } });
 
 /** The session as it stands, in the same envelope. */
 export const getSession = (uploadId) => call(session(uploadId));

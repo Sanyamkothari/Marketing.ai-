@@ -327,6 +327,10 @@ class AgentSession(Artefact):
     upload_id: str = Field(description="The upload it is about; never changed.")
     use_case_id: str = Field(description="The use case whose helper runs it.")
     mode: str = Field(description="`train` or `score`.")
+    model_version_id: str | None = Field(
+        default=None,
+        description="Scoring only: the model version the file is checked against; null = the one in use.",
+    )
     agent_name: str = Field(description="The helper's display name.")
     status: SessionStatus = Field(description="Where the session is.")
     proposals: tuple[Proposal, ...] = Field(default=(), description="Every suggestion, in display order.")

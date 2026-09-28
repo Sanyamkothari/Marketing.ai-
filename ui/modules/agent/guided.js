@@ -455,7 +455,7 @@ async function uploadFile(entry, file) {
   g.phase = "starting";
   draw(entry);
   try {
-    adopt(g, await startSession(g.upload.upload_id, entry.host.uc.id));
+    adopt(g, await startSession(g.upload.upload_id, entry.host.uc.id, entry.host.modelVersionId));
     g.phase = "session";
     announceStatus(g.session.status === "stopped" ? "The helper stopped: see why" : "The helper's suggestions are ready");
   } catch (error) {

@@ -1633,6 +1633,10 @@ export function createController(uc, rerender) {
     get firstStep() {
       return s.mode === "score" ? 2 : 1;
     },
+    /** Score mode: the model Run will score with, so the helper checks the file against the same one. */
+    get modelVersionId() {
+      return s.mode === "score" && s.modelVersionId ? s.modelVersionId : null;
+    },
     holds: (uploadId) => guidedFilled(s) && s.upload.upload_id === uploadId,
     approved: (fill) => adoptGuided(fill),
     manual() {

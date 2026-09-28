@@ -219,6 +219,9 @@ class AgentSessionResponse(StrictBase):
 
 class SessionStartRequest(StrictBase):
     use_case: str = Field(description="Use-case id whose helper runs the session.")
+    model_version_id: str | None = Field(
+        default=None, description="Scoring files only: the model Run will use; default the one in use."
+    )
 
 
 class Decision(StrictBase):
@@ -281,7 +284,12 @@ def _refuse(status: int, code: str, message: str) -> HTTPException:
 
 
 def _load_context(
-    storage: Storage, root: Path, request: Request, upload_id: str, use_case_id: str
+    storage: Storage,
+    root: Path,
+    request: Request,
+    upload_id: str,
+    use_case_id: str,
+    model_version_id: str | None = None,
 ) -> _Loaded:
     config = use_case_config(use_case_id, root)
     if not agent_available(config):
@@ -294,7 +302,7 @@ def _load_context(
     schema: FeatureSchema | None = None
     recipe_error: RecipeError | None = None
     if upload.mode is RunMode.SCORE:
-        version = score_version(get_registry(request), config=config, version_id=None)
+        version = score_version(get_registry(request), config=config, version_id=model_version_id)
         schema = storage.read_model(version.schema_key, FeatureSchema)
         recipe = model_recipe(storage, version)
         if recipe is not None:
@@ -360,7 +368,7 @@ def start_agent_session(
     upload_id: str, body: SessionStartRequest, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> AgentSessionResponse:
     """Runs the advisor - rules only, no AI service - and stores the session. Nothing is changed."""
-    loaded = _load_context(storage, root, request, upload_id, body.use_case)
+    loaded = _load_context(storage, root, request, upload_id, body.use_case, body.model_version_id)
     ctx = loaded.ctx
     session_id = f"s-{upload_id}".lower()
     if loaded.recipe_error is not None:
@@ -379,6 +387,8 @@ def start_agent_session(
         )
     else:
         session = start_session(ctx, session_id=session_id)
+    # Every later call checks against the same model this one did (the one Run will score with).
+    session = session.model_copy(update={"model_version_id": body.model_version_id})
     return _response(_save(storage, session), ctx.config)
 
 
@@ -403,7 +413,7 @@ def decide_agent_session(
     upload_id: str, body: DecisionsRequest, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> AgentSessionResponse:
     session = _load_session(storage, upload_id)
-    ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
+    ctx = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id).ctx
     try:
         if body.decisions:
             session = decide(session, ctx, [(d.proposal_id, d.state, d.value) for d in body.decisions])
@@ -424,7 +434,7 @@ def answer_agent_session(
     upload_id: str, body: AnswerRequest, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> AgentSessionResponse:
     session = _load_session(storage, upload_id)
-    ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
+    ctx = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id).ctx
     try:
         session = answer(session, ctx, body.question_id, body.option_id)
     except SessionError as exc:
@@ -446,7 +456,7 @@ def message_agent_session(
         raise _refuse(
             409, "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it."
         )
-    ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
+    ctx = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id).ctx
     generative = ctx.config.generative
     meter = Meter(
         build_client(generative.llm, profile=profile_in_force()),
@@ -488,15 +498,29 @@ def _accepted_recipe(session: AgentSession, upload: UploadRecord, principal: str
     )
 
 
+def _cell(value: Any) -> str:
+    """One preview cell as text. Numbers and dates are formatted, never run through the text masker:
+    a float's digits (0.020000000000000002) would otherwise read as a phone number."""
+    if value is None or (isinstance(value, float) and value != value):
+        return ""
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, (int, float)) or hasattr(value, "dtype"):
+        try:
+            return f"{float(value):.6g}"
+        except (TypeError, ValueError):
+            pass
+    if hasattr(value, "isoformat"):
+        text = str(value.isoformat())
+        return text[:10] if text.endswith("T00:00:00") else text
+    return redact_cells([str(value)[:60]])[0]
+
+
 def _rows(frame: Any, columns: tuple[str, ...], personal: set[str]) -> tuple[tuple[str, ...], ...]:
     head = frame.head(PREVIEW_ROWS)
     rows: list[tuple[str, ...]] = []
     for _, row in head.iterrows():
-        cells = [
-            "[personal data]" if name in personal else ("" if row[name] is None else str(row[name]))[:60]
-            for name in columns
-        ]
-        rows.append(redact_cells(cells))
+        rows.append(tuple("[personal data]" if name in personal else _cell(row[name]) for name in columns))
     return tuple(rows)
 
 
@@ -510,7 +534,7 @@ def preview_agent_session(
     upload_id: str, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> PreviewResponse:
     session = _load_session(storage, upload_id)
-    loaded = _load_context(storage, root, request, upload_id, session.use_case_id)
+    loaded = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id)
     ctx = loaded.ctx
     personal = {column.name for column in ctx.profile.columns if column.pii_kinds}
     before = ctx.frame
@@ -553,7 +577,7 @@ def apply_agent_session(
     """Refused while anything is undecided. Runs the recipe on every row into a new upload, then the
     Run button's checks with the accepted settings; a 409 carries them when they would fail."""
     session = _load_session(storage, upload_id)
-    loaded = _load_context(storage, root, request, upload_id, session.use_case_id)
+    loaded = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id)
     ctx, upload = loaded.ctx, loaded.upload
     if session.status is SessionStatus.STOPPED:
         raise _refuse(

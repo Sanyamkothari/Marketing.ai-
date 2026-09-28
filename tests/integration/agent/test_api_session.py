@@ -228,3 +228,32 @@ def test_scoring_setup_stops_when_the_models_recipe_does_not_fit(client: TestCli
     stopped = _session(_start(client, broken))
     assert stopped["status"] == "stopped"
     assert "ad_ctr_90d" in stopped["stop_reason"]
+
+
+def test_the_preview_shows_numbers_as_numbers_not_as_masked_text(client: TestClient) -> None:
+    frame = messy_frame()
+    frame["ad_ctr_90d"] = ["2.0000000000000002%"] * len(frame)  # parses to 0.020000000000000002
+    upload_id = _upload(client, frame)
+    _start(client, upload_id)
+    _decide_everything(client, upload_id)
+    preview = client.post(f"/uploads/{upload_id}/agent-session/preview").json()
+    column = preview["columns_after"].index("ad_ctr_90d")
+    assert {row[column] for row in preview["rows_after"]} == {"0.02"}
+    assert not any("REDACTED" in cell for row in preview["rows_after"] for cell in row)
+
+
+def test_a_scoring_session_checks_against_the_model_run_will_use(client: TestClient, data_dir: Path) -> None:
+    _seed_model(data_dir, None)
+    upload_id = _upload(client, _messy("scoring", rows=600), mode="score")
+    missing = client.post(
+        f"/uploads/{upload_id}/agent-session",
+        json={"use_case": USE_CASE, "model_version_id": "m_does_not_exist"},
+    )
+    assert missing.status_code in {404, 409}
+    chosen = _session(
+        client.post(
+            f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE, "model_version_id": "m_1"}
+        )
+    )
+    assert chosen["model_version_id"] == "m_1"
+    assert client.get(f"/uploads/{upload_id}/agent-session").json()["session"]["model_version_id"] == "m_1"
