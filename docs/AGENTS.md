@@ -138,6 +138,12 @@ applied* (so numbers stored as text are not mistaken for an ID):
   acknowledgement).
 - `PK_*`, `TARGET_*`, `ROWS_TOO_FEW`, `CONSENT_COLUMN_MISSING`, `SCHEMA_MISMATCH` (errors) → **stop**,
   with the check's own message and suggestion (`STOP_CODES`).
+- Any other error (`TIME_COLUMN_MISSING`, `TIME_COLUMN_UNPARSEABLE`, a code added later) → the checks
+  run again with the suggested settings that start ticked (§5); an error still there → **stop**, with
+  its message and suggestion. A session therefore never reaches `ready` on its own suggestions with
+  an error Approve's checks would refuse.
+- A column a leak question may hide is never named by a suggested setting (the date to split by, the
+  consent column), so hiding it cannot break a setting.
 - Warnings the engine already acts on (`HIGH_NULL_COLUMN`, `CONSTANT_COLUMN`,
   `HIGH_CARDINALITY_ID_LIKE`, `PII_DETECTED`) → listed under *hidden columns*, one line per column,
   not proposed. `SUPPRESSION_COLUMN_MISSING` → an assumption.
@@ -158,9 +164,11 @@ file does not fit that recipe, the session stops and names the problem.
 
 | Fact | Suggestion | Confidence |
 |---|---|---|
-| The use case splits by date but its date column is absent, and the file has a date column (≥ 3 values) | `split.time_column` = that column | `sure` |
-| … and the file has no date column | `split.type: random_stratified` | `sure` |
-| The use case splits at random and the file has a date column | `split.type: time_based` + `split.time_column` | `check` |
+| The use case splits by date but its date column is absent, and the file has a date column (≥ 3 values) the use case can split by | `split.time_column` = that column | `sure` |
+| … and the file has no such date column | `split.type: random_stratified` | `sure` |
+| … and its date column is in the file but cannot be used (fewer than 3 dates, a column a leak question may hide, …) | `split.type: random_stratified`; the reason names what is wrong with the column | `sure` |
+| … and its date column is in the file but the Run button's check cannot read it as dates (`TIME_COLUMN_UNPARSEABLE`) | `split.type: random_stratified` + `split.time_column: null` (that check runs whatever the split), citing the check | `sure` |
+| The use case splits at random and the file has a date column (≥ 3 values) the use case can split by | `split.type: time_based` + `split.time_column` | `check` |
 | Fewer than 5% of rows are "yes" and the metric is ROC-AUC | `model_search.metric: pr_auc` | `sure` |
 | Fewer than 5,000 rows | `model_search.time_limit_minutes: 10` | `sure` |
 | More than 500,000 rows | `model_search.time_limit_minutes: 60` | `sure` |
@@ -171,8 +179,20 @@ Imbalance is not proposed: `model_search.imbalance: auto` already weights rare o
 `advanced_settings_schema()` (or an extra overridable path), inside its choices or range, never
 advisory, never in `NEVER_RECOMMENDED` (`validation.min_positive`, `validation.min_rows`,
 `validation.leakage_check`, `governance.approval_required`, `validation.acknowledged`), and the whole
-set must resolve with `resolve_config`. A setting the rules say nothing about keeps the use case's
-default. A person may edit a suggested setting only to another value the same check allows.
+set must resolve with `resolve_config`. "Can split by" means the pair resolves: `resolve_config`
+accepts only a template column with role `time` (`TEMPLATE_TIME_MISSING`), so a split by date and its
+column are resolved, kept and dropped as one group. A setting the rules say nothing about keeps the use
+case's default. A person may edit a suggested setting only to another value the same check allows, and
+the settings accepted after any decision must resolve together. One setting has at most one accepted
+value: accepting a second suggestion for it rejects the first, and when one decision accepts several
+(Preview sends the helper's ticked suggestion and the person's chat request together), the latest
+suggestion in the session wins - the chat request over the helper's - and the others are rejected.
+A split by date is decided with its date column: once no split suggestion is pending, a decision that
+would split by date with no date column in the file (accepting "Test on the newest rows" but rejecting
+its column, or rejecting the random split a file without the use case's date column needs) is refused
+with `TIME_COLUMN_MISSING` and a message naming the suggestions to accept, instead of reaching
+`ready` and failing at Approve. "Accept recommended" (`accept_recommended`) never touches a setting the
+person has already accepted a value for: the helper's suggestion for it stays pending for them.
 
 ## 6. The recipe
 
@@ -302,8 +322,8 @@ is stored or put in a prompt, so the stored transcript - which a Viewer can read
 | `POST /uploads/{upload_id}/checks` | Analyst | Dry-run validation for `{use_case, primary_key, target, model_version_id, overrides}`; always 200 with the `ValidationReport` `POST /runs` would give (DEC-1011). |
 | `POST /uploads/{upload_id}/agent-session` | Analyst | Start or restart Guided setup for `{use_case, model_version_id?}` (a scoring session checks against the model Run will use); rules only, no model call; 201 with the session. 409 `AGENT_NOT_AVAILABLE` / `AGENT_USE_CASE_MISMATCH`. |
 | `GET /uploads/{upload_id}/agent-session` | Viewer | The session. 404 `AGENT_SESSION_NOT_FOUND`. |
-| `POST …/agent-session/decisions` | Analyst | `{decisions: [{proposal_id, state, value?}], accept_recommended}`. 422 `AGENT_EDIT_NOT_ALLOWED` / `AGENT_VALUE_NOT_ALLOWED`, 404 unknown id, 409 `AGENT_SESSION_APPLIED`. |
-| `POST …/agent-session/answers` | Analyst | `{question_id, option_id}`; a role answer re-runs the advisor, keeping decisions already made. |
+| `POST …/agent-session/decisions` | Analyst | `{decisions: [{proposal_id, state, value?}], accept_recommended}`. 422 `AGENT_EDIT_NOT_ALLOWED` / `AGENT_VALUE_NOT_ALLOWED`, the `resolve_config` code (e.g. `TEMPLATE_TIME_MISSING`) when the accepted settings do not resolve together, or `TIME_COLUMN_MISSING` when they would split by date with no date column; `accept_recommended` skips a setting the person already accepted a value for; 404 unknown id, 409 `AGENT_SESSION_APPLIED`. |
+| `POST …/agent-session/answers` | Analyst | `{question_id, option_id}`; answering again replaces the previous answer and what it added. A role answer re-runs the advisor, keeping decisions already made (an accepted suggestion wins over a rejected duplicate); a step the person accepted on a column that is now the ID or the outcome is dropped, since the recipe may never change those. |
 | `POST …/agent-session/messages` | Analyst | `{text}` (≤ 1,000 characters): one chat turn. 409 `AGENT_SESSION_APPLIED` / `AGENT_CHAT_FULL`. |
 | `POST …/agent-session/preview` | Analyst | Before/after rows and the receipt on the first 1,000 rows (or entities). 409 with a `RECIPE_*` code when a step cannot run. |
 | `POST …/agent-session/apply` | Analyst | Approve: 409 `AGENT_SESSION_STOPPED` / `AGENT_SESSION_APPLIED` / `AGENT_UNDECIDED`; 409 `VALIDATION_FAILED` with the checks when Run would fail; else `{upload_id, mode, primary_key, target, overrides, summary, receipt}` for `POST /runs`. Audited with the prepared upload and the recipe hash. |
