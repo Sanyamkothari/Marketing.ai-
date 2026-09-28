@@ -30,6 +30,7 @@ from api.routes.agent_recipes import (
     model_recipe,
     prepare_in_memory,
     recipe_failure_report,
+    refuse_other_roles,
     replay_for_scoring,
     run_saved_recipe,
     scoring_source,
@@ -73,7 +74,7 @@ from engine.generative.budget import Meter
 from engine.generative.contracts import LlmUsageReport
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import build_client
-from engine.pii import redact_cells, redact_text
+from engine.pii import REDACTION_MARKER_PATTERN, redact_cells, redact_text
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
@@ -125,11 +126,14 @@ def check_upload(
     storage: StorageDep,
     request: Request,
 ) -> ValidationReport:
-    """The report `POST /runs` would give, always with 200; `passed` says whether Run would start.
+    """The report `POST /runs` would give, with 200; `passed` says whether Run would start.
 
     Nothing is written: not a run directory, and not the upload's `validation.json`, which stays the
     record of the last real Run. The registry is opened only for a scoring file, because opening it
-    creates the local registry database.
+    creates the local registry database. What `POST /runs` refuses before its checks is refused here
+    with the same status and code: a setting the caller's role may not loosen, and an ID column or
+    outcome other than the ones a prepared file's recipe was checked against (409
+    `RECIPE_ROLES_MISMATCH`, DEC-1011).
     """
     use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
     resolved = resolve_config(body.use_case, body.overrides, root=root)
@@ -145,9 +149,12 @@ def check_upload(
     if upload.mode is RunMode.SCORE:
         version = score_version(get_registry(request), config=config, version_id=body.model_version_id)
         schema = storage.read_model(version.schema_key, FeatureSchema)
+        recipe = model_recipe(storage, version)
+        if primary_key is not None:  # `POST /runs` needs an ID column before it gets this far
+            refuse_other_roles(recipe, primary_key=primary_key, target=None, training=False)
         # As `POST /runs` does (DEC-1006): the model's recipe prepares the file before it is checked
         # against the model's columns - here in memory, since a dry run writes nothing.
-        prepared = prepare_in_memory(storage, config, upload, model_recipe(storage, version))
+        prepared = prepare_in_memory(storage, config, upload, recipe)
         if isinstance(prepared, ValidationReport):
             return prepared
         frame, row_count = prepared
@@ -156,6 +163,10 @@ def check_upload(
             409, "UPLOAD_MODE_MISMATCH", "A model version is only used to check a file uploaded for scoring."
         )
     else:
+        if primary_key is not None:  # the roles a prepared upload was checked against (DEC-1004)
+            refuse_other_roles(
+                load_recipe(storage, upload_id), primary_key=primary_key, target=body.target, training=True
+            )
         frame = read_frame(storage, upload.source_key, upload.file_format, profile_row_cap(config))
     return check_plan(
         frame,
@@ -702,8 +713,10 @@ def _cell(value: Any) -> str:
     a float's digits (0.020000000000000002) would otherwise read as a phone number.
 
     Every digit a person needs to tell two values apart is kept: an integer in full, a float to 15
-    significant digits (so 20240001 and 20240002 never both read `2.024e+07`). Text is masked
-    before it is cut, so an e-mail address split by the cut is still one the masker knows.
+    significant digits (so 20240001 and 20240002 never both read `2.024e+07`). A narrower float (a
+    Parquet `float32`) is first written at its own precision, so 0.1 stays `0.1` rather than the
+    `0.100000001490116` it is as a double. Text is masked before it is cut, so an e-mail address split
+    by the cut is still one the masker knows; a marker the cut would split is left out whole.
     """
     if value is None or (isinstance(value, float) and value != value):
         return ""
@@ -713,13 +726,22 @@ def _cell(value: Any) -> str:
         return str(int(value))
     if isinstance(value, (int, float)) or hasattr(value, "dtype"):
         try:
-            return format(float(value), ".15g")
+            dtype = getattr(value, "dtype", None)
+            if getattr(dtype, "kind", "") == "f" and getattr(dtype, "itemsize", 8) < 8:
+                value = float(str(value))  # numpy's shortest text at the value's own precision
+            number = float(value)
+            return "" if number != number else format(number, ".15g")
         except (TypeError, ValueError):
             pass
     if hasattr(value, "isoformat"):
         text = str(value.isoformat())
         return text[:10] if text.endswith("T00:00:00") else text
-    return redact_cells([str(value)])[0][:PREVIEW_CELL_CHARS]
+    masked = redact_cells([str(value)])[0]
+    cut = PREVIEW_CELL_CHARS
+    for marker in REDACTION_MARKER_PATTERN.finditer(masked):
+        if marker.start() < cut < marker.end():
+            cut = marker.start()
+    return masked[:cut]
 
 
 def _rows(frame: Any, columns: tuple[str, ...], personal: set[str]) -> tuple[tuple[str, ...], ...]:
@@ -824,7 +846,12 @@ def _apply_agent_session(
     recipe = _accepted_recipe(session, upload, requested_by(request), ctx.config)
     prepared, receipt = upload, None
     if ctx.mode is RunMode.SCORE and loaded.version is not None:
-        # The model's recipe prepares a scoring file; the session proposes no steps of its own.
+        # The model's recipe prepares a scoring file; the session proposes no steps of its own. Run
+        # would refuse another ID column than the recipe's, so Approve does not prepare for one.
+        if key is not None:
+            refuse_other_roles(
+                model_recipe(storage, loaded.version), primary_key=key, target=None, training=False
+            )
         replayed = replay_for_scoring(storage, ctx.config, upload, loaded.version)
         if isinstance(replayed, ValidationReport):
             return validation_conflict(replayed)

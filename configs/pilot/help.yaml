@@ -280,7 +280,7 @@ codes:
     fix: Check how the column is written in this file; Guided setup shows the values it could not read.
   RECIPE_STEP_INVALID:
     title: A saved preparation step no longer applies
-    meaning: One of the steps saved with the model cannot run on this file or is no longer allowed for this use case.
+    meaning: One of the steps saved with the model cannot run on this file, or the file it was prepared from is gone. A model keeps the preparation rules it was approved with; only a model approved before those rules were saved with it is also stopped when this use case no longer allows one of its steps.
     fix: Train the model again with Guided setup so its preparation steps are saved again.
 
 settings:

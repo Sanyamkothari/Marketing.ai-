@@ -230,6 +230,28 @@ def test_a_column_whose_type_changes_between_read_chunks_is_prepared(
     assert written[KEY].tolist() == frame[KEY].tolist()  # the ID column's text, exactly
 
 
+def test_zero_padded_ids_in_a_chunk_read_as_numbers_are_prepared_as_the_plain_read_gives_them(
+    client: TestClient, data_dir: Path
+) -> None:
+    """The chunked read has already dropped the zeros of a chunk it typed as numbers; the prepared
+    file keeps what that read gave - the same values a file without a recipe is read as - as text.
+    It does not claim to restore the cells as written."""
+    from engine.stages import ingest
+
+    storage = LocalStorage(data_dir)
+    frame = _mixed_ids(100_010)
+    frame[KEY] = [f"{i:07d}" for i in range(100_007)] + ["C-1", "C-2", "C-3"]
+    upload = load_upload(storage, _upload(client, frame))
+    derived = write_derived_upload(storage, load_use_case(USE_CASE), upload, _recipe(frame))
+    written = pd.read_parquet(data_dir / derived.record.source_key)[KEY].tolist()
+    plain = ingest.read_upload(
+        storage, upload.source_key, file_format="csv", row_cap=1_000, keep_all_rows=True
+    ).all_rows
+    assert plain is not None
+    assert written == [str(v) for v in plain[KEY]]
+    assert written[:2] == ["0", "1"] and written[-3:] == ["C-1", "C-2", "C-3"]
+
+
 def test_a_prepared_file_that_cannot_be_written_is_a_coded_refusal(
     client: TestClient, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -287,6 +309,93 @@ def test_training_on_a_prepared_upload_with_other_roles_is_refused(
     assert other_key.status_code == 409, other_key.text
     assert other_key.json()["detail"]["code"] == "RECIPE_ROLES_MISMATCH"
     assert client.post("/runs", json={**body, "primary_key": KEY, "target": TARGET}).status_code == 202
+
+
+def test_the_dry_run_refuses_other_training_roles_as_run_does(client: TestClient, data_dir: Path) -> None:
+    """DEC-1011: the dry run and Run give the same answer about the same file and roles."""
+    storage = LocalStorage(data_dir)
+    frame = _messy()
+    original = load_upload(storage, _upload(client, frame))
+    derived = write_derived_upload(storage, load_use_case(USE_CASE), original, _recipe(frame))
+    upload_id = derived.record.upload_id
+    for roles in (
+        {"primary_key": KEY, "target": "marketing_opt_in"},
+        {"primary_key": "snapshot_date", "target": TARGET},
+    ):
+        dry = client.post(f"/uploads/{upload_id}/checks", json={"use_case": USE_CASE, **roles})
+        run = client.post(
+            "/runs", json={"use_case": USE_CASE, "mode": "train", "upload_id": upload_id, **roles}
+        )
+        assert dry.status_code == run.status_code == 409, (dry.text, run.text)
+        assert dry.json()["detail"]["code"] == run.json()["detail"]["code"] == "RECIPE_ROLES_MISMATCH"
+    same = client.post(
+        f"/uploads/{upload_id}/checks", json={"use_case": USE_CASE, "primary_key": KEY, "target": TARGET}
+    )
+    assert same.status_code == 200, same.text
+    assert same.json()["passed"] is True, _checks(same.json())
+
+
+def test_scoring_with_another_id_column_than_the_models_recipe_is_refused_before_anything_is_prepared(
+    client: TestClient, data_dir: Path
+) -> None:
+    _seed_model(data_dir, _recipe(_messy(), target=None))  # the model's recipe names KEY
+    storage = LocalStorage(data_dir)
+    upload_id = _upload(client, _messy("scoring", rows=600), mode="score")
+    before = sorted(storage.list_keys("uploads/"))
+    body = {"use_case": USE_CASE, "primary_key": "snapshot_date"}
+    dry = client.post(f"/uploads/{upload_id}/checks", json=body)
+    run = client.post("/runs", json={**body, "mode": "score", "upload_id": upload_id})
+    assert dry.status_code == run.status_code == 409, (dry.text, run.text)
+    assert dry.json()["detail"]["code"] == run.json()["detail"]["code"] == "RECIPE_ROLES_MISMATCH"
+    assert sorted(storage.list_keys("uploads/")) == before  # no orphan prepared upload
+    assert _score(client, upload_id).status_code == 202  # with the recipe's own ID column it runs
+
+
+def test_a_model_without_a_recipe_takes_any_id_column(client: TestClient, data_dir: Path) -> None:
+    _seed_model(data_dir, None)
+    upload_id = _upload(client, _messy("scoring", rows=600), mode="score")
+    dry = client.post(
+        f"/uploads/{upload_id}/checks", json={"use_case": USE_CASE, "primary_key": "snapshot_date"}
+    )
+    assert dry.status_code == 200, dry.text
+
+
+def test_approving_a_scoring_session_with_another_id_column_is_refused_before_anything_is_prepared(
+    client: TestClient, data_dir: Path
+) -> None:
+    from engine.agent.contracts import AgentSession, ProposalKind
+
+    _seed_model(data_dir, _recipe(_messy(), target=None))
+    storage = LocalStorage(data_dir)
+    upload_id = _upload(client, _messy("scoring", rows=600), mode="score")
+    started = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
+    assert started.status_code == 201, started.text
+    key = f"uploads/{upload_id}/agent/agent_session.json"
+    session = storage.read_model(key, AgentSession)
+    other = tuple(
+        (
+            p.model_copy(update={"value": "snapshot_date", "suggested_value": "snapshot_date"})
+            if p.kind is ProposalKind.ROLE and p.path == "primary_key"
+            else p
+        )
+        for p in session.proposals
+    )
+    assert other != session.proposals, "the session proposes an ID column"
+    storage.write_model(key, session.model_copy(update={"proposals": other}))
+    client.post(f"/uploads/{upload_id}/agent-session/decisions", json={"accept_recommended": True})
+    decided = storage.read_model(key, AgentSession)
+    pending = [p.proposal_id for p in decided.proposals if p.state.value == "pending"]
+    client.post(
+        f"/uploads/{upload_id}/agent-session/decisions",
+        json={"decisions": [{"proposal_id": pid, "state": "accepted"} for pid in pending]},
+    )
+    before = sorted(storage.list_keys("uploads/"))
+    applied = client.post(f"/uploads/{upload_id}/agent-session/apply")
+    assert applied.status_code == 409, applied.text
+    assert applied.json()["detail"]["code"] == "RECIPE_ROLES_MISMATCH"
+    assert [k for k in storage.list_keys("uploads/") if not k.startswith(f"uploads/{upload_id}/")] == [
+        k for k in before if not k.startswith(f"uploads/{upload_id}/")
+    ]
 
 
 # --- a replay runs under the levels and limit the recipe was approved with ------------------------

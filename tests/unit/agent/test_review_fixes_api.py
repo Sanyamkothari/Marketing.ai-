@@ -73,3 +73,19 @@ def test_recipes_with_the_same_steps_prepare_alike_only_under_the_same_roles_and
 def test_the_preview_formats_a_pandas_integer_as_an_integer() -> None:
     frame = pd.DataFrame({"n": pd.array([20240001, None], dtype="Int64")})
     assert _cell(frame["n"].iloc[0]) == "20240001"
+
+
+def test_a_narrow_float_is_shown_at_its_own_precision() -> None:
+    assert _cell(np.float32(0.1)) == "0.1"
+    assert _cell(np.float16(0.5)) == "0.5"
+    assert _cell(np.float32(3.0)) == "3"
+    assert _cell(np.float32("nan")) == ""
+    assert _cell(np.float64(0.1)) == "0.1"
+
+
+def test_the_cut_never_splits_a_marker() -> None:
+    cell = _cell("a" * 50 + " jane.doe@example.com")
+    assert "jane" not in cell and "[RED" not in cell
+    assert cell == "a" * 50 + " "
+    whole = _cell("a" * 40 + " jane.doe@example.com")
+    assert whole.endswith("[REDACTED:email]") and len(whole) <= 60
