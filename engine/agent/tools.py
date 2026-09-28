@@ -160,12 +160,22 @@ def _personal(ctx: AgentContext, name: str) -> bool:
     return bool(column is not None and column.pii_kinds)
 
 
+def _label(ctx: AgentContext, target: str, params: validate.CheckParams) -> tuple[str | None, int, int]:
+    """The engine's positive-label rule on the outcome column alone.
+
+    `resolve_positive_label` derives facts (type inference, personal-data scans) for every column of
+    the frame it is given, and only the outcome's are read; on a million-row file passing the whole
+    frame cost most of a minute per call (M77, `reports/plan_g_performance.md`).
+    """
+    return validate.resolve_positive_label(ctx.frame[[target]], params)
+
+
 def _positive_mask(ctx: AgentContext, target: str) -> tuple[pd.Series[Any] | None, str | None]:
     """A boolean series for "outcome is positive", by the engine's own label rule, or None."""
     if target not in ctx.frame.columns:
         return None, None
     params = validate.CheckParams(target=target, positive_label=ctx.config.target.positive_label)
-    label, positives, negatives = validate.resolve_positive_label(ctx.frame, params)
+    label, positives, negatives = _label(ctx, target, params)
     if label is None or positives + negatives == 0:
         return None, None
     series = ctx.frame[target]
@@ -299,7 +309,7 @@ def _describe_outcome(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
     name = ctx.resolve(args.column)
     series = ctx.frame[name]
     params = validate.CheckParams(target=name, positive_label=ctx.config.target.positive_label)
-    label, positives, negatives = validate.resolve_positive_label(ctx.frame, params)
+    label, positives, negatives = _label(ctx, name, params)
     total = positives + negatives
     return {
         "column": name,
@@ -356,12 +366,13 @@ def _find_roles(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
 
 def _describe_repeats(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
     """How often each value of an ID column repeats: the evidence behind "combine the rows?" (M76)."""
-    series = ctx.column(args.column)
+    name = ctx.resolve(args.column)
+    series = ctx.frame[name]
     counts = series.dropna().value_counts()
     ids = len(counts)
     present = int(counts.sum())
     return {
-        "column": args.column,
+        "column": name,
         "rows": len(series),
         "empty": int(series.isna().sum()),
         "ids": ids,

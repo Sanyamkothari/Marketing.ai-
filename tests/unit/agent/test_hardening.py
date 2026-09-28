@@ -314,3 +314,27 @@ def test_a_derive_formula_that_does_not_fit_the_values_is_a_coded_refusal() -> N
             max_failure_pct=5,
         )
     assert refused.value.code == "RECIPE_STEP_INVALID"
+
+
+def test_a_large_order_log_passes_the_full_leak_check() -> None:
+    """Above a few hundred thousand rows the probe's DuckDB scanned in parallel, broke `latest` ties
+    between same-day orders differently from the single-threaded build, and reported a false
+    FUTURE_EVENTS_LEAKED - so Approve refused every realistically sized order log."""
+    from tests.fixtures.agent_bench import perf
+    from tests.fixtures.agent_bench.make_multirow import multirow_frame
+
+    frame = multirow_frame(shoppers=60_000)  # ~300,000 rows: DuckDB scans these in parallel
+    assert len(frame) > 250_000
+    step = perf.combine_step(frame.head(20_000))
+    ctx = context_for(frame.head(2_000), "retail-win-back")
+    run = run_recipe(
+        frame,
+        [step],
+        upload_id="u",
+        primary_key=step.column,
+        target=str(step.params["outcome"]),
+        levels=ctx.config.agent.levels,
+        max_failure_pct=ctx.config.agent.max_conversion_failure_pct,
+        leak_check="full",
+    )
+    assert run.receipt.rows_out == frame[step.column].nunique()

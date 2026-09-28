@@ -162,7 +162,8 @@ SESSION_FILENAME: Final[str] = "agent/agent_session.json"
 LLM_USAGE_FILENAME: Final[str] = "agent/llm_usage.json"
 PREVIEW_ROWS: Final[int] = 5
 PREVIEW_SAMPLE_ROWS: Final[int] = 1_000
-"""The preview runs the accepted steps on the first 1,000 rows (Plan G §6.3), not on every row."""
+"""The preview runs the accepted steps on the first 1,000 rows, or the rows of the first 1,000
+entities when rows are combined (Plan G §6.3), not on every row."""
 CHAT_GRACE_TURNS: Final[int] = 10
 """Turns a session may still take once its model-call budget is spent (each answers "out of budget").
 
@@ -484,7 +485,9 @@ def decide_agent_session(
 ) -> AgentSessionResponse:
     with _session_lock(upload_id):
         session = _load_session(storage, upload_id)
-        ctx = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id).ctx
+        ctx = _load_context(
+            storage, root, request, upload_id, session.use_case_id, session.model_version_id
+        ).ctx
         try:
             if body.decisions:
                 session = decide(session, ctx, [(d.proposal_id, d.state, d.value) for d in body.decisions])
@@ -506,7 +509,9 @@ def answer_agent_session(
 ) -> AgentSessionResponse:
     with _session_lock(upload_id):
         session = _load_session(storage, upload_id)
-        ctx = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id).ctx
+        ctx = _load_context(
+            storage, root, request, upload_id, session.use_case_id, session.model_version_id
+        ).ctx
         try:
             session = answer(session, ctx, body.question_id, body.option_id)
         except SessionError as exc:
@@ -532,7 +537,9 @@ def message_agent_session(
             raise _refuse(
                 409, "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it."
             )
-        ctx = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id).ctx
+        ctx = _load_context(
+            storage, root, request, upload_id, session.use_case_id, session.model_version_id
+        ).ctx
         ceiling = 2 * (ctx.config.agent.max_llm_calls_per_session + CHAT_GRACE_TURNS)
         if len(session.transcript) + 2 > ceiling:
             raise _refuse(
@@ -681,6 +688,19 @@ def _rows(frame: Any, columns: tuple[str, ...], personal: set[str]) -> tuple[tup
     return tuple(rows)
 
 
+def _preview_sample(frame: Any, recipe: DataRecipe | None) -> Any:
+    """The rows a preview runs on: the first `PREVIEW_SAMPLE_ROWS` rows, or - when the recipe combines
+    rows per entity - every row of the first `PREVIEW_SAMPLE_ROWS` entities, so no entity is combined
+    from part of its rows."""
+    combine = next(
+        (s for s in (recipe.steps if recipe else ()) if s.kind is RecipeStepKind.COMBINE_ROWS), None
+    )
+    if combine is None or combine.column not in frame.columns:
+        return frame.head(PREVIEW_SAMPLE_ROWS)
+    keys = frame[combine.column].dropna().drop_duplicates().head(PREVIEW_SAMPLE_ROWS)
+    return frame[frame[combine.column].isin(keys)]
+
+
 @router.post(
     "/uploads/{upload_id}/agent-session/preview",
     response_model=PreviewResponse,
@@ -694,8 +714,8 @@ def preview_agent_session(
     loaded = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id)
     ctx = loaded.ctx
     personal = {column.name for column in ctx.profile.columns if column.pii_kinds}
-    before = ctx.frame.head(PREVIEW_SAMPLE_ROWS)
     recipe = _accepted_recipe(session, loaded.upload, None)
+    before = _preview_sample(ctx.frame, recipe)
     after, receipt = before, None
     if recipe is not None:
         try:

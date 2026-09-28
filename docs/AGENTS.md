@@ -59,6 +59,7 @@ scoring: POST /runs mode=score ──► replay the model's recipe ──► val
 | `engine/agent/tools.py` | The read tools and `call_tool`, which validates arguments and records a `ToolResult` with an `evidence_id`. |
 | `engine/agent/formats.py` | The messy-format detector and the parsers the recipe runs (they share code, so they cannot disagree). |
 | `engine/agent/recipe.py` | `check_recipe` and `run_recipe`: the only code that changes data. |
+| `engine/agent/reshape.py` | Level 3 (M76): plan and run a `combine_rows` step through the onboarding feature engine. |
 | `engine/agent/advisor.py` | Every proposal, question and stop, by rules (§4). |
 | `engine/agent/recommend.py` | The recommended settings (§5). |
 | `engine/agent/session.py` | Deciding, answering, re-advising; the session status rule. |
@@ -67,6 +68,7 @@ scoring: POST /runs mode=score ──► replay the model's recipe ──► val
 | `api/routes/agent.py` | The HTTP routes (§8). |
 | `api/routes/agent_recipes.py` | Derived uploads, attaching a recipe to a run, replaying it for scoring. |
 | `configs/prompts/data_agent.v1.md` | The chat prompt. |
+| `ui/modules/agent/` | The *Guided setup* tab (M75, DEC-1019 … DEC-1022), registered through `router.js`'s `registerSetupMode`; Manual setup stays the default tab for now. |
 
 ### 2.2 A session
 
@@ -97,6 +99,7 @@ is `apply`.
 | `inspect_column` | `column` | Counts, masked examples and top values, and the outcome rate per bucket of the column. A personal-data column shows no values at all - not even its minimum or maximum. |
 | `find_format_issues` | `columns` (optional) | Per text column, at most one issue: `number_as_text`, `mixed_dates`, `boolean_as_text`, `category_variants` or `untrimmed_text`, with counts, masked examples and the parameters a fix would use. Personal-data columns are skipped. |
 | `describe_outcome` | `column` | How many rows are "yes" by the engine's own label rule. |
+| `describe_repeats` | `column` | How often each value of an ID column repeats: IDs, rows per ID, the most rows, IDs on several rows (the evidence behind "combine the rows?"). |
 | `find_roles` | — | Which columns could be the ID, the outcome (exact, case-insensitive, synonym), the date, consent, opt-out and last contact. |
 | `check_data` | `primary_key`, `target`, `overrides` | Every check the Run button would run (`check_plan`), with codes, severities, messages and fixes. |
 
@@ -107,7 +110,7 @@ anything else is `AGENT_COLUMN_UNKNOWN`. Bad arguments are `AGENT_TOOL_ARGS_INVA
 
 `engine/agent/advisor.advise` calls the tools above (so every number it uses is evidence) and
 applies fixed rules (DEC-1015). The same file always gets the same advice;
-`tests/fixtures/agent_bench/expected.json` pins it for sixteen files.
+`tests/fixtures/agent_bench/expected.json` pins it for nineteen files.
 
 **Roles.**
 - The ID: the first primary-key candidate, `sure` when its name is one of the use case's
@@ -139,6 +142,13 @@ applied* (so numbers stored as text are not mistaken for an ID):
   `HIGH_CARDINALITY_ID_LIKE`, `PII_DETECTED`) → listed under *hidden columns*, one line per column,
   not proposed. `SUPPRESSION_COLUMN_MISSING` → an assumption.
 
+**Many rows per entity** (level 3, M76, DEC-1026). With `reshape` in `agent.levels`, a training file
+whose hinted ID column repeats and has a usable date column gets a blocking question "Each {entity}
+appears on N rows on average. Combine them into one row per {entity}?" (Combine (recommended) /
+Stop), with N from `describe_repeats`. It is asked once the outcome column is known; until then no
+checks or settings run. Combine re-advises on the combined preview; Stop, no `reshape` level or no
+date column keep the `PK_NOT_UNIQUE`-style stop.
+
 **Scoring files** get no fixes of their own: the model's saved recipe prepares them (§6.4). If the
 file does not fit that recipe, the session stops and names the problem.
 
@@ -168,9 +178,11 @@ default. A person may edit a suggested setting only to another value the same ch
 
 ### 6.1 Step kinds
 
-A `DataRecipe` is an ordered list of `RecipeStep`s. Every step is **stateless and row-wise**
-(DEC-1004): its output for a row depends only on that row and the step's parameters, so running it
-before the train/test split leaks nothing and next month's file is prepared identically.
+A `DataRecipe` is an ordered list of `RecipeStep`s. Every step is **stateless**: a row-wise step's
+output for a row depends only on that row and the step's parameters (DEC-1004), and `combine_rows`'s
+output for an entity only on that entity's rows (DEC-1023). Nothing is learnt from the whole file, so
+running a recipe before the train/test split leaks nothing and next month's file is prepared
+identically.
 
 | Kind | Parameters | Does |
 |---|---|---|
@@ -178,6 +190,7 @@ before the train/test split leaks nothing and next month's file is prepared iden
 | `parse_date` | `dayfirst` (must be decided) | Mixed styles → datetime, each value parsed on its own; a value with a UTC offset keeps its clock time. |
 | `map_boolean` | `true_values`, `false_values` | Listed spellings (compared trimmed, case-folded) → 1 / 0; anything else fails. |
 | `normalise_text` | `strip`, `merge` (frozen at approval) | Trim; replace listed spellings by their canonical one. |
+| `combine_rows` | the step's `column` is the entity key; `time_column`, `snapshot_column`, `dayfirst`, `outcome`, `features` (a frozen `{name, function, column}` list) | Level 3: many rows per entity into one (DEC-1023 … DEC-1025), computed by the onboarding feature engine with its point-in-time guard. Only rows dated on or before the entity's snapshot count; the outcome is read from the latest row, not aggregated; numbers get sum/mean/max/latest, categories latest/nunique, dates days-since, plus a row count. Entity-wise rather than row-wise: an entity's output depends only on its own rows and the frozen parameters. A training Approve runs onboarding's full future-data leak probe, a scoring replay the narrow one, a preview none. Needs the `reshape` level. |
 | `derive` | `expression` | A new column from `engine.onboarding.transforms.derive`'s whitelist: names, numbers, `+ - * /`, `days_between`, `months_between`, `year`, `month`, `coalesce`, `lower`, `abs`, and `snapshot_date`. At most 300 characters; no repeated text. Needs the `derive` level. Not proposed by the advisor today. |
 | `drop_column` | — | Hide a column from the model. |
 
@@ -185,7 +198,7 @@ before the train/test split leaks nothing and next month's file is prepared iden
 
 ### 6.2 Rules `check_recipe` enforces
 
-Steps are numbered 1…n and run in a fixed order: parse and tidy → derive → drop. Refused with
+Steps are numbered 1…n and run in a fixed order: parse and tidy → combine → derive → drop. Refused with
 `RECIPE_STEP_INVALID`: an unknown parameter, an undecided date order, a spelling that means both yes
 and no, a step above the use case's `levels`, a step that changes the ID or the outcome, a derived
 column that reads the outcome or `snapshot_date` without a snapshot column, or a name clash. A
@@ -196,7 +209,8 @@ the values it changed and could not convert (examples masked); more failures tha
 
 ### 6.3 Where a recipe runs
 
-- **Preview** (`…/preview`): on the first 1,000 rows, returning 5 rows before and after (personal
+- **Preview** (`…/preview`): on the first 1,000 rows - or, when the recipe combines rows, on every
+  row of the first 1,000 entities, so no entity is combined from part of its rows - returning 5 rows before and after (personal
   data shown as `[personal data]`, other cells masked) and the receipt of those rows.
 - **Approve** (`…/apply`): on every row, into a **derived upload** `uploads/<new_id>/` with
   `source.parquet` (types kept), `profile.json`, `upload.json` (`"<file> (prepared)"`),
@@ -284,12 +298,12 @@ is stored or put in a prompt, so the stored transcript - which a Viewer can read
 | Method and path | Role | Does |
 |---|---|---|
 | `POST /uploads/{upload_id}/checks` | Analyst | Dry-run validation for `{use_case, primary_key, target, model_version_id, overrides}`; always 200 with the `ValidationReport` `POST /runs` would give (DEC-1011). |
-| `POST /uploads/{upload_id}/agent-session` | Analyst | Start or restart Guided setup for `{use_case}`; rules only, no model call; 201 with the session. 409 `AGENT_NOT_AVAILABLE` / `AGENT_USE_CASE_MISMATCH`. |
+| `POST /uploads/{upload_id}/agent-session` | Analyst | Start or restart Guided setup for `{use_case, model_version_id?}` (a scoring session checks against the model Run will use); rules only, no model call; 201 with the session. 409 `AGENT_NOT_AVAILABLE` / `AGENT_USE_CASE_MISMATCH`. |
 | `GET /uploads/{upload_id}/agent-session` | Viewer | The session. 404 `AGENT_SESSION_NOT_FOUND`. |
 | `POST …/agent-session/decisions` | Analyst | `{decisions: [{proposal_id, state, value?}], accept_recommended}`. 422 `AGENT_EDIT_NOT_ALLOWED` / `AGENT_VALUE_NOT_ALLOWED`, 404 unknown id, 409 `AGENT_SESSION_APPLIED`. |
 | `POST …/agent-session/answers` | Analyst | `{question_id, option_id}`; a role answer re-runs the advisor, keeping decisions already made. |
 | `POST …/agent-session/messages` | Analyst | `{text}` (≤ 1,000 characters): one chat turn. 409 `AGENT_SESSION_APPLIED` / `AGENT_CHAT_FULL`. |
-| `POST …/agent-session/preview` | Analyst | Before/after rows and the receipt on the first 1,000 rows. 409 with a `RECIPE_*` code when a step cannot run. |
+| `POST …/agent-session/preview` | Analyst | Before/after rows and the receipt on the first 1,000 rows (or entities). 409 with a `RECIPE_*` code when a step cannot run. |
 | `POST …/agent-session/apply` | Analyst | Approve: 409 `AGENT_SESSION_STOPPED` / `AGENT_SESSION_APPLIED` / `AGENT_UNDECIDED`; 409 `VALIDATION_FAILED` with the checks when Run would fail; else `{upload_id, mode, primary_key, target, overrides, summary, receipt}` for `POST /runs`. Audited with the prepared upload and the recipe hash. |
 
 Every route has a `RoutePolicy`; a Viewer can read a session but cannot start one, decide, answer,
@@ -314,7 +328,7 @@ agent:
     consent: [marketing_opt_in, opt_in, consent, consented]
     opt_out: [opt_out, opted_out, unsubscribed, do_not_contact]
     recently_contacted: [last_contacted_at, last_contacted, last_contact_date]
-  levels: [clean, derive]             # must include clean
+  levels: [clean, derive]             # must include clean; add reshape for level 3 (combine_rows)
   max_conversion_failure_pct: 5.0     # 0..50
   tick_uncertain: false               # whether "check" suggestions start ticked
   max_llm_calls_per_session: 40       # 1..500
@@ -340,7 +354,7 @@ After a change run `make test` (config validation) and the benchmark (§9.4) if 
 
 1. Add the member to `RecipeStepKind` (`engine/agent/contracts.py`); regenerate `docs/API.md`
    (`python -m scripts.gen_api_docs`).
-2. In `engine/agent/recipe.py`: its phase in `STEP_PHASE`, its level in `_LEVEL_OF` if it is not
+2. In `engine/agent/recipe.py`: its phase in `STEP_PHASE` (parse 1, combine 2, derive 3, drop 4), its level in `_LEVEL_OF` if it is not
    `clean`, its parameters in `_check_params`, and its runner in `_apply`.
 3. Write the parser in `engine/agent/formats.py` (row-wise and stateless, computed once per distinct
    value, returning a `ParseOutcome` that counts failures), and a detector if the advisor should
@@ -352,8 +366,9 @@ After a change run `make test` (config validation) and the benchmark (§9.4) if 
 
 ### 9.4 Update the benchmark golden file
 
-`tests/fixtures/agent_bench/cases.py` builds sixteen files (the messy generator
-`make_messy.py`, the broken fixtures, ambiguous dates, unreadable numbers …) and `expected.json`
+`tests/fixtures/agent_bench/cases.py` builds nineteen files (the messy generator
+`make_messy.py`, the broken fixtures, ambiguous dates, unreadable numbers, the multi-row order logs
+of `make_multirow.py` …) and `expected.json`
 holds a digest of the advice for each. After a deliberate rule change:
 
 ```
@@ -371,8 +386,11 @@ prompt by `HELPER TURN` and parses its state and tool-result sections, so keep t
 
 ## 10. Performance
 
-See `reports/plan_g_performance.md`. On a 1,000,000-row messy file the parsers run once per distinct
-value; reproduce with `python -m tests.fixtures.agent_bench.perf --rows 1000000`.
+See `reports/plan_g_performance.md`. On a 1,000,000-row messy file: the format detector 25 s, the
+whole advisor 110 s (mostly the engine's own profiling and checks), the six fixes on every row 4 s;
+on a 1,000,000-row order log, combining with the full leak check 6 s. The parsers run once per
+distinct value; the preview runs on 1,000 rows (or entities). Reproduce with
+`python -m tests.fixtures.agent_bench.perf --rows 1000000`.
 
 ## 11. Known limitations
 
@@ -386,6 +404,11 @@ value; reproduce with `python -m tests.fixtures.agent_bench.perf --rows 1000000`
 - **Column names are shown as they are** after cleaning and cutting; a header that is itself
   personal data (an email address as a column name) is masked only where the guardrails catch it.
 - **`derive` steps** are supported by the recipe engine but not proposed by the advisor or the chat.
-- **Level 3** (many rows per entity, M76), the UI tab (M75) and `make agent-eval` on Bedrock are
-  separate milestones.
+- **The combine leak probe** is onboarding's `_run_leak_probe`, which opens its own DuckDB connection;
+  Plan G makes it single-threaded by swapping `duckdb.connect` for the duration of the probe
+  (`reshape._single_threaded_duckdb`). The lasting fix is for the probe to accept a connection.
+- **A combine preview** is computed on the first 1,000 entities and without the leak probe; the numbers
+  it shows are for those entities only.
+- `make agent-eval` (the benchmark on Bedrock) is not built yet; Guided setup is not yet the default
+  tab (DEC-1019).
 - Chat is English only.

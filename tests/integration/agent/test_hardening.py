@@ -243,3 +243,17 @@ def test_a_session_id_the_store_refuses_is_404_not_500(client: TestClient, uploa
     response = client.get(f"/uploads/{upload_id}/agent-session")
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "AGENT_SESSION_NOT_FOUND"
+
+
+def test_a_combine_preview_takes_whole_entities_not_the_first_rows() -> None:
+    """The preview samples 1,000 rows; combining part of an entity's rows would show wrong totals."""
+    import pandas as pd
+
+    keys = [f"S{i % 1_500:05d}" for i in range(6_000)]  # every shopper on 4 rows, spread through the file
+    frame = pd.DataFrame({"customer_id": keys, "order_value": range(6_000)})
+    steps = (RecipeStep(order=1, kind=RecipeStepKind.COMBINE_ROWS, column="customer_id", params={}),)
+    recipe = _recipe(_messy(rows=600)).model_copy(update={"steps": steps, "recipe_hash": recipe_hash(steps)})
+    sample = agent_routes._preview_sample(frame, recipe)
+    assert sample["customer_id"].nunique() == agent_routes.PREVIEW_SAMPLE_ROWS
+    assert (sample.groupby("customer_id").size() == 4).all()
+    assert len(agent_routes._preview_sample(frame, None)) == agent_routes.PREVIEW_SAMPLE_ROWS

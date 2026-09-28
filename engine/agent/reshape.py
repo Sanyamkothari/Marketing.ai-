@@ -45,7 +45,9 @@ runs neither.
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+import threading
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from typing import Any, Final, Literal
 
@@ -75,6 +77,39 @@ ROW_COUNT: Final[str] = "row_count"
 
 _ROLE: Final[str] = "events"
 _ENTITY_ROLE: Final[str] = "__combine_entity__"  # no view has it: the probe re-dates every event role
+
+_SINGLE_THREAD_LOCK: Final[threading.Lock] = threading.Lock()
+
+
+@contextmanager
+def _single_threaded_duckdb() -> Iterator[None]:
+    """Every DuckDB connection opened inside the block runs on one thread (M77 hardening).
+
+    The combine build runs single-threaded so `latest` breaks ties between rows of the same date the
+    same way every time. Onboarding's leak probe opens its own connection with DuckDB's default
+    thread count; above a few hundred thousand rows DuckDB then scans in parallel, breaks those ties
+    differently, and the probe reports a value that "moved" - a false `FUTURE_EVENTS_LEAKED` that
+    refused every realistically sized order log at Approve. The probe takes no connection, so for its
+    duration `duckdb.connect` hands out single-threaded connections. The lock keeps two probes from
+    interleaving the swap; another thread connecting meanwhile only runs slower. The lasting fix is
+    for the probe to accept a connection or a thread count (a request to the onboarding owners).
+    """
+    import duckdb
+
+    with _SINGLE_THREAD_LOCK:
+        real = duckdb.connect
+
+        def connect(*args: Any, **kwargs: Any) -> Any:
+            con = real(*args, **kwargs)
+            con.execute("SET threads TO 1")
+            return con
+
+        duckdb.connect = connect
+        try:
+            yield
+        finally:
+            duckdb.connect = real
+
 
 COMBINE_FUNCTIONS: Final[frozenset[str]] = frozenset(
     {"count", "sum", "mean", "max", "min", "latest", "nunique", "days_since_first", "days_since_last"}
@@ -469,15 +504,16 @@ def combine_rows(
         con.close()
     summary: str | None = None
     if leak_check is not None:
-        probe = _run_leak_probe(
-            {_ROLE: events},
-            snapshots,
-            features,
-            built,
-            entity_role=_ENTITY_ROLE,
-            inclusive=True,
-            full=leak_check == "full",
-        )
+        with _single_threaded_duckdb():
+            probe = _run_leak_probe(
+                {_ROLE: events},
+                snapshots,
+                features,
+                built,
+                entity_role=_ENTITY_ROLE,
+                inclusive=True,
+                full=leak_check == "full",
+            )
         if probe.leaked:
             raise CombineError(
                 "RECIPE_STEP_INVALID",
