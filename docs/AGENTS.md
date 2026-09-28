@@ -190,7 +190,7 @@ identically.
 | `parse_date` | `dayfirst` (must be decided) | Mixed styles → datetime, each value parsed on its own; a value with a UTC offset keeps its clock time. |
 | `map_boolean` | `true_values`, `false_values` | Listed spellings (compared trimmed, case-folded) → 1 / 0; anything else fails. |
 | `normalise_text` | `strip`, `merge` (frozen at approval) | Trim; replace listed spellings by their canonical one. |
-| `combine_rows` | the step's `column` is the entity key; `time_column`, `snapshot_column`, `dayfirst`, `outcome`, `features` (a frozen `{name, function, column}` list) | Level 3: many rows per entity into one (DEC-1023 … DEC-1025), computed by the onboarding feature engine with its point-in-time guard. Only rows dated on or before the entity's snapshot count; the outcome is read from the latest row, not aggregated; numbers get sum/mean/max/latest, categories latest/nunique, dates days-since, plus a row count. Entity-wise rather than row-wise: an entity's output depends only on its own rows and the frozen parameters. A training Approve runs onboarding's full future-data leak probe, a scoring replay the narrow one, a preview none. Needs the `reshape` level. |
+| `combine_rows` | the step's `column` is the entity key; `time_column`, `snapshot_column`, `dayfirst`, `outcome`, `features` (a frozen `{name, function, column}` list) | Level 3: many rows per entity into one (DEC-1023 … DEC-1025), computed by the onboarding feature engine with its point-in-time guard. Only rows dated on or before the entity's snapshot count; the outcome is read from the latest row, not aggregated, and `latest` breaks same-date ties the same way (the later row in the file); numbers get sum/mean/max/latest, categories latest/nunique, dates days-since (over dates on or before the snapshot; a date column already holding later dates on earlier rows is left out of the plan), plus a row count. A row with no key, date or snapshot is a counted failure. Dates with an offset or zone are compared in UTC; out-of-range dates are empty; each date column uses the day/month order its own values prove, else `dayfirst`, which is `null` when nothing proved it at planning - then an ambiguous date stops with `RECIPE_VALUES_UNCONVERTED`. A key mixing numbers and text is read as text. Carried consent/opt-out/last-contact columns keep their header whatever its spelling. Entity-wise rather than row-wise: an entity's output depends only on its own rows and the frozen parameters. A training Approve runs onboarding's full future-data leak probe, a scoring replay the narrow one, a preview none. Needs the `reshape` level. |
 | `derive` | `expression` | A new column from `engine.onboarding.transforms.derive`'s whitelist: names, numbers, `+ - * /`, `days_between`, `months_between`, `year`, `month`, `coalesce`, `lower`, `abs`, and `snapshot_date`. At most 300 characters; no repeated text. Needs the `derive` level. Not proposed by the advisor today. |
 | `drop_column` | — | Hide a column from the model. |
 
@@ -409,6 +409,12 @@ distinct value; the preview runs on 1,000 rows (or entities). Reproduce with
   (`reshape._single_threaded_duckdb`). The lasting fix is for the probe to accept a connection.
 - **A combine preview** is computed on the first 1,000 entities and without the leak probe; the numbers
   it shows are for those entities only.
+- **A combine with an unproven day/month order stops instead of asking.** When no date column of the
+  file proves the order and the snapshot (or row date) column holds values such as `10/09/2011`, the
+  plan freezes `dayfirst: null` and the combine stops with `RECIPE_VALUES_UNCONVERTED`; turning it into
+  a question, like the format detector's, is advisor work still to do. The leak probe re-dates only
+  the row date, so a date column overwritten after the snapshot is caught by the plan (on the preview),
+  not by the probe.
 - `make agent-eval` (the benchmark on Bedrock) is not built yet; Guided setup is not yet the default
   tab (DEC-1019).
 - Chat is English only.

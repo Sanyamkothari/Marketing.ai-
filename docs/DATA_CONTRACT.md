@@ -909,8 +909,18 @@ asks first. Each customer is described as of a snapshot date - the latest value 
 such as `snapshot_date`, or, when the file has none, the date of the customer's latest row - and only
 rows dated on or before it are counted, added up, averaged or read (the onboarding point-in-time
 guard). The outcome is the value on the customer's latest row (ties: the later date column, then the
-later row in the file). Rows with no ID or no readable date are left out and counted; more than
-`agent.max_conversion_failure_pct` of them stops with `RECIPE_VALUES_UNCONVERTED`. The columns built
+later row in the file); a column's "latest" value breaks a same-date tie the same way. Rows with no
+ID, no readable date or no readable snapshot date are left out and counted; more than
+`agent.max_conversion_failure_pct` of them stops with `RECIPE_VALUES_UNCONVERTED`. Dates with a UTC
+offset (or a time zone) are compared in UTC; dates without one as written; a date outside the
+supported range (such as `9999-12-31`) counts as empty. Each date column is read in the day/month
+order its own values prove, otherwise in the order fixed when the step was approved; when nothing in
+the file proved an order then and a value such as `10/09/2011` could be read either way, the step
+stops with `RECIPE_VALUES_UNCONVERTED` naming the column instead of guessing. An ID written as a
+number on some rows and as text on others (`7` and `"7"`) is one customer. For another date column,
+"days since" counts only dates on or before the snapshot, and a date column that already holds dates
+after the snapshot on earlier rows (a "last order date" the export overwrote) is not combined at all.
+The columns built
 are fixed when the step is approved, so every later file is combined into exactly the same columns;
 a scoring file needs no outcome column. A training file combined this way gets onboarding's full
 future-data check (rows re-dated after the snapshot must change nothing), a scoring file the narrow
