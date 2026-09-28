@@ -202,6 +202,44 @@ export function setupModes(uc) {
     }
   });
 }
+
+// Plan H M82 (same workstream and block as Plan G, PARALLEL_WORK_PROTOCOL.md §4): links under a run's
+// results to the screens that used to be top-level menu items - Model health, the Schedule, the
+// report - so they are found where the use case is, not in the bar. `ui/usecase.js` draws
+// `resultLinksHtml(uc, run)` under the flow blocks; with nothing registered it draws nothing.
+
+import { esc as escHtml } from "../dom.js";
+
+const resultLinkList = [];
+
+/**
+ * Register a link under a run's results: `{ name, applies(uc, run), link(uc, run) }`, where `link`
+ * returns `{ label, href }`. `name` must be unique; links are drawn in registration order.
+ */
+export function registerResultLink(entry) {
+  const { name, applies, link } = entry || {};
+  if (!name || typeof applies !== "function" || typeof link !== "function") {
+    throw new Error("registerResultLink needs { name, applies(uc, run), link(uc, run) }");
+  }
+  if (resultLinkList.some((e) => e.name === name)) throw new Error(`A result link named "${name}" is already registered`);
+  resultLinkList.push({ name, applies, link });
+  announceModulesChanged();
+}
+
+/** The links that apply to this run, as one quiet row (`nav.uc-links`); `""` for none. */
+export function resultLinksHtml(uc, run) {
+  const links = resultLinkList
+    .map((entry) => {
+      try {
+        return entry.applies(uc, run) ? entry.link(uc, run) : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((l) => l && l.label && l.href)
+    .map((l) => `<a class="uc-link" href="${escHtml(l.href)}">${escHtml(l.label)}<span aria-hidden="true"> ›</span></a>`);
+  return links.length ? `<nav class="uc-links" aria-label="More for this use case">${links.join("")}</nav>` : "";
+}
 // ---- END PLAN-G ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----

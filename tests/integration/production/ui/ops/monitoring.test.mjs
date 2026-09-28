@@ -75,6 +75,10 @@ const { w, calls, forms } = installOps({
 await import("../../../../../ui/app.js");
 await import("../../../../../ui/modules/production/index.js");
 const session = await import("../../../../../ui/modules/production/session.js");
+// Plan H M82 (DEC-1113): the links that were in the top bar are on the Settings page; this is what
+// that page offers to the person signed in now, drawn by its own pure builder.
+const { settingsHtml } = await import("../../../../../ui/modules/simple/pages.js");
+const offers = (href) => settingsHtml({ can: (m, p) => session.can(m, p), status: "signed-in" }).includes(`href="${href}"`);
 
 const text = () => ($("#app") || {}).textContent || "";
 const last = (method, path) => calls.filter((c) => c.method === method && c.path === path).pop();
@@ -82,9 +86,9 @@ const rowOf = (id) => $(`tr[data-schedule="${id}"]`);
 const heading = () => ($("main h1") || {}).textContent || "";
 const cardTitles = () => $$("main .card h3").map((h) => h.textContent).join(" | ");
 
-test("the Analyst's schedule list shows every schedule with its cadence, and the bar links here", async () => {
+test("the Analyst's schedule list shows every schedule with its cadence, and Settings links here", async () => {
   await until(() => $$("tr[data-schedule]").length === fixture("schedules").schedules.length, 3000, "the schedules");
-  assert.ok($('#pb-bar a[href="#/monitoring/schedules"]'), "Monitoring in the user bar");
+  assert.ok(offers("#/monitoring/schedules"), "Schedules on the Settings page");
   assert.match(rowOf(ids.score_schedule).textContent, /Monthly · 02:00 Asia\/Kolkata/);
   assert.match(rowOf(ids.drift_schedule).textContent, /0 \* \* \* \* · UTC/);
   assert.equal($("#pb-schedule-create-submit").disabled, false);
@@ -301,7 +305,7 @@ test("a Viewer reads everything but every change is refused in place, and a refu
 test("an Admin is not an Analyst: the Privacy link is offered, running a schedule is not", async () => {
   session.storeToken("tok-admin", null);
   await session.loadMe();
-  assert.ok($('#pb-bar a[href="#/privacy/consent"]'));
+  assert.ok(offers("#/privacy/consent"), "Privacy on the Settings page");
   w.location.hash = "#/monitoring/runs";
   w.location.hash = "#/monitoring/schedules";
   await until(() => $$("tr[data-schedule]").length > 0 && $$(".pb-why").length > 0, 3000, "the list");

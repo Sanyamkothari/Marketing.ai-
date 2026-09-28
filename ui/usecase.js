@@ -60,7 +60,7 @@ import {
   stagesHtml,
   writePath,
 } from "./settings.js";
-import { runActionsHtml, setupModes, setupSource } from "./modules/router.js";
+import { resultLinksHtml, runActionsHtml, setupModes, setupSource } from "./modules/router.js";
 import * as seams from "./modules/router.js";
 
 const AUTOML = "__automl__";
@@ -128,8 +128,10 @@ export function useCaseState(uc) {
       clientRuns: [],
       clientId: null,
       // Plan G: the Setup view's tab ("manual", or a registered setup mode's name) and the upload a
-      // setup mode filled the form with, so that tab can draw the Run button once it has.
-      setupTab: "manual",
+      // setup mode filled the form with, so that tab can draw the Run button once it has. Plan H M82
+      // (DEC-1114): `null` until the person picks one, which opens the first setup mode offered -
+      // Guided setup - and Manual setup where none is.
+      setupTab: null,
       guided: null,
       view: "setup",
       runId: null,
@@ -798,9 +800,11 @@ function setupForm(uc, s) {
 
 const MANUAL = "manual";
 
-/** The tab on show: the one the user picked while it is still offered, else Manual setup. */
+/** The tab on show: the one the user picked while it is still offered; before any pick, the first
+ * setup mode offered (Guided setup, Plan H); else Manual setup. */
 function activeTab(s, modes) {
-  return modes.some((m) => m.name === s.setupTab) ? s.setupTab : MANUAL;
+  const wanted = s.setupTab === null && modes.length ? modes[0].name : s.setupTab;
+  return modes.some((m) => m.name === wanted) ? wanted : MANUAL;
 }
 
 function setupTabsHtml(modes, active) {
@@ -1153,7 +1157,7 @@ function resultsHtml(uc, s) {
   return `<div class="results"><section class="summary rsum"><div class="vline">${told.head}</div>${told.lines.join(
     "",
   )}<div class="btn-row">${told.actions}</div>${tech}</section>
-    <div class="flow${flow.count > 3 ? " four" : ""}">${flow.html}</div>
+    <div class="flow${flow.count > 3 ? " four" : ""}">${flow.html}</div>${resultLinksHtml(uc, run)}
     <div class="runs-below">${runsCard(uc, s)}</div></div>`;
 }
 
@@ -1685,7 +1689,8 @@ export function createController(uc, rerender) {
   function mountMode(root) {
     const main = root.querySelector("#f-mode");
     if (!main) return;
-    const mode = setupModes(uc).find((m) => m.name === s.setupTab);
+    const modes = setupModes(uc);
+    const mode = modes.find((m) => m.name === activeTab(s, modes));
     if (mode) mode.mount({ main, aside: root.querySelector("#f-mode-aside") }, host);
   }
 
