@@ -1346,8 +1346,14 @@ every later file. The first screen and Manual setup do not change.
   safe under concurrent requests; seventeen review findings are fixed with tests. A 1,000,000-row
   file is prepared in seconds and advised in about two minutes. How it all works:
   [`docs/AGENTS.md`](docs/AGENTS.md); timings: `reports/plan_g_performance.md`.
+- **Adversarial review.** A second review had each finding reproduced by independent reviewers
+  before it counted; 37 were confirmed and fixed with tests, in five areas: number and date
+  parsing (no silent 1000x misreads, zoned dates in UTC), combining rows (no guessed day/month
+  order), the helper's advice (settings that only work together are decided together), the chat
+  (no 500s, no numbers laundered through tool calls) and scoring (one rule for which file a model
+  reads, the same answer from the dry run and Run). DEC-1034 … DEC-1044.
 
-Decisions are DEC-1000 … DEC-1033 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Decisions are DEC-1000 … DEC-1044 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Plan H — One simple product (M80–M84)
 
