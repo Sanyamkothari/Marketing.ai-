@@ -60,6 +60,9 @@ _LEVEL_OF: Final[dict[RecipeStepKind, AgentLevel]] = {
 SNAPSHOT_NAME: Final[str] = "snapshot_date"
 """The fixed name a derive expression uses for the row's snapshot date (onboarding's convention)."""
 
+MAX_DERIVE_CHARS: Final[int] = 300
+"""A derive expression is a short formula; a longer one is refused before it is parsed (M77)."""
+
 
 class RecipeError(Exception):
     """A recipe that cannot run on this file. `code` is a validation code or a RECIPE_* code."""
@@ -82,12 +85,36 @@ class RecipeRun:
     receipt: RecipeReceipt
 
 
-def derive_names(expression: str) -> frozenset[str]:
-    """Every name a derive expression reads (columns, `snapshot_date` and function names)."""
+def _derive_tree(expression: str) -> ast.Expression:
+    """The parsed expression, refused when too long, unparseable, or repeating text.
+
+    `engine.onboarding.transforms.derive` allows only names, literals, `+ - * /` and listed
+    functions, so nothing can be imported or executed; what it does not stop is a formula that
+    exhausts memory - `"x" * 999999999` - or nests deeply enough to overflow the parser. A recipe
+    refuses both here, before anything runs (M77 hardening).
+    """
+    if len(expression) > MAX_DERIVE_CHARS:
+        raise RecipeError("RECIPE_STEP_INVALID", f"A formula is at most {MAX_DERIVE_CHARS} characters long.")
     try:
         tree = ast.parse(expression, mode="eval")
-    except SyntaxError as exc:
+    except (SyntaxError, ValueError, RecursionError, MemoryError) as exc:
         raise RecipeError("RECIPE_STEP_INVALID", f"'{expression}' is not a valid expression.") from exc
+    for node in ast.walk(tree):
+        if (
+            isinstance(node, ast.BinOp)
+            and isinstance(node.op, ast.Mult)
+            and any(
+                isinstance(side, ast.Constant) and isinstance(side.value, str)
+                for side in (node.left, node.right)
+            )
+        ):
+            raise RecipeError("RECIPE_STEP_INVALID", "A formula may not repeat text.")
+    return tree
+
+
+def derive_names(expression: str) -> frozenset[str]:
+    """Every name a derive expression reads (columns, `snapshot_date` and function names)."""
+    tree = _derive_tree(expression)
     return frozenset(node.id for node in ast.walk(tree) if isinstance(node, ast.Name))
 
 
@@ -277,6 +304,15 @@ def _derive(
     except TransformError as exc:
         raise RecipeError(
             "RECIPE_STEP_INVALID", exc.message, column=step.new_column, order=step.order
+        ) from exc
+    except (TypeError, ValueError, ArithmeticError, RecursionError, MemoryError) as exc:
+        # e.g. text minus a number: the formula does not fit this file's values. A coded refusal,
+        # never a 500 in the middle of Approve or of a scoring run.
+        raise RecipeError(
+            "RECIPE_STEP_INVALID",
+            f"The formula for '{step.new_column}' cannot be computed on these values.",
+            column=step.new_column,
+            order=step.order,
         ) from exc
     return ParseOutcome(values=values, changed=int(values.notna().sum()), failed=0, failed_examples=())
 

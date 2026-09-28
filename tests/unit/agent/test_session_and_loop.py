@@ -25,9 +25,11 @@ class ScriptedMeter:
     def __init__(self, replies: Sequence[str | Exception]) -> None:
         self.replies = list(replies)
         self.calls = 0
+        self.rendered: list[Any] = []  # every prompt sent, so a test can assert on what reached the model
 
     def complete(self, rendered: Any, purpose: Any) -> LLMCompletion:
-        del rendered, purpose
+        del purpose
+        self.rendered.append(rendered)
         self.calls += 1
         reply = self.replies.pop(0)
         if isinstance(reply, Exception):

@@ -75,6 +75,12 @@ def load_recipe(storage: Storage, upload_id: str) -> DataRecipe | None:
     return storage.read_model(key, DataRecipe) if storage.exists(key) else None
 
 
+def load_receipt(storage: Storage, upload_id: str) -> RecipeReceipt | None:
+    """What the recipe did when it prepared a derived upload, or None for an upload a person sent."""
+    key = upload_key(upload_id, RECIPE_RECEIPT_FILENAME)
+    return storage.read_model(key, RecipeReceipt) if storage.exists(key) else None
+
+
 def model_recipe(storage: Storage, version: ModelVersion) -> DataRecipe | None:
     """The recipe the version's training run prepared its data with, or None (DEC-1006)."""
     key = run_key(version.run_id, DATA_RECIPE_FILENAME)
@@ -189,7 +195,9 @@ def replay_for_scoring(
     """The upload a scoring run should read: the file as sent, or the file prepared by the model's recipe.
 
     An upload already prepared with the same recipe is used as it is, so pressing Run twice does not
-    prepare a file twice.
+    prepare a file twice. An upload prepared with a *different* recipe is never prepared again on
+    top of that output: the model's recipe runs on the file the person sent, which the prepared
+    upload's receipt names (M77 hardening). A model without a recipe reads the upload it is given.
     """
     recipe = model_recipe(storage, version)
     if recipe is None:
@@ -197,8 +205,22 @@ def replay_for_scoring(
     already = load_recipe(storage, upload.upload_id)
     if already is not None and already.recipe_hash == recipe.recipe_hash:
         return upload, load_upload_profile(storage, upload.upload_id)
+    source = upload
+    if already is not None:
+        receipt = load_receipt(storage, upload.upload_id)
+        if receipt is None or not storage.exists(upload_key(receipt.upload_id, UPLOAD_RECORD_FILENAME)):
+            return recipe_failure_report(
+                RecipeError(
+                    "RECIPE_STEP_INVALID",
+                    "This file was prepared with other steps, and the file it was prepared from is gone. "
+                    "Upload the original file again.",
+                ),
+                upload_id=upload.upload_id,
+                mode=RunMode.SCORE,
+            )
+        source = storage.read_model(upload_key(receipt.upload_id, UPLOAD_RECORD_FILENAME), UploadRecord)
     try:
-        derived = write_derived_upload(storage, config, upload, recipe)
+        derived = write_derived_upload(storage, config, source, recipe)
     except RecipeError as exc:
         return recipe_failure_report(exc, upload_id=upload.upload_id, mode=RunMode.SCORE)
     return derived.record, derived.profile

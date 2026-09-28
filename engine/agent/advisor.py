@@ -19,6 +19,7 @@ Hiding a column is a recipe `drop_column` step, so scoring drops it the same way
 
 from __future__ import annotations
 
+import hashlib
 import itertools
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
@@ -40,6 +41,7 @@ from engine.agent.contracts import (
 from engine.agent.recipe import RecipeError, run_recipe
 from engine.agent.recommend import DataFacts, recommend_settings
 from engine.agent.tools import AgentContext, call_tool
+from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name
 from engine.config import (
     ColumnType,
     ConfigError,
@@ -177,7 +179,7 @@ def _role(builder: _Builder, path: str, column: str, evidence: str, confidence: 
     what = "the column that identifies each row" if path == ROLE_PRIMARY_KEY else "the outcome to predict"
     return builder.propose(
         kind=ProposalKind.ROLE,
-        title=f"Use '{column}' as {what}",
+        title=f"Use '{display_name(column)}' as {what}",
         reason=(
             "It is unique and never empty, and its name looks like an ID."
             if path == ROLE_PRIMARY_KEY
@@ -193,12 +195,13 @@ def _role(builder: _Builder, path: str, column: str, evidence: str, confidence: 
 
 def _role_option(builder: _Builder, path: str, column: str, evidence: str) -> QuestionOption:
     return QuestionOption(
-        option_id=f"use-{len(column)}-{abs(hash(column)) % 10_000}",
-        label=column,
-        effect=f"Use '{column}'.",
+        # A stable digest: `hash()` of a str changes per process, and two columns could collide.
+        option_id="use-" + hashlib.sha256(column.encode("utf-8")).hexdigest()[:12],
+        label=display_name(column),
+        effect=f"Use '{display_name(column)}'.",
         proposal=builder.option_proposal(
             kind=ProposalKind.ROLE,
-            title=f"Use '{column}' as {'the ID column' if path == ROLE_PRIMARY_KEY else 'the outcome'}",
+            title=f"Use '{display_name(column)}' as {'the ID column' if path == ROLE_PRIMARY_KEY else 'the outcome'}",
             reason="You chose it.",
             path=path,
             value=column,
@@ -262,17 +265,18 @@ def _choose_target(
         column = str(synonyms[0])
         _role(builder, ROLE_TARGET, column, roles.evidence_id, AgentConfidence.CHECK)
         return column, None
+    # Every column, not only the page `get_profile` lists: the same profile the tool reports from.
     options = [str(c) for c in synonyms] or [
-        str(c["name"])
-        for c in _rows(profile, "columns")
-        if c.get("distinct") == 2 and c.get("name") != primary_key and not c.get("personal_data")
+        c.name
+        for c in builder.ctx.profile.columns
+        if c.distinct_count == 2 and c.name != primary_key and not c.pii_kinds
     ]
     definition = builder.ctx.config.target.definition or "the outcome"
     if not options:
         configured = builder.ctx.config.target.column
         return None, (
             f"No column says whether {definition.lower()}. The model learns from past rows where the answer "
-            f"is known, so the file needs that column (this use case calls it '{configured}'), with two values "
+            f"is known, so the file needs that column (this use case calls it '{display_name(configured)}'), with two values "
             "such as 1 and 0."
         )
     builder.ask(
@@ -321,7 +325,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
             if non_empty and failed / non_empty * 100.0 > limit:
                 bad = ", ".join(f'"{v}"' for v in list(issue.get("failed_examples", []) or [])[:3])
                 builder.ask(
-                    f"Most of '{column}' looks like numbers, but {failed} of {non_empty} values cannot be read "
+                    f"Most of '{display_name(column)}' looks like numbers, but {failed} of {non_empty} values cannot be read "
                     f"(for example {bad}). What should happen to this column?",
                     [
                         QuestionOption(
@@ -330,7 +334,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                             effect="The model will not use this column.",
                             proposal=builder.option_proposal(
                                 kind=ProposalKind.RECIPE_STEP,
-                                title=f"Hide '{column}'",
+                                title=f"Hide '{display_name(column)}'",
                                 reason="You chose to hide it.",
                                 step=_step(RecipeStepKind.DROP_COLUMN, column),
                                 evidence_ids=(evidence,),
@@ -348,7 +352,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
             _recipe_proposal(
                 builder,
                 _step(RecipeStepKind.PARSE_NUMBER, column, **params),
-                f"Turn '{column}' into numbers",
+                f"Turn '{display_name(column)}' into numbers",
                 f"It is stored as text ({_examples(issue)}), so the model cannot use it as a number; "
                 f"{int(issue['convertible'])} of {non_empty} values convert.",
                 evidence,
@@ -359,7 +363,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
             if dayfirst is None:
                 sample = _examples(issue)
                 builder.ask(
-                    f"In '{column}' ({sample}), which comes first: the day or the month?",
+                    f"In '{display_name(column)}' ({sample}), which comes first: the day or the month?",
                     [
                         QuestionOption(
                             option_id=order,
@@ -367,7 +371,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                             effect=effect,
                             proposal=builder.option_proposal(
                                 kind=ProposalKind.RECIPE_STEP,
-                                title=f"Read '{column}' as dates, {label.lower()}",
+                                title=f"Read '{display_name(column)}' as dates, {label.lower()}",
                                 reason="You told the helper which way round the dates are.",
                                 step=_step(RecipeStepKind.PARSE_DATE, column, dayfirst=order == "day-first"),
                                 evidence_ids=(evidence,),
@@ -386,7 +390,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
             _recipe_proposal(
                 builder,
                 _step(RecipeStepKind.PARSE_DATE, column, dayfirst=bool(dayfirst)),
-                f"Read '{column}' as dates, {order}",
+                f"Read '{display_name(column)}' as dates, {order}",
                 f"The dates are written in more than one way ({_examples(issue)}); values such as a day above 12 "
                 f"show they are {order}.",
                 evidence,
@@ -396,7 +400,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
             _recipe_proposal(
                 builder,
                 _step(RecipeStepKind.MAP_BOOLEAN, column, **params),
-                f"Turn the yes / no values in '{column}' into 1 and 0",
+                f"Turn the yes / no values in '{display_name(column)}' into 1 and 0",
                 f"The same answer is spelled several ways ({_examples(issue)}).",
                 evidence,
                 AgentConfidence.SURE,
@@ -407,9 +411,9 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                 builder,
                 _step(RecipeStepKind.NORMALISE_TEXT, column, **params),
                 (
-                    f"Merge different spellings in '{column}'"
+                    f"Merge different spellings in '{display_name(column)}'"
                     if merging
-                    else f"Remove extra spaces in '{column}'"
+                    else f"Remove extra spaces in '{display_name(column)}'"
                 ),
                 (
                     f"The same value is written differently ({_examples(issue)}), so it would count as different values."
@@ -473,7 +477,7 @@ def _leak_questions(builder: _Builder, checks: ToolResult) -> None:
             continue
         column = str(check["column"])
         builder.ask(
-            f"'{column}' almost perfectly predicts the outcome, so it may contain the answer "
+            f"'{display_name(column)}' almost perfectly predicts the outcome, so it may contain the answer "
             "(for example, something recorded after the outcome happened). Hide it?",
             [
                 QuestionOption(
@@ -482,7 +486,7 @@ def _leak_questions(builder: _Builder, checks: ToolResult) -> None:
                     effect="The model will not see this column.",
                     proposal=builder.option_proposal(
                         kind=ProposalKind.RECIPE_STEP,
-                        title=f"Hide '{column}'",
+                        title=f"Hide '{display_name(column)}'",
                         reason="It may contain the answer.",
                         step=_step(RecipeStepKind.DROP_COLUMN, column),
                         evidence_ids=(checks.evidence_id,),
@@ -495,7 +499,7 @@ def _leak_questions(builder: _Builder, checks: ToolResult) -> None:
                     effect="The warning is recorded as expected.",
                     proposal=builder.option_proposal(
                         kind=ProposalKind.ACKNOWLEDGEMENT,
-                        title=f"Keep '{column}'",
+                        title=f"Keep '{display_name(column)}'",
                         reason="You confirmed it is known before the outcome.",
                         path="validation.acknowledged",
                         value=str(check["acknowledge"] or f"LEAKAGE_SUSPECTED:{column}"),
@@ -528,7 +532,7 @@ def _notes_from_checks(builder: _Builder, checks: ToolResult) -> None:
     # One line per column; personal data first, because it is the reason that matters most.
     for column, why in reasons.items():
         ordered = sorted(dict.fromkeys(why), key=lambda reason: reason != _ENGINE_HIDES["PII_DETECTED"])
-        builder.engine_hidden.append(f"{column}: {', '.join(ordered)}")
+        builder.engine_hidden.append(f"{display_name(column)}: {', '.join(ordered)}")
 
 
 def _facts(
@@ -589,7 +593,9 @@ def advise(
         outcome = builder.call("describe_outcome", {"column": outcome_column})
         label = _value(outcome, "positive_label")
         if label is not None:
-            builder.assumptions.append(f"'{label}' in '{outcome_column}' means yes.")
+            builder.assumptions.append(
+                f"'{clean_text(str(label), MAX_NAME_CHARS)}' in '{display_name(outcome_column)}' means yes."
+            )
     protected = {name for name in (key, outcome_column) if name} | {
         name
         for name in (
@@ -695,7 +701,7 @@ def summarise(
     decisions = tuple(p.title for p in accepted if p.kind is not ProposalKind.ROLE)
     roles = {p.path: str(p.value) for p in accepted if p.kind is ProposalKind.ROLE}
     hidden = [
-        f"{p.step.column}: {p.reason}"
+        f"{display_name(p.step.column)}: {p.reason}"
         for p in accepted
         if p.step is not None and p.step.kind is RecipeStepKind.DROP_COLUMN
     ]
@@ -713,7 +719,7 @@ def summarise(
         test_pct = round(config.split.test_fraction * 100)
         if config.split.type is SplitType.TIME_BASED and config.split.time_column:
             actions.append(
-                f"Hold back the newest {test_pct}% of rows by '{config.split.time_column}' to test the model."
+                f"Hold back the newest {test_pct}% of rows by '{display_name(config.split.time_column)}' to test the model."
             )
         else:
             actions.append(f"Hold back {test_pct}% of rows at random to test the model.")

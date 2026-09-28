@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Any, Final
 
 from engine.agent.contracts import AgentConfidence
+from engine.agent.untrusted import display_name
 from engine.config import (
     ADVISORY_PATHS,
     EXTRA_OVERRIDABLE_PATHS,
@@ -119,7 +120,7 @@ def _split_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecomme
                 SettingRecommendation(
                     "split.time_column",
                     column,
-                    f"Use '{column}' as the date of each row",
+                    f"Use '{display_name(column)}' as the date of each row",
                     "This use case tests on the newest data, and this is the file's date column.",
                     AgentConfidence.SURE,
                     facts.evidence_ids,
@@ -143,14 +144,14 @@ def _split_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecomme
             "split.type",
             SplitType.TIME_BASED.value,
             "Test on the newest rows",
-            f"The file has dates in '{column}', so the model can be tested on its newest rows, as it will be used.",
+            f"The file has dates in '{display_name(column)}', so the model can be tested on its newest rows, as it will be used.",
             AgentConfidence.CHECK,
             facts.evidence_ids,
         ),
         SettingRecommendation(
             "split.time_column",
             column,
-            f"Use '{column}' as the date of each row",
+            f"Use '{display_name(column)}' as the date of each row",
             "Needed to split by date.",
             AgentConfidence.CHECK,
             facts.evidence_ids,
@@ -209,8 +210,8 @@ def _consent_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecom
         SettingRecommendation(
             "governance.consent_column",
             column,
-            f"Train only on customers who consented, using '{column}'",
-            f"'{column}' looks like a consent flag. Rows without consent would be left out of training.",
+            f"Train only on customers who consented, using '{display_name(column)}'",
+            f"'{display_name(column)}' looks like a consent flag. Rows without consent would be left out of training.",
             AgentConfidence.CHECK,
             facts.evidence_ids,
         )

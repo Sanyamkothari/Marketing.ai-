@@ -157,3 +157,120 @@ def test_numbers_stored_as_text_are_reported_even_when_plain() -> None:
 def test_a_mostly_unconvertible_column_is_not_called_numbers() -> None:
     frame = pd.DataFrame({"x": ["abc", "def", "ghi", "12"]})
     assert FormatIssueKind.NUMBER_AS_TEXT not in _kinds(frame).values()
+
+
+# ---------------------------------------------------------------------------
+# M77: the parsers run once per distinct value; they must equal the row-by-row loop they replaced
+# ---------------------------------------------------------------------------
+_MESSY: list[object] = [
+    "₹1,200",
+    "Rs. 1,20,000",
+    "45%",
+    "(300)",
+    "-12",
+    "+7",
+    "1 200",
+    "  8  ",
+    "1.200,50",
+    "abc",
+    "",
+    "   ",
+    None,
+    float("nan"),
+    "1e3",
+    ".5",
+    "5.",
+    "(-4)",
+    "12%%",
+    "€ 3,5",
+    "$-2",
+    "1 000",
+    "1'000",
+    "₹1,200",
+    "abc",
+    7,
+    3.5,
+    "INR",
+    "--5",
+    "0",
+    "Y",
+    "yes",
+    " No ",
+    "delhi ",
+    "Delhi",
+    "DELHI",
+]
+
+
+def _empty(value: object) -> bool:
+    return value is None or (isinstance(value, float) and math.isnan(value)) or not str(value).strip()
+
+
+@pytest.mark.parametrize("decimal", [".", ","])
+def test_parse_numbers_matches_the_row_by_row_loop(decimal: str) -> None:
+    from engine.agent.formats import _number_one  # the one parser both versions share
+
+    series = pd.Series(_MESSY * 3, dtype=object)
+    expected: list[float] = []
+    failures: list[str] = []
+    for value in series:
+        if _empty(value):
+            expected.append(math.nan)
+            continue
+        number = _number_one(str(value), decimal, True)
+        expected.append(math.nan if number is None else number)
+        if number is None:
+            failures.append(str(value))
+    out = parse_numbers(series, decimal=decimal)
+    assert out.values.tolist() == pytest.approx(expected, nan_ok=True)
+    assert (out.failed, out.changed) == (len(failures), sum(not math.isnan(v) for v in expected))
+    assert list(out.failed_examples) == failures[:5]
+
+
+def test_map_booleans_and_normalise_texts_match_the_row_by_row_loop() -> None:
+    series = pd.Series(_MESSY * 2, dtype=object, index=range(100, 100 + 2 * len(_MESSY)))
+    truthy, falsy = {"y", "yes", "1"}, {"no", "n", "0"}
+    out = map_booleans(series, true_values=sorted(truthy), false_values=sorted(falsy))
+    expected: list[float] = []
+    for value in series:
+        key = None if _empty(value) else str(value).strip().casefold()
+        expected.append(1.0 if key in truthy else 0.0 if key in falsy else math.nan)
+    assert out.values.tolist() == pytest.approx(expected, nan_ok=True)
+    assert list(out.values.index) == list(series.index)
+    assert out.failed == sum(
+        1 for v, e in zip(series, expected, strict=True) if not _empty(v) and math.isnan(e)
+    )
+
+    merge = {"delhi": "Delhi", "DELHI": "Delhi"}
+    tidy = normalise_texts(series, merge=merge)
+    changed = 0
+    for before, after in zip(series, tidy.values, strict=True):
+        if _empty(before):
+            assert after is before or (pd.isna(after) and pd.isna(before)) or after == before
+            continue
+        want = merge.get(str(before).strip(), str(before).strip())
+        if want != str(before):
+            changed += 1
+            assert after == want
+        else:
+            assert after == before
+    assert tidy.changed == changed
+
+
+def test_parse_dates_parses_each_spelling_once_with_the_same_answer() -> None:
+    values = ["03/01/2024", "2024-01-05", "5 Feb 2024", "03/01/2024", None, "not a date", "2024-01-05"]
+    series = pd.Series(values * 50, dtype=object)
+    out = parse_dates(series, dayfirst=True)
+    for value, got in zip(series, out.values, strict=True):
+        one = None if value is None else pd.to_datetime(value, format="mixed", dayfirst=True, errors="coerce")
+        assert (pd.isna(got) and (one is None or pd.isna(one))) or got == one
+    assert out.failed == 50
+
+
+def test_dates_with_different_utc_offsets_parse_instead_of_failing() -> None:
+    """A column mixing UTC offsets used to raise inside pandas' `.dt` and end Guided setup with a 500."""
+    series = pd.Series(["2024-01-01T23:00:00+05:30", "2024-01-02T00:00:00+01:00", "2024-01-03", "03/01/2024"])
+    out = parse_dates(series, dayfirst=True)
+    assert out.failed == 0
+    assert out.values.tolist()[0] == pd.Timestamp("2024-01-01 23:00:00")  # the clock time as written
+    assert find_format_issues(pd.DataFrame({"when": series}))[0].kind is FormatIssueKind.MIXED_DATES

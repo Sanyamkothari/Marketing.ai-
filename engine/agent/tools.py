@@ -28,6 +28,7 @@ from pydantic import BaseModel, ConfigDict, Field, JsonValue, ValidationError
 from engine.agent.checks import check_plan
 from engine.agent.contracts import ToolResult
 from engine.agent.formats import find_format_issues
+from engine.agent.untrusted import MAX_PROMPT_LIST, resolve_column
 from engine.config import ConfigError, PrimaryKey, RunMode, UseCaseConfig, resolve_config
 from engine.contracts import DatasetProfile, FeatureSchema
 from engine.pii import redact_cells
@@ -44,6 +45,9 @@ __all__ = [
 ]
 
 MAX_BUCKETS: Final[int] = 8
+MAX_PROFILE_COLUMNS: Final[int] = MAX_PROMPT_LIST
+"""`get_profile` lists at most this many columns per call; `offset` pages through a wider file, so a
+5,000-column file cannot fill a prompt (M77 hardening)."""
 
 
 class AgentToolError(Exception):
@@ -76,10 +80,15 @@ class AgentContext:
     schema: FeatureSchema | None = None
     clock: Callable[[], datetime] = utc_now
 
+    def resolve(self, name: str) -> str:
+        """The file's column `name` means: exact, or the one column whose shown (cleaned, cut) name it is."""
+        found = resolve_column(name, self.frame.columns)
+        if found is None:
+            raise AgentToolError("AGENT_COLUMN_UNKNOWN", f"There is no column {name[:80]!r} in this file.")
+        return found
+
     def column(self, name: str) -> pd.Series[Any]:
-        if name not in self.frame.columns:
-            raise AgentToolError("AGENT_COLUMN_UNKNOWN", f"There is no column {name!r} in this file.")
-        return self.frame[name]
+        return self.frame[self.resolve(name)]
 
 
 class _Args(BaseModel):
@@ -88,6 +97,10 @@ class _Args(BaseModel):
 
 class NoArgs(_Args):
     pass
+
+
+class ProfileArgs(_Args):
+    offset: int = Field(default=0, ge=0, description="First column to list, for a file with many columns.")
 
 
 class ColumnArgs(_Args):
@@ -215,11 +228,14 @@ def _name_matches(name: str, hints: tuple[str, ...]) -> bool:
 # ---------------------------------------------------------------------------
 # Read tools
 # ---------------------------------------------------------------------------
-def _get_profile(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
+def _get_profile(ctx: AgentContext, args: ProfileArgs) -> dict[str, Any]:
     profile = ctx.profile
+    shown = profile.columns[args.offset : args.offset + MAX_PROFILE_COLUMNS]
     return {
         "file_name": profile.file_name,
         "rows": profile.row_count,
+        "columns_total": len(profile.columns),
+        "columns_offset": args.offset,
         "columns": [
             {
                 "name": column.name,
@@ -233,7 +249,7 @@ def _get_profile(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
                 "personal_data": list(column.pii_kinds),
                 "personal_data_in_text": list(column.free_text_pii_kinds),
             }
-            for column in profile.columns
+            for column in shown
         ],
         "primary_key_candidates": list(profile.primary_key_candidates),
         "time_column_candidates": list(profile.time_column_candidates),
@@ -243,17 +259,19 @@ def _get_profile(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
 
 
 def _inspect_column(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
-    series = ctx.column(args.column)
-    column = _column_profiles(ctx).get(args.column)
-    personal = _personal(ctx, args.column)
+    name = ctx.resolve(args.column)
+    series = ctx.frame[name]
+    column = _column_profiles(ctx).get(name)
+    personal = _personal(ctx, name)
     result: dict[str, Any] = {
-        "column": args.column,
+        "column": name,
         "rows": len(series),
         "empty": int(series.isna().sum()),
         "distinct": int(series.nunique(dropna=True)),
         "personal_data": list(column.pii_kinds) if column is not None else [],
     }
-    if column is not None:
+    if column is not None and not personal:
+        # The smallest and largest value of a personal column are somebody's value.
         result.update(
             {
                 "type": column.inferred_type.value,
@@ -272,18 +290,19 @@ def _inspect_column(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
         result["top_values"] = [
             {"value": redact_cells([str(value)[:60]])[0], "rows": int(rows)} for value, rows in counts.items()
         ]
-    result["relation_to_outcome"] = _relation_to_target(ctx, args.column)
+    result["relation_to_outcome"] = _relation_to_target(ctx, name)
     return result
 
 
 def _describe_outcome(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
     """The outcome column by the engine's own label rule: how many rows are "yes"."""
-    series = ctx.column(args.column)
-    params = validate.CheckParams(target=args.column, positive_label=ctx.config.target.positive_label)
+    name = ctx.resolve(args.column)
+    series = ctx.frame[name]
+    params = validate.CheckParams(target=name, positive_label=ctx.config.target.positive_label)
     label, positives, negatives = validate.resolve_positive_label(ctx.frame, params)
     total = positives + negatives
     return {
-        "column": args.column,
+        "column": name,
         "rows": len(series),
         "empty": int(series.isna().sum()),
         "distinct": int(series.nunique(dropna=True)),
@@ -296,10 +315,8 @@ def _describe_outcome(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
 
 
 def _find_format_issues(ctx: AgentContext, args: FormatArgs) -> dict[str, Any]:
-    columns = [c for c in (args.columns or tuple(ctx.frame.columns)) if not _personal(ctx, str(c))]
-    unknown = [c for c in (args.columns or ()) if c not in ctx.frame.columns]
-    if unknown:
-        raise AgentToolError("AGENT_COLUMN_UNKNOWN", f"There is no column {unknown[0]!r} in this file.")
+    asked = [ctx.resolve(c) for c in args.columns] if args.columns else [str(c) for c in ctx.frame.columns]
+    columns = [c for c in asked if not _personal(ctx, c)]
     return {
         "issues": [
             issue.as_json() for issue in find_format_issues(ctx.frame, columns=[str(c) for c in columns])
@@ -342,13 +359,13 @@ def _check_data(ctx: AgentContext, args: CheckArgs) -> dict[str, Any]:
         resolved = resolve_config(ctx.use_case_id, dict(args.overrides), root=ctx.config_root)
     except ConfigError as exc:
         raise AgentToolError(exc.code, exc.message) from exc
-    primary_key: PrimaryKey | None = args.primary_key
+    primary_key: PrimaryKey | None = ctx.resolve(args.primary_key) if args.primary_key else None
     report = check_plan(
         ctx.frame,
         resolved.config,
         mode=ctx.mode,
         primary_key=primary_key,
-        target=args.target,
+        target=ctx.resolve(args.target) if args.target else None,
         upload_id=ctx.upload_id,
         row_count=ctx.profile.row_count,
         schema=ctx.schema,
@@ -379,9 +396,9 @@ TOOLS: Final[Mapping[str, Tool]] = {
     for tool in (
         Tool(
             "get_profile",
-            "Rows, columns, types, empty shares and detected roles of the file.",
+            "Rows, columns, types, empty shares and detected roles of the file (50 columns per call; `offset` pages on).",
             ToolKind.READ,
-            NoArgs,
+            ProfileArgs,
             _get_profile,
         ),
         Tool(

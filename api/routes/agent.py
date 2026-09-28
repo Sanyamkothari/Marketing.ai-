@@ -9,6 +9,9 @@ through `engine.agent.checks.check_plan` - so the two cannot disagree (Plan G §
 
 from __future__ import annotations
 
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -20,7 +23,13 @@ from pydantic import Field, JsonValue
 from api.access import set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep, get_registry
-from api.routes.agent_recipes import model_recipe, recipe_failure_report, write_derived_upload
+from api.routes.agent_recipes import (
+    load_receipt,
+    model_recipe,
+    recipe_failure_report,
+    replay_for_scoring,
+    write_derived_upload,
+)
 from api.routes.runs import read_frame, requested_by, score_version, validation_conflict
 from api.routes.uploads import http_error, load_upload, load_upload_profile, profile_row_cap, use_case_config
 from api.schemas import ErrorResponse, UploadRecord, ValidationErrorResponse
@@ -53,12 +62,13 @@ from engine.agent.session import (
 from engine.agent.tools import AgentContext
 from engine.aws_connection import profile_in_force
 from engine.config import PrimaryKey, RunMode, StrictBase, UseCaseConfig, resolve_config, sole_key
-from engine.contracts import FeatureSchema, ValidationReport
+from engine.contracts import FeatureSchema, ModelVersion, ValidationReport
 from engine.generative.budget import Meter
+from engine.generative.contracts import LlmUsageReport
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import build_client
-from engine.pii import redact_cells
-from engine.storage import Storage, upload_key
+from engine.pii import redact_cells, redact_text
+from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.time import utc_now
 
@@ -149,6 +159,34 @@ def check_upload(
 SESSION_FILENAME: Final[str] = "agent/agent_session.json"
 LLM_USAGE_FILENAME: Final[str] = "agent/llm_usage.json"
 PREVIEW_ROWS: Final[int] = 5
+PREVIEW_SAMPLE_ROWS: Final[int] = 1_000
+"""The preview runs the accepted steps on the first 1,000 rows (Plan G §6.3), not on every row."""
+CHAT_GRACE_TURNS: Final[int] = 10
+"""Turns a session may still take once its model-call budget is spent (each answers "out of budget").
+
+A turn that reaches the model costs at least one call, so `2 * (max_llm_calls_per_session +
+CHAT_GRACE_TURNS)` messages is a hard ceiling on a transcript that would otherwise grow with every
+request (M77 hardening)."""
+
+_SESSION_LOCKS_GUARD: Final[threading.Lock] = threading.Lock()
+_SESSION_LOCKS: dict[str, threading.Lock] = {}
+
+
+@contextmanager
+def _session_lock(upload_id: str) -> Iterator[None]:
+    """Serialise every read-modify-write of one upload's session file within this process.
+
+    Without it two requests read the same session, each change it, and the second write silently
+    drops the first's change - two chat turns at once could each spend the whole model-call budget
+    and record only one of them (M77 hardening). Sync routes run on a thread pool, so this is a
+    thread lock; one lock per upload keeps different uploads independent. A deployment with several
+    API processes needs the session store's own locking, which the local store does not have.
+    """
+    with _SESSION_LOCKS_GUARD:
+        lock = _SESSION_LOCKS.setdefault(upload_id, threading.Lock())
+    with lock:
+        yield
+
 
 register(
     {
@@ -270,6 +308,8 @@ class _Loaded:
     ctx: AgentContext
     upload: UploadRecord
     recipe_error: RecipeError | None
+    version: ModelVersion | None = None
+    """Scoring files only: the model version a scoring run would use."""
 
 
 def _session_key(upload_id: str) -> str:
@@ -293,6 +333,7 @@ def _load_context(
     frame = read_frame(storage, upload.source_key, upload.file_format, profile_row_cap(config))
     schema: FeatureSchema | None = None
     recipe_error: RecipeError | None = None
+    version: ModelVersion | None = None
     if upload.mode is RunMode.SCORE:
         version = score_version(get_registry(request), config=config, version_id=None)
         schema = storage.read_model(version.schema_key, FeatureSchema)
@@ -321,14 +362,20 @@ def _load_context(
         frame=frame,
         schema=schema,
     )
-    return _Loaded(ctx=ctx, upload=upload, recipe_error=recipe_error)
+    return _Loaded(ctx=ctx, upload=upload, recipe_error=recipe_error, version=version)
 
 
 def _load_session(storage: Storage, upload_id: str) -> AgentSession:
-    key = _session_key(upload_id)
-    if not storage.exists(key):
-        raise _refuse(404, "AGENT_SESSION_NOT_FOUND", "Guided setup has not been started for this file.")
-    return storage.read_model(key, AgentSession)
+    """The upload's session, or 404 - also for an id the store refuses as a key (`..`, a backslash),
+    which used to escape as a 500 (M77)."""
+    missing = _refuse(404, "AGENT_SESSION_NOT_FOUND", "Guided setup has not been started for this file.")
+    try:
+        key = _session_key(upload_id)
+        if not storage.exists(key):
+            raise missing
+        return storage.read_model(key, AgentSession)
+    except StorageError as exc:
+        raise missing from exc
 
 
 def _save(storage: Storage, session: AgentSession) -> AgentSession:
@@ -360,6 +407,13 @@ def start_agent_session(
     upload_id: str, body: SessionStartRequest, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> AgentSessionResponse:
     """Runs the advisor - rules only, no AI service - and stores the session. Nothing is changed."""
+    with _session_lock(upload_id):
+        return _start_agent_session(upload_id, body, root, storage, request)
+
+
+def _start_agent_session(
+    upload_id: str, body: SessionStartRequest, root: Path, storage: Storage, request: Request
+) -> AgentSessionResponse:
     loaded = _load_context(storage, root, request, upload_id, body.use_case)
     ctx = loaded.ctx
     session_id = f"s-{upload_id}".lower()
@@ -402,16 +456,17 @@ def read_agent_session(upload_id: str, root: ConfigRootDep, storage: StorageDep)
 def decide_agent_session(
     upload_id: str, body: DecisionsRequest, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> AgentSessionResponse:
-    session = _load_session(storage, upload_id)
-    ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
-    try:
-        if body.decisions:
-            session = decide(session, ctx, [(d.proposal_id, d.state, d.value) for d in body.decisions])
-        if body.accept_recommended:
-            session = accept_recommended(session, ctx)
-    except SessionError as exc:
-        raise _session_error(exc) from exc
-    return _response(_save(storage, session), ctx.config)
+    with _session_lock(upload_id):
+        session = _load_session(storage, upload_id)
+        ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
+        try:
+            if body.decisions:
+                session = decide(session, ctx, [(d.proposal_id, d.state, d.value) for d in body.decisions])
+            if body.accept_recommended:
+                session = accept_recommended(session, ctx)
+        except SessionError as exc:
+            raise _session_error(exc) from exc
+        return _response(_save(storage, session), ctx.config)
 
 
 @router.post(
@@ -423,13 +478,14 @@ def decide_agent_session(
 def answer_agent_session(
     upload_id: str, body: AnswerRequest, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> AgentSessionResponse:
-    session = _load_session(storage, upload_id)
-    ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
-    try:
-        session = answer(session, ctx, body.question_id, body.option_id)
-    except SessionError as exc:
-        raise _session_error(exc) from exc
-    return _response(_save(storage, session), ctx.config)
+    with _session_lock(upload_id):
+        session = _load_session(storage, upload_id)
+        ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
+        try:
+            session = answer(session, ctx, body.question_id, body.option_id)
+        except SessionError as exc:
+            raise _session_error(exc) from exc
+        return _response(_save(storage, session), ctx.config)
 
 
 @router.post(
@@ -441,33 +497,118 @@ def answer_agent_session(
 def message_agent_session(
     upload_id: str, body: MessageRequest, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> AgentSessionResponse:
-    session = _load_session(storage, upload_id)
-    if session.status is SessionStatus.APPLIED:
-        raise _refuse(
-            409, "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it."
+    """What the person typed is masked (`engine.pii.redact_text`) before it is stored, shown to a
+    Viewer or put in a prompt; the transcript is bounded (`CHAT_GRACE_TURNS`); and the session's
+    `llm_usage.json` adds each turn to the turns before it."""
+    with _session_lock(upload_id):
+        session = _load_session(storage, upload_id)
+        if session.status is SessionStatus.APPLIED:
+            raise _refuse(
+                409, "AGENT_SESSION_APPLIED", "This setup was already approved. Start again to change it."
+            )
+        ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
+        ceiling = 2 * (ctx.config.agent.max_llm_calls_per_session + CHAT_GRACE_TURNS)
+        if len(session.transcript) + 2 > ceiling:
+            raise _refuse(
+                409,
+                "AGENT_CHAT_FULL",
+                "This chat has used all its questions. The suggestions on the screen still work; "
+                "start Guided setup again for a new chat.",
+            )
+        generative = ctx.config.generative
+        meter = Meter(
+            build_client(generative.llm, profile=profile_in_force()),
+            job_id=session.session_id,
+            llm=generative.llm,
+            budget=generative.budget,
         )
-    ctx = _load_context(storage, root, request, upload_id, session.use_case_id).ctx
-    generative = ctx.config.generative
-    meter = Meter(
-        build_client(generative.llm, profile=profile_in_force()),
-        job_id=session.session_id,
-        llm=generative.llm,
-        budget=generative.budget,
-    )
-    guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
-    turn = chat_turn(ctx, session, body.text, meter=meter, guardrails=guardrails, config_root=root)
-    asked = ChatMessage(role=ChatRole.USER, text=body.text, created_at=utc_now())
-    session = session.model_copy(
+        guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
+        text = redact_text(body.text)[0]
+        turn = chat_turn(ctx, session, text, meter=meter, guardrails=guardrails, config_root=root)
+        asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
+        session = session.model_copy(
+            update={
+                "transcript": (*session.transcript, asked, turn.reply),
+                "tool_results": (*session.tool_results, *turn.tool_results),
+                "proposals": (*session.proposals, *turn.proposals),
+                "llm_calls": session.llm_calls + turn.llm_calls,
+            }
+        )
+        session = with_summary(session, ctx)
+        usage_key = upload_key(upload_id, LLM_USAGE_FILENAME)
+        earlier = storage.read_model(usage_key, LlmUsageReport) if storage.exists(usage_key) else None
+        storage.write_model(usage_key, add_usage(earlier, meter.usage()))
+        return _response(_save(storage, session), ctx.config)
+
+
+def _sum_cost(a: float | None, b: float | None) -> float | None:
+    """Two priced costs added; null when either could not be priced (DEC-208)."""
+    return None if a is None or b is None else round(a + b, 6)
+
+
+def add_usage(earlier: LlmUsageReport | None, turn: LlmUsageReport) -> LlmUsageReport:
+    """One session's `llm_usage.json`: this turn's usage added to every earlier turn's.
+
+    A `Meter` belongs to one request, so writing `meter.usage()` on its own kept only the last turn.
+    A turn that made no call adds nothing and leaves an earlier null cost null.
+    """
+    if earlier is None:
+        return turn
+    models = {m.model_id: m for m in earlier.by_model}
+    for m in turn.by_model:
+        old = models.get(m.model_id)
+        models[m.model_id] = (
+            m
+            if old is None
+            else m.model_copy(
+                update={
+                    "calls": old.calls + m.calls,
+                    "input_tokens": old.input_tokens + m.input_tokens,
+                    "output_tokens": old.output_tokens + m.output_tokens,
+                    "cost_estimate_usd": _sum_cost(old.cost_estimate_usd, m.cost_estimate_usd),
+                }
+            )
+        )
+    purposes = {p.purpose.value: p for p in earlier.by_purpose}
+    for p in turn.by_purpose:
+        prev = purposes.get(p.purpose.value)
+        purposes[p.purpose.value] = (
+            p
+            if prev is None
+            else p.model_copy(
+                update={
+                    "calls": prev.calls + p.calls,
+                    "input_tokens": prev.input_tokens + p.input_tokens,
+                    "output_tokens": prev.output_tokens + p.output_tokens,
+                    "cost_estimate_usd": _sum_cost(prev.cost_estimate_usd, p.cost_estimate_usd),
+                }
+            )
+        )
+    before, now = earlier.totals, turn.totals
+    if now.calls == 0:
+        cost = before.cost_estimate_usd
+    elif before.calls == 0:
+        cost = now.cost_estimate_usd
+    else:
+        cost = _sum_cost(before.cost_estimate_usd, now.cost_estimate_usd)
+    totals = now.model_copy(
         update={
-            "transcript": (*session.transcript, asked, turn.reply),
-            "tool_results": (*session.tool_results, *turn.tool_results),
-            "proposals": (*session.proposals, *turn.proposals),
-            "llm_calls": session.llm_calls + turn.llm_calls,
+            "calls": before.calls + now.calls,
+            "input_tokens": before.input_tokens + now.input_tokens,
+            "output_tokens": before.output_tokens + now.output_tokens,
+            "cost_estimate_usd": cost,
+            "model_ids": tuple(sorted({*before.model_ids, *now.model_ids})),
         }
     )
-    session = with_summary(session, ctx)
-    storage.write_model(upload_key(upload_id, LLM_USAGE_FILENAME), meter.usage())
-    return _response(_save(storage, session), ctx.config)
+    return turn.model_copy(
+        update={
+            "totals": totals,
+            "cache_hits": earlier.cache_hits + turn.cache_hits,
+            "by_model": tuple(models[k] for k in sorted(models)),
+            "by_purpose": tuple(purposes[k] for k in sorted(purposes)),
+            "warnings": tuple(dict.fromkeys((*earlier.warnings, *turn.warnings))),
+        }
+    )
 
 
 def _accepted_recipe(session: AgentSession, upload: UploadRecord, principal: str | None) -> DataRecipe | None:
@@ -513,7 +654,7 @@ def preview_agent_session(
     loaded = _load_context(storage, root, request, upload_id, session.use_case_id)
     ctx = loaded.ctx
     personal = {column.name for column in ctx.profile.columns if column.pii_kinds}
-    before = ctx.frame
+    before = ctx.frame.head(PREVIEW_SAMPLE_ROWS)
     recipe = _accepted_recipe(session, loaded.upload, None)
     after, receipt = before, None
     if recipe is not None:
@@ -551,7 +692,17 @@ def apply_agent_session(
     upload_id: str, root: ConfigRootDep, storage: StorageDep, request: Request
 ) -> ApplyResponse | JSONResponse:
     """Refused while anything is undecided. Runs the recipe on every row into a new upload, then the
-    Run button's checks with the accepted settings; a 409 carries them when they would fail."""
+    Run button's checks with the accepted settings; a 409 carries them when they would fail.
+
+    A scoring file is prepared by the model's own saved recipe, exactly as `POST /runs` would
+    (`replay_for_scoring`), and checked as prepared; Run then reuses that prepared upload."""
+    with _session_lock(upload_id):
+        return _apply_agent_session(upload_id, root, storage, request)
+
+
+def _apply_agent_session(
+    upload_id: str, root: Path, storage: Storage, request: Request
+) -> ApplyResponse | JSONResponse:
     session = _load_session(storage, upload_id)
     loaded = _load_context(storage, root, request, upload_id, session.use_case_id)
     ctx, upload = loaded.ctx, loaded.upload
@@ -570,7 +721,15 @@ def apply_agent_session(
     key, target = roles_of(session)
     recipe = _accepted_recipe(session, upload, requested_by(request))
     prepared, receipt = upload, None
-    if recipe is not None:
+    if ctx.mode is RunMode.SCORE and loaded.version is not None:
+        # The model's recipe prepares a scoring file; the session proposes no steps of its own.
+        replayed = replay_for_scoring(storage, ctx.config, upload, loaded.version)
+        if isinstance(replayed, ValidationReport):
+            return validation_conflict(replayed)
+        prepared = replayed[0]
+        receipt = load_receipt(storage, prepared.upload_id) if prepared.upload_id != upload_id else None
+        recipe = None
+    elif recipe is not None:
         try:
             derived = write_derived_upload(storage, ctx.config, upload, recipe)
         except RecipeError as exc:
@@ -598,7 +757,7 @@ def apply_agent_session(
         request,
         object_id=prepared.upload_id,
         object_type="upload",
-        after_hash=recipe.recipe_hash if recipe is not None else None,
+        after_hash=receipt.recipe_hash if receipt is not None else None,
         details={
             "use_case_id": ctx.use_case_id,
             "count": sum(1 for p in session.proposals if p.state is ProposalState.ACCEPTED),

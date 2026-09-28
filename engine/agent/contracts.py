@@ -56,6 +56,7 @@ __all__ = [
     "SessionStatus",
     "StepReceipt",
     "ToolResult",
+    "TurnLog",
     "recipe_hash",
 ]
 
@@ -302,10 +303,27 @@ class Question(StrictBase):
         return self
 
 
+class TurnLog(StrictBase):
+    """What one chat turn did, without its content: for audit and for tuning the helper."""
+
+    llm_calls: Annotated[int, Field(ge=0, description="Model calls the turn made.")]
+    tools: tuple[str, ...] = Field(default=(), description="Actions the model took, in order.")
+    error_codes: tuple[str, ...] = Field(
+        default=(), description="Codes of actions the engine refused, in order."
+    )
+    blocked_by: str | None = Field(
+        default=None,
+        description="Why the model's reply was replaced by a plain sentence (a rule, `budget`, …); null when kept.",
+    )
+
+
 class ChatMessage(StrictBase):
     role: ChatRole = Field(description="Who wrote it.")
-    text: str = Field(description="The message; the helper's is checked by the guardrails before storage.")
+    text: str = Field(
+        description="The message; a person's is masked, the helper's is checked by the guardrails before storage."
+    )
     evidence_ids: tuple[str, ...] = Field(default=(), description="Tool results the reply used.")
+    turn: TurnLog | None = Field(default=None, description="The helper's replies only: what the turn did.")
     created_at: AwareDatetime = Field(description="When it was written.")
 
 

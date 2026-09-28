@@ -19,17 +19,26 @@ returns what it could not convert so a receipt can count it. An empty cell stays
 counted as a failure.
 
 Examples shown to a person or a prompt pass through `engine.pii.redact_cells` first.
+
+**Speed** (M77, `reports/plan_g_performance.md`): a parser's output for a cell depends only on the
+cell's text, so each parser runs once per *distinct* value and the answers are spread back over the
+rows with a hash lookup. A million-row column of a few thousand spellings costs a few thousand
+parses; a column where every value differs costs one pass of the same function the row loop ran,
+without the per-row `Series.at` write that dominated before. The semantics are the row loop's,
+value for value - `tests/unit/agent/test_formats.py` compares the two.
 """
 
 from __future__ import annotations
 
 import re
+import warnings
 from collections import Counter
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any, Final
 
+import numpy as np
 import pandas as pd
 
 from engine.pii import redact_cells
@@ -141,6 +150,21 @@ def _text_cells(series: pd.Series[Any]) -> pd.Series[Any]:
     return text[text.str.strip() != ""]
 
 
+def _present(series: pd.Series[Any]) -> tuple[np.ndarray[Any, Any], pd.Series[Any]]:
+    """(row positions, text) of the non-empty cells of `series` - the cells a parser reads."""
+    notna = series.notna().to_numpy()
+    text = series[notna].astype(str)
+    keep = (text.str.strip() != "").to_numpy()
+    return np.flatnonzero(notna)[keep], text[keep]
+
+
+def _per_value(cells: pd.Series[Any], fn: Callable[[str], Any]) -> list[Any]:
+    """`fn` of every cell, computed once per distinct value; the order of `cells`."""
+    values = cells.tolist()
+    table = {value: fn(value) for value in dict.fromkeys(values)}
+    return [table[value] for value in values]
+
+
 def _masked(values: Sequence[str]) -> tuple[str, ...]:
     return redact_cells(value[:80] for value in values[:MAX_EXAMPLES])
 
@@ -200,17 +224,19 @@ def parse_numbers(
         raise ValueError("decimal must be '.' or ','")
     if pd.api.types.is_numeric_dtype(series) and not pd.api.types.is_bool_dtype(series):
         return ParseOutcome(values=series.astype("float64"), changed=0, failed=0, failed_examples=())
-    out = pd.Series(float("nan"), index=series.index, dtype="float64")
-    changed = 0
-    failures: list[str] = []
-    for index, text in _text_cells(series).items():
-        number = _number_one(text, decimal, percent_to_fraction)
-        if number is None:
-            failures.append(text)
-            continue
-        out.at[index] = number
-        changed += 1  # text became a number, whatever it looked like
-    return ParseOutcome(values=out, changed=changed, failed=len(failures), failed_examples=_masked(failures))
+    positions, cells = _present(series)
+    numbers = _per_value(cells, lambda text: _number_one(text, decimal, percent_to_fraction))
+    parsed = np.array([np.nan if number is None else number for number in numbers], dtype="float64")
+    failed = np.array([number is None for number in numbers], dtype=bool)
+    values = np.full(len(series), np.nan, dtype="float64")
+    values[positions] = parsed
+    failures = cells[failed].head(MAX_EXAMPLES).tolist()
+    return ParseOutcome(
+        values=pd.Series(values, index=series.index, dtype="float64"),
+        changed=int((~failed).sum()),  # text became a number, whatever it looked like
+        failed=int(failed.sum()),
+        failed_examples=_masked(failures),
+    )
 
 
 def _decimal_style(cells: pd.Series[Any]) -> str:
@@ -265,8 +291,8 @@ def _style_of(text: str) -> str | None:
 def date_order(cells: pd.Series[Any]) -> bool | None:
     """Whether numeric day/month dates put the day first: True, False, or None when every value fits both."""
     day_first = month_first = False
-    for text in cells:
-        match = _NUMERIC_DAY_MONTH.match(str(text).strip())
+    for text in dict.fromkeys(str(value) for value in cells):  # each spelling once; the answer is an OR
+        match = _NUMERIC_DAY_MONTH.match(text.strip())
         if not match:
             continue
         first, second = int(match.group(1)), int(match.group(2))
@@ -281,12 +307,48 @@ def date_order(cells: pd.Series[Any]) -> bool | None:
     return None
 
 
+def _one_datetime(text: str, dayfirst: bool) -> pd.Timestamp | None:
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            stamp = pd.to_datetime(text, format="mixed", dayfirst=dayfirst, errors="coerce")
+        except (ValueError, TypeError, OverflowError):
+            return None
+    if stamp is None or pd.isna(stamp):
+        return None
+    return stamp.tz_localize(None) if stamp.tzinfo is not None else stamp
+
+
+def _to_datetimes(cells: pd.Series[Any], *, dayfirst: bool) -> pd.Series[Any]:
+    """Each value parsed on its own, as `datetime64[ns]`; a value with a UTC offset keeps its clock time.
+
+    `pd.to_datetime(format="mixed")` does this in one call unless the column mixes UTC offsets (or
+    offsets and none), where it returns objects - or, in later pandas, raises - and the step used to
+    fail with a 500. That case falls back to one value at a time with the same rule (M77).
+    """
+    distinct = pd.Series(list(dict.fromkeys(cells.tolist())), dtype=object)
+    parsed: pd.Series[Any] | None
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        try:
+            parsed = pd.to_datetime(distinct, format="mixed", dayfirst=dayfirst, errors="coerce")
+        except (ValueError, TypeError, OverflowError):
+            parsed = None
+    if parsed is None or not pd.api.types.is_datetime64_any_dtype(parsed):
+        stamps = [_one_datetime(str(text), dayfirst) for text in distinct]
+        parsed = pd.Series([pd.NaT if s is None else s for s in stamps], dtype="datetime64[ns]")
+    # Each distinct spelling parsed once (format="mixed" parses values independently), then spread.
+    lookup = pd.Series(parsed.array, index=pd.Index(distinct, dtype=object))
+    spread = lookup.reindex(pd.Index(cells.tolist(), dtype=object))
+    return pd.Series(spread.array, index=cells.index)
+
+
 def parse_dates(series: pd.Series[Any], *, dayfirst: bool) -> ParseOutcome:
     """Text to datetime, one value at a time (`format="mixed"`), with the day/month order decided."""
     if pd.api.types.is_datetime64_any_dtype(series):
         return ParseOutcome(values=series, changed=0, failed=0, failed_examples=())
     cells = _text_cells(series)
-    parsed = pd.to_datetime(cells, format="mixed", dayfirst=dayfirst, errors="coerce")
+    parsed = _to_datetimes(cells, dayfirst=dayfirst)
     out = pd.Series(pd.NaT, index=series.index, dtype="datetime64[ns]")
     ok = parsed.notna()
     out.loc[parsed.index[ok]] = parsed[ok].dt.tz_localize(None) if parsed.dt.tz is not None else parsed[ok]
@@ -337,20 +399,22 @@ def map_booleans(
     falsy = {value.strip().casefold() for value in false_values}
     if truthy & falsy:
         raise ValueError(f"a value cannot be both true and false: {sorted(truthy & falsy)}")
-    out = pd.Series(float("nan"), index=series.index, dtype="float64")
-    failures: list[str] = []
-    changed = 0
-    for index, text in _text_cells(series).items():
+
+    def one(text: str) -> float:
         key = text.strip().casefold()
-        if key in truthy:
-            out.at[index] = 1.0
-        elif key in falsy:
-            out.at[index] = 0.0
-        else:
-            failures.append(text)
-            continue
-        changed += 1
-    return ParseOutcome(values=out, changed=changed, failed=len(failures), failed_examples=_masked(failures))
+        return 1.0 if key in truthy else 0.0 if key in falsy else np.nan
+
+    positions, cells = _present(series)
+    parsed = np.array(_per_value(cells, one), dtype="float64")
+    failed = np.isnan(parsed)
+    values = np.full(len(series), np.nan, dtype="float64")
+    values[positions] = parsed
+    return ParseOutcome(
+        values=pd.Series(values, index=series.index, dtype="float64"),
+        changed=int((~failed).sum()),
+        failed=int(failed.sum()),
+        failed_examples=_masked(cells[failed].head(MAX_EXAMPLES).tolist()),
+    )
 
 
 def _boolean_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
@@ -382,15 +446,18 @@ def _boolean_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
 # ---------------------------------------------------------------------------
 def normalise_texts(series: pd.Series[Any], *, merge: Mapping[str, str], strip: bool = True) -> ParseOutcome:
     """Strip each value and replace listed spellings with their canonical value; others pass through."""
-    out = series.copy()
-    changed = 0
-    for index, text in _text_cells(series).items():
+
+    def one(text: str) -> str:
         value = text.strip() if strip else text
-        value = merge.get(value, value)
-        if value != text:
-            out.at[index] = value
-            changed += 1
-    return ParseOutcome(values=out, changed=changed, failed=0, failed_examples=())
+        return merge.get(value, value)
+
+    out = series.copy()
+    positions, cells = _present(series)
+    tidy = np.array(_per_value(cells, one), dtype=object)
+    differs = tidy != cells.to_numpy(dtype=object)
+    if differs.any():
+        out.iloc[positions[differs]] = tidy[differs]
+    return ParseOutcome(values=out, changed=int(differs.sum()), failed=0, failed_examples=())
 
 
 def _category_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
