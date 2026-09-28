@@ -1,19 +1,25 @@
 # Marketing AI
 
-> **New here? Run the demo on your laptop: [docs/QUICKSTART.md](docs/QUICKSTART.md).** It needs Python 3.11 and
-> about 20 minutes, and no AWS account, AI service or client data. How ready v1 is, and what to
-> say out loud when you demo it: [docs/V1_READINESS.md](docs/V1_READINESS.md).
+> **New here? Start with [docs/START_HERE.md](docs/START_HERE.md)**: the four pages and the flow in
+> plain words, with screenshots. Developers running it on a laptop: [docs/QUICKSTART.md](docs/QUICKSTART.md)
+> (Python 3.11, about 20 minutes, no AWS account, AI service or client data needed). How ready v1
+> is: [docs/V1_READINESS.md](docs/V1_READINESS.md).
 
-A **reusable marketing AI engine**. A business user selects a use case (e.g. Targeted Advertisement),
-uploads a CSV, picks the primary key and target column, and clicks Run. The engine validates the data,
-trains the best model with AutoML, evaluates it, explains it, and can later score new data. Results are
-shown as a pipeline: **Data → Model → Output**. The engine is generic: each use case is a *configuration
-file*, not code. Adding a new use case, or a new industry, means adding config, not features.
+**Marketing AI helps a marketer decide who to contact, and then shows what the campaign changed.**
+Pick a goal (win customers, keep them paying, stop them leaving, win them back), bring your data,
+and the product trains a model, scores every customer with a reason and a next step, and after the
+campaign measures the extra conversions it caused.
 
-Instead of building a separate model per client, we build one engine. Each industry gets a template of
-lifecycle stages and use cases. Each client maps their data to a standard format. AutoML trains the best
-model on their data. Users can train on historical data or score new data with the approved (champion)
-model, and every prediction comes with a reason and a recommended action.
+It works in four pages: **Home** (the goals and their use cases), **Connections** (S3, PostgreSQL /
+Redshift, MySQL and more, set up and tested in one place), **Results** (every run, newest first) and
+**Settings**. Each use case is one flow: **1 Choose data** (upload a file or pick one from a
+connection) → **2 Guided setup** (a helper checks and fixes the data, asks when it is unsure,
+recommends settings, and changes nothing until you approve) → **3 Run & results** → **4 Measure the
+campaign**. It is a single-company tool that starts empty; nothing is pre-loaded.
+
+Under the hood it is one reusable engine: each use case is a *configuration file*, not code, AutoML
+trains the best model on your data, a new model is used only after someone approves it, and every
+prediction comes with a reason and a recommended action.
 
 ---
 
@@ -33,8 +39,13 @@ nightly (`make test-all`, which adds the `@slow` AutoGluon and browser journeys)
   key, and next month's tables are scored through the same saved recipe, with the mapping step
   reopened only for a table whose columns changed (Phase 2 and Plan A M34-M35;
   `tests/integration/test_onboarding_acceptance.py`).
-- **Several industries.** Telecom (the default) plus banking, insurance, e-commerce and ad tech, each a
-  YAML file under `configs/industries/`, chosen on the overview (Plan A M38).
+- **Guided setup and Connections.** Every predictive use case opens on a helper that prepares the
+  file and recommends settings for your approval, with the fixes saved and replayed on next month's
+  file (Plan G, `docs/AGENTS.md`); data can come from a file or from a tested connection (Plan H,
+  `docs/CONNECTIONS.md`).
+- **One journey for every business.** Home shows one generic journey (`configs/industries/generic.yaml`,
+  DEC-1110 …). The industry templates of Plan A M38 (telecom, banking, insurance, e-commerce, ad
+  tech) remain as config and open by URL (`#/industry/<id>`), but are no longer offered.
 - **Generative features** on the fake LLM by default and on Bedrock when configured: the onboarding
   assistant, root-cause summaries per risk segment and win-back copy with a judge (Phase 3a).
 - **Uplift modelling.** Step 4 of a use case, *Measure the campaign*, learns who to contact next

@@ -1285,3 +1285,10 @@ DEC-1116).
 with docs/START_HERE.md"), keeping the QUICKSTART link for developers. Reword the two opening
 paragraphs to describe one generic journey for a single company. The Plan H block already carries
 the link, so nothing breaks if this waits.
+
+### 2026-09-28 — plan-h-simple: the README opening is rewritten (closes the request above)
+
+The product owner asked for the README's opening to be rewritten, so Plan H did it: the banner links
+`docs/START_HERE.md` first, the opening paragraphs describe the four pages, the four-step flow and
+the single-company tool, and "What works today" names Guided setup, Connections and the one generic
+journey (the industry templates stay as config, reachable by URL). **What is needed.** Nothing.
