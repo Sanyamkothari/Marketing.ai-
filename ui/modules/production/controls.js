@@ -22,9 +22,10 @@ import { getUsers } from "./api.js";
 import { can, currentMe, reasonFor } from "./session.js";
 
 /**
- * Every screen's header in the one v1 order: breadcrumb (Home first), H1, one sentence, then the
- * header actions (already built with `headActions`). `trail` are the crumbs between Home and this
- * screen, each `{ label, href }`.
+ * Every screen's header in the one v1 order: breadcrumb, H1, one sentence, then the header actions
+ * (already built with `headActions`). `trail` are the crumbs before this screen, each `{ label, href }`;
+ * it starts with the top-bar place the screen is under (`SETTINGS_CRUMB`, `RESULTS_CRUMB` from
+ * `dom.js`), or the breadcrumb starts at Home.
  */
 export const screenHead = ({ trail = [], title, crumb = null, desc = "", actions = "" }) =>
   pageHead(

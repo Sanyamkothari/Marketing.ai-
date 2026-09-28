@@ -236,7 +236,10 @@ test("the uplift entry point and its words are ui/modules/uplift's (DEC-608)", (
   assert.match(views, /\$\{esc\(\s*uc\.name,\s*\)\} · Uplift<\/h1><p class="desc">Uplift \$\{esc\(UPLIFT_EXPLANATION\)\}\.<\/p>/);
   for (const words of ["Train uplift model", "Score customers", "Previous uplift runs", "No uplift runs yet.",
     "Train an uplift model first", "Trained uplift model", "The saved uplift model that will rank the uploaded customers.",
-    "No trained uplift model yet", "Uplift pipeline", "Uplift modelling",
+    // "Uplift modelling" is no longer shared: it was the product's breadcrumb for #/uplift, which Plan H
+    // moved under Settings as the "Uplift workbench" (docs/UI_AUDIT.md §8.4 item 12). The prototype
+    // predates Plan H and keeps its old H1; the product's crumb follows Settings.
+    "No trained uplift model yet", "Uplift pipeline",
     "Which column identifies a customer, which one says whether they were treated, and which one is the outcome.",
     "One row per customer of a past campaign: the features, whether they were treated (0/1, assigned at random) and the outcome.",
     "The customers to score. The trained uplift model ranks them by how much the action changes their outcome.",

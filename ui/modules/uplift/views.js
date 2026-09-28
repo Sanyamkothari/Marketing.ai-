@@ -19,6 +19,8 @@
 
 import {
   EM_DASH,
+  RESULTS_CRUMB,
+  SETTINGS_CRUMB,
   crumbs,
   dash,
   dataTable,
@@ -153,11 +155,13 @@ const upliftChip = () => `<div class="chips"><span class="chip type">Uplift</spa
 const screenOf = (uc, head, body) =>
   `<main class="screen t-${esc((uc && uc.marker) || "P")}" data-module="uplift">${pageHead(head)}${body}</main>`;
 
-const INDEX_CRUMB = { label: "Uplift modelling", href: routes.index() };
+/** The workbench is under Settings → Advanced tools (Plan H M82), and named as Settings names it. */
+export const INDEX_LABEL = "Uplift workbench";
+const INDEX_CRUMB = { label: INDEX_LABEL, href: routes.index() };
 
-/** Home › Uplift modelling › <use case> › <current>. */
+/** Settings › Uplift workbench › <use case> › <current>. */
 const upliftCrumbs = (uc, current) =>
-  crumbs([INDEX_CRUMB, { label: uc.name, href: routes.setup(uc.id) }, { label: current }]);
+  crumbs([SETTINGS_CRUMB, INDEX_CRUMB, { label: uc.name, href: routes.setup(uc.id) }, { label: current }]);
 
 /**
  * A result tile: a label, a value, and an optional second line (a range, a comparison). The label
@@ -233,7 +237,7 @@ export function upliftIndexHtml(payload, statuses = {}) {
           )}</span></span><span class="s">${esc(upliftUnavailable(u))}</span></div>`,
       ),
     );
-  const head = `${crumbs([{ label: "Uplift modelling" }])}<h1 class="h1">Measure what a campaign changes (uplift)</h1><p class="desc">Uplift ${esc(
+  const head = `${crumbs([SETTINGS_CRUMB, { label: INDEX_LABEL }])}<h1 class="h1">Measure what a campaign changes (uplift)</h1><p class="desc">Uplift ${esc(
     UPLIFT_EXPLANATION,
   )}: it compares customers who were treated with a randomly held-out control group, so you contact the persuadable and leave alone the ones who would convert anyway, would never convert, or react badly.</p>`;
   const body = rows.length
@@ -772,7 +776,7 @@ function resultsBody(uc, s) {
 export function upliftScreenHtml(uc, s) {
   const body = s.view === "running" ? runningBody(uc, s) : s.view === "results" ? resultsBody(uc, s) : setupBody(uc, s);
   const current = s.view === "setup" || !s.view ? { label: uc.name } : { label: uc.name, href: routes.setup(uc.id) };
-  const trail = crumbs([INDEX_CRUMB, current, s.view === "running" || s.view === "results" ? { label: "Run" } : null]);
+  const trail = crumbs([SETTINGS_CRUMB, INDEX_CRUMB, current, s.view === "running" || s.view === "results" ? { label: "Run" } : null]);
   return screenOf(
     uc,
     `${trail}<h1 class="h1">${esc(
@@ -1475,7 +1479,8 @@ export const campaignTitle = (uc, run, c) => (c && c.title) || `${uc.name} campa
 /** `#/campaign/<use case>/<run>`: the verdict of a scoring run's campaign, or when it will exist. */
 export function campaignPageHtml(uc, run, c) {
   const title = campaignTitle(uc, run, c);
-  const trail = crumbs([{ label: "Campaigns", href: routes.campaigns() }, { label: title }]);
+  // Results › <campaign>: the page is under Results (`navFor`), and Results lists the run it measures.
+  const trail = crumbs([RESULTS_CRUMB, { label: title }]);
   const chip = isUpliftRun(run);
   if (run.mode !== "score") {
     const body = noticeCard({

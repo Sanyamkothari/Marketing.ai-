@@ -20,7 +20,7 @@
 // Passwords are read from their inputs on submit and never kept in state or echoed back; setting
 // your own password here needs your current one, exactly as `POST /users/{id}/password` requires.
 
-import { EM_DASH, errorBox, esc, fmtDate, headActions, noticeCard } from "../../dom.js";
+import { EM_DASH, SETTINGS_CRUMB, errorBox, esc, fmtDate, headActions, noticeCard } from "../../dom.js";
 import { getUsers, patchUser, postPassword, postUser } from "./api.js";
 import { dangerConfirm, personName, refusal, rememberPeople, rowsTable, screenHead, spanRow } from "./controls.js";
 import { can, currentMe, loadMe, reasonFor, sessionStatus } from "./session.js";
@@ -51,9 +51,8 @@ const state = {
   busy: false,
 };
 
-/** The Admin screens' header: Home › Admin › <title>. */
-export const adminHead = (title, desc, actions = "") =>
-  screenHead({ trail: [{ label: "Admin", href: "#/admin/users" }], title, desc, actions });
+/** The Admin screens' header: Settings › <title> (Settings lists them under Admin, Plan H M82). */
+export const adminHead = (title, desc, actions = "") => screenHead({ trail: [SETTINGS_CRUMB], title, desc, actions });
 
 /** Kept for callers of the earlier tab strip; the top bar's Admin menu now links the Admin screens. */
 export const tabsHtml = () => "";

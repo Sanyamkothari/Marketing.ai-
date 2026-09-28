@@ -102,6 +102,10 @@ function nowhereBut(id, body) {
 test("the Admin's consent screen lists the purposes and which use cases they gate", async () => {
   await until(() => $("#pb-consent-import"), 3000, "the consent screen");
   assert.ok(offers("#/privacy/consent"), "Privacy on the Settings page");
+  // docs/UI_AUDIT.md §8.4 item 12: Settings › Privacy › …, not Home › Admin › Privacy › …
+  const trail = $$("#app .crumbs a, #app .crumbs .cur").map((e) => [e.textContent, e.getAttribute("href")]);
+  assert.deepEqual(trail.slice(0, 2), [["Settings", "#/settings"], ["Privacy", "#/privacy/consent"]]);
+  assert.equal(trail.length, 3);
   for (const purpose of fixture("purposes").purposes) assert.match(text(), new RegExp(purpose.label));
   assert.match(text(), /not legal advice/);
   assert.equal(last("GET", "/privacy/purposes").auth, "Bearer tok-admin");

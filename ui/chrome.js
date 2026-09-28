@@ -8,7 +8,8 @@
 // (Build data, Reports, Campaigns, Model health, Schedules, Privacy, Admin, Uplift, Waiting for
 // approval) keep their routes; they are opened from Results, from a run, or from Settings. The
 // "admin" and "models" slots are no longer drawn in the bar: the Settings page reads them
-// (`navSlotHtml`), so the role checks their owners make still decide what is offered.
+// (`navSlotHtml`), so the role checks their owners make still decide what is offered. The place marked
+// is `navFor`'s for the route, except a run opened from Results, which stays under Results (`placeFor`).
 //
 // It is `<header id="pb-bar" class="topbar">` - the id the Phase 4b user bar had, so every test that
 // reads `#pb-bar a[href=...]` keeps reading the same place - drawn *before* `#app`, outside the area
@@ -107,9 +108,84 @@ export function navFor(hash) {
   return null;
 }
 
+// --- a run opened from Results (docs/UI_AUDIT.md §8.4 item 2) --------------------------------------
+//
+// A run's own screens are use-case routes, which `navFor` puts under Home. Opened from Results (a row,
+// the campaign page, Waiting for approval), the bar would jump to Home. So the place a run was opened
+// from is remembered, per run, while the person stays on it (its Data / Model / Output pages, its
+// root-cause notes): Results stays marked. Opening the same run from Home (its use case's runs) marks
+// Home again. The memory is this tab's `sessionStorage`, so a reload keeps the mark; without storage
+// (a private window) it lasts until the reload.
+
+const RUN_PAGES = new Set(["run", "data", "model", "output"]);
+const ORIGIN_KEY = "marketing-ai:run-opened-from";
+const ORIGINS_KEPT = 50;
+const origins = new Map(); // "<use case>/<run>" -> "results"
+let originsLoaded = false;
+
+/** The run a route shows, as "<use case>/<run>", or null: `#/uc/<uc>/{run,data,model,output}/<run>`
+ * and the run's root-cause notes, `#/generative/rca/<uc>/<run>`. */
+export function runOf(hash) {
+  const parts = String(hash || "").replace(/^#\/?/, "").split("/").filter(Boolean);
+  if (parts[0] === "uc" && RUN_PAGES.has(parts[2]) && parts[1] && parts[3]) return `${parts[1]}/${parts[3]}`;
+  if (parts[0] === "generative" && parts[1] === "rca" && parts[2] && parts[3]) return `${parts[2]}/${parts[3]}`;
+  return null;
+}
+
+function storage() {
+  try {
+    return typeof window !== "undefined" && window.sessionStorage ? window.sessionStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function loadOrigins() {
+  if (originsLoaded) return;
+  originsLoaded = true;
+  try {
+    const saved = JSON.parse((storage() && storage().getItem(ORIGIN_KEY)) || "[]");
+    for (const run of Array.isArray(saved) ? saved : []) if (typeof run === "string") origins.set(run, "results");
+  } catch {
+    // unreadable storage: nothing remembered, the bar follows the route
+  }
+}
+
+function saveOrigins() {
+  while (origins.size > ORIGINS_KEPT) origins.delete(origins.keys().next().value);
+  try {
+    const store = storage();
+    if (store) store.setItem(ORIGIN_KEY, JSON.stringify([...origins.keys()]));
+  } catch {
+    // storage refused (quota, private mode): the mark lasts for this page only
+  }
+}
+
+/** The place the bar marks for a route: `navFor`, except a run opened from Results is a Result. */
+export function placeFor(hash) {
+  const place = navFor(hash);
+  if (place !== "home") return place;
+  loadOrigins();
+  const run = runOf(hash);
+  return run && origins.get(run) === "results" ? "results" : place;
+}
+
+/** A route change from `from` to `to`: remember where a run was opened from (moving between one run's
+ * own pages keeps what was remembered for it). */
+export function noteRoute(from, to) {
+  const run = runOf(to);
+  if (!run || runOf(from) === run) return;
+  loadOrigins();
+  origins.delete(run);
+  if (placeFor(from) === "results") origins.set(run, "results");
+  saveOrigins();
+}
+
+let lastHash = null;
+
 function activeId() {
   const hash = currentHash();
-  const id = active.hash === hash && active.id ? active.id : navFor(hash);
+  const id = active.hash === hash && active.id ? active.id : placeFor(hash);
   return OLD_GOALS[id] || id;
 }
 
@@ -401,7 +477,11 @@ export function mountChrome(doc = document) {
   doc.addEventListener("keydown", onKey);
   const win = doc.defaultView;
   if (win) {
+    lastHash = currentHash();
     win.addEventListener("hashchange", () => {
+      const now = currentHash();
+      noteRoute(lastHash, now);
+      lastHash = now;
       ui.menu = null;
       ui.panel = false;
       refreshChrome();

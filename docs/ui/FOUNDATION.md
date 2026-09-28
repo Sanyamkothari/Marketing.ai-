@@ -32,8 +32,8 @@ ONLY=home,run-output node scripts/ui_screens.mjs          # writes docs/ui/after
 | Helper | What it draws |
 |---|---|
 | `pageHead(inner)` | The header. The right side is the logo only; the client picker is in the top bar. |
-| `crumbs(items)` | `Home › ... › current`. `items` are `{label, href}`; the last without `href` is the current screen. Never pass Home. |
-| `backLink(uc)` / `journeyCrumb(uc)` / `journeyBack(uc)` | `Home › journey › use case` (nav), the `Home › journey` links, and the `{href,label}` for "Back to <journey>". |
+| `crumbs(items)` | `Home › ... › current`. `items` are `{label, href}`; the last without `href` is the current screen. Never pass Home. A screen under another top-bar place starts `items` with `SETTINGS_CRUMB`, `RESULTS_CRUMB` or `CONNECTIONS_CRUMB`, which is then the root ("Settings › Schedules"): the first crumb is the place `navFor` marks. A crumb opening `#/` (the default journey) is left out. |
+| `backLink(uc)` / `journeyCrumb(uc)` / `journeyBack(uc)` | `Home › use case` (nav) and the `Home` link (`Home › journey` for a journey other than the default, `#/industry/<id>`), and the `{href,label}` for "Back to <journey>". |
 | `headActions({primary, secondary, related})` | The header's actions in one order; each an HTML string or `{label, href \| id, attrs}`. `related` is a quiet link with `›`. |
 | `errorBox(error, {title, retry})` | Plain sentence first (the glossary's `codes.<CODE>.title`; a 4xx's own sentence; else "Something went wrong while loading this page."), the glossary fix, an optional **Try again** (`[data-retry]`, `app.js` redraws the route), code and message in a closed **Details**. Class `.apierr` kept. |
 | `notFound(what, back, error)` | "This run could not be found." + one "Back to <label>" button. |

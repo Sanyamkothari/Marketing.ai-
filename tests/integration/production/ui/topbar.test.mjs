@@ -127,6 +127,37 @@ test("the active place follows the route", async () => {
   assert.equal($("#pb-bar .tn-item.on").getAttribute("aria-current"), "page");
 });
 
+// docs/UI_AUDIT.md §8.4 item 2: a run's screens are use-case routes (Home), but a run opened from
+// Results is a Result - the bar used to jump to Home on the click.
+test("a run opened from Results keeps Results marked, on all its pages and after a reload", async () => {
+  const on = () => (($("#pb-bar .tn-item.on") || {}).textContent || "").trim().replace(/\s*\d+$/, "");
+  const go = async (hash) => {
+    w.location.hash = hash;
+    await settle(3);
+    return on();
+  };
+  assert.equal(await go("#/results"), "Results");
+  assert.equal(await go("#/uc/telco-churn/run/r7"), "Results", "the row's link");
+  assert.equal(await go("#/uc/telco-churn/model/r7"), "Results", "the run's Model page");
+  assert.equal(await go("#/uc/telco-churn/output/r7"), "Results", "the run's Output page");
+  assert.equal(await go("#/generative/rca/telco-churn/r7"), "Results", "the run's root-cause notes");
+  assert.deepEqual(JSON.parse(w.sessionStorage.getItem("marketing-ai:run-opened-from")), ["telco-churn/r7"], "kept for a reload");
+  // the use case itself is Home, and the same run opened from there is Home again
+  assert.equal(await go("#/uc/telco-churn"), "Home");
+  assert.equal(await go("#/uc/telco-churn/run/r7"), "Home", "opened from its use case");
+  assert.deepEqual(JSON.parse(w.sessionStorage.getItem("marketing-ai:run-opened-from")), []);
+  // from the campaign page and Waiting for approval (both under Results) too; a run opened from
+  // Settings is not a Result
+  await go("#/campaign/telco-churn/r8");
+  assert.equal(await go("#/uc/telco-churn/output/r8"), "Results", "from the campaign page");
+  await go("#/approvals");
+  assert.equal(await go("#/uc/telco-churn/run/r9"), "Results", "from Waiting for approval");
+  await go("#/monitoring/schedules");
+  assert.equal(await go("#/uc/telco-churn/run/r10"), "Home", "from Settings");
+  assert.equal(chrome.placeFor("#/uc/telco-churn/data/r9"), "results");
+  assert.equal(chrome.navFor("#/uc/telco-churn/data/r9"), "home", "navFor itself still reads the route alone");
+});
+
 test("a menu (Help) opens with aria-expanded and closes on Escape, focus back on its trigger", async () => {
   chrome.addNavSlot("help", { html: () => `<button type="button">Take the tour</button>` });
   await redraw();
