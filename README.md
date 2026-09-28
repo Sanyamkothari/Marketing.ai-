@@ -1361,7 +1361,14 @@ three-step flow, plus a fourth step after a campaign.
   model from it and gives its contact list. Offered for every use case that contacts customers
   (`actions.contacts_customers`); see `docs/UPLIFT.md` §9.
 
-Decisions are DEC-1130 … DEC-1135 so far.
+- **M81–M82 — one journey, four pages.** Home shows one journey for every business (Win customers,
+  Keep them paying, Stop them leaving, Win them back, Run smoothly) with no industry or client
+  picker, and nothing is pre-loaded unless a developer runs `make demo-seed`. The top bar is Home ·
+  Connections · Results · Settings. Results lists every run, with a badge when models wait for
+  approval; Settings holds the AI service, privacy, schedules and the advanced tools. Setup opens on
+  Guided setup. Every older screen still opens by its URL.
+
+Decisions are DEC-1110 … DEC-1116 and DEC-1130 … DEC-1135 so far.
 
 <!-- ---- END PLAN-G ---- -->
 
