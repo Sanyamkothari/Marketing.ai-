@@ -41,6 +41,7 @@ __all__ = [
     "api_log_group_name",
     "audit_bucket_name",
     "cluster_name",
+    "connections_key_secret_name",
     "db_instance_identifier",
     "job_task_family",
     "jobs_log_group_name",
@@ -170,6 +171,8 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "login_failure_window_seconds",
     "login_lockout_seconds",
     "trusted_proxy_hops",
+    # Plan H (DEC-1101, DEC-1120): one added field, a secret supplied by the database stack.
+    "connections_key",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 
@@ -234,6 +237,12 @@ def secret_name(env_name: str) -> str:
 def privacy_salt_secret_name(env_name: str) -> str:
     """`marketing-ai/<env>/privacy-salt`: the generated principal-hash salt (Plan D, DEC-860)."""
     return f"{PRODUCT}/{env_name}/privacy-salt"
+
+
+def connections_key_secret_name(env_name: str) -> str:
+    """`marketing-ai/<env>/connections-key`: the generated key saved connections are encrypted with
+    (Plan H, DEC-1120)."""
+    return f"{PRODUCT}/{env_name}/connections-key"
 
 
 def stack_name(env_name: str, component: str) -> str:

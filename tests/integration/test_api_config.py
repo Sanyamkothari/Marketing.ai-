@@ -14,6 +14,7 @@ from api.schemas import IndustriesResponse, UseCaseResponse
 from engine import __version__
 from engine.config import (
     DEFAULT_CONFIG_ROOT,
+    DEFAULT_INDUSTRY,
     UseCaseConfig,
     get_catalog,
     list_industries,
@@ -28,6 +29,7 @@ pytestmark = pytest.mark.integration
 USE_CASE_IDS: tuple[str, ...] = list_use_case_ids()
 DEMO_ID: str = "targeted-advertisement"
 EXPECTED_MARKERS: tuple[str, ...] = ("P", "G", "P", "H", "H")
+GENERIC_MARKERS: tuple[str, ...] = ("P", "P", "H", "H", "P")
 EXPECTED_PAGES: dict[str, str] = {
     "data": "Customer + campaign data",
     "model": "Audience Propensity Model",
@@ -49,17 +51,30 @@ def test_healthz(client: TestClient) -> None:
 
 
 def test_industries_validates_and_lists_five_stages_in_order(client: TestClient) -> None:
-    """Telecom's journey, opened by default; every other industry file is listed after it (DEC-085)."""
+    """The generic journey, opened by default; every other industry file is listed after it (DEC-085).
+
+    Plan H M81 (DEC-1110) changed the default from telecom to `generic`, deliberately: the product
+    shows one journey for every business, its five goals in order, operations last.
+    """
     response = client.get("/industries")
     assert response.status_code == 200
     body = IndustriesResponse.model_validate(response.json())
     assert sorted(industry.id for industry in body.industries) == sorted(list_industries())
-    assert body.default_industry == "telecom"
+    assert body.default_industry == "generic"
     industry = body.industries[0]
-    assert industry.id == "telecom"
+    assert industry.id == "generic"
     assert industry.journey_label == "Customer Lifecycle"
-    assert tuple(stage.marker for stage in industry.stages) == EXPECTED_MARKERS
+    assert [stage.name for stage in industry.stages] == [
+        "Win customers",
+        "Keep them paying",
+        "Stop them leaving",
+        "Win them back",
+        "Run smoothly",
+    ]
+    assert tuple(stage.marker for stage in industry.stages) == GENERIC_MARKERS
     assert tuple(stage.order for stage in industry.stages) == (1, 2, 3, 4, 5)
+    telecom = next(i for i in body.industries if i.id == "telecom")
+    assert tuple(stage.marker for stage in telecom.stages) == EXPECTED_MARKERS
 
 
 def test_industries_legend_has_three_entries_with_stars(client: TestClient) -> None:
@@ -99,14 +114,15 @@ def test_every_industry_file_is_a_journey_the_overview_can_select(client: TestCl
     assert available == set(USE_CASE_IDS)
 
 
-def test_a_root_without_telecom_opens_on_its_first_industry(tmp_path: Path) -> None:
+def test_a_root_without_the_default_opens_on_its_first_industry(tmp_path: Path) -> None:
+    """Plan H (DEC-1110): the default is `generic` now, so that is the file this root goes without."""
     root = tmp_path / "configs"
     shutil.copytree(DEFAULT_CONFIG_ROOT, root)
-    (root / "industries" / "telecom.yaml").unlink()
+    (root / "industries" / f"{DEFAULT_INDUSTRY}.yaml").unlink()
     with TestClient(create_app(config_root=root)) as test_client:
         body = IndustriesResponse.model_validate(test_client.get("/industries").json())
     ids = [industry.id for industry in body.industries]
-    assert "telecom" not in ids
+    assert DEFAULT_INDUSTRY not in ids
     assert ids == sorted(ids)
     assert body.default_industry == ids[0]
 
@@ -132,7 +148,9 @@ def planned_client(tmp_path: Path) -> Iterator[TestClient]:
 
 def test_a_planned_use_case_is_a_card_without_a_configuration(planned_client: TestClient) -> None:
     body = IndustriesResponse.model_validate(planned_client.get("/industries").json())
-    cards = {card.id: card for stage in body.industries[0].stages for card in stage.use_cases}
+    # The fixture swaps telecom's file (Plan H: telecom is no longer the first industry listed).
+    telecom = next(industry for industry in body.industries if industry.id == "telecom")
+    cards = {card.id: card for stage in telecom.stages for card in stage.use_cases}
     planned = cards[PLANNED_ID]
     assert planned.status == "planned"
     assert planned.problem_type is None
@@ -381,6 +399,23 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/pilot/demo/raw/{variant}",
         "/pilot/feedback",
         "/pilot/feedback/export",
+        # Plan G (use-case agents): the dry-run data checks (M71, DEC-1011)
+        "/uploads/{upload_id}/checks",
+        # Plan G M74: the Guided-setup session, one per upload (DEC-1018)
+        "/uploads/{upload_id}/agent-session",
+        "/uploads/{upload_id}/agent-session/decisions",
+        "/uploads/{upload_id}/agent-session/answers",
+        "/uploads/{upload_id}/agent-session/messages",
+        "/uploads/{upload_id}/agent-session/preview",
+        "/uploads/{upload_id}/agent-session/apply",
+        # Plan H M80: connections - set up, test, browse, preview and import (DEC-1100)
+        "/connections/kinds",
+        "/connections",
+        "/connections/{connection_id}",
+        "/connections/{connection_id}/test",
+        "/connections/{connection_id}/browse",
+        "/connections/{connection_id}/preview",
+        "/connections/{connection_id}/import",
         # Phase 4b M46/M47: sign-in, user management and the audit viewer
         "/auth/login",
         "/auth/logout",
@@ -421,6 +456,9 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/models/{model_id}/reject",
         "/privacy/erasure/{request_id}/retry",
         "/privacy/erasure/{request_id}/progress",
+        # Plan H M83: step 4 of a use case, "Measure the campaign", and learning from it
+        "/runs/{run_id}/measure",
+        "/runs/{run_id}/measure/learn",
     }
 
 

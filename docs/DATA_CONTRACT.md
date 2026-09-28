@@ -891,3 +891,68 @@ skipped: with customers in both arms there are no per-customer arms to count.
 ["TREATMENT_NOT_RANDOM"]`), and the run then labels every result not causal. A scoring file of an
 uplift model needs no treatment column; when it has one, its treated share is compared with the
 training data's in `uplift_drift.json` (`UPLIFT.md` §8).
+
+## 12. Files prepared by Guided setup (Plan G)
+
+Guided setup never changes the file a person uploads. The steps they approve (a *recipe*: turn
+text into numbers or dates, map yes / no spellings to 1 / 0, merge spellings of one category, add
+a column computed from others, hide a column) run on a copy, which is stored as a new upload and
+trained on like any other (DEC-1005). The recipe is saved with the run, and every file later scored
+with that model is prepared by the same steps before it is checked against the model's columns
+(DEC-1006). A recipe never changes the ID column or the outcome column, and a computed column may
+not read the outcome.
+
+**Several rows per customer (level 3, M76).** Where a use case allows it (`agent.levels` includes
+`reshape`; Retail Win-back today), a training file whose ID column repeats and that has a date column
+can be combined into one row per customer instead of being refused with `PK_NOT_UNIQUE`; the helper
+asks first. Each customer is described as of a snapshot date - the latest value of a snapshot column
+such as `snapshot_date`, or, when the file has none, the date of the customer's latest row - and only
+rows dated on or before it are counted, added up, averaged or read (the onboarding point-in-time
+guard). The outcome is the value on the customer's latest row (ties: the later date column, then the
+later row in the file). A column's "latest" value is the one on the customer's latest row by the
+row date; between rows of the same date it is the one with the later snapshot date, then the later
+row in the file. Rows with no ID or no readable date, and the rows of a customer with no readable
+snapshot date on any of its rows, are left out and counted; a blank snapshot on one row is fine when
+the customer has one on another. More than `agent.max_conversion_failure_pct` of them stops with
+`RECIPE_VALUES_UNCONVERTED`. Dates with a UTC offset (or a time zone) are compared in UTC; dates
+without one as written; a date with an offset that cannot be read in UTC, or outside the supported
+range (such as `9999-12-31`), counts as empty. The day/month order of each date column is fixed when
+the step is planned: the order the column's own values prove, otherwise the order the file's other
+date columns prove; each later file is read in that order, value by value, whatever its other rows
+hold. When nothing proved an order and a value such as `10/09/2011` could be read either way, the
+step stops with `RECIPE_VALUES_UNCONVERTED` naming the column instead of guessing. An ID column
+holding numbers and text is read as text on every row, so `7` and `"7"` are one customer. A
+customer's combined row depends only on its own rows and the fixed parameters, never on other
+customers. For another date column, "days since" counts only dates on or before the snapshot, and a
+date column that already holds dates after the snapshot on earlier rows (a "last order date" the
+export overwrote) is not combined at all; a training file in which a combined date column turns out
+that way stops with `RECIPE_STEP_INVALID` (the message starts `FUTURE_EVENTS_LEAKED:`).
+The columns built
+are fixed when the step is approved, so every later file is combined into exactly the same columns;
+a scoring file needs no outcome column. A training file combined this way gets onboarding's full
+future-data check (rows re-dated after the snapshot must change nothing), a scoring file the narrow
+one, and the receipt says which ran.
+
+A recipe replays under the levels and conversion-failure limit it was approved with (recorded on
+`data_recipe.json` as `levels` and `max_failure_pct`; a recipe saved before they were recorded uses
+the use case's current ones). A prepared upload is reused for scoring only when it was prepared by
+the same steps with the same ID, outcome and snapshot columns, levels and limit; otherwise - and
+always for a model trained on files as sent - the file the person sent is used. A run on a prepared
+upload must name the recipe's ID column and outcome, and a scoring run the model recipe's ID column
+when it named one (409 `RECIPE_ROLES_MISMATCH`, from `POST /runs`, the dry run and Guided setup's
+Approve alike, before anything is prepared). Scoring a built
+dataset (`POST /runs` with `dataset_id`, or a scheduled score) with a model that has a recipe is
+refused with 409 `RECIPE_DATASET_UNSUPPORTED` until datasets can be prepared too.
+
+When a scoring file cannot be prepared, `POST /runs` answers 409 with one of these errors, and the
+dry run `POST /uploads/{id}/checks`, which prepares it the same way in memory, answers 200 with a
+report carrying the same error (only `RECIPE_ROLES_MISMATCH` is a 409 there too). None can
+be acknowledged: a file prepared differently from the training data would be scored wrongly. A
+column the recipe only hides is the exception: a scoring file without it has nothing to hide, so the
+step is skipped (`skipped: true` in the receipt) rather than refused.
+
+| Code | Severity | Acknowledgeable | Message | Suggestion |
+|---|---|---|---|---|
+| `RECIPE_COLUMN_MISSING` | error | no | "The file has no column '{column}'." | "Add the column back under the name the model was trained with, or open Guided setup to tell the helper what it is called now." |
+| `RECIPE_VALUES_UNCONVERTED` | error | no | "{n} of {non_empty} values in '{column}' could not be converted ({share}), more than the {limit}% limit." | "Check how this column is written in the new file. Open Guided setup to see the values that could not be read." |
+| `RECIPE_STEP_INVALID` | error | no | Why the saved step cannot run. | "Retrain the model with Guided setup, so its preparation steps are saved again." |

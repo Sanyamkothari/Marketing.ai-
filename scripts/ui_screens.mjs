@@ -68,6 +68,14 @@ const click = async (page, selector) => {
   await page.locator(selector).first().click({ timeout: 8000 });
   await settle(page);
 };
+/** Plan H M82 (DEC-1114): Setup opens on Guided setup; a screen of Manual setup's form clicks its tab
+ * first (a screen marked `manual: true`). No tab (a Viewer, a generative use case): nothing to do. */
+const manualTab = async (page) => {
+  const tab = page.locator('[data-setup-tab="manual"]').first();
+  if (!(await tab.count().catch(() => 0))) return;
+  await tab.click({ timeout: 8000 }).catch(() => {});
+  await settle(page, 400);
+};
 const openDetails = async (page, selector) => {
   // <details> toggled via its summary; works at any width
   await page.locator(`${selector} > summary`).first().click({ timeout: 8000 });
@@ -128,14 +136,34 @@ const ALL = "Any role (Viewer can read; Analyst runs)";
 export const SCREENS = [
   // ---------------- chrome / home ----------------
   {
-    id: "home", group: "chrome-home", title: "Overview (industry journey, use-case cards)",
+    id: "home", group: "chrome-home", title: "Overview (the generic journey, use-case cards)",
     roles: "Any role", files: ["ui/overview.js", "ui/app.js", "ui/dom.js", "ui/modules/pilot/index.js", "ui/modules/uplift/index.js", "ui/modules/onboarding/clients.js", "ui/modules/production/userbar.js"],
     route: () => "#/",
     states: {
       full: { base: "demo" },
-      empty: { base: "empty", note: "fresh data dir: no demo badge, same catalogue" },
+      empty: { base: "empty", note: "fresh data dir, demo off: no demo badge, same catalogue" },
       loading: { base: "demo", delay: /^\/industries$/ },
       error: { base: "demo", fail: /^\/industries$/ },
+    },
+  },
+  // Plan H M82: the Results and Settings pages (the client picker's "+ New client" screen is gone:
+  // one company, no picker).
+  {
+    id: "results", group: "chrome-home", title: "Results: every run, newest first (approvals notice)",
+    roles: "Any role", files: ["ui/modules/simple/pages.js", "ui/modules/simple/index.js"],
+    route: () => "#/results",
+    states: {
+      full: { base: "demo" },
+      empty: { base: "empty", note: "no runs yet" },
+      error: { base: "demo", fail: /^\/runs$/ },
+    },
+  },
+  {
+    id: "settings", group: "chrome-home", title: "Settings: services, privacy, schedules, advanced tools, about",
+    roles: "Any role", files: ["ui/modules/simple/pages.js", "ui/modules/simple/index.js"],
+    route: () => "#/settings",
+    states: {
+      full: { base: "demo", act: async (page) => openDetails(page, "[data-settings-advanced] details") },
     },
   },
   {
@@ -159,7 +187,7 @@ export const SCREENS = [
     },
   },
   {
-    id: "help-popover", group: "chrome-home", title: '"What does this mean?" help popover',
+    id: "help-popover", manual: true, group: "chrome-home", title: '"What does this mean?" help popover',
     roles: "Any role", files: ["ui/modules/pilot/help.js", "configs/pilot/help.yaml"],
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
@@ -209,7 +237,7 @@ export const SCREENS = [
 
   // ---------------- setup / onboarding ----------------
   {
-    id: "usecase-setup-train", group: "setup-onboarding", title: "Use case Setup, Train mode (prepared file)",
+    id: "usecase-setup-train", manual: true, group: "setup-onboarding", title: "Use case Setup, Train mode (prepared file)",
     roles: ALL, files: P1,
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
@@ -220,7 +248,7 @@ export const SCREENS = [
     },
   },
   {
-    id: "usecase-setup-file", group: "setup-onboarding", title: "Setup after a prepared file is uploaded (preview, columns, problem type)",
+    id: "usecase-setup-file", manual: true, group: "setup-onboarding", title: "Setup after a prepared file is uploaded (preview, columns, problem type)",
     roles: "Analyst", files: P1,
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
@@ -234,7 +262,7 @@ export const SCREENS = [
     },
   },
   {
-    id: "usecase-setup-advanced", group: "setup-onboarding", title: "Setup > Advanced settings expanded",
+    id: "usecase-setup-advanced", manual: true, group: "setup-onboarding", title: "Setup > Advanced settings expanded",
     roles: "Analyst", files: [...P1, "ui/settings.js"],
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
@@ -249,7 +277,7 @@ export const SCREENS = [
     },
   },
   {
-    id: "usecase-setup-score", group: "setup-onboarding", title: "Use case Setup, Score new data mode",
+    id: "usecase-setup-score", manual: true, group: "setup-onboarding", title: "Use case Setup, Score new data mode",
     roles: "Analyst", files: P1,
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
@@ -258,12 +286,38 @@ export const SCREENS = [
     },
   },
   {
-    id: "client-new", group: "setup-onboarding", title: 'Header client picker: "+ New client" form',
-    roles: "Analyst", files: ["ui/modules/onboarding/clients.js", "ui/dom.js"],
+    // Plan G M75: the Guided setup tab. `full` uploads the prepared telco file, so the helper has
+    // little to fix; the states that matter are the checklist, the summary and the chat beside it.
+    id: "guided-setup", group: "setup-onboarding", title: "Use case Setup, Guided setup tab (helper's suggestions, summary, chat)",
+    roles: "Analyst", files: [...P1, "ui/modules/agent/guided.js", "ui/modules/agent/styles.js"],
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
-      full: { base: "demo", act: async (page) => { await page.selectOption("#f-client", "__new__"); await settle(page); } },
-      empty: { base: "empty", note: "no client exists yet" },
+      full: {
+        base: "demo", note: "telco_history.csv uploaded on the Guided tab",
+        act: async (page) => {
+          await click(page, '[data-setup-tab="guided"]');
+          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+          await page.locator("[data-ag-group], [data-ag-stop]").first().waitFor({ timeout: 20000 }).catch(() => {});
+          await settle(page, 400);
+        },
+      },
+      empty: { base: "empty", note: "before a file is uploaded", act: async (page) => click(page, '[data-setup-tab="guided"]') },
+      loading: {
+        base: "demo", note: "the helper's first look held back", delay: /^\/uploads\/[^/]+\/agent-session$/,
+        act: async (page) => {
+          await click(page, '[data-setup-tab="guided"]');
+          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+        },
+      },
+      error: {
+        base: "demo", note: "starting the session fails (500 injected)", fail: /^\/uploads\/[^/]+\/agent-session$/,
+        act: async (page) => {
+          await click(page, '[data-setup-tab="guided"]');
+          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+          await page.locator(".ag .apierr").first().waitFor({ timeout: 10000 }).catch(() => {});
+          await settle(page, 400);
+        },
+      },
     },
   },
   ...[
@@ -272,7 +326,7 @@ export const SCREENS = [
     ["features", 3, "Features & label"],
     ["build", 4, "Build & review (build report, future-data check)"],
   ].map(([step, n, label]) => ({
-    id: `build-raw-${n}-${step}`, group: "setup-onboarding", title: `Build from raw tables, step ${n}: ${label}`,
+    id: `build-raw-${n}-${step}`, manual: true, group: "setup-onboarding", title: `Build from raw tables, step ${n}: ${label}`,
     roles: "Analyst", files: ["ui/modules/onboarding/setup.js", "ui/modules/onboarding/panel.js", "ui/modules/onboarding/steps.js", "ui/usecase.js"],
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
@@ -298,7 +352,7 @@ export const SCREENS = [
     },
   })),
   {
-    id: "build-raw-score", group: "setup-onboarding", title: "Score mode: Upload this month's tables (recipe replay)",
+    id: "build-raw-score", manual: true, group: "setup-onboarding", title: "Score mode: Upload this month's tables (recipe replay)",
     roles: "Analyst", files: ["ui/modules/onboarding/setup.js", "ui/modules/onboarding/panel.js", "ui/usecase.js"],
     route: (m) => `#/uc/${m.use_case_id}`,
     states: {
@@ -784,9 +838,14 @@ async function shoot(browser, screen, stateName, spec, m, variant) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
     if (stateName === "loading") {
+      // A loading state reached by clicking (Guided setup's upload): act, then shoot while held back.
+      if (spec.act || screen.manual) await settle(page);
+      if (screen.manual) await manualTab(page);
+      if (spec.act) await spec.act(page, m);
       await page.waitForTimeout(1500);
     } else {
       await settle(page);
+      if (screen.manual) await manualTab(page);
       if (spec.act) await spec.act(page, m);
       await settle(page);
     }

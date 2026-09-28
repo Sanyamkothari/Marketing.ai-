@@ -15,6 +15,7 @@ import pytest
 from pydantic import ValidationError
 
 from engine.contracts import (
+    AGENT_VALIDATION_CODES,
     CHECK_CODE_TABLES,
     CHECK_CODES,
     EXTENSION_VALIDATION_CODES,
@@ -42,8 +43,13 @@ def test_the_build_report_carries_the_phase_one_contract() -> None:
 def test_the_known_codes_are_every_table_and_the_phase_one_table_has_not_grown() -> None:
     # Plan A M36 added a third table beside the Phase 1 one (DEC-095); the one-registry ruling
     # (DEC-950) added the uplift table as the fourth. The union takes all of them.
+    # Plan G added the agent table, the fifth (DEC-1013).
     assert CHECK_CODES == (
-        VALIDATION_CODES | ONBOARDING_VALIDATION_CODES | EXTENSION_VALIDATION_CODES | UPLIFT_VALIDATION_CODES
+        VALIDATION_CODES
+        | ONBOARDING_VALIDATION_CODES
+        | EXTENSION_VALIDATION_CODES
+        | UPLIFT_VALIDATION_CODES
+        | AGENT_VALIDATION_CODES
     )
     assert len(VALIDATION_CODES) == 19
     assert not (VALIDATION_CODES & ONBOARDING_VALIDATION_CODES)
@@ -51,7 +57,7 @@ def test_the_known_codes_are_every_table_and_the_phase_one_table_has_not_grown()
 
 def test_one_registry_holds_every_table_and_no_code_is_in_two() -> None:
     """DEC-950: one code registry; a code means one thing wherever it appears."""
-    assert set(CHECK_CODE_TABLES) == {"validation", "extension", "onboarding", "uplift"}
+    assert set(CHECK_CODE_TABLES) == {"validation", "extension", "onboarding", "uplift", "agent"}
     assert sum(len(table) for table in CHECK_CODE_TABLES.values()) == len(CHECK_CODES)
     for name, table in CHECK_CODE_TABLES.items():
         assert all(check_code_table(code) == name for code in table)

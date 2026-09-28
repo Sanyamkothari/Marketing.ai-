@@ -386,6 +386,34 @@ The report is stored as `incrementality_report.json` and can be read again with
 non-empty control group among the eligible customers. The engine draws that group at random, per
 customer, so the comparison is an experiment.
 
+### Step 4 of a use case: "Measure the campaign" (Plan H M83)
+
+The same measurement is also step 4 of every use case that acts on customers, on the scoring run's
+own Results, so a marketer never has to find this page. Which use cases have it is configuration:
+`actions.contacts_customers` (true unless the use-case YAML says false, as the operational
+`order-fulfillment` and `fault-prediction` do) and `actions.control_group_fraction > 0`, and never an
+AI-written-text use case (`engine.uplift.measure.measure_offered`).
+
+* **One upload.** `POST /runs/{run_id}/measure` takes only the outcomes file. The outcome column is the
+  use case's own target when the file has it, else the one column besides the customer id; the
+  window is `uplift.outcome_window_days`, else the use case's label `horizon_days`. It then calls
+  `POST /runs/{run_id}/campaign-results` with that body, so the report is the one this page shows.
+* **One plain line.** The response adds a verdict read off the report: "The campaign added about N
+  conversions" (or "prevented about N cases" for an outcome the use case exists to prevent, the
+  value view's `configs/pilot/value.yaml` rule), "No clear effect yet" when the interval includes
+  zero, "Outcome window not over yet" while it is immature. Rates, the interval and the p-value stay
+  under **Details**.
+* **Learn who to contact next time.** When both groups have at least `uplift.min_arm_rows` customers
+  and `uplift.min_arm_positives` responders, `POST /runs/{run_id}/measure/learn` builds the experiment
+  file on the server - the run's own input rows, `contacted` = 1 for every eligible customer not held
+  back and 0 for the "Control (hold out)" rows, and the outcome as the use case's target - stores it
+  as a training upload and starts `POST /uplift/runs` on it. Suppressed customers are in neither arm;
+  for an uplift run only its `intended_treatment` customers are kept. The link then goes to the new
+  model's contact list (`#/uplift/<use case>/output/<run>`).
+
+`campaign_measure.json` in the run directory records the outcomes file and the uplift run learned
+from it.
+
 ---
 
 ## 10. Off-policy evaluation (OPE)
@@ -469,9 +497,10 @@ Phase 1's champion rule in `engine/registry.py` is not changed.
 
 ### In the UI
 
-1. From the Overview, follow **Uplift modelling ›** (or **Uplift for this use case ›** on any
-   use-case screen). Both links are added by the uplift module. The screens live at `#/uplift` and
-   `#/uplift/<use case>`.
+1. Open **Settings → Advanced → Uplift workbench**. The screens live at `#/uplift` and
+   `#/uplift/<use case>`. A use case's own screen does not link here: under Plan H uplift is step 4
+   of a use case, **Measure the campaign**, whose "Learn who to contact next time" trains an uplift
+   model and links to its contact list (docs/UI_AUDIT.md §8.4 item 8).
 2. **Train uplift model**: upload the campaign file, pick the primary key, the **treatment column**
    (from the detected 0/1 columns) and the **outcome column**, and run. If a check blocks, the
    reasons appear in place. `TREATMENT_NOT_RANDOM` offers an acknowledge button.
@@ -654,6 +683,9 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `CAMPAIGN_RESULTS_NOT_FOUND` | 404 | `GET /runs/{id}/campaign-results` | No campaign has been measured for this run yet. | `POST` the outcomes file first. |
 | `RUN_NOT_UPLIFT` | 409 | `POST /runs/{id}/uplift/ope` | The run is not a finished uplift training run, so it has no hold-out to replay. | Use an uplift training run. |
 | `OPE_INVALID` | 422 | `POST /runs/{id}/uplift/ope` | The rule or the logged data cannot be evaluated (the message says why). | Correct the rule as the message says. |
+| `MEASURE_NOT_OFFERED` | 409 | `POST /runs/{id}/measure`, `.../measure/learn` | The use case does not contact customers, or holds nobody back (section 9, step 4). | Nothing to measure; the Campaign results route still answers for any scoring run. |
+| `MEASURE_INVALID` | 422 | `POST /runs/{id}/measure`, `.../measure/learn` | The outcomes file has no customer id column, only the id, or several columns and none is the use case's outcome. | Keep the customer id and one outcome column, or name it with `outcome_column`. |
+| `MEASURE_NOT_READY` | 409 | `POST /runs/{id}/measure/learn` | The campaign was not measured yet, its window is still open, or a group is below the uplift floors (the message gives the counts). | Measure it, wait for the window, or run a larger campaign. |
 
 Phase 1's shared codes (`RUN_NOT_FOUND`, `UPLOAD_NOT_FOUND`, the ingest codes and the configuration
 codes) keep their Phase 1 meaning on these routes.

@@ -159,10 +159,8 @@ FIELD_READS: Final[tuple[tuple[str, str, str, str, str, Path_], ...]] = (
     ("feedback.js", "screen: route()", "POST", "/pilot/feedback", "body", ("screen",)),
     ("feedback.js", "category,", "POST", "/pilot/feedback", "body", ("category",)),
     ("feedback.js", "text }", "POST", "/pilot/feedback", "body", ("text",)),
-    # v1 (WP8): names, clients, tags and verdicts instead of ids
-    ("screen.js", "r.client_id", "GET", "/runs", "response", ("runs", "[]", "client_id")),
+    # v1 (WP8): names, tags and verdicts instead of ids (Plan H: one company, so no client names)
     ("screen.js", "r.use_case_id", "GET", "/runs", "response", ("runs", "[]", "use_case_id")),
-    ("screen.js", "d.client_id", "GET", "/datasets", "response", ("datasets", "[]", "client_id")),
     ("screen.js", "d.target", "GET", "/datasets", "response", ("datasets", "[]", "target")),
     (
         "screen.js",
@@ -180,9 +178,6 @@ FIELD_READS: Final[tuple[tuple[str, str, str, str, str, Path_], ...]] = (
         "response",
         ("versions", "[]", "version", "created_at"),
     ),
-    ("screen.js", "clients.value.clients", "GET", "/clients", "response", ("clients",)),
-    ("screen.js", "cl.client_id", "GET", "/clients", "response", ("clients", "[]", "client_id")),
-    ("screen.js", "found.name", "GET", "/clients", "response", ("clients", "[]", "name")),
     ("screen.js", "payload.industries", "GET", "/industries", "response", ("industries",)),
     ("screen.js", "industry.stages", "GET", "/industries", "response", ("industries", "[]", "stages")),
     (
@@ -209,8 +204,6 @@ FIELD_READS: Final[tuple[tuple[str, str, str, str, str, Path_], ...]] = (
         "response",
         ("industries", "[]", "stages", "[]", "use_cases", "[]", "status"),
     ),
-    ("screen.js", "m.client_name", "GET", "/pilot/demo", "response", ("manifest", "client_name")),
-    ("screen.js", "m.broken_client_id", "GET", "/pilot/demo", "response", ("manifest", "broken_client_id")),
     ("screen.js", "m.campaigns", "GET", "/pilot/demo", "response", ("manifest", "campaigns")),
     (
         "screen.js",
@@ -563,3 +556,14 @@ def test_no_bare_number_is_interpolated_into_the_page() -> None:
     for name in sorted(EXPECTED_FILES):
         found = INTERPOLATED_NUMBER.findall(code_of(name))
         assert not found, f"{name} interpolates hand-typed numbers into its markup: {found}"
+
+
+def test_the_hub_and_the_kit_speak_of_one_company() -> None:
+    """Plan H (UI_AUDIT §8.4 item 13): one company and one journey, so no Client or Industry column,
+    no "your client" and no "pilot team" on the Reports hub or the data request kit."""
+    code = read("screen.js")
+    for column in ('label: "Client"', 'label: "Industry"'):
+        assert column not in code, f"screen.js still draws a {column} column"
+    for words in ("your client", "pilot team"):
+        assert words not in code.lower(), f"screen.js still says {words!r}"
+    assert "Ask your data team for the right tables" in code

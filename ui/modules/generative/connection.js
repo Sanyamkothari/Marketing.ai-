@@ -21,7 +21,7 @@
 //
 // v1 UI: plain words first, AWS vocabulary only under "Technical details".
 
-import { EM_DASH, crumbs, errorBox, esc, pageHead, present } from "../../dom.js";
+import { CONNECTIONS_CRUMB, EM_DASH, crumbs, errorBox, esc, pageHead, present } from "../../dom.js";
 import { injectGenerativeStyles } from "./styles.js";
 import { deleteAwsConnection, getAwsConnection, postTestAwsConnection, putAwsConnection } from "./api.js";
 
@@ -216,7 +216,7 @@ export function connectionHtml(s) {
       : `<div class="stack"><span class="skel skel-card"></span></div>`;
   return `<main class="screen gscreen">
     ${pageHead(
-      `${crumbs([{ label: "AI service connection" }])}<h1 class="h1">AI service connection</h1><p class="desc">Lets Marketing AI write text (assistant answers, root-cause notes, campaign copy) using your company's AI service. No sign-in details or keys are typed here.</p>`,
+      `${crumbs([CONNECTIONS_CRUMB, { label: "AI service" }])}<h1 class="h1">AI service connection</h1><p class="desc">Lets Marketing AI write text (assistant answers, root-cause notes, campaign copy) using your company's AI service. No sign-in details or keys are typed here.</p>`,
     )}
     ${body}
   </main>`;

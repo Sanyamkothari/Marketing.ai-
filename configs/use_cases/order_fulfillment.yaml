@@ -27,6 +27,7 @@ actions:
     - {name: High,   min_score: 0.80, action: "Reroute or switch carrier"}
     - {name: Medium, min_score: 0.50, action: "Notify customer"}
     - {name: Low,    min_score: 0.00, action: "No action"}
+  contacts_customers: false         # operational: nothing is sent to a customer, so there is no campaign to measure (Plan H M83)
 
 output:
   kpi:
@@ -91,3 +92,13 @@ suggested_features:
   - {name: orders_last_7d,         role: orders, function: count, window_days: 7, description: "Orders in the last week."}
   - {name: avg_order_value_30d,    role: orders, function: mean,  column: order_value, window_days: 30, description: "Average order value over 30 days."}
   - {name: days_since_last_order,  role: orders, function: days_since_last, description: "Days since the previous order."}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the orders at risk of missing their promised delivery date."
+  knowledge:
+    - "The outcome is delivery after the promised SLA date."
+    - "Delivery dates, delivery status and delay minutes are recorded after the fact and contain the answer."
+    - "Carrier record, stock cover, distance and same-day volume are known when the order is placed."
+    - "Train on older orders and test on newer ones: orders are time-ordered."
+  column_hints:
+    target_synonyms: [delayed, late_delivery, sla_breached, missed_sla]

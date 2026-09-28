@@ -12,6 +12,11 @@
 // which fills Step 2 exactly as an upload's profile does. Run then posts `dataset_id` instead of
 // `upload_id`, and nothing after the `202` knows the difference.
 //
+// The prepared-file card can have other ways to get its upload too - an *upload source*
+// (`registerUploadSource`, modules/router.js; today "Pick from a connection", UI audit §8.4 item 10).
+// Its result is the same `{upload_id, profile}` a file upload answers, so it fills Step 1 through the
+// same `adoptUpload()` and everything after it is the file upload's own.
+//
 // v1 (docs/ui/FOUNDATION.md, WP2): one step at a time - before there is data only Step 1 is drawn,
 // the later steps are one line each; Score mode asks for the model first. Results lead with one
 // verdict and one primary action; ids, codes and engine wording sit behind "Technical details".
@@ -47,6 +52,7 @@ import {
   noticeCard,
   pageHead,
   present,
+  RUN_FINISHED_EVENT,
   sortNote,
   techDetails,
   typeChip,
@@ -60,12 +66,21 @@ import {
   stagesHtml,
   writePath,
 } from "./settings.js";
-import { runActionsHtml, setupSource } from "./modules/router.js";
+import {
+  resultLinksHtml,
+  runActionsHtml,
+  runPanelsHtml,
+  setupModes,
+  setupSource,
+  uploadSources,
+} from "./modules/router.js";
 import * as seams from "./modules/router.js";
 
 const AUTOML = "__automl__";
 const FILE = "file";
 const RAW = "raw";
+/** The run override that carries the warnings the user confirmed (`POST /runs`, DEC-058). */
+const ACKNOWLEDGED = "validation.acknowledged";
 const POLL_MS = 2000;
 const RUNS_SHOWN = 5;
 
@@ -100,6 +115,10 @@ export function useCaseState(uc) {
       upload: null,
       uploadError: null,
       uploading: false,
+      // An upload source (UI audit §8.4 item 10): the one whose panel has the file control's place
+      // (`null`: the file control), and the name the upload it gave is shown under.
+      uploadSource: null,
+      uploadFrom: null,
       pk: "",
       target: "",
       problemType: "",
@@ -125,6 +144,12 @@ export function useCaseState(uc) {
       models: [],
       clientRuns: [],
       clientId: null,
+      // Plan G: the Setup view's tab ("manual", or a registered setup mode's name) and the upload a
+      // setup mode filled the form with, so that tab can draw the Run button once it has. Plan H M82
+      // (DEC-1114): `null` until the person picks one, which opens the first setup mode offered -
+      // Guided setup - and Manual setup where none is.
+      setupTab: null,
+      guided: null,
       view: "setup",
       runId: null,
       detail: null,
@@ -230,6 +255,15 @@ const datasetOf = (s) => (s.source === RAW ? s.dataset : null);
 /** What Step 1 has produced for the chosen card: an upload, a built dataset, or nothing yet. */
 const dataOf = (s) => (s.source === RAW ? s.dataset : s.upload);
 
+/** The upload source whose panel is open in Step 1, when it is still registered; else `null`. */
+const openUploadSource = (s) =>
+  (s.source === FILE && s.uploadSource && uploadSources().find((source) => source.name === s.uploadSource)) || null;
+
+/** The upload's name for the file control: the source's label ("history.csv (from Exports)") for an
+ * upload a source gave, else the file's own name. */
+const uploadName = (s, profile) =>
+  s.uploadFrom && s.upload && s.uploadFrom.uploadId === s.upload.upload_id ? s.uploadFrom.label : profile.file_name;
+
 /** The key as a list of columns: an upload's is one, a periodic dataset's is two (DEC-083). */
 const keyColumns = (pk) => (Array.isArray(pk) ? pk : pk ? [pk] : []);
 
@@ -315,7 +349,7 @@ function overridesFor(uc, s) {
   Object.assign(overrides, s.extraOverrides);
   const chosen = chosenProblemType(uc, s);
   if (chosen && chosen !== uc.problem_type) overrides.problem_type = chosen;
-  if (s.acknowledged.length) overrides["validation.acknowledged"] = s.acknowledged.slice();
+  if (s.acknowledged.length) overrides[ACKNOWLEDGED] = s.acknowledged.slice();
   return overrides;
 }
 
@@ -610,13 +644,22 @@ function uploadStep(uc, s, n, card) {
   const copy = modeCopy(uc, s);
   const profile = profileOf(s);
   const raw = s.source === RAW && card;
-  const uploadControl = `<div class="orline"><label class="control file ${
-    s.upload ? "has" : ""
-  }"><input type="file" id="f-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
-    profile ? profile.file_name : "Upload CSV or Parquet",
-  )}</span><span class="ico" aria-hidden="true">⤒</span></label><span>or <a class="btn quiet sm" href="${esc(
-    templateUrl(uc.setup.template_url),
-  )}" download>Download template</a></span></div>
+  // Each upload source draws its offer into its own element here after every paint (`bind`).
+  const entries = mayRun(s)
+    ? uploadSources()
+        .map((source) => `<span class="up-src" data-upload-entry="${esc(source.name)}"></span>`)
+        .join("")
+    : "";
+  const open = openUploadSource(s);
+  const uploadControl = open
+    ? `<div id="f-upload-source" data-upload-panel="${esc(open.name)}"></div>`
+    : `<div class="orline"><label class="control file ${
+        s.upload ? "has" : ""
+      }"><input type="file" id="f-file" class="sr" accept=".csv,.parquet"><span class="fname">${esc(
+        profile ? uploadName(s, profile) : "Upload CSV or Parquet",
+      )}</span><span class="ico" aria-hidden="true">⤒</span></label>${entries}<span>or <a class="btn quiet sm" href="${esc(
+        templateUrl(uc.setup.template_url),
+      )}" download>Download template</a></span></div>
     ${s.uploading ? `<div class="loading" role="status">Reading the file…</div>` : ""}
     ${s.uploadError ? errorBox(s.uploadError) : ""}
     ${previewHtml(s)}`;
@@ -727,14 +770,10 @@ const noModelHtml = (uc) =>
     action: { label: "Train a model", attrs: 'data-goto-mode="train"' },
   })}</div>`;
 
-function setupForm(uc, s) {
+/** The Train / Score switch and its one line of help, at the top of the Setup card. */
+function modeSeg(uc, s) {
   const copy = modeCopy(uc, s);
-  const train = s.mode === "train";
-  const why = blocker(uc, s);
-  const extension = setupSource();
-  const card = extension ? extension.card(uc, s.mode, extension.context()) : null;
-  const hasData = !!dataOf(s);
-  const seg = `<div class="seg" role="group" aria-label="Mode">${uc.setup.modes
+  return `<div class="seg" role="group" aria-label="Mode">${uc.setup.modes
     .map(
       (m) =>
         `<button type="button" data-mode="${esc(m.value)}" class="${m.value === s.mode ? "on" : ""}" aria-pressed="${
@@ -742,6 +781,16 @@ function setupForm(uc, s) {
         }">${esc(m.label)}</button>`,
     )
     .join("")}</div><p class="seg-help">${esc(copy.help)}</p>`;
+}
+
+function setupForm(uc, s) {
+  const copy = modeCopy(uc, s);
+  const train = s.mode === "train";
+  const why = blocker(uc, s);
+  const extension = setupSource();
+  const card = extension ? extension.card(uc, s.mode, extension.context()) : null;
+  const hasData = !!dataOf(s);
+  const seg = modeSeg(uc, s);
 
   if (!train && !trainedVersions(s).length) {
     return `<section class="card"><div class="form-body">${seg}${noModelHtml(uc)}</div></section>`;
@@ -777,7 +826,69 @@ function setupForm(uc, s) {
       </form></div></section>`;
 }
 
+// --- setup modes (Plan G) -------------------------------------------------------------------------
+// A phase module can offer a second way through Setup (`registerSetupMode`, modules/router.js) -
+// today, Guided setup. Then the Setup view gets a tab strip: the module's tab, and "Manual setup",
+// which is the form above, unchanged. On the module's tab this screen draws the card, the mode switch
+// and two empty elements the module mounts into; once the module has filled the form's state
+// (`host.approved`), the card also draws this form's own validation list and Run button.
+
+const MANUAL = "manual";
+
+/** The tab on show: the one the user picked while it is still offered; before any pick, the first
+ * setup mode offered (Guided setup, Plan H); else Manual setup. */
+function activeTab(s, modes) {
+  const wanted = s.setupTab === null && modes.length ? modes[0].name : s.setupTab;
+  return modes.some((m) => m.name === wanted) ? wanted : MANUAL;
+}
+
+function setupTabsHtml(modes, active) {
+  const tab = (name, label) =>
+    `<button type="button" class="tab${name === active ? " on" : ""}" data-setup-tab="${esc(name)}" aria-pressed="${
+      name === active
+    }">${esc(label)}</button>`;
+  return `<div class="tabs setup-tabs" role="group" aria-label="How to set up">${modes
+    .map((m) => tab(m.name, m.label))
+    .join("")}${tab(MANUAL, "Manual setup")}</div>`;
+}
+
+/** Whether a setup mode filled the form with the upload it still holds. */
+const guidedFilled = (s) => Boolean(s.guided && s.upload && s.source === FILE && s.upload.upload_id === s.guided.uploadId);
+
+function modeForm(uc, s) {
+  const copy = modeCopy(uc, s);
+  const train = s.mode === "train";
+  const seg = modeSeg(uc, s);
+  if (!train && !trainedVersions(s).length) {
+    return `<section class="card"><div class="form-body">${seg}${noModelHtml(uc)}</div></section>`;
+  }
+  const why = blocker(uc, s);
+  const model = train ? "" : `<div class="f-setup">${scoreModelStep(uc, s, 1)}</div>`;
+  const run = guidedFilled(s)
+    ? `<form id="f-setup" novalidate class="f-setup">
+        ${validationHtml(uc, s)}
+        ${s.submitError ? errorBox(s.submitError) : ""}
+        <div class="actions"><button type="submit" class="btn primary run" id="f-run"${
+          why || s.submitting ? " disabled" : ""
+        }>${esc(s.submitting ? "Starting…" : copy.run_button)}</button><span class="reason">${esc(why)}</span></div>
+      </form>`
+    : "";
+  return `<section class="card"><div class="form-body">${seg}${model}<div id="f-mode"></div>${run}</div></section>`;
+}
+
 function setupHtml(uc, s) {
+  const modes = mayRun(s) ? setupModes(uc) : [];
+  if (modes.length) {
+    const active = activeTab(s, modes);
+    const strip = setupTabsHtml(modes, active);
+    if (active !== MANUAL) {
+      return `${strip}<div class="setup-grid">${modeForm(uc, s)}<div class="setup-side"><div id="f-mode-aside"></div>${runsCard(
+        uc,
+        s,
+      )}</div></div>`;
+    }
+    return `${strip}<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
+  }
   if (mayRun(s)) return `<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
   // A role that may not start runs: what it can do first, the (gated) form folded away below.
   const latest = latestDone(s);
@@ -978,19 +1089,31 @@ function flowBlocks(uc, s, run) {
       state = '<span class="bstate waiting">Not completed</span>';
       extra = " pending";
     }
+    // A file name is one long word: it is cut with an ellipsis on one line, whole in its tooltip,
+    // instead of breaking mid-word ("synthetic_score.cs / v", UI_AUDIT §8.4 item 6).
+    const val =
+      slug === "data"
+        ? `<div class="val fname" title="${esc(value)}">${esc(value)}</div>`
+        : `<div class="val">${esc(value)}</div>`;
     return `<a class="block${extra}" href="#/uc/${esc(uc.id)}/${slug}/${esc(run.run_id)}"><div><div class="lab"><span>${esc(
       label,
-    )}</span>${state}</div><div class="val">${esc(value)}</div>${
+    )}</span>${state}</div>${val}${
       meta ? `<div class="meta">${esc(meta)}</div>` : ""
     }</div><div class="go"><span>View details</span><span aria-hidden="true">›</span></div></a>`;
   });
   // After a scoring run: what the phase modules offer next (campaign results, AI copy), as a fourth block.
   const next = !train && done ? runActionsHtml(uc, run) : "";
-  // An action that is itself a flow step (Campaign results) brings its own arrow and block: it is the
-  // fourth block, not a box inside one.
+  // An action that is itself a flow step (Campaign results, Measure the campaign) brings its own arrow
+  // and block: it is the fourth block, not a box inside one. Plain button actions offered beside it
+  // (Write campaign copy, root-cause notes) go in a row under the flow, not into the flow's grid.
   if (next && next.includes('class="block')) {
     const arrow = '<div class="arrow" aria-hidden="true">→</div>';
-    return { html: blocks.join(arrow) + next, count: blocks.length + (next.match(/class="block/g) || []).length };
+    const { steps, buttons } = splitActions(next);
+    return {
+      html: blocks.join(arrow) + steps,
+      count: blocks.length + (steps.match(/class="block/g) || []).length,
+      actions: buttons,
+    };
   }
   if (next) {
     blocks.push(
@@ -999,6 +1122,23 @@ function flowBlocks(uc, s, run) {
   }
   const arrow = '<div class="arrow" aria-hidden="true">→</div>';
   return { html: blocks.join(arrow), count: blocks.length };
+}
+
+/** Run actions split into flow steps (the arrows and blocks) and everything else (buttons). Without a
+ * document to parse with, everything stays a step, as before Plan H. */
+function splitActions(html) {
+  if (typeof document === "undefined" || !document.createElement) return { steps: html, buttons: "" };
+  const holder = document.createElement("template");
+  holder.innerHTML = html;
+  let steps = "";
+  let buttons = "";
+  for (const node of [...holder.content.childNodes]) {
+    const isStep = node.nodeType === 1 && (node.classList.contains("block") || node.classList.contains("arrow"));
+    const markup = node.nodeType === 1 ? node.outerHTML : node.textContent || "";
+    if (isStep) steps += markup;
+    else buttons += markup.trim() ? markup : "";
+  }
+  return { steps, buttons };
 }
 
 /** The summary's lines and actions for each way a run can end. */
@@ -1078,10 +1218,14 @@ function resultsHtml(uc, s) {
     ["Error code", run.error && run.error.code],
   ]);
   const flow = flowBlocks(uc, s, run);
+  // A step that needs a full-width section under the flow (Plan H M83: step 4, "Measure the campaign").
+  const panels = run.mode === "score" && run.state === "done" ? runPanelsHtml(uc, run) : "";
   return `<div class="results"><section class="summary rsum"><div class="vline">${told.head}</div>${told.lines.join(
     "",
   )}<div class="btn-row">${told.actions}</div>${tech}</section>
-    <div class="flow${flow.count > 3 ? " four" : ""}">${flow.html}</div>
+    <div class="flow${flow.count > 3 ? " four" : ""}">${flow.html}</div>${
+      flow.actions ? `<div class="btn-row flow-actions">${flow.actions}</div>` : ""
+    }${panels}${resultLinksHtml(uc, run)}
     <div class="runs-below">${runsCard(uc, s)}</div></div>`;
 }
 
@@ -1092,7 +1236,8 @@ export function useCaseHtml(uc, s) {
   const body =
     s.view === "running" ? runningHtml(uc, s) : s.view === "results" ? resultsHtml(uc, s) : setupHtml(uc, s);
   // A related link the phase modules offer for the use case itself (`registerRunAction`, asked with
-  // no run): uplift's "target with uplift", for one. Drawn quietly, after the description.
+  // no run), drawn quietly after the description. None offers one today: Plan H made uplift step 4
+  // ("Measure the campaign") and put its workbench under Settings → Advanced (UI_AUDIT §8.4 item 8).
   const related = runActionsHtml(uc, null);
   return `<main class="screen t-${esc(uc.marker)}">
     ${pageHead(
@@ -1172,10 +1317,16 @@ details.more-runs>summary{padding:12px 20px;border-top:1px solid var(--line);fon
 .rsum .vsub.muted{font-size:13px;color:var(--muted)}
 .rsum .btn-row{margin-top:8px}
 .flow.four{grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr}
+.block .val.fname{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
 .block.next-step{background:var(--soft)}
+.flow-actions{margin-top:16px}
 .block .next-actions{flex-wrap:wrap;gap:8px 16px;justify-content:flex-start}
 .uc-viewer{display:flex;flex-direction:column;gap:24px;margin-top:8px}
 .uc-viewer .adv-wrap{border-top:0}
+.setup-tabs{margin:8px 0 16px}
+.setup-tabs .tab{font:inherit;font-size:13px;font-weight:500;cursor:pointer}
+.setup-tabs .tab:not(.on){background:var(--surface)}
+.setup-side{display:flex;flex-direction:column;gap:24px;min-width:0}
 @media (max-width:1100px){.flow.four{grid-template-columns:1fr}.flow.four .arrow{transform:rotate(90deg);height:40px}}
 @media (max-width:700px){.run-head{flex-direction:column}.stages.plain .sfields{grid-template-columns:1fr}.ptype .control{width:100%}.runrow{flex-direction:column;align-items:flex-start}.runrow .r3{text-align:left;max-width:none}.rsum .vline{font-size:18px}}
 `;
@@ -1311,6 +1462,8 @@ export function createController(uc, rerender) {
       await refreshLists();
       rerender();
       const run = s.detail.run;
+      // Whoever shows what a finished run changes (the approvals badge on Results) reads it again.
+      window.dispatchEvent(new window.CustomEvent(RUN_FINISHED_EVENT, { detail: run }));
       announceStatus(
         run.state === "done"
           ? run.mode === "train"
@@ -1476,6 +1629,7 @@ export function createController(uc, rerender) {
   function chooseSource(source) {
     if (s.source === source) return;
     s.source = source;
+    s.uploadSource = null;
     resetColumns();
     const data = dataOf(s);
     if (data && source === RAW) adoptDataset();
@@ -1495,6 +1649,7 @@ export function createController(uc, rerender) {
     if (s.mode === mode) return;
     s.mode = mode;
     s.upload = null;
+    s.uploadSource = null;
     // A dataset built for training is not a scoring input, nor the other way round.
     s.source = FILE;
     s.dataset = null;
@@ -1538,7 +1693,130 @@ export function createController(uc, rerender) {
       s.source = FILE;
       resetColumns();
     }
+    if (s.uploadSource && !openUploadSource(s)) s.uploadSource = null;
     settleModel();
+  }
+
+  /**
+   * What a setup mode (Plan G) may do to this form: read which use case and mode it is on, and fill
+   * the form's state once the person approved - then Run is this form's own `submit()`.
+   */
+  const host = {
+    uc,
+    get mode() {
+      return s.mode;
+    },
+    get mayRun() {
+      return mayRun(s);
+    },
+    /** Score mode's first step is the model choice this card draws above the mode's own steps. */
+    get firstStep() {
+      return s.mode === "score" ? 2 : 1;
+    },
+    /** Score mode: the model Run will score with, so the helper checks the file against the same one. */
+    get modelVersionId() {
+      return s.mode === "score" && s.modelVersionId ? s.modelVersionId : null;
+    },
+    holds: (uploadId) => guidedFilled(s) && s.upload.upload_id === uploadId,
+    approved: (fill) => adoptGuided(fill),
+    manual() {
+      s.setupTab = MANUAL;
+      rerender();
+    },
+  };
+
+  /**
+   * Fill the form from a setup mode's approval, exactly as Manual setup would have been filled: the
+   * (prepared) upload and its profile, the two columns, and every override - a path the settings
+   * schema has goes into `values`, the acknowledgements into `acknowledged`, anything else into
+   * `extraOverrides`. The paths are the API's; none is spelled here. Earlier edits are dropped: what
+   * was approved is the whole plan.
+   */
+  function adoptGuided({ mode, upload: prepared, primaryKey, target, overrides }) {
+    if (mode && mode !== s.mode) return;
+    const schema = uc.advanced_settings || { stages: [] };
+    const byPath = indexSchema(schema);
+    releaseTimeSplit();
+    s.source = FILE;
+    s.uploadSource = null;
+    s.dataset = null;
+    s.upload = prepared;
+    s.uploadError = null;
+    s.pk = primaryKey || "";
+    s.target = s.mode === "train" ? target || "" : "";
+    s.problemType = "";
+    s.editColumns = false;
+    s.validation = null;
+    s.submitError = null;
+    s.values = initialValues(schema, uc.config);
+    s.values.__ui = { model: s.model };
+    s.acknowledged = [];
+    s.extraOverrides = {};
+    for (const [path, value] of Object.entries(overrides || {})) {
+      if (path === "problem_type") s.problemType = value;
+      else if (path === ACKNOWLEDGED) s.acknowledged = Array.isArray(value) ? value.slice() : [value];
+      else if (byPath.has(path)) writePath(s.values, path, value);
+      else s.extraOverrides[path] = value;
+    }
+    s.guided = { uploadId: prepared.upload_id };
+    rerender();
+  }
+
+  /** Mount the chosen setup mode into this paint's two placeholders, on its own tab. */
+  function mountMode(root) {
+    const main = root.querySelector("#f-mode");
+    if (!main) return;
+    const modes = setupModes(uc);
+    const mode = modes.find((m) => m.name === activeTab(s, modes));
+    if (mode) mode.mount({ main, aside: root.querySelector("#f-mode-aside") }, host);
+  }
+
+  /**
+   * An upload source's result - what `POST /uploads` answers - fills Step 1 exactly as a file upload
+   * does: the same state, the same `adoptUpload()`, so Step 2's detection and pickers are the upload's.
+   */
+  function uploadFromSource(result, label) {
+    s.uploadSource = null;
+    s.uploading = false;
+    s.uploadError = null;
+    s.upload = result;
+    s.uploadFrom = { uploadId: result.upload_id, label: label || result.profile.file_name };
+    resetColumns();
+    adoptUpload();
+    rerender();
+  }
+
+  /** Draw each upload source's offer into Step 1, or the open source's panel in the file control's place. */
+  function mountUploadSources(root) {
+    const sources = uploadSources();
+    if (!sources.length) return;
+    const panel = root.querySelector("#f-upload-source");
+    const open = openUploadSource(s);
+    if (panel && open) {
+      open.panel(panel, {
+        uc,
+        mode: s.mode,
+        onUpload: uploadFromSource,
+        onCancel() {
+          s.uploadSource = null;
+          rerender();
+        },
+      });
+      return;
+    }
+    root.querySelectorAll("[data-upload-entry]").forEach((slot) => {
+      const source = sources.find((candidate) => candidate.name === slot.dataset.uploadEntry);
+      if (!source) return;
+      source.entry(slot, {
+        uc,
+        mode: s.mode,
+        disabled: s.uploading,
+        open() {
+          s.uploadSource = source.name;
+          rerender();
+        },
+      });
+    });
   }
 
   /** Mount the setup source's panel into this paint's placeholder, when the raw card is chosen. */
@@ -1557,7 +1835,8 @@ export function createController(uc, rerender) {
       if (el) el.addEventListener(event, fn);
     };
 
-    root.querySelectorAll(".seg button").forEach((button) =>
+    // `[data-mode]`: only the Train / Score switch, never another button group drawn beside it.
+    root.querySelectorAll(".seg button[data-mode]").forEach((button) =>
       button.addEventListener("click", () => {
         if (s.mode === button.dataset.mode) return;
         switchMode(button.dataset.mode);
@@ -1567,6 +1846,14 @@ export function createController(uc, rerender) {
     root.querySelectorAll("[data-goto-mode]").forEach((button) =>
       button.addEventListener("click", () => {
         switchMode(button.dataset.gotoMode);
+        rerender();
+      }),
+    );
+
+    root.querySelectorAll("[data-setup-tab]").forEach((button) =>
+      button.addEventListener("click", () => {
+        if (s.setupTab === button.dataset.setupTab) return;
+        s.setupTab = button.dataset.setupTab;
         rerender();
       }),
     );
@@ -1707,6 +1994,8 @@ export function createController(uc, rerender) {
 
     // Last, so none of the queries above reaches into the panel: it binds its own events.
     if (s.view === "setup") mountSource(root);
+    if (s.view === "setup") mountUploadSources(root);
+    if (s.view === "setup") mountMode(root);
 
     // The role gate disables Run in a microtask after this paint; once it has, a role that may not
     // start runs gets the read-only layout (and the full form again after a sign-in as one that may).

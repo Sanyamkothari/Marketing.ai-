@@ -143,7 +143,9 @@ export function mountUserBar(doc = document) {
   mounted = true;
   setAccess({ can: (method, path) => can(method, path), status: () => sessionStatus() });
   injectUserStyles(doc);
-  addNavSlot("user", { html: () => userBarHtml(currentMe(), sessionStatus()) });
+  // Plan H M81 (DEC-1112): with sign-in off the product is a single-user tool, so the bar says nothing
+  // about sign-in; the Settings page's About says it is off (`userBarHtml` still draws the chip).
+  addNavSlot("user", { html: () => (sessionStatus() === "off" ? "" : userBarHtml(currentMe(), sessionStatus())) });
   addNavSlot("admin", { html: adminMenuHtml });
   addNavSlot("models", { html: modelsMenuHtml });
   doc.addEventListener("click", (event) => {

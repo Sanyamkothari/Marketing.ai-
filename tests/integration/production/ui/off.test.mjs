@@ -1,5 +1,7 @@
 /* auth_mode=off: the UI works exactly as before Phase 4b - no header on any call, no control gated,
-   no sign-in - and the bar says plainly that access control is off (DEC-702). */
+   no sign-in. Plan H M81/M82 (DEC-1112, DEC-1113): the product is a single-user tool, so the bar is
+   the four places and says nothing about sign-in; Settings says it is off (DEC-702) and offers no
+   Admin group while it is. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { $, $$, fixture, installPage, settle, until } from "./harness.mjs";
@@ -16,6 +18,7 @@ const { w, calls } = installPage(server, { hash: "#/" });
 await import("../../../../ui/app.js");
 await import("../../../../ui/modules/generative/index.js");
 await import("../../../../ui/modules/production/index.js");
+await import("../../../../ui/modules/simple/index.js");
 
 test("the overview renders and no call carries a token", async () => {
   await until(() => $(".stage-pill"), 3000, "the overview");
@@ -25,10 +28,19 @@ test("the overview renders and no call carries a token", async () => {
   assert.equal(w.location.hash, "#/");
 });
 
-test("the bar says access control is off, and offers the admin screens the local operator may open", async () => {
-  await until(() => /Access control is off/.test($("#pb-bar").textContent), 2000, "the bar");
-  assert.ok($('#pb-bar a[href="#/admin/users"]'));
+test("the bar is the four places with no sign-in chip; Settings says sign-in is off and hides Admin", async () => {
+  await until(() => $$("#pb-bar nav[aria-label='Main'] .tn-item").length === 4, 2000, "the bar");
+  await settle(2);
+  assert.doesNotMatch($("#pb-bar").textContent, /Sign-in off|Access control is off/);
+  assert.equal($('#pb-bar a[href="#/admin/users"]'), null);
   assert.equal($("#pb-signout"), null);
+  w.location.hash = "#/settings";
+  await until(() => $("[data-signin-off]"), 3000, "the Settings page's About");
+  assert.match($("[data-signin-off]").textContent, /Sign-in is off/);
+  assert.equal($("[data-settings-admin]"), null, "no Admin group while sign-in is off");
+  assert.equal($('#app a[href="#/admin/users"]'), null);
+  assert.ok($('#app a[href="#/privacy/consent"]'), "Privacy is still offered");
+  assert.ok($('#app a[href="#/connections"]'), "and the AI service");
 });
 
 test("the settings screen keeps every control the screen drew", async () => {

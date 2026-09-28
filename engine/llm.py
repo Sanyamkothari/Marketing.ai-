@@ -399,7 +399,62 @@ class FakeLLMClient:
             return self._copy(user)
         if shape == "evidence":
             return self._root_cause(user)
+        if shape == "helper":
+            return self._helper(user)
         return self._answer(user)
+
+    def _helper(self, user: str) -> str:
+        """One helper step (Plan G): look a quoted column up, suggest a faster search, or reply.
+
+        `GROUNDED` answers only from the state and the tool results in the prompt, so every number it
+        writes is on the page; each other mode breaks the one rule its name says.
+        """
+        state, results, message = _helper_sections(user)
+        if self._mode is FakeLLMMode.REFUSING:
+            return json.dumps({"action": "reply", "text": "I cannot help with that.", "evidence_ids": []})
+        if self._mode is FakeLLMMode.UNGROUNDED:
+            text = "About 98,765 of your customers will convert next month."
+            return json.dumps({"action": "reply", "text": text, "evidence_ids": []})
+        if not results:
+            if "faster" in message.lower():
+                args = {
+                    "path": "model_search.strategy",
+                    "value": "fast",
+                    "reason": "You asked for a faster search.",
+                }
+                return json.dumps({"action": "propose_setting", "args": args})
+            quoted = _QUOTED.findall(message)
+            if quoted:
+                return json.dumps({"action": "inspect_column", "args": {"column": quoted[0]}})
+            proposals = [p for p in state.get("proposals", []) if isinstance(p, dict)]
+            if proposals:
+                first = proposals[0]
+                text = f"I suggest this first: {first.get('title', '')}. {first.get('reason', '')}"
+                evidence = [str(e) for e in first.get("evidence_ids", [])]
+            else:
+                text, evidence = "Everything here is decided; you can approve and run.", []
+            return self._helper_reply(text, evidence)
+        latest = results[-1]
+        result = latest.get("result", {}) if isinstance(latest.get("result"), dict) else {}
+        if latest.get("tool") == "inspect_column":
+            text = (
+                f"'{result.get('column')}' has {result.get('distinct')} different values "
+                f"and {result.get('empty')} empty cells."
+            )
+        elif latest.get("tool") == "propose_setting":
+            text = "I have suggested that change; approve it on the screen if you agree."
+        else:
+            text = "I looked that up; the details are on the screen."
+        return self._helper_reply(text, [str(latest.get("evidence_id", ""))])
+
+    def _helper_reply(self, text: str, evidence: list[str]) -> str:
+        if self._mode is FakeLLMMode.PII:
+            text = f"{text} {_FAKE_PII}"
+        elif self._mode is FakeLLMMode.BANNED:
+            text = f"{text} {_FAKE_BANNED}"
+        elif self._mode is FakeLLMMode.OVERLONG:
+            text = " ".join([text] * 400)
+        return json.dumps({"action": "reply", "text": text, "evidence_ids": [e for e in evidence if e]})
 
     def _judge(self) -> str:
         failing = self._mode is FakeLLMMode.FAILING_JUDGE
@@ -615,8 +670,38 @@ def _prompt_shape(system: str, user: str) -> str:
         return "copy"
     if "Evidence pack for segment" in user:
         return "evidence"
+    if "HELPER TURN" in user:  # Plan G: one step of a Guided-setup helper (DEC-1017)
+        return "helper"
     del system
     return "answer"
+
+
+_QUOTED: Final[re.Pattern[str]] = re.compile(r"'([A-Za-z0-9_ .\-]+)'")
+_HELPER_STATE: Final[str] = "State of this setup (proposals, questions and what has been decided):"
+_HELPER_RESULTS: Final[str] = "Tool results so far in this turn:"
+_HELPER_MESSAGE: Final[str] = "The person says:"
+
+
+def _helper_sections(user: str) -> tuple[dict[str, Any], list[dict[str, Any]], str]:
+    """The state, this turn's tool results and the message, from a rendered `data_agent` prompt."""
+
+    def between(start: str, end: str | None) -> str:
+        after = user.split(start, 1)[1] if start in user else ""
+        return (after.split(end, 1)[0] if end and end in after else after).strip()
+
+    def parsed(text: str) -> Any:
+        try:
+            return json.loads(text)
+        except ValueError:
+            return None
+
+    state = parsed(between(_HELPER_STATE, _HELPER_RESULTS))
+    results = parsed(between(_HELPER_RESULTS, _HELPER_MESSAGE))
+    return (
+        state if isinstance(state, dict) else {},
+        [r for r in results if isinstance(r, dict)] if isinstance(results, list) else [],
+        between(_HELPER_MESSAGE, None),
+    )
 
 
 def _numbered_extracts(user: str) -> list[tuple[int, str]]:

@@ -142,6 +142,7 @@ defaults:
       recently_contacted_column: last_contacted_at   # str | null (config-only)
       recently_contacted_days: 14       # int 1..90 step 1
     control_group_fraction: 0.10        # float 0..0.50 step 0.01; UI shows *100 as "%" (DEC-005); seeded by run_id
+    contacts_customers: true            # bool; false for operational use cases: no "Measure the campaign" step (Plan H, DEC-1130)
 
   monitoring:                           # [UI 7] Monitoring & retraining
     drift_psi_threshold: 0.20           # float 0.05..1.00 step 0.05
@@ -317,3 +318,21 @@ defaults:
       budget_contacts: null             # int >= 1 | null; most customers to contact; null = every persuadable
       cost_per_contact: null            # float >= 0 | null
       value_per_conversion: null        # float >= 0 | null; with cost, stops where expected value per contact < cost
+
+  agent:                                # Plan G §8.1. The Guided-setup helper of each use case (DEC-1003); not overridable per run
+    enabled: true                       # bool; the Guided setup tab appears only when this is true and the use case trains a model
+    display_name: null                  # str | null; null = "<use case name> helper"
+    goal: null                          # str | null; one plain sentence; null = target.definition
+    knowledge: []                       # list[str]; <= 20 short plain-language facts the rules and the prompt may rely on
+    column_hints:                       # extra name hints for roles the profile does not detect (case-insensitive)
+      target_synonyms: []               # list[str]; names the outcome column may go by in a client's file
+      consent: [marketing_opt_in, opt_in, consent, consented]
+      opt_out: [opt_out, opted_out, unsubscribed, do_not_contact]
+      recently_contacted: [last_contacted_at, last_contacted, last_contact_date]
+    levels: [clean, derive]             # list[enum clean | derive | reshape]; how far a recipe may change the data (G8)
+                                        # reshape (combine many rows per customer, M76) is enabled per use case where
+                                        # files are event logs (retail-win-back), never here: elsewhere a repeating ID is a stop
+    max_conversion_failure_pct: 5.0     # float 0..50; a format fix failing on more of a column than this becomes a question
+    tick_uncertain: false               # bool; whether suggestions marked "check" start ticked
+    max_llm_calls_per_session: 40       # int 1..500; the chat's model-call budget for one upload
+    max_tool_steps_per_turn: 8          # int 1..20; tool calls the helper may make before it must reply

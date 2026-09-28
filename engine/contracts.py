@@ -37,6 +37,7 @@ from engine.config import (
 )
 
 __all__ = [
+    "AGENT_VALIDATION_CODES",
     "ARTEFACT_REGISTRY",
     "CHECK_CODES",
     "CHECK_CODE_TABLES",
@@ -1629,12 +1630,23 @@ UPLIFT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
 DEC-854). Defined here, beside the other tables, since the one-registry ruling (DEC-950);
 `engine.uplift.contracts` re-exports it."""
 
+AGENT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
+    {
+        "RECIPE_COLUMN_MISSING",
+        "RECIPE_VALUES_UNCONVERTED",
+        "RECIPE_STEP_INVALID",
+    }
+)
+"""Plan G's three codes (DEC-1006, DEC-1013): a scoring file the model's saved preparation recipe cannot
+prepare. Defined here, beside the other tables, for the one-registry ruling (DEC-950)."""
+
 CHECK_CODE_TABLES: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
         "validation": VALIDATION_CODES,
         "extension": EXTENSION_VALIDATION_CODES,
         "onboarding": ONBOARDING_VALIDATION_CODES,
         "uplift": UPLIFT_VALIDATION_CODES,
+        "agent": AGENT_VALIDATION_CODES,  # Plan G (DEC-1013)
     }
 )
 """The one code registry (DEC-950): every check code the platform can write, grouped by the table it
@@ -1649,7 +1661,7 @@ if sum(len(table) for table in CHECK_CODE_TABLES.values()) != len(CHECK_CODES): 
 
 
 def check_code_table(code: str) -> str | None:
-    """The registry table `code` belongs to (`validation`, `extension`, `onboarding` or `uplift`)."""
+    """The registry table `code` belongs to (`validation`, `extension`, `onboarding`, `uplift` or `agent`)."""
     return next((name for name, table in CHECK_CODE_TABLES.items() if code in table), None)
 
 
@@ -1674,3 +1686,5 @@ _NEVER_ACKNOWLEDGEABLE: Final[frozenset[str]] = frozenset({"FUTURE_EVENTS_LEAKED
 # ---- END PHASE-3B ----
 # ---- PLAN-E (pilot) — append only below this line ----
 # ---- END PLAN-E ----
+# ---- PLAN-G (agents) — append only below this line ----
+# ---- END PLAN-G ----

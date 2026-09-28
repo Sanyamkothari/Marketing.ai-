@@ -162,6 +162,8 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "login_failure_window_seconds": f"{ENV_PREFIX}LOGIN_FAILURE_WINDOW_SECONDS",
     "login_lockout_seconds": f"{ENV_PREFIX}LOGIN_LOCKOUT_SECONDS",
     "trusted_proxy_hops": f"{ENV_PREFIX}TRUSTED_PROXY_HOPS",
+    # --- Plan H (connections). One more extension; nothing above changes meaning (DEC-1101).
+    "connections_key": f"{ENV_PREFIX}CONNECTIONS_KEY",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -379,6 +381,16 @@ class Settings(BaseModel):
         description="Proxies in front of the API whose X-Forwarded-For entries are trusted; 0 uses the peer address.",
     )
 
+    # --- Plan H (connections) ----------------------------------------------------------------------
+    # Added field only. The Fernet key that encrypts every saved connection's secrets. No default in
+    # code, as for the privacy salt: a laptop without one gets a key generated once into its own data
+    # directory (`engine.connections.store.connections_key`, 0600); `env=prod` refuses to save a
+    # secret without one (DEC-1101).
+    connections_key: SecretStr | None = Field(
+        default=None,
+        description="Fernet key encrypting saved connections' passwords and keys. A secret; required on env=prod.",
+    )
+
     @field_validator("sagemaker_subnet_ids", "sagemaker_security_group_ids", "cors_origins", mode="before")
     @classmethod
     def _split_list(cls, value: object) -> object:
@@ -560,8 +572,8 @@ fixtures use.
 REDACTED: Final[str] = "<redacted>"
 
 SECRET_FIELDS: Final[frozenset[str]] = frozenset(
-    {"postgres_dsn", "privacy_salt"}
-)  # privacy_salt: Plan D, DEC-860
+    {"postgres_dsn", "privacy_salt", "connections_key"}
+)  # privacy_salt: Plan D, DEC-860; connections_key: Plan H, DEC-1120
 """Fields `redacted()` hides and `summary()` may never name."""
 
 SUMMARY_FIELDS: Final[tuple[str, ...]] = (
@@ -750,3 +762,5 @@ def build_services(config: Settings) -> tuple[Any, Any]:
 # ---- END PHASE-3B ----
 # ---- PLAN-E (pilot) — append only below this line ----
 # ---- END PLAN-E ----
+# ---- PLAN-G (agents) — append only below this line ----
+# ---- END PLAN-G ----

@@ -75,16 +75,25 @@ const { w, calls, forms } = installOps({
 await import("../../../../../ui/app.js");
 await import("../../../../../ui/modules/production/index.js");
 const session = await import("../../../../../ui/modules/production/session.js");
+// Plan H M82 (DEC-1113): the links that were in the top bar are on the Settings page; this is what
+// that page offers to the person signed in now, drawn by its own pure builder.
+const { settingsHtml } = await import("../../../../../ui/modules/simple/pages.js");
+const offers = (href) => settingsHtml({ can: (m, p) => session.can(m, p), status: "signed-in" }).includes(`href="${href}"`);
 
 const text = () => ($("#app") || {}).textContent || "";
 const last = (method, path) => calls.filter((c) => c.method === method && c.path === path).pop();
 const rowOf = (id) => $(`tr[data-schedule="${id}"]`);
 const heading = () => ($("main h1") || {}).textContent || "";
 const cardTitles = () => $$("main .card h3").map((h) => h.textContent).join(" | ");
+/** The breadcrumb as [label, href] pairs, href null for the screen itself (docs/UI_AUDIT.md §8.4 item 12). */
+const crumbTrail = () => $$("#app .crumbs a, #app .crumbs .cur").map((e) => [e.textContent, e.getAttribute("href")]);
+const SETTINGS = ["Settings", "#/settings"];
+const RESULTS = ["Results", "#/results"];
 
-test("the Analyst's schedule list shows every schedule with its cadence, and the bar links here", async () => {
+test("the Analyst's schedule list shows every schedule with its cadence, and Settings links here", async () => {
   await until(() => $$("tr[data-schedule]").length === fixture("schedules").schedules.length, 3000, "the schedules");
-  assert.ok($('#pb-bar a[href="#/monitoring/schedules"]'), "Monitoring in the user bar");
+  assert.ok(offers("#/monitoring/schedules"), "Schedules on the Settings page");
+  assert.deepEqual(crumbTrail(), [SETTINGS, ["Schedules", null]], "Settings › Schedules, not Home › Model health › Schedules");
   assert.match(rowOf(ids.score_schedule).textContent, /Monthly · 02:00 Asia\/Kolkata/);
   assert.match(rowOf(ids.drift_schedule).textContent, /0 \* \* \* \* · UTC/);
   assert.equal($("#pb-schedule-create-submit").disabled, false);
@@ -166,6 +175,8 @@ test("Sync retraining schedules reports what the server created, updated and rem
 test("one schedule: its firing history with the missed slots, filtered by status", async () => {
   w.location.hash = `#/monitoring/schedules/${ids.drift_schedule}`;
   await until(() => $("#pb-firings-filter") && $$("tbody tr").length === firings.length, 3000, "the history");
+  assert.deepEqual(crumbTrail().slice(0, 2), [SETTINGS, ["Schedules", "#/monitoring/schedules"]]);
+  assert.equal(crumbTrail().length, 3, "then the schedule itself");
   assert.equal($$('.pill.bad[data-status="missed"]').filter((p) => p.textContent === "Missed").length, 5);
   const filter = $("#pb-firings-filter");
   setField(w, filter, "status", "missed", { change: true });
@@ -195,6 +206,7 @@ test("editing a schedule sends its whole cadence, zone and parameters", async ()
 test("missed runs lists every due slot nobody fired", async () => {
   w.location.hash = "#/monitoring/missed";
   await until(() => /^Missed runs ·/.test(cardTitles()), 3000, "the missed slots");
+  assert.deepEqual(crumbTrail(), [SETTINGS, ["Model health", "#/monitoring/alerts"], ["Missed runs", null]]);
   assert.equal($$("tbody tr").length, fixture("missed").firings.length);
   assert.match(text(), /SCHEDULE_MISSED/);
   assert.ok($(`a[href="#/monitoring/schedules/${ids.drift_schedule}"]`));
@@ -252,10 +264,12 @@ test("the Campaigns list links each run to its Campaign results page and reads M
 test("a finished scoring run: no outcomes yet, then an upload measures it against the test score", async () => {
   w.location.hash = "#/monitoring/runs";
   await until(() => heading() === "Campaigns" && /^Campaigns ·/.test(cardTitles()), 3000, "the scored lists");
+  assert.deepEqual(crumbTrail(), [RESULTS, ["Campaigns", null]], "under Results, where the bar marks it");
   assert.ok($(`a[href="#/monitoring/runs/${ids.run_id}"]`));
   assert.deepEqual(last("GET", "/runs").query, { mode: "score", limit: "100" });
   w.location.hash = `#/monitoring/runs/${ids.run_id}`;
   await until(() => $("#pb-outcomes"), 3000, "the upload form");
+  assert.deepEqual(crumbTrail().slice(0, 2), [RESULTS, ["Campaigns", "#/monitoring/runs"]]);
   assert.match(text(), /No outcomes have been added for this run yet\./);
   assert.equal($$(".apierr").length, 0, "a report not written yet is not an error");
 
@@ -301,7 +315,7 @@ test("a Viewer reads everything but every change is refused in place, and a refu
 test("an Admin is not an Analyst: the Privacy link is offered, running a schedule is not", async () => {
   session.storeToken("tok-admin", null);
   await session.loadMe();
-  assert.ok($('#pb-bar a[href="#/privacy/consent"]'));
+  assert.ok(offers("#/privacy/consent"), "Privacy on the Settings page");
   w.location.hash = "#/monitoring/runs";
   w.location.hash = "#/monitoring/schedules";
   await until(() => $$("tr[data-schedule]").length > 0 && $$(".pb-why").length > 0, 3000, "the list");

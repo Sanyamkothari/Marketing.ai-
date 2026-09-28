@@ -326,6 +326,8 @@ def test_every_setting_gets_its_explanation(page: Any, server: str, manifest: De
     page = page.context.browser.new_page(viewport={"width": 1280, "height": 900})
     page.add_init_script("window.localStorage.setItem('marketing-ai:pilot-tour-seen', '1')")
     page.goto(f"{server}/ui/#/uc/{manifest.use_case_id}")
+    # Plan H M82 (DEC-1114): Setup opens on Guided setup; the settings are on Manual setup's form.
+    page.get_by_role("button", name="Manual setup").click()
     page.locator("#f-adv > summary").click()
     page.evaluate("document.querySelectorAll('#f-adv details').forEach((d) => { d.open = true; })")
     assert page.locator("#f-adv [data-path]").count() > 0

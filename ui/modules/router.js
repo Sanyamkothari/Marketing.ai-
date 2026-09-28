@@ -162,6 +162,148 @@ import "./production/boot.js";
 // The pilot module (`modules/pilot/index.js`, route `pilot`) is loaded by its own `<script>` in
 // index.html's PLAN-E block, as the uplift module is, for the same reason: it imports this file.
 // ---- END PLAN-E ----
+// ---- PLAN-G (agents) — append only below this line ----
+// A *setup mode* (Plan G M75): a second way through the use-case page's Setup view, offered as a tab
+// beside "Manual setup" - today, "Guided setup". `ui/usecase.js` asks for the modes that apply to a
+// use case, draws the tab strip when there is at least one, and on that tab hands the mode two empty
+// elements to mount into (`main`, left; `aside`, right, above Previous runs) and a `host` - the only
+// door back into the Setup form's state:
+//
+//     host = { uc, mode, mayRun, approved({ upload, primaryKey, target, overrides }), manual() }
+//
+// `approved` fills the Setup form exactly as Manual setup would have been filled (the upload, the
+// two columns, every override - the paths come from the API, never from the module) and Run is then
+// the form's own. The agent module (`modules/agent/index.js`) is loaded by its own `<script>` in
+// index.html's PLAN-G block, as the uplift and pilot modules are, because it imports this file.
+
+const setupModeList = [];
+
+/**
+ * Register a setup mode: `{ name, label, applies(uc), mount({ main, aside }, host) }`. `name` must be
+ * unique; `label` is the tab's text; `applies(uc)` says whether the use case offers it.
+ */
+export function registerSetupMode(mode) {
+  const { name, label, applies, mount } = mode || {};
+  if (!name || !label || typeof applies !== "function" || typeof mount !== "function") {
+    throw new Error("registerSetupMode needs { name, label, applies(uc), mount({ main, aside }, host) }");
+  }
+  if (setupModeList.some((m) => m.name === name)) throw new Error(`A setup mode named "${name}" is already registered`);
+  setupModeList.push({ name, label, applies, mount });
+  announceModulesChanged();
+}
+
+/** The registered setup modes that apply to `uc`, in registration order; `[]` for none. */
+export function setupModes(uc) {
+  return setupModeList.filter((mode) => {
+    try {
+      return Boolean(mode.applies(uc));
+    } catch {
+      return false;
+    }
+  });
+}
+
+// Plan H M83: a *run panel* - a full-width section under a run's Results flow, for a step that needs
+// more room than a flow block ("Measure the campaign": an upload and its result). `ui/usecase.js`
+// draws `runPanelsHtml(uc, run)` below the flow blocks; the module owns the panel's markup, its
+// events (delegated, so a repaint of the screen needs no re-binding) and its own in-place redraws.
+const runPanelList = [];
+
+/** Register a run panel: `{ name, applies(uc, run), html(uc, run) }`. `name` must be unique. */
+export function registerRunPanel(panel) {
+  const { name, applies, html } = panel || {};
+  if (!name || typeof applies !== "function" || typeof html !== "function") {
+    throw new Error("registerRunPanel needs { name, applies(uc, run), html(uc, run) }");
+  }
+  if (runPanelList.some((p) => p.name === name)) throw new Error(`A run panel named "${name}" is already registered`);
+  runPanelList.push({ name, applies, html });
+  announceModulesChanged();
+}
+
+/** The markup of every run panel that applies to this run, in registration order; `""` for none. */
+export function runPanelsHtml(uc, run) {
+  return runPanelList
+    .map((panel) => {
+      try {
+        return panel.applies(uc, run) ? panel.html(uc, run) || "" : "";
+      } catch {
+        return "";
+      }
+    })
+    .join("");
+}
+
+// Plan H M82 (same workstream and block as Plan G, PARALLEL_WORK_PROTOCOL.md §4): links under a run's
+// results to the screens that used to be top-level menu items - Model health, the Schedule, the
+// report - so they are found where the use case is, not in the bar. `ui/usecase.js` draws
+// `resultLinksHtml(uc, run)` under the flow blocks; with nothing registered it draws nothing.
+
+import { esc as escHtml } from "../dom.js";
+
+const resultLinkList = [];
+
+/**
+ * Register a link under a run's results: `{ name, applies(uc, run), link(uc, run) }`, where `link`
+ * returns `{ label, href }`. `name` must be unique; links are drawn in registration order.
+ */
+export function registerResultLink(entry) {
+  const { name, applies, link } = entry || {};
+  if (!name || typeof applies !== "function" || typeof link !== "function") {
+    throw new Error("registerResultLink needs { name, applies(uc, run), link(uc, run) }");
+  }
+  if (resultLinkList.some((e) => e.name === name)) throw new Error(`A result link named "${name}" is already registered`);
+  resultLinkList.push({ name, applies, link });
+  announceModulesChanged();
+}
+
+/** The links that apply to this run, as one quiet row (`nav.uc-links`); `""` for none. */
+export function resultLinksHtml(uc, run) {
+  const links = resultLinkList
+    .map((entry) => {
+      try {
+        return entry.applies(uc, run) ? entry.link(uc, run) : null;
+      } catch {
+        return null;
+      }
+    })
+    .filter((l) => l && l.label && l.href)
+    .map((l) => `<a class="uc-link" href="${escHtml(l.href)}">${escHtml(l.label)}<span aria-hidden="true"> ›</span></a>`);
+  return links.length ? `<nav class="uc-links" aria-label="More for this use case">${links.join("")}</nav>` : "";
+}
+
+// Plan H M80 (shares this block): the Connections module (`modules/connections/index.js`, route
+// `connections`) is loaded by its own `<script>` in index.html's PLAN-G block, as the agent module is,
+// because it imports this file for `registerModule` and `registerNavSlot`.
+
+// UI audit §8.4 item 10: an *upload source* - another way to get the ordinary upload Manual setup's
+// Step 1 takes (today, "Pick from a connection"). Unlike the setup source above, whose result is a
+// built dataset, an upload source ends in exactly what `POST /uploads` answers, so Step 2 on is the
+// file upload's own. `ui/usecase.js` hands each source two places to draw, after every paint:
+//
+//     entry(container, { uc, mode, disabled, open() })       // beside the file control: the offer
+//     panel(container, { uc, mode, onUpload(upload, label), onCancel() })   // in its place, once open
+//
+// `open()` asks the form to swap the file control for the source's panel; `onUpload` fills Step 1 with
+// the upload (`{ upload_id, profile }`) and closes it, `onCancel` closes it. Several sources are drawn
+// in registration order.
+const uploadSourceList = [];
+
+/** Register an upload source: `{ name, entry(container, ctx), panel(container, ctx) }`; `name` is unique. */
+export function registerUploadSource(source) {
+  const { name, entry, panel } = source || {};
+  if (!name || typeof entry !== "function" || typeof panel !== "function") {
+    throw new Error("registerUploadSource needs { name, entry(container, ctx), panel(container, ctx) }");
+  }
+  if (uploadSourceList.some((s) => s.name === name)) throw new Error(`An upload source named "${name}" is already registered`);
+  uploadSourceList.push({ name, entry, panel });
+  announceModulesChanged();
+}
+
+/** Every registered upload source, in registration order; `[]` for none (Step 1 is the file control). */
+export function uploadSources() {
+  return uploadSourceList.slice();
+}
+// ---- END PLAN-G ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----
 // How a module fills the top bar and the shared screens without editing them. `registerNavSlot`,

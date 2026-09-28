@@ -28,6 +28,7 @@ from pydantic import (
     model_validator,
 )
 
+from engine.agent.config import AgentConfig  # Plan G (DEC-1003); imports nothing from engine
 from engine.settings import DEFAULT_CONFIG_DIR, ENV_VARS, settings
 from engine.uplift.config import (  # Phase 3b (DEC-601); imports nothing from engine
     UPLIFT_OVERRIDABLE_PATHS,
@@ -770,6 +771,11 @@ class ActionsConfig(_Base):
     )
     suppression: SuppressionConfig = SuppressionConfig()
     control_group_fraction: Annotated[float, Field(ge=0.0, le=0.50)] = 0.10
+    # Plan H M83: whether the actions are contacts with customers (an offer, a reminder, a call), so a
+    # campaign run from the list can be measured against the held-back control group ("4 Measure the
+    # campaign"). Operational use cases (rerouting an order, servicing an asset) set it false. Read
+    # only by `engine.uplift.measure.measure_offered`; nothing about scoring changes with it.
+    contacts_customers: bool = True
 
     @field_validator("bands")
     @classmethod
@@ -1270,6 +1276,13 @@ class UseCaseConfig(_Base):
     # it. Defaulted, and read only when `problem_type` is `uplift`, so no other path moves. The type
     # lives in `engine/uplift/config.py`, which imports nothing from this file (DEC-601).
     uplift: UpliftConfig = UpliftConfig()
+    # --- Plan G (use-case agents) ---------------------------------------------------------------
+    # The one declaration Plan G adds above its block, for Phase 2's and 3b's reason: `_Base`
+    # forbids unknown keys, so a use case cannot carry an `agent:` section until the model has a
+    # field for it. Defaulted, read only by `engine/agent`, and not overridable per run, so no
+    # other path moves. The type lives in `engine/agent/config.py`, which imports nothing from
+    # this file (DEC-1003).
+    agent: AgentConfig = AgentConfig()
 
     _catalog: Catalog | None = PrivateAttr(default=None)
 
@@ -1447,6 +1460,15 @@ class IndustryStage(_Base):
     name: Annotated[str, Field(min_length=1)]
     ai_type: AiType
     use_cases: tuple[IndustryUseCaseRef, ...]
+    # Plan H M81 (DEC-1111): a stage may group use cases from several lifecycle stages under a
+    # goal of its own ("Win customers" holds the Awareness ones). Empty keeps the old rule: every
+    # available use case's `lifecycle_stage` equals the stage's name.
+    lifecycle_stages: tuple[Annotated[str, Field(min_length=1)], ...] = ()
+
+    @property
+    def accepted_lifecycle_stages(self) -> tuple[str, ...]:
+        """The `lifecycle_stage` values a use case listed here may carry."""
+        return self.lifecycle_stages or (self.name,)
 
 
 class IndustryConfig(_Base):
@@ -1574,9 +1596,10 @@ def get_catalog(root: Path | None = None) -> Catalog:
 
 
 #: The industry the overview opens on and `load_industry` reads when given no id. One file per
-#: industry sits in `configs/industries/` (DEC-085); telecom is the product's own journey and stays
-#: the default, so adding an industry adds a choice rather than changing what a user first sees.
-DEFAULT_INDUSTRY: Final[str] = "telecom"
+#: industry sits in `configs/industries/` (DEC-085). Plan H M81 (DEC-1110): the product shows one
+#: journey for every business, `generic.yaml`; the industry files stay loadable (by URL and by id)
+#: but the overview no longer offers a choice between them. Telecom was the default until then.
+DEFAULT_INDUSTRY: Final[str] = "generic"
 
 
 def list_industries(root: Path | None = None) -> tuple[str, ...]:
@@ -1668,7 +1691,7 @@ def load_industry(industry_id: str = DEFAULT_INDUSTRY, root: Path | None = None)
                     path=str(path),
                 )
             config = load_use_case(ref.id, root)
-            if config.lifecycle_stage != stage.name:
+            if config.lifecycle_stage not in stage.accepted_lifecycle_stages:
                 raise ConfigError(
                     "INDUSTRY_STAGE_MISMATCH",
                     f"{ref.id!r} has lifecycle_stage {config.lifecycle_stage!r} "
@@ -3753,3 +3776,5 @@ ResolvedConfig.model_rebuild()
 # ---- END PHASE-3B ----
 # ---- PLAN-E (pilot) — append only below this line ----
 # ---- END PLAN-E ----
+# ---- PLAN-G (agents) — append only below this line ----
+# ---- END PLAN-G ----

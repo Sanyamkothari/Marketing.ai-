@@ -2455,10 +2455,9 @@ function resultsHtml(u){const s=st(u),r=s.current,cfg=SETUP[u.id],v=runVerdict(u
     ${cfg.gen?assistantResults(u):""}
     <div class="runs-below">${runsCard(u)}</div></div>`;
 }
-/* DEC-608's entry point, since v1 a quiet related link in the use case's own header actions (the audit's
-   "Also: target with uplift ›"), never an injected pill. Only a use case with uplift sample content has
-   one (upliftOffered: never on a generative, notice, planned or error screen). */
-const upRelated=u=>upliftOffered(baseUC(u))?{label:"Also: target with uplift",href:pageHref(upView(baseUC(u))),attrs:`title="Uplift ${esc(UPLIFT_EXPLANATION)}"`}:null;
+/* DEC-608's entry point is no longer on the use case: Plan H made uplift step 4 of a use case ("Measure the
+   campaign") and put the workbench under Settings → Advanced, so ui/modules/uplift offers no "Also: target
+   with uplift" link in a use case's header (docs/UI_AUDIT.md §8.4 item 8). The uplift screens stay at #/uplift. */
 const upChip=()=>`<span class="chip type">Uplift</span>`;
 /* The breadcrumb above a use-case screen: Home › journey › use case (› Uplift) › the page. */
 function ucCrumbs(u,page){const b=baseUC(u),items=[JOURNEY];
@@ -2474,7 +2473,7 @@ function detail(u){const s=st(u);
     ${body}
   </main>`;
   return `<main class="screen t-${u.k}">
-    ${pageHead(`${ucCrumbs(u)}<h1 class="h1">${esc(u.name)}</h1><p class="desc">${esc(u.desc)}</p><div class="chips">${typeChip(u.k)}</div>${headActions({related:upRelated(u)})}`)}
+    ${pageHead(`${ucCrumbs(u)}<h1 class="h1">${esc(u.name)}</h1><p class="desc">${esc(u.desc)}</p><div class="chips">${typeChip(u.k)}</div>`)}
     ${body}
   </main>`;
 }
@@ -2720,7 +2719,7 @@ function mock(u, kind){
   }
   const next = nextKind&&kind!=="campaign" ? {label:`Next: ${NAMES[nextKind]} ›`,href:pageHref(u,nextKind)} : null;
   return `<main class="screen t-${u.k}"${u.up?' data-module="uplift"':""}>
-    ${pageHead(`${ucCrumbs(u,K)}<h1 class="h1">${esc(title)}</h1><div class="chips">${u.up?upChip():typeChip(u.k)}</div>${headActions({secondary:next?[next]:[],related:u.up?null:upRelated(u)})}`)}
+    ${pageHead(`${ucCrumbs(u,K)}<h1 class="h1">${esc(title)}</h1><div class="chips">${u.up?upChip():typeChip(u.k)}</div>${headActions({secondary:next?[next]:[]})}`)}
     <div class="tabs-bar"><nav class="tabs" aria-label="Pipeline">${tabs}</nav><span class="note">Illustrative sample, AWS reference stack</span></div>
     <div class="stack">${body}
     ${run&&kind!=="campaign"?techDetails([["Run id",run.id],["Dataset file",run.file],["Recorded",run.at]],"Details: this run"):""}</div>

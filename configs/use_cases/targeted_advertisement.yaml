@@ -87,3 +87,12 @@ suggested_features:
   - {name: avg_bill_6m,              role: bills,           function: mean,  column: amount, window_days: 180, description: "Average bill over six months; spend is the best proxy for headroom."}
   - {name: usage_mb_30d,             role: usage,           function: sum,   column: data_mb, window_days: 30, description: "Data used in the last 30 days."}
   - {name: days_since_last_activity, role: activity,        function: days_since_last, description: "Days since the customer last did anything."}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the customers most likely to buy within 30 days of seeing an ad."
+  knowledge:
+    - "The outcome is a purchase within 30 days of ad exposure, so anything recorded about that purchase (order ids, purchase or refund dates) already contains the answer."
+    - "Visits, click-through and tenure describe the customer before the ad and are the useful signals."
+    - "Customers who did not opt in to marketing must never be targeted, whatever their score."
+  column_hints:
+    target_synonyms: [converted, purchased, bought, conversion]

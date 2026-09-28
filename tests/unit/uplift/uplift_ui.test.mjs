@@ -368,7 +368,10 @@ test("campaign results: a mature report shows lift with its interval and the p-v
   assert.ok(!text(html).includes("Not yet known (outcome period still running)"));
   assert.match(html, /<a class="btn primary" href="#\/pilot\/value\/r-score">See the value in rupees/);
   assert.match(html, /<summary>Measure again with a new outcomes file<\/summary>/);
-  assert.match(html, /<nav class="crumbs"[^>]*><a href="#\/">Home<\/a>.*<a href="#\/monitoring\/runs">Campaigns<\/a>/);
+  // The campaign page is under Results (the top bar marks Results): the breadcrumb starts there, not
+  // at Home › Campaigns (docs/UI_AUDIT.md §8.4 item 12).
+  assert.match(html, /<nav class="crumbs"[^>]*><a href="#\/results">Results<\/a><span class="sep" aria-hidden="true">›<\/span><span class="cur" aria-current="page">/);
+  assert.ok(!/<nav class="crumbs"[^>]*>.*(Home|Campaigns)<\/a>.*<\/nav>/.test(html), "no Home or Campaigns crumb");
   noJunk(html);
 });
 
@@ -596,6 +599,30 @@ test("the index page links every use case to its uplift setup, with a status, an
   assert.match(html, /No uplift model yet/);
   assert.match(html, /<h1 class="h1">Measure what a campaign changes \(uplift\)<\/h1>/);
   assert.ok(html.indexOf("Pick a use case") < html.indexOf('class="uindex"'), "the hint is above the list");
+});
+
+// docs/UI_AUDIT.md §8.4 item 12: the workbench is under Settings (the top bar marks Settings), so its
+// breadcrumbs start there and name it as Settings does, not "Home › Uplift modelling".
+test("the workbench's breadcrumbs start at Settings and name the Uplift workbench", () => {
+  const crumbsOf = (html) => {
+    const nav = html.match(/<nav class="crumbs"[^>]*>(.*?)<\/nav>/)[1];
+    return [...nav.matchAll(/<(a) href="([^"]*)">([^<]*)<\/a>|<span class="cur"[^>]*>([^<]*)<\/span>/g)].map((m) =>
+      (m[1] ? [m[3], m[2]] : [m[4]]).map((s) => s.replace(/&lt;/g, "<").replace(/&gt;/g, ">")),
+    );
+  };
+  assert.deepEqual(crumbsOf(views.upliftIndexHtml({ industries: [] }, {})), [["Settings", "#/settings"], ["Uplift workbench"]]);
+  const setup = { view: "setup", mode: "train", upload: null, models: [], runs: [], acknowledged: [] };
+  assert.deepEqual(crumbsOf(views.upliftScreenHtml(uc, setup)), [
+    ["Settings", "#/settings"],
+    ["Uplift workbench", "#/uplift"],
+    [uc.name],
+  ]);
+  assert.deepEqual(crumbsOf(views.modelPageHtml(uc, trainRun, {}, null)), [
+    ["Settings", "#/settings"],
+    ["Uplift workbench", "#/uplift"],
+    [uc.name, `#/uplift/${uc.id}`],
+    ["Model"],
+  ]);
 });
 
 test("a finished scoring run's Campaign results block says when it applies instead of saying done", () => {

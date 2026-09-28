@@ -38,10 +38,17 @@ from aws_cdk import aws_secretsmanager as secretsmanager
 from constructs import Construct
 
 from infra.context import AppContext
-from infra.naming import PRODUCT, db_instance_identifier, privacy_salt_secret_name, secret_name
+from infra.naming import (
+    PRODUCT,
+    connections_key_secret_name,
+    db_instance_identifier,
+    privacy_salt_secret_name,
+    secret_name,
+)
 from infra.network import POSTGRES_PORT
 
 __all__ = [
+    "CONNECTIONS_KEY_LENGTH",
     "DATABASE_NAME",
     "DATABASE_SCHEMA",
     "DATABASE_USERNAME",
@@ -57,6 +64,8 @@ DATABASE_SCHEMA: Final[str] = "marketing_ai"
 """The schema Alembic owns; `Settings.postgres_schema` is set to it."""
 
 PRIVACY_SALT_LENGTH: Final[int] = 48
+CONNECTIONS_KEY_LENGTH: Final[int] = 48
+"""Letters and digits, from which `engine.connections.store` derives the Fernet key (DEC-1120)."""
 """Chosen, not measured: well above `engine.privacy.config.MIN_SALT_LENGTH` (16)."""
 
 PASSWORD_LENGTH: Final[int] = 40
@@ -140,6 +149,22 @@ class DatabaseStack(Stack):
             removal_policy=RemovalPolicy.RETAIN,
             generate_secret_string=secretsmanager.SecretStringGenerator(
                 password_length=PRIVACY_SALT_LENGTH, exclude_punctuation=True
+            ),
+        )
+
+        # Plan H (DEC-1101, DEC-1120): the key every saved connection's passwords are encrypted with.
+        # A prod API refuses to save a connection's secret without one. Generated once, retained and
+        # NEVER rotated, for the privacy salt's reason: a new key would leave every saved password
+        # unreadable. Letters and digits only; the engine derives the Fernet key from it.
+        self.connections_key_secret = secretsmanager.Secret(
+            self,
+            "ConnectionsKey",
+            secret_name=connections_key_secret_name(context.env_name),
+            description=f"Key for saved connections' secrets in {PRODUCT} {context.env_name}; generated once, never rotated",
+            encryption_key=key,
+            removal_policy=RemovalPolicy.RETAIN,
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                password_length=CONNECTIONS_KEY_LENGTH, exclude_punctuation=True
             ),
         )
 
@@ -233,6 +258,9 @@ class DatabaseStack(Stack):
                 # a dynamic reference, resolved at deploy time like the password in the URL (DEC-860)
                 "privacy_salt": SecretValue.unsafe_plain_text(
                     self.privacy_salt_secret.secret_value.unsafe_unwrap()
+                ),
+                "connections_key": SecretValue.unsafe_plain_text(
+                    self.connections_key_secret.secret_value.unsafe_unwrap()
                 ),
             },
         )

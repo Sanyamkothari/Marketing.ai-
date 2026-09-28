@@ -61,6 +61,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from engine.access.roles import SYSTEM_SCHEDULER, Principal
+from engine.agent.contracts import DATA_RECIPE_FILENAME
 from engine.audit.events import AuditEvent, AuditLog
 from engine.clients import ClientStore, ClientStoreError
 from engine.config import (
@@ -331,6 +332,19 @@ def start_dataset_run(
         capped = ingest.read_upload(storage, frame_key, file_format="parquet", row_cap=_row_cap(config)).frame
     except ingest.IngestError as exc:
         raise FiringError(exc.code, exc.message, dataset_id=dataset_id) from exc
+    if (
+        mode is RunMode.SCORE
+        and version is not None
+        and storage.exists(run_key(version.run_id, DATA_RECIPE_FILENAME))
+    ):
+        # Plan G (DEC-1006): the model was trained on data Guided setup prepared, and only an upload
+        # can be prepared by its recipe; a built dataset scored as built would be scored wrongly.
+        raise FiringError(
+            "RECIPE_DATASET_UNSUPPORTED",
+            f"Model {version.model_id} was trained on data Guided setup prepared, and a built dataset "
+            "cannot be prepared the same way yet. Score an uploaded file instead.",
+            dataset_id=dataset_id,
+        )
     if mode is RunMode.TRAIN:
         report = validate.validate_for_training(
             capped,

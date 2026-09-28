@@ -46,7 +46,16 @@ const modelId = item.version.model_id;
 
 test("the Approver sees the head-to-head, with the metric the challenger is worse on marked", async () => {
   await until(() => $(`[data-approval="${modelId}"]`), 3000, "the challenger");
-  assert.ok($('#pb-bar a[href="#/approvals"]'), "Approvals in the user bar for an Approver");
+  // Plan H M82 (DEC-1113): no "Waiting for approval" item any more; the count is a badge on Results.
+  await until(() => $('#pb-bar a.tn-item[href="#/results"] .count'), 3000, "the approvals count on Results");
+  // under Results, as the bar marks it (docs/UI_AUDIT.md §8.4 item 12)
+  assert.deepEqual(
+    $$("#app .crumbs a, #app .crumbs .cur").map((e) => [e.textContent, e.getAttribute("href")]),
+    [
+      ["Results", "#/results"],
+      ["Waiting for approval", null],
+    ],
+  );
   for (const row of item.head_to_head.metrics) {
     const tr = $(`tr[data-metric="${row.metric}"]`);
     assert.ok(tr, `a row for ${row.metric}`);
@@ -79,6 +88,8 @@ test("approving needs a reason, and then the challenger becomes champion", async
   assert.equal(sent.body.reason, "beats the champion on ROC-AUC");
   assert.equal(sent.auth, "Bearer tok-approver");
   assert.match(text(), /No model is waiting for approval/);
+  // docs/UI_AUDIT.md §8.4 item 1: the decision recounts, so Results' badge does not stay at 1
+  await until(() => !$('#pb-bar a.tn-item[href="#/results"] .count'), 2000, "the badge cleared after the decision");
 });
 
 test("the trainer sees why they cannot decide, and has no button to press", async () => {

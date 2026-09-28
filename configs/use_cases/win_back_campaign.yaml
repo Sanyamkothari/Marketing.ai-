@@ -93,3 +93,12 @@ suggested_features:
   - {name: offers_sent_180d,           role: campaign_events, function: count, window_days: 180, description: "Win-back offers already sent, so nobody is contacted twice."}
   - {name: avg_monthly_spend_12m,      role: bills,           function: mean,  column: amount, window_days: 365, description: "What the customer was worth before they left."}
   - {name: complaints_before_leaving,  role: complaints,      function: count, window_days: 365, description: "Complaints in the year before the snapshot."}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the former customers most likely to come back after an offer."
+  knowledge:
+    - "The outcome is rejoining within 90 days of an offer."
+    - "Rejoin dates and new contract ids contain the answer."
+    - "Customers who did not opt in to marketing must never be contacted, whatever their score."
+  column_hints:
+    target_synonyms: [reactivated, rejoined, won_back, returned]

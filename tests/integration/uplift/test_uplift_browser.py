@@ -8,7 +8,8 @@ through the markup only - no request is made to the API by the test itself.
 
 The journey, in order:
 
-1. Overview -> the top bar's Models › "Uplift models" -> Win-back Campaign -> uplift Setup.
+1. Overview -> Settings › Advanced tools › "Uplift workbench" -> Win-back Campaign -> uplift Setup
+   (Plan H M82: the top bar is Home, Connections, Results, Settings).
 2. Upload a randomised campaign (`make_uplift_data`), see the treatment column detected and the
    Uplift problem type explained, click "Train uplift model", watch Running, reach Results.
 3. Model page: the Qini chart with its random line, AUUC with its interval, the decile bars, an
@@ -424,13 +425,15 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     targeted = workdir / "targeted.csv"
     make_uplift_data(TARGETED_ROWS, seed=21, targeted=True).frame.to_csv(targeted, index=False)
 
-    # 1. Overview -> the top bar's Models menu -> "Uplift models" -> the use case's uplift Setup.
+    # 1. Overview -> Settings -> Advanced tools -> "Uplift workbench" -> the use case's uplift Setup
+    #    (Plan H M82, DEC-1113: the uplift workbench left the top bar for Settings).
     page.goto(f"{server.base_url}/ui/", wait_until="domcontentloaded")
-    models = page.locator("#pb-bar nav[aria-label=Main] button", has_text="Models")
-    expect(models).to_be_visible()
+    settings = page.locator("#pb-bar nav[aria-label=Main] a", has_text="Settings")
+    expect(settings).to_be_visible()
     seen.screens["overview"] = capture(page, console, shots, "01-overview")
-    models.click()
-    page.locator("#pb-bar a", has_text="Uplift models").click()
+    settings.click()
+    page.locator("[data-settings-advanced] summary").click()
+    page.locator("[data-settings-advanced] a", has_text="Uplift workbench").click()
     expect(page.get_by_role("heading", name="Measure what a campaign changes (uplift)")).to_be_visible()
     seen.screens["index"] = capture(page, console, shots, "02-uplift-index")
     page.get_by_role("link", name=USE_CASE_NAME).click()
@@ -515,6 +518,7 @@ def journey(browser: Any, server: Server, workdir: Path, shots: Path) -> Journey
     at = time.monotonic()
     console.phase1 = True
     page.goto(f"{server.base_url}/ui/#/uc/{USE_CASE}", wait_until="domcontentloaded")
+    page.get_by_role("button", name="Manual setup").click()  # Plan H M82: Setup opens on Guided setup
     expect(page.locator("#f-file")).to_be_attached()
     page.get_by_role("button", name="Score new data").click()
     expect(page.locator("#f-scorerun")).to_be_visible()
@@ -709,9 +713,11 @@ def test_no_card_is_cut_off_at_the_edge_of_a_phone(journey: Journey) -> None:
 
 def test_the_top_bar_leads_to_uplift_and_the_index_lists_the_use_case(journey: Journey) -> None:
     index = journey.screens["index"].text
-    assert "Uplift modelling" in index  # the breadcrumb
+    assert "Uplift workbench" in index  # the breadcrumb, Settings › Uplift workbench (UI_AUDIT §8.4)
     assert USE_CASE_NAME in index
-    assert "Uplift model" in index  # each row says whether a model exists
+    # Each row says whether a model exists ("No uplift model yet" / "Uplift model trained ...");
+    # this used to pass on the old breadcrumb "Uplift modelling" alone.
+    assert "No uplift model yet" in index or "Uplift model trained" in index
 
 
 def test_setup_detects_the_treatment_column_and_explains_the_problem_type(journey: Journey) -> None:

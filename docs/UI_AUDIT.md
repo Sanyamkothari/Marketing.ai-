@@ -81,7 +81,7 @@ The Models menu also offers "Train or score a model: choose a use case on Home" 
 
 ### What leaves the page body
 
-- The injected "Uplift modelling ›" / "Uplift for this use case ›" pill becomes a quiet related link in the use case's own header actions ("Also: target with uplift ›"). It is never offered on generative, notice, planned or error screens (the prototype's `upliftOffered()` rule).
+- The injected "Uplift modelling ›" / "Uplift for this use case ›" pill becomes a quiet related link in the use case's own header actions ("Also: target with uplift ›"). It is never offered on generative, notice, planned or error screens (the prototype's `upliftOffered()` rule). *Superseded by Plan H (§8.4 item 8):* the link is removed; uplift is a use case's step 4, "Measure the campaign", and the workbench is under Settings → Advanced.
 - "Campaign results for this run" becomes the fourth flow block on a scoring run's results.
 - Every "‹ Customer Lifecycle" back link becomes the breadcrumb "Home › <journey> › <screen>".
 
@@ -509,7 +509,7 @@ Screenshot names are `docs/ui/before/<id>--<state>--<viewport>.png`. "Change" li
   - "HTTP_500 The API answered 500."
   - A Viewer sees two reasons side by side ("Only an Analyst can start a run. Upload a dataset to continue").
 - **Change.**
-  - The header follows the one pattern: the chooser moves to the top bar, the uplift link becomes a quiet related link, and there is one context chip.
+  - The header follows the one pattern: the chooser moves to the top bar, the uplift link becomes a quiet related link (removed under Plan H, §8.4 item 8), and there is one context chip.
   - Before a file is chosen, show only Step 1. Steps 2 and 3 become one-line placeholders ("2 Columns: after upload").
   - Drop the duplicate hint and the "Selected" tag.
   - Plain labels, in `configs/engine.yaml` `ui:` copy only: "Customer ID column", "What to predict (outcome column)", "Best model, picked automatically (recommended)". Keep "Run training", "Score data" and "Score new data".
@@ -1313,3 +1313,86 @@ Package 0 lands first. Packages 1 to 8 then run in parallel worktrees with disjo
 3. **Verdict first, with one primary action on every results screen** (contact list, campaign verdict, rupee value). `run-output--full--desktop.png`, `usecase-results--full--desktop.png`, `campaign-results--full--desktop.png`, `uplift-output--full--desktop.png`, `pilot-value--full--desktop.png`
 4. **Technical detail behind Details, plain words in front** (C4, C5, C6, tables). `run-data--full--desktop.png`, `run-model--full--desktop.png`, `uplift-model--full--desktop.png`, `admin-audit--full--desktop.png`, `monitoring-alerts--full--desktop.png`
 5. **Setup and Build data one step at a time** (locked steps hidden, readable Sources and Mapping, Advanced tamed, model first when scoring). `usecase-setup-train--full--desktop.png`, `usecase-setup-advanced--full--mobile.png`, `build-raw-1-sources--full--desktop.png`, `build-raw-2-mapping--full--desktop.png`, `usecase-setup-score--empty--desktop.png`
+
+---
+
+## 8. Plan H: the four-page product (M84)
+
+Plan H (`docs/plans/MARKETING_AI_PLAN_H_SIMPLE.md`) keeps the engine and hides the complexity. This section records the screens after M80 to M83, as a new user meets them.
+
+- **Date:** 28 Sep 2026, on the code at `0d6750c` (branch `m84-docs`).
+- **How:** `python -m scripts.capture_start_here` starts the app on an empty temporary data folder, uploads a synthetic, deliberately messy Targeted Advertisement file through Guided setup, trains and scores through the API (the one-minute search), and shoots 1280 x 800 screens into `docs/screenshots/start_here/` (used by `docs/START_HERE.md`). The hidden screens below were opened by URL on the same kind of server. Sign-in off, light mode, desktop only.
+- **Where the routes are decided:** the top bar and the place each route belongs to are `ui/chrome.js` (`NAV_ITEMS`, `navFor`); screens claim their routes through `ui/modules/router.js` (`registerModule`) from `ui/modules/*/index.js`; `ui/app.js` owns `#/`, `#/industry/<id>` and `#/uc/...`.
+
+### 8.1 What a new user sees
+
+| Place | Route | What is on it |
+|---|---|---|
+| **Home** | `#/` | The generic journey ("Customer Lifecycle") with five goals left to right: Win customers, Keep them paying, Stop them leaving, Win them back, Run smoothly. Eleven use-case cards. No industry picker (`SHOW_INDUSTRY_CHOOSER = false`), no client picker (`SINGLE_COMPANY`), no demo numbers. Empty start: "No models yet. Choose a use case below and upload your data to train the first one." Later a "For you" line ("1 model waiting for your approval"). `01_home.png`. |
+| **A use case** | `#/uc/<id>` | Opens on **Guided setup (recommended)**, Manual setup one click away (DEC-1114). Train a model / Score new data. Step 1 "Your data": upload, **Pick from a connection**, Download template. Then Data fixes and Summary, Approve, and the Setup form's own Run button. `05_guided_setup_start.png`, `06_guided_setup_suggestions.png`. |
+| **A run** | `#/uc/<id>/run/<run>` | The verdict, the Data / Model / Output blocks and, for a finished scoring run of a use case that contacts customers, a fourth block **Measure** and the panel **Measure the campaign** (M83; unnumbered since §8.4 item 5); then the links Model health, Schedule and the report (M82, `registerResultLink`). `08_run_results.png`, `09_measure_campaign.png`. |
+| **Connections** | `#/connections`, `#/connections/new/<kind>`, `#/connections/<id>` | Your connections (empty state), the AI service card ("Open and test"), and "Add a connection": Amazon S3, S3-compatible, PostgreSQL, Amazon Redshift, MySQL / MariaDB, and Snowflake, BigQuery and Azure Blob marked **Needs the add-on** until installed. The form's one button is Save and test; the test shows five named steps. `02_connections_empty.png`, `03_connections_add.png`, `04_connection_form.png`. |
+| **Results** | `#/results` | Every run, newest first (use case, what the run did, status, outcome, started). A notice with **Review** when models wait for approval, and the count as a badge on "Results". "All reports ›" links to the Reports hub. `07_results.png`. |
+| **Settings** | `#/settings` | Services and data (AI service → Connections, Privacy, Schedules), Admin (only while sign-in is on), **Advanced tools** folded (Uplift workbench, Data request kit, Build from raw tables, Model health, Document assistant), About (version, "Sign-in is off"). `10_settings.png`. |
+
+### 8.2 What moved under Settings, or into the flow
+
+| Was | Now |
+|---|---|
+| Top-level Privacy, Schedules | Settings → Services and data (`#/privacy/consent`, `#/monitoring/schedules`) |
+| Top-level Admin (Users, Audit log) | Settings → Admin, drawn only when signed in (`status === "signed-in"`) |
+| AI service (in the Admin menu) | Connections → AI service card → `#/generative/connection` |
+| Uplift page | Settings → Advanced tools → Uplift workbench (`#/uplift`); in the flow as step 4 "Measure the campaign" |
+| Build data (data request kit, readiness reports) | Settings → Advanced tools → Data request kit (`#/pilot/kit`) |
+| Build from raw tables | Manual setup, Step 1 card; Settings → Advanced tools says how to get there |
+| Model health (alerts) | Settings → Advanced tools → Model health, and a link under each finished run |
+| Schedules | Settings, and a "Schedule" link under each finished run |
+| Reports, Campaigns | Results ("All reports ›"), the report link under a run, step 4's "Open the full campaign report" |
+| Waiting for approval | A badge and a notice on Results, a "For you" line on Home |
+| Industry picker, client picker | Gone from the screens; the generic journey and the default client stay underneath |
+
+### 8.3 Hidden, but still reachable by URL
+
+Each keeps its route, and the top bar still marks a place for it (`navFor` in `ui/chrome.js`):
+
+| Route | Owner | Bar marks | Linked from |
+|---|---|---|---|
+| `#/industry/<id>` (banking, telecom, ...) | `ui/app.js`, `ui/overview.js` | Home | nowhere (URL only) |
+| `#/uc/ai-onboarding-assistant`, `#/generative/assistant/<uc>` | `ui/app.js`, `modules/generative` | Home | Settings → Advanced → Document assistant |
+| `#/uc/<id>/data`, `/model`, `/output` `[/<run>]` | `ui/app.js`, `ui/pages.js` | Home | a run's flow blocks ("View details") |
+| `#/generative/connection` | `modules/generative` | Connections (Settings before M84) | Connections → AI service |
+| `#/generative/rca/<uc>/<run>`, `#/generative/copy/<uc>/<run>` | `modules/generative` | Home / Results | a run's actions |
+| `#/campaign/<uc>/<run>` | `modules/uplift` | Results | step 4's Details |
+| `#/uplift`, `#/uplift/<uc>/...` | `modules/uplift` | Settings | Settings → Advanced (no link on a use case since §8.4 item 8) |
+| `#/pilot`, `#/pilot/view/results/<uc>`, `#/pilot/value/<run>` | `modules/pilot` | Results | Results ("All reports"), a run's report link |
+| `#/pilot/kit`, `#/pilot/view/readiness/<id>` | `modules/pilot` | Settings | Settings → Advanced → Data request kit |
+| `#/approvals` | `modules/production` | Results | the Results notice, Home's "For you" |
+| `#/monitoring/alerts`, `/missed`, `/schedules` | `modules/production` | Settings | Settings, a run's links |
+| `#/monitoring/runs` (Outcomes, the old "Campaigns") | `modules/production` | Results | a run's outcomes page breadcrumb, the Reports hub |
+| `#/privacy/consent`, `/erasure`, `/access`, `/retention` | `modules/production` | Settings | Settings → Privacy |
+| `#/admin/users`, `#/admin/audit` | `modules/production` | Settings | Settings → Admin (signed in only); with sign-in off, URL only |
+| `#/signin`, `#/account` | `modules/production` | none | the user menu when sign-in is on |
+
+### 8.4 Rough edges seen while taking the screenshots
+
+Fixed in M84 (one line): **the AI service screen marked Settings.** `#/generative/connection` is opened from Connections ("Open and test"), and Settings says the AI service "is on Connections", but `navFor` marked Settings, so the bar jumped. `navFor` now returns `connections` for it, and `tests/integration/production/ui/topbar.test.mjs` has the case.
+
+All fixed after M84, at the product owner's request (DEC-1117 … DEC-1119); each note names its test:
+
+1. **The Results badge goes stale in the same tab** (`modules/production/approvals.js`). The approvals count is read once per sign-in state (`onSession`). Train a model and open Results without reloading: the notice says "1 model is waiting for approval" but the bar's Results badge is empty (`07_results.png`). *Fixed:* `recountApprovals()` reads the count again when Results opens, when a training run the use-case screen watched finishes (`RUN_FINISHED_EVENT`, dispatched by `ui/usecase.js`), and after an approve or reject (`tests/integration/production/ui/approvals/badge.test.mjs`, `approvals.test.mjs`, `usecase/run_finished.test.mjs`).
+2. **A run opened from Results marks Home** (`navFor`: every `#/uc/...` is Home). The person clicks a row on Results and the bar jumps to Home (`08_run_results.png`). *Fixed:* `ui/chrome.js` remembers, per run, that it was opened from a Results screen (Results, a campaign page, Waiting for approval) in the tab's `sessionStorage`, and `placeFor` keeps Results marked on that run's pages (run, Data, Model, Output, root-cause notes), after a reload too; the same run opened from its use case is Home again. `navFor` still reads the route alone (`topbar.test.mjs`, `runorigin.test.mjs`).
+3. **The breadcrumb repeats Home.** A use case reads "Home › Customer Lifecycle › Targeted Advertisement"; both first crumbs open the same page (`05_guided_setup_start.png`). *Fixed:* `crumbs` and `journeyCrumb` (`ui/dom.js`) leave out a crumb that opens `#/`, so the one journey reads "Home › Targeted Advertisement"; a use case of a URL-only journey (`#/industry/<id>`) keeps its journey crumb (`tests/integration/test_ui_journey.py`, `crumbs.test.mjs`).
+4. **Results rows do not look clickable** (`modules/simple/pages.js` `resultsHtml`). *Fixed:* the use-case name is in link colour (`.sp-runs a`) and each row ends in a real "Open ›" link to the run, labelled for screen readers (`07_results.png`; `simple/results.test.mjs`).
+5. **Step numbers did not add up** (the use-case page). *Fixed:* the Measure block reads "Measure" (its link "Go to the step") and the panel "Measure the campaign", so no stray "4" follows Guided setup's own 1-3 and the unnumbered Data / Model / Output blocks (`modules/measure/index.js`; `tests/integration/production/ui/measure/measure.test.mjs`, run by `tests/integration/test_measure_ui.py`).
+6. **The Measure block label wrapped, and the DATA block's file name broke mid-word.** *Fixed:* the block's state ("After the campaign", "Measured") sits under its label (`.lab.measure-lab`, `modules/measure/styles.js`); the DATA block's file name stays on one line with an ellipsis and the whole name in its `title` (`ui/usecase.js` `flowBlocks`, `.val.fname`). Covered by `measure.test.mjs` (computed styles against `index.html`'s rules) and `08_run_results.png`.
+7. **The Measure panel's heading was indented further than its text.** *Fixed:* the heading drops `.card h3`'s band padding, so the card's 24 px is the one left edge for heading and body (`modules/measure/styles.js`; `measure.test.mjs`, `09_measure_campaign.png`).
+8. **"Also: target with uplift ›" on every use case.** *Fixed (removed, as the product owner asked):* `modules/uplift/index.js` no longer registers the `uplift-related` run action, so no use case's header links to the workbench; uplift is step 4, "Measure the campaign", and the workbench stays at `#/uplift` and under Settings → Advanced. The prototype drops its `upRelated()` to match. Covered by `tests/unit/uplift/uplift_ui_wiring.test.mjs`, `measure.test.mjs`, `tests/prototype/uplift.test.mjs` and `consistency.test.mjs`; `settings.test.mjs` keeps the Settings entry.
+9. **Connections puts "Add a connection" below the fold** (`modules/connections/page.js` `listHtml`). *Fixed:* "Add a connection" is drawn right after "Your connections", before the AI service, so "Pick a service below" is true at 1280 x 800 (`02_connections_empty.png`; `connections/page.test.mjs`).
+10. **Manual setup cannot pick from a connection** (DEC-1109, `ui/usecase.js`). Guided setup offers "Pick from a connection"; Manual setup only an upload and Build from raw tables. *Fix:* a setup-source seam for Manual Step 1, as the decision notes. *Fixed:* an upload-source seam (`registerUploadSource`, `modules/router.js`) lets Manual Step 1 offer "or Pick from a connection" beside the file upload (a line linking to Connections when there is none); `modules/connections/source.js` reuses Guided setup's picker and `POST /connections/{id}/import`, and the upload fills Step 1 as a file upload does (`tests/integration/production/ui/connections/manual.test.mjs`).
+11. **Settings → "Build from raw tables" links to Home** (`modules/simple/pages.js`). *Fixed:* the entry is plain text that says how to get there ("Open a use case, choose Manual setup, then Build from raw tables."), with no link (`simple/settings.test.mjs`).
+12. **Breadcrumbs still name the old places.** Screens now under Settings read "Home › Uplift modelling", "Home › Build data", "Home › Model health › Schedules", "Home › Admin › Users", "Home › AI service connection"; the campaign page reads "Home › Campaigns › …" (linking `#/monitoring/runs`). The bar marks Settings or Results meanwhile. *Fixed:* a trail that starts with `SETTINGS_CRUMB`, `RESULTS_CRUMB` or `CONNECTIONS_CRUMB` (`ui/dom.js`) is rooted there instead of Home. Now: "Settings › Uplift workbench › …", "Settings › Build data (› Data readiness)", "Settings › Schedules (› a schedule)", "Settings › Model health › Alerts / Missed runs", "Settings › Privacy › …", "Settings › Users / Audit log", "Connections › AI service", "Results › <campaign>" (the campaign page, linking `#/results`), "Results › <campaign> › Value in rupees", "Results › Reports (› a report)", "Results › Campaigns (› a run)", "Results › Waiting for approval", "Results › <use case> › Campaign copy" (back to the scoring run). Each starts at the place the bar marks (`tests/integration/production/ui/crumbs.test.mjs`, plus `flow`, `ops/*`, `approvals` and `tests/unit/uplift/uplift_ui.test.mjs`).
+13. **Pilot and client words on hidden screens.** *Fixed* (`modules/pilot/screen.js`): the Reports hub and Build data have no Client column and Build data no Industry column; "your client" is "your data team" (or just "your tables"/"your data"), and the export line reads "Feedback:". The demo's broken practice dataset keeps a "Practice data with problems" chip. None of these words came from the API or `configs/pilot/` (`simple/reports.test.mjs`, `tests/unit/pilot/test_pilot_ui.py`).
+14. **The Reports hub offers "Open the latest report" when there is none** (`#/pilot`). *Fixed:* it counts an approved model's results report, and a campaign's value only once `GET /pilot/roi` says it is measured (the newest three scored campaigns are asked); a scored but unmeasured campaign no longer brings the button (`simple/reports.test.mjs`).
+15. **The Advanced tools card has an empty band above its summary** (`modules/simple/pages.js`). *Fixed:* `.sp .card>details.adv{border-top:0;padding:0}` undoes the global `details.adv` padding and rule inside a card (`10_settings.png`; `simple/settings.test.mjs`).
+16. **Guided setup's quoting is noisy.** A reason reads `("'Basic' → 'BASIC'", "'PREMIUM' → 'premium'")`: double quotes around single-quoted values (`06_guided_setup_suggestions.png`). The text is the API's (`engine/agent/advisor.py`). *Fix:* one quoting style for values in reasons. *Fixed:* every value is quoted one way, `'value'` (`engine.agent.untrusted.quoted`): the reason now reads `('Basic' → 'basic', 'PREMIUM' → 'premium')`, yes / no spellings read `: 'N' (771), 'Y' (749)`, and a refused setting value is named without Python syntax (`tests/unit/agent/test_quoting.py`).
+17. **Backend, seen once: the first visit to Schedules on an empty data folder logged a 500**, "table schedule already exists" (`engine/platform_db.create_tables`: two first requests racing to create the SQLite tables). The screen still drew. *Fixed in M84:* `create_tables` holds a lock and treats "already exists" as success (`tests/unit/production/test_platform_db_create.py`).

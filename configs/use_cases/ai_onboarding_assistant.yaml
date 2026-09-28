@@ -20,6 +20,7 @@ actions:                                           # nothing is sent, so there i
   suppression:                                     # The switches stay at their defaults: with no column named they do nothing.
     opt_out_column: null
     recently_contacted_column: null
+  contacts_customers: false                        # Plan H M83: no campaign, so no "Measure the campaign" step
 
 generative:
   kind: rag_assistant

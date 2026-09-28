@@ -32,8 +32,8 @@ ONLY=home,run-output node scripts/ui_screens.mjs          # writes docs/ui/after
 | Helper | What it draws |
 |---|---|
 | `pageHead(inner)` | The header. The right side is the logo only; the client picker is in the top bar. |
-| `crumbs(items)` | `Home › ... › current`. `items` are `{label, href}`; the last without `href` is the current screen. Never pass Home. |
-| `backLink(uc)` / `journeyCrumb(uc)` / `journeyBack(uc)` | `Home › journey › use case` (nav), the `Home › journey` links, and the `{href,label}` for "Back to <journey>". |
+| `crumbs(items)` | `Home › ... › current`. `items` are `{label, href}`; the last without `href` is the current screen. Never pass Home. A screen under another top-bar place starts `items` with `SETTINGS_CRUMB`, `RESULTS_CRUMB` or `CONNECTIONS_CRUMB`, which is then the root ("Settings › Schedules"): the first crumb is the place `navFor` marks. A crumb opening `#/` (the default journey) is left out. |
+| `backLink(uc)` / `journeyCrumb(uc)` / `journeyBack(uc)` | `Home › use case` (nav) and the `Home` link (`Home › journey` for a journey other than the default, `#/industry/<id>`), and the `{href,label}` for "Back to <journey>". |
 | `headActions({primary, secondary, related})` | The header's actions in one order; each an HTML string or `{label, href \| id, attrs}`. `related` is a quiet link with `›`. |
 | `errorBox(error, {title, retry})` | Plain sentence first (the glossary's `codes.<CODE>.title`; a 4xx's own sentence; else "Something went wrong while loading this page."), the glossary fix, an optional **Try again** (`[data-retry]`, `app.js` redraws the route), code and message in a closed **Details**. Class `.apierr` kept. |
 | `notFound(what, back, error)` | "This run could not be found." + one "Back to <label>" button. |
@@ -50,9 +50,14 @@ ONLY=home,run-output node scripts/ui_screens.mjs          # writes docs/ui/after
 ## Top bar (`ui/chrome.js`) and router seams (`ui/modules/router.js`)
 
 `header#pb-bar.topbar` is mounted by `app.js` before `#app`: wordmark, `nav[aria-label="Main"]` with
-Home, Build data (`#/pilot/kit`), Models (menu), Campaigns (`#/monitoring/runs`), Reports (`#/pilot`),
-Admin (menu), then the context slot, sample-data chip, Help and user. Below 700px: wordmark, picker and
-a Menu button. The active goal follows the route (`navFor(hash)` in `chrome.js`).
+exactly four places since Plan H M82 - Home (`#/`), Connections (`#/connections`), Results
+(`#/results`, with the approvals count) and Settings (`#/settings`) - then the context slot (empty: one
+company, no client picker), sample-data chip (demo mode only), Help and user (nothing with sign-in
+off). Below 700px: wordmark and a Menu button. The active place follows the route (`navFor(hash)` in
+`chrome.js`). Build data, Reports, Campaigns, Model health, Schedules, Privacy, Admin, Uplift and
+Waiting for approval keep their routes and are opened from Results, a run's results
+(`registerResultLink`) or Settings (`ui/modules/simple/`); the "models" and "admin" slots below are
+kept but no longer drawn in the bar.
 
 | Seam (from `modules/router.js`) | Use |
 |---|---|
@@ -61,6 +66,8 @@ a Menu button. The active goal follows the route (`navFor(hash)` in `chrome.js`)
 | `registerAccess({can(method, path), status?()})` | Role visibility. Items with a `need` (Waiting for approval: `GET /approvals`; Model health: `GET /schedules`) are hidden when `can` says no; `status() === "signed-out"` draws the wordmark and the user slot only. No provider: everything is drawn. Safe to call from `boot.js`. |
 | `registerGlossary({code, term, metric, setting})` | Functions or maps, or the `GET /pilot/help` catalogue itself (`{codes, terms, metrics, settings}`). |
 | `registerRunAction({name, applies(uc, run), html(uc, run)})` / `runActionsHtml(uc, run)` | Actions on a run's results (AI copy, root-cause notes, campaign results). Register from a module's `index.js`. |
+| `registerRunPanel({name, applies(uc, run), html(uc, run)})` / `runPanelsHtml(uc, run)` | A full-width section under a finished scoring run's Results flow, for a step that needs room (Plan H M83: "4 Measure the campaign", `modules/measure/`). The module delegates its events and redraws its own element. |
+| `registerResultLink({name, applies(uc, run), link(uc, run)})` / `resultLinksHtml(uc, run)` | Plan H M82: quiet links under a run's results (Model health, Schedule, the report) to screens that left the top bar. `link` returns `{label, href}`. |
 | `setActiveNav(id)` | Override the active goal for the current route only (a scoring run's Output is `"campaigns"`). |
 | `refreshTopBar()` | Redraw the bar after a slot's own state changed. `MODULES_CHANGED` and route changes redraw it anyway. |
 

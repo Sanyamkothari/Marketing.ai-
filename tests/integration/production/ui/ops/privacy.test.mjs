@@ -75,6 +75,10 @@ const { w, calls, forms, saved } = installOps({
 await import("../../../../../ui/app.js");
 await import("../../../../../ui/modules/production/index.js");
 const session = await import("../../../../../ui/modules/production/session.js");
+// Plan H M82 (DEC-1113): the links that were in the top bar are on the Settings page; this is what
+// that page offers to the person signed in now, drawn by its own pure builder.
+const { settingsHtml } = await import("../../../../../ui/modules/simple/pages.js");
+const offers = (href) => settingsHtml({ can: (m, p) => session.can(m, p), status: "signed-in" }).includes(`href="${href}"`);
 const privacyScreen = await import("../../../../../ui/modules/production/privacy.js");
 privacyScreen._setErasurePollForTests(5);
 
@@ -97,7 +101,11 @@ function nowhereBut(id, body) {
 
 test("the Admin's consent screen lists the purposes and which use cases they gate", async () => {
   await until(() => $("#pb-consent-import"), 3000, "the consent screen");
-  assert.ok($('#pb-bar a[href="#/privacy/consent"]'), "Privacy in the user bar");
+  assert.ok(offers("#/privacy/consent"), "Privacy on the Settings page");
+  // docs/UI_AUDIT.md §8.4 item 12: Settings › Privacy › …, not Home › Admin › Privacy › …
+  const trail = $$("#app .crumbs a, #app .crumbs .cur").map((e) => [e.textContent, e.getAttribute("href")]);
+  assert.deepEqual(trail.slice(0, 2), [["Settings", "#/settings"], ["Privacy", "#/privacy/consent"]]);
+  assert.equal(trail.length, 3);
   for (const purpose of fixture("purposes").purposes) assert.match(text(), new RegExp(purpose.label));
   assert.match(text(), /not legal advice/);
   assert.equal(last("GET", "/privacy/purposes").auth, "Bearer tok-admin");
@@ -298,7 +306,7 @@ test("without a privacy policy the server's sentence replaces the forms", async 
 test("a Viewer is told why, and the privacy API is not even asked", async () => {
   session.storeToken("tok-viewer", null);
   await session.loadMe();
-  assert.equal($('#pb-bar a[href="#/privacy/consent"]'), null, "no Privacy link for a Viewer");
+  assert.equal(offers("#/privacy/consent"), false, "no Privacy link for a Viewer");
   const before = [count("GET", "/privacy/purposes"), count("GET", "/privacy/erasure")];
   w.location.hash = "#/privacy/erasure";
   await until(() => $('[data-code="ROLE_REQUIRED"]'), 3000, "the refusal");

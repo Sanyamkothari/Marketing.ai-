@@ -1,19 +1,25 @@
 # Marketing AI
 
-> **New here? Run the demo on your laptop: [docs/QUICKSTART.md](docs/QUICKSTART.md).** It needs Python 3.11 and
-> about 20 minutes, and no AWS account, AI service or client data. How ready v1 is, and what to
-> say out loud when you demo it: [docs/V1_READINESS.md](docs/V1_READINESS.md).
+> **New here? Start with [docs/START_HERE.md](docs/START_HERE.md)**: the four pages and the flow in
+> plain words, with screenshots. Developers running it on a laptop: [docs/QUICKSTART.md](docs/QUICKSTART.md)
+> (Python 3.11, about 20 minutes, no AWS account, AI service or client data needed). How ready v1
+> is: [docs/V1_READINESS.md](docs/V1_READINESS.md).
 
-A **reusable marketing AI engine**. A business user selects a use case (e.g. Targeted Advertisement),
-uploads a CSV, picks the primary key and target column, and clicks Run. The engine validates the data,
-trains the best model with AutoML, evaluates it, explains it, and can later score new data. Results are
-shown as a pipeline: **Data → Model → Output**. The engine is generic: each use case is a *configuration
-file*, not code. Adding a new use case, or a new industry, means adding config, not features.
+**Marketing AI helps a marketer decide who to contact, and then shows what the campaign changed.**
+Pick a goal (win customers, keep them paying, stop them leaving, win them back), bring your data,
+and the product trains a model, scores every customer with a reason and a next step, and after the
+campaign measures the extra conversions it caused.
 
-Instead of building a separate model per client, we build one engine. Each industry gets a template of
-lifecycle stages and use cases. Each client maps their data to a standard format. AutoML trains the best
-model on their data. Users can train on historical data or score new data with the approved (champion)
-model, and every prediction comes with a reason and a recommended action.
+It works in four pages: **Home** (the goals and their use cases), **Connections** (S3, PostgreSQL /
+Redshift, MySQL and more, set up and tested in one place), **Results** (every run, newest first) and
+**Settings**. Each use case is one flow: **1 Choose data** (upload a file or pick one from a
+connection) → **2 Guided setup** (a helper checks and fixes the data, asks when it is unsure,
+recommends settings, and changes nothing until you approve) → **3 Run & results** → **4 Measure the
+campaign**. It is a single-company tool that starts empty; nothing is pre-loaded.
+
+Under the hood it is one reusable engine: each use case is a *configuration file*, not code, AutoML
+trains the best model on your data, a new model is used only after someone approves it, and every
+prediction comes with a reason and a recommended action.
 
 ---
 
@@ -33,13 +39,19 @@ nightly (`make test-all`, which adds the `@slow` AutoGluon and browser journeys)
   key, and next month's tables are scored through the same saved recipe, with the mapping step
   reopened only for a table whose columns changed (Phase 2 and Plan A M34-M35;
   `tests/integration/test_onboarding_acceptance.py`).
-- **Several industries.** Telecom (the default) plus banking, insurance, e-commerce and ad tech, each a
-  YAML file under `configs/industries/`, chosen on the overview (Plan A M38).
+- **Guided setup and Connections.** Every predictive use case opens on a helper that prepares the
+  file and recommends settings for your approval, with the fixes saved and replayed on next month's
+  file (Plan G, `docs/AGENTS.md`); data can come from a file or from a tested connection (Plan H,
+  `docs/CONNECTIONS.md`).
+- **One journey for every business.** Home shows one generic journey (`configs/industries/generic.yaml`,
+  DEC-1110 …). The industry templates of Plan A M38 (telecom, banking, insurance, e-commerce, ad
+  tech) remain as config and open by URL (`#/industry/<id>`), but are no longer offered.
 - **Generative features** on the fake LLM by default and on Bedrock when configured: the onboarding
   assistant, root-cause summaries per risk segment and win-back copy with a judge (Phase 3a).
-- **Uplift modelling.** From *Uplift modelling ›* on the overview: train S-, T- or X-learners on a
-  past randomised campaign, read the Qini curve and AUUC, get a budgeted treat list that leaves the
-  sleeping dogs alone, and measure a campaign's incremental conversions once its outcomes mature
+- **Uplift modelling.** Step 4 of a use case, *Measure the campaign*, learns who to contact next
+  time; by hand, from *Settings → Advanced → Uplift workbench* (`#/uplift`): train S-, T- or
+  X-learners on a past randomised campaign, read the Qini curve and AUUC, get a budgeted treat list
+  that leaves the sleeping dogs alone, and measure a campaign's incremental conversions once its outcomes mature
   (Phase 3b; `tests/integration/uplift/`). Since M53 an uplift file may hold each customer at
   several snapshot dates, keyed by customer + snapshot date: treatment must be the same for a
   customer across a campaign's snapshots (`TREATMENT_VARIES_WITHIN_ENTITY`), the hold-out keeps each
@@ -1288,6 +1300,117 @@ Decisions are DEC-900 … DEC-912 in [`docs/DECISIONS.md`](docs/DECISIONS.md). W
 above its blocks is announced in [`docs/CROSS_BRANCH_REQUESTS.md`](docs/CROSS_BRANCH_REQUESTS.md).
 
 <!-- ---- END PLAN-E ---- -->
+<!-- ---- PLAN-G (agents) — append only below this line ---- -->
+## Plan G — Use-case agents, Guided setup (M70–M77)
+
+[`docs/plans/MARKETING_AI_PLAN_G_AGENTS.md`](docs/plans/MARKETING_AI_PLAN_G_AGENTS.md) adds a
+helper to every use case that trains a model. On the use-case page a *Guided setup* tab sits beside
+today's *Manual setup*: the helper checks the uploaded file, suggests fixes (hide ID, empty and
+personal-data columns, turn `"₹1,200"` into 1200, one date format, `Y/N` into 1/0) and recommended
+settings, each with a plain reason, and asks when it is unsure. Nothing is applied until the user
+approves. The fixes are a *recipe* our code runs on a copy, stored with the model and replayed on
+every later file. The first screen and Manual setup do not change.
+
+**Done so far.**
+
+- **M70 — decisions, contracts, config.** Every use case carries an `agent:` block (defaults in
+  `configs/engine.yaml`; a goal, facts and outcome-column synonyms in each trainable use case),
+  validated by `engine/agent/config.py` and never overridable per run. `engine/agent/contracts.py`
+  defines the session, proposals, questions, the recipe and its receipt. Tests:
+  `tests/unit/agent/`.
+- **M71 — read and check tools, dry-run validation.** The helper's first tools wrap what exists:
+  the profile, one column in detail (with how the outcome rate moves across its values), the roles
+  the use case's hints point at, and the Run button's own checks. `engine/agent/formats.py` finds
+  numbers, dates and yes/no values stored as text, and one category spelled several ways, with the
+  parsers the recipe will run. `POST /uploads/{id}/checks` answers what Run would say without
+  starting a run (`tests/integration/agent/`).
+- **M72 — the recipe engine and scoring replay.** `engine/agent/recipe.py` checks and runs approved
+  steps on a copy, in a fixed order, counting what each changed and could not read; a recipe never
+  touches the ID or the outcome. The prepared copy is stored as a new upload and trains like any
+  other; its recipe is saved with the run, and `POST /runs` prepares every later scoring file the
+  same way, or answers 409 with `RECIPE_COLUMN_MISSING`, `RECIPE_VALUES_UNCONVERTED` or
+  `RECIPE_STEP_INVALID`.
+- **M73 — the advisor.** `engine/agent/advisor.py` turns what the tools found into proposals,
+  questions and stops by fixed rules, with no AI service: the ID and outcome columns, one fix per
+  formatting problem, a question for a possible leak or a date that could be read two ways, and a
+  plain stop when the data cannot work. `engine/agent/recommend.py` suggests settings from one
+  measured fact each and never loosens a safeguard. `tests/fixtures/agent_bench/` pins the advice
+  for sixteen files, including a deliberately messy one.
+- **M74 — sessions, chat and Approve.** `/uploads/{id}/agent-session` starts Guided setup (rules
+  only), records decisions and answers, answers questions in a chat that can only read the data
+  and suggest settings, previews the prepared rows, and on Approve prepares the copy and returns
+  the ID, outcome and settings for the ordinary Run. Every number in a chat reply must come from
+  the data the helper looked at, or the reply is replaced (`engine/agent/loop.py`,
+  `engine/agent/grounding.py`).
+- **M75 — Guided setup on screen.** Predictive and hybrid use cases get a "Guided setup
+  (recommended)" tab beside Manual setup, which is unchanged and still opens first. Upload a file,
+  answer the helper's questions, tick or untick its grouped suggestions, preview the changed rows,
+  Approve, then Run with the usual Run button. Chat replies are plain text and show the data they
+  came from; practice answers are labelled (`ui/modules/agent/`,
+  `tests/integration/agent/test_guided_setup_ui.py`).
+- **M76 — order logs are combined.** Where a use case allows it (Retail Win-back today), a file
+  with several rows per customer is no longer refused: the helper asks to combine them into one
+  row per customer, built only from rows on or before each customer's snapshot date and checked for
+  future-data leaks, and next month's file is combined the same way before scoring
+  (`engine/agent/reshape.py`).
+- **M77 — hardened and measured.** The chat only states numbers it measured; file content is cleaned
+  and treated as data in the prompt; chat messages are masked; sessions are budgeted, bounded and
+  safe under concurrent requests; seventeen review findings are fixed with tests. A 1,000,000-row
+  file is prepared in seconds and advised in about two minutes. How it all works:
+  [`docs/AGENTS.md`](docs/AGENTS.md); timings: `reports/plan_g_performance.md`.
+- **Adversarial review.** A second review had each finding reproduced by independent reviewers
+  before it counted; 37 were confirmed and fixed with tests, in five areas: number and date
+  parsing (no silent 1000x misreads, zoned dates in UTC), combining rows (no guessed day/month
+  order), the helper's advice (settings that only work together are decided together), the chat
+  (no 500s, no numbers laundered through tool calls) and scoring (one rule for which file a model
+  reads, the same answer from the dry run and Run). DEC-1034 … DEC-1045.
+
+Decisions are DEC-1000 … DEC-1045 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+## Plan H — One simple product (M80–M84)
+
+[`docs/plans/MARKETING_AI_PLAN_H_SIMPLE.md`](docs/plans/MARKETING_AI_PLAN_H_SIMPLE.md) keeps the engine
+and hides the complexity: one generic journey, four pages (Home, Connections, Results, Settings) and a
+three-step flow, plus a fourth step after a campaign.
+
+> **Start here if you are a marketer: [`docs/START_HERE.md`](docs/START_HERE.md)**, the four pages
+> and the flow in plain words, with screenshots.
+
+- **M84 — Checks and docs.** `docs/START_HERE.md` walks a marketer through the product with
+  screenshots of the new flow (`docs/screenshots/start_here/`, re-taken with
+  `python -m scripts.capture_start_here`). `docs/UI_AUDIT.md` §8 lists every screen after Plan H,
+  the older screens still reachable by URL, and the rough edges still open. Two fixes came out of
+  it: the AI service screen highlights Connections in the top bar, and two first requests on an
+  empty data folder no longer race to create the database tables (a 500 on a fresh install).
+  Every other rough edge the audit listed is now fixed too: the "Also: target with uplift" link is
+  gone from use cases (uplift is step 4; the workbench is under Settings → Advanced), breadcrumbs
+  start with the page the top bar marks, a run opened from Results stays under Results, the Results
+  badge updates without a reload, Manual setup can also pick data from a connection, and the
+  helper quotes values one way (DEC-1117 … DEC-1119).
+
+- **M83 — Measure a campaign (step 4).** On a scoring run's Results, upload who responded (customer
+  ID and a 1/0 column) to see how many extra conversions the campaign caused compared with the
+  customers held back, in one plain sentence. "Learn who to contact next time" then trains an uplift
+  model from it and gives its contact list. Offered for every use case that contacts customers
+  (`actions.contacts_customers`); see `docs/UPLIFT.md` §9.
+
+- **M81–M82 — one journey, four pages.** Home shows one journey for every business (Win customers,
+  Keep them paying, Stop them leaving, Win them back, Run smoothly) with no industry or client
+  picker, and nothing is pre-loaded unless a developer runs `make demo-seed`. The top bar is Home ·
+  Connections · Results · Settings. Results lists every run, with a badge when models wait for
+  approval; Settings holds the AI service, privacy, schedules and the advanced tools. Setup opens on
+  Guided setup. Every older screen still opens by its URL.
+
+- **M80 — Connections.** `#/connections` connects Amazon S3 or S3-compatible storage (Google Cloud
+  Storage, Cloudflare R2, MinIO), PostgreSQL / Redshift and MySQL / MariaDB, with Snowflake, BigQuery
+  and Azure Blob as optional add-ons, plus the AI service. Each connection is tested step by step
+  with a plain fix for every failure; Guided setup can then pick a table or file, imported as an
+  ordinary upload. Passwords and keys are encrypted with `MARKETING_AI_CONNECTIONS_KEY` (generated
+  on a laptop, required in production) and never returned. See `docs/CONNECTIONS.md`.
+
+Decisions are DEC-1100 … DEC-1120 and DEC-1130 … DEC-1135.
+
+<!-- ---- END PLAN-G ---- -->
 
 <!-- ---- PLAN-D (hardening) — append only below this line ---- -->
 

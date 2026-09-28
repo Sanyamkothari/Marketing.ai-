@@ -13,7 +13,7 @@ seam to stub, without any of them reaching into the route's own globals.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Annotated, Final
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 
@@ -107,6 +107,37 @@ async def create_upload(
         delete_upload(storage, upload_id)
         raise
 
+    upload = finish_upload(
+        storage,
+        config,
+        upload_id=upload_id,
+        source_key=source_key,
+        file_format=file_format,
+        file_name=file.filename or source_filename(file_format),
+        file_size_bytes=total,
+        mode=mode,
+    )
+    response.headers["Location"] = f"/uploads/{upload_id}/profile"
+    return upload
+
+
+def finish_upload(
+    storage: Storage,
+    config: UseCaseConfig,
+    *,
+    upload_id: str,
+    source_key: str,
+    file_format: Literal["csv", "parquet"],
+    file_name: str,
+    file_size_bytes: int,
+    mode: RunMode,
+) -> UploadResponse:
+    """Profile a file already written at `source_key` and record it as upload `upload_id`.
+
+    Everything `POST /uploads` does after the bytes land, shared with an import from a connection
+    (Plan H M80), so an imported table is an upload in every respect. An unreadable file removes the
+    whole upload directory and raises the same 415/422 the upload route gives.
+    """
     try:
         result = ingest.read_upload(
             storage, source_key, file_format=file_format, row_cap=profile_row_cap(config)
@@ -115,9 +146,9 @@ async def create_upload(
             result.frame,
             config,
             upload_id=upload_id,
-            file_name=file.filename or source_filename(file_format),
+            file_name=file_name,
             file_format=result.file_format,
-            file_size_bytes=total,
+            file_size_bytes=file_size_bytes,
             delimiter=result.delimiter,
             encoding=result.encoding,
             row_count=result.row_count,
@@ -132,7 +163,7 @@ async def create_upload(
         mode=mode,
         file_name=profile.file_name,
         file_format=profile.file_format,
-        file_size_bytes=total,
+        file_size_bytes=file_size_bytes,
         delimiter=profile.delimiter,
         encoding=profile.encoding,
         row_count=profile.row_count,
@@ -146,7 +177,6 @@ async def create_upload(
     storage.write_model(record.profile_key, profile)
     storage.write_model(record.fingerprint_key, profile.fingerprint)
     storage.write_model(upload_key(upload_id, UPLOAD_RECORD_FILENAME), record)
-    response.headers["Location"] = f"/uploads/{upload_id}/profile"
     return UploadResponse(upload_id=upload_id, profile=profile)
 
 

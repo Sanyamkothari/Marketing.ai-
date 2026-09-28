@@ -235,5 +235,21 @@ from api.routes.pilot import router as pilot_router  # noqa: E402
 
 PHASE_ROUTERS.append(pilot_router)
 # ---- END PLAN-E ----
+# ---- PLAN-G (agents) — append only below this line ----
+# Use-case agents (Guided setup): the dry-run data checks and, from M74, the helper's session. Every
+# write goes through the same run and upload paths as Manual setup (DEC-1005).
+from api.routes.agent import router as agent_router  # noqa: E402
+
+PHASE_ROUTERS.append(agent_router)
+# Plan H M83: step 4 of a use case, "Measure the campaign" - a thin layer over the uplift routes.
+from api.routes.measure import router as measure_router  # noqa: E402
+
+PHASE_ROUTERS.append(measure_router)
+# Plan H M80: connections - set up, test, browse and import from S3, databases and the optional
+# add-ons. An import ends in the same code as `POST /uploads` (DEC-1100).
+from api.routes.connections import router as connections_router  # noqa: E402
+
+PHASE_ROUTERS.append(connections_router)
+# ---- END PLAN-G ----
 
 app: FastAPI = create_app()

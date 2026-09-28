@@ -65,3 +65,12 @@ template:
     - {name: euribor3m,      role: feature,     type: float,   description: "Three-month Euribor rate, daily indicator",                                      examples: ["4.857","4.962","4.021","1.313","0.722"]}
     - {name: nr_employed,    role: feature,     type: float,   description: "Number of employees, quarterly indicator, in thousands",                         examples: ["5191.0","5228.1","5195.8","5099.1","4963.6"]}
     - {name: y,              role: target,      type: string,  description: "Target: yes when the client subscribed to a term deposit, else no. Leave blank when scoring.", examples: ["no","no","yes","no","yes"]}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the clients most likely to subscribe to a term deposit when called."
+  knowledge:
+    - "The outcome is a term-deposit subscription after the campaign call."
+    - "Call duration is only known after the call ends, so it contains the answer and must not be used to decide whom to call."
+    - "The outcome is labelled yes / no rather than 1 / 0."
+  column_hints:
+    target_synonyms: [subscribed, deposit, converted]

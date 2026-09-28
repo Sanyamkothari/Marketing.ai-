@@ -1,0 +1,325 @@
+{
+  "messy": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "recipe_step parse_number:ad_ctr_90d (sure)",
+      "recipe_step normalise_text:plan_tier (sure)",
+      "recipe_step normalise_text:region (sure)",
+      "recipe_step parse_number:monthly_spend (sure)",
+      "recipe_step parse_date:signup_date (sure)",
+      "recipe_step map_boolean:is_premium (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'campaign_result_score' almost perfectly predicts the outcom",
+        "options": [
+          "Hide it (recommended)",
+          "Keep it, it is known in advance"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": [
+      "contact_email: personal data, looks like an ID, not a signal"
+    ]
+  },
+  "clean": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [],
+    "hidden": []
+  },
+  "renamed_target": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "Purchased",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=Purchased (check)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [],
+    "hidden": []
+  },
+  "ambiguous_dates": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "In 'joined' ('01/01/2024'",
+        "options": [
+          "Day first",
+          "Month first"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "unreadable_numbers": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Most of 'balance' looks like numbers",
+        "options": [
+          "Hide it",
+          "Leave it as text"
+        ],
+        "blocking": false
+      }
+    ],
+    "hidden": []
+  },
+  "leaky_column": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "'campaign_result_score' almost perfectly predicts the outcom",
+        "options": [
+          "Hide it (recommended)",
+          "Keep it, it is known in advance"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "pii_column": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [],
+    "hidden": [
+      "billing_contact_email: personal data",
+      "billing_contact_phone: personal data"
+    ]
+  },
+  "constant_column": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [],
+    "hidden": [
+      "data_source: the same value in every row"
+    ]
+  },
+  "high_null_column": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [],
+    "hidden": [
+      "survey_nps_score: mostly empty"
+    ]
+  },
+  "id_like_column": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)",
+      "setting split.type=time_based (check)",
+      "setting split.time_column=snapshot_date (check)",
+      "setting model_search.time_limit_minutes=10 (sure)"
+    ],
+    "questions": [],
+    "hidden": [
+      "external_ref: looks like an ID, not a signal"
+    ]
+  },
+  "duplicate_keys": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": null,
+    "target": null,
+    "proposals": [],
+    "questions": [],
+    "hidden": []
+  },
+  "null_keys": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": null,
+    "target": null,
+    "proposals": [],
+    "questions": [],
+    "hidden": []
+  },
+  "too_few_positives": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)"
+    ],
+    "questions": [],
+    "hidden": []
+  },
+  "too_few_rows": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)"
+    ],
+    "questions": [],
+    "hidden": []
+  },
+  "constant_target": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)"
+    ],
+    "questions": [],
+    "hidden": []
+  },
+  "non_binary_target": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": "customer_id",
+    "target": "converted_30d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=converted_30d (sure)"
+    ],
+    "questions": [],
+    "hidden": []
+  },
+  "multi_row": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "reactivated_90d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=reactivated_90d (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Each shopper appears on 5.1 rows on average. Combine them in",
+        "options": [
+          "Combine (recommended)",
+          "Stop"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "multi_row_one_date": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "reactivated_90d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=reactivated_90d (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Each shopper appears on 4.4 rows on average. Combine them in",
+        "options": [
+          "Combine (recommended)",
+          "Stop"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "multi_row_no_dates": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": "customer_id",
+    "target": "reactivated_90d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=reactivated_90d (sure)"
+    ],
+    "questions": [],
+    "hidden": []
+  }
+}

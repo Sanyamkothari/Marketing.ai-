@@ -40,6 +40,13 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep
+from api.routes.agent_recipes import (  # Plan G (DEC-1006)
+    attach_recipe_to_run,
+    load_recipe,
+    model_recipe,
+    refuse_other_roles,
+    replay_for_scoring,
+)
 from api.routes.uploads import (
     UPLOAD_VALIDATION_FILENAME,
     http_error,
@@ -205,6 +212,9 @@ DATASET_USE_CASE_MISMATCH: Final[str] = "DATASET_USE_CASE_MISMATCH"
 DATASET_CLIENT_MISMATCH: Final[str] = "DATASET_CLIENT_MISMATCH"
 UPLIFT_REQUIRES_UPLIFT_ROUTE: Final[str] = "UPLIFT_REQUIRES_UPLIFT_ROUTE"
 """An uplift training run asked of `POST /runs`, which cannot run the uplift checks first (M53)."""
+RECIPE_DATASET_UNSUPPORTED: Final[str] = "RECIPE_DATASET_UNSUPPORTED"
+"""Scoring a built dataset with a model whose training data Guided setup prepared (Plan G review):
+only an upload can be prepared by the model's recipe today, and an unprepared file is scored wrongly."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -375,6 +385,10 @@ def create_run_endpoint(
 
     version: ModelVersion | None = None
     if body.mode is RunMode.TRAIN:
+        if upload is not None:
+            refuse_other_roles(
+                load_recipe(storage, upload.upload_id), primary_key=primary_key, target=target, training=True
+            )
         report = validate.validate_for_training(
             read_frame(storage, source_key, file_format, profile_row_cap(config)),
             config,
@@ -389,6 +403,25 @@ def create_run_endpoint(
         # version's columns, so this version is the one that must score it, whatever is promoted
         # while the job waits in the queue.
         version = score_version(registry, config=config, version_id=body.model_version_id)
+        recipe = model_recipe(storage, version)
+        if upload is None and recipe is not None:
+            raise http_error(
+                409,
+                RECIPE_DATASET_UNSUPPORTED,
+                "This model was trained on data Guided setup prepared, and a built dataset cannot be "
+                "prepared the same way yet. Upload the file to score instead.",
+            )
+        if upload is not None:
+            # Before anything is prepared, as the dry run does: a refused run leaves no prepared upload.
+            refuse_other_roles(recipe, primary_key=primary_key, target=None, training=False)
+            # Plan G (DEC-1006): a model trained on prepared data prepares every scoring file the same
+            # way, before the file is checked against its schema; a file it cannot prepare is a 409.
+            replayed = replay_for_scoring(storage, config, upload, version)
+            if isinstance(replayed, ValidationReport):
+                storage.write_model(upload_key(upload.upload_id, UPLOAD_VALIDATION_FILENAME), replayed)
+                return validation_conflict(replayed)
+            upload, profile = replayed
+            source_key, file_format, source_id = upload.source_key, upload.file_format, upload.upload_id
         report = validate.validate_against_schema(
             read_frame(storage, source_key, file_format, profile_row_cap(config)),
             storage.read_model(version.schema_key, FeatureSchema),
@@ -425,6 +458,8 @@ def create_run_endpoint(
         model_version_id=body.model_version_id if version is None else version.model_id,
         requested_by=requested_by(request),
     )
+    if upload is not None:
+        attach_recipe_to_run(storage, upload.upload_id, record.run_id)  # Plan G (DEC-1006)
     spec = job_spec_for(record, upload=source, client_id=settings.client_id)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))

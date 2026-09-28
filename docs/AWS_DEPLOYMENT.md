@@ -238,6 +238,7 @@ variable is missing from this document.
 | `login_lockout_seconds` | `MARKETING_AI_LOGIN_LOCKOUT_SECONDS` | `login_lockout_seconds` | `900`, between 1 and 86400 | `auth_mode=local` | no |
 | `trusted_proxy_hops` | `MARKETING_AI_TRUSTED_PROXY_HOPS` | `trusted_proxy_hops` | `0` (the peer address), between 0 and 5 | the per-address sign-in limit behind a load balancer | yes, `1`: the ALB is the one proxy in front of the tasks (DEC-867) |
 | `demo_mode` | `MARKETING_AI_DEMO_MODE` | `demo_mode` | `false` | nothing; `true` serves the seeded synthetic "Demo Telecom" client for a demo (Plan E, DEC-901) | no: never on a client deployment |
+| `connections_key` | `MARKETING_AI_CONNECTIONS_KEY` | **the secret only**, §3.3 | none; a laptop generates one into its data directory (0600) | saving a connection's password or key; env=prod refuses to save one without it (Plan H, DEC-1101) | no: put a Fernet key into the secret by hand before the first connection is saved |
 
 Three fields are tuples filled from one comma-separated value: `sagemaker_subnet_ids`,
 `sagemaker_security_group_ids` and `cors_origins`.

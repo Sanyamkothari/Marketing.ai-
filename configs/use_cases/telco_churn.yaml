@@ -124,3 +124,12 @@ suggested_features:
   - {name: usage_mb_30d,               role: usage,      function: sum,   column: data_mb, window_days: 30, description: "Data used in the last 30 days."}
   - {name: usage_drop_30d_vs_90d,      role: usage,      function: ratio, of: {function: mean, column: data_mb, window_days: 30}, over: {function: mean, column: data_mb, window_days: 90}, description: "Recent usage against the quarter; well below 1 means the subscriber is going quiet."}
   - {name: days_since_last_activity,   role: activity,   function: days_since_last, description: "Days since the subscriber last did anything."}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the subscribers most likely to leave next month."
+  knowledge:
+    - "The outcome is leaving within the month after the snapshot."
+    - "TotalCharges in the public file is stored as text and is blank for brand-new subscribers; it should become a number."
+    - "Many columns hold Yes / No text that should become 1 / 0."
+  column_hints:
+    target_synonyms: [churned, left, cancelled]

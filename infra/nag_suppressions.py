@@ -297,6 +297,18 @@ SUPPRESSIONS: Final[tuple[Suppression, ...]] = (
     ),
     Suppression(
         stack="database",
+        path="ConnectionsKey/Resource",
+        rule="AwsSolutions-SMG4",
+        reason=(
+            "Plan H (DEC-1101, DEC-1120): this secret is the key every saved connection's passwords "
+            "are encrypted with. It grants access to nothing by itself, and there is no service "
+            "behind it for a rotation function to rotate against; rotating it would leave every "
+            "saved password unreadable until each connection is entered again. It is generated "
+            "once, encrypted with the deployment's key and retained, like the privacy salt."
+        ),
+    ),
+    Suppression(
+        stack="database",
         path="ApplicationSecret/Resource",
         rule="AwsSolutions-SMG4",
         reason=(

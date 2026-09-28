@@ -179,9 +179,11 @@ test("the uplift label, defaults and thresholds are the product's", (t) => {
     assert.ok(!offered.includes(ev(dom, "UPLIFT_PTYPE")), `${id}'s Phase 1 Setup offers Uplift`);
     assert.equal($(dom, "#f-samplecampaign"), null, `${id}'s Phase 1 Setup offers an uplift sample`);
   }
-  go(dom, "#/uc/win-back-campaign");
-  const link = $(dom, ".head-actions a.related");
-  assert.ok(link, "and it is reachable elsewhere: the uplift screen, linked from the use case's Setup");
+  // and it is reachable elsewhere: the uplift workbench's index (#/uplift, Settings → Advanced in the
+  // product), which links to the use case's uplift screen; the use case itself no longer does (Plan H)
+  go(dom, "#/uplift");
+  const link = $(dom, '.uindex a[href="#/uplift/win-back-campaign"]');
+  assert.ok(link, "and it is reachable elsewhere: the uplift screen, linked from #/uplift");
   go(dom, link.getAttribute("href"));
   click(dom, "#f-samplecampaign");
   assert.equal($(dom, ".ptype .pill").textContent, ev(dom, "UPLIFT_PTYPE"));
@@ -220,20 +222,24 @@ test("the uplift entry point and its words are ui/modules/uplift's (DEC-608)", (
   const dom = load("#/uc/win-back-campaign");
   const explanation = views.match(/export const UPLIFT_EXPLANATION = "([^"]+)";/)[1];
   assert.equal(ev(dom, "UPLIFT_EXPLANATION"), explanation);
-  // v1 (WP9): the entry is a quiet related link in the use case's header actions, in the audit's words,
-  // never an injected pill - exactly the markup index.js registers as its related run action.
-  assert.ok(index.includes('`<a class="related" href="${esc(routes.setup(uc.id))}">Also: target with uplift ›</a>`'),
-    "index.js's entry link moved: update the prototype's upRelated()");
+  // Plan H (UI_AUDIT §8.4 item 8): uplift is step 4 of a use case, "Measure the campaign", and its
+  // workbench sits under Settings → Advanced, so neither index.js nor the prototype offers a use case a
+  // link to it - no "Also: target with uplift ›" related link, and no injected pill.
+  assert.ok(!index.includes("target with uplift"), "index.js offers a use case no uplift link");
+  assert.ok(!/name: "uplift-related"/.test(index), "no related run action for a use case's header");
   assert.equal($(dom, ".uentry"), null, "no injected pill under the header");
-  assert.equal($(dom, ".head-actions a.related").outerHTML,
-    `<a class="related" href="#/uplift/win-back-campaign" title="Uplift ${explanation}">Also: target with uplift ›</a>`);
+  assert.equal($(dom, ".head-actions a.related"), null, "no related link in the use case's header");
+  assert.doesNotMatch($(dom, ".head").textContent, /target with uplift/);
   assert.match(views, /setup: \(ucId\) => `#\/uplift\/\$\{encodeURIComponent\(ucId\)\}`/);
   assert.match(views, /index: \(\) => "#\/uplift"/);
   // the uplift screen's header, mode and button labels, and the index page
   assert.match(views, /\$\{esc\(\s*uc\.name,\s*\)\} · Uplift<\/h1><p class="desc">Uplift \$\{esc\(UPLIFT_EXPLANATION\)\}\.<\/p>/);
   for (const words of ["Train uplift model", "Score customers", "Previous uplift runs", "No uplift runs yet.",
     "Train an uplift model first", "Trained uplift model", "The saved uplift model that will rank the uploaded customers.",
-    "No trained uplift model yet", "Uplift pipeline", "Uplift modelling",
+    // "Uplift modelling" is no longer shared: it was the product's breadcrumb for #/uplift, which Plan H
+    // moved under Settings as the "Uplift workbench" (docs/UI_AUDIT.md §8.4 item 12). The prototype
+    // predates Plan H and keeps its old H1; the product's crumb follows Settings.
+    "No trained uplift model yet", "Uplift pipeline",
     "Which column identifies a customer, which one says whether they were treated, and which one is the outcome.",
     "One row per customer of a past campaign: the features, whether they were treated (0/1, assigned at random) and the outcome.",
     "The customers to score. The trained uplift model ranks them by how much the action changes their outcome.",

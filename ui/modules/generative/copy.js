@@ -17,6 +17,8 @@
 
 import { ApiError, getArtefacts, getRun } from "../../api.js";
 import {
+  RESULTS_CRUMB,
+  crumbs,
   emptyState,
   errorBox,
   esc,
@@ -24,7 +26,6 @@ import {
   fmtNum,
   fmtStamp,
   headActions,
-  journeyCrumb,
   pageHead,
   skeleton,
   techDetails,
@@ -236,10 +237,12 @@ function downloadAction(s) {
 
 // --- shell -------------------------------------------------------------------------------------
 
-function crumbTrail(uc) {
-  return `<nav class="crumbs" aria-label="Breadcrumb">${journeyCrumb(uc)}<span class="sep" aria-hidden="true">›</span><a href="#/uc/${esc(
-    uc.id,
-  )}">${esc(uc.name)}</a><span class="sep" aria-hidden="true">›</span><span class="cur" aria-current="page">Campaign copy</span></nav>`;
+/** Results › <use case> › Campaign copy: the top bar marks Results here (`navFor`), so the breadcrumb
+ * starts there, and the use case's crumb goes back to the scoring run the copy was written for
+ * (docs/UI_AUDIT.md §8.4 item 12). */
+function crumbTrail(uc, run) {
+  const back = `#/uc/${encodeURIComponent(uc.id)}/run/${encodeURIComponent(run.run_id)}`;
+  return crumbs([RESULTS_CRUMB, { label: uc.name, href: back }, { label: "Campaign copy" }]);
 }
 
 export function copyHtml(uc, s) {
@@ -250,7 +253,7 @@ export function copyHtml(uc, s) {
   const contacts = `#/uc/${encodeURIComponent(uc.id)}/output/${encodeURIComponent(run.run_id)}`;
   return `<main class="screen gscreen t-${esc(uc.marker)}">
     ${pageHead(
-      `${crumbTrail(uc)}<h1 class="h1">Campaign copy</h1><p class="desc">Messages written for the customers this scoring run picked, held for your review before anyone downloads them.</p><div class="chips">${gTypeChip(
+      `${crumbTrail(uc, run)}<h1 class="h1">Campaign copy</h1><p class="desc">Messages written for the customers this scoring run picked, held for your review before anyone downloads them.</p><div class="chips">${gTypeChip(
         uc,
       )}</div>${headActions({ primary: downloadAction(s), related: { label: "See who to contact", href: contacts } })}`,
     )}

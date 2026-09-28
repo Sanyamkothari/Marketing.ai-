@@ -34,6 +34,16 @@ Contract schema version: 1.
 | GET | `/connection/aws` | The AWS identity Bedrock is called as, and whether this caller may change it | AwsConnectionState |
 | PUT | `/connection/aws` | Choose the AWS identity: the default chain, or an AWS CLI profile by name (local only) | AwsConnectionState |
 | POST | `/connection/aws/test` | Check the AWS identity and whether each configured Bedrock model is enabled - free, no tokens | ConnectionReport |
+| GET | `/connections` | Every saved connection, oldest first | ConnectionList |
+| POST | `/connections` | Save a new connection; its secrets are encrypted and never returned | ConnectionView |
+| GET | `/connections/kinds` | Every kind of connection, with its set-up form and whether its add-on is installed | ConnectionKinds |
+| DELETE | `/connections/{connection_id}` | Forget a connection and its encrypted secrets; imported uploads stay | - |
+| GET | `/connections/{connection_id}` | One saved connection, without its secrets | ConnectionView |
+| PUT | `/connections/{connection_id}` | Change a connection; a secret left blank keeps its saved value | ConnectionView |
+| GET | `/connections/{connection_id}/browse` | List folders and CSV/Parquet files (stores) or schemas and tables (databases); at most 500 | BrowseResult |
+| POST | `/connections/{connection_id}/import` | Import a table or file as an ordinary upload (a snapshot), exactly like POST /uploads | UploadResponse |
+| POST | `/connections/{connection_id}/preview` | The first 20 rows of a table or file, personal data masked | Preview |
+| POST | `/connections/{connection_id}/test` | Test a connection step by step: reach, sign in, list, read a sample, read-only check | ConnectionTestResponse |
 | GET | `/datasets` | Dataset manifests, newest first | DatasetListResponse |
 | POST | `/datasets` | Validate a recipe and, when it passes, start building a dataset from it | DatasetCreatedResponse |
 | GET | `/datasets/{dataset_id}` | One dataset: its manifest, once built, and the status the Build screen polls | DatasetGetResponse |
@@ -90,6 +100,9 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
 | GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
 | GET | `/runs/{run_id}/incrementality-input` | The treated-versus-control outcomes Plan B's incrementality report reads | IncrementalityInput |
+| GET | `/runs/{run_id}/measure` | Step 4 of a scoring run: its measured campaign, the plain verdict and what can be learned | MeasureView |
+| POST | `/runs/{run_id}/measure` | Measure a scoring run's campaign from an outcomes file of customer id and outcome | MeasureView |
+| POST | `/runs/{run_id}/measure/learn` | Learn who to contact next time: an uplift training run on the measured campaign | RunCreatedResponse |
 | GET | `/runs/{run_id}/outcomes` | A scoring run's real-world performance | OutcomeReport |
 | POST | `/runs/{run_id}/outcomes` | Add a scoring run's real outcomes, once its window has matured | OutcomeReport |
 | POST | `/runs/{run_id}/root-cause` | Start a root-cause summary over a finished scoring run | GenerativeJobStartedResponse |
@@ -108,6 +121,14 @@ Contract schema version: 1.
 | GET | `/schedules/{schedule_id}/firings` | A schedule's firing history, newest first | FiringListResponse |
 | POST | `/uplift/runs` | Validate an upload as an experiment and, when it passes, start an uplift training run | RunCreatedResponse |
 | POST | `/uploads` | Store a CSV or Parquet file, profile it and return everything the Setup screen renders | UploadResponse |
+| GET | `/uploads/{upload_id}/agent-session` | The Guided-setup session of an upload | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session` | Start (or restart) Guided setup for an upload: the helper's suggestions and questions | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/answers` | Answer one of the helper's questions | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/apply` | Approve: prepare the data with the accepted steps and return what Run needs | ApplyResponse |
+| POST | `/uploads/{upload_id}/agent-session/decisions` | Accept or reject the helper's suggestions | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/messages` | Ask the helper something; its reply is checked before it is kept | AgentSessionResponse |
+| POST | `/uploads/{upload_id}/agent-session/preview` | The first rows before and after the accepted steps, and what each step did | PreviewResponse |
+| POST | `/uploads/{upload_id}/checks` | Run the data checks for an upload without starting a run | ValidationReport |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
 | GET | `/uploads/{upload_id}/treatment-candidates` | The 0/1 columns of an upload that could record who was treated | TreatmentCandidatesResponse |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
@@ -282,6 +303,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `label` | LabelDefinition \| null | no |  |
 | `onboarding` | OnboardingConfig | no | `engine.yaml:defaults.onboarding` - every onboarding default, per use case (plan section 5.3). |
 | `uplift` | UpliftConfig | no | `uplift:` in a use case. Inert unless `problem_type` is `uplift`.  The data limits, the randomness check and anything about the treatment assignment are **not** agent-editable: an agent that could loosen them could make a targeted campaign look causal. |
+| `agent` | AgentConfig | no | `agent:` in a use case: the Guided-setup helper for that use case. |
 
 #### TargetConfig
 
@@ -371,6 +393,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `bands` | list[Band] | no |  |
 | `suppression` | SuppressionConfig | no |  |
 | `control_group_fraction` | number | no |  |
+| `contacts_customers` | boolean | no |  |
 
 #### MonitoringConfig
 
@@ -503,6 +526,23 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `drift_treated_share_tolerance` | number | no |  |
 | `segments` | UpliftSegmentsConfig | no | Where the four segments are cut. A Phase 5 agent may propose new cuts. |
 | `policy` | UpliftPolicyConfig | no | The budget the targeting recommendation works within. A Phase 5 agent may propose budgets. |
+
+#### AgentConfig
+
+`agent:` in a use case: the Guided-setup helper for that use case.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `enabled` | boolean | no |  |
+| `display_name` | string \| null | no |  |
+| `goal` | string \| null | no |  |
+| `knowledge` | list[string] | no |  |
+| `column_hints` | AgentColumnHints | no | Extra column-name hints the helper uses on top of the use case's own detection hints.  `primary_key_hints` and `time_column_hints` stay where they are; these cover roles the profile does not detect today. Matching is case-insensitive on the whole name or a `_`-separated part. |
+| `levels` | list[AgentLevel ("clean" \| "derive" \| "reshape")] | no |  |
+| `max_conversion_failure_pct` | number | no |  |
+| `tick_uncertain` | boolean | no |  |
+| `max_llm_calls_per_session` | integer | no |  |
+| `max_tool_steps_per_turn` | integer | no |  |
 
 #### ThresholdConfig
 
@@ -752,6 +792,17 @@ The budget the targeting recommendation works within. A Phase 5 agent may propos
 | `budget_contacts` | integer \| null | no |  |
 | `cost_per_contact` | number \| null | no |  |
 | `value_per_conversion` | number \| null | no |  |
+
+#### AgentColumnHints
+
+Extra column-name hints the helper uses on top of the use case's own detection hints.  `primary_key_hints` and `time_column_hints` stay where they are; these cover roles the profile does not detect today. Matching is case-insensitive on the whole name or a `_`-separated part.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `target_synonyms` | list[string] | no |  |
+| `consent` | list[string] | no |  |
+| `opt_out` | list[string] | no |  |
+| `recently_contacted` | list[string] | no |  |
 
 #### CopyLimits
 
@@ -1796,6 +1847,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `actions.bands` | list[Band]; strictly descending min_score, last must be 0.0, unique names (DEC-008) |
 | `actions.suppression.opt_out_column` | str \| null; rows where falsey are suppressed (config-only) |
 | `actions.suppression.recently_contacted_column` | str \| null (config-only) |
+| `actions.contacts_customers` | bool; false for operational use cases: no "Measure the campaign" step (Plan H, DEC-1130) |
 | `monitoring` | [UI 7] Monitoring & retraining |
 | `governance` | [UI 8] Governance & privacy |
 | `output` | non-UI (plan §5) |
@@ -1923,6 +1975,18 @@ Keys of the default document that no advanced-settings field renders, with their
 | `uplift.policy.budget_contacts` | int >= 1 \| null; most customers to contact; null = every persuadable |
 | `uplift.policy.cost_per_contact` | float >= 0 \| null |
 | `uplift.policy.value_per_conversion` | float >= 0 \| null; with cost, stops where expected value per contact < cost |
+| `agent` | Plan G §8.1. The Guided-setup helper of each use case (DEC-1003); not overridable per run |
+| `agent.enabled` | bool; the Guided setup tab appears only when this is true and the use case trains a model |
+| `agent.display_name` | str \| null; null = "<use case name> helper" |
+| `agent.goal` | str \| null; one plain sentence; null = target.definition |
+| `agent.knowledge` | list[str]; <= 20 short plain-language facts the rules and the prompt may rely on |
+| `agent.column_hints` | extra name hints for roles the profile does not detect (case-insensitive) |
+| `agent.column_hints.target_synonyms` | list[str]; names the outcome column may go by in a client's file |
+| `agent.levels` | list[enum clean \| derive \| reshape]; how far a recipe may change the data (G8) |
+| `agent.max_conversion_failure_pct` | float 0..50; a format fix failing on more of a column than this becomes a question |
+| `agent.tick_uncertain` | bool; whether suggestions marked "check" start ticked |
+| `agent.max_llm_calls_per_session` | int 1..500; the chat's model-call budget for one upload |
+| `agent.max_tool_steps_per_turn` | int 1..20; tool calls the helper may make before it must reply |
 
 ### Catalog keys
 

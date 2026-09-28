@@ -165,26 +165,50 @@ const journeyOf = (uc) => (uc && uc.journey) || null;
 const HOME = { label: "Home", href: "#/" };
 const CRUMB_SEP = `<span class="sep" aria-hidden="true">›</span>`;
 
+/**
+ * The top bar's places other than Home (`NAV_ITEMS` in `chrome.js`), as the first crumb of a screen
+ * that lives there (docs/UI_AUDIT.md §8.4 item 12): "Settings › Schedules", "Results › <campaign>",
+ * "Connections › AI service". A trail that starts with one of these is not put under Home, so the
+ * breadcrumb starts at the place the top bar marks for the screen (`navFor`).
+ */
+export const SETTINGS_CRUMB = Object.freeze({ label: "Settings", href: "#/settings", place: true });
+export const RESULTS_CRUMB = Object.freeze({ label: "Results", href: "#/results", place: true });
+export const CONNECTIONS_CRUMB = Object.freeze({ label: "Connections", href: "#/connections", place: true });
+
+/**
+ * A crumb that opens the page the Home crumb already opens: the default journey (`#/`). Plan H has
+ * one journey for every business (DEC-1110), so "Home › Customer Lifecycle › ..." named one page
+ * twice (docs/UI_AUDIT.md §8.4 item 3). A journey with a page of its own (`#/industry/<id>`, reachable
+ * by URL) is still a crumb.
+ */
+const sameAsHome = (item) => Boolean(item) && item.href === HOME.href;
+
 const crumbLink = ({ label, href }) =>
   href ? `<a href="${esc(href)}">${esc(label)}</a>` : `<span class="cur" aria-current="page">${esc(label)}</span>`;
 
 /**
  * Every screen's breadcrumb: `Home › ... › current`. `items` are `{ label, href }`; the last one, with
- * no `href`, is the screen itself. The root is always Home, added here and never by the caller.
+ * no `href`, is the screen itself. The root is Home, added here and never by the caller, unless the
+ * trail starts at another place of the top bar (`SETTINGS_CRUMB`, `RESULTS_CRUMB`,
+ * `CONNECTIONS_CRUMB`): that place is the root then. A crumb opening Home's own page is left out.
  */
 export function crumbs(items = []) {
-  const trail = [HOME, ...items.filter((item) => item && item.label && item !== HOME)];
+  const rest = items.filter((item) => item && item.label && !sameAsHome(item));
+  const trail = rest.length && rest[0].place ? rest : [HOME, ...rest];
   return `<nav class="crumbs" aria-label="Breadcrumb">${trail.map(crumbLink).join(CRUMB_SEP)}</nav>`;
 }
 
-/** The breadcrumb above a use case's title: Home › journey › the use case. */
+/** The breadcrumb above a use case's title: Home › the use case (Home › journey › the use case when
+ * its journey is not the one Home opens). */
 export function backLink(uc) {
   return crumbs([journeyOf(uc), uc && uc.name ? { label: uc.name } : null]);
 }
 
-/** The first links of a use case's breadcrumb, `Home › journey`, for a caller that adds the rest. */
+/** The first links of a use case's breadcrumb, `Home` (`Home › journey` when its journey is not the
+ * one Home opens), for a caller that adds the rest. */
 export function journeyCrumb(uc) {
-  return [HOME, journeyOf(uc)].filter(Boolean).map(crumbLink).join(CRUMB_SEP);
+  const journey = journeyOf(uc);
+  return [HOME, sameAsHome(journey) ? null : journey].filter(Boolean).map(crumbLink).join(CRUMB_SEP);
 }
 
 /** The `{ href, label }` a "Back to ..." button on a use-case screen returns to. */
@@ -451,6 +475,13 @@ export function announceStatus(text) {
 
 /** The event `modules/router.js` dispatches when a registration or a module's state changes a screen. */
 export const MODULES_EVENT = "marketing-ai:modules-changed";
+
+/**
+ * The event `usecase.js` dispatches on `window` when a run it was watching stops running; `detail` is
+ * the run (`mode`, `state`, `run_id`, ...). A module that shows something a run changes listens for
+ * it: the approvals badge recounts after a training run (docs/UI_AUDIT.md §8.4 item 1).
+ */
+export const RUN_FINISHED_EVENT = "marketing-ai:run-finished";
 
 // --- charts: inline SVG (plan §9.3), drawn to the prototype's own geometry -------------------
 // No `viewBox`: percentage widths resolve against the element itself, so the 4px corner radius
