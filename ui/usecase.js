@@ -60,7 +60,7 @@ import {
   stagesHtml,
   writePath,
 } from "./settings.js";
-import { resultLinksHtml, runActionsHtml, setupModes, setupSource } from "./modules/router.js";
+import { resultLinksHtml, runActionsHtml, runPanelsHtml, setupModes, setupSource } from "./modules/router.js";
 import * as seams from "./modules/router.js";
 
 const AUTOML = "__automl__";
@@ -1062,11 +1062,17 @@ function flowBlocks(uc, s, run) {
   });
   // After a scoring run: what the phase modules offer next (campaign results, AI copy), as a fourth block.
   const next = !train && done ? runActionsHtml(uc, run) : "";
-  // An action that is itself a flow step (Campaign results) brings its own arrow and block: it is the
-  // fourth block, not a box inside one.
+  // An action that is itself a flow step (Campaign results, Measure the campaign) brings its own arrow
+  // and block: it is the fourth block, not a box inside one. Plain button actions offered beside it
+  // (Write campaign copy, root-cause notes) go in a row under the flow, not into the flow's grid.
   if (next && next.includes('class="block')) {
     const arrow = '<div class="arrow" aria-hidden="true">→</div>';
-    return { html: blocks.join(arrow) + next, count: blocks.length + (next.match(/class="block/g) || []).length };
+    const { steps, buttons } = splitActions(next);
+    return {
+      html: blocks.join(arrow) + steps,
+      count: blocks.length + (steps.match(/class="block/g) || []).length,
+      actions: buttons,
+    };
   }
   if (next) {
     blocks.push(
@@ -1075,6 +1081,23 @@ function flowBlocks(uc, s, run) {
   }
   const arrow = '<div class="arrow" aria-hidden="true">→</div>';
   return { html: blocks.join(arrow), count: blocks.length };
+}
+
+/** Run actions split into flow steps (the arrows and blocks) and everything else (buttons). Without a
+ * document to parse with, everything stays a step, as before Plan H. */
+function splitActions(html) {
+  if (typeof document === "undefined" || !document.createElement) return { steps: html, buttons: "" };
+  const holder = document.createElement("template");
+  holder.innerHTML = html;
+  let steps = "";
+  let buttons = "";
+  for (const node of [...holder.content.childNodes]) {
+    const isStep = node.nodeType === 1 && (node.classList.contains("block") || node.classList.contains("arrow"));
+    const markup = node.nodeType === 1 ? node.outerHTML : node.textContent || "";
+    if (isStep) steps += markup;
+    else buttons += markup.trim() ? markup : "";
+  }
+  return { steps, buttons };
 }
 
 /** The summary's lines and actions for each way a run can end. */
@@ -1154,10 +1177,14 @@ function resultsHtml(uc, s) {
     ["Error code", run.error && run.error.code],
   ]);
   const flow = flowBlocks(uc, s, run);
+  // A step that needs a full-width section under the flow (Plan H M83: "4 Measure the campaign").
+  const panels = run.mode === "score" && run.state === "done" ? runPanelsHtml(uc, run) : "";
   return `<div class="results"><section class="summary rsum"><div class="vline">${told.head}</div>${told.lines.join(
     "",
   )}<div class="btn-row">${told.actions}</div>${tech}</section>
-    <div class="flow${flow.count > 3 ? " four" : ""}">${flow.html}</div>${resultLinksHtml(uc, run)}
+    <div class="flow${flow.count > 3 ? " four" : ""}">${flow.html}</div>${
+      flow.actions ? `<div class="btn-row flow-actions">${flow.actions}</div>` : ""
+    }${panels}${resultLinksHtml(uc, run)}
     <div class="runs-below">${runsCard(uc, s)}</div></div>`;
 }
 
@@ -1249,6 +1276,7 @@ details.more-runs>summary{padding:12px 20px;border-top:1px solid var(--line);fon
 .rsum .btn-row{margin-top:8px}
 .flow.four{grid-template-columns:1fr 40px 1fr 40px 1fr 40px 1fr}
 .block.next-step{background:var(--soft)}
+.flow-actions{margin-top:16px}
 .block .next-actions{flex-wrap:wrap;gap:8px 16px;justify-content:flex-start}
 .uc-viewer{display:flex;flex-direction:column;gap:24px;margin-top:8px}
 .uc-viewer .adv-wrap{border-top:0}

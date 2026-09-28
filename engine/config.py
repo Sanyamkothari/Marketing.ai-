@@ -771,6 +771,11 @@ class ActionsConfig(_Base):
     )
     suppression: SuppressionConfig = SuppressionConfig()
     control_group_fraction: Annotated[float, Field(ge=0.0, le=0.50)] = 0.10
+    # Plan H M83: whether the actions are contacts with customers (an offer, a reminder, a call), so a
+    # campaign run from the list can be measured against the held-back control group ("4 Measure the
+    # campaign"). Operational use cases (rerouting an order, servicing an asset) set it false. Read
+    # only by `engine.uplift.measure.measure_offered`; nothing about scoring changes with it.
+    contacts_customers: bool = True
 
     @field_validator("bands")
     @classmethod

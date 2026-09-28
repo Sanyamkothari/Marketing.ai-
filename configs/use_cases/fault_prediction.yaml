@@ -28,6 +28,7 @@ actions:
     - {name: High,   min_score: 0.80, action: "Schedule visit"}
     - {name: Medium, min_score: 0.50, action: "Remote reset"}
     - {name: Low,    min_score: 0.00, action: "Monitor"}
+  contacts_customers: false         # operational: nothing is sent to a customer, so there is no campaign to measure (Plan H M83)
 
 output:
   kpi:
