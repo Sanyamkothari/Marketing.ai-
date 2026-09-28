@@ -41,7 +41,7 @@ from typing import Any, Final
 import numpy as np
 import pandas as pd
 
-from engine.pii import redact_cells
+from engine.pii import REDACTION_MARKER_PATTERN, redact_cells
 
 __all__ = [
     "BOOLEAN_FALSE",
@@ -53,6 +53,7 @@ __all__ = [
     "date_order",
     "find_format_issues",
     "map_booleans",
+    "masked_cut",
     "normalise_texts",
     "parse_dates",
     "parse_numbers",
@@ -198,7 +199,20 @@ def _per_value(cells: pd.Series[Any], fn: Callable[[str], Any]) -> list[Any]:
 
 
 def _masked(values: Sequence[str]) -> tuple[str, ...]:
-    return redact_cells(value[:80] for value in values[:MAX_EXAMPLES])
+    return tuple(masked_cut(value, 80) for value in values[:MAX_EXAMPLES])
+
+
+def masked_cut(value: str, limit: int) -> str:
+    """`value` masked whole, then cut to `limit` characters; a marker the cut would split is left out.
+
+    Masking first means half an e-mail address or phone number can never escape the masker.
+    """
+    masked = redact_cells([value])[0]
+    cut = limit
+    for marker in REDACTION_MARKER_PATTERN.finditer(masked):
+        if marker.start() < cut < marker.end():
+            cut = marker.start()
+    return masked[:cut]
 
 
 def _distinct_examples(values: pd.Series[Any]) -> tuple[str, ...]:

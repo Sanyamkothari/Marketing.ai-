@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-from api.routes.agent import _cell
+from api.routes.agent import _cell, _rows
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import DataRecipe, RecipeStep, RecipeStepKind, recipe_hash
+from engine.agent.formats import masked_cut
 from engine.utils.time import utc_now
 
 
@@ -89,3 +92,25 @@ def test_the_cut_never_splits_a_marker() -> None:
     assert cell == "a" * 50 + " "
     whole = _cell("a" * 40 + " jane.doe@example.com")
     assert whole.endswith("[REDACTED:email]") and len(whole) <= 60
+
+
+def test_the_preview_rows_keep_a_float32_column_at_its_own_precision(tmp_path: Path) -> None:
+    """The real preview path, not `_cell` alone: a Parquet float32 column read back as float32."""
+    path = tmp_path / "f.parquet"
+    pd.DataFrame(
+        {
+            "a": np.array([0.1, 0.2, np.nan], dtype="float32"),
+            "n": pd.array([1, None, 3], dtype="Int64"),
+            "s": ["x", "y", "z"],
+        }
+    ).to_parquet(path)
+    frame = pd.read_parquet(path)
+    assert frame["a"].dtype == np.dtype("float32")
+    assert _rows(frame, ("a", "n", "s"), set()) == (("0.1", "1", "x"), ("0.2", "", "y"), ("", "3", "z"))
+    assert _rows(frame, ("a", "s"), {"s"})[0] == ("0.1", "[personal data]")
+
+
+def test_format_examples_are_masked_before_they_are_cut() -> None:
+    value = "a" * 70 + " jane.doe@example.com"
+    cut = masked_cut(value, 80)
+    assert "jane" not in cut and "[RED" not in cut and len(cut) <= 80

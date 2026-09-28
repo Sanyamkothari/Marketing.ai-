@@ -17,6 +17,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
+import numpy as np
+import pandas as pd
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import JSONResponse
 from pydantic import Field, JsonValue
@@ -54,6 +56,7 @@ from engine.agent.contracts import (
     SessionStatus,
     recipe_hash,
 )
+from engine.agent.formats import masked_cut
 from engine.agent.loop import chat_turn
 from engine.agent.recipe import RecipeError, run_recipe
 from engine.agent.scope import agent_available
@@ -74,7 +77,7 @@ from engine.generative.budget import Meter
 from engine.generative.contracts import LlmUsageReport
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import build_client
-from engine.pii import REDACTION_MARKER_PATTERN, redact_cells, redact_text
+from engine.pii import redact_text
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
@@ -341,6 +344,8 @@ class _Loaded:
     recipe_error: RecipeError | None
     version: ModelVersion | None = None
     """Scoring files only: the model version a scoring run would use."""
+    model_has_recipe: bool = False
+    """Scoring files only: whether that model prepares its data in saved steps."""
 
 
 def _session_key(upload_id: str) -> str:
@@ -378,10 +383,12 @@ def _load_context(
     recipe_error: RecipeError | None = None
     version: ModelVersion | None = None
     recipe: DataRecipe | None = None
+    model_has_recipe = False
     if upload.mode is RunMode.SCORE:
         version = score_version(get_registry(request), config=config, version_id=model_version_id)
         schema = storage.read_model(version.schema_key, FeatureSchema)
         recipe = model_recipe(storage, version)
+        model_has_recipe = recipe is not None
         # The file Run would prepare (or read as it is): never the model's recipe on top of its own
         # output, nor on another recipe's output (`scoring_source`, as `POST /runs`).
         chosen = scoring_source(storage, upload, recipe)
@@ -424,7 +431,9 @@ def _load_context(
         frame=frame,
         schema=schema,
     )
-    return _Loaded(ctx=ctx, upload=upload, recipe_error=recipe_error, version=version)
+    return _Loaded(
+        ctx=ctx, upload=upload, recipe_error=recipe_error, version=version, model_has_recipe=model_has_recipe
+    )
 
 
 def _load_session(storage: Storage, upload_id: str) -> AgentSession:
@@ -488,8 +497,12 @@ def _start_agent_session(
             mode=ctx.mode.value,
             agent_name=ctx.config.agent.name_for(ctx.config.name),
             status=SessionStatus.STOPPED,
-            stop_reason=f"{loaded.recipe_error.message} The model in use prepares its data in saved steps, "
-            "and this file does not fit them.",
+            stop_reason=loaded.recipe_error.message
+            + (
+                " The model in use prepares its data in saved steps, and this file does not fit them."
+                if loaded.model_has_recipe
+                else ""
+            ),
             created_at=now,
             updated_at=now,
         )
@@ -718,7 +731,7 @@ def _cell(value: Any) -> str:
     `0.100000001490116` it is as a double. Text is masked before it is cut, so an e-mail address split
     by the cut is still one the masker knows; a marker the cut would split is left out whole.
     """
-    if value is None or (isinstance(value, float) and value != value):
+    if value is None or value is pd.NA or value is pd.NaT or (isinstance(value, float) and value != value):
         return ""
     if isinstance(value, bool):
         return str(value)
@@ -736,20 +749,29 @@ def _cell(value: Any) -> str:
     if hasattr(value, "isoformat"):
         text = str(value.isoformat())
         return text[:10] if text.endswith("T00:00:00") else text
-    masked = redact_cells([str(value)])[0]
-    cut = PREVIEW_CELL_CHARS
-    for marker in REDACTION_MARKER_PATTERN.finditer(masked):
-        if marker.start() < cut < marker.end():
-            cut = marker.start()
-    return masked[:cut]
+    return masked_cut(str(value), PREVIEW_CELL_CHARS)
 
 
 def _rows(frame: Any, columns: tuple[str, ...], personal: set[str]) -> tuple[tuple[str, ...], ...]:
     head = frame.head(PREVIEW_ROWS)
-    rows: list[tuple[str, ...]] = []
-    for _, row in head.iterrows():
-        rows.append(tuple("[personal data]" if name in personal else _cell(row[name]) for name in columns))
-    return tuple(rows)
+    # Column by column, not `iterrows`: a row Series would turn a float32 into a double (0.1 into
+    # 0.100000001490116) before `_cell` could write it at its own precision.
+    cells = {
+        name: (
+            ("[personal data]",) * len(head)
+            if name in personal
+            else tuple(_cell(value) for value in _values(head[name]))
+        )
+        for name in columns
+    }
+    return tuple(tuple(cells[name][index] for name in columns) for index in range(len(head)))
+
+
+def _values(series: Any) -> list[Any]:
+    """The column's values with their own scalar types: numpy scalars for a numpy column."""
+    if isinstance(series.dtype, np.dtype):
+        return list(series.to_numpy())
+    return list(series.array)
 
 
 def _preview_sample(frame: Any, recipe: DataRecipe | None) -> Any:

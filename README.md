@@ -1351,9 +1351,9 @@ every later file. The first screen and Manual setup do not change.
   parsing (no silent 1000x misreads, zoned dates in UTC), combining rows (no guessed day/month
   order), the helper's advice (settings that only work together are decided together), the chat
   (no 500s, no numbers laundered through tool calls) and scoring (one rule for which file a model
-  reads, the same answer from the dry run and Run). DEC-1034 … DEC-1044.
+  reads, the same answer from the dry run and Run). DEC-1034 … DEC-1045.
 
-Decisions are DEC-1000 … DEC-1044 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Decisions are DEC-1000 … DEC-1045 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Plan H — One simple product (M80–M84)
 

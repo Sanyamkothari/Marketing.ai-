@@ -944,8 +944,9 @@ Approve alike, before anything is prepared). Scoring a built
 dataset (`POST /runs` with `dataset_id`, or a scheduled score) with a model that has a recipe is
 refused with 409 `RECIPE_DATASET_UNSUPPORTED` until datasets can be prepared too.
 
-When a scoring file cannot be prepared, `POST /runs` - and the dry run `POST /uploads/{id}/checks`,
-which prepares it the same way in memory - answers with one of these errors. None can
+When a scoring file cannot be prepared, `POST /runs` answers 409 with one of these errors, and the
+dry run `POST /uploads/{id}/checks`, which prepares it the same way in memory, answers 200 with a
+report carrying the same error (only `RECIPE_ROLES_MISMATCH` is a 409 there too). None can
 be acknowledged: a file prepared differently from the training data would be scored wrongly. A
 column the recipe only hides is the exception: a scoring file without it has nothing to hide, so the
 step is skipped (`skipped: true` in the receipt) rather than refused.

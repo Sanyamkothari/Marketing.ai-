@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import shutil
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -463,3 +464,20 @@ def test_approve_records_the_levels_and_limit_on_the_recipe(client: TestClient, 
     agent = load_use_case(USE_CASE).agent
     assert saved.levels == agent.levels
     assert saved.max_failure_pct == agent.max_conversion_failure_pct
+
+
+def test_a_model_without_a_recipe_is_not_said_to_prepare_its_data_in_saved_steps(
+    client: TestClient, data_dir: Path
+) -> None:
+    _seed_model(data_dir, _recipe(_messy(), target=None))
+    _seed_plain_version(data_dir)
+    original = _upload(client, _messy("scoring", rows=600), mode="score")
+    prepared = _run_upload(data_dir, _score(client, original))
+    shutil.rmtree(data_dir / "uploads" / original)  # the file it was prepared from is gone
+    response = client.post(
+        f"/uploads/{prepared}/agent-session", json={"use_case": USE_CASE, "model_version_id": "m_2"}
+    )
+    assert response.status_code == 201, response.text
+    session = response.json()["session"]
+    assert session["status"] == "stopped"
+    assert "gone" in session["stop_reason"] and "saved steps" not in session["stop_reason"]

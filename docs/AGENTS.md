@@ -453,6 +453,12 @@ distinct value; the preview runs on 1,000 rows (or entities). Reproduce with
 
 ## 11. Known limitations
 
+- **A float column of phone-like numbers shows every digit in the preview.** Numbers are never run
+  through the text masker (a float's digits would read as a phone number), and the personal-data
+  detector does not look at float columns. A column of phone numbers stored as floats is therefore
+  not masked in the preview. Teaching `engine/pii` to look at float columns whose values are all
+  whole numbers is follow-up work.
+
 - **One API process.** The session lock is a thread lock; several API processes writing one session
   need a store-level lock. The per-session call budget is counted in the session file; the dollar
   budget is per request (`generative.budget.max_cost_usd_per_run`), not per session.
