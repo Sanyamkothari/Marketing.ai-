@@ -1341,8 +1341,13 @@ every later file. The first screen and Manual setup do not change.
   row per customer, built only from rows on or before each customer's snapshot date and checked for
   future-data leaks, and next month's file is combined the same way before scoring
   (`engine/agent/reshape.py`).
+- **M77 — hardened and measured.** The chat only states numbers it measured; file content is cleaned
+  and treated as data in the prompt; chat messages are masked; sessions are budgeted, bounded and
+  safe under concurrent requests; seventeen review findings are fixed with tests. A 1,000,000-row
+  file is prepared in seconds and advised in about two minutes. How it all works:
+  [`docs/AGENTS.md`](docs/AGENTS.md); timings: `reports/plan_g_performance.md`.
 
-Decisions are DEC-1000 … DEC-1026 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Decisions are DEC-1000 … DEC-1033 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 <!-- ---- END PLAN-G ---- -->
 
