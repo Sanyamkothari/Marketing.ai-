@@ -683,7 +683,7 @@ def _event_columns(
                     "RECIPE_STEP_INVALID",
                     f"FUTURE_EVENTS_LEAKED: '{column}' holds dates after the snapshot on rows dated "
                     "before it, so it was written after the snapshot and whether it is empty could give "
-                    "the answer away. It was not like this when the step was planned; plan the combine "
+                    "the answer away. It was not like this when the step was planned; start Guided setup "
                     "again on this file.",
                     column=column,
                 )

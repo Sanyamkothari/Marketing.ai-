@@ -139,6 +139,7 @@ class Advice:
 class _Builder:
     ctx: AgentContext
     prefix: str = ""
+    decided_steps: tuple[RecipeStep, ...] = ()
     results: list[ToolResult] = field(default_factory=list)
     proposals: list[Proposal] = field(default_factory=list)
     questions: list[Question] = field(default_factory=list)
@@ -167,6 +168,28 @@ class _Builder:
         proposal = Proposal(proposal_id=self.proposal_id(), **values)
         self.proposals.append(proposal)
         return proposal
+
+    def preview_steps(self) -> tuple[RecipeStep, ...]:
+        """The steps the preview runs: the ticked suggestions and the steps the person accepted.
+
+        A step the person accepted replaces a ticked one of the same kind on the same column.
+        """
+        ticked = recipe_steps(p for p in self.proposals if _ticked(p, self.ctx.config.agent.tick_uncertain))
+        decided = {(step.kind, step.column) for step in self.decided_steps}
+        return ordered_steps(
+            [*(step for step in ticked if (step.kind, step.column) not in decided), *self.decided_steps]
+        )
+
+    def asked_date_columns(self) -> set[str]:
+        """The columns a question asks the day/month order of (an option adds their `parse_date`)."""
+        return {
+            option.proposal.step.column
+            for question in self.questions
+            for option in question.options
+            if option.proposal is not None
+            and option.proposal.step is not None
+            and option.proposal.step.kind is RecipeStepKind.PARSE_DATE
+        }
 
     def option_proposal(self, **values: Any) -> Proposal:
         return Proposal(proposal_id=self.proposal_id(), **values)
@@ -553,8 +576,7 @@ def _ask_to_combine(
     added up as a number; the features it freezes are listed in the step's parameters.
     """
     ctx = builder.ctx
-    ticked = [p for p in builder.proposals if _ticked(p, ctx.config.agent.tick_uncertain)]
-    prepared = _prepared_context(builder, recipe_steps(ticked), key, target)
+    prepared = _prepared_context(builder, builder.preview_steps(), key, target)
     others = {name for name in protected if name in prepared.frame.columns} - {key, target}
     dates = choose_dates(
         prepared.profile, exclude=[key, target, *sorted(others)], snapshot_hint=ctx.config.split.time_column
@@ -842,6 +864,7 @@ def advise(
     id_prefix: str = "",
     combine: RecipeStep | None = None,
     combine_declined: bool = False,
+    decided_steps: Sequence[RecipeStep] = (),
 ) -> Advice:
     """Look at the file and propose everything; `primary_key` / `target` are the user's answers so far.
 
@@ -851,8 +874,10 @@ def advise(
     `combine` is the `combine_rows` step the user chose (M76): everything after the roles and the
     format fixes - the checks, the questions about leaks, the settings - is then about the combined
     file. `combine_declined` means the user answered Stop, so a repeating ID stops the session.
+    `decided_steps` are the recipe steps the person already accepted (an answered day/month
+    question's `parse_date`): the preview runs them, so the combine reads the dates they convert.
     """
-    builder = _Builder(ctx, prefix=id_prefix)
+    builder = _Builder(ctx, prefix=id_prefix, decided_steps=tuple(decided_steps))
     config = ctx.config
     profile = builder.call("get_profile")
     roles = builder.call("find_roles")
@@ -883,13 +908,17 @@ def advise(
         # Nothing else is checked on rows that are about to be combined: the answer re-advises.
         stop = _ask_to_combine(builder, profile, key, outcome_column, protected)
     elif stop is None and can_check:
-        ticked = [p for p in builder.proposals if _ticked(p, config.agent.tick_uncertain)]
-        steps = ordered_steps([*recipe_steps(ticked), *([combine] if combine is not None else [])])
+        steps = ordered_steps([*builder.preview_steps(), *([combine] if combine is not None else [])])
+        waiting = False
         try:
             prepared = _prepared_context(builder, steps, key, outcome_column, strict=combine is not None)
         except RecipeError as exc:
-            prepared, stop = ctx, f"The rows could not be combined: {exc.message}"
-        if stop is None:
+            prepared = ctx
+            # A date the day/month question is about is read once it is answered; the answer re-advises.
+            waiting = exc.code == "RECIPE_VALUES_UNCONVERTED" and exc.column in builder.asked_date_columns()
+            if not waiting:
+                stop = f"The rows could not be combined: {exc.message}"
+        if stop is None and not waiting:
             if outcome_column is not None and outcome is None:
                 outcome = _describe_outcome(builder, outcome_column, prepared)  # one row per entity now
             checks = builder.call("check_data", {"primary_key": key, "target": outcome_column}, ctx=prepared)

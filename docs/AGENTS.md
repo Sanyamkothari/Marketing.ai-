@@ -142,8 +142,10 @@ applied* (so numbers stored as text are not mistaken for an ID):
   run again with the suggested settings that start ticked (§5); an error still there → **stop**, with
   its message and suggestion. A session therefore never reaches `ready` on its own suggestions with
   an error Approve's checks would refuse.
-- A column a leak question may hide is never named by a suggested setting (the date to split by, the
-  consent column), so hiding it cannot break a setting.
+- A column a leak question may hide is never named by the helper's own suggested settings (the date
+  to split by, the consent column). A split by date the person asked for in chat can still name it;
+  answering Hide on that column is then refused with `TIME_COLUMN_MISSING` (422), as a decision
+  that would split by a hidden date is, and the message says which suggestions to reject first.
 - Warnings the engine already acts on (`HIGH_NULL_COLUMN`, `CONSTANT_COLUMN`,
   `HIGH_CARDINALITY_ID_LIKE`, `PII_DETECTED`) → listed under *hidden columns*, one line per column,
   not proposed. `SUPPRESSION_COLUMN_MISSING` → an assumption.
@@ -210,7 +212,7 @@ identically.
 | `parse_date` | `dayfirst` (must be decided) | Mixed styles → datetime, each value parsed on its own; a value with a UTC offset is converted to UTC before the offset is dropped, a value without one is kept as written. A value with no digit (`now`, `today`) is never a date: it fails and is counted. |
 | `map_boolean` | `true_values`, `false_values` | Listed spellings (compared trimmed, case-folded) → 1 / 0; a real number matches a numeric spelling by value (1.0 is `"1"`); anything else fails. |
 | `normalise_text` | `strip`, `merge` (frozen at approval) | Trim; replace listed spellings by their canonical one. |
-| `combine_rows` | the step's `column` is the entity key; `time_column`, `snapshot_column`, `dayfirst` (per date column: a map of column to true/false/null, frozen at planning; a single value applies to every date column), `outcome`, `features` (a frozen `{name, function, column}` list) | Level 3: many rows per entity into one (DEC-1023 … DEC-1025), computed by the onboarding feature engine with its point-in-time guard. Only rows dated on or before the entity's snapshot count; the outcome is read from the latest row, not aggregated; `latest` settles a same-date tie by the later snapshot, then the later row in the file (the row the outcome would read among those rows; across dates `latest` follows the row date and the outcome the snapshot); numbers get sum/mean/max/latest, categories latest/nunique, dates days-since (over dates on or before the snapshot; a date column already holding later dates on earlier rows is left out of the plan, and on a training file stops with `FUTURE_EVENTS_LEAKED` if a later file shows it), plus a row count. A row with no key or date, or whose entity has no readable snapshot on any row, is a counted failure; a blank snapshot on one row is fine when the entity has one elsewhere. Dates with an offset or zone are compared in UTC (a zoned value unreadable in UTC is empty); out-of-range dates are empty. Each date column's day/month order is the one frozen for it at planning (its own values' order, else the file's when its date columns agree, else `null`); the combine never re-decides it, and a `null` column holding an ambiguous date stops with `RECIPE_VALUES_UNCONVERTED`. An untyped key column is read as text on every row, so 7 and `"7"` are one entity. Carried consent/opt-out/last-contact columns keep their header whatever its spelling. Entity-wise rather than row-wise: an entity's output depends only on its own rows and the frozen parameters, never on other entities or a statistic of the whole file. A training Approve runs onboarding's full future-data leak probe, a scoring replay the narrow one, a preview none. Needs the `reshape` level. |
+| `combine_rows` | the step's `column` is the entity key; `time_column`, `snapshot_column`, `dayfirst` (per date column: a map of column to true/false/null, frozen at planning; a single value applies to every date column), `outcome`, `features` (a frozen `{name, function, column}` list) | Level 3: many rows per entity into one (DEC-1023 … DEC-1025), computed by the onboarding feature engine with its point-in-time guard. Only rows dated on or before the entity's snapshot count; the outcome is read from the latest row, not aggregated; `latest` settles a same-date tie by the later snapshot, then the later row in the file (the row the outcome would read among those rows; across dates `latest` follows the row date and the outcome the snapshot); numbers get sum/mean/max/latest, categories latest/nunique, dates days-since (over dates on or before the snapshot; a date column already holding later dates on earlier rows is left out of the plan, and on a training file stops with `RECIPE_STEP_INVALID` (`FUTURE_EVENTS_LEAKED: ...`) if a later file shows it), plus a row count. A row with no key or date, or whose entity has no readable snapshot on any row, is a counted failure; a blank snapshot on one row is fine when the entity has one elsewhere. Dates with an offset or zone are compared in UTC (a zoned value unreadable in UTC is empty); out-of-range dates are empty. Each date column's day/month order is the one frozen for it at planning (its own values' order, else the file's when its date columns agree, else `null`); the combine never re-decides it, and a `null` column holding an ambiguous date stops with `RECIPE_VALUES_UNCONVERTED`. An untyped key column is read as text on every row, so 7 and `"7"` are one entity. Carried consent/opt-out/last-contact columns keep their header whatever its spelling. Entity-wise rather than row-wise: an entity's output depends only on its own rows and the frozen parameters, never on other entities or a statistic of the whole file. A training Approve runs onboarding's full future-data leak probe, a scoring replay the narrow one, a preview none. Needs the `reshape` level. |
 | `derive` | `expression` | A new column from `engine.onboarding.transforms.derive`'s whitelist: names, numbers, `+ - * /`, `days_between`, `months_between`, `year`, `month`, `coalesce`, `lower`, `abs`, and `snapshot_date`. At most 300 characters; no repeated text. Needs the `derive` level. Not proposed by the advisor today. |
 | `drop_column` | — | Hide a column from the model. A file without the column has nothing to hide: the step is skipped and its receipt says `skipped: true`, so a hidden column (a leak, often unknown when scoring) need not be in a scoring file. |
 
@@ -431,14 +433,16 @@ distinct value; the preview runs on 1,000 rows (or entities). Reproduce with
   (`reshape._single_threaded_duckdb`). The lasting fix is for the probe to accept a connection.
 - **A combine preview** is computed on the first 1,000 entities and without the leak probe; the numbers
   it shows are for those entities only.
-- **A combine with an unproven day/month order stops instead of asking.** When no date column of the
-  file proves the order and the snapshot (or row date) column holds values such as `10/09/2011`, the
-  plan freezes that column's order as `null` and the combine stops with `RECIPE_VALUES_UNCONVERTED`,
-  telling the user to export the column year first; the advisor offers no way to decide the order
-  in the session. Turning it into a question, like the format detector's, is advisor work still to do.
+- **A combine with an unproven day/month order waits for the day/month question.** When nothing in
+  the file proves the order, the plan freezes that column's order as `null` and the format detector
+  asks which comes first. The answer's `parse_date` runs before the combine, so the combine reads
+  real dates. Answered Combine first, the helper waits for the day/month answer (no checks yet) and
+  advises again once it is given. A `null` column with no question (a value the detector does not
+  ask about) still stops with `RECIPE_VALUES_UNCONVERTED`.
 - **Overwritten date columns.** The leak probe re-dates only the row date, so a date column written
-  after the snapshot (an overwritten "last order date") is caught by the plan, on the preview, and on
-  a training file by a direct check in the combine (`FUTURE_EVENTS_LEAKED`), not by the probe. The
+  after the snapshot (an overwritten "last order date") is left out by the plan (made on the file the
+  helper reads, up to its profile row cap), and on a training file caught by a direct check in the
+  combine (`RECIPE_STEP_INVALID`, message starting `FUTURE_EVENTS_LEAKED:`), not by the probe. The
   plan's rule is conservative: it also leaves out an honest per-event date (a refund or delivery
   date) that fell after the snapshot on the preview, although the combine's masking would make it
   safe, so that signal is lost.

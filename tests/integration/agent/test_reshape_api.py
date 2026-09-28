@@ -258,3 +258,47 @@ def test_a_changed_order_log_stops_scoring_with_the_missing_column_named(
     assert scored.status_code == 409, scored.text
     (check,) = scored.json()["validation"]["checks"]
     assert (check["code"], check["column"]) == ("RECIPE_COLUMN_MISSING", "order_value")
+
+
+@pytest.mark.parametrize("answers", [("day-first", "combine"), ("combine", "day-first")])
+def test_answering_the_day_month_question_and_combine_keeps_the_session_going(
+    client: TestClient, answers: tuple[str, str]
+) -> None:
+    """Nothing in the file proves the order, so the combine freezes none; the answer's parse_date
+    converts the dates before the combine reads them, in the preview and on Approve alike. Answered
+    in either order: Combine first waits for the day/month answer instead of stopping."""
+    orders = multirow_frame()
+    dates = pd.to_datetime(orders["order_date"])
+    orders["order_date"] = [f"{d.day % 12 + 1:02d}/{d.month:02d}/{d.year}" for d in dates]
+    upload_id = _upload(client, orders)
+    session = _session(client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE}))
+    for option in answers:
+        by_option = {o["option_id"]: q for q in session["questions"] for o in q["options"]}
+        session = _session(
+            client.post(
+                f"/uploads/{upload_id}/agent-session/answers",
+                json={"question_id": by_option[option]["question_id"], "option_id": option},
+            )
+        )
+        assert session["status"] != "stopped", session["stop_reason"]
+    steps = [p["step"] for p in session["proposals"] if p["step"] and p["state"] == "accepted"]
+    assert {"kind": "parse_date", "column": "order_date", "dayfirst": True} in [
+        {"kind": s["kind"], "column": s["column"], "dayfirst": s["params"].get("dayfirst")} for s in steps
+    ]
+
+    session = _session(
+        client.post(f"/uploads/{upload_id}/agent-session/decisions", json={"accept_recommended": True})
+    )
+    pending = [p["proposal_id"] for p in session["proposals"] if p["state"] == "pending"]
+    session = _session(
+        client.post(
+            f"/uploads/{upload_id}/agent-session/decisions",
+            json={"decisions": [{"proposal_id": pid, "state": "rejected"} for pid in pending]},
+        )
+    )
+    assert session["status"] == "ready"
+    preview = client.post(f"/uploads/{upload_id}/agent-session/preview")
+    assert preview.status_code == 200, preview.text
+    applied = client.post(f"/uploads/{upload_id}/agent-session/apply")
+    assert applied.status_code == 200, applied.text
+    assert applied.json()["receipt"]["rows_out"] == orders[KEY].nunique()

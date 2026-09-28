@@ -469,7 +469,13 @@ def answer(
     if chosen is not None:
         proposals.append(_decided(chosen, ProposalState.ACCEPTED))
     updated = session.model_copy(update={"questions": questions, "proposals": tuple(proposals)})
-    if (chosen is not None and chosen.kind is ProposalKind.ROLE) or _is_combine_question(question):
+    # A role or the combine changes the file advised on; so does a date format once rows are combined.
+    combining = reshape_of(updated)[0] is not None
+    if (
+        (chosen is not None and chosen.kind is ProposalKind.ROLE)
+        or _is_combine_question(question)
+        or (combining and chosen is not None and chosen.kind is ProposalKind.RECIPE_STEP)
+    ):
         key, target = roles_of(updated)
         combine, declined = reshape_of(updated)
         try:
@@ -480,6 +486,11 @@ def answer(
                 id_prefix=f"a{session.rounds + 1}-",
                 combine=combine,
                 combine_declined=declined,
+                decided_steps=[
+                    p.step
+                    for p in updated.proposals
+                    if p.state is ProposalState.ACCEPTED and p.step is not None and not _combines(p)
+                ],
             )
         except AgentToolError as exc:
             raise SessionError(exc.code, exc.message) from exc
@@ -497,6 +508,10 @@ def answer(
                 )
             }
         )
+    # An answer is a decision too: hiding the column an accepted split by date uses is refused.
+    gap = _split_gap(ctx, updated.proposals)
+    if gap is not None and _split_gap(ctx, session.proposals) is None:
+        raise SessionError("TIME_COLUMN_MISSING", gap)
     return with_summary(updated, ctx, clock=clock)
 
 

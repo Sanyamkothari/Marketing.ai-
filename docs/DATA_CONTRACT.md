@@ -926,7 +926,7 @@ customer's combined row depends only on its own rows and the fixed parameters, n
 customers. For another date column, "days since" counts only dates on or before the snapshot, and a
 date column that already holds dates after the snapshot on earlier rows (a "last order date" the
 export overwrote) is not combined at all; a training file in which a combined date column turns out
-that way stops with `FUTURE_EVENTS_LEAKED`.
+that way stops with `RECIPE_STEP_INVALID` (the message starts `FUTURE_EVENTS_LEAKED:`).
 The columns built
 are fixed when the step is approved, so every later file is combined into exactly the same columns;
 a scoring file needs no outcome column. A training file combined this way gets onboarding's full

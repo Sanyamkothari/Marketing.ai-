@@ -207,6 +207,25 @@ def test_the_leak_question_and_the_split_suggestion_never_disagree_about_a_colum
     assert _apply_errors(ctx, ready) == []
 
 
+def test_hiding_the_column_an_accepted_split_by_date_uses_is_refused() -> None:
+    ctx = context_for(_drifting())
+    session = start_session(ctx, session_id="s1")
+    evidence = session.tool_results[0].evidence_id
+    chat = (
+        _chat_setting("c1-p1", "split.type", "time_based", evidence),
+        _chat_setting("c1-p2", "split.time_column", "snapshot_date", evidence),
+    )
+    session = session.model_copy(update={"proposals": (*session.proposals, *chat)})
+    pending = [p for p in session.proposals if p.state is ProposalState.PENDING]
+    session = decide(session, ctx, [(p.proposal_id, ProposalState.ACCEPTED, None) for p in pending])
+    with pytest.raises(SessionError) as refused:
+        _answer_all(ctx, session, option=0)  # Hide snapshot_date
+    assert refused.value.code == "TIME_COLUMN_MISSING"
+    assert "hidden" in refused.value.message
+    kept = _answer_all(ctx, session, option=1)  # Keep it: the split stays usable
+    assert _apply_errors(ctx, _accept_everything(ctx, kept)) == []
+
+
 # ---------------------------------------------------------------------------
 # Re-advice keeps what the person accepted, and drops only what can no longer apply
 # ---------------------------------------------------------------------------
