@@ -67,3 +67,12 @@ template:
     - {name: PAY_AMT5,                   role: feature,     type: float,   description: "Amount paid four months earlier",                                         examples: ["0","0","1000","1069","689"]}
     - {name: PAY_AMT6,                   role: feature,     type: float,   description: "Amount paid five months earlier",                                         examples: ["0","2000","5000","1000","679"]}
     - {name: default_payment_next_month, role: target,      type: integer, description: "Target: 1 when the account defaulted on next month's payment, else 0. Leave blank when scoring.", examples: ["1","1","0","0","0"]}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the card accounts likely to miss next month's minimum payment."
+  knowledge:
+    - "The outcome is failing to pay the minimum due in the month after the observation window."
+    - "PAY_0 and PAY_2 to PAY_6 are the repayment status of past months; BILL_AMT and PAY_AMT are past amounts."
+    - "SEX, MARRIAGE and AGE are sensitive; the fairness report can compare results across them."
+  column_hints:
+    target_synonyms: [default, defaulted, missed_payment]

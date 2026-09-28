@@ -103,3 +103,12 @@ suggested_features:
   - {name: bill_change_3m_vs_6m,      role: bills,      function: ratio, of: {function: mean, column: amount, window_days: 90}, over: {function: mean, column: amount, window_days: 180}, description: "A bill that has jumped is a bill that gets disputed."}
   - {name: unpaid_bills_6m,           role: bills,      function: count, window_days: 180, where: {column: paid_date, op: is_null}, description: "Bills from six months that were never paid."}
   - {name: complaints_90d,            role: complaints, function: count, window_days: 90, description: "Complaints raised in the last 90 days."}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the accounts likely to pay late or miss a payment, before the due date."
+  knowledge:
+    - "The outcome is a payment made after the due date, or not made at all."
+    - "Columns written after the due date (payment date, days late, collection status) contain the answer."
+    - "Past late payments, autopay and bill changes describe the account before the due date and are the useful signals."
+  column_hints:
+    target_synonyms: [late_payment, missed_payment, paid_late, defaulted]

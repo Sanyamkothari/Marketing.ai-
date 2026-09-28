@@ -54,3 +54,11 @@ template:
     - {name: Policy_Sales_Channel, role: feature,     type: float,   description: "Code of the channel that reached the policyholder. A category code stored as a number, not a quantity.", examples: ["26.0","26.0","26.0","152.0","152.0"]}
     - {name: Vintage,              role: feature,     type: integer, description: "Days the policyholder has been with the company",                              examples: ["217","183","27","203","39"]}
     - {name: Response,             role: target,      type: integer, description: "Target: 1 when the policyholder was interested in the vehicle policy, else 0. Leave blank when scoring.", examples: ["1","0","1","0","0"]}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the health-insurance policyholders most likely to take a vehicle policy."
+  knowledge:
+    - "The outcome is a policyholder saying they are interested in the vehicle policy."
+    - "Customers who already have vehicle insurance rarely respond; that column is a strong, legitimate signal."
+  column_hints:
+    target_synonyms: [interested, response, converted]

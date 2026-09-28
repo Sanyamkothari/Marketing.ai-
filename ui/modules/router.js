@@ -162,6 +162,8 @@ import "./production/boot.js";
 // The pilot module (`modules/pilot/index.js`, route `pilot`) is loaded by its own `<script>` in
 // index.html's PLAN-E block, as the uplift module is, for the same reason: it imports this file.
 // ---- END PLAN-E ----
+// ---- PLAN-G (agents) — append only below this line ----
+// ---- END PLAN-G ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----
 // How a module fills the top bar and the shared screens without editing them. `registerNavSlot`,

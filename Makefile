@@ -253,3 +253,5 @@ demo-signin: demo-seed ## the demo with sign-in on and one demo user per role (l
 	@echo ""
 	MARKETING_AI_DEMO_MODE=true MARKETING_AI_AUTH_MODE=local $(BIN)/uvicorn api.main:app --port 8000
 # ---- END PLAN-E ----
+# ---- PLAN-G (agents) — append only below this line ----
+# ---- END PLAN-G ----

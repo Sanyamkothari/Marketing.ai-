@@ -269,6 +269,19 @@ codes:
     title: No customer ID column was found
     meaning: The checker could not find a column that looks like a customer ID in this table, so it cannot be linked to the customer table.
     fix: Include the pseudonymised customer ID in every table, with the same column name in each file.
+  # --- Plan G: a scoring file the model's saved preparation cannot prepare (DEC-1006, DEC-1013) ----
+  RECIPE_COLUMN_MISSING:
+    title: A column the model prepares is missing
+    meaning: The model was trained on data prepared in saved steps, and one of those steps needs a column this file does not have.
+    fix: Add the column back under its old name, or open Guided setup and tell the helper what it is called now.
+  RECIPE_VALUES_UNCONVERTED:
+    title: Some values could not be read
+    meaning: A saved preparation step could not turn too many of this column's values into numbers, dates or yes / no, so the file looks different from the one the model learnt from.
+    fix: Check how the column is written in this file; Guided setup shows the values it could not read.
+  RECIPE_STEP_INVALID:
+    title: A saved preparation step no longer applies
+    meaning: One of the steps saved with the model cannot run on this file or is no longer allowed for this use case.
+    fix: Train the model again with Guided setup so its preparation steps are saved again.
 
 settings:
   actions.bands[*].min_score:

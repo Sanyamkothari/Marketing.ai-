@@ -100,3 +100,12 @@ suggested_features:
   - {name: days_since_last_fault,    role: other_event, function: days_since_last, description: "Days since the asset last raised a fault."}
   - {name: complaints_30d,           role: complaints,  function: count, window_days: 30, description: "Customer complaints against this asset in 30 days."}
   - {name: usage_sessions_7d,        role: usage,       function: sum,   column: sessions, window_days: 7, description: "How hard the asset has been worked this week."}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the assets likely to fail in the next 72 hours, so they are serviced first."
+  knowledge:
+    - "The outcome is a fault ticket or outage within 72 hours of the snapshot."
+    - "Ticket ids, outage times and repair notes from after the snapshot contain the answer."
+    - "Train on older snapshots and test on newer ones: telemetry is time-ordered."
+  column_hints:
+    target_synonyms: [fault, failed, outage, failure_72h]

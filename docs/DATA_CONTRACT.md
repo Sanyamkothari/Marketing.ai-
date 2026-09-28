@@ -891,3 +891,22 @@ skipped: with customers in both arms there are no per-customer arms to count.
 ["TREATMENT_NOT_RANDOM"]`), and the run then labels every result not causal. A scoring file of an
 uplift model needs no treatment column; when it has one, its treated share is compared with the
 training data's in `uplift_drift.json` (`UPLIFT.md` §8).
+
+## 12. Files prepared by Guided setup (Plan G)
+
+Guided setup never changes the file a person uploads. The steps they approve (a *recipe*: turn
+text into numbers or dates, map yes / no spellings to 1 / 0, merge spellings of one category, add
+a column computed from others, hide a column) run on a copy, which is stored as a new upload and
+trained on like any other (DEC-1005). The recipe is saved with the run, and every file later scored
+with that model is prepared by the same steps before it is checked against the model's columns
+(DEC-1006). A recipe never changes the ID column or the outcome column, and a computed column may
+not read the outcome.
+
+When a scoring file cannot be prepared, `POST /runs` answers 409 with one of these errors. None can
+be acknowledged: a file prepared differently from the training data would be scored wrongly.
+
+| Code | Severity | Acknowledgeable | Message | Suggestion |
+|---|---|---|---|---|
+| `RECIPE_COLUMN_MISSING` | error | no | "The file has no column '{column}'." | "Add the column back under the name the model was trained with, or open Guided setup to tell the helper what it is called now." |
+| `RECIPE_VALUES_UNCONVERTED` | error | no | "{n} of {non_empty} values in '{column}' could not be converted ({share}), more than the {limit}% limit." | "Check how this column is written in the new file. Open Guided setup to see the values that could not be read." |
+| `RECIPE_STEP_INVALID` | error | no | Why the saved step cannot run. | "Retrain the model with Guided setup, so its preparation steps are saved again." |

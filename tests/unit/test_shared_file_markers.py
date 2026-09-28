@@ -10,7 +10,8 @@ before it is closed, and in the order Phase 2, Phase 3a, Phase 4a, Phase 4b, Pha
 the end of your block" means the same place to every reader. Blocks come in the order they reached
 `main`, not in phase-number order: Phase 4b's foundation landed before Phase 3b (uplift) merged, and
 Phase 3b's own rule is that its block comes last (DEC-600). Plan E (pilot readiness) started after
-all five had merged, so its `PLAN-E` block follows Phase 3b's (DEC-900).
+all five had merged, so its `PLAN-E` block follows Phase 3b's (DEC-900), and Plan G (use-case
+agents) started after Plan E, so its `PLAN-G` block follows Plan E's (DEC-1000).
 
 `docs/API.md` is in §4's list and deliberately absent from this one: it is generated and `make
 lint` fails on a hand-edit (DEC-014), so a block there would be deleted by the next `make
@@ -45,7 +46,15 @@ SHARED_FILES: Final[tuple[str, ...]] = (
 Phase 3a outright, and a file with one owner needs no blocks. The same goes for
 `engine/onboarding/specs.py`, which belongs to Phase 2."""
 
-PHASES: Final[tuple[str, ...]] = ("PHASE-2", "PHASE-3A", "PHASE-4A", "PHASE-4B", "PHASE-3B", "PLAN-E")
+PHASES: Final[tuple[str, ...]] = (
+    "PHASE-2",
+    "PHASE-3A",
+    "PHASE-4A",
+    "PHASE-4B",
+    "PHASE-3B",
+    "PLAN-E",
+    "PLAN-G",
+)
 
 OPEN: Final[str] = "---- {phase} ("
 CLOSE: Final[str] = "---- END {phase} ----"

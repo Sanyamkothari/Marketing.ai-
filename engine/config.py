@@ -28,6 +28,7 @@ from pydantic import (
     model_validator,
 )
 
+from engine.agent.config import AgentConfig  # Plan G (DEC-1003); imports nothing from engine
 from engine.settings import DEFAULT_CONFIG_DIR, ENV_VARS, settings
 from engine.uplift.config import (  # Phase 3b (DEC-601); imports nothing from engine
     UPLIFT_OVERRIDABLE_PATHS,
@@ -1270,6 +1271,13 @@ class UseCaseConfig(_Base):
     # it. Defaulted, and read only when `problem_type` is `uplift`, so no other path moves. The type
     # lives in `engine/uplift/config.py`, which imports nothing from this file (DEC-601).
     uplift: UpliftConfig = UpliftConfig()
+    # --- Plan G (use-case agents) ---------------------------------------------------------------
+    # The one declaration Plan G adds above its block, for Phase 2's and 3b's reason: `_Base`
+    # forbids unknown keys, so a use case cannot carry an `agent:` section until the model has a
+    # field for it. Defaulted, read only by `engine/agent`, and not overridable per run, so no
+    # other path moves. The type lives in `engine/agent/config.py`, which imports nothing from
+    # this file (DEC-1003).
+    agent: AgentConfig = AgentConfig()
 
     _catalog: Catalog | None = PrivateAttr(default=None)
 
@@ -3753,3 +3761,5 @@ ResolvedConfig.model_rebuild()
 # ---- END PHASE-3B ----
 # ---- PLAN-E (pilot) — append only below this line ----
 # ---- END PLAN-E ----
+# ---- PLAN-G (agents) — append only below this line ----
+# ---- END PLAN-G ----

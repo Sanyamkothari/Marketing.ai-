@@ -235,5 +235,12 @@ from api.routes.pilot import router as pilot_router  # noqa: E402
 
 PHASE_ROUTERS.append(pilot_router)
 # ---- END PLAN-E ----
+# ---- PLAN-G (agents) — append only below this line ----
+# Use-case agents (Guided setup): the dry-run data checks and, from M74, the helper's session. Every
+# write goes through the same run and upload paths as Manual setup (DEC-1005).
+from api.routes.agent import router as agent_router  # noqa: E402
+
+PHASE_ROUTERS.append(agent_router)
+# ---- END PLAN-G ----
 
 app: FastAPI = create_app()

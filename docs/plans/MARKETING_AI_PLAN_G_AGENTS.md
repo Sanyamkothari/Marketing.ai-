@@ -169,7 +169,7 @@ It **stops and explains** when the data cannot work: `TARGET_TOO_FEW_POSITIVES`,
 |---|---|---|
 | `RECIPE_COLUMN_MISSING` | A column a step needs is absent. The message names it and suggests the nearest name. | error |
 | `RECIPE_VALUES_UNCONVERTED` | Share of values a step could not convert is above the limit. Examples shown masked. | error above the limit; acknowledgeable warning below it |
-| `RECIPE_NOT_SAVED` | The model's recipe file is missing | error |
+| `RECIPE_STEP_INVALID` | A saved step can no longer run (bad parameters, or a level the use case no longer allows). Replaces the sketched `RECIPE_NOT_SAVED`: a version finds its recipe in its training run's directory, so a missing file means "trained on the file as sent" (DEC-1013). | error |
 
 - In Guided setup a `RECIPE_COLUMN_MISSING` becomes a question ("Is it now called `bill_amount`?"). The answer
   produces a new recipe version, recorded with lineage. The model's recipe is never edited in place.

@@ -65,3 +65,12 @@ template:
     - {name: returned_orders,          role: feature,     type: integer, description: "Orders the shopper cancelled or returned on or before the snapshot",            examples: ["0","0","1","2","5"]}
     - {name: returned_items,           role: feature,     type: integer, description: "Items returned on or before the snapshot",                                      examples: ["0","0","3","24","180"]}
     - {name: reactivated_90d,          role: target,      type: integer, description: "Target: 1 when the shopper ordered again within 90 days of the snapshot, else 0. Leave blank when scoring.", examples: ["0","1","0","1","1"]}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the lapsed shoppers most likely to order again within 90 days."
+  knowledge:
+    - "The outcome is another order within 90 days of the snapshot."
+    - "Orders placed after the snapshot contain the answer; every spend and order count must be measured before it."
+    - "Recency, frequency and spend describe the shopper before the snapshot and are the useful signals."
+  column_hints:
+    target_synonyms: [reactivated, reordered, returned]

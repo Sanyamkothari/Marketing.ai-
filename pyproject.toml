@@ -55,6 +55,8 @@ dependencies = [
   # ---- PLAN-E (pilot) — append only below this line ----
   "fpdf2==2.8.5",                       # server-side PDF of the readiness, results and ROI reports; pure Python (DEC-903)
   # ---- END PLAN-E ----
+  # ---- PLAN-G (agents) — append only below this line ----
+  # ---- END PLAN-G ----
 ]
 
 [project.optional-dependencies]

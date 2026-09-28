@@ -108,3 +108,12 @@ suggested_features:
   - {name: days_since_last_complaint, role: complaints, function: days_since_last, description: "Days since the customer last complained."}
   - {name: bill_trend_3m_vs_6m,       role: bills,      function: ratio, of: {function: mean, column: amount, window_days: 90}, over: {function: mean, column: amount, window_days: 180}, description: "Recent bills against the six-month average."}
   - {name: days_since_last_activity,  role: activity,   function: days_since_last, description: "Days since the customer last did anything."}
+
+agent:                                  # Plan G: this use case's Guided-setup helper (DEC-1003)
+  goal: "Find the customers likely to leave within 60 days, and why."
+  knowledge:
+    - "The outcome is a disconnection within 60 days of the snapshot."
+    - "Disconnection dates, churn reasons and cancellation codes contain the answer."
+    - "Complaint text is free text that may hold personal details; it is masked before anyone sees it."
+  column_hints:
+    target_synonyms: [churned, churn, disconnected, left]

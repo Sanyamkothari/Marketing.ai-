@@ -381,6 +381,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/pilot/demo/raw/{variant}",
         "/pilot/feedback",
         "/pilot/feedback/export",
+        # Plan G (use-case agents): the dry-run data checks (M71, DEC-1011)
+        "/uploads/{upload_id}/checks",
         # Phase 4b M46/M47: sign-in, user management and the audit viewer
         "/auth/login",
         "/auth/logout",

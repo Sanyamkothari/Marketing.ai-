@@ -1217,3 +1217,58 @@ branch that owns the uplift screens to confirm and fix (waiting in `upload()` fo
 or for the element the test reads, rather than for the first swap).
 
 **Resolved 2026-09-23 (Plan D, DEC-875 … DEC-879).** The cause was confirmed: jsdom queues a second, hashchange re-render that under load landed before the file read finished. `tests/prototype/harness.mjs`'s `settle(dom)` now waits until the page has no file read or timer left, and every fixed wait in the prototype suites was replaced by it. No assertion changed. Under load the suite passed 50 of 50 runs (`scripts/loop_prototype_tests.sh`, DEC-876), and CI now runs it (`make prototype-test`, DEC-877).
+
+### 2026-09-28 — plan-g-agents → trunk: `UseCaseConfig.agent` and the `PLAN-G` blocks (announcement)
+
+**What changed above the PLAN-G block, in shared files** (DEC-1000, DEC-1003):
+
+* `engine/config.py`, two places: the import `from engine.agent.config import AgentConfig` before the
+  `engine.settings` import (that module imports nothing from `engine`), and the defaulted field
+  `UseCaseConfig.agent: AgentConfig = AgentConfig()`, with a comment, after `uplift`.
+* Every shared file gained an empty `PLAN-G (agents)` block after its `PLAN-E` block
+  (`docs/DECISIONS.md`'s is at the end of the file), and `tests/unit/test_shared_file_markers.py`
+  gained `PLAN-G` in `PHASES`.
+
+*Outside any block, in files that have none:* `configs/engine.yaml` `defaults` gained the commented
+`agent:` block, and each trainable use case gained an `agent:` section. No `agent.*` path is
+overridable per run and none enters `Recipe.recipe_hash`, so no run, recipe hash or existing test
+moves. Nothing was renamed or removed.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-09-28 — plan-g-agents → trunk, Plan E: the dry-run route, the recipe hooks in `POST /runs`, and a fifth code table (announcement)
+
+**What changed outside Plan G's own paths** (DEC-1011, DEC-1013, DEC-1014):
+
+* `api/routes/runs.py` (trunk): one import (`attach_recipe_to_run`, `replay_for_scoring` from
+  `api.routes.agent_recipes`) and two hooks. In score mode, after `score_version`, an upload is
+  replaced by the copy the model's recipe prepares, or the route answers 409 with the recipe's
+  error; after `create_run`, a derived upload's recipe is copied into the run directory. A model
+  with no recipe and an upload with none take exactly the old path.
+* `engine/contracts.py`, in the PHASE-2 block where the one registry lives (DEC-950):
+  `AGENT_VALIDATION_CODES` and `CHECK_CODE_TABLES["agent"]`; `__all__` gained the name.
+* `configs/pilot/help.yaml` (Plan E): three entries for the new codes, required by
+  `tests/unit/pilot/test_help.py`.
+* Tests pinning exact sets: `tests/integration/test_api_config.py` gained
+  `/uploads/{upload_id}/checks`; `tests/unit/test_one_check_contract.py` gained the agent table.
+* `PARALLEL_WORK_PROTOCOL.md` §3: Plan G's row also names `api/routes/agent_recipes.py`.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-09-28 — plan-g-agents → Phase 3a: a `data_agent` purpose, prompt and fake branch (announcement)
+
+**What changed in files §3 gives Phase 3a** (DEC-1017, recorded with M74):
+
+* `engine/generative/contracts.py`: `GenerativePurpose.DATA_AGENT = "data_agent"`, so the helper's
+  model calls are metered and reported by purpose like every other flow.
+* `configs/prompts/data_agent.v1.md`: the helper's prompt, named after its purpose as
+  `test_the_repository_ships_a_prompt_for_every_purpose_that_needs_one` requires; it asks for one
+  JSON object and forbids inventing a number, like every generating prompt.
+* `engine/llm.py`: `_prompt_shape` recognises the prompt's `HELPER TURN` marker and `FakeLLMClient`
+  answers it with `_helper` - `GROUNDED` looks a quoted column up, suggests a faster search when
+  asked, or replies from the state on the page; each other mode breaks its one rule. No existing
+  branch or mode changed.
+* `tests/unit/generative/test_prompts.py`: `VALUES` gained one value per new prompt variable.
+
+**What is needed.** Nothing; this is an announcement.
+

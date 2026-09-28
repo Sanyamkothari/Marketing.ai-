@@ -17,6 +17,7 @@ Three agents work at the same time on three branches. This document is the contr
 | `phase-4a-aws` | `MARKETING_AI_PHASE4A_PLAN.md` | third | `main`, then the merged result of 2 and 3a |
 | `phase-3b-uplift` | Plan B (Phase 3b — uplift modelling and measured impact) | fourth, after 2, 3a and 4a had merged | `main`; its shared-file blocks come after Phase 4a's (DEC-600) |
 | `plan-e-pilot` (developed on `main`) | Plan E (pilot readiness: data request kit, readiness, results and ROI reports, demo mode, playbook) | runs beside Plans D and F; reads artefacts only, changes no engine logic | `main`; its shared-file blocks come after Phase 3b's (DEC-900) |
+| `plan-g-agents` (a branch from `main`) | Plan G (`docs/plans/MARKETING_AI_PLAN_G_AGENTS.md`: use-case agents, Guided setup) | after Plan E; adds a tab and a derived-upload path, changes no training logic | `main`; its shared-file blocks come after Plan E's (DEC-1000) |
 
 - Rebase (or merge `main` into your branch) **at least once a day**. Resolve conflicts immediately; never let them accumulate.
 - A branch merges only when: CI is green on the branch, the Phase 1 suites (`make test-all`) are green, the phase's own integration test is green, and `README.md` and `docs/DECISIONS.md` are current.
@@ -56,6 +57,8 @@ An agent may freely create and edit files in the directories it owns. It may edi
 | `engine/uplift/**`, `api/routes/uplift.py`, `ui/modules/uplift/**`, `tests/**/uplift/**`, `tests/fixtures/make_uplift_data.py`, `docs/UPLIFT.md` | Phase 3b |
 | `configs/engine.yaml` section `defaults.uplift`, and `configs/use_cases/*.yaml` section `uplift` | Phase 3b |
 | `engine/pilot/**`, `api/routes/pilot.py`, `ui/modules/pilot/**`, `configs/pilot/**`, `scripts/preflight.py`, `scripts/gen_data_request.py`, `scripts/seed_demo.py`, `tests/**/pilot/**`, `docs/pilot/**` | Plan E |
+| `engine/agent/**`, `api/routes/agent.py`, `api/routes/agent_recipes.py`, `ui/modules/agent/**`, `configs/prompts/data_agent*`, `tests/**/agent/**`, `tests/fixtures/agent_bench/**`, `docs/AGENTS.md` | Plan G |
+| `configs/engine.yaml` section `defaults.agent`, and `configs/use_cases/*.yaml` section `agent` | Plan G |
 | `engine/stages/train.py`, `evaluate.py`, `explain.py`, `engine/registry.py` champion rule | **Frozen.** Nobody. |
 | `engine/contracts.py`, `engine/config.py`, `engine/settings.py`, `engine/pipeline.py`, `api/main.py`, `api/schemas.py`, `ui/index.html`, `ui/modules/router.js`, `Makefile`, `pyproject.toml`, `README.md`, `docs/DECISIONS.md`, `docs/API.md` | **Shared** (section 4) |
 
@@ -93,7 +96,8 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-800…899 | trunk, continued (the integration of the parallel branches onwards) | claimed 2026-09-23; the integrations used DEC-800…801, the Model page beeswarm DEC-802, and Plan D (DEC-850…899) claimed 2026-09-23 |
   | DEC-900…949 | Plan E — pilot readiness (M59–M64) | claimed 2026-09-23 |
   | DEC-950…999 | v1 readiness: rulings, demo, quick start and the UI clean-up (on `main`) | claimed 2026-09-24 |
-  | DEC-1000 up | unallocated | — |
+  | DEC-1000…1099 | Plan G — use-case agents, Guided setup (M70–M77) | claimed 2026-09-28 |
+  | DEC-1100 up | unallocated | — |
 
   A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.
 - `docs/API.md` is generated; never hand-edit. Run `gen_api_docs` after adding models.

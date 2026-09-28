@@ -68,6 +68,17 @@ VALUES: dict[str, object] = {
     "generated": "Refunds take about three weeks.",
     "reference_answer": "Within four hours.",
     "answer": "Four hours.",
+    # Plan G: the Guided-setup helper (data_agent)
+    "agent_name": "Targeted Advertisement helper",
+    "goal": "Find the customers most likely to buy.",
+    "knowledge": ["The outcome is a purchase within 30 days."],
+    "tools": [{"name": "get_profile", "description": "The file's columns.", "args": "{}"}],
+    "settings": [
+        {"path": "model_search.strategy", "value": "balanced", "allowed": "fast, balanced, exhaustive"}
+    ],
+    "state": '{"proposals": []}',
+    "message": "Why hide contact_email?",
+    "turn_results": "none",
 }
 """One plausible value per variable any shipped prompt declares, so the sweep can render them all."""
 

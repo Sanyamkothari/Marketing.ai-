@@ -1288,6 +1288,46 @@ Decisions are DEC-900 … DEC-912 in [`docs/DECISIONS.md`](docs/DECISIONS.md). W
 above its blocks is announced in [`docs/CROSS_BRANCH_REQUESTS.md`](docs/CROSS_BRANCH_REQUESTS.md).
 
 <!-- ---- END PLAN-E ---- -->
+<!-- ---- PLAN-G (agents) — append only below this line ---- -->
+## Plan G — Use-case agents, Guided setup (M70–M77)
+
+[`docs/plans/MARKETING_AI_PLAN_G_AGENTS.md`](docs/plans/MARKETING_AI_PLAN_G_AGENTS.md) adds a
+helper to every use case that trains a model. On the use-case page a *Guided setup* tab sits beside
+today's *Manual setup*: the helper checks the uploaded file, suggests fixes (hide ID, empty and
+personal-data columns, turn `"₹1,200"` into 1200, one date format, `Y/N` into 1/0) and recommended
+settings, each with a plain reason, and asks when it is unsure. Nothing is applied until the user
+approves. The fixes are a *recipe* our code runs on a copy, stored with the model and replayed on
+every later file. The first screen and Manual setup do not change.
+
+**Done so far.**
+
+- **M70 — decisions, contracts, config.** Every use case carries an `agent:` block (defaults in
+  `configs/engine.yaml`; a goal, facts and outcome-column synonyms in each trainable use case),
+  validated by `engine/agent/config.py` and never overridable per run. `engine/agent/contracts.py`
+  defines the session, proposals, questions, the recipe and its receipt. Tests:
+  `tests/unit/agent/`.
+- **M71 — read and check tools, dry-run validation.** The helper's first tools wrap what exists:
+  the profile, one column in detail (with how the outcome rate moves across its values), the roles
+  the use case's hints point at, and the Run button's own checks. `engine/agent/formats.py` finds
+  numbers, dates and yes/no values stored as text, and one category spelled several ways, with the
+  parsers the recipe will run. `POST /uploads/{id}/checks` answers what Run would say without
+  starting a run (`tests/integration/agent/`).
+- **M72 — the recipe engine and scoring replay.** `engine/agent/recipe.py` checks and runs approved
+  steps on a copy, in a fixed order, counting what each changed and could not read; a recipe never
+  touches the ID or the outcome. The prepared copy is stored as a new upload and trains like any
+  other; its recipe is saved with the run, and `POST /runs` prepares every later scoring file the
+  same way, or answers 409 with `RECIPE_COLUMN_MISSING`, `RECIPE_VALUES_UNCONVERTED` or
+  `RECIPE_STEP_INVALID`.
+- **M73 — the advisor.** `engine/agent/advisor.py` turns what the tools found into proposals,
+  questions and stops by fixed rules, with no AI service: the ID and outcome columns, one fix per
+  formatting problem, a question for a possible leak or a date that could be read two ways, and a
+  plain stop when the data cannot work. `engine/agent/recommend.py` suggests settings from one
+  measured fact each and never loosens a safeguard. `tests/fixtures/agent_bench/` pins the advice
+  for sixteen files, including a deliberately messy one.
+
+Decisions are DEC-1000 … DEC-1016 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+
+<!-- ---- END PLAN-G ---- -->
 
 <!-- ---- PLAN-D (hardening) — append only below this line ---- -->
 
