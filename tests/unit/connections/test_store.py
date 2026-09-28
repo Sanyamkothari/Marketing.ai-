@@ -16,7 +16,7 @@ from engine.connections.store import KEY_FILENAME, ConnectionStore, connections_
 from engine.settings import Settings, SettingsError
 from engine.storage import LocalStorage
 
-PASSWORD = "correct-horse-battery-staple"
+PASSWORD = "correct-horse-battery-staple"  # secret-scan: allow (a fake password for the encryption tests)
 
 
 def store_at(root: Path, **settings: object) -> ConnectionStore:

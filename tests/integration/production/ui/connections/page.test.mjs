@@ -145,7 +145,7 @@ test("Save and test sends the settings and the secret, then shows the test", asy
   const body = sent.creates[0];
   assert.equal(body.kind, "postgres");
   assert.equal(body.name, "Sales DB");
-  assert.deepEqual(body.secrets, { password: "typed-secret" });
+  assert.deepEqual(body.secrets, { password: "typed-secret" });  // secret-scan: allow (a fake password the test types)
   assert.equal(body.config.host, "db.example.com");
   assert.equal(body.config.port, 5432, "the default port is sent as the field's default");
   assert.ok(!("password" in body.config), "a secret never travels as a setting");

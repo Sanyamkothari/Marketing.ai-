@@ -17,11 +17,9 @@ import pytest
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from moto import mock_aws
-from pydantic import SecretStr
 
 from api.main import create_app
 from engine.connections import snowflake as snowflake_module
-from engine.settings import Settings
 from tests.fixtures.make_data import GenerationSpec, generate
 
 pytestmark = pytest.mark.integration
@@ -276,15 +274,14 @@ def test_a_missing_add_on_is_listed_and_refused_with_the_install_command(
     assert "marketing-ai[snowflake]" in tested.json()["detail"]["message"]
 
 
-def test_a_changed_key_asks_for_the_password_again(config_root: Path, tmp_path: Path, aws: Any) -> None:
+def test_a_changed_key_asks_for_the_password_again(
+    config_root: Path, tmp_path: Path, aws: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
     def app_with(key: str) -> TestClient:
-        return TestClient(
-            create_app(
-                config_root=config_root,
-                data_dir=tmp_path / "data",
-                settings=Settings(connections_key=SecretStr(key), data_dir=tmp_path / "data"),
-            )
-        )
+        # Through the environment, as a deployment sets it: `create_app(settings=...)` would also
+        # configure the process's logging, which is not this test's business.
+        monkeypatch.setenv("MARKETING_AI_CONNECTIONS_KEY", key)
+        return TestClient(create_app(config_root=config_root, data_dir=tmp_path / "data"))
 
     with app_with(Fernet.generate_key().decode()) as first:
         cid = _create(first)["connection_id"]
