@@ -216,13 +216,21 @@ identically.
 | `derive` | `expression` | A new column from `engine.onboarding.transforms.derive`'s whitelist: names, numbers, `+ - * /`, `days_between`, `months_between`, `year`, `month`, `coalesce`, `lower`, `abs`, and `snapshot_date`. At most 300 characters; no repeated text. Needs the `derive` level. Not proposed by the advisor today. |
 | `drop_column` | — | Hide a column from the model. A file without the column has nothing to hide: the step is skipped and its receipt says `skipped: true`, so a hidden column (a leak, often unknown when scoring) need not be in a scoring file. |
 
-`recipe_hash` covers kinds, columns and parameters only (not reasons or ids).
+`recipe_hash` covers kinds, columns and parameters only (not reasons or ids). A recipe also records
+what it was approved under - `primary_key`, `target`, `snapshot_column`, and the use case's `levels`
+and `max_conversion_failure_pct` at that moment (`levels`, `max_failure_pct`; null on a recipe saved
+before they were recorded, which then runs under the current config). Every replay runs under the
+recorded levels and limit, so a use case that later drops a level does not refuse the scoring files of
+a model already trained with it: narrowing `agent.levels` or the limit affects new approvals only,
+not the models already trained. Two recipes prepare a file alike (`DataRecipe.prepares_like`) only
+when the hash *and* all of these match.
 
 ### 6.2 Rules `check_recipe` enforces
 
 Steps are numbered 1…n and run in a fixed order: parse and tidy → combine → derive → drop. Refused with
 `RECIPE_STEP_INVALID`: an unknown parameter, an undecided date order, a spelling that means both yes
-and no, a step above the use case's `levels`, a step that changes the ID or the outcome, a derived
+and no, a step above the levels it runs under (the use case's at Approve, the recipe's recorded
+ones on a replay), a step that changes the ID or the outcome, a derived
 column that reads the outcome or `snapshot_date` without a snapshot column, or a name clash. A
 column the file lacks is `RECIPE_COLUMN_MISSING`, except for a `drop_column` step, which is skipped
 (a column the file has but an earlier step used up is still refused). A parser that cannot run on a
@@ -239,14 +247,33 @@ the values it changed and could not convert (examples masked); more failures tha
 - **Approve** (`…/apply`): on every row, into a **derived upload** `uploads/<new_id>/` with
   `source.parquet` (types kept), `profile.json`, `upload.json` (`"<file> (prepared)"`),
   `data_recipe.json` and `recipe_receipt.json`, whose `upload_id` names the file it was prepared from
-  (DEC-1014). The original is untouched.
+  (DEC-1014). The original is untouched. A column whose type changes between the 100,000-row read
+  chunks (numeric IDs, then `C-123`) is written as text so the file can be saved: the text of what
+  the chunked read gave, so a chunk read as numbers has already lost any leading zeros (`0000123` is
+  `123`), as the same file read without a recipe has - not the cells as written. A prepared file that
+  still cannot be saved is `RECIPE_STEP_INVALID`, never a 500. Guided setup is refused on a
+  prepared *training* upload (409 `AGENT_UPLOAD_PREPARED`): a session saves only its own steps, so the
+  model would carry part of the preparation.
 - **Training** (`POST /runs` from a derived upload): the recipe is copied to
-  `runs/<run_id>/data_recipe.json`; the model version finds it through its `run_id` (DEC-1013).
+  `runs/<run_id>/data_recipe.json`; the model version finds it through its `run_id` (DEC-1013). The
+  run must name the recipe's ID column and outcome (409 `RECIPE_ROLES_MISMATCH` otherwise): every
+  safety rule of the recipe was checked against those. A scoring run must name the model recipe's ID
+  column, when it named one. `agent_recipes.refuse_other_roles` is the one rule: `POST /runs`, the
+  dry run and a scoring session's Approve all apply it before anything is prepared, so they give the
+  same answer and a refused scoring run leaves no prepared upload behind.
 - **Scoring**: `replay_for_scoring` runs the model's recipe on the scoring upload before
-  `validate_against_schema`. An upload already prepared with the same `recipe_hash` is reused. An
-  upload prepared with a *different* recipe is re-prepared from the file it came from, never on top
-  of the first recipe's output. Guided setup's Approve on a scoring file does the same replay, so the
-  upload it returns is the one Run reuses.
+  `validate_against_schema`. `scoring_source` decides which file that is, for `POST /runs`, the dry
+  run and Guided setup alike: an upload already prepared by a recipe that `prepares_like` the model's
+  is read as it is; an upload prepared by any *other* recipe - or scored by a model that has no recipe
+  - goes back to the file it came from (named by its receipt), never prepared on top of another
+  recipe's output nor scored prepared by a model trained on files as sent. Guided setup's Approve on
+  a scoring file does the same replay, so the upload it returns is the one Run reuses.
+- **Dry run** (`POST /uploads/{id}/checks`, scoring file): the same source and the same recipe on
+  every row, in memory - nothing is written - so it agrees with `POST /runs` (DEC-1011); other roles
+  than the recipe's are the same 409 `RECIPE_ROLES_MISMATCH`.
+- **Built datasets**: a dataset cannot be prepared by a recipe yet, so scoring one with a model that
+  has a recipe is refused - `POST /runs` with `dataset_id` answers 409 `RECIPE_DATASET_UNSUPPORTED`,
+  and a scheduled score firing fails with the same code - rather than scored unprepared.
 
 ## 7. Chat safety
 
@@ -329,8 +356,8 @@ is stored or put in a prompt, so the stored transcript - which a Viewer can read
 
 | Method and path | Role | Does |
 |---|---|---|
-| `POST /uploads/{upload_id}/checks` | Analyst | Dry-run validation for `{use_case, primary_key, target, model_version_id, overrides}`; always 200 with the `ValidationReport` `POST /runs` would give (DEC-1011). |
-| `POST /uploads/{upload_id}/agent-session` | Analyst | Start or restart Guided setup for `{use_case, model_version_id?}` (a scoring session checks against the model Run will use); rules only, no model call; 201 with the session. 409 `AGENT_NOT_AVAILABLE` / `AGENT_USE_CASE_MISMATCH`. |
+| `POST /uploads/{upload_id}/checks` | Analyst | Dry-run validation for `{use_case, primary_key, target, model_version_id, overrides}`; 200 with the `ValidationReport` `POST /runs` would give (DEC-1011); the same 409 `RECIPE_ROLES_MISMATCH` as Run for another ID column or outcome than a prepared file's recipe. |
+| `POST /uploads/{upload_id}/agent-session` | Analyst | Start or restart Guided setup for `{use_case, model_version_id?}` (a scoring session checks against the model Run will use); rules only, no model call; 201 with the session. 409 `AGENT_NOT_AVAILABLE` / `AGENT_USE_CASE_MISMATCH` / `AGENT_UPLOAD_PREPARED` (a training upload Guided setup already prepared). |
 | `GET /uploads/{upload_id}/agent-session` | Viewer | The session. 404 `AGENT_SESSION_NOT_FOUND`. |
 | `POST …/agent-session/decisions` | Analyst | `{decisions: [{proposal_id, state, value?}], accept_recommended}`. 422 `AGENT_EDIT_NOT_ALLOWED` / `AGENT_VALUE_NOT_ALLOWED`, the `resolve_config` code (e.g. `TEMPLATE_TIME_MISSING`) when the accepted settings do not resolve together, or `TIME_COLUMN_MISSING` when they would split by date with no date column; `accept_recommended` skips a setting the person already accepted a value for; 404 unknown id, 409 `AGENT_SESSION_APPLIED`. |
 | `POST …/agent-session/answers` | Analyst | `{question_id, option_id}`; answering again replaces the previous answer and what it added. A role answer re-runs the advisor, keeping decisions already made (an accepted suggestion wins over a rejected duplicate); a step the person accepted on a column that is now the ID or the outcome is dropped, since the recipe may never change those. |

@@ -9,6 +9,7 @@ through `engine.agent.checks.check_plan` - so the two cannot disagree (Plan G §
 
 from __future__ import annotations
 
+import numbers
 import threading
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -25,9 +26,14 @@ from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, StorageDep, get_registry
 from api.routes.agent_recipes import (
     load_receipt,
+    load_recipe,
     model_recipe,
+    prepare_in_memory,
     recipe_failure_report,
+    refuse_other_roles,
     replay_for_scoring,
+    run_saved_recipe,
+    scoring_source,
     write_derived_upload,
 )
 from api.routes.runs import read_frame, requested_by, score_version, validation_conflict
@@ -68,7 +74,7 @@ from engine.generative.budget import Meter
 from engine.generative.contracts import LlmUsageReport
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.llm import build_client
-from engine.pii import redact_cells, redact_text
+from engine.pii import REDACTION_MARKER_PATTERN, redact_cells, redact_text
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
@@ -120,11 +126,14 @@ def check_upload(
     storage: StorageDep,
     request: Request,
 ) -> ValidationReport:
-    """The report `POST /runs` would give, always with 200; `passed` says whether Run would start.
+    """The report `POST /runs` would give, with 200; `passed` says whether Run would start.
 
     Nothing is written: not a run directory, and not the upload's `validation.json`, which stays the
     record of the last real Run. The registry is opened only for a scoring file, because opening it
-    creates the local registry database.
+    creates the local registry database. What `POST /runs` refuses before its checks is refused here
+    with the same status and code: a setting the caller's role may not loosen, and an ID column or
+    outcome other than the ones a prepared file's recipe was checked against (409
+    `RECIPE_ROLES_MISMATCH`, DEC-1011).
     """
     use_case_config(body.use_case, root)  # 404 for a planned or unknown id, before anything is read
     resolved = resolve_config(body.use_case, body.overrides, root=root)
@@ -136,21 +145,37 @@ def check_upload(
     profile = load_upload_profile(storage, upload_id)
     primary_key = sole_key(body.primary_key, what="A check") if body.primary_key is not None else None
     schema: FeatureSchema | None = None
+    row_count = profile.row_count
     if upload.mode is RunMode.SCORE:
         version = score_version(get_registry(request), config=config, version_id=body.model_version_id)
         schema = storage.read_model(version.schema_key, FeatureSchema)
+        recipe = model_recipe(storage, version)
+        if primary_key is not None:  # `POST /runs` needs an ID column before it gets this far
+            refuse_other_roles(recipe, primary_key=primary_key, target=None, training=False)
+        # As `POST /runs` does (DEC-1006): the model's recipe prepares the file before it is checked
+        # against the model's columns - here in memory, since a dry run writes nothing.
+        prepared = prepare_in_memory(storage, config, upload, recipe)
+        if isinstance(prepared, ValidationReport):
+            return prepared
+        frame, row_count = prepared
     elif body.model_version_id is not None:
         raise http_error(
             409, "UPLOAD_MODE_MISMATCH", "A model version is only used to check a file uploaded for scoring."
         )
+    else:
+        if primary_key is not None:  # the roles a prepared upload was checked against (DEC-1004)
+            refuse_other_roles(
+                load_recipe(storage, upload_id), primary_key=primary_key, target=body.target, training=True
+            )
+        frame = read_frame(storage, upload.source_key, upload.file_format, profile_row_cap(config))
     return check_plan(
-        read_frame(storage, upload.source_key, upload.file_format, profile_row_cap(config)),
+        frame,
         config,
         mode=upload.mode,
         primary_key=primary_key,
         target=body.target,
         upload_id=upload_id,
-        row_count=profile.row_count,
+        row_count=row_count,
         schema=schema,
     )
 
@@ -340,43 +365,55 @@ def _load_context(
     upload = load_upload(storage, upload_id)
     if upload.use_case_id != config.id:
         raise _refuse(409, "AGENT_USE_CASE_MISMATCH", "This file was uploaded for another use case.")
-    profile = load_upload_profile(storage, upload_id)
-    frame = read_frame(storage, upload.source_key, upload.file_format, profile_row_cap(config))
+    if upload.mode is RunMode.TRAIN and load_recipe(storage, upload_id) is not None:
+        # A session saves only the steps it accepts; on a prepared file the model's recipe would
+        # leave out every step that prepared it, and scoring would replay only part (DEC-1006).
+        raise _refuse(
+            409,
+            "AGENT_UPLOAD_PREPARED",
+            "This file was already prepared by Guided setup. Start Guided setup on the file you sent.",
+        )
+    source = upload
     schema: FeatureSchema | None = None
     recipe_error: RecipeError | None = None
     version: ModelVersion | None = None
+    recipe: DataRecipe | None = None
     if upload.mode is RunMode.SCORE:
         version = score_version(get_registry(request), config=config, version_id=model_version_id)
         schema = storage.read_model(version.schema_key, FeatureSchema)
         recipe = model_recipe(storage, version)
-        if recipe is not None:
-            try:
-                frame = run_recipe(
+        # The file Run would prepare (or read as it is): never the model's recipe on top of its own
+        # output, nor on another recipe's output (`scoring_source`, as `POST /runs`).
+        chosen = scoring_source(storage, upload, recipe)
+        if isinstance(chosen, ValidationReport):
+            check = chosen.checks[0]
+            recipe_error = RecipeError(check.code, check.message, column=check.column)
+            recipe = None
+        else:
+            source = chosen.upload
+            if chosen.ready:
+                recipe = None
+    profile = load_upload_profile(storage, source.upload_id)
+    frame = read_frame(storage, source.source_key, source.file_format, profile_row_cap(config))
+    if recipe is not None:
+        try:
+            frame = run_saved_recipe(frame, recipe, config, upload_id=upload_id).frame
+        except RecipeError as exc:
+            recipe_error = exc
+        else:
+            if any(step.kind is RecipeStepKind.COMBINE_ROWS for step in recipe.steps):
+                # Combined rows are other rows: the profile the helper reads must describe them.
+                profile = ingest.profile_dataset(
                     frame,
-                    recipe.steps,
+                    config,
                     upload_id=upload_id,
-                    primary_key=recipe.primary_key,
-                    target=recipe.target,
-                    levels=config.agent.levels,
-                    max_failure_pct=config.agent.max_conversion_failure_pct,
-                    snapshot_column=recipe.snapshot_column,
-                ).frame
-            except RecipeError as exc:
-                recipe_error = exc
-            else:
-                if any(step.kind is RecipeStepKind.COMBINE_ROWS for step in recipe.steps):
-                    # Combined rows are other rows: the profile the helper reads must describe them.
-                    profile = ingest.profile_dataset(
-                        frame,
-                        config,
-                        upload_id=upload_id,
-                        file_name=profile.file_name,
-                        file_format=profile.file_format,
-                        file_size_bytes=profile.file_size_bytes,
-                        delimiter=profile.delimiter,
-                        encoding=profile.encoding,
-                        row_count=len(frame),
-                    )
+                    file_name=profile.file_name,
+                    file_format=profile.file_format,
+                    file_size_bytes=profile.file_size_bytes,
+                    delimiter=profile.delimiter,
+                    encoding=profile.encoding,
+                    row_count=len(frame),
+                )
     ctx = AgentContext(
         use_case_id=config.id,
         config=config,
@@ -644,7 +681,11 @@ def add_usage(earlier: LlmUsageReport | None, turn: LlmUsageReport) -> LlmUsageR
     )
 
 
-def _accepted_recipe(session: AgentSession, upload: UploadRecord, principal: str | None) -> DataRecipe | None:
+def _accepted_recipe(
+    session: AgentSession, upload: UploadRecord, principal: str | None, config: UseCaseConfig
+) -> DataRecipe | None:
+    """The accepted steps as a recipe, with the levels and failure limit they are approved under:
+    every later replay runs under those, whatever the use case says by then."""
     steps = recipe_steps(p for p in session.proposals if p.state is ProposalState.ACCEPTED)
     if not steps:
         return None
@@ -658,26 +699,49 @@ def _accepted_recipe(session: AgentSession, upload: UploadRecord, principal: str
         primary_key=key,
         target=target,
         approved_by=principal,
+        levels=tuple(config.agent.levels),
+        max_failure_pct=config.agent.max_conversion_failure_pct,
         created_at=utc_now(),
     )
 
 
+PREVIEW_CELL_CHARS: Final[int] = 60
+
+
 def _cell(value: Any) -> str:
     """One preview cell as text. Numbers and dates are formatted, never run through the text masker:
-    a float's digits (0.020000000000000002) would otherwise read as a phone number."""
+    a float's digits (0.020000000000000002) would otherwise read as a phone number.
+
+    Every digit a person needs to tell two values apart is kept: an integer in full, a float to 15
+    significant digits (so 20240001 and 20240002 never both read `2.024e+07`). A narrower float (a
+    Parquet `float32`) is first written at its own precision, so 0.1 stays `0.1` rather than the
+    `0.100000001490116` it is as a double. Text is masked before it is cut, so an e-mail address split
+    by the cut is still one the masker knows; a marker the cut would split is left out whole.
+    """
     if value is None or (isinstance(value, float) and value != value):
         return ""
     if isinstance(value, bool):
         return str(value)
+    if isinstance(value, numbers.Integral):
+        return str(int(value))
     if isinstance(value, (int, float)) or hasattr(value, "dtype"):
         try:
-            return f"{float(value):.6g}"
+            dtype = getattr(value, "dtype", None)
+            if getattr(dtype, "kind", "") == "f" and getattr(dtype, "itemsize", 8) < 8:
+                value = float(str(value))  # numpy's shortest text at the value's own precision
+            number = float(value)
+            return "" if number != number else format(number, ".15g")
         except (TypeError, ValueError):
             pass
     if hasattr(value, "isoformat"):
         text = str(value.isoformat())
         return text[:10] if text.endswith("T00:00:00") else text
-    return redact_cells([str(value)[:60]])[0]
+    masked = redact_cells([str(value)])[0]
+    cut = PREVIEW_CELL_CHARS
+    for marker in REDACTION_MARKER_PATTERN.finditer(masked):
+        if marker.start() < cut < marker.end():
+            cut = marker.start()
+    return masked[:cut]
 
 
 def _rows(frame: Any, columns: tuple[str, ...], personal: set[str]) -> tuple[tuple[str, ...], ...]:
@@ -714,7 +778,7 @@ def preview_agent_session(
     loaded = _load_context(storage, root, request, upload_id, session.use_case_id, session.model_version_id)
     ctx = loaded.ctx
     personal = {column.name for column in ctx.profile.columns if column.pii_kinds}
-    recipe = _accepted_recipe(session, loaded.upload, None)
+    recipe = _accepted_recipe(session, loaded.upload, None, ctx.config)
     before = _preview_sample(ctx.frame, recipe)
     after, receipt = before, None
     if recipe is not None:
@@ -779,10 +843,15 @@ def _apply_agent_session(
             f"{len(session.undecided)} suggestion(s) or question(s) still need a decision before approving.",
         )
     key, target = roles_of(session)
-    recipe = _accepted_recipe(session, upload, requested_by(request))
+    recipe = _accepted_recipe(session, upload, requested_by(request), ctx.config)
     prepared, receipt = upload, None
     if ctx.mode is RunMode.SCORE and loaded.version is not None:
-        # The model's recipe prepares a scoring file; the session proposes no steps of its own.
+        # The model's recipe prepares a scoring file; the session proposes no steps of its own. Run
+        # would refuse another ID column than the recipe's, so Approve does not prepare for one.
+        if key is not None:
+            refuse_other_roles(
+                model_recipe(storage, loaded.version), primary_key=key, target=None, training=False
+            )
         replayed = replay_for_scoring(storage, ctx.config, upload, loaded.version)
         if isinstance(replayed, ValidationReport):
             return validation_conflict(replayed)

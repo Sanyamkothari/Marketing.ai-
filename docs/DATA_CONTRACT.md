@@ -933,7 +933,19 @@ a scoring file needs no outcome column. A training file combined this way gets o
 future-data check (rows re-dated after the snapshot must change nothing), a scoring file the narrow
 one, and the receipt says which ran.
 
-When a scoring file cannot be prepared, `POST /runs` answers 409 with one of these errors. None can
+A recipe replays under the levels and conversion-failure limit it was approved with (recorded on
+`data_recipe.json` as `levels` and `max_failure_pct`; a recipe saved before they were recorded uses
+the use case's current ones). A prepared upload is reused for scoring only when it was prepared by
+the same steps with the same ID, outcome and snapshot columns, levels and limit; otherwise - and
+always for a model trained on files as sent - the file the person sent is used. A run on a prepared
+upload must name the recipe's ID column and outcome, and a scoring run the model recipe's ID column
+when it named one (409 `RECIPE_ROLES_MISMATCH`, from `POST /runs`, the dry run and Guided setup's
+Approve alike, before anything is prepared). Scoring a built
+dataset (`POST /runs` with `dataset_id`, or a scheduled score) with a model that has a recipe is
+refused with 409 `RECIPE_DATASET_UNSUPPORTED` until datasets can be prepared too.
+
+When a scoring file cannot be prepared, `POST /runs` - and the dry run `POST /uploads/{id}/checks`,
+which prepares it the same way in memory - answers with one of these errors. None can
 be acknowledged: a file prepared differently from the training data would be scored wrongly. A
 column the recipe only hides is the exception: a scoring file without it has nothing to hide, so the
 step is skipped (`skipped: true` in the receipt) rather than refused.
