@@ -5,11 +5,17 @@ touches data. The API stores the result at `uploads/<upload_id>/agent/agent_sess
 
 * `start_session` runs the advisor once.
 * `decide` accepts or rejects proposals. A setting's value may be edited to another value the
-  settings schema allows; a recipe step or a role may only be accepted or rejected.
+  settings schema allows; a recipe step or a role may only be accepted or rejected. The settings
+  accepted after a decision must resolve together, and one setting has at most one accepted
+  value: accepting another suggestion for the same setting rejects the one accepted before, and
+  accepting two different values for it at once is refused.
 * `answer` records a question's answer. An option that carries a proposal adds it, accepted by the
-  user. Answering who the ID or the outcome is re-runs the advisor with that role fixed, because
-  every check downstream depends on it; decisions already made carry over to the new advice when
-  the same proposal comes back (same kind and subject), and nothing the user chose is dropped.
+  user; answering again withdraws what the previous answer added. Answering who the ID or the
+  outcome is re-runs the advisor with that role fixed, because every check downstream depends on
+  it; decisions already made carry over to the new advice when the same proposal comes back (same
+  kind and subject; an accepted one wins over a rejected duplicate), and nothing the user chose is
+  dropped - except a recipe step on a column that is now the ID or the outcome, which the recipe
+  may never change.
   Answering "combine the rows?" (M76) re-runs it too: with Combine the rest of the advice is about
   the combined file; with Stop a repeating ID stops the session.
 * `status_of` is the one rule for where a session is: stopped when the data cannot work, ready
@@ -23,7 +29,14 @@ from collections.abc import Callable, Iterable, Sequence
 from datetime import datetime
 from typing import Any
 
-from engine.agent.advisor import ROLE_PRIMARY_KEY, ROLE_TARGET, Advice, advise, summarise
+from engine.agent.advisor import (
+    ROLE_PRIMARY_KEY,
+    ROLE_TARGET,
+    Advice,
+    advise,
+    run_overrides,
+    summarise,
+)
 from engine.agent.contracts import (
     AgentSession,
     DecidedBy,
@@ -223,8 +236,55 @@ def decide(
         if value is not None and value != proposal.value:
             _check_edit(ctx, session, proposal, value)
         changed[proposal_id] = _decided(proposal, state, value)
-    proposals = tuple(changed.get(p.proposal_id, p) for p in session.proposals)
+    proposals = _one_value_per_setting(
+        [changed.get(p.proposal_id, p) for p in session.proposals], set(changed)
+    )
+    after = run_overrides(proposals)
+    if after and after != run_overrides(session.proposals):
+        # Each value resolving alone is not enough: a split by date and its column go together.
+        try:
+            resolve_config(ctx.use_case_id, after, root=ctx.config_root)
+        except ConfigError as exc:
+            raise SessionError(exc.code, exc.message) from exc
     return with_summary(session.model_copy(update={"proposals": proposals}), ctx, clock=clock)
+
+
+def _one_value_per_setting(proposals: Sequence[Proposal], decided_now: set[str]) -> tuple[Proposal, ...]:
+    """At most one accepted setting per path, so the run and the summary agree on its value.
+
+    A setting accepted in this decision rejects any accepted before it for the same path; the same
+    value accepted twice at once keeps the later one; two different values at once are refused.
+    """
+    latest: dict[str, Proposal] = {}
+    for proposal in proposals:
+        if (
+            proposal.proposal_id not in decided_now
+            or proposal.state is not ProposalState.ACCEPTED
+            or proposal.kind is not ProposalKind.SETTING
+            or proposal.path is None
+        ):
+            continue
+        earlier = latest.get(proposal.path)
+        if earlier is not None and json.dumps(earlier.value, sort_keys=True) != json.dumps(
+            proposal.value, sort_keys=True
+        ):
+            raise SessionError(
+                "AGENT_SETTING_CONFLICT",
+                f"Two suggestions give '{proposal.path}' different values; accept only one of them.",
+            )
+        latest[proposal.path] = proposal
+    winners = {p.proposal_id for p in latest.values()}
+    return tuple(
+        (
+            _decided(p, ProposalState.REJECTED)
+            if p.kind is ProposalKind.SETTING
+            and p.state is ProposalState.ACCEPTED
+            and p.path in latest
+            and p.proposal_id not in winners
+            else p
+        )
+        for p in proposals
+    )
 
 
 def accept_recommended(
@@ -232,16 +292,41 @@ def accept_recommended(
 ) -> AgentSession:
     """Accept every pending suggestion the helper is sure of (and uncertain ones when the use case says so)."""
     tick_uncertain = ctx.config.agent.tick_uncertain
-    decisions = [
-        (p.proposal_id, ProposalState.ACCEPTED, None)
-        for p in session.proposals
-        if p.state is ProposalState.PENDING and (p.confidence.value == "sure" or tick_uncertain)
-    ]
+    chosen: dict[tuple[str, str], Proposal] = {}
+    for p in session.proposals:
+        if p.state is ProposalState.PENDING and (p.confidence.value == "sure" or tick_uncertain):
+            # Two pending suggestions for one setting: the later one, never a conflict.
+            key = ("path", p.path) if p.kind is ProposalKind.SETTING and p.path else ("id", p.proposal_id)
+            chosen.pop(key, None)
+            chosen[key] = p
+    decisions = [(p.proposal_id, ProposalState.ACCEPTED, None) for p in chosen.values()]
     return decide(session, ctx, decisions, clock=clock)
 
 
+def _touches_role(proposal: Proposal, roles: set[str]) -> bool:
+    """A recipe step on the ID or the outcome column, which `check_recipe` refuses."""
+    step = proposal.step
+    return (
+        step is not None
+        and step.column in roles
+        and step.kind not in {RecipeStepKind.COMBINE_ROWS, RecipeStepKind.DERIVE}
+    )
+
+
 def _merge(old: AgentSession, advice: Advice, now: datetime) -> AgentSession:
-    decided = {identity(p): p for p in old.proposals if p.state is not ProposalState.PENDING}
+    decided: dict[tuple[str, ...], Proposal] = {}
+    for p in old.proposals:
+        if p.state is ProposalState.PENDING:
+            continue
+        # The same suggestion made twice (a repeated chat request): what the user accepted wins.
+        earlier = decided.get(identity(p))
+        if (
+            earlier is None
+            or earlier.state is not ProposalState.ACCEPTED
+            or p.state is ProposalState.ACCEPTED
+        ):
+            decided[identity(p)] = p
+    roles = {name for name in (advice.primary_key, advice.target) if name}
     proposals: list[Proposal] = []
     seen: set[tuple[str, ...]] = set()
     for proposal in advice.proposals:
@@ -256,7 +341,12 @@ def _merge(old: AgentSession, advice: Advice, now: datetime) -> AgentSession:
             else proposal
         )
     # What the user chose themselves stays, even when the new advice does not suggest it again.
-    proposals += [p for key, p in decided.items() if key not in seen and p.decided_by is DecidedBy.USER]
+    # A step on a column that is now the ID or the outcome can no longer apply, so it goes.
+    proposals += [
+        p
+        for key, p in decided.items()
+        if key not in seen and p.decided_by is DecidedBy.USER and not _touches_role(p, roles)
+    ]
     answered = {q.text: q for q in old.questions if q.answer is not None}
     questions: list[Question] = [answered.pop(q.text, q) for q in advice.questions]
     questions += list(answered.values())
@@ -301,10 +391,11 @@ def answer(
     questions = tuple(
         q.model_copy(update={"answer": option_id}) if q is question else q for q in session.questions
     )
-    proposals = list(session.proposals)
+    # Answering again replaces the previous answer: whatever any option added is withdrawn first.
+    offered = {identity(o.proposal) for o in question.options if o.proposal is not None}
+    proposals = [p for p in session.proposals if identity(p) not in offered]
     chosen = option.proposal
     if chosen is not None:
-        proposals = [p for p in proposals if identity(p) != identity(chosen)]
         proposals.append(_decided(chosen, ProposalState.ACCEPTED))
     updated = session.model_copy(update={"questions": questions, "proposals": tuple(proposals)})
     if (chosen is not None and chosen.kind is ProposalKind.ROLE) or _is_combine_question(question):

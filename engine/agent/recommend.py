@@ -7,7 +7,9 @@ the use case's default, and the screen labels it that way; nothing is changed "j
 Every suggestion is filtered against the advanced-settings schema - the path must be one of its
 fields, the value one of its choices or inside its range, never an advisory ("Coming later") field -
 and the whole set is resolved with `resolve_config` before it is returned, so a suggestion can never
-come back from `POST /runs` as a 422. Some settings are never suggested at all, whatever the data
+come back from `POST /runs` as a 422. Suggestions that only work together - a split by date and the
+column it splits by - are one group: the pair is resolved as a pair (a date column the use case
+cannot split by is never offered), and a group is kept or dropped whole. Some settings are never suggested at all, whatever the data
 says: anything that loosens a data limit (`validation.min_positive`, `validation.min_rows`), switches
 off a check (`validation.leakage_check`) or removes human approval (`governance.approval_required`).
 """
@@ -15,7 +17,7 @@ off a check (`validation.leakage_check`) or removes human approval (`governance.
 from __future__ import annotations
 
 import json
-from collections.abc import Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
@@ -71,6 +73,8 @@ class DataFacts:
     """Date columns with at least three distinct values, best first."""
     consent_candidates: tuple[str, ...]
     evidence_ids: tuple[str, ...]
+    columns: tuple[str, ...] = ()
+    """Every column of the file, so a date column that is there but unusable is told from a missing one."""
 
 
 @dataclass(frozen=True)
@@ -109,13 +113,19 @@ def setting_allowed(path: str, value: Any, fields: dict[str, FieldSpec]) -> bool
     return True
 
 
-def _split_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecommendation]:
+Resolves = Callable[[Mapping[str, Any]], bool]
+"""Whether a set of overrides resolves for the use case (`resolve_config` raises no `ConfigError`)."""
+
+
+def _split_rules(config: UseCaseConfig, facts: DataFacts, resolves: Resolves) -> list[SettingRecommendation]:
     split = config.split
     if split.type is SplitType.TIME_BASED:
         if split.time_column in facts.time_columns:
             return []
-        if facts.time_columns:
-            column = facts.time_columns[0]
+        # Only a column the use case can split by: `resolve_config` checks it against the template.
+        usable = [c for c in facts.time_columns if resolves({"split.time_column": c})]
+        if usable:
+            column = usable[0]
             return [
                 SettingRecommendation(
                     "split.time_column",
@@ -126,23 +136,16 @@ def _split_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecomme
                     facts.evidence_ids,
                 )
             ]
-        return [
-            SettingRecommendation(
-                "split.type",
-                SplitType.RANDOM_STRATIFIED.value,
-                "Split the rows at random",
-                "The file has no date column, so the newest rows cannot be held back for testing.",
-                AgentConfidence.SURE,
-                facts.evidence_ids,
-            )
-        ]
-    if not facts.time_columns:
+        return _random_split(split.time_column, facts)
+    time_based = SplitType.TIME_BASED.value
+    usable = [c for c in facts.time_columns if resolves({"split.type": time_based, "split.time_column": c})]
+    if not usable:
         return []
-    column = facts.time_columns[0]
+    column = usable[0]
     return [
         SettingRecommendation(
             "split.type",
-            SplitType.TIME_BASED.value,
+            time_based,
             "Test on the newest rows",
             f"The file has dates in '{display_name(column)}', so the model can be tested on its newest rows, as it will be used.",
             AgentConfidence.CHECK,
@@ -157,6 +160,46 @@ def _split_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecomme
             facts.evidence_ids,
         ),
     ]
+
+
+def _random_split(configured: str | None, facts: DataFacts) -> list[SettingRecommendation]:
+    """A random split for a use case that splits by date when the file gives it no usable date."""
+    name = display_name(configured) if configured else ""
+    if configured is not None and configured in facts.columns:
+        reason = (
+            f"'{name}', the date this use case splits by, does not hold usable dates in this file, "
+            "so the newest rows cannot be held back for testing."
+        )
+    elif configured is not None and facts.time_columns:
+        reason = (
+            f"The file has no '{name}' column, which this use case splits by, and its other dates cannot "
+            "stand in for it, so the newest rows cannot be held back for testing."
+        )
+    else:
+        reason = "The file has no date column, so the newest rows cannot be held back for testing."
+    recs = [
+        SettingRecommendation(
+            "split.type",
+            SplitType.RANDOM_STRATIFIED.value,
+            "Split the rows at random",
+            reason,
+            AgentConfidence.SURE,
+            facts.evidence_ids,
+        )
+    ]
+    if configured is not None and configured in facts.columns:
+        # The Run button checks the dates of a configured time column whatever the split type.
+        recs.append(
+            SettingRecommendation(
+                "split.time_column",
+                None,
+                f"Stop reading '{name}' as the date of each row",
+                "The rows are split at random instead, and its values cannot be read as dates.",
+                AgentConfidence.SURE,
+                facts.evidence_ids,
+            )
+        )
+    return recs
 
 
 def _metric_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecommendation]:
@@ -227,26 +270,31 @@ def recommend_settings(
 ) -> tuple[SettingRecommendation, ...]:
     """The changes these facts justify, each allowed by the schema, and resolvable together."""
     fields = settings_fields(schema)
-    candidates: Sequence[SettingRecommendation] = [
-        *_split_rules(config, facts),
-        *_metric_rules(config, facts),
-        *_time_rules(config, facts),
-        *_consent_rules(config, facts),
-    ]
-    kept = [rec for rec in candidates if setting_allowed(rec.path, rec.value, fields)]
-    if kept:
+
+    def resolves(overrides: Mapping[str, Any]) -> bool:
         try:
-            resolve_config(config.id, {rec.path: rec.value for rec in kept}, root=config_root)
+            resolve_config(config.id, dict(overrides), root=config_root)
         except ConfigError:
-            # A rule proposed something the config refuses: a bug in a rule, never the user's
-            # problem. Keep only what resolves on its own rather than showing nothing.
-            kept = [rec for rec in kept if _resolves(config.id, rec, config_root)]
+            return False
+        return True
+
+    groups: Sequence[Sequence[SettingRecommendation]] = [
+        _split_rules(config, facts, resolves),  # one group: a split and its column go together
+        *([rec] for rec in _metric_rules(config, facts)),
+        *([rec] for rec in _time_rules(config, facts)),
+        *([rec] for rec in _consent_rules(config, facts)),
+    ]
+    allowed = [
+        list(group)
+        for group in groups
+        if group and all(setting_allowed(rec.path, rec.value, fields) for rec in group)
+    ]
+    kept = [rec for group in allowed for rec in group]
+    if kept and not resolves({rec.path: rec.value for rec in kept}):
+        # A rule proposed something the config refuses: a bug in a rule, never the user's problem.
+        # Keep, in order, each whole group that still resolves with the groups kept before it.
+        kept = []
+        for group in allowed:
+            if resolves({rec.path: rec.value for rec in (*kept, *group)}):
+                kept.extend(group)
     return tuple(kept)
-
-
-def _resolves(use_case_id: str, rec: SettingRecommendation, config_root: Path | None) -> bool:
-    try:
-        resolve_config(use_case_id, {rec.path: rec.value}, root=config_root)
-    except ConfigError:
-        return False
-    return True

@@ -10,8 +10,10 @@ a recorded `ToolResult` a proposal cites, and turns what they found into:
 * **checks on the prepared data** - the Run button's checks, run on a preview of the file with the
   sure fixes applied, so a column of numbers stored as text is not mistaken for an ID. A suspected
   leak becomes a blocking question; a problem no setting can fix (too few rows, too few "yes"
-  cases, an ID that repeats) stops the session with the check's own message and suggestion;
-* **setting proposals** - `engine.agent.recommend`;
+  cases, an ID that repeats) stops the session with the check's own message and suggestion, and so
+  does any other error the suggested settings leave in place (they are checked again when one is
+  there), so a session never reaches "ready" with an error the Run button will refuse;
+* **setting proposals** - `engine.agent.recommend`, never naming a column a leak question may hide;
 * **a question to combine rows** (level 3, M76) - when the use case allows `reshape`, a training
   file whose ID-named column repeats and that has a date column gets a blocking question instead of
   a stop: "Each customer appears on N rows on average. Combine them into one row per customer?".
@@ -24,6 +26,7 @@ Hiding a column is a recipe `drop_column` step, so scoring drops it the same way
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import itertools
 from collections.abc import Iterable, Mapping, Sequence
@@ -47,7 +50,7 @@ from engine.agent.contracts import (
 from engine.agent.recipe import STEP_PHASE, RecipeError, run_recipe
 from engine.agent.recommend import DataFacts, recommend_settings
 from engine.agent.reshape import choose_dates, plan_combine
-from engine.agent.tools import AgentContext, call_tool
+from engine.agent.tools import AgentContext, AgentToolError, call_tool
 from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name
 from engine.config import (
     ColumnType,
@@ -620,10 +623,17 @@ def _ask_to_combine(
     return None
 
 
+def _leaks(checks: ToolResult) -> list[dict[str, Any]]:
+    """The suspected leaks that are errors: each becomes a question whether to hide the column."""
+    return [
+        check
+        for check in _rows(checks, "checks")
+        if check["code"] == "LEAKAGE_SUSPECTED" and check["severity"] == "error" and check["column"]
+    ]
+
+
 def _leak_questions(builder: _Builder, checks: ToolResult) -> None:
-    for check in _rows(checks, "checks"):
-        if check["code"] != "LEAKAGE_SUSPECTED" or check["severity"] != "error" or not check["column"]:
-            continue
+    for check in _leaks(checks):
         column = str(check["column"])
         builder.ask(
             f"'{display_name(column)}' almost perfectly predicts the outcome, so it may contain the answer "
@@ -670,6 +680,47 @@ def _stop_from_checks(checks: ToolResult) -> str | None:
     return None
 
 
+def _open_errors(checks: ToolResult, asked: set[str]) -> list[dict[str, Any]]:
+    """Errors that would make the Run button refuse, other than the leaks a question asks about."""
+    return [
+        check
+        for check in _rows(checks, "checks")
+        if check["severity"] == "error"
+        and not check.get("acknowledged")
+        and not (check["code"] == "LEAKAGE_SUSPECTED" and check["column"] in asked)
+    ]
+
+
+def _unfixed_stop(
+    builder: _Builder, checks: ToolResult, prepared: AgentContext, key: str | None, target: str | None
+) -> str | None:
+    """The stop reason when an error is left that no stop, question or suggested setting deals with.
+
+    The checks are run again with the settings that start ticked, so an error a suggestion fixes (a
+    random split for a file without the use case's date column) does not stop the session.
+    """
+    asked = {str(check["column"]) for check in _leaks(checks)} if builder.ctx.mode is RunMode.TRAIN else set()
+    if not _open_errors(checks, asked):
+        return None
+    tick_uncertain = builder.ctx.config.agent.tick_uncertain
+    overrides = {
+        str(p.path): p.value
+        for p in builder.proposals
+        if p.kind is ProposalKind.SETTING and _ticked(p, tick_uncertain)
+    }
+    # The suggestions resolve together by construction; should they not, the first check stands.
+    with contextlib.suppress(AgentToolError):
+        if overrides:
+            checks = builder.call(
+                "check_data", {"primary_key": key, "target": target, "overrides": overrides}, ctx=prepared
+            )
+    remaining = _open_errors(checks, asked)
+    if not remaining:
+        return None
+    first = remaining[0]
+    return f"{first['message']} {first.get('suggestion') or ''}".strip()
+
+
 def _notes_from_checks(builder: _Builder, checks: ToolResult) -> None:
     reasons: dict[str, list[str]] = {}
     for check in _rows(checks, "checks"):
@@ -685,8 +736,14 @@ def _notes_from_checks(builder: _Builder, checks: ToolResult) -> None:
 
 
 def _facts(
-    builder: _Builder, prepared: AgentContext, outcome: ToolResult | None, roles: ToolResult
+    builder: _Builder,
+    prepared: AgentContext,
+    outcome: ToolResult | None,
+    roles: ToolResult,
+    *,
+    exclude: Iterable[str] = (),
 ) -> DataFacts:
+    """What `recommend_settings` may know; `exclude` are columns no setting may name (suspected leaks)."""
     columns = {column.name: column for column in prepared.profile.columns}
     ordered = list(prepared.profile.time_column_candidates) + [
         name
@@ -694,7 +751,7 @@ def _facts(
         if column.inferred_type in {ColumnType.DATE, ColumnType.DATETIME}
     ]
     time_columns: list[str] = []
-    reserved = {builder.ctx.config.actions.suppression.recently_contacted_column}
+    reserved = {builder.ctx.config.actions.suppression.recently_contacted_column, *exclude}
     for name in ordered:
         column = columns.get(name)
         if (
@@ -709,6 +766,7 @@ def _facts(
     taken = {
         builder.ctx.config.actions.suppression.opt_out_column,
         builder.ctx.config.actions.suppression.recently_contacted_column,
+        *exclude,
     }
     consent = tuple(c for c in _names(roles, "consent") if c not in taken)
     evidence = tuple(r.evidence_id for r in (roles, outcome) if r is not None)
@@ -718,6 +776,7 @@ def _facts(
         time_columns=tuple(time_columns),
         consent_candidates=consent,
         evidence_ids=evidence,
+        columns=tuple(str(c) for c in prepared.frame.columns),
     )
 
 
@@ -794,7 +853,11 @@ def advise(
             _notes_from_checks(builder, checks)
             if stop is None and ctx.mode is RunMode.TRAIN:
                 _leak_questions(builder, checks)
-                _settings(builder, prepared, outcome, roles, key, outcome_column)
+                # A column the person may hide is never the one a suggested setting depends on.
+                leaks = [str(check["column"]) for check in _leaks(checks)]
+                _settings(builder, prepared, outcome, roles, key, outcome_column, exclude=leaks)
+            if stop is None:
+                stop = _unfixed_stop(builder, checks, prepared, key, outcome_column)
     status = (
         SessionStatus.STOPPED
         if stop is not None
@@ -820,9 +883,11 @@ def _settings(
     roles: ToolResult,
     key: str | None,
     target: str | None,
+    *,
+    exclude: Iterable[str] = (),
 ) -> None:
     config = prepared.config
-    facts = _facts(builder, prepared, outcome, roles)
+    facts = _facts(builder, prepared, outcome, roles, exclude=exclude)
     schema = advanced_settings_schema(
         config, columns=tuple(str(c) for c in prepared.frame.columns), primary_key=key, target=target
     )
