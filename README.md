@@ -1361,6 +1361,16 @@ Decisions are DEC-1000 … DEC-1044 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 and hides the complexity: one generic journey, four pages (Home, Connections, Results, Settings) and a
 three-step flow, plus a fourth step after a campaign.
 
+> **Start here if you are a marketer: [`docs/START_HERE.md`](docs/START_HERE.md)**, the four pages
+> and the flow in plain words, with screenshots.
+
+- **M84 — Checks and docs.** `docs/START_HERE.md` walks a marketer through the product with
+  screenshots of the new flow (`docs/screenshots/start_here/`, re-taken with
+  `python -m scripts.capture_start_here`). `docs/UI_AUDIT.md` §8 lists every screen after Plan H,
+  the older screens still reachable by URL, and the rough edges still open. Two fixes came out of
+  it: the AI service screen highlights Connections in the top bar, and two first requests on an
+  empty data folder no longer race to create the database tables (a 500 on a fresh install).
+
 - **M83 — Measure a campaign (step 4).** On a scoring run's Results, upload who responded (customer
   ID and a 1/0 column) to see how many extra conversions the campaign caused compared with the
   customers held back, in one plain sentence. "Learn who to contact next time" then trains an uplift
@@ -1381,7 +1391,7 @@ three-step flow, plus a fourth step after a campaign.
   ordinary upload. Passwords and keys are encrypted with `MARKETING_AI_CONNECTIONS_KEY` (generated
   on a laptop, required in production) and never returned. See `docs/CONNECTIONS.md`.
 
-Decisions are DEC-1100 … DEC-1116 and DEC-1130 … DEC-1135 so far.
+Decisions are DEC-1100 … DEC-1116 and DEC-1130 … DEC-1135.
 
 <!-- ---- END PLAN-G ---- -->
 

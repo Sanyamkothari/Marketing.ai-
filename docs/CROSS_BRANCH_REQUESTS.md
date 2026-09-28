@@ -1272,3 +1272,16 @@ moves. Nothing was renamed or removed.
 
 **What is needed.** Nothing; this is an announcement.
 
+
+### 2026-09-28 — plan-h-simple → README owners: point the first-time reader at `docs/START_HERE.md` (request)
+
+**Why.** Plan H (M84) wrote `docs/START_HERE.md` for marketers: the four pages, the flow and
+connections in plain words, with screenshots. The README's opening banner and first two paragraphs
+sit outside any plan's block, so Plan H did not edit them. They still describe industries with
+their own lifecycle templates and clients mapping their data, which Plan H hid (DEC-1110 …
+DEC-1116).
+
+**What is needed.** In the README's opening banner, link `docs/START_HERE.md` first ("New here? Start
+with docs/START_HERE.md"), keeping the QUICKSTART link for developers. Reword the two opening
+paragraphs to describe one generic journey for a single company. The Plan H block already carries
+the link, so nothing breaks if this waits.

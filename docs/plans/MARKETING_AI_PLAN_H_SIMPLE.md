@@ -4,7 +4,7 @@
 **Owner:** Minfy — AI/ML team
 **Decision range:** DEC-1100 … 1199
 **Milestones:** M80 – M84
-**Status:** approved in conversation on 2026-09-28; building
+**Status:** approved in conversation on 2026-09-28; built (M80–M84)
 
 > The platform grew one phase at a time and now shows every capability as its own page: industries,
 > clients, "Build data", reports, campaigns, model health, schedules, uplift, privacy, admin. A
