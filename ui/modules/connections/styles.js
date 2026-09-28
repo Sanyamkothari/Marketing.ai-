@@ -47,6 +47,8 @@ const CSS = `
 .cp-item .cp-name{overflow-wrap:anywhere}
 .cp-item .cp-meta{flex:none;font-size:12px;color:var(--muted)}
 .cp .cp-note{margin:0;font-size:12px;color:var(--muted);line-height:1.45}
+.orline .up-src:empty{display:none}
+.up-src .cp-none a{color:var(--brand-blue);font-weight:500}
 @media (max-width:700px){.cn-grid{grid-template-columns:minmax(0,1fr)}}
 `;
 

@@ -48,7 +48,7 @@ At the top, choose **Train a model** (your first time: a file where you already 
 Under **Your data**, do one of these:
 
 - **Upload CSV or Parquet**: one row per customer. For training, include the column with the outcome (for example, whether they bought).
-- **Pick from a connection**: choose a saved connection, open a folder or schema, pick a file or a table. You see its first rows (personal details are hidden in this preview), then click **Import**. From here on it works exactly like an uploaded file.
+- **Pick from a connection**: choose a saved connection, open a folder or schema, pick a file or a table. You see its first rows (personal details are hidden in this preview), then click **Import**. From here on it works exactly like an uploaded file. **Manual setup** offers the same **Pick from a connection** beside its file upload (with no connection yet, it links to **Connections** instead).
 - Not sure which columns you need? **Download template** shows them.
 
 Your own file is never changed.

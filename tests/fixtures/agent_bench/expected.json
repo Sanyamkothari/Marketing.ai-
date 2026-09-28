@@ -75,7 +75,7 @@
     ],
     "questions": [
       {
-        "asks": "In 'joined' (\"01/01/2024\"",
+        "asks": "In 'joined' ('01/01/2024'",
         "options": [
           "Day first",
           "Month first"

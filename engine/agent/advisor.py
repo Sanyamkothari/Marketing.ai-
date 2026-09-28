@@ -51,7 +51,7 @@ from engine.agent.recipe import STEP_PHASE, RecipeError, run_recipe
 from engine.agent.recommend import DataFacts, recommend_settings
 from engine.agent.reshape import choose_dates, plan_combine
 from engine.agent.tools import AgentContext, AgentToolError, call_tool
-from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name
+from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name, quoted
 from engine.config import (
     ColumnType,
     ConfigError,
@@ -384,9 +384,18 @@ def _recipe_proposal(
     )
 
 
-def _examples(issue: Mapping[str, Any]) -> str:
-    shown = [f'"{value}"' for value in list(issue.get("examples", []) or [])[:3]]
-    return ", ".join(shown)
+_QUOTED_EXAMPLES: Final[frozenset[str]] = frozenset(
+    {"boolean_as_text", "category_variants", "untrimmed_text"}
+)
+"""Issue kinds whose examples `formats.py` already quotes: `'Basic' → 'BASIC'`, `'Y' (749)`."""
+
+
+def _examples(issue: Mapping[str, Any], key: str = "examples") -> str:
+    """Up to three of an issue's examples for a reason: `'1,200', '3,400'` - one quoting style
+    (`quoted`), never a Python tuple and never a pair wrapped in a second pair of quotes."""
+    values = [str(value) for value in list(issue.get(key, []) or [])[:3]]
+    ready = key == "examples" and str(issue.get("kind")) in _QUOTED_EXAMPLES
+    return ", ".join(values if ready else [quoted(value) for value in values])
 
 
 def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]) -> None:
@@ -403,7 +412,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
         params: dict[str, Any] = dict(issue.get("params", {}) or {})
         if kind == "number_as_text":
             if non_empty and failed / non_empty * 100.0 > limit:
-                bad = ", ".join(f'"{v}"' for v in list(issue.get("failed_examples", []) or [])[:3])
+                bad = _examples(issue, "failed_examples")
                 builder.ask(
                     f"Most of '{display_name(column)}' looks like numbers, but {failed} of {non_empty} values cannot be read "
                     f"(for example {bad}). What should happen to this column?",
@@ -481,7 +490,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                 builder,
                 _step(RecipeStepKind.MAP_BOOLEAN, column, **params),
                 f"Turn the yes / no values in '{display_name(column)}' into 1 and 0",
-                f"The same answer is spelled several ways ({_examples(issue)}).",
+                f"The same answer is spelled several ways: {_examples(issue)}.",
                 evidence,
                 AgentConfidence.SURE,
             )
