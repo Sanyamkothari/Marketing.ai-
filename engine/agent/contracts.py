@@ -31,6 +31,7 @@ from typing import Annotated, Final, Self
 
 from pydantic import AwareDatetime, Field, JsonValue, model_validator
 
+from engine.agent.config import AgentLevel
 from engine.config import StrictBase
 from engine.contracts import Artefact
 
@@ -201,6 +202,22 @@ class DataRecipe(Artefact):
     derived_from_recipe_id: str | None = Field(
         default=None, description="The recipe this one replaced, when a changed file forced a new version."
     )
+    levels: tuple[AgentLevel, ...] | None = Field(
+        default=None,
+        description=(
+            "The use case's `agent.levels` when the recipe was approved; every replay runs under them. "
+            "Null on a recipe saved before they were recorded: the use case's current levels apply."
+        ),
+    )
+    max_failure_pct: float | None = Field(
+        default=None,
+        ge=0.0,
+        le=100.0,
+        description=(
+            "The use case's `agent.max_conversion_failure_pct` when the recipe was approved; every "
+            "replay uses it. Null on a recipe saved before it was recorded: the current limit applies."
+        ),
+    )
     created_at: AwareDatetime = Field(description="When it was approved.")
 
     @model_validator(mode="after")
@@ -211,6 +228,31 @@ class DataRecipe(Artefact):
         if self.recipe_hash != recipe_hash(self.steps):
             raise ValueError("recipe_hash does not match the steps")
         return self
+
+    def prepares_like(self, other: DataRecipe) -> bool:
+        """True when the two recipes turn the same file into the same prepared file.
+
+        `recipe_hash` covers the steps only, so that the same fixes hash the same on next month's
+        file. What a replay also depends on - the ID and outcome columns the steps are checked
+        against, the snapshot column a derive step reads, and the levels and failure limit it runs
+        under - is compared here, so an upload prepared under one of them is never reused for
+        another (Plan G review).
+        """
+        return (
+            self.recipe_hash,
+            self.primary_key,
+            self.target,
+            self.snapshot_column,
+            self.levels,
+            self.max_failure_pct,
+        ) == (
+            other.recipe_hash,
+            other.primary_key,
+            other.target,
+            other.snapshot_column,
+            other.levels,
+            other.max_failure_pct,
+        )
 
 
 class StepReceipt(StrictBase):

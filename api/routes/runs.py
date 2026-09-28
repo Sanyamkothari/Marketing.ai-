@@ -40,7 +40,12 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep
-from api.routes.agent_recipes import attach_recipe_to_run, replay_for_scoring  # Plan G (DEC-1006)
+from api.routes.agent_recipes import (  # Plan G (DEC-1006)
+    attach_recipe_to_run,
+    load_recipe,
+    model_recipe,
+    replay_for_scoring,
+)
 from api.routes.uploads import (
     UPLOAD_VALIDATION_FILENAME,
     http_error,
@@ -206,6 +211,11 @@ DATASET_USE_CASE_MISMATCH: Final[str] = "DATASET_USE_CASE_MISMATCH"
 DATASET_CLIENT_MISMATCH: Final[str] = "DATASET_CLIENT_MISMATCH"
 UPLIFT_REQUIRES_UPLIFT_ROUTE: Final[str] = "UPLIFT_REQUIRES_UPLIFT_ROUTE"
 """An uplift training run asked of `POST /runs`, which cannot run the uplift checks first (M53)."""
+RECIPE_DATASET_UNSUPPORTED: Final[str] = "RECIPE_DATASET_UNSUPPORTED"
+"""Scoring a built dataset with a model whose training data Guided setup prepared (Plan G review):
+only an upload can be prepared by the model's recipe today, and an unprepared file is scored wrongly."""
+RECIPE_ROLES_MISMATCH: Final[str] = "RECIPE_ROLES_MISMATCH"
+"""A run on a prepared upload with another ID column or outcome than its recipe was checked against."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -310,6 +320,33 @@ def _dataset_source(
     return _DatasetSource(manifest=manifest, profile=profile, source_key=frame_key)
 
 
+def _refuse_other_roles(
+    storage: Storage, upload_id: str, *, primary_key: PrimaryKey, target: str | None
+) -> None:
+    """409 when a prepared upload is run with another ID column or outcome than its recipe's.
+
+    Every safety rule of a recipe - no step changes the ID or the outcome, no computed column reads
+    the outcome, combined rows never add the outcome up - was checked against the recipe's own roles
+    (DEC-1004). A run naming other roles would train on, or join scores by, columns those rules never
+    protected. A scoring run names no outcome, so only its ID column is compared, and only when the
+    model's recipe named one.
+    """
+    recipe = load_recipe(storage, upload_id)
+    if recipe is None:
+        return
+    key = primary_key if isinstance(primary_key, str) else None
+    training = target is not None
+    other_key = key != recipe.primary_key and (training or recipe.primary_key is not None)
+    if other_key or (training and target != recipe.target):
+        raise http_error(
+            409,
+            RECIPE_ROLES_MISMATCH,
+            f"This file was prepared by Guided setup with {recipe.primary_key!r} as the ID column"
+            + (f" and {recipe.target!r} as the outcome" if target is not None else "")
+            + ". Run it with those, or start Guided setup again on the file you sent.",
+        )
+
+
 @router.post(
     "/runs",
     response_model=RunCreatedResponse,
@@ -376,6 +413,8 @@ def create_run_endpoint(
 
     version: ModelVersion | None = None
     if body.mode is RunMode.TRAIN:
+        if upload is not None:
+            _refuse_other_roles(storage, upload.upload_id, primary_key=primary_key, target=target or None)
         report = validate.validate_for_training(
             read_frame(storage, source_key, file_format, profile_row_cap(config)),
             config,
@@ -390,6 +429,13 @@ def create_run_endpoint(
         # version's columns, so this version is the one that must score it, whatever is promoted
         # while the job waits in the queue.
         version = score_version(registry, config=config, version_id=body.model_version_id)
+        if upload is None and model_recipe(storage, version) is not None:
+            raise http_error(
+                409,
+                RECIPE_DATASET_UNSUPPORTED,
+                "This model was trained on data Guided setup prepared, and a built dataset cannot be "
+                "prepared the same way yet. Upload the file to score instead.",
+            )
         if upload is not None:
             # Plan G (DEC-1006): a model trained on prepared data prepares every scoring file the same
             # way, before the file is checked against its schema; a file it cannot prepare is a 409.
@@ -399,6 +445,7 @@ def create_run_endpoint(
                 return validation_conflict(replayed)
             upload, profile = replayed
             source_key, file_format, source_id = upload.source_key, upload.file_format, upload.upload_id
+            _refuse_other_roles(storage, upload.upload_id, primary_key=primary_key, target=None)
         report = validate.validate_against_schema(
             read_frame(storage, source_key, file_format, profile_row_cap(config)),
             storage.read_model(version.schema_key, FeatureSchema),
