@@ -90,6 +90,9 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
 | GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
 | GET | `/runs/{run_id}/incrementality-input` | The treated-versus-control outcomes Plan B's incrementality report reads | IncrementalityInput |
+| GET | `/runs/{run_id}/measure` | Step 4 of a scoring run: its measured campaign, the plain verdict and what can be learned | MeasureView |
+| POST | `/runs/{run_id}/measure` | Measure a scoring run's campaign from an outcomes file of customer id and outcome | MeasureView |
+| POST | `/runs/{run_id}/measure/learn` | Learn who to contact next time: an uplift training run on the measured campaign | RunCreatedResponse |
 | GET | `/runs/{run_id}/outcomes` | A scoring run's real-world performance | OutcomeReport |
 | POST | `/runs/{run_id}/outcomes` | Add a scoring run's real outcomes, once its window has matured | OutcomeReport |
 | POST | `/runs/{run_id}/root-cause` | Start a root-cause summary over a finished scoring run | GenerativeJobStartedResponse |
@@ -380,6 +383,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `bands` | list[Band] | no |  |
 | `suppression` | SuppressionConfig | no |  |
 | `control_group_fraction` | number | no |  |
+| `contacts_customers` | boolean | no |  |
 
 #### MonitoringConfig
 

@@ -430,6 +430,9 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/models/{model_id}/reject",
         "/privacy/erasure/{request_id}/retry",
         "/privacy/erasure/{request_id}/progress",
+        # Plan H M83: step 4 of a use case, "Measure the campaign", and learning from it
+        "/runs/{run_id}/measure",
+        "/runs/{run_id}/measure/learn",
     }
 
 

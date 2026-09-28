@@ -202,6 +202,36 @@ export function setupModes(uc) {
     }
   });
 }
+
+// Plan H M83: a *run panel* - a full-width section under a run's Results flow, for a step that needs
+// more room than a flow block ("4 Measure the campaign": an upload and its result). `ui/usecase.js`
+// draws `runPanelsHtml(uc, run)` below the flow blocks; the module owns the panel's markup, its
+// events (delegated, so a repaint of the screen needs no re-binding) and its own in-place redraws.
+const runPanelList = [];
+
+/** Register a run panel: `{ name, applies(uc, run), html(uc, run) }`. `name` must be unique. */
+export function registerRunPanel(panel) {
+  const { name, applies, html } = panel || {};
+  if (!name || typeof applies !== "function" || typeof html !== "function") {
+    throw new Error("registerRunPanel needs { name, applies(uc, run), html(uc, run) }");
+  }
+  if (runPanelList.some((p) => p.name === name)) throw new Error(`A run panel named "${name}" is already registered`);
+  runPanelList.push({ name, applies, html });
+  announceModulesChanged();
+}
+
+/** The markup of every run panel that applies to this run, in registration order; `""` for none. */
+export function runPanelsHtml(uc, run) {
+  return runPanelList
+    .map((panel) => {
+      try {
+        return panel.applies(uc, run) ? panel.html(uc, run) || "" : "";
+      } catch {
+        return "";
+      }
+    })
+    .join("");
+}
 // ---- END PLAN-G ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----

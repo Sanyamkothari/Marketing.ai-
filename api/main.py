@@ -241,6 +241,10 @@ PHASE_ROUTERS.append(pilot_router)
 from api.routes.agent import router as agent_router  # noqa: E402
 
 PHASE_ROUTERS.append(agent_router)
+# Plan H M83: step 4 of a use case, "Measure the campaign" - a thin layer over the uplift routes.
+from api.routes.measure import router as measure_router  # noqa: E402
+
+PHASE_ROUTERS.append(measure_router)
 # ---- END PLAN-G ----
 
 app: FastAPI = create_app()

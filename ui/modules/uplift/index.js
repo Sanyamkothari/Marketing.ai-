@@ -30,6 +30,7 @@ import { ApiError, getIndustries, getUseCase } from "../../api.js";
 import { crumbs, errorBox, esc, notFound, pageHead, skeleton } from "../../dom.js";
 import { journeyFor } from "../../overview.js";
 import { registerModule, registerRunAction, setActiveNav } from "../router.js";
+import { campaignStep } from "../measure/rule.js";
 import {
   createCampaignController,
   createModelController,
@@ -266,7 +267,11 @@ registerRunAction({
  */
 registerRunAction({
   name: "campaign-results",
-  applies: (uc, run) => !!uc && !!run && run.mode === "score" && run.state === "done",
+  // Plan H M83: a use case whose config says it contacts customers shows step 4, "Measure the
+  // campaign" (`modules/measure/`), instead; one that does not (operational) shows neither. The
+  // block stays for a use case object without its config, as before.
+  applies: (uc, run) =>
+    !!uc && !!run && run.mode === "score" && run.state === "done" && campaignStep(uc) === "unknown",
   html: (uc, run) =>
     `<div class="arrow" aria-hidden="true">→</div><a class="block" href="${esc(
       routes.campaign(uc.id, run.run_id),

@@ -60,7 +60,7 @@ import {
   stagesHtml,
   writePath,
 } from "./settings.js";
-import { runActionsHtml, setupModes, setupSource } from "./modules/router.js";
+import { runActionsHtml, runPanelsHtml, setupModes, setupSource } from "./modules/router.js";
 import * as seams from "./modules/router.js";
 
 const AUTOML = "__automl__";
@@ -1150,10 +1150,12 @@ function resultsHtml(uc, s) {
     ["Error code", run.error && run.error.code],
   ]);
   const flow = flowBlocks(uc, s, run);
+  // A step that needs a full-width section under the flow (Plan H M83: "4 Measure the campaign").
+  const panels = run.mode === "score" && run.state === "done" ? runPanelsHtml(uc, run) : "";
   return `<div class="results"><section class="summary rsum"><div class="vline">${told.head}</div>${told.lines.join(
     "",
   )}<div class="btn-row">${told.actions}</div>${tech}</section>
-    <div class="flow${flow.count > 3 ? " four" : ""}">${flow.html}</div>
+    <div class="flow${flow.count > 3 ? " four" : ""}">${flow.html}</div>${panels}
     <div class="runs-below">${runsCard(uc, s)}</div></div>`;
 }
 

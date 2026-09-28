@@ -61,6 +61,7 @@ a Menu button. The active goal follows the route (`navFor(hash)` in `chrome.js`)
 | `registerAccess({can(method, path), status?()})` | Role visibility. Items with a `need` (Waiting for approval: `GET /approvals`; Model health: `GET /schedules`) are hidden when `can` says no; `status() === "signed-out"` draws the wordmark and the user slot only. No provider: everything is drawn. Safe to call from `boot.js`. |
 | `registerGlossary({code, term, metric, setting})` | Functions or maps, or the `GET /pilot/help` catalogue itself (`{codes, terms, metrics, settings}`). |
 | `registerRunAction({name, applies(uc, run), html(uc, run)})` / `runActionsHtml(uc, run)` | Actions on a run's results (AI copy, root-cause notes, campaign results). Register from a module's `index.js`. |
+| `registerRunPanel({name, applies(uc, run), html(uc, run)})` / `runPanelsHtml(uc, run)` | A full-width section under a finished scoring run's Results flow, for a step that needs room (Plan H M83: "4 Measure the campaign", `modules/measure/`). The module delegates its events and redraws its own element. |
 | `setActiveNav(id)` | Override the active goal for the current route only (a scoring run's Output is `"campaigns"`). |
 | `refreshTopBar()` | Redraw the bar after a slot's own state changed. `MODULES_CHANGED` and route changes redraw it anyway. |
 
