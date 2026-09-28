@@ -163,6 +163,45 @@ import "./production/boot.js";
 // index.html's PLAN-E block, as the uplift module is, for the same reason: it imports this file.
 // ---- END PLAN-E ----
 // ---- PLAN-G (agents) — append only below this line ----
+// A *setup mode* (Plan G M75): a second way through the use-case page's Setup view, offered as a tab
+// beside "Manual setup" - today, "Guided setup". `ui/usecase.js` asks for the modes that apply to a
+// use case, draws the tab strip when there is at least one, and on that tab hands the mode two empty
+// elements to mount into (`main`, left; `aside`, right, above Previous runs) and a `host` - the only
+// door back into the Setup form's state:
+//
+//     host = { uc, mode, mayRun, approved({ upload, primaryKey, target, overrides }), manual() }
+//
+// `approved` fills the Setup form exactly as Manual setup would have been filled (the upload, the
+// two columns, every override - the paths come from the API, never from the module) and Run is then
+// the form's own. The agent module (`modules/agent/index.js`) is loaded by its own `<script>` in
+// index.html's PLAN-G block, as the uplift and pilot modules are, because it imports this file.
+
+const setupModeList = [];
+
+/**
+ * Register a setup mode: `{ name, label, applies(uc), mount({ main, aside }, host) }`. `name` must be
+ * unique; `label` is the tab's text; `applies(uc)` says whether the use case offers it.
+ */
+export function registerSetupMode(mode) {
+  const { name, label, applies, mount } = mode || {};
+  if (!name || !label || typeof applies !== "function" || typeof mount !== "function") {
+    throw new Error("registerSetupMode needs { name, label, applies(uc), mount({ main, aside }, host) }");
+  }
+  if (setupModeList.some((m) => m.name === name)) throw new Error(`A setup mode named "${name}" is already registered`);
+  setupModeList.push({ name, label, applies, mount });
+  announceModulesChanged();
+}
+
+/** The registered setup modes that apply to `uc`, in registration order; `[]` for none. */
+export function setupModes(uc) {
+  return setupModeList.filter((mode) => {
+    try {
+      return Boolean(mode.applies(uc));
+    } catch {
+      return false;
+    }
+  });
+}
 // ---- END PLAN-G ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----

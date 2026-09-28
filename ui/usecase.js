@@ -60,12 +60,14 @@ import {
   stagesHtml,
   writePath,
 } from "./settings.js";
-import { runActionsHtml, setupSource } from "./modules/router.js";
+import { runActionsHtml, setupModes, setupSource } from "./modules/router.js";
 import * as seams from "./modules/router.js";
 
 const AUTOML = "__automl__";
 const FILE = "file";
 const RAW = "raw";
+/** The run override that carries the warnings the user confirmed (`POST /runs`, DEC-058). */
+const ACKNOWLEDGED = "validation.acknowledged";
 const POLL_MS = 2000;
 const RUNS_SHOWN = 5;
 
@@ -125,6 +127,10 @@ export function useCaseState(uc) {
       models: [],
       clientRuns: [],
       clientId: null,
+      // Plan G: the Setup view's tab ("manual", or a registered setup mode's name) and the upload a
+      // setup mode filled the form with, so that tab can draw the Run button once it has.
+      setupTab: "manual",
+      guided: null,
       view: "setup",
       runId: null,
       detail: null,
@@ -315,7 +321,7 @@ function overridesFor(uc, s) {
   Object.assign(overrides, s.extraOverrides);
   const chosen = chosenProblemType(uc, s);
   if (chosen && chosen !== uc.problem_type) overrides.problem_type = chosen;
-  if (s.acknowledged.length) overrides["validation.acknowledged"] = s.acknowledged.slice();
+  if (s.acknowledged.length) overrides[ACKNOWLEDGED] = s.acknowledged.slice();
   return overrides;
 }
 
@@ -727,14 +733,10 @@ const noModelHtml = (uc) =>
     action: { label: "Train a model", attrs: 'data-goto-mode="train"' },
   })}</div>`;
 
-function setupForm(uc, s) {
+/** The Train / Score switch and its one line of help, at the top of the Setup card. */
+function modeSeg(uc, s) {
   const copy = modeCopy(uc, s);
-  const train = s.mode === "train";
-  const why = blocker(uc, s);
-  const extension = setupSource();
-  const card = extension ? extension.card(uc, s.mode, extension.context()) : null;
-  const hasData = !!dataOf(s);
-  const seg = `<div class="seg" role="group" aria-label="Mode">${uc.setup.modes
+  return `<div class="seg" role="group" aria-label="Mode">${uc.setup.modes
     .map(
       (m) =>
         `<button type="button" data-mode="${esc(m.value)}" class="${m.value === s.mode ? "on" : ""}" aria-pressed="${
@@ -742,6 +744,16 @@ function setupForm(uc, s) {
         }">${esc(m.label)}</button>`,
     )
     .join("")}</div><p class="seg-help">${esc(copy.help)}</p>`;
+}
+
+function setupForm(uc, s) {
+  const copy = modeCopy(uc, s);
+  const train = s.mode === "train";
+  const why = blocker(uc, s);
+  const extension = setupSource();
+  const card = extension ? extension.card(uc, s.mode, extension.context()) : null;
+  const hasData = !!dataOf(s);
+  const seg = modeSeg(uc, s);
 
   if (!train && !trainedVersions(s).length) {
     return `<section class="card"><div class="form-body">${seg}${noModelHtml(uc)}</div></section>`;
@@ -777,7 +789,67 @@ function setupForm(uc, s) {
       </form></div></section>`;
 }
 
+// --- setup modes (Plan G) -------------------------------------------------------------------------
+// A phase module can offer a second way through Setup (`registerSetupMode`, modules/router.js) -
+// today, Guided setup. Then the Setup view gets a tab strip: the module's tab, and "Manual setup",
+// which is the form above, unchanged. On the module's tab this screen draws the card, the mode switch
+// and two empty elements the module mounts into; once the module has filled the form's state
+// (`host.approved`), the card also draws this form's own validation list and Run button.
+
+const MANUAL = "manual";
+
+/** The tab on show: the one the user picked while it is still offered, else Manual setup. */
+function activeTab(s, modes) {
+  return modes.some((m) => m.name === s.setupTab) ? s.setupTab : MANUAL;
+}
+
+function setupTabsHtml(modes, active) {
+  const tab = (name, label) =>
+    `<button type="button" class="tab${name === active ? " on" : ""}" data-setup-tab="${esc(name)}" aria-pressed="${
+      name === active
+    }">${esc(label)}</button>`;
+  return `<div class="tabs setup-tabs" role="group" aria-label="How to set up">${modes
+    .map((m) => tab(m.name, m.label))
+    .join("")}${tab(MANUAL, "Manual setup")}</div>`;
+}
+
+/** Whether a setup mode filled the form with the upload it still holds. */
+const guidedFilled = (s) => Boolean(s.guided && s.upload && s.source === FILE && s.upload.upload_id === s.guided.uploadId);
+
+function modeForm(uc, s) {
+  const copy = modeCopy(uc, s);
+  const train = s.mode === "train";
+  const seg = modeSeg(uc, s);
+  if (!train && !trainedVersions(s).length) {
+    return `<section class="card"><div class="form-body">${seg}${noModelHtml(uc)}</div></section>`;
+  }
+  const why = blocker(uc, s);
+  const model = train ? "" : `<div class="f-setup">${scoreModelStep(uc, s, 1)}</div>`;
+  const run = guidedFilled(s)
+    ? `<form id="f-setup" novalidate class="f-setup">
+        ${validationHtml(uc, s)}
+        ${s.submitError ? errorBox(s.submitError) : ""}
+        <div class="actions"><button type="submit" class="btn primary run" id="f-run"${
+          why || s.submitting ? " disabled" : ""
+        }>${esc(s.submitting ? "Starting…" : copy.run_button)}</button><span class="reason">${esc(why)}</span></div>
+      </form>`
+    : "";
+  return `<section class="card"><div class="form-body">${seg}${model}<div id="f-mode"></div>${run}</div></section>`;
+}
+
 function setupHtml(uc, s) {
+  const modes = mayRun(s) ? setupModes(uc) : [];
+  if (modes.length) {
+    const active = activeTab(s, modes);
+    const strip = setupTabsHtml(modes, active);
+    if (active !== MANUAL) {
+      return `${strip}<div class="setup-grid">${modeForm(uc, s)}<div class="setup-side"><div id="f-mode-aside"></div>${runsCard(
+        uc,
+        s,
+      )}</div></div>`;
+    }
+    return `${strip}<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
+  }
   if (mayRun(s)) return `<div class="setup-grid">${setupForm(uc, s)}${runsCard(uc, s)}</div>`;
   // A role that may not start runs: what it can do first, the (gated) form folded away below.
   const latest = latestDone(s);
@@ -1176,6 +1248,10 @@ details.more-runs>summary{padding:12px 20px;border-top:1px solid var(--line);fon
 .block .next-actions{flex-wrap:wrap;gap:8px 16px;justify-content:flex-start}
 .uc-viewer{display:flex;flex-direction:column;gap:24px;margin-top:8px}
 .uc-viewer .adv-wrap{border-top:0}
+.setup-tabs{margin:8px 0 16px}
+.setup-tabs .tab{font:inherit;font-size:13px;font-weight:500;cursor:pointer}
+.setup-tabs .tab:not(.on){background:var(--surface)}
+.setup-side{display:flex;flex-direction:column;gap:24px;min-width:0}
 @media (max-width:1100px){.flow.four{grid-template-columns:1fr}.flow.four .arrow{transform:rotate(90deg);height:40px}}
 @media (max-width:700px){.run-head{flex-direction:column}.stages.plain .sfields{grid-template-columns:1fr}.ptype .control{width:100%}.runrow{flex-direction:column;align-items:flex-start}.runrow .r3{text-align:left;max-width:none}.rsum .vline{font-size:18px}}
 `;
@@ -1541,6 +1617,74 @@ export function createController(uc, rerender) {
     settleModel();
   }
 
+  /**
+   * What a setup mode (Plan G) may do to this form: read which use case and mode it is on, and fill
+   * the form's state once the person approved - then Run is this form's own `submit()`.
+   */
+  const host = {
+    uc,
+    get mode() {
+      return s.mode;
+    },
+    get mayRun() {
+      return mayRun(s);
+    },
+    /** Score mode's first step is the model choice this card draws above the mode's own steps. */
+    get firstStep() {
+      return s.mode === "score" ? 2 : 1;
+    },
+    holds: (uploadId) => guidedFilled(s) && s.upload.upload_id === uploadId,
+    approved: (fill) => adoptGuided(fill),
+    manual() {
+      s.setupTab = MANUAL;
+      rerender();
+    },
+  };
+
+  /**
+   * Fill the form from a setup mode's approval, exactly as Manual setup would have been filled: the
+   * (prepared) upload and its profile, the two columns, and every override - a path the settings
+   * schema has goes into `values`, the acknowledgements into `acknowledged`, anything else into
+   * `extraOverrides`. The paths are the API's; none is spelled here. Earlier edits are dropped: what
+   * was approved is the whole plan.
+   */
+  function adoptGuided({ mode, upload: prepared, primaryKey, target, overrides }) {
+    if (mode && mode !== s.mode) return;
+    const schema = uc.advanced_settings || { stages: [] };
+    const byPath = indexSchema(schema);
+    releaseTimeSplit();
+    s.source = FILE;
+    s.dataset = null;
+    s.upload = prepared;
+    s.uploadError = null;
+    s.pk = primaryKey || "";
+    s.target = s.mode === "train" ? target || "" : "";
+    s.problemType = "";
+    s.editColumns = false;
+    s.validation = null;
+    s.submitError = null;
+    s.values = initialValues(schema, uc.config);
+    s.values.__ui = { model: s.model };
+    s.acknowledged = [];
+    s.extraOverrides = {};
+    for (const [path, value] of Object.entries(overrides || {})) {
+      if (path === "problem_type") s.problemType = value;
+      else if (path === ACKNOWLEDGED) s.acknowledged = Array.isArray(value) ? value.slice() : [value];
+      else if (byPath.has(path)) writePath(s.values, path, value);
+      else s.extraOverrides[path] = value;
+    }
+    s.guided = { uploadId: prepared.upload_id };
+    rerender();
+  }
+
+  /** Mount the chosen setup mode into this paint's two placeholders, on its own tab. */
+  function mountMode(root) {
+    const main = root.querySelector("#f-mode");
+    if (!main) return;
+    const mode = setupModes(uc).find((m) => m.name === s.setupTab);
+    if (mode) mode.mount({ main, aside: root.querySelector("#f-mode-aside") }, host);
+  }
+
   /** Mount the setup source's panel into this paint's placeholder, when the raw card is chosen. */
   function mountSource(root) {
     const slot = root.querySelector("#f-onboarding");
@@ -1557,7 +1701,8 @@ export function createController(uc, rerender) {
       if (el) el.addEventListener(event, fn);
     };
 
-    root.querySelectorAll(".seg button").forEach((button) =>
+    // `[data-mode]`: only the Train / Score switch, never another button group drawn beside it.
+    root.querySelectorAll(".seg button[data-mode]").forEach((button) =>
       button.addEventListener("click", () => {
         if (s.mode === button.dataset.mode) return;
         switchMode(button.dataset.mode);
@@ -1567,6 +1712,14 @@ export function createController(uc, rerender) {
     root.querySelectorAll("[data-goto-mode]").forEach((button) =>
       button.addEventListener("click", () => {
         switchMode(button.dataset.gotoMode);
+        rerender();
+      }),
+    );
+
+    root.querySelectorAll("[data-setup-tab]").forEach((button) =>
+      button.addEventListener("click", () => {
+        if (s.setupTab === button.dataset.setupTab) return;
+        s.setupTab = button.dataset.setupTab;
         rerender();
       }),
     );
@@ -1707,6 +1860,7 @@ export function createController(uc, rerender) {
 
     // Last, so none of the queries above reaches into the panel: it binds its own events.
     if (s.view === "setup") mountSource(root);
+    if (s.view === "setup") mountMode(root);
 
     // The role gate disables Run in a microtask after this paint; once it has, a role that may not
     // start runs gets the read-only layout (and the full form again after a sign-in as one that may).

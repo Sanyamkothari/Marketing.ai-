@@ -258,6 +258,41 @@ export const SCREENS = [
     },
   },
   {
+    // Plan G M75: the Guided setup tab. `full` uploads the prepared telco file, so the helper has
+    // little to fix; the states that matter are the checklist, the summary and the chat beside it.
+    id: "guided-setup", group: "setup-onboarding", title: "Use case Setup, Guided setup tab (helper's suggestions, summary, chat)",
+    roles: "Analyst", files: [...P1, "ui/modules/agent/guided.js", "ui/modules/agent/styles.js"],
+    route: (m) => `#/uc/${m.use_case_id}`,
+    states: {
+      full: {
+        base: "demo", note: "telco_history.csv uploaded on the Guided tab",
+        act: async (page) => {
+          await click(page, '[data-setup-tab="guided"]');
+          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+          await page.locator("[data-ag-group], [data-ag-stop]").first().waitFor({ timeout: 20000 }).catch(() => {});
+          await settle(page, 400);
+        },
+      },
+      empty: { base: "empty", note: "before a file is uploaded", act: async (page) => click(page, '[data-setup-tab="guided"]') },
+      loading: {
+        base: "demo", note: "the helper's first look held back", delay: /^\/uploads\/[^/]+\/agent-session$/,
+        act: async (page) => {
+          await click(page, '[data-setup-tab="guided"]');
+          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+        },
+      },
+      error: {
+        base: "demo", note: "starting the session fails (500 injected)", fail: /^\/uploads\/[^/]+\/agent-session$/,
+        act: async (page) => {
+          await click(page, '[data-setup-tab="guided"]');
+          await page.locator("#ag-file").setInputFiles(path.join(FIX, "telco_history.csv"));
+          await page.locator(".ag .apierr").first().waitFor({ timeout: 10000 }).catch(() => {});
+          await settle(page, 400);
+        },
+      },
+    },
+  },
+  {
     id: "client-new", group: "setup-onboarding", title: 'Header client picker: "+ New client" form',
     roles: "Analyst", files: ["ui/modules/onboarding/clients.js", "ui/dom.js"],
     route: (m) => `#/uc/${m.use_case_id}`,
@@ -784,6 +819,11 @@ async function shoot(browser, screen, stateName, spec, m, variant) {
   try {
     await page.goto(url, { waitUntil: "domcontentloaded", timeout: 30000 });
     if (stateName === "loading") {
+      // A loading state reached by clicking (Guided setup's upload): act, then shoot while held back.
+      if (spec.act) {
+        await settle(page);
+        await spec.act(page, m);
+      }
       await page.waitForTimeout(1500);
     } else {
       await settle(page);
