@@ -126,8 +126,8 @@ These ten steps show the whole product in about fifteen minutes.
 7. **Build a dataset from raw tables.** Under **Build data**, see what a client is asked to send,
    and open the **data readiness report**. The demo also holds a broken extract with one planted
    problem (duplicate customer IDs); its readiness report shows how a problem is explained.
-8. **Uplift: who to contact, and who to leave alone.** Open **Win-back Campaign → Also: target
-   with uplift ›** (or **Models → Uplift models**). It sorts customers into persuadables, sure
+8. **Uplift: who to contact, and who to leave alone.** Open **Settings → Advanced → Uplift
+   workbench** and pick **Win-back Campaign**. It sorts customers into persuadables, sure
    things, lost causes and sleeping dogs, and recommends contacting only the persuadables.
 9. **Approvals.** Under **Models**, open **Waiting for approval**. A new model only replaces the
    current one after an Approver agrees; with `make demo-signin`, sign in as `demo-lead`, train a

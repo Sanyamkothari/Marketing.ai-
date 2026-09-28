@@ -86,7 +86,7 @@ A newly trained model waits for approval before it is the one in use. Results sh
 
 Only for use cases that contact customers (ads, cross-sell, payment reminders, retention, win-back). Operational use cases, *Order Fulfillment* and *Fault Prediction*, do not have this step.
 
-When you score customers for a campaign, a small group (10% by default) is held back and not contacted. After the campaign, open the scoring run and go to **4 · Measure the campaign**:
+When you score customers for a campaign, a small group (10% by default) is held back and not contacted. After the campaign, open the scoring run and go to **Measure the campaign**, the last step on its page:
 
 1. Click **Upload outcomes**: a CSV with the customer id and one column, 1 if they responded and 0 if not.
 2. You get one plain answer, such as "The campaign added about 180 conversions", "No clear effect yet" or "Outcome window not over yet", with the response rates of the contacted and held-back customers.

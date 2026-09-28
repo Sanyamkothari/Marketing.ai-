@@ -1,14 +1,13 @@
 // Phase 3b's entry point: the uplift screens (plan B §8), registered with `ui/modules/router.js`.
 //
 // HOW A USER REACHES THE UPLIFT SCREENS
-//   * From the top bar: Models › "Uplift models" (`ui/chrome.js`) opens `#/uplift`.
-//   * From a use case's Setup (`#/uc/<id>`): the quiet related link "Also: target with uplift ›" in
-//     its header, which this module offers through the router's run-action seam as the action for
-//     "no run" (`runActionsHtml(uc, null)`), and only for a use case that can have one (not an
-//     AI-written-text use case; planned, notice and error screens never draw a use case).
-//   * From a finished scoring run (`#/uc/<id>/run/<run>`): the "Campaign results" flow block, the
-//     same seam's action for a scoring run (`runActionsHtml(uc, run)`), because any scoring run with a
-//     control group can be measured - not only uplift ones.
+//   * From Settings → Advanced: "Uplift workbench" (`ui/modules/simple/pages.js`) opens `#/uplift`.
+//   * Not from a use case's header: Plan H makes uplift step 4 of a use case, "Measure the campaign"
+//     (`ui/modules/measure/`, whose "Learn who to contact next time" trains an uplift model and links
+//     to its contact list), so a use case offers no link to this workbench (UI_AUDIT §8.4 item 8).
+//   * From a finished scoring run (`#/uc/<id>/run/<run>`) of a use case object without its config:
+//     the "Campaign results" flow block, the router's run-action seam (`runActionsHtml(uc, run)`),
+//     because any scoring run with a control group can be measured - not only uplift ones.
 //   * From Campaigns (`#/monitoring/runs`) and the value view (`#/pilot/value/<run>`), which link here.
 //   * Directly, by URL:
 //       #/uplift                          every use case, one row each, with its uplift status
@@ -49,7 +48,6 @@ import {
   routes,
   upliftIndexHtml,
   upliftScreenHtml,
-  upliftUnavailable,
 } from "./views.js";
 
 injectUpliftStyles();
@@ -249,17 +247,7 @@ async function render(app, parts) {
 
 registerModule({ name: "uplift", routes: ROUTES, render });
 
-// --- what other screens offer: the related link and the Campaign results block -----------------
-
-/**
- * On a use case's own header (no run): "Also: target with uplift ›", as `headActions`' quiet related
- * link. Never for a use case uplift cannot serve (AI-written text, planned).
- */
-registerRunAction({
-  name: "uplift-related",
-  applies: (uc, run) => !run && !!uc && !!uc.id && !upliftUnavailable(uc),
-  html: (uc) => `<a class="related" href="${esc(routes.setup(uc.id))}">Also: target with uplift ›</a>`,
-});
+// --- what other screens offer: the Campaign results block ----------------------------------------
 
 /**
  * On a finished scoring run's Results: the fourth flow block, "Campaign results". It never says

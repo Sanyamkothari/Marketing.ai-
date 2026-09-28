@@ -138,9 +138,11 @@ test("DEC-608: Phase 1's change… never offers Uplift, not even for a file with
   assert.ok($(dom, "#f-model"), "the Phase 1 model step");
   assert.equal($(dom, "#f-learner"), null);
   assert.equal($(dom, ".upchecks"), null);
-  // Uplift is chosen by going to its screen, from the related link in the header's actions
-  const link = $(dom, ".head-actions a.related");
-  assert.equal(link.getAttribute("href"), UP);
+  // Uplift is chosen by going to its screen: not from the use case's header (Plan H, UI_AUDIT §8.4
+  // item 8) but from the workbench's index, #/uplift (Settings → Advanced in the product)
+  assert.equal($(dom, ".head-actions a.related"), null, "no uplift link on the use case");
+  go(dom, "#/uplift");
+  const link = $(dom, `.uindex a[href="${UP}"]`);
   click(dom, link);
   await settle(dom);
   assert.equal(dom.window.location.hash, UP);
@@ -511,10 +513,11 @@ test("the plain win-back sample is the Phase 1 path: no treatment column, a prop
   assert.equal($(dom, ".ptype .pill").textContent, "Classification (yes / no)");
   assert.ok($(dom, "#f-model"), "the Phase 1 model step, not the meta-learners");
   assert.equal($(dom, "#f-learner"), null);
-  // DEC-608: uplift is not a choice on this Setup; it is a link to the uplift screen, under the header
+  // DEC-608: uplift is not a choice on this Setup; it is an explicit opt-in on its own screen, which
+  // under Plan H the use case does not link to (UI_AUDIT §8.4 item 8)
   assert.equal($(dom, "#f-samplecampaign"), null, "the campaign files are on the uplift screen");
   assert.equal($(dom, "#f-sampletargeted"), null);
-  assert.equal($(dom, ".head-actions a.related").getAttribute("href"), UP, "uplift is an explicit opt-in, on its own screen");
+  assert.equal($(dom, ".head-actions a.related"), null, "no uplift link under the header");
   submit(dom);
   assert.equal($$(dom, ".progress .pt")[0].textContent === "Checking the treatment", false);
   await settle(dom);
@@ -1067,31 +1070,35 @@ test("Campaign results and Results date a run on the same day in Asia/Kolkata (I
 
 /* ---------- DEC-608: uplift is not a Phase 1 Setup choice ---------- */
 
-test("DEC-608: win-back's Setup links to its uplift screen, the product's entry point, in the product's words", async () => {
+test("DEC-608 under Plan H: no use case links to the uplift workbench; its screens stay at #/uplift", async () => {
   const dom = winback();
-  // v1 (the audit's navigation section): a quiet related link in the use case's own header actions,
-  // never a pill injected under the rule
+  // Plan H (UI_AUDIT §8.4 item 8): uplift is step 4 of a use case, "Measure the campaign", and the
+  // workbench sits under Settings → Advanced, so a use case's header has no "Also: target with uplift ›"
+  // related link (and never a pill injected under the rule)
   const entry = () => $(dom, ".head .head-actions a.related");
-  assert.equal($(dom, ".uentry"), null);
-  assert.equal(entry().textContent, "Also: target with uplift ›");
-  assert.equal(entry().getAttribute("title"), "Uplift predicts who changes behaviour because of your action");
-  assert.equal(entry().getAttribute("href"), UP);
+  const noLink = (where) => {
+    assert.equal(entry(), null, `${where}: no related link in the header`);
+    assert.equal($(dom, ".uentry"), null, `${where}: no injected pill`);
+    assert.doesNotMatch($(dom, ".head").textContent, /target with uplift/, where);
+    assert.equal($(dom, `.head a[href="${UP}"]`), null, `${where}: nothing in the header opens the workbench`);
+  };
+  noLink("Setup");
   // on every state of the use case's screen: Setup, Running and Results
   click(dom, "#f-sample");
   submit(dom);
-  assert.ok($(dom, ".progress") && entry(), "Running keeps the link");
+  assert.ok($(dom, ".progress"));
+  noLink("Running");
   await settle(dom);
-  assert.ok($(dom, ".results") && entry(), "Results keeps the link");
-  // no other use case has uplift sample content
+  assert.ok($(dom, ".results"));
+  noLink("Results");
   for (const id of ["targeted-advertisement", "ai-onboarding-assistant", "order-fulfillment", "fault-prediction", "payment-propensity", "rca"]) {
     go(dom, `#/uc/${id}`);
-    assert.equal(entry(), null, `${id} has no uplift link`);
+    noLink(id);
   }
-  // the reviewer's ruling on DEC-666 (DEC-952): the Data / Model / Output pages carry the use-case link,
-  // since v1 in their header actions too (screenshots 14 and 17)
+  // nor do the Data / Model / Output / Campaign pages (DEC-952 put the link there in v1)
   for (const page of ["data", "model", "output", "campaign"]) {
     go(dom, `#/uc/${WB}/${page}`);
-    assert.equal(entry().getAttribute("href"), UP, `${page} links to the uplift screen`);
+    noLink(page);
   }
   // Home carries no uplift pill: "Uplift models" is an entry of the top bar's Models menu (screenshot 25)
   go(dom, "#/");

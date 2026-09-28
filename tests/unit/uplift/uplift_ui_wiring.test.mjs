@@ -1,9 +1,9 @@
 /* The uplift module's wiring (ui/modules/uplift/index.js), in node with a stubbed `window`,
    `document` and `fetch`: it registers its two routes with ui/modules/router.js, and a route
-   render fetches exactly the contract's endpoints and paints what they returned, and the two run
-   actions it offers other screens (the use case's "Also: target with uplift" link, a scoring run's
-   "Campaign results" block) apply where they should. No browser and no npm install: a separate
-   file, so the globals stubbed here never leak into the view tests. */
+   render fetches exactly the contract's endpoints and paints what they returned, the run action it
+   offers other screens (a scoring run's "Campaign results" block) applies where it should, and a
+   use case's header gets no uplift link (Plan H, UI_AUDIT §8.4 item 8). No browser and no npm
+   install: a separate file, so the globals stubbed here never leak into the view tests. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
 
@@ -213,14 +213,15 @@ test("the module paints no entry pill on other screens: the links are run action
   assert.ok(!("entry" in main), "nothing is inserted under a Phase 1 header");
 });
 
-test("a use case's header gets the related link 'Also: target with uplift', never for AI-written text", () => {
+test("a use case's header gets no uplift link: Plan H makes uplift step 4 and the workbench a Settings entry", () => {
+  // UI_AUDIT §8.4 item 8: the related link "Also: target with uplift ›" is gone from every use case;
+  // the workbench stays reachable at #/uplift (the route below) and from Settings → Advanced.
   const winBack = { id: "win-back", name: "Win-back", ai_type: "predictive", status: "available" };
-  assert.equal(
-    router.runActionsHtml(winBack, null),
-    '<a class="related" href="#/uplift/win-back">Also: target with uplift ›</a>',
-  );
+  assert.equal(router.runActionsHtml(winBack, null), "");
   assert.equal(router.runActionsHtml({ id: "assistant", ai_type: "generative" }, null), "");
   assert.equal(router.runActionsHtml({ id: "soon", ai_type: "predictive", status: "planned" }, null), "");
+  assert.equal(router.resolveRoute(["uplift"]).name, "uplift", "#/uplift still opens the workbench");
+  assert.equal(router.resolveRoute(["uplift", "win-back"]).name, "uplift", "#/uplift/<uc> still opens its Setup");
 });
 
 test("a finished scoring run gets the Campaign results flow block; a training run does not", () => {

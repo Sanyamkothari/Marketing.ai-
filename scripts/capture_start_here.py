@@ -9,7 +9,7 @@ deleted afterwards), drives it the way a new user would, and writes 1280x800 PNG
 2. A use case's Guided setup, with a real helper session: a synthetic, deliberately messy file for
    Targeted Advertisement is uploaded through the page's own file input.
 3. Unless `--no-train`: one fast training run and one scoring run through the API (a minute or two),
-   then Results, the scoring run's results and its "4 Measure the campaign" step.
+   then Results, the scoring run's results and its "Measure the campaign" step.
 4. Settings, with Advanced tools opened.
 
 Every row is synthetic (`tests/fixtures/make_data.py`): no real person, no secret, no personal data.

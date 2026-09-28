@@ -3,9 +3,10 @@
    with the measure module loaded, before and after an outcomes file is uploaded, a campaign whose
    outcome window is not over, one too small to learn from, learning who to contact next time, and an
    operational use case that has no step 4 at all. */
+import fs from "node:fs";
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { $, $$, fixture, installPage, until } from "../harness.mjs";
+import { $, $$, ROOT, fixture, installPage, until } from "../harness.mjs";
 
 const uc = fixture("use_case");
 const ops = fixture("use_case_ops");
@@ -45,6 +46,15 @@ const server = ({ method, path }) => {
   return null;
 };
 const { w, calls } = installPage(server, { hash: `#/uc/${uc.id}/run/${run.run_id}` });
+// index.html's own stylesheets, first in <head> as on the page (before any module injects its rules),
+// so computed styles see the shared `.card h3` / `.block .lab` rules with the modules' rules after them.
+{
+  const html = fs.readFileSync(new URL("ui/index.html", ROOT), "utf8");
+  const style = w.document.createElement("style");
+  style.id = "page-styles";
+  style.textContent = [...html.matchAll(/<style>([\s\S]*?)<\/style>/g)].map((m) => m[1]).join("\n");
+  w.document.head.appendChild(style);
+}
 
 await import("../../../../../ui/modules/router.js");
 await import("../../../../../ui/modules/uplift/index.js");
@@ -72,11 +82,11 @@ test("a scoring run's Results end with step 4: a fourth block and the step, with
   const blocks = $$(".flow .block");
   assert.equal(blocks.length, 4);
   assert.equal(blocks[3].dataset.action, "measure");
-  assert.match(blocks[3].textContent, /^4 MeasureAfter the campaign/);
+  assert.match(blocks[3].textContent, /^MeasureAfter the campaign/);
   assert.equal($('[data-action="campaign-results"]'), null, "step 4 replaces the old Campaign results block");
   assert.ok(panel(), "the step is drawn under the flow");
   await until(() => $(".measure-lead"), 2000, "the step's first answer");
-  assert.equal($("#measure-h").textContent, "4 · Measure the campaign");
+  assert.equal($("#measure-h").textContent, "Measure the campaign");
   const held = fixture("measure_before").held_back.toLocaleString("en-US");
   assert.equal(
     $(".measure-lead").textContent,
@@ -85,6 +95,42 @@ test("a scoring run's Results end with step 4: a fourth block and the step, with
   assert.equal($$("[data-measure-file]").length, 1, "one upload button");
   assert.equal($(".measure-upload").textContent, "Upload outcomes");
   assert.equal($(".measure-result"), null, "no result before any outcome, and no number invented");
+});
+
+test("the use-case page's rough edges (UI_AUDIT §8.4 items 5-8)", async () => {
+  show(uc, run);
+  await until(() => $(".measure-lead"), 2000, "the step's first answer");
+  const css = (el, prop) => w.getComputedStyle(el).getPropertyValue(prop);
+  // 8: no "Also: target with uplift ›" in the use case's header; uplift is this step and a Settings entry
+  assert.equal($(".head .head-actions a.related"), null, "no related link in the header");
+  assert.doesNotMatch($(".head").textContent, /target with uplift/i);
+  assert.equal($('.head a[href^="#/uplift"]'), null, "nothing in the header opens the uplift workbench");
+  // 5: the Measure block and panel carry no stray number (Guided setup's 1-3 are its own)
+  const block = $('[data-action="measure"]');
+  assert.doesNotMatch(block.querySelector(".lab").textContent, /\d/, "the block's label has no number");
+  assert.doesNotMatch(block.querySelector(".go").textContent, /\d/, "nor its link");
+  assert.doesNotMatch($("#measure-h").textContent, /\d/, "the panel's heading has no number");
+  // 6: the block's state sits under its label, not beside it
+  const lab = block.querySelector(".lab");
+  assert.deepEqual([...lab.children].map((c) => c.textContent), ["Measure", "After the campaign"]);
+  assert.equal(css(lab, "flex-direction"), "column", "the state goes under the label");
+  assert.equal(css(lab, "align-items"), "flex-start");
+  // 6: the DATA block's file name is cut with an ellipsis on one line, whole in its tooltip
+  const name = $$(".flow .block")[0].querySelector(".val");
+  assert.ok(run.file_name, "the fixture run names its file");
+  assert.equal(name.textContent, run.file_name);
+  assert.equal(name.getAttribute("title"), run.file_name);
+  assert.equal(css(name, "white-space"), "nowrap");
+  assert.equal(css(name, "overflow"), "hidden");
+  assert.equal(css(name, "text-overflow"), "ellipsis");
+  assert.equal($$(".flow .block")[1].querySelector(".val").getAttribute("title"), null, "only the file name");
+  // 7: the panel's heading starts where its text does: the card pads both, the heading adds no more
+  const heading = $("#measure-h");
+  // (jsdom leaves a property no rule sets empty: that is the initial 0)
+  const left = (el) => ["padding-left", "margin-left"].map((p) => css(el, p) || "0px");
+  assert.equal(css(panel(), "padding-left"), "24px");
+  assert.deepEqual(left(heading), ["0px", "0px"], "no extra left padding on the heading");
+  assert.deepEqual(left(heading), left($(".measure-lead")), "the heading and the text share one left edge");
 });
 
 test("uploading outcomes shows one big plain result from the engine's report, the statistics folded", async () => {

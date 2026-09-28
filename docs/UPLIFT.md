@@ -497,9 +497,10 @@ Phase 1's champion rule in `engine/registry.py` is not changed.
 
 ### In the UI
 
-1. From the Overview, follow **Uplift modelling ›** (or **Uplift for this use case ›** on any
-   use-case screen). Both links are added by the uplift module. The screens live at `#/uplift` and
-   `#/uplift/<use case>`.
+1. Open **Settings → Advanced → Uplift workbench**. The screens live at `#/uplift` and
+   `#/uplift/<use case>`. A use case's own screen does not link here: under Plan H uplift is step 4
+   of a use case, **Measure the campaign**, whose "Learn who to contact next time" trains an uplift
+   model and links to its contact list (docs/UI_AUDIT.md §8.4 item 8).
 2. **Train uplift model**: upload the campaign file, pick the primary key, the **treatment column**
    (from the detected 0/1 columns) and the **outcome column**, and run. If a check blocks, the
    reasons appear in place. `TREATMENT_NOT_RANDOM` offers an acknowledge button.
