@@ -11,7 +11,12 @@ a recorded `ToolResult` a proposal cites, and turns what they found into:
   sure fixes applied, so a column of numbers stored as text is not mistaken for an ID. A suspected
   leak becomes a blocking question; a problem no setting can fix (too few rows, too few "yes"
   cases, an ID that repeats) stops the session with the check's own message and suggestion;
-* **setting proposals** - `engine.agent.recommend`.
+* **setting proposals** - `engine.agent.recommend`;
+* **a question to combine rows** (level 3, M76) - when the use case allows `reshape`, a training
+  file whose ID-named column repeats and that has a date column gets a blocking question instead of
+  a stop: "Each customer appears on N rows on average. Combine them into one row per customer?".
+  Choosing Combine adds a `combine_rows` step (`engine.agent.reshape`), and the advisor looks at the
+  file again as it will be once combined; choosing Stop stops with the Run button's own message.
 
 Hiding a column is a recipe `drop_column` step, so scoring drops it the same way (DEC-1006).
 `summarise` turns whatever the user has decided into the four lists read before Approve.
@@ -25,6 +30,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from typing import Any, Final
 
+from engine.agent.config import AgentLevel
 from engine.agent.contracts import (
     AgentConfidence,
     AgentSummary,
@@ -38,8 +44,9 @@ from engine.agent.contracts import (
     SessionStatus,
     ToolResult,
 )
-from engine.agent.recipe import RecipeError, run_recipe
+from engine.agent.recipe import STEP_PHASE, RecipeError, run_recipe
 from engine.agent.recommend import DataFacts, recommend_settings
+from engine.agent.reshape import choose_dates, plan_combine
 from engine.agent.tools import AgentContext, call_tool
 from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name
 from engine.config import (
@@ -175,12 +182,20 @@ class _Builder:
         )
 
 
-def _role(builder: _Builder, path: str, column: str, evidence: str, confidence: AgentConfidence) -> Proposal:
+def _role(
+    builder: _Builder,
+    path: str,
+    column: str,
+    evidence: str,
+    confidence: AgentConfidence,
+    reason: str | None = None,
+) -> Proposal:
     what = "the column that identifies each row" if path == ROLE_PRIMARY_KEY else "the outcome to predict"
     return builder.propose(
         kind=ProposalKind.ROLE,
         title=f"Use '{display_name(column)}' as {what}",
-        reason=(
+        reason=reason
+        or (
             "It is unique and never empty, and its name looks like an ID."
             if path == ROLE_PRIMARY_KEY
             else "Its name matches what this use case predicts."
@@ -212,12 +227,33 @@ def _role_option(builder: _Builder, path: str, column: str, evidence: str) -> Qu
     )
 
 
+_COMBINED_KEY_REASON: Final[str] = "Its name looks like an ID, and once the rows are combined it is unique."
+
+
+def _repeats(builder: _Builder, column: str) -> bool:
+    """Whether a value of `column` appears on more than one row."""
+    return bool(builder.ctx.column(column).dropna().duplicated().any())
+
+
 def _choose_primary_key(
-    builder: _Builder, profile: ToolResult, chosen: str | None
+    builder: _Builder, profile: ToolResult, chosen: str | None, *, reshape: bool = False
 ) -> tuple[str | None, str | None]:
-    """(column, stop reason). Proposes or asks; stops when no column can identify a row."""
+    """(column, stop reason). Proposes or asks; stops when no column can identify a row.
+
+    With `reshape` (the use case allows combining rows and nobody has declined it), an ID-named
+    column that repeats is proposed as the key instead of stopping: `advise` then asks whether to
+    combine the rows. `reshape` is also set once the rows are combined, for the combined key's reason.
+    """
     if chosen is not None:
-        _role(builder, ROLE_PRIMARY_KEY, chosen, profile.evidence_id, AgentConfidence.SURE)
+        repeating = reshape and _repeats(builder, chosen)
+        _role(
+            builder,
+            ROLE_PRIMARY_KEY,
+            chosen,
+            profile.evidence_id,
+            AgentConfidence.SURE,
+            _COMBINED_KEY_REASON if repeating else None,
+        )
         return chosen, None
     candidates = _names(profile, "primary_key_candidates")
     hints = {h.casefold() for h in builder.ctx.config.primary_key_hints}
@@ -233,14 +269,32 @@ def _choose_primary_key(
         )
         return best, None
     hinted = [str(c) for c in builder.ctx.frame.columns if str(c).casefold() in hints]
+    if hinted and reshape and _repeats(builder, hinted[0]):
+        _role(
+            builder,
+            ROLE_PRIMARY_KEY,
+            hinted[0],
+            profile.evidence_id,
+            AgentConfidence.SURE,
+            _COMBINED_KEY_REASON,
+        )
+        return hinted[0], None
     if hinted:
         # An ID-named column exists but repeats or has blanks: the Run button's own check says it best.
-        checks = builder.call("check_data", {"primary_key": hinted[0]})
-        reason = _stop_from_checks(checks)
+        reason = _repeating_key_stop(builder, hinted[0])
         if reason is not None:
             return None, reason
+    return None, _no_key_stop(builder)
+
+
+def _repeating_key_stop(builder: _Builder, key: str) -> str | None:
+    """The Run button's own message about an ID column that repeats or has blanks, or None."""
+    return _stop_from_checks(builder.call("check_data", {"primary_key": key}))
+
+
+def _no_key_stop(builder: _Builder) -> str:
     entity = builder.ctx.config.entity
-    return None, (
+    return (
         f"No column holds a different value on every row, so the file does not say which {entity} each row is. "
         f"The model needs one row per {entity} with an ID column; if a {entity} appears on several rows, "
         "combine them into one row first, or build the data from raw tables."
@@ -429,19 +483,32 @@ def _ticked(proposal: Proposal, tick_uncertain: bool) -> bool:
     return proposal.confidence is AgentConfidence.SURE or tick_uncertain
 
 
+def ordered_steps(steps: Iterable[RecipeStep]) -> tuple[RecipeStep, ...]:
+    """`steps` in the engine's fixed order (stable within a phase) and numbered 1..n."""
+    ordered = sorted(steps, key=lambda step: STEP_PHASE[step.kind])
+    return tuple(step.model_copy(update={"order": order}) for order, step in enumerate(ordered, start=1))
+
+
 def recipe_steps(proposals: Iterable[Proposal]) -> tuple[RecipeStep, ...]:
     """The recipe steps of `proposals`, in the engine's fixed order and numbered 1..n."""
-    from engine.agent.recipe import STEP_PHASE
-
-    steps = [p.step for p in proposals if p.kind is ProposalKind.RECIPE_STEP and p.step is not None]
-    steps.sort(key=lambda step: STEP_PHASE[step.kind])
-    return tuple(step.model_copy(update={"order": order}) for order, step in enumerate(steps, start=1))
+    return ordered_steps(
+        p.step for p in proposals if p.kind is ProposalKind.RECIPE_STEP and p.step is not None
+    )
 
 
 def _prepared_context(
-    builder: _Builder, steps: Sequence[RecipeStep], primary_key: str | None, target: str | None
+    builder: _Builder,
+    steps: Sequence[RecipeStep],
+    primary_key: str | None,
+    target: str | None,
+    *,
+    strict: bool = False,
 ) -> AgentContext:
-    """A context over the preview of the prepared file, so checks see cleaned values."""
+    """A context over the preview of the prepared file, so checks see cleaned (and combined) values.
+
+    A recipe that cannot run on the preview leaves the file as it is, unless `strict`: combined rows
+    are the whole point of a combine, so a combine that fails raises and the advisor stops on it.
+    """
     ctx = builder.ctx
     if not steps:
         return ctx
@@ -456,7 +523,10 @@ def _prepared_context(
             max_failure_pct=ctx.config.agent.max_conversion_failure_pct,
         )
     except RecipeError:
+        if strict:
+            raise
         return ctx
+    combined = any(step.kind is RecipeStepKind.COMBINE_ROWS for step in steps)
     profile = ingest.profile_dataset(
         run.frame,
         ctx.config,
@@ -466,9 +536,88 @@ def _prepared_context(
         file_size_bytes=ctx.profile.file_size_bytes,
         delimiter=ctx.profile.delimiter,
         encoding=ctx.profile.encoding,
-        row_count=ctx.profile.row_count,
+        row_count=len(run.frame) if combined else ctx.profile.row_count,
     )
     return replace(ctx, frame=run.frame, profile=profile)
+
+
+def _ask_to_combine(
+    builder: _Builder, profile: ToolResult, key: str, target: str, protected: set[str]
+) -> str | None:
+    """Ask whether to combine the rows of each entity (M76); the stop reason when they cannot be.
+
+    The plan is made on the preview with the sure fixes applied, so a number stored as text is
+    added up as a number; the features it freezes are listed in the step's parameters.
+    """
+    ctx = builder.ctx
+    ticked = [p for p in builder.proposals if _ticked(p, ctx.config.agent.tick_uncertain)]
+    prepared = _prepared_context(builder, recipe_steps(ticked), key, target)
+    others = {name for name in protected if name in prepared.frame.columns} - {key, target}
+    dates = choose_dates(
+        prepared.profile, exclude=[key, target, *sorted(others)], snapshot_hint=ctx.config.split.time_column
+    )
+    if dates is None:
+        entity = ctx.config.entity
+        reason = _repeating_key_stop(builder, key) or _no_key_stop(builder)
+        return (
+            f"{reason} The rows could be combined into one per {entity}, but that needs a date column "
+            "saying when each row happened, and this file has none."
+        )
+    time_column, snapshot_column = dates
+    params = plan_combine(
+        prepared.frame,
+        prepared.profile,
+        key=key,
+        time_column=time_column,
+        snapshot_column=snapshot_column,
+        outcome=target,
+        carry=sorted(others - {time_column, snapshot_column}),
+    )
+    repeats = builder.call("describe_repeats", {"column": key})
+    per, most = _value(repeats, "rows_per_id"), _value(repeats, "most_rows")
+    entity = ctx.config.entity
+    as_of = (
+        f"the latest '{display_name(snapshot_column)}' of each {entity}"
+        if snapshot_column is not None
+        else f"each {entity}'s latest '{display_name(time_column)}'"
+    )
+    reason = (
+        f"Each {entity} appears on {per:g} rows on average (up to {most}), and the model needs one row per "
+        f"{entity}. Per '{display_name(key)}', the rows are counted and their values added up, averaged or taken from the "
+        f"latest row, using only rows dated on or before {as_of}; '{display_name(target)}' is read from the {entity}'s "
+        "latest row."
+    )
+    if snapshot_column is None:
+        reason += (
+            " Every row counts, so the file should hold only rows known before the outcome was measured."
+        )
+    evidence = (repeats.evidence_id, profile.evidence_id)
+    step = RecipeStep(order=1, kind=RecipeStepKind.COMBINE_ROWS, column=key, params=params, reason=reason)
+    builder.ask(
+        f"Each {entity} appears on {per:g} rows on average. Combine them into one row per {entity}?",
+        [
+            QuestionOption(
+                option_id="combine",
+                label="Combine (recommended)",
+                effect=f"One row per {entity}, built only from its rows on or before its snapshot date.",
+                proposal=builder.option_proposal(
+                    kind=ProposalKind.RECIPE_STEP,
+                    title=f"Combine the rows into one row per {entity}",
+                    reason=reason,
+                    step=step,
+                    evidence_ids=evidence,
+                    confidence=AgentConfidence.SURE,
+                ),
+            ),
+            QuestionOption(
+                option_id="stop",
+                label="Stop",
+                effect=f"Nothing is changed; the file cannot be used until it has one row per {entity}.",
+            ),
+        ],
+        evidence,
+    )
+    return None
 
 
 def _leak_questions(builder: _Builder, checks: ToolResult) -> None:
@@ -572,30 +721,48 @@ def _facts(
     )
 
 
+def _describe_outcome(builder: _Builder, column: str, ctx: AgentContext | None = None) -> ToolResult:
+    outcome = builder.call("describe_outcome", {"column": column}, ctx=ctx)
+    label = _value(outcome, "positive_label")
+    if label is not None:
+        builder.assumptions.append(
+            f"'{clean_text(str(label), MAX_NAME_CHARS)}' in '{display_name(column)}' means yes."
+        )
+    return outcome
+
+
 def advise(
-    ctx: AgentContext, *, primary_key: str | None = None, target: str | None = None, id_prefix: str = ""
+    ctx: AgentContext,
+    *,
+    primary_key: str | None = None,
+    target: str | None = None,
+    id_prefix: str = "",
+    combine: RecipeStep | None = None,
+    combine_declined: bool = False,
 ) -> Advice:
     """Look at the file and propose everything; `primary_key` / `target` are the user's answers so far.
 
     `id_prefix` keeps evidence, proposal and question ids unique when a session asks more than once.
     A scoring file gets no fixes of its own: it is prepared by the model's saved recipe (DEC-1006).
+
+    `combine` is the `combine_rows` step the user chose (M76): everything after the roles and the
+    format fixes - the checks, the questions about leaks, the settings - is then about the combined
+    file. `combine_declined` means the user answered Stop, so a repeating ID stops the session.
     """
     builder = _Builder(ctx, prefix=id_prefix)
     config = ctx.config
     profile = builder.call("get_profile")
     roles = builder.call("find_roles")
-    key, stop = _choose_primary_key(builder, profile, primary_key)
+    reshape = ctx.mode is RunMode.TRAIN and AgentLevel.RESHAPE in config.agent.levels and not combine_declined
+    chosen_key = primary_key if primary_key is not None else combine.column if combine is not None else None
+    key, stop = _choose_primary_key(builder, profile, chosen_key, reshape=reshape)
+    to_combine = combine is None and reshape and key is not None and _repeats(builder, key)
     outcome_column: str | None = None
     if ctx.mode is RunMode.TRAIN and stop is None:
         outcome_column, stop = _choose_target(builder, roles, profile, target, key)
     outcome: ToolResult | None = None
-    if outcome_column is not None:
-        outcome = builder.call("describe_outcome", {"column": outcome_column})
-        label = _value(outcome, "positive_label")
-        if label is not None:
-            builder.assumptions.append(
-                f"'{clean_text(str(label), MAX_NAME_CHARS)}' in '{display_name(outcome_column)}' means yes."
-            )
+    if outcome_column is not None and combine is None and not to_combine:
+        outcome = _describe_outcome(builder, outcome_column)
     protected = {name for name in (key, outcome_column) if name} | {
         name
         for name in (
@@ -609,15 +776,25 @@ def advise(
         issues = builder.call("find_format_issues")
         _format_proposals(builder, issues, protected)
     can_check = outcome_column is not None if ctx.mode is RunMode.TRAIN else ctx.schema is not None
-    if stop is None and can_check:
+    if to_combine and key is not None and outcome_column is not None and stop is None:
+        # Nothing else is checked on rows that are about to be combined: the answer re-advises.
+        stop = _ask_to_combine(builder, profile, key, outcome_column, protected)
+    elif stop is None and can_check:
         ticked = [p for p in builder.proposals if _ticked(p, config.agent.tick_uncertain)]
-        prepared = _prepared_context(builder, recipe_steps(ticked), key, outcome_column)
-        checks = builder.call("check_data", {"primary_key": key, "target": outcome_column}, ctx=prepared)
-        stop = _stop_from_checks(checks)
-        _notes_from_checks(builder, checks)
-        if stop is None and ctx.mode is RunMode.TRAIN:
-            _leak_questions(builder, checks)
-            _settings(builder, prepared, outcome, roles, key, outcome_column)
+        steps = ordered_steps([*recipe_steps(ticked), *([combine] if combine is not None else [])])
+        try:
+            prepared = _prepared_context(builder, steps, key, outcome_column, strict=combine is not None)
+        except RecipeError as exc:
+            prepared, stop = ctx, f"The rows could not be combined: {exc.message}"
+        if stop is None:
+            if outcome_column is not None and outcome is None:
+                outcome = _describe_outcome(builder, outcome_column, prepared)  # one row per entity now
+            checks = builder.call("check_data", {"primary_key": key, "target": outcome_column}, ctx=prepared)
+            stop = _stop_from_checks(checks)
+            _notes_from_checks(builder, checks)
+            if stop is None and ctx.mode is RunMode.TRAIN:
+                _leak_questions(builder, checks)
+                _settings(builder, prepared, outcome, roles, key, outcome_column)
     status = (
         SessionStatus.STOPPED
         if stop is not None
@@ -712,8 +889,18 @@ def summarise(
     except ConfigError:
         config = ctx.config
     entity = config.entity
-    if ctx.mode is RunMode.TRAIN:
+    combine = next(
+        (p.step for p in accepted if p.step is not None and p.step.kind is RecipeStepKind.COMBINE_ROWS),
+        None,
+    )
+    if ctx.mode is RunMode.TRAIN and combine is not None:
+        actions.append(
+            f"Combine the {ctx.profile.row_count:,} rows into one row per {entity} by '{combine.column}', "
+            f"using only rows dated on or before each {entity}'s snapshot, and train on those."
+        )
+    elif ctx.mode is RunMode.TRAIN:
         actions.append(f"Train on {ctx.profile.row_count:,} rows, one per {entity}.")
+    if ctx.mode is RunMode.TRAIN:
         if roles.get(ROLE_TARGET):
             actions.append(f"Learn to predict '{roles[ROLE_TARGET]}'.")
         test_pct = round(config.split.test_fraction * 100)

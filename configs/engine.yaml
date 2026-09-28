@@ -329,6 +329,8 @@ defaults:
       opt_out: [opt_out, opted_out, unsubscribed, do_not_contact]
       recently_contacted: [last_contacted_at, last_contacted, last_contact_date]
     levels: [clean, derive]             # list[enum clean | derive | reshape]; how far a recipe may change the data (G8)
+                                        # reshape (combine many rows per customer, M76) is enabled per use case where
+                                        # files are event logs (retail-win-back), never here: elsewhere a repeating ID is a stop
     max_conversion_failure_pct: 5.0     # float 0..50; a format fix failing on more of a column than this becomes a question
     tick_uncertain: false               # bool; whether suggestions marked "check" start ticked
     max_llm_calls_per_session: 40       # int 1..500; the chat's model-call budget for one upload

@@ -1330,8 +1330,19 @@ every later file. The first screen and Manual setup do not change.
   the ID, outcome and settings for the ordinary Run. Every number in a chat reply must come from
   the data the helper looked at, or the reply is replaced (`engine/agent/loop.py`,
   `engine/agent/grounding.py`).
+- **M75 — Guided setup on screen.** Predictive and hybrid use cases get a "Guided setup
+  (recommended)" tab beside Manual setup, which is unchanged and still opens first. Upload a file,
+  answer the helper's questions, tick or untick its grouped suggestions, preview the changed rows,
+  Approve, then Run with the usual Run button. Chat replies are plain text and show the data they
+  came from; practice answers are labelled (`ui/modules/agent/`,
+  `tests/integration/agent/test_guided_setup_ui.py`).
+- **M76 — order logs are combined.** Where a use case allows it (Retail Win-back today), a file
+  with several rows per customer is no longer refused: the helper asks to combine them into one
+  row per customer, built only from rows on or before each customer's snapshot date and checked for
+  future-data leaks, and next month's file is combined the same way before scoring
+  (`engine/agent/reshape.py`).
 
-Decisions are DEC-1000 … DEC-1018 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Decisions are DEC-1000 … DEC-1026 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 <!-- ---- END PLAN-G ---- -->
 

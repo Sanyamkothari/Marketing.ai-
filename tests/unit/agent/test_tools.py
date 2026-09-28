@@ -27,6 +27,7 @@ def test_m71_ships_only_read_tools() -> None:
         "describe_outcome",
         "find_format_issues",
         "find_roles",
+        "describe_repeats",  # M76
         "check_data",
     }
     assert {tool.kind for tool in TOOLS.values()} == {ToolKind.READ}
@@ -150,6 +151,7 @@ def test_tools_do_not_change_the_frame() -> None:
         ("inspect_column", {"column": "region"}),
         ("find_format_issues", None),
         ("find_roles", None),
+        ("describe_repeats", {"column": "customer_id"}),
         ("check_data", {"primary_key": "customer_id", "target": "converted_30d"}),
     ]:
         call_tool(ctx, name, args, evidence_id="e1")
@@ -170,3 +172,17 @@ def test_describe_outcome_counts_yes_by_the_checks_rule() -> None:
     assert result["positives"] + result["negatives"] == 2_000
     assert result["positives"] == int((frame["converted_30d"] == 1).sum())
     assert 0.05 < result["positive_rate"] < 0.2
+
+
+def test_describe_repeats_measures_rows_per_id() -> None:
+    frame = pd.DataFrame({"customer_id": ["a", "a", "a", "b", None, "c"], "x": range(6)})
+    result = _run(context_for(frame), "describe_repeats", {"column": "customer_id"})
+    assert result == {
+        "column": "customer_id",
+        "rows": 6,
+        "empty": 1,
+        "ids": 3,
+        "rows_per_id": 1.7,
+        "most_rows": 3,
+        "ids_on_several_rows": 1,
+    }

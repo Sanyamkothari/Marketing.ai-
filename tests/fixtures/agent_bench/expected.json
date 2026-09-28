@@ -267,5 +267,59 @@
     ],
     "questions": [],
     "hidden": []
+  },
+  "multi_row": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "reactivated_90d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=reactivated_90d (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Each shopper appears on 5.1 rows on average. Combine them in",
+        "options": [
+          "Combine (recommended)",
+          "Stop"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "multi_row_one_date": {
+    "status": "needs_review",
+    "stopped": false,
+    "primary_key": "customer_id",
+    "target": "reactivated_90d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=reactivated_90d (sure)"
+    ],
+    "questions": [
+      {
+        "asks": "Each shopper appears on 4.4 rows on average. Combine them in",
+        "options": [
+          "Combine (recommended)",
+          "Stop"
+        ],
+        "blocking": true
+      }
+    ],
+    "hidden": []
+  },
+  "multi_row_no_dates": {
+    "status": "stopped",
+    "stopped": true,
+    "primary_key": "customer_id",
+    "target": "reactivated_90d",
+    "proposals": [
+      "role primary_key=customer_id (sure)",
+      "role target=reactivated_90d (sure)"
+    ],
+    "questions": [],
+    "hidden": []
   }
 }

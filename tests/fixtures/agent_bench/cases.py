@@ -16,6 +16,7 @@ import pandas as pd
 
 from engine.agent.advisor import Advice, advise
 from tests.fixtures.agent_bench.make_messy import messy_frame
+from tests.fixtures.agent_bench.make_multirow import multirow_frame
 from tests.fixtures.make_data import GenerationSpec, generate
 from tests.unit.agent.helpers import context_for
 
@@ -60,7 +61,18 @@ CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
     "too_few_rows": _variant("too_few_rows"),
     "constant_target": _variant("constant_target"),
     "non_binary_target": _variant("non_binary_target"),
+    # Level 3 (M76): an order log, several rows per shopper, for a use case that allows `reshape`.
+    "multi_row": multirow_frame,
+    "multi_row_one_date": lambda: multirow_frame(snapshot=False),
+    "multi_row_no_dates": lambda: multirow_frame(dates=False),
 }
+
+CASE_USE_CASES: Final[dict[str, str]] = {
+    "multi_row": "retail-win-back",
+    "multi_row_one_date": "retail-win-back",
+    "multi_row_no_dates": "retail-win-back",
+}
+"""The use case a case runs under, when it is not Targeted Advertisement."""
 
 
 def digest(advice: Advice) -> dict[str, Any]:
@@ -90,7 +102,7 @@ def digest(advice: Advice) -> dict[str, Any]:
 
 
 def run_case(name: str) -> dict[str, Any]:
-    return digest(advise(context_for(CASES[name]())))
+    return digest(advise(context_for(CASES[name](), CASE_USE_CASES.get(name, USE_CASE))))
 
 
 def main() -> None:

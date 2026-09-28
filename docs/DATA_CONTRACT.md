@@ -902,6 +902,20 @@ with that model is prepared by the same steps before it is checked against the m
 (DEC-1006). A recipe never changes the ID column or the outcome column, and a computed column may
 not read the outcome.
 
+**Several rows per customer (level 3, M76).** Where a use case allows it (`agent.levels` includes
+`reshape`; Retail Win-back today), a training file whose ID column repeats and that has a date column
+can be combined into one row per customer instead of being refused with `PK_NOT_UNIQUE`; the helper
+asks first. Each customer is described as of a snapshot date - the latest value of a snapshot column
+such as `snapshot_date`, or, when the file has none, the date of the customer's latest row - and only
+rows dated on or before it are counted, added up, averaged or read (the onboarding point-in-time
+guard). The outcome is the value on the customer's latest row (ties: the later date column, then the
+later row in the file). Rows with no ID or no readable date are left out and counted; more than
+`agent.max_conversion_failure_pct` of them stops with `RECIPE_VALUES_UNCONVERTED`. The columns built
+are fixed when the step is approved, so every later file is combined into exactly the same columns;
+a scoring file needs no outcome column. A training file combined this way gets onboarding's full
+future-data check (rows re-dated after the snapshot must change nothing), a scoring file the narrow
+one, and the receipt says which ran.
+
 When a scoring file cannot be prepared, `POST /runs` answers 409 with one of these errors. None can
 be acknowledged: a file prepared differently from the training data would be scored wrongly.
 

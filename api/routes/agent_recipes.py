@@ -111,6 +111,10 @@ def write_derived_upload(
         max_failure_pct=config.agent.max_conversion_failure_pct,
         snapshot_column=recipe.snapshot_column,
         derived_upload_id=derived_id,
+        # Combined rows get onboarding's future-data check (ruling R1): full when a training file is
+        # prepared - each Approve writes a new recipe, so this is always its first build - and the
+        # narrow check when the model's recipe is replayed on a scoring file (M76).
+        leak_check="full" if source.mode is RunMode.TRAIN else "narrow",
     )
     source_key = upload_key(derived_id, source_filename("parquet"))
     with storage.open_write(source_key) as sink:
