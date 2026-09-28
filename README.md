@@ -1408,7 +1408,7 @@ three-step flow, plus a fourth step after a campaign.
   ordinary upload. Passwords and keys are encrypted with `MARKETING_AI_CONNECTIONS_KEY` (generated
   on a laptop, required in production) and never returned. See `docs/CONNECTIONS.md`.
 
-Decisions are DEC-1100 … DEC-1119 and DEC-1130 … DEC-1135.
+Decisions are DEC-1100 … DEC-1120 and DEC-1130 … DEC-1135.
 
 <!-- ---- END PLAN-G ---- -->
 

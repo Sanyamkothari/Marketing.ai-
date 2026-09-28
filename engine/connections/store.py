@@ -5,8 +5,11 @@ settings, the names of the secrets it has and its last test. The secrets themsel
 token (AES-128-CBC with an HMAC-SHA256, from `cryptography`) of a small JSON object - never
 plaintext on disk, never in a listing, never in a response, never in a log line.
 
-**The key.** `MARKETING_AI_CONNECTIONS_KEY` (a Fernet key: 32 url-safe base64 bytes), read through
-`engine.settings`. Without it:
+**The key.** `MARKETING_AI_CONNECTIONS_KEY`, read through `engine.settings`: a Fernet key (32 url-safe
+base64 bytes), or a generated secret of at least 32 letters and digits - what AWS Secrets Manager
+generates for a deployment - from which the Fernet key is derived (SHA-256, domain-separated). The two
+cannot be confused: a Fernet key always ends in `=`, a generated secret never has one (DEC-1120).
+Without it:
 
 * on `env=prod`, saving a secret is refused (`SettingsError` naming the variable);
 * where the store is the local filesystem (a laptop, a test), a key is generated once and kept at
@@ -21,6 +24,7 @@ tried and the message says what to do: set the old key back, or enter the passwo
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import logging
@@ -101,7 +105,10 @@ def key_fingerprint(key: bytes) -> str:
 def connections_key(settings: Settings, storage: Storage) -> bytes:
     """The Fernet key secrets are encrypted with; see the module docstring for where it comes from."""
     if settings.connections_key is not None:
-        key = settings.connections_key.get_secret_value().strip().encode("ascii", errors="replace")
+        value = settings.connections_key.get_secret_value().strip()
+        if _GENERATED_SECRET.fullmatch(value):
+            return _derived_key(value)
+        key = value.encode("ascii", errors="replace")
         try:
             Fernet(key)
         except (ValueError, TypeError):
@@ -122,6 +129,16 @@ def connections_key(settings: Settings, storage: Storage) -> bytes:
             "is nowhere safe to keep a generated key"
         )
     return _read_or_create_key(storage.root / KEY_FILENAME)
+
+
+_GENERATED_SECRET: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9]{32,}")
+"""A secret generated for a deployment (letters and digits only); a Fernet key always has `=`."""
+
+
+def _derived_key(secret: str) -> bytes:
+    """The Fernet key for a generated secret: 32 bytes of domain-separated SHA-256, base64url."""
+    digest = hashlib.sha256(b"marketing-ai/connections-key\0" + secret.encode("ascii")).digest()
+    return base64.urlsafe_b64encode(digest)
 
 
 def _read_or_create_key(path: Path) -> bytes:

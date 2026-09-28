@@ -63,6 +63,28 @@ def test_the_configured_key_wins_and_a_bad_one_is_named(tmp_path: Path) -> None:
     assert caught.value.env_var == "MARKETING_AI_CONNECTIONS_KEY"
 
 
+def test_a_generated_deployment_secret_derives_a_stable_key(tmp_path: Path) -> None:
+    """What AWS Secrets Manager generates (letters and digits, no `=`) is not a Fernet key; the key is
+    derived from it, the same on every container, so a deployment can supply it (DEC-1120)."""
+    generated = "Ab3" * 16  # 48 letters and digits, as `exclude_punctuation` generates
+    key = connections_key(Settings(connections_key=SecretStr(generated)), LocalStorage(tmp_path))
+    Fernet(key)  # a valid key
+    assert key != generated.encode()
+    again = connections_key(Settings(connections_key=SecretStr(f" {generated}\n")), LocalStorage(tmp_path))
+    assert again == key
+    other = connections_key(Settings(connections_key=SecretStr("Ab4" * 16)), LocalStorage(tmp_path))
+    assert other != key
+    first = ConnectionStore(
+        LocalStorage(tmp_path),
+        Settings(env="prod", connections_key=SecretStr(generated), cors_origins=("https://app.example.com",)),
+    )
+    record = make(first)
+    second = ConnectionStore(LocalStorage(tmp_path), Settings(connections_key=SecretStr(generated)))
+    assert second.secrets(second.get(record.connection_id))["password"] == PASSWORD  # type: ignore[attr-defined]
+    with pytest.raises(SettingsError):  # too short to be a generated secret, and not a Fernet key
+        connections_key(Settings(connections_key=SecretStr("Ab3" * 5)), LocalStorage(tmp_path))
+
+
 def test_production_refuses_to_save_a_secret_without_a_key(tmp_path: Path) -> None:
     store = store_at(tmp_path, env="prod", cors_origins=("https://app.example.com",))
     with pytest.raises(SettingsError) as caught:

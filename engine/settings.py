@@ -572,8 +572,8 @@ fixtures use.
 REDACTED: Final[str] = "<redacted>"
 
 SECRET_FIELDS: Final[frozenset[str]] = frozenset(
-    {"postgres_dsn", "privacy_salt"}
-)  # privacy_salt: Plan D, DEC-860
+    {"postgres_dsn", "privacy_salt", "connections_key"}
+)  # privacy_salt: Plan D, DEC-860; connections_key: Plan H, DEC-1120
 """Fields `redacted()` hides and `summary()` may never name."""
 
 SUMMARY_FIELDS: Final[tuple[str, ...]] = (

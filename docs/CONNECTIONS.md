@@ -47,7 +47,12 @@ Every network call has a timeout: at most 10 seconds to connect or sign in, 60 s
   returned by the API (a connection lists only the *names* of the secrets it has saved), never logged,
   and never part of an audit event.
 - The key is **`MARKETING_AI_CONNECTIONS_KEY`**: 32 url-safe base64 bytes, as printed by
-  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`.
+  `python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"`, or a
+  generated secret of at least 32 letters and digits, from which the key is derived. It is a secret
+  field: never shown in the settings summary and never shipped to a training job.
+- **On an AWS deployment** the database stack generates it once (`marketing-ai/<env>/connections-key`,
+  48 letters and digits, retained, never rotated) and the application secret carries it, as it
+  carries the privacy salt (DEC-1120). Rotating it would leave every saved password unreadable.
 - **On a laptop** (a local data folder) without the variable, a key is generated the first time a
   secret is saved and kept at `<data dir>/connections_key` with 0600 permissions; the log says so once.
   Back it up with the data folder: without it the saved passwords cannot be read.
