@@ -57,6 +57,8 @@ __all__ = [
     "BEDROCK_SERVICE",
     "FAKE_MODEL_ID",
     "GROUNDED_FAKE_MODEL_ID",
+    "KEYWORD_HASH_DIMENSIONS",
+    "KEYWORD_HASH_MODEL_ID",
     "BedrockLLMClient",
     "FakeLLMClient",
     "FakeLLMMode",
@@ -65,6 +67,7 @@ __all__ = [
     "LLMCompletion",
     "LLMError",
     "estimate_tokens",
+    "keyword_hash_vector",
     "usage_from",
 ]
 
@@ -374,19 +377,7 @@ class FakeLLMClient:
 
     def _lexical_vector(self, text: str) -> tuple[float, ...]:
         """Each content word hashed into a bucket with a log term frequency, then normalised."""
-        buckets = [0.0] * self._dimensions
-        for word, count in Counter(_tokenise(text)).items():
-            digest = hashlib.blake2b(word.encode("utf-8"), digest_size=8).digest()
-            index = int.from_bytes(digest[:4], "big") % self._dimensions
-            # The sign bit spreads collisions in both directions, so two unrelated words that land
-            # in one bucket are as likely to cancel as to reinforce.
-            sign = 1.0 if digest[4] & 1 else -1.0
-            # Log term frequency: a word said ten times is more evidence than a word said once, but
-            # not ten times as much - which keeps a long chunk from drowning a short one that is
-            # actually about the question.
-            buckets[index] += sign * (1.0 + math.log(count))
-        norm = math.sqrt(math.fsum(value * value for value in buckets))
-        return tuple(value / norm for value in buckets) if norm else tuple(buckets)
+        return keyword_hash_vector(text, self._dimensions)
 
     # -- reading the prompt back, so the answer can come out of it ----------
     def _body(self, system: str, user: str) -> str:
@@ -553,6 +544,36 @@ class FakeLLMClient:
                 {"label": label, "subject": "A word about your connection", "text": whole, "body": whole}
             )
         return json.dumps({"variants": variants})
+
+
+KEYWORD_HASH_MODEL_ID: Final[str] = "keyword-hash-v1"
+"""The id embeddings report when they are keyword-hash vectors (`keyword_hash_vector`), not a model's."""
+
+KEYWORD_HASH_DIMENSIONS: Final[int] = _GROUNDED_DIMENSIONS
+"""Width of the keyword-hash vectors an AI service without embeddings uses."""
+
+
+def keyword_hash_vector(text: str, dimensions: int = _GROUNDED_DIMENSIONS) -> tuple[float, ...]:
+    """Each content word hashed into a bucket with a log term frequency, then normalised.
+
+    Two texts that share vocabulary sit close together, so retrieval matches by keywords. It is a
+    deterministic function of the text alone - real retrieval, not a simulated model - and it is what
+    `FakeLLMClient` uses in every mode but `DIGEST` and what an AI service with no embedding model
+    uses for the document assistant (`engine.ai_service`, reported as `KEYWORD_HASH_MODEL_ID`).
+    """
+    buckets = [0.0] * dimensions
+    for word, count in Counter(_tokenise(text)).items():
+        digest = hashlib.blake2b(word.encode("utf-8"), digest_size=8).digest()
+        index = int.from_bytes(digest[:4], "big") % dimensions
+        # The sign bit spreads collisions in both directions, so two unrelated words that land
+        # in one bucket are as likely to cancel as to reinforce.
+        sign = 1.0 if digest[4] & 1 else -1.0
+        # Log term frequency: a word said ten times is more evidence than a word said once, but
+        # not ten times as much - which keeps a long chunk from drowning a short one that is
+        # actually about the question.
+        buckets[index] += sign * (1.0 + math.log(count))
+    norm = math.sqrt(math.fsum(value * value for value in buckets))
+    return tuple(value / norm for value in buckets) if norm else tuple(buckets)
 
 
 def estimate_tokens(text: str) -> int:

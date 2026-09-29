@@ -225,10 +225,16 @@ class GenerativeKind(StrEnum):
 
 
 class LlmBackend(StrEnum):
-    """Which client a generative flow calls through: a deterministic fake, or Bedrock (DEC-203)."""
+    """Which client a generative flow calls through: a deterministic fake, or Bedrock (DEC-203).
+
+    `EXTERNAL` is never written in a use-case file: it is what a job records when the language model
+    was the saved AI service of a third party (OpenAI, Claude, OpenRouter, Hugging Face, a compatible
+    server), which `engine.ai_service` resolves per request (DEC-1141).
+    """
 
     FAKE = "fake"
     BEDROCK = "bedrock"
+    EXTERNAL = "external"
 
 
 class DocumentType(StrEnum):
@@ -871,6 +877,13 @@ class LlmConfig(_Base):
         # A model id is deployment data, never a literal in code (DEC-204), so the only place this
         # can be caught is here - and it is caught at configuration time rather than three stages
         # into a run that was always going to fail.
+        if self.backend is LlmBackend.EXTERNAL:
+            raise ConfigError(
+                "LLM_BACKEND_NOT_CONFIGURABLE",
+                "generative.llm.backend must be 'fake' or 'bedrock'; a third-party AI service is "
+                "connected under Connections, not in a use-case file.",
+                path="generative.llm.backend",
+            )
         if self.backend is LlmBackend.BEDROCK:
             missing = [
                 name

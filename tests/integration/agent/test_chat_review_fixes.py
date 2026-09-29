@@ -11,7 +11,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from api.routes import agent as agent_routes
+from engine import ai_service
 from engine.agent.contracts import AgentSession
 from engine.generative.contracts import LlmUsageReport
 from engine.llm import FakeLLMClient, FakeLLMMode, LLMCompletion
@@ -47,7 +47,7 @@ def test_a_malformed_model_reply_is_answered_and_metered(
     client: TestClient, data_dir: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = _NotAList(mode=FakeLLMMode.GROUNDED)
-    monkeypatch.setattr(agent_routes, "build_client", lambda *_a, **_k: fake)
+    monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: fake)
     response = client.post(
         "/uploads",
         files={"file": ("history.csv", messy_frame().to_csv(index=False).encode(), "text/csv")},

@@ -62,7 +62,7 @@ The helper reads your file and makes a short checklist. Each item has a plain re
 - **Settings: Auto (recommended)**: any change it suggests to the run's settings. Everything else keeps the recommended value.
 - **Questions**: when it cannot decide alone, it asks. A question marked **Needs an answer** must be answered before you can approve. For example, a column that almost perfectly predicts the outcome may contain the answer: you choose **Hide it (recommended)** or **Keep it**.
 
-Ticked items are applied when you approve. Untick any you do not want. Items marked **Please check** need your eye. You can also ask the helper questions in the chat box ("Ask the helper…"). Without an AI service the chat gives practice answers; the checklist works the same either way. With one, the line under the chat box says what the AI may look at (your data, with the personal details our checks recognise hidden, or only summaries), and says so when the service is run by another company, with a link to change it on Connections. Under each answer, **What the AI looked at** opens to show what was sent to write it (up to 12 items; more are counted), with the personal details our checks recognise already hidden. Our checks find e-mail addresses, phone and card numbers and similar patterns and every column marked as personal; a name inside a sentence or another country's ID number can slip past, so for such data list the free-text columns in `agent.always_hide_columns` or switch to summaries only. An answer you opened stays open while you keep working.
+Ticked items are applied when you approve. Untick any you do not want. Items marked **Please check** need your eye. You can also ask the helper questions in the chat box ("Ask the helper…"). The chat needs **Product AI** (Connections → AI service); without one the box says "Connect an AI service to chat with the helper", and the checklist above works the same either way. With one, the line under the chat box says what the AI may look at (your data, with the personal details our checks recognise hidden, or only summaries), and says so when the service is run by another company, with a link to change it on Connections. Under each answer, **What the AI looked at** opens to show what was sent to write it (up to 12 items; more are counted), with the personal details our checks recognise already hidden. Our checks find e-mail addresses, phone and card numbers and similar patterns and every column marked as personal; a name inside a sentence or another country's ID number can slip past, so for such data list the free-text columns in `agent.always_hide_columns` or switch to summaries only. An answer you opened stays open while you keep working.
 
 Then click **Approve**. The fixes are applied to a *copy* of your file. The same fixes are saved with the model, so next month's file is prepared the same way before it is scored.
 
@@ -125,7 +125,7 @@ Good to know 🔒
 
 - **Marketing AI only reads.** It imports a copy and never changes anything in your systems. Ask your IT team for a user that can only read. If the user could write, the test shows a safety tip.
 - **Passwords and keys stay on the server.** They are stored encrypted, never sent back to your browser, and not written to logs or the audit log. When you edit a connection, a saved password shows "Saved. Leave blank to keep it."
-- The **AI service** (Amazon Bedrock) is also on Connections: **Open and test**. It writes summaries, campaign copy and chat answers. Everything else works without it.
+- The **AI service** is also on Connections, as two settings. **Product AI** is your team's own tool: it powers the Guided-setup chat and sees column names and masked samples of your file. **Deliverable AI** is what your customer receives: document questions, summaries and campaign copy, so it can be a different provider, account and bill. Pick Amazon Bedrock, OpenAI, Claude, OpenRouter, Hugging Face or any OpenAI-compatible server, paste a key (stored encrypted, never shown again), choose a model and press **Test**. One connection is enough to start: Deliverable AI follows Product AI until you give it its own. Everything else works without either.
 
 ## ⚙️ Where did the other tools go?
 
@@ -135,7 +135,7 @@ Rarely used tools are under **Settings**. Open **Advanced tools** to find:
 - **Data request kit**: what data to ask for, with templates, and data readiness reports.
 - **Build from raw tables**: open a use case, choose **Manual setup**, then **Build from raw tables**.
 - **Model health**: alerts for every model.
-- **Document assistant**: answers questions from your own documents (needs the AI service).
+- **Document assistant**: answers questions from your own documents (needs Deliverable AI, or Product AI to share).
 
 **Privacy** (consent, requests to erase or see a person's data, retention) and **Schedules** (score new data every week or month) are at the top of Settings. **All reports** is a link at the top of Results.
 

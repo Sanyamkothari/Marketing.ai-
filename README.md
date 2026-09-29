@@ -46,8 +46,11 @@ nightly (`make test-all`, which adds the `@slow` AutoGluon and browser journeys)
 - **One journey for every business.** Home shows one generic journey (`configs/industries/generic.yaml`,
   DEC-1110 …). The industry templates of Plan A M38 (telecom, banking, insurance, e-commerce, ad
   tech) remain as config and open by URL (`#/industry/<id>`), but are no longer offered.
-- **Generative features** on the fake LLM by default and on Bedrock when configured: the onboarding
-  assistant, root-cause summaries per risk segment and win-back copy with a judge (Phase 3a).
+- **Generative features** on the AI service a person connects under Connections - Amazon Bedrock, OpenAI,
+  Claude, OpenRouter, Hugging Face or any OpenAI-compatible server (Deliverable AI; the Guided-setup chat
+  uses a separate Product AI): the onboarding assistant, root-cause summaries per risk segment and
+  win-back copy with a judge (Phase 3a). With none connected they say so (`409 AI_NOT_CONNECTED`); the
+  deterministic test model answers only under `MARKETING_AI_ALLOW_FAKE_AI=1` (tests, DEC-1140).
 - **Uplift modelling.** Step 4 of a use case, *Measure the campaign*, learns who to contact next
   time; by hand, from *Settings → Advanced → Uplift workbench* (`#/uplift`): train S-, T- or
   X-learners on a past randomised campaign, read the Qini curve and AUUC, get a budgeted treat list
@@ -1346,7 +1349,7 @@ every later file. The first screen and Manual setup do not change.
   (recommended)" tab beside Manual setup, which is unchanged and still opens first. Upload a file,
   answer the helper's questions, tick or untick its grouped suggestions, preview the changed rows,
   Approve, then Run with the usual Run button. Chat replies are plain text and show the data they
-  came from; practice answers are labelled (`ui/modules/agent/`,
+  came from; without Product AI the chat says so and the suggestions still work (`ui/modules/agent/`,
   `tests/integration/agent/test_guided_setup_ui.py`).
 - **M76 — order logs are combined.** Where a use case allows it (Retail Win-back today), a file
   with several rows per customer is no longer refused: the helper asks to combine them into one
@@ -1387,6 +1390,14 @@ three-step flow, plus a fourth step after a campaign.
   start with the page the top bar marks, a run opened from Results stays under Results, the Results
   badge updates without a reload, Manual setup can also pick data from a connection, and the
   helper quotes values one way (DEC-1117 … DEC-1119).
+
+- **Configurable AI service (DEC-1140 … DEC-1149).** Connections → AI service has two settings: **Product AI**
+  (the Guided-setup chat, your team's tool) and **Deliverable AI** (what the customer receives: document
+  assistant, summaries, campaign copy and their checks), each with its own provider, model, encrypted key
+  and test. There is no practice mode: with nothing connected the features that need a model answer
+  `409 AI_NOT_CONNECTED` naming the setting, and Guided setup's rules keep working. `engine/ai_service.py`
+  (registry, storage, resolution), `engine/llm_http.py` (OpenAI-compatible and Anthropic clients),
+  `api/routes/ai_service.py` (`/ai-service`), `docs/CONNECTIONS.md`.
 
 - **M83 — Measure a campaign (step 4).** On a scoring run's Results, upload who responded (customer
   ID and a 1/0 column) to see how many extra conversions the campaign caused compared with the
