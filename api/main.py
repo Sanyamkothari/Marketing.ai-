@@ -19,6 +19,7 @@ from fastapi import APIRouter, FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
+from starlette.responses import Response
 
 from api.routes import ALL_ROUTERS
 from api.schemas import ErrorBody, ErrorResponse, HealthResponse
@@ -139,7 +140,7 @@ def create_app(
     if UI_DIR.is_dir():
         # The UI is plain HTML and ES modules: a module cannot be fetched over `file://`, so the
         # same process that answers the API also serves them (DEC-024 keeps CORS open regardless).
-        app.mount("/ui", StaticFiles(directory=UI_DIR, html=True), name="ui")
+        app.mount("/ui", _RevalidatedStaticFiles(directory=UI_DIR, html=True), name="ui")
 
         # `/` is the address uvicorn prints and the one a person types. It sends them to the screens
         # rather than to a JSON 404 (DEC-953). A plain Starlette route like the mount above: not part
@@ -155,6 +156,20 @@ def create_app(
         return HealthResponse(status="ok", version=__version__)
 
     return app
+
+
+class _RevalidatedStaticFiles(StaticFiles):
+    """The screens' files, sent with `Cache-Control: no-cache`.
+
+    Without a cache header a browser may keep a script for hours and keep showing a screen from before an
+    upgrade. `no-cache` still lets it keep the file, but it asks first: the ETag matches and the answer is
+    an empty `304`, or the file changed and the new one is sent. So an upgrade shows up on the next load.
+    """
+
+    def file_response(self, *args: object, **kwargs: object) -> Response:
+        response: Response = super().file_response(*args, **kwargs)  # type: ignore[arg-type]
+        response.headers["Cache-Control"] = "no-cache"
+        return response
 
 
 # ===========================================================================
