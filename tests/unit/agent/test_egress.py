@@ -19,8 +19,10 @@ from engine.agent.egress import (
     MAX_SENT_ITEMS,
     MAX_SENT_PREVIEW_CHARS,
     MAX_SENT_SESSION_CHARS,
+    MAX_SENT_SESSION_ITEMS,
     PERSONAL_DATA,
     SAFE_KEYS,
+    SENT_DROPPED,
     SHAPE_ALPHABET,
     Egress,
     alias_table,
@@ -621,3 +623,16 @@ def test_text_for_the_person_keeps_a_personal_header_as_its_alias_and_restores_a
         "column": "hdr.owner@example.test",
         "columns": ["Spend (INR)\u200b?", "notes"],
     }
+
+
+def test_a_very_long_session_keeps_a_bounded_number_of_sent_items() -> None:
+    """A session of hundreds of turns must not keep a placeholder for every old item (review of PR 6)."""
+    big = "x" * 900
+    transcript = [_message([big] * MAX_SENT_ITEMS) for _ in range(500)]
+    capped = cap_sent(transcript)
+    kept = [item for message in capped for item in message.sent]
+    assert len(kept) <= MAX_SENT_SESSION_ITEMS
+    assert sum(len(item.preview) for item in kept) <= MAX_SENT_SESSION_CHARS + len(kept) * len(SENT_DROPPED)
+    assert len(capped) == 500  # every message stays; only the oldest lose their items
+    assert not capped[0].sent and capped[-1].sent
+    assert len(json.dumps([m.model_dump(mode="json") for m in capped])) < 400_000

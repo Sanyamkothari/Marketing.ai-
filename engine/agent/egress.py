@@ -50,6 +50,7 @@ __all__ = [
     "MAX_SENT_ITEMS",
     "MAX_SENT_PREVIEW_CHARS",
     "MAX_SENT_SESSION_CHARS",
+    "MAX_SENT_SESSION_ITEMS",
     "PERSONAL_DATA",
     "SAFE_KEYS",
     "SAFE_LITERALS",
@@ -345,6 +346,9 @@ STATE_TOOL: Final[str] = "advisor_state"
 """What `SentItem.tool` says for the helper's own suggestions and questions, which go into every prompt."""
 MAX_SENT_PREVIEW_CHARS: Final[int] = 1_500
 MAX_SENT_SESSION_CHARS: Final[int] = 20_000
+MAX_SENT_SESSION_ITEMS: Final[int] = 300
+"""The most items a session file keeps in all, newest first; older messages keep none. Without it a session
+of hundreds of turns would keep a placeholder for every old item and grow past its preview budget."""
 SENT_DROPPED: Final[str] = "[not kept: the session keeps at most 20 KB of previews]"
 THIRD_PARTY_FREE_BACKENDS: Final[frozenset[str]] = frozenset({"fake", "bedrock"})
 """Backends that run inside the platform's own account. Any other backend is a third party."""
@@ -1248,17 +1252,19 @@ def sent_item(
 
 
 def cap_sent(transcript: Sequence[ChatMessage]) -> tuple[ChatMessage, ...]:
-    """The transcript with at most 12 items per message and 20 KB of previews in all, newest first kept."""
+    """The transcript with at most 25 items per message, 300 items and 20 KB of previews in all, newest first."""
     budget = MAX_SENT_SESSION_CHARS
+    room = MAX_SENT_SESSION_ITEMS
     kept: list[ChatMessage] = []
     for message in reversed(transcript):
         items: list[SentItem] = []
-        for item in message.sent[:MAX_SENT_ITEMS]:
+        for item in message.sent[: min(MAX_SENT_ITEMS, room)]:
+            room -= 1
             if len(item.preview) <= budget:
                 budget -= len(item.preview)
                 items.append(item)
-            else:
-                items.append(item.model_copy(update={"preview": SENT_DROPPED}))
+            else:  # the note keeps the tool and the length; the arguments go too, so it stays small
+                items.append(item.model_copy(update={"preview": SENT_DROPPED, "args": {}}))
         kept.append(message.model_copy(update={"sent": tuple(items)}) if message.sent else message)
     return tuple(reversed(kept))
 
