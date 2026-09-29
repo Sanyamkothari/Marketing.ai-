@@ -77,6 +77,7 @@ VALUES: dict[str, object] = {
         {"path": "model_search.strategy", "value": "balanced", "allowed": "fast, balanced, exhaustive"}
     ],
     "state": '{"proposals": []}',
+    "column_choices": '[{"path": "evaluation.fairness_column", "choices": ["region"]}]',
     "message": "Why hide contact_email?",
     "turn_results": "none",
 }

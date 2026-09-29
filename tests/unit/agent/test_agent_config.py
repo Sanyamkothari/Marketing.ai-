@@ -7,7 +7,13 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from engine.agent.config import AGENT_KNOWLEDGE_MAX_ITEMS, AgentColumnHints, AgentConfig, AgentLevel
+from engine.agent.config import (
+    AGENT_KNOWLEDGE_MAX_ITEMS,
+    AgentColumnHints,
+    AgentConfig,
+    AgentLevel,
+    DataAccess,
+)
 from engine.agent.scope import agent_available
 from engine.config import (
     ConfigError,
@@ -108,3 +114,47 @@ def test_a_malformed_agent_block_in_yaml_is_a_config_error(tmp_path: Path, confi
     with pytest.raises(ConfigError) as caught:
         load_use_case("targeted-advertisement", root)
     assert "agent.max_tool_steps_per_turn" in str(caught.value)
+
+
+def test_the_egress_settings_default_to_masked_data_and_nothing_hidden(config_root: Path) -> None:
+    for use_case_id, config in load_all_use_cases(config_root).items():
+        assert config.agent.ai_data_access is DataAccess.MASKED_DATA, use_case_id
+        assert config.agent.always_hide_columns == (), use_case_id
+    assert AgentConfig().ai_data_access is DataAccess.MASKED_DATA
+
+
+def test_ai_data_access_accepts_only_its_two_modes() -> None:
+    assert AgentConfig(ai_data_access="summaries_only").ai_data_access is DataAccess.SUMMARIES_ONLY  # type: ignore[arg-type]
+    with pytest.raises(ValidationError):
+        AgentConfig(ai_data_access="everything")  # type: ignore[arg-type]
+
+
+def test_always_hide_columns_are_trimmed_and_refuse_duplicates_case_insensitively() -> None:
+    assert AgentConfig(always_hide_columns=(" notes ", "", "Feedback")).always_hide_columns == (
+        "notes",
+        "Feedback",
+    )
+    with pytest.raises(ValidationError):
+        AgentConfig(always_hide_columns=("notes", "NOTES"))
+
+
+def test_the_egress_settings_are_set_in_a_use_case_file_and_never_per_run(
+    tmp_path: Path, config_root: Path
+) -> None:
+    import shutil
+
+    root = tmp_path / "configs"
+    shutil.copytree(config_root, root)
+    path = root / "use_cases" / "targeted_advertisement.yaml"
+    path.write_text(
+        path.read_text(encoding="utf-8")
+        + "\n  ai_data_access: summaries_only\n  always_hide_columns: [notes, feedback]\n",
+        encoding="utf-8",
+    )
+    config = load_use_case("targeted-advertisement", root)
+    assert config.agent.ai_data_access is DataAccess.SUMMARIES_ONLY
+    assert config.agent.always_hide_columns == ("notes", "feedback")
+    for override in ("agent.ai_data_access", "agent.always_hide_columns"):
+        with pytest.raises(ConfigError) as caught:
+            resolve_config("targeted-advertisement", {override: "summaries_only"}, root=config_root)
+        assert caught.value.code == "OVERRIDE_UNKNOWN_PATH"

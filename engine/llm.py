@@ -424,6 +424,11 @@ class FakeLLMClient:
                 }
                 return json.dumps({"action": "propose_setting", "args": args})
             quoted = _QUOTED.findall(message)
+            lowered = message.lower()
+            if "sample" in lowered:  # look at real rows (the look-at-the-data tools)
+                return json.dumps({"action": "sample_rows", "args": {"n": 3}})
+            if quoted and "most common" in lowered:
+                return json.dumps({"action": "value_counts", "args": {"column": quoted[0], "top": 3}})
             if quoted:
                 return json.dumps({"action": "inspect_column", "args": {"column": quoted[0]}})
             proposals = [p for p in state.get("proposals", []) if isinstance(p, dict)]
@@ -440,6 +445,20 @@ class FakeLLMClient:
             text = (
                 f"'{result.get('column')}' has {result.get('distinct')} different values "
                 f"and {result.get('empty')} empty cells."
+            )
+        elif latest.get("tool") == "sample_rows":
+            columns = result.get("columns")
+            head = columns[0] if isinstance(columns, list) and columns else "the first column"
+            text = (
+                f"I looked at {result.get('returned')} of the {result.get('total_matching')} rows, "
+                f"starting with '{head}'."
+            )
+        elif latest.get("tool") == "value_counts":
+            values = result.get("values")
+            top = values[0].get("rows") if isinstance(values, list) and values else 0
+            text = (
+                f"'{result.get('column')}' has {result.get('distinct')} different values; "
+                f"the most common is on {top} rows."
             )
         elif latest.get("tool") == "propose_setting":
             text = "I have suggested that change; approve it on the screen if you agree."
@@ -677,9 +696,9 @@ def _prompt_shape(system: str, user: str) -> str:
 
 
 _QUOTED: Final[re.Pattern[str]] = re.compile(r"'([A-Za-z0-9_ .\-]+)'")
-_HELPER_STATE: Final[str] = "State of this setup (proposals, questions and what has been decided):"
-_HELPER_RESULTS: Final[str] = "Tool results so far in this turn:"
-_HELPER_MESSAGE: Final[str] = "The person says:"
+_HELPER_STATE: Final[str] = "\n\nState of this setup (proposals, questions and what has been decided):\n"
+_HELPER_RESULTS: Final[str] = "\n\nTool results so far in this turn:\n"
+_HELPER_MESSAGE: Final[str] = "\n\nThe person says:\n"
 
 
 def _helper_sections(user: str) -> tuple[dict[str, Any], list[dict[str, Any]], str]:

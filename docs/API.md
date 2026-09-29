@@ -543,6 +543,8 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `tick_uncertain` | boolean | no |  |
 | `max_llm_calls_per_session` | integer | no |  |
 | `max_tool_steps_per_turn` | integer | no |  |
+| `ai_data_access` | DataAccess ("masked_data" \| "summaries_only") | no | What the chat model may see of the file's cells (`agent.ai_data_access`).  `masked_data` shows the values a tool asks for after masking (`engine.agent.egress.mask_value`): the model can look at real cells so it does not have to guess. `summaries_only` shows no cell at all: every string that comes from a cell is replaced by its *shape* (`Aaaaa 9999`), so the model still sees formats and counts and never a value. Personal-data columns never yield a value in either mode. |
+| `always_hide_columns` | list[string] | no |  |
 
 #### ThresholdConfig
 
@@ -1987,6 +1989,8 @@ Keys of the default document that no advanced-settings field renders, with their
 | `agent.tick_uncertain` | bool; whether suggestions marked "check" start ticked |
 | `agent.max_llm_calls_per_session` | int 1..500; the chat's model-call budget for one upload |
 | `agent.max_tool_steps_per_turn` | int 1..20; tool calls the helper may make before it must reply |
+| `agent.ai_data_access` | enum masked_data \| summaries_only; what the chat model sees of cells: masked values, or only their shape (`Aaaaa 9999`) |
+| `agent.always_hide_columns` | list[str]; columns (case-insensitive) whose values the chat model never sees, whatever the profile says |
 
 ### Catalog keys
 

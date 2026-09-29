@@ -335,4 +335,6 @@ defaults:
     max_conversion_failure_pct: 5.0     # float 0..50; a format fix failing on more of a column than this becomes a question
     tick_uncertain: false               # bool; whether suggestions marked "check" start ticked
     max_llm_calls_per_session: 40       # int 1..500; the chat's model-call budget for one upload
-    max_tool_steps_per_turn: 8          # int 1..20; tool calls the helper may make before it must reply
+    max_tool_steps_per_turn: 12         # int 1..20; tool calls the helper may make before it must reply
+    ai_data_access: masked_data         # enum masked_data | summaries_only; what the chat model sees of cells: masked values, or only their shape (`Aaaaa 9999`)
+    always_hide_columns: []             # list[str]; columns (case-insensitive) whose values the chat model never sees, whatever the profile says

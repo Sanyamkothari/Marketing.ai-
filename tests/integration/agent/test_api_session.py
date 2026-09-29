@@ -6,6 +6,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
+import pandas as pd
 import pytest
 from fastapi.testclient import TestClient
 
@@ -85,6 +86,19 @@ def _decide_everything(client: TestClient, upload_id: str) -> dict[str, Any]:
             json={"decisions": [{"proposal_id": pid, "state": "rejected"} for pid in pending]},
         )
     )
+
+
+def test_a_file_with_one_two_valued_column_starts_a_session_instead_of_failing(client: TestClient) -> None:
+    """The only candidate for the outcome is proposed (to check), not asked about: never a 500."""
+    frame = pd.DataFrame(
+        {"customer_id": [f"C{i}" for i in range(1000)], "y": [0, 1] * 500, "spend": range(1000)}
+    )
+    response = _start(client, _upload(client, frame))
+    assert response.status_code == 201, response.text
+    session = _session(response)
+    targets = [p for p in session["proposals"] if p["kind"] == "role" and p["path"] == "target"]
+    assert [(p["value"], p["confidence"], p["state"]) for p in targets] == [("y", "check", "pending")]
+    assert session["questions"] == []
 
 
 def test_starting_suggests_and_changes_nothing(client: TestClient, data_dir: Path) -> None:

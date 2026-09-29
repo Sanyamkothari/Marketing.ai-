@@ -38,6 +38,7 @@ import {
 } from "../../dom.js";
 import { createConnectionPicker } from "../connections/picker.js";
 import { postAnswer, postApply, postDecisions, postMessage, postPreview, startSession } from "./api.js";
+import { sentHtml, statusHtml } from "./sent.js";
 import { injectAgentStyles } from "./styles.js";
 
 const entries = new Map();
@@ -410,7 +411,7 @@ function sourcesHtml(ids, evidence) {
     .join("")}</div>`;
 }
 
-function asideHtml(entry) {
+function asideHtml(entry, openSent = new Set()) {
   const g = entry.state;
   const session = g.session;
   if (!session) return "";
@@ -420,10 +421,13 @@ function asideHtml(entry) {
       : "";
   const evidence = new Map((session.tool_results || []).map((r) => [r.evidence_id, r]));
   const messages = (session.transcript || [])
-    .map((m) =>
+    .map((m, i) =>
       m.role === "user"
         ? `<div class="gmsg user">${esc(m.text)}</div>`
-        : `<div class="gmsg bot">${esc(m.text)}${sourcesHtml(m.evidence_ids, evidence)}</div>`,
+        : `<div class="gmsg bot">${esc(m.text)}${sourcesHtml(m.evidence_ids, evidence)}${sentHtml(m.sent, {
+            id: i,
+            open: openSent.has(String(i)),
+          })}</div>`,
     )
     .join("");
   const pending = g.asking
@@ -437,12 +441,16 @@ function asideHtml(entry) {
     g.draft,
   )}" autocomplete="off" maxlength="1000"${closed ? " disabled" : ""}></div><button type="submit" class="btn secondary"${
     g.busy || closed ? " disabled" : ""
-  }>Ask</button></form></section>`;
+  }>Ask</button></form>${statusHtml(g.chat)}</section>`;
 }
 
 function draw(entry) {
   entry.main.innerHTML = mainHtml(entry);
-  entry.aside.innerHTML = asideHtml(entry);
+  // A disclosure the person opened stays open when the page is drawn again (a decision, a new reply).
+  const openSent = new Set(
+    [...entry.aside.querySelectorAll("details[data-ag-sent][open]")].map((el) => el.getAttribute("data-ag-sent")),
+  );
+  entry.aside.innerHTML = asideHtml(entry, openSent);
   entry.aside.hidden = !entry.state.session;
   bind(entry);
 }

@@ -29,6 +29,15 @@ def test_m71_ships_only_read_tools() -> None:
         "find_roles",
         "describe_repeats",  # M76
         "check_data",
+        # The look-at-the-data tools (tests/unit/agent/test_look_tools.py)
+        "sample_rows",
+        "value_counts",
+        "find_values",
+        "describe_numbers",
+        "describe_dates",
+        "compare_columns",
+        "describe_missing",
+        "describe_duplicates",
     }
     assert {tool.kind for tool in TOOLS.values()} == {ToolKind.READ}
 
