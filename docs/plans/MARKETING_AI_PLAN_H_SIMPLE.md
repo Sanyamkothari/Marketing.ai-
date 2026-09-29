@@ -33,7 +33,7 @@
   restored the stage names; an earlier version had renamed them into "goals"):
   - **Awareness:** Targeted Advertisement, Vehicle Policy Cross-sell, Term Deposit Conversion
   - **Onboarding:** AI Onboarding Assistant
-  - **Service / Payments:** Payment Propensity, Card Default Propensity, Order Fulfillment, Fault Prediction
+  - **Service:** Payment Propensity, Card Default Propensity, Order Fulfillment, Fault Prediction
   - **Churn:** RCA (churn with reasons), Telco Customer Churn
   - **Win-back:** Win-back Campaign, Retail Win-back
   - No industry picker, no client picker, no demo numbers.

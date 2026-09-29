@@ -106,7 +106,7 @@ list; it does not forecast revenue.
 
 *Show this when someone asks whether the AutoML is doing anything a logistic regression would not.*
 
-**Open it:** Overview → industry selector **Banking** → Service / Payments → **Card Default
+**Open it:** Overview → industry selector **Banking** → Service → **Card Default
 Propensity**.
 
 1. **Upload** `library/uci-credit-default/data/prepared.csv` — 30,000 card accounts.

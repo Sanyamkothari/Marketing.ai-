@@ -67,7 +67,7 @@ def test_industries_validates_and_lists_five_stages_in_order(client: TestClient)
     assert [stage.name for stage in industry.stages] == [
         "Awareness",
         "Onboarding",
-        "Service / Payments",
+        "Service",
         "Churn",
         "Win-back",
     ]

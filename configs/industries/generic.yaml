@@ -22,7 +22,7 @@ stages:                                    # ordered; the overview renders them 
     use_cases:
       - {id: ai-onboarding-assistant, status: available}
   - id: service_payments
-    name: Service / Payments
+    name: Service
     ai_type: predictive
     use_cases:
       - {id: order-fulfillment,  status: available}

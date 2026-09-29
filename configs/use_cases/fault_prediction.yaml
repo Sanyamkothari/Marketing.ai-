@@ -1,7 +1,7 @@
 id: fault-prediction
 name: Fault Prediction
 description: Uses telemetry and service history to predict which assets will fail in the next 72 hours, so service happens before the fault.
-lifecycle_stage: Service / Payments
+lifecycle_stage: Service
 entity: asset
 
 target:
