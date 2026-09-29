@@ -82,7 +82,7 @@ def test_the_catalogue_lists_every_service_with_its_form(client: TestClient) -> 
     }
     assert kinds["s3"]["available"] and kinds["s3"]["tier"] == "built_in"
     assert kinds["snowflake"]["tier"] == "optional" and kinds["snowflake"]["addon"] == "snowflake"
-    assert kinds["ai_service"]["screen"] == "#/generative/connection" and not kinds["ai_service"]["creatable"]
+    assert kinds["ai_service"]["screen"] == "#/connections/ai/product" and not kinds["ai_service"]["creatable"]
     secret_fields = [f["name"] for f in kinds["postgres"]["fields"] if f["secret"]]
     assert secret_fields == ["password"]
 
