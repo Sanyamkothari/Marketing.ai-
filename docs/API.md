@@ -8,6 +8,11 @@ Contract schema version: 1.
 
 | Method | Path | Summary | Response model |
 |---|---|---|---|
+| GET | `/ai-service` | Both AI service slots (Product AI and Deliverable AI) and the providers a person can connect | AiServiceStates |
+| DELETE | `/ai-service/{slot}` | Disconnect one slot: removes its saved record and key; the state after (it may inherit or fall back) | AiServiceState |
+| PUT | `/ai-service/{slot}` | Connect one slot; the key is encrypted and never returned. Makes no network call | AiServiceState |
+| POST | `/ai-service/{slot}/models` | The model names a service lists (at most 200); on failure an empty list and a note | ModelList |
+| POST | `/ai-service/{slot}/test` | One tiny completion against a slot, or against the settings in the body; a failure is ok: false | TestOutcome |
 | GET | `/approvals` | Challengers waiting for an Approver, with the head-to-head and who may decide | ApprovalListResponse |
 | GET | `/audit/events` | Read the audit log | AuditEventPage |
 | GET | `/audit/events.csv` | Download the audit log as CSV | - |
@@ -576,7 +581,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `backend` | LlmBackend ("fake" \| "bedrock") | no | Which client a generative flow calls through: a deterministic fake, or Bedrock (DEC-203). |
+| `backend` | LlmBackend ("fake" \| "bedrock" \| "external") | no | Which client a generative flow calls through: a deterministic fake, or Bedrock (DEC-203).  `EXTERNAL` is never written in a use-case file: it is what a job records when the language model was the saved AI service of a third party (OpenAI, Claude, OpenRouter, Hugging Face, a compatible server), which `engine.ai_service` resolves per request (DEC-1141). |
 | `region` | string | no |  |
 | `generation_model_id` | string | no |  |
 | `judge_model_id` | string | no |  |

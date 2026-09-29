@@ -250,6 +250,10 @@ PHASE_ROUTERS.append(measure_router)
 from api.routes.connections import router as connections_router  # noqa: E402
 
 PHASE_ROUTERS.append(connections_router)
+# Configurable AI service: Product AI and Deliverable AI, connected under Connections (DEC-1140).
+from api.routes.ai_service import router as ai_service_router  # noqa: E402
+
+PHASE_ROUTERS.append(ai_service_router)
 # ---- END PLAN-G ----
 
 app: FastAPI = create_app()
