@@ -25,7 +25,7 @@ from pydantic import Field, JsonValue
 
 from api.access import set_audit_context
 from api.access_policy import RoutePolicy, register
-from api.deps import ConfigRootDep, StorageDep, get_registry
+from api.deps import ConfigRootDep, StorageDep, get_registry, get_settings
 from api.routes.agent_recipes import (
     load_receipt,
     load_recipe,
@@ -38,6 +38,7 @@ from api.routes.agent_recipes import (
     scoring_source,
     write_derived_upload,
 )
+from api.routes.ai_service import resolve_slot
 from api.routes.runs import read_frame, requested_by, score_version, validation_conflict
 from api.routes.uploads import http_error, load_upload, load_upload_profile, profile_row_cap, use_case_config
 from api.schemas import ErrorResponse, UploadRecord, ValidationErrorResponse
@@ -72,13 +73,12 @@ from engine.agent.session import (
     with_summary,
 )
 from engine.agent.tools import AgentContext
-from engine.aws_connection import profile_in_force
+from engine.ai_service import effective_service
 from engine.config import PrimaryKey, RunMode, StrictBase, UseCaseConfig, resolve_config, sole_key
 from engine.contracts import FeatureSchema, ModelVersion, ValidationReport
 from engine.generative.budget import Meter
 from engine.generative.contracts import LlmUsageReport
 from engine.generative.guardrails import Guardrails, load_policy
-from engine.llm import build_client
 from engine.pii import redact_text
 from engine.stages import ingest
 from engine.storage import Storage, StorageError, upload_key
@@ -277,7 +277,19 @@ register(
 
 
 class ChatAvailability(StrictBase):
-    backend: str = Field(description="`fake` (practice answers) or `bedrock`.")
+    available: bool = Field(
+        default=True,
+        description="False when no AI service is connected for Product AI: the suggestions and questions "
+        "still work, only the chat box does not.",
+    )
+    reason: str | None = Field(
+        default=None, description="Why it is not available: `AI_NOT_CONNECTED`. Null when it is."
+    )
+    backend: str = Field(
+        description="Which AI service answers: the provider's id (`bedrock`, `openai`, `anthropic`, "
+        "`openrouter`, `huggingface`, `openai_compatible`), `fake` in tests, or `none` when not connected."
+    )
+    provider_label: str | None = Field(default=None, description="The provider's name, as a person reads it.")
     generation_model_id: str | None = Field(
         default=None, description="The model that writes replies, when known."
     )
@@ -287,7 +299,7 @@ class ChatAvailability(StrictBase):
     )
     third_party: bool = Field(
         default=False,
-        description="True when the chat model runs outside the platform's own account (not `fake`, not `bedrock`).",
+        description="True when the chat model runs outside the platform's own account (not `bedrock`, not the test model).",
     )
 
 
@@ -464,17 +476,32 @@ def _save(storage: Storage, session: AgentSession) -> AgentSession:
     return session
 
 
-def _response(session: AgentSession, config: UseCaseConfig) -> AgentSessionResponse:
-    llm = config.generative.llm
-    return AgentSessionResponse(
-        session=session,
-        chat=ChatAvailability(
-            backend=llm.backend.value,
-            generation_model_id=llm.generation_model_id or None,
-            data_access=config.agent.ai_data_access,
-            third_party=is_third_party(llm),
-        ),
+def _response(
+    session: AgentSession, config: UseCaseConfig, storage: Storage, request: Request
+) -> AgentSessionResponse:
+    """The session and what the chat box may do: the Product AI's effective provider decides
+    `chat` (not the use case's `generative.llm.backend`), and with none connected the rules-based
+    suggestions still work while the chat is `available: false` (DEC-1140)."""
+    effective = effective_service(
+        config.generative.llm, slot="product", storage=storage, settings=get_settings(request)
     )
+    if effective is None:
+        chat = ChatAvailability(
+            available=False,
+            reason="AI_NOT_CONNECTED",
+            backend="none",
+            data_access=config.agent.ai_data_access,
+            third_party=False,
+        )
+    else:
+        chat = ChatAvailability(
+            backend=effective.provider,
+            provider_label=effective.label,
+            generation_model_id=effective.llm.generation_model_id or None,
+            data_access=config.agent.ai_data_access,
+            third_party=is_third_party(effective.llm, effective.provider),
+        )
+    return AgentSessionResponse(session=session, chat=chat)
 
 
 def _session_error(exc: SessionError) -> HTTPException:
@@ -525,7 +552,7 @@ def _start_agent_session(
         session = start_session(ctx, session_id=session_id)
     # Every later call checks against the same model this one did (the one Run will score with).
     session = session.model_copy(update={"model_version_id": body.model_version_id})
-    return _response(_save(storage, session), ctx.config)
+    return _response(_save(storage, session), ctx.config, storage, request)
 
 
 @router.get(
@@ -534,9 +561,11 @@ def _start_agent_session(
     responses={404: {"model": ErrorResponse}},
     summary="The Guided-setup session of an upload",
 )
-def read_agent_session(upload_id: str, root: ConfigRootDep, storage: StorageDep) -> AgentSessionResponse:
+def read_agent_session(
+    upload_id: str, root: ConfigRootDep, storage: StorageDep, request: Request
+) -> AgentSessionResponse:
     session = _load_session(storage, upload_id)
-    return _response(session, use_case_config(session.use_case_id, root))
+    return _response(session, use_case_config(session.use_case_id, root), storage, request)
 
 
 @router.post(
@@ -560,7 +589,7 @@ def decide_agent_session(
                 session = accept_recommended(session, ctx)
         except SessionError as exc:
             raise _session_error(exc) from exc
-        return _response(_save(storage, session), ctx.config)
+        return _response(_save(storage, session), ctx.config, storage, request)
 
 
 @router.post(
@@ -581,7 +610,7 @@ def answer_agent_session(
             session = answer(session, ctx, body.question_id, body.option_id)
         except SessionError as exc:
             raise _session_error(exc) from exc
-        return _response(_save(storage, session), ctx.config)
+        return _response(_save(storage, session), ctx.config, storage, request)
 
 
 @router.post(
@@ -614,12 +643,10 @@ def message_agent_session(
                 "start Guided setup again for a new chat.",
             )
         generative = ctx.config.generative
-        meter = Meter(
-            build_client(generative.llm, profile=profile_in_force()),
-            job_id=session.session_id,
-            llm=generative.llm,
-            budget=generative.budget,
-        )
+        # The Product AI, before anything is stored: no AI service means 409 AI_NOT_CONNECTED and a
+        # session exactly as it was (the suggestions and questions do not need one).
+        ai = resolve_slot(generative.llm, slot="product", storage=storage, settings=get_settings(request))
+        meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
         guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
         text = redact_text(body.text)[0]
         turn = chat_turn(ctx, session, text, meter=meter, guardrails=guardrails, config_root=root)
@@ -636,7 +663,7 @@ def message_agent_session(
         usage_key = upload_key(upload_id, LLM_USAGE_FILENAME)
         earlier = storage.read_model(usage_key, LlmUsageReport) if storage.exists(usage_key) else None
         storage.write_model(usage_key, add_usage(earlier, meter.usage()))
-        return _response(_save(storage, session), ctx.config)
+        return _response(_save(storage, session), ctx.config, storage, request)
 
 
 def _sum_cost(a: float | None, b: float | None) -> float | None:

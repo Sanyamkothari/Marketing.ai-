@@ -45,8 +45,11 @@ const CSS = `
 .ag-done{margin:0;font-size:14px;color:var(--ink);line-height:1.5}
 .ag-done .ok{font-weight:600}
 .ag-aside[hidden]{display:none}
-.ag-practice{display:flex;align-items:center;gap:8px;margin:0;padding:12px 20px 0;font-size:12px;color:var(--muted)}
-.ag-practice::before{content:"i";display:inline-grid;place-items:center;width:18px;height:18px;border-radius:50%;border:1px solid var(--line2);font-size:12px;font-weight:600;color:var(--muted);flex:none}
+.ag-nochat{display:flex;flex-direction:column;gap:4px;padding:14px 20px 18px}
+.ag-nochat p{margin:0;font-size:13px;color:var(--ink2);line-height:1.5}
+.ag-nochat a{color:var(--brand-blue);font-weight:500}
+.ag-nochat a:hover{text-decoration:underline}
+.ag-nochat .sub{font-size:12px;color:var(--muted)}
 .ag-chat .gchat{max-height:420px;overflow:auto}
 .ag-chat .gmsg{max-width:90%;overflow-wrap:anywhere}
 .ag-chat .gaskrow .btn{flex:none}

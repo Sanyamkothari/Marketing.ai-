@@ -4,7 +4,7 @@ name: Banking
 journey_label: Client Lifecycle            # str; overview subtitle and breadcrumb root
 
 # Two public datasets carry this industry today, one at each end of the lifecycle: UCI Bank
-# Marketing at Awareness and UCI Default of Credit Card Clients at Service / Payments. The planned
+# Marketing at Awareness and UCI Default of Credit Card Clients at Service. The planned
 # entries are the stages the library has no public dataset for yet; they carry their own copy
 # because no use-case file exists for them.
 
@@ -23,7 +23,7 @@ stages:                                    # ordered; the overview renders them 
         name: Account Opening Assistant
         description: A chat assistant grounded in product terms and KYC rules that walks a new client through opening an account.
   - id: service_payments
-    name: Service / Payments
+    name: Service
     ai_type: predictive                    # -> "P"
     use_cases:
       - {id: card-default-propensity, status: available}

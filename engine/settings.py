@@ -164,6 +164,8 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "trusted_proxy_hops": f"{ENV_PREFIX}TRUSTED_PROXY_HOPS",
     # --- Plan H (connections). One more extension; nothing above changes meaning (DEC-1101).
     "connections_key": f"{ENV_PREFIX}CONNECTIONS_KEY",
+    # --- Configurable AI service. One more extension; nothing above changes meaning (DEC-1140).
+    "allow_fake_ai": f"{ENV_PREFIX}ALLOW_FAKE_AI",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -389,6 +391,16 @@ class Settings(BaseModel):
     connections_key: SecretStr | None = Field(
         default=None,
         description="Fernet key encrypting saved connections' passwords and keys. A secret; required on env=prod.",
+    )
+
+    # --- Configurable AI service (DEC-1140) --------------------------------------------------------
+    # Added field only, defaulted off. The deterministic fake language model is a test tool: with this
+    # off (every real run) a language call with no AI service connected is refused with
+    # 409 AI_NOT_CONNECTED instead of being answered with machine-made text. Tests and developer
+    # targets that need the fake set it (`MARKETING_AI_ALLOW_FAKE_AI=1`).
+    allow_fake_ai: bool = Field(
+        default=False,
+        description="Test/development only: let the deterministic fake answer when no AI service is connected.",
     )
 
     @field_validator("sagemaker_subnet_ids", "sagemaker_security_group_ids", "cors_origins", mode="before")

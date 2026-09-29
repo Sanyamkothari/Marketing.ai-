@@ -67,7 +67,7 @@ def test_industries_validates_and_lists_five_stages_in_order(client: TestClient)
     assert [stage.name for stage in industry.stages] == [
         "Awareness",
         "Onboarding",
-        "Service / Payments",
+        "Service",
         "Churn",
         "Win-back",
     ]
@@ -416,6 +416,11 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/connections/{connection_id}/browse",
         "/connections/{connection_id}/preview",
         "/connections/{connection_id}/import",
+        # Configurable AI service (DEC-1140): two slots, Product AI and Deliverable AI
+        "/ai-service",
+        "/ai-service/{slot}",
+        "/ai-service/{slot}/test",
+        "/ai-service/{slot}/models",
         # Phase 4b M46/M47: sign-in, user management and the audit viewer
         "/auth/login",
         "/auth/logout",

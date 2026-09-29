@@ -487,15 +487,50 @@ the same on a screen.
 
 ---
 
-## 9. Backends: the fake and Bedrock
+## 9. Backends: the AI service, Bedrock and the test model
+
+**Which model answers is a setting a person makes, not a file they edit** (DEC-1140). Under
+Connections, **Deliverable AI** is the language service for everything in this document: the
+document assistant, root-cause summaries, campaign copy, and the judge and guardrail checks. (Guided
+setup's chat helper is **Product AI**, a separate setting: see `docs/CONNECTIONS.md` and
+`docs/AGENTS.md`.) They are separate because the deliverable is the customer's - their documents,
+their campaign data, their bill, their choice of provider - while the helper is your team's tool.
+
+Every generative route resolves its client through `engine.ai_service.resolve_client(..., slot="deliverable")`
+(`api.routes.generative._with_deliverable_ai`), in this order:
+
+1. the **Deliverable AI** the person saved (Amazon Bedrock, OpenAI, Claude, OpenRouter, Hugging Face or
+   any OpenAI-compatible server; `engine/llm_http.py` speaks the two HTTP protocols);
+2. else the **Product AI**, if that one is saved (so one connection is enough to start);
+3. else the use case's own `generative.llm.backend: bedrock`, exactly as before (below);
+4. else the test model, **only** when `MARKETING_AI_ALLOW_FAKE_AI` is on (the test suite and developer
+   checks; a real deployment must never set it);
+5. else nothing: the route answers `409 AI_NOT_CONNECTED` ("No AI service is connected for Deliverable
+   AI.", with the fix "Open Connections → AI service → Deliverable AI and connect one."), *before*
+   anything is written, so a refused request leaves no half-made index or status file behind.
+
+The model names of the service that answers - not the use case file's - are what every metered call is
+made against, what an index records (`backend: external` for a saved third-party service), and what
+`llm_usage.json` prices. `LlmBackend.EXTERNAL` is never written in a use-case file (`LlmConfig` refuses
+it). A saved provider without embeddings (Claude), or a service saved without an embedding model,
+embeds by **keyword hash** (`engine.llm.keyword_hash_vector`, model id `keyword-hash-v1`): the same
+deterministic lexical vector the test model's grounded mode uses, so retrieval is real, matches by shared
+words, and involves no model. An index remembers the embedding model it was built with; changing the
+embedding model means rebuilding it.
+
+The rest of this section describes the two backends a **use-case file** can name and the test model.
+A use case's `generative.llm.backend` is now only a *fallback*: `bedrock` (step 3 above) is honoured when
+nothing is saved, `fake` (the shipped default) means "no service configured in the file", and neither
+answers anybody unless step 3 or 4 applies.
 
 `generative.llm.backend` chooses between `fake` and `bedrock` (`LlmBackend`), and `fake` is the
-default for every use case that turns a generative flow on (DEC-203). That default is not a
-convenience; it is what lets a developer with no AWS credentials open every generative screen, build
-an index, generate copy, and watch the guardrails and the budget actually work - the parts of this
-package most likely to be wrong - without spending anything or configuring anything.
+default for every use case that turns a generative flow on (DEC-203). That default is what lets the
+test suite open every generative screen, build an index, generate copy, and watch the guardrails and
+the budget actually work - the parts of this package most likely to be wrong - without spending
+anything or configuring anything. **It is a test tool, not a product mode**: since DEC-1140 it answers
+only when `MARKETING_AI_ALLOW_FAKE_AI` is on, and a product screen never offers it.
 
-Switching to a real model is a configuration change, never a code change:
+Switching a use case file to a real model is a configuration change, never a code change:
 `generative.llm.{generation,judge,embedding}_model_id` are the only three places a model id appears
 anywhere in this package, they default to blank, and `LlmConfig` refuses a document that sets
 `backend: bedrock` while any of the three is still blank - at configuration-load time, naming the
@@ -518,8 +553,9 @@ answer under Bedrock is, and each of the remaining `FakeLLMMode` values can then
 guardrail at a time for a targeted test.
 
 **With a fake backend, no path that renders generated text may be reachable** (plan section 13.3, as
-DEC-214 restates it for this package specifically). This is stricter than "the fake must not be used
-in production": it means a screen must make which backend produced what it shows unmistakable, because
+DEC-214 restates it for this package specifically). DEC-1140 makes that true by construction for a real
+run: without `MARKETING_AI_ALLOW_FAKE_AI` the fake is never built. The rule is still worded strictly - it
+means a screen must make which backend produced what it shows unmistakable, because
 plan section 13.3's underlying rule - never invent a metric, a sample row, or a placeholder number in
 a path that reaches the UI - applies exactly as hard to invented prose as to an invented accuracy
 score. A screen that could show `[fake completion 3f2a...]`-shaped text to a person evaluating a real
@@ -527,6 +563,9 @@ deployment would be showing them a fabricated value with nothing that says so.
 
 
 ### Whose AWS credentials: the connection screen
+
+(This screen chooses the AWS *identity* Bedrock is called as. Whether Bedrock is used at all - and for
+which of Product AI and Deliverable AI - is chosen on the AI service screens of Connections.)
 
 Different people use this product with different AWS credentials, and the screen at
 `#/generative/connection` - reached from the backend badge on every generative screen - is where a

@@ -1,7 +1,7 @@
 id: order-fulfillment
 name: Order Fulfillment
 description: Predicts which orders are at risk of missing their delivery date, so teams can fix them before the customer notices.
-lifecycle_stage: Service / Payments
+lifecycle_stage: Service
 entity: order
 
 target:

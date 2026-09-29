@@ -1,0 +1,29 @@
+# configs/ai_service.yaml
+# Examples the "AI service" screen offers while a person types a model name (DEC-1141).
+#
+# These are suggestions, never defaults: nothing is sent to a model until a person connects an AI
+# service and names one. Model names change often and differ by account, region and plan, which is
+# why they are data here rather than literals in code (DEC-204) and why the screen also offers
+# "Load models from this service". Edit or empty any list; a missing provider simply has no examples.
+
+schema_version: 1                       # int; bumped on any breaking change of this document's shape
+
+suggestions:                            # provider id -> {models, embeddings}, each a list of str
+  bedrock:
+    models: ["amazon.nova-lite-v1:0"]
+    embeddings: ["amazon.titan-embed-text-v2:0"]
+  openai:
+    models: ["gpt-4o-mini", "gpt-4o"]
+    embeddings: ["text-embedding-3-small"]
+  anthropic:
+    models: ["claude-sonnet-4-5", "claude-haiku-4-5"]
+    embeddings: []
+  openrouter:
+    models: ["openai/gpt-4o-mini", "anthropic/claude-sonnet-4.5"]
+    embeddings: []
+  huggingface:
+    models: ["meta-llama/Llama-3.3-70B-Instruct"]
+    embeddings: []
+  openai_compatible:
+    models: []
+    embeddings: []

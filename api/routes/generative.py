@@ -54,7 +54,8 @@ import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
 from pydantic import BaseModel
 
-from api.deps import ConfigRootDep, JobsDep, StorageDep
+from api.deps import ConfigRootDep, JobsDep, SettingsDep, StorageDep
+from api.routes.ai_service import resolve_slot
 from api.routes.runs import load_run, read_artefact
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import (
@@ -71,7 +72,7 @@ from api.schemas import (
     ReferenceSetResponse,
     RootCauseRequest,
 )
-from engine.aws_connection import profile_in_force
+from engine.ai_service import ResolvedAi
 from engine.config import (
     GenerativeConfig,
     GenerativeKind,
@@ -134,7 +135,7 @@ from engine.generative.root_cause import build_root_cause_summary
 from engine.generative.vectorstore import LocalVectorStore, VectorStore
 from engine.generative.win_back import approve_template, generate_campaign_copy, regenerate_template
 from engine.jobs import CancelToken, JobFn
-from engine.llm import build_client
+from engine.settings import Settings
 from engine.stages.explain import ROW_EXPLANATIONS_FILENAME
 from engine.stages.export import SCORES_CSV
 from engine.storage import Storage, StorageError, index_key, run_key
@@ -564,18 +565,47 @@ def _new_job_id(prefix: str) -> str:
     return f"{prefix}_{utc_now().strftime('%Y%m%d%H%M%S')}_{secrets.token_hex(4)}"
 
 
+def _with_deliverable_ai(
+    use_case: UseCaseConfig, storage: Storage, settings: Settings
+) -> tuple[UseCaseConfig, ResolvedAi]:
+    """The use case as it will really run - `generative.llm` naming the Deliverable AI's models - and the
+    client that answers it; `409 AI_NOT_CONNECTED` when there is none.
+
+    Called at the top of every route that needs a model, before anything is written, so a request that
+    cannot be answered leaves no half-made index or status file behind (DEC-1140). The identity a
+    Bedrock client runs as is read per request (`profile_in_force`): a person may switch profile on the
+    connection screen between two jobs, and the next job should run as whoever they chose.
+    """
+    ai = resolve_slot(use_case.generative.llm, slot="deliverable", storage=storage, settings=settings)
+    generative = use_case.generative.model_copy(update={"llm": ai.llm})
+    return use_case.model_copy(update={"generative": generative}), ai
+
+
 def _client_meter_guardrails(
-    use_case: UseCaseConfig, *, job_id: str, config_root: Path | None
+    use_case: UseCaseConfig, *, ai: ResolvedAi, job_id: str, config_root: Path | None
 ) -> tuple[Meter, Guardrails]:
-    generative = use_case.generative
-    # The identity is read per request rather than at import: a person may switch profile on the
-    # connection screen between two jobs, and the next job should run as whoever they chose. Not
-    # `load_connection(settings())`: on `prod` that raises, because a deployment's settings are in
-    # Parameter Store and the environment alone is not a valid prod configuration.
-    client = build_client(generative.llm, profile=profile_in_force())
-    meter = Meter(client, job_id=job_id, llm=generative.llm, budget=generative.budget)
+    generative = use_case.generative  # already carries the Deliverable AI's models (`_with_deliverable_ai`)
+    meter = Meter(ai.client, job_id=job_id, llm=generative.llm, budget=generative.budget)
     guardrails = Guardrails(load_policy(config_root), meter=meter, prompts_root=config_root)
     return meter, guardrails
+
+
+def _require_same_embedding_model(manifest: DocIndexManifest, use_case: UseCaseConfig) -> None:
+    """`409 INDEX_EMBEDDING_CHANGED` when the Deliverable AI no longer embeds with the model the index was built with.
+
+    An index holds vectors of one model. Asking it with another model's vector either has a different
+    length (a crash in the search) or the same length and meaningless scores, so the index has to be
+    rebuilt before it is asked or graded again.
+    """
+    built_with = manifest.chunk_config.embedding_model_id
+    now_uses = use_case.generative.llm.embedding_model
+    if built_with != now_uses:
+        raise http_error(
+            409,
+            "INDEX_EMBEDDING_CHANGED",
+            "This index was built with a different embedding model than the Deliverable AI now uses. "
+            "Rebuild the index from its documents, then ask again.",
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -739,6 +769,7 @@ async def create_index(
     root: ConfigRootDep,
     storage: StorageDep,
     jobs: JobsDep,
+    current: SettingsDep,
     model_choice: ModelChoiceField,
     documents: DocumentsField = None,
     use_sample_documents: UseSampleDocumentsField = False,
@@ -772,6 +803,9 @@ async def create_index(
     if reference_path is not None:
         _require_gradeable_reference_set(reference_path, generative, primary_key=primary_key)
 
+    config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
+    generative = config.generative
+
     index_id = new_index_id()
     if use_sample_documents:
         paths = _sample_document_paths()
@@ -804,6 +838,7 @@ async def create_index(
         _index_build_job(
             storage,
             use_case=config,
+            ai=ai,
             index_id=index_id,
             paths=paths,
             reference_path=reference_path,
@@ -829,6 +864,7 @@ def _index_build_job(
     storage: Storage,
     *,
     use_case: UseCaseConfig,
+    ai: ResolvedAi,
     index_id: str,
     paths: Sequence[Path],
     reference_path: Path | None,
@@ -838,7 +874,7 @@ def _index_build_job(
 ) -> JobFn:
     status_key = index_key(index_id, INDEX_STATUS_FILENAME)
     store: VectorStore = LocalVectorStore(storage)
-    meter, guardrails = _client_meter_guardrails(use_case, job_id=index_id, config_root=config_root)
+    meter, guardrails = _client_meter_guardrails(use_case, ai=ai, job_id=index_id, config_root=config_root)
 
     def job(_cancel: CancelToken) -> None:
         stages = tuple(_stage(key, RunState.PENDING) for key in stage_keys)
@@ -1018,13 +1054,14 @@ async def create_evaluation(
     root: ConfigRootDep,
     storage: StorageDep,
     jobs: JobsDep,
+    current: SettingsDep,
     reference_set_id: ReferenceSetIdField = None,
     use_sample_questions: UseSampleQuestionsField = False,
     primary_key: PrimaryKeyField = None,
     reference_column: ReferenceColumnField = None,
 ) -> IndexJobStartedResponse:
     try:
-        read_manifest(storage, index_id)
+        manifest = read_manifest(storage, index_id)
     except GenerativeError as exc:
         raise generative_http(exc) from exc
     owner = _read_owner(storage, index_id)
@@ -1039,6 +1076,10 @@ async def create_evaluation(
     if reference_path is None:
         raise http_error(422, "REFERENCE_SET_REQUIRED", "Name a reference_set_id or use_sample_questions.")
     _require_gradeable_reference_set(reference_path, generative, primary_key=primary_key)
+
+    config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
+    _require_same_embedding_model(manifest, config)
+    generative = config.generative
 
     started = utc_now()
     label = (
@@ -1066,6 +1107,7 @@ async def create_evaluation(
         _evaluate_job(
             storage,
             use_case=config,
+            ai=ai,
             index_id=index_id,
             reference_path=reference_path,
             started_at=started,
@@ -1089,6 +1131,7 @@ def _evaluate_job(
     storage: Storage,
     *,
     use_case: UseCaseConfig,
+    ai: ResolvedAi,
     index_id: str,
     reference_path: Path,
     started_at: datetime,
@@ -1096,7 +1139,7 @@ def _evaluate_job(
 ) -> JobFn:
     status_key = index_key(index_id, INDEX_STATUS_FILENAME)
     store: VectorStore = LocalVectorStore(storage)
-    meter, guardrails = _client_meter_guardrails(use_case, job_id=index_id, config_root=config_root)
+    meter, guardrails = _client_meter_guardrails(use_case, ai=ai, job_id=index_id, config_root=config_root)
 
     def job(_cancel: CancelToken) -> None:
         stages = (_stage("evaluate", RunState.RUNNING),)
@@ -1159,16 +1202,18 @@ def _evaluate_job(
     summary="Answer one question from an index, grounded in its documents or refused",
 )
 def ask_index(
-    index_id: str, body: AssistantAskRequest, root: ConfigRootDep, storage: StorageDep
+    index_id: str, body: AssistantAskRequest, root: ConfigRootDep, storage: StorageDep, current: SettingsDep
 ) -> AssistantAnswer:
     try:
-        read_manifest(storage, index_id)
+        manifest = read_manifest(storage, index_id)
     except GenerativeError as exc:
         raise generative_http(exc) from exc
     owner = _read_owner(storage, index_id)
     config = use_case_config(owner.use_case_id, root)
+    config, ai = _with_deliverable_ai(config, storage, current)
+    _require_same_embedding_model(manifest, config)
     store: VectorStore = LocalVectorStore(storage)
-    meter, guardrails = _client_meter_guardrails(config, job_id=f"ask_{index_id}", config_root=root)
+    meter, guardrails = _client_meter_guardrails(config, ai=ai, job_id=f"ask_{index_id}", config_root=root)
     try:
         return answer(
             body.question,
@@ -1203,7 +1248,12 @@ def ask_index(
     summary="Start a root-cause summary over a finished scoring run",
 )
 def create_root_cause(
-    run_id: str, body: RootCauseRequest, root: ConfigRootDep, storage: StorageDep, jobs: JobsDep
+    run_id: str,
+    body: RootCauseRequest,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    jobs: JobsDep,
+    current: SettingsDep,
 ) -> GenerativeJobStartedResponse:
     run = load_run(storage, run_id)
     config = use_case_config(run.use_case_id, root)
@@ -1211,6 +1261,7 @@ def create_root_cause(
     _require_finished_run(run, needs_explanations=True)
     generative = _merged_generative_sub(config.generative, body.overrides, block="root_cause")
     config = config.model_copy(update={"generative": generative})
+    config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
 
     started = utc_now()
     stages = (_stage("summarize", RunState.PENDING),)
@@ -1226,16 +1277,23 @@ def create_root_cause(
     )
     job_id = _new_job_id("root_cause")
     jobs.submit(
-        job_id, _root_cause_job(storage, use_case=config, run_id=run_id, started_at=started, config_root=root)
+        job_id,
+        _root_cause_job(storage, use_case=config, ai=ai, run_id=run_id, started_at=started, config_root=root),
     )
     return GenerativeJobStartedResponse(run_id=run_id, job_id=job_id)
 
 
 def _root_cause_job(
-    storage: Storage, *, use_case: UseCaseConfig, run_id: str, started_at: datetime, config_root: Path | None
+    storage: Storage,
+    *,
+    use_case: UseCaseConfig,
+    ai: ResolvedAi,
+    run_id: str,
+    started_at: datetime,
+    config_root: Path | None,
 ) -> JobFn:
     status_key = run_key(run_id, ROOT_CAUSE_STATUS_FILENAME)
-    meter, guardrails = _client_meter_guardrails(use_case, job_id=run_id, config_root=config_root)
+    meter, guardrails = _client_meter_guardrails(use_case, ai=ai, job_id=run_id, config_root=config_root)
 
     def job(_cancel: CancelToken) -> None:
         stages = (_stage("summarize", RunState.RUNNING),)
@@ -1308,7 +1366,12 @@ def _root_cause_job(
     summary="Start campaign-copy generation over a finished scoring run",
 )
 def create_campaign_copy(
-    run_id: str, body: CampaignCopyRequest, root: ConfigRootDep, storage: StorageDep, jobs: JobsDep
+    run_id: str,
+    body: CampaignCopyRequest,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    jobs: JobsDep,
+    current: SettingsDep,
 ) -> GenerativeJobStartedResponse:
     run = load_run(storage, run_id)
     config = use_case_config(run.use_case_id, root)
@@ -1316,6 +1379,7 @@ def create_campaign_copy(
     _require_finished_run(run, needs_explanations=False)
     generative = _merged_generative_sub(config.generative, body.overrides, block="campaign_copy")
     config = config.model_copy(update={"generative": generative})
+    config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
 
     started = utc_now()
     stages = (_stage("generate", RunState.PENDING),)
@@ -1332,16 +1396,24 @@ def create_campaign_copy(
     job_id = _new_job_id("campaign_copy")
     jobs.submit(
         job_id,
-        _campaign_copy_job(storage, use_case=config, run_id=run_id, started_at=started, config_root=root),
+        _campaign_copy_job(
+            storage, use_case=config, ai=ai, run_id=run_id, started_at=started, config_root=root
+        ),
     )
     return GenerativeJobStartedResponse(run_id=run_id, job_id=job_id)
 
 
 def _campaign_copy_job(
-    storage: Storage, *, use_case: UseCaseConfig, run_id: str, started_at: datetime, config_root: Path | None
+    storage: Storage,
+    *,
+    use_case: UseCaseConfig,
+    ai: ResolvedAi,
+    run_id: str,
+    started_at: datetime,
+    config_root: Path | None,
 ) -> JobFn:
     status_key = run_key(run_id, COPY_STATUS_FILENAME)
-    meter, guardrails = _client_meter_guardrails(use_case, job_id=run_id, config_root=config_root)
+    meter, guardrails = _client_meter_guardrails(use_case, ai=ai, job_id=run_id, config_root=config_root)
 
     def job(_cancel: CancelToken) -> None:
         stages = (_stage("generate", RunState.RUNNING),)
@@ -1449,13 +1521,14 @@ def approve_copy_template(
     summary="Re-run generation for one campaign-copy template in place",
 )
 def regenerate_copy_template(
-    run_id: str, template_id: str, root: ConfigRootDep, storage: StorageDep
+    run_id: str, template_id: str, root: ConfigRootDep, storage: StorageDep, current: SettingsDep
 ) -> CopyTemplate:
     run = load_run(storage, run_id)
     config = use_case_config(run.use_case_id, root)
     batch = _load_copy_batch(storage, run_id)
     _find_template(batch, template_id)  # 404 before a model is called
-    meter, guardrails = _client_meter_guardrails(config, job_id=f"regen_{run_id}", config_root=root)
+    config, ai = _with_deliverable_ai(config, storage, current)
+    meter, guardrails = _client_meter_guardrails(config, ai=ai, job_id=f"regen_{run_id}", config_root=root)
     try:
         replacement = regenerate_template(
             batch,

@@ -16,6 +16,7 @@ from api.routes import agent as agent_routes
 from api.routes import runs
 from api.routes.agent_recipes import write_derived_upload
 from api.routes.uploads import load_upload
+from engine import ai_service
 from engine.agent.contracts import (
     RECIPE_RECEIPT_FILENAME,
     AgentSession,
@@ -143,7 +144,7 @@ def test_what_a_person_types_is_masked_before_it_is_stored_or_sent(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake = FakeLLMClient(mode=FakeLLMMode.GROUNDED)
-    monkeypatch.setattr(agent_routes, "build_client", lambda *_a, **_k: fake)
+    monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: fake)
     upload_id = _upload(client, messy_frame())
     client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE})
     session = _session(

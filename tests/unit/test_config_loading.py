@@ -127,7 +127,7 @@ def test_industries_list_and_telecom_loads() -> None:
     assert [stage.name for stage in industry.stages] == [
         "Awareness",
         "Onboarding",
-        "Service / Payments",
+        "Service",
         "Churn",
         "Win-back",
     ]

@@ -1269,7 +1269,13 @@ def cap_sent(transcript: Sequence[ChatMessage]) -> tuple[ChatMessage, ...]:
     return tuple(reversed(kept))
 
 
-def is_third_party(llm: Any) -> bool:
-    """True when the chat model runs outside the platform's own account (any backend but the two below)."""
-    backend = getattr(llm, "backend", llm)
+def is_third_party(llm: Any, provider: str | None = None) -> bool:
+    """True when the chat model runs outside the platform's own account (any backend but the two below).
+
+    `provider` is the effective Product AI's id (`engine.ai_service`): when a service is connected
+    under Connections it, not the use case's `generative.llm.backend`, decides who sees the prompts
+    (Bedrock and the test model are ours; OpenAI, Claude, OpenRouter, Hugging Face and any other server
+    are not). Without one, `llm` is read as before: a backend or a config that carries one.
+    """
+    backend = provider if provider is not None else getattr(llm, "backend", llm)
     return str(getattr(backend, "value", backend)).lower() not in THIRD_PARTY_FREE_BACKENDS

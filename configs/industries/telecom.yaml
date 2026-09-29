@@ -15,7 +15,7 @@ stages:                                    # ordered; the overview renders them 
     use_cases:
       - {id: ai-onboarding-assistant, status: available}     # Phase 3a; name and description now come from its own file
   - id: service_payments
-    name: Service / Payments
+    name: Service
     ai_type: predictive                    # -> "P"
     use_cases:
       - {id: order-fulfillment,  status: available}

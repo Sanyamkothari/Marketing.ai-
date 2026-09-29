@@ -42,7 +42,7 @@ test("Home is the generic journey: the customer lifecycle in order, and no indus
   assert.equal($("main h1").textContent, generic.journey_label);
   assert.deepEqual(
     $$(".stage-pill").map((p) => p.textContent.trim()),
-    ["Awareness", "Onboarding", "Service / Payments", "Churn", "Win-back"],
+    ["Awareness", "Onboarding", "Service", "Churn", "Win-back"],
   );
   const cards = $$(".uc-list a.uc").map((a) => a.getAttribute("href"));
   assert.deepEqual(

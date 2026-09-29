@@ -32,16 +32,17 @@ CONNECTORS: Final[Mapping[str, Connector]] = {
 
 AI_SERVICE: Final[KindInfo] = KindInfo(
     kind="ai_service",
-    label="AI service (Amazon Bedrock)",
-    description="The AI service that writes summaries, campaign copy and chat answers. It uses the AWS "
-    "sign-in set up on this computer and is set up and tested on its own screen.",
+    label="AI service",
+    description="The AI services that write summaries, campaign copy and chat answers: Product AI for your "
+    "team's Guided setup chat, Deliverable AI for what your customer receives. Each is set up and tested "
+    "on its own screen.",
     group="ai",
     tier="built_in",
     available=True,
     creatable=False,
-    screen="#/generative/connection",
+    screen="#/connections/ai/product",
 )
-"""The AI service's card. Its backend is `/connection/aws` (Phase 3a), reused as it is, not rewritten."""
+"""The AI service's card. Its backend is `/ai-service` (two slots, DEC-1140); the page draws one card per slot."""
 
 MAX_TEXT: Final[int] = 1000
 MAX_SECRET: Final[int] = 20_000

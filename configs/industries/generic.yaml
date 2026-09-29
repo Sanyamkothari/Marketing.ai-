@@ -7,7 +7,8 @@ journey_label: Customer Lifecycle          # str; overview subtitle and breadcru
 # are the customer lifecycle the product was built around (Awareness > Onboarding > Service /
 # Payments > Churn > Win-back), with each stage's name equal to the `lifecycle_stage` of every use
 # case below it. The other industry files stay loadable; Home no longer offers a choice.
-# (DEC-1121 restored these stage names after DEC-1110's first version had renamed them into goals.)
+# (DEC-1121 restored these stage names after DEC-1110's first version had renamed them into goals;
+# DEC-1124 took out the four use cases from other industries that had been added under them.)
 
 stages:                                    # ordered; the overview renders them left to right
   - id: awareness
@@ -15,21 +16,18 @@ stages:                                    # ordered; the overview renders them 
     ai_type: predictive
     use_cases:
       - {id: targeted-advertisement, status: available}
-      - {id: insurance-cross-sell,   status: available}
-      - {id: bank-term-deposit,      status: available}
   - id: onboarding
     name: Onboarding
     ai_type: generative
     use_cases:
       - {id: ai-onboarding-assistant, status: available}
   - id: service_payments
-    name: Service / Payments
+    name: Service
     ai_type: predictive
     use_cases:
-      - {id: payment-propensity,      status: available}
-      - {id: card-default-propensity, status: available}
-      - {id: order-fulfillment,       status: available}
-      - {id: fault-prediction,        status: available}
+      - {id: order-fulfillment,  status: available}
+      - {id: fault-prediction,   status: available}
+      - {id: payment-propensity, status: available}
   - id: churn
     name: Churn
     ai_type: hybrid
@@ -41,4 +39,3 @@ stages:                                    # ordered; the overview renders them 
     ai_type: hybrid
     use_cases:
       - {id: win-back-campaign, status: available}
-      - {id: retail-win-back,   status: available}

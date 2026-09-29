@@ -1,7 +1,7 @@
 id: card-default-propensity
 name: Card Default Propensity
 description: Scores every credit-card account on how likely it is to miss next month's payment, so payment plans and reminders reach the accounts that need them first.
-lifecycle_stage: Service / Payments
+lifecycle_stage: Service
 entity: account                            # the engine's copy says "one row per account"
 
 # UCI "Default of Credit Card Clients", 30,000 Taiwanese card accounts observed April to September

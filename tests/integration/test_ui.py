@@ -374,9 +374,10 @@ def test_the_generative_module_imports_and_routes_the_connection_screen() -> Non
     assert "renderConnection" in index_code
 
 
-def test_the_backend_badge_links_to_the_connection_screen() -> None:
-    """Discoverable from every generative screen (plan §13.3's badge, not a page nobody finds)."""
-    assert "#/generative/connection" in code_of_generative("gdom.js")
+def test_the_backend_badge_links_to_the_ai_service_screen() -> None:
+    """Discoverable from every generative screen (plan §13.3's badge, not a page nobody finds): the
+    Deliverable AI's screen, since the badge says who wrote the customer's text."""
+    assert "#/connections/ai/deliverable" in code_of_generative("gdom.js")
 
 
 def test_the_connection_screen_calls_every_route_connection_py_serves() -> None:

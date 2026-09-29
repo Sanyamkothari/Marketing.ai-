@@ -1,7 +1,7 @@
 id: payment-propensity
 name: Payment Propensity
 description: Predicts which customers are likely to pay late, so reminders and payment plans reach them before the due date.
-lifecycle_stage: Service / Payments
+lifecycle_stage: Service
 entity: account
 
 target:

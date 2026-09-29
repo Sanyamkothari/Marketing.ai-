@@ -208,7 +208,7 @@ test("a Viewer's AWS connection screen explains, in place, why they cannot test 
   await until(() => $("#c-test"), 3000, "the connection screen");
   await settle(2);
   // opened from Connections, and the bar marks Connections: so does the breadcrumb (§8.4 item 12)
-  assert.deepEqual(crumbTrail(), [["Connections", "#/connections"], ["AI service", null]]);
+  assert.deepEqual(crumbTrail(), [["Connections", "#/connections"], ["Amazon Bedrock sign-in", null]]);
   assert.equal(marked(), "Connections");
   assert.equal($("#c-test").disabled, true);
   assert.ok($$(".pb-why").some((n) => n.textContent === "Only an Admin can test the AWS connection."));
