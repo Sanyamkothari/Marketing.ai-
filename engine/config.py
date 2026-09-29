@@ -1461,8 +1461,8 @@ class IndustryStage(_Base):
     ai_type: AiType
     use_cases: tuple[IndustryUseCaseRef, ...]
     # Plan H M81 (DEC-1111): a stage may group use cases from several lifecycle stages under a
-    # goal of its own ("Win customers" holds the Awareness ones). Empty keeps the old rule: every
-    # available use case's `lifecycle_stage` equals the stage's name.
+    # name of its own. Empty keeps the old rule: every available use case's `lifecycle_stage` equals
+    # the stage's name (the generic journey uses that rule, DEC-1121).
     lifecycle_stages: tuple[Annotated[str, Field(min_length=1)], ...] = ()
 
     @property

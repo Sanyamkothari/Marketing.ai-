@@ -35,14 +35,14 @@ test("the top bar is exactly Home, Connections, Results and Settings", async () 
   assert.equal($("#pb-bar [data-menu]:not([data-menu='tn-help'])"), null, "no menu but Help");
 });
 
-test("Home is the generic journey: its five goals in order, and no industry chooser", async () => {
+test("Home is the generic journey: the customer lifecycle in order, and no industry chooser", async () => {
   await until(() => $$(".stage-pill").length === 5, 3000, "the journey");
   const generic = fixture("industries").industries[0];
   assert.equal(generic.id, "generic");
   assert.equal($("main h1").textContent, generic.journey_label);
   assert.deepEqual(
     $$(".stage-pill").map((p) => p.textContent.trim()),
-    ["Win customers", "Keep them paying", "Stop them leaving", "Win them back", "Run smoothly"],
+    ["Awareness", "Onboarding", "Service / Payments", "Churn", "Win-back"],
   );
   const cards = $$(".uc-list a.uc").map((a) => a.getAttribute("href"));
   assert.deepEqual(
