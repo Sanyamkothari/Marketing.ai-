@@ -1,6 +1,6 @@
 // The top bar: one role-aware bar above every screen (v1, docs/ui/FOUNDATION.md).
 //
-//   [Marketing AI]  Home  Connections  Results (2)  Settings          [chip] [Help ▾] [user]
+//   [Marketing AI]  Home  Connections  Results (2)  Settings          [chip] [user] [Minfy logo]
 //
 // Plan H M82 (DEC-1113): exactly four places. Home is the journey, Connections the cloud services
 // and the AI service (M80), Results every run (with the approvals count as its badge), Settings
@@ -24,7 +24,7 @@
 //   "models"   extra model tools (`<a>` elements); drawn on the Settings page, not in the bar
 //   "admin"    the admin entries (Users, Audit log, ...); drawn on the Settings page, not in the bar
 //   "demo"     the sample-data chip, right side
-//   "help"     the Help menu's entries; Help is drawn only when this slot has any
+//   "help"     the Help menu's entries; not drawn in the bar (the Minfy logo is in its place, top right)
 //   "user"     the user menu (or "Sign in", or the sign-in-off chip), far right
 //   "badge:approvals"  a count shown on Results ("" for none)
 // The context slot is the registered header tool, `headerToolHtml()` (Plan H: it draws nothing, as
@@ -33,7 +33,7 @@
 // Until a module fills "user", an older strip mounted before `#app` (Phase 4b's `#pb-bar` user bar,
 // Plan E's `#pe-bar`) is adopted into the bar's second row, so nothing it offered is lost.
 
-import { MODULES_EVENT, esc, headerToolHtml } from "./dom.js";
+import { LOGO, MODULES_EVENT, esc, headerToolHtml } from "./dom.js";
 
 const slots = new Map();
 let access = null;
@@ -280,17 +280,10 @@ export function topBarHtml() {
       }).join("");
   const nav = items ? `<nav class="topnav tb-c" aria-label="Main"><ul>${items}</ul></nav>` : "";
   const context = signedOut ? "" : headerToolHtml();
-  const help = signedOut ? "" : slotHtml("help");
-  const helpOpen = ui.menu === "tn-help";
-  const helpMenu = help
-    ? `<div class="menu"><button type="button" class="tn-item" data-menu="tn-help" aria-expanded="${helpOpen}" aria-controls="tn-help">Help${chev}</button><div class="menu-pop right" id="tn-help"${
-        helpOpen ? "" : " hidden"
-      }>${help}</div></div>`
-    : "";
-  const utils = `${signedOut ? "" : slotHtml("demo")}${helpMenu}${slotHtml("user")}`;
+  const utils = `${signedOut ? "" : slotHtml("demo")}${slotHtml("user")}`;
   return `<div class="tb-row"><a class="wordmark" href="#/">Marketing AI</a>${nav}<div class="tb-context">${context}</div>${
     utils ? `<div class="tb-utils tb-c">${utils}</div>` : ""
-  }<button type="button" class="btn secondary sm tb-menu-btn" data-tb-menu aria-expanded="${ui.panel}" aria-controls="pb-bar">Menu</button></div>`;
+  }<a class="tb-logo" href="#/" aria-label="Minfy, home">${LOGO}</a><button type="button" class="btn secondary sm tb-menu-btn" data-tb-menu aria-expanded="${ui.panel}" aria-controls="pb-bar">Menu</button></div>`;
 }
 
 function paintChrome() {

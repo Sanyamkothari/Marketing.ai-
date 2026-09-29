@@ -235,11 +235,10 @@ export function headerToolHtml() {
 
 /**
  * Every screen's header: breadcrumb, H1, one-sentence description, at most one chip and the header
- * actions on the left; the logo alone on the right (the owner's request). The client picker lives in
- * the top bar (`chrome.js`), not here.
+ * actions. The logo is in the top bar's right corner (`chrome.js`), as is the client picker, not here.
  */
 export function pageHead(inner) {
-  return `<div class="head"><div class="titles">${inner}</div>${LOGO}</div><div class="rule"></div>`;
+  return `<div class="head"><div class="titles">${inner}</div></div><div class="rule"></div>`;
 }
 
 /** One header button or link: an HTML string as it is, or `{ label, href | id, kind, attrs }`. */
