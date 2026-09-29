@@ -177,8 +177,8 @@ async function showOverview(industryId) {
 async function showUseCase(id, runId) {
   loading("form");
   const uc = await useCase(id);
-  // A use case that is only AI-written text (the assistant) has nothing to show in a demo with no
-  // AI service: one notice rather than a training form that does not apply to it (DEC-954).
+  // A use case that is only AI-written text (the assistant) has nothing to show while no AI service is
+  // connected: one notice rather than a training form that does not apply to it (DEC-954).
   if (uc.ai_type === "generative" && (await needsAiNotice(uc))) {
     active = null;
     paint(aiNoticeHtml(uc, backLink(uc)));

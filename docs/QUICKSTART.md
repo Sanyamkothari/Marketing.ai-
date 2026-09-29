@@ -136,8 +136,8 @@ These ten steps show the whole product in about fifteen minutes.
     for a one-line plain-language explanation. **Help → Send feedback** records what you think.
 
 **What the demo does not include:** the AI-written features (the onboarding assistant, root-cause
-notes and campaign copy) need a connection to an AI service and show a "Needs AI service
-connection" notice instead. The demo sends no messages to anyone and holds no real client data.
+notes and campaign copy) need an AI service (Connections → AI service → Deliverable AI) and show a
+"Needs AI service connection" notice until one is connected. The demo sends no messages to anyone and holds no real client data.
 
 ---
 

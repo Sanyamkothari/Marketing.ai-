@@ -13,22 +13,22 @@ import { injectGenerativeStyles } from "./styles.js";
 
 injectGenerativeStyles();
 
-export const CONNECTION_HREF = "#/generative/connection";
+export const CONNECTION_HREF = "#/connections/ai/deliverable";
 
 /**
- * The line every generative screen carries above its content (plan §13.3): with the fake backend,
- * nothing on the screen came from a real AI service, and that must be as plain as a watermark - but
- * calm, one sentence. `llm` is the resolved `generative.llm` block from a run's `run_config.json`, or
+ * The line every generative screen carries above its content (plan §13.3): text that no AI service
+ * wrote (a build made before one was connected) must say so as plainly as a watermark - but calm, one
+ * sentence. `llm` is the resolved `generative.llm` block from a run's `run_config.json`, or
  * the snapshot an index build was made with.
  *
- * It is a link, always to the AI service connection screen: which service answered is exactly the
+ * It is a link, always to the AI service screen: which service answered is exactly the
  * question that screen answers, so the line that names it is also how a person finds where it is set.
  */
 export function backendBadge(llm) {
   const href = `href="${CONNECTION_HREF}"`;
   if (!llm) return `<a class="gbackend g-unknown" ${href}>AI service ${EM_DASH}</a>`;
   if (llm.backend === "fake") {
-    return `<a class="gbackend g-fake" ${href}>Practice mode: answers are sample text, not from a real AI service.</a>`;
+    return `<a class="gbackend g-none" ${href}>No AI service wrote this. Connect one to get real answers.</a>`;
   }
   const model = present(llm.generation_model_id) ? llm.generation_model_id : "";
   const region = present(llm.region) ? ` · ${llm.region}` : "";

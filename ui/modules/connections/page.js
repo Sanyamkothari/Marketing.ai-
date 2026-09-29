@@ -3,6 +3,9 @@
 //   #/connections              the saved connections (status, Test, Edit, Delete) and the services to add
 //   #/connections/new/<kind>   the set-up form of one kind
 //   #/connections/<id>         a saved connection's form, with its last test
+//   #/connections/ai/<slot>    the AI service screens (`ai.js`): "product" and "deliverable"
+//
+// The list ends with the two AI service cards, drawn from `GET /ai-service` whatever the kinds say.
 //
 // Plain words, few fields: a form shows what nearly everyone needs and tucks ports, encryption and the
 // like under "More options". A secret field is a password input that is never filled in - the API never
@@ -20,6 +23,7 @@ import {
   testConnection,
   updateConnection,
 } from "./api.js";
+import { SLOTS, aiStatusBadge, renderAiService, slotHref } from "./ai.js";
 import { injectConnectionStyles } from "./styles.js";
 
 const LIST = "#/connections";
@@ -130,18 +134,22 @@ function kindCard(k) {
   )}</p>${action}</article>`;
 }
 
-function aiCard(k) {
-  const ai = state.ai;
-  const line = !ai
-    ? "Set up and tested on its own screen."
-    : ai.connection && ai.connection.source === "profile" && ai.connection.profile
-      ? `Uses the AWS profile “${ai.connection.profile}” on this computer.`
-      : "Uses the AWS sign-in already set up on this computer.";
-  return `<article class="cn-card" data-cn-kind="${esc(k.kind)}"><h3>${esc(k.label)}</h3><p class="cn-text">${esc(
-    k.description,
-  )}</p><p class="cn-note">${esc(line)}</p><div class="btn-row"><a class="btn secondary sm" href="${esc(
-    k.screen,
-  )}">Open and test</a></div></article>`;
+/** One of the two AI service cards: its own badge and one button to its screen. */
+function aiCard(slot) {
+  const info = SLOTS[slot];
+  const st = state.ai && state.ai.slots ? state.ai.slots[slot] : null;
+  const note =
+    st && st.source === "inherited"
+      ? "Uses the Product AI unless you set its own."
+      : st && st.source === "config"
+        ? "Set in this installation's configuration."
+        : "";
+  const set = st && st.source && st.source !== "none";
+  return `<article class="cn-card" data-cn-ai="${esc(slot)}"><h3>${esc(info.title)}</h3>${aiStatusBadge(st)}<p class="cn-text">${esc(
+    info.blurb,
+  )}</p>${note ? `<p class="cn-note">${esc(note)}</p>` : ""}<div class="btn-row"><a class="btn secondary sm" href="${esc(
+    slotHref(slot),
+  )}">${set ? "Change" : "Set up"}</a></div></article>`;
 }
 
 function listHtml() {
@@ -158,13 +166,14 @@ function listHtml() {
         text: "Pick a service below to connect it. You can also upload files directly in each use case.",
       });
   const data = state.kinds.filter((k) => k.creatable);
-  const ai = state.kinds.filter((k) => !k.creatable && k.screen);
   return `<main class="screen cn">${head}
     <section class="cn-sec" aria-labelledby="cn-yours"><h2 id="cn-yours">Your connections</h2>${saved}</section>
     <section class="cn-sec" aria-labelledby="cn-add"><h2 id="cn-add">Add a connection</h2><p>Files in cloud storage, or tables in a database.</p><div class="cn-grid">${data
       .map(kindCard)
       .join("")}</div></section>
-    ${ai.length ? `<section class="cn-sec" aria-labelledby="cn-ai"><h2 id="cn-ai">AI service</h2><div class="cn-grid">${ai.map(aiCard).join("")}</div></section>` : ""}
+    <section class="cn-sec" aria-labelledby="cn-ai"><h2 id="cn-ai">AI service</h2><p>Two settings: one that helps your team, one for what your customer gets. Neither trains or scores your models.</p><div class="cn-grid">${Object.keys(SLOTS)
+      .map(aiCard)
+      .join("")}</div></section>
   </main>`;
 }
 
@@ -420,6 +429,7 @@ function bind(app) {
 /** `registerModule`'s render for `#/connections...`: paint a skeleton, load, draw. */
 export async function renderConnections(app, parts) {
   injectConnectionStyles();
+  if (parts[1] === "ai") return renderAiService(app, parts[2]); // the AI service screens load their own state
   view = { app, parts: [...parts] };
   const editing = parts[1];
   app.innerHTML = skeleton(editing ? "form" : "list", { title: "Connections" });

@@ -32,8 +32,8 @@ Three promises hold throughout:
 - **The helper never edits a file and never writes code.** It proposes steps from a short fixed
   list; our tested code runs them.
 - **It works without an AI service.** The suggestions, questions and settings come from rules in our
-  code. The AI service only adds the chat. With none connected, the chat answers in practice mode
-  (`chat.backend = "fake"`) and everything else works the same.
+  code. The AI service only adds the chat. With none connected (`chat.available = false`), the chat box
+  says "Connect an AI service to chat with the helper" and everything else works the same.
 
 ## 2. How it works, end to end
 
@@ -68,7 +68,7 @@ scoring: POST /runs mode=score ──► replay the model's recipe ──► val
 | `api/routes/agent.py` | The HTTP routes (§8). |
 | `api/routes/agent_recipes.py` | Derived uploads, attaching a recipe to a run, replaying it for scoring. |
 | `configs/prompts/data_agent.v1.md` | The chat prompt. |
-| `ui/modules/agent/` | The *Guided setup* tab (M75, DEC-1019 … DEC-1022), registered through `router.js`'s `registerSetupMode`; since Plan H it is the tab a use case opens on, with Manual setup one click away (DEC-1114). Under each chat reply that has `sent` items, `sent.js` draws a collapsed "What the AI looked at (N)" disclosure (the tool in plain words, its columns, the masked `preview` as escaped text in a height-capped block), and under the input a one-line status from `chat.data_access` / `chat.third_party` (nothing for the practice backend or when the API does not send them). |
+| `ui/modules/agent/` | The *Guided setup* tab (M75, DEC-1019 … DEC-1022), registered through `router.js`'s `registerSetupMode`; since Plan H it is the tab a use case opens on, with Manual setup one click away (DEC-1114). Under each chat reply that has `sent` items, `sent.js` draws a collapsed "What the AI looked at (N)" disclosure (the tool in plain words, its columns, the masked `preview` as escaped text in a height-capped block), and under the input a one-line status from `chat.data_access` / `chat.third_party` (nothing when no service is connected or when the API does not send them); when `chat.available` is false the chat box is replaced by a link to connect the Product AI (`#/connections/ai/product`). |
 
 ### 2.2 A session
 

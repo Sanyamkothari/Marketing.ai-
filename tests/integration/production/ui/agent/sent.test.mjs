@@ -27,8 +27,11 @@ const scenarios = {
     sent: [{ ...SENT[0], mode: "summaries_only" }],
   },
   emptysent: { chat: { backend: "bedrock", generation_model_id: "m", data_access: "masked_data", third_party: false }, sent: [] },
-  practice: { chat: { backend: "fake", generation_model_id: "practice", data_access: "masked_data", third_party: false }, sent: [] },
-  older: { chat: null, sent: undefined }, // the recorded body as the API answers today
+  // No Product AI: the session says the chat is not available (`chat.available: false`).
+  unavailable: { chat: { available: false, reason: "AI_NOT_CONNECTED" }, sent: [] },
+  // Available when the session started; disconnected before the first message (the API then answers 409).
+  vanished: { chat: { backend: "bedrock", generation_model_id: "m", available: true, data_access: "masked_data", third_party: false }, sent: [] },
+  older: { chat: null, sent: undefined }, // no `chat` block and no `sent`: the oldest API
   olderreal: { chat: { backend: "bedrock", generation_model_id: "m" }, sent: undefined },
 };
 
@@ -36,6 +39,7 @@ function body(name, action) {
   const copy = structuredClone(fixture(action === "start" ? "main_start" : "main_chat"));
   const scenario = scenarios[name];
   if (scenario.chat) copy.chat = scenario.chat;
+  else delete copy.chat; // an API that sends no `chat` block at all
   if (action === "messages") {
     const reply = copy.session.transcript.at(-1);
     if (scenario.sent !== undefined) reply.sent = scenario.sent;
@@ -57,6 +61,9 @@ const server = (request) => {
   if (session && method === "POST" && scenarios[session[1]]) {
     const action = session[2] || "start";
     if (action === "start") return { status: 201, body: body(session[1], "start") };
+    if (action === "messages" && session[1] === "vanished") {
+      return { status: 409, body: { detail: { code: "AI_NOT_CONNECTED", message: "No AI service is connected." } } };
+    }
     if (action === "messages") return { status: 200, body: body(session[1], "messages") };
   }
   return null;
@@ -75,8 +82,8 @@ const rerender = () => {
   controller.bind(app);
 };
 
-/** Upload a file, wait for the session, then send one chat message and wait for the reply. */
-async function chat(name) {
+/** Upload a file and wait for the Guided setup session to be drawn. */
+async function upload(name) {
   nextUpload = name;
   if (!controller) {
     controller = createController(uc, rerender);
@@ -90,7 +97,12 @@ async function chat(name) {
   const file = new w.File(["a,b\n1,2\n"], `${name}.csv`, { type: "text/csv" });
   Object.defineProperty(input, "files", { value: [file], configurable: true });
   input.dispatchEvent(new w.Event("change", { bubbles: true }));
-  await until(() => $("#ag-question") && !$(".ag .loading"), 3000, `the ${name} session`);
+  await until(() => $("#ag-chat") && !$(".ag .loading"), 3000, `the ${name} session`);
+}
+
+/** Upload a file, wait for the session, then send one chat message and wait for the reply. */
+async function chat(name) {
+  await upload(name);
   $("#ag-question").value = "What about monthly_spend?";
   $("#ag-question").dispatchEvent(new w.Event("input", { bubbles: true }));
   $("#ag-ask").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
@@ -148,7 +160,6 @@ test("masked data: the status line under the input, and no third-party sentence"
   const line = $("#ag-chat [data-ag-access]");
   assert.equal(flat(line), "The AI can look at your data, with the personal details our checks recognise hidden.");
   assert.equal(line.querySelector("a"), null);
-  assert.equal($("[data-ag-practice]"), null, "a real service is not labelled practice");
   assert.ok(line.compareDocumentPosition($("#ag-ask")) & w.Node.DOCUMENT_POSITION_PRECEDING, "it sits under the input row");
 });
 
@@ -160,7 +171,7 @@ test("summaries only, from another company's service: the line, the sentence and
     "The AI sees only summaries of your data, never values. This AI service is run by another company. Change on Connections",
   );
   const link = line.querySelector("a");
-  assert.equal(link.getAttribute("href"), "#/connections");
+  assert.equal(link.getAttribute("href"), "#/connections/ai/product");
   assert.equal(link.textContent, "Change on Connections");
   assert.equal(reply().querySelector("summary").textContent, "What the AI looked at (1)");
 });
@@ -187,18 +198,33 @@ test("an empty `sent` draws no disclosure", async () => {
   assert.ok($("#ag-chat [data-ag-access]"), "the access line is still there");
 });
 
-test("the practice service shows only the practice label, even when the API sends the new fields", async () => {
-  await chat("practice");
-  assert.equal($("#ag-chat [data-ag-access]"), null);
-  assert.match(flat($("[data-ag-practice]")), /^Practice answers/);
-  assert.equal($("#ag-chat details"), null);
+test("no Product AI: the chat box is replaced by one line and a link to connect one", async () => {
+  await upload("unavailable");
+  const notice = $("#ag-chat [data-ag-nochat]");
+  assert.equal(flat(notice), "Connect an AI service to chat with the helper.The suggestions in the list work without it.");
+  assert.equal(notice.querySelector("a").getAttribute("href"), "#/connections/ai/product");
+  assert.equal($("#ag-ask"), null, "no input to type into");
+  assert.equal($("#ag-question"), null);
+  assert.equal($("#ag-chat [data-ag-access]"), null, "nothing claimed about a service that is not there");
+  assert.ok($$(".ag-item").length > 0, "the rules-based suggestions are still listed");
 });
 
-test("an older API (no `sent`, no `data_access`) shows nothing extra, and the practice label stays", async () => {
+test("the chat answering 409 AI_NOT_CONNECTED turns the box into the same line, without an error", async () => {
+  await upload("vanished");
+  assert.ok($("#ag-question"), "available when the session started");
+  $("#ag-question").value = "What about monthly_spend?";
+  $("#ag-question").dispatchEvent(new w.Event("input", { bubbles: true }));
+  $("#ag-ask").dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+  await until(() => $("#ag-chat [data-ag-nochat]"), 3000, "the connect line");
+  assert.equal($("#ag-chat .apierr"), null);
+  assert.equal($("#ag-ask"), null);
+});
+
+test("an older API (no `sent`, no `data_access`) shows nothing extra", async () => {
   await chat("older");
   assert.equal($("#ag-chat details"), null);
   assert.equal($("#ag-chat [data-ag-access]"), null);
-  assert.ok($("[data-ag-practice]"));
+  assert.equal($("[data-ag-nochat]"), null, "an API that says nothing about availability leaves the chat as it was");
   await chat("olderreal");
   assert.equal($("#ag-chat details"), null);
   assert.equal($("#ag-chat [data-ag-access]"), null, "an unknown mode is never claimed");

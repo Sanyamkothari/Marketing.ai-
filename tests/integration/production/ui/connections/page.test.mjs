@@ -10,13 +10,22 @@ const s3Tested = fixture("s3_tested");
 const pgTested = fixture("pg_tested");
 
 let connections = fixture("list").connections;
+// `GET /ai-service` as the API answers it: two slots and the providers (only what the card reads).
+const slot = (over) => ({ connected: false, source: "none", provider: null, provider_label: null, model: null, has_key: false, key_readable: true, third_party: false, last_test: null, editable: true, locked_reason: null, ...over });
+const aiState = {
+  slots: {
+    product: slot({ connected: true, source: "saved", provider: "openai", provider_label: "OpenAI", model: "test-model-1", has_key: true, third_party: true }),
+    deliverable: slot({ connected: true, source: "inherited", provider: "openai", provider_label: "OpenAI", model: "test-model-1", inherits_product: true }),
+  },
+  providers: [],
+};
 const sent = { creates: [], updates: [], tests: [], deletes: [] };
 
 const server = (request) => {
   const { method, path, body } = request;
   if (method === "GET" && path === "/connections/kinds") return { status: 200, body: kinds };
   if (method === "GET" && path === "/connections") return { status: 200, body: { connections } };
-  if (method === "GET" && path === "/connection/aws") return { status: 200, body: fixture("ai") };
+  if (method === "GET" && path === "/ai-service") return { status: 200, body: aiState };
   if (method === "POST" && path === "/connections") {
     sent.creates.push(body);
     return { status: 201, body: fixture("pg_created") };
@@ -80,7 +89,7 @@ test("a name with markup is shown as text, never as markup", () => {
   assert.equal(w.__pwned, undefined);
 });
 
-test("the catalogue offers every service; one without its add-on says so; the AI service links to its screen", () => {
+test("the catalogue offers every service; one without its add-on says so", () => {
   for (const kind of kinds.kinds.filter((k) => k.creatable)) {
     const el = $(`[data-cn-kind="${kind.kind}"]`);
     assert.ok(el, kind.kind);
@@ -93,8 +102,21 @@ test("the catalogue offers every service; one without its add-on says so; the AI
       assert.equal(text(badge), "Not set up");
     }
   }
-  const ai = $('[data-cn-kind="ai_service"]');
-  assert.equal(ai.querySelector("a").getAttribute("href"), "#/generative/connection");
+});
+
+test("the AI service section has two cards, each with its own badge and a button to its screen", () => {
+  const product = $('[data-cn-ai="product"]');
+  const deliverable = $('[data-cn-ai="deliverable"]');
+  assert.equal(text(product.querySelector("h3")), "Product AI");
+  assert.equal(text(deliverable.querySelector("h3")), "Deliverable AI");
+  assert.equal(text(product.querySelector("[data-cn-status]")), "Connected · OpenAI · test-model-1");
+  assert.equal(text(deliverable.querySelector("[data-cn-status]")), "Uses the Product AI · OpenAI · test-model-1");
+  assert.match(text(deliverable), /Uses the Product AI unless you set its own/);
+  assert.equal(product.querySelector("a.btn").getAttribute("href"), "#/connections/ai/product");
+  assert.equal(deliverable.querySelector("a.btn").getAttribute("href"), "#/connections/ai/deliverable");
+  assert.equal(text(product.querySelector("a.btn")), "Change");
+  assert.match(text(product), /Helps your team prepare data in Guided setup/);
+  assert.match(text(deliverable), /What your customer gets/);
 });
 
 test("the services to add come before the AI service, right under the person's connections", () => {

@@ -27,6 +27,7 @@ await import("../../../../ui/modules/production/index.js");
 await import("../../../../ui/modules/uplift/index.js");
 await import("../../../../ui/modules/pilot/index.js");
 await import("../../../../ui/modules/simple/index.js");
+await import("../../../../ui/modules/connections/index.js");
 
 /** The breadcrumb as [label, href] pairs (href null for the screen itself). */
 const trail = () => $$("#app .crumbs a, #app .crumbs .cur").map((e) => [e.textContent, e.getAttribute("href")]);
@@ -59,7 +60,9 @@ const CASES = [
   ["#/approvals", [RESULTS, ["Waiting for approval", null]]],
   ["#/campaign/targeted-advertisement/r-missing", [RESULTS, ["Not found", null]]],
   // Connections
-  ["#/generative/connection", [["Connections", "#/connections"], ["AI service", null]]],
+  ["#/generative/connection", [["Connections", "#/connections"], ["Amazon Bedrock sign-in", null]]],
+  ["#/connections/ai/product", [["Connections", "#/connections"], ["Product AI", null]]],
+  ["#/connections/ai/deliverable", [["Connections", "#/connections"], ["Deliverable AI", null]]],
   // Home: the one journey is Home's own page, so it is not a crumb of its own
   ["#/uc/targeted-advertisement", [["Home", "#/"], ["Targeted Advertisement", null]]],
 ];

@@ -9,7 +9,7 @@ import { API_BASE, ApiError } from "../../api.js";
 
 const enc = encodeURIComponent;
 
-async function call(path, { method = "GET", body } = {}) {
+export async function call(path, { method = "GET", body } = {}) {
   let response;
   try {
     response = await fetch(`${API_BASE}${path}`, {
@@ -30,7 +30,7 @@ async function call(path, { method = "GET", body } = {}) {
     }
   }
   if (response.ok) return parsed;
-  const detail = parsed && parsed.detail;
+  const detail = (parsed && parsed.detail) || (parsed && typeof parsed === "object" ? parsed : null);
   throw new ApiError(
     response.status,
     (detail && detail.code) || `HTTP_${response.status}`,
@@ -83,5 +83,24 @@ export const importFrom = (id, pick, useCaseId, mode) =>
     body: { use_case: useCaseId, mode, ...pickBody(pick) },
   });
 
-/** The AI service's own state (`GET /connection/aws`, Phase 3a), for its card. */
-export const getAiService = () => call("/connection/aws");
+// --- the AI service (`api/routes/ai_service.py`) ---------------------------------------------------
+// Two slots, `product` (the Guided setup helper) and `deliverable` (what the customer receives), each
+// saved separately. The API key goes to the server in the body of a save, a test or a model listing
+// and nowhere else; no call here ever returns it (a state says only `has_key`).
+
+const slotPath = (slot, tail = "") => `/ai-service/${enc(slot)}${tail}`;
+
+/** `{ slots: { product, deliverable }, providers: [...] }`: what is connected, the last tests, the choices. */
+export const getAiService = () => call("/ai-service");
+
+/** Save a slot: `{ provider, api_key?, model, embedding_model?, base_url?, region? }`; a blank key keeps the saved one. */
+export const putAiService = (slot, body) => call(slotPath(slot), { method: "PUT", body });
+
+/** Test one tiny completion; no body tests what is saved. `{ ok, message, fix, latency_ms, model, embeddings_note }`. */
+export const testAiService = (slot, body) => call(slotPath(slot, "/test"), { method: "POST", body });
+
+/** `{ models: [str], note }`: the models the service lists for this key; a failure is an empty list and a note. */
+export const listAiModels = (slot, body) => call(slotPath(slot, "/models"), { method: "POST", body });
+
+/** Disconnect a slot: removes what it saved and answers with the state that remains. */
+export const deleteAiService = (slot) => call(slotPath(slot), { method: "DELETE" });

@@ -9,7 +9,8 @@
 // The AI type of each use case is its card's coloured edge, explained once by "What do the colours
 // mean?" (the legend and the per-stage type chips said the same thing three times). A planned card
 // is muted and tagged "Coming soon"; in demo mode the demo's use cases are tagged "Sample data ready",
-// and an AI-writing use case that has no AI service here "Needs AI service" (the notice it opens to).
+// and an AI-writing use case is tagged "Needs AI service" (the notice it opens to) while no AI service
+// is connected (`GET /ai-service`, through `availability.js`).
 //
 // What only the browser can know - the demo, whether any model exists yet, the "For you" line a phase
 // module adds (`registerForYou`) - is read after the first paint and asks for a repaint when it
@@ -129,18 +130,16 @@ async function readExtras(industry) {
   ]);
   const demo = await demoStatus();
   const needsAi = new Set();
-  if (demo && demo.demo_mode) {
-    const writing = cardsOf(industry).filter((u) => isAvailable(u) && u.ai_type === "generative");
-    await Promise.all(
-      writing.map(async (u) => {
-        try {
-          if (await needsAiNotice(await getUseCase(u.id))) needsAi.add(u.id);
-        } catch {
-          // a use case that cannot be read is tagged nothing; opening it explains itself
-        }
-      }),
-    );
-  }
+  const writing = cardsOf(industry).filter((u) => isAvailable(u) && u.ai_type === "generative");
+  await Promise.all(
+    writing.map(async (u) => {
+      try {
+        if (await needsAiNotice(await getUseCase(u.id))) needsAi.add(u.id);
+      } catch {
+        // a use case that cannot be read is tagged nothing; opening it explains itself
+      }
+    }),
+  );
   let noRuns = false;
   try {
     const response = await fetch(`${API_BASE}/runs?limit=1`);
@@ -154,8 +153,21 @@ async function readExtras(industry) {
 const signature = (e) => JSON.stringify([e.demo && e.demo.seeded, [...e.needsAi].sort(), e.noRuns]);
 
 /** Read the extras once a while (never on every repaint), and repaint only when they changed. */
+let listening = false;
+
+/** Connecting or disconnecting an AI service makes what Home read about it stale: read again next time. */
+function listenForAiService() {
+  if (listening) return;
+  listening = true;
+  import("./availability.js")
+    .then(({ AI_SERVICE_EVENT }) => window.addEventListener(AI_SERVICE_EVENT, () => (extras.at = 0)))
+    .catch(() => {});
+}
+
 function refreshExtras(industry) {
-  if (typeof window === "undefined" || extras.busy || Date.now() - extras.at < STALE_MS) return;
+  if (typeof window === "undefined") return;
+  listenForAiService();
+  if (extras.busy || Date.now() - extras.at < STALE_MS) return;
   extras.busy = true;
   const before = signature(extras);
   readExtras(industry)
