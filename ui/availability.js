@@ -65,7 +65,12 @@ export function forgetAiServiceStatus() {
   ai = null;
   aiAnswer = undefined;
   aiAt = 0;
-  if (typeof window !== "undefined" && typeof Event === "function") window.dispatchEvent(new Event(AI_SERVICE_EVENT));
+  // Ask again straight away, so a screen opened next finds the new answer settled, and tell listeners
+  // once it has arrived (a repaint before then would still see "no answer yet").
+  const announce = () => {
+    if (typeof window !== "undefined" && typeof Event === "function") window.dispatchEvent(new Event(AI_SERVICE_EVENT));
+  };
+  aiServiceStatus({ fresh: true }).then(announce, announce);
 }
 
 /** The Deliverable AI's state out of an `aiServiceStatus()` answer, or null. */

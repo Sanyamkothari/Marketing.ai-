@@ -590,6 +590,24 @@ def _client_meter_guardrails(
     return meter, guardrails
 
 
+def _require_same_embedding_model(manifest: DocIndexManifest, use_case: UseCaseConfig) -> None:
+    """`409 INDEX_EMBEDDING_CHANGED` when the Deliverable AI no longer embeds with the model the index was built with.
+
+    An index holds vectors of one model. Asking it with another model's vector either has a different
+    length (a crash in the search) or the same length and meaningless scores, so the index has to be
+    rebuilt before it is asked or graded again.
+    """
+    built_with = manifest.chunk_config.embedding_model_id
+    now_uses = use_case.generative.llm.embedding_model
+    if built_with != now_uses:
+        raise http_error(
+            409,
+            "INDEX_EMBEDDING_CHANGED",
+            "This index was built with a different embedding model than the Deliverable AI now uses. "
+            "Rebuild the index from its documents, then ask again.",
+        )
+
+
 # ---------------------------------------------------------------------------
 # 1. POST /use-cases/{use_case_id}/reference-sets
 # ---------------------------------------------------------------------------
@@ -1043,7 +1061,7 @@ async def create_evaluation(
     reference_column: ReferenceColumnField = None,
 ) -> IndexJobStartedResponse:
     try:
-        read_manifest(storage, index_id)
+        manifest = read_manifest(storage, index_id)
     except GenerativeError as exc:
         raise generative_http(exc) from exc
     owner = _read_owner(storage, index_id)
@@ -1060,6 +1078,7 @@ async def create_evaluation(
     _require_gradeable_reference_set(reference_path, generative, primary_key=primary_key)
 
     config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
+    _require_same_embedding_model(manifest, config)
     generative = config.generative
 
     started = utc_now()
@@ -1186,12 +1205,13 @@ def ask_index(
     index_id: str, body: AssistantAskRequest, root: ConfigRootDep, storage: StorageDep, current: SettingsDep
 ) -> AssistantAnswer:
     try:
-        read_manifest(storage, index_id)
+        manifest = read_manifest(storage, index_id)
     except GenerativeError as exc:
         raise generative_http(exc) from exc
     owner = _read_owner(storage, index_id)
     config = use_case_config(owner.use_case_id, root)
     config, ai = _with_deliverable_ai(config, storage, current)
+    _require_same_embedding_model(manifest, config)
     store: VectorStore = LocalVectorStore(storage)
     meter, guardrails = _client_meter_guardrails(config, ai=ai, job_id=f"ask_{index_id}", config_root=root)
     try:

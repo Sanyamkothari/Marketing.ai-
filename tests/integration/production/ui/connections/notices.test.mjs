@@ -88,9 +88,12 @@ test("the answer is reused for a moment, and connecting or disconnecting makes t
   window.addEventListener(availability.AI_SERVICE_EVENT, () => (heard += 1));
   setSlots({}, {});
   availability.forgetAiServiceStatus();
-  assert.equal(heard, 1);
+  assert.equal(heard, 0, "listeners are told once the new answer is in, not before");
   assert.equal(await availability.needsAiNotice(RAG), true);
-  assert.equal(asked, before + 1);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  assert.equal(heard, 1);
+  assert.equal(asked, before + 1, "one question, asked straight away");
+  assert.equal(availability.needsAiNoticeNow(RAG), true, "settled: a screen opened next needs no wait");
 });
 
 test("an API that cannot answer claims nothing: no notice, and the writing is offered (the server decides)", async () => {

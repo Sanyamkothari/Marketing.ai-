@@ -289,3 +289,34 @@ def test_the_test_model_makes_a_slot_usable_only_when_a_test_allows_it(storage: 
     )  # a saved service wins
     saved = build_state(storage, _settings(allow_fake_ai=True), "deliverable")
     assert (saved.source, saved.provider) == ("saved", "openai")
+
+
+def test_a_late_test_result_does_not_overwrite_a_newer_setting_or_bring_back_a_deleted_one(
+    tmp_path: Path,
+) -> None:
+    """A test outlives the record it began with; recording its result must not clobber what came after."""
+    from datetime import UTC, datetime
+
+    from engine.ai_service import AiServiceRecord, AiServiceStore, LastTest
+
+    def _record(model: str) -> AiServiceRecord:
+        return AiServiceRecord(provider="openai_compatible", model=model, updated_at=datetime.now(UTC))
+
+    store = AiServiceStore(LocalStorage(tmp_path), Settings(connections_key=SecretStr("F" * 40)))
+    old = _record("old-m")
+    store.write("product", old)
+    result = LastTest(ok=True, message="ready", fix=None, latency_ms=5, tested_at=datetime.now(UTC))
+
+    store.write("product", _record("new-m"))  # saved while the test was running
+    store.record_test("product", old, result)
+    kept = store.read("product")
+    assert kept is not None and kept.model == "new-m" and kept.last_test is None
+
+    store.delete("product")  # disconnected while another test was running
+    store.record_test("product", old, result)
+    assert store.read("product") is None
+
+    store.write("product", old)  # the same settings still there: the result is recorded
+    store.record_test("product", old, result)
+    saved = store.read("product")
+    assert saved is not None and saved.last_test is not None and saved.last_test.ok

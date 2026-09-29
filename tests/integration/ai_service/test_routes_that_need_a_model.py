@@ -259,3 +259,24 @@ def test_a_question_is_answered_by_the_deliverable_service(client: TestClient) -
     assert server.requests, "the question should have reached the saved service"
     assert server.requests[0].headers["x-api-key"] == KEY and server.requests[0].body["model"] == "cust-m"
     assert KEY not in answered.text
+
+
+def test_an_index_is_not_asked_after_the_embedding_model_changed(client: TestClient) -> None:
+    """Vectors of one model cannot be searched with another's: 409, not a crash or meaningless scores."""
+    with serve(lambda _: message_reply("It costs Rs 299 a month.")) as server:
+        _save(client, "deliverable", provider="anthropic", api_key=KEY, model="cust-m", base_url=server.url)
+        index_id = _sample_index(client).json()["index_id"]
+        assert _wait(client, index_id)["status"]["state"] == "done"
+        # the customer switches to a provider that has its own embedding model
+        _save(
+            client,
+            "deliverable",
+            provider="openai_compatible",
+            model="local-m",
+            embedding_model="local-embed",
+            base_url=server.url + "/v1",
+        )
+        asked = client.post(f"/indexes/{index_id}/ask", json={"question": "How long does a SIM take?"})
+    assert asked.status_code == 409, asked.text
+    assert asked.json()["detail"]["code"] == "INDEX_EMBEDDING_CHANGED"
+    assert KEY not in asked.text

@@ -522,14 +522,29 @@ class AiServiceStore:
             self._storage.write_model(store_key(slot), record)
 
     def record_test(self, slot: str, record: AiServiceRecord, result: LastTest) -> AiServiceRecord:
-        updated = record.model_copy(update={"last_test": result})
-        self.write(slot, updated)
-        return updated
+        """Remember `result` as the slot's last test - only if the slot still holds `record`.
+
+        A test can take as long as the provider's timeout, and someone may save another service or
+        disconnect the slot meanwhile. The record is re-read under the write lock: a slot that changed
+        or went away is left exactly as it now is, because a result about the old settings must not
+        overwrite the new ones or bring a deleted service back.
+        """
+        with _WRITE_LOCK:
+            current = self.read(slot)
+            if current is None or _without_test(current) != _without_test(record):
+                return current if current is not None else record
+            updated = current.model_copy(update={"last_test": result})
+            self._storage.write_model(store_key(slot), updated)
+            return updated
 
     def delete(self, slot: str) -> None:
         with _WRITE_LOCK:
             if self._storage.exists(store_key(slot)):
                 self._storage.delete(store_key(slot))
+
+
+def _without_test(record: AiServiceRecord) -> AiServiceRecord:
+    return record.model_copy(update={"last_test": None})
 
 
 def key_store_problem(settings: Settings, storage: Storage) -> str | None:
