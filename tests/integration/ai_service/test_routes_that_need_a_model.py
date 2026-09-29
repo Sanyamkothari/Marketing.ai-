@@ -162,7 +162,8 @@ def test_the_test_model_answers_only_when_a_test_allows_it(config_root: Path, tm
         upload_id = _upload(client)
         chat = client.post(f"/uploads/{upload_id}/agent-session", json={"use_case": USE_CASE}).json()["chat"]
         assert (chat["available"], chat["backend"], chat["third_party"]) == (True, "fake", False)
-        assert client.get("/ai-service").json()["slots"]["product"]["connected"] is False  # not a service
+        product = client.get("/ai-service").json()["slots"]["product"]  # the screens agree with the chat box
+        assert (product["connected"], product["source"], product["provider"]) == (True, "config", "fake")
 
 
 # --- Deliverable AI: the generative routes ---------------------------------------------------------

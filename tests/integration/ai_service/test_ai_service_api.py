@@ -278,6 +278,26 @@ def test_test_makes_one_tiny_completion_and_stores_the_result(api: _Recorder) ->
     api.assert_no_key()
 
 
+def test_the_test_also_tries_the_embedding_model_when_one_is_named(api: _Recorder) -> None:
+    def working(sent: Any) -> Reply:
+        if sent.path.endswith("/embeddings"):
+            return Reply(200, {"data": [{"index": 0, "embedding": [0.1, 0.2]}]})
+        return chat_reply()
+
+    with serve(working) as server:
+        api.put("/ai-service/product", _openai_body(server, embedding_model="e-1"))
+        assert api.post("/ai-service/product/test").json()["embeddings_note"] is None
+    assert [r.path for r in server.requests] == ["/v1/chat/completions", "/v1/embeddings"]
+
+    def broken(sent: Any) -> Reply:
+        return Reply(500, {"error": "x"}) if sent.path.endswith("/embeddings") else chat_reply()
+
+    with serve(broken) as server:
+        api.put("/ai-service/product", _openai_body(server, embedding_model="e-1"))
+        body = api.post("/ai-service/product/test").json()
+    assert body["ok"] is True and "embedding model did not answer" in body["embeddings_note"]
+
+
 def test_a_rejected_key_is_ok_false_with_a_plain_fix_not_an_http_error(api: _Recorder) -> None:
     quoting = {"error": {"message": f"bad key {KEY}; prompt was: Reply with the single word: ready"}}
     with serve(lambda _: Reply(401, quoting)) as server:
@@ -455,7 +475,7 @@ def test_a_test_of_a_saved_bedrock_calls_converse_in_its_region(
     monkeypatch.setattr(boto3, "Session", _Session)
     api.put("/ai-service/product", {"provider": "bedrock", "model": "b-model", "region": "us-east-1"})
     body = api.post("/ai-service/product/test").json()
-    assert (body["ok"] is True and body["embeddings_note"] is None) or "keywords" in body["embeddings_note"]
+    assert body["ok"] is True and body["embeddings_note"] == "Document assistant will match by keywords."
     assert calls[0]["session"]["region_name"] == "us-east-1" and calls[1]["modelId"] == "b-model"
     assert calls[1]["inferenceConfig"]["maxTokens"] == 16
 

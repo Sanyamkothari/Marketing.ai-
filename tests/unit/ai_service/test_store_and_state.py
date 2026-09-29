@@ -277,3 +277,15 @@ def test_the_state_says_when_saving_is_locked(storage: LocalStorage, tmp_path: P
 def test_an_unreadable_record_file_reads_as_not_saved(storage: LocalStorage) -> None:
     storage.write_text(store_key("product"), "{not json")
     assert AiServiceStore(storage, _settings()).read("product") is None
+
+
+def test_the_test_model_makes_a_slot_usable_only_when_a_test_allows_it(storage: LocalStorage) -> None:
+    off = build_state(storage, _settings(), "product")
+    assert (off.connected, off.source, off.provider) == (False, "none", None)
+    on = build_state(storage, _settings(allow_fake_ai=True), "deliverable")
+    assert (on.connected, on.source, on.provider, on.third_party) == (True, "config", "fake", False)
+    _save(
+        storage, _settings(), "deliverable", provider="openai", api_key=KEY, model="m"
+    )  # a saved service wins
+    saved = build_state(storage, _settings(allow_fake_ai=True), "deliverable")
+    assert (saved.source, saved.provider) == ("saved", "openai")

@@ -745,7 +745,8 @@ class AiServiceState(BaseModel):
 
     `source` says where the answer comes from: `saved` (this slot's own record), `inherited` (a
     deliverable slot with no record of its own, following the product slot's), `config` (a use case's
-    own `generative.llm.backend: bedrock`) or `none`. `inherits_product` is true for a deliverable slot
+    own `generative.llm.backend: bedrock`, or - only with `MARKETING_AI_ALLOW_FAKE_AI` - the test model,
+    `provider: "fake"`) or `none`. `inherits_product` is true for a deliverable slot
     that has no record of its own - it follows the product slot until it is given one (and, while the
     product slot has nothing either, `source` is `none`).
     """
@@ -835,6 +836,17 @@ def build_state(
             model=configured.generation_model_id or None,
             embedding_model=configured.embedding_model_id or None,
             region=configured.region,
+            third_party=False,
+            **common,
+        )
+    if settings.allow_fake_ai:
+        # Tests and developer checks: the test model answers (`resolve_client` step 4), so the slot is
+        # usable and the screens that ask `connected` must agree with the chat box.
+        return AiServiceState(
+            connected=True,
+            source="config",
+            provider="fake",
+            provider_label="Test model",
             third_party=False,
             **common,
         )
