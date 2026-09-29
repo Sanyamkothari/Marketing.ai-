@@ -173,6 +173,8 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "trusted_proxy_hops",
     # Plan H (DEC-1101, DEC-1120): one added field, a secret supplied by the database stack.
     "connections_key",
+    # Configurable AI service (DEC-1140): one added field, off unless a test or a developer sets it.
+    "allow_fake_ai",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 
