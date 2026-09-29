@@ -86,8 +86,6 @@ PROTOTYPE_RULES: Final[tuple[str, ...]] = (
 PROTOTYPE_TOKENS: Final[tuple[str, ...]] = (
     "--brand-blue:#1E57BD",
     "--brand-yellow:#FFD500",
-    "@media (prefers-color-scheme: dark)",
-    ':root[data-theme="dark"]',
 )
 
 SAMPLE_VALUES: Final[tuple[str, ...]] = (

@@ -2,7 +2,7 @@
    Phase 2 and Phase 3a add screens; they do not redraw the old ones. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { load, go, ev, settle, $, $$, HTML } from "./harness.mjs";
+import { load, go, ev, settle, $, $$, HTML, repoText } from "./harness.mjs";
 
 test("the lifecycle overview is unchanged", () => {
   const dom = load("#/");
@@ -79,13 +79,16 @@ test("the three setup steps and the run states still exist", async () => {
   assert.equal($$(dom, ".flow .block").length, 3);
 });
 
-test("the colour tokens and dark mode are unchanged", () => {
+test("the colour tokens are unchanged, and the product page is light only", () => {
   for (const token of ["--p:#2F6FDB", "--g:#7A55D3", "--h:#12957F",
                        "--brand-blue:#1E57BD", "--brand-yellow:#FFD500"]) {
     assert.ok(HTML.includes(token), `missing light token ${token}`);
   }
-  assert.ok(HTML.includes('@media (prefers-color-scheme: dark)'));
-  assert.ok(HTML.includes(':root[data-theme="dark"]'));
+  // the prototype file keeps its dark palette; the product page (DEC-1122) has none
+  const product = repoText("ui/index.html");
+  assert.ok(!product.includes("prefers-color-scheme"), "the product is light only");
+  assert.ok(!product.includes('data-theme="dark"'), "the product is light only");
+  assert.ok(product.includes("color-scheme:light"));
   // new panels must not introduce a hard-coded colour of their own
   const newCss = HTML.slice(HTML.indexOf("/* --- header client picker"), HTML.indexOf("</style>"));
   const hardCoded = newCss.match(/#[0-9a-fA-F]{3,6}\b/g) || [];
