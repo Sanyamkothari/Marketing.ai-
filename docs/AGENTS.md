@@ -32,8 +32,10 @@ Three promises hold throughout:
 - **The helper never edits a file and never writes code.** It proposes steps from a short fixed
   list; our tested code runs them.
 - **It works without an AI service.** The suggestions, questions and settings come from rules in our
-  code. The AI service only adds the chat. With none connected, the chat answers in practice mode
-  (`chat.backend = "fake"`) and everything else works the same.
+  code. The AI service only adds the chat. With none connected the chat box says so
+  (`chat.available = false`, `chat.reason = "AI_NOT_CONNECTED"`; a chat message is `409 AI_NOT_CONNECTED`)
+  and everything else works the same. The chat uses **Product AI** (Connections → AI service), your
+  team's own setting, separate from the customer-facing **Deliverable AI** (DEC-1140).
 
 ## 2. How it works, end to end
 
@@ -373,7 +375,7 @@ Column names and cell values come from the client's file. `engine/agent/untruste
   names listed under 'Columns a setting may name'" there, and the columns themselves are listed in the
   **user** section under that heading, through the same gate as every other file text (aliases, masks).
   A setting with fixed choices (a metric, a model family) still lists them in the system section;
-- the practice (fake) service finds its sections by the full delimiter line (`\n\nThe person says:\n`),
+- the test model (`FakeLLMClient`, allowed only with `MARKETING_AI_ALLOW_FAKE_AI`) finds its sections by the full delimiter line (`\n\nThe person says:\n`),
   so a cell or message that contains a section's words does not split the prompt;
 - a prompt that would still exceed 60,000 characters is not sent (`blocked_by: prompt_too_large`).
 
@@ -508,8 +510,12 @@ in that turn's prompts - `tool`, `args` (masked), `preview` (the exact masked pa
 characters), `chars` (its whole length) and `mode`. Up to 25 items per message (a turn can take 21 looks; the screen shows 12 and counts the rest) and 20 KB of previews per
 session file; when the session is over the limit the oldest previews are replaced by a short note and keep
 their `chars`. A session saved before this field existed loads with `sent` empty. `GET/POST …/agent-session…`
-also answer `chat.data_access` and `chat.third_party` (true when `generative.llm.backend` is neither `fake`
-nor `bedrock`; today always false - `egress.is_third_party` is the one place a future backend is added).
+also answer `chat.available` / `chat.reason` (false with `AI_NOT_CONNECTED` when Product AI has nothing
+connected), `chat.backend` (the provider's id, `none` when not connected), `chat.provider_label`,
+`chat.data_access` and `chat.third_party` (true unless the effective Product AI is Amazon Bedrock or the
+test model; `egress.is_third_party(llm, provider)` is fed `engine.ai_service.effective_service(...,
+slot="product")`, so a saved OpenAI, Claude, OpenRouter, Hugging Face or compatible server counts as a
+third party and the data gate above is chosen for it).
 
 **The canary.** `tests/unit/agent/test_egress_canary.py` and `tests/integration/agent/test_egress_sessions.py`
 plant fake personal data (an e-mail, a phone, PAN, card, Aadhaar, IBAN, IPv4 and IPv6, a URL with a token, an

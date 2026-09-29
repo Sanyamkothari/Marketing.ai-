@@ -20,7 +20,7 @@ writes to, creates or deletes anything in the connected system.
 | Snowflake | `snowflake` | optional: `pip install 'marketing-ai[snowflake]'` | account, warehouse, database, user, password |
 | Google BigQuery | `bigquery` | optional: `pip install 'marketing-ai[bigquery]'` | project, service-account key (JSON) |
 | Azure Blob Storage | `azure_blob` | optional: `pip install 'marketing-ai[azure]'` | account, container, SAS token (or account key) |
-| AI service (Amazon Bedrock) | `ai_service` | built in | set up on its own screen, `#/generative/connection` |
+| AI service (two: Product AI and Deliverable AI) | `ai_service` | built in | set up on its own screens, `#/connections/ai/product` and `#/connections/ai/deliverable` (see "The AI service" below) |
 
 A service whose add-on is not installed is still listed; its card says **Needs the add-on** and names
 the command.
@@ -80,9 +80,75 @@ Only one query ever reads a table: `SELECT * FROM <schema>.<table> LIMIT n`, wit
 the database's own identifier rules (psycopg `sql.Identifier`, MySQL back-ticks, Snowflake double
 quotes) and accepted only when the database lists them. BigQuery uses its table API, with no SQL.
 
+## The AI service: two settings, Product AI and Deliverable AI
+
+Marketing AI talks to a language model for two different jobs, so there are **two settings**, each
+with its own provider, model, key and test (DEC-1140):
+
+| Setting | What it powers | Who it is for |
+|---|---|---|
+| **Product AI** | The Guided-setup chat helper. It reads column names and masked samples of *your* file. | Your team's own tool. You choose it and you pay for it. |
+| **Deliverable AI** | What the customer receives: the Onboarding Assistant (document questions), root-cause summaries, win-back campaign copy, and the judge and guardrail checks over them. | The customer's. They may want their own account, their own bill, or a provider that is not a third party. |
+
+**Why separate?** *Billing* (your helper's tokens are not the customer's), *privacy* (the helper sees
+your file's structure; the deliverable sees the customer's documents and campaign data, and each
+screen tells you exactly who receives those prompts), and *choice* (a customer can insist on Amazon
+Bedrock in their own account while your team uses whatever suits it). Neither is the AutoML models that
+train and score - those never call a language model.
+
+**One connection is enough to start.** A Deliverable AI with nothing saved of its own follows the Product
+AI (the screen says "Uses the same AI as Product AI"); give it its own to separate them, disconnect it to
+follow again. The Product AI never follows the Deliverable AI. With nothing connected for a slot, the
+features that need it say so (`409 AI_NOT_CONNECTED`, naming the slot) instead of answering with made-up
+text; Guided setup's rules-based suggestions and questions keep working, and only the chat box is off.
+
+**Providers:** Amazon Bedrock (no key; the AWS sign-in of this computer or role, region and model
+names), OpenAI, Claude (Anthropic), OpenRouter, Hugging Face, and *Other / local* for any
+OpenAI-compatible server (Ollama, vLLM, LiteLLM, Together, Groq, an Azure-compatible gateway; the key
+is optional). Model names shown are examples only (`configs/ai_service.yaml`); the field is editable and
+**Load models from this service** asks the service for its own list.
+
+**Keys** are treated exactly like a connection's secrets: Fernet-encrypted with
+`MARKETING_AI_CONNECTIONS_KEY` (same key, same fingerprint, same "enter it again" handling), stored in
+`ai_service/product.json` and `ai_service/deliverable.json` in the artefact store, never returned by the
+API (a slot says only `has_key: true`), never logged and never in an error. A saved key is kept when you
+save again with the key box blank, but only for the same provider **and** the same address; changing
+either asks for the key again, so a saved key can never be sent somewhere new. If the encryption key was
+changed, the slot says so and the calls say "enter the key again" - they are *not* quietly sent to some
+other provider.
+
+**Addresses** must be `https://` (or `http://` for a server on this computer such as Ollama), with no
+user name or password, and never a link-local address (the cloud metadata address included). A
+deployed Marketing AI additionally refuses loopback and private addresses: a name is resolved and every
+address it gives is checked before a test or a call, and redirects are never followed.
+
+**Who sees the prompts.** Every provider except Amazon Bedrock is a third party: the screen says
+"Your prompts (including column names and masked samples from Guided setup) are sent to <provider>."
+for Product AI, and names the customer's documents and campaign data for Deliverable AI. The Guided-setup
+data gate (`agent.ai_data_access`) is fed the Product AI's effective provider.
+
+**Documents without an embedding model.** Claude has no embeddings, and any service can be saved without
+one. The document assistant then matches by keywords (`keyword-hash-v1`): real retrieval by shared
+words, no model involved, said so on the screen.
+
+**For operators.** `MARKETING_AI_ALLOW_FAKE_AI=1` (default off) lets the deterministic *test model*
+answer when nothing is connected. It exists for the test suite and developer checks; a real deployment
+must never set it. A use case whose own file says `generative.llm.backend: bedrock` keeps working as
+before whenever nothing is saved (its source shows as `config`). On a deployment without
+`MARKETING_AI_CONNECTIONS_KEY` the screens are read-only and say so (`editable: false`).
+
 ## API
 
 `GET /connections/kinds`, `GET|POST /connections`, `GET|PUT|DELETE /connections/{id}`,
 `POST /connections/{id}/test`, `GET /connections/{id}/browse?path=`, `POST /connections/{id}/preview`,
 `POST /connections/{id}/import`. Reads are Viewer; everything that changes a connection or talks to the
 service is Analyst. See `docs/API.md` for the bodies.
+
+The AI service: `GET /ai-service` (both slots and the six providers), then per slot (`product` or
+`deliverable`; any other name is 404) `PUT /ai-service/{slot}` (saves; no network call; a blank `api_key`
+keeps the saved key for the same provider and address), `POST /ai-service/{slot}/test` (one 16-token
+completion; a failed call is `200` with `ok: false` and a plain `fix`), `POST /ai-service/{slot}/models`
+(the service's model names, at most 200; on failure an empty list and a `note`) and
+`DELETE /ai-service/{slot}`. Reads are Viewer; the rest is Analyst. These routes read their own body
+(16 KiB at most), so a validation error names fields and never repeats a value, and every response is
+`Cache-Control: no-store`. At most 4 calls to a service run at once, then `429 AI_BUSY`.
