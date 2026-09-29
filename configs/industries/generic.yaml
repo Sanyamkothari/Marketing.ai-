@@ -3,48 +3,42 @@ id: generic
 name: Every business
 journey_label: Customer Lifecycle          # str; overview subtitle and breadcrumb root
 
-# Plan H M81 (DEC-1110, DEC-1111): one journey for every business, and the one Home shows. Its
-# stages are goals a marketer recognises rather than an industry's lifecycle, so each one groups the
-# use cases of one or more lifecycle stages (`lifecycle_stages`; without it a stage's name must equal
-# each use case's own `lifecycle_stage`, as in the industry files beside this one). Operations come
-# last. The AI Onboarding Assistant (a question-and-answer helper over the company's own documents)
-# is not a customer-journey goal, so it is not on Home: it stays reachable by URL and from
-# Settings -> Advanced tools. The other industry files stay loadable; Home no longer offers a choice.
+# Plan H M81 (DEC-1110, DEC-1111): one journey for every business, and the one Home shows. Its stages
+# are the customer lifecycle the product was built around (Awareness > Onboarding > Service /
+# Payments > Churn > Win-back), with each stage's name equal to the `lifecycle_stage` of every use
+# case below it. The other industry files stay loadable; Home no longer offers a choice.
+# (DEC-1121 restored these stage names after DEC-1110's first version had renamed them into goals.)
 
 stages:                                    # ordered; the overview renders them left to right
-  - id: win_customers
-    name: Win customers
+  - id: awareness
+    name: Awareness
     ai_type: predictive
-    lifecycle_stages: [Awareness]
     use_cases:
       - {id: targeted-advertisement, status: available}
       - {id: insurance-cross-sell,   status: available}
       - {id: bank-term-deposit,      status: available}
-  - id: keep_paying
-    name: Keep them paying
+  - id: onboarding
+    name: Onboarding
+    ai_type: generative
+    use_cases:
+      - {id: ai-onboarding-assistant, status: available}
+  - id: service_payments
+    name: Service / Payments
     ai_type: predictive
-    lifecycle_stages: [Service / Payments]
     use_cases:
       - {id: payment-propensity,      status: available}
       - {id: card-default-propensity, status: available}
-  - id: stop_leaving
-    name: Stop them leaving
+      - {id: order-fulfillment,       status: available}
+      - {id: fault-prediction,        status: available}
+  - id: churn
+    name: Churn
     ai_type: hybrid
-    lifecycle_stages: [Churn]
     use_cases:
       - {id: rca,         status: available}
       - {id: telco-churn, status: available}
   - id: win_back
-    name: Win them back
+    name: Win-back
     ai_type: hybrid
-    lifecycle_stages: [Win-back]
     use_cases:
       - {id: win-back-campaign, status: available}
       - {id: retail-win-back,   status: available}
-  - id: run_smoothly
-    name: Run smoothly
-    ai_type: predictive
-    lifecycle_stages: [Service / Payments]
-    use_cases:
-      - {id: order-fulfillment, status: available}
-      - {id: fault-prediction,  status: available}

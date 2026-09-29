@@ -29,7 +29,6 @@ pytestmark = pytest.mark.integration
 USE_CASE_IDS: tuple[str, ...] = list_use_case_ids()
 DEMO_ID: str = "targeted-advertisement"
 EXPECTED_MARKERS: tuple[str, ...] = ("P", "G", "P", "H", "H")
-GENERIC_MARKERS: tuple[str, ...] = ("P", "P", "H", "H", "P")
 EXPECTED_PAGES: dict[str, str] = {
     "data": "Customer + campaign data",
     "model": "Audience Propensity Model",
@@ -54,7 +53,8 @@ def test_industries_validates_and_lists_five_stages_in_order(client: TestClient)
     """The generic journey, opened by default; every other industry file is listed after it (DEC-085).
 
     Plan H M81 (DEC-1110) changed the default from telecom to `generic`, deliberately: the product
-    shows one journey for every business, its five goals in order, operations last.
+    shows one journey for every business: the customer lifecycle, Awareness > Onboarding > Service /
+    Payments > Churn > Win-back (DEC-1121 restored the stage names).
     """
     response = client.get("/industries")
     assert response.status_code == 200
@@ -65,13 +65,13 @@ def test_industries_validates_and_lists_five_stages_in_order(client: TestClient)
     assert industry.id == "generic"
     assert industry.journey_label == "Customer Lifecycle"
     assert [stage.name for stage in industry.stages] == [
-        "Win customers",
-        "Keep them paying",
-        "Stop them leaving",
-        "Win them back",
-        "Run smoothly",
+        "Awareness",
+        "Onboarding",
+        "Service / Payments",
+        "Churn",
+        "Win-back",
     ]
-    assert tuple(stage.marker for stage in industry.stages) == GENERIC_MARKERS
+    assert tuple(stage.marker for stage in industry.stages) == EXPECTED_MARKERS
     assert tuple(stage.order for stage in industry.stages) == (1, 2, 3, 4, 5)
     telecom = next(i for i in body.industries if i.id == "telecom")
     assert tuple(stage.marker for stage in telecom.stages) == EXPECTED_MARKERS

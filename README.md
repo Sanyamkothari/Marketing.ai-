@@ -6,11 +6,11 @@
 > is: [docs/V1_READINESS.md](docs/V1_READINESS.md).
 
 **Marketing AI helps a marketer decide who to contact, and then shows what the campaign changed.**
-Pick a goal (win customers, keep them paying, stop them leaving, win them back), bring your data,
+Pick a stage of the customer lifecycle (Awareness, Onboarding, Service / Payments, Churn, Win-back), bring your data,
 and the product trains a model, scores every customer with a reason and a next step, and after the
 campaign measures the extra conversions it caused.
 
-It works in four pages: **Home** (the goals and their use cases), **Connections** (S3, PostgreSQL /
+It works in four pages: **Home** (the customer lifecycle and its use cases), **Connections** (S3, PostgreSQL /
 Redshift, MySQL and more, set up and tested in one place), **Results** (every run, newest first) and
 **Settings**. Each use case is one flow: **1 Choose data** (upload a file or pick one from a
 connection) → **2 Guided setup** (a helper checks and fixes the data, asks when it is unsure,
@@ -1394,8 +1394,8 @@ three-step flow, plus a fourth step after a campaign.
   model from it and gives its contact list. Offered for every use case that contacts customers
   (`actions.contacts_customers`); see `docs/UPLIFT.md` §9.
 
-- **M81–M82 — one journey, four pages.** Home shows one journey for every business (Win customers,
-  Keep them paying, Stop them leaving, Win them back, Run smoothly) with no industry or client
+- **M81–M82 — one journey, four pages.** Home shows one journey for every business (the customer lifecycle:
+  Awareness, Onboarding, Service / Payments, Churn, Win-back) with no industry or client
   picker, and nothing is pre-loaded unless a developer runs `make demo-seed`. The top bar is Home ·
   Connections · Results · Settings. Results lists every run, with a badge when models wait for
   approval; Settings holds the AI service, privacy, schedules and the advanced tools. Setup opens on
@@ -1408,7 +1408,7 @@ three-step flow, plus a fourth step after a campaign.
   ordinary upload. Passwords and keys are encrypted with `MARKETING_AI_CONNECTIONS_KEY` (generated
   on a laptop, required in production) and never returned. See `docs/CONNECTIONS.md`.
 
-Decisions are DEC-1100 … DEC-1120 and DEC-1130 … DEC-1135.
+Decisions are DEC-1100 … DEC-1121 and DEC-1130 … DEC-1135.
 
 <!-- ---- END PLAN-G ---- -->
 

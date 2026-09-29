@@ -28,12 +28,12 @@ The bar at the top has four places. That is all you need.
 
 | Page | What it is for |
 |---|---|
-| **Home** | Pick what you want to do. The use cases are grouped by goal: *Win customers*, *Keep them paying*, *Stop them leaving*, *Win them back* and, last, *Run smoothly* (operations). |
+| **Home** | Pick what you want to do. The use cases are grouped by the stage of the customer lifecycle they help with: *Awareness*, *Onboarding*, *Service / Payments*, *Churn* and *Win-back*. |
 | **Connections** | Connect the places your data lives: cloud storage or a database. Optional: you can always upload a file instead. |
 | **Results** | Every run, newest first. Open one to see its scores, reasons and next steps. |
 | **Settings** | Things you set up once: privacy, schedules and the advanced tools. You rarely need it. |
 
-![Home: the use cases, grouped by goal](screenshots/start_here/01_home.png)
+![Home: the use cases, grouped by lifecycle stage](screenshots/start_here/01_home.png)
 
 ## 🧩 Using a use case, step by step
 

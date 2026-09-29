@@ -29,12 +29,13 @@
 🏠 Home    🔌 Connections    📊 Results    ⚙️ Settings
 ```
 
-- **Home** — one generic journey, four goals, each with its use cases:
-  - **Win customers:** Targeted Advertisement, Vehicle Policy Cross-sell, Term Deposit Conversion
-  - **Keep them paying:** Payment Propensity, Card Default Propensity
-  - **Stop them leaving:** RCA (churn with reasons), Telco Customer Churn
-  - **Win them back:** Win-back Campaign, Retail Win-back
-  - **Run smoothly** (operations, shown last): Order Fulfillment, Fault Prediction
+- **Home** — one generic journey: the customer lifecycle, with each stage's use cases (DEC-1121
+  restored the stage names; an earlier version had renamed them into "goals"):
+  - **Awareness:** Targeted Advertisement, Vehicle Policy Cross-sell, Term Deposit Conversion
+  - **Onboarding:** AI Onboarding Assistant
+  - **Service / Payments:** Payment Propensity, Card Default Propensity, Order Fulfillment, Fault Prediction
+  - **Churn:** RCA (churn with reasons), Telco Customer Churn
+  - **Win-back:** Win-back Campaign, Retail Win-back
   - No industry picker, no client picker, no demo numbers.
 - **Connections** — every cloud service in one place: set up, test, see status (§4).
 - **Results** — every run, newest first, with its use case, status and outcome; campaign results
