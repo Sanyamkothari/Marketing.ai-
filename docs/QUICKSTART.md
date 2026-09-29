@@ -106,8 +106,8 @@ and sign in as one of these demo users. They exist only in your local demo.
 
 ## 4. Try this first: a 10-step tour
 
-The demo opens with a short guided tour. You can take it again any time from **Help → Take the tour**
-in the top bar.
+The demo opens with a short guided tour. The Help menu is hidden for now (DEC-1123), so the tour is
+offered only when the demo opens.
 These ten steps show the whole product in about fifteen minutes.
 
 1. **Home.** The use cases for a telecom business, laid out along the customer lifecycle. The top
@@ -133,7 +133,7 @@ These ten steps show the whole product in about fifteen minutes.
    current one after an Approver agrees; with `make demo-signin`, sign in as `demo-lead`, train a
    model, and see that you cannot approve it yourself.
 10. **Ask "What does this mean?"** Wherever you see a **?** beside a warning or a setting, click it
-    for a one-line plain-language explanation. **Help → Send feedback** records what you think.
+    for a one-line plain-language explanation.
 
 **What the demo does not include:** the AI-written features (the onboarding assistant, root-cause
 notes and campaign copy) need a connection to an AI service and show a "Needs AI service

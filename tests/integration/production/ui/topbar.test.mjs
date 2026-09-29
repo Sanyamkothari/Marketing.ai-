@@ -158,17 +158,17 @@ test("a run opened from Results keeps Results marked, on all its pages and after
   assert.equal(chrome.navFor("#/uc/telco-churn/data/r9"), "home", "navFor itself still reads the route alone");
 });
 
-test("a menu (Help) opens with aria-expanded and closes on Escape, focus back on its trigger", async () => {
+test("no Help menu is drawn, and the Minfy logo is the last thing in the bar, top right", async () => {
   chrome.addNavSlot("help", { html: () => `<button type="button">Take the tour</button>` });
   await redraw();
-  const trigger = $('#pb-bar [data-menu="tn-help"]');
-  trigger.click();
-  assert.equal(trigger.getAttribute("aria-expanded"), "true");
-  assert.equal($("#tn-help").hidden, false);
-  w.document.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Escape" }));
-  assert.equal($("#tn-help").hidden, true);
-  assert.equal($('#pb-bar [data-menu="tn-help"]').getAttribute("aria-expanded"), "false");
-  assert.equal(w.document.activeElement, $('#pb-bar [data-menu="tn-help"]'));
+  assert.equal($('#pb-bar [data-menu="tn-help"]'), null, "Help is not drawn, even when a slot fills it");
+  assert.equal($("#tn-help"), null);
+  const logo = $("#pb-bar .tb-row > .tb-logo");
+  assert.ok(logo, "the logo is a direct child of the bar's row");
+  assert.equal(logo.querySelector("svg.logo").getAttribute("aria-label"), "Minfy");
+  const row = $("#pb-bar .tb-row");
+  const order = [...row.children].filter((el) => el.classList.contains("tb-logo") || el.classList.contains("tb-utils"));
+  assert.equal(order[order.length - 1], logo, "the logo comes after the user menu");
 });
 
 test("with no access provider the four places are drawn (a deployment without sign-in)", async () => {

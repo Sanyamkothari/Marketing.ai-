@@ -21,30 +21,6 @@
   --btn:var(--ink);--btn-ink:var(--surface);
   color-scheme:light;
 }
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]){
-    --bg:#0F1216;--surface:#171B21;--soft:#1D222A;--line:#2A3039;--line2:#36404B;
-    --ink:#F3F4F6;--ink2:#D1D5DB;--muted:#9AA3AF;--faint:#6B7480;
-    --stage:#E5E7EB;--stage-ink:#111827;--stage-num:#6B7280;
-    --p:#6E9BEA;--p-t:#1B2A44;--g:#A68BEA;--g-t:#2A2342;--h:#4CC3AC;--h-t:#16302B;
-    --ok:#5BD08A;--ok-t:#16301F;--warn:#F2B35B;--warn-t:#3A2C14;--bad:#F2877B;--bad-t:#3B1C19;
-    --brand-blue:#6E9BEA;--track:#232932;
-    --bs0:#184F95;--bs1:#2A78D6;--bs2:#5598E7;--bs3:#86B6EF;--bs4:#B7D3F6;
-    --btn:var(--p);--btn-ink:var(--stage-ink);
-    color-scheme:dark;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#0F1216;--surface:#171B21;--soft:#1D222A;--line:#2A3039;--line2:#36404B;
-  --ink:#F3F4F6;--ink2:#D1D5DB;--muted:#9AA3AF;--faint:#6B7480;
-  --stage:#E5E7EB;--stage-ink:#111827;--stage-num:#6B7280;
-  --p:#6E9BEA;--p-t:#1B2A44;--g:#A68BEA;--g-t:#2A2342;--h:#4CC3AC;--h-t:#16302B;
-  --ok:#5BD08A;--ok-t:#16301F;--warn:#F2B35B;--warn-t:#3A2C14;--bad:#F2877B;--bad-t:#3B1C19;
-  --brand-blue:#6E9BEA;--track:#232932;
-  --bs0:#184F95;--bs1:#2A78D6;--bs2:#5598E7;--bs3:#86B6EF;--bs4:#B7D3F6;
-  --btn:var(--p);--btn-ink:var(--stage-ink);
-  color-scheme:dark;
-}
 *{box-sizing:border-box}
 html,body{margin:0}
 body{background:var(--bg);color:var(--ink);font-family:Inter,"Segoe UI",system-ui,-apple-system,Roboto,Helvetica,Arial,sans-serif;font-size:14px;line-height:1.45;-webkit-font-smoothing:antialiased}
@@ -457,6 +433,8 @@ details.tbl-more[open] + .tbl-wrap .tbl .more{display:table-cell}
 .tn-item .chev{width:7px;height:7px;border-right:1.5px solid currentColor;border-bottom:1.5px solid currentColor;transform:translateY(-2px) rotate(45deg)}
 .tb-context{position:relative;margin-left:auto;display:flex;align-items:center;gap:8px}
 .tb-utils{display:flex;align-items:center;gap:8px}
+.tb-logo{display:flex;align-items:center;flex:none;margin-left:8px}
+.tb-logo .logo{width:104px;height:28px}
 .tb-menu-btn{display:none}
 .tb-sub{max-width:1440px;margin:0 auto;padding:0 24px;display:flex;flex-wrap:wrap;align-items:center;gap:0 24px}
 .tb-sub>.pb-bar,.tb-sub>.pe-bar{margin:0 0 8px;padding:0;max-width:none;background:none;border:0}
@@ -473,15 +451,6 @@ details.tbl-more[open] + .tbl-wrap .tbl .more{display:table-cell}
   .tb-sub{padding:0 16px}
   .topbar:not(.open) .tb-sub{display:none}
 }
-/* dark mode: no light slabs; the active tab and the stage pills read as tinted surfaces */
-@media (prefers-color-scheme: dark){
-  :root:not([data-theme="light"]) .tab.on{background:var(--soft);border-color:var(--line2);border-top:3px solid var(--c,var(--brand-blue));color:var(--ink)}
-  :root:not([data-theme="light"]) .stage-pill{background:var(--soft);color:var(--ink);border-top:3px solid var(--c,var(--line2))}
-  :root:not([data-theme="light"]) .stage-pill .n{color:var(--muted)}
-}
-:root[data-theme="dark"] .tab.on{background:var(--soft);border-color:var(--line2);border-top:3px solid var(--c,var(--brand-blue));color:var(--ink)}
-:root[data-theme="dark"] .stage-pill{background:var(--soft);color:var(--ink);border-top:3px solid var(--c,var(--line2))}
-:root[data-theme="dark"] .stage-pill .n{color:var(--muted)}
 /* ==== end v1 foundation ==== */
 </style>
 </head>
