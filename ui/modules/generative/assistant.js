@@ -7,7 +7,7 @@
 // every number here either came out of `DocIndexManifest`/`RagEval`/`LlmUsageReport` or it is an em
 // dash, and every answer in "Try it" shows the citations it was actually drawn from, because an
 // answer whose sources are hidden is indistinguishable from a guess (rule 1 of the package). The
-// backend line at the top is not decoration: with `generative.llm.backend: fake`, nothing below it
+// backend line at the top is not decoration: when no AI service wrote a build, nothing below it
 // reached a real model, and plan §13.3 asks that this be obvious rather than discovered.
 //
 // v1 UI: plain words ("AI model", "passages", "Built assistants"); the index id, the embedding
@@ -69,9 +69,9 @@ function stateFor(uc) {
   return STATE.get(uc.id);
 }
 
-/** What a build's AI model is called on screen: "Practice mode" for the fake backend, else its id. */
+/** What a build's AI model is called on screen: "No AI service" for a build no service wrote, else its id. */
 const modelName = (llm) =>
-  llm && llm.backend === "fake" ? "Practice mode" : dash(llm && llm.generation_model_id);
+  llm && llm.backend === "fake" ? "No AI service" : dash(llm && llm.generation_model_id);
 
 // --- Setup: documents, test questions, AI model ---------------------------------------------------
 

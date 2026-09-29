@@ -411,14 +411,16 @@ function sourcesHtml(ids, evidence) {
     .join("")}</div>`;
 }
 
+/** Where the Product AI is connected: the helper's chat is the one thing that needs it. */
+const PRODUCT_AI_HREF = "#/connections/ai/product";
+
+/** The chat cannot answer: the session says no service is connected (`chat.available: false`). */
+const chatOff = (g) => Boolean(g.chat) && g.chat.available === false;
+
 function asideHtml(entry, openSent = new Set()) {
   const g = entry.state;
   const session = g.session;
   if (!session) return "";
-  const practice =
-    g.chat && g.chat.backend === "fake"
-      ? `<p class="ag-practice" data-ag-practice>Practice answers: replies are sample text, not from a real AI service. The suggestions do not depend on them.</p>`
-      : "";
   const evidence = new Map((session.tool_results || []).map((r) => [r.evidence_id, r]));
   const messages = (session.transcript || [])
     .map((m, i) =>
@@ -434,8 +436,13 @@ function asideHtml(entry, openSent = new Set()) {
     ? `<div class="gmsg user">${esc(g.asking)}</div><div class="gmsg bot"><span class="loading">Thinking…</span></div>`
     : "";
   const closed = Boolean(g.applied) || session.status === "applied";
+  const off = chatOff(g);
   const empty = `<div class="empty">Ask why a fix is suggested, or ask for a change such as “make training faster”. A change the helper suggests appears in the list to tick.</div>`;
-  return `<section class="card ag-chat" id="ag-chat"><h3>${esc(session.agent_name)}</h3>${practice}<div class="gchat">${
+  if (off) {
+    // No Product AI: the rules-based suggestions on the page still work; only the chat needs a service.
+    return `<section class="card ag-chat" id="ag-chat"><h3>${esc(session.agent_name)}</h3><div class="gchat">${messages}</div><div class="ag-nochat" data-ag-nochat role="status"><p><a href="${PRODUCT_AI_HREF}">Connect an AI service</a> to chat with the helper.</p><p class="sub">The suggestions in the list work without it.</p></div></section>`;
+  }
+  return `<section class="card ag-chat" id="ag-chat"><h3>${esc(session.agent_name)}</h3><div class="gchat">${
     messages || pending ? `${messages}${pending}` : empty
   }</div>${g.chatError ? `<div class="card-body">${errorBox(g.chatError)}</div>` : ""}<form id="ag-ask" class="gaskrow"><div class="control"><input type="text" id="ag-question" aria-label="Ask the helper" placeholder="Ask the helper…" value="${esc(
     g.draft,
@@ -612,7 +619,11 @@ async function ask(entry) {
     adopt(g, await postMessage(g.upload.upload_id, text));
     g.draft = "";
   } catch (error) {
-    g.chatError = error;
+    if (error && error.code === "AI_NOT_CONNECTED") {
+      g.chat = { ...(g.chat || {}), available: false, reason: "AI_NOT_CONNECTED" }; // someone disconnected it meanwhile
+    } else {
+      g.chatError = error;
+    }
   }
   g.busy = "";
   g.asking = "";

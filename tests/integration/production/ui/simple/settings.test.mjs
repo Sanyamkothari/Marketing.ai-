@@ -90,5 +90,5 @@ test("with sign-in on, an Admin gets Users and Audit log, and a role that may no
   assert.equal(viewer.querySelector("[data-settings-admin]"), null);
   assert.equal(viewer.querySelector('a[href="#/privacy/consent"]'), null);
   assert.equal(viewer.querySelector('a[href="#/monitoring/schedules"]'), null);
-  assert.equal(viewer.querySelector('a[href="#/connections"]'), null, "testing the AI service is a POST");
+  assert.equal(viewer.querySelector('a[href="#/connections"]'), null, "changing the AI service is a PUT");
 });

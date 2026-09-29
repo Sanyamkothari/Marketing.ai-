@@ -10,7 +10,7 @@
 //
 // v1 UI: it also fills the router seams (docs/ui/FOUNDATION.md) - the Admin menu's "AI service"
 // entry, and the "Write root-cause notes" / "Write campaign copy" actions on a run's results, offered
-// only where AI writing is available (DEC-954: never into the demo's switched-off notice). Who may
+// only where AI writing is available (DEC-954: never into the switched-off notice). Who may
 // connect an AI service, and the approver's name, come from the production session.
 
 import { ApiError, getIndustries, getUseCase } from "../../api.js";
@@ -19,8 +19,8 @@ import { journeyFor } from "../../overview.js";
 import { registerModule, registerNavSlot, registerRunAction } from "../router.js";
 import {
   aiNoticeHtml,
+  aiServiceStatus,
   aiWritingAvailableNow,
-  demoStatus,
   needsAiNotice,
   registerAiServiceAccess,
 } from "../../availability.js";
@@ -29,15 +29,14 @@ import { assistantHtml, createAssistantController } from "./assistant.js";
 import { connectionHtml, createConnectionController } from "./connection.js";
 import { createCopyController, copyHtml } from "./copy.js";
 import { createRcaController, rcaHtml } from "./rca.js";
-import { CONNECTION_HREF } from "./gdom.js";
 
 const assistantControllers = new Map();
 const rcaControllers = new Map();
 const copyControllers = new Map();
 let connectionController = null;
 
-/** Only an Admin may test (or change) the AWS connection (`api/access_policy.py`). */
-const mayConnect = () => can("POST", "/connection/aws/test");
+/** Only a role that may change the AI service can connect one (`api/access_policy.py`). */
+const mayConnect = () => can("PUT", "/ai-service/{slot}");
 registerAiServiceAccess(mayConnect);
 
 /** The signed-in person's name for the approval record; `null` with sign-in off or nobody known. */
@@ -189,17 +188,17 @@ registerModule({
     let uc = null;
     try {
       if (kind === "connection") {
-        loading(app, "form", "AI service connection");
+        loading(app, "form", "Amazon Bedrock sign-in");
         await renderConnection(app);
-        document.title = "AI service connection · Marketing AI";
+        document.title = "Amazon Bedrock sign-in · Marketing AI";
         return;
       }
       const known = (kind === "assistant" && useCaseId) || ((kind === "rca" || kind === "copy") && useCaseId && thirdSegment);
       if (!known) throw new ApiError(404, "UI_ROUTE", `No screen matches #/${parts.join("/")}`, null);
       loading(app, kind === "assistant" ? "form" : "page", TITLES[kind]);
       uc = await useCase(useCaseId);
-      // In a demo with no AI service these screens would show the fake backend's stand-in text:
-      // one notice instead (DEC-954). The connection screen stays, since it is how one connects.
+      // With no AI service connected these screens cannot write anything: one notice instead
+      // (DEC-954). The connection screen stays, since it is how one connects.
       if (await needsAiNotice(uc)) {
         paint(app, aiNoticeHtml(uc, backLink(uc)));
         document.title = `${uc.name} · Marketing AI`;
@@ -222,7 +221,7 @@ registerModule({
 // --- the top bar and the run results (router seams, v1 UI) -------------------------------------------
 
 registerNavSlot("admin", {
-  html: () => (mayConnect() ? `<a href="${CONNECTION_HREF}">AI service</a>` : ""),
+  html: () => (mayConnect() ? `<a href="#/connections">AI service</a>` : ""),
 });
 
 const kindOf = (uc) => uc && uc.config && uc.config.generative && uc.config.generative.kind;
@@ -230,9 +229,9 @@ const finished = (run) => Boolean(run) && (!run.state || run.state === "done");
 const runHref = (screen, uc, run) =>
   `#/generative/${screen}/${encodeURIComponent(uc.id)}/${encodeURIComponent(run.run_id)}`;
 
-// Registered once `GET /pilot/demo` has answered, so `applies` can decide at once and never offers an
-// action that would open the demo's switched-off notice.
-demoStatus().then(() => {
+// Registered once `GET /ai-service` has answered, so `applies` can decide at once and never offers an
+// action that would open the switched-off notice.
+aiServiceStatus().then(() => {
   registerRunAction({
     name: "generative.root-cause-notes",
     applies: (uc, run) => kindOf(uc) === "root_cause_summary" && finished(run) && aiWritingAvailableNow(uc),

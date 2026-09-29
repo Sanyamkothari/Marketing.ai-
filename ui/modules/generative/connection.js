@@ -1,4 +1,5 @@
-// The AI service connection screen: which identity the AI service (Bedrock) is called as, chosen by
+// The Amazon Bedrock sign-in screen (`#/generative/connection`, reached from the AI service screens at
+// `#/connections/ai/<slot>` when Bedrock is the service): which identity Bedrock is called as, chosen by
 // name and checked, never typed in.
 //
 // `engine/aws_connection.py` states the design this screen only renders: the browser chooses a
@@ -216,7 +217,7 @@ export function connectionHtml(s) {
       : `<div class="stack"><span class="skel skel-card"></span></div>`;
   return `<main class="screen gscreen">
     ${pageHead(
-      `${crumbs([CONNECTIONS_CRUMB, { label: "AI service" }])}<h1 class="h1">AI service connection</h1><p class="desc">Lets Marketing AI write text (assistant answers, root-cause notes, campaign copy) using your company's AI service. No sign-in details or keys are typed here.</p>`,
+      `${crumbs([CONNECTIONS_CRUMB, { label: "Amazon Bedrock sign-in" }])}<h1 class="h1">Amazon Bedrock sign-in</h1><p class="desc">Which AWS identity Marketing AI uses to reach Amazon Bedrock when it is your AI service. No sign-in details or keys are typed here.</p>`,
     )}
     ${body}
   </main>`;

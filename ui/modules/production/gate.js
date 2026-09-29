@@ -67,6 +67,14 @@ export const ACTION_CONTROLS = [
   { selector: "#c-save", method: "PUT", path: "/connection/aws" },
   { selector: "#c-reset", method: "DELETE", path: "/connection/aws" },
   { selector: "#c-test", method: "POST", path: "/connection/aws/test" },
+  // --- settings: the AI service (connections/ai.js), either slot ----------------------------------
+  { selector: "#ai-save", method: "PUT", path: "/ai-service/{slot}" },
+  { selector: "[data-ai-input]", method: "PUT", path: "/ai-service/{slot}", explain: false },
+  { selector: "[data-ai-provider]", method: "PUT", path: "/ai-service/{slot}", explain: false },
+  { selector: "#ai-test", method: "POST", path: "/ai-service/{slot}/test" },
+  { selector: "#ai-models", method: "POST", path: "/ai-service/{slot}/models", explain: false },
+  { selector: "#ai-disconnect", method: "DELETE", path: "/ai-service/{slot}" },
+  { selector: "#ai-use-own", method: "PUT", path: "/ai-service/{slot}", explain: false },
   // --- uplift Setup and campaign results (uplift/views.js): upload, train or score, cancel, measure ---
   { selector: "#u-file", method: "POST", path: "/uploads" },
   { selector: "#u-run", method: "POST", path: "/runs" },

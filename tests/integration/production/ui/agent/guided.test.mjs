@@ -224,8 +224,7 @@ test("the main flow: proposals grouped and ticked by confidence, questions, summ
     assert.ok(text("[data-ag-summary]").includes(line), line);
   }
   assert.equal($("[data-ag-dirty]").hidden, false, "the summary says it is brought up to date later");
-  assert.ok($("[data-ag-practice]"), "the fake backend is labelled as practice answers");
-  assert.match(text("[data-ag-practice]"), /^Practice answers/);
+  assert.equal($("[data-ag-practice]"), null, "no answers are labelled as anything but the AI service's");
   assert.equal(sent.decisions.length, 0, "nothing is decided until preview or approve");
 });
 

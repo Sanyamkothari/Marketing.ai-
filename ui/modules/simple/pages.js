@@ -160,8 +160,8 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     `${crumbs([{ label: "Settings" }])}<h1 class="h1">Settings</h1><p class="desc">Things you set up once. Your everyday work is on Home and Results.</p>`,
   );
   const main = [
-    can("POST", "/connection/aws/test")
-      ? entry({ label: "AI service", href: "#/connections", text: "Connect the AI service that writes campaign copy and answers questions: it is on Connections, with your data." })
+    can("PUT", "/ai-service/{slot}")
+      ? entry({ label: "AI service", href: "#/connections", text: "Connect the AI that helps your team in Guided setup and the AI behind what your customer gets. Both are on Connections, with your data." })
       : "",
     can("GET", "/privacy/purposes")
       ? entry({ label: "Privacy", href: "#/privacy/consent", text: "Consent, requests to erase or see a person's data, and how long data is kept." })
@@ -192,7 +192,7 @@ export function settingsHtml({ can = () => true, status = null, version = null }
     entry({
       label: "Document assistant",
       href: "#/uc/ai-onboarding-assistant",
-      text: "Answers questions from your own documents. Needs the AI service.",
+      text: "Answers questions from your own documents. Needs the Deliverable AI.",
     }),
   ].filter(Boolean);
   const about = [

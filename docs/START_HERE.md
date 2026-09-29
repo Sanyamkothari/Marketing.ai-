@@ -29,7 +29,7 @@ The bar at the top has four places. That is all you need.
 | Page | What it is for |
 |---|---|
 | **Home** | Pick what you want to do. The use cases are grouped by the stage of the customer lifecycle they help with: *Awareness*, *Onboarding*, *Service / Payments*, *Churn* and *Win-back*. |
-| **Connections** | Connect the places your data lives: cloud storage or a database. Optional: you can always upload a file instead. |
+| **Connections** | Connect the places your data lives (cloud storage or a database), and your AI service. Data connections are optional: you can always upload a file instead. |
 | **Results** | Every run, newest first. Open one to see its scores, reasons and next steps. |
 | **Settings** | Things you set up once: privacy, schedules and the advanced tools. You rarely need it. |
 
@@ -125,7 +125,11 @@ Good to know 🔒
 
 - **Marketing AI only reads.** It imports a copy and never changes anything in your systems. Ask your IT team for a user that can only read. If the user could write, the test shows a safety tip.
 - **Passwords and keys stay on the server.** They are stored encrypted, never sent back to your browser, and not written to logs or the audit log. When you edit a connection, a saved password shows "Saved. Leave blank to keep it."
-- The **AI service** is also on Connections, as two settings. **Product AI** is your team's own tool: it powers the Guided-setup chat and sees column names and masked samples of your file. **Deliverable AI** is what your customer receives: document questions, summaries and campaign copy, so it can be a different provider, account and bill. Pick Amazon Bedrock, OpenAI, Claude, OpenRouter, Hugging Face or any OpenAI-compatible server, paste a key (stored encrypted, never shown again), choose a model and press **Test**. One connection is enough to start: Deliverable AI follows Product AI until you give it its own. Everything else works without either.
+- The **AI service** is also on Connections, in two parts, each with **Set up** (or **Change**). Everything else works without it.
+  - **Product AI** helps your team in Guided setup (the chat helper). It sees column names and masked samples of the customer's data.
+  - **Deliverable AI** is what your customer gets: the Onboarding Assistant's answers, root-cause summaries and campaign copy. It uses the Product AI unless you give it its own service (**Use its own**); use the customer's own account if they need their data to stay there.
+
+  To connect one: click **Set up**, pick **Amazon Bedrock**, **OpenAI**, **Claude (Anthropic)**, **OpenRouter**, **Hugging Face** or **Other / local** (Ollama, vLLM and other OpenAI-compatible servers), paste the API key (Bedrock uses the AWS sign-in of the server instead, so it has no key), type the model or click **Load models from this service**, then **Test** and **Save**. The key is stored encrypted, shown afterwards only as "Saved", and a blank key field keeps it. For any service run by another company the screen says what is sent to it. **Disconnect** removes it.
 
 ## ⚙️ Where did the other tools go?
 

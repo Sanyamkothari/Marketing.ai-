@@ -104,15 +104,15 @@ export function sentHtml(sent, { id = "", open = false } = {}) {
   )}</p></details>`;
 }
 
-/** The line under the chat input: what the AI may look at, and whose service it is. Nothing for the
- * practice service, and nothing claimed when the API does not say. */
+/** The line under the chat input: what the AI may look at, and whose service it is. Nothing claimed
+ * when the API does not say, and nothing when no service is connected. */
 export function statusHtml(chat) {
-  if (!chat || chat.backend === "fake") return "";
+  if (!chat || chat.available === false) return "";
   const parts = [];
   if (chat.data_access === "masked_data") parts.push(esc(STATUS_MASKED));
   else if (chat.data_access === "summaries_only") parts.push(esc(STATUS_SUMMARIES));
   if (chat.third_party === true) {
-    parts.push(`${esc(STATUS_THIRD_PARTY)} <a href="#/connections">Change on Connections</a>`);
+    parts.push(`${esc(STATUS_THIRD_PARTY)} <a href="#/connections/ai/product">Change on Connections</a>`);
   }
   return parts.length ? `<p class="ag-access" data-ag-access>${parts.join(" ")}</p>` : "";
 }
