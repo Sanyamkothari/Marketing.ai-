@@ -18,7 +18,7 @@ stateless (DEC-1004): each output depends only on the value and the parameters, 
 returns what it could not convert so a receipt can count it. An empty cell stays empty and is never
 counted as a failure.
 
-Examples shown to a person or a prompt pass through `engine.pii.redact_cells` first.
+Examples shown to a person or a prompt are masked whole with the gate's scanner set (`masked_cut`) and then cut.
 
 **Speed** (M77, `reports/plan_g_performance.md`): a parser's output for a cell depends only on the
 cell's text, so each parser runs once per *distinct* value and the answers are spread back over the
@@ -41,8 +41,9 @@ from typing import Any, Final
 import numpy as np
 import pandas as pd
 
+from engine.agent.egress import assert_clean
 from engine.agent.untrusted import quoted
-from engine.pii import REDACTION_MARKER_PATTERN, redact_cells
+from engine.pii import REDACTION_MARKER_PATTERN
 
 __all__ = [
     "BOOLEAN_FALSE",
@@ -100,6 +101,15 @@ _DATE_STYLES: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
 )
 _NUMERIC_DAY_MONTH: Final[re.Pattern[str]] = re.compile(r"^(\d{1,2})[/.-](\d{1,2})[/.-]\d{2,4}")
 _HAS_DIGIT_RE: Final[re.Pattern[str]] = re.compile(r"\d")
+_TIME_ONLY_RE: Final[re.Pattern[str]] = re.compile(
+    r"^\s*\d{1,2}:\d{2}(:\d{2}([.,]\d+)?)?\s*([AaPp]\.?[Mm]\.?)?\s*$"
+)
+"""`09:30`, `9:30:15`, `9:30 pm`: a time of day names no date, and pandas would use today's."""
+
+
+def _is_dateable(text: str) -> bool:
+    """Whether `text` can hold a date: it has a digit and is not only a time of day."""
+    return bool(_HAS_DIGIT_RE.search(text)) and _TIME_ONLY_RE.match(text) is None
 
 
 class FormatIssueKind(StrEnum):
@@ -133,6 +143,9 @@ class FormatIssue:
     failed_examples: tuple[str, ...]
     params: dict[str, Any] = field(default_factory=dict)
     notes: tuple[str, ...] = ()
+    example_cells: tuple[str, ...] = ()
+    """The cells that `examples` quote (`'Basic' → 'BASIC'` holds `Basic` and `BASIC`), each masked and cut
+    on its own, so a sentence built from `examples` can be found piece by piece (`advisor._cells`)."""
 
     @property
     def convert_share(self) -> float:
@@ -148,9 +161,37 @@ class FormatIssue:
             "convert_share": round(self.convert_share, 4),
             "examples": list(self.examples),
             "failed_examples": list(self.failed_examples),
-            "params": self.params,
+            "params": _params_json(self.params),
             "notes": list(self.notes),
+            "example_cells": list(self.example_cells),
         }
+
+
+def _params_json(params: Mapping[str, Any]) -> dict[str, Any]:
+    """A fix's parameters as a *tool result* shows them: `merge` is a list of `{from, to}` pairs.
+
+    The recipe step keeps `merge` as a dict keyed by the spelling (`normalise_texts` looks it up), but a
+    dict keyed by cell values would put cells where only labels belong (`egress` reads a key as a label),
+    so the result lists the pairs and `advisor` builds the dict back (`merge_from_pairs`).
+    """
+    merge = params.get("merge")
+    if not isinstance(merge, Mapping):
+        return dict(params)
+    return {
+        **params,
+        "merge": [{"from": str(spelling), "to": str(canonical)} for spelling, canonical in merge.items()],
+    }
+
+
+def merge_from_pairs(pairs: Any) -> dict[str, str]:
+    """`{spelling: canonical}` from the `{from, to}` pairs `find_format_issues` returns (or a dict as is)."""
+    if isinstance(pairs, Mapping):
+        return {str(k): str(v) for k, v in pairs.items()}
+    return {
+        str(pair["from"]): str(pair["to"])
+        for pair in (pairs or [])
+        if isinstance(pair, Mapping) and "from" in pair and "to" in pair
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -206,9 +247,11 @@ def _masked(values: Sequence[str]) -> tuple[str, ...]:
 def masked_cut(value: str, limit: int) -> str:
     """`value` masked whole, then cut to `limit` characters; a marker the cut would split is left out.
 
-    Masking first means half an e-mail address or phone number can never escape the masker.
+    Masked with the complete scanner set (`egress.assert_clean`: e-mail, phone, PAN, Aadhaar, card, IBAN, IP,
+    URL, token, nine-digit run) and never cut first, so half of a secret can never escape the masker.
+    White space is kept as written: a leading or doubled space is what an example is there to show.
     """
-    masked = redact_cells([value])[0]
+    masked = assert_clean(value)[0]
     cut = limit
     for marker in REDACTION_MARKER_PATTERN.finditer(masked):
         if marker.start() < cut < marker.end():
@@ -351,6 +394,7 @@ def _number_issue(name: str, present: pd.Series[Any]) -> FormatIssue | None:
     convertible = int(parsed.values.notna().sum())
     if convertible / len(cells) < MIN_CONVERT_SHARE:
         return None
+    examples = _distinct_examples(cells)
     currency = sorted({m.group(0) for text in cells.head(2000) for m in _CURRENCY_RE.finditer(text)})
     percent = int(cells.str.strip().str.endswith("%").sum())
     notes: list[str] = []
@@ -366,10 +410,11 @@ def _number_issue(name: str, present: pd.Series[Any]) -> FormatIssue | None:
         non_empty=len(cells),
         convertible=convertible,
         failed=parsed.failed,
-        examples=_distinct_examples(cells),
+        examples=examples,
         failed_examples=parsed.failed_examples,
         params={"decimal": decimal, "percent_to_fraction": True},
         notes=tuple(notes),
+        example_cells=(*examples, *parsed.failed_examples),
     )
 
 
@@ -403,8 +448,8 @@ def date_order(cells: pd.Series[Any]) -> bool | None:
 
 
 def _one_datetime(text: str, dayfirst: bool) -> pd.Timestamp | None:
-    if not _HAS_DIGIT_RE.search(text):
-        return None  # "now" / "today": pandas reads them as the current time
+    if not _is_dateable(text):
+        return None  # "now" / "today" / "09:30": pandas reads them as the current time or date
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
         try:
@@ -423,13 +468,14 @@ def _to_datetimes(cells: pd.Series[Any], *, dayfirst: bool) -> pd.Series[Any]:
     in different zones compare as the instants they are; a value with no offset is kept as written.
     The rule is per value (DEC-1004): it does not depend on what else the column holds. A value with
     no digit is never a date - pandas would read `now` and `today` as the time of the run, a
-    different value on every run and later than every real event - so it fails and is counted.
+    different value on every run and later than every real event - and neither is a bare time of
+    day (`09:30`, which pandas reads as *today* at that time), so both fail and are counted.
 
     `pd.to_datetime(format="mixed", utc=True)` does this in one call; should it raise on some
     spelling, the column falls back to one value at a time with the same rule (M77).
     """
     distinct = pd.Series(list(dict.fromkeys(cells.tolist())), dtype=object)
-    dated = distinct.map(lambda text: bool(_HAS_DIGIT_RE.search(str(text)))).to_numpy(dtype=bool)
+    dated = distinct.map(lambda text: _is_dateable(str(text))).to_numpy(dtype=bool)
     parsed: pd.Series[Any] | None
     with warnings.catch_warnings():
         warnings.simplefilter("ignore")
@@ -479,6 +525,7 @@ def _date_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
     ambiguous_order = order is None and bool(cells.str.match(_NUMERIC_DAY_MONTH).any())
     if len(styles) < 2 and not ambiguous_order and order is None:
         return None
+    examples = _distinct_examples(cells)
     notes = [f"{count} values in {style} style" for style, count in styles.most_common()]
     if ambiguous_order:
         notes.append("day and month order cannot be told from the values")
@@ -488,10 +535,11 @@ def _date_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
         non_empty=len(cells),
         convertible=convertible,
         failed=parsed.failed,
-        examples=_distinct_examples(cells),
+        examples=examples,
         failed_examples=parsed.failed_examples,
         params={"dayfirst": order},
         notes=tuple(notes),
+        example_cells=(*examples, *parsed.failed_examples),
     )
 
 
@@ -548,16 +596,18 @@ def _boolean_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
         return None  # plain 0/1 text reads as numbers already
     true_values = sorted(s for s in spellings if s.casefold() in BOOLEAN_TRUE)
     false_values = sorted(s for s in spellings if s.casefold() in BOOLEAN_FALSE)
+    shown = [(masked_cut(s, 80), count) for s, count in spellings.most_common(MAX_EXAMPLES)]
     return FormatIssue(
         column=name,
         kind=FormatIssueKind.BOOLEAN_AS_TEXT,
         non_empty=len(cells),
         convertible=len(cells),
         failed=0,
-        examples=_masked([f"{quoted(s)} ({spellings[s]})" for s, _ in spellings.most_common()]),
+        examples=tuple(f"{quoted(s)} ({count})" for s, count in shown),
         failed_examples=(),
         params={"true_values": true_values, "false_values": false_values},
         notes=(f"{len(spellings)} spellings of yes / no",),
+        example_cells=tuple(s for s, _ in shown),
     )
 
 
@@ -611,16 +661,18 @@ def _category_issue(name: str, cells: pd.Series[Any]) -> FormatIssue | None:
     examples = (
         sorted(merge.items())[:MAX_EXAMPLES] if merge else [(s, s.strip()) for s in untrimmed[:MAX_EXAMPLES]]
     )
+    pairs = [(masked_cut(a, 80), masked_cut(b, 80)) for a, b in examples[:MAX_EXAMPLES]]
     return FormatIssue(
         column=name,
         kind=kind,
         non_empty=len(cells),
         convertible=affected,
         failed=0,
-        examples=_masked([f"{quoted(a)} → {quoted(b)}" for a, b in examples]),
+        examples=tuple(f"{quoted(a)} → {quoted(b)}" for a, b in pairs),
         failed_examples=(),
         params={"strip": True, "merge": dict(sorted(merge.items()))},
         notes=(f"{len(merge)} spellings merge into others",) if merge else ("values have extra spaces",),
+        example_cells=tuple(dict.fromkeys(piece for pair in pairs for piece in pair)),
     )
 
 

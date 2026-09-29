@@ -28,6 +28,7 @@ __all__ = [
     "AgentColumnHints",
     "AgentConfig",
     "AgentLevel",
+    "DataAccess",
 ]
 
 _SETTINGS: Final[ConfigDict] = ConfigDict(
@@ -56,6 +57,20 @@ class AgentLevel(StrEnum):
     CLEAN = "clean"
     DERIVE = "derive"
     RESHAPE = "reshape"
+
+
+class DataAccess(StrEnum):
+    """What the chat model may see of the file's cells (`agent.ai_data_access`).
+
+    `masked_data` shows the values a tool asks for after masking (`engine.agent.egress.mask_value`):
+    the model can look at real cells so it does not have to guess. `summaries_only` shows no cell at
+    all: every string that comes from a cell is replaced by its *shape* (`Aaaaa 9999`), so the model
+    still sees formats and counts and never a value. Personal-data columns never yield a value in
+    either mode.
+    """
+
+    MASKED_DATA = "masked_data"
+    SUMMARIES_ONLY = "summaries_only"
 
 
 def _clean_names(values: tuple[str, ...]) -> tuple[str, ...]:
@@ -113,7 +128,11 @@ class AgentConfig(BaseModel):
     tick_uncertain: bool = False
     """Whether suggestions the helper is not sure about start ticked. Sure ones always do."""
     max_llm_calls_per_session: Annotated[int, Field(ge=1, le=500)] = 40
-    max_tool_steps_per_turn: Annotated[int, Field(ge=1, le=20)] = 8
+    max_tool_steps_per_turn: Annotated[int, Field(ge=1, le=20)] = 12
+    ai_data_access: DataAccess = DataAccess.MASKED_DATA
+    """`masked_data` (cells visible after masking) or `summaries_only` (cells replaced by their shape)."""
+    always_hide_columns: tuple[str, ...] = ()
+    """Columns whose values the chat model never sees (counts only), whatever the profile says."""
 
     @field_validator("knowledge")
     @classmethod
@@ -128,6 +147,11 @@ class AgentConfig(BaseModel):
                 f"too long: {', '.join(repr(text + '...') for text in long)}"
             )
         return lines
+
+    @field_validator("always_hide_columns")
+    @classmethod
+    def _always_hide(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        return _clean_names(value)
 
     @field_validator("levels")
     @classmethod

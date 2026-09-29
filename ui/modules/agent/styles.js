@@ -52,6 +52,17 @@ const CSS = `
 .ag-chat .gaskrow .btn{flex:none}
 .ag-chat .control input[type=text]{width:100%;height:100%;border:0;background:transparent;color:inherit;font:inherit;padding:0 12px;outline:none}
 .ag-chat .gaskrow{padding:12px 16px 16px}
+.ag-sent{margin-top:8px;font-size:12px;color:var(--muted)}
+.ag-sent>summary{cursor:pointer;padding:2px 0;border-radius:4px}
+.ag-sent>summary:focus-visible,.ag-sent-pre:focus-visible{outline:2px solid var(--brand-blue);outline-offset:2px}
+.ag-sent-list{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:8px}
+.ag-sent-tool{display:block;color:var(--ink2);font-weight:600}
+.ag-sent-meta{display:block;color:var(--muted)}
+.ag-sent-pre{margin:4px 0 0;padding:8px 10px;max-height:140px;overflow:auto;background:var(--surface);border:1px solid var(--line);border-radius:6px;font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace;font-size:12px;line-height:1.45;color:var(--ink);white-space:pre-wrap;overflow-wrap:anywhere}
+.ag-sent-more{color:var(--muted);font-style:italic}
+.ag-sent-foot{margin:8px 0 0;font-size:12px;color:var(--muted)}
+.ag-access{margin:0;padding:0 20px 16px;font-size:12px;color:var(--muted);line-height:1.45}
+.ag-access a{color:var(--brand-blue)}
 .ag-previewbar{margin-top:12px}
 @media (max-width:700px){.ag-opt{flex-direction:column;align-items:flex-start}.ag-sum{grid-template-columns:1fr}}
 `;

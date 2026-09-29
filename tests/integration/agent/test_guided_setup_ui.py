@@ -13,6 +13,10 @@ screen asks for it:
   button's own checks;
 * **stopped** - a file too small to learn from, where the helper stops and says why.
 
+`sent.test.mjs` (same directory, run by the same glob) covers "What the AI looked at" and the access
+line under the chat input: it takes the recorded chat bodies and adds the newer `sent` / `data_access` /
+`third_party` fields by hand, so an unchanged recording is also its "older API" case.
+
 Two things are not recorded but derived in the node test from these bodies: a session whose titles
 and chat reply carry markup and markdown (escaping), and the decisions the screen must send (from the
 recorded session, by the same rule the recording used).

@@ -19,10 +19,17 @@ What the person reads is checked before it is kept:
   and the rule that failed is recorded.
 
 What reaches the prompt is treated as untrusted (M77): the person's message is masked
-(`engine.pii.redact_text`), and every string from the file - column names, cell examples, check
-messages - passes `engine.agent.untrusted.for_prompt`, which strips invisible and reordering
-characters, cuts long names and long lists, and the prompt says that file content is data, never
-instructions. A prompt that would still be longer than `MAX_PROMPT_CHARS` is not sent.
+(`engine.agent.egress.scrub`, which includes `engine.pii.redact_text`), and every string from the
+file - column names, cell examples, check messages - passes **one default-deny gate**,
+`engine.agent.egress` (Plan G §7.6): a string is a label only under a known key, every other string
+is a cell value that is masked (or, in `summaries_only`, reduced to its shape), personal-data and
+`always_hide_columns` columns show no value, and a column name that is not ordinary words becomes an
+alias the reply translates back. The gate output then passes `engine.agent.untrusted.for_prompt`,
+which strips invisible and reordering characters, cuts long names and long lists, and the prompt says
+that file content is data, never instructions. The rendered prompt is re-scanned last
+(`egress.assert_clean`): anything that still matches a scanner is masked and recorded as
+`EGRESS_LATE_MASK`. A prompt that would still be longer than `MAX_PROMPT_CHARS` is not sent. Each
+reply records what was put in its prompts (`ChatMessage.sent`).
 
 A malformed reply, an unknown tool or bad arguments are fed back once as an error the model can
 correct; a second failure ends the turn with the same plain fallback. Anything else a step raises
@@ -36,8 +43,9 @@ that is not a known tool, `propose_setting` or `reply` is logged as `unknown`, n
 
 from __future__ import annotations
 
+import dataclasses
 import json
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -51,21 +59,30 @@ from engine.agent.contracts import (
     Proposal,
     ProposalKind,
     ProposalState,
+    SentItem,
     ToolResult,
     TurnLog,
+)
+from engine.agent.egress import (
+    EGRESS_LATE_MASK,
+    MAX_SENT_ITEMS,
+    STATE_TOOL,
+    Egress,
+    assert_clean,
+    scrub,
+    sent_item,
 )
 from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounded_numbers
 from engine.agent.recommend import setting_allowed, settings_fields
 from engine.agent.session import roles_of
 from engine.agent.tools import TOOLS, AgentContext, AgentToolError, ToolKind, call_tool
-from engine.agent.untrusted import display_name, for_prompt
+from engine.agent.untrusted import display_name, for_prompt, resolve_column
 from engine.config import ConfigError, advanced_settings_schema, resolve_config
 from engine.generative.contracts import GenerativePurpose
 from engine.generative.errors import GenerativeError
 from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, render
 from engine.llm import LLMError
-from engine.pii import redact_text
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -98,6 +115,17 @@ LOGGED_UNKNOWN: Final[str] = "unknown"
 """What the turn log records for an action name that is not a tool, `propose_setting` or `reply`."""
 CHAT_REASON: Final[str] = "You asked for this change."
 """The reason shown with a chat suggestion whose own reason failed a check."""
+STATE_TEXT_KEYS: Final[frozenset[str]] = frozenset(
+    {"stop_reason", "id", "title", "reason", "state", "evidence_ids", "text", "hidden_columns"}
+)
+"""Keys of `_state` that hold sentences our own rules wrote (the gate still aliases and scans them)."""
+SETTING_TEXT_KEYS: Final[frozenset[str]] = frozenset({"path", "value", "allowed"})
+PROPOSE_TEXT_KEYS: Final[frozenset[str]] = frozenset({"path", "current", "suggested", "value"})
+MAX_FIND_VALUES_PER_COLUMN_TURN: Final[int] = 5
+MAX_FIND_VALUES_PER_COLUMN_SESSION: Final[int] = 15
+"""`find_values` on one column: at most this many calls in one turn and in one session. A search is the
+one tool whose answer depends on text the model chooses, so many searches of one column are how a value is
+read out a piece at a time (review finding 7); a legitimate look needs a handful."""
 UNAVAILABLE: Final[str] = (
     "The AI service is not answering right now. The suggestions on the screen still work without it."
 )
@@ -133,27 +161,55 @@ def _advisor_proposals(session: AgentSession) -> list[Proposal]:
     return [p for p in session.proposals if not set(p.evidence_ids) & chat]
 
 
-def _state(session: AgentSession) -> dict[str, Any]:
-    return {
-        "stop_reason": session.stop_reason,
-        "proposals": [
+def _step_columns(proposal: Proposal) -> list[str]:
+    return [proposal.step.column] if proposal.step is not None and proposal.step.column else []
+
+
+def _state(session: AgentSession, gate: Egress) -> dict[str, Any]:
+    """The advisor's suggestions and questions as the model may read them (§7.7).
+
+    Each suggestion's sentences are made together (`Egress.sentences`): the cells it quotes become
+    their shape or a hidden marker, and one that is about a hidden column hides every quoted example
+    in all its sentences, not only in the one that names the column. The person's screen keeps the
+    full text; this is the copy for the model.
+    """
+    proposals: list[dict[str, Any]] = []
+    for p in session.proposals:
+        title, reason = gate.sentences([p.title, p.reason], p.examples, columns=_step_columns(p))
+        proposals.append(
             {
                 "id": p.proposal_id,
-                "title": p.title,
-                "reason": p.reason,
+                "title": title,
+                "reason": reason,
                 "state": p.state.value,
                 "evidence_ids": list(p.evidence_ids),
             }
-            for p in session.proposals
-        ],
-        "questions": [
-            {"id": q.question_id, "text": q.text, "answered": q.answer is not None} for q in session.questions
-        ],
+        )
+    questions: list[dict[str, Any]] = []
+    for q in session.questions:
+        columns = [c for option in q.options if option.proposal for c in _step_columns(option.proposal)]
+        (text,) = gate.sentences([q.text], q.examples, columns=columns)
+        questions.append({"id": q.question_id, "text": text, "answered": q.answer is not None})
+    return {
+        "stop_reason": session.stop_reason,
+        "proposals": proposals,
+        "questions": questions,
         "hidden_columns": list(session.engine_hidden),
     }
 
 
+COLUMN_CHOICES_NOTE: Final[str] = "one of the column names listed under 'Columns a setting may name' below"
+_COLUMN_WIDGETS: Final[frozenset[str]] = frozenset({"column-select", "column-multi-select"})
+
+
+def _column_valued(field: Any) -> bool:
+    """A setting whose choices are the file's own column names (its headers are data, not our words)."""
+    return bool(field.choices) and str(field.widget.value) in _COLUMN_WIDGETS
+
+
 def _allowed_text(field: Any) -> str:
+    if _column_valued(field):
+        return COLUMN_CHOICES_NOTE
     if field.choices:
         return "choices: " + ", ".join(str(choice.value) for choice in field.choices)
     if field.min is not None or field.max is not None:
@@ -229,7 +285,7 @@ def chat_turn(
     """Answer one message. Never raises for a model's mistake; the reply says what happened."""
     agent = ctx.config.agent
     prefix = f"c{len(session.transcript) // 2 + 1}-"
-    message = redact_text(message[:MAX_MESSAGE_CHARS])[0]
+    message = scrub(message[:MAX_MESSAGE_CHARS])
     results: list[ToolResult] = []
     proposals: list[Proposal] = []
     feedback: list[dict[str, Any]] = []
@@ -242,7 +298,14 @@ def chat_turn(
     prompt = load_prompt(HELPER_PROMPT, config_root)
     knowledge = list(agent.knowledge) or [ctx.config.target.definition or ctx.config.description]
     columns = tuple(str(c) for c in ctx.frame.columns)
-    names = {column: display_name(column) for column in columns}
+    gate = Egress.build(
+        columns,
+        personal_columns=[column.name for column in ctx.profile.columns if column.pii_kinds],
+        always_hide=agent.always_hide_columns,
+        mode=agent.ai_data_access,
+        known_text=[str(field.label) for field in fields.values()],
+    )
+    names = {column: gate.label(column) for column in columns}
     advisor = _advisor_proposals(session)
     chat = _chat_made(session)
     checker = _Checker(
@@ -255,18 +318,57 @@ def chat_turn(
                 message,
             ]
         ).union(
-            *(evidence_numbers(r.result, r.args) for r in session.tool_results if r.evidence_id not in chat)
+            *(
+                evidence_numbers(r.result, r.typed_args)
+                for r in session.tool_results
+                if r.evidence_id not in chat
+            )
         ),
         names=(*columns, *names.values()),
         guardrails=guardrails,
     )
-    state = json.dumps(for_prompt(_state(session), names), ensure_ascii=False)
+    state = json.dumps(
+        for_prompt(gate.prepare(_state(session, gate), extra_text_keys=STATE_TEXT_KEYS), names),
+        ensure_ascii=False,
+    )
+    shown_settings = [
+        for_prompt(gate.prepare(setting, extra_text_keys=SETTING_TEXT_KEYS), names) for setting in settings
+    ]
+    # The file's own headers a setting may name go in the user section, under the untrusted-data rule.
+    column_choices = json.dumps(
+        for_prompt(
+            [
+                gate.prepare(
+                    {"path": path, "choices": [choice.value for choice in field.choices or ()]},
+                    extra_text_keys=SETTING_TEXT_KEYS,
+                )
+                for path, field in fields.items()
+                if _column_valued(field)
+            ],
+            names,
+        ),
+        ensure_ascii=False,
+    )
+    items: list[SentItem | None] = []  # aligned with `feedback`: what each tool result put in a prompt
+    sent: list[SentItem] = []
+    recorded: set[int] = set()
+    # The helper's suggestions and questions quote real cells and name the columns; they go into every
+    # prompt of the turn, so the person is told about them once, first.
+    state_item = sent_item(
+        gate, STATE_TOOL, {}, state + "\n" + column_choices, extra_text_keys=STATE_TEXT_KEYS
+    )
+    state_recorded = False
 
     def finish(text: str, evidence: tuple[str, ...] = (), blocked_by: str | None = None) -> TurnResult:
         log = TurnLog(llm_calls=calls, tools=tuple(actions), error_codes=tuple(errors), blocked_by=blocked_by)
         return TurnResult(
             reply=ChatMessage(
-                role=ChatRole.AGENT, text=text, evidence_ids=evidence, turn=log, created_at=clock()
+                role=ChatRole.AGENT,
+                text=gate.person_text(text),  # aliases back to the file's own names, where those are clean
+                evidence_ids=evidence,
+                turn=log,
+                sent=tuple(sent[:MAX_SENT_ITEMS]),
+                created_at=clock(),
             ),
             tool_results=tuple(results),
             proposals=tuple(proposals),
@@ -283,20 +385,38 @@ def chat_turn(
             "entity": ctx.config.entity,
             "knowledge": knowledge,
             "tools": _tools(),
-            "settings": [for_prompt(setting, names) for setting in settings],
+            "settings": shown_settings,
             "state": state,
+            "column_choices": column_choices,
             "message": message,
             "turn_results": (
                 json.dumps(for_prompt(feedback, names), ensure_ascii=False) if feedback else "none"
             ),
         }
         rendered = render(prompt, variables)
+        included = list(range(len(feedback)))
         if len(rendered.system) + len(rendered.user) > MAX_PROMPT_CHARS and feedback:
             # Too much looked up this turn: keep the newest result only, then give up if still too long.
             variables["turn_results"] = json.dumps(for_prompt(feedback[-1:], names), ensure_ascii=False)
             rendered = render(prompt, variables)
+            included = [len(feedback) - 1]
+        # The last check before anything leaves: whatever still matches a scanner is masked, not sent.
+        system, masked_system = assert_clean(rendered.system)
+        user, masked_user = assert_clean(rendered.user)
+        if masked_system or masked_user:
+            rendered = dataclasses.replace(rendered, system=system, user=user)
+            errors.append(EGRESS_LATE_MASK)
+            _LOGGER.warning("egress: a prompt was masked late (%d matches)", masked_system + masked_user)
         if len(rendered.system) + len(rendered.user) > MAX_PROMPT_CHARS:
             return finish(FALLBACK, blocked_by="prompt_too_large")
+        if not state_recorded:
+            state_recorded = True
+            sent.append(state_item)
+        for index in included:
+            item = items[index]
+            if item is not None and index not in recorded:
+                recorded.add(index)
+                sent.append(item)
         try:
             completion = meter.complete(rendered, GenerativePurpose.DATA_AGENT)
         except (LLMError, GenerativeError):
@@ -307,7 +427,7 @@ def chat_turn(
             name = str(action["action"])
             actions.append(_logged(name))
             raw_args = action.get("args")
-            args: dict[str, Any] = dict(raw_args) if isinstance(raw_args, dict) else {}
+            args: dict[str, Any] = dict(gate.unalias_args(raw_args)) if isinstance(raw_args, dict) else {}
             if name == "reply":
                 return _reply(session, action, results, checker, finish)
             if name == PROPOSE_TOOL:
@@ -322,23 +442,24 @@ def chat_turn(
                 )
                 results.append(result)
                 proposals.append(proposal)
-                feedback.append(
-                    {"evidence_id": result.evidence_id, "tool": PROPOSE_TOOL, "result": result.result}
-                )
+                _record(gate, names, feedback, items, result, PROPOSE_TEXT_KEYS)
                 continue
             tool = TOOLS.get(name)
             if tool is None or tool.kind is not ToolKind.READ:
                 raise AgentToolError("AGENT_TOOL_UNKNOWN", f"There is no tool called {name[:40]!r}.")
+            if name == "find_values":
+                _limit_searches(ctx, session, results, args)
             result = call_tool(ctx, name, args, evidence_id=f"{prefix}e{len(results) + 1}")
             results.append(result)
-            checker.grounded = checker.grounded | evidence_numbers(result.result, result.args)
-            feedback.append({"evidence_id": result.evidence_id, "tool": name, "result": result.result})
+            checker.grounded = checker.grounded | evidence_numbers(result.result, result.typed_args)
+            _record(gate, names, feedback, items, result, frozenset())
         except AgentToolError as exc:
             errors.append(exc.code)
             strikes += 1
             if strikes > 1:
                 return finish(FALLBACK, blocked_by=exc.code)
-            feedback.append({"error": exc.code, "message": exc.message})
+            feedback.append(gate.prepare({"error": exc.code, "message": exc.message}))
+            items.append(None)
         except Exception as exc:
             # A model's odd input must never cost a paid call that nobody records (DEC-1017, DEC-1029).
             _LOGGER.warning("agent chat step failed: %s", type(exc).__name__)
@@ -346,6 +467,50 @@ def chat_turn(
             return finish(FALLBACK, blocked_by=TURN_FAILED)
         del step
     return finish(FALLBACK, blocked_by="too_many_steps")
+
+
+def _limit_searches(
+    ctx: AgentContext, session: AgentSession, results: list[ToolResult], args: dict[str, Any]
+) -> None:
+    """Refuse one more `find_values` on a column that was searched `MAX_FIND_VALUES_PER_COLUMN_*` times."""
+    column = args.get("column")
+    if not isinstance(column, str):
+        return  # the tool reports bad arguments itself
+    name = ctx.resolve(column)
+
+    def searches(found: Iterable[ToolResult]) -> int:
+        return sum(
+            1
+            for r in found
+            if r.tool == "find_values"
+            and isinstance(r.args.get("column"), str)
+            and resolve_column(str(r.args["column"]), ctx.frame.columns) == name
+        )
+
+    if (
+        searches(results) >= MAX_FIND_VALUES_PER_COLUMN_TURN
+        or searches(session.tool_results) + searches(results) >= MAX_FIND_VALUES_PER_COLUMN_SESSION
+    ):
+        raise AgentToolError(
+            "AGENT_TOOL_LIMIT",
+            f"find_values has been used on '{display_name(name)}' as often as one session allows; "
+            "use value_counts or sample_rows instead.",
+        )
+
+
+def _record(
+    gate: Egress,
+    names: dict[str, str],
+    feedback: list[dict[str, Any]],
+    items: list[SentItem | None],
+    result: ToolResult,
+    text_keys: frozenset[str],
+) -> None:
+    """Put one tool result in this turn's feedback through the gate, and note what will be sent."""
+    prepared = gate.prepare(result.result, extra_text_keys=text_keys)
+    feedback.append({"evidence_id": result.evidence_id, "tool": result.tool, "result": prepared})
+    payload = json.dumps(for_prompt(prepared, names), ensure_ascii=False)
+    items.append(sent_item(gate, result.tool, result.args, payload, extra_text_keys=text_keys))
 
 
 def _propose(

@@ -31,7 +31,7 @@ from typing import Annotated, Final, Self
 
 from pydantic import AwareDatetime, Field, JsonValue, model_validator
 
-from engine.agent.config import AgentLevel
+from engine.agent.config import AgentLevel, DataAccess
 from engine.config import StrictBase
 from engine.contracts import Artefact
 
@@ -54,6 +54,7 @@ __all__ = [
     "RecipeReceipt",
     "RecipeStep",
     "RecipeStepKind",
+    "SentItem",
     "SessionStatus",
     "StepReceipt",
     "ToolResult",
@@ -137,10 +138,19 @@ class ToolResult(StrictBase):
     evidence_id: Annotated[str, Field(pattern=_ID, description="Stable id proposals cite.")]
     tool: str = Field(description="Registered tool name.")
     args: dict[str, JsonValue] = Field(default_factory=dict, description="Validated arguments.")
+    supplied: dict[str, JsonValue] | None = Field(
+        default=None,
+        description="Only the arguments the model wrote, before defaults were filled in; null in older records.",
+    )
     result: dict[str, JsonValue] = Field(
         default_factory=dict, description="JSON result; sample values are masked before storage."
     )
     created_at: AwareDatetime = Field(description="When the tool ran.")
+
+    @property
+    def typed_args(self) -> dict[str, JsonValue]:
+        """What the model typed: a number in it never grounds a reply. Older records: every argument."""
+        return self.args if self.supplied is None else self.supplied
 
 
 class RecipeStep(StrictBase):
@@ -314,6 +324,14 @@ class Proposal(StrictBase):
     )
     step: RecipeStep | None = Field(default=None, description="For `recipe_step`: the step it adds.")
     evidence_ids: tuple[str, ...] = Field(description="Tool results it rests on; never empty.")
+    examples: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "The cell values `title` and `reason` quote, as written there (already masked for personal data). "
+            "The screen shows them; the chat's prompt gets each one as its shape or a hidden marker, "
+            "never as written. Empty for a suggestion that quotes no value."
+        ),
+    )
     confidence: AgentConfidence = Field(description="`sure` or `check`.")
     state: ProposalState = Field(default=ProposalState.PENDING, description="Only the user changes it.")
     decided_by: DecidedBy | None = Field(default=None, description="Who set the state; null while pending.")
@@ -353,6 +371,10 @@ class Question(StrictBase):
         default=True, description="Approve is refused until a blocking question is answered."
     )
     evidence_ids: tuple[str, ...] = Field(default=(), description="Tool results it rests on.")
+    examples: tuple[str, ...] = Field(
+        default=(),
+        description="The cell values `text` quotes, as written there; the chat's prompt never gets them as written.",
+    )
     answer: str | None = Field(default=None, description="The chosen option_id.")
 
     @model_validator(mode="after")
@@ -381,6 +403,23 @@ class TurnLog(StrictBase):
     )
 
 
+class SentItem(StrictBase):
+    """One tool result as it was put in a prompt to the AI service: what left, not what was found.
+
+    `preview` is the masked payload (`engine.agent.egress.prepare`), cut to 1,500 characters;
+    `chars` is the length of the whole payload before that cut. A turn records at most 12 items and
+    a session file keeps at most 20 KB of previews (older ones are replaced by a short note).
+    """
+
+    tool: str = Field(description="The tool that produced the result (`propose_setting` for a suggestion).")
+    args: dict[str, JsonValue] = Field(
+        default_factory=dict, description="The arguments the model gave, masked like the payload."
+    )
+    preview: str = Field(description="The masked payload sent to the AI service, at most 1,500 characters.")
+    chars: Annotated[int, Field(ge=0, description="Characters in the whole payload, before the cut.")]
+    mode: DataAccess = Field(description="`masked_data` or `summaries_only`: how the payload was made.")
+
+
 class ChatMessage(StrictBase):
     role: ChatRole = Field(description="Who wrote it.")
     text: str = Field(
@@ -388,6 +427,10 @@ class ChatMessage(StrictBase):
     )
     evidence_ids: tuple[str, ...] = Field(default=(), description="Tool results the reply used.")
     turn: TurnLog | None = Field(default=None, description="The helper's replies only: what the turn did.")
+    sent: tuple[SentItem, ...] = Field(
+        default=(),
+        description="The helper's replies only: exactly which tool results were put in this turn's prompts.",
+    )
     created_at: AwareDatetime = Field(description="When it was written.")
 
 

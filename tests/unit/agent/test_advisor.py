@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import pandas as pd
 import pytest
 
 from engine.agent.advisor import ROLE_PRIMARY_KEY, ROLE_TARGET, advise, run_overrides, summarise
@@ -85,6 +86,37 @@ def test_answering_a_role_question_fixes_the_role() -> None:
     chosen = advise(context_for(frame), primary_key="cid", target="bought")
     roles = {p.path: (p.value, p.confidence.value) for p in chosen.proposals if p.kind is ProposalKind.ROLE}
     assert roles == {ROLE_PRIMARY_KEY: ("cid", "sure"), ROLE_TARGET: ("bought", "sure")}
+
+
+def _single_two_valued_column_frame() -> pd.DataFrame:
+    return pd.DataFrame(
+        {"customer_id": [f"C{i}" for i in range(1000)], "y": [0, 1] * 500, "spend": range(1000)}
+    )
+
+
+def test_one_two_valued_column_is_proposed_as_the_outcome_to_check_never_asked_about() -> None:
+    """A question needs two choices, so the one candidate becomes a `check` proposal the person accepts."""
+    advice = advise(context_for(_single_two_valued_column_frame()))
+    assert advice.stop_reason is None
+    assert not [q for q in advice.questions if "Which column says" in q.text]
+    targets = [p for p in advice.proposals if p.kind is ProposalKind.ROLE and p.path == ROLE_TARGET]
+    assert [(p.value, p.confidence.value, p.state) for p in targets] == [
+        ("y", "check", ProposalState.PENDING)
+    ]
+
+
+def test_two_two_valued_columns_are_still_a_question() -> None:
+    frame = _single_two_valued_column_frame().assign(flag=[0, 0, 1, 1] * 250)
+    advice = advise(context_for(frame))
+    asked = [q for q in advice.questions if "Which column says" in q.text]
+    assert len(asked) == 1 and len(asked[0].options) == 2
+    assert not [p for p in advice.proposals if p.path == ROLE_TARGET]
+
+
+def test_no_two_valued_column_stops() -> None:
+    frame = _single_two_valued_column_frame().drop(columns=["y"])
+    advice = advise(context_for(frame))
+    assert advice.stop_reason is not None and "No column says" in advice.stop_reason
 
 
 def _decide_all(advice_proposals: tuple, *, accept: bool = True) -> list:

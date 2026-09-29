@@ -44,6 +44,7 @@ from api.schemas import ErrorResponse, UploadRecord, ValidationErrorResponse
 from engine.access.roles import Role
 from engine.agent.advisor import recipe_steps, run_overrides
 from engine.agent.checks import check_plan
+from engine.agent.config import DataAccess
 from engine.agent.contracts import (
     AgentSession,
     AgentSummary,
@@ -56,6 +57,7 @@ from engine.agent.contracts import (
     SessionStatus,
     recipe_hash,
 )
+from engine.agent.egress import cap_sent, is_third_party
 from engine.agent.formats import masked_cut
 from engine.agent.loop import chat_turn
 from engine.agent.recipe import RecipeError, run_recipe
@@ -279,6 +281,14 @@ class ChatAvailability(StrictBase):
     generation_model_id: str | None = Field(
         default=None, description="The model that writes replies, when known."
     )
+    data_access: DataAccess = Field(
+        default=DataAccess.MASKED_DATA,
+        description="What the chat model sees of the file's cells: `masked_data` (masked values) or `summaries_only` (their shape only).",
+    )
+    third_party: bool = Field(
+        default=False,
+        description="True when the chat model runs outside the platform's own account (not `fake`, not `bedrock`).",
+    )
 
 
 class AgentSessionResponse(StrictBase):
@@ -458,7 +468,12 @@ def _response(session: AgentSession, config: UseCaseConfig) -> AgentSessionRespo
     llm = config.generative.llm
     return AgentSessionResponse(
         session=session,
-        chat=ChatAvailability(backend=llm.backend.value, generation_model_id=llm.generation_model_id or None),
+        chat=ChatAvailability(
+            backend=llm.backend.value,
+            generation_model_id=llm.generation_model_id or None,
+            data_access=config.agent.ai_data_access,
+            third_party=is_third_party(llm),
+        ),
     )
 
 
@@ -611,7 +626,7 @@ def message_agent_session(
         asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
         session = session.model_copy(
             update={
-                "transcript": (*session.transcript, asked, turn.reply),
+                "transcript": cap_sent((*session.transcript, asked, turn.reply)),
                 "tool_results": (*session.tool_results, *turn.tool_results),
                 "proposals": (*session.proposals, *turn.proposals),
                 "llm_calls": session.llm_calls + turn.llm_calls,

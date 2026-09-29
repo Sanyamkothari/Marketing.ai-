@@ -47,6 +47,7 @@ from engine.agent.contracts import (
     SessionStatus,
     ToolResult,
 )
+from engine.agent.formats import merge_from_pairs
 from engine.agent.recipe import STEP_PHASE, RecipeError, run_recipe
 from engine.agent.recommend import DataFacts, recommend_settings
 from engine.agent.reshape import choose_dates, plan_combine
@@ -61,6 +62,7 @@ from engine.config import (
     resolve_config,
 )
 from engine.stages import ingest
+from engine.utils.logging import get_logger
 
 __all__ = [
     "ROLE_PRIMARY_KEY",
@@ -71,6 +73,8 @@ __all__ = [
     "run_overrides",
     "summarise",
 ]
+
+_LOGGER = get_logger(__name__)
 
 ROLE_PRIMARY_KEY: Final[str] = "primary_key"
 ROLE_TARGET: Final[str] = "target"
@@ -195,7 +199,13 @@ class _Builder:
         return Proposal(proposal_id=self.proposal_id(), **values)
 
     def ask(
-        self, text: str, options: Sequence[QuestionOption], evidence: Sequence[str], *, blocking: bool = True
+        self,
+        text: str,
+        options: Sequence[QuestionOption],
+        evidence: Sequence[str],
+        *,
+        blocking: bool = True,
+        examples: Sequence[str] = (),
     ) -> None:
         self.questions.append(
             Question(
@@ -204,6 +214,7 @@ class _Builder:
                 options=tuple(options),
                 blocking=blocking,
                 evidence_ids=tuple(evidence),
+                examples=tuple(examples),
             )
         )
 
@@ -359,6 +370,17 @@ def _choose_target(
             f"is known, so the file needs that column (this use case calls it '{display_name(configured)}'), with two values "
             "such as 1 and 0."
         )
+    if len(options) == 1:
+        # A question needs two choices: one candidate is proposed for the person to accept instead.
+        _role(
+            builder,
+            ROLE_TARGET,
+            options[0],
+            roles.evidence_id,
+            AgentConfidence.CHECK,
+            reason=f"It is the only column with two values, so it may say whether {definition.lower()}. Check it.",
+        )
+        return options[0], None
     builder.ask(
         f"Which column says whether {definition.lower()}?",
         [_role_option(builder, ROLE_TARGET, column, roles.evidence_id) for column in options[:_MAX_OPTIONS]],
@@ -372,7 +394,13 @@ def _step(kind: RecipeStepKind, column: str, **params: Any) -> RecipeStep:
 
 
 def _recipe_proposal(
-    builder: _Builder, step: RecipeStep, title: str, reason: str, evidence: str, confidence: AgentConfidence
+    builder: _Builder,
+    step: RecipeStep,
+    title: str,
+    reason: str,
+    evidence: str,
+    confidence: AgentConfidence,
+    examples: Sequence[str] = (),
 ) -> Proposal:
     return builder.propose(
         kind=ProposalKind.RECIPE_STEP,
@@ -381,6 +409,7 @@ def _recipe_proposal(
         step=step.model_copy(update={"reason": reason}),
         evidence_ids=(evidence,),
         confidence=confidence,
+        examples=tuple(examples),
     )
 
 
@@ -398,6 +427,34 @@ def _examples(issue: Mapping[str, Any], key: str = "examples") -> str:
     return ", ".join(values if ready else [quoted(value) for value in values])
 
 
+def _note_unknown_hidden_columns(builder: _Builder) -> None:
+    """A column named in `agent.always_hide_columns` that the file does not have hides nothing: say so.
+
+    A typo (`custmer_notes`) would otherwise be a silent no-op and the column it meant would reach the chat
+    model. The note is a warning in the session's assumptions and in the log; it never blocks the session."""
+    have = {str(c).casefold() for c in builder.ctx.frame.columns} | {
+        display_name(c).casefold() for c in builder.ctx.frame.columns
+    }
+    for entry in builder.ctx.config.agent.always_hide_columns:
+        if entry.casefold() not in have:
+            _LOGGER.warning("agent.always_hide_columns names a column the file does not have")
+            builder.assumptions.append(
+                f"Warning: agent.always_hide_columns lists '{display_name(entry)}', which is not a column of this "
+                "file, so it hides nothing. Check the spelling; the column you meant is not hidden from the chat."
+            )
+
+
+def _cells(issue: Mapping[str, Any], key: str = "examples") -> tuple[str, ...]:
+    """The cell values `_examples(issue, key)` writes into a sentence, each as one string.
+
+    A proposal or question carries them (`examples`) so the copy of the sentence that goes to the chat
+    model can be built from them - each one its shape or a hidden marker - instead of by reading quotes
+    back out of prose."""
+    if key == "examples" and str(issue.get("kind")) in _QUOTED_EXAMPLES:
+        return tuple(str(value) for value in issue.get("example_cells", []) or [])
+    return tuple(str(value) for value in list(issue.get(key, []) or [])[:3])
+
+
 def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]) -> None:
     limit = builder.ctx.config.agent.max_conversion_failure_pct
     for issue in _rows(issues, "issues"):
@@ -410,6 +467,8 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
         failed = int(issue["failed"])
         share = float(issue["convert_share"])
         params: dict[str, Any] = dict(issue.get("params", {}) or {})
+        if "merge" in params:
+            params["merge"] = merge_from_pairs(params["merge"])  # the tool lists pairs; the step keeps a dict
         if kind == "number_as_text":
             if non_empty and failed / non_empty * 100.0 > limit:
                 bad = _examples(issue, "failed_examples")
@@ -436,6 +495,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                     ],
                     [evidence],
                     blocking=False,
+                    examples=_cells(issue, "failed_examples"),
                 )
                 continue
             _recipe_proposal(
@@ -446,6 +506,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                 f"{int(issue['convertible'])} of {non_empty} values convert.",
                 evidence,
                 AgentConfidence.SURE if share >= 0.95 else AgentConfidence.CHECK,
+                _cells(issue),
             )
         elif kind == "mixed_dates":
             dayfirst = params.get("dayfirst")
@@ -473,6 +534,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                         )
                     ],
                     [evidence],
+                    examples=_cells(issue),
                 )
                 continue
             order = "day first" if dayfirst else "month first"
@@ -484,6 +546,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                 f"show they are {order}.",
                 evidence,
                 AgentConfidence.SURE,
+                _cells(issue),
             )
         elif kind == "boolean_as_text":
             _recipe_proposal(
@@ -493,6 +556,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                 f"The same answer is spelled several ways: {_examples(issue)}.",
                 evidence,
                 AgentConfidence.SURE,
+                _cells(issue),
             )
         elif kind in {"category_variants", "untrimmed_text"}:
             merging = bool(params.get("merge"))
@@ -511,6 +575,7 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
                 ),
                 evidence,
                 AgentConfidence.SURE,
+                _cells(issue) if merging else (),
             )
 
 
@@ -890,6 +955,7 @@ def advise(
     config = ctx.config
     profile = builder.call("get_profile")
     roles = builder.call("find_roles")
+    _note_unknown_hidden_columns(builder)
     reshape = ctx.mode is RunMode.TRAIN and AgentLevel.RESHAPE in config.agent.levels and not combine_declined
     chosen_key = primary_key if primary_key is not None else combine.column if combine is not None else None
     key, stop = _choose_primary_key(builder, profile, chosen_key, reshape=reshape)

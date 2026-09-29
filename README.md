@@ -1365,7 +1365,7 @@ every later file. The first screen and Manual setup do not change.
   (no 500s, no numbers laundered through tool calls) and scoring (one rule for which file a model
   reads, the same answer from the dry run and Run). DEC-1034 … DEC-1045.
 
-Decisions are DEC-1000 … DEC-1045 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
+Decisions are DEC-1000 … DEC-1055 in [`docs/DECISIONS.md`](docs/DECISIONS.md).
 
 ## Plan H — One simple product (M80–M84)
 
@@ -1407,6 +1407,16 @@ three-step flow, plus a fourth step after a campaign.
   with a plain fix for every failure; Guided setup can then pick a table or file, imported as an
   ordinary upload. Passwords and keys are encrypted with `MARKETING_AI_CONNECTIONS_KEY` (generated
   on a laptop, required in production) and never returned. See `docs/CONNECTIONS.md`.
+
+- **The helper looks at your data.** In Guided setup the chat can look at the actual data with eight
+  read-only tools (sample rows, value counts, searches, number and date profiles, comparing two columns,
+  empty-data patterns, repeats) instead of guessing from a few examples. Everything it is shown passes one
+  default-deny gate: personal details our checks recognise are masked, columns you list in
+  `agent.always_hide_columns` are never shown, and `agent.ai_data_access: summaries_only` shows only the
+  shape of values (`Aaaaa 9999`). Under each reply, "What the AI looked at" lists what was sent. A separate
+  review attacked the masking and its ~34 findings are fixed with tests; what pattern masking cannot catch
+  (a name inside a sentence in a column nobody marked) is documented in `docs/AGENTS.md` §7.7 and §11
+  (DEC-1046 … DEC-1055).
 
 Decisions are DEC-1100 … DEC-1121 and DEC-1130 … DEC-1135.
 
