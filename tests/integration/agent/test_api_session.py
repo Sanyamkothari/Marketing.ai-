@@ -11,8 +11,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from api.routes import agent as agent_routes
 from api.routes import runs
+from engine import ai_service
 from engine.agent.contracts import DATA_RECIPE_FILENAME
 from engine.jobs import CancelToken
 from engine.llm import FakeLLMClient, FakeLLMMode
@@ -208,7 +208,7 @@ def test_an_invented_number_never_reaches_the_screen(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setattr(
-        agent_routes, "build_client", lambda *_a, **_k: FakeLLMClient(mode=FakeLLMMode.UNGROUNDED)
+        ai_service, "build_client", lambda *_a, **_k: FakeLLMClient(mode=FakeLLMMode.UNGROUNDED)
     )
     upload_id = _upload(client, messy_frame())
     _start(client, upload_id)

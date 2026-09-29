@@ -17,9 +17,9 @@ import pytest
 from fastapi.testclient import TestClient
 
 from api.main import create_app
-from api.routes import agent as agent_routes
 from api.routes import runs
 from api.routes.uploads import use_case_config
+from engine import ai_service
 from engine.agent.config import DataAccess
 from engine.agent.egress import EGRESS_LATE_MASK, MAX_SENT_ITEMS, MAX_SENT_SESSION_CHARS
 from engine.config import UseCaseConfig
@@ -82,7 +82,7 @@ def _chat_everything(
     _configure(monkeypatch, mode, always_hide)
     frame = canary_frame(1_200)
     fake = ToolingClient(every_call([str(c) for c in frame.columns]))
-    monkeypatch.setattr(agent_routes, "build_client", lambda *_a, **_k: fake)
+    monkeypatch.setattr(ai_service, "build_client", lambda *_a, **_k: fake)
     uploaded = client.post(
         "/uploads",
         files={"file": ("history.csv", frame.to_csv(index=False).encode(), "text/csv")},
