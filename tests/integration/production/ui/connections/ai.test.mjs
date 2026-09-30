@@ -26,7 +26,7 @@ const saved = (over = {}) => ({ ...none, connected: true, source: "saved", provi
 
 let slots;
 const reset = () => {
-  slots = { product: saved(), deliverable: { ...saved(), source: "inherited", has_key: false, inherits_product: true } };
+  slots = { product: saved(), deliverable: { ...none } };
 };
 reset();
 
@@ -61,7 +61,7 @@ const server = (request) => {
   }
   if (method === "DELETE" && !action) {
     seen.deletes.push(slot);
-    slots[slot] = slot === "deliverable" && slots.product.connected ? { ...slots.product, source: "inherited", has_key: false, inherits_product: true } : { ...none };
+    slots[slot] = { ...none };
     return { status: 200, body: slots[slot] };
   }
   return null;
@@ -210,7 +210,7 @@ test("the third-party notice names the service and what is sent, and differs by 
   pick("anthropic");
   assert.match(text($("[data-ai-third-party]")), /are sent to Claude \(Anthropic\)\.$/);
   await show("deliverable");
-  $("#ai-use-own").click();
+  if ($("#ai-use-own")) $("#ai-use-own").click();
   pick("openai");
   assert.doesNotMatch(text($("[data-ai-third-party]")), /Guided setup/);
   assert.match(text($("[data-ai-third-party]")), /sent to OpenAI\.$/);
@@ -395,30 +395,17 @@ test("Disconnect asks first, then removes the saved service and the badge says N
   assert.equal($("#ai-f-api_key"), null, "no provider is picked any more");
 });
 
-test("the Deliverable AI that uses the Product AI says so, offers Test, and 'Use its own' reveals the form", async () => {
+test("the Deliverable AI is independent: shows its own setup form and status", async () => {
   reset();
   await show("deliverable");
-  const card = $("[data-ai-inherited]");
-  assert.match(text(card), /Uses the Product AI unless you set its own/);
-  assert.match(text(card), /Right now it uses OpenAI · test-model-1\./);
-  assert.equal(text($("#ai-status")), "Uses the Product AI · OpenAI · test-model-1");
-  assert.equal($("#ai-form"), null, "no form until it is given its own");
-  seen.tests.length = 0;
-  click("#ai-test");
-  await until(() => seen.tests.length === 1, 2000, "the test");
-  assert.deepEqual(seen.tests, [{ slot: "deliverable", body: null }]);
-  click("#ai-use-own");
-  assert.ok($("#ai-form"));
+  assert.equal(text($("#ai-status")), "Not connected");
+  assert.ok($("#ai-form"), "shows its own form");
   assert.equal($("[data-ai-provider]:checked"), null, "nothing is picked for its own service yet");
-  assert.equal($("[data-ai-saved]"), null, "the Product AI's key is not this slot's");
-  click("#ai-use-inherited");
-  assert.ok($("[data-ai-inherited]"), "back to using the Product AI's");
 });
 
-test("saving the Deliverable AI's own service, then 'Use the Product AI instead' removes it", async () => {
+test("saving the Deliverable AI's own service and disconnecting it", async () => {
   reset();
   await show("deliverable");
-  click("#ai-use-own");
   pick("anthropic");
   type("#ai-f-model", "claude-example");
   type("#ai-f-api_key", KEY);
@@ -428,11 +415,11 @@ test("saving the Deliverable AI's own service, then 'Use the Product AI instead'
   assert.equal(seen.puts[0].slot, "deliverable");
   await until(() => $("[data-ai-result]"), 2000, "the test");
   assert.equal(text($("#ai-status")), "Connected · Claude (Anthropic) · claude-example");
-  assert.equal(text($("#ai-disconnect")), "Use the Product AI instead");
+  assert.equal(text($("#ai-disconnect")), "Disconnect");
   click("#ai-disconnect");
-  assert.match(text($("[data-cn-status]") ? $("#ai-disconnect-zone") : app), /It will use the Product AI again/);
+  assert.match(text($("[data-cn-status]") ? $("#ai-disconnect-zone") : app), /Disconnect\? Text features stop/);
   click("#ai-disconnect-yes");
-  await until(() => $("[data-ai-inherited]"), 2000, "back to the Product AI's service");
+  await until(() => /Not connected/.test(text($("#ai-status"))), 2000, "disconnected");
   assert.deepEqual(seen.deletes.at(-1), "deliverable");
 });
 

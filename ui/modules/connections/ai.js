@@ -279,15 +279,11 @@ function readOnlyHtml() {
 
 function disconnectHtml() {
   if (!s.data || s.data.source !== "saved") return "";
-  // Deliverable falls back to the Product AI when its own service is removed.
-  const back = s.slot === "deliverable" && productConnected();
-  const label = back ? "Use the Product AI instead" : "Disconnect";
+  const label = "Disconnect";
   if (s.confirming) {
-    const ask = back
-      ? "Stop using its own service? It will use the Product AI again."
-      : "Disconnect? Text features stop until you connect one again.";
+    const ask = "Disconnect? Text features stop until you connect one again.";
     return `<span class="cn-confirm" role="group" aria-label="${esc(label)}?"><span>${esc(ask)}</span><button type="button" class="btn danger confirm sm" id="ai-disconnect-yes">${esc(
-      back ? "Yes, use the Product AI" : "Disconnect",
+      "Disconnect",
     )}</button><button type="button" class="btn quiet sm" id="ai-disconnect-no">Keep it</button></span>`;
   }
   return `<button type="button" class="btn quiet" id="ai-disconnect">${esc(label)}</button>`;
@@ -342,9 +338,7 @@ function mainHtml() {
   if (s.slot === "deliverable" && inherited()) return inheritedHtml(head, status, out);
   const own =
     s.slot === "deliverable" && s.data.source !== "saved"
-      ? `<p class="ai-note" data-ai-own>${esc(
-          productConnected() ? "Give the Deliverable AI its own service instead of the Product AI's." : "Connect the service the customer's deliverables use.",
-        )}</p>`
+      ? `<p class="ai-note" data-ai-own>${esc("Connect the service the customer's deliverables use.")}</p>`
       : "";
   return `<main class="screen cn ai" data-ai-slot="${esc(s.slot)}">${head}${status}${sourceNoteHtml()}${own}
     <form class="cn-form ai-form" id="ai-form" novalidate>
@@ -355,11 +349,7 @@ function mainHtml() {
         s.saving ? "Saving…" : "Save"
       }</button><button type="button" class="btn secondary" id="ai-test"${s.testing || s.saving || !canTest() ? " disabled" : ""}>${
         s.testing ? "Testing…" : "Test"
-      }</button>${
-        s.slot === "deliverable" && s.data.source === "inherited"
-          ? `<button type="button" class="btn quiet" id="ai-use-inherited">Use the Product AI</button>`
-          : ""
-      }<span class="spacer"></span><span id="ai-disconnect-zone">${disconnectHtml()}</span></div>
+      }</button><span class="spacer"></span><span id="ai-disconnect-zone">${disconnectHtml()}</span></div>
     </form>
     ${out}
   </main>`;

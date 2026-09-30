@@ -139,11 +139,9 @@ function aiCard(slot) {
   const info = SLOTS[slot];
   const st = state.ai && state.ai.slots ? state.ai.slots[slot] : null;
   const note =
-    st && st.source === "inherited"
-      ? "Uses the Product AI unless you set its own."
-      : st && st.source === "config"
-        ? "Set in this installation's configuration."
-        : "";
+    st && st.source === "config"
+      ? "Set in this installation's configuration."
+      : "";
   const set = st && st.source && st.source !== "none";
   return `<article class="cn-card" data-cn-ai="${esc(slot)}"><h3>${esc(info.title)}</h3>${aiStatusBadge(st)}<p class="cn-text">${esc(
     info.blurb,

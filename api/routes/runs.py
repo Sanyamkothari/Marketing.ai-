@@ -583,8 +583,9 @@ def read_scores(run_id: str, storage: StorageDep) -> Response:
 def cancel_run_endpoint(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunCancelResponse:
     """`cancelled` is true only for a job that was still pending or running; never a 500."""
     record = load_run(storage, run_id)
-    if not jobs.cancel(run_id):
+    if record.state in (RunState.DONE, RunState.FAILED, RunState.CANCELLED):
         return RunCancelResponse(run_id=run_id, cancelled=False, state=record.state)
+    jobs.cancel(run_id)
     cancelled = cancel_run(storage, run_id)
     return RunCancelResponse(run_id=run_id, cancelled=True, state=cancelled.state)
 

@@ -32,8 +32,7 @@ stages:                                    # ordered; the overview renders them 
     name: Churn
     ai_type: hybrid
     use_cases:
-      - {id: rca,         status: available}
-      - {id: telco-churn, status: available}
+      - {id: rca, status: available}
   - id: win_back
     name: Win-back
     ai_type: hybrid

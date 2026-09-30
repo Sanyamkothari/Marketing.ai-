@@ -1975,6 +1975,13 @@ export function createController(uc, rerender) {
       try {
         await cancelRun(s.runId);
         s.detail = await getRun(s.runId);
+        stop();
+        s.view = "results";
+        await loadKpi(s.detail.run);
+        await refreshLists();
+        const run = s.detail.run;
+        window.dispatchEvent(new window.CustomEvent(RUN_FINISHED_EVENT, { detail: run }));
+        announceStatus(run.mode === "train" ? "Training cancelled" : "Scoring cancelled");
       } catch (error) {
         s.submitError = error;
       }

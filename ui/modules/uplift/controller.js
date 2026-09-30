@@ -380,6 +380,10 @@ export function createSetupController(uc, rerender) {
       try {
         await cancelRun(s.runId);
         s.detail = await getRun(s.runId);
+        stop();
+        s.view = "results";
+        await refreshLists();
+        await loadFinished();
       } catch (error) {
         s.submitError = error;
       }

@@ -238,10 +238,11 @@ def test_a_service_without_embeddings_builds_an_index_by_keywords(client: TestCl
     assert KEY not in str(body)
 
 
-def test_the_deliverable_follows_the_product_service_until_it_has_its_own(client: TestClient) -> None:
+def test_the_deliverable_does_not_follow_the_product_service(client: TestClient) -> None:
     _save(client, "product", provider="anthropic", api_key=KEY, model="prod-m")
-    body = _wait(client, _sample_index(client).json()["index_id"])
-    assert body["status"]["state"] == "done" and body["llm"]["generation_model_id"] == "prod-m"
+    res = _sample_index(client)
+    assert res.status_code == 409
+    assert res.json()["detail"]["code"] == "AI_NOT_CONNECTED"
     _save(client, "deliverable", provider="anthropic", api_key=KEY, model="cust-m")
     body = _wait(client, _sample_index(client).json()["index_id"])
     assert body["llm"]["generation_model_id"] == "cust-m"

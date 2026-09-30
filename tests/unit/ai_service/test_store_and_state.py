@@ -40,7 +40,9 @@ def storage(tmp_path: Path) -> LocalStorage:
 
 
 def _save(storage: LocalStorage, settings: Settings, slot: str = "product", **body: object) -> None:
-    save_service(AiServiceStore(storage, settings), slot, ServiceInput(**body), settings=settings, storage=storage)  # type: ignore[arg-type]
+    save_service(
+        AiServiceStore(storage, settings), slot, ServiceInput(**body), settings=settings, storage=storage
+    )  # type: ignore[arg-type]
 
 
 def _everything_on_disk(root: Path) -> str:
@@ -217,18 +219,17 @@ def test_a_provider_without_embeddings_drops_the_embedding_model(storage: LocalS
     assert state.embedding_model is None and state.base_url == "https://api.anthropic.com"
 
 
-def test_slots_are_separate_files_and_the_deliverable_inherits_the_product(
+def test_slots_are_separate_files_and_deliverable_is_independent(
     storage: LocalStorage, tmp_path: Path
 ) -> None:
     settings = _settings()
     empty = build_states(storage, settings)
     assert not empty.slots["product"].connected and empty.slots["deliverable"].source == "none"
-    assert empty.slots["deliverable"].inherits_product and not empty.slots["product"].inherits_product
+    assert not empty.slots["deliverable"].inherits_product and not empty.slots["product"].inherits_product
     _save(storage, settings, "product", provider="openai", api_key=KEY, model="m-p")
     states = build_states(storage, settings)
     deliverable = states.slots["deliverable"]
-    assert deliverable.source == "inherited" and deliverable.connected and deliverable.model == "m-p"
-    assert deliverable.inherits_product and deliverable.has_key
+    assert deliverable.source == "none" and not deliverable.connected and deliverable.model is None
     assert not (tmp_path / "data" / store_key("deliverable")).exists()
     _save(storage, settings, "deliverable", provider="anthropic", api_key=OTHER, model="m-d")
     states = build_states(storage, settings)
@@ -238,7 +239,7 @@ def test_slots_are_separate_files_and_the_deliverable_inherits_the_product(
     assert not states.slots["deliverable"].inherits_product and states.slots["product"].provider == "openai"
     assert KEY not in states.model_dump_json() and OTHER not in states.model_dump_json()
     AiServiceStore(storage, settings).delete("deliverable")
-    assert build_states(storage, settings).slots["deliverable"].source == "inherited"
+    assert build_states(storage, settings).slots["deliverable"].source == "none"
     with pytest.raises(AiServiceError) as caught:
         _save(
             storage, settings, "deliverable", provider="openai", model="m"

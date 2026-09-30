@@ -137,7 +137,7 @@ def test_the_catalogue_lists_every_kind_and_the_ai_service_card() -> None:
     kinds = [k.kind for k in catalogue()]
     assert kinds == [*CONNECTORS, "ai_service"]
     ai = catalogue()[-1]
-    assert not ai.creatable and ai.screen == "#/generative/connection"
+    assert not ai.creatable and ai.screen == "#/connections/ai/product"
 
 
 def test_the_form_check_coerces_defaults_and_names_fields_never_values() -> None:

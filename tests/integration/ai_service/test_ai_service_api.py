@@ -94,7 +94,7 @@ def test_the_initial_state_is_two_unconnected_slots_and_six_providers(api: _Reco
         False,
     )
     assert product["editable"] is True and product["locked_reason"] is None and product["last_test"] is None
-    assert product["inherits_product"] is False and deliverable["inherits_product"] is True
+    assert product["inherits_product"] is False and deliverable["inherits_product"] is False
     providers = {p["id"]: p for p in body["providers"]}
     assert list(providers) == [
         "bedrock",
@@ -163,8 +163,8 @@ def test_save_read_and_disconnect_never_return_the_key(api: _Recorder, data_dir:
         )
         assert server.requests == []  # saving makes no network call
         after = api.get("/ai-service").json()["slots"]
-        assert after["product"]["connected"] and after["deliverable"]["source"] == "inherited"
-        assert after["deliverable"]["connected"] and after["deliverable"]["model"] == "local-m"
+        assert after["product"]["connected"] and after["deliverable"]["source"] == "none"
+        assert not after["deliverable"]["connected"] and after["deliverable"]["model"] is None
         gone = api.delete("/ai-service/product")
         assert (
             gone.status_code == 200 and gone.json()["connected"] is False and gone.json()["source"] == "none"
@@ -356,12 +356,14 @@ def test_test_with_nothing_saved_is_409_not_connected_naming_the_slot(api: _Reco
     assert "Deliverable AI" in detail["message"] and detail["fix"]
 
 
-def test_testing_the_inherited_service_records_the_result_on_the_product(api: _Recorder) -> None:
+def test_testing_deliverable_without_service_returns_not_connected(api: _Recorder) -> None:
     with serve(lambda _: chat_reply()) as server:
         api.put("/ai-service/product", _openai_body(server))
-        assert api.post("/ai-service/deliverable/test").json()["ok"] is True
+        res = api.post("/ai-service/deliverable/test")
+        assert res.status_code == 409
+        assert res.json()["detail"]["code"] == "AI_NOT_CONNECTED"
     slots = api.get("/ai-service").json()["slots"]
-    assert slots["product"]["last_test"]["ok"] is True and slots["deliverable"]["source"] == "inherited"
+    assert slots["product"]["connected"] is True and slots["deliverable"]["source"] == "none"
 
 
 def test_a_key_saved_for_one_address_is_not_sent_to_another(api: _Recorder) -> None:

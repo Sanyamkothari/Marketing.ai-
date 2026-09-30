@@ -49,7 +49,9 @@ def storage(tmp_path: Path) -> LocalStorage:
 
 def _save(storage: LocalStorage, slot: str = "product", **body: object) -> None:
     settings = _settings()
-    save_service(AiServiceStore(storage, settings), slot, ServiceInput(**body), settings=settings, storage=storage)  # type: ignore[arg-type]
+    save_service(
+        AiServiceStore(storage, settings), slot, ServiceInput(**body), settings=settings, storage=storage
+    )  # type: ignore[arg-type]
 
 
 def test_nothing_connected_is_a_refusal_naming_the_slot(storage: LocalStorage) -> None:
@@ -142,14 +144,11 @@ def test_a_saved_bedrock_uses_its_region_and_models(storage: LocalStorage) -> No
     )
 
 
-def test_the_deliverable_follows_the_product_until_it_has_its_own(storage: LocalStorage) -> None:
+def test_the_deliverable_does_not_follow_the_product(storage: LocalStorage) -> None:
     _save(storage, "product", provider="openai", api_key=KEY, model="prod-m")
-    inherited = resolve_client(YAML_FAKE, slot="deliverable", storage=storage, settings=_settings())
-    assert (inherited.source, inherited.provider, inherited.llm.generation_model) == (
-        "inherited",
-        "openai",
-        "prod-m",
-    )
+    with pytest.raises(AiNotConnectedError) as caught:
+        resolve_client(YAML_FAKE, slot="deliverable", storage=storage, settings=_settings())
+    assert caught.value.slot == "deliverable"
     _save(storage, "deliverable", provider="anthropic", api_key=KEY, model="cust-m")
     own = resolve_client(YAML_FAKE, slot="deliverable", storage=storage, settings=_settings())
     assert (own.source, own.provider, own.llm.generation_model) == ("saved", "anthropic", "cust-m")
@@ -167,15 +166,17 @@ def test_the_product_never_uses_the_deliverables_service(storage: LocalStorage) 
 
 
 def test_an_unreadable_key_does_not_fall_through_to_another_provider(storage: LocalStorage) -> None:
-    _save(storage, provider="openai", api_key=KEY, model="m")
+    _save(storage, "product", provider="openai", api_key=KEY, model="m")
+    _save(storage, "deliverable", provider="openai", api_key=KEY, model="m")
     other = Settings(connections_key=SecretStr("D" * 40), allow_fake_ai=True)
     for llm in (YAML_FAKE, YAML_BEDROCK):
         with pytest.raises(AiNotConnectedError) as caught:
             resolve_client(llm, slot="product", storage=storage, settings=other)
         assert "can no longer be read" in caught.value.message and "enter the key again" in caught.value.fix
         assert KEY not in caught.value.message + caught.value.fix
-    with pytest.raises(AiNotConnectedError):  # the deliverable inherits the same unreadable key
+    with pytest.raises(AiNotConnectedError) as caught:
         resolve_client(YAML_FAKE, slot="deliverable", storage=storage, settings=other)
+    assert "can no longer be read" in caught.value.message
 
 
 def test_a_saved_address_that_a_deployment_may_not_call_is_refused(

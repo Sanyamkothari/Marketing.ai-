@@ -472,14 +472,10 @@ class AiServiceStore:
             return None
 
     def active(self, slot: str) -> tuple[AiServiceRecord, str] | None:
-        """The record a call for `slot` uses and whose slot it is: its own, else (deliverable) the product's."""
+        """The record a call for `slot` uses: its own, else None."""
         own = self.read(slot)
         if own is not None:
             return own, slot
-        if slot == "deliverable":
-            inherited = self.read("product")
-            if inherited is not None:
-                return inherited, "product"
         return None
 
     def key_readable(self, record: AiServiceRecord) -> bool:
@@ -819,7 +815,7 @@ def build_state(
         "slot": slot,
         "editable": problem is None,
         "locked_reason": problem,
-        "inherits_product": slot == "deliverable" and store.read("deliverable") is None,
+        "inherits_product": False,
     }
     active = store.active(slot)
     if active is not None:
