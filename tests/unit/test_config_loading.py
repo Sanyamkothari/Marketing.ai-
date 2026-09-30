@@ -159,7 +159,8 @@ def test_industry_available_entries_have_files_and_matching_stage_names() -> Non
                 assert load_use_case(ref.id).lifecycle_stage in stage.accepted_lifecycle_stages
                 if not stage.lifecycle_stages:
                     assert load_use_case(ref.id).lifecycle_stage == stage.name
-    assert sorted(available) == sorted(list_use_case_ids())
+    # `telco-churn` is hidden from every journey on purpose (DEC-1126); its file stays and it opens by id.
+    assert sorted(available) == sorted(set(list_use_case_ids()) - {"telco-churn"})
 
 
 def test_industry_planned_entries_have_no_file_but_carry_their_own_copy(tmp_path: Path) -> None:

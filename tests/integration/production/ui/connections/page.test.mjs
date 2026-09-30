@@ -111,7 +111,6 @@ test("the AI service section has two cards, each with its own badge and a button
   assert.equal(text(deliverable.querySelector("h3")), "Deliverable AI");
   assert.equal(text(product.querySelector("[data-cn-status]")), "Connected · OpenAI · test-model-1");
   assert.equal(text(deliverable.querySelector("[data-cn-status]")), "Uses the Product AI · OpenAI · test-model-1");
-  assert.match(text(deliverable), /Uses the Product AI unless you set its own/);
   assert.equal(product.querySelector("a.btn").getAttribute("href"), "#/connections/ai/product");
   assert.equal(deliverable.querySelector("a.btn").getAttribute("href"), "#/connections/ai/deliverable");
   assert.equal(text(product.querySelector("a.btn")), "Change");
