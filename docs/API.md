@@ -113,6 +113,7 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/root-cause` | Start a root-cause summary over a finished scoring run | GenerativeJobStartedResponse |
 | GET | `/runs/{run_id}/scores.csv` | The scored rows of a scoring run as CSV | - |
 | POST | `/runs/{run_id}/uplift/ope` | Off-policy estimate of a targeting rule on an uplift training run's hold-out | OpeReport |
+| GET | `/runs/{run_id}/uplift/profit-curve` | Expected net value against the number of customers contacted, for a finished uplift run | ProfitCurve |
 | GET | `/runs/{run_id}/uplift/{name}` | One uplift artefact of a run, whitelisted against the uplift artefact registry | - |
 | GET | `/schedules` | List schedules | ScheduleListResponse |
 | POST | `/schedules` | Create a schedule | Schedule |

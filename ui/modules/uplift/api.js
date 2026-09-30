@@ -89,3 +89,18 @@ export const getCampaignResults = (runId) => orNull(request(`${run(runId)}/campa
 
 /** Off-policy estimate of a targeting rule on a training run's hold-out: `{top_share}` or `{min_uplift}`. */
 export const postOpe = (runId, rule) => request(`${run(runId)}/uplift/ope`, json(rule));
+
+/**
+ * The budget curve of a finished uplift run. `costPerContact` / `valuePerConversion` replace the
+ * run's configured ones for this answer only; `null` (or absent) keeps the run's own. Nothing is
+ * stored or retrained, so it is safe to ask again whenever an input changes.
+ */
+export function getProfitCurve(runId, { costPerContact = null, valuePerConversion = null } = {}) {
+  const query = new URLSearchParams();
+  if (costPerContact !== null && costPerContact !== undefined) query.set("cost_per_contact", String(costPerContact));
+  if (valuePerConversion !== null && valuePerConversion !== undefined) {
+    query.set("value_per_conversion", String(valuePerConversion));
+  }
+  const path = `${run(runId)}/uplift/profit-curve`;
+  return request(query.toString() ? `${path}?${query}` : path);
+}

@@ -348,3 +348,50 @@ test("a real 409 from POST /uplift/runs renders both reports and the acknowledge
   assert.match(html, /Randomness measured 0\.882 \(0\.5 = random\)/);
   assert.ok(!/undefined|NaN/.test(html));
 });
+
+test("the output page asks for the budget curve once a recommendation exists, and a refusal stays in its card", async () => {
+  reply("/runs/r2", 200, {
+    run: { run_id: "r2", mode: "score", state: "done", created_at: "2026-09-01T00:00:00Z", file_name: "f.csv" },
+    status: { stages: [] },
+  });
+  reply("/runs/r2/uplift/policy_recommendation.json", 200, {
+    run_id: "r2",
+    computed_on: "scored",
+    rows: 10,
+    eligible_persuadables: 4,
+    contacts_recommended: 4,
+    stop_reason: "all_persuadables",
+    budget_contacts: null,
+    predicted_incremental_conversions: 1.2,
+    expected_incremental_conversions: null,
+    cost_per_contact: null,
+    value_per_conversion: null,
+    expected_cost: null,
+    expected_value: null,
+    expected_net_value: null,
+    causal: true,
+  });
+  reply("/runs/r2/uplift/profit-curve", 409, {
+    detail: { code: "PROFIT_CURVE_UNAVAILABLE", message: "No budget curve for this run." },
+  });
+  calls.length = 0;
+  const app = fakeApp();
+  const parts = ["uplift", "win-back", "output", "r2"];
+  window.location.hash = `#/${parts.join("/")}`;
+  await router.resolveRoute(parts).render(app, parts);
+  assert.ok(calls.some(([method, path]) => method === "GET" && path === "/runs/r2/uplift/profit-curve"));
+  assert.match(app.innerHTML, /What if the budget changed\?/);
+  assert.match(app.innerHTML, /No budget curve for this run\./);
+  assert.match(app.innerHTML, /Targeting recommendation/);
+  assert.ok(!/undefined|NaN/.test(app.innerHTML));
+});
+
+test("the output page without a recommendation never asks for a budget curve", async () => {
+  calls.length = 0;
+  const app = fakeApp();
+  const parts = ["uplift", "win-back", "output", "r1"];
+  window.location.hash = `#/${parts.join("/")}`;
+  await router.resolveRoute(parts).render(app, parts);
+  assert.ok(!calls.some(([, path]) => path.includes("profit-curve")));
+  assert.ok(!/What if the budget changed\?/.test(app.innerHTML));
+});

@@ -61,6 +61,7 @@ from engine.uplift.contracts import (
     IncrementalityStatus,
     OpeReport,
     PolicyRecommendation,
+    ProfitCurve,
     Segment,
     SegmentReport,
     UpliftEvaluation,
@@ -463,6 +464,62 @@ def test_off_policy_evaluation_of_a_rule_on_the_hold_out(app: App, trained: Trai
     assert uplift_artefact(app, trained.run_id, "ope_report.json") == report
     refused = app.client.post(f"/runs/{trained.run_id}/uplift/ope", json={})
     assert refused.status_code == 422
+
+
+def test_the_budget_curve_of_a_training_run_passes_through_its_recommendation(
+    app: App, trained: Trained
+) -> None:
+    url = f"/runs/{trained.run_id}/uplift/profit-curve"
+    response = app.client.get(url)
+    assert response.status_code == 200, response.text
+    curve = ProfitCurve.model_validate(response.json())
+    policy = uplift_artefact(app, trained.run_id, "policy_recommendation.json")
+    assert curve.computed_on == "test" and curve.causal and not curve.overridden
+    assert curve.configured.contacts == policy.contacts_recommended
+    assert curve.configured.expected_incremental_conversions == policy.expected_incremental_conversions
+    assert curve.configured.predicted_incremental_conversions == policy.predicted_incremental_conversions
+    contacts = [point.contacts for point in curve.points]
+    assert contacts[0] == 0 and contacts[-1] == curve.max_contacts == policy.eligible_persuadables
+    assert contacts == sorted(set(contacts))
+    # No cost or value is configured here, so there is no money to optimise - and it says so.
+    assert curve.optimum is None and curve.optimum_note
+    assert all(point.expected_net_value is None for point in curve.points)
+
+    priced = app.client.get(url, params={"cost_per_contact": 1.0, "value_per_conversion": 40.0, "points": 21})
+    assert priced.status_code == 200, priced.text
+    money = ProfitCurve.model_validate(priced.json())
+    assert money.overridden and money.cost_per_contact == 1.0 and money.value_per_conversion == 40.0
+    assert money.optimum is not None and money.optimum in money.points
+    nets = [point.expected_net_value for point in money.points if point.expected_net_value is not None]
+    assert money.optimum.expected_net_value is not None and money.optimum.expected_net_value >= max(nets)
+    assert money.bands_available
+    for point in money.points:
+        assert point.expected_cost == pytest.approx(point.contacts * 1.0)
+        low, high = point.net_value_low, point.net_value_high
+        if low is not None and high is not None:
+            assert low <= high
+
+
+def test_the_budget_curve_of_a_scoring_run_replays_its_contact_list(app: App, scored: Scored) -> None:
+    response = app.client.get(f"/runs/{scored.run_id}/uplift/profit-curve")
+    assert response.status_code == 200, response.text
+    curve = ProfitCurve.model_validate(response.json())
+    policy = uplift_artefact(app, scored.run_id, "policy_recommendation.json")
+    assert curve.computed_on == "scored" and curve.rows == SCORE_ROWS
+    assert (
+        curve.configured.contacts
+        == policy.contacts_recommended
+        == int((scored.scores["action"] == "Treat").sum())
+    )
+    assert curve.configured.expected_incremental_conversions == policy.expected_incremental_conversions
+    assert curve.eligible_persuadables == policy.eligible_persuadables
+
+
+def test_the_budget_curve_refuses_what_it_cannot_compute(app: App, trained: Trained) -> None:
+    negative = app.client.get(f"/runs/{trained.run_id}/uplift/profit-curve", params={"cost_per_contact": -1})
+    assert negative.status_code == 422
+    missing = app.client.get("/runs/r_nope/uplift/profit-curve")
+    assert missing.status_code == 404 and missing.json()["detail"]["code"] == "RUN_NOT_FOUND"
 
 
 def test_campaign_results_need_a_scoring_run(app: App, trained: Trained) -> None:

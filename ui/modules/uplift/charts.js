@@ -1,4 +1,4 @@
-// The three uplift charts, as inline SVG strings (plan §9.3: no chart library, the prototype's look).
+// The uplift charts, as inline SVG strings (plan §9.3: no chart library, the prototype's look).
 //
 // Each function reads one artefact and nothing else, and each returns one empty-card sentence
 // ("Available after training.", no file name on screen) when that artefact is missing - never a
@@ -14,7 +14,7 @@
 // axis titles are short enough to fit at that size. Counts use `dom.js`'s one number locale.
 
 import { EM_DASH, esc, fmtInt, fmtNum, present } from "../../dom.js";
-import { fmtPts, fmtRate } from "./format.js";
+import { fmtCount, fmtPts, fmtRate } from "./format.js";
 
 const W = 640;
 const H = 280;
@@ -195,4 +195,92 @@ export function segmentChart(report) {
     })
     .join("");
   return `<div class="usegs">${rows}</div>`;
+}
+
+/**
+ * The budget curve (`GET /runs/{id}/uplift/profit-curve`) -> expected net value against customers
+ * contacted: a line through the computed points only (nothing between them is called a value), the
+ * per-point likely range shaded where the API sent one, the zero line, a dashed line at the
+ * configured budget, a ring at the best budget and a dot at `selected` (the slider's point). Money
+ * is whole units, as the Output page prints it, in whatever currency the inputs were given in.
+ */
+export function profitChart(curve, selected = null) {
+  const points = ((curve && curve.points) || [])
+    .filter((p) => present(p.contacts) && present(p.expected_net_value))
+    .slice()
+    .sort((a, b) => a.contacts - b.contacts);
+  const maxX = curve && present(curve.max_contacts) ? curve.max_contacts : 0;
+  if (points.length < 2 || !(maxX > 0)) {
+    return empty("The net value curve needs a cost per contact, a value per conversion and a measured hold-out.");
+  }
+  const banded = points.filter((p) => present(p.net_value_low) && present(p.net_value_high));
+  const values = [
+    0,
+    ...points.map((p) => p.expected_net_value),
+    ...banded.flatMap((p) => [p.net_value_low, p.net_value_high]),
+  ];
+  const ticks = niceTicks(Math.min(...values), Math.max(...values), 5);
+  const lo = ticks[0];
+  const hi = ticks[ticks.length - 1];
+  const y = yScale(lo, hi);
+  const x = (contacts) => xOf(contacts / maxX);
+  const line = points.map((p) => pt(x(p.contacts), y(p.expected_net_value))).join(" ");
+  const band =
+    banded.length >= 2
+      ? `<polygon class="area" points="${banded.map((p) => pt(x(p.contacts), y(p.net_value_high))).join(" ")} ${banded
+          .slice()
+          .reverse()
+          .map((p) => pt(x(p.contacts), y(p.net_value_low)))
+          .join(" ")}"/>`
+      : "";
+  const yTicks = ticks
+    .map(
+      (v) =>
+        `<line class="grid" x1="${PAD.left}" x2="${W - PAD.right}" y1="${y(v).toFixed(1)}" y2="${y(v).toFixed(
+          1,
+        )}"/><text class="tk" x="${PAD.left - 8}" y="${(y(v) + 4).toFixed(1)}" text-anchor="end">${esc(fmtCount(v))}</text>`,
+    )
+    .join("");
+  const xTicks = niceTicks(0, maxX, 5)
+    .filter((v) => v >= 0 && v <= maxX && Number.isInteger(v))
+    .map(
+      (v) =>
+        `<text class="tk" x="${x(v).toFixed(1)}" y="${H - PAD.bottom + 28}" text-anchor="middle">${esc(fmtInt(v))}</text>`,
+    )
+    .join("");
+  const configured = curve.configured;
+  const budgetLine =
+    configured && present(configured.contacts)
+      ? `<line class="rand" x1="${x(configured.contacts).toFixed(1)}" x2="${x(configured.contacts).toFixed(1)}" y1="${
+          PAD.top
+        }" y2="${H - PAD.bottom}"/>`
+      : "";
+  const optimum = curve.optimum;
+  const best =
+    optimum && present(optimum.expected_net_value)
+      ? `<circle class="uopt" cx="${x(optimum.contacts).toFixed(1)}" cy="${y(optimum.expected_net_value).toFixed(1)}" r="6.5"/>`
+      : "";
+  const here =
+    selected && present(selected.contacts) && present(selected.expected_net_value)
+      ? `<circle class="pred" cx="${x(selected.contacts).toFixed(1)}" cy="${y(selected.expected_net_value).toFixed(1)}" r="4"/>`
+      : "";
+  const label = `Expected net value by customers contacted, ${points.length} points${
+    optimum && present(optimum.expected_net_value)
+      ? `; highest at ${fmtInt(optimum.contacts)} customers: ${fmtCount(optimum.expected_net_value)}`
+      : ""
+  }`;
+  return `<div class="uchart"><svg viewBox="0 0 ${W} ${H}" role="img" aria-label="${esc(label)}">
+    ${yTicks}
+    ${band}
+    <line class="zero" x1="${PAD.left}" x2="${W - PAD.right}" y1="${y(0).toFixed(1)}" y2="${y(0).toFixed(1)}"/>
+    ${budgetLine}
+    <polyline class="model" points="${line}"/>
+    ${best}${here}
+    ${xTicks}
+    <text class="tk tt" x="${(PAD.left + W - PAD.right) / 2}" y="${H - 4}" text-anchor="middle">Customers contacted, best first</text>
+  </svg></div><div class="ulegend"><span><i></i>Expected net value</span>${
+    band ? `<span><i class="sq b"></i>Likely range</span>` : ""
+  }<span><i class="r v"></i>Your budget</span>${
+    best ? `<span><i class="ring"></i>Best budget</span>` : ""
+  }<span><i class="dot"></i>Selected</span></div>`;
 }

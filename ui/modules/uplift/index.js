@@ -178,7 +178,7 @@ async function renderPage(app, mine, kind, ucId, runId) {
     kind === "model"
       ? createModelController(runId, rerender)
       : kind === "output"
-        ? createOutputController(uc, runId)
+        ? createOutputController(uc, runId, rerender)
         : createCampaignController(uc, runId, rerender);
   await controller.load();
   if (!current(mine)) return;

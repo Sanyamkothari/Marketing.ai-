@@ -54,6 +54,8 @@ __all__ = [
     "OpeReport",
     "PolicyRecommendation",
     "PolicyStopReason",
+    "ProfitCurve",
+    "ProfitPoint",
     "QiniCurve",
     "QiniPoint",
     "Segment",
@@ -409,6 +411,90 @@ class PolicyRecommendation(Artefact):
         description="Expected incremental conversions × value_per_conversion, when configured."
     )
     expected_net_value: float | None = Field(description="expected_value − expected_cost, when both exist.")
+    causal: bool = Field(description="False when the treatment was acknowledged as not random.")
+
+
+# ---------------------------------------------------------------------------
+# The budget curve (`GET /runs/{run_id}/uplift/profit-curve`; computed on request, never stored)
+# ---------------------------------------------------------------------------
+class ProfitPoint(Artefact):
+    """The targeting recommendation had the budget been `contacts`: every money field as in
+    `PolicyRecommendation`, with the same rules and the same nulls."""
+
+    contacts: int = Field(description="Customers contacted: the top `contacts` eligible persuadables.")
+    ranking_depth: int = Field(
+        description="Position of the last one contacted in the ranking of every row (0 when none)."
+    )
+    predicted_incremental_conversions: float = Field(
+        description="Sum of the model's predicted uplift over the customers contacted."
+    )
+    expected_incremental_conversions: ConfidenceValue | None = Field(
+        description=(
+            "contacts × the uplift observed on the hold-out among the top ranking_depth/rows share, "
+            "with its bootstrap interval scaled the same way; null when the hold-out cannot measure it."
+        )
+    )
+    expected_cost: float | None = Field(description="contacts × cost_per_contact, when a cost is set.")
+    expected_value: float | None = Field(
+        description="Expected incremental conversions × value_per_conversion, when both exist."
+    )
+    expected_net_value: float | None = Field(description="expected_value − expected_cost, when both exist.")
+    net_value_low: float | None = Field(
+        description="expected_net_value at the low end of the conversions interval; null without one."
+    )
+    net_value_high: float | None = Field(
+        description="expected_net_value at the high end of the conversions interval; null without one."
+    )
+    roi: float | None = Field(
+        description="expected_net_value / expected_cost; null when either is null or the cost is 0."
+    )
+
+
+class ProfitCurve(Artefact):
+    """Net value against the number of customers contacted, under the targeting policy's own rules.
+
+    Every point is what `policy_recommendation.json` would say with `budget_contacts` set to its
+    `contacts`: only eligible persuadables, highest predicted uplift first, never a sleeping dog, and
+    no customer whose expected gain is below the contact cost. `configured` is the run's own budget
+    and equals its recommendation exactly; `optimum` maximises the expected net value over every
+    possible contact count, not only the plotted ones.
+    """
+
+    run_id: str = Field(description="Run the curve belongs to.")
+    computed_on: Literal["test", "scored"] = Field(
+        description="Hold-out split of a training run, or every row of a scoring run."
+    )
+    rows: int = Field(description="Customers considered.")
+    eligible_persuadables: int = Field(description="Persuadables the policy could choose from.")
+    max_contacts: int = Field(
+        description="Most customers the rules allow: the eligible persuadables that pay for their contact."
+    )
+    max_contacts_reason: PolicyStopReason = Field(
+        description="Why no more: value_below_cost, all_persuadables or no_persuadables."
+    )
+    budget_contacts: int | None = Field(description="The run's configured contact budget, if any.")
+    cost_per_contact: float | None = Field(description="Cost of one contact the curve was computed with.")
+    value_per_conversion: float | None = Field(
+        description="Value of one conversion the curve was computed with."
+    )
+    overridden: bool = Field(
+        description="True when the cost or value differs from what the run was configured with."
+    )
+    points: tuple[ProfitPoint, ...] = Field(
+        description="From 0 contacts to max_contacts, ascending, including the configured point and the optimum."
+    )
+    configured: ProfitPoint = Field(
+        description="The point at the configured budget (every persuadable without one)."
+    )
+    configured_stop_reason: PolicyStopReason = Field(description="Why the configured point is not larger.")
+    optimum: ProfitPoint | None = Field(
+        description="The point of highest expected net value; null when the net value cannot be computed."
+    )
+    optimum_note: str | None = Field(
+        description="Why there is no optimum, in plain words; null when there is one."
+    )
+    bands_available: bool = Field(description="True when the points carry a low/high net value band.")
+    bands_note: str = Field(description="What the band is, or why there is none.")
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
 

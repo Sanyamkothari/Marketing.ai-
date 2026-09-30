@@ -39,6 +39,7 @@ CONTRACT_PATHS: Final[frozenset[str]] = frozenset(
         "/runs/{}/uplift/{}",
         "/runs/{}/campaign-results",
         "/runs/{}/uplift/ope",
+        "/runs/{}/uplift/profit-curve",  # the budget curve (DEC-1200), a read-only GET
     }
 )
 """Every uplift endpoint of UPLIFT_INTERFACES.md (Stage F, "API it talks to"), parameters as `{}`."""

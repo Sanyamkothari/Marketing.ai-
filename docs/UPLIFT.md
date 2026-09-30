@@ -299,6 +299,45 @@ not `N / rows` (DEC-604). If the hold-out cannot measure that share, the field i
 × value_per_conversion`; `expected_net_value = value − cost`. Each is shown only when every input
 exists.
 
+### What if the budget changed? (the budget curve, DEC-1200…1204)
+
+The Output page's **"What if the budget changed?"** card sweeps the budget instead of fixing it. It
+reads `GET /runs/{run_id}/uplift/profit-curve` (`engine/uplift/policy.py` `profit_curve`), which
+replays the run's own recommendation at every number of contacts, from 0 to the most the rules
+allow, and answers `ProfitCurve` (`engine/uplift/contracts.py`):
+
+* **Same rules at every point.** Only eligible persuadables, highest predicted uplift first, with the
+  scoring run's own control group, suppression and tie-break; sleeping dogs never; and when both a
+  cost and a value are set, nobody whose `uplift × value` is below the cost - so the curve ends at
+  `max_contacts`, not at every row. Each point is what `policy_recommendation.json` would say with
+  `budget_contacts` set to its `contacts`, so **the point at the configured budget equals the
+  recommendation field for field** (pinned by `tests/unit/uplift/test_profit_curve.py`).
+* **Each point:** `contacts`, `expected_incremental_conversions` (contacts × the uplift observed on
+  the hold-out at the depth that budget reaches, with its bootstrap interval), `expected_cost`,
+  `expected_value`, `expected_net_value`, `roi` (= net value ÷ cost; "—" at zero cost) and the
+  model's own `predicted_incremental_conversions`.
+* **Band.** `net_value_low`/`net_value_high` turn the same bootstrap interval the recommendation
+  quotes into money. It is honest for each point on its own, not a band for the whole curve at once,
+  and it only measures the evaluation's noise (predictions held fixed). No hold-out, or no cost and
+  value, means no band, `bands_available: false` and `bands_note` says why. Nothing is estimated
+  another way.
+* **Optimum.** `optimum` is the contact count of highest expected net value, searched over **every**
+  count with the hold-out's point estimate (not only the ~40 plotted ones), fewest contacts on a tie,
+  and 0 when every budget loses money. It is null with `optimum_note` when cost, value or a hold-out
+  is missing.
+* **Overrides.** `?cost_per_contact=` and `?value_per_conversion=` replace the run's settings for
+  that answer only (`overridden: true`); nothing is stored or retrained. `?points=` (2…201, default
+  41) sets how many evenly spaced counts are plotted; the configured point and the optimum are
+  always added.
+* **Replay check.** Before plotting, the route recomputes the recommendation from the saved scores
+  (a scoring run) or hold-out (a training run) and compares it with `policy_recommendation.json` (and
+  with who the scores file marks `Treat`); if they differ it answers `409 PROFIT_CURVE_UNAVAILABLE`
+  rather than a curve that is not the run's.
+
+On the page the cost and value inputs are prefilled from the run; the slider steps through the
+computed points only (no interpolated figures) and starts on the configured budget; the chart
+marks the configured budget (dashed line), the optimum (ring) and the slider's point (dot).
+
 ---
 
 ## 8. Scoring: the treat list
@@ -531,6 +570,8 @@ curl http://localhost:8000/runs/$RUN/uplift/uplift_evaluation.json   # also qini
                                                                      # policy_recommendation.json, uplift_validation.json
 # 5. off-policy estimate of "treat the top 20%"
 curl -H 'content-type: application/json' -d '{"top_share": 0.2}' http://localhost:8000/runs/$RUN/uplift/ope
+#    the budget curve, with a cost and a value for this answer only (any finished uplift run)
+curl 'http://localhost:8000/runs/$RUN/uplift/profit-curve?cost_per_contact=1&value_per_conversion=40'
 # 6. score new customers with an uplift model through Phase 1's own endpoint
 curl -H 'content-type: application/json' -d '{"use_case": "win-back-campaign", "mode": "score",
       "upload_id": "'$SCORE_UPLOAD'", "primary_key": "customer_id", "model_version_id": "'$MODEL'"}' \
@@ -682,6 +723,9 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `UPLIFT_REQUIRES_UPLIFT_ROUTE` | 422 | `POST /runs` | A training run whose problem type is uplift - by override or by the use case's own configuration - was sent to Phase 1's route, which cannot run the uplift checks first (M53). | Start it with `POST /uplift/runs`. Scoring an uplift model stays on `POST /runs`. |
 | `CAMPAIGN_RESULTS_NOT_FOUND` | 404 | `GET /runs/{id}/campaign-results` | No campaign has been measured for this run yet. | `POST` the outcomes file first. |
 | `RUN_NOT_UPLIFT` | 409 | `POST /runs/{id}/uplift/ope` | The run is not a finished uplift training run, so it has no hold-out to replay. | Use an uplift training run. |
+| `RUN_NOT_UPLIFT` | 409 | `GET /runs/{id}/uplift/profit-curve` | The run is not a finished uplift run, or made no targeting recommendation, or (a training run) has no hold-out. | Use a finished uplift training or scoring run. |
+| `RUN_NOT_SCORED` | 409 | `GET /runs/{id}/uplift/profit-curve` | A scoring run without its scores file. | Score the customers again. |
+| `PROFIT_CURVE_UNAVAILABLE` | 409 | `GET /runs/{id}/uplift/profit-curve` | The saved scores no longer reproduce the run's recommendation, or lack the columns the curve needs. | Score the customers again. |
 | `OPE_INVALID` | 422 | `POST /runs/{id}/uplift/ope` | The rule or the logged data cannot be evaluated (the message says why). | Correct the rule as the message says. |
 | `MEASURE_NOT_OFFERED` | 409 | `POST /runs/{id}/measure`, `.../measure/learn` | The use case does not contact customers, or holds nobody back (section 9, step 4). | Nothing to measure; the Campaign results route still answers for any scoring run. |
 | `MEASURE_INVALID` | 422 | `POST /runs/{id}/measure`, `.../measure/learn` | The outcomes file has no customer id column, only the id, or several columns and none is the use case's outcome. | Keep the customer id and one outcome column, or name it with `outcome_column`. |

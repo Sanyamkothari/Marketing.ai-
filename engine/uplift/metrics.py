@@ -88,8 +88,10 @@ __all__ = [
     "CONFIDENCE_LEVEL",
     "DECILES",
     "UPLIFT_AT_FRACTIONS",
+    "HoldoutUplift",
     "auuc_score",
     "bootstrap_uplift_at",
+    "bootstrap_uplift_at_many",
     "decile_table",
     "evaluate_uplift",
     "holdout_digest",
@@ -489,6 +491,76 @@ def bootstrap_uplift_at(
         return None
     resamples = _bootstrap(ranked, (k,), samples=samples, seed=seed, curves=False)
     return _interval(point, resamples.uplift_at[k])
+
+
+def bootstrap_uplift_at_many(
+    pred: npt.ArrayLike,
+    t: npt.ArrayLike,
+    y: npt.ArrayLike,
+    fractions: Sequence[float],
+    *,
+    samples: int,
+    seed: int,
+) -> tuple[ConfidenceValue | None, ...]:
+    """:func:`bootstrap_uplift_at` for several shares at once, from ONE set of resamples.
+
+    Entry `i` equals `bootstrap_uplift_at(pred, t, y, fractions[i], samples=samples, seed=seed)`
+    exactly: the resample draws do not depend on which top-`k` counts are read off them, so reading
+    many from one pass changes the cost, not the numbers. The budget curve
+    (`engine.uplift.policy.profit_curve`) relies on that to put the recommendation's own interval
+    on its configured point.
+    """
+    import numpy as np
+
+    ranked = _rank(pred, t, y)
+    single = _single(ranked)
+    ks = [_top_rows(fraction, ranked.n) for fraction in fractions]
+    points = [float(_uplift_at_k(single, k)[0]) for k in ks]
+    wanted = tuple(sorted({k for k, point in zip(ks, points, strict=True) if not np.isnan(point)}))
+    if not wanted:
+        return tuple(None for _ in ks)
+    resamples = _bootstrap(ranked, wanted, samples=samples, seed=seed, curves=False)
+    return tuple(
+        None if np.isnan(point) else _interval(point, resamples.uplift_at[k])
+        for k, point in zip(ks, points, strict=True)
+    )
+
+
+@dataclass(frozen=True)
+class HoldoutUplift:
+    """A hold-out's observed uplift among its top share, asked about many shares cheaply.
+
+    `at` is exactly :func:`bootstrap_uplift_at` - what `recommend_policy`'s `observed_top_share`
+    callable is - `intervals` the same for several shares from one bootstrap, and `points` the bare
+    point estimate for any number of shares with no bootstrap at all (NaN where an arm of the top
+    rows is empty), which is what lets the budget curve search every contact count for its optimum.
+    """
+
+    pred: FloatArray
+    t: IntArray
+    y: IntArray
+    samples: int
+    seed: int
+
+    def at(self, fraction: float) -> ConfidenceValue | None:
+        return bootstrap_uplift_at(self.pred, self.t, self.y, fraction, samples=self.samples, seed=self.seed)
+
+    def intervals(self, fractions: Sequence[float]) -> tuple[ConfidenceValue | None, ...]:
+        return bootstrap_uplift_at_many(
+            self.pred, self.t, self.y, fractions, samples=self.samples, seed=self.seed
+        )
+
+    def points(self, fractions: FloatArray) -> FloatArray:
+        import numpy as np
+
+        ranked = _rank(self.pred, self.t, self.y)
+        # `_top_rows` itself, one share at a time: numpy's rounding is not Python's in every last
+        # digit, and a share must count exactly the rows `at` counts for it.
+        ks = np.asarray(
+            [_top_rows(float(share), ranked.n) for share in np.asarray(fractions).tolist()], dtype=np.int64
+        )
+        difference: FloatArray = _rate_difference(_single(ranked))[0][ks]
+        return difference
 
 
 # ---------------------------------------------------------------------------
