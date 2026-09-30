@@ -283,6 +283,9 @@ export const postScheduleFire = (scheduleId) => request(`/schedules/${sid(schedu
 /** `{status?, limit?}` → `FiringListResponse`, newest first (missed slots included). */
 export const getFirings = (scheduleId, filters = {}) => request(withQuery(`/schedules/${sid(scheduleId)}/firings`, filters));
 
+/** "Retrain on recent data": 201 with the firing (a challenger run awaiting approval), or `409 NO_TRAINING_DATA`. */
+export const postRetrainNow = (payload) => request("/schedules/retrain-now", json("POST", payload));
+
 /** `RetrainingSyncResponse`: what `monitoring.retraining` now implies was created, updated, removed. */
 export const postRetrainingSync = () => request("/schedules/retraining/sync", { method: "POST" });
 

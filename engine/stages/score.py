@@ -88,7 +88,7 @@ from __future__ import annotations
 import time
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from engine.storage import run_key
 from engine.utils.logging import get_logger, log_stage
@@ -104,6 +104,7 @@ if TYPE_CHECKING:
         DriftBaseline,
         DriftReport,
         DriftStatus,
+        FeatureBaseline,
         FeatureDrift,
         ModelVersion,
         PrepareReport,
@@ -599,15 +600,15 @@ def compute_drift(
     for feature in baseline.features:
         expected, actual, null_rate_current = _feature_shares(feature, frame)
         psi = round(_psi(expected, actual), PSI_DECIMALS)
-        drifts.append(
-            FeatureDrift(
-                feature=feature.feature,
-                psi=psi,
-                status=_drift_status(psi, threshold),
-                null_rate_baseline=round(feature.null_rate, RATE_DECIMALS),
-                null_rate_current=round(null_rate_current, RATE_DECIMALS),
-            )
+        drift = FeatureDrift(
+            feature=feature.feature,
+            psi=psi,
+            status=_drift_status(psi, threshold),
+            null_rate_baseline=round(feature.null_rate, RATE_DECIMALS),
+            null_rate_current=round(null_rate_current, RATE_DECIMALS),
+            **_feature_movement(feature, frame),
         )
+        drifts.append(drift.model_copy(update={"what_moved": describe_movement(drift)}))
     drifts.sort(key=lambda drift: (-drift.psi, drift.feature))
     max_psi = max((drift.psi for drift in drifts), default=0.0)
     status = _drift_status(max_psi, threshold)
@@ -631,6 +632,84 @@ def compute_drift(
         summary=f"PSI {max_psi:.2f}, {status.value}",
         computed_at=utc_now(),
     )
+
+
+def _feature_movement(feature: FeatureBaseline, frame: pd.DataFrame) -> dict[str, Any]:
+    """The measured numbers behind a readable "what moved" line: means, or the biggest share change.
+
+    A numeric feature reports its training and current mean (a datetime column reports none: its
+    mean is epoch seconds, which says nothing to a reader). A categorical feature reports the level
+    whose share moved most, with its share on both sides; a level unseen at training time counts as
+    a share of zero, unless the baseline bucketed its tail as `__other__`, where its old share is
+    not known and the level is left out. Anything that cannot be measured stays `None`.
+    """
+    import pandas as pd
+
+    from engine.stages.register import OTHER_CATEGORY, _finite_values, _label_counts
+
+    if feature.feature not in frame.columns:
+        return {}
+    if feature.kind == "numeric":
+        if pd.api.types.is_datetime64_any_dtype(frame[feature.feature].dtype):
+            return {}
+        values = _finite_values(frame, feature.feature)
+        return {
+            "mean_baseline": feature.mean,
+            "mean_current": round(float(values.mean()), RATE_DECIMALS) if values.size else None,
+        }
+    counts = _label_counts(frame, feature.feature)
+    total = sum(counts.values())
+    if total == 0 or not feature.categories:
+        return {}
+    before = {category.value: category.share for category in feature.categories}
+    shares = {label: count / total for label, count in counts.items()}
+    moves = {label: (before[label], shares.get(label, 0.0)) for label in before if label != OTHER_CATEGORY}
+    if OTHER_CATEGORY not in before:
+        moves.update({label: (0.0, share) for label, share in shares.items() if label not in before})
+    if not moves:
+        return {}
+    label = max(sorted(moves), key=lambda name: abs(moves[name][1] - moves[name][0]))
+    return {
+        "top_category": label,
+        "category_share_baseline": round(moves[label][0], RATE_DECIMALS),
+        "category_share_current": round(moves[label][1], RATE_DECIMALS),
+    }
+
+
+def _figure(value: float) -> str:
+    """A number as a reader wants it: one decimal from ten up, two below, thousands separated."""
+    return f"{value:,.1f}" if abs(value) >= 10 else f"{value:.2f}"
+
+
+def describe_movement(drift: FeatureDrift) -> str | None:
+    """One plain-language line for what moved in a feature, from numbers the report holds; else `None`.
+
+    `Average monthly_spend moved from 42.1 to 53.0 (+26%)` for a numeric feature (no percentage when
+    the training mean is zero), `Share of plan_type = 'prepaid' went from 31% to 48%` for a
+    categorical one, and a missing-data line when the feature is (nearly) empty in the scored file.
+    `None` when the report has nothing to say, so nothing is ever invented.
+    """
+    name = drift.feature
+    if drift.null_rate_current >= 0.999 > drift.null_rate_baseline:
+        return f"{name} is missing or empty in this file (it was {drift.null_rate_baseline:.0%} empty in training)"
+    if drift.mean_baseline is not None and drift.mean_current is not None:
+        before, after = _figure(drift.mean_baseline), _figure(drift.mean_current)
+        if before == after:
+            return f"Average {name} stayed at {before}"
+        change = ""
+        if drift.mean_baseline != 0:
+            change = f" ({(drift.mean_current - drift.mean_baseline) / abs(drift.mean_baseline):+.0%})"
+        return f"Average {name} moved from {before} to {after}{change}"
+    if (
+        drift.top_category is not None
+        and drift.category_share_baseline is not None
+        and drift.category_share_current is not None
+    ):
+        return (
+            f"Share of {name} = '{drift.top_category}' went from "
+            f"{drift.category_share_baseline:.0%} to {drift.category_share_current:.0%}"
+        )
+    return None
 
 
 def _psi(expected: Sequence[float], actual: Sequence[float]) -> float:

@@ -452,6 +452,7 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/schedules/{schedule_id}/fire",
         "/schedules/{schedule_id}/firings",
         "/schedules/retraining/sync",
+        "/schedules/retrain-now",
         "/runs/{run_id}/outcomes",
         "/runs/{run_id}/incrementality-input",
         "/monitoring/alerts",

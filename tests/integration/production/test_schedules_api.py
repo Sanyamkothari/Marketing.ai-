@@ -615,6 +615,7 @@ def test_only_an_analyst_changes_or_fires_a_schedule(api: Api, who: str) -> None
         ("POST", f"/schedules/{schedule_id}/fire", None),
         ("DELETE", f"/schedules/{schedule_id}", None),
         ("POST", "/schedules/retraining/sync", None),
+        ("POST", "/schedules/retrain-now", {"use_case_id": USE_CASE}),
     ]:
         response = api.client.request(method, path, json=body, headers=api.as_(who))
         assert response.status_code == 403, (method, path, response.text)
@@ -635,3 +636,49 @@ def test_without_a_sign_in_nothing_answers(api: Api) -> None:
     for method, path in [("GET", "/schedules"), ("POST", "/schedules"), ("GET", "/monitoring/alerts")]:
         response = api.client.request(method, path, json={} if method == "POST" else None)
         assert response.status_code == 401, (method, path)
+
+
+# ---------------------------------------------------------------------------
+# "Retrain on recent data" - the drift notice's one click (DEC-1211)
+# ---------------------------------------------------------------------------
+def test_retrain_now_starts_a_challenger_run_through_a_paused_schedule(api: Api) -> None:
+    champion = register_champion(api.world, training_frame(api.world))
+    body = {"use_case_id": USE_CASE, "client_id": api.world.client_id}
+    response = api.client.post("/schedules/retrain-now", json=body, headers=api.as_("analyst"))
+    assert response.status_code == 201, response.text
+    firing = response.json()
+    assert (firing["status"], firing["result_code"], firing["kind"]) == (
+        "running",
+        "TRAINING_STARTED",
+        "retrain",
+    )
+    run = api.world.storage.read_model(run_key(firing["run_id"], "run.json"), RunRecord)
+    assert run.mode.value == "train" and run.requested_by == api.user_ids["analyst"]
+    current = api.world.registry.get_champion(USE_CASE)
+    assert current is not None and current.model_id == champion.model_id, "a challenger, never a swap"
+    (saved,) = api.client.get("/schedules", params={"kind": "retrain"}, headers=api.as_("viewer")).json()[
+        "schedules"
+    ]
+    assert saved["enabled"] is False and saved["schedule_id"] == firing["schedule_id"]
+    (event,) = api.events("schedules.retrain_now")
+    assert event.actor_id == api.user_ids["analyst"]
+    again = api.client.post("/schedules/retrain-now", json=body, headers=api.as_("analyst")).json()
+    assert again["schedule_id"] == saved["schedule_id"], "the schedule is reused, not duplicated"
+
+
+def test_retrain_now_says_plainly_when_there_is_no_labelled_data(api: Api) -> None:
+    response = api.client.post(
+        "/schedules/retrain-now", json={"use_case_id": USE_CASE}, headers=api.as_("analyst")
+    )
+    assert response.status_code == 409, response.text
+    assert code_of(response) == "NO_TRAINING_DATA"
+    assert "no labelled data" in response.json()["detail"]["message"]
+    assert api.client.get("/schedules", headers=api.as_("viewer")).json()["schedules"] == []
+
+
+def test_retrain_now_needs_the_analyst_role_and_a_known_use_case(api: Api) -> None:
+    body = {"use_case_id": USE_CASE, "client_id": api.world.client_id}
+    assert api.client.post("/schedules/retrain-now", json=body, headers=api.as_("viewer")).status_code == 403
+    unknown = {"use_case_id": "no-such-use-case"}
+    missing = api.client.post("/schedules/retrain-now", json=unknown, headers=api.as_("analyst"))
+    assert (missing.status_code, code_of(missing)) == (404, "USE_CASE_NOT_FOUND")

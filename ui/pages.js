@@ -1079,6 +1079,7 @@ function noBeeswarm(shap) {
  * must stay importable by node's unit tests.
  */
 export function bindPage(kind, root) {
+  if (kind === "output") bindRetrain(root);
   if (kind !== "model") return;
   root.querySelectorAll("details[data-beeswarm]").forEach((details) => {
     let loaded = false;
@@ -1097,6 +1098,44 @@ export function bindPage(kind, root) {
     });
   });
 }
+
+/**
+ * "Retrain on recent data": start a training run through `POST /schedules/retrain-now`. The run is a
+ * challenger that waits for an approver, and a use case with no labelled data is told so in the
+ * API's own sentence (`NO_TRAINING_DATA`) instead of a button that pretends.
+ */
+function bindRetrain(root) {
+  root.querySelectorAll("[data-retrain]").forEach((button) => {
+    button.addEventListener("click", async () => {
+      const out = root.querySelector("[data-retrain-result]");
+      button.disabled = true;
+      button.textContent = "Starting…";
+      const ucId = button.dataset.retrain;
+      try {
+        const { postRetrainNow } = await import("./api.js");
+        const firing = await postRetrainNow({ use_case_id: ucId, client_id: button.dataset.clientId || null });
+        if (firing.status === "failed") {
+          throw { code: firing.error_code || "FIRING_FAILED", message: "The retraining run could not start." };
+        }
+        out.innerHTML = `<p class="pb-ok" role="status">${esc(retrainStarted())}${
+          firing.run_id ? ` <a href="#/uc/${esc(ucId)}/model/${esc(firing.run_id)}">Open the training run</a>` : ""
+        }</p>`;
+        button.textContent = "Retraining started";
+      } catch (error) {
+        out.innerHTML =
+          error && error.code === "NO_TRAINING_DATA"
+            ? `<div class="apierr" role="alert" data-code="NO_TRAINING_DATA"><b>${esc(error.message)}</b></div>`
+            : errorBox(error);
+        button.disabled = false;
+        button.textContent = "Retrain on recent data";
+      }
+    });
+  });
+}
+
+/** What a started retrain means, in words; the model waits for an approver, the current one stays. */
+const retrainStarted = () =>
+  "Retraining has started. The new model waits for an approver when it finishes; the current model stays in use until then.";
 
 // --- Output ------------------------------------------------------------------------------------
 
@@ -1248,6 +1287,51 @@ function kpiBands(kpi) {
   return match ? [...match[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]) : null;
 }
 
+/** The features that moved, most PSI first: `watch` and `drifted` ones only; a stable one is not news. */
+export function movedFeatures(drift) {
+  return ((drift && drift.features) || [])
+    .filter((f) => f && f.status && f.status !== "stable")
+    .sort((a, b) => (b.psi ?? 0) - (a.psi ?? 0) || String(a.feature).localeCompare(String(b.feature)));
+}
+
+/** "Moved the most: a, b and c." from the report's own feature list, or "" when nothing moved. */
+export function driftHeadline(drift) {
+  const names = movedFeatures(drift)
+    .slice(0, 3)
+    .map((f) => f.feature);
+  if (!names.length) return "";
+  const list = names.length > 1 ? `${names.slice(0, -1).join(", ")} and ${names[names.length - 1]}` : names[0];
+  return `Moved the most: ${list}.`;
+}
+
+const DRIFT_TABLE_ROWS = 10;
+
+/** What moved, feature by feature: status, the plain line the engine measured (a dash when it did not), PSI. */
+function driftTable(drift) {
+  const moved = movedFeatures(drift);
+  if (!moved.length) return "";
+  const shown = moved.slice(0, DRIFT_TABLE_ROWS);
+  const rows = shown.map((f) => [
+    esc(f.feature),
+    esc(humanise(f.status)),
+    f.what_moved ? esc(f.what_moved) : EM_DASH,
+    esc(fmtNum(f.psi, 3)),
+  ]);
+  const more = moved.length - shown.length;
+  return card(
+    `What moved${sortNote("biggest change first")}`,
+    `${dataTable([{ label: "Measure" }, { label: "Status" }, { label: "What moved" }, { label: "PSI", num: true }], rows)}${
+      more > 0 ? `<p class="caption">${esc(fmtInt(more))} more moved less.</p>` : ""
+    }`,
+  );
+}
+
+/** The drifted notice's one click; the answer (or the plain refusal) is written into `[data-retrain-result]`. */
+function retrainAction(uc, run) {
+  const client = run && run.client_id ? ` data-client-id="${esc(run.client_id)}"` : "";
+  return `<button type="button" class="btn secondary" data-retrain="${esc(uc.id)}"${client}>Retrain on recent data</button><div class="retrain-result" data-retrain-result></div>`;
+}
+
 function scoringOutputPage(uc, run, art, byPath, scoresHref) {
   const summary = art["scoring_summary.json"];
   const drift = art["drift.json"];
@@ -1304,8 +1388,9 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref) {
   const driftNotice = driftEntry
     ? noticeCard({
         title: driftEntry.title,
-        text: [driftEntry.meaning, driftEntry.fix].filter(Boolean),
+        text: [driftHeadline(drift), driftEntry.meaning, driftEntry.fix].filter(Boolean),
         attrs: `data-code="DRIFT_${esc(String(status).toUpperCase())}"`,
+        action: status === "drifted" ? retrainAction(uc, run) : null,
       })
     : "";
 
@@ -1337,6 +1422,7 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref) {
 
   const body = `${outputTiles}
     ${driftNotice}
+    ${driftTable(drift)}
     ${bandsCard}
     ${sampleCard(uc, run, summary)}
     ${settingsCard(uc, run, config, byPath, summary, drift)}`;
