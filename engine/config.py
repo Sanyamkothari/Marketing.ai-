@@ -673,6 +673,7 @@ class ModelSearchConfig(_Base):
     time_limit_minutes: Annotated[int, Field(ge=1, le=240)] = 30  # 1 for plan §10's smoke run (DEC-036)
     folds: Annotated[int, Field(ge=2, le=10)] = 5  # plan §6.3 `folds` -> AutoGluon num_bag_folds
     imbalance: Imbalance = Imbalance.AUTO
+    use_gpu: bool = False
 
     @model_validator(mode="after")
     def _check(self) -> Self:

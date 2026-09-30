@@ -303,6 +303,20 @@ def autogluon_predictor_kwargs(
     return kwargs
 
 
+def get_hardware_accelerator() -> str:
+    """Detect available hardware accelerator: 'cuda', 'mps', or 'cpu'."""
+    try:
+        import torch
+
+        if torch.cuda.is_available():
+            return "cuda"
+        if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+            return "mps"
+    except Exception:
+        pass
+    return "cpu"
+
+
 def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     """`predictor.fit(train_data=..., tuning_data=..., **this)`. Pure, and complete on purpose.
 
@@ -337,9 +351,22 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     search = recipe.model_search
     families = available_families(recipe)
     bagging = search.ensemble
+
+    accelerator = get_hardware_accelerator() if search.use_gpu else "cpu"
+    hyperparameters: dict[str, Any] = {}
+    for family in families:
+        ag_key = catalog.model_families[family].autogluon_key
+        use_gpu_for_family = (family is ModelFamily.NEURAL_NET and accelerator in ("cuda", "mps")) or (
+            family in (ModelFamily.XGBOOST, ModelFamily.CATBOOST) and accelerator == "cuda"
+        )
+        if use_gpu_for_family:
+            hyperparameters[ag_key] = {"ag_args_fit": {"num_gpus": 1}}
+        else:
+            hyperparameters[ag_key] = {}
+
     return {
         "presets": catalog.strategy_presets[search.strategy],  # D1
-        "hyperparameters": {catalog.model_families[family].autogluon_key: {} for family in families},
+        "hyperparameters": hyperparameters,
         "hyperparameter_tune_kwargs": {  # DEC-073
             "num_trials": search.tuning_trials,
             "scheduler": "local",

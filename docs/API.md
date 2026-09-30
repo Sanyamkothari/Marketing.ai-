@@ -378,6 +378,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `time_limit_minutes` | integer | no |  |
 | `folds` | integer | no |  |
 | `imbalance` | Imbalance ("auto" \| "class_weights" \| "oversampling" \| "none") | no |  |
+| `use_gpu` | boolean | no |  |
 
 #### EvaluationConfig
 
@@ -1846,6 +1847,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `model_search` | [UI 4] Model search ("metric" renders in UI 5 as "Optimise for") |
 | `model_search.metric_choices` | list[enum]; ordered choices of "Optimise for" (DEC-019) |
 | `model_search.candidate_pool` | list[enum catalog.model_families]; offered in the grid, in this order |
+| `model_search.use_gpu` | bool; enable MPS/CUDA acceleration for supported models when available |
 | `evaluation` | [UI 5] Evaluation & explainability |
 | `evaluation.threshold` | DEC-006 |
 | `evaluation.threshold.max_flagged_rate` | float 0.01..1 \| null (config-only); auto falls back to the top decile (THRESHOLD_FALLBACK) above this share flagged |
