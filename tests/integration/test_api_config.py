@@ -389,6 +389,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/uplift/{name}",
         "/runs/{run_id}/campaign-results",
         "/runs/{run_id}/uplift/ope",
+        # Plan I: the budget curve behind the Output page's "What if the budget changed?" card (DEC-1203)
+        "/runs/{run_id}/uplift/profit-curve",
         # Plan E (pilot readiness): help, the data request kit, the reports, demo mode, feedback
         "/pilot/help",
         "/pilot/data-request",
