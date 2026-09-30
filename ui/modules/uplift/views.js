@@ -44,7 +44,7 @@ import {
   techDetails,
   toggletip,
 } from "../../dom.js";
-import { decileChart, qiniChart, segmentChart } from "./charts.js";
+import { decileChart, profitChart, qiniChart, segmentChart } from "./charts.js";
 import {
   fmtCi,
   fmtCount,
@@ -1086,6 +1086,144 @@ export function contactLine(policy, segments, train, heldBack = null) {
   return parts.join(" ");
 }
 
+// --- What if the budget changed? (`GET /runs/{id}/uplift/profit-curve`) ------------------------
+
+/** Where the slider starts: the point at the run's configured budget (the first point without one). */
+export function configuredIndex(curve) {
+  const points = (curve && curve.points) || [];
+  const configured = curve && curve.configured;
+  const at = configured ? points.findIndex((p) => p.contacts === configured.contacts) : -1;
+  return at >= 0 ? at : 0;
+}
+
+/** Net value per unit spent as a signed whole percentage: 2.0 -> "+200%". */
+export const fmtRoi = (roi) => (present(roi) ? `${signed(roi * 100, 0)}%` : EM_DASH);
+
+/** What a point is: the run's own budget, the best one, both, or neither (`""`). */
+function pointTag(point, curve) {
+  if (!point || !curve) return "";
+  const mine = curve.configured && curve.configured.contacts === point.contacts;
+  const best = curve.optimum && curve.optimum.contacts === point.contacts;
+  if (mine && best) return "Your budget, and the best one";
+  if (mine) return "Your budget";
+  return best ? "Best budget" : "";
+}
+
+/**
+ * The slider's readout: contacts, extra responses, cost, net value and return at ONE computed point
+ * of the curve - never a figure between two points - with "—" for anything the API did not send.
+ */
+export function profitReadout(point, curve) {
+  const p = point || {};
+  const expected = p.expected_incremental_conversions;
+  const items = [
+    { label: "Customers to contact", value: dash(p.contacts, fmtInt), sub: pointTag(point, curve) },
+    {
+      label: "Extra customers expected to respond",
+      value: expected && present(expected.value) ? `about ${fmtCount(expected.value)}` : EM_DASH,
+      sub: expected ? fmtLikely(expected.ci_low, expected.ci_high) : "",
+    },
+    { label: "Cost", value: fmtCount(p.expected_cost) },
+    { label: "Net value", value: fmtCount(p.expected_net_value), sub: fmtLikely(p.net_value_low, p.net_value_high) },
+    { label: "Return on spend", value: fmtRoi(p.roi), sub: present(p.roi) ? "net value ÷ cost" : "" },
+  ];
+  return `<div class="uprofit-read">${items
+    .map(
+      (t) =>
+        `<div><div class="l">${esc(t.label)}</div><div class="v">${esc(t.value)}</div>${
+          t.sub ? `<div class="s">${esc(t.sub)}</div>` : ""
+        }</div>`,
+    )
+    .join("")}</div>`;
+}
+
+/** The one sentence above the curve: the best budget against the run's own, or why there is none. */
+export function profitVerdict(curve) {
+  if (!curve) return "";
+  const best = curve.optimum;
+  const mine = curve.configured;
+  if (!best || !present(best.expected_net_value)) return curve.optimum_note || "";
+  const range = fmtLikely(best.net_value_low, best.net_value_high);
+  const lead =
+    best.contacts === 0
+      ? `Contacting nobody is the best budget: no number of contacts is expected to earn more than it costs.`
+      : `The best budget is ${plural(best.contacts, "customer")}: expected net value ${fmtCount(best.expected_net_value)}${
+          range ? ` (${range})` : ""
+        }.`;
+  const yours =
+    mine && mine.contacts !== best.contacts && present(mine.expected_net_value)
+      ? ` At your budget of ${plural(mine.contacts, "customer")} it is ${fmtCount(mine.expected_net_value)}.`
+      : mine && mine.contacts === best.contacts
+        ? " Your budget is already there."
+        : "";
+  return `${lead}${yours}`;
+}
+
+/**
+ * "What if the budget changed?": cost and value inputs (prefilled from the run), a slider over the
+ * computed points, the readout at the slider's point and the net value curve. `p` is the output
+ * controller's `profit` state; `policy` is `policy_recommendation.json`, without which there is no
+ * budget to vary and nothing is drawn.
+ */
+export function profitCard(p, policy) {
+  if (!policy) return "";
+  const s = p || {};
+  const curve = s.curve;
+  const points = (curve && curve.points) || [];
+  const index = Math.max(0, Math.min(points.length - 1, present(s.index) ? Number(s.index) : configuredIndex(curve)));
+  const point = points[index] || null;
+  const input = (id, label, value) =>
+    `<div class="field xs"><label class="sub" for="${id}">${esc(label)}</label><div class="control"><input type="number" id="${id}" min="0" step="any" inputmode="decimal" value="${esc(
+      present(value) ? value : "",
+    )}" aria-describedby="u-profit-help"></div></div>`;
+  // What the person typed, else what the curve was computed with, else the run's own setting.
+  const prefill = (typed, field) =>
+    present(typed) ? typed : curve && present(curve[field]) ? curve[field] : policy[field];
+  const form = `<form id="u-profit-form" class="uform" novalidate><div class="frow">${input(
+    "u-profit-cost",
+    "Cost per contact",
+    prefill(s.cost, "cost_per_contact"),
+  )}${input("u-profit-value", "Value per response", prefill(s.value, "value_per_conversion"))}</div><div class="actions"><button type="submit" class="btn secondary"${
+    s.loading ? " disabled" : ""
+  }>${s.loading ? "Working it out…" : "Recalculate"}</button><span class="reason" id="u-profit-help">Numbers of 0 or more. Leave one empty to use this run's setting. Nothing is retrained.</span></div>${
+    s.error ? errorBox(s.error) : ""
+  }</form>`;
+  let body;
+  if (!curve) {
+    body = s.loading ? `<p class="caption">Working out the curve…</p>` : "";
+  } else if (!(curve.max_contacts > 0)) {
+    body = `<div class="empty">${esc(
+      curve.max_contacts_reason === "value_below_cost"
+        ? "No customer is worth contacting at this cost and value: each one's expected gain is below the cost of the contact."
+        : "There is no persuadable customer to contact, so there is no budget to vary.",
+    )}</div>`;
+  } else {
+    const verdict = profitVerdict(curve);
+    body = `${verdict ? `<p class="uprofit-lead">${esc(verdict)}</p>` : ""}<div class="uprofit-slide"><label class="sub" for="u-profit-slider">Customers to contact</label><input type="range" id="u-profit-slider" min="0" max="${
+      points.length - 1
+    }" step="1" value="${index}" aria-valuetext="${esc(point ? `${fmtInt(point.contacts)} customers` : EM_DASH)}"><span class="caption">${esc(
+      `0 to ${fmtInt(curve.max_contacts)}, in ${points.length} steps`,
+    )}</span></div><div id="u-profit-readout">${profitReadout(point, curve)}</div><div id="u-profit-chart">${profitChart(
+      curve,
+      point,
+    )}</div><p class="caption">${esc(
+      [
+        curve.bands_note,
+        curve.overridden ? "The cost and value used here apply to this view only; the run's settings are unchanged." : "",
+        curve.max_contacts_reason === "value_below_cost"
+          ? `The curve stops at ${fmtInt(curve.max_contacts)}: every other persuadable's expected gain is below the cost of contacting them.`
+          : "",
+        "Sleeping dogs are never contacted at any budget.",
+      ]
+        .filter(Boolean)
+        .join(" "),
+    )}</p>`;
+  }
+  return `<section class="card uprofit" id="u-profit"><h3>What if the budget changed?</h3><p class="seg-help">${esc(
+    "Contact more or fewer of the customers the model ranks highest, and see what each budget is expected to cost and earn. Expected responses are measured on test customers the model never saw.",
+  )}</p>${form}${body}</section>`;
+}
+
 /** `#/uplift/<use case>/output/<run>`: who to contact, the four segments, the contact list download. */
 export function outputPageHtml(uc, run, art, extra = {}) {
   const validation = art["uplift_validation.json"];
@@ -1212,6 +1350,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
       <section class="card"><h3>Four groups of customers</h3>${segmentChart(segments)}${segmentRows}</section>
       <section class="card"><h3>Targeting recommendation</h3>${policyRows}</section>
     </div>
+    ${profitCard(extra.profit, policy)}
     ${listCard}
     <section class="card card-body udetails-card">${runTech(run)}</section>`;
   const actions = train

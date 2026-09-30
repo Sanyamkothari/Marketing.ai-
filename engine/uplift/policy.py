@@ -47,6 +47,15 @@ asking the hold-out.
 conversions × value_per_conversion`; `expected_net_value = value − cost`. Each is null unless every
 number it is made of exists: no field is ever filled with a placeholder.
 
+**The budget curve** (`profit_curve`, DEC-1200). The same rules at every budget: for each number of
+contacts from 0 to the most the rules allow (every eligible persuadable that pays for its contact),
+the point is exactly what the recommendation would say with `budget_contacts` set to it - the same
+ranking, the same ranking depth, the same observed hold-out uplift and the same money arithmetic -
+so the point at the configured budget *is* the recommendation. The optimum is searched over every
+contact count with the hold-out's point estimate; the plotted points, the configured one and the
+optimum carry the recommendation's own bootstrap interval, turned into a low/high net value. With
+no hold-out, or without both a cost and a value, those fields are null and the curve says why.
+
 `numpy` is imported inside the function bodies, never at module level, so `import engine` stays
 fast.
 """
@@ -54,33 +63,66 @@ fast.
 from __future__ import annotations
 
 import time
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from engine.uplift.contracts import (
     ConfidenceValue,
     PolicyRecommendation,
     PolicyStopReason,
+    ProfitCurve,
+    ProfitPoint,
     Segment,
 )
 from engine.uplift.segments import _finite_vector, _segment_vector
 from engine.utils.logging import get_logger, log_stage
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Sequence
 
     import numpy as np
 
     from engine.uplift.config import UpliftPolicyConfig
 
 __all__ = [
+    "DEFAULT_CURVE_POINTS",
+    "ObservedUplift",
     "below_cost",
     "choose_contacts",
+    "profit_curve",
     "rank_positions",
     "ranking",
     "recommend_policy",
 ]
 
 _LOGGER = get_logger(__name__)
+
+DEFAULT_CURVE_POINTS: Final[int] = 41
+"""Evenly spaced contact counts the budget curve plots, 0 and the maximum included (every 2.5 %)."""
+
+BANDS_NOTE: Final[str] = (
+    "The band is the 95% bootstrap interval of the uplift observed on the hold-out among the same "
+    "share of the ranking - the interval the recommendation itself quotes - turned into money. It "
+    "holds for each point on its own, not for the whole curve at once."
+)
+NO_HOLDOUT_NOTE: Final[str] = (
+    "No expected value and no band: there is no measured hold-out to take the observed uplift from."
+)
+NO_MONEY_NOTE: Final[str] = "Set both a cost per contact and a value per conversion to find the best budget."
+NO_INTERVAL_NOTE: Final[str] = (
+    "No band: a band needs a cost per contact, a value per conversion and a measured interval."
+)
+
+
+class ObservedUplift(Protocol):
+    """The hold-out's observed uplift by top share: `engine.uplift.metrics.HoldoutUplift`, or a fake."""
+
+    def intervals(self, fractions: Sequence[float]) -> Sequence[ConfidenceValue | None]:
+        """What `recommend_policy`'s `observed_top_share(f)` returns, for each `f`."""
+        ...
+
+    def points(self, fractions: np.ndarray) -> np.ndarray:
+        """The point estimate of each share, NaN where the hold-out cannot measure it."""
+        ...
 
 
 def below_cost(uplift: np.ndarray, policy: UpliftPolicyConfig) -> np.ndarray:
@@ -243,6 +285,170 @@ def recommend_policy(
     return recommendation, selected
 
 
+def profit_curve(
+    uplift: np.ndarray,
+    segments: np.ndarray,
+    policy: UpliftPolicyConfig,
+    *,
+    run_id: str,
+    computed_on: Literal["test", "scored"],
+    causal: bool,
+    observed: ObservedUplift | None = None,
+    eligible: np.ndarray | None = None,
+    tiebreak: np.ndarray | None = None,
+    points: int = DEFAULT_CURVE_POINTS,
+    overridden: bool = False,
+) -> ProfitCurve:
+    """Expected conversions, cost, value, net value and ROI against the number of customers contacted.
+
+    The arguments are :func:`recommend_policy`'s, with `observed` in place of `observed_top_share`
+    (its `intervals` must answer what that callable would, share for share). `policy.budget_contacts`
+    only places the configured point: the curve runs to every contact the other rules allow.
+    `overridden` is recorded as given - only the caller knows whether the cost and value are the run's.
+    """
+    import numpy as np
+
+    if points < 2:
+        raise ValueError(f"a curve needs at least 2 points, got {points}.")
+    started = time.perf_counter()
+    lift = _finite_vector(uplift, "uplift")
+    labels = _segment_vector(segments)
+    allowed = _eligible_vector(eligible, len(lift))
+    selected, configured_reason = choose_contacts(lift, labels, policy, eligible=allowed, tiebreak=tiebreak)
+
+    rows = len(lift)
+    order = ranking(lift, tiebreak)
+    is_candidate = (labels == Segment.PERSUADABLE.value) & allowed
+    candidate_positions = np.flatnonzero(is_candidate[order])  # ranking positions, best first
+    ranked = order[candidate_positions]
+    cut = below_cost(lift[ranked], policy)
+    reachable = int(np.argmax(cut)) if cut.any() else len(ranked)
+    if not len(ranked):
+        max_reason = PolicyStopReason.NO_PERSUADABLES
+    elif reachable < len(ranked):
+        max_reason = PolicyStopReason.VALUE_BELOW_COST
+    else:
+        max_reason = PolicyStopReason.ALL_PERSUADABLES
+    configured = int(selected.sum())
+    if configured > reachable or not bool(selected[ranked[:configured]].all()):  # unreachable by construction
+        raise RuntimeError("The budget curve and the targeting policy disagree on who is chosen.")
+
+    # `depths[c - 1]` is how far down the ranking of every row the first `c` contacts reach.
+    depths = candidate_positions[:reachable] + 1
+    best, optimum_note = _best_contacts(depths, rows, policy, observed)
+    counts = sorted(
+        {round(float(c)) for c in np.linspace(0, reachable, points)}
+        | {configured}
+        | (set() if best is None else {best})
+    )
+    fractions = [int(depths[c - 1]) / rows for c in counts if c]
+    looked_up = iter(list(observed.intervals(fractions)) if observed is not None and fractions else [])
+    curve: list[ProfitPoint] = []
+    for contacts in counts:
+        chosen = np.sort(ranked[:contacts])  # index order, as `lift[selected]` sums in recommend_policy
+        expected = None if observed is None else _scaled(contacts, next(looked_up) if contacts else None)
+        curve.append(
+            _profit_point(
+                contacts,
+                int(depths[contacts - 1]) if contacts else 0,
+                float(lift[chosen].sum()),
+                expected,
+                policy,
+            )
+        )
+    by_contacts = {point.contacts: point for point in curve}
+    bands = any(point.net_value_low is not None for point in curve if point.contacts)
+    bands_note = NO_HOLDOUT_NOTE if observed is None else BANDS_NOTE if bands else NO_INTERVAL_NOTE
+
+    result = ProfitCurve(
+        run_id=run_id,
+        computed_on=computed_on,
+        rows=rows,
+        eligible_persuadables=len(ranked),
+        max_contacts=reachable,
+        max_contacts_reason=max_reason,
+        budget_contacts=policy.budget_contacts,
+        cost_per_contact=policy.cost_per_contact,
+        value_per_conversion=policy.value_per_conversion,
+        overridden=overridden,
+        points=tuple(curve),
+        configured=by_contacts[configured],
+        configured_stop_reason=configured_reason,
+        optimum=None if best is None else by_contacts[best],
+        optimum_note=optimum_note,
+        bands_available=bands,
+        bands_note=bands_note,
+        causal=causal,
+    )
+    _LOGGER.info(
+        "uplift_profit_curve points=%d max_contacts=%d configured=%d optimum=%s",
+        len(curve),
+        reachable,
+        configured,
+        "none" if best is None else str(best),
+    )
+    log_stage(_LOGGER, "uplift_profit_curve", rows=rows, seconds=time.perf_counter() - started)
+    return result
+
+
+def _best_contacts(
+    depths: np.ndarray, rows: int, policy: UpliftPolicyConfig, observed: ObservedUplift | None
+) -> tuple[int | None, str | None]:
+    """The contact count of highest expected net value over EVERY count, or why there is none.
+
+    Ties go to the fewest contacts: the same money for less contact. A count whose share the hold-out
+    cannot measure is skipped, as its point would show "—"; zero contacts (net value exactly 0) is
+    always a candidate, so contacting nobody wins when every count loses money.
+    """
+    import numpy as np
+
+    value, cost = policy.value_per_conversion, policy.cost_per_contact
+    if observed is None:
+        return None, NO_HOLDOUT_NOTE
+    if value is None or cost is None:
+        return None, NO_MONEY_NOTE
+    if not len(depths):
+        return 0, None
+    contacts = np.arange(1, len(depths) + 1, dtype=np.float64)
+    lift = np.asarray(observed.points(depths / rows), dtype=np.float64)
+    # The arithmetic of `_scaled` and `_profit_point`, in their order: (contacts × uplift) × value − cost.
+    net = np.concatenate([[0.0], (contacts * lift) * value - contacts * cost])
+    return int(np.nanargmax(net)), None
+
+
+def _profit_point(
+    contacts: int,
+    depth: int,
+    predicted: float,
+    expected: ConfidenceValue | None,
+    policy: UpliftPolicyConfig,
+) -> ProfitPoint:
+    """One point of the budget curve; the money is computed exactly as `recommend_policy` does it."""
+    value_per, cost_per = policy.value_per_conversion, policy.cost_per_contact
+    cost = None if cost_per is None else contacts * cost_per
+    value = None if expected is None or value_per is None else expected.value * value_per
+    net = None if value is None or cost is None else value - cost
+
+    def at(bound: float | None) -> float | None:
+        """The net value were the conversions at `bound` instead of the point estimate."""
+        if bound is None or value_per is None or cost is None:
+            return None
+        return bound * value_per - cost
+
+    return ProfitPoint(
+        contacts=contacts,
+        ranking_depth=depth,
+        predicted_incremental_conversions=predicted,
+        expected_incremental_conversions=expected,
+        expected_cost=cost,
+        expected_value=value,
+        expected_net_value=net,
+        net_value_low=None if expected is None else at(expected.ci_low),
+        net_value_high=None if expected is None else at(expected.ci_high),
+        roi=None if net is None or cost is None or cost == 0 else net / cost,
+    )
+
+
 def _expected_conversions(
     contacts: int,
     depth: int,
@@ -253,8 +459,18 @@ def _expected_conversions(
     if observed_top_share is None:
         return None
     if contacts == 0:
+        return _scaled(0, None)
+    return _scaled(contacts, observed_top_share(depth / rows))
+
+
+def _scaled(contacts: int, observed: ConfidenceValue | None) -> ConfidenceValue | None:
+    """`contacts ×` an observed uplift and its interval; exactly zero, zero-width, for no contacts.
+
+    Called only when a hold-out lookup exists. The one place expected conversions are formed, so a
+    point of the budget curve and the recommendation cannot drift apart.
+    """
+    if contacts == 0:
         return ConfidenceValue(value=0.0, ci_low=0.0, ci_high=0.0)
-    observed = observed_top_share(depth / rows)
     if observed is None:
         return None
     return ConfidenceValue(

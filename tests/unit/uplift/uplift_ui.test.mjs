@@ -685,3 +685,135 @@ test("the stepper: Data · Model · Contact list · Campaign results, a step tha
   assert.ok(!train.includes('id="ustep-why-model"'), "a step that applies has no reason line");
   assert.ok(html.indexOf("r-score<") > html.indexOf("<summary>Technical details</summary>"), "the run id is only in Technical details");
 });
+
+// --- What if the budget changed? (the budget curve) ----------------------------------------------
+
+/** A point like `GET /runs/{id}/uplift/profit-curve` sends: net = 4.4c − 0.5c², best at 4 of 9. */
+const profitPoint = (c) => {
+  const conv = c * (0.5 - 0.05 * c);
+  const cost = 0.6 * c;
+  return {
+    contacts: c,
+    ranking_depth: c,
+    predicted_incremental_conversions: c * 0.3,
+    expected_incremental_conversions: c ? cv(conv, conv - 0.1 * c, conv + 0.1 * c) : cv(0, 0, 0),
+    expected_cost: cost,
+    expected_value: conv * 10,
+    expected_net_value: conv * 10 - cost,
+    net_value_low: c ? (conv - 0.1 * c) * 10 - cost : 0,
+    net_value_high: c ? (conv + 0.1 * c) * 10 - cost : 0,
+    roi: c ? (conv * 10 - cost) / cost : null,
+  };
+};
+const profit = {
+  run_id: "r-score",
+  computed_on: "scored",
+  rows: 10,
+  eligible_persuadables: 10,
+  max_contacts: 9,
+  max_contacts_reason: "value_below_cost",
+  budget_contacts: 7,
+  cost_per_contact: 0.6,
+  value_per_conversion: 10,
+  overridden: false,
+  points: [0, 2, 4, 7, 9].map(profitPoint),
+  configured: profitPoint(7),
+  configured_stop_reason: "budget",
+  optimum: profitPoint(4),
+  optimum_note: null,
+  bands_available: true,
+  bands_note: "The band is the 95% bootstrap interval of the uplift observed on the hold-out.",
+  causal: true,
+};
+const pricedPolicy = { ...policy, cost_per_contact: 0.6, value_per_conversion: 10, budget_contacts: 7 };
+const moneyless = (p) => ({
+  ...p,
+  expected_cost: null,
+  expected_value: null,
+  expected_net_value: null,
+  net_value_low: null,
+  net_value_high: null,
+  roi: null,
+});
+
+test("budget card: inputs prefilled from the run, the slider on the configured budget, its readout", () => {
+  const html = views.profitCard({ curve: profit }, pricedPolicy);
+  assert.match(html, /id="u-profit-cost"[^>]*value="0.6"/);
+  assert.match(html, /id="u-profit-value"[^>]*value="10"/);
+  // Five computed points: the slider steps over them and starts on the configured budget (index 3).
+  assert.match(html, /type="range" id="u-profit-slider" min="0" max="4" step="1" value="3"/);
+  const read = text(views.profitReadout(profit.points[3], profit));
+  assert.match(read, /Customers to contact 7 Your budget/);
+  assert.match(read, /Net value 6 /); // 4.4 × 7 − 24.5 = 6.3
+  assert.match(read, /Return on spend \+150%/); // 6.3 / 4.2
+  assert.match(
+    text(html),
+    /The best budget is 4 customers: expected net value 10 \(likely 6 to 14\)\. At your budget of 7 customers it is 6\./,
+  );
+  assert.match(text(html), /Sleeping dogs are never contacted at any budget\./);
+  noJunk(html);
+});
+
+test("budget chart: the line through computed points, the band, the budget line and the best ring", () => {
+  const svg = charts.profitChart(profit, profit.points[1]);
+  const line = svg.match(/<polyline class="model" points="([^"]+)"/);
+  assert.ok(line, "the net value line is drawn");
+  assert.equal(line[1].trim().split(" ").length, 5, "one vertex per computed point, nothing interpolated");
+  assert.match(svg, /<polygon class="area"/);
+  assert.match(svg, /<line class="rand"/);
+  assert.match(svg, /<circle class="uopt"/);
+  assert.match(svg, /<circle class="pred"/);
+  assert.match(svg, /highest at 4 customers: 10/);
+  assert.ok(!/NaN|undefined/.test(svg));
+});
+
+test("budget card without money: every money figure is an em dash and the curve says what it needs", () => {
+  const points = profit.points.map(moneyless);
+  const bare = {
+    ...profit,
+    cost_per_contact: null,
+    value_per_conversion: null,
+    points,
+    configured: points[3],
+    optimum: null,
+    optimum_note: "Set both a cost per contact and a value per conversion to find the best budget.",
+    bands_available: false,
+  };
+  const html = views.profitCard({ curve: bare }, policy);
+  const read = text(views.profitReadout(bare.points[3], bare));
+  assert.match(read, new RegExp(`Cost ${EM} `));
+  assert.match(read, new RegExp(`Net value ${EM} `));
+  assert.match(read, new RegExp(`Return on spend ${EM}`));
+  assert.match(text(html), /Set both a cost per contact and a value per conversion to find the best budget\./);
+  assert.match(html, /The net value curve needs a cost per contact, a value per conversion and a measured hold-out\./);
+  assert.match(html, /id="u-profit-cost"[^>]*value=""/);
+  noJunk(html);
+});
+
+test("budget card: no recommendation draws nothing; a refusal stays in the card; nobody reachable says why", () => {
+  assert.equal(views.profitCard({ curve: profit }, null), "");
+  const refused = views.profitCard(
+    { curve: null, error: { code: "PROFIT_CURVE_UNAVAILABLE", message: "No curve for this run." } },
+    policy,
+  );
+  assert.match(refused, /No curve for this run\./);
+  assert.ok(!/u-profit-slider/.test(refused));
+  const nobody = views.profitCard(
+    { curve: { ...profit, max_contacts: 0, points: [profitPoint(0)], configured: profitPoint(0), optimum: profitPoint(0) } },
+    policy,
+  );
+  assert.match(text(nobody), /No customer is worth contacting at this cost and value/);
+});
+
+test("the output page carries the budget card below the targeting recommendation", () => {
+  const html = views.outputPageHtml(
+    uc,
+    scoreRun,
+    { "policy_recommendation.json": pricedPolicy, "segments.json": segments },
+    { profit: { curve: profit } },
+  );
+  assert.ok(html.indexOf("Targeting recommendation") < html.indexOf("What if the budget changed?"));
+  assert.equal(views.configuredIndex(profit), 3);
+  assert.equal(views.fmtRoi(1.5), "+150%");
+  assert.equal(views.fmtRoi(null), EM);
+});

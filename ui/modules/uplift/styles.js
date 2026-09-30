@@ -116,6 +116,21 @@ main[data-module="uplift"] .progress li.done .pd.w,main[data-module="uplift"] .p
 .uope-result{padding-top:12px;border-top:1px solid var(--line);margin-top:12px}
 .uope-result .caption{padding:4px 0 8px}
 .uhint{margin:0 0 12px}
+.uprofit > .seg-help{margin:0;padding:8px 20px 0}
+.uprofit > .uform{padding-bottom:12px}
+.uprofit-lead{margin:0;padding:0 20px 12px;font-size:14px;font-weight:500;line-height:1.5;color:var(--ink);max-width:760px}
+.uprofit-slide{display:flex;flex-wrap:wrap;align-items:center;gap:8px 12px;padding:0 20px 12px}
+.uprofit-slide input[type=range]{flex:1 1 240px;min-width:0;min-height:24px;accent-color:var(--c)}
+.uprofit-slide .caption{padding:0}
+.uprofit-read{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;padding:0 20px 8px;font-feature-settings:"tnum"}
+.uprofit-read .l{font-size:12px;color:var(--muted)}
+.uprofit-read .v{margin-top:4px;font-size:18px;font-weight:600;color:var(--ink)}
+.uprofit-read .s{margin-top:4px;font-size:12px;color:var(--muted)}
+.uprofit > .caption{padding:0 20px 16px}
+.uchart .uopt{fill:none;stroke:var(--ok);stroke-width:2.5}
+.ulegend i.ring{width:10px;height:10px;border:2px solid var(--ok);border-radius:50%}
+.ulegend i.sq.b{background:var(--t)}
+.ulegend i.r.v{width:0;height:12px;border-top:0;border-left:1.5px dashed var(--faint)}
 .uindex{display:flex;flex-direction:column;border:1px solid var(--line);border-radius:10px;overflow:hidden;background:var(--surface)}
 .uindex > a,.uindex > .off{display:grid;grid-template-columns:minmax(0,1fr) auto 16px;gap:12px;align-items:center;padding:12px 20px;border-top:1px solid var(--line);font-size:13px;min-height:48px}
 .uindex > :first-child{border-top:0}

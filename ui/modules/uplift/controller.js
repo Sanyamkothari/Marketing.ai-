@@ -16,11 +16,13 @@ import {
   postUpload,
   scoresUrl,
 } from "../../api.js";
+import { present } from "../../dom.js";
 // The campaign's value view and the demo manifest are the pilot module's endpoints; its calls are
 // reused rather than repeated, so the Campaign results page reads the value view's own words and sign.
 import { getDemo, getRoi } from "../pilot/api.js";
 import {
   getCampaignResults,
+  getProfitCurve,
   getTreatmentCandidates,
   getUpliftArtefact,
   getUpliftArtefacts,
@@ -28,10 +30,12 @@ import {
   postOpe,
   postUpliftRun,
 } from "./api.js";
+import { profitChart } from "./charts.js";
 import {
   DEFAULT_TOP_SHARE_PCT,
   MODEL_ARTEFACTS,
   OUTPUT_ARTEFACTS,
+  profitReadout,
   routes,
   upliftUnavailable,
   upliftVersions,
@@ -446,8 +450,44 @@ export function createModelController(runId, rerender) {
 
 // --- Output page ---------------------------------------------------------------------------------
 
-export function createOutputController(uc, runId) {
-  const s = { run: null, art: null, scoreRuns: [], scoresHref: scoresUrl(runId), summary: null };
+/**
+ * A cost or value input as the API wants it: `null` for empty (the run's own setting), a number of 0
+ * or more, or `undefined` for anything else - which the form refuses before asking.
+ */
+export function amountOf(text) {
+  const raw = String(text === null || text === undefined ? "" : text).trim();
+  if (raw === "") return null;
+  const value = Number(raw);
+  return Number.isFinite(value) && value >= 0 ? value : undefined;
+}
+
+export function createOutputController(uc, runId, rerender = () => {}) {
+  const s = {
+    run: null,
+    art: null,
+    scoreRuns: [],
+    scoresHref: scoresUrl(runId),
+    summary: null,
+    // "What if the budget changed?": the curve the API computed, the inputs as typed, the slider's
+    // point (an index into `curve.points`; `null` = the configured budget).
+    profit: { curve: null, cost: null, value: null, index: null, loading: false, error: null },
+  };
+
+  /** Asks for the curve; a refusal is shown in the card and never takes the rest of the page down. */
+  async function loadCurve(overrides = {}) {
+    s.profit.loading = true;
+    s.profit.error = null;
+    try {
+      const curve = await getProfitCurve(runId, overrides);
+      s.profit.curve = curve;
+      s.profit.index = null;
+      s.profit.cost = present(curve.cost_per_contact) ? String(curve.cost_per_contact) : null;
+      s.profit.value = present(curve.value_per_conversion) ? String(curve.value_per_conversion) : null;
+    } catch (error) {
+      s.profit.error = error;
+    }
+    s.profit.loading = false;
+  }
 
   async function load() {
     const [detail, runs] = await Promise.all([getRun(runId), upliftRuns(uc.id)]);
@@ -462,9 +502,49 @@ export function createOutputController(uc, runId) {
     s.art = art;
     s.summary = summary;
     s.scoreRuns = runs.filter((r) => r.mode === "score");
+    if (art["policy_recommendation.json"]) await loadCurve();
   }
 
-  return { state: s, load, bind: () => {} };
+  function bind(root) {
+    const slider = root.querySelector("#u-profit-slider");
+    if (slider) {
+      // Moving the slider repaints only the readout and the chart, so the slider keeps focus and drag.
+      slider.addEventListener("input", () => {
+        const curve = s.profit.curve;
+        const points = (curve && curve.points) || [];
+        const index = Math.max(0, Math.min(points.length - 1, Number(slider.value) || 0));
+        s.profit.index = index;
+        const point = points[index] || null;
+        const readout = root.querySelector("#u-profit-readout");
+        const chart = root.querySelector("#u-profit-chart");
+        if (readout) readout.innerHTML = profitReadout(point, curve);
+        if (chart) chart.innerHTML = profitChart(curve, point);
+        if (point) slider.setAttribute("aria-valuetext", `${point.contacts} customers`);
+      });
+    }
+    const form = root.querySelector("#u-profit-form");
+    if (!form) return;
+    form.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const costInput = root.querySelector("#u-profit-cost");
+      const valueInput = root.querySelector("#u-profit-value");
+      s.profit.cost = costInput ? costInput.value : null;
+      s.profit.value = valueInput ? valueInput.value : null;
+      const costPerContact = amountOf(s.profit.cost);
+      const valuePerConversion = amountOf(s.profit.value);
+      if (costPerContact === undefined || valuePerConversion === undefined) {
+        s.profit.error = new ApiError(0, "INVALID_INPUT", "Enter a cost and a value of 0 or more, or leave them empty.", null);
+        rerender();
+        return;
+      }
+      s.profit.loading = true;
+      rerender();
+      await loadCurve({ costPerContact, valuePerConversion });
+      rerender();
+    });
+  }
+
+  return { state: s, load, bind };
 }
 
 // --- Campaign results page -----------------------------------------------------------------------
