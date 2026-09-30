@@ -11,6 +11,8 @@ screen asks for it:
   `POST /runs` the Setup form's Run then sends;
 * **conflict** - the same file with the outcome unticked, whose Approve answers `409` with the Run
   button's own checks;
+* **placeholder** - a file with a placeholder code (`99`) in a number column: the session as started,
+  its `set_missing` suggestion ticked by the person with the rest as their boxes start, and the preview;
 * **stopped** - a file too small to learn from, where the helper stops and says why.
 
 `sent.test.mjs` (same directory, run by the same glob) covers "What the AI looked at" and the access
@@ -99,6 +101,22 @@ def _answer_leak(client: TestClient, upload_id: str, session: dict[str, Any]) ->
     )
 
 
+def placeholder_frame() -> Any:
+    """A clean file whose `visits_last_7d` holds `99` on every 25th row: a placeholder code."""
+    frame = generate(GenerationSpec(use_case_id=USE_CASE, rows=3_000))
+    frame.loc[frame.index % 25 == 0, "visits_last_7d"] = 99
+    return frame
+
+
+def _set_missing(bodies: dict[str, Any]) -> str:
+    """The id of the placeholder session's `set_missing` suggestion."""
+    return next(
+        p["proposal_id"]
+        for p in bodies["placeholder_start"]["session"]["proposals"]
+        if p["step"] and p["step"]["kind"] == "set_missing"
+    )
+
+
 def write_fixtures(root: Path, config_root: Path) -> Path:
     """Every body the node test replays, answered by the real app."""
     out = root / "fixtures"
@@ -159,6 +177,19 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
         assert refused.status_code == 409, refused.text
         bodies["conflict_apply"] = refused.json()
 
+        # placeholder: `99` in a column whose real values stop at 16 (DEC-1220): the suggestion starts
+        # unticked with its measured impact; the person ticks it, then previews.
+        bodies["upload_placeholder"] = _upload(client, placeholder_frame())
+        placeholder = ids["placeholder"] = bodies["upload_placeholder"]["upload_id"]
+        base = f"/uploads/{placeholder}/agent-session"
+        bodies["placeholder_start"] = _ok(client.post(base, json={"use_case": USE_CASE}), 201)
+        ticked = [
+            {**decision, "state": "accepted"} if decision["proposal_id"] == _set_missing(bodies) else decision
+            for decision in _as_ticked(bodies["placeholder_start"]["session"])
+        ]
+        bodies["placeholder_decided"] = _ok(client.post(f"{base}/decisions", json={"decisions": ticked}))
+        bodies["placeholder_preview"] = _ok(client.post(f"{base}/preview"))
+
         # stopped: too few rows to learn from.
         bodies["upload_stopped"] = _upload(client, generate(GenerationSpec(use_case_id=USE_CASE, rows=900)))
         stopped = ids["stopped"] = bodies["upload_stopped"]["upload_id"]
@@ -210,6 +241,17 @@ def test_the_fixtures_are_the_world_the_screen_is_tested_in(tmp_path: Path, conf
     conflict = _read(out, "conflict_apply")
     assert conflict["detail"]["code"] == "VALIDATION_FAILED"
     assert "TARGET_MISSING" in [c["code"] for c in conflict["validation"]["checks"]]
+    placeholder = _read(out, "placeholder_start")["session"]
+    suggestion = next(p for p in placeholder["proposals"] if p["step"] and p["step"]["kind"] == "set_missing")
+    assert suggestion["confidence"] == "check" and suggestion["step"]["params"] == {"values": [99]}
+    impact = next(
+        r
+        for r in placeholder["tool_results"]
+        if r["evidence_id"] in suggestion["evidence_ids"] and r["tool"] == "describe_placeholder_values"
+    )["result"]
+    assert impact["affected_rows"] == 120 and impact["auc_before"] is not None
+    receipt = _read(out, "placeholder_preview")["receipt"]
+    assert [s["kind"] for s in receipt["steps"]] == ["set_missing"] and receipt["steps"][0]["changed"] == 40
     stopped = _read(out, "stopped_start")["session"]
     assert stopped["status"] == "stopped" and stopped["stop_reason"]
     assert not _read(out, "use_case_generative")["advanced_settings"]["stages"]

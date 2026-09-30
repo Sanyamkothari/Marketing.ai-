@@ -170,7 +170,37 @@ function itemHtml(g, proposal, disabled) {
     ticked(g, proposal) ? " checked" : ""
   }${disabled ? " disabled" : ""}><span><span class="ag-t">${esc(proposal.title)}</span>${check}<span class="ag-r">${esc(
     proposal.reason,
-  )}</span></span></label>`;
+  )}</span></span></label>${impactHtml(g, proposal)}`;
+}
+
+const measured = (v) => typeof v === "number" && Number.isFinite(v);
+const impactNum = (v) => (measured(v) ? (Number.isInteger(v) ? fmtInt(v) : fmtNum(v, 3)) : EM_DASH);
+const impactPct = (v) => (measured(v) ? `${fmtNum(v * 100, 1)}%` : EM_DASH);
+
+/**
+ * What emptying a column's placeholder values does to the data (DEC-1222), under that suggestion: the
+ * `describe_placeholder_values` result the suggestion cites, number for number, and "—" wherever it
+ * measured nothing (no known two-valued outcome, too few rows for an AUC). The single-column AUC is the
+ * one the leakage check reads; no model is trained per choice, so no model score is shown (DEC-1223).
+ */
+function impactHtml(g, proposal) {
+  if (!proposal.step || proposal.step.kind !== "set_missing") return "";
+  const cited = new Set(proposal.evidence_ids || []);
+  const found = (g.session.tool_results || []).find(
+    (r) => cited.has(r.evidence_id) && r.tool === "describe_placeholder_values",
+  );
+  if (!found) return "";
+  const r = found.result || {};
+  const rows = [
+    ["Rows affected", `${impactNum(r.affected_rows)} of ${impactNum(r.rows)} (${impactPct(r.affected_share)})`],
+    ["Mean", `${impactNum(r.mean_before)} → ${impactNum(r.mean_after)}`],
+    ["Median", `${impactNum(r.median_before)} → ${impactNum(r.median_after)}`],
+    ["Outcome rate, these rows vs the rest", `${impactPct(r.affected_positive_rate)} vs ${impactPct(r.other_positive_rate)}`],
+    ["Single-column AUC", `${impactNum(r.auc_before)} → ${impactNum(r.auc_after)}`],
+  ];
+  return `<div class="ag-impact" data-ag-impact="${esc(proposal.proposal_id)}"><h5>If ticked (before → after)</h5><dl>${rows
+    .map(([label, value]) => `<dt>${esc(label)}</dt><dd>${esc(value)}</dd>`)
+    .join("")}</dl></div>`;
 }
 
 function questionHtml(question, disabled) {
@@ -231,6 +261,7 @@ const listHtml = (title, items) =>
 /** One step's effect on the rows it read, in words, from the receipt's own counts. */
 function stepLine(result) {
   if (result.kind === "drop_column") return `${result.column}: hidden from the model`;
+  if (result.kind === "set_missing") return `${result.column}: ${fmtInt(result.changed)} of ${fmtInt(result.rows)} values made empty`;
   const failed = result.failed ? `, ${fmtInt(result.failed)} could not be read` : "";
   return `${result.column}: ${fmtInt(result.changed)} of ${fmtInt(result.rows)} values changed${failed}`;
 }

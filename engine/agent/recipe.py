@@ -3,10 +3,10 @@
 The helper never edits a file. It proposes `RecipeStep`s; once the user approves them, this module
 runs them - and only this module does. Three rules hold for every run:
 
-* **Fixed order.** Parsing and tidying steps run first, then combining rows (level 3), then derived
-  columns, then drops, so the rows are combined from cleaned values, a derived column reads the
-  combined ones, and a drop never removes something a later step needs. `check_recipe` refuses a
-  recipe written in another order rather than silently re-sorting it.
+* **Fixed order.** Parsing and tidying steps run first, then emptying placeholder codes, then
+  combining rows (level 3), then derived columns, then drops, so the rows are combined from cleaned
+  values, a derived column reads the combined ones, and a drop never removes something a later step
+  needs. `check_recipe` refuses a recipe written in another order rather than silently re-sorting it.
 * **Stateless.** Every step's output for a row depends only on that row and the step's parameters
   (DEC-1004), so the same recipe gives the same result on next month's file and nothing learnt from
   the test rows can leak into training. `combine_rows` is the one step that reads several rows: its
@@ -24,6 +24,7 @@ The input frame is never modified; `run_recipe` works on a copy.
 from __future__ import annotations
 
 import ast
+import math
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -34,6 +35,7 @@ import pandas as pd
 from engine.agent.config import AgentLevel
 from engine.agent.contracts import RecipeReceipt, RecipeStep, RecipeStepKind, StepReceipt, recipe_hash
 from engine.agent.formats import ParseOutcome, map_booleans, normalise_texts, parse_dates, parse_numbers
+from engine.agent.placeholders import MAX_PLACEHOLDER_VALUES, set_missing
 from engine.agent.reshape import CombineError, CombineSpec, LeakCheck, combine_rows
 from engine.onboarding.transforms import TransformError, derive
 from engine.utils.time import utc_now
@@ -52,11 +54,14 @@ STEP_PHASE: Final[dict[RecipeStepKind, int]] = {
     RecipeStepKind.PARSE_DATE: 1,
     RecipeStepKind.MAP_BOOLEAN: 1,
     RecipeStepKind.NORMALISE_TEXT: 1,
-    RecipeStepKind.COMBINE_ROWS: 2,
-    RecipeStepKind.DERIVE: 3,
-    RecipeStepKind.DROP_COLUMN: 4,
+    RecipeStepKind.SET_MISSING: 2,
+    RecipeStepKind.COMBINE_ROWS: 3,
+    RecipeStepKind.DERIVE: 4,
+    RecipeStepKind.DROP_COLUMN: 5,
 }
-"""Parse and tidy, then combine rows, then derive, then drop (Plan G §6.3, M76)."""
+"""Parse and tidy, then empty placeholder codes, then combine rows, then derive, then drop (Plan G §6.3,
+M76, DEC-1220). Placeholders come after parsing, so a code written as text (`"99"`) is already a number,
+and before combining, so a code is never added up or averaged into a combined column."""
 
 _LEVEL_OF: Final[dict[RecipeStepKind, AgentLevel]] = {
     RecipeStepKind.DERIVE: AgentLevel.DERIVE,
@@ -158,8 +163,8 @@ def check_recipe(
         if STEP_PHASE[step.kind] < phase:
             raise RecipeError(
                 "RECIPE_STEP_INVALID",
-                "Steps run in a fixed order: fix values first, then combine rows, then add new columns, "
-                "then hide columns.",
+                "Steps run in a fixed order: fix values first, then empty placeholder values, then combine "
+                "rows, then add new columns, then hide columns.",
                 order=step.order,
             )
         phase = STEP_PHASE[step.kind]
@@ -286,6 +291,7 @@ def _check_params(step: RecipeStep) -> None:
         RecipeStepKind.PARSE_DATE: frozenset({"dayfirst"}),
         RecipeStepKind.MAP_BOOLEAN: frozenset({"true_values", "false_values"}),
         RecipeStepKind.NORMALISE_TEXT: frozenset({"strip", "merge"}),
+        RecipeStepKind.SET_MISSING: frozenset({"values"}),
         RecipeStepKind.DERIVE: frozenset({"expression"}),
         RecipeStepKind.COMBINE_ROWS: frozenset(
             {"time_column", "snapshot_column", "dayfirst", "outcome", "features"}
@@ -314,6 +320,16 @@ def _check_params(step: RecipeStep) -> None:
             isinstance(k, str) and isinstance(v, str) for k, v in merge.items()
         ):
             raise refuse("merge must map spellings to spellings")
+    if kind is RecipeStepKind.SET_MISSING:
+        values = params.get("values")
+        if not (
+            isinstance(values, list)
+            and 0 < len(values) <= MAX_PLACEHOLDER_VALUES
+            and all(
+                isinstance(v, (int, float)) and not isinstance(v, bool) and math.isfinite(v) for v in values
+            )
+        ):
+            raise refuse(f"list 1 to {MAX_PLACEHOLDER_VALUES} numbers to treat as missing")
     if kind is RecipeStepKind.DERIVE and not isinstance(params.get("expression"), str):
         raise refuse("a new column needs an expression")
 
@@ -337,6 +353,9 @@ def _apply(frame: pd.DataFrame, step: RecipeStep, snapshot_column: str | None) -
             _series(series),
             merge={str(k): str(v) for k, v in dict(params.get("merge", {})).items()},
             strip=bool(params.get("strip", True)),
+        ),
+        RecipeStepKind.SET_MISSING: lambda: set_missing(
+            _series(series), values=[float(v) for v in params["values"]]
         ),
         RecipeStepKind.DERIVE: lambda: _derive(frame, str(params["expression"]), snapshot_column, step),
     }

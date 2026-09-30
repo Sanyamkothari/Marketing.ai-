@@ -48,6 +48,7 @@ from engine.agent.contracts import (
     ToolResult,
 )
 from engine.agent.formats import merge_from_pairs
+from engine.agent.placeholders import PLACEHOLDER_KIND, number_text
 from engine.agent.recipe import STEP_PHASE, RecipeError, run_recipe
 from engine.agent.recommend import DataFacts, recommend_settings
 from engine.agent.reshape import choose_dates, plan_combine
@@ -65,6 +66,7 @@ from engine.stages import ingest
 from engine.utils.logging import get_logger
 
 __all__ = [
+    "NEVER_TICKED_STEPS",
     "ROLE_PRIMARY_KEY",
     "ROLE_TARGET",
     "STOP_CODES",
@@ -103,6 +105,10 @@ _ENGINE_HIDES: Final[Mapping[str, str]] = {
     "PII_DETECTED": "personal data",
 }
 """Warnings the engine already acts on by itself: shown as hidden columns, never proposed."""
+
+NEVER_TICKED_STEPS: Final[frozenset[RecipeStepKind]] = frozenset({RecipeStepKind.SET_MISSING})
+"""Steps only the person may tick, whatever `agent.tick_uncertain` says: emptying a value is right only
+when it really is a code for "unknown", which the file cannot prove (DEC-1224)."""
 
 _MIN_TIME_DISTINCT: Final[int] = 3
 _MAX_OPTIONS: Final[int] = 4
@@ -455,7 +461,67 @@ def _cells(issue: Mapping[str, Any], key: str = "examples") -> tuple[str, ...]:
     return tuple(str(value) for value in list(issue.get(key, []) or [])[:3])
 
 
-def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]) -> None:
+def _values_text(texts: Sequence[str]) -> str:
+    """`'99'`, `'99' and '999'`, `'-1', '99' and '999'`."""
+    shown = [quoted(text) for text in texts]
+    return shown[0] if len(shown) == 1 else f"{', '.join(shown[:-1])} and {shown[-1]}"
+
+
+def _placeholder_proposal(
+    builder: _Builder, issues: ToolResult, issue: Mapping[str, Any], target: str | None
+) -> None:
+    """Suggest emptying a column's placeholder codes, with what that does to the data (DEC-1220, DEC-1222).
+
+    Always `check`, and never ticked for the person (`NEVER_TICKED_STEPS`). The impact is a tool result the
+    suggestion cites, so every number the screen shows next to it was measured on the file.
+    """
+    column = str(issue["column"])
+    values = [float(v) for v in dict(issue.get("params", {}) or {}).get("values", [])]
+    if not values:
+        return
+    low, high = float(issue["other_minimum"]), float(issue["other_maximum"])
+    impact = builder.call(
+        "describe_placeholder_values",
+        {"column": column, "values": values},
+        ctx=replace(builder.ctx, target=target),
+    )
+    texts = [number_text(v) for v in values]
+    shown = _values_text(texts)
+    rows = int(issue["convertible"])
+    lowest, highest = number_text(low), number_text(high)
+    edges: tuple[str, ...]
+    if all(v > high for v in values):
+        edges, where = (highest,), f"far above every other value (the largest is {quoted(highest)})"
+    elif all(v < low for v in values):
+        edges, where = (lowest,), f"far below every other value (the smallest is {quoted(lowest)})"
+    else:
+        edges = (lowest, highest)
+        where = f"far outside every other value (they run from {quoted(lowest)} to {quoted(highest)})"
+    what = (
+        "It is probably a code for unknown, not a real value"
+        if len(values) == 1
+        else "They are probably codes for unknown, not real values"
+    )
+    reason = (
+        f"{rows} rows in '{display_name(column)}' hold {shown}, {where}. {what}. Tick it only if that is "
+        "right: the rows are kept and those cells become empty."
+    )
+    builder.propose(
+        kind=ProposalKind.RECIPE_STEP,
+        title=f"Treat {shown} in '{display_name(column)}' as missing",
+        reason=reason,
+        step=_step(
+            RecipeStepKind.SET_MISSING, column, values=[int(v) if v.is_integer() else v for v in values]
+        ).model_copy(update={"reason": reason}),
+        evidence_ids=(issues.evidence_id, impact.evidence_id),
+        confidence=AgentConfidence.CHECK,
+        examples=tuple(dict.fromkeys((*texts, *edges))),
+    )
+
+
+def _format_proposals(
+    builder: _Builder, issues: ToolResult, protected: set[str], target: str | None = None
+) -> None:
     limit = builder.ctx.config.agent.max_conversion_failure_pct
     for issue in _rows(issues, "issues"):
         column = str(issue["column"])
@@ -463,6 +529,9 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
             continue
         kind = str(issue["kind"])
         evidence = issues.evidence_id
+        if kind == PLACEHOLDER_KIND:
+            _placeholder_proposal(builder, issues, issue, target)
+            continue
         non_empty = int(issue["non_empty"])
         failed = int(issue["failed"])
         share = float(issue["convert_share"])
@@ -580,6 +649,8 @@ def _format_proposals(builder: _Builder, issues: ToolResult, protected: set[str]
 
 
 def _ticked(proposal: Proposal, tick_uncertain: bool) -> bool:
+    if proposal.step is not None and proposal.step.kind in NEVER_TICKED_STEPS:
+        return False
     return proposal.confidence is AgentConfidence.SURE or tick_uncertain
 
 
@@ -977,7 +1048,7 @@ def advise(
     }
     if ctx.mode is RunMode.TRAIN:
         issues = builder.call("find_format_issues")
-        _format_proposals(builder, issues, protected)
+        _format_proposals(builder, issues, protected, outcome_column)
     can_check = outcome_column is not None if ctx.mode is RunMode.TRAIN else ctx.schema is not None
     if to_combine and key is not None and outcome_column is not None and stop is None:
         # Nothing else is checked on rows that are about to be combined: the answer re-advises.
