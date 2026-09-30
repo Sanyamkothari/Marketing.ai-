@@ -267,8 +267,9 @@ def test_fit_kwargs_with_gpu_accelerates_supported_models(monkeypatch) -> None:
     assert kwargs["hyperparameters"]["RF"] == {}
     assert kwargs["hyperparameters"]["LR"] == {}
 
-    # Under Linux CUDA: NeuralNet, XGBoost, CatBoost get GPU
+    # Under Linux CUDA (with a CUDA build of XGBoost): NeuralNet, XGBoost, CatBoost get GPU
     monkeypatch.setattr("engine.stages.train.get_hardware_accelerator", lambda: "cuda")
+    monkeypatch.setattr("engine.stages.train.xgboost_has_cuda", lambda: True)
     kwargs_cuda = autogluon_fit_kwargs(recipe)
     assert kwargs_cuda["hyperparameters"]["NN_TORCH"] == {"ag_args_fit": {"num_gpus": 1}}
     assert kwargs_cuda["hyperparameters"]["XGB"] == {"ag_args_fit": {"num_gpus": 1}}
@@ -276,6 +277,12 @@ def test_fit_kwargs_with_gpu_accelerates_supported_models(monkeypatch) -> None:
     assert kwargs_cuda["hyperparameters"]["GBM"] == {}
     assert kwargs_cuda["hyperparameters"]["RF"] == {}
     assert kwargs_cuda["hyperparameters"]["LR"] == {}
+
+    # A CPU-only XGBoost build (what this project installs) is never asked for a GPU: the fit would fail
+    monkeypatch.setattr("engine.stages.train.xgboost_has_cuda", lambda: False)
+    kwargs_cpu_xgb = autogluon_fit_kwargs(recipe)
+    assert kwargs_cpu_xgb["hyperparameters"]["XGB"] == {}
+    assert kwargs_cpu_xgb["hyperparameters"]["CAT"] == {"ag_args_fit": {"num_gpus": 1}}
 
     # When use_gpu is False: all models stay on CPU even if accelerator is present
     recipe_cpu = make_recipe(candidate_pool=all_families, candidates=all_families, use_gpu=False)
