@@ -17,7 +17,7 @@
 // there are some; the route itself always answers.
 
 import { EM_DASH, errorBox, esc, fmtStamp, glossaryCode, techDetails } from "../../dom.js";
-import { getAlerts, getMissedFirings, postAlertAcknowledge } from "./api.js";
+import { getAlerts, getMissedFirings, postAlertAcknowledge, postRetrainNow } from "./api.js";
 import {
   actionButton,
   codeWords,
@@ -61,6 +61,9 @@ const state = {
   ackError: null, // { alertId, error }
   acking: null,
   acked: null, // the alert as the server answered it, for the confirmation line
+  retraining: null, // the alert whose "Retrain on recent data" is in flight
+  retrained: null, // { alertId, firing }
+  retrainError: null, // { alertId, error }
   missed: null,
   missedError: null,
 };
@@ -119,6 +122,33 @@ function acknowledgement(alert) {
   })}${error}`;
 }
 
+/**
+ * A drift alert's one click: start a training run on recent data. The result (a challenger waiting for
+ * an approver, or the API's plain refusal when nothing is labelled) is written under the button.
+ */
+function retrainControl(alert) {
+  if (alert.kind !== "drift_above_threshold" || !alert.use_case_id) return "";
+  const mine = (slot) => (slot && slot.alertId === alert.alert_id ? slot : null);
+  const failed = mine(state.retrainError);
+  const started = mine(state.retrained);
+  const busy = state.retraining === alert.alert_id;
+  const note = started
+    ? `<div class="pb-ok" role="status">Retraining has started. The new model waits for an approver when it finishes; the current model stays in use until then. <a href="${runHref(
+        started.firing.run_id,
+      )}">See the run</a></div>`
+    : failed
+      ? failed.error && failed.error.code === "NO_TRAINING_DATA"
+        ? `<div class="apierr" role="alert" data-code="NO_TRAINING_DATA"><b>${esc(failed.error.message)}</b></div>`
+        : errorBox(failed.error)
+      : "";
+  return `${actionButton("POST", "/schedules/retrain-now", {
+    cls: "btn secondary sm",
+    attrs: `data-retrain="${esc(alert.alert_id)}"`,
+    label: busy ? "Starting…" : "Retrain on recent data",
+    busy: busy || Boolean(started),
+  })}${note}`;
+}
+
 function whatHappened(alert) {
   const links = [
     alert.run_id ? `<a href="${runHref(alert.run_id)}">See the run</a>` : "",
@@ -151,7 +181,7 @@ function alertRow(alert) {
       whatHappened(alert),
       esc(useCaseName(alert.use_case_id)),
       esc(fmtStamp(alert.created_at)),
-      acknowledgement(alert),
+      `${acknowledgement(alert)}${retrainControl(alert)}`,
     ],
   };
 }
@@ -261,6 +291,30 @@ export function bindAlerts(root, repaint) {
     filters.addEventListener("submit", (event) => event.preventDefault());
   }
   main.addEventListener("click", async (event) => {
+    const retrain = event.target && event.target.closest ? event.target.closest("[data-retrain]") : null;
+    if (retrain && !state.retraining) {
+      const alert = (state.alerts || []).find((a) => a.alert_id === retrain.getAttribute("data-retrain"));
+      if (!alert) return;
+      state.retraining = alert.alert_id;
+      state.retrainError = null;
+      repaint();
+      try {
+        const firing = await postRetrainNow({ use_case_id: alert.use_case_id, client_id: alert.client_id || null });
+        if (firing.status === "failed") {
+          state.retrainError = {
+            alertId: alert.alert_id,
+            error: { code: firing.error_code || "FIRING_FAILED", message: "The retraining run could not start." },
+          };
+        } else {
+          state.retrained = { alertId: alert.alert_id, firing };
+        }
+      } catch (error) {
+        state.retrainError = { alertId: alert.alert_id, error };
+      }
+      state.retraining = null;
+      repaint();
+      return;
+    }
     const button = event.target && event.target.closest ? event.target.closest("[data-ack]") : null;
     if (!button || state.acking) return;
     const alertId = button.getAttribute("data-ack");
@@ -288,6 +342,9 @@ export function _resetAlertsForTests() {
     ackError: null,
     acking: null,
     acked: null,
+    retraining: null,
+    retrained: null,
+    retrainError: null,
     missed: null,
     missedError: null,
   });

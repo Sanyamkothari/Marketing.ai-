@@ -66,6 +66,7 @@ from pathlib import Path
 from typing import Annotated, Any, Final
 
 from fastapi import APIRouter, FastAPI, Query, Request, Response
+from pydantic import Field
 from sqlalchemy.engine import Engine
 
 from api.access import PrincipalDep, current_principal, get_audit_log, set_audit_context
@@ -86,6 +87,7 @@ from api.schemas import (
 from engine.access.roles import Role
 from engine.audit.events import content_hash
 from engine.clients import ClientStore, ClientStoreError
+from engine.config import ConfigError, StrictBase, resolve_config
 from engine.onboarding.specs import OnboardingSpec
 from engine.platform_db import platform_engine
 from engine.scheduling.alerts import AlertSink, AlertStore, build_alert_sink
@@ -99,6 +101,8 @@ from engine.scheduling.scheduler import (
     build_scheduler,
 )
 from engine.scheduling.schedules import (
+    PRESET_CRON,
+    CadencePreset,
     FiringStatus,
     FiringTrigger,
     Schedule,
@@ -161,6 +165,9 @@ POLICIES: Final[dict[tuple[str, str], RoutePolicy]] = {
     ("POST", "/schedules/{schedule_id}/fire"): _schedule_policy(_AN, "schedules.fire", "run a schedule now"),
     ("GET", "/schedules/{schedule_id}/firings"): _schedule_policy(
         _V, "schedules.firings", "see a schedule's history"
+    ),
+    ("POST", "/schedules/retrain-now"): _schedule_policy(
+        _AN, "schedules.retrain_now", "retrain a use case on recent data", with_id=False
     ),
     ("POST", "/schedules/retraining/sync"): _schedule_policy(
         _AN, "schedules.retraining_sync", "sync the retraining schedules", with_id=False
@@ -681,6 +688,92 @@ def fire_schedule(schedule_id: str, request: Request) -> ScheduleFiring:
     if firing is None:  # a manual firing has no slot to lose; kept for the protocol's honesty
         raise http_error(409, "FIRING_SLOT_TAKEN", "This schedule is being fired already. Try again shortly.")
     set_audit_context(request, details=firing_audit_details(firing))
+    return firing
+
+
+class RetrainNowRequest(StrictBase):
+    """Body of `POST /schedules/retrain-now`: which use case (and client) to retrain."""
+
+    use_case_id: str = Field(min_length=1, max_length=128, description="Use case to retrain.")
+    client_id: str | None = Field(
+        default=None, max_length=128, description="Client whose data to retrain on."
+    )
+
+
+@router.post(
+    "/schedules/retrain-now",
+    response_model=FiringResponse,
+    status_code=201,
+    responses=_ERRORS,
+    summary="Retrain a use case on recent data now",
+)
+def retrain_now(body: RetrainNowRequest, request: Request, principal: PrincipalDep) -> ScheduleFiring:
+    """Start a training run the way a retrain schedule's firing does - the drift notice's one click (DEC-1211).
+
+    It reuses the use case's retrain schedule when it has one; otherwise it saves a paused one
+    (never fires by itself, and shows in the schedules list) and fires that. The run is a challenger
+    pending approval (DEC-778): the champion is not touched, and the caller cannot approve what they
+    started (DEC-889). `409 NO_TRAINING_DATA` when there is no labelled recipe to retrain from.
+    """
+    store = get_schedule_store(request)
+    existing = store.list(client_id=body.client_id, use_case_id=body.use_case_id, kind=ScheduleKind.RETRAIN)
+    firer = _manual_firer(request)
+    set_audit_context(
+        request,
+        details={"use_case_id": body.use_case_id, "client_id": body.client_id, "schedule_kind": "retrain"},
+    )
+    if existing:
+        schedule = existing[0]
+    else:
+        try:
+            resolve_config(body.use_case_id, root=get_config_root(request))
+        except ConfigError:
+            raise http_error(
+                404, "USE_CASE_NOT_FOUND", f"No use case with id {body.use_case_id!r}."
+            ) from None
+        now = scheduling_clock(request)()
+        probe = Schedule(
+            schedule_id="sch_probe",
+            client_id=body.client_id,
+            use_case_id=body.use_case_id,
+            kind=ScheduleKind.RETRAIN,
+            cron=PRESET_CRON[CadencePreset.MONTHLY],
+            created_by=principal.user_id,
+            created_at=now,
+            updated_at=now,
+        )
+        if not firer.has_training_data(probe):
+            raise http_error(
+                409,
+                "NO_TRAINING_DATA",
+                "There is no labelled data to retrain on: no saved recipe for this use case defines the "
+                "outcome to learn. Build a dataset with outcomes from the client's tables first.",
+            )
+        try:
+            schedule = create_schedule(
+                store,
+                get_scheduler(request),
+                config_root=get_config_root(request),
+                client_id=body.client_id,
+                use_case_id=body.use_case_id,
+                kind=ScheduleKind.RETRAIN,
+                cadence=CadencePreset.MONTHLY.value,
+                created_by=principal.user_id,
+                enabled=False,
+                client_store=get_client_store(request),
+                now=now,
+            )
+        except ScheduleError as exc:
+            set_audit_context(request, details={"reason_code": exc.code})
+            raise schedule_error(exc) from None
+    if existing and not firer.has_training_data(schedule):
+        raise http_error(
+            409, "NO_TRAINING_DATA", "There is no labelled data to retrain on for this schedule."
+        )
+    firing = firer.fire(schedule, trigger=FiringTrigger.MANUAL)
+    if firing is None:
+        raise http_error(409, "FIRING_SLOT_TAKEN", "A retrain is being started already. Try again shortly.")
+    set_audit_context(request, object_id=schedule.schedule_id, details=firing_audit_details(firing))
     return firing
 
 

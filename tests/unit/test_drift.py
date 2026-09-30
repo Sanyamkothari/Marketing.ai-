@@ -15,7 +15,14 @@ from hypothesis import given, settings
 from hypothesis import strategies as st
 
 from engine.config import ResolvedConfig, UseCaseConfig, resolve_config
-from engine.contracts import CategoryCount, DriftBaseline, DriftStatus, FeatureBaseline, HistogramBin
+from engine.contracts import (
+    CategoryCount,
+    DriftBaseline,
+    DriftStatus,
+    FeatureBaseline,
+    FeatureDrift,
+    HistogramBin,
+)
 from engine.stages.register import (
     MAX_CATEGORY_LEVELS,
     NUMERIC_BIN_COUNT,
@@ -620,3 +627,91 @@ def test_the_epsilon_keeps_an_empty_bin_finite() -> None:
     assert emptied == pytest.approx(
         (1.0 - 0.5) * math.log(1.0 / 0.5) + (PSI_EPSILON - 0.5) * math.log(PSI_EPSILON / 0.5)
     )
+
+
+# ---------------------------------------------------------------------------
+# What moved: the per-feature numbers and the plain-language line (DEC-1210)
+# ---------------------------------------------------------------------------
+def one_feature(baseline: DriftBaseline, frame: pd.DataFrame, config: UseCaseConfig) -> FeatureDrift:
+    """The only feature of a one-feature baseline, compared with `frame`."""
+    report = compute_drift(baseline, frame, config, run_id=SCORE_RUN)
+    assert report is not None
+    (feature,) = report.features
+    return feature
+
+
+def with_feature(baseline: DriftBaseline, **changes: object) -> DriftBaseline:
+    """`baseline` with its only feature changed."""
+    return baseline.model_copy(update={"features": (baseline.features[0].model_copy(update=changes),)})
+
+
+def test_a_numeric_feature_reports_both_means_and_a_readable_line(config: UseCaseConfig) -> None:
+    baseline = with_feature(two_bin_baseline(), feature="monthly_spend", mean=42.1)
+    feature = one_feature(baseline, pd.DataFrame({"monthly_spend": [53.0] * 10}), config)
+    assert (feature.mean_baseline, feature.mean_current) == (42.1, 53.0)
+    assert feature.what_moved == "Average monthly_spend moved from 42.1 to 53.0 (+26%)"
+    assert feature.top_category is None
+
+
+def test_a_categorical_feature_names_the_level_whose_share_moved_most(config: UseCaseConfig) -> None:
+    baseline = categorical_baseline(("postpaid", 0.6), ("prepaid", 0.31), ("hybrid", 0.09))
+    frame = pd.DataFrame({"plan_tier": ["prepaid"] * 48 + ["postpaid"] * 45 + ["hybrid"] * 7})
+    feature = one_feature(baseline, frame, config)
+    assert feature.top_category == "prepaid"
+    assert (feature.category_share_baseline, feature.category_share_current) == (0.31, 0.48)
+    assert feature.what_moved == "Share of plan_tier = 'prepaid' went from 31% to 48%"
+    assert feature.mean_baseline is None and feature.mean_current is None
+
+
+def test_an_unseen_level_counts_as_a_share_of_zero(config: UseCaseConfig) -> None:
+    baseline = categorical_baseline(("a", 0.5), ("b", 0.5))
+    feature = one_feature(baseline, pd.DataFrame({"plan_tier": ["a"] * 40 + ["b"] * 40 + ["c"] * 20}), config)
+    assert feature.top_category == "c"
+    assert (feature.category_share_baseline, feature.category_share_current) == (0.0, 0.2)
+
+
+def test_a_missing_feature_says_so_and_invents_no_means(config: UseCaseConfig) -> None:
+    feature = one_feature(two_bin_baseline(), pd.DataFrame({"other": [1, 2]}), config)
+    assert feature.mean_current is None and feature.top_category is None
+    assert feature.what_moved == "visits is missing or empty in this file (it was 0% empty in training)"
+
+
+def test_an_unchanged_mean_is_not_called_a_move(config: UseCaseConfig) -> None:
+    feature = one_feature(two_bin_baseline(), pd.DataFrame({"visits": [1.0] * 10}), config)
+    assert feature.what_moved == "Average visits stayed at 1.00"
+
+
+def test_a_zero_training_mean_gives_no_percentage(config: UseCaseConfig) -> None:
+    feature = one_feature(
+        with_feature(two_bin_baseline(), mean=0.0), pd.DataFrame({"visits": [3.0] * 10}), config
+    )
+    assert feature.what_moved == "Average visits moved from 0.00 to 3.00"
+
+
+def test_an_older_drift_report_without_the_new_fields_still_loads() -> None:
+    from engine.contracts import DriftReport
+
+    report = DriftReport.model_validate(
+        {
+            "run_id": SCORE_RUN,
+            "baseline_run_id": TRAIN_RUN,
+            "model_version_id": MODEL_ID,
+            "threshold": 0.2,
+            "features": [
+                {
+                    "feature": "x",
+                    "psi": 0.3,
+                    "status": "drifted",
+                    "null_rate_baseline": 0.0,
+                    "null_rate_current": 0.0,
+                }
+            ],
+            "max_psi": 0.3,
+            "drifted_features": ["x"],
+            "status": "drifted",
+            "summary": "PSI 0.30, drifted",
+            "computed_at": utc_now().isoformat(),
+        }
+    )
+    (feature,) = report.features
+    assert feature.what_moved is None and feature.mean_current is None and feature.top_category is None

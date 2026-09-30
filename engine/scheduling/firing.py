@@ -1117,6 +1117,25 @@ class ScheduleFirer:
             )
         return self._build(self._spec(schedule, spec_id, mode=RunMode.TRAIN), config, mode=RunMode.TRAIN)
 
+    def has_training_data(self, schedule: Schedule) -> bool:
+        """Whether a retrain of `schedule` has a labelled source, by the same order `_training_dataset` uses.
+
+        Checked without building anything, so a person can be told "no labelled data" before a firing
+        is recorded. A recipe counts only when it defines the outcome to learn.
+        """
+        parameters = schedule.parameters
+        if parameters.dataset_id is not None or parameters.onboarding_spec_id is not None:
+            return True  # named on the schedule; the firing itself reports what is wrong with it
+        client_store = self.services.client_store
+        spec_id = self._champion_spec_id(schedule)
+        if spec_id is not None and client_store is not None:
+            try:
+                if client_store.get_spec(spec_id).label_spec is not None:
+                    return True
+            except ClientStoreError:
+                pass
+        return self._newest_training_spec_id(schedule) is not None
+
     def _champion_spec_id(self, schedule: Schedule) -> str | None:
         services = self.services
         champion = services.registry.get_champion(schedule.use_case_id)

@@ -1050,6 +1050,27 @@ class FeatureDrift(Artefact):
     status: DriftStatus = Field(description="Verdict for this feature.")
     null_rate_baseline: float = Field(description="Null share at training time, 0 to 1.")
     null_rate_current: float = Field(description="Null share in the scored file, 0 to 1.")
+    mean_baseline: float | None = Field(
+        default=None, description="Training mean; numeric features only, absent in older reports."
+    )
+    mean_current: float | None = Field(
+        default=None,
+        description="Mean in the scored file; numeric features with values, absent in older reports.",
+    )
+    top_category: str | None = Field(
+        default=None,
+        description="The level whose share moved most; categorical features only, absent in older reports.",
+    )
+    category_share_baseline: float | None = Field(
+        default=None, description="That level's share at training time, 0 to 1."
+    )
+    category_share_current: float | None = Field(
+        default=None, description="That level's share in the scored file, 0 to 1."
+    )
+    what_moved: str | None = Field(
+        default=None,
+        description="Plain-language line built from the numbers above; absent in older reports.",
+    )
 
 
 class DriftReport(Artefact):

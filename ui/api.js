@@ -108,3 +108,11 @@ export const scoresUrl = (runId) => url(`/runs/${encodeURIComponent(runId)}/scor
 export const getDatasetLineage = (datasetId) => request(`/datasets/${encodeURIComponent(datasetId)}/lineage`);
 
 export const getModels = (useCaseId) => request(`/models?use_case=${encodeURIComponent(useCaseId)}`);
+
+/** Start a training run on recent data (a challenger pending approval); `NO_TRAINING_DATA` when nothing is labelled. */
+export const postRetrainNow = (payload) =>
+  request("/schedules/retrain-now", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });

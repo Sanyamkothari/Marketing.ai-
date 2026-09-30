@@ -116,6 +116,7 @@ Contract schema version: 1.
 | GET | `/runs/{run_id}/uplift/{name}` | One uplift artefact of a run, whitelisted against the uplift artefact registry | - |
 | GET | `/schedules` | List schedules | ScheduleListResponse |
 | POST | `/schedules` | Create a schedule | Schedule |
+| POST | `/schedules/retrain-now` | Retrain a use case on recent data now | ScheduleFiring |
 | POST | `/schedules/retraining/sync` | Create or remove the schedules monitoring.retraining asks for | RetrainingSyncResponse |
 | DELETE | `/schedules/{schedule_id}` | Delete a schedule | - |
 | GET | `/schedules/{schedule_id}` | One schedule | Schedule |
@@ -1412,6 +1413,12 @@ Drift of one feature between the training data and the scored file.
 | `status` | DriftStatus ("stable" \| "watch" \| "drifted") | yes | Verdict for this feature. |
 | `null_rate_baseline` | number | yes | Null share at training time, 0 to 1. |
 | `null_rate_current` | number | yes | Null share in the scored file, 0 to 1. |
+| `mean_baseline` | number \| null | no | Training mean; numeric features only, absent in older reports. |
+| `mean_current` | number \| null | no | Mean in the scored file; numeric features with values, absent in older reports. |
+| `top_category` | string \| null | no | The level whose share moved most; categorical features only, absent in older reports. |
+| `category_share_baseline` | number \| null | no | That level's share at training time, 0 to 1. |
+| `category_share_current` | number \| null | no | That level's share in the scored file, 0 to 1. |
+| `what_moved` | string \| null | no | Plain-language line built from the numbers above; absent in older reports. |
 
 ### `scoring_summary.json`
 
