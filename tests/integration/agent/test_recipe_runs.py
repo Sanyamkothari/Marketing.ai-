@@ -18,6 +18,7 @@ from engine.agent.contracts import (
     DATA_RECIPE_FILENAME,
     RECIPE_RECEIPT_FILENAME,
     DataRecipe,
+    RecipeReceipt,
     RecipeStep,
     RecipeStepKind,
     recipe_hash,
@@ -271,3 +272,31 @@ def test_a_model_without_a_recipe_scores_the_file_as_sent(client: TestClient, da
     assert response.status_code == 202, response.text
     record = LocalStorage(data_dir).read_model(run_key(response.json()["run_id"], "run.json"), RunRecord)
     assert record.upload_id == upload_id
+
+
+def test_scoring_replays_a_set_missing_step_on_the_scoring_file(client: TestClient, data_dir: Path) -> None:
+    """A placeholder emptied at setup (DEC-1220) is emptied in every scoring file, by the listed value alone."""
+    recipe = _recipe(_messy(), target=None)
+    placeholder = RecipeStep(
+        order=3, kind=RecipeStepKind.SET_MISSING, column="visits_last_7d", params={"values": [99]}
+    )
+    steps = (*recipe.steps, placeholder)
+    _seed_model(data_dir, recipe.model_copy(update={"steps": steps, "recipe_hash": recipe_hash(steps)}))
+    scoring = _messy("scoring", rows=800)
+    scoring.loc[scoring.index % 40 == 0, "visits_last_7d"] = 99
+    response = _score(client, _upload(client, scoring, mode="score"))
+    assert response.status_code == 202, response.text
+    storage = LocalStorage(data_dir)
+    prepared = str(storage.read_model(run_key(response.json()["run_id"], "run.json"), RunRecord).upload_id)
+    receipt = storage.read_model(f"uploads/{prepared}/{RECIPE_RECEIPT_FILENAME}", RecipeReceipt)
+    step = receipt.steps[2]
+    assert (step.kind, step.column, step.rows, step.changed, step.failed) == (
+        RecipeStepKind.SET_MISSING,
+        "visits_last_7d",
+        800,
+        20,
+        0,
+    )
+    frame = pd.read_parquet(storage.root / "uploads" / prepared / "source.parquet")
+    assert 99 not in set(frame["visits_last_7d"].dropna())
+    assert int(frame["visits_last_7d"].isna().sum()) == 20 + int(scoring["visits_last_7d"].isna().sum())

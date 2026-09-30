@@ -34,6 +34,7 @@ from datetime import datetime
 from typing import Any
 
 from engine.agent.advisor import (
+    NEVER_TICKED_STEPS,
     ROLE_PRIMARY_KEY,
     ROLE_TARGET,
     Advice,
@@ -368,6 +369,8 @@ def accept_recommended(
         if p.state is ProposalState.PENDING and (p.confidence.value == "sure" or tick_uncertain):
             if p.kind is ProposalKind.SETTING and p.path in settled:
                 continue  # left pending, for the person to decide
+            if p.step is not None and p.step.kind in NEVER_TICKED_STEPS:
+                continue  # only the person decides these (DEC-1224)
             # Two pending suggestions for one setting: the later one, never a conflict.
             key = ("path", p.path) if p.kind is ProposalKind.SETTING and p.path else ("id", p.proposal_id)
             chosen.pop(key, None)

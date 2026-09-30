@@ -44,6 +44,20 @@ def _unreadable_numbers() -> pd.DataFrame:
     return frame
 
 
+def _placeholder_value() -> pd.DataFrame:
+    """`99` in a column whose real values stop at 16: a code for "unknown" (DEC-1221)."""
+    frame = _variant("clean")()
+    frame.loc[frame.index % 25 == 0, "visits_last_7d"] = 99
+    return frame
+
+
+def _real_ninety_nine() -> pd.DataFrame:
+    """Ages 18 to 99, evenly spread: `99` is a real age, never a placeholder (the false-positive guard)."""
+    frame = _variant("clean")()
+    frame["age"] = [18 + (i * 7) % 82 for i in range(len(frame))]
+    return frame
+
+
 CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
     "messy": messy_frame,
     "clean": _variant("clean"),
@@ -61,6 +75,9 @@ CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
     "too_few_rows": _variant("too_few_rows"),
     "constant_target": _variant("constant_target"),
     "non_binary_target": _variant("non_binary_target"),
+    # Placeholder values (DEC-1221): one to propose emptying, one real value to leave alone.
+    "placeholder_value": _placeholder_value,
+    "real_ninety_nine": _real_ninety_nine,
     # Level 3 (M76): an order log, several rows per shopper, for a use case that allows `reshape`.
     "multi_row": multirow_frame,
     "multi_row_one_date": lambda: multirow_frame(snapshot=False),

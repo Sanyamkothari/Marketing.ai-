@@ -21,6 +21,11 @@ const CSS = `
 .ag-item .ag-t{color:var(--ink);font-weight:500;overflow-wrap:anywhere}
 .ag-item .ag-r{display:block;margin-top:3px;font-size:12px;color:var(--muted);line-height:1.45}
 .ag-item .pill{margin-left:8px;padding:1px 8px}
+.ag-impact{padding:0 14px 12px 40px;font-size:12px;color:var(--ink2)}
+.ag-impact h5{margin:0 0 4px;font-size:12px;font-weight:600;color:var(--ink2)}
+.ag-impact dl{margin:0;display:grid;grid-template-columns:max-content minmax(0,1fr);gap:2px 12px;line-height:1.45}
+.ag-impact dt{color:var(--muted)}
+.ag-impact dd{margin:0;color:var(--ink);font-variant-numeric:tabular-nums}
 .ag-q{padding:12px 14px;border-top:1px solid var(--line);font-size:13px}
 .ag-group>h4 + .ag-q{border-top:0}
 .ag-q .ag-qt{color:var(--ink);font-weight:500;line-height:1.5}

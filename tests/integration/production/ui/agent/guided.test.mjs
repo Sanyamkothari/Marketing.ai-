@@ -24,6 +24,17 @@ function hostile(body) {
   return copy;
 }
 const TRICKY = "u_tricky";
+/** The recorded placeholder session with the outcome figures unmeasured, as for a file whose outcome is
+ * not known yet: those rows must read "—", never a number. */
+const NO_OUTCOME = "u_no_outcome";
+const OUTCOME_KEYS = ["affected_positive_rate", "other_positive_rate", "auc_before", "auc_after"];
+function withoutOutcome(body) {
+  const copy = structuredClone(body);
+  for (const result of copy.session.tool_results) {
+    if (result.tool === "describe_placeholder_values") for (const key of OUTCOME_KEYS) result.result[key] = null;
+  }
+  return copy;
+}
 const hostileChat = (() => {
   const copy = hostile(fixture("main_chat"));
   copy.session.transcript[copy.session.transcript.length - 1].text = HOSTILE;
@@ -33,6 +44,7 @@ const hostileChat = (() => {
 const flows = {
   [ids.main]: { start: "main_start", messages: "main_chat", answers: "main_answer", decisions: "main_decided", preview: "main_preview", apply: "main_apply" },
   [ids.conflict]: { start: "conflict_start", answers: "conflict_answer", decisions: "conflict_decided", apply: "conflict_apply" },
+  [ids.placeholder]: { start: "placeholder_start", decisions: "placeholder_decided", preview: "placeholder_preview" },
   [ids.stopped]: { start: "stopped_start" },
 };
 const sent = { decisions: [], runs: [], messages: [], starts: 0 };
@@ -44,6 +56,9 @@ const server = (request) => {
   if (method === "GET" && path === "/models") return { status: 200, body: fixture("models_empty") };
   if (method === "POST" && path === "/uploads") {
     if (nextUpload === "tricky") return { status: 201, body: { ...fixture("upload_main"), upload_id: TRICKY } };
+    if (nextUpload === "no_outcome") {
+      return { status: 201, body: { ...fixture("upload_placeholder"), upload_id: NO_OUTCOME } };
+    }
     return { status: 201, body: fixture(`upload_${nextUpload}`) };
   }
   if (method === "GET" && path === `/uploads/${ids.derived}/profile`) return { status: 200, body: fixture("derived_profile") };
@@ -56,6 +71,9 @@ const server = (request) => {
   if (session && method === "POST") {
     const [, uploadId, action = "start"] = session;
     if (action === "start") sent.starts += 1;
+    if (uploadId === NO_OUTCOME && action === "start") {
+      return { status: 201, body: withoutOutcome(fixture("placeholder_start")) };
+    }
     if (uploadId === TRICKY) {
       if (action === "start") return { status: 201, body: hostile(fixture("main_start")) };
       if (action === "messages") return { status: 200, body: hostileChat };
@@ -331,4 +349,69 @@ test("an Approve the Run button's checks refuse shows those checks, and fills no
   assert.ok($('[data-ag-checks] [data-code="TARGET_MISSING"]'));
   assert.equal($("[data-ag-applied]"), null);
   assert.equal(controller.state.upload.upload_id, before, "the Setup form was not touched");
+});
+
+// --- placeholder values (DEC-1220 … DEC-1224) ---------------------------------------------------
+
+/** The house formats, as the screen writes a measured number: an integer grouped, a fraction to 3 places. */
+const shownNumber = (v) =>
+  v === null || v === undefined
+    ? "—"
+    : Number.isInteger(v)
+      ? v.toLocaleString("en-US")
+      : Number(v).toFixed(3).replace(/0+$/, "").replace(/\.$/, "");
+const shownPct = (v) =>
+  v === null || v === undefined ? "—" : `${Number(v * 100).toFixed(1).replace(/0+$/, "").replace(/\.$/, "")}%`;
+const setMissing = (body) => body.session.proposals.find((p) => p.step && p.step.kind === "set_missing");
+const impactOf = (body, suggestion) =>
+  body.session.tool_results.find(
+    (r) => suggestion.evidence_ids.includes(r.evidence_id) && r.tool === "describe_placeholder_values",
+  ).result;
+const impactRows = (id) => $$(`[data-ag-impact="${id}"] dd`).map((dd) => dd.textContent);
+
+test("a placeholder suggestion starts unticked and shows, under it, what it would change - measured", async () => {
+  await chooseFile("placeholder");
+  const start = fixture("placeholder_start");
+  const suggestion = setMissing(start);
+  assert.ok(suggestion, "the recorded session suggests emptying the placeholder");
+  assert.equal(box(suggestion.proposal_id).checked, false, "never ticked for the person");
+  assert.match(box(suggestion.proposal_id).closest(".ag-item").textContent, /Please check/);
+  assert.equal($$("[data-ag-impact]").length, 1, "only the placeholder suggestion carries an impact");
+  const r = impactOf(start, suggestion);
+  assert.deepEqual(impactRows(suggestion.proposal_id), [
+    `${shownNumber(r.affected_rows)} of ${shownNumber(r.rows)} (${shownPct(r.affected_share)})`,
+    `${shownNumber(r.mean_before)} → ${shownNumber(r.mean_after)}`,
+    `${shownNumber(r.median_before)} → ${shownNumber(r.median_after)}`,
+    `${shownPct(r.affected_positive_rate)} vs ${shownPct(r.other_positive_rate)}`,
+    `${shownNumber(r.auc_before)} → ${shownNumber(r.auc_after)}`,
+  ]);
+  assert.ok(!impactRows(suggestion.proposal_id).some((row) => row.includes("—")), "every figure was measured");
+});
+
+test("ticking it sends it accepted, and the preview says how many values it made empty", async () => {
+  const suggestion = setMissing(fixture("placeholder_start"));
+  box(suggestion.proposal_id).click();
+  assert.equal(box(suggestion.proposal_id).checked, true);
+  $("#ag-preview").click();
+  await until(() => $("[data-ag-preview]"), 2000, "the preview");
+  const decided = sent.decisions.filter((d) => d.uploadId === ids.placeholder);
+  assert.equal(decided.length, 1);
+  assert.deepEqual(
+    decided[0].body.decisions.find((d) => d.proposal_id === suggestion.proposal_id),
+    { proposal_id: suggestion.proposal_id, state: "accepted" },
+  );
+  const step = fixture("placeholder_preview").receipt.steps.find((s) => s.kind === "set_missing");
+  const line = `${step.column}: ${step.changed.toLocaleString("en-US")} of ${step.rows.toLocaleString("en-US")} values made empty`;
+  assert.ok(text("[data-ag-preview]").includes(line), line);
+});
+
+test("an outcome figure the API did not measure reads —, never a number", async () => {
+  await chooseFile("no_outcome");
+  const body = withoutOutcome(fixture("placeholder_start"));
+  const suggestion = setMissing(body);
+  const r = impactOf(body, suggestion);
+  const rows = impactRows(suggestion.proposal_id);
+  assert.equal(rows[0], `${shownNumber(r.affected_rows)} of ${shownNumber(r.rows)} (${shownPct(r.affected_share)})`);
+  assert.equal(rows[3], "— vs —");
+  assert.equal(rows[4], "— → —");
 });

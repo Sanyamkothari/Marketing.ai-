@@ -112,6 +112,7 @@ class RecipeStepKind(StrEnum):
     PARSE_DATE = "parse_date"
     MAP_BOOLEAN = "map_boolean"
     NORMALISE_TEXT = "normalise_text"
+    SET_MISSING = "set_missing"  # placeholder codes (99, -1, …) to an empty cell (DEC-1220)
     DERIVE = "derive"
     COMBINE_ROWS = "combine_rows"
 
@@ -156,7 +157,9 @@ class ToolResult(StrictBase):
 class RecipeStep(StrictBase):
     """One change to the data, run by our code on a copy (Plan G §6)."""
 
-    order: Annotated[int, Field(ge=1, description="1-based position; runs parse → derive → drop.")]
+    order: Annotated[
+        int, Field(ge=1, description="1-based position; runs parse → set missing → combine → derive → drop.")
+    ]
     kind: RecipeStepKind = Field(description="What the step does.")
     column: str = Field(description="The column it reads (and rewrites, unless `new_column` is set).")
     new_column: str | None = Field(default=None, description="Name of a new column; required for `derive`.")
@@ -173,6 +176,8 @@ class RecipeStep(StrictBase):
             raise ValueError("a drop_column step creates no column")
         if self.kind is RecipeStepKind.COMBINE_ROWS and self.new_column is not None:
             raise ValueError("a combine_rows step names its new columns in params.features")
+        if self.kind is RecipeStepKind.SET_MISSING and self.new_column is not None:
+            raise ValueError("a set_missing step empties cells of its own column")
         return self
 
 

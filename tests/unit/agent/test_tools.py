@@ -38,6 +38,7 @@ def test_m71_ships_only_read_tools() -> None:
         "compare_columns",
         "describe_missing",
         "describe_duplicates",
+        "describe_placeholder_values",  # DEC-1222
     }
     assert {tool.kind for tool in TOOLS.values()} == {ToolKind.READ}
 

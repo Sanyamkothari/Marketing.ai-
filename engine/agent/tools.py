@@ -57,6 +57,12 @@ from engine.agent.formats import (
     parse_dates,
     parse_numbers,
 )
+from engine.agent.placeholders import (
+    MAX_PLACEHOLDER_VALUES,
+    find_placeholder_values,
+    number_text,
+    placeholder_impact,
+)
 from engine.agent.untrusted import MAX_PROMPT_LIST, display_name, quoted, resolve_column
 from engine.config import ConfigError, PrimaryKey, RunMode, UseCaseConfig, resolve_config
 from engine.contracts import DatasetProfile, FeatureSchema
@@ -165,6 +171,16 @@ class ColumnArgs(_Args):
 class FormatArgs(_Args):
     columns: tuple[str, ...] | None = Field(
         default=None, description="Columns to check; all text columns when omitted."
+    )
+
+
+class PlaceholderArgs(_Args):
+    column: str = Field(min_length=1, description="Column name exactly as in the file.")
+    values: tuple[float, ...] | None = Field(
+        default=None,
+        min_length=1,
+        max_length=MAX_PLACEHOLDER_VALUES,
+        description="The numbers to treat as missing; the placeholder codes `find_format_issues` found when omitted.",
     )
 
 
@@ -534,12 +550,48 @@ def _describe_outcome(ctx: AgentContext, args: ColumnArgs) -> dict[str, Any]:
 
 def _find_format_issues(ctx: AgentContext, args: FormatArgs) -> dict[str, Any]:
     asked = [ctx.resolve(c) for c in args.columns] if args.columns else [str(c) for c in ctx.frame.columns]
-    columns = [c for c in asked if not _pii(ctx, c)]  # a hidden column is still read by the rules
+    columns = [str(c) for c in asked if not _pii(ctx, c)]  # a hidden column is still read by the rules
+    # Text columns get the format checks, number columns the placeholder check (DEC-1221). The outcome is
+    # never offered a placeholder fix: a value outside its labels is `TARGET_NOT_BINARY`'s to report.
+    numbers = [c for c in columns if c != ctx.target]
     return {
         "issues": [
-            issue.as_json() for issue in find_format_issues(ctx.frame, columns=[str(c) for c in columns])
+            *(issue.as_json() for issue in find_format_issues(ctx.frame, columns=columns)),
+            *(issue.as_json() for issue in find_placeholder_values(ctx.frame, columns=numbers)),
         ]
     }
+
+
+def _describe_placeholder_values(ctx: AgentContext, args: PlaceholderArgs) -> dict[str, Any]:
+    """What treating some numbers of a column as missing would do, measured (DEC-1222).
+
+    The outcome figures need a known, two-valued outcome (`ctx.target`) and are null otherwise. No model
+    is trained, so nothing here is a model score (DEC-1223).
+    """
+    name = ctx.resolve(args.column)
+    if _personal(ctx, name):
+        return _personal_refusal(ctx, name)
+    series = ctx.frame[name]
+    if args.values is not None:
+        values: tuple[float, ...] = tuple(args.values)
+    else:
+        found = find_placeholder_values(ctx.frame, columns=[name])
+        values = found[0].values if found else ()
+    result: dict[str, Any] = {"column": _shown(name), "values": [number_text(v) for v in values]}
+    if not values:
+        result.update(
+            {
+                "rows": len(series),
+                "message": "No placeholder value was found in this column; name the values to look at.",
+            }
+        )
+        return result
+    positive: pd.Series[Any] | None = None
+    if ctx.target is not None and ctx.target != name:
+        mask, _ = _positive_mask(ctx, ctx.target)
+        positive = None if mask is None else pd.to_numeric(mask.astype("float64"), errors="coerce")
+    result.update(placeholder_impact(series, values, positive=positive))
+    return result
 
 
 def _find_roles(ctx: AgentContext, _: NoArgs) -> dict[str, Any]:
@@ -1398,10 +1450,22 @@ TOOLS: Final[Mapping[str, Tool]] = {
         ),
         Tool(
             "find_format_issues",
-            "Text columns holding numbers, dates or yes/no values, or one category spelled several ways.",
+            "Text columns holding numbers, dates or yes/no values, or one category spelled several ways; "
+            "number columns holding a placeholder code (99, 999, 9999, -1, -99, -999) far outside every other value.",
             ToolKind.READ,
             FormatArgs,
             _find_format_issues,
+        ),
+        Tool(
+            "describe_placeholder_values",
+            "What treating some numbers of a number column as missing would change (the placeholder codes "
+            "find_format_issues found, or the values given): rows affected and their share, the column's mean "
+            "and median before and after and, when the outcome is known and has two values, the outcome rate on "
+            "those rows against the rest and the column's single-column AUC before and after. No model is "
+            "trained. Refused for personal-data columns.",
+            ToolKind.READ,
+            PlaceholderArgs,
+            _describe_placeholder_values,
         ),
         Tool(
             "describe_outcome",
