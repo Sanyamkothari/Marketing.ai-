@@ -127,7 +127,7 @@ Good to know 🔒
 - **Passwords and keys stay on the server.** They are stored encrypted, never sent back to your browser, and not written to logs or the audit log. When you edit a connection, a saved password shows "Saved. Leave blank to keep it."
 - The **AI service** is also on Connections, in two parts, each with **Set up** (or **Change**). Everything else works without it.
   - **Product AI** helps your team in Guided setup (the chat helper). It sees column names and masked samples of the customer's data.
-  - **Deliverable AI** is what your customer gets: the Onboarding Assistant's answers, root-cause summaries and campaign copy. It uses the Product AI unless you give it its own service (**Use its own**); use the customer's own account if they need their data to stay there.
+  - **Deliverable AI** is what your customer gets: the Onboarding Assistant's answers, root-cause summaries and campaign copy. It is set up on its own, separately from the Product AI: use the customer's own account if they need their data to stay there.
 
   To connect one: click **Set up**, pick **Amazon Bedrock**, **OpenAI**, **Claude (Anthropic)**, **OpenRouter**, **Hugging Face** or **Other / local** (Ollama, vLLM and other OpenAI-compatible servers), paste the API key (Bedrock uses the AWS sign-in of the server instead, so it has no key), type the model or click **Load models from this service**, then **Test** and **Save**. The key is stored encrypted, shown afterwards only as "Saved", and a blank key field keeps it. For any service run by another company the screen says what is sent to it. **Disconnect** removes it.
 
@@ -139,7 +139,7 @@ Rarely used tools are under **Settings**. Open **Advanced tools** to find:
 - **Data request kit**: what data to ask for, with templates, and data readiness reports.
 - **Build from raw tables**: open a use case, choose **Manual setup**, then **Build from raw tables**.
 - **Model health**: alerts for every model.
-- **Document assistant**: answers questions from your own documents (needs Deliverable AI, or Product AI to share).
+- **Document assistant**: answers questions from your own documents (needs the Deliverable AI).
 
 **Privacy** (consent, requests to erase or see a person's data, retention) and **Schedules** (score new data every week or month) are at the top of Settings. **All reports** is a link at the top of Results.
 

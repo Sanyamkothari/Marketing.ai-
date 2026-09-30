@@ -103,7 +103,8 @@ def test_every_industry_file_is_a_journey_the_overview_can_select(client: TestCl
                     assert card.problem_type and card.entity, card.id
                 else:
                     assert card.problem_type is None and card.name and card.description, card.id
-    # Every shipped use case is reachable from one overview or another.
+    # Every shipped use case is reachable from one overview or another, except those hidden on purpose
+    # (DEC-1126): their files stay and they open by id.
     available = {
         card.id
         for industry in body.industries
@@ -111,7 +112,7 @@ def test_every_industry_file_is_a_journey_the_overview_can_select(client: TestCl
         for card in stage.use_cases
         if card.status == "available"
     }
-    assert available == set(USE_CASE_IDS)
+    assert available == set(USE_CASE_IDS) - {"telco-churn"}
 
 
 def test_a_root_without_the_default_opens_on_its_first_industry(tmp_path: Path) -> None:

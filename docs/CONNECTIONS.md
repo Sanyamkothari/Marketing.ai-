@@ -96,9 +96,7 @@ screen tells you exactly who receives those prompts), and *choice* (a customer c
 Bedrock in their own account while your team uses whatever suits it). Neither is the AutoML models that
 train and score - those never call a language model.
 
-**One connection is enough to start.** A Deliverable AI with nothing saved of its own follows the Product
-AI (the screen says "Uses the same AI as Product AI"); give it its own to separate them, disconnect it to
-follow again. The Product AI never follows the Deliverable AI. With nothing connected for a slot, the
+**The two settings are separate.** Each is connected on its own; neither uses the other's service or key. With nothing connected for a slot, the
 features that need it say so (`409 AI_NOT_CONNECTED`, naming the slot) instead of answering with made-up
 text; Guided setup's rules-based suggestions and questions keep working, and only the chat box is off.
 
