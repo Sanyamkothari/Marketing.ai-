@@ -35,6 +35,7 @@ importing the engine stays free of heavy libraries.
 
 from __future__ import annotations
 
+import importlib
 import json
 import math
 import re
@@ -304,10 +305,13 @@ def autogluon_predictor_kwargs(
 
 
 def get_hardware_accelerator() -> str:
-    """Detect available hardware accelerator: 'cuda', 'mps', or 'cpu'."""
-    try:
-        import torch
+    """The accelerator training can use: 'cuda', 'mps' (Apple Silicon) or 'cpu'.
 
+    `torch` is optional (only the neural network needs it), so it is imported by name at call time: a
+    machine without it, or with a broken install, is simply a CPU machine.
+    """
+    try:
+        torch = importlib.import_module("torch")
         if torch.cuda.is_available():
             return "cuda"
         if hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
@@ -315,6 +319,16 @@ def get_hardware_accelerator() -> str:
     except Exception:
         pass
     return "cpu"
+
+
+def xgboost_has_cuda() -> bool:
+    """Whether the installed XGBoost was built with CUDA. This project installs `xgboost-cpu`, which was
+    not: asking it for a GPU makes every XGBoost fit fail (AutoGluon drops the model and carries on, so the
+    run would quietly lose a candidate). A GPU is requested only when it can be used."""
+    try:
+        return bool(importlib.import_module("xgboost").build_info().get("USE_CUDA"))
+    except Exception:
+        return False
 
 
 def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
@@ -356,8 +370,10 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     hyperparameters: dict[str, Any] = {}
     for family in families:
         ag_key = catalog.model_families[family].autogluon_key
-        use_gpu_for_family = (family is ModelFamily.NEURAL_NET and accelerator in ("cuda", "mps")) or (
-            family in (ModelFamily.XGBOOST, ModelFamily.CATBOOST) and accelerator == "cuda"
+        use_gpu_for_family = (
+            (family is ModelFamily.NEURAL_NET and accelerator in ("cuda", "mps"))
+            or (family is ModelFamily.CATBOOST and accelerator == "cuda")
+            or (family is ModelFamily.XGBOOST and accelerator == "cuda" and xgboost_has_cuda())
         )
         if use_gpu_for_family:
             hyperparameters[ag_key] = {"ag_args_fit": {"num_gpus": 1}}
