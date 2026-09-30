@@ -117,6 +117,7 @@ defaults:
     time_limit_minutes: 30              # int 1..240 step 1; 1 is what plan §10's integration run overrides to (DEC-036)
     folds: 5                            # int 2..10 step 1  -> AutoGluon num_bag_folds (plan §6.3 `folds`)
     imbalance: auto                     # enum: auto | class_weights | oversampling | none
+    use_gpu: true                       # bool; enable MPS/CUDA acceleration for supported models when available
 
   evaluation:                           # [UI 5] Evaluation & explainability
     calibration: isotonic               # enum: isotonic | platt | none

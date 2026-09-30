@@ -228,7 +228,8 @@ def test_the_reverse_name_map_matches_the_installed_registry() -> None:
     assert set(AG_NAME_TO_FAMILY.values()) == set(ModelFamily)
 
 
-def test_an_unavailable_family_is_dropped_and_an_empty_candidate_list_is_refused(caplog) -> None:
+def test_an_unavailable_family_is_dropped_and_an_empty_candidate_list_is_refused(caplog, monkeypatch) -> None:
+    monkeypatch.setattr("engine.config.dependency_available", lambda module: module != "torch")
     pool = (ModelFamily.LIGHTGBM, ModelFamily.NEURAL_NET)
     recipe = make_recipe(candidate_pool=pool, candidates=pool)
     with caplog.at_level("WARNING"):
@@ -241,6 +242,45 @@ def test_an_unavailable_family_is_dropped_and_an_empty_candidate_list_is_refused
         autogluon_fit_kwargs(make_recipe(candidate_pool=only_torch, candidates=only_torch))
     assert raised.value.code == "TRAIN_NO_MODEL_FAMILY"
     assert "NeuralNet" in raised.value.message
+
+
+def test_fit_kwargs_with_gpu_accelerates_supported_models(monkeypatch) -> None:
+    """Supported models (NeuralNet on MPS/CUDA, XGBoost/CatBoost on CUDA) get GPU when use_gpu is True."""
+    monkeypatch.setattr("engine.config.dependency_available", lambda module: True)
+    all_families = (
+        ModelFamily.XGBOOST,
+        ModelFamily.LIGHTGBM,
+        ModelFamily.CATBOOST,
+        ModelFamily.RANDOM_FOREST,
+        ModelFamily.LOGISTIC_REGRESSION,
+        ModelFamily.NEURAL_NET,
+    )
+    recipe = make_recipe(candidate_pool=all_families, candidates=all_families, use_gpu=True)
+
+    # Under Apple Silicon MPS: only NeuralNet gets GPU; tree models stay on multi-core CPU
+    monkeypatch.setattr("engine.stages.train.get_hardware_accelerator", lambda: "mps")
+    kwargs = autogluon_fit_kwargs(recipe)
+    assert kwargs["hyperparameters"]["NN_TORCH"] == {"ag_args_fit": {"num_gpus": 1}}
+    assert kwargs["hyperparameters"]["XGB"] == {}
+    assert kwargs["hyperparameters"]["GBM"] == {}
+    assert kwargs["hyperparameters"]["CAT"] == {}
+    assert kwargs["hyperparameters"]["RF"] == {}
+    assert kwargs["hyperparameters"]["LR"] == {}
+
+    # Under Linux CUDA: NeuralNet, XGBoost, CatBoost get GPU
+    monkeypatch.setattr("engine.stages.train.get_hardware_accelerator", lambda: "cuda")
+    kwargs_cuda = autogluon_fit_kwargs(recipe)
+    assert kwargs_cuda["hyperparameters"]["NN_TORCH"] == {"ag_args_fit": {"num_gpus": 1}}
+    assert kwargs_cuda["hyperparameters"]["XGB"] == {"ag_args_fit": {"num_gpus": 1}}
+    assert kwargs_cuda["hyperparameters"]["CAT"] == {"ag_args_fit": {"num_gpus": 1}}
+    assert kwargs_cuda["hyperparameters"]["GBM"] == {}
+    assert kwargs_cuda["hyperparameters"]["RF"] == {}
+    assert kwargs_cuda["hyperparameters"]["LR"] == {}
+
+    # When use_gpu is False: all models stay on CPU even if accelerator is present
+    recipe_cpu = make_recipe(candidate_pool=all_families, candidates=all_families, use_gpu=False)
+    kwargs_cpu = autogluon_fit_kwargs(recipe_cpu)
+    assert all(space == {} for space in kwargs_cpu["hyperparameters"].values())
 
 
 # ---------------------------------------------------------------------------
