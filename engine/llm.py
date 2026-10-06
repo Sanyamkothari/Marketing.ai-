@@ -422,6 +422,11 @@ class FakeLLMClient:
             lowered = message.lower()
             if "sample" in lowered:  # look at real rows (the look-at-the-data tools)
                 return json.dumps({"action": "sample_rows", "args": {"n": 3}})
+            if quoted and " by " in lowered:  # Ask your data (Plan I): "'churned' by 'state'"
+                group: dict[str, Any] = {"column": quoted[-1]}
+                if len(quoted) > 1:
+                    group["outcome_column"] = quoted[0]
+                return json.dumps({"action": "rate_by", "args": group})
             if quoted and "most common" in lowered:
                 return json.dumps({"action": "value_counts", "args": {"column": quoted[0], "top": 3}})
             if quoted:
@@ -431,6 +436,8 @@ class FakeLLMClient:
                 first = proposals[0]
                 text = f"I suggest this first: {first.get('title', '')}. {first.get('reason', '')}"
                 evidence = [str(e) for e in first.get("evidence_ids", [])]
+            elif state.get("text"):  # an Ask-your-data chat: nothing to decide, only questions to answer
+                text, evidence = "Ask me about a column in quotes, for example a rate by 'region'.", []
             else:
                 text, evidence = "Everything here is decided; you can approve and run.", []
             return self._helper_reply(text, evidence)
@@ -455,6 +462,8 @@ class FakeLLMClient:
                 f"'{result.get('column')}' has {result.get('distinct')} different values; "
                 f"the most common is on {top} rows."
             )
+        elif latest.get("tool") == "rate_by":
+            text = f"I grouped the rows by '{result.get('column')}'; the chart shows each group."
         elif latest.get("tool") == "propose_setting":
             text = "I have suggested that change; approve it on the screen if you agree."
         else:

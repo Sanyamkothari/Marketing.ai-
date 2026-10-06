@@ -411,6 +411,9 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/uploads/{upload_id}/agent-session/messages",
         "/uploads/{upload_id}/agent-session/preview",
         "/uploads/{upload_id}/agent-session/apply",
+        # Plan I: Ask your data, the helper's read-only chat on an upload (DEC-1253)
+        "/uploads/{upload_id}/ask",
+        "/uploads/{upload_id}/ask/messages",
         # Plan H M80: connections - set up, test, browse, preview and import (DEC-1100)
         "/connections/kinds",
         "/connections",

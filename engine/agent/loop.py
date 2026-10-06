@@ -39,6 +39,10 @@ half-changed. Every call goes through `Meter`, so cost is metered by purpose (`d
 the session's own `agent.max_llm_calls_per_session` stops a runaway chat. Each reply carries a
 `TurnLog` - calls, actions, refusals and the rule that replaced it - and no content: an action name
 that is not a known tool, `propose_setting` or `reply` is logged as `unknown`, never verbatim.
+
+An *Ask your data* session (`AgentSession.explore`, Plan I DEC-1250/1251) runs the same turn read-only:
+no setting is listed, the state block is one fixed sentence, and `propose_setting` is refused with
+`AGENT_EXPLORE_READ_ONLY` like any other refused action.
 """
 
 from __future__ import annotations
@@ -72,6 +76,7 @@ from engine.agent.egress import (
     scrub,
     sent_item,
 )
+from engine.agent.explore import EXPLORE_NOTE
 from engine.agent.grounding import evidence_numbers, grounded_numbers, ungrounded_numbers
 from engine.agent.recommend import setting_allowed, settings_fields
 from engine.agent.session import roles_of
@@ -126,6 +131,8 @@ MAX_FIND_VALUES_PER_COLUMN_SESSION: Final[int] = 15
 """`find_values` on one column: at most this many calls in one turn and in one session. A search is the
 one tool whose answer depends on text the model chooses, so many searches of one column are how a value is
 read out a piece at a time (review finding 7); a legitimate look needs a handful."""
+EXPLORE_READ_ONLY: Final[str] = "AGENT_EXPLORE_READ_ONLY"
+"""The refusal of `propose_setting` in an Ask-your-data session (DEC-1251): it only answers."""
 UNAVAILABLE: Final[str] = (
     "The AI service is not answering right now. The suggestions on the screen still work without it."
 )
@@ -168,11 +175,15 @@ def _step_columns(proposal: Proposal) -> list[str]:
 def _state(session: AgentSession, gate: Egress) -> dict[str, Any]:
     """The advisor's suggestions and questions as the model may read them (§7.7).
 
+    An Ask-your-data session has none: its state is one fixed sentence saying so (`EXPLORE_NOTE`).
+
     Each suggestion's sentences are made together (`Egress.sentences`): the cells it quotes become
     their shape or a hidden marker, and one that is about a hidden column hides every quoted example
     in all its sentences, not only in the one that names the column. The person's screen keeps the
     full text; this is the copy for the model.
     """
+    if session.explore:
+        return {"text": EXPLORE_NOTE, "proposals": [], "questions": [], "hidden_columns": []}
     proposals: list[dict[str, Any]] = []
     for p in session.proposals:
         title, reason = gate.sentences([p.title, p.reason], p.examples, columns=_step_columns(p))
@@ -294,7 +305,8 @@ def chat_turn(
     calls = 0
     strikes = 0
     remaining = agent.max_llm_calls_per_session - session.llm_calls
-    settings, fields = _settings(ctx, session)
+    # An Ask-your-data session lists no setting: there is nothing the model could suggest (DEC-1251).
+    settings, fields = ([], {}) if session.explore else _settings(ctx, session)
     prompt = load_prompt(HELPER_PROMPT, config_root)
     knowledge = list(agent.knowledge) or [ctx.config.target.definition or ctx.config.description]
     columns = tuple(str(c) for c in ctx.frame.columns)
@@ -430,6 +442,11 @@ def chat_turn(
             args: dict[str, Any] = dict(gate.unalias_args(raw_args)) if isinstance(raw_args, dict) else {}
             if name == "reply":
                 return _reply(session, action, results, checker, finish)
+            if name == PROPOSE_TOOL and session.explore:
+                raise AgentToolError(
+                    EXPLORE_READ_ONLY,
+                    "This chat only answers questions about the data; it cannot suggest a setting. Reply instead.",
+                )
             if name == PROPOSE_TOOL:
                 result, proposal = _propose(
                     ctx,

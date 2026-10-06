@@ -113,6 +113,7 @@ is `apply`.
 | `describe_dates` | `column` | For a date column, or text that mostly parses as dates: earliest and latest (ISO), distinct days and months, longest gap in days, share with a time part, `day_first` and whether the order is ambiguous (from `formats.date_order`), how many are not dates, and the 5 most common written shapes (`99/99/9999`: digits 9, capitals A, lower-case a). A bare time of day (`09:30`) is not a date (pandas would read it as today). A personal-data column is refused. |
 | `compare_columns` | `left`, `right` | Share of rows equal, share both empty, `kind` (`identical`, `one_to_one`, `left_determines_right`, `right_determines_left`, `constant_multiple`, `offset`, `linear`, `correlated`, `unrelated`, `not_derived`), a top-10 cross-tab for categories, Pearson and Spearman for numbers, and the slope and intercept when one is an exact linear function of the other (a constant column is never derived from another). The purpose is spotting duplicates and leaks. Either column personal: refused. |
 | `describe_missing` | `columns` (optional, at most 30) | Empty share of the 30 most empty columns, groups of columns empty on the same rows (on at most 100,000 rows), and, when the outcome is known, the outcome rate where each of the 5 most empty columns is empty against filled. |
+| `rate_by` | `column`, `outcome_column` (optional), `bins` (2-10, default 5), `top` (2-20, default 10) | Rows grouped by `column` - a number column in `bins` ranges of about equal rows, any other in its `top` most common values and `(other)`, empty cells `(empty)` - with each group's `rows`, `share` and, with `outcome_column`, `positive_rate` (two-valued, by the engine's label rule) or `mean` (a number column). A group of fewer than 10 rows shows no figure; see §12.2. Personal-data and hidden columns are refused. Added for Ask your data (§12); the setup chat may call it too. |
 | `describe_duplicates` | `columns` (optional, 1-5) | Duplicate rows and share for the key (the whole row when no column is given), repeated keys, the largest group, the 5 most repeated keys (masked; personal-data columns `"[personal data]"`) and how many repeated keys differ in their other columns. `0.0` and `-0.0` are the same value. |
 
 **Hidden columns.** A column in `agent.always_hide_columns` is treated by every look tool exactly like one the
@@ -570,6 +571,10 @@ list the free-text columns, or switch the mode, for data where that is not accep
 | `POST …/agent-session/preview` | Analyst | Before/after rows and the receipt on the first 1,000 rows (or entities). 409 with a `RECIPE_*` code when a step cannot run. |
 | `POST …/agent-session/apply` | Analyst | Approve: 409 `AGENT_SESSION_STOPPED` / `AGENT_SESSION_APPLIED` / `AGENT_UNDECIDED`; 409 `VALIDATION_FAILED` with the checks when Run would fail; else `{upload_id, mode, primary_key, target, overrides, summary, receipt}` for `POST /runs`. Audited with the prepared upload and the recipe hash. |
 
+| `GET /uploads/{upload_id}/ask` | Viewer | Ask your data (§12): `{session \| null, chat, charts}`. 404 unknown upload, 409 `AGENT_NOT_AVAILABLE`. |
+| `POST /uploads/{upload_id}/ask/messages` | Analyst | `{text}`: one read-only chat turn; the first opens the explore session. 409 `AI_NOT_CONNECTED` (nothing stored) / `AGENT_CHAT_FULL`. |
+| `DELETE /uploads/{upload_id}/ask` | Analyst | A new chat: the old explore session is deleted. |
+
 Every route has a `RoutePolicy`; a Viewer can read a session but cannot start one, decide, answer,
 chat, preview or approve.
 
@@ -720,3 +725,43 @@ distinct value; the preview runs on 1,000 rows (or entities). Reproduce with
   safe, so that signal is lost.
 - `make agent-eval` (the benchmark on Bedrock) is not built yet.
 - Chat is English only.
+
+## 12. Ask your data (Plan I, DEC-1250 … DEC-1258)
+
+### 12.1 In plain words
+
+At the end of a run's **Data** page there is a box: *Ask your data*. You type a question about the file
+the run used - "Churn rate by state", "Who are the top 10% spenders?" - and the same helper that runs
+Guided setup looks the answer up in the file and replies. When it grouped the rows to answer, a bar chart
+is drawn under the reply. It can only look: it cannot change the file, suggest a setting or start
+anything. With no AI service connected the box says "Connect an AI service to chat with the helper",
+exactly as Guided setup does.
+
+### 12.2 How it works
+
+| Piece | Does |
+|---|---|
+| `engine/agent/explore.py` | `start_explore` (an empty, read-only session: `AgentSession.explore = true`, status `ready`, no suggestions or questions) and `charts_of` (each reply's `rate_by` results as `RateChart`s). |
+| `engine/agent/loop.py` | The same `chat_turn`. For an explore session it lists no setting, its state block is one sentence (`EXPLORE_NOTE`), and `propose_setting` is refused with `AGENT_EXPLORE_READ_ONLY`. Every other rule of §7 holds unchanged: the egress gate, `numbers_grounded`, the guardrails, the budgets, `sent`. |
+| `engine/agent/tools.py` `rate_by` | Groups and measures (§3). The small-group rule (`MIN_GROUP_ROWS` = 10): a value held by fewer than 10 rows is never named (it is in `(other)`; fewer than 10 empty cells are too, and the smallest named values join a smaller `(other)`); a group with fewer than 10 rows, or 10 measured outcomes, shows no figure (`suppressed: true`); and while what is suppressed adds up to fewer than 10 rows the next smallest group is suppressed with it, so a small group's figures cannot be worked out from the totals. |
+| `api/routes/agent.py` | `GET` / `DELETE /uploads/{id}/ask`, `POST /uploads/{id}/ask/messages` (§8). The session is `uploads/<id>/agent/explore_session.json`, beside Guided setup's and erased with the upload; usage is added to `uploads/<id>/agent/llm_usage.json`. The file is read as it was sent (no recipe replayed). |
+| `ui/modules/agent/ask.js` | The panel, registered as a *page panel* (`registerPagePanel`, `ui/modules/router.js`) for the Data page of a run made from an upload; `app.js` hands the page its panels and `pages.js` draws them after its cards. The top bar is unchanged (DEC-1113). |
+
+**The chart is the tool's.** The bars are drawn from `charts` in the API answer, which `charts_of` reads
+from the stored `rate_by` result of that reply's own turn; a number in the reply's text is checked by
+`numbers_grounded` but never drawn. Each bar is the Model page's (`barTrack`, inline SVG): the group's rate
+(as a percent), mean or rows; a suppressed group reads "fewer than 10 rows" and has no bar.
+
+**What the AI service sees** is what §7.7 says for any tool result: `rate_by`'s group labels are cells
+(masked, or shapes in `summaries_only`), its counts and rates are counts, and a personal-data or hidden column
+is refused before anything is computed. The canary test runs `rate_by` on every column in every mode.
+
+**No SQL.** The model chooses a tool and its arguments; nothing it writes is run as a query (DEC-1256).
+
+### 12.3 Limits
+
+- Only the uploaded file. A finished run's scored file (`scores.csv` / `.parquet`) is not offered (DEC-1257).
+- The ends of a number range are real values of the column (the smallest and largest in the range), as
+  `inspect_column`'s minimum and maximum are; in `summaries_only` the model sees their shape only.
+- A rate is the share of the outcome's positive value by the engine's own label rule; a column with more
+  than two values is not a yes/no outcome and is refused as one, unless it is a number (then the mean).

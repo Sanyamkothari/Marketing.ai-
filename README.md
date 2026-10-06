@@ -1431,6 +1431,14 @@ three-step flow, plus a fourth step after a campaign.
 
 Decisions are DEC-1100 … DEC-1121 and DEC-1130 … DEC-1135.
 
+- **Ask your data (Plan I).** At the end of a run's Data page, ask the data helper about the file the run
+  used ("Churn rate by state", "Who are the top 10% spenders?"). It is Guided setup's helper in a
+  read-only session: the same tools, masking and number checks, and it cannot suggest or change anything.
+  A new tool, `rate_by`, groups the rows and measures each group (rows, rate of an outcome, or a mean),
+  showing no figure for a group of fewer than 10 rows; when the helper used it, the reply carries a bar
+  chart drawn from the tool's own numbers. Routes `GET`/`DELETE /uploads/{id}/ask` and
+  `POST /uploads/{id}/ask/messages`; see `docs/AGENTS.md` §12 (DEC-1250 … DEC-1258).
+
 <!-- ---- END PLAN-G ---- -->
 
 <!-- ---- PLAN-D (hardening) — append only below this line ---- -->

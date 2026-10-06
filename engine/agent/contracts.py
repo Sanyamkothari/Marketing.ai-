@@ -481,6 +481,11 @@ class AgentSession(Artefact):
     rounds: int = Field(default=1, ge=1, description="How many times the advisor has looked at the file.")
     llm_calls: int = Field(default=0, ge=0, description="Model calls the chat has made in this session.")
     applied_upload_id: str | None = Field(default=None, description="The derived upload `apply` wrote.")
+    explore: bool = Field(
+        default=False,
+        description="An *Ask your data* session (Plan I, DEC-1250): read-only questions about the file, outside "
+        "Guided setup. It has no suggestions and no questions, and the helper cannot suggest a setting.",
+    )
     created_at: AwareDatetime = Field(description="When the session started.")
     updated_at: AwareDatetime = Field(description="When it last changed.")
 
@@ -511,6 +516,8 @@ class AgentSession(Artefact):
             raise ValueError("an applied session names the upload it wrote")
         if (self.status is SessionStatus.STOPPED) != (self.stop_reason is not None):
             raise ValueError("stop_reason is set exactly when the session is stopped")
+        if self.explore and (self.proposals or self.questions or self.status is not SessionStatus.READY):
+            raise ValueError("an Ask-your-data session is ready and holds no suggestion or question")
         return self
 
     @property
