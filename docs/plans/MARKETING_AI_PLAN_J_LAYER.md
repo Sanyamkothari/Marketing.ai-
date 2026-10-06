@@ -1862,7 +1862,7 @@ class DeliveryReceipt(BaseModel):
 ```python
 class HoldoutSpec(BaseModel):
     scope: Literal["run", "use_case", "universal", "external"] = "run"
-    fraction: float | None = None               # 0..0.5; persistent scopes require it
+    fraction: float | None = None               # 0..0.5; persistent scopes require it. Under scope run it stays None and actions.control_group_fraction applies
     salt_id: str | None = None                  # fingerprint of MARKETING_AI_HOLDOUT_SALT; set from settings, never from config
     epoch: int = 1
     external_column: str | None = None          # scope=external only
@@ -1870,13 +1870,13 @@ class HoldoutSpec(BaseModel):
 
 def holdout_mask(keys: Sequence[str], spec: HoldoutSpec, salt: SecretStr, scope_key: str) -> np.ndarray: ...
     # member iff int(sha256(f"{salt}:{scope_key}:{key}")[:16], 16) < fraction * 2**64
-def explore_mask(keys, eligible, selected, sleeping_dog, fraction, salt) -> tuple[np.ndarray, np.ndarray]: ...
+def explore_mask(keys, eligible, holdout_member, selected, sleeping_dog, fraction, salt) -> tuple[np.ndarray, np.ndarray]: ...  # eligible ∧ ¬holdout_member ∧ ¬selected ∧ ¬sleeping_dog; salt label "explore"
     # (mask, per-row propensity); separate salt label "explore"
 def roster(master_keys, spec, salt, scope_key) -> pd.DataFrame: ...
     # over the customer master (entity source), refreshed each cycle
 ```
 
-- **Config:** `actions.holdout {scope, fraction}` and `actions.explore_fraction` (0..0.10).
+- **Config:** `actions.holdout {scope, fraction}` and `actions.explore_fraction` (0..0.10). The existing `actions.control_group_fraction` (0..0.50, default 0.10) keeps its meaning under `scope: run`, so today's behaviour is unchanged. Under a persistent scope `actions.holdout.fraction` is required and wins. `measure_offered`, `engine/scheduling/outcomes.py` and the help.yaml settings entry read the effective fraction through one helper, `effective_holdout_fraction(actions)`, so no reader sees two numbers.
 - **Routes:** `GET /holdout` and `PUT /holdout` (Admin; a decrease or rotation increments `epoch`). `PUT /holdout` is the only way to record `external_agreement_ref`. The release rule refuses `scope=external` without it (`RELEASE_HOLDOUT_NOT_PERSISTENT`).
 
 ### 5.4 Action catalogue (M109)
