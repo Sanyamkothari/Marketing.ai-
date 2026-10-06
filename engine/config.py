@@ -261,6 +261,19 @@ class SegmentBy(StrEnum):
     TOP_REASON = "top_reason"
 
 
+class CopySegmentBy(StrEnum):
+    """How campaign copy divides its audience into the groups it writes one message each for.
+
+    `band` is the original behaviour: one template set per score band. `top_reason` groups rows by
+    their own strongest SHAP reason (the same grouping `SegmentBy.TOP_REASON` gives a root-cause
+    run). `uplift_segment` writes for an uplift scoring run's persuadables only (DEC-1240).
+    """
+
+    BAND = "band"
+    TOP_REASON = "top_reason"
+    UPLIFT_SEGMENT = "uplift_segment"
+
+
 class ModelFamily(StrEnum):
     XGBOOST = "XGBoost"
     LIGHTGBM = "LightGBM"
@@ -1020,6 +1033,10 @@ class CampaignCopyConfig(_Base):
     require_human_review: bool = True
     limits: CopyLimits = CopyLimits()
     required_lines: RequiredLines = RequiredLines()
+    segment_by: CopySegmentBy = CopySegmentBy.BAND
+    max_segments: Annotated[int, Field(ge=2, le=20)] = 6
+    """Segments written for under `segment_by: top_reason`, the last one an "other" bucket for every
+    smaller group. Unused by `band` and `uplift_segment`, which have a fixed set (DEC-1241)."""
 
     @field_validator("channels")
     @classmethod

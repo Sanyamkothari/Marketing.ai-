@@ -1,4 +1,4 @@
-"""`engine.generative.prompts`: the loader, and the nine prompts the repository ships.
+"""`engine.generative.prompts`: the loader, and the prompts the repository ships.
 
 Two different things are proved here and it is worth saying which is which.
 
@@ -80,6 +80,9 @@ VALUES: dict[str, object] = {
     "column_choices": '[{"path": "evaluation.fairness_column", "choices": ["region"]}]',
     "message": "Why hide contact_email?",
     "turn_results": "none",
+    # Plan I: copy written per segment (copy_segment_*, DEC-1244)
+    "segment_rule": "every customer in it has months_since_churn as the strongest reason behind their score",
+    "figures": ["42 customers, 30.0% of those this campaign writes to", "By band: High 20, Medium 22"],
 }
 """One plausible value per variable any shipped prompt declares, so the sweep can render them all."""
 

@@ -50,11 +50,13 @@ from engine.config import (
     BudgetConfig,
     CampaignCopyConfig,
     Channel,
+    CopySegmentBy,
     GenerativeKind,
     LlmConfig,
+    ProblemType,
     load_use_case,
 )
-from engine.contracts import RunRecord
+from engine.contracts import RowExplanation, RunRecord
 from engine.generative.budget import Meter
 from engine.generative.contracts import (
     COPY_BATCH_FILENAME,
@@ -66,10 +68,18 @@ from engine.generative.contracts import (
     CopyStatus,
     CopyTemplate,
 )
-from engine.generative.errors import MISSING_FIELD, NOT_A_GENERATIVE_USE_CASE, GenerativeError
+from engine.generative.errors import (
+    COPY_NEEDS_UPLIFT_RUN,
+    MISSING_FIELD,
+    NOT_A_GENERATIVE_USE_CASE,
+    RUN_WITHOUT_EXPLANATIONS,
+    GenerativeError,
+)
 from engine.generative.guardrails import Guardrails, load_policy
+from engine.generative.segments import cap_with_other, group_keys
 from engine.generative.win_back import (
     _RENDER_ENVIRONMENT,
+    OTHER_REASONS_SEGMENT,
     RUN_RECORD_FILENAME,
     _classify,
     _finalize_template,
@@ -79,11 +89,15 @@ from engine.generative.win_back import (
     approve_template,
     fill_placeholders,
     generate_campaign_copy,
+    is_uplift_scoring_run,
     placeholders_in,
+    regenerate_template,
     render_message,
 )
 from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.stages.actions import BAND_COLUMN, CONTROL_GROUP_COLUMN, SUPPRESSED_REASON_COLUMN
+from engine.stages.explain import ROW_EXPLANATIONS_FILENAME, read_row_explanations
+from engine.stages.export import SCORES_CSV
 from engine.storage import LocalStorage, run_key
 from engine.utils.time import utc_now
 from tests.fixtures.make_run import RunSpec, source_key, write_run
@@ -670,3 +684,335 @@ def test_a_downloaded_message_says_which_backend_wrote_it() -> None:
     assert CopyMessage.model_fields["backend"].is_required(), "a row must never omit it"
     columns = list(CopyMessage.model_fields)
     assert "backend" in columns, "the CSV writes exactly these columns"
+
+
+# ---------------------------------------------------------------------------
+# Closed-loop copy: one message per main reason or per uplift segment (DEC-1240 ... DEC-1247)
+# ---------------------------------------------------------------------------
+def _explanations(storage: LocalStorage, run_id: str) -> dict[str, RowExplanation]:
+    record = storage.read_model(run_key(run_id, RUN_RECORD_FILENAME), RunRecord)
+    return {
+        e.primary_key: e
+        for e in read_row_explanations(record.artefacts[ROW_EXPLANATIONS_FILENAME], storage=storage)
+    }
+
+
+def _scores_frame(storage: LocalStorage, run_id: str) -> pd.DataFrame:
+    return pd.read_csv(
+        io.StringIO(storage.read_text(run_key(run_id, SCORES_CSV))), dtype={"customer_id": str}
+    )
+
+
+def _eligible_keys(scores: pd.DataFrame, bands: tuple[str, ...] = ("High", "Medium")) -> set[str]:
+    eligible = scores[SUPPRESSED_REASON_COLUMN].isna() & ~scores[CONTROL_GROUP_COLUMN].astype(bool)
+    return set(scores.loc[eligible & scores[BAND_COLUMN].isin(bands), "customer_id"].astype(str))
+
+
+def _assert_no_row_value_in_any_prompt(storage: LocalStorage, run_id: str, client: FakeLLMClient) -> None:
+    """The same honest check as `test_no_row_value_from_the_source_data_ever_reaches_a_prompt`,
+    over every column a segment could plausibly have leaked: ids, dates, spend and free-text reasons."""
+    assert client.calls
+    record = storage.read_model(run_key(run_id, RUN_RECORD_FILENAME), RunRecord)
+    source = pd.read_csv(io.StringIO(storage.read_text(source_key(record))), dtype=str)
+    prompt_text = "\n".join(f"{call.system}\n{call.prompt}" for call in client.calls)
+    for customer_id in source["customer_id"]:
+        assert customer_id not in prompt_text
+    for snapshot_date in source["snapshot_date"].dropna().unique():
+        assert snapshot_date not in prompt_text
+    for spend in source["avg_monthly_spend"].dropna().unique():
+        assert spend not in prompt_text
+
+
+def _make_uplift_run(storage: LocalStorage, config_root: Path) -> tuple[str, pd.DataFrame]:
+    """A fabricated win-back scoring run turned into what an uplift scoring run carries.
+
+    `run.json` says `uplift` and `scores.csv` gains the `segment`, `uplift` and `intended_treatment`
+    columns the uplift score flow writes (`engine.uplift.flow.scores_columns`), each row's segment
+    drawn round-robin so all four occur. Nothing else about the run changes.
+    """
+    run_id = write_run(
+        storage,
+        RunSpec(use_case_id=USE_CASE_ID, rows=ROWS, positive_rate=POSITIVE_RATE, config_root=config_root),
+    )
+    key = run_key(run_id, RUN_RECORD_FILENAME)
+    record = storage.read_model(key, RunRecord)
+    storage.write_model(key, record.model_copy(update={"problem_type": ProblemType.UPLIFT}))
+    scores = _scores_frame(storage, run_id)
+    order = ("persuadable", "sure_thing", "lost_cause", "sleeping_dog")
+    scores["segment"] = [order[i % 4] for i in range(len(scores))]
+    scores["uplift"] = [0.05 if order[i % 4] == "persuadable" else -0.01 for i in range(len(scores))]
+    scores["intended_treatment"] = scores["segment"] == "persuadable"
+    storage.write_text(run_key(run_id, SCORES_CSV), scores.to_csv(index=False, lineterminator="\n"))
+    return run_id, scores
+
+
+def test_segment_by_defaults_to_band_so_existing_configs_keep_their_behaviour() -> None:
+    assert CampaignCopyConfig().segment_by is CopySegmentBy.BAND
+    assert CampaignCopyConfig().max_segments == 6
+    with pytest.raises(ValueError):
+        CampaignCopyConfig.model_validate({"segment_by": "persona"})
+
+
+def test_a_batch_written_per_band_carries_no_segment_field_and_the_csv_keeps_its_columns(
+    run: tuple[LocalStorage, str, UseCaseConfig], config_root: Path
+) -> None:
+    """Byte-identical by construction: the new fields are left out of the file, not written as null."""
+    storage, run_id, base_use_case = run
+    result, client, _meter = _generate(_use_case_with(base_use_case), storage, run_id, config_root)
+
+    raw = storage.read_text(run_key(run_id, COPY_BATCH_FILENAME))
+    for absent in ('"segment"', '"segment_by"', '"segments"', '"not_persuadable_rows"'):
+        assert absent not in raw
+    header = storage.read_text(run_key(run_id, COPY_MESSAGES_FILENAME)).splitlines()[0]
+    assert header.split(",") == [
+        "schema_version",
+        "entity_key",
+        "band",
+        "channel",
+        "variant",
+        "template_id",
+        "rendered_text",
+        "status",
+        "block_reason",
+        "backend",
+    ]
+    assert all(template.segment is None for template in result.batch.templates)
+    # Per band the band prompts are used and nothing else: no segment prompt was even rendered.
+    assert set(result.batch.prompt_versions) == {"copy_sms", "copy_whatsapp"}
+    assert not any("How it was formed:" in call.prompt for call in client.calls)
+
+
+def test_group_keys_orders_largest_first_and_cap_with_other_folds_the_tail() -> None:
+    names = {"a": "x", "b": "y", "c": "x", "d": "z", "e": None, "f": "y", "g": "x"}
+    groups = group_keys(names, names.__getitem__)
+    assert groups == [("x", ["a", "c", "g"]), ("y", ["b", "f"]), ("z", ["d"])]
+
+    assert cap_with_other(groups, max_segments=3, other="o") == groups  # fits: nothing folded
+    assert cap_with_other(groups, max_segments=2, other="o") == [
+        ("x", ["a", "c", "g"]),
+        ("o", ["b", "f", "d"]),
+    ]
+    # Rows with nothing to group on always land in the other bucket, which then comes last.
+    assert cap_with_other(groups, max_segments=6, other="o", extra=["e"]) == [*groups, ("o", ["e"])]
+    assert cap_with_other(groups, max_segments=3, other="o", extra=["e"]) == [
+        ("x", ["a", "c", "g"]),
+        ("y", ["b", "f"]),
+        ("o", ["d", "e"]),
+    ]
+
+
+def test_top_reason_writes_one_template_set_per_main_reason_capped_with_an_other_bucket(
+    run: tuple[LocalStorage, str, UseCaseConfig], config_root: Path
+) -> None:
+    storage, run_id, base_use_case = run
+    use_case = _use_case_with(base_use_case, segment_by=CopySegmentBy.TOP_REASON, max_segments=3)
+    result, client, _meter = _generate(use_case, storage, run_id, config_root)
+    batch = result.batch
+
+    explanations = _explanations(storage, run_id)
+    eligible = _eligible_keys(_scores_frame(storage, run_id))
+    expected: dict[str, set[str]] = {}
+    for key in eligible:
+        expected.setdefault(explanations[key].reasons[0].feature, set()).add(key)
+    ranked = sorted(expected.items(), key=lambda item: (-len(item[1]), item[0]))
+    assert len(ranked) > 3, "the fixture must have more reasons than the cap for this test to mean anything"
+
+    assert batch.segment_by == "top_reason"
+    assert batch.segments is not None
+    ids = [segment.segment for segment in batch.segments]
+    assert ids == [f"reason_{ranked[0][0]}", f"reason_{ranked[1][0]}", OTHER_REASONS_SEGMENT]
+    assert [s.rows for s in batch.segments] == [
+        len(ranked[0][1]),
+        len(ranked[1][1]),
+        sum(len(keys) for _feature, keys in ranked[2:]),
+    ]
+    assert sum(s.rows for s in batch.segments) == batch.audience.rows == len(eligible)
+    assert batch.segments[0].label == f"Main reason: {ranked[0][0]}"
+    assert batch.segments[0].reasons[0].feature == ranked[0][0]  # the reason it was formed on leads
+    assert batch.segments[-1].label == "Other reasons"
+    assert all(s.written for s in batch.segments)
+
+    # One template per segment, channel and variant; one call per segment and channel to write them.
+    assert {(t.segment, t.channel) for t in batch.templates} == {
+        (segment_id, channel) for segment_id in ids for channel in ("sms", "whatsapp")
+    }
+    assert all(t.template_id.startswith(f"{t.segment}-") for t in batch.templates)
+    writes = [call for call in client.calls if "How it was formed:" in call.prompt]
+    assert len(writes) == len(ids) * 2
+    assert set(batch.prompt_versions) == {"copy_segment_sms", "copy_segment_whatsapp"}
+
+    # Rendering picks each row's own segment's template.
+    segment_of_key = {key: f"reason_{feature}" for feature, keys in ranked[:2] for key in keys}
+    by_id = {t.template_id: t for t in batch.templates}
+    assert result.messages
+    for message in result.messages:
+        assert message.segment == by_id[message.template_id].segment
+        assert message.segment == segment_of_key.get(message.entity_key, OTHER_REASONS_SEGMENT)
+    rendered = {(m.entity_key, m.channel) for m in result.messages}
+    unblocked_channels = {t.channel for t in batch.templates if t.status is not CopyStatus.BLOCKED}
+    assert {key for key, _channel in rendered} == eligible  # every eligible row, and only those
+    assert len(rendered) == len(result.messages)  # one variant per row and channel (variants_per_band=1)
+    assert {channel for _key, channel in rendered} == unblocked_channels
+
+    header = storage.read_text(run_key(run_id, COPY_MESSAGES_FILENAME)).splitlines()[0].split(",")
+    assert "segment" in header
+
+
+def test_top_reason_prompts_carry_aggregates_and_no_row_value(
+    run: tuple[LocalStorage, str, UseCaseConfig], config_root: Path
+) -> None:
+    storage, run_id, base_use_case = run
+    use_case = _use_case_with(base_use_case, segment_by=CopySegmentBy.TOP_REASON, max_segments=3)
+    result, client, _meter = _generate(use_case, storage, run_id, config_root)
+    _assert_no_row_value_in_any_prompt(storage, run_id, client)
+
+    assert result.batch.segments is not None
+    first = result.batch.segments[0]
+    write = next(call for call in client.calls if f"Segment: {first.label}" in call.prompt)
+    assert f"{first.rows} customers, {first.share_pct}% of those this campaign writes to" in write.prompt
+    assert first.reasons[0].feature in write.prompt
+
+
+def test_top_reason_on_a_run_without_per_row_reasons_is_refused_before_any_call(
+    config_root: Path, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    run_id = write_run(
+        storage,
+        RunSpec(
+            use_case_id=USE_CASE_ID,
+            rows=120,
+            positive_rate=POSITIVE_RATE,
+            with_reasons=False,
+            config_root=config_root,
+        ),
+    )
+    use_case = _use_case_with(load_use_case(USE_CASE_ID, config_root), segment_by=CopySegmentBy.TOP_REASON)
+    client, meter = _client_and_meter()
+    with pytest.raises(GenerativeError) as excinfo:
+        generate_campaign_copy(
+            run_id=run_id,
+            use_case=use_case,
+            storage=storage,
+            meter=meter,
+            guardrails=_guardrails(meter, config_root),
+            config_root=config_root,
+        )
+    assert excinfo.value.code == RUN_WITHOUT_EXPLANATIONS
+    assert not client.calls
+    assert not storage.exists(run_key(run_id, COPY_BATCH_FILENAME))
+
+
+def test_uplift_segment_writes_for_persuadables_only_and_counts_everyone_else(
+    config_root: Path, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    run_id, scores = _make_uplift_run(storage, config_root)
+    use_case = _use_case_with(
+        load_use_case(USE_CASE_ID, config_root), segment_by=CopySegmentBy.UPLIFT_SEGMENT
+    )
+    result, client, _meter = _generate(use_case, storage, run_id, config_root)
+    batch = result.batch
+
+    suppressed = scores[SUPPRESSED_REASON_COLUMN].notna()
+    control = scores[CONTROL_GROUP_COLUMN].astype(bool) & ~suppressed
+    left = scores.loc[~suppressed & ~control]
+    persuadables = set(left.loc[left["segment"] == "persuadable", "customer_id"].astype(str))
+    assert persuadables
+
+    assert batch.segment_by == "uplift_segment"
+    assert batch.holdout.suppressed_rows == int(suppressed.sum())
+    assert batch.holdout.control_rows == int(control.sum())
+    assert batch.holdout.out_of_band_rows == 0
+    assert batch.holdout.not_persuadable_rows == len(left) - len(persuadables)
+    assert batch.audience.rows == len(persuadables)
+
+    assert batch.segments is not None
+    by_id = {segment.segment: segment for segment in batch.segments}
+    assert by_id["persuadable"].written
+    assert by_id["persuadable"].rows == len(persuadables)
+    assert by_id["persuadable"].mean_score == 0.05
+    for skipped in ("sure_thing", "lost_cause", "sleeping_dog"):
+        segment = by_id[skipped]
+        assert not segment.written
+        assert segment.rows == int((left["segment"] == skipped).sum())
+        assert segment.skipped_reason  # why no message, stated
+    assert "Never treat" in (by_id["sleeping_dog"].skipped_reason or "")
+
+    # Only persuadables were written for, and only persuadables (never control, never suppressed)
+    # got a message.
+    assert {t.segment for t in batch.templates} == {"persuadable"}
+    assert {m.entity_key for m in result.messages} == persuadables
+    writes = [call for call in client.calls if "How it was formed:" in call.prompt]
+    assert len(writes) == 2  # one segment, two channels
+    assert "Segment: Persuadables" in writes[0].prompt
+    _assert_no_row_value_in_any_prompt(storage, run_id, client)
+
+    record = storage.read_model(run_key(run_id, RUN_RECORD_FILENAME), RunRecord)
+    assert is_uplift_scoring_run(storage, record)
+
+
+def test_uplift_segment_on_a_run_that_is_not_an_uplift_run_is_refused_before_any_call(
+    run: tuple[LocalStorage, str, UseCaseConfig], config_root: Path
+) -> None:
+    storage, run_id, base_use_case = run
+    use_case = _use_case_with(base_use_case, segment_by=CopySegmentBy.UPLIFT_SEGMENT)
+    client, meter = _client_and_meter()
+    with pytest.raises(GenerativeError) as excinfo:
+        generate_campaign_copy(
+            run_id=run_id,
+            use_case=use_case,
+            storage=storage,
+            meter=meter,
+            guardrails=_guardrails(meter, config_root),
+            config_root=config_root,
+        )
+    assert excinfo.value.code == COPY_NEEDS_UPLIFT_RUN
+    assert run_id in excinfo.value.message
+    assert not client.calls
+    record = storage.read_model(run_key(run_id, RUN_RECORD_FILENAME), RunRecord)
+    assert not is_uplift_scoring_run(storage, record)
+
+
+def test_regenerating_a_segment_template_reasks_its_own_segment_and_keeps_its_id(
+    run: tuple[LocalStorage, str, UseCaseConfig], config_root: Path
+) -> None:
+    """The batch's own `segment_by` is used, not the use case's (the route passes no override)."""
+    storage, run_id, base_use_case = run
+    use_case = _use_case_with(base_use_case, segment_by=CopySegmentBy.TOP_REASON, max_segments=3)
+    result, _client, _meter = _generate(use_case, storage, run_id, config_root)
+    target = result.batch.templates[0]
+    assert result.batch.segments is not None
+
+    client, meter = _client_and_meter()
+    replacement = regenerate_template(
+        result.batch,
+        target.template_id,
+        run_id=run_id,
+        use_case=_use_case_with(base_use_case),  # segment_by: band, as the route would pass it
+        storage=storage,
+        meter=meter,
+        guardrails=_guardrails(meter, config_root),
+        config_root=config_root,
+    )
+    assert replacement.template_id == target.template_id
+    assert replacement.segment == target.segment
+    writes = [call for call in client.calls if "How it was formed:" in call.prompt]
+    assert len(writes) == 1
+    label = next(s.label for s in result.batch.segments if s.segment == target.segment)
+    assert f"Segment: {label}" in writes[0].prompt
+
+
+def test_a_segment_template_must_still_be_approved_like_any_other(
+    run: tuple[LocalStorage, str, UseCaseConfig], config_root: Path
+) -> None:
+    storage, run_id, base_use_case = run
+    use_case = _use_case_with(base_use_case, segment_by=CopySegmentBy.TOP_REASON, max_segments=3)
+    result, _client, _meter = _generate(use_case, storage, run_id, config_root)
+    assert result.batch.require_human_review
+    pending = [t for t in result.batch.templates if t.status is CopyStatus.PENDING_REVIEW]
+    assert pending
+    approved = approve_template(result.batch, pending[0].template_id, approved_by="reviewer@example.com")
+    statuses = {t.template_id: t.status for t in approved.templates}
+    assert statuses[pending[0].template_id] is CopyStatus.APPROVED
+    assert all(statuses[t.template_id] is CopyStatus.PENDING_REVIEW for t in pending[1:])

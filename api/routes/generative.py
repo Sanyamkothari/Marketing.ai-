@@ -52,7 +52,7 @@ from typing import Annotated, Any, Final, Literal, TypeVar
 
 import pandas as pd
 from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 from api.deps import ConfigRootDep, JobsDep, SettingsDep, StorageDep
 from api.routes.ai_service import resolve_slot
@@ -74,6 +74,8 @@ from api.schemas import (
 )
 from engine.ai_service import ResolvedAi
 from engine.config import (
+    ConfigError,
+    CopySegmentBy,
     GenerativeConfig,
     GenerativeKind,
     LlmConfig,
@@ -116,6 +118,7 @@ from engine.generative.contracts import (
 )
 from engine.generative.errors import (
     BUDGET_EXCEEDED,
+    COPY_NEEDS_UPLIFT_RUN,
     INDEX_CORRUPT,
     INDEX_EMPTY,
     INDEX_NOT_FOUND,
@@ -133,7 +136,12 @@ from engine.generative.guardrails import Guardrails, load_policy
 from engine.generative.index import build_index, read_manifest
 from engine.generative.root_cause import build_root_cause_summary
 from engine.generative.vectorstore import LocalVectorStore, VectorStore
-from engine.generative.win_back import approve_template, generate_campaign_copy, regenerate_template
+from engine.generative.win_back import (
+    approve_template,
+    generate_campaign_copy,
+    is_uplift_scoring_run,
+    regenerate_template,
+)
 from engine.jobs import CancelToken, JobFn
 from engine.settings import Settings
 from engine.stages.explain import ROW_EXPLANATIONS_FILENAME
@@ -179,6 +187,7 @@ GENERATIVE_ERROR_STATUS: Final[dict[str, int]] = {
     RUN_WITHOUT_SCORES: 409,
     RUN_WITHOUT_EXPLANATIONS: 409,
     NOT_A_GENERATIVE_USE_CASE: 409,
+    COPY_NEEDS_UPLIFT_RUN: 409,
     REFERENCE_SET_INVALID: 422,
     KNOWLEDGE_BASE_TOO_LARGE: 422,
 }
@@ -312,7 +321,7 @@ def _merged_generative(config: UseCaseConfig, overrides: Mapping[str, Any]) -> G
         return config.generative
     wrapped: dict[str, Any] = {"generative": config.generative.model_dump(mode="json")}
     merged = apply_overrides(wrapped, overrides, allowed=frozenset(leaf_paths(wrapped)))
-    return GenerativeConfig.model_validate(merged["generative"])
+    return _validated_generative(merged["generative"])
 
 
 def _merged_generative_sub(
@@ -328,7 +337,22 @@ def _merged_generative_sub(
     allowed = frozenset(f"{prefix}.{leaf}" for leaf in leaf_paths(wrapped["generative"][block]))
     prefixed = {f"{prefix}.{key}": value for key, value in overrides.items()}
     merged = apply_overrides(wrapped, prefixed, allowed=allowed)
-    return GenerativeConfig.model_validate(merged["generative"])
+    return _validated_generative(merged["generative"])
+
+
+def _validated_generative(document: Mapping[str, Any]) -> GenerativeConfig:
+    """`document` as a `GenerativeConfig`, or `CONFIG_INVALID` naming the first refused value.
+
+    An override that names a real setting but gives it a value the setting refuses (a `segment_by`
+    that is not one of its three choices) is the caller's mistake, so it becomes the `ConfigError`
+    `api.main` renders as `422`, not the `500` an unhandled `ValidationError` would be.
+    """
+    try:
+        return GenerativeConfig.model_validate(document)
+    except ValidationError as exc:
+        first = exc.errors()[0]
+        dotted = ".".join(["generative", *(str(part) for part in first["loc"])])
+        raise ConfigError("CONFIG_INVALID", f"{dotted}: {first['msg']}.", path=dotted) from exc
 
 
 def _with_reference_column(generative: GenerativeConfig, reference_column: str | None) -> GenerativeConfig:
@@ -1378,6 +1402,7 @@ def create_campaign_copy(
     _require_generative_kind(config, GenerativeKind.CAMPAIGN_COPY)
     _require_finished_run(run, needs_explanations=False)
     generative = _merged_generative_sub(config.generative, body.overrides, block="campaign_copy")
+    _require_copy_segments(run, generative.campaign_copy.segment_by, storage)
     config = config.model_copy(update={"generative": generative})
     config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
 
@@ -1401,6 +1426,16 @@ def create_campaign_copy(
         ),
     )
     return GenerativeJobStartedResponse(run_id=run_id, job_id=job_id)
+
+
+def _require_copy_segments(run: RunRecord, segment_by: CopySegmentBy, storage: Storage) -> None:
+    """The segment the request asked to write per can be formed from this run, checked before a job
+    is queued: per main reason needs per-row reasons, per uplift segment needs an uplift scoring run
+    (DEC-1243). `generate_campaign_copy` checks the same again, for a caller that is not this route."""
+    if segment_by is CopySegmentBy.TOP_REASON:
+        _require_finished_run(run, needs_explanations=True)
+    if segment_by is CopySegmentBy.UPLIFT_SEGMENT and not is_uplift_scoring_run(storage, run):
+        raise generative_http(generative_error(COPY_NEEDS_UPLIFT_RUN, run_id=run.run_id))
 
 
 def _campaign_copy_job(

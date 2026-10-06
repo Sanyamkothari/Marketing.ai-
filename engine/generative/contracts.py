@@ -66,6 +66,7 @@ __all__ = [
     "CopyBatch",
     "CopyHoldout",
     "CopyMessage",
+    "CopySegment",
     "CopyStatus",
     "CopyTemplate",
     "DocIndexManifest",
@@ -137,6 +138,9 @@ class GenerativePurpose(StrEnum):
     COPY_EMAIL = "copy_email"
     COPY_SMS = "copy_sms"
     COPY_WHATSAPP = "copy_whatsapp"
+    COPY_SEGMENT_EMAIL = "copy_segment_email"  # Plan I: copy written per segment (DEC-1244)
+    COPY_SEGMENT_SMS = "copy_segment_sms"
+    COPY_SEGMENT_WHATSAPP = "copy_segment_whatsapp"
     JUDGE_FAITHFULNESS = "judge_faithfulness"
     JUDGE_CORRECTNESS = "judge_correctness"
     JUDGE_COMPLIANCE = "judge_compliance"
@@ -657,11 +661,50 @@ class RootCauseSummary(Artefact):
 # ---------------------------------------------------------------------------
 # Campaign copy
 # ---------------------------------------------------------------------------
+def _absent(value: object) -> bool:
+    """`exclude_if` for a field added after a contract was first written (DEC-1242).
+
+    A batch written per score band - the default, and every batch written before segments existed -
+    leaves these fields `None`, and leaving them out of the file rather than writing `null` keeps
+    that batch byte-identical to what it always was.
+    """
+    return value is None
+
+
+class CopySegment(Artefact):
+    """One group copy was written for, when `campaign_copy.segment_by` is not `band` (DEC-1241).
+
+    Every number here is counted or averaged by the engine over the segment's rows; it is what the
+    segment's prompt was shown, and none of it is any single row's value.
+    """
+
+    segment: str = Field(description="Stable id of the segment; templates name it in `segment`.")
+    label: str = Field(description="What the screen calls the segment, e.g. 'Main reason: tenure_months'.")
+    rows: int = Field(
+        description="Rows in the segment once suppressed, control and out-of-band rows are taken out."
+    )
+    share_pct: float = Field(description="Those rows as a percentage of every segment's rows together.")
+    per_band: dict[str, int] = Field(default_factory=dict, description="The segment's rows per band name.")
+    mean_score: float | None = Field(
+        default=None,
+        description="Mean of the run's score (or predicted uplift) over the segment; null if none.",
+    )
+    reasons: tuple[EvidenceReason, ...] = Field(
+        default=(), description="The segment's strongest aggregated reasons, strongest first."
+    )
+    written: bool = Field(description="Whether templates were written for the segment at all.")
+    skipped_reason: str | None = Field(
+        default=None, description="Why no message is written for the segment; null when one is."
+    )
+
+
 class CopyTemplate(Artefact):
     """One variant a model wrote for one band on one channel: prose with placeholders, not a message."""
 
     template_id: str = Field(description="Stable id of this template within the batch.")
-    band: str = Field(description="Band the template was written for.")
+    band: str = Field(
+        description="Band the template was written for; per segment, the segment id (also in `segment`)."
+    )
     channel: str = Field(description="Channel it was written for: email, sms or whatsapp.")
     variant: str = Field(description="Variant label within the band and channel: A, B, C or D.")
     subject: str | None = Field(
@@ -689,6 +732,11 @@ class CopyTemplate(Artefact):
     approved_at: AwareDatetime | None = Field(
         default=None, description="UTC time it was approved; null until approved."
     )
+    segment: str | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Segment the template was written for; absent when it was written per band.",
+    )
 
 
 class CopyAudience(Artefact):
@@ -709,6 +757,12 @@ class CopyHoldout(Artefact):
     control_rows: int = Field(description="Rows held out as the control group, which get no message.")
     suppressed_rows: int = Field(description="Rows suppressed by consent or recent contact.")
     out_of_band_rows: int = Field(description="Rows in a band the configuration does not write copy for.")
+    not_persuadable_rows: int | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Uplift runs only: rows that are not persuadables (sure things, lost causes, "
+        "sleeping dogs), which get no message; absent for any other run.",
+    )
 
 
 class CopyBatch(Artefact):
@@ -738,6 +792,16 @@ class CopyBatch(Artefact):
         default_factory=dict, description="Prompt name to content hash, so a rendering is reproducible."
     )
     created_at: AwareDatetime = Field(description="UTC time the batch was written.")
+    segment_by: str | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="top_reason or uplift_segment when the batch was written per segment; absent per band.",
+    )
+    segments: tuple[CopySegment, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="The segments, largest first, the 'other' bucket last; absent per band.",
+    )
 
 
 class CopyMessage(Artefact):
@@ -756,6 +820,11 @@ class CopyMessage(Artefact):
     status: CopyStatus = Field(description="State of the template this rendering came from.")
     block_reason: str | None = Field(
         default=None, description="Why this rendering was refused; null when it was not."
+    )
+    segment: str | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Segment of the template it was rendered from; absent (no column) per band.",
     )
     backend: str = Field(
         description="Which client wrote this copy: `fake` or `bedrock`. Carried per row on purpose."

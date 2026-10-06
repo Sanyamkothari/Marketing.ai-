@@ -20,6 +20,7 @@ from typing import Final
 __all__ = [
     "BUDGET_EXCEEDED",
     "COMPLAINT_COLUMN_MISSING",
+    "COPY_NEEDS_UPLIFT_RUN",
     "DOCUMENT_EMPTY",
     "DOCUMENT_NAME_CLASH",
     "DOCUMENT_TYPE_UNSUPPORTED",
@@ -79,6 +80,8 @@ RUN_WITHOUT_EXPLANATIONS: Final[str] = "RUN_WITHOUT_EXPLANATIONS"
 COMPLAINT_COLUMN_MISSING: Final[str] = "COMPLAINT_COLUMN_MISSING"
 NOT_A_GENERATIVE_USE_CASE: Final[str] = "NOT_A_GENERATIVE_USE_CASE"
 MISSING_FIELD: Final[str] = "MISSING_FIELD"
+COPY_NEEDS_UPLIFT_RUN: Final[str] = "COPY_NEEDS_UPLIFT_RUN"
+"""`campaign_copy.segment_by: uplift_segment` over a run that has no uplift segments (DEC-1243)."""
 
 
 GENERATIVE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
@@ -169,6 +172,11 @@ GENERATIVE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         MISSING_FIELD: (
             "{rows} rows have no value for {field}, so no message could be rendered for them.",
             "Take the field out of generative.campaign_copy.allowed_fields, or fill it in the data.",
+        ),
+        COPY_NEEDS_UPLIFT_RUN: (
+            "Run {run_id} is not an uplift scoring run, so it has no persuadables to write for.",
+            "Write one message per score band or per main reason instead, or score this data with an "
+            "uplift model first.",
         ),
     }
 )
