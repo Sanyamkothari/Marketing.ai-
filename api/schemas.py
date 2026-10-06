@@ -397,16 +397,50 @@ from engine.generative.contracts import (  # noqa: E402
 from engine.generative.feedback import AnswerFeedback, FeedbackRating  # noqa: E402
 from engine.generative.versions import IndexGrade, IndexUpdate, VerdictChange  # noqa: E402
 
+ASK_HISTORY_MAX_TURNS: int = 20
+"""Earlier exchanges an ask may carry. Only the last three reach a prompt (`HISTORY_TURNS` turns);
+the ceiling bounds what a request may make the server parse, not what it remembers."""
+
+ASK_HISTORY_QUESTION_CHARS: int = 2_000
+"""Longest earlier question an ask may carry."""
+
+ASK_HISTORY_ANSWER_CHARS: int = 8_000
+"""Longest earlier answer an ask may carry: `max_output_chars`, the ceiling on any generated text."""
+
+
+class AssistantTurn(StrictBase):
+    """One earlier exchange of a conversation, as the Try-it chat keeps it (Plan I, DEC-1280).
+
+    Nothing is stored server-side: the client sends the turns it has, the assistant reads them for
+    this one question and forgets them again.
+    """
+
+    question: str = Field(
+        min_length=1,
+        max_length=ASK_HISTORY_QUESTION_CHARS,
+        description="What the person asked in that turn.",
+    )
+    answer: str = Field(
+        max_length=ASK_HISTORY_ANSWER_CHARS,
+        description="What the assistant answered in that turn, refusal sentence included.",
+    )
+
 
 class AssistantAskRequest(StrictBase):
     """Body of `POST /indexes/{index_id}/ask`: one question for the Try-it panel.
 
-    The whole shape is one field because everything else the answer needs - which index, which
-    prompt version, which guardrails apply - is already fixed by the index and its resolved
-    config; the only thing a caller supplies is the question itself.
+    Everything else the answer needs - which index, which prompt version, which guardrails apply -
+    is already fixed by the index and its resolved config; a caller supplies the question and,
+    for a follow-up, the conversation so far.
     """
 
     question: str = Field(description="The question to ask the index, exactly as the caller typed it.")
+    history: list[AssistantTurn] = Field(
+        default_factory=list,
+        max_length=ASK_HISTORY_MAX_TURNS,
+        description="Earlier exchanges in this conversation, oldest first; empty for a first question. "
+        "With history a follow-up is rewritten to stand alone before the documents are searched.",
+    )
 
 
 class RootCauseRequest(StrictBase):
@@ -560,6 +594,11 @@ class IndexDetailResponse(StrictBase):
     update: IndexUpdate | None = Field(
         default=None,
         description='What an "Update documents" reused and re-embedded; null for a build from scratch.',
+    )
+    suggested_questions: list[str] = Field(
+        default_factory=list,
+        description="Up to four starter questions for an empty chat, taken from this index's own "
+        "graded reference questions that passed; empty when it was never graded.",
     )
 
 

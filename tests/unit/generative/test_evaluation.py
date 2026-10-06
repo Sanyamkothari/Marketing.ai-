@@ -40,6 +40,7 @@ from engine.generative.budget import Meter
 from engine.generative.contracts import (
     RAG_EVAL_FILENAME,
     Chunk,
+    GenerativePurpose,
     RagEval,
     RagEvalAggregates,
     RagEvalQuestion,
@@ -690,3 +691,33 @@ def test_an_artefact_written_before_errored_rows_existed_still_loads() -> None:
     aggregates = aggregate([eval_question()], pass_threshold=0.5).model_dump()
     del aggregates["errored"]
     assert RagEvalAggregates.model_validate(aggregates).errored == 0
+
+
+def test_grading_never_rewrites_a_question_so_its_calls_are_what_they_were(
+    graded_fixture: GradedFixture,
+) -> None:
+    """A graded question is asked with no history, so the follow-up rewrite is never called (DEC-1280).
+
+    The call count is pinned exactly: one answer and one faithfulness check per answered row, its
+    own retrieval, a correctness judge where there is a reference answer, and nothing else - a
+    rewrite call would make a grade cost more than it did before the conversation existed.
+    """
+    client = FakeLLMClient(mode=FakeLLMMode.GROUNDED)
+    meter = meter_for(client)
+    evaluate(
+        index_id=graded_fixture.index_id,
+        use_case=small_use_case(),
+        reference_set_path=graded_fixture.reference_set_path,
+        storage=graded_fixture.storage,
+        store=graded_fixture.store,
+        meter=meter,
+        guardrails=Guardrails(load_policy(), meter=meter),
+    )
+    purposes = {usage.purpose for usage in meter.usage().by_purpose}
+    assert GenerativePurpose.ASSISTANT_CONDENSE not in purposes
+    assert GenerativePurpose.ASSISTANT_ANSWER in purposes
+    assert not any("FOLLOW-UP QUESTION" in call.prompt for call in client.calls if call.kind == "complete")
+    answers = [
+        usage for usage in meter.usage().by_purpose if usage.purpose is GenerativePurpose.ASSISTANT_ANSWER
+    ]
+    assert answers[0].calls == 2, "two answerable rows, one answer each: no retry and no rewrite"

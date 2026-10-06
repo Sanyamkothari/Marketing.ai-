@@ -622,6 +622,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `min_similarity` | number | no |  |
 | `mmr_lambda` | number | no |  |
 | `bm25_weight` | number | no |  |
+| `rerank` | "none" \| "local" | no |  |
 | `answer_language` | string | no |  |
 | `refusal_message` | string | no |  |
 
@@ -1918,6 +1919,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `generative.rag.min_similarity` | float 0..1; below this nothing is retrieved and the answer is a refusal |
 | `generative.rag.mmr_lambda` | float 0..1; 1 is pure relevance, 0 is pure diversity |
 | `generative.rag.bm25_weight` | float 0..1; share of the ranking given to keyword (BM25) matches; 0 is pure vector search. The floor stays on the vector score |
+| `generative.rag.rerank` | enum: none \| local; `local` re-orders passages that passed the floor with a cross-encoder (BAAI/bge-reranker-base, needs the local-embeddings extra) before MMR |
 | `generative.rag.answer_language` | enum: auto \| en \| hi ...; `auto` echoes the question's language |
 | `generative.knowledge_base` | what may be uploaded and indexed |
 | `generative.knowledge_base.accepted_types` | list[enum]; anything else is refused at upload |

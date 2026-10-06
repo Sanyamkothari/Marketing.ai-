@@ -17,7 +17,15 @@ The flow is short and its order is the substance:
    real document, a real heading and a real chunk id have to be that chunk's own words, or the
    citation's whole purpose - letting a reader check the claim - is served by something invented.
 5. **Check, then return.** The faithfulness judge is given exactly the extracts as its source, so
-   "is every claim supported?" is asked against the same text the prompt was.
+   "is every claim supported?" is asked against the same text the prompt was. An answer the judge
+   refuses is written again with a stricter instruction, up to `guardrails.retries` times, before
+   the refusal is returned (DEC-1281); every attempt is a metered call.
+
+Plan I added the conversation around this (DEC-1280 … DEC-1289): a follow-up asked with earlier
+turns is first rewritten to stand alone, and that rewrite is what step 1 searches with (`condense`;
+no call at all without history); every answered question carries a confidence label worked out from
+measured signals only (`confidence_for`); and an empty chat offers starter questions taken from the
+reference rows the index passed (`suggested_questions`).
 
 Nothing here writes a file. An answer is a response body and a row of `rag_eval.json`, and the
 caller decides which; keeping the flow free of storage is what lets the evaluation run it a hundred
@@ -36,28 +44,44 @@ from typing import Any, Final
 from engine.config import UseCaseConfig
 from engine.generative.budget import Meter
 from engine.generative.contracts import (
+    AnswerConfidence,
     AssistantAnswer,
     Citation,
+    Confidence,
     GenerativePurpose,
     GuardrailCheck,
     GuardrailOutcome,
+    JudgeScore,
+    RagEval,
 )
 from engine.generative.errors import MODEL_OUTPUT_MALFORMED
 from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, render
+from engine.generative.rerank import Reranker
 from engine.generative.retrieval import Retrieved, retrieve
 from engine.generative.vectorstore import Match, VectorStore
-from engine.utils.logging import get_logger
+from engine.llm import LLMError
+from engine.utils.logging import get_logger, log_failure
 
 __all__ = [
     "ANSWER_PROMPT",
+    "CONDENSE_MAX_CHARS",
+    "CONDENSE_PROMPT",
+    "FAITHFULNESS_RULE",
+    "HIGH_FAITHFULNESS",
     "HISTORY_TURNS",
     "QUOTE_WORDS",
+    "STRONG_MARGIN",
+    "SUGGESTED_QUESTIONS",
     "UNKNOWN_CITATION",
     "UNSUPPORTED_QUOTE",
+    "WEAK_MARGIN",
     "Turn",
     "answer",
+    "condense",
+    "confidence_for",
     "extracts_for",
+    "suggested_questions",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -70,6 +94,26 @@ Nothing is stored server-side: the client sends the conversation it has, and the
 this question with that context and forgets it again. A longer window would cost tokens on every
 question to serve the rare conversation that needs it.
 """
+
+CONDENSE_PROMPT: Final[str] = "assistant_condense"
+CONDENSE_MAX_CHARS: Final[int] = 600
+"""The longest rewritten question kept. The prompt asks for at most 60 words; a reply far past that
+is not a question any more, so it is treated as unreadable and the question is searched as asked."""
+
+FAITHFULNESS_RULE: Final[str] = GenerativePurpose.JUDGE_FAITHFULNESS.value
+"""The rule name a failed faithfulness check is recorded under, and the one block that is retried."""
+
+HIGH_FAITHFULNESS: Final[float] = 0.90
+"""The faithfulness score at or above which an answer can be called high confidence."""
+
+STRONG_MARGIN: Final[float] = 0.15
+"""How far above the floor the closest passage must be for high confidence (DEC-1284)."""
+
+WEAK_MARGIN: Final[float] = 0.05
+"""Closer to the floor than this, and the closest passage makes the answer low confidence."""
+
+SUGGESTED_QUESTIONS: Final[int] = 4
+"""Starter questions shown on an empty chat, at most."""
 
 QUOTE_WORDS: Final[int] = 25
 """The longest quote a citation may carry, trimmed here rather than trusted from the model."""
@@ -115,68 +159,232 @@ def answer(
     guardrails: Guardrails,
     history: Sequence[Mapping[str, str]] = (),
     config_root: Path | None = None,
+    reranker: Reranker | None = None,
 ) -> AssistantAnswer:
-    """Answer `question` from `index_id`, or refuse because the documents do not answer it."""
+    """Answer `question` from `index_id`, or refuse because the documents do not answer it.
+
+    With `history` (earlier turns, oldest first) a follow-up is first rewritten to stand alone and
+    that is what is searched for (`condense`, DEC-1280); the answer prompt still sees the question
+    as asked and the conversation. Without history - which includes every graded question - no
+    rewriting call is made at all.
+    """
     started = time.monotonic()
     rag = use_case.generative.rag
-    (question_vector,) = meter.embed([question])
-    found = retrieve(store, index_id, question_vector, config=rag, question_text=question)
+    turns = list(history)[-HISTORY_TURNS:]
+    searched, condense_error = condense(question, turns, meter=meter, config_root=config_root)
+    (question_vector,) = meter.embed([searched])
+    found = retrieve(store, index_id, question_vector, config=rag, question_text=searched, reranker=reranker)
+    searched_for = searched if searched != question else None
 
     if found.empty:
-        return _refusal(question, found, started, rag.refusal_message, config_root)
+        return _refusal(question, found, started, rag.refusal_message, config_root).model_copy(
+            update={"searched_for": searched_for, "condense_error": condense_error}
+        )
 
     prompt = load_prompt(ANSWER_PROMPT, config_root)
-    rendered = render(
-        prompt,
-        {
-            "question": question,
-            "chunks": extracts_for(found.matches),
-            "refusal_message": rag.refusal_message,
-            "answer_language": rag.answer_language,
-            "history": list(history)[-HISTORY_TURNS:],
-        },
+    context = CheckContext(
+        target=question[:80],
+        expected_language=None if rag.answer_language == "auto" else rag.answer_language,
+        source="\n\n".join(match.chunk.text for match in found.matches),
+        judges=("faithfulness",),
     )
-    completion = meter.complete(rendered, GenerativePurpose.ASSISTANT_ANSWER)
-    text, refused, citations, unknown = _parse(
-        completion.text, found.matches, question=question, refusal=rag.refusal_message
-    )
+    retried_after: list[GuardrailCheck] = []
+    attempts = 0
+    while True:
+        attempts += 1
+        rendered = render(
+            prompt,
+            {
+                "question": question,
+                "chunks": extracts_for(found.matches),
+                "refusal_message": rag.refusal_message,
+                "answer_language": rag.answer_language,
+                "history": turns,
+                "strict": attempts > 1,
+                "attempt": attempts,
+            },
+        )
+        completion = meter.complete(rendered, GenerativePurpose.ASSISTANT_ANSWER)
+        text, refused, citations, unknown = _parse(
+            completion.text, found.matches, question=question, refusal=rag.refusal_message
+        )
+        result = guardrails.check(text, context)
+        checks = (*unknown, *result.checks)
+        if result.passed or result.blocked_by != FAITHFULNESS_RULE or attempts > guardrails.retries:
+            break
+        # Only an unfaithful answer is written again: the stricter instruction is a fix for claims
+        # the extracts do not support, and would change nothing about a phone number or a banned
+        # phrase, which a deterministic rule blocks the same way every time (DEC-1281).
+        retried_after.extend(check for check in result.checks if check.rule == FAITHFULNESS_RULE)
+        _LOGGER.info("assistant.retry attempt=%d rule=%s", attempts, result.blocked_by)
 
-    checks = list(unknown)
-    result = guardrails.check(
-        text,
-        CheckContext(
-            target=question[:80],
-            expected_language=None if rag.answer_language == "auto" else rag.answer_language,
-            source="\n\n".join(match.chunk.text for match in found.matches),
-            judges=("faithfulness",),
-        ),
-    )
-    checks.extend(result.checks)
+    common: dict[str, Any] = {
+        "question": question,
+        "retrieved": len(found.matches),
+        "called_model": True,
+        "prompt_version": prompt.version,
+        "guardrails": checks,
+        "searched_for": searched_for,
+        "condense_error": condense_error,
+        "attempts": attempts,
+        "retried_after": tuple(retried_after),
+    }
     if not result.passed:
-        _LOGGER.info("assistant.blocked rule=%s", result.blocked_by)
+        _LOGGER.info("assistant.blocked rule=%s attempts=%d", result.blocked_by, attempts)
         return AssistantAnswer(
-            question=question,
             answer=rag.refusal_message,
             refused=True,
             citations=(),
-            retrieved=len(found.matches),
-            called_model=True,
-            prompt_version=prompt.version,
             latency_ms=_elapsed(started),
-            guardrails=tuple(checks),
+            **common,
         )
 
+    kept = () if refused else citations
     return AssistantAnswer(
-        question=question,
         answer=text,
         refused=refused,
-        citations=() if refused else citations,
-        retrieved=len(found.matches),
-        called_model=True,
-        prompt_version=prompt.version,
+        citations=kept,
         latency_ms=_elapsed(started),
-        guardrails=tuple(checks),
+        confidence=confidence_for(
+            refused=refused,
+            top_similarity=max(match.similarity for match in found.matches),
+            floor=rag.min_similarity,
+            citations=kept,
+            faithfulness=_faithfulness(result.judge_scores),
+            retried=attempts > 1,
+        ),
+        **common,
     )
+
+
+def condense(
+    question: str,
+    history: Sequence[Mapping[str, str]],
+    *,
+    meter: Meter,
+    config_root: Path | None = None,
+) -> tuple[str, str | None]:
+    """The question to search with, and why rewriting failed (an error code) or `None`.
+
+    With no history the question is returned as it is, and **no call is made**: a first question,
+    and every question a grading run asks, costs exactly what it cost before (DEC-1280). With history
+    one call to the generating model rewrites the follow-up to stand alone - "and for business
+    customers?" becomes a question retrieval can match. When that call fails (the AI service
+    refused or was unreachable) or its reply cannot be read, the question is searched as asked and
+    the reason is returned, so the answer says it; a failed rewrite is never a failed answer. Running
+    out of budget is not a failed rewrite: it would stop the answer's own call too, so it is raised.
+    """
+    if not history:
+        return question, None
+    prompt = load_prompt(CONDENSE_PROMPT, config_root)
+    rendered = render(prompt, {"question": question, "history": list(history)[-HISTORY_TURNS:]})
+    try:
+        completion = meter.complete(rendered, GenerativePurpose.ASSISTANT_CONDENSE)
+    except LLMError as exc:
+        log_failure(_LOGGER, "assistant.condense", exc)
+        return question, exc.code
+    payload = _json(completion.text)
+    standalone = " ".join(str(payload.get("question") or "").split()) if payload else ""
+    if not standalone or len(standalone) > CONDENSE_MAX_CHARS:
+        _LOGGER.info("assistant.condense_unreadable chars=%d", len(standalone))
+        return question, MODEL_OUTPUT_MALFORMED
+    return standalone, None
+
+
+def confidence_for(
+    *,
+    refused: bool,
+    top_similarity: float,
+    floor: float,
+    citations: Sequence[Citation],
+    faithfulness: float | None,
+    retried: bool,
+) -> AnswerConfidence | None:
+    """High, medium or low for one answer, from four measured signals and nothing else (DEC-1284).
+
+    A refusal has no confidence: it claims nothing. Otherwise:
+
+    * **Low** when any of: the first answer failed the faithfulness check and had to be rewritten;
+      no citation carries a quote found in its passage; or the closest passage cleared the floor by
+      less than `WEAK_MARGIN`.
+    * **High** when all of: no retry; the faithfulness check ran and scored at least
+      `HIGH_FAITHFULNESS`; at least one citation carries a checked quote; and the closest passage
+      cleared the floor by at least `STRONG_MARGIN`.
+    * **Medium** otherwise.
+
+    Similarity is read against the floor rather than as a bare number because the floor is
+    calibrated per embedding model (DEC-218): 0.4 is a strong match for one model and a weak one for
+    another, while "well above the point this index stops answering" means the same for both.
+    """
+    if refused:
+        return None
+    verified = sum(1 for citation in citations if citation.quote)
+    margin = top_similarity - floor
+    signals: dict[str, Any] = {
+        "top_similarity": round(top_similarity, 4),
+        "floor": floor,
+        "verified_citations": verified,
+        "faithfulness": None if faithfulness is None else round(faithfulness, 4),
+        "retried": retried,
+    }
+    low: list[str] = []
+    if retried:
+        low.append("The first answer did not pass the check against the documents and was rewritten.")
+    if verified == 0:
+        low.append("No citation carries a quote found in its passage.")
+    if margin < WEAK_MARGIN:
+        low.append("The closest passage was only just similar enough to be used.")
+    if low:
+        return AnswerConfidence(level=Confidence.LOW, reasons=tuple(low), **signals)
+    missing: list[str] = []
+    if faithfulness is None:
+        missing.append("The answer was not checked against the documents.")
+    elif faithfulness < HIGH_FAITHFULNESS:
+        missing.append(
+            f"The check against the documents scored {faithfulness:.2f}, below {HIGH_FAITHFULNESS:.2f}."
+        )
+    if margin < STRONG_MARGIN:
+        missing.append("The closest passage was a fair match rather than a strong one.")
+    if missing or faithfulness is None:
+        return AnswerConfidence(level=Confidence.MEDIUM, reasons=tuple(missing), **signals)
+    return AnswerConfidence(
+        level=Confidence.HIGH,
+        reasons=(
+            f"The check against the documents scored {faithfulness:.2f}.",
+            f"{verified} citation{'s' if verified != 1 else ''} with a quote found in the passage.",
+            "The closest passage was a strong match.",
+        ),
+        **signals,
+    )
+
+
+def suggested_questions(rag_eval: RagEval | None, limit: int = SUGGESTED_QUESTIONS) -> tuple[str, ...]:
+    """Up to `limit` starter questions, each one this index was graded on and answered well.
+
+    Taken only from the reference set's own rows - never written by a model - and only from rows
+    that passed, were meant to be answered (not refused), were answered, and did not error: a
+    starter that leads to a refusal or a wrong answer would teach a new user the wrong thing about
+    the assistant. Best-supported first (faithfulness, then correctness), each question once.
+    """
+    if rag_eval is None or limit < 1:
+        return ()
+    rows = [
+        row
+        for row in rag_eval.questions
+        if row.passed and not row.expect_refusal and row.refused is False and row.error_code is None
+    ]
+    rows.sort(key=lambda row: (-(row.faithfulness or 0.0), -(row.correctness or 0.0)))
+    chosen: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        text = " ".join(row.question.split())
+        key = text.lower()
+        if text and key not in seen:
+            seen.add(key)
+            chosen.append(text)
+        if len(chosen) == limit:
+            break
+    return tuple(chosen)
 
 
 def _refusal(
@@ -202,6 +410,14 @@ def _refusal(
         prompt_version=load_prompt(ANSWER_PROMPT, config_root).version,
         latency_ms=_elapsed(started),
         guardrails=(),
+    )
+
+
+def _faithfulness(scores: Sequence[JudgeScore]) -> float | None:
+    """The faithfulness judge's score among `scores`, or `None` when it did not run."""
+    return next(
+        (score.score for score in scores if score.purpose is GenerativePurpose.JUDGE_FAITHFULNESS),
+        None,
     )
 
 

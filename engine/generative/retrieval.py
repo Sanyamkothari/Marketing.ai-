@@ -23,6 +23,9 @@ passage that uses the same word even where the embedding places it a little furt
 keeps the meaning DEC-218 calibrated, a strong semantic match is never pushed under the floor by a
 weak keyword score, and a passage that merely shares a word with the question is never let over it.
 
+**Reranking, optional.** With `rerank: local` a cross-encoder re-orders what passed the floor before
+MMR picks from it (`engine.generative.rerank`, DEC-1282). It never adds or drops a passage.
+
 Neither decision is a model's to make, and neither costs a call. What reaches the prompt is
 `retrieve`'s output and nothing else, which is what makes "answer only from the extracts" a rule
 the engine enforces rather than a request the prompt makes.
@@ -36,6 +39,7 @@ from typing import Final
 
 from engine.config import RagConfig
 from engine.generative.contracts import Chunk
+from engine.generative.rerank import Reranker, rerank, reranker_for
 from engine.generative.vectorstore import Match, VectorStore, cosine
 from engine.utils.logging import get_logger
 
@@ -85,6 +89,7 @@ def retrieve(
     config: RagConfig,
     documents: Sequence[str] | None = None,
     question_text: str | None = None,
+    reranker: Reranker | None = None,
 ) -> Retrieved:
     """The chunks an answer may use: searched, floored, de-duplicated, best first.
 
@@ -96,6 +101,11 @@ def retrieve(
     per product line needs. The filter is applied after the search rather than inside it, because
     the local store has no query language and Phase 4's will; a caller that needs it filtered
     cheaply at scale is a caller on OpenSearch.
+
+    With `config.rerank` set to `local` (or a `reranker` given, which is how a test supplies one),
+    the candidates that passed the floor are re-ordered by the reranker before MMR, and MMR trades
+    on its score. Reranking needs the question's words, so a call without `question_text` is not
+    reranked. A reranker that cannot run raises its `LLMError`; it never falls back (DEC-1282).
     """
     wanted = config.top_k
     candidates = store.search(
@@ -110,6 +120,9 @@ def retrieve(
         allowed = set(documents)
         candidates = tuple(match for match in candidates if match.chunk.document in allowed)
     above = tuple(match for match in candidates if match.similarity >= config.min_similarity)
+    chosen_reranker = reranker if reranker is not None else reranker_for(config.rerank)
+    if chosen_reranker is not None and question_text and above:
+        above = rerank(question_text, above, chosen_reranker)
     chosen = mmr(above, question_vector, top_k=wanted, lambda_=config.mmr_lambda)
     _LOGGER.info(
         "retrieval.done considered=%d above_floor=%d chosen=%d",

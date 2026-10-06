@@ -951,6 +951,9 @@ class RagConfig(_Base):
     # Share of the ranking given to BM25 keyword scores; 0 is a pure vector search. Ranking only:
     # `min_similarity` is applied to the cosine whatever this is (DEC-1260, DEC-1261).
     bm25_weight: Annotated[float, Field(ge=0.0, le=1.0)] = 0.25
+    # Plan I: re-order what passed the floor with a cross-encoder before MMR. `local` needs the
+    # `local-embeddings` extra and never falls back to `none` when it is missing (DEC-1282).
+    rerank: Literal["none", "local"] = "none"
     answer_language: Annotated[str, Field(pattern=r"^(auto|[a-z]{2})$")] = "auto"
     refusal_message: Annotated[str, Field(min_length=1)] = (
         "I don't have that information in the documents I've been given. Please contact support."

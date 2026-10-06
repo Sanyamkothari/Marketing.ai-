@@ -3,7 +3,9 @@
 The node test (`production/ui/generative/assistant.test.mjs`, sharing that directory's jsdom install
 as `measure/` does) renders `ui/modules/generative/assistant.js`'s Results view of a graded index and
 drives what Plan I added to it: a citation that opens its passage, feedback on an answer, "Add to
-test questions", "Update documents", deleting a version and the compare view. Every body its fake API
+test questions", "Update documents", deleting a version and the compare view - and, in
+`chat.test.mjs`, the conversation: follow-ups sent with history, "New conversation", starter
+questions and the confidence label (DEC-1280 … DEC-1289). Every body its fake API
 answers with was answered by the app below, over the bundled sample corpus and the fake AI backend.
 """
 
@@ -28,6 +30,7 @@ NODE_DIR: Final[Path] = Path(__file__).resolve().parent / "production" / "ui"
 TESTS_DIR: Final[Path] = NODE_DIR / "generative"
 USE_CASE: Final[str] = "ai-onboarding-assistant"
 QUESTION: Final[str] = "What is the late payment fee?"
+FOLLOW_UP: Final[str] = "And when is it charged?"
 
 
 def _ok(response: Any, status: int = 200) -> Any:
@@ -69,6 +72,16 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
         first = built["index_id"]
         bodies["detail"] = _wait(client, first)
         bodies["answer"] = _ok(client.post(f"/indexes/{first}/ask", json={"question": QUESTION}))
+        # Plan I: a follow-up asked with the conversation so far, rewritten before it was searched.
+        bodies["answer_followup"] = _ok(
+            client.post(
+                f"/indexes/{first}/ask",
+                json={
+                    "question": FOLLOW_UP,
+                    "history": [{"question": QUESTION, "answer": bodies["answer"]["answer"]}],
+                },
+            )
+        )
         cited = bodies["answer"]["citations"][0]["chunk_id"]
         bodies["chunk"] = _ok(client.get(f"/indexes/{first}/chunks/{cited}"))
         neighbour = bodies["chunk"]["next_chunk_id"] or bodies["chunk"]["previous_chunk_id"]
@@ -123,6 +136,10 @@ def test_the_fixtures_are_the_world_the_screen_is_tested_in(fixtures: Path) -> N
     assert detail["grade"] is not None and detail["rag_eval"] is not None
     answer = _read(fixtures, "answer")
     assert answer["refused"] is False and answer["citations"]
+    assert answer["confidence"]["level"] in ("high", "medium", "low")
+    assert detail["suggested_questions"], "a graded index offers starter questions"
+    followup = _read(fixtures, "answer_followup")
+    assert followup["searched_for"] and followup["question"] == FOLLOW_UP
     chunk = _read(fixtures, "chunk")
     assert chunk["chunk_id"] == answer["citations"][0]["chunk_id"]
     assert "asha.verma@example.com" not in json.dumps(_read(fixtures, "feedback_list"))

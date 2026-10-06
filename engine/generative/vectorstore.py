@@ -89,17 +89,22 @@ class Match:
     the similarity floor is defined on and the one a citation shows. A hybrid search also fills
     `keyword_score` (the chunk's BM25 score for the question, scaled to 0..1) and `hybrid_score`
     (the blend the search ranked by); a dense-only search leaves both `None` and ranks by
-    `similarity` (DEC-1261).
+    `similarity` (DEC-1261). A reranked match also carries `rerank_score` (the cross-encoder's
+    relevance, 0..1), which then decides its rank; the floor never reads it (DEC-1282).
     """
 
     chunk: Chunk
     similarity: float
     keyword_score: float | None = None
     hybrid_score: float | None = None
+    rerank_score: float | None = None
 
     @property
     def rank(self) -> float:
-        """The score this match was ranked by: the hybrid blend when there is one, else the cosine."""
+        """The score this match is ranked by: the reranker's when there is one, else the hybrid
+        blend when there is one, else the cosine."""
+        if self.rerank_score is not None:
+            return self.rerank_score
         return self.similarity if self.hybrid_score is None else self.hybrid_score
 
 

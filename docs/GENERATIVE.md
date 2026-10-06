@@ -851,3 +851,70 @@ the segments written for nobody are listed with their size and the reason (DEC-1
 
 Out of scope, deliberately: no persona reviewer, no multi-agent framework, and no per-row reason
 column in `copy_messages.csv` - a row with no message is not a message.
+
+## 13. The assistant as a conversation: follow-ups, retries, reranking, confidence (Plan I)
+
+Section 3 describes how one question is answered. This section is about a person asking several in a
+row, in "Try it" or through `POST /indexes/{id}/ask`. The decisions are DEC-1280 to DEC-1289; the code
+is `engine/generative/assistant.py` (`answer`, `condense`, `confidence_for`, `suggested_questions`)
+and `engine/generative/rerank.py`.
+
+**The conversation is sent, not stored.** The ask body may carry `history`, the earlier exchanges
+oldest first, each `{"question": ..., "answer": ...}`: at most 20, a question of up to 2,000
+characters, an answer of up to 8,000, nothing else (`422` otherwise, before any call). The server
+reads the last three exchanges for this one question and forgets them. "Try it" sends the last three
+answered exchanges with the same index version; "New conversation" clears the chat.
+
+**A follow-up is rewritten before it is searched.** "And how much does it cost?" has nothing in it to
+search for. When - and only when - there is history, one call with `assistant_condense.v1.md`
+(purpose `assistant_condense`, metered and budgeted like every call) rewrites it as a question that
+stands alone; that is what is embedded and searched, by vector, BM25 and reranker alike, and the
+answer reports it as `searched_for` ("Searched for: …" under the answer). The answer prompt itself
+still gets the question as typed and the conversation. If the rewrite fails - the AI service is
+unreachable, or the reply is not `{"question": ...}` - the question is searched as typed and
+`condense_error` says why; the answer goes ahead. A first question, and every question a grading run
+asks, has no history and makes no rewrite call, so its cost is what it was.
+
+**An unfaithful answer is written again before it is refused.** When the faithfulness judge blocks an
+answer, the answer prompt (`assistant_answer.v2.md`) is rendered again with a stricter instruction
+and the attempt number, up to `retries` times from `configs/guardrails.yaml` (2 shipped). The first
+answer that passes is returned; if none does, the operator's refusal sentence is. A block by a
+deterministic rule (personal data, a banned phrase, the length) is not retried: a stricter grounding
+instruction does not change it. The answer records `attempts` and `retried_after` (the faithfulness
+check that refused each earlier attempt), and the chat says "Written again once after a check
+against the documents failed".
+
+**Reranking is optional.** `generative.rag.rerank: local` re-orders the passages that passed the
+similarity floor with the cross-encoder `BAAI/bge-reranker-base` before MMR chooses from them. It
+needs the `local-embeddings` extra (`pip install 'marketing-ai[local-embeddings]'`), downloads the
+model on first use, and loads it once per process. When it is chosen and cannot run, asking fails
+with `RERANKER_NOT_INSTALLED` or `RERANKER_UNAVAILABLE` (`503`) - it never quietly ranks some other
+way. It never adds a passage the floor dropped, a citation still shows the cosine, and it costs no
+money, so it is logged (time, passage count) rather than metered. Default: `none`.
+
+**Confidence is measured, not asked for.** Every answer that was not a refusal carries
+`confidence`: a level and the signals it was worked out from.
+
+| Level | Rule |
+|---|---|
+| Low | any of: the answer needed a faithfulness retry; no citation carries a quote found in its passage; the closest passage cleared the similarity floor by less than 0.05 |
+| High | none of the above, **and** the faithfulness check ran and scored at least 0.90, **and** the closest passage cleared the floor by at least 0.15 |
+| Medium | everything else, including any answer the faithfulness check did not run on |
+
+The similarity is read against the floor, not as a bare number, because the floor is calibrated per
+embedding model (DEC-218). A refusal has no confidence. The chat shows the level as a pill; its
+tooltip lists the reasons.
+
+**Starter questions are the index's own.** `GET /indexes/{id}` carries `suggested_questions`: up to
+four questions from the reference set this version was graded on that passed, were meant to be
+answered and were answered, best-supported first. An empty chat shows them; a click asks one. An
+index that was never graded shows none, and nothing is ever generated to fill the space.
+
+**Errors on the ask route.** An AI-service failure is a coded, plain error: `LLM_REFUSED` `409`,
+`LLM_TOO_LONG` / `LLM_INVALID_REQUEST` `422`, anything else (unreachable, rejected key, throttled,
+the local embedder or reranker missing) `503`; the budget is `409 BUDGET_EXCEEDED` as before, and a
+generative error code the route has no status for is `503`. No provider text and no traceback reach
+the response.
+
+What is not done: no streaming, no server-side memory of conversations, no agent framework, and no
+retry of an answer blocked by anything other than the faithfulness check.

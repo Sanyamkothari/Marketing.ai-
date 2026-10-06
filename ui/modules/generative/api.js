@@ -88,8 +88,13 @@ export function postEvaluate(indexId, fields) {
  * One question, answered live. The response body *is* an `AssistantAnswer` - `contracts.py` names
  * this exact route in the artefact's own docstring, so the shape is not this file's to invent.
  */
-export const postAsk = (indexId, question) =>
-  request(`/indexes/${encodeURIComponent(indexId)}/ask`, { method: "POST", ...json({ question }) });
+export const postAsk = (indexId, question, history = []) =>
+  request(`/indexes/${encodeURIComponent(indexId)}/ask`, {
+    method: "POST",
+    // `history` is the conversation so far, oldest first, as `{question, answer}` (DEC-1280); a first
+    // question sends none, so its body is exactly what it always was.
+    ...json(history.length ? { question, history } : { question }),
+  });
 
 // --- root-cause summaries (GenerativeJobKind.ROOT_CAUSE) ----------------------------------------
 

@@ -56,6 +56,7 @@ __all__ = [
     "ROOT_CAUSE_SUMMARY_FILENAME",
     "RUN_GENERATIVE_ARTEFACTS",
     "TOKENS_ESTIMATED",
+    "AnswerConfidence",
     "AssistantAnswer",
     "Chunk",
     "ChunkConfig",
@@ -134,6 +135,7 @@ class GenerativePurpose(StrEnum):
 
     EMBEDDING = "embedding"
     ASSISTANT_ANSWER = "assistant_answer"
+    ASSISTANT_CONDENSE = "assistant_condense"  # Plan I: a follow-up rewritten to stand alone (DEC-1280)
     ROOT_CAUSE_SUMMARY = "root_cause_summary"
     COPY_EMAIL = "copy_email"
     COPY_SMS = "copy_sms"
@@ -422,6 +424,29 @@ class Citation(Artefact):
     )
 
 
+class AnswerConfidence(Artefact):
+    """How far one answer can be relied on, worked out from measured signals only (DEC-1284).
+
+    Never a model's opinion of itself: `level` follows a fixed rule
+    (`engine.generative.assistant.confidence_for`) over the four signals recorded beside it, so a
+    reader can see exactly why an answer was called high, medium or low.
+    """
+
+    level: Confidence = Field(
+        description="high, medium or low, by the rule in docs/GENERATIVE.md section 13."
+    )
+    top_similarity: float = Field(description="Cosine similarity of the closest passage retrieved, 0 to 1.")
+    floor: float = Field(description="The similarity floor the index answered with, 0 to 1.")
+    verified_citations: int = Field(description="Citations whose quote was found in the cited passage.")
+    faithfulness: float | None = Field(
+        description="The faithfulness check's score for the answer shown, 0 to 1; null when no check ran."
+    )
+    retried: bool = Field(description="True when an earlier answer failed the faithfulness check.")
+    reasons: tuple[str, ...] = Field(
+        default=(), description="Why the level is what it is, one plain sentence per signal that decided it."
+    )
+
+
 class AssistantAnswer(Artefact):
     """One answer to one question: what was said, what it was drawn from and what it cost.
 
@@ -445,6 +470,27 @@ class AssistantAnswer(Artefact):
     latency_ms: int = Field(description="Milliseconds from question to answer, retrieval included.")
     guardrails: tuple[GuardrailCheck, ...] = Field(
         default=(), description="Checks that ran over the answer, in the order they ran."
+    )
+    searched_for: str | None = Field(
+        default=None,
+        description="The follow-up rewritten as a standalone question, which retrieval searched with; "
+        "null when the question was searched as asked.",
+    )
+    condense_error: str | None = Field(
+        default=None,
+        description="Why a follow-up could not be rewritten (an error code), so the question was "
+        "searched as asked; null when nothing failed.",
+    )
+    attempts: int = Field(
+        default=0,
+        description="Answers written for this question, retries included; 0 when no model was asked.",
+    )
+    retried_after: tuple[GuardrailCheck, ...] = Field(
+        default=(),
+        description="The check that refused each earlier answer, one per retry, in order.",
+    )
+    confidence: AnswerConfidence | None = Field(
+        default=None, description="How far the answer can be relied on; null for a refusal."
     )
 
 

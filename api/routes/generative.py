@@ -95,7 +95,7 @@ from engine.config import (
     leaf_paths,
 )
 from engine.contracts import LLMUsage, RunRecord, RunState
-from engine.generative.assistant import answer
+from engine.generative.assistant import Turn, answer, suggested_questions
 from engine.generative.budget import Meter
 from engine.generative.contracts import (
     COPY_BATCH_FILENAME,
@@ -1164,6 +1164,7 @@ def read_index(index_id: str, storage: StorageDep) -> IndexDetailResponse:
         guardrails=_optional_model(storage, index_key(index_id, GUARDRAIL_REPORT_FILENAME), GuardrailReport),
         grade=None if rag_eval is None else grade_of(rag_eval),
         update=_optional_model(storage, index_key(index_id, INDEX_UPDATE_FILENAME), IndexUpdate),
+        suggested_questions=list(suggested_questions(rag_eval)),
     )
 
 
@@ -1331,10 +1332,32 @@ def _evaluate_job(
 # ---------------------------------------------------------------------------
 # 6. POST /indexes/{index_id}/ask
 # ---------------------------------------------------------------------------
+ASK_LLM_ERROR_STATUS: Final[dict[str, int]] = {
+    "LLM_REFUSED": 409,
+    "LLM_TOO_LONG": 422,
+    "LLM_INVALID_REQUEST": 422,
+}
+"""`LLMError.code` -> status on the ask route. The service refusing this request is `409`, a request
+it can never accept (too long, malformed) is `422`, and everything else - unreachable, throttled,
+out of credit, the local model missing - is `503`: the service the answer needs is not available,
+which is not the caller's fault and not a server bug either (DEC-1285)."""
+
+
+def _ask_http(exc: GenerativeError) -> HTTPException:
+    """A `GenerativeError` from answering, with a code this router has not been taught as `503`.
+
+    `generative_http`'s `500` for an unmapped code is right for a job, which a person can only
+    report; a question can be asked again, and every code that reaches here carries a plain message
+    chosen by the module that raised it.
+    """
+    status = GENERATIVE_ERROR_STATUS.get(exc.code, 503)
+    return http_error(status, exc.code, exc.message)
+
+
 @router.post(
     "/indexes/{index_id}/ask",
     response_model=AssistantAnswer,
-    responses=_NOT_FOUND,
+    responses={**_GENERATIVE_ERRORS, 503: {"model": ErrorResponse}},
     summary="Answer one question from an index, grounded in its documents or refused",
 )
 def ask_index(
@@ -1350,6 +1373,11 @@ def ask_index(
     _require_same_embedding_model(manifest, config)
     store: VectorStore = LocalVectorStore(storage)
     meter, guardrails = _client_meter_guardrails(config, ai=ai, job_id=f"ask_{index_id}", config_root=root)
+    history = [
+        Turn(role=role, text=text)
+        for turn in body.history
+        for role, text in (("user", turn.question), ("assistant", turn.answer))
+    ]
     try:
         return _with_citation_pages(
             answer(
@@ -1359,13 +1387,20 @@ def ask_index(
                 store=store,
                 meter=meter,
                 guardrails=guardrails,
+                history=history,
                 config_root=root,
             ),
             store,
             index_id,
         )
     except GenerativeError as exc:
-        raise generative_http(exc) from exc
+        raise _ask_http(exc) from exc
+    except LLMError as exc:
+        # The AI service (or the local reranker) failed: unreachable, refused, out of credit. The
+        # person reads the client's own fixed, plain message under its code - never a 500 with the
+        # provider's text in it - and the log names the class only (DEC-1285).
+        log_failure(_LOGGER, "generative.ask", exc)
+        raise http_error(ASK_LLM_ERROR_STATUS.get(exc.code, 503), exc.code, exc.message) from exc
     finally:
         # An ask is short, but it is not free, and the third rule does not stop at the request
         # thread: this call embedded the question and usually generated an answer, and both are

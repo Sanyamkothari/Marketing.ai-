@@ -50,6 +50,9 @@ VALUES: dict[str, object] = {
     "refusal_message": "I don't have that.",
     "answer_language": "auto",
     "history": [{"role": "user", "text": "hello"}],
+    # Plan I: the stricter retry of an answer the faithfulness check refused (DEC-1281)
+    "strict": True,
+    "attempt": 2,
     "segment": "High",
     "evidence": '{"reasons": [{"id": "r1"}]}',
     "tone": "neutral_business",
