@@ -1,4 +1,4 @@
-/* The browser's copy of the control-group power maths (ui/modules/measure/power.js) against the
+/* The browser's copy of the control-group power maths (ui/power.js) against the
    Python engine's (engine/uplift/power.py), case for case from tests/fixtures/power_cases.json, and
    the Output page's card rendered from scoring_summary-shaped data. Run by tests/unit/uplift/test_power_js.py,
    or directly: `node --test tests/unit/uplift/power.test.mjs`. No npm install is needed. */
@@ -7,7 +7,7 @@ import assert from "node:assert/strict";
 import fs from "node:fs";
 
 const UI = new URL("../../../ui/", import.meta.url);
-const power = await import(new URL("modules/measure/power.js", UI));
+const power = await import(new URL("power.js", UI));
 const cases = JSON.parse(fs.readFileSync(new URL("../../fixtures/power_cases.json", import.meta.url), "utf8"));
 const near = (a, b, tol = 1e-9) => assert.ok(Math.abs(a - b) <= tol, `${a} vs ${b}`);
 const EM = "—";

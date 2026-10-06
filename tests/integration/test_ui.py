@@ -37,6 +37,7 @@ MODULES: Final[tuple[str, ...]] = (
     "dom.js",
     "overview.js",
     "pages.js",
+    "power.js",  # the control-group size card on a scoring run's Output page (DEC-1234)
     "settings.js",
     "usecase.js",
 )

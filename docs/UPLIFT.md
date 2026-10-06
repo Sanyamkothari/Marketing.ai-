@@ -478,7 +478,7 @@ possible even holding back the maximum 50%").
   positive rate lives in another run's `evaluation.json`, which a scoring run does not carry, so it is
   not used. The card says which baseline it assumed. A figure the run did not write, a score that is
   not a rate, or a run that held nobody back shows "—" with the reason, never a guess.
-* **Where it is computed.** In the browser (`ui/modules/measure/power.js`, no new route), as a copy of
+* **Where it is computed.** In the browser (`ui/power.js`, no new route), as a copy of
   `engine/uplift/power.py`; `tests/fixtures/power_cases.json` holds cases both sides are checked
   against (`tests/unit/uplift/test_power.py`, `power.test.mjs`).
 

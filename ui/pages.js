@@ -42,7 +42,7 @@ import {
   toggletip,
   typeChip,
 } from "./dom.js";
-import { bindPower, powerCardBody } from "./modules/measure/power.js";
+import { bindPower, powerCardBody } from "./power.js";
 import { indexSchema, readPath } from "./settings.js";
 
 /**

@@ -8,7 +8,7 @@
 // Pure strings and numbers in, strings out, apart from `bindPower`, so node can import it.
 // Never fabricated: a figure the run did not write is an em dash, and the card says why.
 
-import { EM_DASH, esc, fmtInt, fmtNum, present } from "../../dom.js";
+import { EM_DASH, esc, fmtInt, fmtNum, present } from "./dom.js";
 
 export const DEFAULT_ALPHA = 0.05;
 export const DEFAULT_POWER = 0.8;

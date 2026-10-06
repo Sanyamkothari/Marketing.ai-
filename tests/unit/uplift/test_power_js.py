@@ -1,6 +1,6 @@
 """The browser's copy of the power maths and the Output page's card, checked without a browser.
 
-`power.test.mjs` runs `ui/modules/measure/power.js` under node against the cases in
+`power.test.mjs` runs `ui/power.js` under node against the cases in
 `tests/fixtures/power_cases.json` (the same ones `test_power.py` checks the engine on) and renders the
 card. Skipped, with the reason printed, where there is no node; `REQUIRE_JSDOM=1` (CI) makes that a failure.
 """

@@ -36,7 +36,7 @@ snapshot rows per customer the real number of independent units is smaller, and 
 little larger.
 
 `MAX_CONTROL_FRACTION` mirrors `ActionsConfig.control_group_fraction`'s upper bound (0.50); a unit
-test pins the two together. The browser has the same maths in `ui/modules/measure/power.js`; the two
+test pins the two together. The browser has the same maths in `ui/power.js`; the two
 are checked against the same cases (`tests/fixtures/power_cases.json`).
 """
 

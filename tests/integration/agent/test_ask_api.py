@@ -11,6 +11,7 @@ stored; and the routes keep the access rule of their neighbours.
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,28 @@ from tests.unit.agent.egress_canary import ToolingClient
 pytestmark = pytest.mark.integration
 
 USE_CASE = "targeted-advertisement"
+
+
+@pytest.fixture(autouse=True)
+def _restore_root_logging() -> Iterator[None]:
+    """`create_app(settings=...)` configures the process's logging; a test is not a process.
+
+    Left in place, its handler and filter change how every later test logs, which
+    `tests/unit/test_logging_audit.py` makes assertions about; restored as in
+    `tests/integration/ai_service/conftest.py`.
+    """
+    root = logging.getLogger()
+    handlers = list(root.handlers)
+    state = [(handler, list(handler.filters), handler.formatter) for handler in handlers]
+    level = root.level
+    try:
+        yield
+    finally:
+        root.handlers = handlers
+        root.setLevel(level)
+        for handler, filters, formatter in state:
+            handler.filters = filters
+            handler.setFormatter(formatter)
 
 
 @pytest.fixture
