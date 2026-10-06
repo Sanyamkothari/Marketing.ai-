@@ -150,7 +150,8 @@ test("a batch written per band labels each card with its band and the band's siz
 test("a batch written per uplift segment shows the persuadables' cards and says why nobody else gets one", async () => {
   batch = {
     ...base,
-    holdout: { ...base.holdout, not_persuadable_rows: 40 },
+    holdout: { ...base.holdout, not_persuadable_rows: 40, outside_budget_rows: 7 },
+    uplift_budget_applied: true,
     audience: { rows: 15, per_band: {} },
     segment_by: "uplift_segment",
     segments: [
@@ -173,6 +174,7 @@ test("a batch written per uplift segment shows the persuadables' cards and says 
   assert.equal(holder.querySelector(".gtpl-seg").textContent, "Persuadables · 15 customers");
   const skipped = holder.querySelector('[data-skipped="sleeping_dog"]');
   assert.match(skipped.textContent, /Sleeping dogs · 40 customers: Never treat/);
-  assert.match(holder.textContent, /writes nothing for 40 who are not persuadables/);
+  assert.match(holder.textContent, /writes nothing for 40 who are not persuadables or 7 persuadables over the contact budget/);
+  assert.doesNotMatch(holder.textContent, /do not say which persuadables fit/);
   controller.stop();
 });

@@ -763,6 +763,12 @@ class CopyHoldout(Artefact):
         description="Uplift runs only: rows that are not persuadables (sure things, lost causes, "
         "sleeping dogs), which get no message; absent for any other run.",
     )
+    outside_budget_rows: int | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Uplift runs only: persuadables the policy left outside the contact budget "
+        "(intended_treatment false), which get no message; absent when the budget was not applied.",
+    )
 
 
 class CopyBatch(Artefact):
@@ -801,6 +807,13 @@ class CopyBatch(Artefact):
         default=None,
         exclude_if=_absent,
         description="The segments, largest first, the 'other' bucket last; absent per band.",
+    )
+    uplift_budget_applied: bool | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="uplift_segment only: true when the scores file's intended_treatment column limited "
+        "copy to the persuadables inside the contact budget, false when it had no such column and every "
+        "persuadable was written to; absent otherwise.",
     )
 
 

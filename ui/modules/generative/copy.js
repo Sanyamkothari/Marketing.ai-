@@ -259,7 +259,15 @@ function summaryHtml(s, batch) {
       batch.holdout.out_of_band_rows
         ? ` (${fmtInt(batch.holdout.out_of_band_rows)} fell outside the bands this batch writes for)`
         : ""
-    }${notPersuadable ? `, and writes nothing for <b>${fmtInt(notPersuadable)}</b> who are not persuadables` : ""}.</p>
+    }${notPersuadable ? `, and writes nothing for <b>${fmtInt(notPersuadable)}</b> who are not persuadables` : ""}${
+      batch.holdout.outside_budget_rows
+        ? ` or <b>${fmtInt(batch.holdout.outside_budget_rows)}</b> persuadables over the contact budget`
+        : ""
+    }.</p>${
+      batch.uplift_budget_applied === false
+        ? `<p class="gmuted">This run's scores do not say which persuadables fit the contact budget, so every persuadable was written to.</p>`
+        : ""
+    }
     ${skippedHtml(batch)}
     ${total ? approverField(s) : ""}
     ${s.actionError ? errorBox(s.actionError) : ""}

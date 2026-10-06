@@ -80,6 +80,7 @@ from engine.generative.segments import cap_with_other, group_keys
 from engine.generative.win_back import (
     _RENDER_ENVIRONMENT,
     OTHER_REASONS_SEGMENT,
+    OVER_BUDGET_SEGMENT,
     RUN_RECORD_FILENAME,
     _classify,
     _finalize_template,
@@ -723,12 +724,15 @@ def _assert_no_row_value_in_any_prompt(storage: LocalStorage, run_id: str, clien
         assert spend not in prompt_text
 
 
-def _make_uplift_run(storage: LocalStorage, config_root: Path) -> tuple[str, pd.DataFrame]:
+def _make_uplift_run(
+    storage: LocalStorage, config_root: Path, *, with_intended: bool = True
+) -> tuple[str, pd.DataFrame]:
     """A fabricated win-back scoring run turned into what an uplift scoring run carries.
 
-    `run.json` says `uplift` and `scores.csv` gains the `segment`, `uplift` and `intended_treatment`
-    columns the uplift score flow writes (`engine.uplift.flow.scores_columns`), each row's segment
-    drawn round-robin so all four occur. Nothing else about the run changes.
+    `run.json` says `uplift` and `scores.csv` gains the `segment`, `uplift` and (unless
+    `with_intended` is false) `intended_treatment` columns the uplift score flow writes
+    (`engine.uplift.flow.scores_columns`). Segments are drawn round-robin so all four occur, and the
+    policy "chooses" every other persuadable, so some persuadables are over the contact budget.
     """
     run_id = write_run(
         storage,
@@ -741,7 +745,8 @@ def _make_uplift_run(storage: LocalStorage, config_root: Path) -> tuple[str, pd.
     order = ("persuadable", "sure_thing", "lost_cause", "sleeping_dog")
     scores["segment"] = [order[i % 4] for i in range(len(scores))]
     scores["uplift"] = [0.05 if order[i % 4] == "persuadable" else -0.01 for i in range(len(scores))]
-    scores["intended_treatment"] = scores["segment"] == "persuadable"
+    if with_intended:
+        scores["intended_treatment"] = [i % 8 == 0 for i in range(len(scores))]
     storage.write_text(run_key(run_id, SCORES_CSV), scores.to_csv(index=False, lineterminator="\n"))
     return run_id, scores
 
@@ -761,7 +766,14 @@ def test_a_batch_written_per_band_carries_no_segment_field_and_the_csv_keeps_its
     result, client, _meter = _generate(_use_case_with(base_use_case), storage, run_id, config_root)
 
     raw = storage.read_text(run_key(run_id, COPY_BATCH_FILENAME))
-    for absent in ('"segment"', '"segment_by"', '"segments"', '"not_persuadable_rows"'):
+    for absent in (
+        '"segment"',
+        '"segment_by"',
+        '"segments"',
+        '"not_persuadable_rows"',
+        '"outside_budget_rows"',
+        '"uplift_budget_applied"',
+    ):
         assert absent not in raw
     header = storage.read_text(run_key(run_id, COPY_MESSAGES_FILENAME)).splitlines()[0]
     assert header.split(",") == [
@@ -903,7 +915,7 @@ def test_top_reason_on_a_run_without_per_row_reasons_is_refused_before_any_call(
     assert not storage.exists(run_key(run_id, COPY_BATCH_FILENAME))
 
 
-def test_uplift_segment_writes_for_persuadables_only_and_counts_everyone_else(
+def test_uplift_segment_writes_for_persuadables_inside_the_budget_and_counts_everyone_else(
     config_root: Path, tmp_path: Path
 ) -> None:
     storage = LocalStorage(tmp_path)
@@ -917,32 +929,41 @@ def test_uplift_segment_writes_for_persuadables_only_and_counts_everyone_else(
     suppressed = scores[SUPPRESSED_REASON_COLUMN].notna()
     control = scores[CONTROL_GROUP_COLUMN].astype(bool) & ~suppressed
     left = scores.loc[~suppressed & ~control]
-    persuadables = set(left.loc[left["segment"] == "persuadable", "customer_id"].astype(str))
-    assert persuadables
+    persuadable = left["segment"] == "persuadable"
+    chosen = set(left.loc[persuadable & left["intended_treatment"], "customer_id"].astype(str))
+    over_budget = int((persuadable & ~left["intended_treatment"]).sum())
+    assert chosen
+    assert over_budget
 
     assert batch.segment_by == "uplift_segment"
+    assert batch.uplift_budget_applied is True
     assert batch.holdout.suppressed_rows == int(suppressed.sum())
     assert batch.holdout.control_rows == int(control.sum())
     assert batch.holdout.out_of_band_rows == 0
-    assert batch.holdout.not_persuadable_rows == len(left) - len(persuadables)
-    assert batch.audience.rows == len(persuadables)
+    assert batch.holdout.not_persuadable_rows == int((~persuadable).sum())
+    assert batch.holdout.outside_budget_rows == over_budget
+    assert batch.audience.rows == len(chosen)
 
     assert batch.segments is not None
     by_id = {segment.segment: segment for segment in batch.segments}
     assert by_id["persuadable"].written
-    assert by_id["persuadable"].rows == len(persuadables)
+    assert by_id["persuadable"].rows == len(chosen)
     assert by_id["persuadable"].mean_score == 0.05
+    budget = by_id[OVER_BUDGET_SEGMENT]
+    assert not budget.written
+    assert budget.rows == over_budget
+    assert (budget.skipped_reason or "").startswith("Over the contact budget")
     for skipped in ("sure_thing", "lost_cause", "sleeping_dog"):
         segment = by_id[skipped]
         assert not segment.written
         assert segment.rows == int((left["segment"] == skipped).sum())
         assert segment.skipped_reason  # why no message, stated
     assert "Never treat" in (by_id["sleeping_dog"].skipped_reason or "")
+    assert sum(s.rows for s in batch.segments) == len(left)  # every remaining row, once
 
-    # Only persuadables were written for, and only persuadables (never control, never suppressed)
-    # got a message.
+    # Only the persuadables the policy chose (never control, suppressed or over budget) got a message.
     assert {t.segment for t in batch.templates} == {"persuadable"}
-    assert {m.entity_key for m in result.messages} == persuadables
+    assert {m.entity_key for m in result.messages} == chosen
     writes = [call for call in client.calls if "How it was formed:" in call.prompt]
     assert len(writes) == 2  # one segment, two channels
     assert "Segment: Persuadables" in writes[0].prompt
@@ -950,6 +971,32 @@ def test_uplift_segment_writes_for_persuadables_only_and_counts_everyone_else(
 
     record = storage.read_model(run_key(run_id, RUN_RECORD_FILENAME), RunRecord)
     assert is_uplift_scoring_run(storage, record)
+
+
+def test_uplift_segment_without_intended_treatment_writes_for_every_persuadable_and_says_so(
+    config_root: Path, tmp_path: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    run_id, scores = _make_uplift_run(storage, config_root, with_intended=False)
+    use_case = _use_case_with(
+        load_use_case(USE_CASE_ID, config_root), segment_by=CopySegmentBy.UPLIFT_SEGMENT
+    )
+    result, _client, _meter = _generate(use_case, storage, run_id, config_root)
+    batch = result.batch
+
+    suppressed = scores[SUPPRESSED_REASON_COLUMN].notna()
+    control = scores[CONTROL_GROUP_COLUMN].astype(bool) & ~suppressed
+    left = scores.loc[~suppressed & ~control]
+    persuadables = set(left.loc[left["segment"] == "persuadable", "customer_id"].astype(str))
+
+    assert batch.uplift_budget_applied is False
+    assert batch.holdout.outside_budget_rows is None
+    assert batch.segments is not None
+    assert OVER_BUDGET_SEGMENT not in {segment.segment for segment in batch.segments}
+    assert {m.entity_key for m in result.messages} == persuadables
+    raw = storage.read_text(run_key(run_id, COPY_BATCH_FILENAME))
+    assert '"uplift_budget_applied":false' in raw.replace(" ", "")
+    assert '"outside_budget_rows"' not in raw
 
 
 def test_uplift_segment_on_a_run_that_is_not_an_uplift_run_is_refused_before_any_call(

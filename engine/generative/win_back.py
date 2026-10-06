@@ -128,7 +128,7 @@ from engine.stages.actions import BAND_COLUMN, CONTROL_GROUP_COLUMN, SUPPRESSED_
 from engine.stages.explain import ROW_EXPLANATIONS_FILENAME, read_row_explanations
 from engine.stages.export import SCORES_CSV
 from engine.storage import Storage, run_key
-from engine.uplift.actions import SEGMENT_COLUMN
+from engine.uplift.actions import INTENDED_TREATMENT_COLUMN, SEGMENT_COLUMN
 from engine.uplift.contracts import SEGMENT_ACTIONS, SEGMENT_LABELS, Segment
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.time import utc_now
@@ -142,6 +142,7 @@ if TYPE_CHECKING:
 __all__ = [
     "MAX_BAND_REASONS",
     "OTHER_REASONS_SEGMENT",
+    "OVER_BUDGET_SEGMENT",
     "PROFILE_FILENAME",
     "RUN_RECORD_FILENAME",
     "UNSUBSCRIBE_FIELD",
@@ -209,6 +210,9 @@ _SEGMENT_PURPOSES: Final[Mapping[Channel, GenerativePurpose]] = {
 
 OTHER_REASONS_SEGMENT: Final[str] = "other_reasons"
 """The id of the `top_reason` bucket that holds every reason too rare for a segment of its own."""
+
+OVER_BUDGET_SEGMENT: Final[str] = "persuadable_over_budget"
+"""The `uplift_segment` segment of persuadables the policy left outside the contact budget (DEC-1243)."""
 
 _REASON_SEGMENT_PREFIX: Final[str] = "reason_"
 _UNIT: Final[str] = "__copy_unit__"
@@ -875,30 +879,50 @@ def _write_messages_csv(storage: Storage, run_id: str, messages: Sequence[CopyMe
 # ---------------------------------------------------------------------------
 def _classify_uplift(
     scores: pd.DataFrame, fields: pd.DataFrame, *, primary_key: str
-) -> tuple[pd.DataFrame, pd.DataFrame, CopyHoldout]:
-    """`_classify` for an uplift run: suppressed, then control, then not a persuadable, then eligible.
+) -> tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, CopyHoldout, bool]:
+    """`_classify` for an uplift run: suppressed, then control, then not a persuadable, then over
+    the contact budget, then eligible.
 
     The same fixed precedence and the same promise - every row counted once, with exactly one stated
     reason - with `segment` in the place `bands_to_write` holds per band: a sure thing, a lost cause or
     a sleeping dog gets no message whatever its band, because the uplift model already said a contact
-    is wasted on it or makes things worse (DEC-1243). Returns the eligible persuadables, the eligible
-    rows that are not persuadables (counted per segment by the caller), and the holdout.
+    is wasted on it or makes things worse; and a persuadable the policy did not choose
+    (`intended_treatment` false) is over the contact budget and gets none either (DEC-1243). A scores
+    file without `intended_treatment` cannot say who is inside the budget, so every persuadable is
+    eligible and the last value returned, whether the budget was applied, is `False`.
+
+    Returns the eligible persuadables, the rows that are not persuadables, the persuadables over
+    budget, the holdout and whether the budget was applied.
     """
+    import pandas as pd
+
     merged = scores.merge(fields, on=primary_key, how="left")
     suppressed = merged[SUPPRESSED_REASON_COLUMN].notna()
     control = merged[CONTROL_GROUP_COLUMN] & ~suppressed
     persuadable = merged[SEGMENT_COLUMN] == Segment.PERSUADABLE.value
-    not_persuadable = ~suppressed & ~control & ~persuadable
-    eligible = ~suppressed & ~control & persuadable
+    budget_applied = INTENDED_TREATMENT_COLUMN in merged.columns
+    if budget_applied:
+        intended = merged[INTENDED_TREATMENT_COLUMN].fillna(False).astype(bool)
+    else:
+        intended = pd.Series(True, index=merged.index)
+    left = ~suppressed & ~control
+    not_persuadable = left & ~persuadable
+    over_budget = left & persuadable & ~intended
+    eligible = left & persuadable & intended
     holdout = CopyHoldout(
         control_rows=int(control.sum()),
         suppressed_rows=int(suppressed.sum()),
         out_of_band_rows=0,
         not_persuadable_rows=int(not_persuadable.sum()),
+        outside_budget_rows=int(over_budget.sum()) if budget_applied else None,
     )
-    audience = merged.loc[eligible].reset_index(drop=True)
-    skipped = merged.loc[not_persuadable].reset_index(drop=True)
-    return audience, skipped, holdout
+    return (
+        merged.loc[eligible].reset_index(drop=True),
+        merged.loc[not_persuadable].reset_index(drop=True),
+        merged.loc[over_budget].reset_index(drop=True),
+        holdout,
+        budget_applied,
+    )
 
 
 @dataclass(frozen=True)
@@ -927,6 +951,7 @@ class _Plan:
     per_band: dict[str, int]
     units: tuple[_Unit, ...]
     explanations: Mapping[str, RowExplanation]
+    budget_applied: bool | None = None
 
 
 def _score_name(segment_by: CopySegmentBy, use_case: UseCaseConfig) -> str:
@@ -1064,18 +1089,20 @@ def _plan_top_reason(
 def _plan_uplift(
     audience: pd.DataFrame,
     skipped: pd.DataFrame,
+    over_budget: pd.DataFrame,
     *,
     primary_key: str,
     explanations: Mapping[str, RowExplanation],
     score_column: str,
 ) -> tuple[CopySegment, ...]:
-    """Persuadables first, written for; then each other uplift segment present, counted and skipped.
+    """Persuadables inside the budget first, written for; then the persuadables over the budget and
+    each other uplift segment present, counted and skipped.
 
-    A skipped segment carries the uplift action that is the reason its rows get no message - the
-    same words `scores.csv` already records per row in its `action` column (DEC-1243).
+    A skipped segment carries the reason its rows get no message: "Over the contact budget", or the
+    uplift action `scores.csv` already records per row in its `action` column (DEC-1243).
     """
     audience[_UNIT] = Segment.PERSUADABLE.value
-    considered = len(audience) + len(skipped)
+    considered = len(audience) + len(skipped) + len(over_budget)
     keys = [str(key) for key in audience[primary_key]]
     persuadables = len(audience)
     segments = [
@@ -1089,10 +1116,25 @@ def _plan_uplift(
             reasons=_segment_reasons(keys, explanations, leading=None),
             written=persuadables > 0,
             skipped_reason=(
-                None if persuadables else "No persuadable is left after suppression and the control group."
+                None
+                if persuadables
+                else "No persuadable is left after suppression, the control group and the contact budget."
             ),
         )
     ]
+    if not over_budget.empty:
+        segments.append(
+            CopySegment(
+                segment=OVER_BUDGET_SEGMENT,
+                label="Persuadables over budget",
+                rows=len(over_budget),
+                share_pct=_share(len(over_budget), considered),
+                per_band=_per_band(over_budget),
+                mean_score=_mean_score(over_budget, score_column),
+                written=False,
+                skipped_reason="Over the contact budget, so no message is written for them.",
+            )
+        )
     for kind in (Segment.SURE_THING, Segment.LOST_CAUSE, Segment.SLEEPING_DOG):
         rows = skipped.loc[skipped[SEGMENT_COLUMN] == kind.value]
         if rows.empty:
@@ -1134,19 +1176,35 @@ def _plan(*, run_id: str, record: RunRecord, use_case: UseCaseConfig, storage: S
     if segment_by is CopySegmentBy.TOP_REASON:
         extra = (score_column,)
     elif segment_by is CopySegmentBy.UPLIFT_SEGMENT:
-        extra = (score_column, SEGMENT_COLUMN)
+        extra = (score_column, SEGMENT_COLUMN, INTENDED_TREATMENT_COLUMN)
 
     scores = _read_scores(storage, record.artefacts[SCORES_CSV], primary_key, extra)
     fields = _read_source_fields(storage, record, profile, source_fields, primary_key)
     explanations = _read_reasons(storage, record)
 
     if segment_by is CopySegmentBy.UPLIFT_SEGMENT:
-        audience, skipped, holdout = _classify_uplift(scores, fields, primary_key=primary_key)
+        audience, skipped, over_budget, holdout, budget_applied = _classify_uplift(
+            scores, fields, primary_key=primary_key
+        )
         segments = _plan_uplift(
-            audience, skipped, primary_key=primary_key, explanations=explanations, score_column=score_column
+            audience,
+            skipped,
+            over_budget,
+            primary_key=primary_key,
+            explanations=explanations,
+            score_column=score_column,
         )
         units = tuple(_Unit(unit_id=segment.segment, segment=segment) for segment in segments)
-        return _Plan(primary_key, source_fields, audience, holdout, _per_band(audience), units, explanations)
+        return _Plan(
+            primary_key,
+            source_fields,
+            audience,
+            holdout,
+            _per_band(audience),
+            units,
+            explanations,
+            budget_applied,
+        )
 
     audience, holdout, per_band = _classify(
         scores, fields, primary_key=primary_key, bands_to_write=copy.bands_to_write
@@ -1317,6 +1375,7 @@ def generate_campaign_copy(
         prompt_hashes=prompt_hashes(used_names, config_root),
         created_at=finished,
         segment_by=None if segment_by is CopySegmentBy.BAND else segment_by.value,
+        uplift_budget_applied=plan.budget_applied,
         segments=(
             None
             if segment_by is CopySegmentBy.BAND
