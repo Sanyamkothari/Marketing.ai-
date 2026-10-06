@@ -834,6 +834,18 @@ def _built_leak_check(
     dataset_id = response.json()["dataset_id"]
     final = _poll_until_finished(client, dataset_id, timeout=BUILD_TIMEOUT_S)
     assert final["status"]["state"] == "done", final["status"]
+    # The build writes `done` and the route registers the dataset in the client's list a moment later,
+    # and "an earlier build of this recipe" means a registered one - so a second build asked for in
+    # that gap would be the first again. Wait for the registration, as a person reading the list would.
+    deadline = time.monotonic() + BUILD_TIMEOUT_S
+    while time.monotonic() < deadline:
+        listed = client.get("/datasets", params={"client_id": ctx["client_id"]})
+        assert listed.status_code == 200, listed.text
+        if any(row["dataset_id"] == dataset_id for row in listed.json()["datasets"]):
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError(f"dataset {dataset_id} was never registered in the client's list")
     report = client.get(f"/datasets/{dataset_id}/report")
     assert report.status_code == 200, report.text
     check: dict[str, Any] = report.json()["leak_check"]
