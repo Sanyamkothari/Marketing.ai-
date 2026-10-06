@@ -63,6 +63,7 @@ __all__ = [
     "read_reference_qa",
     "source_text",
     "write_docx",
+    "write_html",
     "write_pdf",
     "write_txt",
 ]
@@ -85,6 +86,8 @@ MD: Final[str] = "md"
 PDF: Final[str] = "pdf"
 DOCX: Final[str] = "docx"
 TXT: Final[str] = "txt"
+HTML: Final[str] = "html"
+HTM: Final[str] = "htm"
 
 FORMATS: Final[MappingProxyType[str, str]] = MappingProxyType(
     {
@@ -100,10 +103,10 @@ FORMATS: Final[MappingProxyType[str, str]] = MappingProxyType(
         "policy_refunds": PDF,
         "policy_fair_use": DOCX,
         "policy_privacy": TXT,
-        "guide_router_setup": MD,
+        "guide_router_setup": HTML,  # a saved web page, chrome and all (DEC-1275)
         "guide_esim": DOCX,
         "support_outages": PDF,
-        "support_porting": MD,
+        "support_porting": HTM,
     }
 )
 """Document stem -> the format :func:`build_knowledge_base` writes it in. Fixed, so tests can name one."""
@@ -351,6 +354,35 @@ def write_docx(path: Path, markdown: str) -> Path:
     return path
 
 
+_HTML_CHROME_TOP: Final[str] = (
+    '<!doctype html><html><head><meta charset="utf-8"><title>Northwind Telecom help</title>'
+    "<style>body { font-family: sans-serif; }</style>"
+    '<script>window.analytics = { page: "help" };</script></head><body>'
+    '<nav><a href="/">Home</a> | <a href="/plans">Plans</a> | <a href="/login">Sign in</a></nav>'
+    "<main>"
+)
+_HTML_CHROME_BOTTOM: Final[str] = '</main><script>document.title += "";</script></body></html>\n'
+
+
+def write_html(path: Path, markdown: str) -> Path:
+    """Write one document as a saved web page: the Markdown rendered, wrapped in a site's chrome.
+
+    The navigation bar, the inline style and the two scripts are what a page saved from a help
+    centre really carries, and what the HTML reader must drop; the content between them is the same
+    prose every other format is built from (the synthetic-document note left out, as everywhere),
+    rendered by the same Markdown parser the MD reader uses.
+    """
+    from markdown_it import MarkdownIt  # imported here, as python-docx is, so the module loads lean
+
+    title, lines = _title_and_body(markdown)
+    # Inline code and emphasis stay as typed, as they do in the text, PDF and DOCX copies, so the
+    # sentences a test compares are the same characters in every format.
+    renderer = MarkdownIt("commonmark").enable("table").disable(["backticks", "emphasis"])
+    body = renderer.render("\n".join([f"# {title}", "", *lines]))
+    path.write_text(_HTML_CHROME_TOP + body + _HTML_CHROME_BOTTOM, encoding="utf-8")
+    return path
+
+
 def build_knowledge_base(out_dir: Path, *, stems: Sequence[str] | None = None) -> tuple[Path, ...]:
     """Write the corpus into `out_dir`, each document in the format :data:`FORMATS` assigns it.
 
@@ -371,6 +403,8 @@ def build_knowledge_base(out_dir: Path, *, stems: Sequence[str] | None = None) -
             write_txt(path, markdown)
         elif extension == PDF:
             write_pdf(path, markdown)
+        elif extension in (HTML, HTM):
+            write_html(path, markdown)
         else:
             write_docx(path, markdown)
         written.append(path)

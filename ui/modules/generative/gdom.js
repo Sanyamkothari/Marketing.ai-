@@ -102,13 +102,42 @@ export function costAndChecks(usage, guardrails) {
   }</div></details>`;
 }
 
-/** One `Citation`: document, section and the exact quote, because a hidden source is a guess. */
-export function citationCard(citation) {
-  return `<figure class="gcite"><figcaption>${esc(citation.document)} · ${esc(
-    citation.section,
-  )} <span class="gsim">match ${fmtNum(citation.similarity, 2)}</span></figcaption><blockquote>&ldquo;${esc(
-    citation.quote,
-  )}&rdquo;</blockquote></figure>`;
+/**
+ * One `Citation`: document, section, page when the format has pages, and the exact quote, because a
+ * hidden source is a guess. With `open` (the attribute value that names it, e.g. "2:0"), the card is
+ * a button that opens the whole passage beside the chat (DEC-1271); an empty quote shows no quote.
+ */
+export function citationCard(citation, { open = null } = {}) {
+  const page = present(citation.page) ? ` · page ${esc(citation.page)}` : "";
+  const quote = present(citation.quote) ? `<blockquote>&ldquo;${esc(citation.quote)}&rdquo;</blockquote>` : "";
+  const action = open === null
+    ? ""
+    : ` role="button" tabindex="0" data-cite="${esc(open)}" aria-label="${esc(
+        `Read the passage from ${citation.document}, ${citation.section}`,
+      )}"`;
+  return `<figure class="gcite${open === null ? "" : " gcite-open"}"${action}><figcaption><span>${esc(
+    citation.document,
+  )} · ${esc(citation.section)}${page}</span> <span class="gsim">match ${fmtNum(citation.similarity, 2)}</span></figcaption>${quote}${
+    open === null ? "" : `<span class="gcite-more">Read the passage ›</span>`
+  }</figure>`;
+}
+
+const REGEX_SPECIAL = /[.*+?^${}()|[\]\\]/g;
+
+/**
+ * `text` escaped, with the first run of words matching `quote` wrapped in `<mark>` - case and spacing
+ * ignored, the way the engine checked the quote against the passage (DEC-226). No match, no mark:
+ * the passage is shown as it is rather than with a guessed highlight.
+ */
+export function highlightQuote(text, quote) {
+  const words = String(quote || "").trim().split(/\s+/).filter(Boolean);
+  if (!words.length) return esc(text);
+  const pattern = new RegExp(words.map((w) => w.replace(REGEX_SPECIAL, "\\$&")).join("\\s+"), "i");
+  const match = pattern.exec(text);
+  if (!match) return esc(text);
+  const start = match.index;
+  const end = start + match[0].length;
+  return `${esc(text.slice(0, start))}<mark>${esc(text.slice(start, end))}</mark>${esc(text.slice(end))}`;
 }
 
 /** One evidence-pack reference (`EvidenceReason` or `RedactedComplaint`), by its shared `id`. */

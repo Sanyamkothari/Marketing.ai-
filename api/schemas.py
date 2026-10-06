@@ -394,6 +394,8 @@ from engine.generative.contracts import (  # noqa: E402
     LlmUsageReport,
     RagEval,
 )
+from engine.generative.feedback import AnswerFeedback, FeedbackRating  # noqa: E402
+from engine.generative.versions import IndexGrade, IndexUpdate, VerdictChange  # noqa: E402
 
 
 class AssistantAskRequest(StrictBase):
@@ -512,6 +514,13 @@ class IndexSummary(StrictBase):
         description="Documents summary for a build row, or the reference file's name for an evaluate row."
     )
     created_at: AwareDatetime = Field(description="UTC time the job that produced this row finished.")
+    pass_rate: float | None = Field(
+        default=None,
+        description="Share of test questions passed at the last grading; null when never graded.",
+    )
+    previous_index_id: str | None = Field(
+        default=None, description="The index this version was updated from; null for a build from scratch."
+    )
 
 
 class IndexListResponse(StrictBase):
@@ -543,6 +552,14 @@ class IndexDetailResponse(StrictBase):
     )
     guardrails: GuardrailReport | None = Field(
         default=None, description="`guardrail_report.json`; null before any check has run."
+    )
+    grade: IndexGrade | None = Field(
+        default=None,
+        description="The grade card's numbers, read off `rag_eval.json`; null when never graded.",
+    )
+    update: IndexUpdate | None = Field(
+        default=None,
+        description='What an "Update documents" reused and re-embedded; null for a build from scratch.',
     )
 
 
@@ -601,6 +618,78 @@ class ConnectionTestRequest(StrictBase):
     )
     use_case_id: str = Field(
         default="ai-onboarding-assistant", description="Use case whose configured models are checked."
+    )
+
+
+# Plan I (DEC-1270 … DEC-1279): passages, answer feedback, index versions and the compare view.
+class ChunkPassageResponse(StrictBase):
+    """Body of `GET /indexes/{index_id}/chunks/{chunk_id}`: one passage, as a citation opens it.
+
+    `previous_chunk_id` and `next_chunk_id` are the neighbouring passages of the *same document*, so
+    a reader can step through the text around a quote without leaving the panel; null at either end.
+    """
+
+    index_id: str = Field(description="Index the passage belongs to.")
+    chunk_id: str = Field(description="Id of this passage, as a citation names it.")
+    doc_id: str = Field(description="Document the passage came from.")
+    document: str = Field(description="Document filename, as the citation shows it.")
+    section: str = Field(description="Heading the passage sits under.")
+    page: int | None = Field(default=None, description="Page the passage starts on; null when unpaged.")
+    ordinal: int = Field(description="Position of the passage in its document, from 0.")
+    text: str = Field(description="The passage itself, exactly as it was indexed.")
+    previous_chunk_id: str | None = Field(default=None, description="The passage before it in the document.")
+    next_chunk_id: str | None = Field(default=None, description="The passage after it in the document.")
+
+
+class AnswerFeedbackRequest(StrictBase):
+    """Body of `POST /indexes/{index_id}/feedback`: a thumbs up or down on one answer, and why."""
+
+    rating: FeedbackRating = Field(description="`up` when the answer helped, `down` when it did not.")
+    question: str = Field(min_length=1, max_length=2000, description="The question that was asked.")
+    answer: str = Field(default="", max_length=8000, description="The answer that was rated.")
+    refused: bool = Field(default=False, description="Whether the rated answer was a refusal.")
+    cited_chunk_ids: tuple[str, ...] = Field(
+        default=(), max_length=20, description="Chunks the rated answer cited."
+    )
+    comment: str = Field(
+        default="", max_length=1000, description="Optional words; contact details are masked before storing."
+    )
+
+
+class AnswerFeedbackListResponse(StrictBase):
+    """Body of `GET /indexes/{index_id}/feedback`: every entry, oldest first, with the two counts."""
+
+    index_id: str = Field(description="Index the feedback is about.")
+    up: int = Field(description="Answers rated helpful.")
+    down: int = Field(description="Answers rated not helpful.")
+    entries: tuple[AnswerFeedback, ...] = Field(default=(), description="Every entry, oldest first.")
+
+
+class IndexComparisonSide(StrictBase):
+    """One index in `GET /indexes/{index_id}/compare/{other_index_id}`."""
+
+    index_id: str = Field(description="Index this side describes.")
+    llm: GenerativeLlmSummary = Field(description="Backend and models it ran with.")
+    documents: int | None = Field(
+        default=None, description="Documents in it; null before its build finished."
+    )
+    built_at: AwareDatetime | None = Field(default=None, description="When its build finished.")
+    grade: IndexGrade = Field(description="Its grade card.")
+
+
+class IndexComparisonResponse(StrictBase):
+    """Body of `GET /indexes/{index_id}/compare/{other_index_id}`: two gradings side by side.
+
+    `same_reference_set` is false when the two were graded against different files; the numbers are
+    still shown, and the screen says the comparison is between different questions.
+    """
+
+    left: IndexComparisonSide = Field(description="The index in the path's first position.")
+    right: IndexComparisonSide = Field(description="The index it is compared with.")
+    same_reference_set: bool = Field(description="Whether both were graded against the same file.")
+    common_questions: int = Field(description="Questions asked of both, matched by their wording.")
+    changed: tuple[VerdictChange, ...] = Field(
+        default=(), description="Questions asked of both that passed on one and failed on the other."
     )
 
 

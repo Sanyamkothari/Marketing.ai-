@@ -39,7 +39,7 @@ ui:
     train: "Upload the documents new customers ask about. They are split, embedded and indexed; nothing is trained and nothing is invented."
     score: "Upload a reference Q&A set. Every question is asked against the index and the answers are graded against yours."
   dataset_hint:
-    train: "The documents themselves: PDF, Word, Markdown or plain text."
+    train: "The documents themselves: PDF, Word, Markdown, web pages (HTML) or plain text."
     score: "One row per {entity}, with the answer you would give. CSV or Parquet."
   columns_hint:
     train: "No columns: the upload is a set of documents, and each one keeps its own name and sections."

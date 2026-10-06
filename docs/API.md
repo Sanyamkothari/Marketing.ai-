@@ -57,9 +57,16 @@ Contract schema version: 1.
 | GET | `/datasets/{dataset_id}/report` | The build review screen's report for one dataset | BuildReport |
 | GET | `/datasets/{dataset_id}/sample` | A stringified, PII-redacted sample of one built dataset | DatasetSampleResponse |
 | GET | `/healthz` | Liveness probe | HealthResponse |
+| DELETE | `/indexes/{index_id}` | Delete one index version and everything stored with it; never the best one, never a busy one | - |
 | GET | `/indexes/{index_id}` | One index in full: its status, its manifest and, once graded, its evaluation | IndexDetailResponse |
 | POST | `/indexes/{index_id}/ask` | Answer one question from an index, grounded in its documents or refused | AssistantAnswer |
+| GET | `/indexes/{index_id}/chunks/{chunk_id}` | One passage of an index, as a citation opens it, with its neighbours in the document | ChunkPassageResponse |
+| GET | `/indexes/{index_id}/compare/{other_index_id}` | Two graded indexes of one use case side by side, and the questions whose verdict changed | IndexComparisonResponse |
 | POST | `/indexes/{index_id}/evaluate` | Re-grade an already-built index against a reference set, without rebuilding it | IndexJobStartedResponse |
+| GET | `/indexes/{index_id}/feedback` | Every thumbs up and down given on this index's answers, oldest first | AnswerFeedbackListResponse |
+| POST | `/indexes/{index_id}/feedback` | Record a thumbs up or down on one answer (contact details are masked before storing) | AnswerFeedback |
+| GET | `/indexes/{index_id}/feedback/test-questions.csv` | The thumbs-down questions as rows of a reference-set file, with the answers left for a person | - |
+| POST | `/indexes/{index_id}/update` | Build a new version with documents added, replaced or removed, reusing every unchanged one | IndexJobStartedResponse |
 | GET | `/industries` | Every industry journey with its stages and use-case cards | IndustriesResponse |
 | GET | `/models` | Registered model versions, newest first, with the champion flagged | ModelListResponse |
 | POST | `/models/{model_id}/approve` | Approve a version that is waiting for a human, making it champion | ModelVersionResponse |
@@ -621,7 +628,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `accepted_types` | list[DocumentType ("pdf" \| "docx" \| "md" \| "txt")] | no |  |
+| `accepted_types` | list[DocumentType ("pdf" \| "docx" \| "md" \| "txt" \| "html" \| "htm")] | no |  |
 | `max_docs` | integer | no |  |
 | `max_mb` | integer | no |  |
 

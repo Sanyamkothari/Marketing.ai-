@@ -391,6 +391,12 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/uplift/ope",
         # Plan I: the budget curve behind the Output page's "What if the budget changed?" card (DEC-1203)
         "/runs/{run_id}/uplift/profit-curve",
+        # Plan I: the assistant's passages, answer feedback, versions and compare view (DEC-1270…1279)
+        "/indexes/{index_id}/chunks/{chunk_id}",
+        "/indexes/{index_id}/feedback",
+        "/indexes/{index_id}/feedback/test-questions.csv",
+        "/indexes/{index_id}/update",
+        "/indexes/{index_id}/compare/{other_index_id}",
         # Plan E (pilot readiness): help, the data request kit, the reports, demo mode, feedback
         "/pilot/help",
         "/pilot/data-request",

@@ -138,3 +138,37 @@ export const deleteAwsConnection = () => request("/connection/aws", { method: "D
  */
 export const postTestAwsConnection = (body = {}) =>
   request("/connection/aws/test", { method: "POST", ...json(body) });
+
+// --- Plan I: passages, answer feedback, versions and the compare view (DEC-1270 … DEC-1279) -----
+
+/** One passage of an index, with its neighbours in the same document: what a citation opens. */
+export const getChunk = (indexId, chunkId) =>
+  request(`/indexes/${encodeURIComponent(indexId)}/chunks/${encodeURIComponent(chunkId)}`);
+
+/** A thumbs up or down on one answer; the server masks contact details before it stores anything. */
+export const postFeedback = (indexId, feedback) =>
+  request(`/indexes/${encodeURIComponent(indexId)}/feedback`, { method: "POST", ...json(feedback) });
+
+/** Every rating given on this index's answers, oldest first, with the two counts. */
+export const getFeedback = (indexId) => request(`/indexes/${encodeURIComponent(indexId)}/feedback`);
+
+/** The thumbs-down questions as a reference-set CSV, the accepted answers left for a person. */
+export const getTestQuestionsCsv = (indexId) =>
+  request(`/indexes/${encodeURIComponent(indexId)}/feedback/test-questions.csv`);
+
+/** A new version of an index: files added or replaced, documents removed; the old one is kept. */
+export function postIndexUpdate(indexId, fields) {
+  const form = new FormData();
+  for (const file of fields.documents || []) form.append("documents", file);
+  for (const name of fields.remove || []) form.append("remove", name);
+  if (fields.referenceSetId) form.append("reference_set_id", fields.referenceSetId);
+  if (fields.useSampleQuestions) form.append("use_sample_questions", "true");
+  return request(`/indexes/${encodeURIComponent(indexId)}/update`, { method: "POST", body: form });
+}
+
+/** Deletes one version. The server refuses the best one (`INDEX_IS_CHAMPION`) and a busy one. */
+export const deleteIndex = (indexId) => request(`/indexes/${encodeURIComponent(indexId)}`, { method: "DELETE" });
+
+/** Two graded versions side by side, and the questions whose verdict changed between them. */
+export const getComparison = (indexId, otherId) =>
+  request(`/indexes/${encodeURIComponent(indexId)}/compare/${encodeURIComponent(otherId)}`);

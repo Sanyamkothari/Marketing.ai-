@@ -215,7 +215,7 @@ defaults:
       refusal_message: "I don't have that information in the documents I've been given. Please contact support."
 
     knowledge_base:                     # what may be uploaded and indexed
-      accepted_types: [pdf, docx, md, txt]   # list[enum]; anything else is refused at upload
+      accepted_types: [pdf, docx, md, txt, html, htm]   # list[enum]; anything else is refused at upload
       max_docs: 200                     # int >= 1
       max_mb: 200                       # int >= 1; the whole knowledge base, not one file
 

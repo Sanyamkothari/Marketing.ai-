@@ -244,6 +244,8 @@ class DocumentType(StrEnum):
     DOCX = "docx"
     MD = "md"
     TXT = "txt"
+    HTML = "html"  # Plan I (DEC-1275): a saved web page; additive, nothing above it changed meaning
+    HTM = "htm"
 
 
 class Channel(StrEnum):
@@ -945,6 +947,8 @@ class KnowledgeBaseConfig(_Base):
         DocumentType.DOCX,
         DocumentType.MD,
         DocumentType.TXT,
+        DocumentType.HTML,
+        DocumentType.HTM,
     )
     max_docs: Annotated[int, Field(ge=1)] = 200
     max_mb: Annotated[int, Field(ge=1)] = 200

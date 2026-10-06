@@ -6,7 +6,7 @@ that said "policy_refunds.pdf, somewhere" would be a citation nobody could check
 of this module is to recover structure - which lines are headings, which page they sit on, and
 which prose belongs under each - before anything is chunked, embedded or quoted.
 
-**Four formats, one shape, one table.** :data:`DOCUMENT_PARSERS` maps a
+**Five formats, one shape, one table.** :data:`DOCUMENT_PARSERS` maps a
 :class:`engine.config.DocumentType` to the reader for it, and :func:`parse` looks the extension up
 rather than branching on it. A chain of `if suffix == ".pdf"` would have put the accepted set in
 two places - here and in `generative.knowledge_base.accepted_types` - and the two would have
@@ -44,6 +44,13 @@ that wants the text cleaned calls `redaction.redact`. A second pair of functions
 been a second answer to "what does a phone number look like in prose" and, worse, a second
 redaction marker, so this module has none.
 
+**A web page is read with the standard library.** `html.parser` is enough to recover what a saved
+help-centre page means - `h1`..`h6` are real headings, a `tr` is a row - and adding a parsing library
+for it would be a new pinned dependency for a format that needs none (DEC-1275). What a page carries
+around its content - scripts, styles, the site navigation, forms - is dropped before anything is
+indexed, because "Home | Products | Sign in" is on every page of a site and would match every
+question equally badly.
+
 `pypdf`, `python-docx` and `markdown-it-py` are imported inside the reader bodies, never at module
 level, so `import engine` stays fast and the engine's import graph loads no document library
 (tests/integration/test_engine_imports.py).
@@ -53,6 +60,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
+from html.parser import HTMLParser
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
@@ -153,8 +161,8 @@ DOCUMENT_EMPTY: Final[str] = "DOCUMENT_EMPTY"
 PARSE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
     {
         DOCUMENT_TYPE_UNSUPPORTED: (
-            "{name} is a {suffix} file, and the knowledge base reads only PDF, Word, Markdown "
-            "and plain text.",
+            "{name} is a {suffix} file, and the knowledge base reads only PDF, Word, Markdown, "
+            "web pages (HTML) and plain text.",
             "Save the document as a PDF or a Word file and upload it again.",
         ),
         DOCUMENT_UNREADABLE: (
@@ -232,7 +240,7 @@ class ParsedDocument:
     """Filename as uploaded, which is what a citation shows."""
 
     media_type: str
-    """The `DocumentType` value the reader was chosen by: pdf, docx, md or txt."""
+    """The `DocumentType` value the reader was chosen by: pdf, docx, md, txt, html or htm."""
 
     sections: tuple[Section, ...]
     """Sections in reading order; never empty, because an empty document is a `ParseError`."""
@@ -528,12 +536,155 @@ def _read_text(path: Path, name: str) -> _Reading:
     return _Reading(pieces=tuple(pieces), pages=None, warnings=())
 
 
+_HTML_HEADINGS: Final[frozenset[str]] = frozenset({"h1", "h2", "h3", "h4", "h5", "h6"})
+"""Tags that open a section. A web page marks its headings, so none is guessed from shape."""
+
+_HTML_SKIPPED: Final[frozenset[str]] = frozenset(
+    {"script", "style", "noscript", "template", "nav", "head", "svg", "iframe", "form", "button", "select"}
+)
+"""Tags whose whole content is dropped: code, styling, site navigation and controls are not prose."""
+
+_HTML_BLOCKS: Final[frozenset[str]] = frozenset(
+    {
+        "p",
+        "div",
+        "section",
+        "article",
+        "main",
+        "aside",
+        "header",
+        "footer",
+        "li",
+        "ul",
+        "ol",
+        "dl",
+        "dt",
+        "dd",
+        "blockquote",
+        "pre",
+        "br",
+        "hr",
+        "figure",
+        "figcaption",
+        "table",
+        "caption",
+        "address",
+        "details",
+        "summary",
+    }
+)
+"""Tags that end the paragraph before them, so two list items never run together as one sentence."""
+
+_HTML_VOID: Final[frozenset[str]] = frozenset(
+    {"br", "hr", "img", "input", "meta", "link", "area", "base", "col", "embed", "source", "track", "wbr"}
+)
+"""Tags with no closing tag; they never open a skipped region, whatever their name."""
+
+
+class _HtmlCollector(HTMLParser):
+    """Collects a page's headings, paragraphs and table rows in reading order.
+
+    `convert_charrefs=True`, so `&amp;` arrives as `&` and an entity is never what gets quoted.
+    """
+
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=True)
+        self.pieces: list[_Piece] = []
+        self._text: list[str] = []
+        self._skip_depth = 0
+        self._in_heading = False
+        self._row: list[str] | None = None
+        self._cell: list[str] | None = None
+
+    def _flush(self, *, heading: bool = False) -> None:
+        text = _WHITESPACE_RUN.sub(" ", "".join(self._text)).strip()
+        self._text = []
+        if text:
+            self.pieces.append(_Piece(text, None, heading))
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:  # noqa: ARG002
+        if tag in _HTML_VOID:
+            if tag in _HTML_BLOCKS and self._skip_depth == 0 and self._cell is None:
+                self._flush(heading=self._in_heading)
+            return
+        if self._skip_depth or tag in _HTML_SKIPPED:
+            self._skip_depth += 1
+            return
+        if tag == "tr":
+            self._flush()
+            self._row = []
+        elif tag in ("td", "th") and self._row is not None:
+            self._cell = []
+        elif tag in _HTML_HEADINGS:
+            self._flush()
+            self._in_heading = True
+        elif tag in _HTML_BLOCKS and self._cell is None:
+            self._flush(heading=self._in_heading)
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag in _HTML_VOID:
+            return
+        if self._skip_depth:
+            self._skip_depth -= 1
+            return
+        if tag in ("td", "th") and self._cell is not None and self._row is not None:
+            self._row.append(_WHITESPACE_RUN.sub(" ", "".join(self._cell)).strip())
+            self._cell = None
+        elif tag == "tr" and self._row is not None:
+            cells = CELL_SEPARATOR.join(self._row)
+            if cells.strip(CELL_SEPARATOR):
+                self.pieces.append(_Piece(cells, None, False))
+            self._row = None
+        elif tag in _HTML_HEADINGS and self._in_heading:
+            self._flush(heading=True)
+            self._in_heading = False
+        elif tag in _HTML_BLOCKS and self._cell is None:
+            self._flush(heading=self._in_heading)
+
+    def handle_data(self, data: str) -> None:
+        if self._skip_depth:
+            return
+        if self._cell is not None:
+            self._cell.append(data)
+        else:
+            self._text.append(data)
+
+    def finish(self) -> tuple[_Piece, ...]:
+        self.close()
+        self._flush(heading=self._in_heading)
+        return tuple(self.pieces)
+
+
+def _read_html(path: Path, name: str) -> _Reading:
+    """Read a saved web page: `h1`..`h6` open sections, a table row is a line, the chrome is dropped.
+
+    Scripts, styles, `<head>`, site navigation and form controls are skipped with everything inside
+    them (:data:`_HTML_SKIPPED`). A table's cells are joined by :data:`CELL_SEPARATOR`, as every other
+    reader joins them, so a tariff table reads the same whether it arrived as HTML or as a PDF.
+    """
+    try:
+        source = path.read_text(encoding="utf-8-sig")
+    except (OSError, UnicodeError) as exc:
+        log_failure(_LOGGER, "parse.html.read", exc)
+        raise parse_error(DOCUMENT_UNREADABLE, name=name) from exc
+    collector = _HtmlCollector()
+    try:
+        collector.feed(source)
+        pieces = collector.finish()
+    except Exception as exc:  # html.parser is lenient; anything it still raises is an unreadable file
+        log_failure(_LOGGER, "parse.html.parse", exc)
+        raise parse_error(DOCUMENT_UNREADABLE, name=name) from exc
+    return _Reading(pieces=pieces, pages=None, warnings=())
+
+
 DOCUMENT_PARSERS: Final[Mapping[DocumentType, Callable[[Path, str], _Reading]]] = MappingProxyType(
     {
         DocumentType.PDF: _read_pdf,
         DocumentType.DOCX: _read_docx,
         DocumentType.MD: _read_markdown,
         DocumentType.TXT: _read_text,
+        DocumentType.HTML: _read_html,
+        DocumentType.HTM: _read_html,
     }
 )
 """`DocumentType` -> the reader that owns it. The one place a format is dispatched on.

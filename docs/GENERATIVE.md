@@ -138,10 +138,11 @@ The assistant's whole job is: read a question, decide honestly whether the uploa
 it, and if they do, answer with citations a person can check. The pipeline that makes that possible
 has seven steps, and the interesting part of each one is what it deliberately throws away.
 
-**1. Parse.** `engine/generative/parsers.py` reads an uploaded PDF, DOCX, Markdown or plain-text file
-into ordered, headed `Section`s. Four formats share one goal that is harder than it sounds: recovering
-*structure* rather than inventing it. DOCX and Markdown carry real heading markers, so those two
-readers are told the answer directly. PDF and plain text have been flattened to lines, so the parser
+**1. Parse.** `engine/generative/parsers.py` reads an uploaded PDF, DOCX, Markdown, web page (`.html`
+or `.htm`) or plain-text file into ordered, headed `Section`s. Five formats share one goal that is
+harder than it sounds: recovering *structure* rather than inventing it. DOCX, Markdown and HTML carry
+real heading markers, so those three readers are told the answer directly (a web page's scripts,
+styles, navigation and form controls are dropped first - section 11). PDF and plain text have been flattened to lines, so the parser
 infers a heading from shape - a short, capitalised line that finishes no sentence, sitting after one
 that did - deliberately loosened to sentence case rather than Title Case, because "How a refund is
 paid" is a heading in every policy document ever written and is not Title Case. A table's cells are
@@ -650,3 +651,95 @@ this question with that context and forgets it again." Storing a conversation se
 customer data this package does not otherwise need to hold, retained for a benefit - "and the other
 one?" answered without the client resending it - that a longer request already buys for the
 conversations that actually need it.
+
+---
+
+## 11. Managing an assistant: passages, feedback, versions (Plan I)
+
+Sections 1 to 10 describe how an answer is made trustworthy at the moment it is written. This section
+is about the weeks after: a reader who wants to check a citation, a person who says an answer was
+wrong, a policy document that changes, and a reviewer who wants to know whether the new version is
+better than the old one. Every route below is in `api/routes/generative.py`, declares its role with
+`register(...)` next to itself, and is in `docs/API.md`; the decisions are DEC-1270 to DEC-1279.
+
+| Route | Role | What it does |
+|---|---|---|
+| `GET /indexes/{id}/chunks/{chunk_id}` | Viewer | One passage exactly as indexed, with its document, section, page and the ids of the passages before and after it in the same document. |
+| `POST /indexes/{id}/feedback` | Viewer | A thumbs up or down on one answer, with an optional comment. |
+| `GET /indexes/{id}/feedback` | Viewer | Every rating on this index's answers, oldest first, with the two counts. |
+| `GET /indexes/{id}/feedback/test-questions.csv` | Analyst, audited | The thumbs-down questions as rows of a reference-set file. |
+| `POST /indexes/{id}/update` | Analyst | A new index version with documents added, replaced or removed. |
+| `DELETE /indexes/{id}` | Analyst | Deletes one version; never the use case's best one, never one a job is using. |
+| `GET /indexes/{id}/compare/{other_id}` | Viewer | Two graded versions of one use case side by side, and the questions whose verdict changed. |
+
+**A citation opens its passage.** A quote of 25 words is enough to recognise a passage and not
+enough to judge it, so a citation card in "Try it" is a button: it opens the whole passage in a side
+panel, with the quoted words marked and "Previous passage" / "Next passage" walking the document
+around it (DEC-1271). The panel marks only words that are really there: `highlightQuote`
+(`ui/modules/generative/gdom.js`) looks for the quote with case and spacing ignored - the same
+comparison the engine used to keep the quote (DEC-226) - and marks nothing rather than a guess when
+it is not found. `Citation.page` is new and optional; the ask route copies it from the cited chunk
+after `assistant.answer` returns, so a card can say "page 3" for a PDF and says nothing for a format
+without pages.
+
+**Feedback is stored redacted, one file per entry.** `engine/generative/feedback.py` writes each
+rating to `indexes/{id}/feedback/{feedback_id}.json` and never rewrites it, as the pilot's feedback
+button does (DEC-911): two people pressing the button at once cannot lose each other's entry. The
+question, the rated answer and the comment each pass through `engine.pii.redact_text` before they are
+stored, so an e-mail address or phone number is kept as a marker naming its kind; who pressed the
+button is left to the audit trail, which already records it against the entry id (DEC-1272).
+
+**"Add to test questions" never writes an answer.** The export is a reference-set file in the use
+case's own column names (`question`, `expect_refusal`, `source_doc`, `reference_answer` by default),
+each thumbs-down question once, and every column but the question left empty. The rated answer was
+judged wrong by a person, so copying it - or asking a model for a better one - would put an unchecked
+answer into the file whose job is to check answers. A person fills the three cells in and uploads
+the file under Evaluate assistant (DEC-1273).
+
+**Updating documents makes a new version, and pays only for what changed.** "Update documents" sends
+added and replacement files and the names of documents to remove. The route copies every kept
+document's bytes into the new version's own directory (from the previous version's uploads, or from
+the bundled sample corpus for a sample build), keeps the previous version's passage settings - a
+reused passage is only valid under the settings that cut it - and builds with
+`build_index(previous=...)`. Reuse is the engine's own: keyed on `(fingerprint, doc_id)` (DEC-220,
+DEC-221), so an unchanged document keeps its passages and vectors at no embedding cost, and a
+replaced one is read and embedded again. The new version's `index_update.json` records what was
+added, replaced, removed and reused, how many passages were carried over and how many were embedded;
+its `llm_usage.json` is the cost of the update alone. The previous version is never touched: it can
+still be asked, graded, compared and deleted on its own (DEC-1274). When no test questions are named,
+the new version is graded with the ones the previous version was last graded with, so the two can
+be compared at once.
+
+**Deleting a version.** `DELETE /indexes/{id}` removes every file under `indexes/{id}/` - status,
+manifest, passages, vectors, uploaded copies, grading, usage and feedback - and answers `204`. It
+refuses the use case's best index with `409 INDEX_IS_CHAMPION` (the best is decided by the rule
+`GET /use-cases/{id}/indexes` already uses: highest mean faithfulness, else the newest), and an index
+that is still building or grading, or whose update is still building, with `409 INDEX_BUSY`
+(DEC-1279). A version built from it keeps working, because an update holds its own copies.
+
+**Web pages.** `.html` and `.htm` are `DocumentType`s with one reader, built on the standard
+library's `html.parser`: `h1`-`h6` open sections, a table row is read as its cells joined like every
+other format's tables, and `<head>`, scripts, styles, `<nav>`, `<svg>`, `<iframe>` and form controls
+are dropped with everything inside them. Two documents of the test corpus are now built as saved web
+pages, chrome and all, and are compared sentence for sentence with their Markdown sources like every
+other format (DEC-1275).
+
+**The grade card and the compare view.** `GET /indexes/{id}` carries `grade`: the pass rate and pass
+mark, retrieval hit rate, mean faithfulness and mean correctness (null - an em dash on screen - when
+nothing was measured), and three counts read off the graded questions: questions where refusing or
+answering matched the reference set, questions that should be refused, and how many of those were
+(DEC-1276). The compare view puts two graded versions of one use case side by side with the same
+figures and lists the questions asked of both that passed on one and failed on the other, matched by
+their wording; it says so when the two were graded on different files, and refuses a version that was
+never graded with `409 INDEX_NOT_GRADED` and versions of two use cases with `409
+INDEXES_NOT_COMPARABLE` (DEC-1277).
+
+Plain-language refusals on these routes, each with its code: `CHUNK_NOT_FOUND` (404),
+`INDEX_UPDATE_EMPTY`, `DOCUMENT_NOT_IN_INDEX`, `INDEX_UPDATE_REMOVES_EVERYTHING` and
+`DOCUMENT_NAME_CLASH` (422), and `INDEX_SOURCE_MISSING`, `INDEX_EMBEDDING_CHANGED`,
+`INDEX_IS_CHAMPION`, `INDEX_BUSY`, `INDEX_NOT_GRADED` and `INDEXES_NOT_COMPARABLE` (409). Every update
+refusal is raised before anything is written.
+
+What is not done: feedback is not shown to the model or used to change an answer, a reference answer
+is never suggested, the compare view does not re-grade either version, and an update cannot change
+the passage size or the embedding model - that is a new build from the start.
