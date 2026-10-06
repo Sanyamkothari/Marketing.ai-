@@ -27,7 +27,7 @@ import { mountChrome } from "./chrome.js";
 import { bindOverview, journeyFor, overviewHtml } from "./overview.js";
 import { bindPage, isUplift, pageArtefacts, renderPage } from "./pages.js";
 import { createController, useCaseHtml } from "./usecase.js";
-import { MODULES_CHANGED, resolveRoute } from "./modules/router.js";
+import { MODULES_CHANGED, pagePanelsHtml, resolveRoute } from "./modules/router.js";
 import { aiNoticeHtml, needsAiNotice } from "./availability.js";
 
 const app = document.getElementById("app");
@@ -226,7 +226,12 @@ async function showPage(id, kind, runId) {
   }
   const detail = await getRun(chosen);
   const art = await getArtefacts(chosen, pageArtefacts(kind, detail.run));
-  const extra = { ...(await lineageOf(kind, detail.run)), ...(await upliftChartsFor(kind, detail.run)) };
+  const extra = {
+    ...(await lineageOf(kind, detail.run)),
+    ...(await upliftChartsFor(kind, detail.run)),
+    // A module's section on this page ("Ask your data" on the Data page, `registerPagePanel`).
+    panelsHtml: pagePanelsHtml(kind, uc, detail.run),
+  };
   paint(renderPage(kind, uc, detail.run, art, scoresUrl(chosen), extra), () => bindPage(kind, app));
   return uc;
 }

@@ -59,6 +59,7 @@ from engine.agent.contracts import (
     recipe_hash,
 )
 from engine.agent.egress import cap_sent, is_third_party
+from engine.agent.explore import EXPLORE_SESSION_FILENAME, RateChart, charts_of, start_explore
 from engine.agent.formats import masked_cut
 from engine.agent.loop import chat_turn
 from engine.agent.recipe import RecipeError, run_recipe
@@ -85,7 +86,14 @@ from engine.storage import Storage, StorageError, upload_key
 from engine.utils.ids import new_upload_id
 from engine.utils.time import utc_now
 
-__all__ = ["AgentSessionResponse", "ApplyResponse", "ChecksRequest", "PreviewResponse", "router"]
+__all__ = [
+    "AgentSessionResponse",
+    "ApplyResponse",
+    "AskResponse",
+    "ChecksRequest",
+    "PreviewResponse",
+    "router",
+]
 
 router = APIRouter(tags=["agent"])
 
@@ -965,3 +973,183 @@ def _apply_agent_session(
         summary=applied.summary,
         receipt=receipt,
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan I: Ask your data (DEC-1250 … DEC-1259)
+# ---------------------------------------------------------------------------
+EXPLORE_KEY: Final[str] = f"agent/{EXPLORE_SESSION_FILENAME}"
+
+register(
+    {
+        # Reading the chat is a read (DEC-716); asking spends tokens and starting over deletes, as in Guided
+        # setup's chat (DEC-1253).
+        ("GET", "/uploads/{upload_id}/ask"): RoutePolicy(
+            role=Role.VIEWER,
+            action="agent.ask.read",
+            purpose="see Ask your data",
+            object_type="upload",
+            object_param="upload_id",
+        ),
+        ("POST", "/uploads/{upload_id}/ask/messages"): RoutePolicy(
+            role=Role.ANALYST,
+            action="agent.ask",
+            purpose="ask about your data",
+            object_type="upload",
+            object_param="upload_id",
+        ),
+        ("DELETE", "/uploads/{upload_id}/ask"): RoutePolicy(
+            role=Role.ANALYST,
+            action="agent.ask.clear",
+            purpose="start a new Ask your data chat",
+            object_type="upload",
+            object_param="upload_id",
+        ),
+    }
+)
+
+
+class AskResponse(StrictBase):
+    """An upload's Ask-your-data chat, what the chat box may do, and the charts under its replies."""
+
+    session: AgentSession | None = Field(
+        description="The read-only explore session (`explore: true`); null until the first question."
+    )
+    chat: ChatAvailability
+    charts: tuple[RateChart, ...] = Field(
+        default=(),
+        description="One bar chart per `rate_by` result of a reply's own turn (at most three per reply), "
+        "read from the stored tool result, never from the reply's text.",
+    )
+
+
+def _explore_key(upload_id: str) -> str:
+    return upload_key(upload_id, EXPLORE_KEY)
+
+
+def _ask_config(storage: Storage, root: Path, upload_id: str) -> tuple[UploadRecord, UseCaseConfig]:
+    """The upload and its use case, or 404 / `409 AGENT_NOT_AVAILABLE` for a use case with no helper."""
+    upload = load_upload(storage, upload_id)
+    config = use_case_config(upload.use_case_id, root)
+    if not agent_available(config):
+        raise _refuse(409, "AGENT_NOT_AVAILABLE", f"{config.name} has no data helper to ask.")
+    return upload, config
+
+
+def _explore_context(storage: Storage, root: Path, upload_id: str) -> AgentContext:
+    """The upload exactly as it was sent: no recipe replayed and no model resolved, because nothing is
+    prepared or run from here. A prepared (derived) upload may be asked about like any other."""
+    upload, config = _ask_config(storage, root, upload_id)
+    profile = load_upload_profile(storage, upload_id)
+    frame = read_frame(storage, upload.source_key, upload.file_format, profile_row_cap(config))
+    return AgentContext(
+        use_case_id=config.id,
+        config=config,
+        config_root=root,
+        upload_id=upload_id,
+        mode=upload.mode,
+        profile=profile,
+        frame=frame,
+    )
+
+
+def _load_explore(storage: Storage, upload_id: str) -> AgentSession | None:
+    key = _explore_key(upload_id)
+    return storage.read_model(key, AgentSession) if storage.exists(key) else None
+
+
+def _ask_response(
+    session: AgentSession | None, config: UseCaseConfig, storage: Storage, request: Request
+) -> AskResponse:
+    """`_response`'s chat availability (it reads only the config), with the charts of every reply."""
+    shown = session if session is not None else _unsaved(config)
+    return AskResponse(
+        session=session,
+        chat=_response(shown, config, storage, request).chat,
+        charts=charts_of(session) if session is not None else (),
+    )
+
+
+def _unsaved(config: UseCaseConfig) -> AgentSession:
+    """An empty explore session that is never stored: what stands in before the first question."""
+    now = utc_now()
+    return AgentSession(
+        session_id="ask",
+        upload_id="ask",
+        use_case_id=config.id,
+        mode=RunMode.TRAIN.value,
+        agent_name=config.agent.name_for(config.name),
+        status=SessionStatus.READY,
+        explore=True,
+        created_at=now,
+        updated_at=now,
+    )
+
+
+@router.get(
+    "/uploads/{upload_id}/ask",
+    response_model=AskResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Ask your data: an upload's read-only chat with the data helper, and its charts",
+)
+def read_ask(upload_id: str, root: ConfigRootDep, storage: StorageDep, request: Request) -> AskResponse:
+    """`session` is null until the first question; `chat.available` says whether a question can be asked."""
+    _, config = _ask_config(storage, root, upload_id)
+    return _ask_response(_load_explore(storage, upload_id), config, storage, request)
+
+
+@router.post(
+    "/uploads/{upload_id}/ask/messages",
+    response_model=AskResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Ask the data helper a question about an upload; it looks things up and cannot change anything",
+)
+def ask_message(
+    upload_id: str, body: MessageRequest, root: ConfigRootDep, storage: StorageDep, request: Request
+) -> AskResponse:
+    """Guided setup's chat turn (`chat_turn`) in a read-only explore session: the same tools, egress gate,
+    grounding and guardrails, with `propose_setting` refused (DEC-1251). The first question opens the
+    session. With no AI service connected it is `409 AI_NOT_CONNECTED` and nothing is stored."""
+    with _session_lock(f"{upload_id}:ask"):
+        ctx = _explore_context(storage, root, upload_id)
+        session = _load_explore(storage, upload_id) or start_explore(ctx, session_id=f"x-{upload_id}".lower())
+        ceiling = 2 * (ctx.config.agent.max_llm_calls_per_session + CHAT_GRACE_TURNS)
+        if len(session.transcript) + 2 > ceiling:
+            raise _refuse(
+                409, "AGENT_CHAT_FULL", "This chat has used all its questions. Start a new chat to ask more."
+            )
+        generative = ctx.config.generative
+        ai = resolve_slot(generative.llm, slot="product", storage=storage, settings=get_settings(request))
+        meter = Meter(ai.client, job_id=session.session_id, llm=ai.llm, budget=generative.budget)
+        guardrails = Guardrails(load_policy(root), meter=meter, prompts_root=root)
+        text = redact_text(body.text)[0]
+        turn = chat_turn(ctx, session, text, meter=meter, guardrails=guardrails, config_root=root)
+        asked = ChatMessage(role=ChatRole.USER, text=text, created_at=utc_now())
+        session = session.model_copy(
+            update={
+                "transcript": cap_sent((*session.transcript, asked, turn.reply)),
+                "tool_results": (*session.tool_results, *turn.tool_results),
+                "llm_calls": session.llm_calls + turn.llm_calls,
+                "updated_at": utc_now(),
+            }
+        )
+        storage.write_model(_explore_key(upload_id), session)
+        usage_key = upload_key(upload_id, LLM_USAGE_FILENAME)
+        earlier = storage.read_model(usage_key, LlmUsageReport) if storage.exists(usage_key) else None
+        storage.write_model(usage_key, add_usage(earlier, meter.usage()))
+        return _ask_response(session, ctx.config, storage, request)
+
+
+@router.delete(
+    "/uploads/{upload_id}/ask",
+    response_model=AskResponse,
+    responses={404: {"model": ErrorResponse}, 409: {"model": ErrorResponse}},
+    summary="Start a new Ask-your-data chat on an upload; the old one is deleted",
+)
+def clear_ask(upload_id: str, root: ConfigRootDep, storage: StorageDep, request: Request) -> AskResponse:
+    with _session_lock(f"{upload_id}:ask"):
+        _, config = _ask_config(storage, root, upload_id)
+        key = _explore_key(upload_id)
+        if storage.exists(key):
+            storage.delete(key)
+        return _ask_response(None, config, storage, request)

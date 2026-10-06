@@ -29,11 +29,25 @@ export const TOOL_PHRASES = {
   find_roles: "Looked for the ID and outcome columns",
   describe_repeats: "Checked how often an ID repeats",
   check_data: "Checked the data against the run's rules",
+  rate_by: "Grouped the rows and measured each group",
   advisor_state: "Read the helper's own suggestions and questions",
 };
 
 /** Argument names that hold a column name (or a list of them). */
-const COLUMN_KEYS = ["column", "columns", "left", "right", "other", "column_a", "column_b", "a", "b", "primary_key", "target"];
+const COLUMN_KEYS = [
+  "column",
+  "columns",
+  "left",
+  "right",
+  "other",
+  "column_a",
+  "column_b",
+  "a",
+  "b",
+  "primary_key",
+  "target",
+  "outcome_column",
+];
 
 /** Items drawn per reply; more are counted, never drawn. */
 export const MAX_ITEMS = 12;

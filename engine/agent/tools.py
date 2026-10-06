@@ -18,6 +18,11 @@ text in two kinds of place: names and fixed words under the keys `column`, `colu
 `kind`, `code`, `name`, `function`, `dtype`, `label` and `message`, and everything that came from
 a cell under other keys (`value`, `values`, `rows`, `cells`, `matches`, ...), each cell passed
 through `_masked`. Numbers may appear anywhere.
+
+`rate_by` (Plan I, Ask your data, DEC-1252) groups the rows by one column and measures each group (rows,
+the rate of a two-valued outcome, or the mean of a number). It never names a value fewer than
+`MIN_GROUP_ROWS` rows hold, shows no figure for a group that small, and suppresses the next smallest group
+too when the suppressed ones add up to fewer rows than that, so the totals cannot give a figure back.
 """
 
 from __future__ import annotations
@@ -262,6 +267,35 @@ class DuplicatesArgs(_LookArgs):
         min_length=1,
         max_length=5,
         description="1 to 5 column names that make up the key; the whole row when omitted.",
+    )
+
+
+MIN_GROUP_ROWS: Final[int] = 10
+"""`rate_by` reports nothing about a group of fewer rows than this (Plan I, DEC-1252): no row count, no share,
+no rate and no mean. A category value held by fewer rows is never named - it goes into `(other)` - and when
+the groups left out add up to fewer rows than this, the next smallest group is left out with them, so the
+missing figures cannot be worked back from the totals either."""
+MAX_RATE_GROUPS: Final[int] = 20
+"""The most category values `rate_by` names; the rest share one `(other)` group."""
+RATE_OTHER: Final[str] = "(other)"
+RATE_EMPTY: Final[str] = "(empty)"
+
+
+class RateByArgs(_LookArgs):
+    column: str = Field(min_length=1, description="The column to group the rows by.")
+    outcome_column: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Optional: a yes/no column (each group's rate of 'yes') or a number column (each group's mean).",
+    )
+    bins: int = Field(
+        default=5, ge=2, le=10, description="A number column: how many equal-sized ranges, 2 to 10."
+    )
+    top: int = Field(
+        default=10,
+        ge=2,
+        le=MAX_RATE_GROUPS,
+        description="A text column: how many of its most common values, 2 to 20; the rest are one '(other)' group.",
     )
 
 
@@ -1431,6 +1465,160 @@ def _describe_duplicates(ctx: AgentContext, args: DuplicatesArgs) -> dict[str, A
     return result
 
 
+def _rate_measure(
+    ctx: AgentContext, outcome: str | None
+) -> tuple[str, np.ndarray[Any, Any] | None, dict[str, Any] | None]:
+    """(function, per-row values or None, the outcome block) for `rate_by`.
+
+    A two-valued column gives 1.0 / 0.0 by the engine's own label rule (`_positive_mask`), so a group's mean
+    is its positive rate; a number column gives its values; with no outcome there is nothing to average.
+    NaN marks a row whose outcome is empty: it counts in `rows` but not in the rate or the mean.
+    """
+    if outcome is None:
+        return "rows", None, None
+    series = ctx.frame[outcome]
+    if len(_counts(series)) == 2:
+        positive, label = _positive_mask(ctx, outcome)
+        if positive is not None and label is not None:
+            values = np.asarray(pd.to_numeric(positive, errors="coerce").to_numpy(dtype="float64"))
+            known = values[~np.isnan(values)]
+            return (
+                "positive_rate",
+                values,
+                {
+                    "column": _shown(outcome),
+                    "positive_label": _masked(label, LOOK_CELL_CHARS),
+                    "overall_positive_rate": _round(float(known.mean())) if known.size else None,
+                },
+            )
+    if _numeric_dtype(series):
+        values = _floats(series)
+        values = np.where(np.isfinite(values), values, np.nan)
+        known = values[~np.isnan(values)]
+        return (
+            "mean",
+            values,
+            {"column": _shown(outcome), "mean": _round(_exact_mean(known)) if known.size else None},
+        )
+    raise AgentToolError(
+        "AGENT_TOOL_ARGS_INVALID",
+        f"rate_by: {quoted(_shown(outcome))} is neither a yes/no column nor a number column.",
+    )
+
+
+def _rate_groups(
+    series: pd.Series[Any], args: RateByArgs
+) -> tuple[str, np.ndarray[Any, Any], list[dict[str, Any]]]:
+    """(kind, a group number per row, one entry per group in display order) for `rate_by`.
+
+    A number column with more distinct values than `top` is cut into `bins` ranges of about equal rows
+    (`pd.qcut`); anything else is grouped by value, naming only the `top` most common values held by at
+    least `MIN_GROUP_ROWS` rows - every other value is `(other)`, so a rare value is never named. Empty
+    cells are `(empty)`. Labels are cells: masked, then cut, like every other look tool's.
+    """
+    empty = _empty_mask(series)
+    codes = np.full(len(series), -1, dtype=np.int64)
+    groups: list[dict[str, Any]] = []
+    counts = _counts(series)
+    if _numeric_dtype(series) and len(counts) > args.top:
+        values = _floats(series)
+        finite = np.isfinite(values)
+        held = values[finite]
+        cut = pd.qcut(pd.Series(held), q=args.bins, duplicates="drop").cat.codes.to_numpy(dtype=np.int64)
+        codes[np.flatnonzero(finite)] = cut
+        for code in range(int(cut.max()) + 1 if cut.size else 0):
+            # The range a person reads is the smallest and largest value the group really holds (qcut's own
+            # edges start just below the minimum: `19.979 to 87.1`).
+            inside = held[cut == code]
+            if not inside.size:  # qcut leaves no range empty; a group of no rows would still be listed
+                groups.append({"group": RATE_OTHER, "low": None, "high": None})
+                continue
+            low, high = float(_round(float(inside.min())) or 0.0), float(_round(float(inside.max())) or 0.0)
+            groups.append({"group": f"{number_text(low)} to {number_text(high)}", "low": low, "high": high})
+        other = np.flatnonzero(~finite & ~empty)  # an infinite value is a number no range holds
+        kind = "number_ranges"
+    else:
+        keys = series.astype(str)
+        top = [(value, int(n)) for value, n in counts.head(args.top).items() if int(n) >= MIN_GROUP_ROWS]
+        if 0 < int(empty.sum()) < MIN_GROUP_ROWS:
+            empty = np.zeros(len(series), dtype=bool)  # a few empty cells are counted in (other), not alone
+        # A small (other) would only be suppressed and take a named value down with it: the smallest named
+        # values join it instead, until it is large enough to show (or nothing is named).
+        rest = len(series) - int(empty.sum()) - sum(n for _, n in top)
+        while top and 0 < rest < MIN_GROUP_ROWS:
+            rest += top.pop()[1]
+        named = [value for value, _ in top]
+        index = {str(value): position for position, value in enumerate(named)}
+        mapped = keys.map(index)
+        known = mapped.notna().to_numpy(dtype=bool) & ~empty
+        codes[known] = mapped.to_numpy()[known].astype(np.int64)
+        groups = [{"group": _masked(value, LOOK_CELL_CHARS)} for value in named]
+        other = np.flatnonzero(~known & ~empty)
+        kind = "values"
+    if other.size:
+        codes[other] = len(groups)
+        groups.append({"group": RATE_OTHER})
+    if empty.any():
+        codes[empty] = len(groups)
+        groups.append({"group": RATE_EMPTY})
+    return kind, codes, groups
+
+
+def _rate_by(ctx: AgentContext, args: RateByArgs) -> dict[str, Any]:
+    name = ctx.resolve(args.column)
+    outcome = ctx.resolve(args.outcome_column) if args.outcome_column is not None else None
+    if outcome == name:
+        raise AgentToolError("AGENT_TOOL_ARGS_INVALID", "rate_by: group by one column and measure another.")
+    for column in (name, outcome):
+        # A group label of a personal column is somebody's value; a rate of one is somebody's outcome.
+        if column is not None and _personal(ctx, column):
+            return _personal_refusal(ctx, column, groups=[])
+    function, values, outcome_block = _rate_measure(ctx, outcome)
+    kind, codes, groups = _rate_groups(ctx.frame[name], args)
+    rows = len(ctx.frame)
+    sizes: np.ndarray[Any, Any] = np.bincount(codes[codes >= 0], minlength=len(groups))
+    known: np.ndarray[Any, Any] = sizes
+    sums: np.ndarray[Any, Any] = np.zeros(len(groups))
+    if values is not None:
+        measured = ~np.isnan(values) & (codes >= 0)
+        known = np.bincount(codes[measured], minlength=len(groups))
+        sums = np.bincount(codes[measured], weights=values[measured], minlength=len(groups))
+    # Small groups say nothing; when what they leave out adds up to fewer than MIN_GROUP_ROWS rows, the next
+    # smallest group joins them, so the totals cannot give the missing figures back (complementary suppression).
+    hidden = {i for i in range(len(groups)) if known[i] < MIN_GROUP_ROWS}
+    while hidden and sum(int(known[i]) for i in hidden) < MIN_GROUP_ROWS and len(hidden) < len(groups):
+        hidden.add(min((i for i in range(len(groups)) if i not in hidden), key=lambda i: (int(known[i]), i)))
+    order = list(range(len(groups)))
+    if kind == "values":  # most rows first; (other) and (empty) stay last
+        named = [i for i in order if groups[i]["group"] not in {RATE_OTHER, RATE_EMPTY}]
+        order = sorted(named, key=lambda i: (-int(sizes[i]), i)) + [i for i in order if i not in named]
+    listed: list[dict[str, Any]] = []
+    for i in order:
+        entry = dict(groups[i])
+        if i in hidden:
+            entry.update({"rows": None, "share": None, "suppressed": True})
+            if function != "rows":
+                entry[function] = None
+        else:
+            entry.update({"rows": int(sizes[i]), "share": _share(int(sizes[i]), rows), "suppressed": False})
+            if function != "rows":
+                entry[function] = _round(float(sums[i] / known[i])) if known[i] else None
+        listed.append(entry)
+    result: dict[str, Any] = {
+        "column": _shown(name),
+        "kind": kind,
+        "function": function,
+        "rows": rows,
+        "outcome": outcome_block,
+        "min_group_rows": MIN_GROUP_ROWS,
+        "groups_suppressed": len(hidden),
+        "groups": listed,
+    }
+    if _fit(result, listed, keep=1):
+        result["truncated"] = True
+    return result
+
+
 TOOLS: Final[Mapping[str, Tool]] = {
     tool.name: tool
     for tool in (
@@ -1555,6 +1743,18 @@ TOOLS: Final[Mapping[str, Tool]] = {
             ToolKind.READ,
             DuplicatesArgs,
             _describe_duplicates,
+        ),
+        Tool(
+            "rate_by",
+            "Group the rows by one column and measure each group: its rows and share of all rows and, when "
+            "outcome_column is given, the share of 'yes' in each group (a yes/no column) or the group's mean (a "
+            "number column). A number column is cut into ranges of about equal rows; a text column keeps its most "
+            "common values and puts the rest in '(other)'. A group of fewer than 10 rows shows no figures "
+            "(suppressed). Use it for 'churn rate by state' or 'who are the top 10% spenders'. The person sees "
+            "the result as a chart. Refused for personal-data columns.",
+            ToolKind.READ,
+            RateByArgs,
+            _rate_by,
         ),
         Tool(
             "check_data",

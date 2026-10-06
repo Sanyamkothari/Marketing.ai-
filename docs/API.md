@@ -135,6 +135,9 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/agent-session/decisions` | Accept or reject the helper's suggestions | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/messages` | Ask the helper something; its reply is checked before it is kept | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/preview` | The first rows before and after the accepted steps, and what each step did | PreviewResponse |
+| DELETE | `/uploads/{upload_id}/ask` | Start a new Ask-your-data chat on an upload; the old one is deleted | AskResponse |
+| GET | `/uploads/{upload_id}/ask` | Ask your data: an upload's read-only chat with the data helper, and its charts | AskResponse |
+| POST | `/uploads/{upload_id}/ask/messages` | Ask the data helper a question about an upload; it looks things up and cannot change anything | AskResponse |
 | POST | `/uploads/{upload_id}/checks` | Run the data checks for an upload without starting a run | ValidationReport |
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
 | GET | `/uploads/{upload_id}/treatment-candidates` | The 0/1 columns of an upload that could record who was treated | TreatmentCandidatesResponse |

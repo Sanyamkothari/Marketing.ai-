@@ -70,3 +70,15 @@ export const postPreview = (uploadId) => call(session(uploadId, "/preview"), { m
 
 /** Approve: `{ upload_id, mode, primary_key, target, overrides, summary, receipt }`, or a 409. */
 export const postApply = (uploadId) => call(session(uploadId, "/apply"), { method: "POST" });
+
+// Ask your data (Plan I, DEC-1250): the helper's read-only chat on an upload, outside Guided setup.
+const ask = (uploadId, tail = "") => `/uploads/${enc(uploadId)}/ask${tail}`;
+
+/** The upload's Ask-your-data chat: `{ session | null, chat, charts }`. */
+export const getAsk = (uploadId) => call(ask(uploadId));
+
+/** One question; the reply (and any chart under it) comes back in the same envelope. */
+export const postAsk = (uploadId, text) => call(ask(uploadId, "/messages"), { method: "POST", body: { text } });
+
+/** Start a new chat: the old one is deleted. */
+export const clearAsk = (uploadId) => call(ask(uploadId), { method: "DELETE" });

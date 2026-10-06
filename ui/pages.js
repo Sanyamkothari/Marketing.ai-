@@ -687,7 +687,9 @@ function dataPage(uc, run, art, byPath, extra) {
     ${targetCard}
     ${pipelineCard}
     ${featureCard}
-    ${set("Columns not used", dropped)}${set("Columns kept, not used to predict", carried, "The date each row describes")}${removalCard}`;
+    ${set("Columns not used", dropped)}${set("Columns kept, not used to predict", carried, "The date each row describes")}${removalCard}${
+      extra.panelsHtml || ""
+    }`;
   return shell(uc, "data", run, body, { techHtml: techRows });
 }
 

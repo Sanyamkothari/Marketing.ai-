@@ -303,6 +303,37 @@ export function registerUploadSource(source) {
 export function uploadSources() {
   return uploadSourceList.slice();
 }
+
+// Plan I (DEC-1255, same workstream and block as Plan G): a *page panel* - a section a module adds to a
+// run's Data, Model or Output page (today, "Ask your data" on the Data page). `app.js` asks for
+// `pagePanelsHtml(kind, uc, run)` when it draws the page and `pages.js` puts it at the end of the page's
+// cards; the module owns the panel's markup, its events (delegated, so a repaint needs no re-binding)
+// and its own in-place redraws. With nothing registered the page is drawn exactly as before.
+const pagePanelList = [];
+
+/** Register a page panel: `{ name, applies(kind, uc, run), html(kind, uc, run) }`. `name` must be unique. */
+export function registerPagePanel(panel) {
+  const { name, applies, html } = panel || {};
+  if (!name || typeof applies !== "function" || typeof html !== "function") {
+    throw new Error("registerPagePanel needs { name, applies(kind, uc, run), html(kind, uc, run) }");
+  }
+  if (pagePanelList.some((p) => p.name === name)) throw new Error(`A page panel named "${name}" is already registered`);
+  pagePanelList.push({ name, applies, html });
+  announceModulesChanged();
+}
+
+/** The markup of every page panel that applies to this page of this run, in registration order; `""` for none. */
+export function pagePanelsHtml(kind, uc, run) {
+  return pagePanelList
+    .map((panel) => {
+      try {
+        return panel.applies(kind, uc, run) ? panel.html(kind, uc, run) || "" : "";
+      } catch {
+        return "";
+      }
+    })
+    .join("");
+}
 // ---- END PLAN-G ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----

@@ -39,6 +39,7 @@ def test_m71_ships_only_read_tools() -> None:
         "describe_missing",
         "describe_duplicates",
         "describe_placeholder_values",  # DEC-1222
+        "rate_by",  # DEC-1252 (Ask your data)
     }
     assert {tool.kind for tool in TOOLS.values()} == {ToolKind.READ}
 

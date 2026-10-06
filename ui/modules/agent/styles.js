@@ -72,6 +72,16 @@ const CSS = `
 .ag-access{margin:0;padding:0 20px 16px;font-size:12px;color:var(--muted);line-height:1.45}
 .ag-access a{color:var(--brand-blue)}
 .ag-previewbar{margin-top:12px}
+.ask .ask-lead{margin:0;padding:0 20px 8px;font-size:13px;color:var(--ink2);line-height:1.5}
+.ask .gaskrow .btn.quiet{flex:none}
+.ask-chart{margin:10px 0 0;padding:10px 12px;background:var(--surface);border:1px solid var(--line);border-radius:8px;color:var(--ink)}
+.ask-chart figcaption{font-size:12px;font-weight:600;color:var(--ink2);margin-bottom:8px;overflow-wrap:anywhere}
+.ask-chart .bars{padding:0;gap:8px}
+.ask-chart .brow{grid-template-columns:minmax(72px,160px) minmax(60px,1fr) auto;gap:10px;font-size:12px}
+.ask-chart .brow .pct{font-variant-numeric:tabular-nums;white-space:nowrap}
+.ask-chart .ask-rows{display:block;font-size:11px;color:var(--muted)}
+.ask-chart .is-suppressed .pct{font-weight:400;color:var(--muted)}
+.ask-chart .caption{margin:8px 0 0;padding:0;font-size:11px;color:var(--muted)}
 @media (max-width:700px){.ag-opt{flex-direction:column;align-items:flex-start}.ag-sum{grid-template-columns:1fr}}
 `;
 
