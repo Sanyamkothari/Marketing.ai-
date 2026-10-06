@@ -83,6 +83,14 @@ def test_every_legacy_policy_has_a_purpose_to_explain_a_refusal() -> None:
         (("DELETE", "/connection/aws"), Role.ADMIN),
         (("POST", "/connection/aws/test"), Role.ADMIN),
         (("GET", "/runs"), Role.VIEWER),
+        # Plan I (DEC-1278): reading and rating answers is Viewer; building, exporting, deleting Analyst
+        (("GET", "/indexes/{index_id}/chunks/{chunk_id}"), Role.VIEWER),
+        (("POST", "/indexes/{index_id}/feedback"), Role.VIEWER),
+        (("GET", "/indexes/{index_id}/feedback"), Role.VIEWER),
+        (("GET", "/indexes/{index_id}/compare/{other_index_id}"), Role.VIEWER),
+        (("GET", "/indexes/{index_id}/feedback/test-questions.csv"), Role.ANALYST),
+        (("POST", "/indexes/{index_id}/update"), Role.ANALYST),
+        (("DELETE", "/indexes/{index_id}"), Role.ANALYST),
     ],
 )
 def test_the_separation_of_duties_is_what_the_plan_says(key: tuple[str, str], role: Role) -> None:
@@ -95,6 +103,7 @@ def test_the_separation_of_duties_is_what_the_plan_says(key: tuple[str, str], ro
         ("GET", "/runs/{run_id}/scores.csv"),
         ("GET", "/runs/{run_id}/copy_messages.csv"),
         ("GET", "/runs/{run_id}/artefacts/{name}"),
+        ("GET", "/indexes/{index_id}/feedback/test-questions.csv"),
     ],
 )
 def test_row_level_downloads_are_audited(key: tuple[str, str]) -> None:

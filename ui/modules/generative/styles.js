@@ -119,6 +119,30 @@ const CSS = `
 .gsave-row{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:16px;padding-top:16px;border-top:1px solid var(--line)}
 .gsave-row .spacer{flex:1}
 .gscreen .card>details.tech:last-child{padding-bottom:16px}
+.gcite-open{cursor:pointer}
+.gcite-open:hover,.gcite-open:focus-visible{background:var(--soft);outline:2px solid var(--brand-blue);outline-offset:1px}
+.gcite-more{display:block;margin-top:4px;font-size:12px;color:var(--brand-blue)}
+.gpassage{position:fixed;top:0;right:0;bottom:0;width:min(440px,100vw);z-index:40;background:var(--card,var(--surface));border-left:1px solid var(--line);box-shadow:-8px 0 24px rgba(0,0,0,.12);display:flex;flex-direction:column}
+.gpassage-h{display:flex;justify-content:space-between;align-items:flex-start;gap:12px;padding:16px 20px;border-bottom:1px solid var(--line)}
+.gpassage-h h3{margin:0;font-size:14px}
+.gpassage-h .sub{font-size:12px;color:var(--muted)}
+.gpassage-body{flex:1 1 auto;overflow:auto;padding:16px 20px;font-size:13px;line-height:1.6;white-space:pre-wrap}
+.gpassage-body mark{background:var(--warn-t);color:var(--ink);padding:0 2px;border-radius:2px}
+.gpassage-nav{display:flex;justify-content:space-between;gap:12px;padding:12px 20px;border-top:1px solid var(--line)}
+.gfb{margin-top:8px;display:flex;flex-direction:column;gap:8px}
+.gfb-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:var(--muted)}
+.gfb-row .btn[aria-pressed="true"]{border-color:var(--brand-blue);color:var(--brand-blue)}
+.gfb textarea{width:100%;min-height:56px;font:inherit;font-size:13px;padding:8px;border:1px solid var(--line2);border-radius:8px;background:var(--surface);color:var(--ink)}
+.gmetrics{display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:12px;padding:12px 20px 4px}
+.gmetric{border:1px solid var(--line);border-radius:8px;padding:8px 12px}
+.gmetric .k{font-size:12px;color:var(--muted)}
+.gmetric .v{font-size:18px;font-weight:600;color:var(--ink)}
+.gcompare{padding:8px 20px 16px;display:flex;flex-direction:column;gap:12px}
+.gdocrows{display:flex;flex-direction:column;gap:4px;margin:8px 0}
+.gdocrows label{display:flex;gap:8px;align-items:center;font-size:13px}
+.gmanage{padding:8px 20px 16px;display:flex;flex-direction:column;gap:12px}
+.gfeedback-list{margin:0;padding-left:16px;font-size:13px;display:flex;flex-direction:column;gap:4px}
+@media (max-width:700px){.gpassage{width:100vw}}
 `;
 
 let injected = false;

@@ -51,20 +51,27 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal, TypeVar
 
 import pandas as pd
-from fastapi import APIRouter, File, Form, HTTPException, Response, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
 from pydantic import BaseModel
 
+from api.access import set_audit_context
+from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, JobsDep, SettingsDep, StorageDep
 from api.routes.ai_service import resolve_slot
 from api.routes.runs import load_run, read_artefact
 from api.routes.uploads import http_error, use_case_config
 from api.schemas import (
+    AnswerFeedbackListResponse,
+    AnswerFeedbackRequest,
     AssistantAskRequest,
     CampaignCopyRequest,
+    ChunkPassageResponse,
     CopyTemplateApproveRequest,
     ErrorResponse,
     GenerativeJobStartedResponse,
     GenerativeLlmSummary,
+    IndexComparisonResponse,
+    IndexComparisonSide,
     IndexDetailResponse,
     IndexJobStartedResponse,
     IndexListResponse,
@@ -72,7 +79,9 @@ from api.schemas import (
     ReferenceSetResponse,
     RootCauseRequest,
 )
+from engine.access.roles import Role
 from engine.ai_service import ResolvedAi
+from engine.audit.events import content_hash
 from engine.config import (
     GenerativeConfig,
     GenerativeKind,
@@ -129,10 +138,24 @@ from engine.generative.errors import (
     generative_error,
 )
 from engine.generative.evaluation import SOURCE_DOC_COLUMN, evaluate
+from engine.generative.feedback import (
+    AnswerFeedback,
+    list_feedback,
+    new_feedback,
+    save_feedback,
+    thumbs_down_csv,
+)
 from engine.generative.guardrails import Guardrails, load_policy
 from engine.generative.index import build_index, read_manifest
 from engine.generative.root_cause import build_root_cause_summary
 from engine.generative.vectorstore import LocalVectorStore, VectorStore
+from engine.generative.versions import (
+    INDEX_UPDATE_FILENAME,
+    IndexUpdate,
+    grade_of,
+    update_summary,
+    verdict_changes,
+)
 from engine.generative.win_back import approve_template, generate_campaign_copy, regenerate_template
 from engine.jobs import CancelToken, JobFn
 from engine.settings import Settings
@@ -237,6 +260,11 @@ class _IndexOwner(StrictBase):
     use_case_id: str
     llm: GenerativeLlmSummary
     source_label: str
+    previous_index_id: str | None = None
+    """The index an "Update documents" built this one from (DEC-1274); null for a build from scratch."""
+    reference_set_id: str | None = None
+    """The test questions this index was last graded with, so an update can grade its new version too."""
+    sample_questions: bool = False
 
 
 def _llm_summary(llm: LlmConfig) -> GenerativeLlmSummary:
@@ -379,9 +407,7 @@ def _with_model_choice(
 # ---------------------------------------------------------------------------
 # Job status documents (DEC-211): one per job, coarse stages, never fabricated ones
 # ---------------------------------------------------------------------------
-def _stage(
-    key: str, state: RunState, *, seconds: float = 0.0, detail: str | None = None
-) -> GenerativeStage:
+def _stage(key: str, state: RunState, *, seconds: float = 0.0, detail: str | None = None) -> GenerativeStage:
     if detail is None:
         detail = "" if state in (RunState.PENDING, RunState.RUNNING) else "Finished."
     return GenerativeStage(
@@ -833,7 +859,11 @@ async def create_index(
         storage,
         index_id,
         _IndexOwner(
-            use_case_id=config.id, llm=_llm_summary(generative.llm), source_label=_source_label(paths)
+            use_case_id=config.id,
+            llm=_llm_summary(generative.llm),
+            source_label=_source_label(paths),
+            reference_set_id=None if use_sample_questions else reference_set_id,
+            sample_questions=use_sample_questions,
         ),
     )
     _write_status(
@@ -884,7 +914,15 @@ def _index_build_job(
     stage_keys: Sequence[str],
     started_at: datetime,
     config_root: Path | None,
+    previous: DocIndexManifest | None = None,
+    changes: _UpdateChanges | None = None,
 ) -> JobFn:
+    """The build job; with `previous`, an "Update documents" version that reuses what did not change.
+
+    `previous` goes straight to `build_index(previous=...)`, whose reuse is keyed on each document's
+    `(fingerprint, doc_id)` (DEC-220, DEC-221), and `changes` is what the request asked for, written
+    beside the new version as `index_update.json` once the build has finished (DEC-1274).
+    """
     status_key = index_key(index_id, INDEX_STATUS_FILENAME)
     store: VectorStore = LocalVectorStore(storage)
     meter, guardrails = _client_meter_guardrails(use_case, ai=ai, job_id=index_id, config_root=config_root)
@@ -903,15 +941,27 @@ def _index_build_job(
         )
         try:
             began = time.monotonic()
-            build_index(
+            built = build_index(
                 list(paths),
                 index_id=index_id,
                 use_case=use_case,
                 storage=storage,
                 store=store,
                 meter=meter,
+                previous=previous,
                 config_root=config_root,
             )
+            if previous is not None and changes is not None:
+                storage.write_model(
+                    index_key(index_id, INDEX_UPDATE_FILENAME),
+                    update_summary(
+                        previous,
+                        built.manifest,
+                        added=changes.added,
+                        replaced=changes.replaced,
+                        removed=changes.removed,
+                    ),
+                )
             stages = _moved(stages, "build", RunState.DONE, seconds=time.monotonic() - began)
             if reference_path is not None:
                 stages = _moved(stages, "evaluate", RunState.RUNNING)
@@ -1010,6 +1060,8 @@ def _index_summary(storage: Storage, index_id: str, owner: _IndexOwner) -> Index
         faithfulness=None if rag_eval is None else rag_eval.aggregates.mean_faithfulness,
         source_label=owner.source_label,
         created_at=status.updated_at,
+        pass_rate=None if rag_eval is None else rag_eval.aggregates.pass_rate,
+        previous_index_id=owner.previous_index_id,
     )
 
 
@@ -1048,14 +1100,17 @@ def read_index(index_id: str, storage: StorageDep) -> IndexDetailResponse:
     except StorageError as exc:
         raise generative_http(generative_error(INDEX_NOT_FOUND, index_id=index_id)) from exc
     owner = _read_owner(storage, index_id)
+    rag_eval = _optional_model(storage, index_key(index_id, RAG_EVAL_FILENAME), RagEval)
     return IndexDetailResponse(
         index_id=index_id,
         llm=owner.llm,
         status=status,
         manifest=_optional_model(storage, index_key(index_id, DOC_INDEX_MANIFEST_FILENAME), DocIndexManifest),
-        rag_eval=_optional_model(storage, index_key(index_id, RAG_EVAL_FILENAME), RagEval),
+        rag_eval=rag_eval,
         llm_usage=_optional_model(storage, index_key(index_id, LLM_USAGE_FILENAME), LlmUsageReport),
         guardrails=_optional_model(storage, index_key(index_id, GUARDRAIL_REPORT_FILENAME), GuardrailReport),
+        grade=None if rag_eval is None else grade_of(rag_eval),
+        update=_optional_model(storage, index_key(index_id, INDEX_UPDATE_FILENAME), IndexUpdate),
     )
 
 
@@ -1110,7 +1165,14 @@ async def create_evaluation(
     _write_owner(
         storage,
         index_id,
-        owner.model_copy(update={"llm": _llm_summary(generative.llm), "source_label": label}),
+        owner.model_copy(
+            update={
+                "llm": _llm_summary(generative.llm),
+                "source_label": label,
+                "reference_set_id": None if use_sample_questions else reference_set_id,
+                "sample_questions": use_sample_questions,
+            }
+        ),
     )
     stages = (_stage("evaluate", RunState.PENDING),)
     _write_status(
@@ -1235,14 +1297,18 @@ def ask_index(
     store: VectorStore = LocalVectorStore(storage)
     meter, guardrails = _client_meter_guardrails(config, ai=ai, job_id=f"ask_{index_id}", config_root=root)
     try:
-        return answer(
-            body.question,
-            index_id=index_id,
-            use_case=config,
-            store=store,
-            meter=meter,
-            guardrails=guardrails,
-            config_root=root,
+        return _with_citation_pages(
+            answer(
+                body.question,
+                index_id=index_id,
+                use_case=config,
+                store=store,
+                meter=meter,
+                guardrails=guardrails,
+                config_root=root,
+            ),
+            store,
+            index_id,
         )
     except GenerativeError as exc:
         raise generative_http(exc) from exc
@@ -1583,3 +1649,504 @@ def regenerate_copy_template(
 def read_copy_messages(run_id: str, storage: StorageDep) -> Response:
     """Registered like `GET /runs/{run_id}/scores.csv`; `404 ARTEFACT_NOT_FOUND` before any copy exists."""
     return read_artefact(run_id, COPY_MESSAGES_FILENAME, storage)
+
+
+# ===========================================================================
+# Plan I (DEC-1270 … DEC-1279): a trustworthy, manageable assistant.
+# Passages behind citations, feedback on answers, index versions without full rebuilds, deletion and
+# a compare view. Each route's role is declared here, next to it, like every router after Phase 4b.
+# ===========================================================================
+_V, _AN = Role.VIEWER, Role.ANALYST
+
+register(
+    {
+        ("GET", "/indexes/{index_id}/chunks/{chunk_id}"): RoutePolicy(
+            role=_V,
+            action="indexes.chunk_read",
+            purpose="read a passage of a knowledge index",
+            object_type="index",
+            object_param="index_id",
+        ),
+        ("POST", "/indexes/{index_id}/feedback"): RoutePolicy(
+            role=_V,
+            action="indexes.feedback_create",
+            purpose="give feedback on an answer",
+            object_type="index",
+            object_param="index_id",
+        ),
+        ("GET", "/indexes/{index_id}/feedback"): RoutePolicy(
+            role=_V,
+            action="indexes.feedback_list",
+            purpose="see feedback on answers",
+            object_type="index",
+            object_param="index_id",
+        ),
+        ("GET", "/indexes/{index_id}/feedback/test-questions.csv"): RoutePolicy(
+            role=_AN,
+            action="indexes.feedback_export",
+            purpose="turn feedback into test questions",
+            object_type="index",
+            object_param="index_id",
+            audit_reads=True,
+        ),
+        ("POST", "/indexes/{index_id}/update"): RoutePolicy(
+            role=_AN,
+            action="indexes.update",
+            purpose="update an assistant's documents",
+            object_type="index",
+            object_param="index_id",
+        ),
+        ("DELETE", "/indexes/{index_id}"): RoutePolicy(
+            role=_AN,
+            action="indexes.delete",
+            purpose="delete a knowledge index",
+            object_type="index",
+            object_param="index_id",
+        ),
+        ("GET", "/indexes/{index_id}/compare/{other_index_id}"): RoutePolicy(
+            role=_V,
+            action="indexes.compare",
+            purpose="compare knowledge indexes",
+            object_type="index",
+            object_param="index_id",
+        ),
+    }
+)
+"""Reading a passage, giving and seeing feedback, and comparing gradings are Viewer, as every read of
+an index already is and as the pilot's feedback button is (DEC-911); anything that builds, spends or
+deletes is Analyst, as building an index is (DEC-716); the test-question export is Analyst and audited,
+because it is the step that turns what people asked into a file that leaves the product (DEC-1278)."""
+
+_BUSY_STATES: Final[frozenset[RunState]] = frozenset({RunState.PENDING, RunState.RUNNING})
+
+RemoveDocumentsField = Annotated[
+    list[str] | None,
+    Form(description="Names of documents to leave out of the new version, exactly as the index lists them."),
+]
+
+
+def _with_citation_pages(result: AssistantAnswer, store: VectorStore, index_id: str) -> AssistantAnswer:
+    """`result` with each citation's page copied from its chunk, so a card can say "page 3".
+
+    `Citation.page` is filled here rather than inside `assistant.answer`, from the same chunk the
+    citation already names: a page is a fact of the stored passage, never something a model said.
+    """
+    if not result.citations:
+        return result
+    pages = {chunk.chunk_id: chunk.page for chunk in store.chunks(index_id)}
+    return result.model_copy(
+        update={
+            "citations": tuple(
+                citation.model_copy(update={"page": pages.get(citation.chunk_id)})
+                for citation in result.citations
+            )
+        }
+    )
+
+
+def _owned_indexes(storage: Storage, use_case_id: str) -> list[tuple[str, _IndexOwner]]:
+    """Every index of `use_case_id`, as `(index_id, owner)`, in storage order."""
+    return [
+        (key.split("/")[1], owner)
+        for key in storage.list_keys("indexes/")
+        if key.endswith(f"/{_INDEX_OWNER_FILENAME}")
+        for owner in (storage.read_model(key, _IndexOwner),)
+        if owner.use_case_id == use_case_id
+    ]
+
+
+# ---------------------------------------------------------------------------
+# 12. GET /indexes/{index_id}/chunks/{chunk_id}
+# ---------------------------------------------------------------------------
+@router.get(
+    "/indexes/{index_id}/chunks/{chunk_id}",
+    response_model=ChunkPassageResponse,
+    responses=_GENERATIVE_ERRORS,
+    summary="One passage of an index, as a citation opens it, with its neighbours in the document",
+)
+def read_chunk(index_id: str, chunk_id: str, storage: StorageDep) -> ChunkPassageResponse:
+    """Read-only: the passage exactly as it was indexed, so a reader can check a quote against it."""
+    try:
+        read_manifest(storage, index_id)
+        chunks = LocalVectorStore(storage).chunks(index_id)
+    except GenerativeError as exc:
+        raise generative_http(exc) from exc
+    found = next((chunk for chunk in chunks if chunk.chunk_id == chunk_id), None)
+    if found is None:
+        raise http_error(
+            404,
+            "CHUNK_NOT_FOUND",
+            "This passage is not in this assistant's documents. It may have been cited by another version.",
+        )
+    siblings = sorted((c for c in chunks if c.doc_id == found.doc_id), key=lambda c: c.ordinal)
+    position = next(i for i, c in enumerate(siblings) if c.chunk_id == chunk_id)
+    return ChunkPassageResponse(
+        index_id=index_id,
+        chunk_id=found.chunk_id,
+        doc_id=found.doc_id,
+        document=found.document,
+        section=found.section,
+        page=found.page,
+        ordinal=found.ordinal,
+        text=found.text,
+        previous_chunk_id=siblings[position - 1].chunk_id if position > 0 else None,
+        next_chunk_id=siblings[position + 1].chunk_id if position + 1 < len(siblings) else None,
+    )
+
+
+# ---------------------------------------------------------------------------
+# 13. POST and GET /indexes/{index_id}/feedback, and the test-question export
+# ---------------------------------------------------------------------------
+@router.post(
+    "/indexes/{index_id}/feedback",
+    response_model=AnswerFeedback,
+    status_code=201,
+    responses=_NOT_FOUND,
+    summary="Record a thumbs up or down on one answer (contact details are masked before storing)",
+)
+def create_answer_feedback(
+    index_id: str, body: AnswerFeedbackRequest, request: Request, storage: StorageDep
+) -> AnswerFeedback:
+    _read_owner(storage, index_id)  # 404 INDEX_NOT_FOUND for an index that is not there
+    entry = new_feedback(
+        index_id=index_id,
+        rating=body.rating,
+        question=body.question,
+        answer=body.answer,
+        refused=body.refused,
+        cited_chunk_ids=body.cited_chunk_ids,
+        comment=body.comment,
+        now=utc_now(),
+    )
+    save_feedback(storage, entry)
+    set_audit_context(
+        request, object_id=entry.feedback_id, object_type="feedback", after_hash=content_hash(entry)
+    )
+    return entry
+
+
+@router.get(
+    "/indexes/{index_id}/feedback",
+    response_model=AnswerFeedbackListResponse,
+    responses=_NOT_FOUND,
+    summary="Every thumbs up and down given on this index's answers, oldest first",
+)
+def list_answer_feedback(index_id: str, storage: StorageDep) -> AnswerFeedbackListResponse:
+    _read_owner(storage, index_id)
+    entries = list_feedback(storage, index_id)
+    return AnswerFeedbackListResponse(
+        index_id=index_id,
+        up=sum(1 for entry in entries if entry.rating == "up"),
+        down=sum(1 for entry in entries if entry.rating == "down"),
+        entries=entries,
+    )
+
+
+@router.get(
+    "/indexes/{index_id}/feedback/test-questions.csv",
+    response_class=Response,
+    responses={**_NOT_FOUND, 200: {"content": {"text/csv": {}}, "description": "A reference-set file."}},
+    summary="The thumbs-down questions as rows of a reference-set file, with the answers left for a person",
+)
+def export_feedback_questions(index_id: str, root: ConfigRootDep, storage: StorageDep) -> Response:
+    """Never invents a reference answer: only the question column is filled (DEC-1273)."""
+    owner = _read_owner(storage, index_id)
+    config = use_case_config(owner.use_case_id, root)
+    body = thumbs_down_csv(list_feedback(storage, index_id), config.generative.reference_set)
+    return Response(
+        body,
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="test_questions_{index_id}.csv"'},
+    )
+
+
+# ---------------------------------------------------------------------------
+# 14. POST /indexes/{index_id}/update - a new version, reusing what did not change
+# ---------------------------------------------------------------------------
+class _UpdateChanges(StrictBase):
+    """What one update request asked for, by document name."""
+
+    added: tuple[str, ...] = ()
+    replaced: tuple[str, ...] = ()
+    removed: tuple[str, ...] = ()
+
+
+def _previous_sources(storage: Storage, index_id: str) -> dict[str, str]:
+    """Document name -> the storage key of the bytes an index was built from (uploaded builds only)."""
+    prefix = index_key(index_id, "source") + "/"
+    return {Path(key).name: key for key in storage.list_keys(prefix)}
+
+
+def _kept_document_bytes(
+    storage: Storage, previous_index_id: str, names: Sequence[str]
+) -> list[tuple[str, bytes]]:
+    """The bytes of every document carried into the new version, or `409 INDEX_SOURCE_MISSING`.
+
+    Looked up among the previous version's own uploads first and the bundled sample corpus second
+    (a sample build stores no copy). Every name is resolved before one byte is read, so a request
+    refused here has written nothing.
+    """
+    stored = _previous_sources(storage, previous_index_id)
+    located: list[tuple[str, str | Path]] = []
+    for name in names:
+        if name in stored:
+            located.append((name, stored[name]))
+            continue
+        sample = SAMPLE_SOURCE_DIR / name
+        if sample.is_file():
+            located.append((name, sample))
+            continue
+        raise http_error(
+            409,
+            "INDEX_SOURCE_MISSING",
+            f"The file {name} this assistant was built from is no longer stored, so it cannot be carried "
+            "into a new version. Upload it again with this update, or remove it.",
+        )
+    return [
+        (name, where.read_bytes() if isinstance(where, Path) else storage.read_bytes(where))
+        for name, where in located
+    ]
+
+
+def _require_distinct_stems(names: Sequence[str]) -> None:
+    by_stem: dict[str, list[str]] = {}
+    for name in names:
+        by_stem.setdefault(Path(name).stem, []).append(name)
+    for stem, clashing in sorted(by_stem.items()):
+        if len(clashing) > 1:
+            raise http_error(
+                422,
+                "DOCUMENT_NAME_CLASH",
+                f"{', '.join(sorted(clashing))} would share the name {stem!r} in the new version. "
+                "Rename one, or remove the old one in the same update.",
+            )
+
+
+@router.post(
+    "/indexes/{index_id}/update",
+    response_model=IndexJobStartedResponse,
+    status_code=202,
+    responses=_GENERATIVE_ERRORS,
+    summary="Build a new version with documents added, replaced or removed, reusing every unchanged one",
+)
+async def update_index(
+    index_id: str,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    jobs: JobsDep,
+    current: SettingsDep,
+    documents: DocumentsField = None,
+    remove: RemoveDocumentsField = None,
+    reference_set_id: ReferenceSetIdField = None,
+    use_sample_questions: UseSampleQuestionsField = False,
+) -> IndexJobStartedResponse:
+    """A file named like a document already in the index replaces it; any other file is added.
+
+    The index named in the path is never changed: the new version gets its own id, its own copy of
+    every document and its own vectors, and `build_index(previous=...)` carries over the passages
+    and vectors of every document whose bytes did not change, so only new and changed files are
+    read and paid for (DEC-1274). The new version keeps the passage settings the previous one was
+    built with - a reused passage is only valid under the settings that cut it. With no test
+    questions named, it is graded with the ones the previous version was last graded with, if any.
+    """
+    try:
+        previous = read_manifest(storage, index_id)
+    except GenerativeError as exc:
+        raise generative_http(exc) from exc
+    owner = _read_owner(storage, index_id)
+    config = use_case_config(owner.use_case_id, root)
+    _require_generative_kind(config, GenerativeKind.RAG_ASSISTANT)
+
+    uploads = [(Path(file.filename or "document").name, await file.read()) for file in documents or ()]
+    upload_names = [name for name, _ in uploads]
+    if len(set(upload_names)) != len(upload_names):
+        raise http_error(422, "DOCUMENT_NAME_CLASH", "Two of the uploaded files have the same name.")
+    existing = [document.name for document in previous.documents]
+    unknown = sorted(set(remove or ()) - set(existing))
+    if unknown:
+        raise http_error(
+            422,
+            "DOCUMENT_NOT_IN_INDEX",
+            f"{', '.join(unknown)} is not a document of this assistant, so it cannot be removed.",
+        )
+    replaced = sorted(set(upload_names) & set(existing))
+    removed = sorted(set(remove or ()) - set(upload_names))
+    added = sorted(set(upload_names) - set(existing))
+    if not uploads and not removed:
+        raise http_error(422, "INDEX_UPDATE_EMPTY", "Upload a document or pick one to remove.")
+    dropped = set(removed) | set(replaced)
+    kept = [name for name in existing if name not in dropped]
+    if not kept and not uploads:
+        raise http_error(
+            422,
+            "INDEX_UPDATE_REMOVES_EVERYTHING",
+            "This would leave the assistant with no documents. Keep at least one, or upload a new one.",
+        )
+    _require_distinct_stems([*kept, *upload_names])
+
+    if reference_set_id is None and not use_sample_questions:
+        reference_set_id, use_sample_questions = owner.reference_set_id, owner.sample_questions
+    generative = _merged_generative(
+        config,
+        {
+            "generative.rag.chunk_tokens": previous.chunk_config.chunk_tokens,
+            "generative.rag.chunk_overlap": previous.chunk_config.chunk_overlap,
+        },
+    )
+    config = config.model_copy(update={"generative": generative})
+    reference_path = _resolve_reference_set_path(
+        storage, reference_set_id=reference_set_id, use_sample_questions=use_sample_questions
+    )
+    if reference_path is not None:
+        _require_gradeable_reference_set(reference_path, generative, primary_key=None)
+
+    config, ai = _with_deliverable_ai(config, storage, current)  # 409 before anything is written
+    _require_same_embedding_model(previous, config)
+    kept_bytes = _kept_document_bytes(storage, index_id, kept)  # 409 before anything is written
+
+    new_id = new_index_id()
+    paths = _persisted_documents(storage, new_id, [*kept_bytes, *uploads])
+    started = utc_now()
+    stage_keys = ("build",) + (("evaluate",) if reference_path is not None else ())
+    _write_owner(
+        storage,
+        new_id,
+        _IndexOwner(
+            use_case_id=config.id,
+            llm=_llm_summary(config.generative.llm),
+            source_label=f"{_source_label(paths)} · updated",
+            previous_index_id=index_id,
+            reference_set_id=None if use_sample_questions else reference_set_id,
+            sample_questions=use_sample_questions,
+        ),
+    )
+    _write_status(
+        storage,
+        index_key(new_id, INDEX_STATUS_FILENAME),
+        job_id=new_id,
+        kind=GenerativeJobKind.INDEX_BUILD,
+        state=RunState.PENDING,
+        stages=tuple(_stage(key, RunState.PENDING) for key in stage_keys),
+        started_at=started,
+    )
+    jobs.submit(
+        _new_job_id("index_update"),
+        _index_build_job(
+            storage,
+            use_case=config,
+            ai=ai,
+            index_id=new_id,
+            paths=paths,
+            reference_path=reference_path,
+            stage_keys=stage_keys,
+            started_at=started,
+            config_root=root,
+            previous=previous,
+            changes=_UpdateChanges(added=tuple(added), replaced=tuple(replaced), removed=tuple(removed)),
+        ),
+    )
+    return IndexJobStartedResponse(index_id=new_id)
+
+
+# ---------------------------------------------------------------------------
+# 15. DELETE /indexes/{index_id}
+# ---------------------------------------------------------------------------
+@router.delete(
+    "/indexes/{index_id}",
+    status_code=204,
+    response_class=Response,
+    responses=_GENERATIVE_ERRORS,
+    summary="Delete one index version and everything stored with it; never the best one, never a busy one",
+)
+def delete_index(index_id: str, request: Request, storage: StorageDep) -> Response:
+    """Refuses the use case's best index (`409 INDEX_IS_CHAMPION`) and an index a job is still using.
+
+    The best index is the one the Setup screen grades and points people at; removing it would
+    silently hand that role to whichever index ranks next. Another version built from this one
+    keeps working: an update copies every document and vector it needs into its own directory.
+    """
+    owner = _read_owner(storage, index_id)
+    status = _optional_model(storage, index_key(index_id, INDEX_STATUS_FILENAME), GenerativeStatus)
+    owned = _owned_indexes(storage, owner.use_case_id)
+    busy = status is not None and status.state in _BUSY_STATES
+    for other_id, other in owned:
+        if other.previous_index_id != index_id:
+            continue
+        other_status = _optional_model(storage, index_key(other_id, INDEX_STATUS_FILENAME), GenerativeStatus)
+        busy = busy or (other_status is not None and other_status.state in _BUSY_STATES)
+    if busy:
+        raise http_error(
+            409,
+            "INDEX_BUSY",
+            "This assistant is still being built, graded or updated. Delete it once that finishes.",
+        )
+    if _champion_index_id(storage, [other_id for other_id, _ in owned]) == index_id:
+        raise http_error(
+            409,
+            "INDEX_IS_CHAMPION",
+            "This is the best assistant built for this use case, so it is kept. "
+            "Build or grade a better one first, then delete this one.",
+        )
+    keys = storage.list_keys(index_key(index_id) + "/")
+    for key in keys:
+        if not key.endswith(f"/{_INDEX_OWNER_FILENAME}"):
+            storage.delete(key)
+    storage.delete(index_key(index_id, _INDEX_OWNER_FILENAME))  # last: until now it is still listed
+    set_audit_context(request, object_id=index_id, object_type="index", details={"files": len(keys)})
+    return Response(status_code=204)
+
+
+# ---------------------------------------------------------------------------
+# 16. GET /indexes/{index_id}/compare/{other_index_id}
+# ---------------------------------------------------------------------------
+def _comparison_side(
+    storage: Storage, index_id: str, owner: _IndexOwner
+) -> tuple[IndexComparisonSide, RagEval]:
+    rag_eval = _optional_model(storage, index_key(index_id, RAG_EVAL_FILENAME), RagEval)
+    if rag_eval is None:
+        raise http_error(
+            409,
+            "INDEX_NOT_GRADED",
+            f"Assistant {index_id} has not been graded against test questions, so there is nothing to compare.",
+        )
+    manifest = _optional_model(storage, index_key(index_id, DOC_INDEX_MANIFEST_FILENAME), DocIndexManifest)
+    side = IndexComparisonSide(
+        index_id=index_id,
+        llm=owner.llm,
+        documents=None if manifest is None else len(manifest.documents),
+        built_at=None if manifest is None else manifest.built_at,
+        grade=grade_of(rag_eval),
+    )
+    return side, rag_eval
+
+
+def _question_key(question: str) -> str:
+    return " ".join(question.lower().split())
+
+
+@router.get(
+    "/indexes/{index_id}/compare/{other_index_id}",
+    response_model=IndexComparisonResponse,
+    responses=_GENERATIVE_ERRORS,
+    summary="Two graded indexes of one use case side by side, and the questions whose verdict changed",
+)
+def compare_indexes(index_id: str, other_index_id: str, storage: StorageDep) -> IndexComparisonResponse:
+    left_owner = _read_owner(storage, index_id)
+    right_owner = _read_owner(storage, other_index_id)
+    if left_owner.use_case_id != right_owner.use_case_id:
+        raise http_error(
+            409,
+            "INDEXES_NOT_COMPARABLE",
+            "These two assistants belong to different use cases, so their grades do not measure the same thing.",
+        )
+    left, left_eval = _comparison_side(storage, index_id, left_owner)
+    right, right_eval = _comparison_side(storage, other_index_id, right_owner)
+    left_questions = {_question_key(q.question) for q in left_eval.questions}
+    right_questions = {_question_key(q.question) for q in right_eval.questions}
+    return IndexComparisonResponse(
+        left=left,
+        right=right,
+        same_reference_set=left_eval.reference_set_fingerprint == right_eval.reference_set_fingerprint,
+        common_questions=len(left_questions & right_questions),
+        changed=verdict_changes(left_eval, right_eval),
+    )

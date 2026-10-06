@@ -333,7 +333,7 @@ class IndexedDocument(Artefact):
 
     doc_id: str = Field(description="Stable id of the document within this index.")
     name: str = Field(description="Filename as uploaded, which is what a citation shows.")
-    media_type: str = Field(description="File type the parser read: pdf, docx, md or txt.")
+    media_type: str = Field(description="File type the parser read: pdf, docx, md, txt, html or htm.")
     fingerprint: str = Field(description="Content hash; an unchanged one is skipped on a rebuild.")
     bytes: int = Field(description="Size of the uploaded file in bytes.")
     pages: int | None = Field(
@@ -412,6 +412,10 @@ class Citation(Artefact):
     section: str = Field(description="Heading the chunk sits under.")
     quote: str = Field(description="At most 25 words copied from the chunk, so a reader can check it.")
     similarity: float = Field(description="Cosine similarity of the chunk to the question, 0 to 1.")
+    page: int | None = Field(
+        default=None,
+        description="Page the cited chunk starts on, copied from the chunk; null for a format without pages.",
+    )
 
 
 class AssistantAnswer(Artefact):

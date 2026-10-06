@@ -65,6 +65,13 @@ def extracted_text(path: Path) -> str:
         return "\n".join(page.extract_text() or "" for page in PdfReader(str(path)).pages)
     if path.suffix == ".docx":
         return "\n".join(paragraph.text for paragraph in Document(str(path)).paragraphs)
+    if path.suffix in (".html", ".htm"):
+        # A web page's text is what is left once its markup and chrome are gone, which only an
+        # HTML reader can say; the engine's own is the one every index build uses (DEC-1275).
+        from engine.generative.parsers import parse
+
+        document = parse(path)
+        return "\n".join(f"{section.heading}\n{section.text}" for section in document.sections)
     return path.read_text(encoding="utf-8")
 
 

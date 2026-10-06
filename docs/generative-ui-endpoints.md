@@ -76,7 +76,7 @@ Request: `multipart/form-data`.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `documents` | file, repeated | one of `documents` / `use_sample_documents` | Knowledge-base files: PDF, DOCX, MD or TXT, checked against `generative.knowledge_base.accepted_types/max_docs/max_mb`. |
+| `documents` | file, repeated | one of `documents` / `use_sample_documents` | Knowledge-base files: PDF, DOCX, MD, TXT, HTML or HTM, checked against `generative.knowledge_base.accepted_types/max_docs/max_mb`. |
 | `use_sample_documents` | `"true"` | | Seeds the build from the server's bundled sample corpus (`tests/fixtures/make_docs.py`'s output) instead of an upload - the mock's "use the sample documents" link. |
 | `reference_set_id` | string | no | From `POST .../reference-sets`. Omitted when no reference set is used. |
 | `use_sample_questions` | `"true"` | | Seeds reference questions from the bundled sample set - "use the sample questions". |
