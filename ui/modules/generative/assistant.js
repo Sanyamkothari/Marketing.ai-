@@ -247,7 +247,14 @@ function runningHtml(uc, s) {
         )
         .join("")
     : `<li><span class="dot">1</span><div><div class="pt">Starting…</div><div class="pd"></div></div></li>`;
-  return `<div class="setup-grid"><section class="card"><h3>Building the assistant…</h3><ol class="progress">${rows}</ol></section>${indexesCard(
+  const pct = status && typeof status.progress_pct === "number" && !Number.isNaN(status.progress_pct)
+    ? Math.max(0, Math.min(100, Math.round(status.progress_pct)))
+    : null;
+  const pctBadge = pct !== null ? `<span class="run-pct">${pct}%</span>` : "";
+  const meter = pct !== null
+    ? `<div class="run-meter" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div class="run-meter-fill" style="width:${pct}%"></div></div>`
+    : "";
+  return `<div class="setup-grid"><section class="card"><div class="run-title-row"><h3>Building the assistant…</h3>${pctBadge}</div>${meter}<ol class="progress">${rows}</ol></section>${indexesCard(
     s,
   )}</div>`;
 }

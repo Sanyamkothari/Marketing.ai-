@@ -661,11 +661,18 @@ function runningBody(uc, s) {
   const cancel = s.confirmCancel
     ? `<div class="btn-row ucancel"><span>Cancel this run? It stops now and cannot be resumed.</span><button type="button" class="btn danger sm confirm" id="u-cancel">Yes, cancel run</button><button type="button" class="btn quiet sm" id="u-cancel-keep">Keep running</button></div>`
     : `<div class="btn-row ucancel"><span class="spacer"></span><button type="button" class="btn danger sm" id="u-cancel">Cancel run</button></div>`;
-  return `<div class="setup-grid"><section class="card"><h3>${esc(
+  const pct = status && typeof status.progress_pct === "number" && !Number.isNaN(status.progress_pct)
+    ? Math.max(0, Math.min(100, Math.round(status.progress_pct)))
+    : null;
+  const pctBadge = pct !== null ? `<span class="run-pct">${pct}%</span>` : "";
+  const meter = pct !== null
+    ? `<div class="run-meter" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div class="run-meter-fill" style="width:${pct}%"></div></div>`
+    : "";
+  return `<div class="setup-grid"><section class="card"><div class="run-title-row"><h3>${esc(
     train ? "Training your uplift model…" : "Scoring customers…",
-  )}</h3><p class="urun-intro">${esc(
+  )}</h3>${pctBadge}</div><p class="urun-intro">${esc(
     "Running… This usually takes a few minutes. You can leave this page; the run keeps going.",
-  )}</p><ol class="progress">${rows}</ol>${cancel}${s.submitError ? errorBox(s.submitError) : ""}</section>${upliftRunsCard(
+  )}</p>${meter}<ol class="progress">${rows}</ol>${cancel}${s.submitError ? errorBox(s.submitError) : ""}</section>${upliftRunsCard(
     uc,
     s.runs,
     { collapsed: true },
