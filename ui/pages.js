@@ -42,6 +42,7 @@ import {
   toggletip,
   typeChip,
 } from "./dom.js";
+import { bindPower, powerCardBody } from "./modules/measure/power.js";
 import { indexSchema, readPath } from "./settings.js";
 
 /**
@@ -1079,7 +1080,10 @@ function noBeeswarm(shap) {
  * must stay importable by node's unit tests.
  */
 export function bindPage(kind, root) {
-  if (kind === "output") bindRetrain(root);
+  if (kind === "output") {
+    bindRetrain(root);
+    bindPower(root);
+  }
   if (kind !== "model") return;
   root.querySelectorAll("details[data-beeswarm]").forEach((details) => {
     let loaded = false;
@@ -1424,6 +1428,7 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref) {
     ${driftNotice}
     ${driftTable(drift)}
     ${bandsCard}
+    ${card("Is the held-back group big enough?", powerCardBody(uc, summary), 'data-power')}
     ${sampleCard(uc, run, summary)}
     ${settingsCard(uc, run, config, byPath, summary, drift)}`;
   return shell(uc, "output", run, body, {
