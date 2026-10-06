@@ -35,6 +35,7 @@ from engine.config import (
     ProblemType,
     SplitType,
     UseCaseConfig,
+    list_industries,
     list_use_case_ids,
     load_industry,
     load_use_case,
@@ -274,10 +275,14 @@ def test_the_template_is_generated_from_the_config_not_hand_written(
     assert tuple(header.split(",")) == TELCO_COLUMNS
 
 
-def test_the_industry_file_offers_it_under_the_churn_stage(config: UseCaseConfig) -> None:
-    industry = load_industry("telecom")
-    stages = [stage.name for stage, ref in industry.all_refs() if ref.id == USE_CASE_ID]
-    assert stages == [config.lifecycle_stage] == ["Churn"]
+def test_the_industry_file_no_longer_offers_it_on_any_journey_but_it_opens_by_id(
+    config: UseCaseConfig,
+) -> None:
+    """DEC-1126: Telco Churn is off Home, so no journey lists it; its file stays and it opens by id."""
+    for industry_id in list_industries():
+        stages = [stage.name for stage, ref in load_industry(industry_id).all_refs() if ref.id == USE_CASE_ID]
+        assert stages == [], f"{USE_CASE_ID!r} is offered under {stages} in {industry_id!r}"
+    assert load_use_case(USE_CASE_ID).lifecycle_stage == config.lifecycle_stage == "Churn"
 
 
 # ---------------------------------------------------------------------------
