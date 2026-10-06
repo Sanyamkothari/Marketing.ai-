@@ -1309,7 +1309,14 @@ function buildProgress(state) {
         )}</div><div class="pd">${esc(group.detail)}</div></div></li>`,
     )
     .join("");
-  return `<ol class="progress">${rows}</ol>`;
+  const pct = typeof status.progress_pct === "number" && !Number.isNaN(status.progress_pct)
+    ? Math.max(0, Math.min(100, Math.round(status.progress_pct)))
+    : null;
+  const pctBadge = pct !== null ? `<span class="run-pct">${pct}%</span>` : "";
+  const meter = pct !== null
+    ? `<div class="run-meter" role="progressbar" aria-valuenow="${pct}" aria-valuemin="0" aria-valuemax="100"><div class="run-meter-fill" style="width:${pct}%"></div></div>`
+    : "";
+  return `${pctBadge || meter ? `<div class="run-title-row" style="margin-bottom:8px">${pctBadge}</div>${meter}` : ""}<ol class="progress">${rows}</ol>`;
 }
 
 function fileNameOf(state, sourceId) {

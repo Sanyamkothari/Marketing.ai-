@@ -977,6 +977,7 @@ export function runningCard({
   cancel = "",
   listId = "",
   error = "",
+  progressPct = null,
 }) {
   const cls = { running: "active", done: "done", failed: "failed", cancelled: "cancelled", pending: "" };
   const rows = (groups.length ? groups : placeholder.map((label) => ({ label, state: "pending", stages: [] })))
@@ -993,9 +994,17 @@ export function runningCard({
         .map((stage) => `<div><dt>${esc(stage.title || stage.key)}</dt><dd>${esc(stage.detail)}</dd></div>`)
         .join("")}</dl></details>`
     : "";
-  return `<section class="card run-card" aria-busy="true"><div class="run-head"><div><h3>${esc(title)}</h3>${
+  const hasPct = typeof progressPct === "number" && !Number.isNaN(progressPct);
+  const clampedPct = hasPct ? Math.max(0, Math.min(100, Math.round(progressPct))) : null;
+  const pctBadge = clampedPct !== null ? `<span class="run-pct">${clampedPct}%</span>` : "";
+  const meter = clampedPct !== null
+    ? `<div class="run-meter" role="progressbar" aria-valuenow="${clampedPct}" aria-valuemin="0" aria-valuemax="100"><div class="run-meter-fill" style="width:${clampedPct}%"></div></div>`
+    : "";
+  return `<section class="card run-card" aria-busy="true"><div class="run-head"><div><div class="run-title-row"><h3>${esc(
+    title,
+  )}</h3>${pctBadge}</div>${
     intro ? `<p class="run-intro">${esc(intro)}</p>` : ""
-  }</div>${cancel ? `<div class="run-cancel">${cancel}</div>` : ""}</div><ol class="progress"${
+  }${meter}</div>${cancel ? `<div class="run-cancel">${cancel}</div>` : ""}</div><ol class="progress"${
     listId ? ` id="${esc(listId)}"` : ""
   }>${rows}</ol>${tech}${error}</section>`;
 }
@@ -1012,6 +1021,7 @@ export const cancelControls = (button, confirm, confirming) =>
 function runningHtml(uc, s) {
   const status = s.detail && s.detail.status;
   const train = s.mode === "train";
+  const pct = status && typeof status.progress_pct === "number" ? status.progress_pct : null;
   return `<div class="uc-running">${runningCard({
     title: train ? "Training your model…" : `Scoring your ${people(uc)}…`,
     intro: "This usually takes a few minutes. You can leave this page: the run keeps going.",
@@ -1024,6 +1034,7 @@ function runningHtml(uc, s) {
     ),
     listId: "prog",
     error: s.submitError ? errorBox(s.submitError) : "",
+    progressPct: pct,
   })}${runsCard(uc, s, { folded: true })}</div>`;
 }
 
