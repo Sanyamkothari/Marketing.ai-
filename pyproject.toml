@@ -84,6 +84,11 @@ deploy = [                              # Phase 4a: synthesising infra/, never i
 snowflake = ["snowflake-connector-python>=3.12,<5"]
 bigquery = ["google-cloud-bigquery>=3.25,<4"]
 azure = ["azure-storage-blob>=12.20,<13"]
+# The local, open-source embedding model (BAAI/bge-small-en-v1.5) for the document assistant. Not
+# installed by default - it pulls in PyTorch - and imported only when that model is chosen; without
+# it, choosing the model fails with LOCAL_EMBEDDINGS_NOT_INSTALLED and this install command
+# (DEC-1263, following DEC-1103). A range, not a pin, for the same reason as the connectors above.
+local-embeddings = ["sentence-transformers>=3.0,<6"]
 dev = [
   "pytest==9.1.1",
   "hypothesis==6.168.0",

@@ -220,13 +220,28 @@ function fieldsHtml() {
       modelsStatus(),
     )}</span></div></div>`,
   );
+  // The local open-source embedding model runs on this server, so it is offered with every provider:
+  // in the list for one that has embeddings, as a tick box for one that has none (DEC-1263).
+  const local = p.local_embedding_model || "";
   const embedding = p.supports_embeddings
     ? `<div class="field ai-wide"><label for="ai-f-embedding_model">Embedding model <span class="sub">(optional)</span></label><div class="control"><input type="text" id="ai-f-embedding_model" data-ai-input data-ai-field="embedding_model" list="ai-embed-list" value="${esc(
         s.values.embedding_model,
       )}" placeholder="${esc((p.embedding_suggestions || [])[0] || "")}" autocomplete="off" spellcheck="false"></div><datalist id="ai-embed-list">${optionsHtml(
-        p.embedding_suggestions || [],
-      )}</datalist><span class="sub">Used to search your documents. Leave blank and the document assistant will match by keywords.</span></div>`
-    : `<p class="ai-note" data-ai-keywords>${esc(p.label)} has no embeddings. The document assistant will match by keywords.</p>`;
+        [...(p.embedding_suggestions || []), ...(local ? [local] : [])],
+      )}</datalist><span class="sub">Used to search your documents. Leave blank and the document assistant will match by keywords.${
+        local ? ` ${esc(local)} runs on this server instead (it needs the local-embeddings add-on).` : ""
+      }</span></div>`
+    : `<p class="ai-note" data-ai-keywords>${esc(p.label)} has no embeddings. The document assistant will match by keywords${
+        local ? ", unless you use the local model below" : ""
+      }.</p>${
+        local
+          ? `<div class="field ai-wide"><label class="ai-check"><input type="checkbox" id="ai-f-local_embedding" data-ai-input data-ai-local-embedding value="${esc(
+              local,
+            )}"${s.values.embedding_model === local ? " checked" : ""}> Match documents by meaning with ${esc(
+              local,
+            )}</label><span class="sub">An open-source model that runs on this server, so your documents are not sent anywhere to be searched. It needs the local-embeddings add-on.</span></div>`
+          : ""
+      }`;
   const overrideBase = !p.needs_base_url && !bedrock;
   const base = overrideBase
     ? `<div class="field ai-wide"><label for="ai-f-base_url">Address of the service <span class="sub">(optional)</span></label><div class="control"><input type="text" id="ai-f-base_url" data-ai-input data-ai-field="base_url" value="${esc(
@@ -369,6 +384,8 @@ function readValues() {
   view.app.querySelectorAll("[data-ai-field]").forEach((input) => {
     s.values[input.dataset.aiField] = input.value.trim();
   });
+  const localBox = view.app.querySelector("[data-ai-local-embedding]");
+  if (localBox) s.values.embedding_model = localBox.checked ? localBox.value : "";
 }
 
 /** What is on screen as the API takes it: only the fields this provider uses, a blank key left out. */
@@ -379,7 +396,8 @@ function bodyFromForm(p) {
   if (key !== "") body.api_key = key;
   if (p.needs_region) body.region = s.values.region;
   if (p.protocol !== "bedrock" && s.values.base_url) body.base_url = s.values.base_url;
-  if (p.supports_embeddings && s.values.embedding_model) body.embedding_model = s.values.embedding_model;
+  const embeds = p.supports_embeddings || s.values.embedding_model === p.local_embedding_model;
+  if (embeds && s.values.embedding_model) body.embedding_model = s.values.embedding_model;
   return body;
 }
 
@@ -669,7 +687,10 @@ function touch() {
 }
 
 function bindFields() {
-  view.app.querySelectorAll("[data-ai-input]").forEach((input) => input.addEventListener("input", touch));
+  view.app.querySelectorAll("[data-ai-input]").forEach((input) => {
+    input.addEventListener("input", touch);
+    if (input.type === "checkbox") input.addEventListener("change", touch);
+  });
   const key = $("#ai-f-api_key");
   if (key) key.addEventListener("input", checkKeyFormat);
   const models = $("#ai-models");

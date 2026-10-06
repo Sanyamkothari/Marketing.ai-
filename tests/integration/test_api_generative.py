@@ -20,6 +20,9 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from engine.config import RunMode
+from engine.generative.errors import GENERATIVE_ERRORS, JOB_FAILED
+from engine.llm import LLMError
+from engine.llm_http import PROBLEMS, LLMHttpError
 from engine.storage import LocalStorage
 from tests.fixtures.make_run import RunSpec, write_run
 
@@ -420,26 +423,76 @@ def test_a_failed_build_marks_the_step_that_failed_rather_than_leaving_it_runnin
     assert status["stages"][0]["detail"] == status["error_message"]
 
 
-def test_index_build_succeeds_even_when_evaluation_fails(
-    client: TestClient, monkeypatch: pytest.MonkeyPatch
+INTERNAL = "KeyError: 'choices' at /srv/app/engine/secret_module.py line 42"
+"""What an unexpected exception might say: internals that must never reach a status document."""
+
+
+@pytest.mark.parametrize(
+    ("raised", "detail"),
+    [
+        (LLMHttpError("server_error"), PROBLEMS["server_error"][0]),
+        (RuntimeError(INTERNAL), GENERATIVE_ERRORS[JOB_FAILED][0]),
+    ],
+)
+def test_an_index_whose_grading_fails_is_still_built_and_the_grade_step_says_why_in_plain_words(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, raised: Exception, detail: str
 ) -> None:
-    """If grading against the reference set fails, the index is still marked done and ready to use."""
+    """DEC-1267: the index is written and answers questions; only the optional grading step failed."""
     from api.routes import generative
 
     def failing_evaluate(*args: object, **kwargs: object) -> None:
-        raise RuntimeError("Transient provider 502")
+        raise raised
 
     monkeypatch.setattr(generative, "evaluate", failing_evaluate)
-
     response = _build_against(client, use_sample_questions="true")
     assert response.status_code == 202, response.text
-    index_id = response.json()["index_id"]
-    status = _poll_index(client, index_id)
+    status = _poll_index(client, response.json()["index_id"])
     assert status["state"] == "done", status
+    assert status["error_code"] is None and status["error_message"] is None
     stages = {stage["key"]: stage for stage in status["stages"]}
     assert stages["build"]["state"] == "done"
-    assert stages["evaluate"]["state"] == "failed"
-    assert "Transient provider 502" in stages["evaluate"]["detail"]
+    assert (stages["evaluate"]["state"], stages["evaluate"]["detail"]) == ("failed", detail)
+    assert INTERNAL not in str(status)
+
+
+@pytest.mark.parametrize(
+    ("raised", "code", "message"),
+    [
+        (LLMHttpError("key_rejected"), "LLM_UNAVAILABLE", PROBLEMS["key_rejected"][0]),
+        (
+            LLMError("LOCAL_EMBEDDINGS_NOT_INSTALLED", "The local embedding model is not installed."),
+            "LOCAL_EMBEDDINGS_NOT_INSTALLED",
+            "The local embedding model is not installed.",
+        ),
+        (RuntimeError(INTERNAL), JOB_FAILED, GENERATIVE_ERRORS[JOB_FAILED][0]),
+    ],
+)
+def test_a_build_that_raises_anything_is_failed_with_a_code_and_a_plain_message_never_left_running(
+    client: TestClient,
+    monkeypatch: pytest.MonkeyPatch,
+    caplog: pytest.LogCaptureFixture,
+    raised: Exception,
+    code: str,
+    message: str,
+) -> None:
+    """DEC-1267: an AI-service error keeps its own code; anything else is logged and shown generically."""
+    from api.routes import generative
+
+    def failing_build(*args: object, **kwargs: object) -> None:
+        raise raised
+
+    monkeypatch.setattr(generative, "build_index", failing_build)
+    with caplog.at_level("WARNING", logger="api.routes.generative"):
+        response = _build_against(client)
+        assert response.status_code == 202, response.text
+        status = _poll_index(client, response.json()["index_id"])
+    assert status["state"] == "failed", status
+    assert (status["error_code"], status["error_message"]) == (code, message)
+    assert status["stages"][0]["state"] == "failed"
+    assert status["stages"][0]["detail"] == message
+    assert INTERNAL not in str(status)
+    if code == JOB_FAILED:
+        assert any(record.exc_info for record in caplog.records), "a bug's traceback reaches the log"
 
 
 # ---------------------------------------------------------------------------

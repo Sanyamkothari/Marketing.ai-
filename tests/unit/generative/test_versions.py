@@ -115,6 +115,25 @@ def test_only_questions_asked_of_both_whose_verdict_differs_are_changes() -> Non
     ]
 
 
+def test_a_question_the_ai_service_failed_on_is_in_no_count_and_no_change() -> None:
+    """DEC-1266: a provider error has no verdict, so an outage is neither a refusal nor a regression."""
+    errored = RagEvalQuestion(
+        question="What is the fee?",
+        answer="",
+        refused=None,
+        expect_refusal=True,
+        passed=False,
+        failure="provider_error",
+        latency_ms=1,
+    )
+    left = _eval((_q("A?", passed=True), errored))
+    grade = grade_of(left)
+    assert (grade.refusal_correct, grade.should_refuse, grade.refused_correctly) == (1, 0, 0)
+    right = _eval((_q("A?", passed=True), _q("What is the fee?", passed=True, refused=True, expect=True)))
+    assert verdict_changes(left, right) == ()
+    assert verdict_changes(right, left) == ()
+
+
 def test_an_update_counts_reuse_by_bytes_and_id_together() -> None:
     previous = _manifest("x_old", _doc("a.md", "fa", 3), _doc("b.md", "fb", 2), _doc("c.md", "fc", 4))
     built = _manifest(

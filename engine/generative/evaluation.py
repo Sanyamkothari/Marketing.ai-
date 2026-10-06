@@ -59,6 +59,14 @@ check against. **Faithfulness** comes last, checked against the same threshold
 `configs/guardrails.yaml` already sets for the assistant's own grounding guardrail, because "were the
 claims grounded" is exactly that guardrail's question asked a second time with a number attached -
 and not checked at all where that file sets no bar, for the reason `_faithfulness_threshold` gives.
+**A question the AI service failed on is recorded as not graded, never as an answer.** A provider
+error (`LLMError`) while answering, retrieving or judging one row does not end the evaluation - one
+flaky reply should not cost the other questions their grades - but nothing is invented in its
+place: the row carries the error's code and plain message, `failure` is `provider_error`, its scores
+are null, and `aggregate` leaves it out of every count and rate and reports it as `errored`
+(DEC-1266). A refusal or a 0.0 written in its place would be a fabricated result: a made-up refusal
+counts as *passed* on a row the reference set expects to be refused.
+
 `correctness` is deliberately not a fourth gate: nothing in this package's configuration sets a bar
 for it, and inventing one here would be precisely the guessed number DEC-208 refuses to write down
 for cost. It is still graded, reported on every row it can be, and averaged into
@@ -91,12 +99,12 @@ from engine.generative.contracts import (
     RagEvalAggregates,
     RagEvalQuestion,
 )
-from engine.llm import FakeLLMClient, LLMError
 from engine.generative.errors import REFERENCE_SET_INVALID, generative_error
 from engine.generative.guardrails import GuardrailAction, Guardrails
 from engine.generative.prompts import Prompt, load_prompt, prompt_versions, render
 from engine.generative.retrieval import Retrieved, retrieve
 from engine.generative.vectorstore import VectorStore
+from engine.llm import LLMError
 from engine.storage import Storage, index_key
 from engine.utils.logging import get_logger, log_stage
 from engine.utils.time import utc_now
@@ -105,6 +113,7 @@ __all__ = [
     "CORRECTNESS_PROMPT",
     "FAITHFULNESS_PROMPT",
     "NGRAM_SIZE",
+    "PROVIDER_ERROR",
     "REFUSAL_MISMATCH",
     "RETRIEVAL_HIT_OVERLAP",
     "RETRIEVAL_MISS",
@@ -159,6 +168,13 @@ RETRIEVAL_MISS: Final[str] = "retrieval_miss"
 
 UNFAITHFUL: Final[str] = "unfaithful"
 """The row's `failure`, when the faithfulness judge scored the answer below its configured threshold."""
+
+PROVIDER_ERROR: Final[str] = "provider_error"
+"""The row's `failure`, when a call the row needed failed at the AI service, so it was not graded.
+
+Not a verdict on the assistant: `aggregate` leaves such a row out of every count and rate and
+reports how many there were as `errored` (DEC-1266).
+"""
 
 _WORD: Final[re.Pattern[str]] = re.compile(r"[a-z0-9']+")
 
@@ -256,9 +272,7 @@ def _retrieve(meter: Meter, store: VectorStore, index_id: str, question: str, ra
     retrieval information about.
     """
     (vector,) = meter.embed([question])
-    is_fake = isinstance(getattr(meter, "client", None), FakeLLMClient)
-    q_text = None if is_fake else question
-    return retrieve(store, index_id, vector, config=rag, question_text=q_text)
+    return retrieve(store, index_id, vector, config=rag, question_text=question)
 
 
 def _parse_score(text: str) -> float:
@@ -333,7 +347,11 @@ def _grade(
     correctness_prompt: Prompt,
     faithfulness_threshold: float,
 ) -> RagEvalQuestion:
-    """One graded row: the real answer, this module's own retrieval and judge calls, and the verdict."""
+    """One graded row: the real answer, this module's own retrieval and judge calls, and the verdict.
+
+    A provider failure (`LLMError`) on any of those calls makes the row an errored one (`_errored`)
+    rather than ending the evaluation or being graded on a guess (DEC-1266).
+    """
     before = meter.cost_so_far
     try:
         result = answer(
@@ -346,54 +364,45 @@ def _grade(
             config_root=config_root,
         )
     except LLMError as exc:
-        _LOGGER.warning("Answering question %r failed: %s", row.question, exc)
-        result = AssistantAnswer(
-            question=row.question,
-            answer="The model could not answer this question.",
-            refused=True,
-            citations=(),
-            retrieved=0,
-            called_model=False,
-            prompt_version=1,
-            latency_ms=0,
-            guardrails=(),
-        )
+        return _errored(row, exc, before=before, meter=meter)
     gradeable = bool(row.source_doc) and not row.expect_refusal
-    retrieval = (
-        _retrieve(meter, store, index_id, row.question, use_case.generative.rag)
-        if gradeable or not result.refused
-        else None
-    )
-    retrieval_hit = (
-        _retrieval_hit(retrieval, row.source_doc, row.reference_answer)
-        if gradeable and retrieval is not None
-        else None
-    )
+    retrieval_hit: bool | None = None
     faithfulness: float | None = None
     correctness: float | None = None
-    if not result.refused:
-        source = "\n\n".join(match.chunk.text for match in retrieval.matches) if retrieval is not None else ""
-        try:
+    try:
+        retrieval = (
+            _retrieve(meter, store, index_id, row.question, use_case.generative.rag)
+            if gradeable or not result.refused
+            else None
+        )
+        retrieval_hit = (
+            _retrieval_hit(retrieval, row.source_doc, row.reference_answer)
+            if gradeable and retrieval is not None
+            else None
+        )
+        if not result.refused:
+            source = (
+                "\n\n".join(match.chunk.text for match in retrieval.matches) if retrieval is not None else ""
+            )
             faithfulness = _judge_score(
                 meter,
                 faithfulness_prompt,
                 {"source": source, "generated": result.answer},
                 GenerativePurpose.JUDGE_FAITHFULNESS,
             )
-        except LLMError as exc:
-            _LOGGER.warning("Faithfulness judge failed for %r: %s", row.question, exc)
-            faithfulness = 0.0
-        if row.reference_answer:
-            try:
+            if row.reference_answer:
                 correctness = _judge_score(
                     meter,
                     correctness_prompt,
-                    {"question": row.question, "reference_answer": row.reference_answer, "answer": result.answer},
+                    {
+                        "question": row.question,
+                        "reference_answer": row.reference_answer,
+                        "answer": result.answer,
+                    },
                     GenerativePurpose.JUDGE_CORRECTNESS,
                 )
-            except LLMError as exc:
-                _LOGGER.warning("Correctness judge failed for %r: %s", row.question, exc)
-                correctness = 0.0
+    except LLMError as exc:
+        return _errored(row, exc, before=before, meter=meter, result=result, retrieval_hit=retrieval_hit)
     passed, failure = _verdict(
         row, result.refused, retrieval_hit, faithfulness, faithfulness_threshold=faithfulness_threshold
     )
@@ -409,6 +418,40 @@ def _grade(
         failure=failure,
         latency_ms=result.latency_ms,
         cost_estimate_usd=_cost_delta(before, meter.cost_so_far),
+    )
+
+
+def _errored(
+    row: _ReferenceRow,
+    error: LLMError,
+    *,
+    before: float | None,
+    meter: Meter,
+    result: AssistantAnswer | None = None,
+    retrieval_hit: bool | None = None,
+) -> RagEvalQuestion:
+    """The row for a question a provider call failed on: what really happened, and nothing more.
+
+    When the answer itself failed there is no answer to show and no refusal to count, so `answer`
+    is empty and `refused` is null. When the answer came back and a later call (the grading
+    retrieval or a judge) failed, the real answer and whatever was measured before the failure are
+    kept, and the judge scores stay null - never 0.0, which would be a score nobody gave.
+    """
+    _LOGGER.warning("evaluation.question_errored code=%s", error.code)
+    return RagEvalQuestion(
+        question=row.question,
+        answer="" if result is None else result.answer,
+        refused=None if result is None else result.refused,
+        expect_refusal=row.expect_refusal,
+        retrieval_hit=retrieval_hit,
+        faithfulness=None,
+        correctness=None,
+        passed=False,
+        failure=PROVIDER_ERROR,
+        latency_ms=0 if result is None else result.latency_ms,
+        cost_estimate_usd=_cost_delta(before, meter.cost_so_far),
+        error_code=error.code,
+        error_message=error.message,
     )
 
 
@@ -454,26 +497,36 @@ def aggregate(questions: Sequence[RagEvalQuestion], *, pass_threshold: float) ->
     one" rather than "there were none to check". `pass_rate` is the one exception, because it is
     always a share of `questions` and `questions` can be zero - an evaluation that graded nothing has
     not met any bar, which `0.0` says honestly.
+
+    A row that errored at the AI service (`failure == PROVIDER_ERROR`) was not graded, so it is in
+    none of the counts or rates: `questions` counts graded rows and `errored` counts the others
+    (DEC-1266). `meets_threshold` is false while any row errored - a bar is not cleared by the
+    questions that happened to get through.
     """
-    total = len(questions)
-    passed = sum(1 for question in questions if question.passed)
-    hits = [hit for question in questions if (hit := question.retrieval_hit) is not None]
-    faithfulness_scores = [score for question in questions if (score := question.faithfulness) is not None]
-    correctness_scores = [score for question in questions if (score := question.correctness) is not None]
-    refusal_matches = [question.refused == question.expect_refusal for question in questions]
+    errored = sum(1 for question in questions if question.failure == PROVIDER_ERROR)
+    graded = [question for question in questions if question.failure != PROVIDER_ERROR]
+    total = len(graded)
+    passed = sum(1 for question in graded if question.passed)
+    hits = [hit for question in graded if (hit := question.retrieval_hit) is not None]
+    faithfulness_scores = [score for question in graded if (score := question.faithfulness) is not None]
+    correctness_scores = [score for question in graded if (score := question.correctness) is not None]
+    refusal_matches = [
+        question.refused == question.expect_refusal for question in graded if question.refused is not None
+    ]
     pass_rate = passed / total if total else 0.0
     return RagEvalAggregates(
         questions=total,
         passed=passed,
         pass_rate=pass_rate,
         pass_threshold=pass_threshold,
-        meets_threshold=pass_rate >= pass_threshold,
+        meets_threshold=pass_rate >= pass_threshold and errored == 0,
         retrieval_hit_rate=(sum(hits) / len(hits)) if hits else None,
         mean_faithfulness=(
             (sum(faithfulness_scores) / len(faithfulness_scores)) if faithfulness_scores else None
         ),
         mean_correctness=(sum(correctness_scores) / len(correctness_scores)) if correctness_scores else None,
         refusal_accuracy=(sum(refusal_matches) / len(refusal_matches)) if refusal_matches else None,
+        errored=errored,
     )
 
 

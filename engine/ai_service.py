@@ -70,10 +70,10 @@ from engine.connections.base import ConnectorError
 from engine.connections.store import connections_key, key_fingerprint
 from engine.llm import (
     KEYWORD_HASH_MODEL_ID,
+    LOCAL_EMBEDDING_MODEL_ID,
     LLMClient,
     LLMCompletion,
     LLMError,
-    LOCAL_EMBEDDING_MODEL_ID,
     LocalEmbeddingClient,
     build_client,
     keyword_hash_vector,
@@ -118,6 +118,7 @@ __all__ = [
     "run_test",
     "save_service",
     "store_key",
+    "uses_embedding_model",
     "yaml_bedrock",
 ]
 
@@ -195,6 +196,11 @@ class ProviderInfo(BaseModel):
     model_suggestions: tuple[str, ...] = Field(default=(), description="Examples; the field stays editable.")
     embedding_suggestions: tuple[str, ...] = ()
     supports_embeddings: bool
+    local_embedding_model: str = Field(
+        default=LOCAL_EMBEDDING_MODEL_ID,
+        description="The open-source embedding model this server can run itself, offered with every "
+        "provider (it needs the `local-embeddings` extra); naming it as `embedding_model` uses it.",
+    )
     third_party: bool = Field(description="True when prompts leave the platform's own AWS account.")
 
 
@@ -675,7 +681,7 @@ def candidate_from(
             "Amazon Bedrock uses the AWS sign-in, not a key. Leave `api_key` out.",
             field="api_key",
         )
-    if not provider.supports_embeddings:
+    if not uses_embedding_model(provider, embedding):
         embedding = ""
     return Candidate(
         provider=provider,
@@ -956,7 +962,7 @@ def _saved_effective(
             ) from exc
     embedding = (
         record.embedding_model
-        if (record.embedding_model == LOCAL_EMBEDDING_MODEL_ID or (info.supports_embeddings and record.embedding_model))
+        if uses_embedding_model(info, record.embedding_model)
         else KEYWORD_HASH_MODEL_ID
     )
     effective_llm = llm.model_copy(
@@ -1035,7 +1041,8 @@ def build_service_client(
     profile: str | None = None,
     transport: httpx.BaseTransport | None = None,
 ) -> LLMClient:
-    """A client for one provider. Embeddings are a keyword hash unless the provider has them and one is named."""
+    """A client for one provider. Embeddings are the local model when it is named (DEC-1263), else the
+    provider's when it has them and one is named, else a keyword hash."""
     from engine.llm import BedrockLLMClient
 
     client: LLMClient
@@ -1061,9 +1068,21 @@ def build_service_client(
         )
     if embedding_model == LOCAL_EMBEDDING_MODEL_ID:
         client = LocalEmbeddingClient(client, model_id=embedding_model)
-    elif not (info.supports_embeddings and embedding_model):
+    elif not uses_embedding_model(info, embedding_model):
         client = KeywordEmbeddingClient(client)
     return client
+
+
+def uses_embedding_model(info: ProviderInfo, embedding_model: str | None) -> bool:
+    """Whether `embedding_model` is used as named rather than replaced by the keyword hash.
+
+    The local model runs on this server, so it is usable with every provider - including the ones
+    that have no embeddings of their own, which are the ones that need it most (DEC-1263). Any other
+    name is used only with a provider that has embeddings.
+    """
+    if not embedding_model:
+        return False
+    return embedding_model == LOCAL_EMBEDDING_MODEL_ID or info.supports_embeddings
 
 
 def resolve_client(
@@ -1207,8 +1226,14 @@ def run_test(
 
 def _embeddings_note(client: LLMClient, candidate: Candidate) -> str | None:
     info = candidate.provider
-    if not (info.supports_embeddings and candidate.embedding_model):
+    if not uses_embedding_model(info, candidate.embedding_model):
         return "Document assistant will match by keywords."
+    if candidate.embedding_model == LOCAL_EMBEDDING_MODEL_ID:
+        try:
+            client.embed(["ready"], model_id=candidate.embedding_model)
+        except LLMError as exc:  # LocalEmbeddingClient raises only coded, plain-language errors
+            return f"The local embedding model is not ready: {exc.message}"
+        return None
     try:
         client.embed(["ready"], model_id=candidate.embedding_model)
     except LLMError as exc:

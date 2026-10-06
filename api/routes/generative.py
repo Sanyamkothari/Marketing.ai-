@@ -131,6 +131,7 @@ from engine.generative.errors import (
     INDEX_CORRUPT,
     INDEX_EMPTY,
     INDEX_NOT_FOUND,
+    JOB_FAILED,
     KNOWLEDGE_BASE_TOO_LARGE,
     NOT_A_GENERATIVE_USE_CASE,
     REFERENCE_SET_INVALID,
@@ -166,12 +167,13 @@ from engine.generative.win_back import (
     regenerate_template,
 )
 from engine.jobs import CancelToken, JobFn
+from engine.llm import LLMError
 from engine.settings import Settings
 from engine.stages.explain import ROW_EXPLANATIONS_FILENAME
 from engine.stages.export import SCORES_CSV
 from engine.storage import Storage, StorageError, index_key, run_key
 from engine.utils.ids import new_index_id
-from engine.utils.logging import get_logger
+from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
 
 _LOGGER = get_logger(__name__)
@@ -459,7 +461,7 @@ def _write_status(
     state: RunState,
     stages: Sequence[GenerativeStage],
     started_at: datetime,
-    error: Exception | None = None,
+    error: GenerativeError | None = None,
     now: datetime | None = None,
 ) -> GenerativeStatus:
     """Write one `GenerativeStatus`. A caller that writes `state=DONE` (or `FAILED`) does so only
@@ -475,8 +477,8 @@ def _write_status(
         stages=tuple(stages),
         started_at=started_at,
         updated_at=now if now is not None else utc_now(),
-        error_code=None if error is None else getattr(error, "code", "FAILED"),
-        error_message=None if error is None else getattr(error, "message", str(error)),
+        error_code=None if error is None else error.code,
+        error_message=None if error is None else error.message,
     )
     storage.write_model(key, status)
     return status
@@ -493,7 +495,28 @@ def _moved(
     return tuple(_stage(s.key, state, seconds=seconds, detail=detail) if s.key == key else s for s in stages)
 
 
-def _failed(stages: Sequence[GenerativeStage], error: Exception) -> tuple[GenerativeStage, ...]:
+def _job_error(exc: Exception, *, job: str) -> GenerativeError:
+    """What a background job's status document says about `exc`: a code and a plain message.
+
+    A job must never be left `running` because it raised something other than a `GenerativeError`
+    (DEC-1267), but widening the catch must not put an exception's own text in front of a person:
+
+    - a `GenerativeError` keeps its code and message - the module that raised it chose them;
+    - an `LLMError` (the AI service failed: unreachable, refused, out of credit) keeps its own code
+      and its fixed, plain message, and is logged by class name;
+    - anything else is a bug: its traceback goes to the log, where the formatter withholds every
+      message, and the person reads `JOB_FAILED`'s fixed sentence.
+    """
+    if isinstance(exc, GenerativeError):
+        return exc
+    if isinstance(exc, LLMError):
+        log_failure(_LOGGER, f"generative.{job}", exc)
+        return GenerativeError(exc.code, exc.message, suggestion=getattr(exc, "fix", None) or "")
+    _LOGGER.exception("generative.%s.unexpected_error", job)
+    return generative_error(JOB_FAILED)
+
+
+def _failed(stages: Sequence[GenerativeStage], error: GenerativeError) -> tuple[GenerativeStage, ...]:
     """`stages` with whichever step was in flight marked `failed`, carrying why as its detail.
 
     A document that says `state: failed` while one of its steps still says `running` describes a
@@ -502,10 +525,9 @@ def _failed(stages: Sequence[GenerativeStage], error: Exception) -> tuple[Genera
     rendering off the overall state, so the step that was running when the error arrived is the step
     that gets written down as the one that failed.
     """
-    message = getattr(error, "message", str(error))
     return tuple(
         (
-            stage.model_copy(update={"state": RunState.FAILED, "detail": message})
+            stage.model_copy(update={"state": RunState.FAILED, "detail": error.message})
             if stage.state is RunState.RUNNING
             else stage
         )
@@ -1011,22 +1033,29 @@ def _index_build_job(
                         config_root=config_root,
                     )
                     stages = _moved(stages, "evaluate", RunState.DONE, seconds=time.monotonic() - began)
-                except Exception as eval_exc:
-                    _LOGGER.warning("Evaluation failed during index build for %s: %s", index_id, eval_exc)
-                    eval_msg = getattr(eval_exc, "message", str(eval_exc))
+                except Exception as eval_exc:  # grading is optional; the index is built
+                    # The index is already written and answers questions; a reference set that could
+                    # not be graded (the AI service failed, the file was wrong) is that step's
+                    # failure, not the build's (DEC-1267). The step says why in plain words.
+                    problem = _job_error(eval_exc, job="index_evaluate")
                     stages = _moved(
-                        stages, "evaluate", RunState.FAILED, seconds=time.monotonic() - began, detail=eval_msg
+                        stages,
+                        "evaluate",
+                        RunState.FAILED,
+                        seconds=time.monotonic() - began,
+                        detail=problem.message,
                     )
-        except Exception as exc:
+        except Exception as exc:  # a job is never left running (DEC-1267)
+            problem = _job_error(exc, job="index_build")
             _write_status(
                 storage,
                 status_key,
                 job_id=index_id,
                 kind=GenerativeJobKind.INDEX_BUILD,
                 state=RunState.FAILED,
-                stages=_failed(stages, exc),
+                stages=_failed(stages, problem),
                 started_at=started_at,
-                error=exc,
+                error=problem,
             )
             _write_usage(storage, index_key(index_id, LLM_USAGE_FILENAME), meter)
             return
@@ -1271,16 +1300,17 @@ def _evaluate_job(
                 config_root=config_root,
             )
             stages = (_stage("evaluate", RunState.DONE, seconds=time.monotonic() - began),)
-        except Exception as exc:
+        except Exception as exc:  # a job is never left running (DEC-1267)
+            problem = _job_error(exc, job="reference_eval")
             _write_status(
                 storage,
                 status_key,
                 job_id=index_id,
                 kind=GenerativeJobKind.REFERENCE_EVAL,
                 state=RunState.FAILED,
-                stages=_failed(stages, exc),
+                stages=_failed(stages, problem),
                 started_at=started_at,
-                error=exc,
+                error=problem,
             )
             _write_usage(storage, index_key(index_id, LLM_USAGE_FILENAME), meter)
             return
@@ -1427,16 +1457,17 @@ def _root_cause_job(
                 config_root=config_root,
             )
             stages = (_stage("summarize", RunState.DONE, seconds=time.monotonic() - began),)
-        except Exception as exc:
+        except Exception as exc:  # a job is never left running (DEC-1267)
+            problem = _job_error(exc, job="root_cause")
             _write_status(
                 storage,
                 status_key,
                 job_id=run_id,
                 kind=GenerativeJobKind.ROOT_CAUSE,
                 state=RunState.FAILED,
-                stages=_failed(stages, exc),
+                stages=_failed(stages, problem),
                 started_at=started_at,
-                error=exc,
+                error=problem,
             )
             _write_usage(storage, run_key(run_id, LLM_USAGE_FILENAME), meter)
             return
@@ -1558,16 +1589,17 @@ def _campaign_copy_job(
                 config_root=config_root,
             )
             stages = (_stage("generate", RunState.DONE, seconds=time.monotonic() - began),)
-        except Exception as exc:
+        except Exception as exc:  # a job is never left running (DEC-1267)
+            problem = _job_error(exc, job="campaign_copy")
             _write_status(
                 storage,
                 status_key,
                 job_id=run_id,
                 kind=GenerativeJobKind.CAMPAIGN_COPY,
                 state=RunState.FAILED,
-                stages=_failed(stages, exc),
+                stages=_failed(stages, problem),
                 started_at=started_at,
-                error=exc,
+                error=problem,
             )
             _write_usage(storage, run_key(run_id, LLM_USAGE_FILENAME), meter)
             return

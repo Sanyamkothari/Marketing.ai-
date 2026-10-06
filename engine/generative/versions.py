@@ -21,6 +21,7 @@ from pydantic import Field
 
 from engine.contracts import Artefact
 from engine.generative.contracts import DocIndexManifest, RagEval, RagEvalQuestion
+from engine.generative.evaluation import PROVIDER_ERROR
 
 __all__ = [
     "INDEX_UPDATE_FILENAME",
@@ -90,7 +91,13 @@ class IndexUpdate(Artefact):
     chunks_embedded: int = Field(description="Passages read and embedded for this version.")
 
 
+def _graded(questions: Sequence[RagEvalQuestion]) -> list[RagEvalQuestion]:
+    """The questions that were graded: a row the AI service failed on is in no count (DEC-1266)."""
+    return [q for q in questions if q.failure != PROVIDER_ERROR]
+
+
 def _refusal_counts(questions: Sequence[RagEvalQuestion]) -> tuple[int, int, int]:
+    questions = _graded(questions)
     matched = sum(1 for q in questions if q.refused == q.expect_refusal)
     should = sum(1 for q in questions if q.expect_refusal)
     did = sum(1 for q in questions if q.expect_refusal and q.refused)
@@ -125,12 +132,13 @@ def verdict_changes(left: RagEval, right: RagEval) -> tuple[VerdictChange, ...]:
     """Questions asked of both indexes whose pass/fail verdict differs, in the left grading's order.
 
     Questions are matched by their wording (ignoring case and spacing), because a reference set has
-    no id column the engine reads; a question only one side was asked is not a change and is left out.
+    no id column the engine reads; a question only one side was asked is not a change and is left out,
+    and so is a question the AI service failed on in either grading (it has no verdict, DEC-1266).
     """
-    right_by_key = {_key(q.question): q for q in right.questions}
+    right_by_key = {_key(q.question): q for q in _graded(right.questions)}
     changes: list[VerdictChange] = []
     seen: set[str] = set()
-    for q in left.questions:
+    for q in _graded(left.questions):
         key = _key(q.question)
         other = right_by_key.get(key)
         if other is None or key in seen or other.passed == q.passed:

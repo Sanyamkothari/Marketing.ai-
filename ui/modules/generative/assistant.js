@@ -320,6 +320,7 @@ const FAILURE_LABEL = {
   refusal_mismatch: "Refused when it should have answered, or answered when it should have refused",
   retrieval_miss: "Did not find the passage that holds the answer",
   unfaithful: "The answer strays from the documents",
+  provider_error: "Not graded: the AI service failed on this question",
 };
 
 /** A rate as a whole percentage, or an em dash when nothing was measured. */
@@ -402,6 +403,13 @@ function comparisonHtml(c) {
   )}</p>${changed}`;
 }
 
+/** What went wrong with one graded question, in words; a provider error carries its own plain message. */
+function failureText(q) {
+  if (!q.failure) return q.passed ? "" : EM_DASH;
+  const label = FAILURE_LABEL[q.failure] || q.failure;
+  return q.failure === "provider_error" && q.error_message ? `${label} (${q.error_message})` : label;
+}
+
 function evaluationCard(s) {
   const rag = s.detail.rag_eval;
   if (!rag) {
@@ -413,7 +421,9 @@ function evaluationCard(s) {
   return `<section class="card" id="g-eval"><h3>Grade</h3>
     <div class="gevalhead"><div class="gpass tnum">${esc(fmtPct(agg.pass_rate, 0))} passed</div>
     <svg class="track gpass-track" height="8" role="img" aria-label="${esc(fmtPct(agg.pass_rate, 0))} of test questions passed"><rect x="0" y="0" width="100%" height="8" rx="4" fill="var(--track)"/><rect x="0" y="0" width="${pct}%" height="8" rx="4" fill="var(--ok)"/></svg>
-    <div class="gseg-row"><span class="tnum">${fmtInt(agg.questions)} test questions</span><span class="tnum">Pass mark ${esc(
+    <div class="gseg-row"><span class="tnum">${fmtInt(agg.questions)} test questions</span>${
+      agg.errored ? `<span class="tnum" data-g-errored>${fmtInt(agg.errored)} not graded (the AI service failed)</span>` : ""
+    }<span class="tnum">Pass mark ${esc(
       fmtPct(agg.pass_threshold, 0),
     )}</span></div></div>
     ${s.detail.grade ? gradeMetrics(s.detail.grade) : ""}
@@ -425,9 +435,7 @@ function evaluationCard(s) {
                 `<tr><td data-label="Question">${esc(q.question)}</td><td class="num" data-label="Score">${dash(
                   q.faithfulness ?? q.correctness,
                   (v) => fmtNum(v, 2),
-                )}</td><td data-label="What went wrong">${esc(
-                  q.failure ? FAILURE_LABEL[q.failure] || q.failure : q.passed ? "" : EM_DASH,
-                )}</td></tr>`,
+                )}</td><td data-label="What went wrong">${esc(failureText(q))}</td></tr>`,
             )
             .join("")}</tbody></table></div><p class="caption">The ten weakest answers, weakest first.</p>`
         : ""

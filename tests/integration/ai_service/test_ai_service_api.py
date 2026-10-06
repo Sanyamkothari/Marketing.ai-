@@ -118,6 +118,7 @@ def test_the_initial_state_is_two_unconnected_slots_and_six_providers(api: _Reco
         "model_suggestions",
         "embedding_suggestions",
         "supports_embeddings",
+        "local_embedding_model",
         "third_party",
     }
     assert providers["openai"]["model_suggestions"] and providers["anthropic"]["supports_embeddings"] is False

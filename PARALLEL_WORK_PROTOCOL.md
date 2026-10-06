@@ -98,7 +98,7 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-950…999 | v1 readiness: rulings, demo, quick start and the UI clean-up (on `main`) | claimed 2026-09-24 |
   | DEC-1000…1099 | Plan G — use-case agents, Guided setup (M70–M77) | claimed 2026-09-28 |
   | DEC-1100…1199 | Plan H — one simple product (M80–M84); same workstream and shared-file blocks as Plan G | claimed 2026-09-28 |
-  | DEC-1200…1299 | Plan I — product ideas: uplift budget curve (DEC-1200…1209), drift sentinel (DEC-1210…1219), Data Doctor placeholder codes (DEC-1220…1229), a trustworthy and manageable AI Onboarding Assistant (DEC-1270…1279, claimed 2026-10-06) | claimed 2026-09-30 |
+  | DEC-1200…1299 | Plan I — product ideas: uplift budget curve (DEC-1200…1209), drift sentinel (DEC-1210…1219), Data Doctor placeholder codes (DEC-1220…1229), control-group size (DEC-1230…1239), copy per segment (DEC-1240…1249), Ask your data (DEC-1250…1259), hybrid retrieval and its follow-ups (DEC-1260…1269), a trustworthy and manageable AI Onboarding Assistant (DEC-1270…1279) | claimed 2026-09-30 |
   | DEC-1300 up | unallocated | — |
 
   A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.

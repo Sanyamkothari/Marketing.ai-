@@ -203,7 +203,29 @@ function impactHtml(g, proposal) {
     .join("")}</dl></div>`;
 }
 
-function questionHtml(question, disabled) {
+/**
+ * A typed answer picks an option only when it is one of the option labels exactly (ignoring case and
+ * the spaces around and inside it). Anything else - "no", "drop", a sentence - goes to the helper as a
+ * message, because guessing which option a word meant could tick a fix the person never chose.
+ */
+const normalAnswer = (text) => String(text || "").trim().replace(/\s+/g, " ").toLowerCase();
+
+function optionTyped(question, text) {
+  const typed = normalAnswer(text);
+  if (!question || !typed) return null;
+  return (question.options || []).find((option) => normalAnswer(option.label) === typed) || null;
+}
+
+/** The free-text line under a question's options, when the helper's chat can take what it does not match. */
+function typedAnswerHtml(question, disabled) {
+  return `<form class="ag-typed" data-ag-typed="${esc(
+    question.question_id,
+  )}"><input type="text" class="ag-typed-input" aria-label="${esc("Answer “" + question.text + "” in your own words")}" maxlength="1000" autocomplete="off" placeholder="Or answer in your own words, for example “treat 99 as missing”"${
+    disabled ? " disabled" : ""
+  }><button type="submit" class="btn secondary sm"${disabled ? " disabled" : ""}>Send</button></form>`;
+}
+
+function questionHtml(question, disabled, typed) {
   const open = question.blocking && !present(question.answer);
   const options = (question.options || [])
     .map(
@@ -215,17 +237,11 @@ function questionHtml(question, disabled) {
         }>${esc(option.label)}</button>${option.effect ? `<span class="ag-eff">${esc(option.effect)}</span>` : ""}</div>`,
     )
     .join("");
-  const customInput = `<form class="ag-custom-opt" data-ag-custom-question="${esc(question.question_id)}">
-    <div class="ag-custom-row">
-      <input type="text" class="input sm ag-custom-input" placeholder="Or write custom instruction (e.g. drop rows with 99, treat as 0)..."${
-        disabled ? " disabled" : ""
-      } />
-      <button type="submit" class="btn secondary sm"${disabled ? " disabled" : ""}>Submit</button>
-    </div>
-  </form>`;
   return `<div class="ag-q" data-ag-q="${esc(question.question_id)}"><div class="ag-qt">${esc(question.text)}${
     open ? `<span class="pill warn">Needs an answer</span>` : ""
-  }</div><div class="ag-opts" role="group" aria-label="${esc(question.text)}">${options}${customInput}</div></div>`;
+  }</div><div class="ag-opts" role="group" aria-label="${esc(question.text)}">${options}</div>${
+    typed ? typedAnswerHtml(question, disabled) : ""
+  }</div>`;
 }
 
 function checklistHtml(g, closed) {
@@ -234,7 +250,7 @@ function checklistHtml(g, closed) {
   const disabled = closed || Boolean(g.busy);
   const asked = questions.length
     ? `<section class="ag-group" data-ag-group="questions"><h4>Questions</h4>${questions
-        .map((q) => questionHtml(q, disabled))
+        .map((q) => questionHtml(q, disabled, !chatOff(g)))
         .join("")}</section>`
     : "";
   const groups = GROUPS.map((group) => {
@@ -254,14 +270,13 @@ function stopHtml(entry, n) {
     n,
     "This data cannot be used as it is",
     false,
-    `<div class="ag-stop" role="status" data-ag-stop><p class="ag-lead">${esc(dash(session.stop_reason))}</p>
-    <form class="ag-stop-custom-form" id="ag-stop-ask">
-      <div class="ag-custom-row" style="margin: 12px 0 16px;">
-        <input type="text" id="ag-stop-input" class="input sm" placeholder="Tell the helper how you'd like to fix it (e.g. drop duplicate rows, remove 99)..." />
-        <button type="submit" class="btn secondary sm">Ask Helper</button>
-      </div>
-    </form>
-    <div class="btn-row"><button type="button" class="btn secondary sm" id="ag-restart">Upload another file</button><button type="button" class="btn quiet sm" data-ag-manual>Use Manual setup instead</button></div></div>`,
+    `<div class="ag-stop" role="status" data-ag-stop><p class="ag-lead">${esc(dash(session.stop_reason))}</p>${
+      chatOff(entry.state)
+        ? ""
+        : `<form class="ag-typed ag-stop-ask" id="ag-stop-ask"><input type="text" class="ag-typed-input" id="ag-stop-input" aria-label="Tell the helper how to fix it" maxlength="1000" autocomplete="off" placeholder="Tell the helper how you would fix it, for example “drop the duplicate rows”"${
+            entry.state.busy ? " disabled" : ""
+          }><button type="submit" class="btn secondary sm"${entry.state.busy ? " disabled" : ""}>Ask the helper</button></form>`
+    }<div class="btn-row"><button type="button" class="btn secondary sm" id="ag-restart">Upload another file</button><button type="button" class="btn quiet sm" data-ag-manual>Use Manual setup instead</button></div></div>`,
   );
 }
 
@@ -706,42 +721,32 @@ function bind(entry) {
   main.querySelectorAll("[data-ag-option]").forEach((button) =>
     button.addEventListener("click", () => answerQuestion(entry, button.dataset.agQuestion, button.dataset.agOption)),
   );
-  main.querySelectorAll("[data-ag-custom-question]").forEach((form) =>
+  // A typed answer: an option's exact label picks that option; anything else is a message to the helper.
+  main.querySelectorAll("[data-ag-typed]").forEach((form) =>
     form.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const qId = form.dataset.agCustomQuestion;
       const input = form.querySelector("input");
-      const val = (input && input.value || "").trim();
-      if (!val || g.busy) return;
-
-      const qObj = ((g.session && g.session.questions) || []).find((q) => q.question_id === qId);
-      const lowerVal = val.toLowerCase();
-
-      // Check if user input directly matches any pre-defined option
-      const matched = qObj && (qObj.options || []).find((opt) => {
-        const optLabel = (opt.label || "").toLowerCase();
-        const optId = (opt.option_id || "").toLowerCase();
-        return lowerVal === optId || lowerVal === optLabel || optLabel.includes(lowerVal) || lowerVal.includes(optId);
-      });
-
-      if (matched) {
-        await answerQuestion(entry, qId, matched.option_id);
-      } else {
-        const qText = qObj ? qObj.text : "";
-        const promptText = qText ? `Regarding "${qText}": ${val}` : val;
-        g.draft = promptText;
-        await ask(entry);
+      const text = input ? input.value.trim() : "";
+      if (!text || g.busy) return;
+      const questionId = form.dataset.agTyped;
+      const question = ((g.session && g.session.questions) || []).find((q) => q.question_id === questionId);
+      const option = optionTyped(question, text);
+      if (option) {
+        await answerQuestion(entry, questionId, option.option_id);
+        return;
       }
+      g.draft = question ? "About “" + question.text + "”: " + text : text;
+      await ask(entry);
     }),
   );
   const stopForm = main.querySelector("#ag-stop-ask");
   if (stopForm) {
     stopForm.addEventListener("submit", async (event) => {
       event.preventDefault();
-      const stopInput = main.querySelector("#ag-stop-input");
-      const val = (stopInput && stopInput.value || "").trim();
-      if (!val || g.busy) return;
-      g.draft = val;
+      const input = stopForm.querySelector("input");
+      const text = input ? input.value.trim() : "";
+      if (!text || g.busy) return;
+      g.draft = text;
       await ask(entry);
     });
   }

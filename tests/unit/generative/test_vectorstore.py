@@ -49,11 +49,16 @@ import pytest
 from engine.generative.contracts import CHUNKS_FILENAME, EMBEDDINGS_FILENAME, Chunk, ChunkEmbedding
 from engine.generative.errors import GenerativeError
 from engine.generative.vectorstore import (
+    BM25_B,
+    BM25_K1,
     CHUNK_COLUMNS,
     EMBEDDING_COLUMNS,
     LocalVectorStore,
     Match,
     VectorStore,
+    bm25_corpus,
+    bm25_scores,
+    bm25_tokens,
     chunk_ids,
     cosine,
 )
@@ -399,7 +404,103 @@ def test_a_store_missing_one_operation_is_not_a_vector_store() -> None:
         def chunks(self, index_id) -> tuple[Chunk, ...]:
             return ()
 
-        def search(self, index_id, query, *, top_k) -> tuple[Match, ...]:
+        def search(self, index_id, query, *, top_k, query_text=None, bm25_weight=0.0) -> tuple[Match, ...]:
             return ()
 
     assert not isinstance(WriteOnly(), VectorStore)
+
+
+# ---------------------------------------------------------------------------
+# BM25 and hybrid search (DEC-1260 ... DEC-1262)
+# ---------------------------------------------------------------------------
+def test_bm25_matches_a_hand_computed_score() -> None:
+    """Two documents, "a b" and "a c c", asked "c" and then "a c", worked by hand.
+
+    N = 2, average length 2.5. idf(c) = ln(1 + (2 - 1 + 0.5) / (1 + 0.5)) = ln 2 and idf(a) =
+    ln(1 + 0.5 / 2.5) = ln 1.2. The length norms are k1 * (1 - b + b * len / 2.5): 1.275 for the
+    two-word document and 1.725 for the three-word one. The scale is sum(idf) * (k1 + 1).
+    """
+    assert (BM25_K1, BM25_B) == (1.5, 0.75)
+    corpus = ["a b", "a c c"]
+    only_c = bm25_scores(corpus, "c")
+    assert only_c[0] == 0.0
+    assert only_c[1] == pytest.approx((math.log(2) * 2 * 2.5 / (2 + 1.725)) / (math.log(2) * 2.5))
+    assert only_c[1] == pytest.approx(0.5369127517)
+    both = bm25_scores(corpus, "a c")
+    scale = (math.log(1.2) + math.log(2)) * 2.5
+    assert both[0] == pytest.approx((math.log(1.2) * 1 * 2.5 / (1 + 1.275)) / scale)
+    assert both[1] == pytest.approx(
+        (math.log(1.2) * 1 * 2.5 / (1 + 1.725) + math.log(2) * 2 * 2.5 / (2 + 1.725)) / scale
+    )
+
+
+def test_bm25_counts_a_question_word_once_and_ignores_words_no_chunk_has() -> None:
+    corpus = ["a b", "a c c"]
+    assert list(bm25_scores(corpus, "c c c")) == list(bm25_scores(corpus, "c"))
+    assert list(bm25_scores(corpus, "c zebra")) == list(bm25_scores(corpus, "c"))
+    assert list(bm25_scores(corpus, "zebra")) == [0.0, 0.0]
+    assert list(bm25_scores(corpus, "")) == [0.0, 0.0]
+    assert list(bm25_scores([], "c")) == []
+
+
+def test_bm25_tokens_are_lower_cased_words_in_any_script() -> None:
+    assert bm25_tokens("Late-FEE, 2% of ₹100!") == ["late", "fee", "2", "of", "100"]
+    assert bm25_tokens("Café naïve") == ["café", "naïve"]
+
+
+def test_bm25_statistics_are_computed_once_per_set_of_texts() -> None:
+    """The cache is keyed by the texts themselves, so a rebuilt index can never get stale statistics."""
+    first = bm25_corpus(["alpha beta", "beta gamma"])
+    assert bm25_corpus(["alpha beta", "beta gamma"]) is first
+    rebuilt = bm25_corpus(["alpha beta", "beta delta"])
+    assert rebuilt is not first
+    assert rebuilt.document_frequency["delta"] == 1 and "delta" not in first.document_frequency
+
+
+def test_the_store_does_not_tokenise_the_index_again_for_each_question(
+    store: LocalVectorStore, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engine.generative import vectorstore
+
+    store.write(INDEX, [chunk(0, text="late fee"), chunk(1, text="porting code")], [[1.0, 0.0], [0.0, 1.0]])
+    vectorstore._bm25_corpus.cache_clear()
+    tokenised: list[str] = []
+    real = vectorstore.bm25_tokens
+    monkeypatch.setattr(vectorstore, "bm25_tokens", lambda text: tokenised.append(text) or real(text))
+    for question in ("late fee", "porting", "fee"):
+        store.search(INDEX, [1.0, 0.0], top_k=2, query_text=question, bm25_weight=0.5)
+    corpus_texts = [text for text in tokenised if text.startswith("Billing")]
+    assert len(corpus_texts) == 2, "each chunk is tokenised once, not once per question"
+
+
+def test_a_hybrid_search_ranks_by_the_blend_and_still_reports_the_cosine(store: LocalVectorStore) -> None:
+    """The dense winner loses the rank to the chunk that has the question's word; neither loses its cosine."""
+    store.write(
+        INDEX,
+        [chunk(0, text="reconnection is automatic"), chunk(1, text="the porting code")],
+        [[1.0, 1.0], [0.6, 0.8]],
+    )
+    dense = store.search(INDEX, [1.0, 0.0], top_k=2)
+    assert ids(dense) == ("c0", "c1")
+    assert all(m.keyword_score is None and m.hybrid_score is None for m in dense)
+    mixed = store.search(INDEX, [1.0, 0.0], top_k=2, query_text="porting code", bm25_weight=0.5)
+    assert ids(mixed) == ("c1", "c0")
+    by_id = {m.chunk.chunk_id: m for m in mixed}
+    assert by_id["c0"].similarity == pytest.approx(math.sqrt(0.5))
+    assert by_id["c1"].similarity == pytest.approx(0.6)
+    assert by_id["c0"].keyword_score == 0.0
+    assert by_id["c1"].hybrid_score == pytest.approx(0.5 * 0.6 + 0.5 * by_id["c1"].keyword_score)
+
+
+def test_a_weight_of_zero_or_no_question_text_is_the_plain_vector_search(store: LocalVectorStore) -> None:
+    store.write(INDEX, [chunk(0, text="alpha"), chunk(1, text="beta")], [[1.0, 0.0], [0.0, 1.0]])
+    plain = store.search(INDEX, [1.0, 0.0], top_k=2)
+    assert store.search(INDEX, [1.0, 0.0], top_k=2, query_text="beta", bm25_weight=0.0) == plain
+    assert store.search(INDEX, [1.0, 0.0], top_k=2, query_text="  ", bm25_weight=0.5) == plain
+
+
+@pytest.mark.parametrize("weight", [-0.1, 1.5])
+def test_a_weight_outside_zero_to_one_is_a_callers_mistake(store: LocalVectorStore, weight: float) -> None:
+    store.write(INDEX, [chunk(0)], [[1.0, 0.0]])
+    with pytest.raises(ValueError, match="bm25_weight"):
+        store.search(INDEX, [1.0, 0.0], top_k=1, query_text="bills", bm25_weight=weight)

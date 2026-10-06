@@ -47,7 +47,6 @@ from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, render
 from engine.generative.retrieval import Retrieved, retrieve
 from engine.generative.vectorstore import Match, VectorStore
-from engine.llm import FakeLLMClient
 from engine.utils.logging import get_logger
 
 __all__ = [
@@ -121,9 +120,7 @@ def answer(
     started = time.monotonic()
     rag = use_case.generative.rag
     (question_vector,) = meter.embed([question])
-    is_fake = isinstance(getattr(meter, "client", None), FakeLLMClient)
-    q_text = None if is_fake else question
-    found = retrieve(store, index_id, question_vector, config=rag, question_text=q_text)
+    found = retrieve(store, index_id, question_vector, config=rag, question_text=question)
 
     if found.empty:
         return _refusal(question, found, started, rag.refusal_message, config_root)

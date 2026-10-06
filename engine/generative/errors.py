@@ -30,6 +30,7 @@ __all__ = [
     "INDEX_CORRUPT",
     "INDEX_EMPTY",
     "INDEX_NOT_FOUND",
+    "JOB_FAILED",
     "KNOWLEDGE_BASE_TOO_LARGE",
     "MISSING_FIELD",
     "MODEL_OUTPUT_MALFORMED",
@@ -82,6 +83,14 @@ NOT_A_GENERATIVE_USE_CASE: Final[str] = "NOT_A_GENERATIVE_USE_CASE"
 MISSING_FIELD: Final[str] = "MISSING_FIELD"
 COPY_NEEDS_UPLIFT_RUN: Final[str] = "COPY_NEEDS_UPLIFT_RUN"
 """`campaign_copy.segment_by: uplift_segment` over a run that has no uplift segments (DEC-1243)."""
+
+# --- a background job -------------------------------------------------------------------------
+JOB_FAILED: Final[str] = "JOB_FAILED"
+"""A background job stopped on an error nobody wrote a code for - a bug, not the caller's doing.
+
+Its traceback goes to the log (messages withheld by the log formatter); the status document gets
+this fixed sentence, never the exception's own text, which can quote internals or data (DEC-1267).
+"""
 
 
 GENERATIVE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
@@ -177,6 +186,10 @@ GENERATIVE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
             "Run {run_id} is not an uplift scoring run, so it has no persuadables to write for.",
             "Write one message per score band or per main reason instead, or score this data with an "
             "uplift model first.",
+        ),
+        JOB_FAILED: (
+            "This step stopped because of an unexpected problem on our side.",
+            "Try again. If it happens again, contact support: the server log has the details.",
         ),
     }
 )
