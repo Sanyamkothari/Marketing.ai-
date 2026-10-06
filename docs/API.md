@@ -671,6 +671,8 @@ Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` 
 | `require_human_review` | boolean | no |  |
 | `limits` | CopyLimits | no |  |
 | `required_lines` | RequiredLines | no |  |
+| `segment_by` | CopySegmentBy ("band" \| "top_reason" \| "uplift_segment") | no | How campaign copy divides its audience into the groups it writes one message each for.  `band` is the original behaviour: one template set per score band. `top_reason` groups rows by their own strongest SHAP reason (the same grouping `SegmentBy.TOP_REASON` gives a root-cause run). `uplift_segment` writes for an uplift scoring run's persuadables only (DEC-1240). |
+| `max_segments` | integer | no |  |
 
 #### KpiConfig
 

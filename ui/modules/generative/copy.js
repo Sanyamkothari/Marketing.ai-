@@ -11,6 +11,10 @@
 // that a named person accepted it (DEC-055's unverified-claim pattern, same as model approval), and
 // the actual export is the CSV download, same as `scores.csv` is for a predictive run.
 //
+// Before generating, the person chooses what one set of messages is written for - each score band, each
+// main reason, or (on an uplift scoring run only) the persuadables - and each card then names its
+// group and how many customers are in it (DEC-1247).
+//
 // v1 UI: one primary action - "Generate campaign copy" until copy exists, then "Download messages (CSV)"
 // (every message that was not blocked; the screen says to send only the approved versions).The approver's name is the signed-in person's, read-only; it is typed only when sign-in
 // is off. Judge scores, every passed check and the cost sit under closed disclosures.
@@ -53,12 +57,34 @@ const BAND_TIP = "A group of customers with similar scores (High, Medium, Low) t
 const CONTROL_TIP =
   "Customers chosen at random and deliberately not contacted, so the campaign's effect can be measured against them.";
 
+// "Write one message per": `generative.campaign_copy.segment_by` (DEC-1247). Uplift segments are offered
+// only on an uplift scoring run, the one kind of run the engine can write per uplift segment for.
+const PER_CHOICES = [
+  { value: "band", label: "Score band", help: "One set of messages for each score band (High, Medium)." },
+  {
+    value: "top_reason",
+    label: "Main reason",
+    help: "Customers grouped by the main reason behind their score, one set of messages for each group. Small groups share one set.",
+  },
+  {
+    value: "uplift_segment",
+    label: "Uplift segment",
+    help: "Messages only for the persuadables: customers a contact is predicted to win over. Sure things, lost causes and sleeping dogs get none.",
+  },
+];
+
+const isUpliftRun = (run) => Boolean(run && run.problem_type === "uplift");
+
+/** The choices this run can take; `band` always. */
+export const perChoices = (run) => PER_CHOICES.filter((c) => c.value !== "uplift_segment" || isUpliftRun(run));
+
 function stateFor(runId) {
   if (!STATE.has(runId)) {
     STATE.set(runId, {
       runId,
       run: null,
       art: {},
+      segmentBy: "band",
       generating: false,
       generateError: null,
       approverName: "",
@@ -80,14 +106,22 @@ function judgeLine(template) {
   return scores.join(" · ");
 }
 
-function templateCard(s, template) {
+const customers = (n) => `${fmtInt(n)} customer${n === 1 ? "" : "s"}`;
+
+/** "Main reason: tenure_months · 124 customers": who a card's message is for, and how many. */
+function groupLine(group) {
+  return group.rows == null ? group.title : `${group.title} · ${customers(group.rows)}`;
+}
+
+function templateCard(s, template, group) {
   const busy = s.busy[template.template_id];
   const canApprove = template.status === "pending_review" && s.approverName.trim() && !busy;
   const flagged = flaggedChecks(template.guardrails);
-  return `<div class="gtpl${template.status === "blocked" ? " blocked" : ""}">
+  return `<div class="gtpl${template.status === "blocked" ? " blocked" : ""}" data-template="${esc(template.template_id)}">
     <div class="gtpl-head"><span>${esc(template.channel.toUpperCase())} · Version ${esc(
       template.variant,
     )}</span>${copyStatusPill(template.status)}</div>
+    <div class="gtpl-meta gtpl-seg">${esc(groupLine(group))}</div>
     ${template.subject ? `<div class="gtpl-subj">${esc(template.subject)}</div>` : ""}
     <div class="gtpl-body">${esc(template.text)}</div>
     ${template.block_reason ? `<div class="gtpl-block-reason">${esc(template.block_reason)}</div>` : ""}
@@ -115,9 +149,10 @@ function templateCard(s, template) {
   </div>`;
 }
 
-function bandSection(s, band, templates) {
-  return `<section><h4 class="gband-h">${esc(band)} band ${termTip("band", BAND_TIP)}</h4><div class="ggrid">${templates
-    .map((t) => templateCard(s, t))
+function groupSection(s, group) {
+  const tip = group.band ? ` ${termTip("band", BAND_TIP)}` : "";
+  return `<section data-group="${esc(group.key)}"><h4 class="gband-h">${esc(groupLine(group))}${tip}</h4><div class="ggrid">${group.templates
+    .map((t) => templateCard(s, t, group))
     .join("")}</div></section>`;
 }
 
@@ -132,6 +167,47 @@ function templatesByBand(batch) {
     grouped.get(template.band).push(template);
   }
   return order.map((band) => [band, grouped.get(band)]);
+}
+
+/**
+ * The groups the cards are drawn in: one per segment the batch wrote for (largest first, as the batch
+ * lists them), or one per band for a batch written per band - each with its title and its size.
+ */
+export function templateGroups(batch) {
+  if (!Array.isArray(batch.segments)) {
+    const perBand = (batch.audience && batch.audience.per_band) || {};
+    return templatesByBand(batch).map(([band, templates]) => ({
+      key: band,
+      title: `${band} band`,
+      rows: perBand[band] == null ? null : perBand[band],
+      templates,
+      band: true,
+    }));
+  }
+  return batch.segments
+    .filter((segment) => segment.written)
+    .map((segment) => ({
+      key: segment.segment,
+      title: segment.label,
+      rows: segment.rows,
+      templates: batch.templates.filter((t) => t.segment === segment.segment),
+      band: false,
+    }))
+    .filter((group) => group.templates.length);
+}
+
+/** Segments the batch deliberately wrote nothing for (an uplift run's non-persuadables), and why. */
+function skippedHtml(batch) {
+  const skipped = Array.isArray(batch.segments) ? batch.segments.filter((segment) => !segment.written) : [];
+  if (!skipped.length) return "";
+  return `<ul class="gskipped">${skipped
+    .map(
+      (segment) =>
+        `<li data-skipped="${esc(segment.segment)}"><b>${esc(segment.label)}</b> · ${esc(customers(segment.rows))}: ${esc(
+          segment.skipped_reason || "no message is written for them.",
+        )}</li>`,
+    )
+    .join("")}</ul>`;
 }
 
 function approverField(s) {
@@ -152,16 +228,23 @@ function summaryHtml(s, batch) {
   const approved = batch.templates.filter((t) => t.status === "approved").length;
   const pending = batch.templates.filter((t) => t.status === "pending_review").length;
   const blocked = batch.templates.filter((t) => t.status === "blocked").length;
-  const bands = new Set(batch.templates.map((t) => t.band)).size;
+  const perSegment = Array.isArray(batch.segments);
+  const units = new Set(batch.templates.map((t) => (perSegment ? t.segment : t.band))).size;
+  const unitWord = perSegment ? (batch.segment_by === "uplift_segment" ? "segment" : "group") : "band";
   const channels = new Set(batch.templates.map((t) => t.channel)).size;
   const total = batch.templates.length;
+  const nothing =
+    batch.segment_by === "uplift_segment"
+      ? "No persuadable customer was left after consent, recent contact and the control group. Nobody else is written to on purpose."
+      : "None of the customers it scored fell in a band this use case writes for. Score a newer file, or check the bands in the use case's settings.";
   const verdict = total
     ? `<p class="gverdict">${fmtInt(approved)} of ${fmtInt(total)} messages approved</p><p class="gverdict-sub">${fmtInt(
         pending,
-      )} waiting for review · ${fmtInt(blocked)} blocked · ${bands} band${bands === 1 ? "" : "s"} × ${channels} channel${
+      )} waiting for review · ${fmtInt(blocked)} blocked · ${units} ${unitWord}${units === 1 ? "" : "s"} × ${channels} channel${
         channels === 1 ? "" : "s"
       }</p>`
-    : `<p class="gverdict">No messages were written for this run</p><p class="gverdict-sub">None of the customers it scored fell in a band this use case writes for. Score a newer file, or check the bands in the use case's settings.</p>`;
+    : `<p class="gverdict">No messages were written for this run</p><p class="gverdict-sub">${esc(nothing)}</p>`;
+  const notPersuadable = batch.holdout.not_persuadable_rows;
   return `<div class="gsummary">
     <div>${verdict}</div>
     <p>Nothing is sent from here. ${
@@ -176,7 +259,16 @@ function summaryHtml(s, batch) {
       batch.holdout.out_of_band_rows
         ? ` (${fmtInt(batch.holdout.out_of_band_rows)} fell outside the bands this batch writes for)`
         : ""
-    }.</p>
+    }${notPersuadable ? `, and writes nothing for <b>${fmtInt(notPersuadable)}</b> who are not persuadables` : ""}${
+      batch.holdout.outside_budget_rows
+        ? ` or <b>${fmtInt(batch.holdout.outside_budget_rows)}</b> persuadables over the contact budget`
+        : ""
+    }.</p>${
+      batch.uplift_budget_applied === false
+        ? `<p class="gmuted">This run's scores do not say which persuadables fit the contact budget, so every persuadable was written to.</p>`
+        : ""
+    }
+    ${skippedHtml(batch)}
     ${total ? approverField(s) : ""}
     ${s.actionError ? errorBox(s.actionError) : ""}
   </div>`;
@@ -190,18 +282,36 @@ const generateAction = (s) =>
 
 const generateErrorHtml = (s) => (s.generateError ? `<div class="gbody">${errorBox(s.generateError)}</div>` : "");
 
+/** The choice a person makes before generating: "Write one message per" band, main reason or uplift segment. */
+export function perChooserHtml(s) {
+  const choices = perChoices(s.run);
+  if (!choices.some((c) => c.value === s.segmentBy)) s.segmentBy = "band";
+  const current = choices.find((c) => c.value === s.segmentBy);
+  return `<div class="gbody gper"><p class="sub" id="g-per-label">Write one message per</p><div class="seg" role="group" aria-labelledby="g-per-label">${choices
+    .map(
+      (c) =>
+        `<button type="button" data-copy-per="${esc(c.value)}" class="${c.value === s.segmentBy ? "on" : ""}" aria-pressed="${
+          c.value === s.segmentBy
+        }">${esc(c.label)}</button>`,
+    )
+    .join("")}</div><p class="seg-help">${esc(current.help)}</p></div>`;
+}
+
+/** The body `POST .../campaign-copy` is sent: per band is the default and sends nothing extra. */
+export const copyOverrides = (segmentBy) => (segmentBy && segmentBy !== "band" ? { segment_by: segmentBy } : {});
+
 function copyCard(s) {
   const batch = s.art["copy_batch.json"];
   const status = s.art["copy_status.json"];
   const running = status && (status.state === "pending" || status.state === "running");
   const details = costAndChecks(s.art["llm_usage.json"], s.art["guardrail_report.json"]);
   if (batch) {
-    const bands = templatesByBand(batch);
+    const groups = templateGroups(batch);
     return `<section class="card"><h3>Messages to review</h3>${summaryHtml(s, batch)}
       ${
-        bands.length
-          ? `<div class="gbands">${bands
-              .map(([band, templates]) => bandSection(s, band, templates))
+        groups.length
+          ? `<div class="gbands">${groups
+              .map((group) => groupSection(s, group))
               .join("")}</div><p class="caption">A blocked message is never in the download, whatever its scores.</p>`
           : ""
       }
@@ -212,15 +322,15 @@ function copyCard(s) {
     return `<section class="card"><h3>Writing campaign copy…</h3>${progressList(status)}</section>`;
   }
   if (status && status.state === "failed") {
-    return `<section class="card"><h3>Campaign copy</h3>${emptyState({
+    return `<section class="card"><h3>Campaign copy</h3>${perChooserHtml(s)}${emptyState({
       title: "The last attempt did not finish.",
       text: status.error_message || "",
       action: generateAction(s),
     })}${generateErrorHtml(s)}${details}</section>`;
   }
-  return `<section class="card"><h3>Campaign copy</h3>${emptyState({
+  return `<section class="card"><h3>Campaign copy</h3>${perChooserHtml(s)}${emptyState({
     title: "No campaign copy has been written for this run yet.",
-    text: "We write messages for each band and channel from the customer details this use case allows, check them against the safety rules, and hold every one for your review. Nothing is sent to anyone.",
+    text: "We write messages for each group you choose and each channel from the customer details this use case allows, check them against the safety rules, and hold every one for your review. Nothing is sent to anyone.",
     action: generateAction(s),
   })}${generateErrorHtml(s)}</section>`;
 }
@@ -328,7 +438,7 @@ export function createCopyController(uc, runId, rerender, options = {}) {
     s.generateError = null;
     rerender();
     try {
-      await postCampaignCopy(runId);
+      await postCampaignCopy(runId, copyOverrides(s.segmentBy));
       s.art = await getArtefacts(runId, ARTEFACTS);
       s.generating = false;
       rerender();
@@ -402,6 +512,12 @@ export function createCopyController(uc, runId, rerender, options = {}) {
   function bind(root) {
     const generateBtn = root.querySelector("#g-generate-copy");
     if (generateBtn) generateBtn.addEventListener("click", () => generate());
+    root.querySelectorAll("[data-copy-per]").forEach((button) =>
+      button.addEventListener("click", () => {
+        s.segmentBy = button.dataset.copyPer;
+        rerender();
+      }),
+    );
     const approver = root.querySelector("#g-approver");
     if (approver && !s.approverLocked) {
       approver.addEventListener("input", (event) => {

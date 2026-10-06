@@ -743,3 +743,79 @@ refusal is raised before anything is written.
 What is not done: feedback is not shown to the model or used to change an answer, a reference answer
 is never suggested, the compare view does not re-grade either version, and an update cannot change
 the passage size or the embedding model - that is a new build from the start.
+
+## 12. Copy per segment: one message per main reason, or for the persuadables only (Plan I)
+
+A score band says how likely a customer is to come back; it does not say why, and it does not say
+whether a message will change anything. `generative.campaign_copy.segment_by` lets copy be written for
+a group that does (DEC-1240):
+
+```yaml
+generative:
+  campaign_copy:
+    segment_by: band          # band (default) | top_reason | uplift_segment
+    max_segments: 6           # top_reason only: at most this many groups, the last one "other reasons"
+```
+
+The setting is also a per-request override - `POST /runs/{run_id}/campaign-copy` with
+`{"overrides": {"segment_by": "top_reason"}}` - and that is how the campaign copy screen sends it: a
+"Write one message per: Score band / Main reason / Uplift segment" choice above *Generate campaign
+copy*, the last offered only when the run's `problem_type` is `uplift`.
+
+**`band` is unchanged, byte for byte.** It uses the same `copy_email`/`copy_sms`/`copy_whatsapp` prompts
+with the same variables, so the recorded prompts, `prompt_hashes`, `copy_batch.json` and
+`copy_messages.csv` are what they were. The fields added for segments (`CopyTemplate.segment`,
+`CopyMessage.segment`, `CopyBatch.segment_by`, `CopyBatch.segments`, `CopyBatch.uplift_budget_applied`,
+`CopyHoldout.not_persuadable_rows`, `CopyHoldout.outside_budget_rows`)
+are left out of the file when they are empty (`exclude_if`), and the `segment` column of
+`copy_messages.csv` is written only when a message has one (DEC-1242).
+
+**`top_reason`** cuts the rows that would get copy per band anyway - `bands_to_write`, minus suppressed
+and control rows - by each row's own strongest SHAP reason (`row_explanations.parquet`, `reasons[0]`).
+The grouping is `engine.generative.segments.group_keys`, the one `root_cause.py` now uses too, so the
+two screens never cut a run differently: largest group first, ties by name. Copy cannot leave an
+eligible row without a message, so where a root-cause summary drops the groups past its cap,
+`cap_with_other` folds them - and any row with no measured reason - into one `other_reasons` segment,
+listed last (DEC-1241). Segment ids are `reason_<feature>` and `other_reasons`; template ids are
+`<segment>-<channel>-<variant>`. A run without per-row reasons is refused with
+`RUN_WITHOUT_EXPLANATIONS` before any call.
+
+**`uplift_segment`** reads an uplift scoring run's `segment` and `intended_treatment` columns
+(`engine/uplift/segments.py`, `engine/uplift/actions.py`) and writes for the persuadables the policy
+chose. Every row is counted once, by fixed precedence: suppressed, control, not a persuadable, over the
+contact budget, then written to. Sure things, lost causes and sleeping dogs get no message; the batch
+counts them in `holdout.not_persuadable_rows` and lists each as a `CopySegment` with `written: false`
+and a `skipped_reason` that is the uplift action (`Never treat (contact makes it worse)`), the same
+words `scores.csv` already records per row in its `action` column. Persuadables with
+`intended_treatment` false are counted in `holdout.outside_budget_rows` and listed as the skipped
+segment `persuadable_over_budget` ("Over the contact budget"). A scores file without
+`intended_treatment` writes to every persuadable and records `uplift_budget_applied: false` in the
+batch. `bands_to_write`
+does not apply: an uplift run's segments are its targeting. On a run that is not an uplift scoring run
+(`run.json` `problem_type` is not `uplift`, or `scores.csv` has no `segment` column) the request is
+refused with `409 COPY_NEEDS_UPLIFT_RUN` before a job is queued, and `generate_campaign_copy` refuses
+the same way before any call (DEC-1243).
+
+**What a segment's prompt sees.** Per segment and channel there is one call to a `copy_segment_*`
+prompt (DEC-1244), so cost is O(segments x channels) as before. Its inputs are a stored `CopySegment`
+and nothing else: the segment's label, one sentence saying how it was formed, the engine's own
+aggregate figures (row count, share, rows per band, the mean score or mean predicted uplift) and its
+strongest aggregated reasons (`root_cause.aggregate_reasons`, the reason it was formed on first). No
+primary key, no field value and no single row's reason is ever passed in; `_plan` reads the rows and
+hands the prompt builder counts and means. `tests/unit/generative/test_win_back.py` proves it the
+honest way for both new modes - every recorded prompt is searched for every customer id, snapshot date
+and spend value in the source file (DEC-1245).
+
+**Rendering and review are unchanged.** Each row is rendered, without a model, from the template of
+its own segment; `{{band}}` is the row's own band, since a segment can span bands. Control and
+suppressed rows never get a message. Every template is `pending_review` until a person approves it,
+whatever it was written for. Regenerating a segment's template re-asks exactly what the first call
+asked, from the `CopySegment` the batch stored and with the batch's own `segment_by`, not the use
+case's default - the regenerate route takes no override (DEC-1246).
+
+**On the screen** each card names the group it was written for and its size ("Main reason: tenure ·
+124 customers", "High band · 31 customers"), groups are drawn largest first, and on an uplift batch
+the segments written for nobody are listed with their size and the reason (DEC-1247).
+
+Out of scope, deliberately: no persona reviewer, no multi-agent framework, and no per-row reason
+column in `copy_messages.csv` - a row with no message is not a message.

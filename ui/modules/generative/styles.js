@@ -58,6 +58,12 @@ const CSS = `
 .gtpl-subj{font-size:12px;color:var(--muted);margin-bottom:4px}
 .gtpl-meta{font-size:12px;color:var(--muted)}
 .gtpl-block-reason{font-size:12px;color:var(--bad)}
+.gper{display:flex;flex-direction:column;gap:8px;padding-bottom:0}
+.gper>p.sub{margin:0;font-size:13px;font-weight:600;color:var(--ink)}
+.gper .seg{flex-wrap:wrap;align-self:flex-start;max-width:100%}
+.gper>p.seg-help{margin:0;font-size:12px;color:var(--muted)}
+.gskipped{margin:0;padding-left:18px;font-size:13px;color:var(--ink2)}
+.gskipped li{margin:2px 0}
 .gtpl-actions{display:flex;align-items:center;gap:12px;flex-wrap:wrap;margin-top:auto}
 .gtpl details.tech{padding-top:8px}
 .gtpl details.tech p{margin:8px 0 0}

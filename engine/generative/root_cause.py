@@ -83,6 +83,7 @@ from engine.generative.errors import (
 from engine.generative.guardrails import CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, prompt_hashes, prompt_versions, render
 from engine.generative.redaction import redact
+from engine.generative.segments import group_keys, top_reason_feature
 from engine.onboarding.datasets import run_source_key
 from engine.stages.actions import BAND_COLUMN
 from engine.stages.explain import ROW_EXPLANATIONS_FILENAME, read_row_explanations
@@ -199,10 +200,7 @@ def _segment_name(
     """The segment `key` falls into, or `None` when it has nothing to segment on."""
     if cfg.segment_by is SegmentBy.BAND:
         return band_by_key.get(key)
-    explanation = explanations_by_key.get(key)
-    if explanation is None or not explanation.reasons:
-        return None
-    return explanation.reasons[0].feature
+    return top_reason_feature(explanations_by_key.get(key))
 
 
 def _segment_groups(
@@ -211,15 +209,13 @@ def _segment_groups(
     band_by_key: Mapping[str, str],
     explanations_by_key: Mapping[str, RowExplanation],
 ) -> list[tuple[str, list[str]]]:
-    """Segment name -> the keys in it, largest segment first, capped at `max_segments`."""
-    groups: dict[str, list[str]] = {}
-    for key in keys_ordered:
-        name = _segment_name(cfg, key, band_by_key, explanations_by_key)
-        if name is None:
-            continue
-        groups.setdefault(name, []).append(key)
-    ordered = sorted(groups.items(), key=lambda item: (-len(item[1]), item[0]))
-    return ordered[: cfg.max_segments]
+    """Segment name -> the keys in it, largest segment first, capped at `max_segments`.
+
+    The grouping itself is `engine.generative.segments.group_keys`, shared with campaign copy so the
+    two never cut the same run differently (DEC-1241); only the cap is this module's own.
+    """
+    groups = group_keys(keys_ordered, lambda key: _segment_name(cfg, key, band_by_key, explanations_by_key))
+    return groups[: cfg.max_segments]
 
 
 # ---------------------------------------------------------------------------

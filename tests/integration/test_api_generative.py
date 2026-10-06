@@ -660,3 +660,93 @@ def test_a_nonsense_name_is_still_unknown(client: TestClient, rca_run_id: str) -
     response = client.get(f"/runs/{rca_run_id}/artefacts/nonsense.json")
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "ARTEFACT_UNKNOWN"
+
+
+# ---------------------------------------------------------------------------
+# Campaign copy per main reason or per uplift segment (DEC-1240 ... DEC-1247)
+# ---------------------------------------------------------------------------
+def _start_copy(client: TestClient, run_id: str, **overrides: Any) -> Any:
+    return client.post(
+        f"/runs/{run_id}/campaign-copy",
+        json={"overrides": {"allowed_fields": list(COPY_ALLOWED_FIELDS), **overrides}},
+    )
+
+
+def test_campaign_copy_per_main_reason_through_the_api(client: TestClient, copy_run_id: str) -> None:
+    response = _start_copy(client, copy_run_id, segment_by="top_reason", max_segments=3)
+    assert response.status_code == 202, response.text
+    assert _poll_run_status(client, copy_run_id, "copy_status.json")["state"] == "done"
+    batch = client.get(f"/runs/{copy_run_id}/artefacts/copy_batch.json").json()
+
+    assert batch["segment_by"] == "top_reason"
+    segments = batch["segments"]
+    assert 1 <= len(segments) <= 3
+    assert sum(segment["rows"] for segment in segments) == batch["audience"]["rows"]
+    assert {t["segment"] for t in batch["templates"]} == {segment["segment"] for segment in segments}
+
+    header = client.get(f"/runs/{copy_run_id}/copy_messages.csv").text.splitlines()[0].split(",")
+    assert "segment" in header
+
+    # Regenerating a segment's template through the route keeps it in its segment.
+    target = batch["templates"][0]
+    regenerated = client.post(
+        f"/runs/{copy_run_id}/campaign-copy/templates/{target['template_id']}/regenerate"
+    )
+    assert regenerated.status_code == 200, regenerated.text
+    assert regenerated.json()["segment"] == target["segment"]
+    assert regenerated.json()["template_id"] == target["template_id"]
+
+
+def test_campaign_copy_per_uplift_segment_on_a_run_that_is_not_uplift_is_409_before_any_job(
+    client: TestClient, copy_run_id: str, storage: LocalStorage
+) -> None:
+    response = _start_copy(client, copy_run_id, segment_by="uplift_segment")
+    assert response.status_code == 409
+    assert response.json()["detail"]["code"] == "COPY_NEEDS_UPLIFT_RUN"
+    assert not storage.exists(f"runs/{copy_run_id}/copy_status.json")  # nothing was queued
+
+
+def test_campaign_copy_with_an_unknown_segment_by_is_422(client: TestClient, copy_run_id: str) -> None:
+    response = _start_copy(client, copy_run_id, segment_by="persona")
+    assert response.status_code == 422
+
+
+def test_campaign_copy_per_uplift_segment_writes_for_chosen_persuadables_only(
+    client: TestClient, copy_run_id: str, storage: LocalStorage
+) -> None:
+    """An uplift scoring run as `engine.uplift.flow` leaves one: `run.json` says `uplift` and
+    `scores.csv` carries a `segment` per row (drawn round-robin here so all four occur)."""
+    import io
+
+    import pandas as pd
+
+    from engine.config import ProblemType
+    from engine.contracts import RunRecord
+
+    record_key = f"runs/{copy_run_id}/run.json"
+    record = storage.read_model(record_key, RunRecord)
+    storage.write_model(record_key, record.model_copy(update={"problem_type": ProblemType.UPLIFT}))
+    scores_key = f"runs/{copy_run_id}/scores.csv"
+    scores = pd.read_csv(io.StringIO(storage.read_text(scores_key)), dtype={"customer_id": str})
+    order = ("persuadable", "sure_thing", "lost_cause", "sleeping_dog")
+    scores["segment"] = [order[i % 4] for i in range(len(scores))]
+    scores["intended_treatment"] = [i % 8 == 0 for i in range(len(scores))]  # half the persuadables
+    storage.write_text(scores_key, scores.to_csv(index=False, lineterminator="\n"))
+
+    response = _start_copy(client, copy_run_id, segment_by="uplift_segment")
+    assert response.status_code == 202, response.text
+    assert _poll_run_status(client, copy_run_id, "copy_status.json")["state"] == "done"
+    batch = client.get(f"/runs/{copy_run_id}/artefacts/copy_batch.json").json()
+
+    assert batch["segment_by"] == "uplift_segment"
+    assert {t["segment"] for t in batch["templates"]} == {"persuadable"}
+    written = {segment["segment"]: segment["written"] for segment in batch["segments"]}
+    assert written["persuadable"] is True
+    assert not any(flag for name, flag in written.items() if name != "persuadable")
+    assert batch["holdout"]["not_persuadable_rows"] > 0
+    assert batch["holdout"]["outside_budget_rows"] > 0
+    assert batch["uplift_budget_applied"] is True
+
+    persuadable_keys = set(scores.loc[scores["intended_treatment"], "customer_id"])
+    messages = pd.read_csv(io.StringIO(client.get(f"/runs/{copy_run_id}/copy_messages.csv").text), dtype=str)
+    assert set(messages["entity_key"]) <= persuadable_keys
