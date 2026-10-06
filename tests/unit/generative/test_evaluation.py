@@ -584,3 +584,29 @@ def test_a_readable_score_is_untouched() -> None:
     assert _parse_score('{"score": 0.82}') == 0.82
     assert _parse_score('{"score": 4}') == 1.0
     assert _parse_score("not json at all") == 0.0
+
+
+def test_grading_recovers_gracefully_when_answering_raises_llm_error(
+    graded_fixture: GradedFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engine.generative import evaluation
+    from engine.llm import LLMError
+
+    def failing_answer(*args: object, **kwargs: object) -> object:
+        raise LLMError("LLM_UNAVAILABLE", "Transient 502 from upstream provider")
+
+    monkeypatch.setattr(evaluation, "answer", failing_answer)
+
+    meter = meter_for(FakeLLMClient(mode=FakeLLMMode.GROUNDED))
+    result = evaluate(
+        index_id=graded_fixture.index_id,
+        use_case=small_use_case(),
+        reference_set_path=graded_fixture.reference_set_path,
+        storage=graded_fixture.storage,
+        store=graded_fixture.store,
+        meter=meter,
+        guardrails=Guardrails(load_policy(), meter=meter),
+    )
+    assert len(result.questions) > 0
+    for q in result.questions:
+        assert q.refused is True

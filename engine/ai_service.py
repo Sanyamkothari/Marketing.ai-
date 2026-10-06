@@ -73,6 +73,8 @@ from engine.llm import (
     LLMClient,
     LLMCompletion,
     LLMError,
+    LOCAL_EMBEDDING_MODEL_ID,
+    LocalEmbeddingClient,
     build_client,
     keyword_hash_vector,
 )
@@ -952,14 +954,18 @@ def _saved_effective(
                 "The saved AI service's web address is not allowed here.",
                 f"Open Connections → AI service → {SLOT_LABELS[owner]} and change it.",
             ) from exc
-    embedding = record.embedding_model if info.supports_embeddings and record.embedding_model else ""
+    embedding = (
+        record.embedding_model
+        if (record.embedding_model == LOCAL_EMBEDDING_MODEL_ID or (info.supports_embeddings and record.embedding_model))
+        else KEYWORD_HASH_MODEL_ID
+    )
     effective_llm = llm.model_copy(
         update={
             "backend": LlmBackend.BEDROCK if info.protocol == "bedrock" else LlmBackend.EXTERNAL,
             "region": record.region or llm.region,
             "generation_model_id": record.model,
             "judge_model_id": record.model,
-            "embedding_model_id": embedding or KEYWORD_HASH_MODEL_ID,
+            "embedding_model_id": embedding,
         }
     )
     effective = Effective(
@@ -1053,7 +1059,9 @@ def build_service_client(
             max_retries=max_retries,
             transport=transport,
         )
-    if not (info.supports_embeddings and embedding_model):
+    if embedding_model == LOCAL_EMBEDDING_MODEL_ID:
+        client = LocalEmbeddingClient(client, model_id=embedding_model)
+    elif not (info.supports_embeddings and embedding_model):
         client = KeywordEmbeddingClient(client)
     return client
 

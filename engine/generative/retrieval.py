@@ -77,6 +77,8 @@ def retrieve(
     *,
     config: RagConfig,
     documents: Sequence[str] | None = None,
+    question_text: str | None = None,
+    bm25_weight: float = 0.25,
 ) -> Retrieved:
     """The chunks an answer may use: searched, floored, de-duplicated, best first.
 
@@ -86,7 +88,17 @@ def retrieve(
     cheaply at scale is a caller on OpenSearch.
     """
     wanted = config.top_k
-    candidates = store.search(index_id, question_vector, top_k=wanted * OVERSAMPLE)
+    try:
+        candidates = store.search(
+            index_id,
+            question_vector,
+            top_k=wanted * OVERSAMPLE,
+            query_text=question_text,
+            bm25_weight=bm25_weight,
+        )
+    except TypeError:
+        # Fallback for stores that do not accept query_text / bm25_weight
+        candidates = store.search(index_id, question_vector, top_k=wanted * OVERSAMPLE)
     considered = len(candidates)
     if documents is not None:
         allowed = set(documents)

@@ -258,9 +258,16 @@ class _HttpClient:
             raise LLMHttpError("unreachable", model_id=model_id) from None
         if 200 <= status < 300:
             try:
-                return json.loads(raw) if raw else {}
+                payload = json.loads(raw) if raw else {}
             except (ValueError, RecursionError):
                 raise LLMHttpError("bad_response", status=status, model_id=model_id) from None
+            if isinstance(payload, dict) and "error" in payload:
+                err = payload["error"]
+                code = err.get("code") if isinstance(err, dict) else None
+                err_status = code if isinstance(code, int) else None
+                if err_status and err_status >= 500:
+                    raise LLMHttpError("server_error", status=err_status, model_id=model_id)
+            return payload
         error = _classify(status, raw, model_id)
         error.retry_after = retry_after
         raise error
@@ -419,6 +426,12 @@ class OpenAICompatibleClient(_HttpClient):
 
     @staticmethod
     def _completion(data: Any, chosen: str) -> LLMCompletion:
+        if isinstance(data, dict) and "error" in data:
+            err = data["error"]
+            code = err.get("code") if isinstance(err, dict) else None
+            status = code if isinstance(code, int) else None
+            kind: Problem = "server_error" if status and status >= 500 else "bad_response"
+            raise LLMHttpError(kind, status=status, model_id=chosen)
         try:
             choice = data["choices"][0]
             content = choice["message"].get("content")

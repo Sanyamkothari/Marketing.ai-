@@ -11,6 +11,12 @@ serves.
 
 from __future__ import annotations
 
+# Pre-import lightgbm before torch/AutoGluon to ensure OpenMP runtime stability on macOS ARM64
+try:
+    import lightgbm  # noqa: F401
+except Exception:
+    pass
+
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -149,6 +155,11 @@ def create_app(
             return RedirectResponse("/ui/")
 
         app.add_route("/", _to_ui, include_in_schema=False)
+
+    async def _favicon(_request: Request) -> Response:
+        return Response(status_code=204)
+
+    app.add_route("/favicon.ico", _favicon, include_in_schema=False)
 
     @app.get("/healthz", response_model=HealthResponse, tags=["health"], summary="Liveness probe")
     def healthz() -> HealthResponse:

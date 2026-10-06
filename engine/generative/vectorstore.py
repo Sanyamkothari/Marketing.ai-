@@ -28,6 +28,9 @@ atomic, so a crashed build leaves the previous index readable rather than half o
 
 from __future__ import annotations
 
+import math
+import re
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
 from typing import Final, Protocol, runtime_checkable
@@ -52,11 +55,13 @@ __all__ = [
     "LocalVectorStore",
     "Match",
     "VectorStore",
+    "bm25_scores",
     "chunk_ids",
     "cosine",
 ]
 
 _LOGGER = get_logger(__name__)
+
 
 CHUNK_COLUMNS: Final[tuple[str, ...]] = tuple(Chunk.model_fields)
 """The columns of `chunks.parquet`, taken from the contract so the two cannot drift."""
@@ -87,7 +92,15 @@ class VectorStore(Protocol):
 
     def chunks(self, index_id: str) -> tuple[Chunk, ...]: ...
 
-    def search(self, index_id: str, query: Sequence[float], *, top_k: int) -> tuple[Match, ...]: ...
+    def search(
+        self,
+        index_id: str,
+        query: Sequence[float],
+        *,
+        top_k: int,
+        query_text: str | None = None,
+        bm25_weight: float = 0.25,
+    ) -> tuple[Match, ...]: ...
 
     def exists(self, index_id: str) -> bool: ...
 
@@ -137,12 +150,19 @@ class LocalVectorStore:
         rows = frame.astype(object).where(pd.notna(frame), None).to_dict(orient="records")
         return tuple(Chunk.model_validate(row) for row in rows)
 
-    def search(self, index_id: str, query: Sequence[float], *, top_k: int) -> tuple[Match, ...]:
+    def search(
+        self,
+        index_id: str,
+        query: Sequence[float],
+        *,
+        top_k: int,
+        query_text: str | None = None,
+        bm25_weight: float = 0.25,
+    ) -> tuple[Match, ...]:
         """The `top_k` chunks closest to `query`, most similar first.
 
-        Both sides are L2-normalised before the dot product, so the result is a cosine whatever the
-        embedding model's scale - and a zero vector, which cannot be normalised, keeps its zeros
-        and therefore matches nothing.
+        Supports hybrid search when `query_text` is provided, combining dense semantic similarity
+        with Okapi BM25 scoring with weight `bm25_weight` (default 25% BM25, 75% dense).
         """
         if top_k < 1:
             raise ValueError(f"top_k must be at least 1, got {top_k}")
@@ -151,12 +171,6 @@ class LocalVectorStore:
             raise generative_error(INDEX_EMPTY, index_id=index_id)
         matrix = self.matrix(index_id)
         if matrix.shape[0] != len(chunks):
-            # The two files are written separately, so a crash between the writes - or an
-            # overwrite of a live index id - can leave one new and one old. Row `i` of the matrix
-            # would then be a different chunk's vector than `chunks[i]`, and every similarity in
-            # the answer would be measured against the wrong passage while looking perfectly
-            # ordinary. Saying so is the whole value of the check: silence here is a wrong answer
-            # with a citation attached.
             raise generative_error(
                 INDEX_CORRUPT, index_id=index_id, chunks=len(chunks), vectors=matrix.shape[0]
             )
@@ -165,7 +179,15 @@ class LocalVectorStore:
             raise ValueError(
                 f"the question has {question.shape[1]} dimensions and the index has {matrix.shape[1]}"
             )
-        scores = (matrix @ question.T).ravel()
+        dense_scores = (matrix @ question.T).ravel()
+        if query_text and query_text.strip() and bm25_weight > 0.0:
+            corpus_texts = [f"{c.section}\n{c.text}" for c in chunks]
+            bm25 = bm25_scores(corpus_texts, query_text)
+            weight = max(0.0, min(1.0, bm25_weight))
+            scores = (1.0 - weight) * dense_scores + weight * bm25
+        else:
+            scores = dense_scores
+
         # `argsort` on the negated scores gives most-similar-first; ties keep index order, which is
         # reading order, so a search over identical chunks is still deterministic.
         order = np.argsort(-scores, kind="stable")[:top_k]
@@ -209,6 +231,55 @@ def cosine(left: Sequence[float], right: Sequence[float]) -> float:
     b = np.asarray(right, dtype=np.float64)
     denominator = float(np.linalg.norm(a) * np.linalg.norm(b))
     return float(a @ b / denominator) if denominator else 0.0
+
+
+def bm25_scores(
+    corpus_texts: Sequence[str],
+    query: str,
+    *,
+    k1: float = 1.5,
+    b: float = 0.75,
+) -> npt.NDArray[np.float64]:
+    """Compute normalized Okapi BM25 scores (0 to 1) for `query` against `corpus_texts`."""
+    tokenized_corpus = [re.findall(r"[a-z0-9']+", doc.lower()) for doc in corpus_texts]
+    query_tokens = re.findall(r"[a-z0-9']+", query.lower())
+    if not query_tokens or not corpus_texts:
+        return np.zeros(len(corpus_texts), dtype=np.float64)
+
+    doc_lens = [len(doc) for doc in tokenized_corpus]
+    avgdl = sum(doc_lens) / len(doc_lens) if doc_lens else 1.0
+    num_docs = len(corpus_texts)
+
+    df: Counter[str] = Counter()
+    for doc in tokenized_corpus:
+        for t in set(doc):
+            df[t] += 1
+
+    scores: list[float] = []
+    for doc, dlen in zip(tokenized_corpus, doc_lens):
+        doc_counts = Counter(doc)
+        score = 0.0
+        for q in query_tokens:
+            if q in df:
+                n_q = df[q]
+                # Okapi BM25 with Lucene-style non-negative IDF
+                idf = math.log(1.0 + (num_docs - n_q + 0.5) / (n_q + 0.5))
+                freq = doc_counts[q]
+                num = freq * (k1 + 1.0)
+                denom = freq + k1 * (1.0 - b + b * (dlen / avgdl)) if avgdl > 0 else 1.0
+                score += idf * (num / denom)
+        scores.append(score)
+
+    max_possible = 0.0
+    for q in query_tokens:
+        n_q = df.get(q, 0)
+        idf = math.log(1.0 + (num_docs - n_q + 0.5) / (n_q + 0.5))
+        max_possible += idf * (k1 + 1.0)
+
+    arr = np.asarray(scores, dtype=np.float64)
+    if max_possible > 0.0:
+        return arr / max_possible
+    return arr
 
 
 def chunk_ids(chunks: Iterable[Chunk]) -> tuple[str, ...]:

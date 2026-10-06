@@ -140,7 +140,10 @@ from engine.stages.explain import ROW_EXPLANATIONS_FILENAME
 from engine.stages.export import SCORES_CSV
 from engine.storage import Storage, StorageError, index_key, run_key
 from engine.utils.ids import new_index_id
+from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
+
+_LOGGER = get_logger(__name__)
 
 SAMPLE_DOCS_DIR: Final[Path] = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "docs"
 """The bundled Northwind Telecom corpus and its reference set, found by path and never by import.
@@ -376,12 +379,16 @@ def _with_model_choice(
 # ---------------------------------------------------------------------------
 # Job status documents (DEC-211): one per job, coarse stages, never fabricated ones
 # ---------------------------------------------------------------------------
-def _stage(key: str, state: RunState, *, seconds: float = 0.0) -> GenerativeStage:
+def _stage(
+    key: str, state: RunState, *, seconds: float = 0.0, detail: str | None = None
+) -> GenerativeStage:
+    if detail is None:
+        detail = "" if state in (RunState.PENDING, RunState.RUNNING) else "Finished."
     return GenerativeStage(
         key=key,
         title=_STAGE_TITLES[key],
         state=state,
-        detail="" if state in (RunState.PENDING, RunState.RUNNING) else "Finished.",
+        detail=detail,
         seconds=seconds,
     )
 
@@ -402,7 +409,7 @@ def _write_status(
     state: RunState,
     stages: Sequence[GenerativeStage],
     started_at: datetime,
-    error: GenerativeError | None = None,
+    error: Exception | None = None,
     now: datetime | None = None,
 ) -> GenerativeStatus:
     """Write one `GenerativeStatus`. A caller that writes `state=DONE` (or `FAILED`) does so only
@@ -418,20 +425,25 @@ def _write_status(
         stages=tuple(stages),
         started_at=started_at,
         updated_at=now if now is not None else utc_now(),
-        error_code=None if error is None else error.code,
-        error_message=None if error is None else error.message,
+        error_code=None if error is None else getattr(error, "code", "FAILED"),
+        error_message=None if error is None else getattr(error, "message", str(error)),
     )
     storage.write_model(key, status)
     return status
 
 
 def _moved(
-    stages: Sequence[GenerativeStage], key: str, state: RunState, *, seconds: float = 0.0
+    stages: Sequence[GenerativeStage],
+    key: str,
+    state: RunState,
+    *,
+    seconds: float = 0.0,
+    detail: str | None = None,
 ) -> tuple[GenerativeStage, ...]:
-    return tuple(_stage(s.key, state, seconds=seconds) if s.key == key else s for s in stages)
+    return tuple(_stage(s.key, state, seconds=seconds, detail=detail) if s.key == key else s for s in stages)
 
 
-def _failed(stages: Sequence[GenerativeStage], error: GenerativeError) -> tuple[GenerativeStage, ...]:
+def _failed(stages: Sequence[GenerativeStage], error: Exception) -> tuple[GenerativeStage, ...]:
     """`stages` with whichever step was in flight marked `failed`, carrying why as its detail.
 
     A document that says `state: failed` while one of its steps still says `running` describes a
@@ -440,9 +452,10 @@ def _failed(stages: Sequence[GenerativeStage], error: GenerativeError) -> tuple[
     rendering off the overall state, so the step that was running when the error arrived is the step
     that gets written down as the one that failed.
     """
+    message = getattr(error, "message", str(error))
     return tuple(
         (
-            stage.model_copy(update={"state": RunState.FAILED, "detail": error.message})
+            stage.model_copy(update={"state": RunState.FAILED, "detail": message})
             if stage.state is RunState.RUNNING
             else stage
         )
@@ -912,18 +925,25 @@ def _index_build_job(
                     started_at=started_at,
                 )
                 began = time.monotonic()
-                evaluate(
-                    index_id=index_id,
-                    use_case=use_case,
-                    reference_set_path=reference_path,
-                    storage=storage,
-                    store=store,
-                    meter=meter,
-                    guardrails=guardrails,
-                    config_root=config_root,
-                )
-                stages = _moved(stages, "evaluate", RunState.DONE, seconds=time.monotonic() - began)
-        except GenerativeError as exc:
+                try:
+                    evaluate(
+                        index_id=index_id,
+                        use_case=use_case,
+                        reference_set_path=reference_path,
+                        storage=storage,
+                        store=store,
+                        meter=meter,
+                        guardrails=guardrails,
+                        config_root=config_root,
+                    )
+                    stages = _moved(stages, "evaluate", RunState.DONE, seconds=time.monotonic() - began)
+                except Exception as eval_exc:
+                    _LOGGER.warning("Evaluation failed during index build for %s: %s", index_id, eval_exc)
+                    eval_msg = getattr(eval_exc, "message", str(eval_exc))
+                    stages = _moved(
+                        stages, "evaluate", RunState.FAILED, seconds=time.monotonic() - began, detail=eval_msg
+                    )
+        except Exception as exc:
             _write_status(
                 storage,
                 status_key,
@@ -1165,7 +1185,7 @@ def _evaluate_job(
                 config_root=config_root,
             )
             stages = (_stage("evaluate", RunState.DONE, seconds=time.monotonic() - began),)
-        except GenerativeError as exc:
+        except Exception as exc:
             _write_status(
                 storage,
                 status_key,
@@ -1317,7 +1337,7 @@ def _root_cause_job(
                 config_root=config_root,
             )
             stages = (_stage("summarize", RunState.DONE, seconds=time.monotonic() - began),)
-        except GenerativeError as exc:
+        except Exception as exc:
             _write_status(
                 storage,
                 status_key,
@@ -1437,7 +1457,7 @@ def _campaign_copy_job(
                 config_root=config_root,
             )
             stages = (_stage("generate", RunState.DONE, seconds=time.monotonic() - began),)
-        except GenerativeError as exc:
+        except Exception as exc:
             _write_status(
                 storage,
                 status_key,

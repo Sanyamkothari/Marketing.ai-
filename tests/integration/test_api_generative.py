@@ -420,6 +420,28 @@ def test_a_failed_build_marks_the_step_that_failed_rather_than_leaving_it_runnin
     assert status["stages"][0]["detail"] == status["error_message"]
 
 
+def test_index_build_succeeds_even_when_evaluation_fails(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """If grading against the reference set fails, the index is still marked done and ready to use."""
+    from api.routes import generative
+
+    def failing_evaluate(*args: object, **kwargs: object) -> None:
+        raise RuntimeError("Transient provider 502")
+
+    monkeypatch.setattr(generative, "evaluate", failing_evaluate)
+
+    response = _build_against(client, use_sample_questions="true")
+    assert response.status_code == 202, response.text
+    index_id = response.json()["index_id"]
+    status = _poll_index(client, index_id)
+    assert status["state"] == "done", status
+    stages = {stage["key"]: stage for stage in status["stages"]}
+    assert stages["build"]["state"] == "done"
+    assert stages["evaluate"]["state"] == "failed"
+    assert "Transient provider 502" in stages["evaluate"]["detail"]
+
+
 # ---------------------------------------------------------------------------
 # Root cause: the happy path and its preconditions
 # ---------------------------------------------------------------------------

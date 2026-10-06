@@ -34,7 +34,12 @@ const CSS = `
 .ag-opt{display:flex;align-items:center;gap:12px;flex-wrap:wrap}
 .ag-opt .btn[aria-pressed="true"]{border-color:var(--brand-blue);color:var(--brand-blue)}
 .ag-opt .ag-eff{font-size:12px;color:var(--muted)}
+.ag-custom-opt{margin-top:10px;padding-top:10px;border-top:1px dashed var(--line)}
+.ag-custom-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.ag-custom-row input{flex:1;min-width:240px;height:32px;padding:4px 10px;border:1px solid var(--line);border-radius:6px;font-size:12px;color:var(--ink);background:var(--card)}
+.ag-custom-row input:focus{border-color:var(--brand-blue);outline:none}
 .ag-stop p{margin:0;padding:14px 20px 0;line-height:1.55}
+.ag-stop .ag-stop-custom-form{padding:0 20px}
 .ag-sum{margin-top:12px;display:grid;grid-template-columns:repeat(auto-fill,minmax(240px,1fr));gap:12px 24px}
 .ag-sum h5{margin:0 0 4px;font-size:12px;font-weight:600;color:var(--ink2)}
 .ag-sum ul{margin:0;padding-left:18px;font-size:13px;color:var(--ink);line-height:1.5}

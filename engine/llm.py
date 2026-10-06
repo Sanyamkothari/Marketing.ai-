@@ -59,6 +59,8 @@ __all__ = [
     "GROUNDED_FAKE_MODEL_ID",
     "KEYWORD_HASH_DIMENSIONS",
     "KEYWORD_HASH_MODEL_ID",
+    "LOCAL_EMBEDDING_DIMENSIONS",
+    "LOCAL_EMBEDDING_MODEL_ID",
     "BedrockLLMClient",
     "FakeLLMClient",
     "FakeLLMMode",
@@ -66,8 +68,10 @@ __all__ = [
     "LLMClient",
     "LLMCompletion",
     "LLMError",
+    "LocalEmbeddingClient",
     "estimate_tokens",
     "keyword_hash_vector",
+    "local_embedding_vector",
     "usage_from",
 ]
 
@@ -551,6 +555,78 @@ KEYWORD_HASH_MODEL_ID: Final[str] = "keyword-hash-v1"
 
 KEYWORD_HASH_DIMENSIONS: Final[int] = _GROUNDED_DIMENSIONS
 """Width of the keyword-hash vectors an AI service without embeddings uses."""
+
+LOCAL_EMBEDDING_MODEL_ID: Final[str] = "BAAI/bge-small-en-v1.5"
+"""High-quality open-source local embedding model (384 dimensions, normalized cosine space)."""
+
+LOCAL_EMBEDDING_DIMENSIONS: Final[int] = 384
+"""Dimensions of BAAI/bge-small-en-v1.5."""
+
+_LOCAL_EMBEDDER: Any = None
+
+
+def _get_local_embedder() -> Any:
+    global _LOCAL_EMBEDDER
+    if _LOCAL_EMBEDDER is None:
+        try:
+            from sentence_transformers import SentenceTransformer
+
+            _LOCAL_EMBEDDER = SentenceTransformer(LOCAL_EMBEDDING_MODEL_ID)
+        except Exception as exc:
+            _LOGGER.warning("Could not load %s: %s", LOCAL_EMBEDDING_MODEL_ID, exc)
+            _LOCAL_EMBEDDER = False
+    return _LOCAL_EMBEDDER if _LOCAL_EMBEDDER is not False else None
+
+
+def local_embedding_vector(text: str) -> tuple[float, ...]:
+    """Embed single text using BAAI/bge-small-en-v1.5 or fallback to keyword hash."""
+    embedder = _get_local_embedder()
+    if embedder is not None:
+        try:
+            vec = embedder.encode([text], normalize_embeddings=True)[0]
+            return tuple(float(x) for x in vec)
+        except Exception as exc:
+            _LOGGER.warning("Failed local embedding call: %s", exc)
+    return keyword_hash_vector(text)
+
+
+class LocalEmbeddingClient:
+    """Wraps an LLMClient so completions go through the provider, while embeddings use BAAI/bge-small-en-v1.5."""
+
+    def __init__(self, inner: LLMClient, model_id: str = LOCAL_EMBEDDING_MODEL_ID) -> None:
+        self._inner = inner
+        self._model_id = model_id
+
+    def complete(
+        self,
+        prompt: str,
+        *,
+        system: str = "",
+        model_id: str | None = None,
+        max_tokens: int = 512,
+        temperature: float = 0.0,
+    ) -> LLMCompletion:
+        return self._inner.complete(
+            prompt, system=system, model_id=model_id, max_tokens=max_tokens, temperature=temperature
+        )
+
+    def embed(
+        self,
+        texts: Sequence[str],
+        *,
+        model_id: str | None = None,
+    ) -> tuple[tuple[float, ...], ...]:
+        embedder = _get_local_embedder()
+        if embedder is not None:
+            try:
+                vecs = embedder.encode(list(texts), normalize_embeddings=True)
+                return tuple(tuple(float(x) for x in vec) for vec in vecs)
+            except Exception as exc:
+                _LOGGER.warning("Error running sentence-transformers embedding: %s", exc)
+        return tuple(keyword_hash_vector(text) for text in texts)
+
+    def count_tokens(self, text: str, *, model_id: str | None = None) -> int:
+        return self._inner.count_tokens(text, model_id=model_id)
 
 
 def keyword_hash_vector(text: str, dimensions: int = _GROUNDED_DIMENSIONS) -> tuple[float, ...]:

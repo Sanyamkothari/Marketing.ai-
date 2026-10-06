@@ -179,9 +179,13 @@ async function showUseCase(id, runId) {
   const uc = await useCase(id);
   // A use case that is only AI-written text (the assistant) has nothing to show while no AI service is
   // connected: one notice rather than a training form that does not apply to it (DEC-954).
-  if (uc.ai_type === "generative" && (await needsAiNotice(uc))) {
-    active = null;
-    paint(aiNoticeHtml(uc, backLink(uc)));
+  if (uc.ai_type === "generative") {
+    if (await needsAiNotice(uc)) {
+      active = null;
+      paint(aiNoticeHtml(uc, backLink(uc)));
+      return uc;
+    }
+    window.location.hash = `#/generative/assistant/${encodeURIComponent(uc.id)}`;
     return uc;
   }
   active = uc.id;

@@ -85,11 +85,13 @@ from engine.generative.budget import Meter
 from engine.generative.chunking import fingerprint
 from engine.generative.contracts import (
     RAG_EVAL_FILENAME,
+    AssistantAnswer,
     GenerativePurpose,
     RagEval,
     RagEvalAggregates,
     RagEvalQuestion,
 )
+from engine.llm import FakeLLMClient, LLMError
 from engine.generative.errors import REFERENCE_SET_INVALID, generative_error
 from engine.generative.guardrails import GuardrailAction, Guardrails
 from engine.generative.prompts import Prompt, load_prompt, prompt_versions, render
@@ -254,7 +256,9 @@ def _retrieve(meter: Meter, store: VectorStore, index_id: str, question: str, ra
     retrieval information about.
     """
     (vector,) = meter.embed([question])
-    return retrieve(store, index_id, vector, config=rag)
+    is_fake = isinstance(getattr(meter, "client", None), FakeLLMClient)
+    q_text = None if is_fake else question
+    return retrieve(store, index_id, vector, config=rag, question_text=q_text)
 
 
 def _parse_score(text: str) -> float:
@@ -331,15 +335,29 @@ def _grade(
 ) -> RagEvalQuestion:
     """One graded row: the real answer, this module's own retrieval and judge calls, and the verdict."""
     before = meter.cost_so_far
-    result = answer(
-        row.question,
-        index_id=index_id,
-        use_case=use_case,
-        store=store,
-        meter=meter,
-        guardrails=guardrails,
-        config_root=config_root,
-    )
+    try:
+        result = answer(
+            row.question,
+            index_id=index_id,
+            use_case=use_case,
+            store=store,
+            meter=meter,
+            guardrails=guardrails,
+            config_root=config_root,
+        )
+    except LLMError as exc:
+        _LOGGER.warning("Answering question %r failed: %s", row.question, exc)
+        result = AssistantAnswer(
+            question=row.question,
+            answer="The model could not answer this question.",
+            refused=True,
+            citations=(),
+            retrieved=0,
+            called_model=False,
+            prompt_version=1,
+            latency_ms=0,
+            guardrails=(),
+        )
     gradeable = bool(row.source_doc) and not row.expect_refusal
     retrieval = (
         _retrieve(meter, store, index_id, row.question, use_case.generative.rag)
@@ -355,19 +373,27 @@ def _grade(
     correctness: float | None = None
     if not result.refused:
         source = "\n\n".join(match.chunk.text for match in retrieval.matches) if retrieval is not None else ""
-        faithfulness = _judge_score(
-            meter,
-            faithfulness_prompt,
-            {"source": source, "generated": result.answer},
-            GenerativePurpose.JUDGE_FAITHFULNESS,
-        )
-        if row.reference_answer:
-            correctness = _judge_score(
+        try:
+            faithfulness = _judge_score(
                 meter,
-                correctness_prompt,
-                {"question": row.question, "reference_answer": row.reference_answer, "answer": result.answer},
-                GenerativePurpose.JUDGE_CORRECTNESS,
+                faithfulness_prompt,
+                {"source": source, "generated": result.answer},
+                GenerativePurpose.JUDGE_FAITHFULNESS,
             )
+        except LLMError as exc:
+            _LOGGER.warning("Faithfulness judge failed for %r: %s", row.question, exc)
+            faithfulness = 0.0
+        if row.reference_answer:
+            try:
+                correctness = _judge_score(
+                    meter,
+                    correctness_prompt,
+                    {"question": row.question, "reference_answer": row.reference_answer, "answer": result.answer},
+                    GenerativePurpose.JUDGE_CORRECTNESS,
+                )
+            except LLMError as exc:
+                _LOGGER.warning("Correctness judge failed for %r: %s", row.question, exc)
+                correctness = 0.0
     passed, failure = _verdict(
         row, result.refused, retrieval_hit, faithfulness, faithfulness_threshold=faithfulness_threshold
     )

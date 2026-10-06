@@ -304,13 +304,19 @@ def autogluon_predictor_kwargs(
     return kwargs
 
 
-def get_hardware_accelerator() -> str:
+def get_hardware_accelerator(needs_torch: bool = True) -> str:
     """The accelerator training can use: 'cuda', 'mps' (Apple Silicon) or 'cpu'.
 
     `torch` is optional (only the neural network needs it), so it is imported by name at call time: a
     machine without it, or with a broken install, is simply a CPU machine.
     """
+    if not needs_torch:
+        return "cpu"
     try:
+        try:
+            import lightgbm  # noqa: F401
+        except Exception:
+            pass
         torch = importlib.import_module("torch")
         if torch.cuda.is_available():
             return "cuda"
@@ -366,7 +372,8 @@ def autogluon_fit_kwargs(recipe: Recipe) -> dict[str, Any]:
     families = available_families(recipe)
     bagging = search.ensemble
 
-    accelerator = get_hardware_accelerator() if search.use_gpu else "cpu"
+    needs_torch = ModelFamily.NEURAL_NET in families
+    accelerator = get_hardware_accelerator(needs_torch=needs_torch) if search.use_gpu else "cpu"
     hyperparameters: dict[str, Any] = {}
     for family in families:
         ag_key = catalog.model_families[family].autogluon_key
