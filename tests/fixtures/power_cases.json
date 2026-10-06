@@ -1,0 +1,213 @@
+{
+ "min_detectable_lift": [
+  {
+   "n": 10000,
+   "fraction": 0.1,
+   "p0": 0.1,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": {
+    "absolute": 0.0302979954114429,
+    "relative": 0.30297995411442896,
+    "control_rows": 1000,
+    "treated_rows": 9000
+   }
+  },
+  {
+   "n": 10000,
+   "fraction": 0.5,
+   "p0": 0.1,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": {
+    "absolute": 0.017439892851085072,
+    "relative": 0.1743989285108507,
+    "control_rows": 5000,
+    "treated_rows": 5000
+   }
+  },
+  {
+   "n": 10000,
+   "fraction": 0.1,
+   "p0": 0.1,
+   "alpha": 0.05,
+   "power": 0.9,
+   "expected": {
+    "absolute": 0.03508971627215751,
+    "relative": 0.3508971627215751,
+    "control_rows": 1000,
+    "treated_rows": 9000
+   }
+  },
+  {
+   "n": 100,
+   "fraction": 0.1,
+   "p0": 0.5,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": {
+    "absolute": 0.37643692729321593,
+    "relative": 0.7528738545864319,
+    "control_rows": 10,
+    "treated_rows": 90
+   }
+  },
+  {
+   "n": 2000,
+   "fraction": 0.25,
+   "p0": 0.02,
+   "alpha": 0.01,
+   "power": 0.8,
+   "expected": {
+    "absolute": 0.03522394263501774,
+    "relative": 1.761197131750887,
+    "control_rows": 500,
+    "treated_rows": 1500
+   }
+  },
+  {
+   "n": 10000,
+   "fraction": 0.1,
+   "p0": 0.0,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": {
+    "absolute": 0.004996970145968062,
+    "relative": null,
+    "control_rows": 1000,
+    "treated_rows": 9000
+   }
+  },
+  {
+   "n": 10000,
+   "fraction": 0.1,
+   "p0": 1.0,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": null
+  },
+  {
+   "n": 50,
+   "fraction": 0.1,
+   "p0": 0.3,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": {
+    "absolute": 0.5507278602707998,
+    "relative": 1.8357595342359994,
+    "control_rows": 5,
+    "treated_rows": 45
+   }
+  },
+  {
+   "n": 1000000,
+   "fraction": 0.01,
+   "p0": 0.005,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": {
+    "absolute": 0.0022686642623722456,
+    "relative": 0.4537328524744491,
+    "control_rows": 10000,
+    "treated_rows": 990000
+   }
+  },
+  {
+   "n": 500,
+   "fraction": 0.5,
+   "p0": 0.9,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": {
+    "absolute": 0.06312208308997813,
+    "relative": 0.07013564787775348,
+    "control_rows": 250,
+    "treated_rows": 250
+   }
+  }
+ ],
+ "min_control_fraction": [
+  {
+   "n": 10000,
+   "p0": 0.1,
+   "lift": 0.03,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": {
+    "fraction": 0.1021,
+    "control_rows": 1021,
+    "treated_rows": 8979
+   }
+  },
+  {
+   "n": 10000,
+   "p0": 0.1,
+   "lift": 0.001,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": null
+  },
+  {
+   "n": 10000,
+   "p0": 0.1,
+   "lift": 0.95,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": null
+  },
+  {
+   "n": 5000,
+   "p0": 0.3,
+   "lift": 0.02,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": null
+  },
+  {
+   "n": 200,
+   "p0": 0.2,
+   "lift": 0.15,
+   "alpha": 0.05,
+   "power": 0.8,
+   "expected": null
+  },
+  {
+   "n": 1000,
+   "p0": 0.05,
+   "lift": 0.05,
+   "alpha": 0.1,
+   "power": 0.9,
+   "expected": {
+    "fraction": 0.392,
+    "control_rows": 392,
+    "treated_rows": 608
+   }
+  }
+ ],
+ "power_of_lift": [
+  {
+   "n_treated": 9000,
+   "n_control": 1000,
+   "p0": 0.1,
+   "lift": 0.03,
+   "alpha": 0.05,
+   "expected": 0.7922445425055016
+  },
+  {
+   "n_treated": 500,
+   "n_control": 500,
+   "p0": 0.1,
+   "lift": 0.02,
+   "alpha": 0.05,
+   "expected": 0.17259041374484213
+  },
+  {
+   "n_treated": 100,
+   "n_control": 100,
+   "p0": 0.0,
+   "lift": 0.1,
+   "alpha": 0.05,
+   "expected": 0.9065260585598571
+  }
+ ]
+}

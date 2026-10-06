@@ -453,6 +453,35 @@ AI-written-text use case (`engine.uplift.measure.measure_offered`).
 `campaign_measure.json` in the run directory records the outcomes file and the uplift run learned
 from it.
 
+### Is the held-back group big enough? (control-group size)
+
+A scoring run holds a random `actions.control_group_fraction` of the eligible customers back (default
+10%, at most 50%). Whether that is enough to *see* a real lift is a question of statistical power, and
+it can be answered before the campaign. The scoring run's Output page has a card for it,
+"Is the held-back group big enough?": "With 10,000 eligible customers and a 10% control group, this
+campaign can reliably detect a lift of 3 points (30% relative) or more." Two boxes try another control
+percentage, or ask the reverse - the smallest control group that detects a lift you name (or "not
+possible even holding back the maximum 50%").
+
+* **What "reliably" means.** The same two-sided pooled two-proportion z-test that
+  `engine/uplift/incrementality.py` runs after the campaign, at alpha 0.05, finds the lift with
+  probability at least 0.80. The formula, written out in `engine/uplift/power.py`: with
+  `p1 = p0 + lift`, pooled rate `p̄`, `se0 = sqrt(p̄(1-p̄)(1/n_t + 1/n_c))` and
+  `se1 = sqrt(p0(1-p0)/n_c + p1(1-p1)/n_t)`, power is `Φ((lift - z·se0)/se1)` (plus the far tail), and the
+  smallest lift with power 0.80 is found by bisection. Control rows are `round_half_up(N·f)`, as
+  `actions` draws them. Approximations: normal approximation to the binomial (loose under about 5
+  conversions per arm), the baseline taken as known, rows treated as independent customers (a
+  periodic file with several snapshots per customer needs a slightly larger lift).
+* **Where the baseline rate comes from.** The scoring run's `scoring_summary.json`: `score_mean`, the
+  model's average predicted chance across everyone scored (a yes/no model only). Eligible customers
+  are `rows_scored` minus the suppressed rows; held-back customers are `control_group_rows`. Training's
+  positive rate lives in another run's `evaluation.json`, which a scoring run does not carry, so it is
+  not used. The card says which baseline it assumed. A figure the run did not write, a score that is
+  not a rate, or a run that held nobody back shows "—" with the reason, never a guess.
+* **Where it is computed.** In the browser (`ui/modules/measure/power.js`, no new route), as a copy of
+  `engine/uplift/power.py`; `tests/fixtures/power_cases.json` holds cases both sides are checked
+  against (`tests/unit/uplift/test_power.py`, `power.test.mjs`).
+
 ---
 
 ## 10. Off-policy evaluation (OPE)
