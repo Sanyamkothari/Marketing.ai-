@@ -220,7 +220,7 @@ function optionTyped(question, text) {
 function typedAnswerHtml(question, disabled) {
   return `<form class="ag-typed" data-ag-typed="${esc(
     question.question_id,
-  )}"><input type="text" class="ag-typed-input" aria-label="${esc(`Answer “${question.text}” in your own words`)}" maxlength="1000" autocomplete="off" placeholder="Or answer in your own words, for example “treat 99 as missing”"${
+  )}"><input type="text" class="ag-typed-input" aria-label="${esc("Answer “" + question.text + "” in your own words")}" maxlength="1000" autocomplete="off" placeholder="Or answer in your own words, for example “treat 99 as missing”"${
     disabled ? " disabled" : ""
   }><button type="submit" class="btn secondary sm"${disabled ? " disabled" : ""}>Send</button></form>`;
 }
@@ -735,7 +735,7 @@ function bind(entry) {
         await answerQuestion(entry, questionId, option.option_id);
         return;
       }
-      g.draft = question ? `About “${question.text}”: ${text}` : text;
+      g.draft = question ? "About “" + question.text + "”: " + text : text;
       await ask(entry);
     }),
   );
