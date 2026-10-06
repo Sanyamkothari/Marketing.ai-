@@ -190,6 +190,11 @@ def completes(client: FakeLLMClient) -> tuple[LLMCall, ...]:
     return tuple(call for call in client.calls if call.kind == "complete")
 
 
+def answering(client: FakeLLMClient) -> tuple[LLMCall, ...]:
+    """The completions that wrote an answer, leaving out the call that rewrote a follow-up (DEC-1280)."""
+    return tuple(call for call in completes(client) if "Extracts from the documents" in call.prompt)
+
+
 def chunk(text: str, *, section: str = "How long does activation take?", ordinal: int = 0) -> Chunk:
     """One hand-built chunk, for the parsing tests that own their extracts rather than retrieve them."""
     return Chunk(
@@ -690,7 +695,7 @@ def test_only_the_last_turns_of_a_conversation_reach_the_prompt(
     """A longer window would cost tokens on every question to serve the rare one that needs it."""
     history = tuple(Turn(role="user", text=f"turn number {number}") for number in range(HISTORY_TURNS + 3))
     client, _, _ = ask(knowledge_index, ANSWERED, history=history)
-    prompt = completes(client)[0].prompt
+    prompt = answering(client)[0].prompt
     assert [turn["text"] for turn in history if turn["text"] in prompt] == [
         turn["text"] for turn in history[-HISTORY_TURNS:]
     ]
@@ -703,14 +708,14 @@ def test_a_conversation_shorter_than_the_window_is_carried_whole(
     """Truncation is a ceiling, not a quota: two turns are two turns."""
     history = (Turn(role="user", text="is the sim live"), Turn(role="assistant", text="not yet"))
     client, _, _ = ask(knowledge_index, ANSWERED, history=history)
-    prompt = completes(client)[0].prompt
+    prompt = answering(client)[0].prompt
     assert all(turn["text"] in prompt for turn in history)
 
 
 def test_a_question_asked_with_no_history_carries_none(knowledge_index: KnowledgeIndex) -> None:
     """The client sends the conversation it has; nothing is stored, so nothing is remembered."""
     client, _, _ = ask(knowledge_index, ANSWERED)
-    assert "Earlier in this conversation" not in completes(client)[0].prompt
+    assert "Earlier in this conversation" not in answering(client)[0].prompt
 
 
 @pytest.mark.parametrize("question", [ANSWERED, DISJOINT])

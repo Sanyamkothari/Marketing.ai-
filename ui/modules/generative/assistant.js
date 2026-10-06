@@ -31,7 +31,15 @@ import {
   techDetails,
 } from "../../dom.js";
 import { reasonFor } from "../production/session.js";
-import { backendBadge, citationCard, gTypeChip, guardrailList, highlightQuote, usageLine } from "./gdom.js";
+import {
+  backendBadge,
+  citationCard,
+  confidencePill,
+  gTypeChip,
+  guardrailList,
+  highlightQuote,
+  usageLine,
+} from "./gdom.js";
 import {
   deleteIndex,
   getChunk,
@@ -53,6 +61,8 @@ const AUTOML = "__automl__";
 const ACCEPT = ".pdf,.docx,.md,.txt,.html,.htm";
 const POLL_MS = 2000;
 const STATE = new Map();
+/** Earlier exchanges sent with a question: the three the server's prompt reads (`HISTORY_TURNS` = 6 turns). */
+const HISTORY_SENT = 3;
 
 function freshState(uc) {
   return {
@@ -601,18 +611,46 @@ function messageHtml(entry, i) {
     : `<div class="gmeta"><span>No passage in the documents was close enough to this question, so no answer was written.</span></div>`;
   const cites = (a.citations || []).map((c, j) => citationCard(c, { open: `${i}:${j}` })).join("");
   const guardrails = guardrailList(a.guardrails);
+  const conf = a.confidence
+    ? `<span class="gconf" title="${esc((a.confidence.reasons || []).join(" "))}">${confidencePill(a.confidence.level)}</span>`
+    : "";
+  const retries = Math.max(0, (a.attempts || 0) - 1);
+  const searched = a.searched_for ? `<span class="gsearched">Searched for: ${esc(a.searched_for)}</span>` : "";
+  const condenseFailed = a.condense_error
+    ? `<span class="gwarn">Searched with your words as typed: the follow-up could not be rewritten.</span>`
+    : "";
+  const rewritten = retries
+    ? `<span class="gretried">Written again ${retries === 1 ? "once" : `${retries} times`} after a check against the documents failed</span>`
+    : "";
   return `${q}<div class="gmsg bot${a.refused ? " refused" : ""}">${esc(a.answer)}${cites}${called}${guardrails}
-    <div class="gmeta" title="${esc(`${a.latency_ms} ms · prompt v${a.prompt_version}`)}"><span>${fmtInt(a.retrieved)} passage${
+    <div class="gmeta" title="${esc(`${a.latency_ms} ms · prompt v${a.prompt_version}`)}">${conf}<span>${fmtInt(a.retrieved)} passage${
       a.retrieved === 1 ? "" : "s"
-    } used</span>${a.refused ? '<span class="gwarn">Refused</span>' : ""}</div>${feedbackRow(entry, i)}</div>`;
+    } used</span>${a.refused ? '<span class="gwarn">Refused</span>' : ""}${searched}${condenseFailed}${rewritten}</div>${feedbackRow(
+      entry,
+      i,
+    )}</div>`;
+}
+
+/** Starter questions for an empty chat: the index's own graded questions that passed (DEC-1286). */
+function suggestionsHtml(s) {
+  const suggested = (s.detail && s.detail.suggested_questions) || [];
+  if (!suggested.length) return "";
+  return `<div class="gsuggest" aria-label="Questions to try">${suggested
+    .map((text, i) => `<button type="button" class="btn secondary sm" data-suggest="${i}">${esc(text)}</button>`)
+    .join("")}</div>`;
 }
 
 function chatCard(s) {
-  return `<section class="card" id="g-chat"><h3>Try it</h3>
+  const reset = s.conversation.length
+    ? `<button type="button" class="btn quiet sm" id="g-new-chat"${s.asking ? " disabled" : ""}>New conversation</button>`
+    : "";
+  return `<section class="card" id="g-chat"><div class="gchat-h"><h3>Try it</h3>${reset}</div>
     <div class="gchat">${
       s.conversation.length
         ? s.conversation.map(messageHtml).join("")
-        : `<div class="empty">Ask a question below. Each answer shows the passages it came from, or says why it was refused.</div>`
+        : `<div class="empty">Ask a question below. Each answer shows the passages it came from, or says why it was refused. Follow-up questions are understood in the context of the conversation.${suggestionsHtml(
+            s,
+          )}</div>`
     }</div>
     ${s.askError ? `<div class="gbody">${errorBox(s.askError)}</div>` : ""}
     <form id="g-ask" class="gaskrow"><div class="control"><input type="text" id="g-question" aria-label="Your question" placeholder="Ask a question…" value="${esc(
@@ -952,17 +990,26 @@ export function createAssistantController(uc, rerender) {
     }
   }
 
-  async function ask() {
-    const question = s.question.trim();
+  /** The conversation so far with this index, as the server reads it: the last few answered turns. */
+  function historyFor(indexId) {
+    return s.conversation
+      .filter((e) => e.indexId === indexId && e.answer)
+      .slice(-HISTORY_SENT)
+      .map((e) => ({ question: e.question, answer: e.answer.answer }));
+  }
+
+  async function ask(text) {
+    const question = (text === undefined ? s.question : text).trim();
     if (!question || s.asking) return;
     s.asking = true;
     s.askError = null;
     s.question = "";
+    const history = historyFor(s.indexId);
     const entry = { question, answer: null, indexId: s.indexId, fb: null };
     s.conversation = [...s.conversation, entry];
     rerender();
     try {
-      entry.answer = await postAsk(s.indexId, question);
+      entry.answer = await postAsk(s.indexId, question, history);
     } catch (error) {
       s.conversation = s.conversation.filter((e) => e !== entry);
       s.askError = error;
@@ -1039,6 +1086,18 @@ export function createAssistantController(uc, rerender) {
       event.preventDefault();
       ask();
     });
+    on("g-new-chat", "click", () => {
+      if (s.asking) return;
+      Object.assign(s, { conversation: [], passage: null, askError: null, question: "" });
+      rerender();
+    });
+    root.querySelectorAll("[data-suggest]").forEach((button) =>
+      button.addEventListener("click", () => {
+        const suggested = (s.detail && s.detail.suggested_questions) || [];
+        const text = suggested[Number(button.dataset.suggest)];
+        if (text) ask(text);
+      }),
+    );
 
     // Plan I: citations open their passage; answers take feedback; versions are managed.
     root.querySelectorAll("[data-cite]").forEach((card) => {

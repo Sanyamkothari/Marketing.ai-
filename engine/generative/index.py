@@ -81,7 +81,7 @@ BYTES_PER_MB: Final[int] = 1024 * 1024
 EMBED_BATCH: Final[int] = 64
 """Chunks per embedding call. One call per chunk would meter hundreds of requests for one build."""
 
-ANSWER_PROMPTS: Final[tuple[str, ...]] = ("assistant_answer", "judge_faithfulness")
+ANSWER_PROMPTS: Final[tuple[str, ...]] = ("assistant_answer", "assistant_condense", "judge_faithfulness")
 """The prompts an answer from this index will use, recorded so a manifest names them."""
 
 

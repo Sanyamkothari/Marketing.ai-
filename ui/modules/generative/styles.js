@@ -75,6 +75,9 @@ const CSS = `
 .gmsg.bot.refused{border-color:var(--warn);background:var(--warn-t)}
 .gmsg .gmeta{margin-top:8px;font-size:12px;color:var(--muted);display:flex;gap:12px;flex-wrap:wrap}
 .gaskrow{display:flex;gap:12px;padding:12px 20px 20px}
+.gsuggest{display:flex;flex-wrap:wrap;gap:8px;margin-top:10px}
+.gsuggest .btn{white-space:normal;text-align:left;height:auto;min-height:32px}
+.gchat-h{display:flex;align-items:center;justify-content:space-between;gap:12px}
 .gaskrow .control{flex:1 1 auto;height:40px}
 @media (max-width:700px){.gmsg{max-width:100%}.gaskrow{flex-direction:column}.gaskrow .control{flex:none}.gaskrow .btn{width:100%}}
 .gseg-row{display:flex;justify-content:space-between;flex-wrap:wrap;gap:12px;align-items:center;font-size:12px;color:var(--muted);margin-top:4px}

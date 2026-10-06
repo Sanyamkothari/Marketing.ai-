@@ -402,7 +402,26 @@ class FakeLLMClient:
             return self._root_cause(user)
         if shape == "helper":
             return self._helper(user)
+        if shape == "condense":
+            return self._condense(user)
         return self._answer(user)
+
+    def _condense(self, user: str) -> str:
+        """A follow-up made to stand alone (Plan I, DEC-1280), from the conversation on the page only.
+
+        A fake cannot resolve "it" the way a model does, so it does the honest lexical thing: the
+        follow-up, followed by the customer's previous question, so retrieval sees both sets of words.
+        """
+        conversation, _, follow_up = user.partition(_CONDENSE_FOLLOW_UP)
+        earlier = [
+            line[len("user:") :].strip()
+            for line in conversation.splitlines()
+            if line.lower().startswith("user:") and line[len("user:") :].strip()
+        ]
+        question = " ".join(follow_up.split())
+        if earlier:
+            question = f"{question} ({earlier[-1]})"
+        return json.dumps({"question": question})
 
     def _helper(self, user: str) -> str:
         """One helper step (Plan G): look a quoted column up, suggest a faster search, or reply.
@@ -852,9 +871,14 @@ def _prompt_shape(system: str, user: str) -> str:
         return "evidence"
     if "HELPER TURN" in user:  # Plan G: one step of a Guided-setup helper (DEC-1017)
         return "helper"
+    if _CONDENSE_FOLLOW_UP in user:  # Plan I: a follow-up rewritten to stand alone (DEC-1280)
+        return "condense"
     del system
     return "answer"
 
+
+_CONDENSE_FOLLOW_UP: Final[str] = "FOLLOW-UP QUESTION:"
+"""The heading `assistant_condense` puts above the question to rewrite."""
 
 _QUOTED: Final[re.Pattern[str]] = re.compile(r"'([A-Za-z0-9_ .\-]+)'")
 _HELPER_STATE: Final[str] = "\n\nState of this setup (proposals, questions and what has been decided):\n"
