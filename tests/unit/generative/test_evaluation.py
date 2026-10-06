@@ -34,14 +34,22 @@ from pathlib import Path
 import pytest
 
 from engine.config import BudgetConfig, LlmConfig, RagConfig, UseCaseConfig, load_use_case
+from engine.generative import evaluation
 from engine.generative.assistant import ANSWER_PROMPT
 from engine.generative.budget import Meter
-from engine.generative.contracts import RAG_EVAL_FILENAME, Chunk, RagEval, RagEvalQuestion
+from engine.generative.contracts import (
+    RAG_EVAL_FILENAME,
+    Chunk,
+    RagEval,
+    RagEvalAggregates,
+    RagEvalQuestion,
+)
 from engine.generative.errors import REFERENCE_SET_INVALID, GenerativeError
 from engine.generative.evaluation import (
     CORRECTNESS_PROMPT,
     FAITHFULNESS_PROMPT,
     NGRAM_SIZE,
+    PROVIDER_ERROR,
     REFUSAL_MISMATCH,
     RETRIEVAL_HIT_OVERLAP,
     RETRIEVAL_MISS,
@@ -65,7 +73,7 @@ from engine.generative.guardrails import (
 from engine.generative.index import build_index
 from engine.generative.retrieval import Retrieved
 from engine.generative.vectorstore import LocalVectorStore, Match, VectorStore
-from engine.llm import FakeLLMClient, FakeLLMMode
+from engine.llm import FakeLLMClient, FakeLLMMode, LLMError
 from engine.storage import LocalStorage, index_key
 from engine.utils.ids import new_index_id
 from tests.fixtures.make_docs import build_knowledge_base
@@ -586,19 +594,12 @@ def test_a_readable_score_is_untouched() -> None:
     assert _parse_score("not json at all") == 0.0
 
 
-def test_grading_recovers_gracefully_when_answering_raises_llm_error(
-    graded_fixture: GradedFixture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    from engine.generative import evaluation
-    from engine.llm import LLMError
-
-    def failing_answer(*args: object, **kwargs: object) -> object:
-        raise LLMError("LLM_UNAVAILABLE", "Transient 502 from upstream provider")
-
-    monkeypatch.setattr(evaluation, "answer", failing_answer)
-
+# ---------------------------------------------------------------------------
+# A provider error is recorded as "not graded", never as an answer (DEC-1266)
+# ---------------------------------------------------------------------------
+def _evaluate_with(graded_fixture: GradedFixture) -> RagEval:
     meter = meter_for(FakeLLMClient(mode=FakeLLMMode.GROUNDED))
-    result = evaluate(
+    return evaluate(
         index_id=graded_fixture.index_id,
         use_case=small_use_case(),
         reference_set_path=graded_fixture.reference_set_path,
@@ -607,6 +608,85 @@ def test_grading_recovers_gracefully_when_answering_raises_llm_error(
         meter=meter,
         guardrails=Guardrails(load_policy(), meter=meter),
     )
-    assert len(result.questions) > 0
-    for q in result.questions:
-        assert q.refused is True
+
+
+def test_a_question_the_ai_service_failed_to_answer_is_recorded_as_not_graded(
+    graded_fixture: GradedFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_answer(*args: object, **kwargs: object) -> object:
+        raise LLMError("LLM_UNAVAILABLE", "The AI service had a problem on its side.")
+
+    monkeypatch.setattr(evaluation, "answer", failing_answer)
+    result = _evaluate_with(graded_fixture)
+
+    assert len(result.questions) == 3, "the evaluation finished: one failure does not end it"
+    for question in result.questions:
+        assert question.failure == PROVIDER_ERROR
+        assert question.error_code == "LLM_UNAVAILABLE"
+        assert question.error_message == "The AI service had a problem on its side."
+        assert (question.answer, question.refused, question.passed) == ("", None, False)
+        assert question.faithfulness is None and question.correctness is None
+    # The reference set's should-refuse row is NOT a pass: no refusal was made up for it.
+    should_refuse = next(q for q in result.questions if q.expect_refusal)
+    assert should_refuse.passed is False and should_refuse.refused is None
+    aggregates = result.aggregates
+    assert (aggregates.questions, aggregates.passed, aggregates.errored) == (0, 0, 3)
+    assert aggregates.meets_threshold is False
+    assert aggregates.refusal_accuracy is None and aggregates.mean_faithfulness is None
+
+
+def test_a_judge_the_ai_service_failed_keeps_the_real_answer_and_invents_no_score(
+    graded_fixture: GradedFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def failing_judge(*args: object, **kwargs: object) -> float:
+        raise LLMError("LLM_UNAVAILABLE", "The AI service did not answer in time.")
+
+    monkeypatch.setattr(evaluation, "_judge_score", failing_judge)
+    result = _evaluate_with(graded_fixture)
+
+    judged = [q for q in result.questions if q.refused is False]
+    assert judged, "the fixture has questions the assistant answered, so the judge was needed"
+    for question in judged:
+        assert question.answer, "the answer the assistant really gave is kept"
+        assert question.failure == PROVIDER_ERROR and question.error_code == "LLM_UNAVAILABLE"
+        assert question.faithfulness is None and question.correctness is None, "never 0.0"
+    for question in result.questions:
+        if question.refused is True:
+            # A refusal needs no judge: it is graded as usual.
+            assert question.failure != PROVIDER_ERROR and question.error_code is None
+    assert result.aggregates.errored == len(judged)
+    assert result.aggregates.questions == len(result.questions) - len(judged)
+
+
+def test_aggregate_leaves_errored_rows_out_of_every_count_and_rate_and_counts_them() -> None:
+    graded = [
+        eval_question(),
+        eval_question(passed=False, failure=UNFAITHFUL, faithfulness=0.1, correctness=0.2),
+    ]
+    errored = eval_question(
+        answer="",
+        refused=None,
+        retrieval_hit=None,
+        faithfulness=None,
+        correctness=None,
+        passed=False,
+        failure=PROVIDER_ERROR,
+        error_code="LLM_UNAVAILABLE",
+        error_message="The AI service had a problem on its side.",
+    )
+    aggregates = aggregate([*graded, errored], pass_threshold=0.5)
+    assert (aggregates.questions, aggregates.passed, aggregates.errored) == (2, 1, 1)
+    assert aggregates.pass_rate == 0.5
+    assert aggregates.mean_faithfulness == pytest.approx(0.5)
+    assert aggregates.refusal_accuracy == 1.0
+    assert aggregates.meets_threshold is False, "a bar is not cleared while a question went ungraded"
+    assert aggregate(graded, pass_threshold=0.5).meets_threshold is True
+
+
+def test_an_artefact_written_before_errored_rows_existed_still_loads() -> None:
+    old = eval_question().model_dump()
+    del old["error_code"], old["error_message"]
+    assert RagEvalQuestion.model_validate(old).error_code is None
+    aggregates = aggregate([eval_question()], pass_threshold=0.5).model_dump()
+    del aggregates["errored"]
+    assert RagEvalAggregates.model_validate(aggregates).errored == 0

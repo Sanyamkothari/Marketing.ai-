@@ -119,6 +119,7 @@ class RecordingStore:
         self._matches = tuple(matches)
         self.asked_for: list[int] = []
         self.queries: list[tuple[float, ...]] = []
+        self.texts: list[tuple[str | None, float]] = []
 
     def write(self, index_id: str, chunks: Sequence[Chunk], vectors: Sequence[Sequence[float]]) -> None:
         raise NotImplementedError("retrieval never writes")
@@ -129,9 +130,18 @@ class RecordingStore:
     def exists(self, index_id: str) -> bool:
         return True
 
-    def search(self, index_id: str, query: Sequence[float], *, top_k: int) -> tuple[Match, ...]:
+    def search(
+        self,
+        index_id: str,
+        query: Sequence[float],
+        *,
+        top_k: int,
+        query_text: str | None = None,
+        bm25_weight: float = 0.0,
+    ) -> tuple[Match, ...]:
         self.asked_for.append(top_k)
         self.queries.append(tuple(query))
+        self.texts.append((query_text, bm25_weight))
         return self._matches[:top_k]
 
 
@@ -392,3 +402,65 @@ def test_similarity_to_is_the_stores_own_arithmetic_and_a_zero_vector_matches_no
     assert similarity_to((1.0, 0.0), (1.0, 0.0)) == pytest.approx(1.0)
     assert similarity_to((1.0, 0.0), (0.0, 1.0)) == pytest.approx(0.0)
     assert similarity_to((0.0, 0.0), (1.0, 0.0)) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# Hybrid ranking, dense floor (DEC-1260, DEC-1261)
+# ---------------------------------------------------------------------------
+def hybrid(similarity: float, score: float, text: str, *, ordinal: int) -> Match:
+    """A match from a hybrid search: its cosine, and the blended score it was ranked by."""
+    return Match(
+        chunk=chunk(text, ordinal=ordinal), similarity=similarity, keyword_score=None, hybrid_score=score
+    )
+
+
+def test_the_question_text_and_the_configured_weight_reach_the_store() -> None:
+    store = RecordingStore(ranked([(0.90, LATE_FEE)]))
+    retrieve(store, INDEX, QUESTION, config=rag(bm25_weight=0.4), question_text="late fee?")
+    retrieve(store, INDEX, QUESTION, config=rag(bm25_weight=0.0), question_text="late fee?")
+    retrieve(store, INDEX, QUESTION, config=rag())
+    assert store.texts == [("late fee?", 0.4), ("late fee?", 0.0), (None, 0.25)]
+
+
+def test_a_strong_semantic_match_is_kept_however_low_its_keyword_score_pulled_its_rank() -> None:
+    """The floor is on the cosine: a blend below the floor does not turn good evidence into a refusal."""
+    store = RecordingStore([hybrid(0.60, 0.45, LATE_FEE, ordinal=0)])
+    result = retrieve(store, INDEX, QUESTION, config=rag(min_similarity=0.5), question_text="q")
+    assert [found.similarity for found in result.matches] == [0.60]
+    assert not result.empty
+
+
+def test_a_keyword_only_match_is_not_evidence_however_high_its_blended_rank() -> None:
+    """A passage that shares the question's words but not its meaning stays below the floor."""
+    store = RecordingStore([hybrid(0.30, 0.70, PORTING, ordinal=0)])
+    result = retrieve(store, INDEX, QUESTION, config=rag(min_similarity=0.5), question_text="q")
+    assert result.empty
+    assert (result.considered, result.above_floor) == (1, 0)
+
+
+def test_among_matches_above_the_floor_the_hybrid_score_decides_the_order() -> None:
+    """The keyword-favoured passage comes first although its cosine is the lower of the two."""
+    store = RecordingStore(
+        [hybrid(0.80, 0.85, RECONNECTION, ordinal=0), hybrid(0.90, 0.70, LATE_FEE, ordinal=1)]
+    )
+    result = retrieve(store, INDEX, QUESTION, config=rag(top_k=2, min_similarity=0.5), question_text="q")
+    assert [passage.text for passage in result.chunks] == [RECONNECTION, LATE_FEE]
+    assert [found.similarity for found in result.matches] == [0.80, 0.90], "each keeps its own cosine"
+
+
+def test_mmr_trades_on_the_ranked_score_and_a_dense_match_ranks_by_its_cosine() -> None:
+    assert Match(chunk=chunk(LATE_FEE), similarity=0.4).rank == 0.4
+    assert hybrid(0.4, 0.9, LATE_FEE, ordinal=0).rank == 0.9
+    chosen = mmr(
+        [hybrid(0.9, 0.5, LATE_FEE, ordinal=0), hybrid(0.6, 0.8, PORTING, ordinal=1)],
+        QUESTION,
+        top_k=1,
+        lambda_=0.7,
+    )
+    assert [found.chunk.text for found in chosen] == [PORTING]
+
+
+@pytest.mark.parametrize("weight", [-0.01, 1.01])
+def test_a_weight_outside_zero_to_one_is_refused_by_the_configuration(weight: float) -> None:
+    with pytest.raises(ValueError, match="bm25_weight"):
+        rag(bm25_weight=weight)

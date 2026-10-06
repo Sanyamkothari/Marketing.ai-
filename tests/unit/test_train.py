@@ -53,6 +53,7 @@ from engine.stages.train import (
     class_labels,
     engine_score,
     family_for_model_name,
+    get_hardware_accelerator,
     hyperparameters_summary,
     predictor_key_for,
     resolve_imbalance,
@@ -258,7 +259,7 @@ def test_fit_kwargs_with_gpu_accelerates_supported_models(monkeypatch) -> None:
     recipe = make_recipe(candidate_pool=all_families, candidates=all_families, use_gpu=True)
 
     # Under Apple Silicon MPS: only NeuralNet gets GPU; tree models stay on multi-core CPU
-    monkeypatch.setattr("engine.stages.train.get_hardware_accelerator", lambda: "mps")
+    monkeypatch.setattr("engine.stages.train.get_hardware_accelerator", lambda needs_torch=True: "mps")
     kwargs = autogluon_fit_kwargs(recipe)
     assert kwargs["hyperparameters"]["NN_TORCH"] == {"ag_args_fit": {"num_gpus": 1}}
     assert kwargs["hyperparameters"]["XGB"] == {}
@@ -268,7 +269,7 @@ def test_fit_kwargs_with_gpu_accelerates_supported_models(monkeypatch) -> None:
     assert kwargs["hyperparameters"]["LR"] == {}
 
     # Under Linux CUDA (with a CUDA build of XGBoost): NeuralNet, XGBoost, CatBoost get GPU
-    monkeypatch.setattr("engine.stages.train.get_hardware_accelerator", lambda: "cuda")
+    monkeypatch.setattr("engine.stages.train.get_hardware_accelerator", lambda needs_torch=True: "cuda")
     monkeypatch.setattr("engine.stages.train.xgboost_has_cuda", lambda: True)
     kwargs_cuda = autogluon_fit_kwargs(recipe)
     assert kwargs_cuda["hyperparameters"]["NN_TORCH"] == {"ag_args_fit": {"num_gpus": 1}}
@@ -288,6 +289,52 @@ def test_fit_kwargs_with_gpu_accelerates_supported_models(monkeypatch) -> None:
     recipe_cpu = make_recipe(candidate_pool=all_families, candidates=all_families, use_gpu=False)
     kwargs_cpu = autogluon_fit_kwargs(recipe_cpu)
     assert all(space == {} for space in kwargs_cpu["hyperparameters"].values())
+
+
+def test_the_accelerator_check_is_only_given_needs_torch_when_a_neural_network_is_chosen(monkeypatch) -> None:
+    """DEC-1268: without the NeuralNet family, training asks for the accelerator without torch."""
+    monkeypatch.setattr("engine.config.dependency_available", lambda module: True)
+    asked: list[bool] = []
+
+    def accelerator(needs_torch: bool = True) -> str:
+        asked.append(needs_torch)
+        return "cuda"
+
+    monkeypatch.setattr("engine.stages.train.get_hardware_accelerator", accelerator)
+    monkeypatch.setattr("engine.stages.train.xgboost_has_cuda", lambda: True)
+    trees = (ModelFamily.XGBOOST, ModelFamily.CATBOOST, ModelFamily.LIGHTGBM)
+    kwargs = autogluon_fit_kwargs(make_recipe(candidate_pool=trees, candidates=trees, use_gpu=True))
+    assert asked == [False]
+    # A CUDA machine keeps XGBoost and CatBoost on the GPU with no neural network chosen.
+    assert kwargs["hyperparameters"]["XGB"] == {"ag_args_fit": {"num_gpus": 1}}
+    assert kwargs["hyperparameters"]["CAT"] == {"ag_args_fit": {"num_gpus": 1}}
+    with_nn = (*trees, ModelFamily.NEURAL_NET)
+    autogluon_fit_kwargs(make_recipe(candidate_pool=with_nn, candidates=with_nn, use_gpu=True))
+    assert asked == [False, True]
+
+
+def test_without_a_neural_network_the_accelerator_is_found_without_importing_torch(monkeypatch) -> None:
+    """CUDA is asked of CatBoost, and torch is never imported (it is what crashes LightGBM on macOS)."""
+    imported: list[str] = []
+
+    class _CatboostUtils:
+        @staticmethod
+        def get_gpu_device_count() -> int:
+            return 2
+
+    def fake_import(name: str) -> object:
+        imported.append(name)
+        if name == "catboost.utils":
+            return _CatboostUtils
+        raise ImportError(name)
+
+    monkeypatch.setattr("engine.stages.train.importlib.import_module", fake_import)
+    assert get_hardware_accelerator(needs_torch=False) == "cuda"
+    assert "torch" not in imported
+
+    _CatboostUtils.get_gpu_device_count = staticmethod(lambda: 0)  # type: ignore[method-assign]
+    assert get_hardware_accelerator(needs_torch=False) == "cpu"
+    assert "torch" not in imported
 
 
 # ---------------------------------------------------------------------------

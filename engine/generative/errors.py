@@ -29,6 +29,7 @@ __all__ = [
     "INDEX_CORRUPT",
     "INDEX_EMPTY",
     "INDEX_NOT_FOUND",
+    "JOB_FAILED",
     "KNOWLEDGE_BASE_TOO_LARGE",
     "MISSING_FIELD",
     "MODEL_OUTPUT_MALFORMED",
@@ -79,6 +80,14 @@ RUN_WITHOUT_EXPLANATIONS: Final[str] = "RUN_WITHOUT_EXPLANATIONS"
 COMPLAINT_COLUMN_MISSING: Final[str] = "COMPLAINT_COLUMN_MISSING"
 NOT_A_GENERATIVE_USE_CASE: Final[str] = "NOT_A_GENERATIVE_USE_CASE"
 MISSING_FIELD: Final[str] = "MISSING_FIELD"
+
+# --- a background job -------------------------------------------------------------------------
+JOB_FAILED: Final[str] = "JOB_FAILED"
+"""A background job stopped on an error nobody wrote a code for - a bug, not the caller's doing.
+
+Its traceback goes to the log (messages withheld by the log formatter); the status document gets
+this fixed sentence, never the exception's own text, which can quote internals or data (DEC-1267).
+"""
 
 
 GENERATIVE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
@@ -169,6 +178,10 @@ GENERATIVE_ERRORS: Final[Mapping[str, tuple[str, str]]] = MappingProxyType(
         MISSING_FIELD: (
             "{rows} rows have no value for {field}, so no message could be rendered for them.",
             "Take the field out of generative.campaign_copy.allowed_fields, or fill it in the data.",
+        ),
+        JOB_FAILED: (
+            "This step stopped because of an unexpected problem on our side.",
+            "Try again. If it happens again, contact support: the server log has the details.",
         ),
     }
 )

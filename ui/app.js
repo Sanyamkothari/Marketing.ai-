@@ -185,7 +185,10 @@ async function showUseCase(id, runId) {
       paint(aiNoticeHtml(uc, backLink(uc)));
       return uc;
     }
-    window.location.hash = `#/generative/assistant/${encodeURIComponent(uc.id)}`;
+    // The assistant is this use case's only screen, so it opens straight there (DEC-1264). `replace`,
+    // not a new history entry: Back from the assistant must leave the use case, not land on this
+    // address and be sent forward to the assistant again.
+    window.location.replace(`#/generative/assistant/${encodeURIComponent(uc.id)}`);
     return uc;
   }
   active = uc.id;

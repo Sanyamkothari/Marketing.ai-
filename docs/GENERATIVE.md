@@ -208,6 +208,25 @@ citation finds the passage they expected. Neither decision is a model's to make 
 a call; what reaches the prompt is `retrieve`'s output and nothing else, which is what makes "answer
 only from the extracts" a rule the engine enforces rather than a request the prompt makes.
 
+**Hybrid ranking, dense floor.** The search itself is *hybrid* by default (DEC-1260): given the
+question's words as well as its vector, `LocalVectorStore.search` ranks every chunk by
+`(1 - w) * cosine + w * keyword`, where `keyword` is the chunk's Okapi BM25 score for the question
+(`k1 = 1.5`, `b = 0.75`, over the chunk's heading and text) scaled to 0..1 by the score a chunk
+containing every question word would approach, and `w` is `generative.rag.bm25_weight` (default
+`0.25`, `0` for a pure vector search). Embeddings place "the late payment fee" near "charges for paying
+after the due date", which keywords cannot; keywords find the plan name, product code or clause
+number a question quotes exactly, which an embedding can place a little too far away. Ranking is all
+BM25 is allowed to do: every `Match` still carries the plain cosine as `similarity`, and **the floor is
+applied to that cosine, never to the blend** (DEC-1261). The refusal rule therefore keeps the meaning
+DEC-218 calibrated - a strong semantic match is never pushed under the floor by a low keyword score,
+and a passage that merely shares a word with the question is never let over it - while MMR trades on
+the blended score (`Match.rank`), and a citation shows the cosine. The BM25 statistics of an index
+(word counts, document frequencies, lengths) are computed once per distinct set of chunk texts and
+memoised (`vectorstore.bm25_corpus`, DEC-1262), so a question costs one pass over its own words, not a
+re-tokenisation of the knowledge base; the cache key is the texts themselves, so an index rebuilt under
+the same id can never be scored with stale statistics. The same setting applies everywhere a question
+is retrieved - an answer, and the evaluation's own retrieval - whichever client the meter calls.
+
 **6. Answer or refuse.** `engine/generative/assistant.py`'s `answer` embeds the question, retrieves,
 and only then decides whether to call a model at all - see the refusal discussion below. When it does
 call, the rendered prompt numbers the extracts, and that numbering *is* the citation vocabulary: the
@@ -427,8 +446,8 @@ therefore the contract each file is written against, not a promise that somethin
 | File | Model | Written when | What a reader uses it for |
 |---|---|---|---|
 | `doc_index_manifest.json` | `DocIndexManifest` | An index build finishes, whether or not every document parsed. | What is in the index and how it was built - document list, fingerprints, chunk counts, the settings a rebuild is compared against, and any `PII_IN_DOCS` warning. The record a reader asks "which documents, which settings, when?" of. |
-| `index_status.json` | `GenerativeStatus` | Continuously while an index build runs. | The Running screen for an index build: one stage per document plus the embedding step, polled the same way a predictive run's `status.json` is. |
-| `rag_eval.json` | `RagEval` | A reference set is graded against a finished index. | The Results screen for RAG quality: pass rate against `reference_set.pass_threshold`, retrieval hit rate, mean faithfulness and correctness, and the worst-scoring questions stored first so a reviewer reads the head of the list rather than sorting one. |
+| `index_status.json` | `GenerativeStatus` | Continuously while an index build runs. | The Running screen for an index build: one stage per document plus the embedding step, polled the same way a predictive run's `status.json` is. A job is never left `running`: whatever it raises, the status ends `failed` with a code and a plain message - the engine's own for a coded error, the AI service's for a provider error, and `JOB_FAILED`'s fixed sentence (traceback to the log) for anything else. A reference set that cannot be graded fails only its `evaluate` step; the index is still built (DEC-1267). |
+| `rag_eval.json` | `RagEval` | A reference set is graded against a finished index. | The Results screen for RAG quality: pass rate against `reference_set.pass_threshold`, retrieval hit rate, mean faithfulness and correctness, and the worst-scoring questions stored first so a reviewer reads the head of the list rather than sorting one. A question the AI service failed on is stored as not graded (`failure: provider_error`, its `error_code` and plain `error_message`, null scores) and counted in `aggregates.errored`, outside every other figure (DEC-1266). |
 | `root_cause_summary.json` | `RootCauseSummary` | An RCA job finishes over one finished churn run. | Per-segment headlines, root causes and recommended actions, each summary sitting beside the `EvidencePack` it was written from, so every numeric claim on the screen is read from the pack rather than from the model's prose. |
 | `root_cause_status.json` | `GenerativeStatus` | Continuously while an RCA job runs. | The Running screen for an RCA job: one step per segment, so `generate:High` and `generate:Medium` can be watched, retried and reported on independently. |
 | `copy_batch.json` | `CopyBatch` | A campaign-copy job finishes over one finished scoring run. | The templates awaiting review, plus the audience they cover and the holdout (control rows, suppressed rows, out-of-band rows) that a later uplift comparison needs to have been recorded honestly. |
@@ -517,6 +536,19 @@ embeds by **keyword hash** (`engine.llm.keyword_hash_vector`, model id `keyword-
 deterministic lexical vector the test model's grounded mode uses, so retrieval is real, matches by shared
 words, and involves no model. An index remembers the embedding model it was built with; changing the
 embedding model means rebuilding it.
+
+**The local embedding model** (DEC-1263). Instead of the provider's embeddings or the keyword hash, a
+saved service may name `BAAI/bge-small-en-v1.5` as its embedding model: an open-source model (384
+dimensions) that runs on this server through `sentence-transformers`, so the documents are searched by
+meaning even with a provider that has no embeddings (the Connections screen offers it as a tick box for
+those, and in the list for the others). It is an optional extra, not a dependency, because it pulls in
+PyTorch: `pip install 'marketing-ai[local-embeddings]'`. Its first use downloads the weights from
+Hugging Face unless they are already in the server's cache. It never falls back: without the extra the
+build or question fails with `LOCAL_EMBEDDINGS_NOT_INSTALLED` and that install command, and a model that
+cannot load (no network for the first download) fails with `LOCAL_EMBEDDINGS_UNAVAILABLE` - an index
+built from one kind of vector and searched with another would be a dimension error at best and wrong
+answers under a manifest naming the wrong model at worst. The model loads once per process, under a
+lock. A floor calibrated for one embedding model is not automatically right for another (DEC-218).
 
 The rest of this section describes the two backends a **use-case file** can name and the test model.
 A use case's `generative.llm.backend` is now only a *fallback*: `bedrock` (step 3 above) is honoured when

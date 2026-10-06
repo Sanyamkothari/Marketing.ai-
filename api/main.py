@@ -11,12 +11,6 @@ serves.
 
 from __future__ import annotations
 
-# Pre-import lightgbm before torch/AutoGluon to ensure OpenMP runtime stability on macOS ARM64
-try:
-    import lightgbm  # noqa: F401
-except Exception:
-    pass
-
 from collections.abc import Callable
 from pathlib import Path
 from typing import Final
@@ -33,6 +27,7 @@ from engine import __version__
 from engine.config import ConfigError
 from engine.settings import ENV_VARS, Settings, SettingsError
 from engine.utils.logging import configure_logging
+from engine.utils.openmp import import_lightgbm_before_torch
 
 NOT_FOUND_CODES: Final[frozenset[str]] = frozenset(
     {"USE_CASE_NOT_FOUND", "USE_CASE_PLANNED", "INDUSTRY_NOT_FOUND"}
@@ -115,6 +110,9 @@ def create_app(
             f"storage_backend={settings.storage_backend}.",
             env_var=ENV_VARS["storage_backend"],
         )
+    # Before any request can import torch (the local embedding model, a neural network): on macOS the
+    # two OpenMP runtimes only coexist when LightGBM's loads first (DEC-1268).
+    import_lightgbm_before_torch()
     # Phase 1 never called this, so the API inherited whatever logging uvicorn had set up and the
     # `RedactingFormatter` guarantee - that no line the engine writes can carry an exception's
     # message - applied only to processes that configured it themselves. It is called here so the

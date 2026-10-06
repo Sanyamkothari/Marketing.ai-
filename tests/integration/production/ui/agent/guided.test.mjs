@@ -35,6 +35,8 @@ function withoutOutcome(body) {
   }
   return copy;
 }
+/** The main session with no Product AI connected: the chat, and so typed answers, are not offered. */
+const NO_CHAT = "u_no_chat";
 const hostileChat = (() => {
   const copy = hostile(fixture("main_chat"));
   copy.session.transcript[copy.session.transcript.length - 1].text = HOSTILE;
@@ -45,9 +47,9 @@ const flows = {
   [ids.main]: { start: "main_start", messages: "main_chat", answers: "main_answer", decisions: "main_decided", preview: "main_preview", apply: "main_apply" },
   [ids.conflict]: { start: "conflict_start", answers: "conflict_answer", decisions: "conflict_decided", apply: "conflict_apply" },
   [ids.placeholder]: { start: "placeholder_start", decisions: "placeholder_decided", preview: "placeholder_preview" },
-  [ids.stopped]: { start: "stopped_start" },
+  [ids.stopped]: { start: "stopped_start", messages: "stopped_start" },
 };
-const sent = { decisions: [], runs: [], messages: [], starts: 0 };
+const sent = { decisions: [], runs: [], messages: [], answers: [], starts: 0 };
 let nextUpload = "main";
 
 const server = (request) => {
@@ -56,6 +58,7 @@ const server = (request) => {
   if (method === "GET" && path === "/models") return { status: 200, body: fixture("models_empty") };
   if (method === "POST" && path === "/uploads") {
     if (nextUpload === "tricky") return { status: 201, body: { ...fixture("upload_main"), upload_id: TRICKY } };
+    if (nextUpload === "no_chat") return { status: 201, body: { ...fixture("upload_main"), upload_id: NO_CHAT } };
     if (nextUpload === "no_outcome") {
       return { status: 201, body: { ...fixture("upload_placeholder"), upload_id: NO_OUTCOME } };
     }
@@ -74,6 +77,9 @@ const server = (request) => {
     if (uploadId === NO_OUTCOME && action === "start") {
       return { status: 201, body: withoutOutcome(fixture("placeholder_start")) };
     }
+    if (uploadId === NO_CHAT && action === "start") {
+      return { status: 201, body: { ...fixture("main_start"), chat: { available: false, reason: "AI_NOT_CONNECTED" } } };
+    }
     if (uploadId === TRICKY) {
       if (action === "start") return { status: 201, body: hostile(fixture("main_start")) };
       if (action === "messages") return { status: 200, body: hostileChat };
@@ -82,6 +88,7 @@ const server = (request) => {
     if (!flow || !flow[action]) return null;
     if (action === "decisions") sent.decisions.push({ uploadId, body });
     if (action === "messages") sent.messages.push(body);
+    if (action === "answers") sent.answers.push(body);
     const answer = fixture(flow[action]);
     if (action === "apply" && answer.detail) return { status: 409, body: answer };
     return { status: action === "start" ? 201 : 200, body: answer };
@@ -414,4 +421,62 @@ test("an outcome figure the API did not measure reads —, never a number", asyn
   assert.equal(rows[0], `${shownNumber(r.affected_rows)} of ${shownNumber(r.rows)} (${shownPct(r.affected_share)})`);
   assert.equal(rows[3], "— vs —");
   assert.equal(rows[4], "— → —");
+});
+
+// --- typed answers (DEC-1265): only an option's exact label picks it ------------------------------
+
+/** Type `value` into the free-text line of `questionId` and send it. */
+function typeAnswer(questionId, value) {
+  const form = $(`[data-ag-typed="${questionId}"]`);
+  assert.ok(form, "a question offers a line to answer in your own words");
+  form.querySelector("input").value = value;
+  form.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+}
+
+test("typing an option's label exactly - in any case, with stray spaces - answers with that option", async () => {
+  await chooseFile("main");
+  const question = session("main_start").questions.find((q) => q.blocking);
+  const option = question.options[0];
+  const [answers, messages] = [sent.answers.length, sent.messages.length];
+  typeAnswer(question.question_id, `   ${option.label.toUpperCase().replace(/ /g, "  ")}  `);
+  await until(() => sent.answers.length > answers && !$(".ag .loading"), 2000, "the answer");
+  assert.deepEqual(sent.answers.at(-1), { question_id: question.question_id, option_id: option.option_id });
+  assert.equal(sent.messages.length, messages, "an exact label is an answer, not a message");
+});
+
+test("anything else - a word inside a label, an option id, a sentence - goes to the helper, never picks an option", async () => {
+  await chooseFile("main");
+  const question = session("main_start").questions.find((q) => q.blocking);
+  const answers = sent.answers.length;
+  // "no" is inside "known", "it" inside both labels, "hide" is an option id, and the sentence names
+  // one option while asking for the other: each would have ticked a fix under a fuzzy match.
+  for (const typed of ["no", "it", question.options[0].option_id, `do not ${question.options[0].option_id} it`]) {
+    const messages = sent.messages.length;
+    typeAnswer(question.question_id, typed);
+    await until(() => sent.messages.length > messages && !$("#ag-chat .loading"), 2000, `the message ${typed}`);
+    assert.deepEqual(sent.messages.at(-1), { text: `About “${question.text}”: ${typed}` });
+  }
+  assert.equal(sent.answers.length, answers, "no option was picked for the person");
+});
+
+test("the typed line carries no inline style and is not offered while no AI service can read it", async () => {
+  const form = $("[data-ag-typed]");
+  assert.equal(form.getAttribute("style"), null);
+  assert.equal(form.querySelector("[style]"), null, "its look comes from the module's stylesheet");
+  await chooseFile("no_chat");
+  assert.ok($("[data-ag-q]"), "the question is still asked");
+  assert.equal($("[data-ag-typed]"), null, "but there is no helper to send words to");
+});
+
+test("on a stopped session, what the person types is sent to the helper as written", async () => {
+  await chooseFile("stopped");
+  const form = $("#ag-stop-ask");
+  assert.ok(form, "the stop screen offers a line to tell the helper what to do");
+  assert.equal(form.querySelector("[style]"), null);
+  const messages = sent.messages.length;
+  $("#ag-stop-input").value = "  drop the duplicate rows  ";
+  form.dispatchEvent(new w.Event("submit", { bubbles: true, cancelable: true }));
+  await until(() => sent.messages.length > messages && !$("#ag-chat .loading"), 2000, "the message");
+  assert.deepEqual(sent.messages.at(-1), { text: "drop the duplicate rows" });
+  assert.ok($("[data-ag-stop]"), "a message does not make unusable data usable");
 });

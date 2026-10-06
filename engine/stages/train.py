@@ -59,6 +59,7 @@ from engine.stages.scorer import (
 )
 from engine.storage import publish_local_path, run_key
 from engine.utils.logging import get_logger
+from engine.utils.openmp import import_lightgbm_before_torch
 from engine.utils.time import utc_now
 
 if TYPE_CHECKING:
@@ -309,14 +310,17 @@ def get_hardware_accelerator(needs_torch: bool = True) -> str:
 
     `torch` is optional (only the neural network needs it), so it is imported by name at call time: a
     machine without it, or with a broken install, is simply a CPU machine.
+
+    `needs_torch=False` - no neural network among the families - does not import torch at all
+    (DEC-1268): importing it is seconds of start-up and, on macOS, the import order that crashes
+    LightGBM. CUDA is then detected through CatBoost, which every installation has, so XGBoost and
+    CatBoost keep their GPU on a CUDA machine exactly as when torch answered. 'mps' is only ever
+    used by the neural network, so without one it is never reported.
     """
     if not needs_torch:
-        return "cpu"
+        return "cuda" if _cuda_without_torch() else "cpu"
     try:
-        try:
-            import lightgbm  # noqa: F401
-        except Exception:
-            pass
+        import_lightgbm_before_torch()
         torch = importlib.import_module("torch")
         if torch.cuda.is_available():
             return "cuda"
@@ -325,6 +329,14 @@ def get_hardware_accelerator(needs_torch: bool = True) -> str:
     except Exception:
         pass
     return "cpu"
+
+
+def _cuda_without_torch() -> bool:
+    """Whether a CUDA GPU is visible, asked of CatBoost rather than torch; False on any doubt."""
+    try:
+        return int(importlib.import_module("catboost.utils").get_gpu_device_count()) > 0
+    except Exception:
+        return False
 
 
 def xgboost_has_cuda() -> bool:

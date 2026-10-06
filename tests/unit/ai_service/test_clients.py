@@ -295,6 +295,82 @@ def test_unreadable_answers_are_bad_responses() -> None:
     assert caught.value.kind == "bad_response"
 
 
+# --- an error inside a 200 (OpenRouter and others; DEC-1269) ---------------------------------------
+def _answering(body: object, seen: list[int] | None = None) -> OpenAICompatibleClient:
+    """A client whose every request gets `200 OK` with `body`, through a fake transport."""
+
+    def handler(_request: httpx.Request) -> httpx.Response:
+        if seen is not None:
+            seen.append(1)
+        return httpx.Response(200, json=body)
+
+    return OpenAICompatibleClient(
+        base_url="https://gateway.example.test/v1",
+        api_key=KEY,
+        model_id="m-1",
+        embedding_model_id="e-1",
+        max_retries=2,
+        backoff_s=0.0,
+        transport=httpx.MockTransport(handler),
+    )
+
+
+@pytest.mark.parametrize(
+    ("code", "kind", "attempts"),
+    [
+        (502, "server_error", 3),
+        (503, "server_error", 3),
+        (429, "rate_limited", 3),
+        (401, "key_rejected", 1),
+        (403, "key_rejected", 1),
+        (402, "bad_request", 1),
+        (400, "bad_request", 1),
+        (404, "not_found", 1),
+    ],
+)
+def test_an_error_inside_a_200_is_classified_like_the_same_status(
+    code: int, kind: str, attempts: int
+) -> None:
+    seen: list[int] = []
+    body = {"error": {"code": code, "message": f"{PROMPT} {KEY} upstream said no"}}
+    with pytest.raises(LLMHttpError) as caught:
+        _answering(body, seen).complete(PROMPT)
+    exc = caught.value
+    assert (exc.kind, exc.status) == (kind, code)
+    assert (exc.message, exc.fix) == PROBLEMS[kind]
+    assert len(seen) == attempts  # only the transient ones are retried, as for a real status
+    for text in (str(exc), exc.message, exc.fix, repr(exc)):
+        assert KEY not in text and PROMPT not in text and "upstream said no" not in text
+
+
+@pytest.mark.parametrize(
+    "error", [{"message": "the model failed"}, {"code": "provider_down"}, "failed", True]
+)
+def test_an_error_inside_a_200_without_a_status_is_a_problem_on_the_service_side(error: object) -> None:
+    with pytest.raises(LLMHttpError) as caught:
+        _answering({"error": error}).complete("hi")
+    assert caught.value.kind == "server_error"
+
+
+def test_an_error_inside_a_200_fails_embeddings_and_model_lists_too() -> None:
+    body = {"error": {"code": 401, "message": "no"}}
+    with pytest.raises(LLMHttpError) as embedding:
+        _answering(body).embed(["hi"])
+    with pytest.raises(LLMHttpError) as listing:
+        _answering(body).list_models()
+    assert embedding.value.kind == listing.value.kind == "key_rejected"
+
+
+@pytest.mark.parametrize("error", [None, {}, ""])
+def test_an_empty_error_beside_a_real_answer_is_not_an_error(error: object) -> None:
+    body = {
+        "error": error,
+        "choices": [{"message": {"content": "fine"}, "finish_reason": "stop"}],
+        "usage": {},
+    }
+    assert _answering(body).complete("hi").text == "fine"
+
+
 def test_a_refused_connection_is_unreachable() -> None:
     with pytest.raises(LLMHttpError) as caught:
         OpenAICompatibleClient(base_url="http://127.0.0.1:9", model_id="m", max_retries=0).complete("hi")

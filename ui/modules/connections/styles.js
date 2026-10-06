@@ -50,6 +50,7 @@ const CSS = `
 .ai .ai-status{margin:0 0 16px}
 .ai .ai-note,.ai .ai-pick{margin:0;font-size:13px;color:var(--ink2);line-height:1.5}
 .ai .ai-note a{color:var(--brand-blue);font-weight:500}
+.ai .ai-check{display:flex;align-items:center;gap:8px;font-size:13px;color:var(--ink);font-weight:500}
 .ai .ai-form{max-width:640px}
 .ai .ai-providers{margin:0;padding:0;border:0;min-width:0}
 .ai .ai-providers legend{padding:0;margin:0 0 8px;font-size:13px;font-weight:500;color:var(--ink)}

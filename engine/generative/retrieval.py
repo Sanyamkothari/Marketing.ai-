@@ -16,6 +16,13 @@ second fact needed, and makes the answer confidently one-sided. MMR picks greedi
 candidate on how well it matches the question *minus* how much it repeats what is already chosen,
 with `mmr_lambda` setting the trade.
 
+**Hybrid ranking, dense floor.** With `bm25_weight` above 0 the store ranks candidates by a blend of
+the cosine and a BM25 keyword score, so a question that names a plan, a code or a product finds the
+passage that uses the same word even where the embedding places it a little further away
+(DEC-1260). The floor is still applied to the cosine alone (DEC-1261): what counts as evidence
+keeps the meaning DEC-218 calibrated, a strong semantic match is never pushed under the floor by a
+weak keyword score, and a passage that merely shares a word with the question is never let over it.
+
 Neither decision is a model's to make, and neither costs a call. What reaches the prompt is
 `retrieve`'s output and nothing else, which is what makes "answer only from the extracts" a rule
 the engine enforces rather than a request the prompt makes.
@@ -78,9 +85,12 @@ def retrieve(
     config: RagConfig,
     documents: Sequence[str] | None = None,
     question_text: str | None = None,
-    bm25_weight: float = 0.25,
 ) -> Retrieved:
     """The chunks an answer may use: searched, floored, de-duplicated, best first.
+
+    `question_text` is the question as asked; with it, the store ranks by the hybrid score that
+    `config.bm25_weight` sets (DEC-1260). Without it - or at a weight of 0 - the search is the pure
+    vector search it always was. Either way the floor is on the cosine (DEC-1261).
 
     `documents` narrows the search to named files, which is what a use case with one knowledge base
     per product line needs. The filter is applied after the search rather than inside it, because
@@ -88,17 +98,13 @@ def retrieve(
     cheaply at scale is a caller on OpenSearch.
     """
     wanted = config.top_k
-    try:
-        candidates = store.search(
-            index_id,
-            question_vector,
-            top_k=wanted * OVERSAMPLE,
-            query_text=question_text,
-            bm25_weight=bm25_weight,
-        )
-    except TypeError:
-        # Fallback for stores that do not accept query_text / bm25_weight
-        candidates = store.search(index_id, question_vector, top_k=wanted * OVERSAMPLE)
+    candidates = store.search(
+        index_id,
+        question_vector,
+        top_k=wanted * OVERSAMPLE,
+        query_text=question_text,
+        bm25_weight=config.bm25_weight,
+    )
     considered = len(candidates)
     if documents is not None:
         allowed = set(documents)
@@ -125,9 +131,11 @@ def mmr(
 ) -> tuple[Match, ...]:
     """Greedy maximal marginal relevance over `candidates`, most useful first.
 
-    Each round picks the candidate with the highest `lambda_ * similarity(question) - (1 - lambda_)
-    * max similarity(already chosen)`. The first pick is therefore always the best raw match, which
-    matters: a reader who checks the top citation should find the passage they expected.
+    Each round picks the candidate with the highest `lambda_ * relevance(question) - (1 - lambda_)
+    * max similarity(already chosen)`, where relevance is the score the store ranked by
+    (`Match.rank`: the hybrid score of a hybrid search, else the cosine). The first pick is
+    therefore always the best match by that ranking, which matters: a reader who checks the top
+    citation should find the passage they expected.
 
     Similarity between two chunks is computed from their *text* rather than from their vectors,
     because the store hands back chunks and not the vectors behind them. That is a lexical measure
@@ -137,12 +145,12 @@ def mmr(
     """
     if not candidates or top_k < 1:
         return ()
-    # Sorted here rather than assumed. Both callers in the tree hand over a similarity-ordered
+    # Sorted here rather than assumed. Both callers in the tree hand over a rank-ordered
     # list, so this is a no-op for them - but the first pick is taken from the front, and a direct
     # caller passing an unordered list would otherwise get whichever candidate happened to be
     # first as its top citation, with no error and a plausible-looking answer. The promise above
     # is worth more than the microseconds.
-    ordered = sorted(candidates, key=lambda match: -match.similarity)
+    ordered = sorted(candidates, key=lambda match: -match.rank)
     if lambda_ >= 1.0:
         return tuple(ordered[:top_k])
     remaining = list(ordered)
@@ -151,7 +159,7 @@ def mmr(
         best_index, best_score = 0, float("-inf")
         for index, candidate in enumerate(remaining):
             repetition = max(_text_similarity(candidate.chunk, picked.chunk) for picked in chosen)
-            score = lambda_ * candidate.similarity - (1.0 - lambda_) * repetition
+            score = lambda_ * candidate.rank - (1.0 - lambda_) * repetition
             if score > best_score:
                 best_index, best_score = index, score
         chosen.append(remaining.pop(best_index))

@@ -211,6 +211,7 @@ defaults:
       top_k: 6                          # int 1..50; chunks retrieved per question
       min_similarity: 0.25              # float 0..1; below this nothing is retrieved and the answer is a refusal
       mmr_lambda: 0.70                  # float 0..1; 1 is pure relevance, 0 is pure diversity
+      bm25_weight: 0.25                 # float 0..1; share of the ranking given to keyword (BM25) matches; 0 is pure vector search. The floor stays on the vector score
       answer_language: auto             # enum: auto | en | hi ...; `auto` echoes the question's language
       refusal_message: "I don't have that information in the documents I've been given. Please contact support."
 

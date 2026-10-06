@@ -933,6 +933,9 @@ class RagConfig(_Base):
     top_k: Annotated[int, Field(ge=1, le=50)] = 6
     min_similarity: Annotated[float, Field(ge=0.0, le=1.0)] = 0.25
     mmr_lambda: Annotated[float, Field(ge=0.0, le=1.0)] = 0.70
+    # Share of the ranking given to BM25 keyword scores; 0 is a pure vector search. Ranking only:
+    # `min_similarity` is applied to the cosine whatever this is (DEC-1260, DEC-1261).
+    bm25_weight: Annotated[float, Field(ge=0.0, le=1.0)] = 0.25
     answer_language: Annotated[str, Field(pattern=r"^(auto|[a-z]{2})$")] = "auto"
     refusal_message: Annotated[str, Field(min_length=1)] = (
         "I don't have that information in the documents I've been given. Please contact support."

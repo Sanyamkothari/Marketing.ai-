@@ -448,7 +448,9 @@ class RagEvalQuestion(Artefact):
 
     question: str = Field(description="The question from the reference set.")
     answer: str = Field(description="What the assistant replied.")
-    refused: bool = Field(description="Whether the assistant refused.")
+    refused: bool | None = Field(
+        description="Whether the assistant refused; null when no answer came back (see `error_code`)."
+    )
     expect_refusal: bool = Field(description="Whether the reference set says it should have refused.")
     retrieval_hit: bool | None = Field(
         default=None,
@@ -471,16 +473,28 @@ class RagEvalQuestion(Artefact):
     cost_estimate_usd: float | None = Field(
         default=None, description="Cost of answering and judging this row; null when a price was unknown."
     )
+    error_code: str | None = Field(
+        default=None,
+        description="The AI service's error code when a call this row needed failed, so it was not "
+        "graded (`failure` is `provider_error`); null when every call succeeded.",
+    )
+    error_message: str | None = Field(
+        default=None, description="That error in plain words; null when every call succeeded."
+    )
 
 
 class RagEvalAggregates(Artefact):
     """The numbers the Results screen shows, computed here so the screen computes nothing."""
 
-    questions: int = Field(description="Questions graded.")
+    questions: int = Field(
+        description="Questions graded; a question that errored is not one (see `errored`)."
+    )
     passed: int = Field(description="Questions that passed.")
     pass_rate: float = Field(description="Share of questions that passed, 0 to 1.")
     pass_threshold: float = Field(description="Share the configuration required, 0 to 1.")
-    meets_threshold: bool = Field(description="Whether the pass rate reached the threshold.")
+    meets_threshold: bool = Field(
+        description="Whether the pass rate reached the threshold with no question left ungraded."
+    )
     retrieval_hit_rate: float | None = Field(
         default=None, description="Share of answerable questions that retrieved the right document, 0 to 1."
     )
@@ -493,6 +507,10 @@ class RagEvalAggregates(Artefact):
     refusal_accuracy: float | None = Field(
         default=None,
         description="Share of rows where refusing or answering matched the reference set, 0 to 1.",
+    )
+    errored: int = Field(
+        default=0,
+        description="Questions not graded because a call to the AI service failed; in none of the figures above.",
     )
 
 

@@ -261,14 +261,12 @@ class _HttpClient:
                 payload = json.loads(raw) if raw else {}
             except (ValueError, RecursionError):
                 raise LLMHttpError("bad_response", status=status, model_id=model_id) from None
-            if isinstance(payload, dict) and "error" in payload:
-                err = payload["error"]
-                code = err.get("code") if isinstance(err, dict) else None
-                err_status = code if isinstance(code, int) else None
-                if err_status and err_status >= 500:
-                    raise LLMHttpError("server_error", status=err_status, model_id=model_id)
-            return payload
-        error = _classify(status, raw, model_id)
+            embedded = _embedded_error(payload, raw, model_id)
+            if embedded is None:
+                return payload
+            error = embedded
+        else:
+            error = _classify(status, raw, model_id)
         error.retry_after = retry_after
         raise error
 
@@ -305,6 +303,29 @@ def _retry_after(value: str | None) -> float | None:
 def _is_tls(exc: BaseException) -> bool:
     text = f"{type(exc).__name__} {exc}".lower()
     return "certificate" in text or "ssl" in text or "tls" in text
+
+
+def _embedded_error(payload: Any, raw: bytes, model_id: str | None) -> LLMHttpError | None:
+    """The failure a 2xx answer reports in its body, or `None` for an answer that is not one.
+
+    Some OpenAI-compatible services - OpenRouter is the common one - answer `200 OK` with
+    `{"error": {"code": 502, "message": ...}}` when the model behind them failed (DEC-1269). Read as
+    a success, that is "no choices" and the misleading "answered in a form Marketing AI cannot
+    read". It is classified exactly as the same status would be in the HTTP status line - a 401 is a
+    rejected key, a 429 is retried, a 400 is a refused request - so one table decides every case.
+    An error without a numeric HTTP-style `code` is the service saying it failed without saying how,
+    which is a problem on its side. `"error": null`, which some services send beside a real answer,
+    is not an error. As everywhere here, nothing the service wrote is quoted.
+    """
+    if not isinstance(payload, dict):
+        return None
+    error = payload.get("error")
+    if error is None or error is False or error == {} or error == "":
+        return None
+    code = error.get("code") if isinstance(error, dict) else None
+    if isinstance(code, int) and not isinstance(code, bool) and 400 <= code <= 599:
+        return _classify(code, raw, model_id)
+    return LLMHttpError("server_error", model_id=model_id)
 
 
 def _classify(status: int, raw: bytes, model_id: str | None) -> LLMHttpError:
@@ -426,12 +447,6 @@ class OpenAICompatibleClient(_HttpClient):
 
     @staticmethod
     def _completion(data: Any, chosen: str) -> LLMCompletion:
-        if isinstance(data, dict) and "error" in data:
-            err = data["error"]
-            code = err.get("code") if isinstance(err, dict) else None
-            status = code if isinstance(code, int) else None
-            kind: Problem = "server_error" if status and status >= 500 else "bad_response"
-            raise LLMHttpError(kind, status=status, model_id=chosen)
         try:
             choice = data["choices"][0]
             content = choice["message"].get("content")

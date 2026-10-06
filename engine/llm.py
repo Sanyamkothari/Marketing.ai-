@@ -32,11 +32,13 @@ merely unused.
 from __future__ import annotations
 
 import hashlib
+import importlib
 import json
 import logging
 import math
 import re
 import struct
+import threading
 from collections import Counter
 from collections.abc import Sequence
 from enum import StrEnum
@@ -46,6 +48,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 from engine.contracts import LLMUsage
 from engine.utils.logging import get_logger, log_failure
+from engine.utils.openmp import import_lightgbm_before_torch
 
 if TYPE_CHECKING:  # pragma: no cover - only the annotation needs it, and config imports contracts
     from engine.config import LlmConfig
@@ -59,6 +62,9 @@ __all__ = [
     "GROUNDED_FAKE_MODEL_ID",
     "KEYWORD_HASH_DIMENSIONS",
     "KEYWORD_HASH_MODEL_ID",
+    "LOCAL_EMBEDDINGS_EXTRA",
+    "LOCAL_EMBEDDINGS_NOT_INSTALLED",
+    "LOCAL_EMBEDDINGS_UNAVAILABLE",
     "LOCAL_EMBEDDING_DIMENSIONS",
     "LOCAL_EMBEDDING_MODEL_ID",
     "BedrockLLMClient",
@@ -71,7 +77,6 @@ __all__ = [
     "LocalEmbeddingClient",
     "estimate_tokens",
     "keyword_hash_vector",
-    "local_embedding_vector",
     "usage_from",
 ]
 
@@ -103,7 +108,8 @@ class LLMError(Exception):
     """A completion or embedding failed.
 
     `code` is one of LLM_UNAVAILABLE | LLM_REFUSED | LLM_TOO_LONG | LLM_INVALID_REQUEST, so a
-    caller can tell "try again" from "this prompt will never work" without parsing a message.
+    caller can tell "try again" from "this prompt will never work" without parsing a message - or,
+    for the local embedding model, LOCAL_EMBEDDINGS_NOT_INSTALLED | LOCAL_EMBEDDINGS_UNAVAILABLE.
     """
 
     def __init__(self, code: str, message: str, *, model_id: str | None = None) -> None:
@@ -557,45 +563,88 @@ KEYWORD_HASH_DIMENSIONS: Final[int] = _GROUNDED_DIMENSIONS
 """Width of the keyword-hash vectors an AI service without embeddings uses."""
 
 LOCAL_EMBEDDING_MODEL_ID: Final[str] = "BAAI/bge-small-en-v1.5"
-"""High-quality open-source local embedding model (384 dimensions, normalized cosine space)."""
+"""The open-source embedding model that runs on this server rather than at an AI service (DEC-1263).
+
+384 dimensions, used with normalised vectors so a dot product is a cosine. It needs the optional
+`local-embeddings` extra (`sentence-transformers`), and the first use downloads the model's weights
+from Hugging Face unless they are already in its cache.
+"""
 
 LOCAL_EMBEDDING_DIMENSIONS: Final[int] = 384
-"""Dimensions of BAAI/bge-small-en-v1.5."""
+"""Width of `LOCAL_EMBEDDING_MODEL_ID`'s vectors."""
 
-_LOCAL_EMBEDDER: Any = None
+LOCAL_EMBEDDINGS_EXTRA: Final[str] = "local-embeddings"
+"""The `pyproject.toml` extra that installs what the local embedding model needs."""
+
+LOCAL_EMBEDDINGS_NOT_INSTALLED: Final[str] = "LOCAL_EMBEDDINGS_NOT_INSTALLED"
+"""`LLMError.code` when the local embedding model was chosen but `sentence-transformers` is absent."""
+
+LOCAL_EMBEDDINGS_UNAVAILABLE: Final[str] = "LOCAL_EMBEDDINGS_UNAVAILABLE"
+"""`LLMError.code` when the library is there but the model could not be loaded or could not embed."""
+
+_LOCAL_EMBEDDERS: dict[str, Any] = {}
+"""Loaded models by id. A model is a few hundred MB in memory and seconds to load, so one per process."""
+
+_LOCAL_EMBEDDERS_LOCK: Final[threading.Lock] = threading.Lock()
+"""Held while a model loads, so two requests arriving together load it once rather than twice."""
 
 
-def _get_local_embedder() -> Any:
-    global _LOCAL_EMBEDDER
-    if _LOCAL_EMBEDDER is None:
+def _local_embedder(model_id: str) -> Any:
+    """The loaded `SentenceTransformer` for `model_id`, loading it on first use.
+
+    Never falls back to another kind of vector: an index built with this model's 384-dimension
+    vectors and searched with keyword-hash ones (or the reverse) is a dimension mismatch at best and
+    wrong answers under a manifest that names the wrong model at worst (DEC-1263). A failure is an
+    `LLMError` with a plain message, and is not cached - installing the extra and restarting, or
+    restoring network access for the first download, is enough to recover.
+    """
+    with _LOCAL_EMBEDDERS_LOCK:
+        loaded = _LOCAL_EMBEDDERS.get(model_id)
+        if loaded is not None:
+            return loaded
+        import_lightgbm_before_torch()  # sentence-transformers imports torch (DEC-1268)
         try:
-            from sentence_transformers import SentenceTransformer
-
-            _LOCAL_EMBEDDER = SentenceTransformer(LOCAL_EMBEDDING_MODEL_ID)
-        except Exception as exc:
-            _LOGGER.warning("Could not load %s: %s", LOCAL_EMBEDDING_MODEL_ID, exc)
-            _LOCAL_EMBEDDER = False
-    return _LOCAL_EMBEDDER if _LOCAL_EMBEDDER is not False else None
-
-
-def local_embedding_vector(text: str) -> tuple[float, ...]:
-    """Embed single text using BAAI/bge-small-en-v1.5 or fallback to keyword hash."""
-    embedder = _get_local_embedder()
-    if embedder is not None:
+            library = importlib.import_module("sentence_transformers")
+        except ImportError as exc:
+            raise LLMError(
+                LOCAL_EMBEDDINGS_NOT_INSTALLED,
+                "The local embedding model is not installed on this server. Install it with "
+                f"pip install 'marketing-ai[{LOCAL_EMBEDDINGS_EXTRA}]' and restart, or choose "
+                "another embedding model in Connections.",
+                model_id=model_id,
+            ) from exc
         try:
-            vec = embedder.encode([text], normalize_embeddings=True)[0]
-            return tuple(float(x) for x in vec)
-        except Exception as exc:
-            _LOGGER.warning("Failed local embedding call: %s", exc)
-    return keyword_hash_vector(text)
+            loaded = library.SentenceTransformer(model_id)
+        except Exception as exc:  # the library raises OSError, ValueError and HTTP errors alike
+            log_failure(_LOGGER, "llm.local_embeddings.load", exc)
+            raise LLMError(
+                LOCAL_EMBEDDINGS_UNAVAILABLE,
+                f"The local embedding model {model_id} could not be loaded. Its first use downloads "
+                "it from Hugging Face, so this server needs internet access once (or a copy in its "
+                "Hugging Face cache).",
+                model_id=model_id,
+            ) from exc
+        _LOCAL_EMBEDDERS[model_id] = loaded
+        return loaded
 
 
 class LocalEmbeddingClient:
-    """Wraps an LLMClient so completions go through the provider, while embeddings use BAAI/bge-small-en-v1.5."""
+    """Wraps an `LLMClient`: completions go to the AI service, embeddings to the local model.
+
+    The same shape as `ai_service.KeywordEmbeddingClient` - the three protocol methods, with the
+    wrapped client kept as `_inner` - so the two are interchangeable wherever a client is built.
+    `embed` always uses `model_id` given here, as the keyword hash always uses its hash: the model
+    that built an index is the one its manifest names (`chunk_config.embedding_model_id`).
+    """
 
     def __init__(self, inner: LLMClient, model_id: str = LOCAL_EMBEDDING_MODEL_ID) -> None:
         self._inner = inner
         self._model_id = model_id
+
+    @property
+    def model_id(self) -> str:
+        """The local embedding model this client embeds with."""
+        return self._model_id
 
     def complete(
         self,
@@ -614,16 +663,22 @@ class LocalEmbeddingClient:
         self,
         texts: Sequence[str],
         *,
-        model_id: str | None = None,
+        model_id: str | None = None,  # noqa: ARG002 - the protocol's signature; the model is fixed above
     ) -> tuple[tuple[float, ...], ...]:
-        embedder = _get_local_embedder()
-        if embedder is not None:
-            try:
-                vecs = embedder.encode(list(texts), normalize_embeddings=True)
-                return tuple(tuple(float(x) for x in vec) for vec in vecs)
-            except Exception as exc:
-                _LOGGER.warning("Error running sentence-transformers embedding: %s", exc)
-        return tuple(keyword_hash_vector(text) for text in texts)
+        """One normalised vector per text from the local model; an `LLMError` when it cannot run."""
+        if not texts:
+            return ()
+        embedder = _local_embedder(self._model_id)
+        try:
+            vectors = embedder.encode(list(texts), normalize_embeddings=True)
+        except Exception as exc:
+            log_failure(_LOGGER, "llm.local_embeddings.encode", exc)
+            raise LLMError(
+                LOCAL_EMBEDDINGS_UNAVAILABLE,
+                f"The local embedding model {self._model_id} could not embed the text.",
+                model_id=self._model_id,
+            ) from exc
+        return tuple(tuple(float(value) for value in vector) for vector in vectors)
 
     def count_tokens(self, text: str, *, model_id: str | None = None) -> int:
         return self._inner.count_tokens(text, model_id=model_id)

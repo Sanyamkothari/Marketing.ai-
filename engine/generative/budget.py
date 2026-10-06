@@ -229,10 +229,6 @@ class Meter:
 
     # -- the calls ----------------------------------------------------------
     @property
-    def client(self) -> LLMClient:
-        return self._client
-
-    @property
     def backend(self) -> str:
         """Which client this meter calls through: `fake` or `bedrock`.
 

@@ -211,6 +211,7 @@ Optional extras:
 
 ```bash
 make setup EXTRAS=nn   # installs .[dev,nn] — adds torch so the NeuralNet family can be selected (DEC-011)
+make setup EXTRAS=local-embeddings   # adds sentence-transformers: the document assistant's local BAAI/bge-small-en-v1.5 embeddings (DEC-1263)
 ```
 
 Other targets: `make test-all` (every test, including `@slow`, but not the `@bedrock` and `@aws`

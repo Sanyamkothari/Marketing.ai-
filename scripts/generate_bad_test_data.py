@@ -1,366 +1,388 @@
-"""Generate bad test CSV datasets for every use case in Marketing.ai.
+"""Write deliberately dirty CSV files for every configured use case, to try the engine's checks on.
 
-This script constructs comprehensive dirty and adversarial CSV datasets across all 12
-use cases (11 predictive + 1 generative AI assistant) to stress-test the system's ingestion,
-profiling, and validation capabilities.
+    python -m scripts.generate_bad_test_data [--out-dir data/bad_data_tests] [--rows 3000] [--seed 20260930]
+
+For each use case the output directory gets one folder, named by the use case's id, holding:
+
+- `00_fixable_messy_helper_test.csv` - messy but usable: currency symbols, thousands separators and
+  percentages in number columns, erratic casing and stray spaces in categories, `Y`/`no` booleans,
+  mixed date formats, a personal email column and a column that leaks the outcome. Guided setup's
+  helper is meant to propose a fix for each.
+- `01_corrupted_primary_keys.csv` - 50 repeated keys and 20 empty ones.
+- `02_corrupted_target.csv` - 100 outcome cells set to a third value.
+- `03_leakage_and_pii_injection.csv` - a near-copy of the outcome, a contact email and a phone column.
+- `04_schema_and_type_degradation.csv` - text in a number column, constant and mostly-empty columns,
+  an ID-like column and week codes in the date column.
+- `05_formatting_and_parsing_chaos.csv` - the formatting of file 00, with unreadable cells mixed in.
+- `06_extreme_stress_test.csv` - all of the above at once.
+
+A generative use case (the document assistant) has no table to train on, so its files are its
+bundled reference question set (`tests/fixtures/docs/reference_qa.csv`), corrupted the same way where
+a corruption applies. Every file is synthetic: built by `tests.fixtures.make_data`'s generator and the
+corruptions here, from the use case's own template, so no real person's data is involved and the
+emails and phone numbers are in reserved ranges (`example.invalid`, `+1-555-555-xxxx`).
+
+The default output directory is under `data/`, which git ignores. `python -m scripts.audit_bad_data`
+then runs the engine's checks over the files and writes a report beside them.
 """
 
 from __future__ import annotations
 
-import os
+import argparse
+import math
+import sys
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Final
+
 import numpy as np
 import pandas as pd
-
-from engine.config import ColumnRole, ColumnType, load_all_use_cases, load_use_case
 from tests.fixtures.make_data import GenerationSpec, generate
 
-OUTPUT_BASE_DIR = Path.home() / "Downloads" / "marketing_ai_bad_data_tests"
+from engine.config import AiType, ColumnRole, ColumnType, UseCaseConfig, load_all_use_cases
+
+COMMAND: Final[str] = "python -m scripts.generate_bad_test_data"
+REPO_ROOT: Final[Path] = Path(__file__).resolve().parents[1]
+DEFAULT_OUT_DIR: Final[Path] = REPO_ROOT / "data" / "bad_data_tests"
+"""Under `data/`, which `.gitignore` excludes: generated files never end up in a commit."""
+
+REFERENCE_QA: Final[Path] = REPO_ROOT / "tests" / "fixtures" / "docs" / "reference_qa.csv"
+"""The bundled reference question set, the base of a generative use case's files."""
+
+DEFAULT_ROWS: Final[int] = 3_000
+DEFAULT_SEED: Final[int] = 20_260_930
+REFERENCE_ROWS: Final[int] = 65
+"""Rows of a generative use case's files: the bundled set, repeated as variants up to this many."""
+
+FIXABLE: Final[str] = "00_fixable_messy_helper_test.csv"
+PRIMARY_KEYS: Final[str] = "01_corrupted_primary_keys.csv"
+TARGET: Final[str] = "02_corrupted_target.csv"
+LEAKAGE_AND_PII: Final[str] = "03_leakage_and_pii_injection.csv"
+SCHEMA_AND_TYPES: Final[str] = "04_schema_and_type_degradation.csv"
+FORMATTING: Final[str] = "05_formatting_and_parsing_chaos.csv"
+EXTREME: Final[str] = "06_extreme_stress_test.csv"
+FILE_NAMES: Final[tuple[str, ...]] = (
+    FIXABLE,
+    PRIMARY_KEYS,
+    TARGET,
+    LEAKAGE_AND_PII,
+    SCHEMA_AND_TYPES,
+    FORMATTING,
+    EXTREME,
+)
+"""Every file a use case's folder gets, in the order they are written."""
+
+FREE_TEXT_COLUMNS: Final[tuple[str, ...]] = ("complaint_text", "question", "reference_answer")
+"""Text columns that get a contact detail written into some of their cells by the stress test."""
 
 
-def _get_use_case_columns(config):
-    pks = [c.name for c in config.template.columns if c.role == ColumnRole.PRIMARY_KEY]
-    targets = [c.name for c in config.template.columns if c.role == ColumnRole.TARGET]
-    times = [c.name for c in config.template.columns if c.role == ColumnRole.TIME]
-    numerics = [
-        c.name for c in config.template.columns
-        if c.type in (ColumnType.INTEGER, ColumnType.FLOAT) and c.role not in (ColumnRole.PRIMARY_KEY, ColumnRole.TARGET)
+@dataclass(frozen=True)
+class Columns:
+    """The columns of a use case's template, by the role a corruption needs."""
+
+    primary_key: str | None
+    target: str | None
+    time: str | None
+    numbers: tuple[str, ...]
+    categories: tuple[str, ...]
+    booleans: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class Written:
+    """One use case's folder: where it is and how many rows each file has."""
+
+    use_case_id: str
+    folder: Path
+    rows: int
+
+
+def columns_of(config: UseCaseConfig) -> Columns:
+    """The template's columns by role; features only for the number, category and boolean lists."""
+    template = config.template.columns
+
+    def first(role: ColumnRole) -> str | None:
+        return next((column.name for column in template if column.role is role), None)
+
+    features = [
+        column for column in template if column.role not in (ColumnRole.PRIMARY_KEY, ColumnRole.TARGET)
     ]
-    categoricals = [
-        c.name for c in config.template.columns
-        if c.type in (ColumnType.STRING, ColumnType.TEXT) and c.role not in (ColumnRole.PRIMARY_KEY, ColumnRole.TARGET)
-    ]
-    booleans = [
-        c.name for c in config.template.columns
-        if c.type == ColumnType.BOOLEAN and c.role not in (ColumnRole.PRIMARY_KEY, ColumnRole.TARGET)
-    ]
-    return {
-        "pk": pks[0] if pks else None,
-        "target": targets[0] if targets else None,
-        "time": times[0] if times else None,
-        "numerics": numerics,
-        "categoricals": categoricals,
-        "booleans": booleans,
-    }
+    return Columns(
+        primary_key=first(ColumnRole.PRIMARY_KEY),
+        target=first(ColumnRole.TARGET),
+        time=first(ColumnRole.TIME),
+        numbers=tuple(c.name for c in features if c.type in (ColumnType.INTEGER, ColumnType.FLOAT)),
+        categories=tuple(c.name for c in features if c.type in (ColumnType.STRING, ColumnType.TEXT)),
+        booleans=tuple(c.name for c in features if c.type is ColumnType.BOOLEAN),
+    )
 
 
-def _make_base_frame(use_case_id: str, rows: int = 3000, seed: int = 42) -> pd.DataFrame:
-    if use_case_id == "ai-onboarding-assistant":
-        ref_path = Path("tests/fixtures/docs/reference_qa.csv")
-        base = pd.read_csv(ref_path)
+def base_frame(config: UseCaseConfig, *, rows: int, seed: int) -> pd.DataFrame:
+    """A clean frame for `config`: the synthetic generator's, or the reference set for a generative one."""
+    if config.ai_type is AiType.GENERATIVE:
+        base = pd.read_csv(REFERENCE_QA)
         frames = [base]
-        if len(base) < 65:
-            extra = base.copy()
-            extra["question"] = extra["question"] + " (variant)"
-            frames.append(extra)
-        df = pd.concat(frames, ignore_index=True)
-        return df.iloc[:rows].copy()
-    else:
-        spec = GenerationSpec(
-            use_case_id=use_case_id,
-            rows=rows,
-            variant="clean",
-            positive_rate=0.25,
-            seed=seed,
-        )
-        return generate(spec).copy()
+        while sum(len(frame) for frame in frames) < REFERENCE_ROWS:
+            variant = base.copy()
+            variant["question"] = variant["question"] + f" (variant {len(frames)})"
+            frames.append(variant)
+        return pd.concat(frames, ignore_index=True).iloc[:REFERENCE_ROWS].copy()
+    spec = GenerationSpec(use_case_id=config.id, rows=rows, variant="clean", positive_rate=0.25, seed=seed)
+    return generate(spec).copy()
 
 
-# --- Corruptors ---
-
-def inject_corrupted_pks(df: pd.DataFrame, pk_col: str, rng: np.random.Generator) -> pd.DataFrame:
-    df = df.copy()
-    n = len(df)
-    if pk_col and pk_col in df.columns:
-        # Duplicate keys: 50 rows get key of row 0
-        first_key = df.iloc[0][pk_col]
-        dup_indices = rng.choice(range(1, n), size=min(50, n - 1), replace=False)
-        for idx in dup_indices:
-            df.loc[idx, pk_col] = first_key
-        # Null keys: 20 rows get empty string
-        null_indices = rng.choice(
-            [i for i in range(1, n) if i not in dup_indices],
-            size=min(20, n - len(dup_indices) - 1),
-            replace=False
-        )
-        for idx in null_indices:
-            df.loc[idx, pk_col] = ""
-    return df
+# ---------------------------------------------------------------------------
+# The corruptions. Each returns a new frame and leaves its input as it was.
+# ---------------------------------------------------------------------------
+def corrupt_primary_keys(frame: pd.DataFrame, columns: Columns, rng: np.random.Generator) -> pd.DataFrame:
+    """Up to 50 rows repeat the first row's key and up to 20 others have an empty one."""
+    out = frame.copy()
+    key = columns.primary_key
+    if key is None or key not in out.columns or len(out) < 2:
+        return out
+    out[key] = out[key].astype(object)
+    rest = np.arange(1, len(out))
+    repeated = rng.choice(rest, size=min(50, len(rest)), replace=False)
+    out.loc[repeated, key] = out.at[0, key]
+    others = np.setdiff1d(rest, repeated)
+    out.loc[rng.choice(others, size=min(20, len(others)), replace=False), key] = ""
+    return out
 
 
-def inject_corrupted_target(df: pd.DataFrame, target_col: str, rng: np.random.Generator) -> pd.DataFrame:
-    df = df.copy()
-    n = len(df)
-    if not target_col or target_col not in df.columns:
-        return df
-    is_numeric = pd.api.types.is_numeric_dtype(df[target_col])
-    third_label = 99 if is_numeric else "Unknown"
-    indices = rng.choice(range(n), size=min(100, n), replace=False)
-    for idx in indices:
-        df.loc[idx, target_col] = third_label
-    return df
+def corrupt_target(frame: pd.DataFrame, columns: Columns, rng: np.random.Generator) -> pd.DataFrame:
+    """Up to 100 outcome cells set to a third value: `99` in a number outcome, `Unknown` in a text one."""
+    out = frame.copy()
+    target = columns.target
+    if target is None or target not in out.columns:
+        return out
+    third: int | str = 99 if pd.api.types.is_numeric_dtype(out[target]) else "Unknown"
+    values = out[target].astype(object).tolist()
+    for index in rng.choice(len(out), size=min(100, len(out)), replace=False):
+        values[int(index)] = third
+    out[target] = values
+    return out
 
 
-def inject_leakage_and_pii(df: pd.DataFrame, target_col: str, rng: np.random.Generator) -> pd.DataFrame:
-    df = df.copy()
-    n = len(df)
-    if target_col and target_col in df.columns:
-        unique_vals = list(df[target_col].unique())
-        t_num = df[target_col].map(lambda x: 1.0 if x == unique_vals[0] else 0.0).fillna(0.0)
-        leak = t_num + rng.normal(0, 0.02, size=n)
-        df["campaign_result_score"] = np.round(leak, 4)
-    df["billing_contact_email"] = [f"client.user{i:04d}@example.invalid" for i in range(n)]
-    df["billing_contact_phone"] = [f"+1-555-555-{int(rng.integers(1000, 9999)):04d}" for _ in range(n)]
-    return df
+def _leak(
+    frame: pd.DataFrame, target: str | None, rng: np.random.Generator, noise: float
+) -> pd.Series | None:
+    """A column that is the outcome plus a little noise: what a post-outcome score looks like."""
+    if target is None or target not in frame.columns:
+        return None
+    first = frame[target].iloc[0]
+    outcome = (frame[target] == first).astype(float)
+    leak: pd.Series = (outcome + rng.normal(0.0, noise, size=len(frame))).round(4)
+    return leak
 
 
-def inject_schema_and_types(df: pd.DataFrame, cols: dict, rng: np.random.Generator) -> pd.DataFrame:
-    df = df.copy()
-    n = len(df)
-    if cols["numerics"]:
-        col = cols["numerics"][0]
-        mask = rng.random(n) < 0.08
-        df[col] = [
-            "unknown" if m else ("" if pd.isna(v) else str(v))
-            for m, v in zip(mask, df[col], strict=False)
+def inject_leakage_and_pii(frame: pd.DataFrame, columns: Columns, rng: np.random.Generator) -> pd.DataFrame:
+    """A near-copy of the outcome, a contact email and a phone number column."""
+    out = frame.copy()
+    leak = _leak(out, columns.target, rng, 0.02)
+    if leak is not None:
+        out["campaign_result_score"] = leak
+    out["billing_contact_email"] = [f"client.user{i:04d}@example.invalid" for i in range(len(out))]
+    out["billing_contact_phone"] = [
+        f"+1-555-555-{int(n):04d}" for n in rng.integers(1000, 9999, size=len(out))
+    ]
+    return out
+
+
+def degrade_schema_and_types(frame: pd.DataFrame, columns: Columns, rng: np.random.Generator) -> pd.DataFrame:
+    """Text in a number column, a constant column, a mostly-empty one, an ID-like one, week codes as dates."""
+    out = frame.copy()
+    rows = len(out)
+    if columns.numbers:
+        number = columns.numbers[0]
+        unknown = rng.random(rows) < 0.08
+        out[number] = [
+            "unknown" if flag else ("" if pd.isna(value) else str(value))
+            for flag, value in zip(unknown, out[number], strict=True)
         ]
-    df["data_source"] = "legacy_crm_export"
-    nps_vals = [f"{rng.integers(1, 10)}" if rng.random() > 0.88 else "" for _ in range(n)]
-    df["survey_nps_score"] = nps_vals
-    df["external_tracking_uuid"] = [f"TX-{rng.integers(100000, 999999)}-{i}" for i in range(n)]
-    if cols["time"] and cols["time"] in df.columns:
-        df[cols["time"]] = [f"FY26-W{(i % 52) + 1:02d}" for i in range(n)]
-    return df
+    out["data_source"] = "legacy_crm_export"
+    out["survey_nps_score"] = [
+        str(int(n)) if keep else ""
+        for n, keep in zip(rng.integers(1, 10, size=rows), rng.random(rows) > 0.88, strict=True)
+    ]
+    out["external_tracking_uuid"] = [
+        f"TX-{int(n)}-{i}" for i, n in enumerate(rng.integers(100_000, 999_999, size=rows))
+    ]
+    if columns.time is not None and columns.time in out.columns:
+        out[columns.time] = [f"FY26-W{(i % 52) + 1:02d}" for i in range(rows)]
+    return out
 
 
-def build_fixable_messy_helper_test(df: pd.DataFrame, cols: dict, rng: np.random.Generator) -> pd.DataFrame:
-    """Builds a messy file that Guided Setup / The Helper CAN read, propose fixes for, and train on!
+def _is_number(value: object) -> bool:
+    if isinstance(value, bool) or not isinstance(value, int | float | np.number):
+        return False
+    return not math.isnan(float(value))
 
-    Guarantees:
-    - Unique primary keys (no PK_NOT_UNIQUE)
-    - Valid binary target with >= 300 positives (no TARGET errors)
-    - Messy currencies, commas, percentages in numbers
-    - Dirty booleans (Y / N / yes / no)
-    - Mixed date formats (day first)
-    - Trailing spaces and casing in categories
-    - PII contact email and suspected leakage column
+
+def _reformat_numbers(
+    frame: pd.DataFrame, columns: Columns, rng: np.random.Generator, *, unreadable: str | None
+) -> None:
+    """Currency and thousands separators on large numbers, percentages on rates, in place.
+
+    With `unreadable`, about one cell in twenty of a large-number or rate column becomes that text.
     """
-    df = df.copy()
-    n = len(df)
-
-    # 1. Format numeric features with currency, commas, or percentages
-    for col in cols["numerics"]:
-        sample_val = df[col].dropna().iloc[0] if not df[col].dropna().empty else 100
-        is_large = isinstance(sample_val, (int, float, np.number)) and sample_val > 50
-        is_rate = isinstance(sample_val, (int, float, np.number)) and 0.0 <= sample_val <= 1.0
-
-        if is_large:
-            symbols = rng.choice(["₹", "$", "Rs. "], size=n)
-            df[col] = [
-                f"{sym}{val:,.2f}" if pd.notna(val) and isinstance(val, (int, float, np.number))
-                else ("" if pd.isna(val) else str(val))
-                for sym, val in zip(symbols, df[col], strict=False)
+    rows = len(frame)
+    for name in columns.numbers:
+        present = frame[name].dropna()
+        sample = present.iloc[0] if not present.empty else 100
+        large = _is_number(sample) and float(sample) > 50
+        rate = _is_number(sample) and 0.0 <= float(sample) <= 1.0
+        spoil = rng.random(rows) < 0.05 if unreadable is not None else np.zeros(rows, dtype=bool)
+        if large:
+            symbols = rng.choice(["₹", "$", "Rs. "], size=rows)
+            frame[name] = [
+                unreadable if bad and unreadable else f"{symbol}{value:,.2f}" if _is_number(value) else ""
+                for symbol, value, bad in zip(symbols, frame[name], spoil, strict=True)
             ]
-        elif is_rate:
-            df[col] = [
-                f"{val * 100:.1f}%" if pd.notna(val) and isinstance(val, (int, float, np.number))
-                else ("" if pd.isna(val) else str(val))
-                for val in df[col]
+        elif rate:
+            frame[name] = [
+                unreadable if bad and unreadable else f"{value * 100:.1f}%" if _is_number(value) else ""
+                for value, bad in zip(frame[name], spoil, strict=True)
             ]
         else:
-            df[col] = [
-                f"{val:,}" if pd.notna(val) and isinstance(val, (int, np.integer))
-                else str(val)
-                for val in df[col]
+            frame[name] = [
+                (
+                    f"{value:,}"
+                    if isinstance(value, int | np.integer)
+                    else ("" if pd.isna(value) else str(value))
+                )
+                for value in frame[name]
             ]
 
-    # 2. Categoricals: erratic casing and trailing spaces
-    for col in cols["categoricals"]:
-        df[col] = [
-            f" {str(v).upper()} " if i % 3 == 0
-            else f"{str(v).lower()} " if i % 3 == 1
-            else str(v)
-            for i, v in enumerate(df[col])
+
+def _reformat_dates(
+    frame: pd.DataFrame, columns: Columns, rng: np.random.Generator, *, week_codes: bool
+) -> None:
+    """Day-first, ISO and `01 Aug 2026` dates mixed in the time column; with `week_codes`, `FY26-W31` too."""
+    if columns.time is None or columns.time not in frame.columns:
+        return
+    dates = pd.to_datetime(frame[columns.time], errors="coerce", format="mixed").fillna(
+        pd.Timestamp("2026-08-01")
+    )
+    formats = ["%d/%m/%Y", "%Y-%m-%d", "%d %b %Y"]
+    styles = rng.integers(0, len(formats) + int(week_codes), size=len(frame))
+    frame[columns.time] = [
+        f"FY26-W{date.isocalendar().week:02d}" if style == len(formats) else date.strftime(formats[style])
+        for date, style in zip(dates, styles, strict=True)
+    ]
+
+
+def fixable_messy(frame: pd.DataFrame, columns: Columns, rng: np.random.Generator) -> pd.DataFrame:
+    """Messy but usable: keys and outcome intact, everything else in the shapes real exports arrive in."""
+    out = frame.copy()
+    _reformat_numbers(out, columns, rng, unreadable=None)
+    for name in columns.categories:
+        out[name] = [
+            f" {str(v).upper()} " if i % 3 == 0 else f"{str(v).lower()} " if i % 3 == 1 else str(v)
+            for i, v in enumerate(out[name])
         ]
+    for name in columns.booleans:
+        out[name] = rng.choice(["Y", "yes", "YES", "N", "No", "NO"], size=len(out))
+    _reformat_dates(out, columns, rng, week_codes=False)
+    out["contact_email"] = [f"user{i:04d}@example.invalid" for i in range(len(out))]
+    leak = _leak(out, columns.target, rng, 0.03)
+    if leak is not None:
+        out["campaign_result_score"] = leak
+    return out
 
-    # 3. Booleans: dirty representations
-    for col in cols["booleans"]:
-        choices = ["Y", "yes", "YES", "N", "No", "NO"]
-        df[col] = rng.choice(choices, size=n)
 
-    # 4. Dates: day-first format mixed with ISO
-    if cols["time"] and cols["time"] in df.columns:
-        dates = pd.to_datetime(df[cols["time"]], errors="coerce").fillna(pd.Timestamp("2026-08-01"))
-        styles = rng.integers(0, 3, size=n)
-        df[cols["time"]] = [
-            (
-                d.strftime("%d/%m/%Y") if s == 0
-                else d.strftime("%Y-%m-%d") if s == 1
-                else d.strftime("%d %b %Y")
-            )
-            for d, s in zip(dates, styles, strict=False)
+def formatting_chaos(frame: pd.DataFrame, columns: Columns, rng: np.random.Generator) -> pd.DataFrame:
+    """The formatting of `fixable_messy`, with unreadable cells, blanks and week codes mixed in."""
+    out = frame.copy()
+    _reformat_numbers(out, columns, rng, unreadable="N/A")
+    for name in columns.categories:
+        out[name] = [
+            f"  {str(v).upper()} " if i % 4 == 0 else f"{str(v).lower()}   " if i % 4 == 1 else str(v).title()
+            for i, v in enumerate(out[name])
         ]
-
-    # 5. Injected personal email
-    df["contact_email"] = [f"user{i:04d}@example.com" for i in range(n)]
-
-    # 6. Injected leakage column (post-outcome score)
-    target_col = cols["target"]
-    if target_col and target_col in df.columns:
-        unique_vals = list(df[target_col].unique())
-        t_num = df[target_col].map(lambda x: 1.0 if x == unique_vals[0] else 0.0).fillna(0.0)
-        leak = t_num + rng.normal(0, 0.03, size=n)
-        df["campaign_result_score"] = np.round(leak, 4)
-
-    return df
+    for name in columns.booleans:
+        out[name] = rng.choice(
+            ["Y", "yes", "YES", "N", "No", "NO", "1", "0", "true", "false", ""], size=len(out)
+        )
+    _reformat_dates(out, columns, rng, week_codes=True)
+    return out
 
 
-def inject_formatting_chaos(df: pd.DataFrame, cols: dict, rng: np.random.Generator) -> pd.DataFrame:
-    df = df.copy()
-    n = len(df)
-    for col in cols["numerics"]:
-        sample_val = df[col].dropna().iloc[0] if not df[col].dropna().empty else 100
-        is_large = isinstance(sample_val, (int, float, np.number)) and sample_val > 50
-        is_rate = isinstance(sample_val, (int, float, np.number)) and 0.0 <= sample_val <= 1.0
-
-        if is_large:
-            symbols = rng.choice(["$", "₹", "Rs. "], size=n)
-            df[col] = [
-                f"{sym}{val:,.2f}" if pd.notna(val) and isinstance(val, (int, float, np.number))
-                else ("N/A" if rng.random() < 0.05 else str(val))
-                for sym, val in zip(symbols, df[col], strict=False)
-            ]
-        elif is_rate:
-            df[col] = [
-                f"{val * 100:.1f}%" if pd.notna(val) and isinstance(val, (int, float, np.number))
-                else ("unknown" if rng.random() < 0.05 else str(val))
-                for val in df[col]
-            ]
-        else:
-            df[col] = [
-                f"{val:,}" if pd.notna(val) and isinstance(val, (int, np.integer))
-                else str(val)
-                for val in df[col]
-            ]
-
-    for col in cols["categoricals"]:
-        df[col] = [
-            f"  {str(v).upper()} " if i % 4 == 0
-            else f"{str(v).lower()}   " if i % 4 == 1
-            else str(v).title()
-            for i, v in enumerate(df[col])
-        ]
-
-    for col in cols["booleans"]:
-        choices = ["Y", "yes", "YES", "N", "No", "NO", "1", "0", "true", "false", ""]
-        df[col] = rng.choice(choices, size=n)
-
-    if cols["time"] and cols["time"] in df.columns:
-        dates = pd.to_datetime(df[cols["time"]], errors="coerce").fillna(pd.Timestamp("2026-08-01"))
-        styles = rng.integers(0, 4, size=n)
-        df[cols["time"]] = [
-            (
-                d.strftime("%Y-%m-%d") if s == 0
-                else d.strftime("%d/%m/%Y") if s == 1
-                else d.strftime("%d %b %Y") if s == 2
-                else f"FY26-W{d.isocalendar().week:02d}"
-            )
-            for d, s in zip(dates, styles, strict=False)
-        ]
-
-    return df
+def extreme_stress(frame: pd.DataFrame, columns: Columns, rng: np.random.Generator) -> pd.DataFrame:
+    """Every corruption above at once, plus contact details written into free-text cells."""
+    out = frame
+    for corrupt in (
+        corrupt_primary_keys,
+        corrupt_target,
+        inject_leakage_and_pii,
+        degrade_schema_and_types,
+        formatting_chaos,
+    ):
+        out = corrupt(out, columns, rng)
+    for name in FREE_TEXT_COLUMNS:
+        if name in out.columns:
+            out[name] = out[name].astype(object)
+            for index in rng.choice(len(out), size=min(15, len(out)), replace=False):
+                out.at[index, name] = (
+                    f"{out.at[index, name]} [Contact: user_{index}@example.invalid or +1-555-555-{index % 10_000:04d}]"
+                )
+    return out
 
 
-def build_extreme_stress_test(df: pd.DataFrame, cols: dict, positive_label: object, rng: np.random.Generator) -> pd.DataFrame:
-    df = df.copy()
-    pk_col = cols["pk"]
-    target_col = cols["target"]
-
-    if pk_col:
-        df = inject_corrupted_pks(df, pk_col, rng)
-    if target_col:
-        df = inject_corrupted_target(df, target_col, rng)
-    df = inject_leakage_and_pii(df, target_col, rng)
-    df = inject_schema_and_types(df, cols, rng)
-    df = inject_formatting_chaos(df, cols, rng)
-
-    for col in ["complaint_text", "question", "reference_answer"]:
-        if col in df.columns:
-            for idx in rng.choice(range(len(df)), size=min(15, len(df)), replace=False):
-                orig = str(df.loc[idx, col])
-                pii_text = f" [Contact: user_{idx}@example.invalid or +1-555-555-01{idx:02d}]"
-                df.loc[idx, col] = orig + pii_text
-
-    return df
+Corruption = Callable[[pd.DataFrame, Columns, np.random.Generator], pd.DataFrame]
+CORRUPTIONS: Final[dict[str, Corruption]] = {
+    FIXABLE: fixable_messy,
+    PRIMARY_KEYS: corrupt_primary_keys,
+    TARGET: corrupt_target,
+    LEAKAGE_AND_PII: inject_leakage_and_pii,
+    SCHEMA_AND_TYPES: degrade_schema_and_types,
+    FORMATTING: formatting_chaos,
+    EXTREME: extreme_stress,
+}
 
 
-def generate_all_bad_datasets():
-    all_use_cases = load_all_use_cases()
-    OUTPUT_BASE_DIR.mkdir(parents=True, exist_ok=True)
+def write_use_case(config: UseCaseConfig, out_dir: Path, *, rows: int, seed: int) -> Written:
+    """Write every file of `FILE_NAMES` for `config` into `out_dir / config.id`."""
+    folder = out_dir / config.id
+    folder.mkdir(parents=True, exist_ok=True)
+    rng = np.random.default_rng(seed)
+    base = base_frame(config, rows=rows, seed=seed)
+    columns = columns_of(config)
+    for name in FILE_NAMES:
+        CORRUPTIONS[name](base, columns, rng).to_csv(folder / name, index=False)
+    return Written(use_case_id=config.id, folder=folder, rows=len(base))
 
-    summary_records = []
-    print(f"Generating bad test CSV files for {len(all_use_cases)} use cases...")
 
-    for i, (uc_id, config) in enumerate(sorted(all_use_cases.items()), start=1):
-        folder_name = f"{i:02d}_{uc_id.replace('-', '_')}"
-        uc_dir = OUTPUT_BASE_DIR / folder_name
-        uc_dir.mkdir(parents=True, exist_ok=True)
+def generate_all(out_dir: Path, *, rows: int, seed: int, use_case_ids: Sequence[str] = ()) -> list[Written]:
+    """Write the files for every configured use case (or only `use_case_ids`), in id order."""
+    configs = load_all_use_cases()
+    unknown = sorted(set(use_case_ids) - set(configs))
+    if unknown:
+        raise SystemExit(f"Unknown use case id: {', '.join(unknown)}. Known: {', '.join(sorted(configs))}.")
+    chosen = sorted(use_case_ids) if use_case_ids else sorted(configs)
+    written: list[Written] = []
+    for offset, use_case_id in enumerate(chosen):
+        done = write_use_case(configs[use_case_id], out_dir, rows=rows, seed=seed + offset)
+        print(
+            f"[{offset + 1:02d}/{len(chosen)}] {len(FILE_NAMES)} files, {done.rows} rows each: {done.folder}"
+        )
+        written.append(done)
+    return written
 
-        cols = _get_use_case_columns(config)
-        rows = 3000 if uc_id != "ai-onboarding-assistant" else 65
-        rng = np.random.default_rng(20260930 + i)
 
-        base_df = _make_base_frame(uc_id, rows=rows, seed=100 + i)
-        pos_label = config.target.positive_label if config.target.positive_label is not None else 1
-
-        # File 0: 00_fixable_messy_helper_test.csv (The one to test the AI Helper's auto-fix capabilities!)
-        fixable_df = build_fixable_messy_helper_test(base_df, cols, rng)
-        fixable_path = uc_dir / "00_fixable_messy_helper_test.csv"
-        fixable_df.to_csv(fixable_path, index=False)
-
-        # File 1: Extreme Stress Test (All bad data combined)
-        extreme_df = build_extreme_stress_test(base_df, cols, pos_label, rng)
-        extreme_path = uc_dir / f"{uc_id.replace('-', '_')}_extreme_stress_test.csv"
-        extreme_df.to_csv(extreme_path, index=False)
-
-        # File 2: 01_corrupted_primary_keys.csv
-        pks_df = inject_corrupted_pks(base_df, cols["pk"], rng)
-        pks_path = uc_dir / "01_corrupted_primary_keys.csv"
-        pks_df.to_csv(pks_path, index=False)
-
-        # File 3: 02_corrupted_target.csv
-        target_df = inject_corrupted_target(base_df, cols["target"], rng)
-        target_path = uc_dir / "02_corrupted_target.csv"
-        target_df.to_csv(target_path, index=False)
-
-        # File 4: 03_leakage_and_pii_injection.csv
-        leak_df = inject_leakage_and_pii(base_df, cols["target"], rng)
-        leak_path = uc_dir / "03_leakage_and_pii_injection.csv"
-        leak_df.to_csv(leak_path, index=False)
-
-        # File 5: 04_schema_and_type_degradation.csv
-        schema_df = inject_schema_and_types(base_df, cols, rng)
-        schema_path = uc_dir / "04_schema_and_type_degradation.csv"
-        schema_df.to_csv(schema_path, index=False)
-
-        # File 6: 05_formatting_and_parsing_chaos.csv
-        format_df = inject_formatting_chaos(base_df, cols, rng)
-        format_path = uc_dir / "05_formatting_and_parsing_chaos.csv"
-        format_df.to_csv(format_path, index=False)
-
-        print(f"[{i:02d}/{len(all_use_cases)}] Generated 7 bad CSV files for: {uc_id}")
-        summary_records.append({
-            "use_case_id": uc_id,
-            "folder": str(uc_dir),
-            "fixable_file": str(fixable_path),
-            "extreme_file": str(extreme_path),
-            "files_count": 7,
-            "rows": rows,
-        })
-
-    print(f"\nSuccessfully generated test suites across all {len(all_use_cases)} use cases in {OUTPUT_BASE_DIR}!")
-    return summary_records
+def main(argv: Sequence[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog=COMMAND, description=__doc__.splitlines()[0] if __doc__ else None)
+    parser.add_argument("--out-dir", type=Path, default=DEFAULT_OUT_DIR, help=f"default: {DEFAULT_OUT_DIR}")
+    parser.add_argument("--rows", type=int, default=DEFAULT_ROWS, help="rows per predictive file")
+    parser.add_argument("--seed", type=int, default=DEFAULT_SEED, help="the same seed writes the same files")
+    parser.add_argument("--use-case", action="append", default=[], help="only this use case id; repeatable")
+    args = parser.parse_args(argv)
+    if args.rows < 2:
+        parser.error("--rows must be at least 2")
+    written = generate_all(args.out_dir, rows=args.rows, seed=args.seed, use_case_ids=args.use_case)
+    print(f"Wrote {len(written) * len(FILE_NAMES)} files for {len(written)} use cases under {args.out_dir}.")
+    return 0
 
 
 if __name__ == "__main__":
-    generate_all_bad_datasets()
+    sys.exit(main())
