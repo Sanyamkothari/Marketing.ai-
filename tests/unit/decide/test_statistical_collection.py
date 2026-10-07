@@ -30,7 +30,10 @@ def _collect(repo_root: Path, *args: str, statistical: bool) -> subprocess.Compl
 
 
 def test_the_default_marker_filter_does_not_collect_the_statistical_suite(repo_root: Path) -> None:
-    """The exact filter `make test` uses, over the whole `tests/` tree, with the variable unset."""
+    """The exact `-m` filter `make test` uses, over the `tests/statistical` directory.
+
+    `make test` reaches that directory through `testpaths`; the variable is unset here.
+    """
     run = _collect(
         repo_root, "tests/statistical", "-m", "not slow and not bedrock and not aws", statistical=False
     )

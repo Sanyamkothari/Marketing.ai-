@@ -84,7 +84,7 @@ Each shared file gets three marked blocks, added by the contracts-first task:
 ```
 
 - Add code **only inside your block**, at its end. Never edit above your block, never reorder, never reformat the file (run `black` on your block's content before pasting rather than on the whole file if the formatter would reflow other lines).
-- **Plan J's block follows Plan G's** in every shared file that has one: `PLAN-J (product)` opens after `END PLAN-G` (in `docs/DECISIONS.md` it follows Plan I's block, the last one there; in `README.md` it follows Plan D's). The marker is written in each file's comment syntax, exactly like the Plan G one, and `tests/unit/test_shared_file_markers.py` pins the order.
+- **Plan J's block follows Plan G's** in every shared file that has one: `PLAN-J (product)` opens after `END PLAN-G` (in `docs/DECISIONS.md` it follows Plan I's block, the last one there; in `README.md` it follows Plan D's; in `ui/modules/router.js` it follows the `V1-UI` foundation-seams block, the last one there). The marker is written in each file's comment syntax, exactly like the Plan G one, and `tests/unit/test_shared_file_markers.py` pins the order.
 - `Makefile` and `.github/workflows/nightly.yml`: Plan J's `make test-statistical` target lives in its Makefile block and is run by one job of the nightly workflow; `test`, `test-all` and `lint` are untouched (DEC-1300 (e)).
 - `pyproject.toml`: add dependencies in your block; pin versions; never bump a shared pin (pandas, pydantic, FastAPI, AutoGluon). If you need a bump, request it.
 - `README.md` and `docs/DECISIONS.md`: append a section per milestone under your phase heading. Decision numbers are allocated per workstream so that parallel branches cannot claim the same one:
