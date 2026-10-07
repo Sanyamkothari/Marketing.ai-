@@ -86,11 +86,14 @@ def load_help(root: Path | None = None) -> HelpCatalogue:
 
 
 def known_codes() -> frozenset[str]:
-    """Every code the catalogue must explain: the engine's check codes plus Plan E's own."""
+    """Every code the catalogue must explain: the engine's check codes plus Plan E's and Plan J's own."""
     from engine.contracts import CHECK_CODES
+    from engine.decide.codes import PLAN_J_CODES  # Plan J M90, pre-approved additive edit (DEC-1300)
     from engine.pilot.preflight import PREFLIGHT_CODES
 
-    return frozenset(CHECK_CODES | set(DRIFT_CODES.values()) | {THRESHOLD_FALLBACK_CODE} | PREFLIGHT_CODES)
+    return frozenset(
+        CHECK_CODES | set(DRIFT_CODES.values()) | {THRESHOLD_FALLBACK_CODE} | PREFLIGHT_CODES | PLAN_J_CODES
+    )
 
 
 def code_help(code: str, root: Path | None = None) -> CodeHelp | None:

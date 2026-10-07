@@ -228,6 +228,12 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
     ),
     "M55": ("tests/unit/onboarding/test_leak_check.py", "tests/integration/test_onboarding_leak_check.py"),
     "M56": ("tests/unit/test_check_no_skips.py", "tests/unit/test_container_files.py"),
+    # --- Plan J (docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md); each milestone adds its own entry ---
+    "M90": (
+        "tests/unit/test_shared_file_markers.py",
+        "tests/unit/decide/test_plan_j_codes.py",
+        "tests/unit/decide/test_statistical_collection.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

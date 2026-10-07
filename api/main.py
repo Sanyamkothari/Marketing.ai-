@@ -279,5 +279,7 @@ from api.routes.ai_service import router as ai_service_router  # noqa: E402
 
 PHASE_ROUTERS.append(ai_service_router)
 # ---- END PLAN-G ----
+# ---- PLAN-J (product) — append only below this line ----
+# ---- END PLAN-J ----
 
 app: FastAPI = create_app()

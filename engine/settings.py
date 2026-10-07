@@ -776,3 +776,5 @@ def build_services(config: Settings) -> tuple[Any, Any]:
 # ---- END PLAN-E ----
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----
+# ---- PLAN-J (product) — append only below this line ----
+# ---- END PLAN-J ----

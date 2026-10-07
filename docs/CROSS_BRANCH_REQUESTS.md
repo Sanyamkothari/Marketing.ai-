@@ -15,6 +15,33 @@ branch to hit the same wall should find the ruling, not the silence.
 
 ## Open
 
+### 2026-10-07 — plan-j (on main) → protocol owner: Plan I has no PLAN-I block in the shared code files (record)
+
+**What is needed.** A decision, not urgent: should Plan I get a `PLAN-I` block in the shared files? Plan I
+(DEC-1200 … DEC-1299) appended its decisions in `docs/DECISIONS.md` inside a `PLAN-I (ideas)` block, but it has
+no block in `engine/contracts.py`, `engine/config.py`, `engine/settings.py`, `engine/pipeline.py`, `api/main.py`,
+`api/schemas.py`, `ui/index.html`, `ui/modules/router.js`, `Makefile`, `pyproject.toml` or `README.md`, and
+`tests/unit/test_shared_file_markers.py`'s `PHASES` does not list it. Plan I's code went into Plan G's blocks (the
+agent module) or into files it owns. The same is true of Plan D's `PLAN-D (hardening)` block, which exists only in
+`README.md`.
+
+**What I did meanwhile.** Plan J (M90, DEC-1300 (b)) puts its `PLAN-J (product)` block after the last block each
+file already has: after `END PLAN-G` in the code files, after `END PLAN-D` in `README.md` and after `END PLAN-I` in
+`docs/DECISIONS.md`. The marker test pins `PLAN-J` after `PLAN-G` only. Nothing was added for Plan I or Plan D.
+If the owner wants Plan I blocks in the code files, they go between `END PLAN-G` and `PLAN-J`, and `PHASES` gains
+`PLAN-I` there.
+
+### 2026-10-07 — plan-j (on main) → Plan E: one additive edit in `engine/pilot/help.py` (announcement)
+
+**What changed in a file §3 gives Plan E** (pre-approved in the Plan J plan §3.2, recorded in DEC-1300 (d)):
+`known_codes()` also returns `engine.decide.codes.PLAN_J_CODES` (empty at M90, imported inside the function like the
+other two code sets). Nothing was renamed or removed, `tests/unit/pilot/test_help.py` is unchanged and green, and
+the result is identical until a Plan J milestone adds a code. From then on each new code needs an entry in
+`configs/pilot/help.yaml` in the same change.
+
+**What is needed.** Nothing; this is an announcement. **Also announced:** `pyproject.toml` gained the pytest marker
+`statistical` in place in `markers` (DEC-1300 (e)), as the plan's in-place-declaration rule allows. `tests/unit/test_pyproject_pins.py` pins the exact marker set, so its expected set gained `"statistical"` (still an exact-set check; nothing loosened).
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

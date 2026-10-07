@@ -201,6 +201,7 @@ def test_pytest_finds_the_packages_without_an_editable_install(pyproject: dict[s
         "postgres",
         "docker",
         "aws",
+        "statistical",  # Plan J M90 (DEC-1300 (e)): collected only with MARKETING_AI_STATISTICAL=1
     }
     assert "-rs" in ini["addopts"], "a skip must always print its reason (DEC-344)"
 

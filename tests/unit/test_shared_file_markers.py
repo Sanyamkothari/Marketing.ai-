@@ -11,7 +11,11 @@ the end of your block" means the same place to every reader. Blocks come in the 
 `main`, not in phase-number order: Phase 4b's foundation landed before Phase 3b (uplift) merged, and
 Phase 3b's own rule is that its block comes last (DEC-600). Plan E (pilot readiness) started after
 all five had merged, so its `PLAN-E` block follows Phase 3b's (DEC-900), and Plan G (use-case
-agents) started after Plan E, so its `PLAN-G` block follows Plan E's (DEC-1000).
+agents) started after Plan E, so its `PLAN-G` block follows Plan E's (DEC-1000). Plan J (product
+value first) was set up after Plan I, so its `PLAN-J` block follows Plan G's in the code files and Plan
+I's in `docs/DECISIONS.md`, the last block either file has (DEC-1300). Plan I and Plan D carry blocks
+of their own in `docs/DECISIONS.md` and `README.md` only; they are not in `PHASES`, so this test does
+not pin them.
 
 `docs/API.md` is in §4's list and deliberately absent from this one: it is generated and `make
 lint` fails on a hand-edit (DEC-014), so a block there would be deleted by the next `make
@@ -54,6 +58,7 @@ PHASES: Final[tuple[str, ...]] = (
     "PHASE-3B",
     "PLAN-E",
     "PLAN-G",
+    "PLAN-J",
 )
 
 OPEN: Final[str] = "---- {phase} ("

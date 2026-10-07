@@ -1590,3 +1590,47 @@ four busy loops and two node suites on four cores, which is harsher than the sin
 - Deleting the merged branches is an owner action.
 
 <!-- ---- END PLAN-D ---- -->
+
+<!-- ---- PLAN-J (product) — append only below this line ---- -->
+
+## Plan J — Product value first (M90–M111)
+
+[`docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md`](docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md) makes the product itself
+better at deciding and proving before it is connected to anyone's tools: a control group that stays fixed per
+customer, a test planned and registered before it runs, one record and one measurement per campaign, 95% ranges
+that are tested to cover 95%, net-value ranking, the choice of offer and channel, one action per customer, and a
+finance-ready Value Proof Pack, all validated on real public randomised data. Until integration (after the manager
+review) the hand-off is a downloaded treat list. Its decisions are DEC-1300 … DEC-1399 in
+[`docs/DECISIONS.md`](docs/DECISIONS.md), one entry per milestone with lettered sub-decisions; its working notes are
+in [`docs/DECIDE.md`](docs/DECIDE.md).
+
+| # | Milestone | Definition of done | Status | Tests that prove it |
+|---|---|---|---|---|
+| M90 | Plan J set-up | DEC-1300…1399 claimed; a PLAN-J block in the 12 shared files and in the marker test's `PHASES`; the stage-function amendment of protocol §3 (pending the owner's sign-off); `PLAN_J_CODES` and the `known_codes()` hook; the `statistical` marker and `make test-statistical`, kept out of `make test` and `make test-all`; `docs/DECIDE.md` skeleton | **done** | `tests/unit/test_shared_file_markers.py`, `tests/unit/decide/test_plan_j_codes.py`, `tests/unit/decide/test_statistical_collection.py` |
+| M91 | Fix what the research and the code review found | Uplift runs consult the consent ledger; every contacting use case has a consent purpose; a one-way SMS sender gets an opt-out link instead of "Reply STOP"; copy approval records the signed-in person; row-level downloads need Analyst and are audited | pending | — |
+| M92 | Persistent holdout and explore slice | A control group fixed per customer (opt-in, one holdout across use cases), nested by share; an opt-in explore slice of 0–10%; default behaviour unchanged | pending | — |
+| M93 | Plan the test, define the outcome well | A planner for the effect a campaign can detect at each holdout size, with the holdout's cost; outcome definitions with a grace period; random-or-not and sufficiency verdicts | pending | — |
+| M94 | One campaign record, one measurement path, a registered test plan | A campaign recorded once and measured through one path; a registered, hashed test plan; no partial number before outcomes mature | pending | — |
+| M95 | Validity harness and synthetic quarantine | Nightly tests that the 95% intervals cover 95%, the false-positive rate is 5% and the planner delivers its power; a planted demo effect can never be presented as a result | pending | — |
+| M96 | Uplift must earn its place: stability, calibration and the beats-risk check | Uplift is approved only when stable and calibrated; the treat list falls back to risk ranking when uplift does not beat it, and says why | pending | — |
+| M97 | Rank by net value | Customers ranked by net money with honest ranges; money fields null with a reason when value inputs are missing | pending | — |
+| M98 | The treat list: one file with everything, reasons in business words | One downloadable file with offer, channel, reason, net value and holdout flag per row; reasons in business language; Analyst-only | pending | — |
+| M99 | Offer and channel catalogue, channel-aware consent | A catalogue of offers and channels in configuration; consent applied per channel | pending | — |
+| M100 | Choose the offer: multi-treatment uplift | Several offers plus no offer: each customer gets the offer they respond to, within budget and contactable channels; sleeping dogs get none | pending | — |
+| M101 | One action per customer across use cases | No customer gets two actions in one cycle; the winner has the highest priority × value; contact caps and holdouts respected | pending | — |
+| M102 | Revenue outcomes and CUPED | Revenue measured with intervals; CUPED shrinks the holdout needed; binary outcomes unchanged | pending | — |
+| M103 | Audit any campaign, and the programme readout | Upload a past campaign's assignment and outcomes for an audit readout, labelled causal only for random assignment; a programme-level readout | pending | — |
+| M104 | The Value Proof Pack | A finance-ready pack in which every number traces to a measured artefact; backfiring segments flagged; no row-level data | pending | — |
+| M105 | Warnings and proven value to date | Cards for campaigns with no control, early looks, backfiring segments and fading effects; the proven value to date | pending | — |
+| M106 | Learn from the last cycle | The next model learns from the last cycle's holdout and explore slice; a calibration block | pending | — |
+| M107 | The monthly loop, read-only | The monthly cycle runs on schedule from saved connections (read-only) with only the approval left to a person | pending | — |
+| M108 | Cost before each run, with a cap | The cost of a run shown before it starts; a cap that refuses or stops a run | pending | — |
+| M109 | Small fixes that make existing things work better | The retail baseline, annotated drift events and reviewed suggestion benchmarks | pending | — |
+| M110 | Validate on real public randomised data | The whole journey run on real randomised public data (Hillstrom; Criteo and others where obtained), each with a reproducible run report | pending | — |
+| M111 | The manager demo | A demo script that uses only real results, rehearsed once end to end by someone outside the team | pending | — |
+
+M90 changes no product behaviour. It claims the decision range, adds this block to the shared files, and sets up
+the statistical suite: `make test-statistical` (also run nightly) runs `tests/statistical/`, which `make test` and
+`make test-all` never collect because `tests/statistical/conftest.py` ignores it unless
+`MARKETING_AI_STATISTICAL=1` (DEC-1300 (e)).
+<!-- ---- END PLAN-J ---- -->

@@ -18,6 +18,7 @@ Three agents work at the same time on three branches. This document is the contr
 | `phase-3b-uplift` | Plan B (Phase 3b — uplift modelling and measured impact) | fourth, after 2, 3a and 4a had merged | `main`; its shared-file blocks come after Phase 4a's (DEC-600) |
 | `plan-e-pilot` (developed on `main`) | Plan E (pilot readiness: data request kit, readiness, results and ROI reports, demo mode, playbook) | runs beside Plans D and F; reads artefacts only, changes no engine logic | `main`; its shared-file blocks come after Phase 3b's (DEC-900) |
 | `plan-g-agents` (a branch from `main`) | Plan G (`docs/plans/MARKETING_AI_PLAN_G_AGENTS.md`: use-case agents, Guided setup) | after Plan E; adds a tab and a derived-upload path, changes no training logic | `main`; its shared-file blocks come after Plan E's (DEC-1000) |
+| `plan-j-product` (developed on `main`, after Plan I) | Plan J (`docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md`: product value first, M90–M111): persistent holdout, test planning, one campaign record, validity harness, net-value ranking, offer and channel choice, Value Proof Pack. No write into a client's systems | after Plan I; adds modules, routes and a statistical suite, and edits Phase 1 stage code only as the §3 amendment allows | `main`; its shared-file blocks come after Plan G's (DEC-1300) |
 
 - Rebase (or merge `main` into your branch) **at least once a day**. Resolve conflicts immediately; never let them accumulate.
 - A branch merges only when: CI is green on the branch, the Phase 1 suites (`make test-all`) are green, the phase's own integration test is green, and `README.md` and `docs/DECISIONS.md` are current.
@@ -59,10 +60,13 @@ An agent may freely create and edit files in the directories it owns. It may edi
 | `engine/pilot/**`, `api/routes/pilot.py`, `ui/modules/pilot/**`, `configs/pilot/**`, `scripts/preflight.py`, `scripts/gen_data_request.py`, `scripts/seed_demo.py`, `tests/**/pilot/**`, `docs/pilot/**` | Plan E |
 | `engine/agent/**`, `api/routes/agent.py`, `api/routes/agent_recipes.py`, `ui/modules/agent/**`, `configs/prompts/data_agent*`, `tests/**/agent/**`, `tests/fixtures/agent_bench/**`, `docs/AGENTS.md` | Plan G |
 | `configs/engine.yaml` section `defaults.agent`, and `configs/use_cases/*.yaml` section `agent` | Plan G |
+| `engine/holdout/**`, `engine/measurement/**`, `engine/decide/**`, `api/routes/{campaigns,holdout,measurement}.py`, `ui/modules/decide/**`, `configs/decide/**`, `tests/**/{holdout,measurement,decide}/**`, `tests/statistical/**`, `docs/DECIDE.md` | Plan J |
 | `engine/stages/train.py`, `evaluate.py`, `explain.py`, `engine/registry.py` champion rule | **Frozen.** Nobody. |
 | `engine/contracts.py`, `engine/config.py`, `engine/settings.py`, `engine/pipeline.py`, `api/main.py`, `api/schemas.py`, `ui/index.html`, `ui/modules/router.js`, `Makefile`, `pyproject.toml`, `README.md`, `docs/DECISIONS.md`, `docs/API.md` | **Shared** (section 4) |
 
 Phase 2's six listed changes to Phase 1 code (Phase 2 plan §6.5: composite key in `prepare.py`, `score.py`, `actions.py`, `ingest.py` accepting `dataset_id`) are the only exception to "don't touch stages"; they are pre-approved, must be backward compatible, and Phase 2 announces them in `CROSS_BRANCH_REQUESTS.md` the day they land.
+
+**Amendment for Plan J (DEC-1300 (c)) — pending the protocol owner's sign-off.** Plan J may edit exactly these Phase 1 stage functions, and nothing else in `engine/stages/`: `engine/stages/actions.py` `_control_mask`, `_entity_control_mask`, `_holdout_size` and `suppression_rules`; `engine/stages/export.py` `_suppression_counts`. The edits must be backward compatible: **with the default configuration the behaviour stays byte-identical**, pinned by the existing tests, which are not changed. Plan J announces each edit in `CROSS_BRANCH_REQUESTS.md` the day it lands. **This amendment needs the protocol owner's (the human reviewer's) sign-off before M92 starts**; until then it is a proposal and no stage function is edited.
 
 ---
 
@@ -80,6 +84,8 @@ Each shared file gets three marked blocks, added by the contracts-first task:
 ```
 
 - Add code **only inside your block**, at its end. Never edit above your block, never reorder, never reformat the file (run `black` on your block's content before pasting rather than on the whole file if the formatter would reflow other lines).
+- **Plan J's block follows Plan G's** in every shared file that has one: `PLAN-J (product)` opens after `END PLAN-G` (in `docs/DECISIONS.md` it follows Plan I's block, the last one there; in `README.md` it follows Plan D's). The marker is written in each file's comment syntax, exactly like the Plan G one, and `tests/unit/test_shared_file_markers.py` pins the order.
+- `Makefile` and `.github/workflows/nightly.yml`: Plan J's `make test-statistical` target lives in its Makefile block and is run by one job of the nightly workflow; `test`, `test-all` and `lint` are untouched (DEC-1300 (e)).
 - `pyproject.toml`: add dependencies in your block; pin versions; never bump a shared pin (pandas, pydantic, FastAPI, AutoGluon). If you need a bump, request it.
 - `README.md` and `docs/DECISIONS.md`: append a section per milestone under your phase heading. Decision numbers are allocated per workstream so that parallel branches cannot claim the same one:
 
@@ -99,7 +105,8 @@ Each shared file gets three marked blocks, added by the contracts-first task:
   | DEC-1000…1099 | Plan G — use-case agents, Guided setup (M70–M77) | claimed 2026-09-28 |
   | DEC-1100…1199 | Plan H — one simple product (M80–M84); same workstream and shared-file blocks as Plan G | claimed 2026-09-28 |
   | DEC-1200…1299 | Plan I — product ideas: uplift budget curve (DEC-1200…1209), drift sentinel (DEC-1210…1219), Data Doctor placeholder codes (DEC-1220…1229), control-group size (DEC-1230…1239), copy per segment (DEC-1240…1249), Ask your data (DEC-1250…1259), hybrid retrieval and its follow-ups (DEC-1260…1269), a trustworthy and manageable AI Onboarding Assistant (DEC-1270…1279), the assistant as a conversation: follow-ups, retries, reranking, confidence, starter questions (DEC-1280…1289) | claimed 2026-09-30 |
-  | DEC-1300 up | unallocated | — |
+  | DEC-1300…1399 | Plan J — product value first (M90–M111) | claimed 2026-10-07 |
+  | DEC-1400 up | unallocated | — |
 
   A new phase, or a phase that exhausts its hundred, takes the **next free hundred** and adds its row to this table *before* its first entry — the row is the claim. Never borrow a number inside another workstream's hundred, even an unused one.
 - `docs/API.md` is generated; never hand-edit. Run `gen_api_docs` after adding models.

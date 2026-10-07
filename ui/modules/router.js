@@ -335,6 +335,8 @@ export function pagePanelsHtml(kind, uc, run) {
     .join("");
 }
 // ---- END PLAN-G ----
+// ---- PLAN-J (product) — append only below this line ----
+// ---- END PLAN-J ----
 
 // ---- V1-UI (foundation seams, docs/ui/FOUNDATION.md) ----
 // How a module fills the top bar and the shared screens without editing them. `registerNavSlot`,

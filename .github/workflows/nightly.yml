@@ -141,3 +141,44 @@ jobs:
       # trains), the two paid markers are out.
       - name: make library-test
         run: make library-test
+
+  # --- Plan J M90: the statistical suite -------------------------------------------------------
+  # `tests/statistical` simulates thousands of experiments to show that our 95% intervals cover 95%,
+  # that the false-positive rate is 5% at zero effect and that the planner delivers its power (M95).
+  # It cannot run in `make test` or `make test-all`, and those targets may not be changed (protocol
+  # §4), so `tests/statistical/conftest.py` leaves its files uncollected unless
+  # MARKETING_AI_STATISTICAL=1, and `make test-statistical` sets it. This job is the only thing that
+  # does, every night and on a manual run. It trains nothing, so it needs no AutoGluon beyond what
+  # `make setup` installs for every job.
+  statistical:
+    name: statistical suite (Plan J)
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ env.NIGHTLY_REF }}
+
+      # The same install as the jobs above, for the same reason.
+      - name: Set up Python 3.11
+        id: python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            pyproject.toml
+            requirements-freeze.txt
+
+      - name: Cache the venv
+        uses: actions/cache@v4
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py${{ steps.python.outputs.python-version }}-${{ hashFiles('pyproject.toml', 'requirements-freeze.txt') }}
+
+      - name: make setup
+        run: make setup
+
+      - name: make test-statistical
+        run: make test-statistical

@@ -1325,3 +1325,5 @@ class PilotFeedbackResponse(StrictBase):
 # ---- END PLAN-E ----
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----
+# ---- PLAN-J (product) — append only below this line ----
+# ---- END PLAN-J ----

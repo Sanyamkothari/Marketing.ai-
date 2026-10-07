@@ -255,3 +255,14 @@ demo-signin: demo-seed ## the demo with sign-in on and one demo user per role (l
 # ---- END PLAN-E ----
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----
+# ---- PLAN-J (product) — append only below this line ----
+.PHONY: test-statistical
+
+# The statistical suite (tests/statistical, marker `statistical`) simulates thousands of experiments
+# to show our intervals cover what they claim. It is too slow for `make test` and is kept out of
+# `make test` and `make test-all` WITHOUT touching either target (protocol section 4 forbids that):
+# tests/statistical/conftest.py ignores its test files unless MARKETING_AI_STATISTICAL=1, so the
+# other targets never collect them and nothing is reported as skipped (DEC-1300 (e)).
+test-statistical: ## the nightly statistical suite (Plan J): Monte Carlo coverage, false-positive rate, power
+	MARKETING_AI_STATISTICAL=1 $(BIN)/python -m pytest tests/statistical -m statistical
+# ---- END PLAN-J ----
