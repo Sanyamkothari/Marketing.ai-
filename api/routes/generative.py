@@ -41,6 +41,7 @@ Phase-4 move to object storage would have to solve at the store rather than here
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import secrets
@@ -51,10 +52,10 @@ from pathlib import Path
 from typing import Annotated, Any, Final, Literal, TypeVar
 
 import pandas as pd
-from fastapi import APIRouter, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Query, Request, Response, UploadFile
 from pydantic import BaseModel, ValidationError
 
-from api.access import set_audit_context
+from api.access import PrincipalDep, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, JobsDep, SettingsDep, StorageDep
 from api.routes.ai_service import resolve_slot
@@ -79,7 +80,7 @@ from api.schemas import (
     ReferenceSetResponse,
     RootCauseRequest,
 )
-from engine.access.roles import Role
+from engine.access.roles import Principal, Role
 from engine.ai_service import ResolvedAi
 from engine.audit.events import content_hash
 from engine.config import (
@@ -1679,6 +1680,11 @@ def _find_template(batch: CopyBatch, template_id: str) -> CopyTemplate:
     raise http_error(404, "COPY_TEMPLATE_NOT_FOUND", f"No template with id {template_id!r} in this batch.")
 
 
+def _approver_name(principal: Principal, typed: str) -> str:
+    """The signed-in username when sign-in is on; what was typed otherwise (the same rule as model approval)."""
+    return principal.username if principal.kind == "user" else typed
+
+
 @router.post(
     "/runs/{run_id}/campaign-copy/templates/{template_id}/approve",
     response_model=CopyTemplate,
@@ -1686,8 +1692,14 @@ def _find_template(batch: CopyBatch, template_id: str) -> CopyTemplate:
     summary="Record that a person approved one campaign-copy template",
 )
 def approve_copy_template(
-    run_id: str, template_id: str, body: CopyTemplateApproveRequest, storage: StorageDep
+    run_id: str,
+    template_id: str,
+    body: CopyTemplateApproveRequest,
+    storage: StorageDep,
+    principal: PrincipalDep,
 ) -> CopyTemplate:
+    """Approve one template. With sign-in on, `approved_by` is the signed-in user's username and
+    `body.approved_by` is ignored (M91); with sign-in off it is the name the caller typed, as before."""
     load_run(storage, run_id)
     batch = _load_copy_batch(storage, run_id)
     target = _find_template(batch, template_id)
@@ -1697,7 +1709,7 @@ def approve_copy_template(
             "COPY_TEMPLATE_NOT_PENDING",
             f"Template {template_id!r} is {target.status.value}, not pending review.",
         )
-    updated = approve_template(batch, template_id, approved_by=body.approved_by)
+    updated = approve_template(batch, template_id, approved_by=_approver_name(principal, body.approved_by))
     storage.write_model(run_key(run_id, COPY_BATCH_FILENAME), updated)
     return _find_template(updated, template_id)
 
@@ -1748,9 +1760,37 @@ def regenerate_copy_template(
     responses=_NOT_FOUND,
     summary="The rendered campaign-copy messages of a run, one row per scored entity",
 )
-def read_copy_messages(run_id: str, storage: StorageDep) -> Response:
-    """Registered like `GET /runs/{run_id}/scores.csv`; `404 ARTEFACT_NOT_FOUND` before any copy exists."""
-    return read_artefact(run_id, COPY_MESSAGES_FILENAME, storage)
+def read_copy_messages(
+    run_id: str,
+    storage: StorageDep,
+    approved_only: Annotated[
+        bool,
+        Query(
+            description="Keep only the rows of templates a person has approved; the default keeps every row."
+        ),
+    ] = False,
+) -> Response:
+    """Registered like `GET /runs/{run_id}/scores.csv`; `404 ARTEFACT_NOT_FOUND` before any copy exists.
+
+    `approved_only=true` (M91) keeps the rows whose template is approved in `copy_batch.json` *now*: the
+    `status` column of a row is the template's state when it was rendered, so it is not what is read.
+    The header is always kept, so a batch with nothing approved yet answers an empty table, not an error.
+    """
+    response = read_artefact(run_id, COPY_MESSAGES_FILENAME, storage)
+    if not approved_only:
+        return response
+    batch = _load_copy_batch(storage, run_id)
+    approved = {t.template_id for t in batch.templates if t.status is CopyStatus.APPROVED}
+    reader = csv.reader(io.StringIO(bytes(response.body).decode("utf-8"), newline=""))
+    header = next(reader, None)
+    if header is None:
+        return response
+    template_column = header.index("template_id")
+    out = io.StringIO()
+    writer = csv.writer(out, lineterminator="\n")
+    writer.writerow(header)
+    writer.writerows(row for row in reader if row[template_column] in approved)
+    return Response(content=out.getvalue(), media_type=response.media_type)
 
 
 # ===========================================================================
