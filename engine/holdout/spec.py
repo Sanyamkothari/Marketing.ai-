@@ -27,13 +27,17 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 __all__ = [
     "HOLDOUT_FRACTION_LOWERED",
+    "HOLDOUT_FRACTION_MISMATCH",
     "HOLDOUT_REPORT_FILENAME",
     "HOLDOUT_SALT_CHANGED",
     "HOLDOUT_SALT_MISSING",
+    "HOLDOUT_SALT_UNCHANGED",
     "HOLDOUT_SCOPES",
+    "HOLDOUT_SCOPE_RESERVED",
     "MAX_EXPLORE_FRACTION",
     "MAX_HOLDOUT_FRACTION",
     "PERSISTENT_SCOPES",
+    "RESERVED_SCOPE_KEYS",
     "UNIVERSAL_SCOPE_KEY",
     "ExploreFraction",
     "HoldoutAssignmentReport",
@@ -46,6 +50,7 @@ __all__ = [
     "effective_holdout_fraction",
     "is_persistent",
     "ledger_key",
+    "reserved_scope_error",
     "scope_key",
     "service_on",
 ]
@@ -66,10 +71,17 @@ MAX_EXPLORE_FRACTION: Final[float] = 0.10
 
 UNIVERSAL_SCOPE_KEY: Final[str] = "universal"
 
+RESERVED_SCOPE_KEYS: Final[frozenset[str]] = frozenset({UNIVERSAL_SCOPE_KEY, "explore"})
+"""Use-case ids that cannot take `scope: use_case`: their membership text would be the universal
+holdout's (`{salt}:universal:{entity}`) or share the explore draw's prefix (`{salt}:explore:...`)."""
+
 # Error codes (Plan J §5.7 style; help text in `configs/pilot/help.yaml`, added by the integrator).
 HOLDOUT_SALT_MISSING: Final[str] = "HOLDOUT_SALT_MISSING"
 HOLDOUT_SALT_CHANGED: Final[str] = "HOLDOUT_SALT_CHANGED"
+HOLDOUT_SALT_UNCHANGED: Final[str] = "HOLDOUT_SALT_UNCHANGED"
 HOLDOUT_FRACTION_LOWERED: Final[str] = "HOLDOUT_FRACTION_LOWERED"
+HOLDOUT_FRACTION_MISMATCH: Final[str] = "HOLDOUT_FRACTION_MISMATCH"
+HOLDOUT_SCOPE_RESERVED: Final[str] = "HOLDOUT_SCOPE_RESERVED"
 
 ExploreFraction = Annotated[float, Field(ge=0.0, le=MAX_EXPLORE_FRACTION)]
 """`actions.explore_fraction`: the share of eligible customers outside the target treated anyway."""
@@ -216,9 +228,10 @@ def effective_holdout_fraction(actions: _Actions) -> float:
 
 
 def service_on(actions: _Actions, explore_fraction: float) -> bool:
-    """Whether a scoring run engages the holdout service at all: a persistent scope or an explore slice.
+    """Whether a scoring run engages the holdout service: a persistent scope or an explore slice.
 
-    Off (the default) the run is today's, byte for byte, and writes no `holdout_assignment.parquet`.
+    Off (the default) the run is today's, byte for byte, and writes neither holdout file (DEC-1302
+    (e)); `engine.holdout.assign.assignment_frame` derives the same table from its scores on demand.
     """
     return is_persistent(actions) or explore_fraction > 0.0
 
@@ -230,6 +243,17 @@ def scope_key(scope: str, use_case_id: str) -> str | None:
     if scope == "use_case":
         return use_case_id
     return None
+
+
+def reserved_scope_error(scope: str, use_case_id: str) -> HoldoutError | None:
+    """The refusal for `scope: use_case` on a reserved use-case id (`RESERVED_SCOPE_KEYS`), else None."""
+    if scope != "use_case" or use_case_id not in RESERVED_SCOPE_KEYS:
+        return None
+    return HoldoutError(
+        HOLDOUT_SCOPE_RESERVED,
+        f"A use case named {use_case_id!r} cannot have its own holdout (actions.holdout.scope: use_case): "
+        f"the name is reserved by the holdout itself. Rename the use case, or use scope universal or run.",
+    )
 
 
 def ledger_key(scope: str, key: str) -> str:

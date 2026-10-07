@@ -212,6 +212,19 @@ def test_no_sleeping_dog_is_treated_or_explored(scored: Scored) -> None:
     assert not (explore & joined["suppressed_reason"].notna()).any()
     assert not (explore & (joined["action"] == "Treat")).any()
     assert set(joined.loc[explore, "explore_probability"]) == {EXPLORE}
+    assert not (sleeping & joined["treated"]).any(), "nor logged as treated for off-policy evaluation"
+    assert set(joined.loc[sleeping, "treatment_probability"]) == {0.0}, "nothing could have treated them"
+
+
+def test_the_logging_propensity_matches_what_was_done(scored: Scored) -> None:
+    """`treated` is the logged action (Treat, or explored) and every treated row had a chance of it."""
+    joined = _joined(scored)
+    treated = joined["treated"].astype(bool)
+    assert treated.tolist() == ((joined["action"] == "Treat") | joined["explore"].astype(bool)).tolist()
+    probability = joined["treatment_probability"]
+    assert bool((probability.loc[treated] > 0.0).all())
+    assert bool((probability.loc[joined["suppressed_reason"].notna()] == 0.0).all())
+    assert set(probability.round(12)) <= {0.0, round(1 - FRACTION, 12), round((1 - FRACTION) * EXPLORE, 12)}
 
 
 def test_the_run_records_its_spec(scored: Scored) -> None:

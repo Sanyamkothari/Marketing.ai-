@@ -2277,7 +2277,10 @@ _ACTIONS_SUMMARY_TAIL: Final[str] = (
     "{?actions.suppression.suppress_opted_out: · skip opted-out}"
     "{?actions.suppression.suppress_recently_contacted:"
     " · skip contacted <{actions.suppression.recently_contacted_days}d}"
-    " · {actions.control_group_fraction|pct}% control group"
+    # Plan J M92 (DEC-1302 (d)): the effective holdout share - `control_group_fraction` under scope
+    # run (today's words, unchanged), `holdout.fraction` under a persistent scope.
+    "{?!actions.holdout.fraction: · {actions.control_group_fraction|pct}% control group}"
+    "{?actions.holdout.fraction: · {actions.holdout.fraction|pct}% held out, the same customers every run}"
 )
 
 

@@ -2,8 +2,10 @@
 
 Runs the score flow with `tests/unit/test_run_score.py`'s stage stubs - real actions and export,
 fake ingest, predict and explain - as the consent-gate tests do. Under the default configuration the
-service is not engaged at all; with a persistent scope the run writes `holdout_assignment.parquet`
-for every row and `holdout_assignment.json`, and refuses a missing or changed salt at its first stage.
+service is not engaged at all (DEC-1302 (e)): no file, no setting, no database, and the stage table is
+untouched; `assignment_frame` derives the table from the scores instead. With a persistent scope the
+run writes `holdout_assignment.parquet` for every row and `holdout_assignment.json`, and refuses a
+missing or changed salt at its first stage.
 """
 
 from __future__ import annotations
@@ -18,7 +20,12 @@ import pytest
 from engine import pipeline
 from engine.config import ResolvedConfig, UseCaseConfig, resolve_config
 from engine.contracts import RunRecord, RunState, StageKey
-from engine.holdout.assign import ASSIGNMENT_COLUMNS, HOLDOUT_ASSIGNMENT_FILENAME, member_flags
+from engine.holdout.assign import (
+    ASSIGNMENT_COLUMNS,
+    HOLDOUT_ASSIGNMENT_FILENAME,
+    assignment_frame,
+    member_flags,
+)
 from engine.holdout.salt import HoldoutLedger
 from engine.holdout.spec import (
     HOLDOUT_REPORT_FILENAME,
@@ -110,6 +117,36 @@ def test_the_default_configuration_does_not_engage_the_service(
     assert HOLDOUT_ASSIGNMENT_FILENAME not in names and HOLDOUT_REPORT_FILENAME not in names
     assert not (tmp_path / "default" / PLATFORM_DB_FILENAME).exists(), "no database opened"
     assert HOLDOUT_ASSIGNMENT_FILENAME not in read_run(store).artefacts
+
+
+def test_a_default_runs_table_is_derived_from_its_scores(
+    resolved: ResolvedConfig, stubs: StageStubs, tmp_path: Path
+) -> None:
+    """DEC-1302 (e): the hand-off builder gets the default run's table without the run writing it."""
+    store = score(resolved, tmp_path / "derived")
+    scores = read_scores(store)
+    table = assignment_frame(
+        scores,
+        resolved.config,
+        primary_key=PRIMARY_KEY,
+        row_key=PRIMARY_KEY,
+        entity_key=None,
+        run_id=RUN_ID,
+        active=None,
+        explore_fraction=0.0,
+    ).table
+    assert list(table.columns) == [PRIMARY_KEY, *ASSIGNMENT_COLUMNS]
+    assert len(table.index) == ROWS, "suppressed rows included"
+    assert table["holdout_member"].tolist() == scores["control_group"].tolist(), "today's control group"
+    assert not table["explore"].any() and set(table["explore_probability"]) == {0.0}
+
+
+def test_importing_the_pipeline_installs_the_service() -> None:
+    """A dropped `install_holdout_service(_ScoreFlow)` would score persistent holdouts per run, silently."""
+    from engine.uplift.flow import UpliftScoreFlow
+
+    assert getattr(pipeline._ScoreFlow, "_holdout_service_installed", False) is True
+    assert getattr(UpliftScoreFlow, "_holdout_service_installed", False) is True
 
 
 def test_the_stage_table_is_untouched_by_default(resolved: ResolvedConfig, tmp_path: Path) -> None:

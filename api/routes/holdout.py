@@ -8,8 +8,12 @@ database only: no customer data.
 
 `PUT /holdout` (Admin, audited by the middleware) starts a new epoch of one persistent holdout at a
 given fraction - the only way to lower a fraction, which scoring otherwise refuses with
-`HOLDOUT_FRACTION_LOWERED` - and, with `rotate_salt`, adopts the currently configured salt, which
-starts a new epoch of every persistent holdout (`engine.holdout.salt`, DEC-1302 (b)). The audit event
+`HOLDOUT_FRACTION_LOWERED`, and the only way to change the universal share - and, with `rotate_salt`,
+adopts the currently configured salt, which starts a new epoch of every persistent holdout
+(`engine.holdout.salt`, DEC-1302 (b)). It refuses (409) a rotation to the salt already recorded
+(`HOLDOUT_SALT_UNCHANGED`), and a universal epoch at a share some universal use case does not declare
+(`HOLDOUT_FRACTION_MISMATCH`: the universal share is one number for every use case on it). A use case
+named `universal` or `explore` cannot have its own holdout (`HOLDOUT_SCOPE_RESERVED`, 422). The audit event
 carries the ledger's hash before and after, the use case, the new epoch (`count`) and what was done
 (`reason_code`). The scope and fraction a use case *asks for* stay in its configuration: an epoch is
 bookkeeping about the holdout, not a second place to set it.
@@ -38,7 +42,9 @@ from engine.holdout.salt import (
     start_epoch,
 )
 from engine.holdout.spec import (
+    HOLDOUT_FRACTION_MISMATCH,
     HOLDOUT_SALT_CHANGED,
+    HOLDOUT_SALT_UNCHANGED,
     MAX_HOLDOUT_FRACTION,
     UNIVERSAL_SCOPE_KEY,
     HoldoutError,
@@ -47,6 +53,7 @@ from engine.holdout.spec import (
     PersistentScope,
     effective_holdout_fraction,
     ledger_key,
+    reserved_scope_error,
 )
 from engine.utils.time import utc_now
 
@@ -87,6 +94,13 @@ class HoldoutUseCase(BaseModel):
     explore_fraction: float = Field(description="actions.explore_fraction.")
     epoch: int | None = Field(
         description="The current epoch of its persistent holdout; null under run or before first use."
+    )
+    epoch_fraction: float | None = Field(
+        description=(
+            "The share its persistent holdout has reached in that epoch; scoring is refused while this "
+            "differs from fraction (lower, or any difference under universal). Null under run or before "
+            "first use."
+        )
     )
 
 
@@ -138,7 +152,7 @@ def _view(request: Request, settings: SettingsDep, root: ConfigRootDep) -> Holdo
     stored = ledger.fingerprint()
     recorded = None if stored is None else salt_id(stored)
     entries = ledger.entries()
-    epochs = {(entry.scope, entry.scope_key): entry.epoch for entry in entries}
+    by_key = {(entry.scope, entry.scope_key): entry for entry in entries}
     use_cases: list[HoldoutUseCase] = []
     for use_case_id in list_use_case_ids(root):
         try:
@@ -147,13 +161,15 @@ def _view(request: Request, settings: SettingsDep, root: ConfigRootDep) -> Holdo
             continue  # a use case that does not load has no holdout to show; its own screens say why
         scope = config.actions.holdout.scope
         key = use_case_id if scope == "use_case" else UNIVERSAL_SCOPE_KEY
+        entry = None if scope == "run" else by_key.get((scope, key))
         use_cases.append(
             HoldoutUseCase(
                 use_case_id=use_case_id,
                 scope=scope,
                 fraction=effective_holdout_fraction(config.actions),
                 explore_fraction=float(config.actions.explore_fraction),
-                epoch=None if scope == "run" else epochs.get((scope, key)),
+                epoch=None if entry is None else entry.epoch,
+                epoch_fraction=None if entry is None else entry.fraction,
             )
         )
     return HoldoutView(
@@ -164,6 +180,20 @@ def _view(request: Request, settings: SettingsDep, root: ConfigRootDep) -> Holdo
         holdouts=entries,
         use_cases=tuple(use_cases),
     )
+
+
+def _universal_mismatches(root: ConfigRootDep, fraction: float) -> list[str]:
+    """The use cases on the universal holdout whose configured share is not `fraction`."""
+    found: list[str] = []
+    for use_case_id in list_use_case_ids(root):
+        try:
+            config = load_use_case(use_case_id, root)
+        except ConfigError:
+            continue  # a use case that does not load cannot score, so it cannot disagree
+        actions = config.actions
+        if actions.holdout.scope == "universal" and effective_holdout_fraction(actions) != fraction:
+            found.append(use_case_id)
+    return found
 
 
 @router.get(
@@ -190,8 +220,24 @@ def update_holdout(
     key = UNIVERSAL_SCOPE_KEY
     if body.scope == "use_case":
         key = str(body.use_case_id)
+        reserved = reserved_scope_error(body.scope, key)
+        if reserved is not None:
+            set_audit_context(request, details={"reason_code": reserved.code})
+            raise http_error(422, reserved.code, reserved.message, "use_case_id")
         if key not in set(list_use_case_ids(root)):
             raise http_error(404, "USE_CASE_NOT_FOUND", f"Unknown use case: {key}.", "use_case_id")
+    else:
+        others = _universal_mismatches(root, body.fraction)
+        if others:
+            set_audit_context(request, details={"reason_code": HOLDOUT_FRACTION_MISMATCH})
+            raise http_error(
+                409,
+                HOLDOUT_FRACTION_MISMATCH,
+                f"The universal holdout is one share for every use case on it, and {', '.join(others)} "
+                f"declare{'s' if len(others) == 1 else ''} a different one than {body.fraction:.0%}. Set "
+                "actions.holdout.fraction of every universal use case to the new share first.",
+                "fraction",
+            )
     ledger = HoldoutLedger(get_platform_engine(request))
     before = content_hash(ledger.snapshot())
     try:
@@ -206,7 +252,7 @@ def update_holdout(
         )
     except HoldoutError as exc:
         set_audit_context(request, details={"reason_code": exc.code})
-        status = 409 if exc.code == HOLDOUT_SALT_CHANGED else 503
+        status = 409 if exc.code in (HOLDOUT_SALT_CHANGED, HOLDOUT_SALT_UNCHANGED) else 503
         raise http_error(status, exc.code, exc.message) from exc
     set_audit_context(
         request,

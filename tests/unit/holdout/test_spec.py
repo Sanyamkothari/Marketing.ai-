@@ -5,7 +5,13 @@ from __future__ import annotations
 import pytest
 from pydantic import SecretStr, ValidationError
 
-from engine.config import ConfigError, list_use_case_ids, load_use_case, resolve_config
+from engine.config import (
+    ConfigError,
+    advanced_settings_schema,
+    list_use_case_ids,
+    load_use_case,
+    resolve_config,
+)
 from engine.holdout.spec import (
     HoldoutConfig,
     HoldoutSpec,
@@ -111,3 +117,38 @@ def test_a_short_salt_is_refused() -> None:
 
 def test_the_salt_has_no_default() -> None:
     assert Settings.from_env({}).holdout_salt is None
+
+
+def _actions_summary(config: object) -> str:
+    stages = advanced_settings_schema(config).stages  # type: ignore[arg-type]
+    return next(
+        stage.summary for stage in stages if stage.summary_template and "actions." in stage.summary_template
+    )
+
+
+def test_the_actions_summary_reads_the_effective_fraction() -> None:
+    """DEC-1302 (d): no reader shows the unused control_group_fraction under a persistent scope."""
+    assert _actions_summary(use_case()).endswith(" · 10% control group"), "scope run: today's words"
+    for scope in ("use_case", "universal"):
+        line = _actions_summary(use_case(scope=scope, fraction=0.05))
+        assert line.endswith(" · 5% held out, the same customers every run"), line
+        assert "control group" not in line
+
+
+def test_the_settings_card_suite_passes() -> None:
+    """`settings_card.test.mjs`: the run's settings card words the effective share by scope."""
+    import subprocess
+    from pathlib import Path
+
+    from tests.fixtures.node import skip_without_node
+
+    node = skip_without_node()
+    result = subprocess.run(
+        [node, "--test", str(Path(__file__).resolve().parent / "settings_card.test.mjs")],
+        capture_output=True,
+        text=True,
+        timeout=120,
+        check=False,
+    )
+    assert result.returncode == 0, result.stdout[-4000:] + result.stderr[-2000:]
+    assert "# fail 0" in result.stdout

@@ -43,6 +43,7 @@ __all__ = [
     "cluster_name",
     "connections_key_secret_name",
     "db_instance_identifier",
+    "holdout_salt_secret_name",
     "job_task_family",
     "jobs_log_group_name",
     "log_retention",
@@ -247,6 +248,11 @@ def connections_key_secret_name(env_name: str) -> str:
     """`marketing-ai/<env>/connections-key`: the generated key saved connections are encrypted with
     (Plan H, DEC-1120)."""
     return f"{PRODUCT}/{env_name}/connections-key"
+
+
+def holdout_salt_secret_name(env_name: str) -> str:
+    """`marketing-ai/<env>/holdout-salt`: the generated persistent-holdout salt (Plan J M92, DEC-1302)."""
+    return f"{PRODUCT}/{env_name}/holdout-salt"
 
 
 def stack_name(env_name: str, component: str) -> str:

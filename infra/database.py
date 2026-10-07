@@ -42,6 +42,7 @@ from infra.naming import (
     PRODUCT,
     connections_key_secret_name,
     db_instance_identifier,
+    holdout_salt_secret_name,
     privacy_salt_secret_name,
     secret_name,
 )
@@ -52,6 +53,7 @@ __all__ = [
     "DATABASE_NAME",
     "DATABASE_SCHEMA",
     "DATABASE_USERNAME",
+    "HOLDOUT_SALT_LENGTH",
     "PASSWORD_LENGTH",
     "PRIVACY_SALT_LENGTH",
     "ROTATION_DAYS",
@@ -67,6 +69,8 @@ PRIVACY_SALT_LENGTH: Final[int] = 48
 CONNECTIONS_KEY_LENGTH: Final[int] = 48
 """Letters and digits, from which `engine.connections.store` derives the Fernet key (DEC-1120)."""
 """Chosen, not measured: well above `engine.privacy.config.MIN_SALT_LENGTH` (16)."""
+HOLDOUT_SALT_LENGTH: Final[int] = 48
+"""Plan J M92 (DEC-1302): well above the 16 characters `Settings.holdout_salt` requires."""
 
 PASSWORD_LENGTH: Final[int] = 40
 """Chosen, not measured. Long enough that its alphanumeric-only alphabet costs nothing."""
@@ -168,6 +172,23 @@ class DatabaseStack(Stack):
             ),
         )
 
+        # Plan J M92 (DEC-1302): the salt persistent holdouts hash customers with. A use case with
+        # `actions.holdout.scope: use_case` or `universal` refuses to score without it, and a changed
+        # salt is refused too (`HOLDOUT_SALT_CHANGED`): a new one would move every customer in or out
+        # of the holdout. Generated once, retained and NEVER rotated, for the privacy salt's reason;
+        # an Admin adopts a new salt on purpose (`PUT /holdout`), never a deploy.
+        self.holdout_salt_secret = secretsmanager.Secret(
+            self,
+            "HoldoutSalt",
+            secret_name=holdout_salt_secret_name(context.env_name),
+            description=f"Persistent-holdout salt for {PRODUCT} {context.env_name}; generated once, never rotated",
+            encryption_key=key,
+            removal_policy=RemovalPolicy.RETAIN,
+            generate_secret_string=secretsmanager.SecretStringGenerator(
+                password_length=HOLDOUT_SALT_LENGTH, exclude_punctuation=True
+            ),
+        )
+
         self.parameter_group = rds.ParameterGroup(
             self,
             "Parameters",
@@ -261,6 +282,9 @@ class DatabaseStack(Stack):
                 ),
                 "connections_key": SecretValue.unsafe_plain_text(
                     self.connections_key_secret.secret_value.unsafe_unwrap()
+                ),
+                "holdout_salt": SecretValue.unsafe_plain_text(
+                    self.holdout_salt_secret.secret_value.unsafe_unwrap()
                 ),
             },
         )

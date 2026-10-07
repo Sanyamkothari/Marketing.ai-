@@ -7,6 +7,7 @@
 * Composite keys: one membership per entity.
 * Propensity and uplift runs give the same membership.
 * No sleeping dog is ever treated, explore rows included.
+* The recorded logging propensity (`treatment_probability`) is what `ope.evaluate_policy` accepts.
 
 Every expectation is computed from the rule itself (`sha256(f"{salt}:{scope_key}:{entity}")`), never
 read back from the code under test.
@@ -28,10 +29,12 @@ from engine.holdout.assign import (
     assignment_frame,
     holdout_context,
     member_flags,
+    ope_rows,
 )
 from engine.stages.actions import CONTROL_GROUP_COLUMN, SUPPRESSED_REASON_COLUMN, apply_actions
-from engine.uplift.actions import TREAT_ACTION, apply_uplift_actions
+from engine.uplift.actions import INTENDED_TREATMENT_COLUMN, TREAT_ACTION, apply_uplift_actions
 from engine.uplift.contracts import Segment, SegmentThresholds
+from engine.uplift.ope import evaluate_policy
 from tests.unit.holdout.support import CONSENT, SALT, active, binomial_band, keys, scored, use_case
 
 NOW = datetime(2026, 10, 7, 12, 0, tzinfo=UTC)
@@ -270,6 +273,91 @@ def test_no_sleeping_dog_is_treated_or_explored() -> None:
     low, high = binomial_band(int(candidate.sum()), 0.10)
     assert low <= int(explore.sum()) <= high
     assert found.candidates == int(candidate.sum()) and found.explored == int(explore.sum())
+    logged = table["treated"].to_numpy(dtype=bool)
+    assert not bool((sleeping & logged).any()), "no sleeping dog is logged as treated"
+    assert set(table.loc[sleeping, "treatment_probability"]) == {0.0}, "nor could have been"
+
+
+def test_the_logging_propensity_is_the_chance_of_treatment_before_the_draws() -> None:
+    """`treatment_probability` is P(treated | x): 1 - h, (1 - h)·e, or 0 (nothing could treat the row)."""
+    config = use_case(scope="universal", fraction=0.10, explore=0.10, policy={})
+    frame = uplift_frame(keys(5_000), seed=11)
+    result = uplift_run(frame, config, active(config))
+    table = assignment(result, config, MONTHS[0], active(config), explore=0.10)
+    sleeping = (result["segment"] == Segment.SLEEPING_DOG.value).to_numpy()
+    selected = result[INTENDED_TREATMENT_COLUMN].to_numpy(dtype=bool)  # before the holdout
+    eligible = result[SUPPRESSED_REASON_COLUMN].isna().to_numpy()
+    control = result[CONTROL_GROUP_COLUMN].to_numpy(dtype=bool)
+    assert ((result["action"] == TREAT_ACTION).to_numpy() == (selected & ~control)).all()
+    expected = np.where(
+        eligible & selected, 0.90, np.where(eligible & ~selected & ~sleeping, 0.90 * 0.10, 0.0)
+    )
+    assert np.allclose(table["treatment_probability"].to_numpy(), expected)
+    explore = table["explore"].to_numpy(dtype=bool)
+    assert table["treated"].tolist() == ((eligible & selected & ~control) | explore).tolist()
+    # the selected rows' propensity is realised: about 1 - h of them are treated
+    low, high = binomial_band(int((eligible & selected).sum()), 0.90)
+    assert low <= int((eligible & selected & ~control).sum()) <= high
+    # held-out candidates keep their ex-ante propensity and are logged untreated
+    member_rows = table["holdout_member"].to_numpy(dtype=bool)
+    assert not bool(table.loc[member_rows, "treated"].any()), "a held-out customer is never treated"
+    kept = table.loc[member_rows & eligible & ~selected & ~sleeping, "treatment_probability"].to_numpy()
+    assert len(kept) > 0 and np.allclose(kept, 0.90 * 0.10)
+
+
+def test_the_recorded_propensities_are_accepted_by_off_policy_evaluation() -> None:
+    config = use_case(scope="universal", fraction=0.10, explore=0.10, policy={})
+    frame = uplift_frame(keys(5_000), seed=11)
+    result = uplift_run(frame, config, active(config))
+    table = assignment(result, config, MONTHS[0], active(config), explore=0.10)
+    usable = ope_rows(table)
+    probability = usable["treatment_probability"].to_numpy()
+    assert len(usable.index) > 0 and bool(((probability > 0.0) & (probability < 1.0)).all())
+    assert len(usable.index) == int(
+        ((table["treatment_probability"] > 0) & (table["treatment_probability"] < 1)).sum()
+    )
+    rows = frame.set_index("customer_id").loc[usable["customer_id"]]
+    rng = np.random.default_rng(3)
+    report = evaluate_policy(
+        usable["treated"].to_numpy(dtype=np.int64),
+        (rng.uniform(size=len(usable.index)) < 0.2).astype(np.int64),
+        (rows["uplift"].to_numpy() > 0.0).astype(np.float64),
+        p_treated=rows["p_treated"].to_numpy(),
+        p_control=rows["p_control"].to_numpy(),
+        propensity=probability,
+        run_id=MONTHS[0],
+        description="treat positive uplift",
+        causal=True,
+        now=NOW,
+    )
+    assert report.estimates
+    with pytest.raises(ValueError, match="strictly between 0 and 1"):
+        evaluate_policy(
+            table["treated"].to_numpy(dtype=np.int64),
+            np.zeros(len(table.index), dtype=np.int64),
+            np.ones(len(table.index)),
+            p_treated=np.full(len(table.index), 0.5),
+            p_control=np.full(len(table.index), 0.5),
+            propensity=table["treatment_probability"].to_numpy(),
+            run_id=MONTHS[0],
+            description="every row, unfiltered",
+            causal=True,
+            now=NOW,
+        )
+
+
+def test_a_propensity_run_logs_one_minus_h_on_its_selected_bands() -> None:
+    config = use_case(explore=0.05, control_fraction=0.20)
+    frame = scored(keys(4_000), seed=2, suppressed_share=0.1)
+    banded = act(frame, config, MONTHS[0], None)
+    table = assignment(banded, config, MONTHS[0], None, explore=0.05)
+    lowest = config.actions.bands[-1].name
+    eligible = banded[SUPPRESSED_REASON_COLUMN].isna().to_numpy()
+    selected = (banded["band"] != lowest).to_numpy()
+    probability = table["treatment_probability"].to_numpy()
+    assert np.allclose(probability[eligible & selected], 0.80)
+    assert np.allclose(probability[eligible & ~selected], 0.80 * 0.05)
+    assert set(probability[~eligible].tolist()) == {0.0}
 
 
 def test_a_propensity_run_explores_outside_its_top_bands() -> None:

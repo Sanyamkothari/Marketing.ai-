@@ -18,12 +18,18 @@ the new fingerprint, and that starts a new epoch of every persistent holdout.
 fraction used in it:
 
 * the first scoring run records epoch 1 at the configured fraction;
-* **raising** the fraction keeps every member (the rule nests), so a run with a higher fraction
-  simply records it - same epoch;
+* **raising** a `use_case` holdout's fraction keeps every member (the rule nests), so a run with a
+  higher fraction simply records it - same epoch;
 * **lowering** it would turn held-out customers into contacted ones, so results before and after
   cannot be added up: scoring is refused (`HOLDOUT_FRACTION_LOWERED`) until an Admin starts a new
   epoch at the lower fraction (`PUT /holdout`, audited);
-* **rotating the salt** reshuffles everyone: a new epoch of every entry.
+* the **universal** holdout has one share for every use case on it, the ledger's: a use case asking
+  for less is refused as above, and one asking for more is refused too (`HOLDOUT_FRACTION_MISMATCH`)
+  - it would hold out customers that the others, within the same epoch, contact. Changing the
+  universal share is an Admin's new epoch, after every universal use case has been set to it;
+* **rotating the salt** reshuffles everyone: a new epoch of every entry. Rotating to the salt
+  already recorded is refused (`HOLDOUT_SALT_UNCHANGED`): it would record a reshuffle that did not
+  happen.
 
 The ledger is facts about the platform, never a secret and never a person's data, as the table's
 contract requires.
@@ -38,8 +44,10 @@ from typing import TYPE_CHECKING, Final
 
 from engine.holdout.spec import (
     HOLDOUT_FRACTION_LOWERED,
+    HOLDOUT_FRACTION_MISMATCH,
     HOLDOUT_SALT_CHANGED,
     HOLDOUT_SALT_MISSING,
+    HOLDOUT_SALT_UNCHANGED,
     UNIVERSAL_SCOPE_KEY,
     HoldoutError,
     HoldoutLedgerEntry,
@@ -47,6 +55,7 @@ from engine.holdout.spec import (
     PersistentScope,
     effective_holdout_fraction,
     ledger_key,
+    reserved_scope_error,
 )
 
 if TYPE_CHECKING:
@@ -236,6 +245,9 @@ def resolve_holdout(
     scope = actions.holdout.scope
     if scope == "run":
         return ResolvedHoldout(HoldoutSpec(scope="run", fraction=fraction, explore_fraction=explore), None)
+    reserved = reserved_scope_error(scope, config.id)
+    if reserved is not None:
+        raise reserved
     key = config.id if scope == "use_case" else UNIVERSAL_SCOPE_KEY
     if settings is None or engine is None:
         raise ValueError(
@@ -258,12 +270,26 @@ def resolve_holdout(
         )
     entry = ledger.entry(scope, key)
     if entry is not None and fraction < entry.fraction:
+        everyone = (
+            " Every use case on the universal holdout holds out the same share."
+            if scope == "universal"
+            else ""
+        )
         raise HoldoutError(
             HOLDOUT_FRACTION_LOWERED,
             f"The holdout for {key} is {entry.fraction:.0%} in its current epoch ({entry.epoch}) and this "
             f"use case now asks for {fraction:.0%}. Lowering it would contact customers who were held out, "
-            "so results before and after could not be added up. Ask an Admin to start a new holdout epoch "
-            "at the lower share (Settings, Holdout), or set the share back.",
+            f"so results before and after could not be added up.{everyone} Ask an Admin to start a new "
+            "holdout epoch at the lower share (Settings, Holdout), or set the share back.",
+        )
+    if scope == "universal" and entry is not None and fraction > entry.fraction:
+        raise HoldoutError(
+            HOLDOUT_FRACTION_MISMATCH,
+            f"The universal holdout is {entry.fraction:.0%} in its current epoch ({entry.epoch}) and this "
+            f"use case asks for {fraction:.0%}. Every use case on the universal holdout holds out the same "
+            "share, or one would contact customers another holds out. Set actions.holdout.fraction to "
+            f"{entry.fraction:.0%}, or set every universal use case to the new share and ask an Admin to "
+            "start a new epoch at it (Settings, Holdout).",
         )
     if record:
         if stored is None:
@@ -307,13 +333,24 @@ def start_epoch(
     """An Admin's new epoch: for one holdout at `fraction`, and with `rotate_salt` for every holdout.
 
     Rotating records the current salt's fingerprint and moves every other entry to its next epoch at
-    its own fraction. Without `rotate_salt` the salt must be the recorded one (`HOLDOUT_SALT_CHANGED`).
+    its own fraction; it needs a recorded salt that differs from the configured one
+    (`HOLDOUT_SALT_UNCHANGED` otherwise: nothing would be reshuffled). Without `rotate_salt` the salt
+    must be the recorded one (`HOLDOUT_SALT_CHANGED`).
     """
     salt = configured_salt(settings)
     if salt is None:
         raise _missing_salt()
     fingerprint = salt_fingerprint(salt)
     stored = ledger.fingerprint()
+    if rotate_salt and (stored is None or stored == fingerprint):
+        from engine.settings import ENV_VARS
+
+        detail = "the one already recorded" if stored is not None else "the first one any holdout uses"
+        raise HoldoutError(
+            HOLDOUT_SALT_UNCHANGED,
+            f"The configured {ENV_VARS['holdout_salt']} is {detail}, so rotating would reshuffle nobody. "
+            "Set the new salt first, or start the epoch without rotate_salt.",
+        )
     if not rotate_salt and stored is not None and stored != fingerprint:
         raise HoldoutError(
             HOLDOUT_SALT_CHANGED,
@@ -323,7 +360,7 @@ def start_epoch(
     if stored != fingerprint:
         ledger.put_fingerprint(fingerprint, at=at)
     short = salt_id(fingerprint)
-    if rotate_salt and stored is not None and stored != fingerprint:
+    if rotate_salt:  # a recorded, different salt (checked above): every holdout starts again
         for other in ledger.entries():
             if (other.scope, other.scope_key) == (scope, key):
                 continue

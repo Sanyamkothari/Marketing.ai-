@@ -690,7 +690,9 @@ id or `universal` and `entity` the key as text (the customer column of a two-col
 depend on the run, on who is eligible or on row order, and smaller fractions nest inside larger ones.
 The control group is `eligible ∧ member`: a suppressed member stays a member, it was never going to be
 contacted. The realised share is binomial around the fraction (on 10,000 customers at 10%, within
-about ±0.9 points 99.9% of the time), not exact as under `run`.
+about ±1.0 point 99.9% of the time: 3.29 × √(0.1 × 0.9 / 10,000)), not exact as under `run`. A use
+case whose id is `universal` or `explore` cannot take `scope: use_case` (`HOLDOUT_SCOPE_RESERVED`): its
+membership text would be the universal holdout's, or share the explore draw's prefix.
 
 **The salt** is `MARKETING_AI_HOLDOUT_SALT` (a secret setting, at least 16 characters, no default).
 Its fingerprint - never the salt - is kept in `platform_setting`. A persistent scope without the salt
@@ -698,26 +700,55 @@ fails the run at its first stage with `HOLDOUT_SALT_MISSING`; a different salt f
 with `HOLDOUT_SALT_CHANGED`.
 
 **Epochs.** Each persistent holdout has a ledger entry: its epoch and the largest fraction used in it.
-Raising the fraction keeps every member and stays in the epoch. Lowering it would contact customers
-who were held out, so scoring is refused (`HOLDOUT_FRACTION_LOWERED`) until an Admin starts a new
-epoch at the lower share with `PUT /holdout` (audited). Rotating the salt (`PUT /holdout` with
-`rotate_salt: true`) starts a new epoch of every persistent holdout. `GET /holdout` (Viewer) shows the
-salt's state by fingerprint, every ledger entry and each use case's scope, fraction and explore share.
+Raising a `use_case` holdout's fraction keeps every member and stays in the epoch. Lowering it would
+contact customers who were held out, so scoring is refused (`HOLDOUT_FRACTION_LOWERED`) until an Admin
+starts a new epoch at the lower share with `PUT /holdout` (audited). The **universal** holdout has one
+share for every use case on it - the ledger's: a use case asking for more is refused too
+(`HOLDOUT_FRACTION_MISMATCH`), because within one epoch it would hold out customers another use case
+contacts. To change the universal share, set every universal use case to the new share, then have an
+Admin start a new epoch at it; `PUT /holdout` refuses a universal epoch at a share some universal use
+case does not declare (`HOLDOUT_FRACTION_MISMATCH`, 409). Rotating the salt (`PUT /holdout` with
+`rotate_salt: true`) starts a new epoch of every persistent holdout; rotating to the salt already
+recorded is refused (`HOLDOUT_SALT_UNCHANGED`, 409), so the audit trail never records a reshuffle that
+did not happen. `GET /holdout` (Viewer) shows the salt's state by fingerprint, every ledger entry and
+each use case's scope, fraction, explore share, epoch and the share its epoch has reached
+(`epoch_fraction`).
 
-**The explore slice.** Candidates are rows that are eligible, not holdout members, not selected (an
-uplift run: not `Treat`; a propensity run: in the lowest band) and not a predicted sleeping dog. Each
-candidate customer is explored when `sha256(f"{salt}:explore:{seed}:{entity}")` falls under
-`explore_fraction × 2^64` - a second label, re-drawn every run. A sleeping dog is never explored. The
-scored action in `scores.*` is unchanged; the flag is for the hand-off file.
+**The explore slice.** "Selected" is decided before the holdout: on an uplift run the policy's
+`intended_treatment` rows (its `Treat` rows plus the held-out rows it would have treated), on a
+propensity run every band but the lowest. Candidates are rows that are eligible, not holdout members,
+not selected and not a predicted sleeping dog. Each candidate customer is explored when
+`sha256(f"{salt}:explore:{seed}:{entity}")` falls under `explore_fraction × 2^64` - a second label,
+re-drawn every run. A sleeping dog is never explored. The scored action in `scores.*` is unchanged;
+the flag is for the hand-off file.
 
-**What a run writes.** When the service is engaged (a persistent scope or an explore slice), every
-scoring run writes `holdout_assignment.parquet` - the key column(s), `holdout_member`, `explore` and
-`explore_probability` (the explore share for a candidate, 0 otherwise; the logging probability
-`ope.evaluate_policy` needs) for **every** row, suppressed rows included - and
-`holdout_assignment.json` (the run's `HoldoutSpec`: scope, fraction, salt fingerprint, epoch, and the
-counts). The parquet file is a row-level artefact (`configs/privacy.yaml`, `engine/privacy/layout.py`):
-retention deletes it and erasure rewrites it like `scores.parquet`. Under the default configuration
-nothing is engaged and the run is byte for byte what it was, with no extra file.
+**Probabilities for off-policy evaluation.** Two columns answer two questions:
+
+* `explore_probability` is `P(explored | candidate)`: the explore share for a candidate, 0 otherwise.
+  It describes the explore draw alone and is **not** a logging propensity.
+* `treatment_probability` is the logging propensity `P(treated | x)` that `ope.evaluate_policy`
+  needs, and `treated` is the logged action (selected and not held out, or explored). With `h` the
+  effective holdout fraction and `e` the explore share it is, before either draw: `1 − h` for an
+  eligible selected row; `(1 − h) × e` for an eligible, non-selected row that is not a predicted
+  sleeping dog; 0 for a suppressed row, a sleeping dog, and a non-selected row when there is no
+  explore slice. Held-out rows keep their ex-ante value and are logged untreated.
+
+Only rows strictly inside `(0, 1)` say anything about both actions: `engine.holdout.assign.ope_rows`
+keeps exactly those, and `evaluate_policy(t=treated, propensity=treatment_probability, ...)` accepts
+them as they are. The whole table, unfiltered, is refused - by design.
+
+**What a run writes.** When the service is engaged (a persistent scope or an explore slice), the
+scoring run writes `holdout_assignment.parquet` - the key column(s), `holdout_member`, `explore`,
+`explore_probability`, `treated` and `treatment_probability` for **every** row, suppressed rows
+included - and `holdout_assignment.json` (the run's `HoldoutSpec`: scope, fraction, salt fingerprint,
+epoch, and the counts). The parquet file is a row-level artefact (`configs/privacy.yaml`,
+`engine/privacy/layout.py`): retention deletes it and erasure rewrites it like `scores.parquet`.
+Under the default configuration (`scope: run`, no explore slice) nothing is engaged: the run is byte
+for byte what it was and writes neither file, because a default scoring run's files are pinned to
+`SCORE_ARTEFACTS` (DEC-1302 (e)). A reader that needs the table for a default run - the hand-off
+builder - derives it from `scores.*` with `engine.holdout.assign.assignment_frame(..., active=None,
+explore_fraction=0)`: `holdout_member` is the run's `control_group`, nobody is explored, and
+`treatment_probability` is `1 − control_group_fraction` on eligible selected rows.
 
 ---
 
@@ -815,6 +846,9 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `HOLDOUT_SALT_MISSING` | the run fails at ingest; 503 on `PUT /holdout` | any scoring run of a use case with a persistent holdout; `PUT /holdout` | `MARKETING_AI_HOLDOUT_SALT` is not set (section 14). | Set the salt (at least 16 characters, kept for as long as the holdout runs), or set `actions.holdout.scope` back to `run`. |
 | `HOLDOUT_SALT_CHANGED` | the run fails at ingest; 409 on `PUT /holdout` | any scoring run with a persistent holdout; `PUT /holdout` without `rotate_salt` | The configured salt is not the one the holdout was drawn with. | Set the original salt again, or have an Admin adopt the new one with `PUT /holdout` and `rotate_salt: true` (a new epoch of every holdout). |
 | `HOLDOUT_FRACTION_LOWERED` | the run fails at ingest | any scoring run with a persistent holdout | The use case asks for a smaller holdout than its current epoch has used. | Set the share back, or have an Admin start a new epoch at the lower share (`PUT /holdout`). |
+| `HOLDOUT_FRACTION_MISMATCH` | the run fails at ingest; 409 on `PUT /holdout` | any scoring run on the universal holdout; `PUT /holdout` with scope `universal` | The universal holdout is one share for every use case on it, and this use case (or the requested epoch) asks for a different one. | Set `actions.holdout.fraction` of every universal use case to the same share; to change it, set them all and then have an Admin start a new epoch at it. |
+| `HOLDOUT_SALT_UNCHANGED` | 409 | `PUT /holdout` with `rotate_salt: true` | The configured salt is the one already recorded (or the first one), so a rotation would reshuffle nobody. | Set the new `MARKETING_AI_HOLDOUT_SALT` first, or start the epoch without `rotate_salt`. |
+| `HOLDOUT_SCOPE_RESERVED` | the run fails at ingest; 422 on `PUT /holdout` | a use case named `universal` or `explore` with `scope: use_case` | The id is reserved by the holdout itself. | Rename the use case, or use scope `universal` or `run`. |
 
 Phase 1's shared codes (`RUN_NOT_FOUND`, `UPLOAD_NOT_FOUND`, the ingest codes and the configuration
 codes) keep their Phase 1 meaning on these routes.

@@ -1153,7 +1153,12 @@ function settingsCard(uc, run, config, byPath, summary, drift) {
   if (!config) return "";
   const scoring = isScoring(run);
   const bands = readPath(config, "actions.bands") || [];
-  const control = readPath(config, "actions.control_group_fraction");
+  // The effective holdout share (Plan J M92, DEC-1302 (d)), the rule of `holdoutFraction` in
+  // modules/measure/rule.js and of `engine.holdout.spec.effective_holdout_fraction`: under a persistent
+  // scope `actions.holdout.fraction` (the same customers every run), else `control_group_fraction`.
+  const scope = readPath(config, "actions.holdout.scope");
+  const persistent = !!scope && scope !== "run";
+  const control = readPath(config, persistent ? "actions.holdout.fraction" : "actions.control_group_fraction");
   const suppression = (key) => readPath(config, `actions.suppression.${key}`);
   const rules = [];
   if (suppression("suppress_opted_out")) {
@@ -1184,7 +1189,14 @@ function settingsCard(uc, run, config, byPath, summary, drift) {
         ? bands.map((b) => `${b.name} from ${fmtNum(b.min_score, 2)}: ${b.action}`).join(" · ")
         : EM_DASH,
     ],
-    present(control) ? ["Held back to measure results", `${fmtPct(control, 0)} of eligible customers, at random`] : null,
+    present(control)
+      ? [
+          "Held back to measure results",
+          persistent
+            ? `${fmtPct(control, 0)} of all customers, the same ones every run`
+            : `${fmtPct(control, 0)} of eligible customers, at random`,
+        ]
+      : null,
     ["Never contacted", rules.length ? rules.join(" · ") : "Nobody is excluded by a rule"],
     scoring && summary && summary.rows_with_fallback_reasons !== undefined
       ? [

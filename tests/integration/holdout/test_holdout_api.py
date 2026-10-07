@@ -7,6 +7,7 @@ the salt itself.
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,7 @@ from engine.access.roles import Role
 from engine.audit.events import AuditQuery
 from engine.holdout.salt import HoldoutLedger, salt_fingerprint
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
+from engine.settings import DEFAULT_CONFIG_DIR
 from tests.integration.production.access_support import audit_log_at, bearer, local_app, make_user
 
 pytestmark = pytest.mark.integration
@@ -178,3 +180,79 @@ def test_an_unknown_use_case_is_404(tmp_path: Path) -> None:
         )
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "USE_CASE_NOT_FOUND"
+
+
+def test_rotating_to_the_recorded_salt_is_refused_and_audited_as_refused(tmp_path: Path) -> None:
+    app = app_with(tmp_path, SALT)
+    tokens = users(app)
+    with TestClient(app) as client:
+        started = client.put(
+            "/holdout", json={"scope": "universal", "fraction": 0.1}, headers=tokens[Role.ADMIN]
+        )
+        assert started.status_code == 200, started.text
+        refused = client.put(
+            "/holdout",
+            json={"scope": "universal", "fraction": 0.1, "rotate_salt": True},
+            headers=tokens[Role.ADMIN],
+        )
+        view = client.get("/holdout", headers=tokens[Role.VIEWER]).json()
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["code"] == "HOLDOUT_SALT_UNCHANGED"
+    assert [item["epoch"] for item in view["holdouts"]] == [1], "nothing was reshuffled"
+    events = [
+        event for event in audit_log_at(tmp_path).query(AuditQuery()) if event.action == "holdout.update"
+    ]
+    assert all(event.details.get("reason_code") != "HOLDOUT_SALT_ROTATED" for event in events)
+
+
+def _config_root_with_universal(tmp_path: Path, fraction: float) -> Path:
+    root = tmp_path / "configs"
+    shutil.copytree(DEFAULT_CONFIG_DIR, root)
+    path = root / "use_cases" / "targeted_advertisement.yaml"
+    text = path.read_text(encoding="utf-8")
+    assert "\nactions:\n" in text and "holdout:" not in text
+    path.write_text(
+        text.replace(
+            "\nactions:\n", f"\nactions:\n  holdout: {{scope: universal, fraction: {fraction}}}\n", 1
+        ),
+        encoding="utf-8",
+    )
+    return root
+
+
+def test_a_universal_epoch_must_be_the_share_every_universal_use_case_declares(tmp_path: Path) -> None:
+    app = app_with(tmp_path)
+    app.state.config_root = _config_root_with_universal(tmp_path, 0.05)
+    tokens = users(app)
+    with TestClient(app) as client:
+        refused = client.put(
+            "/holdout", json={"scope": "universal", "fraction": 0.1}, headers=tokens[Role.ADMIN]
+        )
+        accepted = client.put(
+            "/holdout", json={"scope": "universal", "fraction": 0.05}, headers=tokens[Role.ADMIN]
+        )
+    assert refused.status_code == 409, refused.text
+    assert refused.json()["detail"]["code"] == "HOLDOUT_FRACTION_MISMATCH"
+    assert "targeted-advertisement" in refused.json()["detail"]["message"]
+    assert accepted.status_code == 200, accepted.text
+    by_id = {item["use_case_id"]: item for item in accepted.json()["use_cases"]}
+    assert by_id["targeted-advertisement"]["scope"] == "universal"
+    assert (by_id["targeted-advertisement"]["epoch"], by_id["targeted-advertisement"]["epoch_fraction"]) == (
+        1,
+        0.05,
+    )
+    assert by_id["telco-churn"]["epoch"] is None and by_id["telco-churn"]["epoch_fraction"] is None
+
+
+@pytest.mark.parametrize("reserved", ["universal", "explore"])
+def test_a_reserved_use_case_id_cannot_take_its_own_holdout(tmp_path: Path, reserved: str) -> None:
+    app = app_with(tmp_path)
+    tokens = users(app)
+    with TestClient(app) as client:
+        response = client.put(
+            "/holdout",
+            json={"scope": "use_case", "use_case_id": reserved, "fraction": 0.1},
+            headers=tokens[Role.ADMIN],
+        )
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["code"] == "HOLDOUT_SCOPE_RESERVED"
