@@ -97,6 +97,9 @@ REQUIRED_GATES: Final[dict[str, tuple[str, str]]] = {
     "remove a raw table": ("DELETE", "/clients/{client_id}/sources/{source_id}"),
     "save a mapping": ("PUT", "/clients/{client_id}/mappings/{mapping_id}"),
     "build a dataset": ("POST", "/datasets"),
+    # Plan J M91 follow-up (DEC-1301 (e)): customer-level downloads are Analyst-only with sign-in on.
+    "download the contact list": ("GET", "/runs/{run_id}/scores.csv"),
+    "download campaign messages": ("GET", "/runs/{run_id}/copy_messages.csv"),
 }
 """The actions M46 names ("hide or disable every action the user cannot take"), by the route each calls."""
 
@@ -275,6 +278,39 @@ def test_the_actions_the_plan_names_are_all_gated() -> None:
     gated = {(row["method"], row["path"]) for row in control_rows()}
     missing = [name for name, key in REQUIRED_GATES.items() if key not in gated]
     assert not missing, f"no control is gated for: {missing}"
+
+
+def test_the_row_level_download_links_match_their_gates() -> None:
+    """The two download gates match by href, so the URL builders must keep producing what they match.
+
+    "Download contact list (CSV)" is drawn by usecase.js, uplift/views.js and pages.js from
+    `ui/api.js`'s `scoresUrl`; "Download messages (CSV)" by generative/copy.js from `copyMessagesUrl`.
+    """
+    selectors = {(row["method"], row["path"]): row["selector"] for row in control_rows()}
+    assert selectors[("GET", "/runs/{run_id}/scores.csv")] == 'a[href$="/scores.csv"]'
+    assert selectors[("GET", "/runs/{run_id}/copy_messages.csv")] == 'a[href*="/copy_messages.csv"]'
+    assert re.search(r"scoresUrl = \(runId\) => url\(`/runs/\$\{[^}]+\}/scores\.csv`\)", code_of("api.js"))
+    assert re.search(
+        r"copyMessagesUrl = \(runId\) => url\(`/runs/\$\{[^}]+\}/copy_messages\.csv`\)",
+        code_of("modules/generative/api.js"),
+    )
+    for screen in ("usecase.js", "app.js", "modules/uplift/controller.js"):
+        assert "scoresUrl(" in code_of(screen), f"{screen} no longer links the contact list through scoresUrl"
+    assert "copyMessagesUrl(" in code_of("modules/generative/copy.js")
+
+
+def test_the_plan_j_audit_actions_have_plain_words() -> None:
+    """The audit screen labels an action through `ACTION_WORDS`; Plan J's new actions are listed there."""
+    from api.access_policy import ROW_LEVEL_DOWNLOAD
+    from api.routes.holdout import POLICIES as HOLDOUT_POLICIES
+
+    actions = {ROW_LEVEL_DOWNLOAD.action} | {policy.action for policy in HOLDOUT_POLICIES.values()}
+    assert actions == {"runs.customer_rows_download", "holdout.read", "holdout.update"}
+    words = code_of("modules/production/audit.js")
+    for action in sorted(actions):
+        assert re.search(
+            rf'"{re.escape(action)}": "[^"]+"', words
+        ), f"audit.js has no plain words for {action}"
 
 
 def action_buttons() -> list[tuple[str, str, str]]:

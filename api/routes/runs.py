@@ -90,6 +90,8 @@ from engine.contracts import (
     ValidationReport,
 )
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
+from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME  # Plan J M92 (DEC-1302 (e))
+from engine.holdout.spec import HOLDOUT_REPORT_FILENAME  # Plan J M92 (DEC-1302 (e))
 from engine.jobs import JobRunner, ReconcilingJobRunner
 from engine.keys import normalise_key, split_config_for_key
 from engine.onboarding.specs import DatasetManifest
@@ -562,6 +564,9 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
     # Uplift runs write their artefacts into the run's own directory too, so Phase 1's Data, Model and
     # Output pages read them here like any other (M53; `GET /runs/{id}/uplift/{name}` stays an alias).
     known = known or name in UPLIFT_ARTEFACTS
+    # An engaged run's holdout and explore flags per row (Analyst, `ROW_LEVEL_ARTEFACTS`) and its
+    # aggregate summary, read by the hand-off and the delivery checks (Plan J M92, DEC-1302 (e)).
+    known = known or name in (HOLDOUT_ASSIGNMENT_FILENAME, HOLDOUT_REPORT_FILENAME)
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)

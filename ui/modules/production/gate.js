@@ -89,6 +89,13 @@ export const ACTION_CONTROLS = [
   { selector: "[data-pe-roi] input", method: "PUT", path: "/pilot/roi/{run_id}", explain: false },
   // --- every person's feedback, as one download (pilot/screen.js) ---------------------------------
   { selector: 'a[href$="/pilot/feedback/export"]', method: "GET", path: "/pilot/feedback/export" },
+  // --- customer-level downloads, Analyst-only with sign-in on (Plan J M91, DEC-1301 (e)) -------------
+  // "Download contact list (CSV)" on the Setup screen (usecase.js), the uplift screens (uplift/views.js)
+  // and the output page (pages.js, its href from app.js); "Download messages (CSV)" on the copy screen
+  // (generative/copy.js), with or without `?approved_only=true`. Matched by href so every screen that
+  // links the file is covered, whichever id or data attribute it gives the link.
+  { selector: 'a[href$="/scores.csv"]', method: "GET", path: "/runs/{run_id}/scores.csv" },
+  { selector: 'a[href*="/copy_messages.csv"]', method: "GET", path: "/runs/{run_id}/copy_messages.csv" },
   // --- the client picker (onboarding/clients.js): "+ New client" --------------------------------------
   { selector: '#f-client option[value="__new__"]', method: "POST", path: "/clients", explain: false },
   { selector: "#f-client-add", method: "POST", path: "/clients" },

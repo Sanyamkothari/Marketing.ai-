@@ -223,3 +223,50 @@ test("a gate is idempotent: applying twice adds no second note", async () => {
   gate.applyGates($("#app"));
   assert.equal($$(".pb-why").length, before);
 });
+
+/* Plan J M91 follow-up (DEC-1301 (e)): the customer-level downloads, as each screen draws them -
+   the Setup screen's and the uplift screens' contact list (usecase.js, uplift/views.js), the output
+   page's (pages.js, `data-download`), and the copy screen's messages, plain and approved-only. */
+const API = "http://api.test";
+const DOWNLOADS = `<main class="screen">
+  <a class="btn primary" id="dl-setup" href="${API}/runs/r1/scores.csv" download>Download contact list (CSV)</a>
+  <a class="btn primary" id="dl-page" href="${API}/runs/r1/scores.csv" data-download="scores">Download contact list (CSV)</a>
+  <a class="btn primary" href="${API}/runs/r1/copy_messages.csv" download id="g-download-copy">Download messages (CSV)</a>
+  <a class="btn secondary" id="dl-approved" href="${API}/runs/r1/copy_messages.csv?approved_only=true" download>Approved messages only</a>
+  <a class="btn secondary" id="dl-report" href="${API}/runs/r1/artefacts/report.html">Open the report</a>
+</main>`;
+const DOWNLOAD_LINKS = ["#dl-setup", "#dl-page", "#g-download-copy", "#dl-approved"];
+
+test("a Viewer sees the customer-level downloads disabled, with the server's sentence, and cannot click them", async () => {
+  await paint(DOWNLOADS);
+  const scores = reasonOf("GET", "/runs/{run_id}/scores.csv");
+  const messages = reasonOf("GET", "/runs/{run_id}/copy_messages.csv");
+  assert.match(scores, /Analyst/);
+  assert.match(messages, /Analyst/);
+  const expected = { "#dl-setup": scores, "#dl-page": scores, "#g-download-copy": messages, "#dl-approved": messages };
+  for (const sel of DOWNLOAD_LINKS) {
+    assert.equal($(sel).getAttribute("aria-disabled"), "true", sel);
+    assert.equal($(sel).title, expected[sel], sel);
+  }
+  assert.ok(notes().includes(scores));
+  assert.ok(notes().includes(messages));
+  assert.equal($("#dl-report").hasAttribute("aria-disabled"), false, "reports stay open to Viewers");
+  const click = new w.MouseEvent("click", { bubbles: true, cancelable: true });
+  $("#dl-setup").dispatchEvent(click);
+  assert.equal(click.defaultPrevented, true, "the download never starts");
+});
+
+test("an Analyst downloads customer rows; an Approver or an Admin alone does not; sign-in off touches nothing", async () => {
+  await as("me_analyst");
+  await paint(DOWNLOADS);
+  for (const sel of DOWNLOAD_LINKS) assert.equal($(sel).hasAttribute("aria-disabled"), false, sel);
+  for (const name of ["me_approver", "me_admin"]) {
+    await as(name);
+    await paint(DOWNLOADS);
+    for (const sel of DOWNLOAD_LINKS) assert.equal($(sel).getAttribute("aria-disabled"), "true", `${name} ${sel}`);
+  }
+  await as("me_off");
+  await paint(DOWNLOADS);
+  assert.equal($$("[data-pb-gate]").length, 0);
+  assert.equal($$(".pb-why").length, 0);
+});

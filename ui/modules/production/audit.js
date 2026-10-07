@@ -91,6 +91,9 @@ const ACTION_WORDS = {
   "runs.root_cause": "Asked why a run's results changed",
   "runs.scores_download": "Downloaded scored customers",
   "runs.artefact_download": "Opened a run file",
+  "runs.customer_rows_download": "Downloaded customer-level rows", // Plan J M91 (DEC-1301 (e))
+  "holdout.read": "Looked at the control group settings", // Plan J M92 (DEC-1302 (b))
+  "holdout.update": "Started a new control group period", // Plan J M92 (DEC-1302 (b))
   "uplift.runs_create": "Started an uplift run",
   "uplift.artefact_download": "Opened an uplift run file",
   "uplift.campaign_results": "Measured a campaign's results",

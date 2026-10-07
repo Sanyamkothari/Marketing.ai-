@@ -266,7 +266,7 @@ def resolve_holdout(
             HOLDOUT_SALT_CHANGED,
             f"{ENV_VARS['holdout_salt']} is not the salt this deployment's holdout was drawn with, so "
             "every customer would move in or out of the holdout. Set the original salt again, or ask an "
-            "Admin to start a new holdout epoch with the new salt (Settings, Holdout).",
+            "Admin to start a new holdout epoch with the new salt (PUT /holdout with rotate_salt).",
         )
     entry = ledger.entry(scope, key)
     if entry is not None and fraction < entry.fraction:
@@ -280,7 +280,7 @@ def resolve_holdout(
             f"The holdout for {key} is {entry.fraction:.0%} in its current epoch ({entry.epoch}) and this "
             f"use case now asks for {fraction:.0%}. Lowering it would contact customers who were held out, "
             f"so results before and after could not be added up.{everyone} Ask an Admin to start a new "
-            "holdout epoch at the lower share (Settings, Holdout), or set the share back.",
+            "holdout epoch at the lower share (PUT /holdout), or set the share back.",
         )
     if scope == "universal" and entry is not None and fraction > entry.fraction:
         raise HoldoutError(
@@ -289,7 +289,7 @@ def resolve_holdout(
             f"use case asks for {fraction:.0%}. Every use case on the universal holdout holds out the same "
             "share, or one would contact customers another holds out. Set actions.holdout.fraction to "
             f"{entry.fraction:.0%}, or set every universal use case to the new share and ask an Admin to "
-            "start a new epoch at it (Settings, Holdout).",
+            "start a new epoch at it (PUT /holdout).",
         )
     if record:
         if stored is None:

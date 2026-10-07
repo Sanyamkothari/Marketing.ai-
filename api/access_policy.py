@@ -328,9 +328,15 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
 """Every route that existed before Phase 4b (DEC-716), and Phase 3b's, which merged after it (DEC-801)."""
 
 ROW_LEVEL_ARTEFACTS: Final[frozenset[str]] = frozenset(
-    {"scores.csv", "scores.parquet", "row_explanations.parquet", "copy_messages.csv"}
+    {
+        "scores.csv",
+        "scores.parquet",
+        "row_explanations.parquet",
+        "copy_messages.csv",
+        "holdout_assignment.parquet",  # Plan J M92 (DEC-1302 (e)): holdout and explore flags per customer
+    }
 )
-"""Run files that hold one row per customer (Plan J M91). `configs/privacy.yaml`
+"""Run files that hold one row per customer (Plan J M91, M92). `configs/privacy.yaml`
 `retention.row_level_run_artefacts` names the same files for retention, and a test keeps this set a
 superset of it, so a row-level artefact registered there (M98's `treat_list.csv`) must join here too."""
 
