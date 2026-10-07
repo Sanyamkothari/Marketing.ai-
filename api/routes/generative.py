@@ -1748,9 +1748,12 @@ def regenerate_copy_template(
     responses=_NOT_FOUND,
     summary="The rendered campaign-copy messages of a run, one row per scored entity",
 )
-def read_copy_messages(run_id: str, storage: StorageDep) -> Response:
-    """Registered like `GET /runs/{run_id}/scores.csv`; `404 ARTEFACT_NOT_FOUND` before any copy exists."""
-    return read_artefact(run_id, COPY_MESSAGES_FILENAME, storage)
+def read_copy_messages(run_id: str, storage: StorageDep, request: Request) -> Response:
+    """Registered like `GET /runs/{run_id}/scores.csv`; `404 ARTEFACT_NOT_FOUND` before any copy exists.
+
+    One row per customer, so Analyst once sign-in is on: `read_artefact` applies the rule (Plan J M91).
+    """
+    return read_artefact(run_id, COPY_MESSAGES_FILENAME, storage, request)
 
 
 # ===========================================================================

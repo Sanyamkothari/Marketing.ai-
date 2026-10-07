@@ -22,6 +22,12 @@ The AWS connection's writes and its test are Admin, because they choose whose ac
 The GETs that hand out row-level data - scores, campaign messages, any run artefact, a dataset's
 sample rows - are `audit_reads`, so the trail records who took a copy of customer data.
 
+Plan J M91 (DEC-1301 (e)) took the one-row-per-customer files away from Viewer: `scores.csv`,
+`scores.parquet`, `row_explanations.parquet` and `copy_messages.csv` (`ROW_LEVEL_ARTEFACTS`) need
+Analyst when sign-in is on, on every route that serves them. The two routes that serve nothing else
+say so in their own row; the generic artefact route stays Viewer for its reports and applies
+`ROW_LEVEL_DOWNLOAD` to those names inside `api.routes.runs.read_artefact`.
+
 `purpose` is the words the refusal and the UI use: "Only an Approver can *approve a champion*."
 """
 
@@ -37,6 +43,8 @@ from engine.access.roles import ROLE_DESCRIPTIONS, Role
 __all__ = [
     "LEGACY_POLICIES",
     "MUTATING_METHODS",
+    "ROW_LEVEL_ARTEFACTS",
+    "ROW_LEVEL_DOWNLOAD",
     "RoutePolicy",
     "all_policies",
     "policy_for",
@@ -128,8 +136,9 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
         object_param="run_id",
         audit_reads=True,
     ),
+    # Plan J M91 (e): a file with one row per customer is Analyst, not Viewer (`ROW_LEVEL_ARTEFACTS`).
     ("GET", "/runs/{run_id}/scores.csv"): _policy(
-        _V,
+        _AN,
         "runs.scores_download",
         "download scores",
         object_type="run",
@@ -259,8 +268,8 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
         object_type="copy_template",
         object_param="template_id",
     ),
-    ("GET", "/runs/{run_id}/copy_messages.csv"): _policy(
-        _V,
+    ("GET", "/runs/{run_id}/copy_messages.csv"): _policy(  # Analyst: customer rows (M91)
+        _AN,
         "copy.messages_download",
         "download campaign messages",
         object_type="run",
@@ -317,6 +326,28 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
     ),
 }
 """Every route that existed before Phase 4b (DEC-716), and Phase 3b's, which merged after it (DEC-801)."""
+
+ROW_LEVEL_ARTEFACTS: Final[frozenset[str]] = frozenset(
+    {"scores.csv", "scores.parquet", "row_explanations.parquet", "copy_messages.csv"}
+)
+"""Run files that hold one row per customer (Plan J M91). `configs/privacy.yaml`
+`retention.row_level_run_artefacts` names the same files for retention, and a test keeps this set a
+superset of it, so a row-level artefact registered there (M98's `treat_list.csv`) must join here too."""
+
+ROW_LEVEL_DOWNLOAD: Final[RoutePolicy] = _policy(
+    _AN,
+    "runs.customer_rows_download",
+    "download customer-level rows",
+    object_type="run",
+    object_param="run_id",
+    audit_reads=True,
+)
+"""What taking a `ROW_LEVEL_ARTEFACTS` file requires when sign-in is on, whichever route serves it.
+
+Not keyed to a route: `GET /runs/{run_id}/artefacts/{name}` stays Viewer for the reports and charts
+it serves, and `api.routes.runs.read_artefact` - which every route serving a run file calls - applies
+this policy to the row-level names (DEC-1301 (e)). Its action names the generic route's audit event,
+which would otherwise read the same for `scores.csv` as for `run.json`."""
 
 _ARTICLE: Final[dict[Role, str]] = {
     Role.VIEWER: "a",
