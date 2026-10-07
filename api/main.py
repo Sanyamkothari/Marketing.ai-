@@ -280,6 +280,11 @@ from api.routes.ai_service import router as ai_service_router  # noqa: E402
 PHASE_ROUTERS.append(ai_service_router)
 # ---- END PLAN-G ----
 # ---- PLAN-J (product) — append only below this line ----
+# M94 (DEC-1304): campaigns - the one record a measurement attaches to, the one measurement path and
+# the registered test plan.
+from api.routes.campaigns import router as campaigns_router  # noqa: E402
+
+PHASE_ROUTERS.append(campaigns_router)
 # ---- END PLAN-J ----
 
 app: FastAPI = create_app()

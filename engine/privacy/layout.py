@@ -22,6 +22,8 @@ Key                                     Written by                             D
 `indexes/<id>/*`                        `engine/generative/index.py`           knowledge documents
 `llm_cache/<xx>/<key>.json`             `engine/generative/cache.py`           a cache entry: deleted,
                                                                                never edited
+`campaigns/<id>/*`                      `api/routes/campaigns.py` (Plan J      `campaign.json` created_at
+                                        M94, `engine/measurement/campaign.py`)  and primary_key
 ======================================  =====================================  =========================
 
 Root-level files (`registry.db`, `clients.db`, `platform.db` and their journals) are databases, not
@@ -37,7 +39,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import StrEnum
 from typing import Any, Final
 
@@ -48,6 +50,7 @@ from engine.utils.logging import get_logger
 __all__ = [
     "TERMINAL_STATES",
     "VERSION_PURGE_PREFIXES",
+    "CampaignInfo",
     "DatasetInfo",
     "RunInfo",
     "Store",
@@ -84,6 +87,8 @@ class Store(StrEnum):
     MODELS = "models"
     INDEXES = "indexes"
     LLM_CACHE = "llm_cache"
+    CAMPAIGNS = "campaigns"
+    """Plan J M94: a campaign's assignment and outcomes (one row per customer), and its reports."""
     OTHER = "other"
 
 
@@ -119,6 +124,8 @@ def store_of(key: str) -> Store:
         return Store.INDEXES
     if head == "llm_cache":
         return Store.LLM_CACHE
+    if head == "campaigns":
+        return Store.CAMPAIGNS
     return Store.OTHER
 
 
@@ -202,6 +209,19 @@ class UploadInfo:
 
 
 @dataclass(frozen=True)
+class CampaignInfo:
+    """What `campaigns/<id>/campaign.json` says about one campaign (Plan J M94), read leniently."""
+
+    campaign_id: str
+    created_at: datetime | None
+    use_case_id: str | None
+    run_ids: tuple[str, ...]
+    primary_key: tuple[str, ...]
+    matures_at: datetime | None = None
+    """Treatment start plus the outcome window: before then the campaign cannot be measured yet."""
+
+
+@dataclass(frozen=True)
 class DatasetInfo:
     """What `dataset_manifest.json` says about one built dataset."""
 
@@ -221,6 +241,7 @@ class StoreIndex:
         self.runs: dict[str, RunInfo] = {}
         self.uploads: dict[str, UploadInfo] = {}
         self.datasets: dict[str, DatasetInfo] = {}
+        self.campaigns: dict[str, CampaignInfo] = {}
         for key in self._keys:
             parts = key.split("/")
             if len(parts) == 3 and parts[0] == "runs" and parts[2] == "run.json":
@@ -229,6 +250,8 @@ class StoreIndex:
                 self._add_upload(storage, key, parts[1])
             elif len(parts) == 3 and parts[0] == "datasets" and parts[2] == "dataset_manifest.json":
                 self._add_dataset(storage, key, parts[1])
+            elif len(parts) == 3 and parts[0] == "campaigns" and parts[2] == "campaign.json":
+                self._add_campaign(storage, key, parts[1])
 
     @property
     def keys(self) -> tuple[str, ...]:
@@ -273,6 +296,25 @@ class StoreIndex:
             source_ids=tuple(sorted(sources)) if isinstance(sources, dict) else (),
         )
 
+    def _add_campaign(self, storage: Storage, key: str, campaign_id: str) -> None:
+        doc = read_json(storage, key) or {}
+        run_ids = doc.get("run_ids")
+        start = parse_time(doc.get("treatment_start"))
+        window = doc.get("outcome_window_days")
+        matures = (
+            start + timedelta(days=window)
+            if start is not None and isinstance(window, int) and not isinstance(window, bool)
+            else start
+        )
+        self.campaigns[campaign_id] = CampaignInfo(
+            campaign_id=campaign_id,
+            created_at=parse_time(doc.get("created_at")),
+            use_case_id=_str_or_none(doc.get("use_case_id")),
+            run_ids=tuple(str(item) for item in run_ids) if isinstance(run_ids, list) else (),
+            primary_key=_key_tuple(doc.get("primary_key")),
+            matures_at=matures,
+        )
+
     def runs_reading_upload(self, upload_id: str) -> tuple[RunInfo, ...]:
         """Every run that consumed the upload."""
         return tuple(run for run in self.runs.values() if run.upload_id == upload_id)
@@ -297,6 +339,10 @@ class StoreIndex:
         if parts[0] == "datasets" and len(parts) == 3:
             dataset = self.datasets.get(parts[1])
             return dataset.primary_key if dataset is not None and dataset.primary_key else None
+        if parts[0] == "campaigns" and len(parts) == 3:
+            # Plan J M94: `assignment.parquet` and `outcomes.parquet` are keyed by the campaign's own key.
+            campaign = self.campaigns.get(parts[1])
+            return campaign.primary_key if campaign is not None and campaign.primary_key else None
         if parts[0] == "uploads" and len(parts) == 3:
             columns = sorted({name for run in self.runs_reading_upload(parts[1]) for name in run.primary_key})
             return tuple(columns) or None

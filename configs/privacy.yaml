@@ -35,6 +35,11 @@ retention:
     - scores.parquet
     - row_explanations.parquet
     - copy_messages.csv
+  # Plan J M94: a campaign's files that hold one row per customer (`campaigns/<id>/`). Deleted once the
+  # campaign is older than its use case's governance.retention_days; its record and report are kept.
+  row_level_campaign_artefacts:
+    - assignment.parquet
+    - outcomes.parquet
   # Aggregate reports that nevertheless carry a handful of example rows. They are kept, and the
   # listed fields are emptied instead: a list becomes empty, anything else becomes null. A path is
   # dotted; `*` stands for every element of a list.

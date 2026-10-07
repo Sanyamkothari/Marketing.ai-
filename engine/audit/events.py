@@ -73,6 +73,9 @@ DETAIL_KEYS: Final[frozenset[str]] = frozenset(
         # Plan D M54 (DEC-863): a background erasure's progress and the stores it retried.
         "attempt",
         "failed_stores",
+        # Plan J M94 (DEC-1304 (g), reviewed): the hash of a registered test plan, so the trail proves
+        # which plan was fixed before a campaign's outcomes were read. A hash, never the plan.
+        "plan_hash",
     }
 )
 """The only keys `AuditEvent.details` accepts. A new key is a reviewed change to this set, never a
