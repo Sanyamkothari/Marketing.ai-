@@ -70,6 +70,7 @@ Contract schema version: 1.
 | GET | `/indexes/{index_id}/feedback/test-questions.csv` | The thumbs-down questions as rows of a reference-set file, with the answers left for a person | - |
 | POST | `/indexes/{index_id}/update` | Build a new version with documents added, replaced or removed, reusing every unchanged one | IndexJobStartedResponse |
 | GET | `/industries` | Every industry journey with its stages and use-case cards | IndustriesResponse |
+| POST | `/measurement/power-preview` | How small a change each control-group share can see, and what it costs (counts only) | PowerPreview |
 | GET | `/models` | Registered model versions, newest first, with the champion flagged | ModelListResponse |
 | POST | `/models/{model_id}/approve` | Approve a version that is waiting for a human, making it champion | ModelVersionResponse |
 | POST | `/models/{model_id}/promote` | Make a version champion by hand, recording who did it and why | ModelVersionResponse |

@@ -931,8 +931,8 @@ part of Plan J's code set, DEC-1300 (d)), not rows of the Phase 1 to 3b tables o
 `POST /measurement/power-preview` answers the same planning question from numbers typed in
 (eligible customers, base rate, control-group shares, an optional explore share, the value and
 cost inputs, and an optional `direction`: `up`, `down` or `either`, the default), with no customer
-data at all. It is served once its router is registered in `api/main.py`'s PLAN-J block (M90's);
-until then only `api.routes.measurement.router` exists.
+data at all. It is a Viewer route, mounted in `api/main.py`'s PLAN-J block (DEC-1303 (c)), and
+`docs/API.md` lists it.
 
 ## 12. Files prepared by Guided setup (Plan G)
 

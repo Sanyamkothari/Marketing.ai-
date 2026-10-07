@@ -1213,7 +1213,7 @@ ready, not a number (DEC-908).
 
 #### M63 — Demo mode, the tour and the tooltips
 
-`scripts/seed_demo.py` seeds a synthetic "Demo Telecom" through the platform's own API: raw tables
+`scripts/seed_demo.py` seeds a synthetic "Demo Company" through the platform's own API: raw tables
 for 4,000 subscribers uploaded and mapped, a dataset built, a churn model trained and made champion,
 next month scored with a control group of 400, a win-back uplift model trained, and both campaigns
 measured on simulated outcomes (about two and a half minutes; DEC-960). It writes `pilot/demo/demo.json` (`engine/pilot/demo.py`) and keeps the raw
@@ -1227,7 +1227,7 @@ beside every warning code and advanced setting, without editing any other workst
 (DEC-912).
 
 ```bash
-make demo-seed                 # seed Demo Telecom into MARKETING_AI_DATA_DIR (or data/); trains once
+make demo-seed                 # seed Demo Company into MARKETING_AI_DATA_DIR (or data/); trains once
 make demo                      # seed if needed, then serve on :8000 with MARKETING_AI_DEMO_MODE=true
 ```
 
@@ -1609,7 +1609,7 @@ in [`docs/DECIDE.md`](docs/DECIDE.md).
 | M90 | Plan J set-up | DEC-1300…1399 claimed; a PLAN-J block in the 12 shared files and in the marker test's `PHASES`; the stage-function amendment of protocol §3 (pending the owner's sign-off); `PLAN_J_CODES` and the `known_codes()` hook; the `statistical` marker and `make test-statistical`, kept out of `make test` and `make test-all`; `docs/DECIDE.md` skeleton | **done** | `tests/unit/test_shared_file_markers.py`, `tests/unit/decide/test_plan_j_codes.py`, `tests/unit/decide/test_statistical_collection.py` |
 | M91 | Fix what the research and the code review found | Uplift runs consult the consent ledger; every contacting use case has a consent purpose; a one-way SMS sender gets an opt-out link instead of "Reply STOP"; copy approval records the signed-in person; row-level downloads need Analyst and are audited | **done** | `tests/integration/uplift/test_uplift_consent.py`, `tests/unit/production/test_privacy_purpose_coverage.py`, `tests/unit/generative/test_sms_one_way.py`, `tests/integration/test_api_generative_copy_identity.py`, `tests/integration/decide/test_row_level_downloads.py` |
 | M92 | Persistent holdout and explore slice | `actions.holdout.scope` run (default, unchanged) / use_case / universal: a salted hash-threshold control group that never moves between runs and nests across shares; `actions.explore_fraction` (0–10%) marks eligible, non-selected, non-sleeping-dog customers with a re-drawn second hash; `holdout_assignment.parquet` with the logging propensity off-policy evaluation needs (engaged runs only); salt fingerprint and epoch ledger in `platform_setting`; `GET /holdout` (Viewer), `PUT /holdout` (Admin, audited); a generated `marketing-ai/<env>/holdout-salt` secret on AWS (DEC-1302) | **done** | `tests/unit/holdout/test_assign.py`, `tests/unit/holdout/test_spec.py`, `tests/unit/holdout/test_salt.py`, `tests/unit/holdout/test_holdout_flow.py`, `tests/integration/holdout/test_holdout_api.py`, `tests/integration/holdout/test_holdout_uplift_flow.py` |
-| M93 | Plan the test, define the outcome well | A planner for the effect a campaign can detect at each holdout size, with the holdout's cost; outcome definitions with a grace period; random-or-not and sufficiency verdicts | pending | — |
+| M93 | Plan the test, define the outcome well | test planner (MDE, sample size, holdout cost, explore cost; null with a reason, never 0; direction follows the campaign's aim), `POST /measurement/power-preview` (Viewer, counts only), lapse labels with `grace_days` and `exclude_roles` (censoring by the earliest table end, customers-left-out count, leak probe on every grace day), readiness sections "The outcome, checked" (monthly `LABEL_RATE_UNSTABLE`), "Can we measure it?", "Past campaigns" (treatment-history check and sufficiency verdict) | **done** | `tests/unit/measurement/test_planner.py`, `tests/unit/measurement/test_lapse_labels.py`, `tests/unit/measurement/test_readiness_planning.py`, `tests/unit/measurement/test_treatment_history.py`, `tests/unit/measurement/test_neutral_defaults.py`, `tests/unit/measurement/test_codes.py`, `tests/integration/measurement/test_grace_window_leak.py`, `tests/integration/measurement/test_power_preview_route.py`, `tests/integration/measurement/test_readiness_measure.py` |
 | M94 | One campaign record, one measurement path, a registered test plan | A campaign recorded once and measured through one path; a registered, hashed test plan; no partial number before outcomes mature | pending | — |
 | M95 | Validity harness and synthetic quarantine | Nightly tests that the 95% intervals cover 95%, the false-positive rate is 5% and the planner delivers its power; a planted demo effect can never be presented as a result | pending | — |
 | M96 | Uplift must earn its place: stability, calibration and the beats-risk check | Uplift is approved only when stable and calibrated; the treat list falls back to risk ranking when uplift does not beat it, and says why | pending | — |

@@ -316,6 +316,15 @@ codes:
     title: This use case name cannot have its own fixed control group
     meaning: "The names 'universal' and 'explore' are reserved for the shared control group and the explore slice. A use case with one of these names cannot have a control group of its own (scope use_case), because its customers would be drawn as if they were in the shared control group or the explore slice."
     fix: Rename the use case, or use scope universal or run.
+  # --- Plan J M93: the readiness report's planning warnings (DEC-1303 (f), (g), (h)) -------------
+  LABEL_RATE_UNSTABLE:
+    title: The outcome rate jumps from one month to the next
+    meaning: "The share of customers with the outcome changed a lot between two months of prediction dates, by more than the allowed amount and more than chance would explain. When the outcome means something different from month to month, the model learns from an outcome that keeps changing and a test compares unlike months. This is a warning: the dataset can still be used."
+    fix: "Check the outcome definition and the extract for the months named: a changed process, a new product or a gap in the data can change what the outcome means. If the change is real and expected, carry on; otherwise fix the extract and build the dataset again."
+  TREATMENT_HISTORY_NOT_RANDOM:
+    title: Past campaigns did not pick customers at random
+    meaning: "Who past campaigns contacted can be told from the customers' own data, so they were chosen by a model or a rule. Comparing contacted with held-back customers would then mix what a campaign changed with how the chosen customers already differed, so this history cannot yet show who a campaign changes. This is a warning: nothing is blocked."
+    fix: Hold back a randomly chosen control group in the next campaign, and rank customers by how likely they are to have the outcome until its results are in. Learning who each campaign changes can start from the next cycle.
 
 settings:
   actions.bands[*].min_score:

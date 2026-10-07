@@ -249,6 +249,17 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/holdout/test_holdout_api.py",
         "tests/integration/holdout/test_holdout_uplift_flow.py",
     ),
+    "M93": (
+        "tests/unit/measurement/test_planner.py",
+        "tests/unit/measurement/test_lapse_labels.py",
+        "tests/unit/measurement/test_readiness_planning.py",
+        "tests/unit/measurement/test_treatment_history.py",
+        "tests/unit/measurement/test_neutral_defaults.py",
+        "tests/unit/measurement/test_codes.py",
+        "tests/integration/measurement/test_grace_window_leak.py",
+        "tests/integration/measurement/test_power_preview_route.py",
+        "tests/integration/measurement/test_readiness_measure.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

@@ -219,6 +219,90 @@ not "holdout", which the catalogue's jargon check refuses. `tests/unit/pilot/tes
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-07 — plan-j (on main) → trunk (owners of `engine/config.py`, `engine/contracts.py`, `engine/settings.py`, `Makefile`, `docs/DATA_CONTRACT.md`): M93 in-place edits (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M93; DEC-1303 (d), (h), (i), (j)):
+
+* `engine/config.py`: `LabelDefinition` gained, in place and defaulted, `grace_days` (`int` 1..365 or `None`) and
+  `exclude_roles` (`tuple[str, ...]`, default empty). Both are omitted from the serialised spec while unset, so no
+  saved spec, spec hash or recipe hash moves; `docs/API.md` regenerated. A non-lapse label refuses both
+  (`LABEL_FIELD_NOT_ALLOWED`), as it refuses `role` and `expression`. The new property
+  `LabelDefinition.window_days` is `horizon_days + grace_days` (equal to `horizon_days` by default); every reader
+  of the outcome window (scheduling, data request, the measure route, readiness, the build) now uses it.
+* `engine/contracts.py`: `ValidationCheck._known_code` and `_known_codes` also accept
+  `engine.measurement.codes.MEASUREMENT_CHECK_CODES` (`LABEL_RATE_UNSTABLE`, `TREATMENT_HISTORY_NOT_RANDOM`) through
+  `_plan_j_check_codes`, which is defined in the file's PLAN-J block (moved there at integration). `CHECK_CODE_TABLES`
+  and `tests/unit/test_one_check_contract.py` are unchanged; `engine.decide.codes.PLAN_J_CODES` joins the same set.
+* `engine/settings.py`: the `demo_mode` description says "Demo Company" instead of "Demo Telecom"; at integration
+  the `Makefile` `demo-seed` help, the README's demo lines and `docs/AWS_DEPLOYMENT.md`'s `demo_mode` row say the
+  same.
+* `docs/DATA_CONTRACT.md` §11.1 lists the two warnings and `POST /measurement/power-preview`, which is mounted in
+  `api/main.py`'s PLAN-J block.
+* Tests pinning exact sets: `tests/integration/test_api_config.py` gained `/measurement/power-preview` (at
+  integration, once the router was mounted).
+
+**What is needed.** Nothing; this is an announcement. Pinned by `tests/unit/measurement/test_lapse_labels.py` and
+`tests/unit/measurement/test_codes.py`.
+
+### 2026-10-07 — plan-j (on main) → Phase 2: M93 lapse labels, the grace-day leak probe and `SnapshotStat.excluded` (announcement)
+
+**What changed in files §3 gives Phase 2** (pre-approved in the Plan J plan, M93; DEC-1303 (d), (e)):
+
+* `engine/onboarding/labels.py` compiles `grace_days` and `exclude_roles` (the window is `window_days`, through
+  `future_window_clause`; `LABEL_WINDOW_NOT_ENFORCED` is kept). A window counts as finished only up to the earliest
+  last date of the label's table and its `exclude_roles` tables (`LABEL_HORIZON_CENSORED`
+  `details.data_end_by_table`); an empty exclusion table is ignored.
+* `engine/onboarding/build.py`: with a grace period, the leak probe also dates one copy of its rows on every grace
+  day; without one it is unchanged.
+* `engine/onboarding/specs.py`: `SnapshotStat.excluded` (`int | None`, omitted while null) counts the customers a
+  label's `exclude_roles` left out per date.
+* `docs/ONBOARDING.md` §5 describes lapse labels.
+
+**What is needed.** Nothing; this is an announcement. Without `grace_days` or `exclude_roles` every build is byte for
+byte as before; the onboarding suites pass unchanged.
+
+### 2026-10-07 — plan-j (on main) → Plan E: M93 readiness planning sections, neutral defaults and two codes (announcement)
+
+**What changed in files §3 gives Plan E** (pre-approved in the Plan J plan, M93; DEC-1303 (b), (f), (i), (j)):
+
+* `engine/pilot/readiness.py` gains "The outcome, checked", "Can we measure it?" and "Past campaigns", none of which
+  changes the verdict, and `campaign_aim`; their two settings are in the new `configs/pilot/readiness.yaml`.
+* `api/routes/pilot.py`: an optional `treatment_column` query parameter on the readiness report.
+* `engine/pilot/data_request.py` reads `window_days`; the data request defaults to `win-back-campaign`
+  (`configs/pilot/data_request.yaml`, `scripts/gen_data_request.py`), and `docs/pilot/*` is regenerated (the
+  templates follow the new default).
+* Neutral wording: the pre-flight line (`scripts/preflight.py`, `scripts/build_pilot_kit.py`), the demo client
+  "Demo Company" (`engine/pilot/demo.py` `DEMO_CLIENT_NAME`, `scripts/seed_demo.py`), and
+  `ui/modules/pilot/index.js` (wording only).
+* `configs/pilot/help.yaml` gained `LABEL_RATE_UNSTABLE` and `TREATMENT_HISTORY_NOT_RANDOM` under a Plan J M93
+  comment, matching `PLAN_J_CODES`; `tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement. `tests/unit/pilot/test_data_request.py` pins the new default
+and `tests/integration/pilot/test_pilot_acceptance.py` follows the demo's new name.
+
+### 2026-10-07 — plan-j (on main) → Phase 3b: M93 treatment history and the sufficiency verdict (announcement)
+
+**What changed in files §3 gives Phase 3b** (pre-approved in the Plan J plan, M93; DEC-1303 (g)):
+`engine/uplift/checks.py` gains `treatment_history` (past assignment `random`, `model_selected` or `unknown`;
+`TREATMENT_HISTORY_NOT_RANDOM` is a warning) and `sufficiency_verdict` (`uplift_now` only for a random history whose
+groups reach `uplift.min_arm_rows` and `min_arm_positives`). With a two-column key, a customer in both groups gives
+`unknown` / `propensity_first`, the same customers `run_uplift_checks` refuses with `TREATMENT_VARIES_WITHIN_ENTITY`.
+`run_uplift_checks` itself is unchanged. `docs/UPLIFT.md` §3 describes both.
+
+**What is needed.** Nothing; this is an announcement. Pinned by `tests/unit/measurement/test_treatment_history.py`.
+
+### 2026-10-07 — plan-j (on main) → Phase 4b and Plan H (owners of `engine/scheduling/outcomes.py`, `api/routes/measure.py`): M93 outcome windows include the grace period (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M93; DEC-1303 (d), (j)): `engine/scheduling/outcomes.py`
+`outcome_window` and `api/routes/measure.py` `default_outcome_window` read `LabelDefinition.window_days` instead of
+`horizon_days`, so a lapse label with 7 days' grace waits, and measures over, 37 days rather than 30. They are equal
+when `grace_days` is unset, so nothing moves under default config. At integration this was merged alongside M92's
+`effective_holdout_fraction` in `engine/scheduling/outcomes.py`; both are kept. `docs/QUICKSTART.md` and
+`docs/V1_READINESS.md` changed wording only.
+
+**What is needed.** Nothing; this is an announcement. Pinned by
+`tests/unit/measurement/test_lapse_labels.py::test_a_measured_campaigns_default_window_includes_the_grace_period`.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

@@ -237,7 +237,7 @@ pilot-check: ## fail if docs/pilot/DATA_REQUEST.md or its templates are stale
 pilot-kit: ## dist/pilot-kit.zip: what a client needs to run the pre-flight check (no AutoGluon)
 	$(BIN)/python -m scripts.build_pilot_kit
 
-demo-seed: ## seed Demo Telecom into MARKETING_AI_DATA_DIR (or data/): trains once, takes a few minutes
+demo-seed: ## seed Demo Company into MARKETING_AI_DATA_DIR (or data/): trains once, takes a few minutes
 	$(BIN)/python -m scripts.seed_demo
 
 demo: demo-seed ## seed the demo if needed, then serve it on :8000 with demo mode on
