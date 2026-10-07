@@ -288,6 +288,11 @@ PHASE_ROUTERS.append(holdout_router)
 from api.routes.measurement import router as measurement_router  # noqa: E402
 
 PHASE_ROUTERS.append(measurement_router)
+# Plan J M94 (DEC-1304): campaigns - the one record a measurement attaches to, the one
+# measurement path and the registered test plan.
+from api.routes.campaigns import router as campaigns_router  # noqa: E402
+
+PHASE_ROUTERS.append(campaigns_router)
 # ---- END PLAN-J ----
 
 app: FastAPI = create_app()

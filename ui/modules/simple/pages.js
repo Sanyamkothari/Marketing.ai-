@@ -86,9 +86,10 @@ function approvalsNotice(waiting) {
 
 /**
  * The Results page. `runs` is `GET /runs`'s list (null while loading), `error` its failure,
- * `waiting` how many models wait for approval (null or 0: no notice).
+ * `waiting` how many models wait for approval (null or 0: no notice). `lists` are the drawn results
+ * lists other modules register beside the runs (Plan J M94: campaigns; `registerResultsList`).
  */
-export function resultsHtml({ runs = null, error = null, waiting = null } = {}) {
+export function resultsHtml({ runs = null, error = null, waiting = null, lists = [] } = {}) {
   const head = pageHead(
     `${crumbs([{ label: "Results" }])}<h1 class="h1">Results</h1><p class="desc">Every run, newest first. Open one to see its scores, reasons and next steps.</p>${headActions(
       { related: { label: "All reports", href: "#/pilot" } },
@@ -137,7 +138,8 @@ export function resultsHtml({ runs = null, error = null, waiting = null } = {}) 
       cls: "sp-runs",
     })}${more}</section>`;
   }
-  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${body}</main>`;
+  const beside = [].concat(lists || []).filter(Boolean).join("");
+  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${body}${beside}</main>`;
 }
 
 // --- Settings ------------------------------------------------------------------------------------

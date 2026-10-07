@@ -419,4 +419,33 @@ export function refreshTopBar() {
 // ---- END V1-UI ----
 
 // ---- PLAN-J (product) — append only below this line ----
+// M94 (DEC-1304 (k)): a *results list* - a list the Results page draws beside its runs (today, the
+// campaigns of `ui/modules/decide/`). `load()` fetches what the list shows and `html(data)` draws it;
+// the Results page awaits every registered list, draws a failed or empty one as nothing, and with
+// nothing registered looks exactly as before.
+const resultsListEntries = [];
+
+/** Register a results list: `{ name, load(), html(data) }`. `name` must be unique. */
+export function registerResultsList(entry) {
+  const { name, load, html } = entry || {};
+  if (!name || typeof load !== "function" || typeof html !== "function") {
+    throw new Error("registerResultsList needs { name, load(), html(data) }");
+  }
+  if (resultsListEntries.some((e) => e.name === name)) throw new Error(`A results list named "${name}" is already registered`);
+  resultsListEntries.push({ name, load, html });
+  announceModulesChanged();
+}
+
+/** The markup of every registered results list, loaded now, in registration order; `[]` for none. */
+export async function resultsListsHtml() {
+  return Promise.all(
+    resultsListEntries.map(async (entry) => {
+      try {
+        return entry.html(await entry.load()) || "";
+      } catch {
+        return "";
+      }
+    }),
+  );
+}
 // ---- END PLAN-J ----

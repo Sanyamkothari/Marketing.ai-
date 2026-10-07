@@ -20,6 +20,14 @@ Contract schema version: 1.
 | POST | `/auth/login` | Sign in | LoginResponse |
 | POST | `/auth/logout` | Sign out | - |
 | GET | `/auth/me` | Who am I, and what may I do | MeResponse |
+| GET | `/campaigns` | Campaigns, newest first | CampaignListResponse |
+| POST | `/campaigns` | Record a campaign sent from a finished scoring run's list | CampaignView |
+| GET | `/campaigns/{campaign_id}` | One campaign: its record, its measured result and its test plan | CampaignView |
+| POST | `/campaigns/{campaign_id}/measure` | Measure a campaign through the one measurement path, against its test plan | CampaignView |
+| POST | `/campaigns/{campaign_id}/outcomes` | Give a campaign its outcomes file: customer id, outcome and optionally a treatment date | CampaignView |
+| GET | `/campaigns/{campaign_id}/plan` | A campaign's registered test plan and every earlier version | TestPlanView |
+| POST | `/campaigns/{campaign_id}/plan` | Register a campaign's test plan before its outcomes are read | TestPlan |
+| POST | `/campaigns/{campaign_id}/plan/amendments` | Amend a campaign's test plan: a new version with a reason, the old one kept | TestPlan |
 | GET | `/clients` | Every client, newest first | ClientListResponse |
 | POST | `/clients` | Register a client whose data will be onboarded | ClientCreateResponse |
 | POST | `/clients/default` | The client every installation starts with, created the first time it is asked for | ClientRecord |

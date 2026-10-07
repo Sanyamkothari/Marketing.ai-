@@ -462,6 +462,21 @@ The report is stored as `incrementality_report.json` and can be read again with
 non-empty control group among the eligible customers. The engine draws that group at random, per
 customer, so the comparison is an experiment.
 
+**One measurement path (Plan J M94, DEC-1304 (c)).** `POST /runs/{run_id}/campaign-results` no longer
+calls `measure_incrementality` itself: it calls `engine.measurement.measure.measure_campaign`, the one
+function every measured campaign result now comes from, with the run's scores and no test plan. With
+no plan that function *is* `measure_incrementality` - same arguments, same report, byte for byte
+apart from `computed_at` - so this page, step 4 below (which calls this route) and the existing
+tests are unchanged. A **campaign** (`POST /campaigns {run_id, treatment_start?}`, `docs/DECIDE.md`
+§8) measures the same scores through the same function, with three differences that matter once a
+list goes out days after it was made: the treatment time is the day it really went out; a result is
+refused (`CAMPAIGN_NOT_MATURED`, with the date) until *every* customer's window has elapsed, where
+this page shows the mature part; and a registered test plan fixes the window, the outcome and the
+population in advance (`TEST_PLAN_CHANGED` otherwise) and labels a read before its analysis date an
+early look, with no verdict. The report gains two optional fields for that, `test_plan_hash` and
+`early_look` (null and false here). M49's `POST /runs/{id}/outcomes` stays model monitoring: its
+`incrementality_input.json` is never presented as a campaign result.
+
 ### Step 4 of a use case: "Measure the campaign" (Plan H M83)
 
 The same measurement is also step 4 of every use case that acts on customers, on the scoring run's
@@ -473,7 +488,8 @@ AI-written-text use case (`engine.uplift.measure.measure_offered`).
 * **One upload.** `POST /runs/{run_id}/measure` takes only the outcomes file. The outcome column is the
   use case's own target when the file has it, else the one column besides the customer id; the
   window is `uplift.outcome_window_days`, else the use case's label `horizon_days`. It then calls
-  `POST /runs/{run_id}/campaign-results` with that body, so the report is the one this page shows.
+  `POST /runs/{run_id}/campaign-results` with that body, so the report is the one this page shows -
+  and, through it, the one measurement path (`measure_campaign`, above).
 * **One plain line.** The response adds a verdict read off the report: "The campaign added about N
   conversions" (or "prevented about N cases" for an outcome the use case exists to prevent, the
   value view's `configs/pilot/value.yaml` rule), "No clear effect yet" when the interval includes

@@ -144,6 +144,8 @@ class RetentionCategory(StrEnum):
     DATASET = "dataset"
     RUN_ROW_LEVEL = "run_row_level"
     RUN_SAMPLES = "run_samples"
+    CAMPAIGN_ROW_LEVEL = "campaign_row_level"
+    """Plan J M94: a campaign's assignment and outcomes."""
 
 
 class RetentionAction(StrEnum):

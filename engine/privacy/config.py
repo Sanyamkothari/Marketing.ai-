@@ -116,6 +116,13 @@ class RetentionPolicy(_Model):
     row_level_run_artefacts: tuple[str, ...] = Field(
         description="Run-directory filenames holding one row per customer; deleted when a run expires."
     )
+    row_level_campaign_artefacts: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Campaign-directory filenames holding one row per customer (Plan J M94); deleted when the "
+            "campaign expires."
+        ),
+    )
     sample_fields: dict[str, tuple[str, ...]] = Field(
         default_factory=dict,
         description="Run-directory filename -> dotted field paths (`*` = every list element) to empty.",

@@ -590,10 +590,14 @@ def read_uplift_artefact(run_id: str, name: str, storage: StorageDep) -> Respons
 def create_campaign_results(
     run_id: str, body: CampaignResultsRequest, storage: StorageDep
 ) -> IncrementalityReport:
-    """Treated rate minus control rate on the mature rows, stored as `incrementality_report.json`."""
+    """Treated rate minus control rate on the mature rows, stored as `incrementality_report.json`.
+
+    The measurement is Plan J's one path, `engine.measurement.measure.measure_campaign` (M94,
+    DEC-1304 (c)), given the run's scores and no test plan: exactly `measure_incrementality`'s report.
+    """
     import pandas as pd
 
-    from engine.uplift.incrementality import measure_incrementality
+    from engine.measurement.measure import measure_campaign
 
     record = load_run(storage, run_id)
     treatment_time = _finished_scoring_run(record)
@@ -613,7 +617,7 @@ def create_campaign_results(
     upload = load_upload(storage, body.upload_id)
     outcomes = _read_all(storage, upload.source_key, upload.file_format)
     try:
-        report = measure_incrementality(
+        report = measure_campaign(
             scores,
             outcomes,
             run_id=run_id,

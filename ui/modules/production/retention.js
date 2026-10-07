@@ -32,6 +32,7 @@ const CATEGORY = {
   dataset: "Built dataset",
   run_row_level: "Customer rows from a run",
   run_samples: "Report with sample rows",
+  campaign_row_level: "Customer rows from a campaign",
 };
 
 const ACTION = { delete: "Deleted", strip_samples: "Kept; its sample rows removed" };

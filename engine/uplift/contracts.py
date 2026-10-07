@@ -549,6 +549,17 @@ class IncrementalityReport(Artefact):
     causal: bool = Field(description="True: the control group was drawn at random by the engine.")
     summary: str = Field(description="One plain-language sentence for the Campaign results page.")
     computed_at: AwareDatetime = Field(description="UTC time the report was computed.")
+    # Plan J M94 (DEC-1304 (f), pre-approved additive fields in Phase 3b's contract; typed and written by
+    # `engine.measurement.measure.measure_campaign`): the registered test plan the report was read
+    # against, and whether it was read before that plan's analysis date. Defaults keep every report
+    # measured without a plan exactly as it was.
+    test_plan_hash: str | None = Field(
+        default=None, description="`plan_hash` of the registered test plan this report was measured against."
+    )
+    early_look: bool = Field(
+        default=False,
+        description="True when measured before the test plan's analysis date: an early look, not a final result.",
+    )
 
 
 # ---------------------------------------------------------------------------

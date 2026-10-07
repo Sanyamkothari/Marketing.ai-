@@ -12,6 +12,14 @@ whichever exists for a scoring run, never computing an effect of its own:
    with the same function Phase 3b uses (`engine.uplift.incrementality.newcombe_interval`), on the
    same counts, which makes the two sources agree when both exist.
 
+**A campaign's report comes first (Plan J M94, DEC-1304 (i)).** A scoring run's list may have been
+sent as a campaign (`engine.measurement.campaign`), measured with its real treatment start and
+against its registered test plan. The view is keyed by a *measurement key* - a run, or a campaign of
+that run - and reads `campaigns/<id>/incrementality_report.json` first: the one named, or else the
+latest measured campaign of the run. An early look (read before its test plan's analysis date) is not
+a final result and is never priced. Only when no campaign report applies are the run's own two
+sources read, as before.
+
 When neither exists, the run's outcome window (`engine.scheduling.outcomes.outcome_window`) says
 when outcomes can first be measured, and the view shows that date instead of a number.
 
@@ -112,6 +120,8 @@ class Money(_Strict):
 class RoiView(_Strict):
     run_id: str
     use_case_id: str
+    campaign_id: str | None = None
+    """The campaign whose report was read (Plan J M94); null when the run's own measurement was."""
     status: Literal["measured", "not_mature", "not_measured"]
     outcome_is_good: bool = True
     """The direction used: the client's choice when they made one, else the use case's default."""
@@ -167,6 +177,7 @@ def outcome_is_good_by_default(use_case_id: str, outcome_name: str, root: Path |
 class _Common(TypedDict):
     run_id: str
     use_case_id: str
+    campaign_id: str | None
     inputs: RoiInputs | None
 
 
@@ -204,6 +215,44 @@ def _read(storage: Storage, key: str, model: type[BaseModel]) -> BaseModel | Non
         return None
 
 
+def _campaign_report(storage: Storage, run_id: str, campaign_id: str | None) -> BaseModel | None:
+    """The final report of campaign `campaign_id` of this run, or of its latest measured campaign.
+
+    Read from the store alone (`campaigns/<id>/campaign.json` names the campaign's runs), so the
+    value view needs no database. An early look is not a final result and is skipped.
+    """
+    import json
+
+    from engine.storage import StorageError
+    from engine.uplift.contracts import IncrementalityReport
+
+    def final(key: str) -> IncrementalityReport | None:
+        report = _read(storage, key, IncrementalityReport)
+        return report if isinstance(report, IncrementalityReport) and not report.early_look else None
+
+    if campaign_id is not None:
+        return final(f"campaigns/{campaign_id}/incrementality_report.json")
+    try:
+        keys = storage.list_keys("campaigns/")
+    except StorageError:
+        return None
+    found: list[IncrementalityReport] = []
+    for key in keys:
+        parts = key.split("/")
+        if len(parts) != 3 or parts[2] != "campaign.json":
+            continue
+        try:
+            record = json.loads(storage.read_bytes(key))
+        except (StorageError, ValueError):
+            continue
+        if not isinstance(record, dict) or run_id not in (record.get("run_ids") or ()):
+            continue
+        report = final(f"campaigns/{parts[1]}/incrementality_report.json")
+        if report is not None:
+            found.append(report)
+    return max(found, key=lambda report: report.computed_at) if found else None
+
+
 def compute_roi(
     storage: Storage,
     run_id: str,
@@ -211,8 +260,13 @@ def compute_roi(
     inputs: RoiInputs | None = None,
     client_store: ClientStore | None = None,
     root: Path | None = None,
+    campaign_id: str | None = None,
 ) -> RoiView:
-    """The value view of scoring run `run_id` from whichever measurement exists."""
+    """The value view of scoring run `run_id` from whichever measurement exists.
+
+    The measurement key is the run, or one of its campaigns (`campaign_id`); a campaign's final
+    report is read first either way (see the module docstring).
+    """
     from engine.config import load_use_case
     from engine.contracts import RunRecord
     from engine.runs import RUN_FILENAME
@@ -223,10 +277,19 @@ def compute_roi(
 
     record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)
     chosen = inputs if inputs is not None else load_roi_inputs(storage, run_id)
-    report = _read(storage, run_key(run_id, INCREMENTALITY_FILENAME), IncrementalityReport)
+    campaign = _campaign_report(storage, run_id, campaign_id)
+    report = campaign or _read(storage, run_key(run_id, INCREMENTALITY_FILENAME), IncrementalityReport)
     ingested = _read(storage, run_key(run_id, INCREMENTALITY_INPUT_FILENAME), IncrementalityInput)
+    measured_campaign = (
+        campaign.campaign_id if isinstance(campaign, IncrementalityReport) and campaign.campaign_id else None
+    )
 
-    base: _Common = {"run_id": run_id, "use_case_id": record.use_case_id, "inputs": chosen}
+    base: _Common = {
+        "run_id": run_id,
+        "use_case_id": record.use_case_id,
+        "campaign_id": measured_campaign,
+        "inputs": chosen,
+    }
     # A measurement wins over one still waiting: an immature report stays on disk after outcomes were
     # ingested for the same run, and the ingested counts are then the newer, usable measurement.
     mature = isinstance(report, IncrementalityReport) and (

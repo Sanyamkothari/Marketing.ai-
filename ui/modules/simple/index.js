@@ -8,7 +8,7 @@
 
 import { accessStatus } from "../../chrome.js";
 import { skeleton } from "../../dom.js";
-import { announceModulesChanged, canAccess, registerModule, registerResultLink } from "../router.js";
+import { announceModulesChanged, canAccess, registerModule, registerResultLink, resultsListsHtml } from "../router.js";
 import { engineVersion, getAllRuns, waitingForApproval } from "./api.js";
 import { injectStyles, resultsHtml, settingsHtml } from "./pages.js";
 
@@ -30,14 +30,15 @@ function painter(app, parts) {
 async function renderResults(app, parts) {
   const paint = painter(app, parts);
   if (!app.querySelector('[data-module="simple"]')) paint(skeleton("list", { title: "Results" }));
-  const [answer, waiting] = await Promise.all([
+  const [answer, waiting, lists] = await Promise.all([
     getAllRuns().then(
       (body) => ({ runs: (body && body.runs) || [] }),
       (error) => ({ error }),
     ),
     waitingForApproval(),
+    resultsListsHtml(), // Plan J M94: the campaigns beside the runs
   ]);
-  paint(resultsHtml({ ...answer, waiting }));
+  paint(resultsHtml({ ...answer, waiting, lists }));
   document.title = "Results · Marketing AI";
 }
 

@@ -180,6 +180,41 @@ def plan_retention(
                     )
                 )
 
+    # -- campaigns (Plan J M94): their row-level files, dated from `campaign.json` ---------------
+    # The campaign's scoring run's own setting when that run is in the store (a per-run override can
+    # only shorten it), else its use case's; the record and the aggregate report are kept. Counted
+    # from the later of its creation and the end of its outcome window: before that the campaign
+    # cannot be measured, which is what the assignment is kept for (DEC-1304 (j)).
+    for campaign_id, campaign in sorted(index.campaigns.items()):
+        if not privacy.retention.row_level_campaign_artefacts:
+            break
+        if campaign.created_at is None:
+            skipped.append(
+                RetentionSkip(
+                    owner_id=campaign_id, category=RetentionCategory.CAMPAIGN_ROW_LEVEL, reason_code="UNDATED"
+                )
+            )
+            continue
+        known_runs = [run_days[run_id] for run_id in campaign.run_ids if run_id in run_days]
+        days = min(known_runs) if known_runs else by_use_case.get(campaign.use_case_id or "", default_days)
+        start = max(campaign.created_at, campaign.matures_at or campaign.created_at)
+        if not _due(start, days, moment, consumed=False):
+            continue
+        for name in privacy.retention.row_level_campaign_artefacts:
+            key = f"campaigns/{campaign_id}/{name}"
+            if key in present:
+                items.append(
+                    RetentionItem(
+                        key=key,
+                        category=RetentionCategory.CAMPAIGN_ROW_LEVEL,
+                        action=RetentionAction.DELETE,
+                        owner_id=campaign_id,
+                        use_case_id=campaign.use_case_id,
+                        created_at=campaign.created_at,
+                        retention_days=days,
+                    )
+                )
+
     # -- uploads ------------------------------------------------------------------------------
     for upload_id, upload in sorted(index.uploads.items()):
         readers = index.runs_reading_upload(upload_id)
