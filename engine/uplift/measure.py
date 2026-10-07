@@ -78,11 +78,18 @@ _INTENDED_COLUMN: Final[str] = "intended_treatment"
 # Does this use case have step 4?
 # ---------------------------------------------------------------------------
 def measure_offered(config: UseCaseConfig) -> bool:
-    """True when a campaign run from this use case's list can be measured against its control group."""
+    """True when a campaign run from this use case's list can be measured against its control group.
+
+    The holdout share is the effective one (`engine.holdout.spec.effective_holdout_fraction`, Plan J
+    M92): `actions.control_group_fraction` under `scope: run`, `actions.holdout.fraction` under a
+    persistent scope.
+    """
+    from engine.holdout.spec import effective_holdout_fraction
+
     return (
         config.ai_type is not AiType.GENERATIVE
         and config.actions.contacts_customers
-        and config.actions.control_group_fraction > 0.0
+        and effective_holdout_fraction(config.actions) > 0.0
     )
 
 

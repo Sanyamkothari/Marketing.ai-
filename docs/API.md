@@ -57,6 +57,8 @@ Contract schema version: 1.
 | GET | `/datasets/{dataset_id}/report` | The build review screen's report for one dataset | BuildReport |
 | GET | `/datasets/{dataset_id}/sample` | A stringified, PII-redacted sample of one built dataset | DatasetSampleResponse |
 | GET | `/healthz` | Liveness probe | HealthResponse |
+| GET | `/holdout` | The holdout: salt, epochs, use cases | HoldoutView |
+| PUT | `/holdout` | Start a new holdout epoch (Admin): a lower share, or a new salt | HoldoutView |
 | DELETE | `/indexes/{index_id}` | Delete one index version and everything stored with it; never the best one, never a busy one | - |
 | GET | `/indexes/{index_id}` | One index in full: its status, its manifest and, once graded, its evaluation | IndexDetailResponse |
 | POST | `/indexes/{index_id}/ask` | Answer one question from an index, grounded in its documents or refused | AssistantAnswer |
@@ -412,6 +414,8 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `suppression` | SuppressionConfig | no |  |
 | `control_group_fraction` | number | no |  |
 | `contacts_customers` | boolean | no |  |
+| `holdout` | HoldoutConfig | no | `actions.holdout`: which holdout a use case asks for. Not overridable per run. |
+| `explore_fraction` | number | no |  |
 
 #### MonitoringConfig
 
@@ -589,6 +593,15 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `suppress_recently_contacted` | boolean | no |  |
 | `recently_contacted_column` | string \| null | no |  |
 | `recently_contacted_days` | integer | no |  |
+
+#### HoldoutConfig
+
+`actions.holdout`: which holdout a use case asks for. Not overridable per run.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `scope` | "run" \| "use_case" \| "universal" | no | run: a new control group every run (actions.control_group_fraction). use_case: the same customers held out every run of this use case. universal: the same customers held out of every use case that uses this scope. |
+| `fraction` | number \| null | no | Share of all customers held out under a persistent scope; required there, unused under run. |
 
 #### LlmConfig
 
@@ -1880,6 +1893,9 @@ Keys of the default document that no advanced-settings field renders, with their
 | `actions.suppression.opt_out_column` | str \| null; rows where falsey are suppressed (config-only) |
 | `actions.suppression.recently_contacted_column` | str \| null (config-only) |
 | `actions.contacts_customers` | bool; false for operational use cases: no "Measure the campaign" step (Plan H, DEC-1130) |
+| `actions.holdout` | Plan J M92 (DEC-1302); config-only, never per run |
+| `actions.holdout.scope` | enum: run (a new control group each run, control_group_fraction) \| use_case \| universal |
+| `actions.explore_fraction` | float 0..0.10; share of eligible customers outside the target treated anyway (config-only) |
 | `monitoring` | [UI 7] Monitoring & retraining |
 | `governance` | [UI 8] Governance & privacy |
 | `output` | non-UI (plan §5) |

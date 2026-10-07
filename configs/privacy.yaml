@@ -42,6 +42,7 @@ retention:
     - scores.parquet
     - row_explanations.parquet
     - copy_messages.csv
+    - holdout_assignment.parquet        # Plan J M92: key, holdout member, explore, explore probability
   # Aggregate reports that nevertheless carry a handful of example rows. They are kept, and the
   # listed fields are emptied instead: a list becomes empty, anything else becomes null. A path is
   # dotted; `*` stands for every element of a list.

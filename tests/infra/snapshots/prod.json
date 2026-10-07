@@ -46,6 +46,7 @@
     "CredentialAttachment29A549C5": "AWS::SecretsManager::SecretTargetAttachment",
     "CredentialAttachmentPolicy47316472": "AWS::SecretsManager::ResourcePolicy",
     "CredentialAttachmentRotationSchedule3D4B7942": "AWS::SecretsManager::RotationSchedule",
+    "HoldoutSaltB6A3D22D": "AWS::SecretsManager::Secret",
     "Parameters6795E5B4": "AWS::RDS::DBParameterGroup",
     "Postgres9DC8BB04": "AWS::RDS::DBInstance",
     "PostgresRotationSingleUserA53C71BD": "AWS::Serverless::Application",

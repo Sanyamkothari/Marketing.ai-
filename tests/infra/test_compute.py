@@ -105,13 +105,15 @@ def test_the_credential_rotates(dev_templates: dict[str, Template]) -> None:
 def test_the_application_secret_is_a_separate_document(dev_templates: dict[str, Template]) -> None:
     secrets = resources(dev_templates["database"], "AWS::SecretsManager::Secret")
     names = {resource["Properties"]["Name"] for resource in secrets.values()}
-    # Plan D (DEC-860) adds the generated privacy salt and Plan H (DEC-1120) the generated connections
-    # key, both of which the application secret references.
+    # Plan D (DEC-860) adds the generated privacy salt, Plan H (DEC-1120) the generated connections
+    # key and Plan J M92 (DEC-1302) the generated holdout salt, all of which the application secret
+    # references.
     assert names == {
         "marketing-ai/dev/db",
         "marketing-ai/dev/app",
         "marketing-ai/dev/privacy-salt",
         "marketing-ai/dev/connections-key",
+        "marketing-ai/dev/holdout-salt",
     }
 
 

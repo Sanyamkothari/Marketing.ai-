@@ -43,6 +43,7 @@ __all__ = [
     "cluster_name",
     "connections_key_secret_name",
     "db_instance_identifier",
+    "holdout_salt_secret_name",
     "job_task_family",
     "jobs_log_group_name",
     "log_retention",
@@ -175,6 +176,8 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "connections_key",
     # Configurable AI service (DEC-1140): one added field, off unless a test or a developer sets it.
     "allow_fake_ai",
+    # Plan J M92 (DEC-1302): one added field, a secret (the persistent holdout's salt).
+    "holdout_salt",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 
@@ -245,6 +248,11 @@ def connections_key_secret_name(env_name: str) -> str:
     """`marketing-ai/<env>/connections-key`: the generated key saved connections are encrypted with
     (Plan H, DEC-1120)."""
     return f"{PRODUCT}/{env_name}/connections-key"
+
+
+def holdout_salt_secret_name(env_name: str) -> str:
+    """`marketing-ai/<env>/holdout-salt`: the generated persistent-holdout salt (Plan J M92, DEC-1302)."""
+    return f"{PRODUCT}/{env_name}/holdout-salt"
 
 
 def stack_name(env_name: str, component: str) -> str:

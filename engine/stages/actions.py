@@ -324,10 +324,19 @@ def _control_mask(
     run_id: str,
     fraction: float,
 ) -> pd.Series:
-    """A boolean series marking the holdout: the `fraction` of eligible rows with the lowest digest."""
+    """A boolean series marking the holdout: the `fraction` of eligible rows with the lowest digest.
+
+    Under a persistent holdout (Plan J M92, `engine.holdout`) the flow makes one active, and the
+    control group is then the eligible rows whose customer is a member (`fraction` is not read).
+    """
     import numpy as np
     import pandas as pd
 
+    from engine.holdout.assign import active_holdout, persistent_control_mask
+
+    active = active_holdout()
+    if active is not None:
+        return persistent_control_mask(keys, eligible, active, name=CONTROL_GROUP_COLUMN)
     chosen = np.zeros(len(keys), dtype=bool)
     positions = np.flatnonzero(eligible.to_numpy(dtype=bool))
     take = _holdout_size(len(positions), fraction)
@@ -366,12 +375,19 @@ def _entity_control_mask(
     """The holdout drawn over entities: every row of a chosen entity, and nothing else.
 
     Eligibility is already per entity (`_per_entity_reasons`), so an entity's rows are either all
-    eligible or none are; the draw ranks the distinct eligible entities by the salted digest.
+    eligible or none are; the draw ranks the distinct eligible entities by the salted digest. Under a
+    persistent holdout (Plan J M92) membership is per entity by the holdout's own rule, so a customer
+    is in the control group at every snapshot or at none, exactly as here.
     """
     import numpy as np
     import pandas as pd
 
+    from engine.holdout.assign import active_holdout, persistent_control_mask
     from engine.keys import key_text
+
+    active = active_holdout()
+    if active is not None:
+        return persistent_control_mask(entities, eligible, active, name=CONTROL_GROUP_COLUMN)
 
     texts = key_text(entities)
     mask = eligible.to_numpy(dtype=bool)

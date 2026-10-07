@@ -309,6 +309,18 @@ SUPPRESSIONS: Final[tuple[Suppression, ...]] = (
     ),
     Suppression(
         stack="database",
+        path="HoldoutSalt/Resource",
+        rule="AwsSolutions-SMG4",
+        reason=(
+            "Plan J M92 (DEC-1302): this secret is the salt persistent holdouts hash customers with. "
+            "It grants access to nothing; rotating it would move every customer in or out of the "
+            "holdout and break every comparison across months, which scoring refuses "
+            "(HOLDOUT_SALT_CHANGED). An Admin adopts a new salt on purpose, as a new epoch. It is "
+            "generated once, encrypted with the deployment's key and retained, like the privacy salt."
+        ),
+    ),
+    Suppression(
+        stack="database",
         path="ApplicationSecret/Resource",
         rule="AwsSolutions-SMG4",
         reason=(

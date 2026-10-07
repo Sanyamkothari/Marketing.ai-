@@ -240,6 +240,7 @@ variable is missing from this document.
 | `demo_mode` | `MARKETING_AI_DEMO_MODE` | `demo_mode` | `false` | nothing; `true` serves the seeded synthetic "Demo Telecom" client for a demo (Plan E, DEC-901) | no: never on a client deployment |
 | `connections_key` | `MARKETING_AI_CONNECTIONS_KEY` | **the secret only**, §3.3 | none; a laptop generates one into its data directory (0600) | saving a connection's password or key; env=prod refuses to save one without it (Plan H, DEC-1101) | no: put a Fernet key into the secret by hand before the first connection is saved |
 | `allow_fake_ai` | `MARKETING_AI_ALLOW_FAKE_AI` | `allow_fake_ai` | `false` | nothing; `true` lets the deterministic test model answer when no AI service is connected (tests and developer checks only; DEC-1145) | no: never on a deployment - people connect Product AI and Deliverable AI on the Connections page |
+| `holdout_salt` | `MARKETING_AI_HOLDOUT_SALT` | **the secret only**, §3.3 | none, and no generated fallback on a laptop | a use case with a persistent holdout (`actions.holdout.scope: use_case` or `universal`) refuses to score without it (`HOLDOUT_SALT_MISSING`); `scope: run` never reads it (Plan J M92, DEC-1302) | yes, into the secret, from the database stack's generated `HoldoutSalt` secret (`marketing-ai/<env>/holdout-salt`); never change it - a changed salt is refused (`HOLDOUT_SALT_CHANGED`) until an Admin adopts it as a new epoch |
 
 Three fields are tuples filled from one comma-separated value: `sagemaker_subnet_ids`,
 `sagemaker_security_group_ids` and `cors_origins`.
@@ -270,7 +271,10 @@ that are not in Parameter Store. They live in the one Secrets Manager document t
 ARN and nothing else. `privacy_salt` arrives there by a deploy-time reference to the database
 stack's `PrivacySalt` secret (`marketing-ai/<env>/privacy-salt`), which is generated once, never
 rotated and retained when the stack is destroyed: a new salt would leave every principal hash
-already written unmatchable (DEC-860).
+already written unmatchable (DEC-860). `connections_key` (Plan H) and `holdout_salt` (Plan J M92,
+`HoldoutSalt`, `marketing-ai/<env>/holdout-salt`) arrive the same way, from their own generated,
+retained, never-rotated secrets. None of them is added to the application document by hand: the
+database stack recomposes that document on every deploy, and a hand-added key would be dropped.
 
 The database's own credential is a **separate** secret, `marketing-ai/<env>/db`. The task can never
 read it. That is the secret RDS knows about and the one the AWS single-user rotation function

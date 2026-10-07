@@ -29,6 +29,10 @@ from pydantic import (
 )
 
 from engine.agent.config import AgentConfig  # Plan G (DEC-1003); imports nothing from engine
+from engine.holdout.spec import (  # Plan J M92 (DEC-1302); imports nothing from engine
+    ExploreFraction,
+    HoldoutConfig,
+)
 from engine.settings import DEFAULT_CONFIG_DIR, ENV_VARS, settings
 from engine.uplift.config import (  # Phase 3b (DEC-601); imports nothing from engine
     UPLIFT_OVERRIDABLE_PATHS,
@@ -798,6 +802,10 @@ class ActionsConfig(_Base):
     # campaign"). Operational use cases (rerouting an order, servicing an asset) set it false. Read
     # only by `engine.uplift.measure.measure_offered`; nothing about scoring changes with it.
     contacts_customers: bool = True
+    # Plan J M92 (DEC-1302): in-place declarations, typed in `engine.holdout.spec`. The defaults
+    # (`scope: run`, no explore slice) are today's behaviour exactly; neither is overridable per run.
+    holdout: HoldoutConfig = HoldoutConfig()
+    explore_fraction: ExploreFraction = 0.0
 
     @field_validator("bands")
     @classmethod
@@ -2274,7 +2282,10 @@ _ACTIONS_SUMMARY_TAIL: Final[str] = (
     "{?actions.suppression.suppress_opted_out: · skip opted-out}"
     "{?actions.suppression.suppress_recently_contacted:"
     " · skip contacted <{actions.suppression.recently_contacted_days}d}"
-    " · {actions.control_group_fraction|pct}% control group"
+    # Plan J M92 (DEC-1302 (d)): the effective holdout share - `control_group_fraction` under scope
+    # run (today's words, unchanged), `holdout.fraction` under a persistent scope.
+    "{?!actions.holdout.fraction: · {actions.control_group_fraction|pct}% control group}"
+    "{?actions.holdout.fraction: · {actions.holdout.fraction|pct}% held out, the same customers every run}"
 )
 
 

@@ -280,6 +280,10 @@ from api.routes.ai_service import router as ai_service_router  # noqa: E402
 PHASE_ROUTERS.append(ai_service_router)
 # ---- END PLAN-G ----
 # ---- PLAN-J (product) — append only below this line ----
+# Plan J M92 (DEC-1302): the holdout's routes, GET /holdout (Viewer) and PUT /holdout (Admin, audited).
+from api.routes.holdout import router as holdout_router  # noqa: E402
+
+PHASE_ROUTERS.append(holdout_router)
 # ---- END PLAN-J ----
 
 app: FastAPI = create_app()

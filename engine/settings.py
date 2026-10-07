@@ -166,6 +166,8 @@ ENV_VARS: Final[Mapping[str, str]] = {
     "connections_key": f"{ENV_PREFIX}CONNECTIONS_KEY",
     # --- Configurable AI service. One more extension; nothing above changes meaning (DEC-1140).
     "allow_fake_ai": f"{ENV_PREFIX}ALLOW_FAKE_AI",
+    # --- Plan J M92 (holdout). One more extension; nothing above changes meaning (DEC-1302).
+    "holdout_salt": f"{ENV_PREFIX}HOLDOUT_SALT",
 }
 """Field name to environment variable. One mapping, so docs, tests and readers agree."""
 
@@ -403,6 +405,16 @@ class Settings(BaseModel):
         description="Test/development only: let the deterministic fake answer when no AI service is connected.",
     )
 
+    # --- Plan J M92 (holdout, DEC-1302) ------------------------------------------------------------
+    # Added field only. The secret salt of the persistent holdout's membership hash
+    # (`engine.holdout`). No default and no generated fallback: a persistent holdout promises the same
+    # customers for months, so only a salt someone set and keeps will do. `scope: run` (the default)
+    # never reads it; a persistent scope without it refuses to score (`HOLDOUT_SALT_MISSING`).
+    holdout_salt: SecretStr | None = Field(
+        default=None,
+        description="Salt of the persistent holdout's membership hash. A secret; needed only by a persistent holdout.",
+    )
+
     @field_validator("sagemaker_subnet_ids", "sagemaker_security_group_ids", "cors_origins", mode="before")
     @classmethod
     def _split_list(cls, value: object) -> object:
@@ -416,10 +428,10 @@ class Settings(BaseModel):
             return tuple(part.strip() for part in value.split(",") if part.strip())
         return value
 
-    @field_validator("privacy_salt")
+    @field_validator("privacy_salt", "holdout_salt")
     @classmethod
     def _salt_long_enough(cls, value: SecretStr | None) -> SecretStr | None:
-        """A privacy salt is a secret: sixteen characters at least, never whitespace (DEC-860)."""
+        """A salt is a secret: sixteen characters at least, never whitespace (DEC-860; the holdout's, DEC-1302)."""
         if value is not None and len(value.get_secret_value().strip()) < 16:
             raise ValueError("must be at least 16 characters")
         return value
@@ -584,8 +596,8 @@ fixtures use.
 REDACTED: Final[str] = "<redacted>"
 
 SECRET_FIELDS: Final[frozenset[str]] = frozenset(
-    {"postgres_dsn", "privacy_salt", "connections_key"}
-)  # privacy_salt: Plan D, DEC-860; connections_key: Plan H, DEC-1120
+    {"postgres_dsn", "privacy_salt", "connections_key", "holdout_salt"}
+)  # privacy_salt: Plan D, DEC-860; connections_key: Plan H, DEC-1120; holdout_salt: Plan J, DEC-1302
 """Fields `redacted()` hides and `summary()` may never name."""
 
 SUMMARY_FIELDS: Final[tuple[str, ...]] = (
