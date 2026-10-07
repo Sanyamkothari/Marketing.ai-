@@ -27,20 +27,28 @@ fix how it will be judged before it is (`engine.measurement.plan`):
   /campaigns/{id}/plan/amendments {reason, ...}` writes version n+1 with `amends` set; every version
   is kept and `GET /campaigns/{id}/plan` lists them. Once a final result has been read, the plan
   can no longer be amended (**409 `TEST_PLAN_INVALID`**): that result was judged by the plan in force.
+* `GET /campaigns/{id}/plan-preview?holdout=` (Viewer) - the computed points behind the "Plan the test"
+  slider: M93's planner (`engine.measurement.planner.power_preview`) at each control-group share, on
+  the campaign's own measured population, beside its realised counts. Nothing is stored, nothing is
+  interpolated: the slider steps through these points only (DEC-1204).
+
+**Holdout epochs (M92).** `POST /campaigns` records the scoring run's holdout (scope, key and epoch,
+from `holdout_assignment.json`; a run that wrote none drew per run). `POST /campaigns/{id}/measure`
+refuses **409 `CAMPAIGN_EPOCH_MISMATCH`** when the runs behind the assignment span two epochs, when
+the run's epoch no longer matches the record, or when the persistent holdout was redrawn before the
+outcomes were all in (`engine.measurement.campaign.epoch_mismatch`).
 
 Customer ids are never in a URL or an audit record: every route names a campaign, a run or an upload.
-`GET /campaigns/{id}/plan-preview` (the computed points behind the "Plan the test" slider) arrives with
-M93's planner; see `docs/DECIDE.md` §8.
 """
 
 from __future__ import annotations
 
-from datetime import date
-from typing import Annotated, Any, Final
+from datetime import date, datetime, timedelta
+from typing import Annotated, Any, Final, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
-from pydantic import AwareDatetime, Field
+from pydantic import AwareDatetime, Field, ValidationError
 
 from api.access import get_platform_engine, set_audit_context
 from api.access_policy import RoutePolicy, register
@@ -53,8 +61,12 @@ from api.schemas import ErrorBody, ErrorResponse
 from engine.access.roles import Role
 from engine.audit.events import content_hash
 from engine.config import ConfigError, StrictBase, UseCaseConfig, key_columns
+from engine.holdout.assign import run_holdout_spec
+from engine.holdout.salt import HoldoutLedger
+from engine.holdout.spec import PERSISTENT_SCOPES
 from engine.measurement.campaign import (
     ASSIGNMENT_FILENAME,
+    CAMPAIGN_EPOCH_MISMATCH,
     CAMPAIGN_FILENAME,
     CAMPAIGN_NOT_FOUND,
     CAMPAIGN_NOT_MATURED,
@@ -72,6 +84,8 @@ from engine.measurement.campaign import (
     assignment_counts,
     build_assignment,
     campaign_key,
+    epoch_mismatch,
+    holdout_identity,
     new_campaign_id,
     read_frame,
     save_campaign,
@@ -92,6 +106,12 @@ from engine.measurement.plan import (
     plan_inputs,
     realised_population,
 )
+from engine.measurement.planner import (
+    MAX_HOLDOUT_SHARE,
+    PowerPreviewPoint,
+    PowerPreviewRequest,
+    power_preview,
+)
 from engine.pilot.roi import outcome_is_good_by_default
 from engine.stages import export
 from engine.storage import Storage, StorageError, run_key
@@ -107,6 +127,7 @@ __all__ = [
     "CampaignMeasureRequest",
     "CampaignNotMaturedResponse",
     "CampaignOutcomesRequest",
+    "CampaignPlanPreview",
     "CampaignView",
     "TestPlanView",
     "get_campaign_store",
@@ -119,6 +140,9 @@ _LOGGER = get_logger(__name__)
 
 CAMPAIGN_INVALID: Final[str] = "CAMPAIGN_INVALID"
 CAMPAIGNS_SHOWN: Final[int] = 100
+PREVIEW_SHARES: Final[tuple[float, ...]] = (0.02, 0.03, 0.05, 0.10, 0.15, 0.20, 0.30, 0.40, 0.50)
+"""The control-group shares the plan preview computes when the request names none (the campaign's own
+realised share is always added, so the slider can start on it)."""
 
 
 def _on_campaign(role: Role, action: str, purpose: str) -> RoutePolicy:
@@ -145,6 +169,9 @@ register(
         ),
         ("GET", "/campaigns/{campaign_id}/plan"): _on_campaign(
             Role.VIEWER, "campaigns.plan_read", "see a campaign's test plan"
+        ),
+        ("GET", "/campaigns/{campaign_id}/plan-preview"): _on_campaign(
+            Role.VIEWER, "campaigns.plan_preview", "preview a campaign's test sizes"
         ),
         ("POST", "/campaigns/{campaign_id}/plan"): _on_campaign(
             Role.ANALYST, "campaigns.plan", "register a campaign's test plan"
@@ -326,6 +353,7 @@ def create_campaign(
     except ValueError as exc:
         raise http_error(422, CAMPAIGN_INVALID, str(exc), path="bands" if body.bands else None) from exc
     counts = assignment_counts(assignment)
+    holdout_scope, holdout_key, holdout_epoch = holdout_identity(run_holdout_spec(storage, record.run_id))
     uplift_run = "intended_treatment" in scores.columns
     start = body.treatment_start or finished_at
     window = body.outcome_window_days if body.outcome_window_days is not None else _default_window(config)
@@ -344,6 +372,9 @@ def create_campaign(
         bands=body.bands,
         causal=counts.holdout > 0,
         causal_basis="engine_random" if counts.holdout > 0 else "not_random",
+        holdout_scope=holdout_scope,
+        holdout_scope_key=holdout_key,
+        holdout_epoch=holdout_epoch,
         counts=counts,
         status=CampaignStatus.LIVE,
         created_at=now,
@@ -563,6 +594,11 @@ def measure_campaign_results(
     window = (
         body.outcome_window_days if body.outcome_window_days is not None else campaign.outcome_window_days
     )
+    as_of = body.as_of or now
+    mismatch = _epoch_mismatch(request, storage, campaign, window=window, as_of=as_of)
+    if mismatch is not None:
+        set_audit_context(request, details={"reason_code": CAMPAIGN_EPOCH_MISMATCH})
+        raise http_error(409, CAMPAIGN_EPOCH_MISMATCH, mismatch)
     # The pre-registered covariate is measured with unless another one is named: leaving it out of
     # the body is not a change of plan.
     covariate = body.covariate_column
@@ -580,7 +616,7 @@ def measure_campaign_results(
             treatment_time=campaign.treatment_start,
             treatment_date_column=campaign.outcomes.treatment_date_column,
             outcome_window_days=window,
-            as_of=body.as_of or now,
+            as_of=as_of,
             campaign_id=campaign_id,
             plan=plan,
             covariate_column=covariate,
@@ -618,6 +654,148 @@ def measure_campaign_results(
         report.early_look,
     )
     return _view(storage, updated, root)
+
+
+def _epoch_mismatch(
+    request: Request, storage: Storage, campaign: Campaign, *, window: int | None, as_of: datetime
+) -> str | None:
+    """`epoch_mismatch` over the campaign's runs and, for a persistent holdout, the ledger's current epoch.
+
+    The outcomes are all in at the end of the outcome window counted from the treatment start; with
+    no window, or per-row treatment dates the record does not hold, the measurement's own moment.
+    """
+    run_specs = {run_id: run_holdout_spec(storage, run_id) for run_id in campaign.run_ids}
+    ledger = None
+    if campaign.holdout_scope in PERSISTENT_SCOPES and campaign.holdout_scope_key is not None:
+        ledger = HoldoutLedger(get_platform_engine(request)).entry(
+            campaign.holdout_scope, campaign.holdout_scope_key
+        )
+    outcomes = campaign.outcomes
+    per_row = outcomes is not None and outcomes.treatment_date_column is not None
+    closes = as_of if window is None or per_row else campaign.treatment_start + timedelta(days=window)
+    return epoch_mismatch(campaign, run_specs, ledger, outcomes_in_by=min(closes, as_of))
+
+
+# ---------------------------------------------------------------------------
+# GET /campaigns/{id}/plan-preview
+# ---------------------------------------------------------------------------
+class CampaignPlanPreview(StrictBase):
+    """`GET /campaigns/{id}/plan-preview`: the planner's points on this campaign's own population."""
+
+    campaign_id: str = Field(description="The campaign.")
+    eligible: int = Field(description="Customers in the population the campaign is measured on.")
+    n_treat: int = Field(description="Of them, contacted (the campaign's realised split).")
+    n_holdout: int = Field(description="Of them, held back.")
+    n_explore: int = Field(description="Of them, in the explore slice (M92).")
+    holdout_fraction: float = Field(description="The campaign's realised held-back share.")
+    base_rate: float | None = Field(
+        description="The rate expected without the campaign the points use; null when not known."
+    )
+    base_rate_source: Literal["request", "plan"] | None = Field(
+        description="Where it came from: the request, else the registered plan; null when neither gave one."
+    )
+    direction: Literal["up", "down", "either"] = Field(
+        description="Which way the use case's campaigns aim to move the outcome (the smallest change is in it)."
+    )
+    points: tuple[PowerPreviewPoint, ...] = Field(
+        description="One computed point per control-group share, smallest share first; empty with `reason`."
+    )
+    current_index: int | None = Field(
+        description="The point at the campaign's realised share, where the slider starts; null when none is."
+    )
+    basis: str | None = Field(description="What the numbers rest on, in one plain paragraph.")
+    reason: str | None = Field(description="Why there are no points; null when there are.")
+
+
+HoldoutShares = Annotated[
+    list[float] | None,
+    Query(
+        alias="holdout",
+        description="Control-group shares to compute, each more than 0 and at most 0.5; a fixed ladder when none.",
+    ),
+]
+OptionalRate = Annotated[
+    float | None, Query(ge=0.0, le=1.0, description="Rate expected without the campaign, 0 to 1.")
+]
+OptionalMoney = Annotated[float | None, Query(ge=0.0, le=1e9, description="Rupees; null when not known.")]
+
+
+@router.get(
+    "/campaigns/{campaign_id}/plan-preview",
+    response_model=CampaignPlanPreview,
+    responses=_ERRORS,
+    summary="The computed points behind the 'Plan the test' slider, on the campaign's own population",
+)
+def preview_plan(
+    campaign_id: str,
+    request: Request,
+    root: ConfigRootDep,
+    storage: StorageDep,
+    holdout: HoldoutShares = None,
+    base_rate: OptionalRate = None,
+    value_per_conversion: OptionalMoney = None,
+    contact_cost: OptionalMoney = None,
+    offer_cost: OptionalMoney = None,
+) -> CampaignPlanPreview:
+    """`engine.measurement.planner.power_preview` at each share; every number is the planner's."""
+    campaign = _load(get_campaign_store(request), campaign_id)
+    realised = _realised(storage, campaign_id)
+    plan = _current_plan(storage, campaign_id)
+    rate, source = (base_rate, "request") if base_rate is not None else (None, None)
+    if rate is None and plan is not None and plan.base_rate is not None:
+        rate, source = plan.base_rate, "plan"
+    good, _ = _direction(campaign, root)
+    aim: Literal["up", "down", "either"] = (
+        "either" if campaign.use_case_id is None else ("up" if good else "down")
+    )
+    current = realised.holdout_fraction
+    asked = tuple(holdout) if holdout else PREVIEW_SHARES
+    with_current = (*asked, current) if 0.0 < current <= MAX_HOLDOUT_SHARE and not holdout else asked
+    shares = tuple(sorted(set(with_current)))
+    answer: dict[str, Any] = {
+        "campaign_id": campaign_id,
+        "eligible": realised.population_rows,
+        "n_treat": realised.n_treat,
+        "n_holdout": realised.n_holdout,
+        "n_explore": realised.n_explore,
+        "holdout_fraction": current,
+        "base_rate": rate,
+        "base_rate_source": source,
+        "direction": aim,
+    }
+    if realised.population_rows < 1:
+        return CampaignPlanPreview(
+            **answer,
+            points=(),
+            current_index=None,
+            basis=None,
+            reason="This campaign measures nobody, so there is no test to size.",
+        )
+    try:
+        preview_request = PowerPreviewRequest(
+            eligible=realised.population_rows,
+            base_rate=rate,
+            holdout_shares=shares,
+            explore_share=min(realised.explore_fraction, 0.10),
+            alpha=plan.alpha if plan is not None else 0.05,
+            power=plan.power if plan is not None else 0.8,
+            value_per_conversion=value_per_conversion,
+            contact_cost=contact_cost,
+            offer_cost=offer_cost,
+            direction=aim,
+        )
+    except ValidationError as exc:
+        raise http_error(
+            422,
+            CAMPAIGN_INVALID,
+            "Each control-group share must be more than 0 and at most 0.5, and at most 20 may be asked for.",
+            path="holdout",
+        ) from exc
+    preview = power_preview(preview_request)
+    index = next((i for i, point in enumerate(preview.points) if point.holdout_share == current), None)
+    return CampaignPlanPreview(
+        **answer, points=preview.points, current_index=index, basis=preview.basis, reason=None
+    )
 
 
 # ---------------------------------------------------------------------------

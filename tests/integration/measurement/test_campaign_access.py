@@ -36,6 +36,7 @@ ROUTES: dict[tuple[str, str], Role] = {
     ("GET", "/campaigns/{campaign_id}/plan"): Role.VIEWER,
     ("POST", "/campaigns/{campaign_id}/plan"): Role.ANALYST,
     ("POST", "/campaigns/{campaign_id}/plan/amendments"): Role.ANALYST,
+    ("GET", "/campaigns/{campaign_id}/plan-preview"): Role.VIEWER,  # computed at M94's integration
 }
 WRITES = [key for key, role in ROUTES.items() if key[0] in MUTATING_METHODS]
 READS = [key for key in ROUTES if key[0] not in MUTATING_METHODS]
@@ -94,3 +95,21 @@ def test_a_viewer_may_read_the_campaign_list(signed_in: tuple[TestClient, FastAP
     response = client.get("/campaigns", headers=bearer(app, viewer))
     assert response.status_code == 200, response.text
     assert response.json() == {"campaigns": []}
+
+
+def test_no_route_hands_out_a_campaigns_customer_rows(signed_in: tuple[TestClient, FastAPI, Path]) -> None:
+    """M91's row-level rule (`ROW_LEVEL_ARTEFACTS`, enforced in `read_artefact`) guards the run files a
+    route serves. A campaign's row-level files (`assignment.parquet`, `outcomes.parquet`) are served by
+    no route at all: no campaign route takes a file name, and the run artefact route does not know them,
+    so no run id reaches them. Erasure and retention cover them (`test_campaign_privacy.py`)."""
+    from engine.measurement.campaign import ROW_LEVEL_CAMPAIGN_FILES
+
+    for route in live_routes():
+        if route.path.startswith("/campaigns"):
+            assert "{name}" not in route.path and "{path" not in route.path, route.path
+    client, app, _ = signed_in
+    admin = make_user(app, "campaign-rows-admin", list(Role))
+    for name in ROW_LEVEL_CAMPAIGN_FILES:
+        response = client.get(f"/runs/r_20261007_00000001/artefacts/{name}", headers=bearer(app, admin))
+        assert response.status_code == 404, response.text
+        assert response.json()["detail"]["code"] == "ARTEFACT_UNKNOWN"

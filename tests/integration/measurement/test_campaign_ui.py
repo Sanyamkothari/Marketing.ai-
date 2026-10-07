@@ -9,7 +9,10 @@ in its script order - and check what a person sees:
 * a campaign's page shows the plan the server froze - its holdout, power and hash - and only those
   values; before a plan exists, an Analyst gets the form and registering it posts the person's
   decisions and draws the server's answer;
-* an early look is labelled and shows no verdict; a final result shows the verdict's headline.
+* an early look is labelled and shows no verdict; a final result shows the verdict's headline;
+* the "Plan the test" slider steps through the server's computed points only (`GET
+  /campaigns/{id}/plan-preview`, DEC-1204): one stop per point, starting on the campaign's own split,
+  moving it repaints the readout only, and a rate typed into the form asks the server again.
 
 Every body the fake API answers with was answered by the app below over a store holding a Phase 1
 propensity run (`support.py`), with sign-in off.
@@ -83,11 +86,15 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
         fresh_id = fresh["campaign"]["campaign_id"]
         _write(out, "fresh", ok(client.post(f"/campaigns/{fresh_id}/outcomes", json={"upload_id": outcomes})))
         _write(out, "fresh_plans", ok(client.get(f"/campaigns/{fresh_id}/plan")))
+        preview = f"/campaigns/{fresh_id}/plan-preview"
+        _write(out, "fresh_preview", ok(client.get(preview)))
+        _write(out, "fresh_preview_rate", ok(client.get(preview, params={"base_rate": 0.1})))
         _write(
             out, "fresh_plan_registered", ok(client.post(f"/campaigns/{fresh_id}/plan", json=_plan()), 201)
         )
         _write(out, "fresh_after", ok(client.get(f"/campaigns/{fresh_id}")))
         _write(out, "fresh_plans_after", ok(client.get(f"/campaigns/{fresh_id}/plan")))
+        _write(out, "fresh_preview_after", ok(client.get(preview)))
 
         # A campaign read before its analysis date (an early look), then on it (final).
         dated = ok(client.post("/campaigns", json={"run_id": RUN_ID, "name": "Win-back, June"}), 201)
@@ -95,6 +102,7 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
         ok(client.post(f"/campaigns/{dated_id}/outcomes", json={"upload_id": outcomes}))
         ok(client.post(f"/campaigns/{dated_id}/plan", json=_plan(mde_pp=0.3)), 201)
         _write(out, "dated_plans", ok(client.get(f"/campaigns/{dated_id}/plan")))
+        _write(out, "dated_preview", ok(client.get(f"/campaigns/{dated_id}/plan-preview")))
         _write(
             out,
             "early",
@@ -120,6 +128,14 @@ def test_the_fixtures_are_the_world_the_screens_are_tested_in(tmp_path: Path, co
     assert read("early")["report"]["early_look"] is True and read("early")["verdict"] is None
     assert read("final")["report"]["early_look"] is False and read("final")["verdict"] is not None
     assert read("dated_plans")["plan"]["warnings"] == ["PLAN_UNDERPOWERED"]
+    unrated, rated = read("fresh_preview"), read("fresh_preview_rate")
+    assert unrated["base_rate"] is None and all(point["mde_pp"] is None for point in unrated["points"])
+    assert rated["base_rate_source"] == "request" and all(
+        point["mde_pp"] is not None for point in rated["points"]
+    )
+    assert len(rated["points"]) >= 3 and rated["current_index"] is not None
+    assert read("fresh_preview_after")["base_rate_source"] == "plan"
+    assert read("dated_preview")["base_rate_source"] == "plan"
 
 
 def test_the_campaign_screens_in_jsdom(tmp_path: Path, config_root: Path) -> None:

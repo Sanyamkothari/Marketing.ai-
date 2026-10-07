@@ -89,7 +89,7 @@ each arm - with `plan_hash`, the SHA-256 of its content. The audit event's `afte
 different one is `409 TEST_PLAN_EXISTS`; `POST /campaigns/{id}/plan/amendments {reason, ...}` writes
 version n+1 with `amends`, every version kept (`GET /campaigns/{id}/plan`); once a final result has
 been read the plan can no longer be amended (`409 TEST_PLAN_INVALID`). When an effect and a rate
-are given, the power of the planned arms is computed with `engine.uplift.power.power_of_lift`; below
+are given, the power of the planned arms is computed with M93's `engine.measurement.planner.achieved_power`; below
 the plan's power the plan carries `PLAN_UNDERPOWERED`, a warning that never blocks. At measurement any
 difference from the plan - holdout share, population, window, outcome column, value or kind,
 covariate - is `409 TEST_PLAN_CHANGED`. The covariate defaults to the plan's, so only a different one
@@ -111,18 +111,34 @@ named, else the run's latest - and never prices an early look.
 router's PLAN-J seam); a campaign's page (`#/campaigns/<id>`) shows its result and the "Plan the test"
 card with the server's values only.
 
-**Waiting for M92 and M93 (built in parallel).** Two pieces are wired once they merge:
+**Wired at M94's integration, once M92 and M93 had merged (DEC-1304 (l), (m)).**
 
-* *Plan preview (M93).* `GET /campaigns/{campaign_id}/plan-preview?holdout=` (Viewer) in
-  `api/routes/campaigns.py`: the assignment's `realised_population(...)` counts and the plan's
-  expected rate passed to M93's `engine.measurement.planner` (`holdout_for_mde`, `achieved_power`,
-  `cost_of_holdout`, `cost_of_explore`) at the shares the planner names; answer `{points: [...]}`,
-  computed points only. `freeze_plan` then takes `achieved_power` from `planner.achieved_power` instead
-  of `engine.uplift.power.power_of_lift` (the same test, so the numbers agree). The card's slider
-  (`ui/modules/decide/plan.js`, the TODO there) steps over those points only. Tests: the preview
-  matches the planner on the assignment's counts; the slider draws exactly the server's points.
-* *Holdout epochs (M92).* `POST /campaigns` records `Campaign.holdout_epoch` from the scoring run's
-  `holdout_assignment.parquet` / `HoldoutSpec.epoch`, and refuses `CAMPAIGN_EPOCH_MISMATCH` when the
-  run's rows span two epochs (`engine/holdout/` helper over that file); `assignment.parquet` takes
-  its `explore` flag and probability from the same file. Tests: a run spanning two epochs is refused;
-  an explore row is carried and counted.
+* *Plan preview (M93).* `GET /campaigns/{campaign_id}/plan-preview?holdout=&base_rate=` (Viewer) in
+  `api/routes/campaigns.py` passes the assignment's `realised_population(...)` (its measured
+  population, and its explore share) to M93's `engine.measurement.planner.power_preview` at each
+  control-group share asked for, or at a fixed ladder (2 % to 50 %) plus the campaign's own realised
+  share when none is asked. The rate is the request's, else the registered plan's, else unknown (every
+  smallest change is then null with the planner's sentence); the direction is the use case's aim (`down`
+  for an outcome to prevent); value and costs are optional query parameters. The answer is
+  `{eligible, n_treat, n_holdout, holdout_fraction, base_rate, base_rate_source, direction, points,
+  current_index, basis}`: computed points only, nothing stored. `freeze_plan` takes `achieved_power`
+  from `planner.achieved_power` (the same test as `engine.uplift.power.power_of_lift`; they differ only
+  by the far tail in very small groups). The card's slider (`ui/modules/decide/plan.js`) is a range input
+  over the indices of `points`, starting on `current_index`; moving it repaints the readout only, and a
+  rate typed into the form asks the route again (DEC-1204). The stop does not change the plan: the
+  campaign's split is already drawn. Tests: `tests/integration/measurement/test_plan_preview.py` and the
+  jsdom slider tests in `campaigns.test.mjs`.
+* *Holdout epochs (M92).* `POST /campaigns` records the run's holdout - `holdout_scope`,
+  `holdout_scope_key`, `holdout_epoch` - from its `holdout_assignment.json`
+  (`engine.holdout.assign.run_holdout_spec`; a run that wrote none drew per run, scope `run`). `POST
+  /campaigns/{id}/measure` refuses `409 CAMPAIGN_EPOCH_MISMATCH` (audited, nothing stored) when
+  `engine.measurement.campaign.epoch_mismatch` finds the campaign's runs in two epochs, the run's epoch
+  no longer the recorded one, or the persistent holdout redrawn (a later epoch in the ledger `GET
+  /holdout` reads) before the outcomes were all in - the end of the outcome window, or the measurement's
+  own moment when there is no window or the dates are per row. A redraw after that is fine. The ledger
+  keeps only the current epoch's start, so two or more epochs since are refused: when the first began is
+  not known. Tests: `tests/unit/measurement/test_campaign_epochs.py`,
+  `tests/integration/measurement/test_campaign_epochs.py`.
+* *Still open:* `assignment.parquet` does not yet take its explore flag and probability from the run's
+  `holdout_assignment.parquet` (a run's `scores.*` carries no explore flag), so a campaign's `n_explore`
+  is 0 until that is joined on the key.

@@ -481,6 +481,14 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/holdout",
         # Plan J M93: the test planner's power preview (Viewer, counts only) (DEC-1303 (c))
         "/measurement/power-preview",
+        # Plan J M94: the campaign record, its one measurement path and its test plan (DEC-1304)
+        "/campaigns",
+        "/campaigns/{campaign_id}",
+        "/campaigns/{campaign_id}/outcomes",
+        "/campaigns/{campaign_id}/measure",
+        "/campaigns/{campaign_id}/plan",
+        "/campaigns/{campaign_id}/plan/amendments",
+        "/campaigns/{campaign_id}/plan-preview",
     }
 
 

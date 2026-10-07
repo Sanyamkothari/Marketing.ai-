@@ -23,7 +23,9 @@ function pageScripts() {
 /**
  * Install the page. `world` holds what can change between tests: `campaigns` (the `GET /campaigns`
  * body), `views` (campaign id to its `GET /campaigns/{id}` body), `plans` (to its `GET .../plan`
- * body), and `onPlan(id, body)` / `onMeasure(id)` answering the two writes.
+ * body), `previews` (to its `GET .../plan-preview` body) and `ratedPreviews` (to the same with
+ * `?base_rate=`; `previewQueries` records every query asked), and `onPlan(id, body)` /
+ * `onMeasure(id)` answering the two writes.
  */
 export async function installWholePage({ hash = "#/", world }) {
   const server = (request) => {
@@ -40,9 +42,15 @@ export async function installWholePage({ hash = "#/", world }) {
     if (method === "GET" && p === "/clients") return ok(fixture("clients"));
     if (method === "GET" && p === "/healthz") return ok(fixture("healthz"));
     if (method === "GET" && p === "/campaigns") return ok(world.campaigns);
-    const match = p.match(/^\/campaigns\/([^/]+)(\/plan|\/measure)?$/);
+    const match = p.match(/^\/campaigns\/([^/]+)(\/plan-preview|\/plan|\/measure)?$/);
     if (match) {
       const id = decodeURIComponent(match[1]);
+      if (method === "GET" && match[2] === "/plan-preview") {
+        (world.previewQueries = world.previewQueries || []).push({ id, query: request.query });
+        const rated = request.query.base_rate !== undefined;
+        const body = rated ? (world.ratedPreviews || {})[id] : (world.previews || {})[id];
+        if (body) return ok(body);
+      }
       if (method === "GET" && !match[2] && world.views[id]) return ok(world.views[id]);
       if (method === "GET" && match[2] === "/plan" && world.plans[id]) return ok(world.plans[id]);
       if (method === "POST" && match[2] === "/plan" && world.onPlan) return world.onPlan(id, request.body);

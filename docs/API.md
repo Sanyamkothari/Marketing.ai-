@@ -27,6 +27,7 @@ Contract schema version: 1.
 | POST | `/campaigns/{campaign_id}/outcomes` | Give a campaign its outcomes file: customer id, outcome and optionally a treatment date | CampaignView |
 | GET | `/campaigns/{campaign_id}/plan` | A campaign's registered test plan and every earlier version | TestPlanView |
 | POST | `/campaigns/{campaign_id}/plan` | Register a campaign's test plan before its outcomes are read | TestPlan |
+| GET | `/campaigns/{campaign_id}/plan-preview` | The computed points behind the 'Plan the test' slider, on the campaign's own population | CampaignPlanPreview |
 | POST | `/campaigns/{campaign_id}/plan/amendments` | Amend a campaign's test plan: a new version with a reason, the old one kept | TestPlan |
 | GET | `/clients` | Every client, newest first | ClientListResponse |
 | POST | `/clients` | Register a client whose data will be onboarded | ClientCreateResponse |

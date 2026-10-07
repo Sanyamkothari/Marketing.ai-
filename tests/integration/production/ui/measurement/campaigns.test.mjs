@@ -10,6 +10,9 @@ const world = {
   campaigns: fixture("campaigns_empty"),
   views: { [ids.fresh]: fixture("fresh"), [ids.dated]: fixture("early") },
   plans: { [ids.fresh]: fixture("fresh_plans"), [ids.dated]: fixture("dated_plans") },
+  previews: { [ids.fresh]: fixture("fresh_preview"), [ids.dated]: fixture("dated_preview") },
+  ratedPreviews: { [ids.fresh]: fixture("fresh_preview_rate") },
+  previewQueries: [],
   posted: [],
   onPlan: null,
   onMeasure: null,
@@ -49,6 +52,60 @@ test("Results lists the campaigns beside the runs, newest first, each linking to
   assert.equal(cells[3], world.campaigns.campaigns[0].counts.intended.toLocaleString("en-US"));
 });
 
+const points1 = (value) => `${String(Number(value.toFixed(1))).replace(".", "\\.")} points`;
+const readout = () => $("[data-preview-readout]").textContent;
+const moveTo = (index) => {
+  const slider = $("[data-preview-slider]");
+  slider.value = String(index);
+  slider.dispatchEvent(new w.Event("input", { bubbles: true }));
+};
+
+test("the slider has one stop per computed point and starts on the campaign's own split", async () => {
+  await open(`#/campaigns/${ids.fresh}`);
+  await until(() => $("[data-preview-slider]"), 3000, "the preview slider");
+  const preview = fixture("fresh_preview");
+  const slider = $("[data-preview-slider]");
+  assert.equal(slider.getAttribute("min"), "0");
+  assert.equal(slider.getAttribute("max"), String(preview.points.length - 1));
+  assert.equal(slider.getAttribute("step"), "1", "whole stops only: never between two points");
+  assert.equal(slider.value, String(preview.current_index));
+  assert.match(readout(), /this campaign's split/);
+  assert.match(readout(), new RegExp(pct(preview.points[preview.current_index].holdout_share).replace(".", "\\.")));
+  assert.ok($("[data-preview-reason]"), "with no rate, the planner's sentence says why no change is shown");
+  assert.match($("[data-preview-mde]").textContent, /—/);
+});
+
+test("moving the slider draws exactly the server's points and repaints the readout only", async () => {
+  const preview = fixture("fresh_preview");
+  const form = $("[data-plan-form]");
+  form.elements.namedItem("metric").value = "typed before moving";
+  preview.points.forEach((point, index) => {
+    moveTo(index);
+    assert.match(readout(), new RegExp(`${pct(point.holdout_share).replace(".", "\\.")}`));
+    assert.match(
+      $("[data-preview-arms]").textContent,
+      new RegExp(`${point.n_treat.toLocaleString("en-US")} / ${point.n_control.toLocaleString("en-US")}`),
+    );
+  });
+  assert.equal($("[data-plan-form]"), form, "the form was not redrawn");
+  assert.equal(form.elements.namedItem("metric").value, "typed before moving");
+});
+
+test("a rate typed into the form asks the server again and draws its points", async () => {
+  const rated = fixture("fresh_preview_rate");
+  const field = $("[data-plan-form]").elements.namedItem("base_rate_pct");
+  field.value = "10";
+  field.dispatchEvent(new w.Event("change", { bubbles: true }));
+  await until(() => !/—/.test($("[data-preview-mde]").textContent), 3000, "the rated preview");
+  const asked = world.previewQueries.filter((q) => q.id === ids.fresh && q.query.base_rate !== undefined);
+  assert.deepEqual(asked.map((q) => q.query.base_rate), ["0.1"]);
+  const point = rated.points[rated.current_index];
+  assert.match($("[data-preview-mde]").textContent, new RegExp(points1(point.mde_pp)));
+  moveTo(rated.points.length - 1);
+  const last = rated.points[rated.points.length - 1];
+  assert.match($("[data-preview-mde]").textContent, new RegExp(points1(last.mde_pp)));
+});
+
 test("before a plan exists, an Analyst gets the form and the server's answer is what is drawn", async () => {
   await open(`#/campaigns/${ids.fresh}`);
   await until(() => $("[data-plan-form]"), 3000, "the plan form");
@@ -59,6 +116,7 @@ test("before a plan exists, an Analyst gets the form and the server's answer is 
     world.posted.push({ id, body });
     world.views[ids.fresh] = fixture("fresh_after");
     world.plans[ids.fresh] = fixture("fresh_plans_after");
+    world.previews[ids.fresh] = fixture("fresh_preview_after");
     return { status: 201, body: fixture("fresh_plan_registered") };
   };
   const form = $("[data-plan-form]");

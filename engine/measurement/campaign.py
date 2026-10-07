@@ -45,7 +45,7 @@ from __future__ import annotations
 import io
 import secrets
 import threading
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
@@ -58,6 +58,7 @@ from sqlmodel import Session, SQLModel, col, select
 
 from engine.config import PrimaryKey, StrictBase, key_columns
 from engine.contracts import Artefact
+from engine.holdout.spec import PERSISTENT_SCOPES, HoldoutLedgerEntry, HoldoutScope, HoldoutSpec
 from engine.platform_db import create_tables
 from engine.utils.time import utc_now
 
@@ -72,6 +73,7 @@ __all__ = [
     "ARM_TREATED",
     "ASSIGNMENT_FILENAME",
     "CAMPAIGNS_PREFIX",
+    "CAMPAIGN_EPOCH_MISMATCH",
     "CAMPAIGN_FILENAME",
     "CAMPAIGN_NOT_FOUND",
     "CAMPAIGN_NOT_MATURED",
@@ -95,6 +97,8 @@ __all__ = [
     "assignment_counts",
     "build_assignment",
     "campaign_key",
+    "epoch_mismatch",
+    "holdout_identity",
     "new_campaign_id",
     "read_frame",
     "save_campaign",
@@ -103,13 +107,14 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Codes (DEC-1304). `engine.decide.codes.PLAN_J_CODES` and `configs/pilot/help.yaml` are frozen
-# while Plan J's branches run in parallel; this milestone's entries are applied when it is merged,
-# beside M91's (PARALLEL_WORK_PROTOCOL.md §3.2).
+# Codes (DEC-1304). Each is in `engine.decide.codes.PLAN_J_CODES` with a plain-language entry in
+# `configs/pilot/help.yaml` (added when M94 was merged; PARALLEL_WORK_PROTOCOL.md §3.2).
 # ---------------------------------------------------------------------------
 CAMPAIGN_NOT_FOUND: Final[str] = "CAMPAIGN_NOT_FOUND"
 CAMPAIGN_NOT_MATURED: Final[str] = "CAMPAIGN_NOT_MATURED"
 CAMPAIGN_OUTCOMES_MISSING: Final[str] = "CAMPAIGN_OUTCOMES_MISSING"
+CAMPAIGN_EPOCH_MISMATCH: Final[str] = "CAMPAIGN_EPOCH_MISMATCH"
+"""The campaign's control group is not one persistent holdout epoch's (DEC-1304 (l), M92's epochs)."""
 
 # ---------------------------------------------------------------------------
 # Where the artefacts live
@@ -238,8 +243,16 @@ class Campaign(Artefact):
     causal_basis: Literal["engine_random", "declared_random", "verified_random", "not_random"] = Field(
         description="Why it is (or is not) causal: `engine_random` for a holdout our actions stage drew."
     )
+    holdout_scope: HoldoutScope = Field(
+        default="run",
+        description="The holdout the scoring run drew (M92): `run` (a per-run draw), `use_case` or `universal`.",
+    )
+    holdout_scope_key: str | None = Field(
+        default=None, description="`universal`, or the use-case id under `use_case`; null under `run`."
+    )
     holdout_epoch: int | None = Field(
-        default=None, description="The persistent holdout's epoch the assignment was drawn in (M92)."
+        default=None,
+        description="The persistent holdout's epoch the assignment was drawn in (M92); null under `run`.",
     )
     counts: AssignmentCounts = Field(description="Customers in each arm.")
     status: CampaignStatus = Field(description="`live` until a report is stored, then `measured`.")
@@ -509,3 +522,77 @@ def save_campaign(
     saved = store.create(campaign) if create else store.save(campaign)
     storage.write_model(campaign_key(saved.campaign_id, CAMPAIGN_FILENAME), saved)
     return saved
+
+
+# ---------------------------------------------------------------------------
+# Holdout epochs (M92; DEC-1304 (l))
+# ---------------------------------------------------------------------------
+_RUN_HOLDOUT: Final[tuple[HoldoutScope, str | None, int | None]] = ("run", None, None)
+
+
+def holdout_identity(spec: HoldoutSpec | None) -> tuple[HoldoutScope, str | None, int | None]:
+    """`(scope, scope_key, epoch)` of a run's holdout; a run without `holdout_assignment.json` drew per run."""
+    if spec is None or spec.scope == "run":
+        return _RUN_HOLDOUT
+    return spec.scope, spec.scope_key, spec.epoch
+
+
+def epoch_mismatch(
+    campaign: Campaign,
+    run_specs: Mapping[str, HoldoutSpec | None],
+    ledger: HoldoutLedgerEntry | None,
+    *,
+    outcomes_in_by: datetime,
+) -> str | None:
+    """Why `campaign` cannot be measured against its control group, or None when it can (pure).
+
+    * **Two epochs.** The runs behind the assignment (`run_specs`, each run's `HoldoutSpec` from
+      `holdout_assignment.json`, None for a run that drew per run) must share one holdout: one scope,
+      one key, one epoch. Customers held back under two epochs were not held back by one rule.
+    * **The run's epoch no longer matches.** That holdout must still be the one the campaign recorded
+      when it was created (`holdout_scope`, `holdout_scope_key`, `holdout_epoch`).
+    * **A new epoch before the outcomes were in.** `ledger` is the persistent holdout's current entry.
+      A later epoch (a lowered share or a new salt) releases or reshuffles held-back customers, who may
+      then be contacted. If that happened before `outcomes_in_by` (the end of the outcome window) the
+      control group is no longer clean. The ledger keeps only the current epoch's start, so when more
+      than one epoch has started since, the first may have begun inside the window: refused too.
+    """
+    seen = {holdout_identity(spec) for spec in run_specs.values()}
+    if len(seen) > 1:
+        epochs = sorted(f"epoch {epoch}" if epoch is not None else "a per-run draw" for _, _, epoch in seen)
+        return (
+            "This campaign's customers were held back in more than one way ("
+            + ", ".join(epochs)
+            + "), so its two groups were not chosen by one rule. Record a campaign for each scoring run instead."
+        )
+    recorded = (campaign.holdout_scope, campaign.holdout_scope_key, campaign.holdout_epoch)
+    if seen and seen != {recorded}:
+        ((_, _, now),) = seen
+        return (
+            f"The scoring run's control group is no longer the one recorded with this campaign (epoch "
+            f"{campaign.holdout_epoch if campaign.holdout_epoch is not None else 'none'}, now "
+            f"{now if now is not None else 'none'}). Record the campaign again from the run."
+        )
+    epoch = campaign.holdout_epoch
+    if campaign.holdout_scope not in PERSISTENT_SCOPES or epoch is None or ledger is None:
+        return None
+    if ledger.epoch == epoch:
+        return None
+    if ledger.epoch < epoch:  # the ledger cannot go back; a restored database is not the holdout drawn
+        return (
+            f"The control group on record is epoch {ledger.epoch}, older than this campaign's ({epoch}), so "
+            "the campaign's control group cannot be confirmed."
+        )
+    if ledger.epoch == epoch + 1 and ledger.started_at >= outcomes_in_by:
+        return None  # the control group was redrawn only after every outcome was in
+    if ledger.epoch == epoch + 1:
+        return (
+            f"The control group was redrawn (epoch {ledger.epoch}) on {ledger.started_at.date().isoformat()}, "
+            f"before this campaign's outcomes were all in ({outcomes_in_by.date().isoformat()}). Customers "
+            "held back for it may have been contacted since, so the comparison is not clean."
+        )
+    return (
+        f"The control group has been redrawn {ledger.epoch - epoch} times since this campaign (epoch {epoch}, "
+        f"now {ledger.epoch}), and when it first changed is not recorded, so it may have changed before the "
+        "outcomes were all in. The comparison cannot be shown to be clean."
+    )

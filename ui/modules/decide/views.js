@@ -63,9 +63,19 @@ function resultCard(view, { canMeasure, busy, error }) {
 
 /**
  * One campaign's page. `view` is `GET /campaigns/{id}`, `plans` is `GET /campaigns/{id}/plan`,
- * `can(method, path)` what this person may do, `busy` / `measureError` / `planError` the screen's state.
+ * `can(method, path)` what this person may do, `busy` / `measureError` / `planError` the screen's state,
+ * `preview` / `previewIndex` the plan preview (`GET /campaigns/{id}/plan-preview`) and its slider's stop.
  */
-export function campaignPageHtml({ view, plans = null, can = () => true, busy = false, measureError = null, planError = null }) {
+export function campaignPageHtml({
+  view,
+  plans = null,
+  can = () => true,
+  busy = false,
+  measureError = null,
+  planError = null,
+  preview = null,
+  previewIndex = null,
+}) {
   const { campaign } = view;
   const counts = campaign.counts || {};
   const run = (campaign.run_ids || [])[0];
@@ -83,6 +93,8 @@ export function campaignPageHtml({ view, plans = null, can = () => true, busy = 
     versions: (plans && plans.versions) || [],
     canRegister: can("POST", "/campaigns/{campaign_id}/plan"),
     error: planError,
+    preview,
+    previewIndex,
   });
   const result = resultCard({ ...view, plan }, { canMeasure: can("POST", "/campaigns/{campaign_id}/measure"), busy, error: measureError });
   return `<main class="screen dc" data-module="decide" data-campaign-page="${esc(campaign.campaign_id)}">${head}<div class="dc-stack">${result}${card}</div></main>`;
@@ -107,6 +119,8 @@ const CSS = `
 .dc .dc-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:8px}
 .dc .dc-form label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--ink2)}
 .dc .dc-actions{display:flex;gap:8px;margin-top:8px}
+.dc .dc-preview{margin-top:12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
+.dc .dc-preview input[type=range]{width:100%;margin:8px 0}
 .dc .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
 `;
 

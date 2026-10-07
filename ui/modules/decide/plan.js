@@ -7,14 +7,18 @@
 // gets a form of their own decisions - what is measured, when it is read, the smallest effect worth
 // finding, the rate expected without the campaign - and no number of ours until the server answers.
 //
-// TODO(M93 merge, docs/DECIDE.md §8): when `engine/measurement/planner.py` and
-// `GET /campaigns/{id}/plan-preview` land, add above the form a slider over the server's computed
-// points only (holdout share against detectable effect and its cost, DEC-1204): one stop per point the
-// preview returns, never an interpolated value, and choosing a stop fills `mde_pp` from that point.
+// Above the plan sits the preview slider (M93's planner, wired at M94's integration; DEC-1204, DEC-1304
+// (k)): a range input over the indices of `GET /campaigns/{id}/plan-preview`'s `points` and nothing
+// else - one stop per point the server computed, never an interpolated value - starting on the
+// campaign's own split (`current_index`). Each stop reads out the share held back, the customers on
+// each side, the smallest change that test is sure to see and what holding them back costs, or the
+// planner's sentence saying why a figure is missing. The stop does not change the plan: the campaign's
+// split is already drawn, and the plan's power is the server's for that split.
 //
-// Pure: `planCardHtml` draws from its arguments, so the jsdom tests can call it with real answers.
+// Pure: `planCardHtml` and `previewReadoutHtml` draw from their arguments, so the jsdom tests can call
+// them with real answers.
 
-import { EM_DASH, esc, fmtDate, fmtInt, fmtNum, fmtPct, glossaryCode, present } from "../../dom.js";
+import { EM_DASH, esc, fmtDate, fmtInt, fmtMoney, fmtNum, fmtPct, glossaryCode, present } from "../../dom.js";
 
 const row = (label, value, attrs = "") =>
   `<div class="dc-kv"${attrs ? ` ${attrs}` : ""}><span class="dc-k">${esc(label)}</span><span class="dc-v">${value}</span></div>`;
@@ -58,6 +62,41 @@ function planRows(plan) {
   ].join("");
 }
 
+const money = (range) =>
+  !range ? null : range.low === range.high ? fmtMoney(range.low) : `${fmtMoney(range.low)} to ${fmtMoney(range.high)}`;
+
+/** What one computed point says; `preview` is the whole answer (for the campaign's own split). */
+export function previewReadoutHtml(preview, index) {
+  const point = preview && preview.points ? preview.points[index] : null;
+  if (!point) return "";
+  const own = index === preview.current_index ? ` <span class="dc-note">(this campaign's split)</span>` : "";
+  const change = present(point.mde_pp) ? `${esc(fmtNum(point.mde_pp, 1))} points` : EM_DASH;
+  const holding = money(point.cost_of_holdout);
+  return [
+    row("Held back", `${esc(fmtPct(point.holdout_share, 1))}${own}`, "data-preview-share"),
+    row("Customers contacted / held back", `${esc(fmtInt(point.n_treat))} / ${esc(fmtInt(point.n_control))}`, "data-preview-arms"),
+    row("Smallest change the test is sure to see", change, "data-preview-mde"),
+    row("Cost of holding them back", holding ? esc(holding) : EM_DASH, "data-preview-cost"),
+    point.reason ? `<p class="dc-note" data-preview-reason>${esc(point.reason)}</p>` : "",
+  ].join("");
+}
+
+/** The slider over the server's points: one stop per point, starting on `index`. */
+export function previewHtml(preview, index) {
+  if (!preview) return "";
+  const points = preview.points || [];
+  if (!points.length) {
+    return `<div class="dc-preview" data-plan-preview><p class="dc-note" data-preview-reason>${esc(preview.reason || EM_DASH)}</p></div>`;
+  }
+  const at = Math.min(Math.max(0, Number(index) || 0), points.length - 1);
+  return `<div class="dc-preview" data-plan-preview>
+    <p class="dc-text">How small a change a test of the ${esc(fmtInt(preview.eligible))} customers measured can see, by the share held back.</p>
+    <input type="range" min="0" max="${points.length - 1}" step="1" value="${at}" data-preview-slider aria-label="Share held back">
+    <div class="dc-kvs" data-preview-readout>${previewReadoutHtml(preview, at)}</div>
+    ${preview.basis ? `<p class="dc-note" data-preview-basis>${esc(preview.basis)}</p>` : ""}
+  </div>`;
+}
+
 /** The form a person fills before a plan exists: their decisions, never a number of ours. */
 function planForm(campaign) {
   const outcome = (campaign.outcomes && campaign.outcomes.outcome_column) || "";
@@ -91,9 +130,18 @@ export function planBody(form) {
 
 /**
  * The card. `campaign` is the record, `plan` the plan in force (or null), `versions` every version,
- * `canRegister` whether this person may register one, `error` the last refusal.
+ * `canRegister` whether this person may register one, `error` the last refusal, `preview` the answer of
+ * `GET /campaigns/{id}/plan-preview` (or null) and `previewIndex` the slider's stop.
  */
-export function planCardHtml({ campaign, plan = null, versions = [], canRegister = false, error = null } = {}) {
+export function planCardHtml({
+  campaign,
+  plan = null,
+  versions = [],
+  canRegister = false,
+  error = null,
+  preview = null,
+  previewIndex = null,
+} = {}) {
   let body;
   if (plan) {
     const warnings = (plan.warnings || [])
@@ -112,5 +160,6 @@ export function planCardHtml({ campaign, plan = null, versions = [], canRegister
     body = `<p class="dc-text" data-plan-none>No test plan has been registered for this campaign yet.</p>`;
   }
   const problem = error ? `<p class="dc-error" role="alert" data-plan-error>${esc(error.message || String(error))}</p>` : "";
-  return `<section class="card dc-card" data-plan-card><h3>Plan the test</h3>${body}${problem}</section>`;
+  const start = present(previewIndex) ? previewIndex : preview && present(preview.current_index) ? preview.current_index : 0;
+  return `<section class="card dc-card" data-plan-card><h3>Plan the test</h3>${previewHtml(preview, start)}${body}${problem}</section>`;
 }

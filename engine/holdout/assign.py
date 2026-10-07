@@ -88,6 +88,8 @@ if TYPE_CHECKING:
 
     from engine.config import UseCaseConfig
     from engine.contracts import PrimaryKey
+    from engine.holdout.spec import HoldoutSpec
+    from engine.storage import Storage
 
     BoolArray = npt.NDArray[np.bool_]
 
@@ -107,6 +109,7 @@ __all__ = [
     "member_flags",
     "ope_rows",
     "persistent_control_mask",
+    "run_holdout_spec",
 ]
 
 HOLDOUT_ASSIGNMENT_FILENAME: Final[str] = "holdout_assignment.parquet"
@@ -351,3 +354,19 @@ def ope_rows(table: pd.DataFrame) -> pd.DataFrame:
     """
     probability = table[TREATMENT_PROBABILITY_COLUMN]
     return table.loc[(probability > 0.0) & (probability < 1.0)]
+
+
+def run_holdout_spec(storage: Storage, run_id: str) -> HoldoutSpec | None:
+    """The holdout a scoring run used (`holdout_assignment.json`'s spec), or None when it wrote none.
+
+    Only an engaged run writes the file (DEC-1302 (e)); a default run drew its control group per run,
+    which a reader treats as scope `run`. Read by the campaign record (M94) to fix the run's epoch.
+    """
+    from engine.holdout.spec import HOLDOUT_REPORT_FILENAME, HoldoutAssignmentReport
+    from engine.storage import StorageError, run_key
+
+    try:
+        report = storage.read_model(run_key(run_id, HOLDOUT_REPORT_FILENAME), HoldoutAssignmentReport)
+    except StorageError:
+        return None
+    return report.spec

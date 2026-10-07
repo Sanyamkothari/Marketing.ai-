@@ -27,11 +27,12 @@ A read before `analysis_date` is an *early look*: the numbers are shown, labelle
 (`is_early_look`).
 
 **Underpowered is a warning.** When the plan gives a detectable effect and an expected rate, the
-power of the planned arms is computed with `engine.uplift.power.power_of_lift` - the existing pooled
-two-proportion test sizing (DEC-1230) - and below the plan's power the plan carries
-`PLAN_UNDERPOWERED`. It never blocks: a small test honestly labelled is better than none.
-M93's planner (`engine.measurement.planner`) will supply the computed points behind the "Plan the
-test" slider; nothing here invents a point the server did not compute.
+power of the planned arms is computed with M93's `engine.measurement.planner.achieved_power` - the
+same two-proportion test as `engine.uplift.power.power_of_lift` (DEC-1230), which the planner agrees
+with except for the far tail in very small groups - and below the plan's power the plan carries
+`PLAN_UNDERPOWERED`. It never blocks: a small test honestly labelled is better than none. The same
+planner computes the points behind the "Plan the test" slider (`GET /campaigns/{id}/plan-preview`),
+so the card and the frozen plan never disagree; nothing here invents a point the server did not compute.
 """
 
 from __future__ import annotations
@@ -267,7 +268,7 @@ def freeze_plan(
     amendment_reason: str | None = None,
 ) -> TestPlan:
     """A `TestPlan` with its power check and `plan_hash`; `decided.outcome_window_days` must be resolved."""
-    from engine.uplift.power import power_of_lift
+    from engine.measurement.planner import achieved_power
 
     achieved: float | None = None
     note: str | None = None
@@ -279,13 +280,14 @@ def freeze_plan(
     elif decided.base_rate + decided.mde_pp / 100.0 > 1.0:
         note = "The expected rate plus the effect is above 100%, so the power cannot be worked out."
     else:
-        achieved = power_of_lift(
+        estimate = achieved_power(
             realised.n_treat,
             realised.n_holdout,
             decided.base_rate,
             decided.mde_pp / 100.0,
             alpha=decided.alpha,
         )
+        achieved, note = estimate.power, estimate.reason
     warnings = (PLAN_UNDERPOWERED,) if achieved is not None and achieved < decided.power else ()
     content: dict[str, Any] = {
         **decided.model_dump(include=set(TestPlanInput.model_fields)),  # an amendment's reason goes below

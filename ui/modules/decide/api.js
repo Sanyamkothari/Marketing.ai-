@@ -44,6 +44,13 @@ export const getCampaign = (id) => request(campaignPath(id));
 /** The plan in force and every version (`GET /campaigns/{id}/plan`). */
 export const getPlan = (id) => request(`${campaignPath(id)}/plan`);
 
+/**
+ * The planner's points on this campaign's population (`GET /campaigns/{id}/plan-preview`): the slider
+ * steps through these only. `baseRate` (0 to 1) is the rate the person expects; the plan's when null.
+ */
+export const getPlanPreview = (id, baseRate = null) =>
+  request(`${campaignPath(id)}/plan-preview${baseRate === null ? "" : `?base_rate=${encodeURIComponent(baseRate)}`}`);
+
 /** Register the test plan (`POST /campaigns/{id}/plan`). */
 export const postPlan = (id, payload) => request(`${campaignPath(id)}/plan`, post(payload));
 
