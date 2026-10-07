@@ -540,18 +540,6 @@ def _known_codes() -> str:
     return ", ".join(sorted(CHECK_CODES | _plan_j_check_codes()))
 
 
-# --- PLAN-J (M93): Plan J's readiness warnings travel as ValidationCheck rows ---------------------
-def _plan_j_check_codes() -> frozenset[str]:
-    """Plan J's check codes (`engine.measurement.codes`), read at call time. Plan J keeps its codes in
-    its own set (DEC-1300 (d)), not in `CHECK_CODE_TABLES`; this only lets a check row carry them."""
-    from engine.measurement.codes import MEASUREMENT_CHECK_CODES
-
-    return MEASUREMENT_CHECK_CODES
-
-
-# --- end PLAN-J ----------------------------------------------------------------------------------
-
-
 class ValidationReport(Artefact):
     """`validation.json` - every check that ran, errors first."""
 
@@ -1713,6 +1701,7 @@ _NEVER_ACKNOWLEDGEABLE: Final[frozenset[str]] = frozenset({"FUTURE_EVENTS_LEAKED
 # names and one new registry row add nothing above them that was not already there.
 # ---- END PHASE-4A ----
 
+
 # ---- PHASE-4B (production) — append only below this line ----
 # ---- END PHASE-4B ----
 # ---- PHASE-3B (uplift) — append only below this line ----
@@ -1722,4 +1711,15 @@ _NEVER_ACKNOWLEDGEABLE: Final[frozenset[str]] = frozenset({"FUTURE_EVENTS_LEAKED
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----
 # ---- PLAN-J (product) — append only below this line ----
+# Plan J M93 (DEC-1303 (h)): Plan J's readiness warnings travel as `ValidationCheck` rows. The hook is
+# called from `ValidationCheck._known_code` and `_known_codes` above (one in-place call each), and is
+# resolved at call time, so defining it down here is enough.
+def _plan_j_check_codes() -> frozenset[str]:
+    """Plan J's check codes (`engine.measurement.codes`), read at call time. Plan J keeps its codes in
+    its own set (DEC-1300 (d)), not in `CHECK_CODE_TABLES`; this only lets a check row carry them."""
+    from engine.measurement.codes import MEASUREMENT_CHECK_CODES
+
+    return MEASUREMENT_CHECK_CODES
+
+
 # ---- END PLAN-J ----

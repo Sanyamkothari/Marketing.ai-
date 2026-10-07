@@ -284,6 +284,10 @@ PHASE_ROUTERS.append(ai_service_router)
 from api.routes.holdout import router as holdout_router  # noqa: E402
 
 PHASE_ROUTERS.append(holdout_router)
+# Plan J M93 (DEC-1303 (c)): POST /measurement/power-preview (Viewer; counts only, nothing stored).
+from api.routes.measurement import router as measurement_router  # noqa: E402
+
+PHASE_ROUTERS.append(measurement_router)
 # ---- END PLAN-J ----
 
 app: FastAPI = create_app()

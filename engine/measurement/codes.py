@@ -5,7 +5,7 @@ Plan J keeps its codes in one set, `engine.decide.codes.PLAN_J_CODES` (DEC-1300 
 `configs/pilot/help.yaml`. These two are the Plan J codes that travel as a `ValidationCheck` row, so
 `engine.contracts.ValidationCheck` also accepts them (its PLAN-J hook reads this set). They are not in
 `engine.contracts.CHECK_CODE_TABLES`: that registry stays the Phase 1 to 3b and Plan G tables, and
-`PLAN_J_CODES` takes this set as its subset at integration (one definition, imported by both).
+`PLAN_J_CODES` joins this set (one definition, imported by both: DEC-1303 (h)).
 
 - `LABEL_RATE_UNSTABLE` (warning): the share of customers with the outcome jumps from one month to the
   next by more than `configs/pilot/readiness.yaml`'s tolerance and more than chance would explain

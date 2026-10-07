@@ -33,3 +33,10 @@ def test_a_check_row_accepts_them(code: str) -> None:
 def test_a_code_from_nowhere_is_still_refused() -> None:
     with pytest.raises(ValidationError, match="unknown validation code"):
         ValidationCheck(code="LABEL_RATE_UNSTEADY", severity=Severity.WARNING, message="x")
+
+
+def test_they_are_plan_j_codes_from_one_definition() -> None:
+    """DEC-1303 (h): `PLAN_J_CODES` joins this set, so the catalogue asks for both help entries."""
+    from engine.decide.codes import PLAN_J_CODES
+
+    assert MEASUREMENT_CHECK_CODES <= PLAN_J_CODES
