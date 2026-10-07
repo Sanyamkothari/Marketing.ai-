@@ -527,7 +527,7 @@ class ValidationCheck(Artefact):
 
     @model_validator(mode="after")
     def _known_code(self) -> ValidationCheck:
-        if self.code not in CHECK_CODES:
+        if self.code not in CHECK_CODES and self.code not in _plan_j_check_codes():
             raise ValueError(f"unknown validation code {self.code!r}; known codes: {_known_codes()}")
         # Phase 2 plan section 7: a leak is a bug in the engine, so no screen may offer to wave it
         # through - enforced by the model rather than by a convention every producer must remember.
@@ -537,7 +537,19 @@ class ValidationCheck(Artefact):
 
 
 def _known_codes() -> str:
-    return ", ".join(sorted(CHECK_CODES))
+    return ", ".join(sorted(CHECK_CODES | _plan_j_check_codes()))
+
+
+# --- PLAN-J (M93): Plan J's readiness warnings travel as ValidationCheck rows ---------------------
+def _plan_j_check_codes() -> frozenset[str]:
+    """Plan J's check codes (`engine.measurement.codes`), read at call time. Plan J keeps its codes in
+    its own set (DEC-1300 (d)), not in `CHECK_CODE_TABLES`; this only lets a check row carry them."""
+    from engine.measurement.codes import MEASUREMENT_CHECK_CODES
+
+    return MEASUREMENT_CHECK_CODES
+
+
+# --- end PLAN-J ----------------------------------------------------------------------------------
 
 
 class ValidationReport(Artefact):

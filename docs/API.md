@@ -513,6 +513,8 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `any` | boolean | no |  |
 | `description` | string | no |  |
 | `agent_editable` | false | no |  |
+| `grace_days` | integer \| null | no |  |
+| `exclude_roles` | list[string] | no |  |
 
 #### OnboardingConfig
 

@@ -3,13 +3,12 @@
 
 # Data request
 
-This is what we need from you to run the pilot for **Telco Customer Churn and Win-back Campaign**. Your analyst should be able to
+This is what we need from you to run the pilot for **Win-back Campaign**. Your analyst should be able to
 prepare every file from this page alone. If anything is unclear, the pre-flight checker described
 at the end will tell you before anything is sent.
 
 ## What the pilot will do
 
-- **Telco Customer Churn.** Scores every customer on how likely they are to leave, so retention offers reach the accounts most at risk. The outcome it learns from: whether the customer did anything at all in the 60 days after the date we predict from - no activity at all means they left.
 - **Win-back Campaign.** Ranks churned customers by how likely an offer is to bring them back, and generates a personalised message for each. The outcome it learns from: whether a customer who had gone quiet did something again within 90 days.
 
 A *prediction date* is a date the platform stands at: it looks only at what happened before it,
@@ -28,7 +27,6 @@ Per use case:
 
 | Use case | Minimum | Recommended |
 |---|---|---|
-| Telco Customer Churn | 5 months (150 days) | 19 months (570 days) |
 | Win-back Campaign | 6 months (180 days) | 27 months (785 days) |
 
 ## The tables
@@ -37,11 +35,9 @@ Per use case:
 |---|---|---|---|
 | Customers | `customers.csv` | Required | Every other table is linked to a customer through this one. |
 | Campaign events | `campaign_events.csv` | Required | Win-back Campaign: win-back offers this customer has taken before; win-back offers already sent, so nobody is contacted twice; the contacted and held-back groups of past campaigns, which show how many customers a campaign really brought back. |
-| Activity | `activity.csv` | Required | Telco Customer Churn: the outcome is worked out from it (whether the customer did anything at all in the 60 days after the date we predict from - no activity at all means they left); days since the customer last did anything. Win-back Campaign: the outcome is worked out from it (whether a customer who had gone quiet did something again within 90 days); how long the customer has been gone. |
-| Bills | `bills.csv` | Recommended | Telco Customer Churn: average bill over six months; recent bills against the six-month average; above 1 means bills are rising. Win-back Campaign: what the customer was worth before they left. |
-| Payments | `payments.csv` | Recommended | Telco Customer Churn: payments made after the due date in six months. |
-| Complaints | `complaints.csv` | Recommended | Telco Customer Churn: complaints raised in the last 90 days; complaints from the last 30 days still unresolved; days since the customer last complained. Win-back Campaign: complaints in the year before the prediction date. |
-| Usage | `usage.csv` | Recommended | Telco Customer Churn: data used in the last 30 days; recent usage against the quarter; well below 1 means the customer is going quiet. |
+| Activity | `activity.csv` | Required | Win-back Campaign: the outcome is worked out from it (whether a customer who had gone quiet did something again within 90 days); how long the customer has been gone. |
+| Bills | `bills.csv` | Recommended | Win-back Campaign: what the customer was worth before they left. |
+| Complaints | `complaints.csv` | Recommended | Win-back Campaign: complaints in the year before the prediction date. |
 
 **Required** tables must be sent. **Recommended** tables make the results noticeably better. Column
 names do not have to match ours: the platform matches your names to ours, and you confirm the match.
@@ -54,14 +50,12 @@ One row per customer: who they are and what they have, as of the extract date. T
 |---|---|---|---|
 | `customer_id` | Code or category | Required | The pseudonymised customer ID - the same code for the same customer in every file. |
 | `signup_date` | Date (YYYY-MM-DD) | Needed | When the customer joined. |
-| `plan_type` | Code or category | Needed | The plan or product the customer is on (for example prepaid or postpaid). |
-| `region` | Code or category | Needed | Where the customer is, in your own geography (circle, zone or state). |
-| `monthly_charges` | Number | Needed | What the customer is billed in a normal month. |
-| `marketing_opt_in` | Yes / no | Needed | Whether the customer agreed to marketing contact (Y or N). A do-not-disturb flag is fine too; tell us which one it is. |
-| `last_contacted_at` | Date (YYYY-MM-DD) | Needed | Date of the last marketing contact, so nobody is contacted too often. |
 | `churn_reason` | Code or category | Needed | Why the customer left, in your own reason codes; blank while they are active. |
 | `preferred_channel` | Code or category | Needed | How the customer prefers to be contacted: SMS, e-mail or call. |
-| `tenure_months` | Number | Useful | Months since the customer joined. Not needed if you send the join date. |
+| `marketing_opt_in` | Yes / no | Needed | Whether the customer agreed to marketing contact (Y or N). A do-not-disturb flag is fine too; tell us which one it is. |
+| `last_contacted_at` | Date (YYYY-MM-DD) | Needed | Date of the last marketing contact, so nobody is contacted too often. |
+| `plan_type` | Code or category | Useful | The plan or product the customer is on (for example a monthly or a yearly plan, or prepaid or postpaid). |
+| `region` | Code or category | Useful | Where the customer is, in your own geography (for example zone, state or city). |
 | `segment` | Code or category | Useful | Your own customer segment, if you have one. |
 
 ### Campaign events (`campaign_events.csv`)
@@ -99,18 +93,6 @@ One row per invoice. Template: [`bills_template.csv`](templates/bills_template.c
 | `paid_date` | Date (YYYY-MM-DD) | Useful | When it was actually paid; blank when it never was. |
 | `status` | Code or category | Useful | Your own invoice status (for example paid or overdue). |
 
-### Payments (`payments.csv`)
-
-One row per payment received. Template: [`payments_template.csv`](templates/payments_template.csv).
-
-| Column | Kind | Need | What it is |
-|---|---|---|---|
-| `customer_id` | Code or category | Required | The pseudonymised customer ID, as in the customer file. |
-| `event_date` | Date (YYYY-MM-DD), or date and time | Required | When it happened. |
-| `days_late` | Number | Needed | Days after the due date the payment arrived; 0 or less means on time. |
-| `amount` | Number | Useful | What was paid. |
-| `method` | Code or category | Useful | How it was paid. |
-
 ### Complaints (`complaints.csv`)
 
 One row per complaint or support ticket. Template: [`complaints_template.csv`](templates/complaints_template.csv).
@@ -119,22 +101,10 @@ One row per complaint or support ticket. Template: [`complaints_template.csv`](t
 |---|---|---|---|
 | `customer_id` | Code or category | Required | The pseudonymised customer ID, as in the customer file. |
 | `event_date` | Date (YYYY-MM-DD), or date and time | Required | When it happened. |
-| `resolved_time` | Date (YYYY-MM-DD) | Needed | When the complaint was closed; blank while it is still open. |
 | `category` | Code or category | Useful | What the complaint was about. |
+| `resolved_time` | Date (YYYY-MM-DD) | Useful | When the complaint was closed; blank while it is still open. |
 | `severity` | Code or category | Useful | How serious the client judged it. |
 | `text` | Free text | Useful | The complaint in the customer's own words. Optional: remove phone numbers and e-mail addresses typed into it. |
-
-### Usage (`usage.csv`)
-
-One row per usage record (for example one row per customer per day). Template: [`usage_template.csv`](templates/usage_template.csv).
-
-| Column | Kind | Need | What it is |
-|---|---|---|---|
-| `customer_id` | Code or category | Required | The pseudonymised customer ID, as in the customer file. |
-| `event_date` | Date (YYYY-MM-DD), or date and time | Required | When it happened. |
-| `data_mb` | Number | Needed | Data consumed. |
-| `minutes` | Number | Useful | Voice minutes consumed. |
-| `sessions` | Number | Useful | How many separate sessions. |
 
 **Required** columns must be present. **Needed** columns feed a measure the pilot uses. **Useful**
 columns help if you have them.
@@ -175,6 +145,6 @@ readiness report will tell you which column it was so the next extract can leave
 
 ## Before you send: the pre-flight check
 
-- Before sending, run the pre-flight checker on the folder of files: python -m scripts.preflight <folder> --use-case telco-churn (from the unzipped pilot kit).
+- Before sending, run the pre-flight checker on the folder of files: python -m scripts.preflight <folder> --use-case <the use case agreed with Minfy> (from the unzipped pilot kit). Without --use-case it checks the files against this request.
 - It reads the files on your laptop only. Nothing is uploaded; it writes one page, preflight_report.html, next to the files.
 - It lists row counts, date ranges, how well the tables link up, columns that look like personal details, and format problems. Fix anything marked as a problem and run it again.

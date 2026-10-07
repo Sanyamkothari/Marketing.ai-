@@ -642,6 +642,16 @@ class SnapshotStat(Artefact):
     dropped_reason: str | None = Field(
         default=None, description="Why this snapshot was dropped, when it was."
     )
+    # Plan J M93 (additive, pre-approved): omitted while null, so a build without exclude_roles
+    # writes exactly the report it wrote before.
+    excluded: int | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Customers at this date left out of the outcome because they had an event in one of the "
+            "label's exclude_roles tables inside the window; null when the label leaves nobody out."
+        ),
+    )
 
 
 class FeatureStat(Artefact):

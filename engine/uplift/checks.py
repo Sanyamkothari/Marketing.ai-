@@ -57,7 +57,7 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 from engine.config import PrimaryKey
 from engine.contracts import Severity
@@ -83,6 +83,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from engine.config import UseCaseConfig
+    from engine.contracts import ValidationCheck
 
     BoolArray = npt.NDArray[np.bool_]
     IntArray = npt.NDArray[np.int_]
@@ -94,8 +95,13 @@ __all__ = [
     "RANDOMNESS_SAMPLE_ROWS",
     "SIGNAL_MIN_GAIN_SHARE",
     "TOP_SIGNALS",
+    "SufficiencyVerdict",
+    "TreatmentAssignment",
+    "TreatmentHistory",
     "UpliftCheckResult",
     "run_uplift_checks",
+    "sufficiency_verdict",
+    "treatment_history",
     "treatment_predictability",
 ]
 
@@ -734,3 +740,307 @@ def run_uplift_checks(
         causal,
     )
     return UpliftCheckResult(report=report, keep=keep)
+
+
+# ---------------------------------------------------------------------------
+# Plan J M93: the treatment-history check and the sufficiency verdict
+# ---------------------------------------------------------------------------
+TreatmentAssignment = Literal["random", "model_selected", "unknown"]
+"""How past campaigns chose whom to contact: at random, by a model or rule, or not known."""
+
+SufficiencyVerdict = Literal["uplift_now", "propensity_first"]
+"""Whether the history is enough to learn who a campaign changes now, or only from the next cycle."""
+
+
+@dataclass(frozen=True)
+class TreatmentHistory:
+    """What a treatment column the user named says about past campaigns (readiness report, M93).
+
+    `assignment` comes from :func:`treatment_predictability`: `random` when the out-of-fold score is at
+    or below `uplift.randomness_auc_max`, `model_selected` above it, `unknown` when it cannot be
+    measured (no such column, values that are not 0/1, too few customers in a group, nothing to
+    predict from). `verdict` is :func:`sufficiency_verdict`. Every sentence is plain language.
+    """
+
+    column: str
+    assignment: TreatmentAssignment
+    score: float | None
+    threshold: float
+    signals: tuple[str, ...]
+    treated: int | None
+    control: int | None
+    treated_positives: int | None
+    control_positives: int | None
+    min_arm_rows: int
+    min_arm_positives: int
+    verdict: SufficiencyVerdict
+    message: str
+    verdict_message: str
+    check: ValidationCheck | None
+    """`TREATMENT_HISTORY_NOT_RANDOM` (a warning) when `assignment` is `model_selected`."""
+
+
+ArmCounts = tuple[int | None, int | None, int | None, int | None]
+"""`(contacted, held back, contacted with the outcome, held back with the outcome)`."""
+
+
+def sufficiency_verdict(
+    *,
+    assignment: TreatmentAssignment,
+    treated: int | None,
+    control: int | None,
+    treated_positives: int | None,
+    control_positives: int | None,
+    min_arm_rows: int,
+    min_arm_positives: int,
+) -> SufficiencyVerdict:
+    """`uplift_now` when history is random and each group has at least `uplift.min_arm_rows` customers
+    and `uplift.min_arm_positives` with the outcome; `propensity_first` otherwise.
+
+    The same floors `TREATMENT_ARM_TOO_SMALL` applies (`>=` passes), so the verdict switches exactly
+    where an uplift run would stop being refused. A count that is not known never counts as enough.
+    """
+    if assignment != "random" or treated is None or control is None:
+        return "propensity_first"
+    if treated_positives is None or control_positives is None:
+        return "propensity_first"
+    rows_ok = min(treated, control) >= min_arm_rows
+    positives_ok = min(treated_positives, control_positives) >= min_arm_positives
+    return "uplift_now" if rows_ok and positives_ok else "propensity_first"
+
+
+_SCORE_SCALE: Final[str] = "where a random choice scores about 0.50 and the limit is"
+
+
+def _assignment_message(
+    column: str, assignment: TreatmentAssignment, score: float, threshold: float, signals: Sequence[str]
+) -> str:
+    if assignment == "random":
+        return (
+            f"Who was contacted in '{column}' looks random: the customers' own data cannot tell the "
+            f"contacted from the held-back customers (score {score:.2f}, {_SCORE_SCALE} {threshold:.2f})."
+        )
+    strongest = ""
+    if signals:
+        strongest = f" The strongest sign{'s were' if len(signals) > 1 else ' was'} {_join(signals)}."
+    return (
+        f"Who was contacted in '{column}' was not random: it can be told from the customers' own data "
+        f"(score {score:.2f}, {_SCORE_SCALE} {threshold:.2f}).{strongest} Past campaigns chose "
+        "their customers by a model or a rule, so comparing contacted with held-back customers would mix "
+        "what a campaign changed with how the chosen customers already differed."
+    )
+
+
+def _verdict_message(
+    verdict: SufficiencyVerdict,
+    assignment: TreatmentAssignment,
+    counts: ArmCounts,
+    min_rows: int,
+    min_positives: int,
+) -> str:
+    if verdict == "uplift_now":
+        return (
+            "Ready to learn who each campaign changes, now: past campaigns held back a random group, and "
+            f"both groups have at least {_n(min_rows)} customers and {_n(min_positives)} with the outcome."
+        )
+    treated, control, treated_positives, control_positives = counts
+    if assignment == "model_selected":
+        why = "past campaigns did not choose their customers at random"
+    elif assignment == "unknown":
+        why = "it is not known whether past campaigns chose their customers at random"
+    else:
+        short = [
+            f"the {arm} has {_n(count)} customers (at least {_n(min_rows)} needed)"
+            for arm, count in (("contacted group", treated), ("held-back group", control))
+            if count is not None and count < min_rows
+        ] + [
+            f"the {arm} has {_n(count)} with the outcome (at least {_n(min_positives)} needed)"
+            for arm, count in (("contacted group", treated_positives), ("held-back group", control_positives))
+            if count is not None and count < min_positives
+        ]
+        why = "; ".join(short) if short else "the outcome of the past campaigns is not in this dataset"
+    return (
+        f"Start by ranking customers by how likely they are to have the outcome, because {why}. Hold back "
+        "a random control group in the first campaign (and, if you can, contact a small random group "
+        "outside the selection); learning who each campaign changes can start from the next cycle, once "
+        "that campaign's results are in."
+    )
+
+
+def _unknown_history(
+    column: str, message: str, counts: ArmCounts, *, threshold: float, min_rows: int, min_positives: int
+) -> TreatmentHistory:
+    return TreatmentHistory(
+        column=column,
+        assignment="unknown",
+        score=None,
+        threshold=threshold,
+        signals=(),
+        treated=counts[0],
+        control=counts[1],
+        treated_positives=counts[2],
+        control_positives=counts[3],
+        min_arm_rows=min_rows,
+        min_arm_positives=min_positives,
+        verdict="propensity_first",
+        message=message,
+        verdict_message=_verdict_message("propensity_first", "unknown", counts, min_rows, min_positives),
+        check=None,
+    )
+
+
+def treatment_history(
+    frame: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    treatment_column: str,
+    primary_key: PrimaryKey,
+    target: str | None,
+    seed: int = 0,
+) -> TreatmentHistory:
+    """Report how past campaigns chose whom to contact, from the column the user named (Plan J M93).
+
+    Runs :func:`treatment_predictability` on the same columns an uplift run would learn from, counts
+    the two groups (in customers, for a two-column key) and their customers with the outcome `target`,
+    and gives :func:`sufficiency_verdict` against `uplift.min_arm_rows` and `uplift.min_arm_positives`.
+    Never raises for a property of the data: what cannot be measured is `unknown`, with the reason.
+    """
+    from engine import keys
+    from engine.contracts import ValidationCheck
+
+    uplift = config.uplift
+    threshold, min_rows, min_positives = (
+        uplift.randomness_auc_max,
+        uplift.min_arm_rows,
+        uplift.min_arm_positives,
+    )
+    entity = keys.entity_column(primary_key) if keys.is_composite(primary_key) else None
+    if entity is not None and entity not in frame.columns:
+        entity = None
+
+    if treatment_column not in frame.columns:
+        return _unknown_history(
+            treatment_column,
+            f"The column '{treatment_column}' is not in this dataset, so it cannot be said whether past "
+            "campaigns chose their customers at random.",
+            (None, None, None, None),
+            threshold=threshold,
+            min_rows=min_rows,
+            min_positives=min_positives,
+        )
+    t, bad = coerce_treatment(frame[treatment_column])
+    if t is None:
+        return _unknown_history(
+            treatment_column,
+            f"'{treatment_column}' should be 1 for contacted and 0 for held-back customers, but {_n(bad)} "
+            f"of {_n(len(frame))} rows are blank or hold another value, so it cannot be said whether past "
+            "campaigns chose their customers at random.",
+            (None, None, None, None),
+            threshold=threshold,
+            min_rows=min_rows,
+            min_positives=min_positives,
+        )
+    y: IntArray | None = None
+    if target is not None and target in frame.columns:
+        try:
+            y, _ = coerce_outcome(frame[target], config.target.positive_label)
+        except ValueError:
+            y = None
+    if entity is not None:
+        # The same refusal as run_uplift_checks' TREATMENT_VARIES_WITHIN_ENTITY: with a customer in both
+        # groups there are no per-customer groups to count or to compare, so an uplift run would stop.
+        campaign = uplift.campaign_id_column
+        if campaign is not None and campaign not in frame.columns:
+            campaign = None
+        mixed, entities = _mixed_entities(frame, t, entity, campaign)
+        if mixed:
+            within = f" within one campaign ('{campaign}')" if campaign is not None else ""
+            return _unknown_history(
+                treatment_column,
+                f"{_n(mixed)} of {_n(entities)} customers ({mixed / entities:.1%}) are contacted at some "
+                f"prediction dates and held back at others{within}, according to '{treatment_column}'. "
+                "Contacted and held-back groups are kept per customer, so such a customer would be "
+                "compared with itself and these campaigns cannot be compared as they are. Give each "
+                "customer the same value at every prediction date of a campaign.",
+                (None, None, None, None),
+                threshold=threshold,
+                min_rows=min_rows,
+                min_positives=min_positives,
+            )
+    counts: ArmCounts
+    if entity is None:
+        counts = (
+            int((t == 1).sum()),
+            int((t == 0).sum()),
+            None if y is None else int(y[t == 1].sum()),
+            None if y is None else int(y[t == 0].sum()),
+        )
+    else:
+        counts = _entity_arm_counts(frame[entity], t, y)
+    spec = fit_feature_spec(
+        frame, config, primary_key=primary_key, target=target or "", treatment_column=treatment_column
+    )
+    measured = treatment_predictability(
+        apply_feature_spec(frame, spec),
+        t,
+        seed=seed,
+        groups=None if entity is None else frame[entity].to_numpy(dtype=object),
+    )
+    if measured is None:
+        return _unknown_history(
+            treatment_column,
+            f"There are too few contacted or held-back customers in '{treatment_column}' (at least "
+            f"{_n(RANDOMNESS_MIN_ARM_ROWS)} of each are needed), or no other columns to test the choice "
+            "against, so it cannot be said whether past campaigns chose their customers at random.",
+            counts,
+            threshold=threshold,
+            min_rows=min_rows,
+            min_positives=min_positives,
+        )
+    score, signals, rows_used = measured
+    assignment: TreatmentAssignment = "model_selected" if score > threshold else "random"
+    message = _assignment_message(treatment_column, assignment, score, threshold, signals)
+    check = None
+    if assignment == "model_selected":
+        check = ValidationCheck(
+            code="TREATMENT_HISTORY_NOT_RANDOM",
+            severity=Severity.WARNING,
+            message=message,
+            suggestion=(
+                "Hold back a randomly chosen control group in the next campaign; until its results are "
+                "in, rank customers by how likely they are to have the outcome."
+            ),
+            column=treatment_column,
+            details={
+                "score": round(score, 4),
+                "threshold": threshold,
+                "rows_used": rows_used,
+                "strongest_signs": list(signals),
+            },
+        )
+    verdict = sufficiency_verdict(
+        assignment=assignment,
+        treated=counts[0],
+        control=counts[1],
+        treated_positives=counts[2],
+        control_positives=counts[3],
+        min_arm_rows=min_rows,
+        min_arm_positives=min_positives,
+    )
+    return TreatmentHistory(
+        column=treatment_column,
+        assignment=assignment,
+        score=round(score, 4),
+        threshold=threshold,
+        signals=tuple(signals),
+        treated=counts[0],
+        control=counts[1],
+        treated_positives=counts[2],
+        control_positives=counts[3],
+        min_arm_rows=min_rows,
+        min_arm_positives=min_positives,
+        verdict=verdict,
+        message=message,
+        verdict_message=_verdict_message(verdict, assignment, counts, min_rows, min_positives),
+        check=check,
+    )

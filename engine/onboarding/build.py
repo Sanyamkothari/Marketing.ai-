@@ -98,7 +98,7 @@ if TYPE_CHECKING:
     from engine.jobs import CancelToken
     from engine.onboarding.datasets import DatasetRegistry
     from engine.onboarding.sources import SourceReader
-    from engine.onboarding.specs import DatasetManifest
+    from engine.onboarding.specs import DatasetManifest, LabelSpec
 
 __all__ = ["BUILD_STAGES", "build_dataset", "is_first_build_of_recipe"]
 
@@ -571,11 +571,19 @@ def _leak_probe(
     entity_role: str,
     inclusive: bool,
     full: bool = False,
+    grace_window: tuple[int, int] | None = None,
 ) -> dict[str, int]:
     """`_run_leak_probe`'s verdict alone: event role to the future rows it was given, for every role
     whose features moved."""
     return _run_leak_probe(
-        views, snapshots, spec, features, entity_role=entity_role, inclusive=inclusive, full=full
+        views,
+        snapshots,
+        spec,
+        features,
+        entity_role=entity_role,
+        inclusive=inclusive,
+        full=full,
+        grace_window=grace_window,
     ).leaked
 
 
@@ -588,6 +596,7 @@ def _run_leak_probe(
     entity_role: str,
     inclusive: bool,
     full: bool,
+    grace_window: tuple[int, int] | None = None,
 ) -> _Probe:
     """Rebuild every feature against event tables carrying rows dated after the last snapshot.
 
@@ -620,11 +629,23 @@ def _run_leak_probe(
     rebuilt, still over the same stacked views, and the build's features are compared whole. It is
     what catches a leak that moves only an entity outside both groups - a join that reads one
     other, particular entity's events - which the narrowed rows cannot see (DEC-872).
+
+    `grace_window` is `(horizon_days, grace_days)` of a lapse label (Plan J M93), None otherwise. One
+    more copy of the same rows is then dated on each day of the last snapshot's grace period, the days
+    the outcome window was extended by (`(h, h+g]` with an inclusive snapshot time, `[h, h+g)`
+    without), so a feature that reads any of those days - even only the first or only the last - is
+    caught too; the rows dated the day after the last snapshot catch everything nearer.
     """
     import duckdb
     import pandas as pd
 
-    after = pd.Timestamp(snapshots[SNAPSHOT_COLUMN].max()) + pd.Timedelta(days=1)
+    last = pd.Timestamp(snapshots[SNAPSHOT_COLUMN].max())
+    after = last + pd.Timedelta(days=1)
+    in_grace = (
+        []
+        if grace_window is None
+        else [last + pd.Timedelta(days=offset) for offset in _grace_offsets(*grace_window, inclusive)]
+    )
     injected: dict[str, int] = {}
     witnesses: list[pd.Series[Any]] = []
     con = duckdb.connect()
@@ -634,6 +655,10 @@ def _run_leak_probe(
                 con.register(role, frame)
                 continue
             extra = frame.head(_PROBE_ROWS).assign(**{EVENT_TIME: after})
+            if in_grace:
+                extra = pd.concat(
+                    [extra, *(extra.assign(**{EVENT_TIME: day}) for day in in_grace)], ignore_index=True
+                )
             injected[role] = len(extra)
             if ENTITY_KEY in extra.columns:
                 witnesses.append(extra[ENTITY_KEY])
@@ -652,6 +677,22 @@ def _run_leak_probe(
         rows_probed=int(rows.sum()),
         rows_total=len(snapshots),
     )
+
+
+def _grace_window(label: LabelSpec | None) -> tuple[int, int] | None:
+    """`(horizon_days, grace_days)` of a lapse label with a grace period (Plan J M93); None otherwise.
+
+    Read from the recipe's label even when scoring: a feature that reads the grace period leaks the
+    same whether or not this build labels anything."""
+    if label is None or not label.grace_days or label.horizon_days is None:
+        return None
+    return label.horizon_days, label.grace_days
+
+
+def _grace_offsets(horizon_days: int, grace_days: int, inclusive: bool) -> range:
+    """Every day after a snapshot inside its grace period: `(h, h+g]` inclusive, `[h, h+g)` not."""
+    first = horizon_days + 1 if inclusive else horizon_days
+    return range(first, first + grace_days)
 
 
 def _full_rows(count: int) -> npt.NDArray[np.bool_]:
@@ -1139,7 +1180,7 @@ def build_dataset(
         status.start("snapshots")
         _cancelled(cancel)
         first_event, last_event = _event_span(views, entity_role=entity_role, dataset_id=dataset_id)
-        horizon = 0 if label is None else label.horizon_days or 0
+        horizon = 0 if label is None else label.window_days or 0
         if mode is RunMode.SCORE:
             dates = scoring_snapshot(spec.scoring_snapshot_spec(), last_event=last_event)
         else:
@@ -1255,6 +1296,7 @@ def build_dataset(
             entity_role=entity_role,
             inclusive=spec.snapshot_spec.inclusive_snapshot_time,
             full=leak_scope == "full",
+            grace_window=_grace_window(spec.label_spec),
         )
         leaked = probe.leaked
         logger.info(

@@ -3422,6 +3422,15 @@ class LabelDefinition(_Base):
     any_event: bool = Field(default=True, alias="any")
     description: str = ""
     agent_editable: Literal[False] = False
+    # Plan J M93 (in-place declarations, Plan J §3.2): lapse outcomes. `grace_days` extends the outcome
+    # window - "no recharge in 30 days, with 7 days' grace" looks 37 days ahead - and `exclude_roles`
+    # leaves out a customer with an event in one of those tables inside that window (a port-out, a
+    # move to another plan). Compiled in `engine.onboarding.labels`; both are omitted from the
+    # serialised spec while unset, so every saved spec, its hash and its recipe hash are unchanged.
+    grace_days: Annotated[int, Field(ge=1, le=365)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+    exclude_roles: tuple[str, ...] = Field(default=(), exclude_if=lambda value: not value)
 
     @model_validator(mode="after")
     def _shape(self) -> Self:
@@ -3432,7 +3441,12 @@ class LabelDefinition(_Base):
                     f"Label {self.name!r} reads an existing column, so it must name it.",
                     path="column",
                 )
-            for field, value in (("role", self.role), ("expression", self.expression)):
+            for field, value in (
+                ("role", self.role),
+                ("expression", self.expression),
+                ("grace_days", self.grace_days),
+                ("exclude_roles", self.exclude_roles or None),
+            ):
                 if value is not None:
                     raise ConfigError(
                         "LABEL_FIELD_NOT_ALLOWED",
@@ -3477,7 +3491,27 @@ class LabelDefinition(_Base):
                 f"Only a value_threshold label has an expression; {self.name!r} is a {self.type.value}.",
                 path="expression",
             )
+        if self.role in self.exclude_roles:
+            raise ConfigError(
+                "LABEL_FIELD_NOT_ALLOWED",
+                f"Label {self.name!r} cannot leave out customers with an event in {self.role!r}, the "
+                "table its own outcome is worked out from.",
+                path="exclude_roles",
+            )
+        if len(set(self.exclude_roles)) != len(self.exclude_roles):
+            raise ConfigError(
+                "LABEL_FIELD_NOT_ALLOWED",
+                f"Label {self.name!r} names a table to leave out more than once.",
+                path="exclude_roles",
+            )
         return self
+
+    @property
+    def window_days(self) -> int | None:
+        """Days after the snapshot the outcome is read over: `horizon_days` plus any `grace_days`."""
+        if self.horizon_days is None:
+            return None
+        return self.horizon_days + (self.grace_days or 0)
 
 
 class SnapshotDefinition(_Base):

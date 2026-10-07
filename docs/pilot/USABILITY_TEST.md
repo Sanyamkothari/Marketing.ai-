@@ -45,7 +45,7 @@ Success: runs the check and states that some customer IDs appear more than once 
 
 > "The files were uploaded. Is the data ready? If not, what exactly must the client change?"
 
-Give: the Pilot screen. They find the readiness report for "Demo Telecom (broken extract)".
+Give: the Pilot screen. They find the readiness report for "Demo Company (broken extract)".
 
 Observe:
 - Time to the verdict. Do they read the traffic light first?

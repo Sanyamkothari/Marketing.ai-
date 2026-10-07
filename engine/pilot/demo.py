@@ -6,7 +6,8 @@ the platform's own API through every step a pilot takes - raw tables uploaded an
 built, a churn model trained and made champion, next month scored with a control group, a win-back
 uplift model trained on a past randomised campaign, and both campaigns measured once their outcome
 windows had passed - and writes what it made into :class:`DemoManifest`. With `demo_mode` on, the
-API serves that manifest (`GET /pilot/demo`) and the screens open on "Demo Telecom".
+API serves that manifest (`GET /pilot/demo`) and the screens open on "Demo Company" (a neutral
+name since Plan J M93: the product is sold to any B2C business, so the demo no longer says telecom).
 
 Everything in it is synthetic: the tables come from the seeded generators the test-suite uses
 (`tests/fixtures/raw/make_raw.py`, `tests/fixtures/make_uplift_data.py`), and the campaign outcomes
@@ -37,7 +38,7 @@ __all__ = [
     "load_demo",
 ]
 
-DEMO_CLIENT_NAME: Final[str] = "Demo Telecom"
+DEMO_CLIENT_NAME: Final[str] = "Demo Company"
 DEMO_MANIFEST_KEY: Final[str] = "pilot/demo/demo.json"
 """Storage key of the manifest: under the artefact root, so a demo seeded into S3 is found there."""
 

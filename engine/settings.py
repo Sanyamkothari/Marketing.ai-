@@ -344,11 +344,11 @@ class Settings(BaseModel):
 
     # --- Plan E (pilot readiness) --------------------------------------------------------------
     # Added field only, defaulted off, so nothing before Plan E moves (DEC-901). On, the API serves
-    # the synthetic "Demo Telecom" client that `scripts/seed_demo.py` seeded ahead of time, so a
+    # the synthetic "Demo Company" client that `scripts/seed_demo.py` seeded ahead of time, so a
     # sales or management demo never trains live or touches a real file; the screens say it is a demo.
     demo_mode: bool = Field(
         default=False,
-        description="Seed and show the synthetic Demo Telecom client (no real data, no live training in the demo).",
+        description="Seed and show the synthetic Demo Company client (no real data, no live training in the demo).",
     )
 
     # --- Plan D (hardening) ------------------------------------------------------------------

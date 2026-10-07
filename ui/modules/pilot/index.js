@@ -4,7 +4,7 @@
 // It adds, without editing any other workstream's screen:
 //   * Reports (`#/pilot`), Build data (`#/pilot/kit`) and the report viewers (registered with
 //     `modules/router.js`);
-//   * in the top bar (through its slots): the "Sample data: Demo Telecom" chip in demo mode, and the
+//   * in the top bar (through its slots): the "Sample data: Demo Company" chip in demo mode, and the
 //     Help menu - "Take the tour" when the demo is seeded, and "Send feedback";
 //   * the plain-language catalogue as the router's glossary, so every screen's error leads with the
 //     catalogue's title for its code;

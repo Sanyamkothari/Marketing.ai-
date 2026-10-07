@@ -1,6 +1,6 @@
 """The pre-flight checker, for a client analyst to run on their own laptop (Plan E M59).
 
-    python -m scripts.preflight <folder> [--use-case telco-churn] [--out report.html]
+    python -m scripts.preflight <folder> [--use-case <use case id>] [--out report.html]
 
 Reads every CSV and Parquet file in the folder, checks them against the pilot's data request and
 writes one HTML page (default: `preflight_report.html` in the folder). Nothing is uploaded and no
@@ -36,7 +36,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         dest="use_cases",
         default=None,
-        help="use case the files are for; repeat for several (default: the pilot's two)",
+        help="use case the files are for; repeat for several (default: the data request's default)",
     )
     parser.add_argument(
         "--out", type=Path, default=None, help=f"where to write the page (default: {REPORT_FILENAME})"

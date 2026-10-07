@@ -33,7 +33,7 @@ README = """# Pilot kit
    how to pseudonymise the customer ID, and what never to send.
 2. Put the files in one folder.
 3. Install Python 3.11, then: `pip install -r requirements-preflight.txt`
-4. From this folder: `python -m scripts.preflight <your folder> --use-case telco-churn`
+4. From this folder: `python -m scripts.preflight <your folder> --use-case <the use case agreed with Minfy>`
 5. Open `preflight_report.html` (written into your folder). Fix anything marked Problem and run it again.
 
 The check runs on your computer only. Nothing is uploaded and no network connection is made.

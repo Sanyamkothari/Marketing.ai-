@@ -39,7 +39,7 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from engine.contracts import DecileLift
-from engine.pilot.demo import EXCLUDED_DATA, DemoManifest
+from engine.pilot.demo import DEMO_CLIENT_NAME, EXCLUDED_DATA, DemoManifest
 from engine.pilot.plain import jargon_in
 from engine.pilot.preflight import run_preflight
 from engine.storage import LocalStorage, run_key
@@ -308,7 +308,8 @@ def test_the_tour_walks_the_six_screens(page: Any, server: str, manifest: DemoMa
     assert page.locator("#pe-tour").count() == 0
     assert page.evaluate("window.localStorage.getItem('marketing-ai:pilot-tour-seen')") == "1"
     page.locator(".pe-demo").wait_for()
-    assert "Demo Telecom" in page.locator(".pe-demo").inner_text()
+    assert DEMO_CLIENT_NAME == "Demo Company"  # Plan J M93: a neutral demo name
+    assert DEMO_CLIENT_NAME in page.locator(".pe-demo").inner_text()
 
 
 def test_the_pilot_screen_lists_the_reports_and_shows_one_in_place(
