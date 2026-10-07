@@ -205,6 +205,7 @@ A scoring run writes: `drift.json`, `prepare.json`, `profile.json`, `row_explana
 | `error` | RunError \| null | no | Failure detail; set when the state is failed. |
 | `engine_version` | string | yes | Version of the engine package that produced the run. |
 | `requested_by` | string \| null | no | `Principal.user_id` of whoever started the run (the firing principal for a scheduled run); null for a run started before this was recorded. Separation of duties reads it. |
+| `synthetic` | boolean | no | True when the run read data that was generated, not a client's: the seeded demo, or an upload marked synthetic. Every report drawn from such a run says its effect is planted. False for a run recorded before this field existed. |
 
 #### RunError
 

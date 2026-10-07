@@ -645,6 +645,7 @@ def results_document(
     model = facts.model
     return ReportDocument(
         kind="results",
+        synthetic=facts.train_run.synthetic or (facts.score_run is not None and facts.score_run.synthetic),
         title="Results report",
         subtitle=f"{config.name}" + (f" - {facts.client_name}" if facts.client_name else ""),
         client_name=facts.client_name,

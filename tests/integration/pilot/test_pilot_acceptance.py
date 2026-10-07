@@ -219,6 +219,62 @@ def test_new_inputs_change_the_rupees_and_not_the_count(client: TestClient, mani
     assert "The value depends on these inputs" in html and "Demo data" in html
 
 
+# --- the synthetic quarantine (Plan J M95) -------------------------------------------------------------------
+
+SYNTHETIC_PHRASE = "Synthetic data: planted effect, not a forecast"
+
+
+def pdf_text(pdf: bytes) -> str:
+    from pypdf import PdfReader
+
+    return " ".join(
+        " ".join((page.extract_text() or "").split()) for page in PdfReader(io.BytesIO(pdf)).pages
+    )
+
+
+def test_every_run_of_the_demo_is_recorded_as_synthetic(manifest: DemoManifest, data_dir: Path) -> None:
+    from engine.contracts import RunRecord
+    from engine.runs import RUN_FILENAME
+
+    storage = LocalStorage(data_dir)
+    assert len(set(manifest.run_ids)) == 4
+    for run_id in manifest.run_ids:
+        assert storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord).synthetic, run_id
+
+
+@pytest.mark.parametrize("use_case", ["churn", "uplift"])
+def test_the_results_report_of_a_demo_run_says_the_effect_is_planted(
+    client: TestClient, manifest: DemoManifest, use_case: str
+) -> None:
+    use_case_id = manifest.use_case_id if use_case == "churn" else manifest.uplift_use_case_id
+    html = client.get("/pilot/results", params={"use_case": use_case_id}).text
+    assert SYNTHETIC_PHRASE in html
+    pdf = client.get("/pilot/results", params={"use_case": use_case_id, "format": "pdf"})
+    assert pdf.status_code == 200 and SYNTHETIC_PHRASE in pdf_text(pdf.content)
+    assert client.get("/pilot/results", params={"use_case": use_case_id, "format": "json"}).json()[
+        "synthetic"
+    ]
+
+
+@pytest.mark.parametrize("index", [0, 1])
+def test_the_value_report_of_a_demo_campaign_says_the_effect_is_planted(
+    client: TestClient, manifest: DemoManifest, index: int
+) -> None:
+    run_id = manifest.campaigns[index].score_run_id
+    assert SYNTHETIC_PHRASE in client.get(f"/pilot/roi/{run_id}", params={"format": "html"}).text
+    pdf = client.get(f"/pilot/roi/{run_id}", params={"format": "pdf"})
+    assert pdf.status_code == 200 and SYNTHETIC_PHRASE in pdf_text(pdf.content)
+    assert client.get(f"/pilot/roi/{run_id}").json()["synthetic"] is True
+
+
+def test_a_report_that_is_not_about_a_synthetic_run_carries_no_such_block(
+    client: TestClient, manifest: DemoManifest
+) -> None:
+    """The data readiness report reads a dataset, not a run's planted outcomes: no block there."""
+    html = client.get(f"/pilot/readiness/{manifest.train_dataset_id}").text
+    assert SYNTHETIC_PHRASE not in html and "planted" not in html
+
+
 # --- in a browser --------------------------------------------------------------------------------------------
 
 

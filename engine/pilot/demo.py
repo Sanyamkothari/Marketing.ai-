@@ -14,6 +14,11 @@ are simulated with a stated, planted effect. No public or non-commercial dataset
 Criteo uplift sample in particular is excluded (Plan D, R2) - and the manifest says so
 (`data_sources`), which a test pins.
 
+**Quarantine (Plan J M95).** The planted effect must never be read as a result. Every run the demo
+made is therefore recorded with `RunRecord.synthetic` true (:func:`mark_runs_synthetic`, called by the
+seeder as each run finishes), and every report drawn from such a run - results and value, in HTML and
+PDF - carries the block "Synthetic data: planted effect, not a forecast" (`engine.pilot.document`).
+
 This module holds only the manifest and how to find it; it imports no test code, so the API and the
 container can read a demo that a checkout seeded.
 """
@@ -26,6 +31,8 @@ from typing import TYPE_CHECKING, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 if TYPE_CHECKING:
+    from collections.abc import Iterable
+
     from engine.storage import Storage
 
 __all__ = [
@@ -35,6 +42,7 @@ __all__ = [
     "DemoCampaign",
     "DemoManifest",
     "load_demo",
+    "mark_runs_synthetic",
 ]
 
 DEMO_CLIENT_NAME: Final[str] = "Demo Telecom"
@@ -89,6 +97,12 @@ class DemoManifest(_Strict):
     seeded_at: datetime
     seed: int
 
+    @property
+    def run_ids(self) -> tuple[str, ...]:
+        """Every run the demo made: the churn model's training and scoring runs, the win-back model's
+        training run and its scoring run. Each one is recorded as synthetic."""
+        return (self.train_run_id, self.score_run_id, self.uplift_run_id, self.uplift_score_run_id)
+
 
 def load_demo(storage: Storage) -> DemoManifest | None:
     """The seeded demo under `storage`, or None when nobody has seeded one."""
@@ -100,6 +114,27 @@ def load_demo(storage: Storage) -> DemoManifest | None:
         return storage.read_model(DEMO_MANIFEST_KEY, DemoManifest)
     except (StorageError, ValueError):  # a stale or corrupt manifest is no demo, not a 500
         return None
+
+
+def mark_runs_synthetic(storage: Storage, run_ids: Iterable[str]) -> tuple[str, ...]:
+    """Record each run as `synthetic` in its `run.json`; returns the ids it changed.
+
+    Idempotent: a run already marked is left alone and not listed. Call it once a run has finished -
+    `update_run` reads, copies and writes `run.json`, so marking a run still writing would race the
+    pipeline's own updates. A run that does not exist raises `StorageError`: nothing is silently
+    skipped, because an unmarked demo run would show its planted effect as a result.
+    """
+    from engine.contracts import RunRecord
+    from engine.runs import RUN_FILENAME, update_run
+    from engine.storage import run_key
+
+    changed: list[str] = []
+    for run_id in run_ids:
+        if storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord).synthetic:
+            continue
+        update_run(storage, run_id, synthetic=True)
+        changed.append(run_id)
+    return tuple(changed)
 
 
 def raw_key(variant: str, file_name: str) -> str:

@@ -139,6 +139,8 @@ class RoiView(_Strict):
     roi: Money | None = None
     """Net value per rupee spent; null when nothing was spent."""
     summary: str
+    synthetic: bool = False
+    """The run read generated data (`RunRecord.synthetic`): the report then says the effect is planted."""
 
 
 VALUE_CONFIG: Final[str] = "pilot/value.yaml"
@@ -168,6 +170,7 @@ class _Common(TypedDict):
     run_id: str
     use_case_id: str
     inputs: RoiInputs | None
+    synthetic: bool
 
 
 # ---------------------------------------------------------------------------
@@ -226,7 +229,12 @@ def compute_roi(
     report = _read(storage, run_key(run_id, INCREMENTALITY_FILENAME), IncrementalityReport)
     ingested = _read(storage, run_key(run_id, INCREMENTALITY_INPUT_FILENAME), IncrementalityInput)
 
-    base: _Common = {"run_id": run_id, "use_case_id": record.use_case_id, "inputs": chosen}
+    base: _Common = {
+        "run_id": run_id,
+        "use_case_id": record.use_case_id,
+        "inputs": chosen,
+        "synthetic": record.synthetic,
+    }
     # A measurement wins over one still waiting: an immature report stays on disk after outcomes were
     # ingested for the same run, and the ingested counts are then the newer, usable measurement.
     mature = isinstance(report, IncrementalityReport) and (
@@ -583,6 +591,7 @@ def roi_document(
     )
     return ReportDocument(
         kind="roi",
+        synthetic=view.synthetic,
         title="Campaign value",
         subtitle=campaign_title,
         client_name=client_name,

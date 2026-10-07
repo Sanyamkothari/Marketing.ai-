@@ -692,6 +692,13 @@ not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns
   from this environment (re-tested 2026-09-23). Plan B's acceptance run on it has therefore **not**
   been done, and no Criteo number exists anywhere in the repository. The dataset is also
   non-commercial (CC BY-NC-SA 4.0).
+* **The 95% range is an approximation, and it is tested.** The lift's interval is the Newcombe hybrid
+  score interval (section 9), an approximation that is close to, not exactly, 95%. Plan J M95 measures how
+  close: `make test-statistical` simulates campaigns with a known effect and checks that the range holds it
+  within four Monte Carlo standard errors of 95%, at 2%, 5% and 20% base rates, that a campaign with no effect
+  is called effective about 5% of the time, and that excluding immature rows leaves the lift unbiased
+  ([`docs/DECIDE.md`](DECIDE.md) section 9). The test covers the randomised comparison of two arms; it says
+  nothing about a campaign that had no random control group, which is labelled not causal.
 * **Expected incremental conversions on a scoring run** borrow the training hold-out's observed
   uplift at the same ranking depth. That is an approximation when suppression is related to uplift.
 * **Scoring cost.** Every scored row is explained with TreeSHAP, as in Phase 1. On a very large file

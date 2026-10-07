@@ -220,10 +220,12 @@ def create_run(
     model_version_id: str | None,
     now: datetime | None = None,
     requested_by: str | None = None,
+    synthetic: bool = False,
 ) -> RunRecord:
     """Write the whole run directory, in this order, then return. Nothing is submitted here.
 
     `requested_by` is the `Principal.user_id` of whoever started the run (Plan D, DEC-862).
+    `synthetic` is true when the run reads generated data (an upload marked synthetic; Plan J M95).
 
     `status.json` is written before `run.json` and both before the caller submits, so a poller can
     never observe a run that exists but has nothing to show.
@@ -260,6 +262,7 @@ def create_run(
         model_choice=model_choice,
         model_version_id=model_version_id,
         requested_by=requested_by,
+        synthetic=synthetic,
         best_model=None,
         headline_metric=metric,
         headline_metric_label=catalog.metric_label(metric),

@@ -458,6 +458,7 @@ def create_run_endpoint(
         model_choice=body.model_choice or catalog.automl_choice.value,
         model_version_id=body.model_version_id if version is None else version.model_id,
         requested_by=requested_by(request),
+        synthetic=upload is not None and upload.synthetic,
     )
     if upload is not None:
         attach_recipe_to_run(storage, upload.upload_id, record.run_id)  # Plan G (DEC-1006)

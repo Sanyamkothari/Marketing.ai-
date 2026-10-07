@@ -308,6 +308,7 @@ def write_derived_upload(
         fingerprint_key=upload_key(derived_id, UPLOAD_FINGERPRINT_FILENAME),
         fingerprint_hash=profile.fingerprint.hash,
         created_at=utc_now(),
+        synthetic=source.synthetic,
     )
     storage.write_model(record.profile_key, profile)
     storage.write_model(record.fingerprint_key, profile.fingerprint)

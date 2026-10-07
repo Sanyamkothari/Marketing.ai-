@@ -16,6 +16,10 @@ Rules the renderers keep:
   uses DejaVu Sans, which matplotlib (pinned in `requirements-freeze.txt`, pulled in by AutoGluon)
   ships; where it is absent the core Helvetica font is used and the few characters it cannot draw
   are spelled out (`₹` becomes `Rs.`), rather than the export failing.
+* **Planted numbers are labelled.** A document with `synthetic` set - drawn from a run that read
+  generated data, such as the seeded demo - gets a block under the title in both renderers saying
+  "Synthetic data: planted effect, not a forecast" (Plan J M95). It cannot be switched off by a
+  caller: the renderers draw it whenever the flag is true.
 * **Branding is a placeholder.** The Minfy and client logo boxes are named boxes, not images: the
   logos are the client's and Minfy's to supply (plan M61).
 """
@@ -31,6 +35,8 @@ from typing import Annotated, Final, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 __all__ = [
+    "SYNTHETIC_HEADLINE",
+    "SYNTHETIC_TEXT",
     "AnyBlock",
     "Bars",
     "Block",
@@ -46,6 +52,14 @@ __all__ = [
     "render_html",
     "render_pdf",
 ]
+
+SYNTHETIC_HEADLINE: Final[str] = "Synthetic data: planted effect, not a forecast"
+"""The words drawn on a report whose run read generated data (Plan J M95). A test pins them."""
+
+SYNTHETIC_TEXT: Final[str] = (
+    "The numbers in this report come from generated data in which the effect was planted. "
+    "They show how the product reads a result; they do not predict what a campaign would do for a client."
+)
 
 VerdictState = Literal["ready", "warnings", "not_ready", "info"]
 """The traffic light: green, amber, red - and a neutral grey for a report that judges nothing."""
@@ -135,6 +149,9 @@ class ReportDocument(BaseModel):
     """Short who/what/when lines under the title (client, use case, data period)."""
     blocks: tuple[Block, ...] = ()
     footer: str = ""
+    synthetic: bool = False
+    """True when the run behind the report read generated data (`RunRecord.synthetic`); both renderers
+    then draw :data:`SYNTHETIC_HEADLINE` under the title. Old `<report>.json` files load as False."""
 
 
 # ---------------------------------------------------------------------------
@@ -185,6 +202,9 @@ caption { caption-side:bottom; text-align:left; color:var(--muted); font-size:12
 .kv dt { color:var(--muted); } .kv dd { margin:0; font-weight:600; }
 .callout { border-radius:8px; padding:10px 14px; margin:10px 0; border:1px solid var(--line); }
 .callout .ct { font-weight:600; margin-bottom:2px; }
+.synthetic { border:2px solid var(--amber); background:var(--amber-bg); color:var(--amber);
+  border-radius:8px; padding:10px 14px; margin:12px 0; }
+.synthetic .st { font-weight:700; font-size:16px; } .synthetic div + div { color:var(--ink); font-size:13px; }
 .c-info { background:var(--blue-bg); } .c-warning { background:var(--amber-bg); }
 .c-error { background:var(--red-bg); } .c-success { background:var(--green-bg); }
 .bars { margin:8px 0; }
@@ -250,6 +270,12 @@ def render_html(document: ReportDocument) -> str:
     blocks = "\n".join(_html_block(block) for block in document.blocks)
     client_logo = f"{document.client_name} logo" if document.client_name else "Client logo"
     subtitle = f'<p class="subtitle">{_e(document.subtitle)}</p>' if document.subtitle else ""
+    synthetic = (
+        f'<div class="synthetic" role="note" data-synthetic="true"><div class="st">{_e(SYNTHETIC_HEADLINE)}</div>'
+        f"<div>{_e(SYNTHETIC_TEXT)}</div></div>"
+        if document.synthetic
+        else ""
+    )
     footer = _e(document.footer) + " " if document.footer else ""
     generated = document.generated_at.strftime("%d %b %Y, %H:%M UTC")
     return (
@@ -259,7 +285,7 @@ def render_html(document: ReportDocument) -> str:
         f"<title>{_e(document.title)}</title><style>{_CSS}</style></head>"
         f'<body><main data-report="{_e(document.kind)}">'
         f'<div class="brand"><div class="logo">Minfy logo</div><div class="logo">{_e(client_logo)}</div></div>'
-        f"<h1>{_e(document.title)}</h1>{subtitle}"
+        f"<h1>{_e(document.title)}</h1>{subtitle}{synthetic}"
         f'<dl class="facts">{facts}</dl>'
         f"{blocks}"
         f"<footer>{footer}Generated {_e(generated)} by Marketing AI from the platform's own records."
@@ -375,6 +401,24 @@ def render_pdf(document: ReportDocument) -> bytes:
     if document.subtitle:
         line(10, document.subtitle, rgb=(91, 102, 117))
     pdf.ln(1)
+    if document.synthetic:
+        pdf.set_fill_color(*_STATE_BG["warnings"])
+        pdf.set_draw_color(*_STATE_RGB["warnings"])
+        pdf.set_line_width(0.5)
+        pdf.set_font(family, "B", 11)
+        pdf.set_text_color(*_STATE_RGB["warnings"])
+        pdf.multi_cell(
+            width, 7, text(SYNTHETIC_HEADLINE), border="LTR", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT
+        )
+        pdf.set_font(family, "", 9)
+        pdf.set_text_color(27, 36, 48)
+        pdf.multi_cell(
+            width, 5, text(SYNTHETIC_TEXT), border="LBR", fill=True, new_x=XPos.LMARGIN, new_y=YPos.NEXT
+        )
+        pdf.set_fill_color(255, 255, 255)
+        pdf.set_line_width(0.2)
+        pdf.set_draw_color(180, 186, 194)
+        pdf.ln(3)
     for key, value in document.facts:
         pdf.set_font(family, "B", 9)
         pdf.set_text_color(91, 102, 117)
