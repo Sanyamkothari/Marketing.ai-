@@ -348,7 +348,12 @@ the actions (`engine/uplift/actions.py`):
 
 1. **Suppression** (consent, opt-out, recent contact) and the **control group** come from Phase 1's
    `engine.stages.actions.apply_actions`, unchanged. The same run id holds out exactly the same
-   customers as a Phase 1 run would.
+   customers as a Phase 1 run would. When a consent ledger applies to the run (the use case maps to
+   a purpose in `configs/privacy.yaml` and the client has recorded consent for it), the ledger's
+   verdict is written into the consent column first, through the same `engine.privacy.consent`
+   seam a propensity run uses (DEC-732): a customer without valid consent is suppressed as
+   `consent_false`, and the run writes `consent_report.json` (M91). Propensity and uplift runs of
+   the same rows against the same ledger suppress the same customers.
 2. Persuadables chosen by the policy get `Treat`.
 3. Persuadables not chosen get `Don't treat (below cost)` or `Don't treat (over budget)`.
 4. Everyone else gets their segment's action. The `band` column holds the segment label.
