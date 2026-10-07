@@ -17,8 +17,14 @@ the hash it replaces and a reason, and every version kept.
 **Checked at measurement.** `plan_differences` compares what is about to be measured - the realised
 holdout share and population, the outcome window, column, value and kind, the covariate - with the
 plan in force; any difference refuses the measurement (`TEST_PLAN_CHANGED`) until it is amended, in
-the open. A read before `analysis_date` is an *early look*: the numbers are shown, labelled, with no
-verdict (`is_early_look`).
+the open. The population is the one exception to an exact comparison: erasure (DEC-741) removes a
+customer's row from the campaign's assignment, and that is nobody moving the goalposts. So the planned
+population less a few customers - neither arm larger than planned, at most `ERASURE_ALLOWANCE_SHARE` of
+it gone (and at least one customer may go) - is the planned population; past that, the head count is
+compared exactly and the holdout share within `HOLDOUT_TOLERANCE`.
+
+A read before `analysis_date` is an *early look*: the numbers are shown, labelled, with no verdict
+(`is_early_look`).
 
 **Underpowered is a warning.** When the plan gives a detectable effect and an expected rate, the
 power of the planned arms is computed with `engine.uplift.power.power_of_lift` - the existing pooled
@@ -45,6 +51,8 @@ if TYPE_CHECKING:
     import pandas as pd
 
 __all__ = [
+    "ERASURE_ALLOWANCE_SHARE",
+    "HOLDOUT_TOLERANCE",
     "PLAN_UNDERPOWERED",
     "TEST_PLAN_CHANGED",
     "TEST_PLAN_EXISTS",
@@ -61,6 +69,7 @@ __all__ = [
     "plan_differences",
     "plan_hash",
     "plan_inputs",
+    "population_kept",
     "realised_population",
 ]
 
@@ -74,6 +83,10 @@ _HASH_EXCLUDED: Final[frozenset[str]] = frozenset(
     {"plan_hash", "registered_at", "registered_by", "schema_version"}
 )
 _SHARE_DIGITS: Final[int] = 6
+ERASURE_ALLOWANCE_SHARE: Final[float] = 0.01
+"""Share of the planned population that may have gone (erased customers) and still be the plan's."""
+HOLDOUT_TOLERANCE: Final[float] = 0.005
+"""How far the held-back share may move (0.5 percentage points) before it counts as a change."""
 
 
 class TestPlanInput(StrictBase):
@@ -348,9 +361,14 @@ def plan_differences(
     def text(value: object) -> str:
         return "none" if value is None else str(value)
 
-    pairs: list[tuple[str, object, object]] = [
-        ("holdout_fraction", plan.holdout_fraction, realised.holdout_fraction),
-        ("population_rows", plan.population_rows, realised.population_rows),
+    kept = population_kept(plan, realised)
+    holdout_moved = abs(plan.holdout_fraction - realised.holdout_fraction) > HOLDOUT_TOLERANCE
+    pairs: list[tuple[str, object, object]] = []
+    if not kept and holdout_moved:
+        pairs.append(("holdout_fraction", plan.holdout_fraction, realised.holdout_fraction))
+    if not kept and plan.population_rows != realised.population_rows:
+        pairs.append(("population_rows", plan.population_rows, realised.population_rows))
+    pairs += [
         ("outcome_window_days", plan.outcome_window_days, outcome_window_days),
         ("outcome_kind", plan.outcome_kind, outcome_kind),
         ("outcome_column", plan.outcome_column, outcome_column),
@@ -361,6 +379,25 @@ def plan_differences(
         PlanDifference(field=name, planned=text(planned), realised=text(now))
         for name, planned, now in pairs
         if planned != now
+    )
+
+
+def population_kept(plan: TestPlan, realised: RealisedPopulation) -> bool:
+    """True when `realised` is the planned population, less at most a few customers erased since.
+
+    Neither arm may be larger than planned, and no more than `ERASURE_ALLOWANCE_SHARE` of the planned
+    population (rounded up, at least one customer) may be gone. Customers only leave an assignment by
+    erasure, so a shrink that small is a privacy request honoured, not a different test.
+    """
+    import math
+
+    removed = plan.population_rows - realised.population_rows
+    allowance = max(1, math.ceil(plan.population_rows * ERASURE_ALLOWANCE_SHARE))
+    return (
+        realised.n_treat <= plan.n_treat
+        and realised.n_holdout <= plan.n_holdout
+        and realised.n_explore <= plan.n_explore
+        and 0 <= removed <= allowance
     )
 
 

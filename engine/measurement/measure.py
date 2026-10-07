@@ -20,7 +20,8 @@ assignment is translated to the columns the computation reads, `engine.measureme
 .as_scores_frame`) and the test plan: it refuses a measurement that differs from the plan in force
 (`TestPlanChangedError`, `TEST_PLAN_CHANGED`), records the plan's hash on the report, and labels a read
 before the plan's analysis date an **early look** - numbers, but no final verdict
-(`campaign_verdict_for` returns none for it).
+(`campaign_verdict_for` returns none for it, and its summary states the rates so far without the
+conclusion `measure_incrementality`'s sentence ends with).
 
 **`as_of` always comes from the caller.** `utc_now()` lives in the route, never here, so the same
 inputs give the same report on any day.
@@ -35,7 +36,7 @@ from engine.measurement.plan import TestPlanChangedError, is_early_look, plan_di
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
-    from datetime import datetime
+    from datetime import date, datetime
 
     import pandas as pd
 
@@ -44,7 +45,7 @@ if TYPE_CHECKING:
     from engine.uplift.contracts import IncrementalityReport
     from engine.uplift.measure import CampaignVerdict
 
-__all__ = ["EARLY_LOOK_PREFIX", "campaign_verdict_for", "measure_campaign"]
+__all__ = ["EARLY_LOOK_PREFIX", "campaign_verdict_for", "early_look_summary", "measure_campaign"]
 
 EARLY_LOOK_PREFIX = "Early look"
 
@@ -72,7 +73,8 @@ def measure_campaign(
     `assignment` is a run's scores or a campaign's `assignment.parquet`. With no `plan` the report is
     exactly `measure_incrementality`'s. With one, a measurement that differs from it raises
     `TestPlanChangedError` (a `ValueError`) before anything is computed; otherwise the report carries
-    `test_plan_hash` and, before the plan's analysis date, `early_look` with its summary saying so.
+    `test_plan_hash` and, before the plan's analysis date, `early_look` with a summary of the counts
+    so far and no conclusion (`early_look_summary`).
     `covariate_column` is compared with the plan now and used by M102's adjusted estimate. Raises
     `ValueError` for anything `measure_incrementality` refuses.
     """
@@ -110,12 +112,40 @@ def measure_campaign(
     early = is_early_look(plan, as_of)
     update: dict[str, object] = {"test_plan_hash": plan.plan_hash, "early_look": early}
     if early:
-        when = f"{plan.analysis_date.day} {plan.analysis_date:%b %Y}"
-        update["summary"] = (
-            f"{EARLY_LOOK_PREFIX}, before the planned analysis date of {when}: not a final result. "
-            f"{report.summary}"
-        )
+        update["summary"] = early_look_summary(report, plan, as_of)
     return report.model_copy(update=update)
+
+
+def early_look_summary(report: IncrementalityReport, plan: TestPlan, as_of: datetime) -> str:
+    """The summary of an early look: the rates and group sizes so far, and no conclusion.
+
+    `measure_incrementality`'s own sentence ends with the verdict ("about N extra conversions caused
+    by the campaign", "cannot be shown to have changed the outcome"); read before the planned date that
+    is the peeking the plan exists to prevent, so an early look says only what was counted, and when.
+    """
+    from datetime import UTC
+
+    moment = as_of.replace(tzinfo=UTC) if as_of.tzinfo is None else as_of.astimezone(UTC)
+    head = (
+        f"{EARLY_LOOK_PREFIX}, before the planned analysis date of {_day(plan.analysis_date)}: "
+        f"not a final result."
+    )
+    if report.treated_rate is None or report.control_rate is None:
+        counted = (
+            f"So far, as of {_day(moment.date())}, outcomes are in for {report.treated_rows:,} contacted "
+            f"and {report.control_rows:,} held-back customers."
+        )
+    else:
+        counted = (
+            f"So far, as of {_day(moment.date())}, {report.treated_rate:.1%} of {report.treated_rows:,} "
+            f"contacted customers and {report.control_rate:.1%} of {report.control_rows:,} held-back "
+            f"customers had the outcome."
+        )
+    return f"{head} {counted} The result is read on {_day(plan.analysis_date)}."
+
+
+def _day(value: date) -> str:
+    return f"{value.day} {value:%b %Y}"
 
 
 def campaign_verdict_for(

@@ -8,8 +8,11 @@ import pytest
 from pydantic import ValidationError
 
 from engine.measurement.plan import (
+    ERASURE_ALLOWANCE_SHARE,
+    HOLDOUT_TOLERANCE,
     PLAN_UNDERPOWERED,
     RealisedPopulation,
+    TestPlan,
     TestPlanAmendment,
     TestPlanInput,
     freeze_plan,
@@ -17,6 +20,7 @@ from engine.measurement.plan import (
     plan_differences,
     plan_hash,
     plan_inputs,
+    population_kept,
 )
 from engine.uplift.power import power_of_lift
 
@@ -145,3 +149,59 @@ def test_an_early_look_is_any_moment_before_the_analysis_date_in_utc() -> None:
     assert not is_early_look(plan, datetime(2026, 8, 15, 0, 0, tzinfo=UTC))
     assert not is_early_look(plan, datetime(2026, 8, 15, 0, 0))  # naive is read as UTC
     assert plan.analysis_date == date(2026, 8, 15)
+
+
+def _population_fields(plan: TestPlan, realised: RealisedPopulation) -> list[str]:
+    differences = plan_differences(
+        plan,
+        realised=realised,
+        outcome_column="reactivated_90d",
+        positive_label=None,
+        outcome_window_days=90,
+        covariate_column=None,
+    )
+    return [d.field for d in differences]
+
+
+@pytest.mark.parametrize(
+    ("n_treat", "n_holdout"),
+    [(10_799, 1_200), (10_800, 1_199), (10_740, 1_140)],  # one erased, one erased, 120 (1 %) erased
+)
+def test_customers_erased_since_the_plan_are_not_a_change(n_treat: int, n_holdout: int) -> None:
+    """Erasure (DEC-741) removes rows from the assignment; that is not anybody moving the goalposts."""
+    plan = frozen()
+    realised = RealisedPopulation(population_rows=n_treat + n_holdout, n_treat=n_treat, n_holdout=n_holdout)
+    assert population_kept(plan, realised)
+    assert _population_fields(plan, realised) == []
+
+
+def test_a_small_campaign_may_lose_one_customer() -> None:
+    small = freeze_plan(
+        decided(),
+        RealisedPopulation(population_rows=41, n_treat=30, n_holdout=11),
+        campaign_id="c_1",
+        registered_by="u_1",
+        registered_at=WHEN,
+    )
+    one_gone = RealisedPopulation(population_rows=40, n_treat=30, n_holdout=10)
+    assert _population_fields(small, one_gone) == [], "the holdout share moved 1.8 points, by erasure"
+    two_gone = RealisedPopulation(population_rows=39, n_treat=30, n_holdout=9)
+    assert _population_fields(small, two_gone) == ["holdout_fraction", "population_rows"]
+
+
+@pytest.mark.parametrize(
+    ("realised", "fields"),
+    [
+        # more than 1 % gone: a narrower population, not an erasure
+        (RealisedPopulation(population_rows=11_879, n_treat=10_680, n_holdout=1_199), ["population_rows"]),
+        # a larger arm cannot come from erasure, even with the same head count
+        (RealisedPopulation(population_rows=12_000, n_treat=11_400, n_holdout=600), ["holdout_fraction"]),
+        # a customer added
+        (RealisedPopulation(population_rows=12_001, n_treat=10_801, n_holdout=1_200), ["population_rows"]),
+    ],
+)
+def test_a_different_population_is_still_a_change(realised: RealisedPopulation, fields: list[str]) -> None:
+    plan = frozen()
+    assert not population_kept(plan, realised)
+    assert _population_fields(plan, realised) == fields
+    assert HOLDOUT_TOLERANCE == 0.005 and ERASURE_ALLOWANCE_SHARE == 0.01

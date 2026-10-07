@@ -388,3 +388,91 @@ def test_a_plan_cannot_be_registered_after_the_result_was_read(world: World) -> 
     ok(_measure(world, campaign_id))
     late = world.client.post(f"/campaigns/{campaign_id}/plan", json=_plan_body())
     assert late.status_code == 409 and late.json()["detail"]["code"] == "TEST_PLAN_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# Review fixes: the gates around the one measurement path
+# ---------------------------------------------------------------------------
+def test_a_moment_that_has_not_happened_yet_is_refused(world: World) -> None:
+    """A future `as_of` would call open windows closed and an early look final: 422, nothing stored."""
+    campaign_id = _with_outcomes(world, PROPENSITY_RUN, world.propensity_outcomes)
+    now = datetime.now(UTC)
+    far = (now + timedelta(days=300)).date().isoformat()
+    ok(world.client.post(f"/campaigns/{campaign_id}/plan", json=_plan_body(analysis_date=far)), 201)
+    future = _measure(world, campaign_id, as_of=now + timedelta(days=365))
+    assert future.status_code == 422, future.text
+    assert future.json()["detail"]["code"] == "CAMPAIGN_INVALID"
+    assert future.json()["detail"]["path"] == "as_of"
+    assert not world.storage.exists(campaign_key(campaign_id, "incrementality_report.json"))
+    view = ok(world.client.get(f"/campaigns/{campaign_id}"))
+    assert view["verdict"] is None and view["campaign"]["status"] == "live"
+    # now (no as_of) is before the analysis date: an early look, never a verdict
+    early = ok(world.client.post(f"/campaigns/{campaign_id}/measure", json={}))
+    assert early["report"]["early_look"] is True and early["verdict"] is None
+
+
+def test_a_plan_with_a_covariate_is_measured_as_planned_from_an_empty_body(world: World) -> None:
+    """The product page sends `{}`: the pre-registered covariate is the one measured with."""
+    campaign_id = _with_outcomes(world, PROPENSITY_RUN, world.propensity_outcomes)
+    plan = TestPlan.model_validate(
+        ok(
+            world.client.post(
+                f"/campaigns/{campaign_id}/plan", json=_plan_body(covariate_column="tenure_months")
+            ),
+            201,
+        )
+    )
+    measured = ok(world.client.post(f"/campaigns/{campaign_id}/measure", json={}))
+    assert measured["report"]["test_plan_hash"] == plan.plan_hash
+    assert ok(_measure(world, campaign_id))["report"]["test_plan_hash"] == plan.plan_hash
+    # only a different covariate named in the body is a change of plan
+    other = _measure(world, campaign_id, covariate_column="age")
+    assert other.status_code == 409 and other.json()["detail"]["code"] == "TEST_PLAN_CHANGED"
+
+
+def test_a_plan_cannot_be_amended_once_its_final_result_was_read(world: World) -> None:
+    campaign_id = _with_outcomes(world, PROPENSITY_RUN, world.propensity_outcomes)
+    ok(world.client.post(f"/campaigns/{campaign_id}/plan", json=_plan_body(analysis_date="2026-08-20")), 201)
+    # after an early look the plan can still move, in the open
+    ok(_measure(world, campaign_id, as_of=datetime(2026, 8, 18, tzinfo=UTC)))
+    amended = world.client.post(
+        f"/campaigns/{campaign_id}/plan/amendments",
+        json={**_plan_body(analysis_date="2026-08-25"), "reason": "The sponsor moved the review."},
+    )
+    plan = TestPlan.model_validate(ok(amended, 201))
+    final = ok(_measure(world, campaign_id))
+    assert final["report"]["test_plan_hash"] == plan.plan_hash and final["verdict"] is not None
+    late = world.client.post(
+        f"/campaigns/{campaign_id}/plan/amendments",
+        json={**_plan_body(analysis_date="2027-01-01"), "reason": "Read it again later."},
+    )
+    assert late.status_code == 409 and late.json()["detail"]["code"] == "TEST_PLAN_INVALID"
+    view = ok(world.client.get(f"/campaigns/{campaign_id}"))
+    assert view["campaign"]["test_plan_hash"] == view["report"]["test_plan_hash"] == plan.plan_hash
+    assert ok(world.client.get(f"/campaigns/{campaign_id}/plan"))["plan"]["version"] == 2
+
+
+class _FailingStore:
+    """A campaign store whose database refuses the new row."""
+
+    def create(self, campaign: Campaign) -> Campaign:
+        raise RuntimeError("the database is down")
+
+    def __getattr__(self, name: str) -> Any:
+        raise AttributeError(name)
+
+
+def test_a_campaign_whose_record_cannot_be_saved_leaves_no_customer_rows(
+    config_root: Path, tmp_path: Path
+) -> None:
+    """Without `campaign.json` the privacy jobs could not key or date an orphaned assignment."""
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    storage = LocalStorage(data_dir)
+    propensity_run(storage, PROPENSITY_RUN, rows=400)
+    app = create_app(config_root=config_root, data_dir=data_dir)
+    app.state.campaign_store = _FailingStore()
+    with TestClient(app, raise_server_exceptions=False) as client:
+        response = client.post("/campaigns", json={"run_id": PROPENSITY_RUN})
+    assert response.status_code == 500
+    assert storage.list_keys("campaigns/") == ()

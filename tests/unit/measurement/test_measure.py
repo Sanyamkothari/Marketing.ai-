@@ -119,10 +119,16 @@ def test_a_plan_stamps_its_hash_and_an_early_read_is_an_early_look() -> None:
     early = measure_campaign(assignment, outcomes, intended_column=INTENDED_COLUMN, plan=plan, **common())  # type: ignore[arg-type]
     unplanned = measure_campaign(assignment, outcomes, intended_column=INTENDED_COLUMN, **common())  # type: ignore[arg-type]
     assert early.test_plan_hash == plan.plan_hash and early.early_look is True
-    assert (
-        early.summary
-        == f"{EARLY_LOOK_PREFIX}, before the planned analysis date of 2 Sep 2026: not a final result. {unplanned.summary}"
+    assert early.summary.startswith(
+        f"{EARLY_LOOK_PREFIX}, before the planned analysis date of 2 Sep 2026: not a final result. "
     )
+    # the counts so far, and when they were read - never the conclusion the final sentence ends with
+    assert "caused by the campaign" in unplanned.summary, "the conclusion an early look must leave out"
+    for conclusion in ("caused by the campaign", "cannot be shown", "lift of", "95% CI", "p ="):
+        assert conclusion not in early.summary, conclusion
+    assert f"{unplanned.treated_rate:.1%} of {unplanned.treated_rows:,} contacted" in early.summary
+    assert f"{unplanned.control_rate:.1%} of {unplanned.control_rows:,} held-back" in early.summary
+    assert "as of 1 Sep 2026" in early.summary and early.summary.endswith("read on 2 Sep 2026.")
     assert early.absolute_lift == unplanned.absolute_lift, "an early look shows the same numbers"
     assert campaign_verdict_for(early, outcome_is_good=True) is None, "but no verdict"
     on_the_day = measure_campaign(

@@ -75,7 +75,9 @@ turns an assignment and an outcomes file into an `IncrementalityReport`: a wrapp
 .campaign_verdict` (the plain verdict, through `campaign_verdict_for`). `POST
 /runs/{id}/campaign-results` calls it with the run's scores and no plan, so its reports are what they
 were; `POST /campaigns/{id}/measure` calls it with the assignment and the plan in force. `as_of`
-always comes from the caller. A campaign is never measured on part of its customers: while any
+always comes from the caller; the route defaults it to now and refuses a later one (`422
+CAMPAIGN_INVALID`, path `as_of`), since a moment that has not happened would call open outcome windows
+closed and an early look final. A campaign is never measured on part of its customers: while any
 outcome window is open the answer is `409 CAMPAIGN_NOT_MATURED` with `results_available_on`, and
 nothing is stored.
 
@@ -85,12 +87,22 @@ detectable effect and expected rate, and from the assignment the holdout share a
 each arm - with `plan_hash`, the SHA-256 of its content. The audit event's `after_hash` is
 `content_hash(plan)` and its details carry `plan_hash`. The same plan again returns the stored one; a
 different one is `409 TEST_PLAN_EXISTS`; `POST /campaigns/{id}/plan/amendments {reason, ...}` writes
-version n+1 with `amends`, every version kept (`GET /campaigns/{id}/plan`). When an effect and a rate
+version n+1 with `amends`, every version kept (`GET /campaigns/{id}/plan`); once a final result has
+been read the plan can no longer be amended (`409 TEST_PLAN_INVALID`). When an effect and a rate
 are given, the power of the planned arms is computed with `engine.uplift.power.power_of_lift`; below
 the plan's power the plan carries `PLAN_UNDERPOWERED`, a warning that never blocks. At measurement any
 difference from the plan - holdout share, population, window, outcome column, value or kind,
-covariate - is `409 TEST_PLAN_CHANGED`; a read before `analysis_date` is an **early look**: the report
-says so (`early_look`, and its summary), and no verdict is given.
+covariate - is `409 TEST_PLAN_CHANGED`. The covariate defaults to the plan's, so only a different one
+named in the body is a change. The population allows for erasure: the planned population less a few
+customers (neither arm larger, at most 1 % of it and at least one customer gone) is the planned one,
+and beyond that the holdout share is compared within half a point. A read before `analysis_date` is
+an **early look**: the report says so (`early_look`), its summary gives only the rates and group sizes
+so far and the date the result is read - never the conclusion - and no verdict is given.
+
+**Which way round.** The campaign page judges the outcome exactly as step 4 does: a column found in
+the outcomes file is the use case's own outcome (for a churn use case, one to prevent), a column the
+person named (`CampaignOutcomes.outcome_named`) is judged by its own name, and the verdict uses the use
+case's outcome words.
 
 **The value view** (`engine.pilot.roi.compute_roi`) reads a campaign's final report first - the one
 named, else the run's latest - and never prices an early look.

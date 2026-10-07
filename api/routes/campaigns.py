@@ -15,15 +15,18 @@ fix how it will be judged before it is (`engine.measurement.plan`):
 * `POST /campaigns/{id}/outcomes {upload_id, ...}` (Analyst) - copies the key, the outcome and the
   optional treatment date of an uploaded file into `campaigns/<id>/outcomes.parquet`.
 * `POST /campaigns/{id}/measure {as_of?, ...}` (Analyst) - `as_of` defaults to now *here*, never in
-  the engine. While any customer's outcome window is still open the answer is **409
-  `CAMPAIGN_NOT_MATURED`** with `results_available_on`, and nothing is stored: a campaign result is
-  never a partial number (DEC-1304 (e)). A measurement that differs from the registered plan is
-  **409 `TEST_PLAN_CHANGED`**.
+  the engine, and a later one is **422 `CAMPAIGN_INVALID`**: a moment that has not happened would
+  call open outcome windows closed and an early look final. While any customer's outcome window is
+  still open the answer is **409 `CAMPAIGN_NOT_MATURED`** with `results_available_on`, and nothing is
+  stored: a campaign result is never a partial number (DEC-1304 (e)). A measurement that differs from
+  the registered plan is **409 `TEST_PLAN_CHANGED`**; the covariate defaults to the plan's, so only a
+  different one named in the body is a change.
 * `POST /campaigns/{id}/plan` (Analyst) freezes a `TestPlan` with its `plan_hash`; the audit event's
   `after_hash` is `content_hash(plan)` and its details carry `plan_hash` (DEC-1304 (g)). The same
   plan again returns the stored one; a different one is **409 `TEST_PLAN_EXISTS`**. `POST
   /campaigns/{id}/plan/amendments {reason, ...}` writes version n+1 with `amends` set; every version
-  is kept and `GET /campaigns/{id}/plan` lists them.
+  is kept and `GET /campaigns/{id}/plan` lists them. Once a final result has been read, the plan
+  can no longer be amended (**409 `TEST_PLAN_INVALID`**): that result was judged by the plan in force.
 
 Customer ids are never in a URL or an audit record: every route names a campaign, a run or an upload.
 `GET /campaigns/{id}/plan-preview` (the computed points behind the "Plan the test" slider) arrives with
@@ -35,7 +38,7 @@ from __future__ import annotations
 from datetime import date
 from typing import Annotated, Any, Final
 
-from fastapi import APIRouter, Query, Request, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import AwareDatetime, Field
 
@@ -49,9 +52,10 @@ from api.routes.uploads import http_error, load_upload, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
 from engine.access.roles import Role
 from engine.audit.events import content_hash
-from engine.config import StrictBase, UseCaseConfig, key_columns
+from engine.config import ConfigError, StrictBase, UseCaseConfig, key_columns
 from engine.measurement.campaign import (
     ASSIGNMENT_FILENAME,
+    CAMPAIGN_FILENAME,
     CAMPAIGN_NOT_FOUND,
     CAMPAIGN_NOT_MATURED,
     CAMPAIGN_OUTCOMES_MISSING,
@@ -198,13 +202,14 @@ class CampaignMeasureRequest(StrictBase):
     """Body of `POST /campaigns/{id}/measure`; everything has a default."""
 
     as_of: AwareDatetime | None = Field(
-        default=None, description="Reference time for maturity; now when null."
+        default=None, description="Reference time for maturity; now when null, and never later than now."
     )
     outcome_window_days: int | None = Field(
         default=None, ge=0, description="The outcome window to measure with; the campaign's own when null."
     )
     covariate_column: str | None = Field(
-        default=None, description="The covariate to adjust with (M102); checked against the test plan now."
+        default=None,
+        description="The covariate to adjust with (M102); the test plan's when null, checked against it now.",
     )
 
 
@@ -344,8 +349,14 @@ def create_campaign(
         created_at=now,
         created_by=requested_by(request) or "local",
     )
-    write_frame(storage, campaign_key(campaign.campaign_id, ASSIGNMENT_FILENAME), assignment)
-    save_campaign(get_campaign_store(request), storage, campaign, create=True)
+    assignment_key = campaign_key(campaign.campaign_id, ASSIGNMENT_FILENAME)
+    write_frame(storage, assignment_key, assignment)
+    try:
+        save_campaign(get_campaign_store(request), storage, campaign, create=True)
+    except Exception:
+        # Without its record the privacy jobs cannot read the assignment's key or date: never leave one.
+        _discard(storage, assignment_key, campaign_key(campaign.campaign_id, CAMPAIGN_FILENAME))
+        raise
     set_audit_context(request, object_id=campaign.campaign_id, details={"run_id": record.run_id})
     response.headers["Location"] = f"/campaigns/{campaign.campaign_id}"
     _LOGGER.info(
@@ -357,6 +368,14 @@ def create_campaign(
         counts.intended_holdout,
     )
     return _view(storage, campaign, root)
+
+
+def _discard(storage: Storage, *keys: str) -> None:
+    for key in keys:
+        try:
+            storage.delete(key)
+        except (StorageError, OSError):  # already gone, or never written
+            continue
 
 
 def _default_window(config: UseCaseConfig) -> int | None:
@@ -399,15 +418,38 @@ def read_campaign(
 
 def _view(storage: Storage, campaign: Campaign, root: Any) -> CampaignView:
     report = _stored(storage, campaign_key(campaign.campaign_id, REPORT_FILENAME), IncrementalityReport)
-    outcome = campaign.outcomes.outcome_column if campaign.outcomes is not None else ""
-    good = outcome_is_good_by_default(campaign.use_case_id, outcome, root) if campaign.use_case_id else True
+    good, label = _direction(campaign, root)
+    verdict = (
+        campaign_verdict_for(report, outcome_is_good=good, outcome_label=label)
+        if report is not None
+        else None
+    )
     return CampaignView(
         campaign=campaign,
         report=report,
-        verdict=campaign_verdict_for(report, outcome_is_good=good) if report is not None else None,
+        verdict=verdict,
         outcome_is_good=good,
         plan=_stored(storage, campaign_key(campaign.campaign_id, TEST_PLAN_FILENAME), TestPlan),
     )
+
+
+def _direction(campaign: Campaign, root: Any) -> tuple[bool, str | None]:
+    """Which way round the outcome counts, and its words: exactly as step 4 decides (`api.routes.measure`).
+
+    A column found in the outcomes file is taken to be the use case's own outcome, whatever the file
+    calls it; a column the person named is judged by its own name.
+    """
+    if campaign.use_case_id is None:
+        return True, None
+    outcomes = campaign.outcomes
+    named = outcomes.outcome_column if outcomes is not None and outcomes.outcome_named else None
+    try:
+        config = use_case_config(campaign.use_case_id, root)
+    except (ConfigError, HTTPException):  # the use case has gone: judge the column by its own name
+        column = outcomes.outcome_column if outcomes is not None else ""
+        return outcome_is_good_by_default(campaign.use_case_id, column, root), None
+    good = outcome_is_good_by_default(config.id, named or _target_of(config), root)
+    return good, config.target.definition or None
 
 
 def _stored(storage: Storage, key: str, model: type[Any]) -> Any:
@@ -438,12 +480,13 @@ def add_campaign_outcomes(
     upload = load_upload(storage, body.upload_id)
     frame = _read_all(storage, upload.source_key, upload.file_format)
     columns = [str(name) for name in frame.columns]
+    config = _config(campaign, root)
     try:
         outcome = body.outcome_column or detect_outcome_column(
             columns,
             primary_key=campaign.primary_key,
-            target_column=_target(campaign, root),
-            label_name=None,
+            target_column=_target_of(config),
+            label_name=config.label.name if config is not None and config.label is not None else None,
         )
     except ValueError as exc:
         raise http_error(422, CAMPAIGN_INVALID, str(exc), path="upload_id") from exc
@@ -468,6 +511,7 @@ def add_campaign_outcomes(
                 upload_id=upload.upload_id,
                 file_name=upload.file_name,
                 outcome_column=outcome,
+                outcome_named=body.outcome_column is not None,
                 positive_label=body.positive_label,
                 treatment_date_column=body.treatment_date_column,
                 rows=len(kept.index),
@@ -480,11 +524,13 @@ def add_campaign_outcomes(
     return _view(storage, updated, root)
 
 
-def _target(campaign: Campaign, root: Any) -> str:
-    if campaign.use_case_id is None:
-        return "outcome"
-    config = use_case_config(campaign.use_case_id, root)
-    return config.target.column or "outcome"
+def _config(campaign: Campaign, root: Any) -> UseCaseConfig | None:
+    return use_case_config(campaign.use_case_id, root) if campaign.use_case_id is not None else None
+
+
+def _target_of(config: UseCaseConfig | None) -> str:
+    """The use case's outcome column, as step 4 names it (`api.routes.measure._target`)."""
+    return (config.target.column if config is not None else None) or "outcome"
 
 
 # ---------------------------------------------------------------------------
@@ -499,6 +545,14 @@ def _target(campaign: Campaign, root: Any) -> str:
 def measure_campaign_results(
     campaign_id: str, body: CampaignMeasureRequest, request: Request, root: ConfigRootDep, storage: StorageDep
 ) -> CampaignView | JSONResponse:
+    now = utc_now()
+    if body.as_of is not None and body.as_of > now:
+        raise http_error(
+            422,
+            CAMPAIGN_INVALID,
+            "A campaign can only be measured as of now or an earlier moment, not a later one.",
+            path="as_of",
+        )
     store = get_campaign_store(request)
     campaign = _load(store, campaign_id)
     if campaign.outcomes is None:
@@ -509,6 +563,11 @@ def measure_campaign_results(
     window = (
         body.outcome_window_days if body.outcome_window_days is not None else campaign.outcome_window_days
     )
+    # The pre-registered covariate is measured with unless another one is named: leaving it out of
+    # the body is not a change of plan.
+    covariate = body.covariate_column
+    if covariate is None and plan is not None:
+        covariate = plan.covariate_column
     try:
         report = measure_campaign(
             assignment,
@@ -521,10 +580,10 @@ def measure_campaign_results(
             treatment_time=campaign.treatment_start,
             treatment_date_column=campaign.outcomes.treatment_date_column,
             outcome_window_days=window,
-            as_of=body.as_of or utc_now(),
+            as_of=body.as_of or now,
             campaign_id=campaign_id,
             plan=plan,
-            covariate_column=body.covariate_column,
+            covariate_column=covariate,
         )
     except TestPlanChangedError as exc:
         set_audit_context(request, details={"reason_code": TEST_PLAN_CHANGED})
@@ -632,6 +691,15 @@ def amend_plan(campaign_id: str, body: TestPlanAmendment, request: Request, stor
     if current is None:
         raise http_error(
             404, TEST_PLAN_NOT_FOUND, "This campaign has no test plan to amend; register one first."
+        )
+    stored = _stored(storage, campaign_key(campaign_id, REPORT_FILENAME), IncrementalityReport)
+    if stored is not None and not stored.early_look:
+        set_audit_context(request, details={"reason_code": TEST_PLAN_INVALID, "plan_hash": current.plan_hash})
+        raise http_error(
+            409,
+            TEST_PLAN_INVALID,
+            "This campaign's final result has been read under the plan in force, so the plan can no longer "
+            "be amended.",
         )
     decided = _resolved(campaign, TestPlanInput.model_validate(body.model_dump(exclude={"reason"})))
     if plan_inputs(current) == decided:

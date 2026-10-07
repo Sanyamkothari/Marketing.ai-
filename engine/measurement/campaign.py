@@ -103,7 +103,9 @@ __all__ = [
 ]
 
 # ---------------------------------------------------------------------------
-# Codes (DEC-1304): added to `engine.decide.codes.PLAN_J_CODES` and `configs/pilot/help.yaml`
+# Codes (DEC-1304). `engine.decide.codes.PLAN_J_CODES` and `configs/pilot/help.yaml` are frozen
+# while Plan J's branches run in parallel; this milestone's entries are applied when it is merged,
+# beside M91's (PARALLEL_WORK_PROTOCOL.md §3.2).
 # ---------------------------------------------------------------------------
 CAMPAIGN_NOT_FOUND: Final[str] = "CAMPAIGN_NOT_FOUND"
 CAMPAIGN_NOT_MATURED: Final[str] = "CAMPAIGN_NOT_MATURED"
@@ -191,6 +193,13 @@ class CampaignOutcomes(StrictBase):
     upload_id: str = Field(description="The outcomes upload.")
     file_name: str = Field(description="Its name, as uploaded.")
     outcome_column: str = Field(description="The outcome column.")
+    outcome_named: bool = Field(
+        default=False,
+        description=(
+            "True when the person named the column; false when it was found in the file and so is taken "
+            "to be the use case's own outcome (which way round it counts, as step 4 reads it)."
+        ),
+    )
     positive_label: str | None = Field(default=None, description="The value that counts as a conversion.")
     treatment_date_column: str | None = Field(
         default=None,
