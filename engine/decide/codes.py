@@ -20,6 +20,14 @@ PLAN_J_CODES: Final[frozenset[str]] = frozenset(
         # M91 (DEC-1301 (e)): the audit reason code of a row-level download refused to a non-Analyst
         # (`api.routes.runs.require_row_level_role`); the HTTP error itself is `ROLE_REQUIRED`.
         "ROW_LEVEL_DOWNLOAD_REFUSED",
+        # M92 (DEC-1302 (a), (b)): the persistent holdout's refusals, raised as `HoldoutError` by
+        # `engine.holdout.spec` / `engine.holdout.salt` (ingest pre-check and `PUT /holdout`).
+        "HOLDOUT_SALT_MISSING",
+        "HOLDOUT_SALT_CHANGED",
+        "HOLDOUT_SALT_UNCHANGED",
+        "HOLDOUT_FRACTION_LOWERED",
+        "HOLDOUT_FRACTION_MISMATCH",
+        "HOLDOUT_SCOPE_RESERVED",
     }
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises."""

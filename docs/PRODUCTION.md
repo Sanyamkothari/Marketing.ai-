@@ -100,8 +100,8 @@ shown disabled, never hidden, with the server's own sentence beside it: "Only an
 approve a champion." `GET /auth/me` lists every route with whether the caller may use it.
 
 **Customer-level files are Analyst (Plan J M91, DEC-1301 (e)).** A run file with one row per customer
-(`scores.csv`, `scores.parquet`, `row_explanations.parquet`, `copy_messages.csv`; `ROW_LEVEL_ARTEFACTS`
-in `api/access_policy.py`) needs Analyst when sign-in is on, on every route that serves it:
+(`scores.csv`, `scores.parquet`, `row_explanations.parquet`, `copy_messages.csv` and, since Plan J M92,
+`holdout_assignment.parquet`; `ROW_LEVEL_ARTEFACTS` in `api/access_policy.py`) needs Analyst when sign-in is on, on every route that serves it:
 `/runs/{run_id}/scores.csv`, `/runs/{run_id}/copy_messages.csv` and `/runs/{run_id}/artefacts/{name}`.
 The generic route stays Viewer for reports and charts. A refusal is `403 ROLE_REQUIRED`, "Only an
 Analyst can download customer-level rows.", audited with reason code `ROW_LEVEL_DOWNLOAD_REFUSED`, and

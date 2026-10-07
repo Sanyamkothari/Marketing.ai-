@@ -241,6 +241,14 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/test_api_generative_copy_identity.py",
         "tests/integration/decide/test_row_level_downloads.py",
     ),
+    "M92": (
+        "tests/unit/holdout/test_assign.py",
+        "tests/unit/holdout/test_spec.py",
+        "tests/unit/holdout/test_salt.py",
+        "tests/unit/holdout/test_holdout_flow.py",
+        "tests/integration/holdout/test_holdout_api.py",
+        "tests/integration/holdout/test_holdout_uplift_flow.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

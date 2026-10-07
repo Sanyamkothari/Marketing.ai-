@@ -291,6 +291,31 @@ codes:
     title: Only an Analyst can download customer-level rows
     meaning: This file has one row per customer (scored customers, reasons per customer or campaign messages), so with sign-in on it needs the Analyst role. Every download is recorded in the audit log. Reports and charts for the run stay open to Viewers.
     fix: Ask an Admin to give you the Analyst role, or ask an Analyst to share what you need.
+  # --- Plan J M92: persistent control group and explore slice (DEC-1302 (a), (b)) ---------------
+  HOLDOUT_SALT_MISSING:
+    title: "The control group's secret salt is not set"
+    meaning: This use case holds the same customers out on every run. That needs a secret salt (MARKETING_AI_HOLDOUT_SALT), and none is set, so the run stops before scoring anyone.
+    fix: "Ask your administrator to set the salt (at least 16 characters, kept for as long as the same control group is used; on AWS the deployment generates it), or set the use case's control group scope back to run, a fresh draw on every run."
+  HOLDOUT_SALT_CHANGED:
+    title: The salt is not the one the fixed control group was drawn with
+    meaning: "The configured salt differs from the one recorded when this deployment's fixed control group started. Scoring with it would quietly move customers in or out of the control group, so results could no longer be compared over time."
+    fix: Set the original salt again. Or, if the change is intended, ask an Admin to adopt the new salt, which starts a new period for every fixed control group.
+  HOLDOUT_SALT_UNCHANGED:
+    title: There is no new salt to switch to
+    meaning: A switch to a new salt was requested, but the configured salt is the one already recorded (or no salt has been recorded yet), so switching would reshuffle nobody.
+    fix: Set the new MARKETING_AI_HOLDOUT_SALT first, then ask again. To lower a share, start the new period without switching the salt.
+  HOLDOUT_FRACTION_LOWERED:
+    title: The control group share was lowered
+    meaning: This use case now asks to keep a smaller share of customers out than its fixed control group has used in the current period. Some customers who were held out would then be contacted, so results before and after could not be added up.
+    fix: Set the share back. Or ask an Admin to start a new control group period at the lower share; results are then reported per period.
+  HOLDOUT_FRACTION_MISMATCH:
+    title: Use cases sharing one control group ask for different shares
+    meaning: The shared (universal) control group keeps the same customers out of every use case on it, so it has one share. This use case, or the requested new period, asks for a different share than the current period, so one use case would contact customers another holds out.
+    fix: Give every use case on the shared control group the same share. To change that share, change it in all of them first, then ask an Admin to start a new period at it.
+  HOLDOUT_SCOPE_RESERVED:
+    title: This use case name cannot have its own fixed control group
+    meaning: "The names 'universal' and 'explore' are reserved for the shared control group and the explore slice. A use case with one of these names cannot have a control group of its own (scope use_case), because its customers would be drawn as if they were in the shared control group or the explore slice."
+    fix: Rename the use case, or use scope universal or run.
 
 settings:
   actions.bands[*].min_score:

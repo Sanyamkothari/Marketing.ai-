@@ -105,27 +105,117 @@ with sign-in on (`ui/modules/generative/copy.js`), using `can("GET", "/runs/{run
 the click shows the server's refusal. `_approver_name` duplicates `api/routes/models.py`'s `_decider_name`; they
 could share a helper in `api/access`.
 
-### 2026-10-07 — plan-j (on main) → trunk / Plan H (owners of `api/routes/runs.py` and the run UI): row-level downloads need Analyst (announcement)
-
-**What changed** (pre-approved in the Plan J plan, M91; DEC-1301 (e)): `api.routes.runs.read_artefact(run_id, name,
-storage, request)` gained a **required** `request` argument and calls `require_row_level_role` before it looks the
-run up: with sign-in on (`auth_mode != off`), `scores.csv`, `scores.parquet`, `row_explanations.parquet` and
-`copy_messages.csv` are refused to a principal without Analyst (`403 ROLE_REQUIRED`), and a download through
-`GET /runs/{run_id}/artefacts/{name}` is audited as `runs.customer_rows_download`. `read_scores` and
-`read_copy_messages` pass the request. Backward compatible with sign-in off. New test:
-`tests/integration/decide/test_row_level_downloads.py`, which also requires every row-level file in
-`configs/privacy.yaml` (M98's `treat_list.csv` included, when it is registered) to be in `ROW_LEVEL_ARTEFACTS`.
-
-**What is needed.** Optional UI follow-up, not done here: show "Download contact list (CSV)" only when
-`can("GET", "/runs/{run_id}/scores.csv")` is true (`ui/usecase.js`, `ui/modules/uplift/controller.js`, `ui/app.js`),
-or show the refusal reason beside it as the Admin-only controls do; today a Viewer's click gets the server's
-refusal (DEC-793).
+**Done 2026-10-07 (M92 integration), the first half.** "Download messages (CSV)" is disabled for anyone without
+Analyst once sign-in is on, with the server's reason beside it: `ui/modules/production/gate.js` gates every
+`a[href*="/copy_messages.csv"]` by `GET /runs/{run_id}/copy_messages.csv` (DEC-792's one table, so
+`ui/modules/generative/copy.js` is unchanged, and a later `?approved_only=true` link is covered too). Still open: the shared
+`_approver_name` / `_decider_name` helper.
 
 ### 2026-10-07 — plan-j (on main) → Plan E: two codes in `configs/pilot/help.yaml` (announcement)
 
 **What changed:** `configs/pilot/help.yaml` gained `CONSENT_PURPOSE_MISSING` and `ROW_LEVEL_DOWNLOAD_REFUSED` under
 a Plan J M91 comment, matching `engine.decide.codes.PLAN_J_CODES` (DEC-1300 (d), DEC-1301). `tests/unit/pilot/test_help.py`
 is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-07 — plan-j (on main) → Phase 4a (infra owner): M92 generates a retained holdout salt secret (announcement)
+
+**What changed in files §3 gives Phase 4a** (pre-approved in the Plan J plan, M92; DEC-1302 (b)): `infra/database.py`
+adds a generated, retained, never-rotated `HoldoutSalt` secret (`marketing-ai/<env>/holdout-salt`, 48 alphanumeric
+characters), carried into the application secret as key `holdout_salt` by deploy-time reference, like `PrivacySalt`
+and `ConnectionsKey`, so a database-stack redeploy cannot wipe it. Also `infra/naming.py`
+`holdout_salt_secret_name`, an `AwsSolutions-SMG4` suppression in `infra/nag_suppressions.py` and its
+`infra/README.md` row, a `HoldoutSaltB6A3D22D` line in `tests/infra/snapshots/{dev,prod}.json`, the secret name in
+`tests/infra/test_compute.py::test_the_application_secret_is_a_separate_document`, and the new
+`tests/infra/test_plan_j_holdout_salt.py`. `docs/AWS_DEPLOYMENT.md` says the salt comes from that secret, not by hand.
+
+**What is needed.** A review. The builder ran `tests/infra` (262 passed) with aws-cdk-lib 2.270.0 in a scratch venv;
+the integration venv has no `aws_cdk`, so `tests/infra` was not re-run after the merge.
+
+### 2026-10-07 — plan-j (on main) → trunk (owners of `engine/config.py`, `engine/settings.py`, `engine/stages/actions.py`, `configs/engine.yaml`, `ui/pages.js`): M92 in-place edits (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M92; DEC-1300 (c), DEC-1302):
+
+* `engine/config.py`: `ActionsConfig` gained `holdout: HoldoutConfig` and `explore_fraction` in place (types in
+  `engine.holdout.spec`, defaults `scope: run` and 0), and `_ACTIONS_SUMMARY_TAIL` renders " · N% control group"
+  under scope run (unchanged) and " · N% held out, the same customers every run" under a persistent scope;
+  `configs/engine.yaml` has the two defaults; `docs/API.md` regenerated.
+* `engine/settings.py`: `holdout_salt` (`MARKETING_AI_HOLDOUT_SALT`, a `SecretStr` in `SECRET_FIELDS`, at least 16
+  characters, no default), checked by the privacy salt's validator.
+* `engine/stages/actions.py`: only `_control_mask` and `_entity_control_mask`, the functions DEC-1300 (c) names,
+  read the active holdout from a context variable and return today's draw when none is active.
+* `ui/pages.js` `settingsCard` reads the effective share (the rule of `ui/modules/measure/rule.js` `holdoutFraction`,
+  inlined because `tests/integration/test_ui.py` limits `pages.js` imports) and says "of all customers, the same
+  ones every run" under a persistent scope. Default wording is unchanged.
+* Shared files: the `/holdout` router registration (`api/main.py`) and `install_holdout_service(_ScoreFlow)`
+  (`engine/pipeline.py`) were appended after `END PLAN-G` on the branch and moved into the PLAN-J blocks at
+  integration; `tests/unit/holdout/test_holdout_flow.py::test_importing_the_pipeline_installs_the_service` fails if
+  the second is dropped.
+
+**What is needed.** Nothing; this is an announcement. Pinned by `tests/unit/holdout/test_spec.py` and
+`tests/unit/holdout/settings_card.test.mjs`; `tests/unit/test_actions.py` passes unchanged.
+
+### 2026-10-07 — plan-j (on main) → Phase 3b and Plan H: M92 reads the effective holdout share (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M92; DEC-1302 (d)): `engine/uplift/measure.py` `measure_offered`
+and Plan H's `ui/modules/measure/rule.js` (`campaignStep`, new `holdoutFraction`) read the effective share
+(`engine.holdout.spec.effective_holdout_fraction`): `actions.control_group_fraction` under scope run, as before, and
+`actions.holdout.fraction` under a persistent scope. `docs/UPLIFT.md` gains §14 (persistent holdout, explore slice,
+`holdout_assignment.parquet` and its OPE columns). `tests/unit/uplift/test_profit_curve.py` passes unchanged.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-07 — plan-j (on main) → Phase 4b: M92 registers `holdout_assignment.parquet`, reads the effective share, and the M91 UI follow-up (announcement)
+
+**What changed in files §3 gives Phase 4b** (pre-approved in the Plan J plan, M92 and M91; DEC-1302 (d), (e),
+DEC-1301 (e)):
+
+* `configs/privacy.yaml` retention lists `holdout_assignment.parquet` as a row-level run artefact, and
+  `engine/privacy/layout.py` stores it as `Store.SCORES`, so erasure rewrites it (tested).
+* `engine/scheduling/outcomes.py`: `incrementality_input.json`'s `control_group_fraction` is the effective share.
+* At integration: `ui/modules/production/gate.js` gained two rows gating the customer-level download links
+  (`a[href$="/scores.csv"]`, `a[href*="/copy_messages.csv"]`), `ui/modules/production/audit.js` plain words for
+  `runs.customer_rows_download`, `holdout.read` and `holdout.update`, and `tests/integration/production/ui/gate.test.mjs`
+  and `tests/integration/production/test_production_ui.py` tests for both (nothing loosened; `REQUIRED_GATES` gained
+  two rows).
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-07 — plan-j (on main) → trunk / Plan H (owners of `api/routes/runs.py`) and Phase 4b (`api/access_policy.py`): `holdout_assignment.parquet` is a customer-level download (announcement)
+
+**What changed** (found at M92's integration; DEC-1302 consequences, DEC-1301 (e)): M92 lists
+`holdout_assignment.parquet` in `configs/privacy.yaml` `retention.row_level_run_artefacts`, and M91's
+`tests/integration/decide/test_row_level_downloads.py` requires every such file to be in `ROW_LEVEL_ARTEFACTS` and
+served, Analyst-only and audited, by `GET /runs/{run_id}/artefacts/{name}`. So `api/access_policy.py`
+`ROW_LEVEL_ARTEFACTS` gained `holdout_assignment.parquet`, and `api/routes/runs.py` `read_artefact` whitelists it and
+the aggregate `holdout_assignment.json` (both names imported from `engine.holdout`). A run that never wrote them
+answers `404 ARTEFACT_NOT_FOUND` as for any unproduced artefact. `docs/PRODUCTION.md` §2 names the file. No test
+changed.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-07 — plan-j M92 → M94 (hand-off builder) and M98 (delivery checks): `holdout_assignment.parquet` is written only by engaged runs (announcement)
+
+**What changed** (DEC-1302 (e)): `holdout_assignment.parquet` is written only when a run is engaged (a persistent
+scope or `explore_fraction > 0`); a default run writes exactly `SCORE_ARTEFACTS`. For a default run, derive the same
+table from `scores.*` with `engine.holdout.assign.assignment_frame(banded=scores, config, primary_key, row_key,
+entity_key, run_id, active=None, explore_fraction=0.0)`: `holdout_member` equals `control_group` and `explore` is
+False. Columns after the key: `holdout_member`, `explore`, `explore_probability` (P(explored | candidate), not a
+logging propensity), `treated`, `treatment_probability` (P(treated | x)). For OPE use
+`engine.holdout.assign.ope_rows(table)` and pass `treated` as `t` and `treatment_probability` as `propensity`.
+`PLAN_J_LAYER`'s `explore_propensity` name is superseded by these two columns.
+
+**What is needed.** Nothing now; M94 and M98 must not assume the file exists on a default run. If the product owner
+wants it on every run, the follow-up is a trunk change to `SCORE_ARTEFACTS`, the artefact registry and
+`tests/unit/production/test_consent_scoring.py` / `tests/integration/test_score_flow.py`.
+
+### 2026-10-07 — plan-j (on main) → Plan E: six M92 codes in `configs/pilot/help.yaml` (announcement)
+
+**What changed:** `configs/pilot/help.yaml` gained `HOLDOUT_SALT_MISSING`, `HOLDOUT_SALT_CHANGED`,
+`HOLDOUT_SALT_UNCHANGED`, `HOLDOUT_FRACTION_LOWERED`, `HOLDOUT_FRACTION_MISMATCH` and `HOLDOUT_SCOPE_RESERVED` under a
+Plan J M92 comment, matching `engine.decide.codes.PLAN_J_CODES` (DEC-1300 (d), DEC-1302). They say "control group",
+not "holdout", which the catalogue's jargon check refuses. `tests/unit/pilot/test_help.py` is unchanged and green.
 
 **What is needed.** Nothing; this is an announcement.
 
@@ -248,6 +338,33 @@ run link and an alert's run link.
 **Re-filed 2026-09-23 (Plan D M58)** to the trunk. Half of it is covered: approving, rejecting and promoting a challenger now have their own screen, `#/approvals`, linked from the user bar (DEC-862, DEC-864). The link is still missing: `ui/pages.js` has no link from a scoring run's Output page to `#/monitoring/runs/<run_id>`. Plan D touched `ui/pages.js` only for uplift runs (DEC-858). Needed from: the trunk's owner of `ui/pages.js`, that one link on a finished scoring run's Output page.
 
 ## Resolved
+
+### 2026-10-07 — plan-j (on main) → trunk / Plan H (owners of `api/routes/runs.py` and the run UI): row-level downloads need Analyst (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M91; DEC-1301 (e)): `api.routes.runs.read_artefact(run_id, name,
+storage, request)` gained a **required** `request` argument and calls `require_row_level_role` before it looks the
+run up: with sign-in on (`auth_mode != off`), `scores.csv`, `scores.parquet`, `row_explanations.parquet` and
+`copy_messages.csv` are refused to a principal without Analyst (`403 ROLE_REQUIRED`), and a download through
+`GET /runs/{run_id}/artefacts/{name}` is audited as `runs.customer_rows_download`. `read_scores` and
+`read_copy_messages` pass the request. Backward compatible with sign-in off. New test:
+`tests/integration/decide/test_row_level_downloads.py`, which also requires every row-level file in
+`configs/privacy.yaml` (M98's `treat_list.csv` included, when it is registered) to be in `ROW_LEVEL_ARTEFACTS`.
+
+**What is needed.** Optional UI follow-up, not done here: show "Download contact list (CSV)" only when
+`can("GET", "/runs/{run_id}/scores.csv")` is true (`ui/usecase.js`, `ui/modules/uplift/controller.js`, `ui/app.js`),
+or show the refusal reason beside it as the Admin-only controls do; today a Viewer's click gets the server's
+refusal (DEC-793).
+
+**Resolved 2026-10-07 (M92 integration).** Done as the second option, the way the Admin-only controls are gated
+(DEC-792): `ui/modules/production/gate.js` gates every `a[href$="/scores.csv"]` by `GET /runs/{run_id}/scores.csv`,
+which covers "Download contact list (CSV)" on the Setup screen (`ui/usecase.js`), the uplift screens
+(`ui/modules/uplift/views.js`, href from `controller.js`) and the output page (`ui/pages.js`, href from `ui/app.js`)
+without editing those files. With sign-in on, a Viewer (or an Approver-only or Admin-only person) sees the link
+disabled with the server's reason beside it, and a click never starts the download; an Analyst, and everyone
+with sign-in off, sees it as before. The audit screen (`ui/modules/production/audit.js`) now labels
+`runs.customer_rows_download` "Downloaded customer-level rows". Tests: `tests/integration/production/ui/gate.test.mjs`
+(Viewer, Analyst, Approver, Admin, sign-in off) and `tests/integration/production/test_production_ui.py`
+(`REQUIRED_GATES`, the URL builders the selectors rely on, the audit labels).
 
 ### 2026-09-22 — phase-3a-generative → phase-2-onboarding and phase-4a-aws: `LLMClient.complete` takes an optional `system`
 
