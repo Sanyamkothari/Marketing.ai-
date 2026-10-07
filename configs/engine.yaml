@@ -257,6 +257,8 @@ defaults:
         sms: "Reply STOP to opt out"    # str
         whatsapp: "Reply STOP to opt out"   # str
         email: "unsubscribe_link"       # str
+      sms_sender: two_way               # enum: two_way | one_way; one_way if the SMS sender ID cannot receive replies
+                                        # (India's DLT): the SMS line becomes an {{opt_out_link}} field, "Reply STOP" is blocked
   # --- Phase 2: turning a client's raw tables into the shape above -----------
   # `standard_schema`, `suggested_features` and `label` are per-use-case and default to empty/null:
   # a use case that has not been onboarded yet still trains from a prepared file exactly as before.

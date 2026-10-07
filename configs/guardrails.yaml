@@ -17,6 +17,8 @@ deterministic:                          # rule -> block | warn | off
   pii_in_output: block                  # an e-mail, phone, PAN or Aadhaar shape anywhere in the text
   banned_phrases: block                 # the use case's banned_claims, plus `global_banned_phrases`
   max_length: block                     # the channel's character or word limit
+  sms_reply_stop_one_way: block         # "Reply STOP" wording in an SMS when campaign_copy.sms_sender is one_way
+                                        # (a one-way sender ID cannot receive the reply); silent otherwise
   required_lines: block                 # the opt-out line a channel must carry
   allowed_fields_only: block            # a {{placeholder}} naming a field outside allowed_fields
   url_whitelist: block                  # a link to a domain outside `allowed_url_domains`

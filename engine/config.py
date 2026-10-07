@@ -1047,6 +1047,11 @@ class CampaignCopyConfig(_Base):
     max_segments: Annotated[int, Field(ge=2, le=20)] = 6
     """Segments written for under `segment_by: top_reason`, the last one an "other" bucket for every
     smaller group. Unused by `band` and `uplift_segment`, which have a fixed set (DEC-1241)."""
+    sms_sender: Literal["one_way", "two_way"] = "two_way"
+    """Whether the SMS sender ID can receive replies. `two_way` (the default) keeps "Reply STOP to opt
+    out". A one-way sender ID (India's DLT headers, for one) cannot, so `one_way` makes the SMS required
+    line an `{{opt_out_link}}` merge field and the `sms_reply_stop_one_way` guardrail blocks any
+    "Reply STOP" wording (M91). Applies to SMS only; WhatsApp always has a reply channel."""
 
     @field_validator("channels")
     @classmethod
