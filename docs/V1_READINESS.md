@@ -100,7 +100,7 @@ written instructions:
 | `git clone --branch main …` | 2 s | ok |
 | `make setup` (pip, no cache) | 71 s | ok, `setup ok: autogluon.tabular 1.6.3`. On a slower laptop connection, expect 5 to 15 minutes. |
 | `make demo-seed` (4,000 customers) | 2 min 36 s | ok |
-| `make demo`, open `http://localhost:8000` | seconds | **Failed** in run 1 (JSON "Not Found" at `/`); ok after fix 1. The churn campaign: 12.7 points fewer customers left, 95% range 7.7 to 17.8 points, p < 0.001. |
+| `make demo`, open `http://localhost:8000` | seconds | **Failed** in run 1 (JSON "Not Found" at `/`); ok after fix 1. The demo's churn campaign: 12.7 points fewer customers left (a planted effect in synthetic data, not a forecast), 95% range 7.7 to 17.8 points, p < 0.001. |
 | `make demo-signin` | seconds | ok: five demo users printed; `demo-lead` signs in with Analyst + Approver; the API refuses a caller who is not signed in. |
 | `make pilot-kit`, pre-flight on the demo raw tables | 16 s install | ok |
 

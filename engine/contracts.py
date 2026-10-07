@@ -324,6 +324,17 @@ class RunRecord(Artefact):
             "null for a run started before this was recorded. Separation of duties reads it."
         ),
     )
+    # Plan J M95 (DEC-1300 / M95 (b)): an added, defaulted field, so every run.json written before it
+    # still reads, as False. Declared in place because a pydantic field cannot be added from a block at
+    # the foot of the file; the integrator announces it in `docs/CROSS_BRANCH_REQUESTS.md` (Plan J M95).
+    synthetic: bool = Field(
+        default=False,
+        description=(
+            "True when the run read data that was generated, not a client's: the seeded demo, or an "
+            "upload marked synthetic. Every report drawn from such a run says its effect is planted. "
+            "False for a run recorded before this field existed."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -15,6 +15,7 @@ column on the server and trains a real uplift model with a treat list.
 
 from __future__ import annotations
 
+import json
 import time
 from collections.abc import Iterator
 from dataclasses import dataclass
@@ -34,7 +35,7 @@ from engine.contracts import RunRecord, RunState
 from engine.runs import RUN_FILENAME, job_spec_for, write_job_spec
 from engine.stages import export
 from engine.stages.actions import CONTROL_ACTION, apply_actions
-from engine.storage import LocalStorage, run_key
+from engine.storage import LocalStorage, run_key, upload_key
 from engine.uplift.contracts import IncrementalityReport, IncrementalityStatus
 from engine.uplift.incrementality import measure_incrementality
 from engine.uplift.measure import CampaignVerdict, VerdictKind, campaign_verdict
@@ -306,6 +307,21 @@ def test_learning_builds_the_treatment_on_the_server_and_trains_an_uplift_model(
     assert treat_list.status_code == 200, treat_list.text
     view = world.client.get(f"/runs/{RUN_ID}/measure").json()
     assert view["uplift_run"] == {"run_id": uplift_run, "state": "done"}
+
+
+def test_learning_from_a_synthetic_campaign_trains_a_synthetic_uplift_run(world: World) -> None:
+    """Plan J M95: the uplift run is trained on the campaign's outcomes, so if the outcomes file was marked
+    synthetic the experiment upload and the run learned from it are too (they were once recorded plain)."""
+    key = upload_key(world.outcomes_upload, "upload.json")
+    stored = json.loads(world.storage.read_bytes(key))
+    stored["synthetic"] = True
+    world.storage.write_bytes(key, json.dumps(stored).encode())
+
+    response = world.client.post(f"/runs/{RUN_ID}/measure/learn", json={"overrides": FAST})
+    assert response.status_code == 202, response.text
+    record = _finish(world.client, str(response.json()["run_id"]))
+    assert record.synthetic is True
+    assert record.upload_id is not None and load_upload(world.storage, record.upload_id).synthetic is True
 
 
 def _finish(client: TestClient, run_id: str) -> RunRecord:

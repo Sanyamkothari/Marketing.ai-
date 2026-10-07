@@ -290,3 +290,92 @@ def test_the_operator_guide_describes_the_sign_in_throttle(repo_root: Path) -> N
     ):
         assert ENV_VARS[field] in guide, field
     assert "trusted_proxy_hops=1" in guide, "why a deployment behind the ALB trusts one hop"
+
+
+# ---------------------------------------------------------------------------
+# The planted demo effect stays in demo documents (Plan J M95)
+# ---------------------------------------------------------------------------
+PLANTED_FIGURE = re.compile(r"\b12\.7\s*-?\s*(?:percentage[\s-]+)?(?:points?|pts?|pp)\b", re.IGNORECASE)
+"""The demo's planted churn effect, as it is written in prose: `12.7 points`, `12.7-point`,
+`12.7 percentage points`, `12.7pp`, `12.7 pts`."""
+
+PLANTED_LABEL = re.compile(r"planted", re.IGNORECASE)
+"""What makes a line that quotes the figure a labelled one: it says the effect is planted. A line that
+merely quotes the number, or only mentions the demo, is how a planted effect gets read as a result."""
+
+LABELLED_ONLY: tuple[str, ...] = ("docs/V1_READINESS.md", "docs/plans/", "docs/research/")
+"""Documents where the figure may appear only on a line that labels it: the readiness record's demo
+line (explicitly allowed) and the planning and research documents that discuss the quarantine itself."""
+
+DEMO_DOC = re.compile(r"(^|/)(demo[^/]*|[^/]*_demo[^/]*)\.md$", re.IGNORECASE)
+"""A demo document, by name (`docs/pilot/DEMO.md`): the figure may appear anywhere in it."""
+
+
+def planted_figure_violations(root: Path) -> list[tuple[str, int, str]]:
+    """`(file, line number, line)` for each place `docs/` or `README.md` quotes the planted figure
+    where it is not allowed: outside a demo document and, in the labelled-only documents, on a line that
+    does not say the effect is planted or the demo's."""
+    files = [root / "README.md", *sorted((root / "docs").rglob("*.md"))]
+    found: list[tuple[str, int, str]] = []
+    for path in files:
+        if not path.is_file():
+            continue
+        relative = path.relative_to(root).as_posix()
+        if DEMO_DOC.search(relative):
+            continue
+        labelled_only = any(relative == allowed or relative.startswith(allowed) for allowed in LABELLED_ONLY)
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+            if PLANTED_FIGURE.search(line) and not (labelled_only and PLANTED_LABEL.search(line)):
+                found.append((relative, number, line.strip()[:160]))
+    return found
+
+
+def test_the_planted_demo_effect_appears_only_in_demo_documents(repo_root: Path) -> None:
+    """ "12.7 points" is the demo's planted churn effect. It may be read as a result nowhere (principle 1)."""
+    violations = planted_figure_violations(repo_root)
+    assert not violations, (
+        "The demo's planted 12.7-point effect appears outside a demo document, or on a line that does not "
+        "say it is planted. Say 'planted demo effect' on the same line, or remove the figure: "
+        f"{violations}"
+    )
+
+
+def test_the_v1_readiness_demo_line_labels_the_figure_as_planted(repo_root: Path) -> None:
+    """The one line outside the plans that quotes the figure says what it is."""
+    lines = [
+        line
+        for line in (repo_root / "docs/V1_READINESS.md").read_text(encoding="utf-8").splitlines()
+        if PLANTED_FIGURE.search(line)
+    ]
+    assert lines, "docs/V1_READINESS.md no longer quotes the demo's figure; drop this check with it."
+    assert all(re.search(r"planted", line, re.IGNORECASE) for line in lines)
+
+
+def test_the_planted_figure_gate_catches_an_unlabelled_quotation(tmp_path: Path) -> None:
+    """The gate itself works: it fails on README, on a bare quotation in a plan, and on an ordinary doc."""
+    (tmp_path / "docs" / "plans").mkdir(parents=True)
+    (tmp_path / "docs" / "pilot").mkdir()
+    (tmp_path / "README.md").write_text("The campaign cut churn by 12.7 points.\n", encoding="utf-8")
+    (tmp_path / "docs" / "UPLIFT.md").write_text("A 12.7-point lift.\n", encoding="utf-8")
+    (tmp_path / "docs" / "plans" / "PLAN.md").write_text(
+        "The effect was 12.7 points.\nThe demo's planted 12.7-point effect.\n"
+        "The demo campaign achieved 12.7 points.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs" / "VARIANTS.md").write_text(
+        "Cut churn by 12.7 percentage points.\nA 12.7pp drop.\nA 12.7 pts drop.\nA 12.7-pt drop.\n"
+        "A 12.7 percentage-point drop.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs" / "pilot" / "DEMO.md").write_text("12.7 points fewer left.\n", encoding="utf-8")
+    assert [(f, n) for f, n, _ in planted_figure_violations(tmp_path)] == [
+        ("README.md", 1),
+        ("docs/UPLIFT.md", 1),
+        ("docs/VARIANTS.md", 1),
+        ("docs/VARIANTS.md", 2),
+        ("docs/VARIANTS.md", 3),
+        ("docs/VARIANTS.md", 4),
+        ("docs/VARIANTS.md", 5),
+        ("docs/plans/PLAN.md", 1),
+        ("docs/plans/PLAN.md", 3),
+    ]

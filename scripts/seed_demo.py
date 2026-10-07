@@ -58,6 +58,7 @@ from engine.pilot.demo import (
     DemoCampaign,
     DemoManifest,
     load_demo,
+    mark_runs_synthetic,
     raw_key,
 )
 from engine.pilot.roi import RoiInputs, save_roi_inputs
@@ -239,10 +240,13 @@ def _build(client: TestClient, client_id: str, spec_id: str, mode: str) -> tuple
 
 
 def _upload(client: TestClient, frame: pd.DataFrame, *, use_case: str, mode: str, name: str) -> str:
+    """Upload generated data. Every file the seeder sends is synthetic, and says so (Plan J M95)."""
     payload = frame.to_csv(index=False, lineterminator="\n").encode()
     created = _ok(
         client.post(
-            "/uploads", files={"file": (name, payload, "text/csv")}, data={"use_case": use_case, "mode": mode}
+            "/uploads",
+            files={"file": (name, payload, "text/csv")},
+            data={"use_case": use_case, "mode": mode, "synthetic": "true"},
         ),
         201,
     )
@@ -330,6 +334,7 @@ def seed(data_dir: Path | None, *, rng_seed: int, force: bool) -> DemoManifest:
             202,
         )
         trained = _wait_run(client, run["run_id"])
+        mark_runs_synthetic(storage, [run["run_id"]])
         model_id = trained["model_version_id"]
         if not trained.get("champion"):
             _ok(client.post(f"/models/{model_id}/approve", json={"approved_by": "Demo seeder"}))
@@ -385,6 +390,7 @@ def seed(data_dir: Path | None, *, rng_seed: int, force: bool) -> DemoManifest:
             202,
         )
         _wait_run(client, score["run_id"])
+        mark_runs_synthetic(storage, [score["run_id"]])
         churn_scores = _scores(client, score["run_id"])
 
         # the churn campaign, measured on the Campaign results page's route: since M53 it joins on both
@@ -429,6 +435,7 @@ def seed(data_dir: Path | None, *, rng_seed: int, force: bool) -> DemoManifest:
             202,
         )
         uplift_run = _wait_run(client, uplift["run_id"])
+        mark_runs_synthetic(storage, [uplift["run_id"]])
         _ok(
             client.post(
                 f"/models/{uplift_run['model_version_id']}/promote",
@@ -461,6 +468,7 @@ def seed(data_dir: Path | None, *, rng_seed: int, force: bool) -> DemoManifest:
             202,
         )
         _wait_run(client, winback["run_id"])
+        mark_runs_synthetic(storage, [winback["run_id"]])
         winback_scores = _scores(client, winback["run_id"])
         treated = set(winback_scores.loc[winback_scores["action"] == "Treat", "customer_id"])
         observed = outcomes_for(campaign, treated_keys=treated, seed=rng_seed % 1000 + 5)
@@ -548,6 +556,10 @@ def seed(data_dir: Path | None, *, rng_seed: int, force: bool) -> DemoManifest:
         seeded_at=datetime.now(UTC),
         seed=rng_seed,
     )
+    # Every run of the demo is synthetic (Plan J M95): by now all of them are finished, so this is a
+    # check as much as a mark - a run the steps above missed is marked here, never left to show its
+    # planted effect as a result.
+    mark_runs_synthetic(storage, manifest.run_ids)
     lowered = " ".join(manifest.data_sources).lower()
     if any(excluded in lowered for excluded in EXCLUDED_DATA):
         raise SeedError("the demo may not contain excluded data")

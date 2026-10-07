@@ -308,7 +308,13 @@ def create_learn(
     except ValueError as exc:
         raise http_error(422, MEASURE_INVALID, str(exc)) from exc
     experiment = _write_upload(
-        storage, config, frame, file_name=f"{record.file_name or run_id} + campaign outcomes"
+        storage,
+        config,
+        frame,
+        file_name=f"{record.file_name or run_id} + campaign outcomes",
+        # Plan J M95: the planted effect rides in the scores' run or in the outcomes file; either one
+        # makes the experiment, and the uplift run learned from it, synthetic.
+        synthetic=record.synthetic or outcomes_upload.synthetic,
     )
     overrides: dict[str, Any] = {**body.overrides, "target.positive_label": 1}
     started = create_uplift_run(
@@ -419,7 +425,9 @@ def _view(storage: Storage, record: RunRecord, config: UseCaseConfig) -> Measure
     )
 
 
-def _write_upload(storage: Storage, config: UseCaseConfig, frame: Any, *, file_name: str) -> UploadRecord:
+def _write_upload(
+    storage: Storage, config: UseCaseConfig, frame: Any, *, file_name: str, synthetic: bool = False
+) -> UploadRecord:
     """Store `frame` as a new training upload, profiled exactly as `POST /uploads` profiles a file."""
     upload_id = new_upload_id()
     source_key = upload_key(upload_id, source_filename("parquet"))
@@ -454,6 +462,7 @@ def _write_upload(storage: Storage, config: UseCaseConfig, frame: Any, *, file_n
         fingerprint_key=upload_key(upload_id, UPLOAD_FINGERPRINT_FILENAME),
         fingerprint_hash=profile.fingerprint.hash,
         created_at=utc_now(),
+        synthetic=synthetic,
     )
     storage.write_model(record.profile_key, profile)
     storage.write_model(record.fingerprint_key, profile.fingerprint)

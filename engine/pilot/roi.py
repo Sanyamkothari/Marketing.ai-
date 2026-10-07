@@ -149,6 +149,8 @@ class RoiView(_Strict):
     roi: Money | None = None
     """Net value per rupee spent; null when nothing was spent."""
     summary: str
+    synthetic: bool = False
+    """The run read generated data (`RunRecord.synthetic`): the report then says the effect is planted."""
 
 
 VALUE_CONFIG: Final[str] = "pilot/value.yaml"
@@ -179,6 +181,7 @@ class _Common(TypedDict):
     use_case_id: str
     campaign_id: str | None
     inputs: RoiInputs | None
+    synthetic: bool
 
 
 # ---------------------------------------------------------------------------
@@ -253,6 +256,43 @@ def _campaign_report(storage: Storage, run_id: str, campaign_id: str | None) -> 
     return max(found, key=lambda report: report.computed_at) if found else None
 
 
+def _outcomes_upload_synthetic(storage: Storage, run_id: str, campaign_id: str | None = None) -> bool:
+    """True when the outcomes file the campaign was measured from was marked synthetic (Plan J M95).
+
+    The planted effect lives in the outcomes, not in the scoring run, so a synthetic outcomes upload
+    measured against a real scoring run still makes the value view synthetic. The outcomes upload is
+    the one named in the campaign record (`campaigns/<id>/campaign.json`, M94) when the value view
+    reads a campaign's report, else the one step 4 measured the run from (`campaign_measure.json`).
+    Read as plain JSON: this package does not import `api`, and an absent, unreadable or older record
+    is not synthetic.
+    """
+    import json
+
+    from engine.storage import StorageError, run_key, upload_key
+    from engine.uplift.measure import CAMPAIGN_MEASURE_FILENAME
+
+    try:
+        if campaign_id is not None:
+            measure_key = f"campaigns/{campaign_id}/campaign.json"
+            if not storage.exists(measure_key):
+                return False
+            outcomes = json.loads(storage.read_bytes(measure_key)).get("outcomes") or {}
+            upload_id = outcomes.get("upload_id")
+        else:
+            measure_key = run_key(run_id, CAMPAIGN_MEASURE_FILENAME)
+            if not storage.exists(measure_key):
+                return False
+            upload_id = json.loads(storage.read_bytes(measure_key)).get("upload_id")
+        if not isinstance(upload_id, str):
+            return False
+        record_key = upload_key(upload_id, "upload.json")
+        if not storage.exists(record_key):
+            return False
+        return json.loads(storage.read_bytes(record_key)).get("synthetic") is True
+    except (StorageError, ValueError, AttributeError):
+        return False
+
+
 def compute_roi(
     storage: Storage,
     run_id: str,
@@ -289,6 +329,7 @@ def compute_roi(
         "use_case_id": record.use_case_id,
         "campaign_id": measured_campaign,
         "inputs": chosen,
+        "synthetic": record.synthetic or _outcomes_upload_synthetic(storage, run_id, measured_campaign),
     }
     # A measurement wins over one still waiting: an immature report stays on disk after outcomes were
     # ingested for the same run, and the ingested counts are then the newer, usable measurement.
@@ -646,6 +687,7 @@ def roi_document(
     )
     return ReportDocument(
         kind="roi",
+        synthetic=view.synthetic,
         title="Campaign value",
         subtitle=campaign_title,
         client_name=client_name,

@@ -54,6 +54,15 @@ UNSUPPORTED_FORMAT_CODE: Final[str] = "UPLOAD_UNSUPPORTED_FORMAT"
 FileField = Annotated[UploadFile, File(description="The CSV or Parquet file to profile.")]
 UseCaseField = Annotated[str, Form(description="Use case whose limits and hints drive the profile.")]
 ModeField = Annotated[RunMode, Form(description="train or score; recorded on the upload record.")]
+SyntheticField = Annotated[
+    bool,
+    Form(
+        description=(
+            "True when the file is generated data, not a client's. Every run that reads it is "
+            "quarantined as synthetic: its reports say the effect is planted (Plan J M95)."
+        )
+    ),
+]
 
 _UPLOAD_ERRORS: dict[int | str, dict[str, object]] = {
     404: {"model": ErrorResponse},
@@ -78,6 +87,7 @@ async def create_upload(
     file: FileField,
     use_case: UseCaseField,
     mode: ModeField = RunMode.TRAIN,
+    synthetic: SyntheticField = False,
 ) -> UploadResponse:
     """Stream the file in, profile it and persist the `uploads/<upload_id>/` directory.
 
@@ -116,6 +126,7 @@ async def create_upload(
         file_name=file.filename or source_filename(file_format),
         file_size_bytes=total,
         mode=mode,
+        synthetic=synthetic,
     )
     response.headers["Location"] = f"/uploads/{upload_id}/profile"
     return upload
@@ -131,6 +142,7 @@ def finish_upload(
     file_name: str,
     file_size_bytes: int,
     mode: RunMode,
+    synthetic: bool = False,
 ) -> UploadResponse:
     """Profile a file already written at `source_key` and record it as upload `upload_id`.
 
@@ -173,6 +185,7 @@ def finish_upload(
         fingerprint_key=upload_key(upload_id, UPLOAD_FINGERPRINT_FILENAME),
         fingerprint_hash=profile.fingerprint.hash,
         created_at=utc_now(),
+        synthetic=synthetic,
     )
     storage.write_model(record.profile_key, profile)
     storage.write_model(record.fingerprint_key, profile.fingerprint)

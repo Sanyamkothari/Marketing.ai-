@@ -225,6 +225,14 @@ class UploadRecord(Artefact):
     fingerprint_key: str = Field(description="Storage key of the stored `fingerprint.json`.")
     fingerprint_hash: str = Field(description="Dataset digest, copied out so a run needs no second read.")
     created_at: AwareDatetime = Field(description="UTC time the upload was stored.")
+    # Plan J M95: an added, defaulted field, so every upload.json written before it still reads.
+    synthetic: bool = Field(
+        default=False,
+        description=(
+            "True when the file was generated rather than a client's. A run that reads it is recorded "
+            "with `RunRecord.synthetic` true and its reports carry the synthetic-data block."
+        ),
+    )
 
 
 class UploadResponse(StrictBase):

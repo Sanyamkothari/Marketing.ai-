@@ -282,6 +282,7 @@ def create_uplift_run(
         model_choice=config.uplift.learner.value,
         model_version_id=None,
         requested_by=requested_by(request),
+        synthetic=upload.synthetic,
     )
     storage.write_model(
         run_key(record.run_id, UPLIFT_VALIDATION_FILENAME),
