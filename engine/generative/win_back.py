@@ -120,7 +120,7 @@ from engine.generative.errors import (
     RUN_WITHOUT_SCORES,
     generative_error,
 )
-from engine.generative.guardrails import MAX_LENGTH, CheckContext, Guardrails, asks_reply_stop
+from engine.generative.guardrails import MAX_LENGTH, CheckContext, Guardrails
 from engine.generative.prompts import load_prompt, prompt_hashes, prompt_versions, render
 from engine.generative.segments import cap_with_other, group_keys, top_reason_feature
 from engine.onboarding.datasets import run_source_key
@@ -315,6 +315,16 @@ def allowed_placeholder_fields(config: CampaignCopyConfig, channel: Channel) -> 
     return frozenset(fields)
 
 
+def _prompt_allowed_fields(config: CampaignCopyConfig, channel: Channel) -> list[str]:
+    """The "Placeholders you may use" list a prompt shows. On one-way SMS it names `opt_out_link`, which
+    the required line asks for: the v1 SMS prompt cannot name it in its own text, and a list that left it
+    out would contradict the line (rule 1, "only allowed fields", outranks rule 7). Otherwise unchanged."""
+    fields = list(config.allowed_fields)
+    if _one_way_sms(config, channel) and OPT_OUT_LINK_FIELD not in fields:
+        fields.append(OPT_OUT_LINK_FIELD)
+    return fields
+
+
 def _one_way_sms(config: CampaignCopyConfig, channel: Channel) -> bool:
     """True for SMS from a sender ID that cannot receive replies (`campaign_copy.sms_sender`)."""
     return channel is Channel.SMS and config.sms_sender == "one_way"
@@ -322,21 +332,27 @@ def _one_way_sms(config: CampaignCopyConfig, channel: Channel) -> bool:
 
 def required_line_for(config: CampaignCopyConfig, channel: Channel) -> str:
     """The line a template on `channel` must carry: `required_lines`, except that a one-way SMS sender
-    cannot ask for a reply, so a line that does (the default is "Reply STOP to opt out") becomes the
-    `{{opt_out_link}}` placeholder. A line the operator wrote that does not ask for a reply is theirs
-    and is kept."""
+    cannot ask for a reply, so its line *is* the `{{opt_out_link}}` placeholder, whatever wording the
+    operator gave (the default is "Reply STOP to opt out"). The one line kept is an operator's own that
+    already carries the placeholder, e.g. "Unsubscribe: {{opt_out_link}}"."""
     line = config.required_lines.for_channel(channel)
-    if _one_way_sms(config, channel) and asks_reply_stop(line):
+    if _one_way_sms(config, channel):
+        if OPT_OUT_LINK_FIELD in _PLACEHOLDER.findall(line):
+            return normalise_placeholders(line)
         return "{{" + OPT_OUT_LINK_FIELD + "}}"
     return line
+
+
+def normalise_placeholders(text: str) -> str:
+    """`text` with every placeholder written `{{name}}`: `{{ name }}` is a placeholder too (it is
+    parsed and filled), but a required line is matched as exact text."""
+    return _PLACEHOLDER.sub(lambda match: "{{" + match.group(1) + "}}", text)
 
 
 def _rendered_line_for(config: CampaignCopyConfig, channel: Channel) -> str:
     """What `required_line_for` reads like once a message is rendered. A merge-field line is written
     into a message as its own name (see `UNSUBSCRIBE_FIELD`), so the rendered check looks for the name."""
-    line = required_line_for(config, channel)
-    match = _PLACEHOLDER.fullmatch(line)
-    return match.group(1) if match else line
+    return _PLACEHOLDER.sub(lambda match: match.group(1), required_line_for(config, channel))
 
 
 def fill_placeholders(text: str, values: Mapping[str, object]) -> str:
@@ -547,6 +563,9 @@ def _finalize_template(
         )
 
     check_text = text if subject is None else f"{subject}\n{text}"
+    if _one_way_sms(config, channel):
+        # The required line is matched as exact text, so `{{ opt_out_link }}` is read as `{{opt_out_link}}`.
+        check_text = normalise_placeholders(check_text)
     result = guardrails.check(
         check_text,
         CheckContext(
@@ -624,7 +643,7 @@ def _generate_for_band_channel(
             "reasons": list(reasons),
             "tone": config.tone,
             "brand_name": config.brand_name,
-            "allowed_fields": list(config.allowed_fields),
+            "allowed_fields": _prompt_allowed_fields(config, channel),
             "banned_claims": list(config.banned_claims),
             "limits": _limits_for(channel, config.limits),
             "variant_labels": list(labels),
@@ -674,7 +693,7 @@ def _generate_for_segment_channel(
             ],
             "tone": config.tone,
             "brand_name": config.brand_name,
-            "allowed_fields": list(config.allowed_fields),
+            "allowed_fields": _prompt_allowed_fields(config, channel),
             "banned_claims": list(config.banned_claims),
             "limits": _limits_for(channel, config.limits),
             "variant_labels": list(labels),

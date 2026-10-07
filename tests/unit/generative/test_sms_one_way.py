@@ -14,16 +14,25 @@ each test fails on its own assertion rather than the whole file failing to impor
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from pathlib import Path
 
 import pytest
 from pydantic import ValidationError
 
-from engine.config import BudgetConfig, CampaignCopyConfig, Channel, LlmConfig, load_use_case
-from engine.generative import win_back
+from engine.config import (
+    BudgetConfig,
+    CampaignCopyConfig,
+    Channel,
+    CopySegmentBy,
+    LlmConfig,
+    load_use_case,
+)
+from engine.generative import prompts, win_back
 from engine.generative.budget import Meter
-from engine.generative.contracts import CopyStatus, CopyTemplate
+from engine.generative.contracts import CopySegment, CopyStatus, CopyTemplate
 from engine.generative.guardrails import CheckContext, GuardrailAction, Guardrails, load_policy
+from engine.generative.prompts import Prompt, RenderedPrompt
 from engine.llm import FakeLLMClient, FakeLLMMode
 from engine.storage import LocalStorage
 from tests.fixtures.make_run import RunSpec, write_run
@@ -122,6 +131,14 @@ def test_the_shipped_policy_blocks_on_sms_reply_stop_one_way() -> None:
         "Reply 'STOP' to opt out",
         "Text STOP to opt out",
         "Send STOP to 56767",
+        "SMS STOP to 1909",
+        "To opt out SMS STOP to 1909",
+        "Reply with the word STOP",
+        "Reply with the word 'STOP' to opt out",
+        "Typing STOP will opt you out",
+        "Messaging STOP opts you out",
+        "Texting STOP is all it takes",
+        "Respond STOP to leave",
     ],
 )
 def test_reply_stop_wording_is_blocked_when_the_sender_is_one_way(wording: str) -> None:
@@ -167,6 +184,31 @@ def test_the_one_way_sms_required_line_is_the_opt_out_link_placeholder() -> None
         "Reply STOP to opt out"
     )
     assert win_back.required_line_for(_config(), Channel.SMS) == "Reply STOP to opt out"
+
+
+def test_a_custom_line_that_the_reply_stop_pattern_misses_is_still_replaced_when_one_way() -> None:
+    """Under one_way the line *is* the placeholder, whatever the operator's wording was."""
+    config = _config(
+        sms_sender="one_way",
+        required_lines={"sms": "To opt out SMS STOP to 1909"},
+    )
+    assert win_back.required_line_for(config, Channel.SMS) == "{{opt_out_link}}"
+    # The default sender keeps the operator's line exactly.
+    two_way = _config(required_lines={"sms": "To opt out SMS STOP to 1909"})
+    assert win_back.required_line_for(two_way, Channel.SMS) == "To opt out SMS STOP to 1909"
+
+
+def test_a_custom_line_that_already_holds_the_placeholder_is_kept_when_one_way() -> None:
+    line = "Unsubscribe: {{opt_out_link}}"
+    config = _config(sms_sender="one_way", required_lines={"sms": line})
+    assert win_back.required_line_for(config, Channel.SMS) == line
+
+
+def test_a_template_ending_in_the_spaced_placeholder_passes_required_lines_when_one_way() -> None:
+    config = _config(sms_sender="one_way")
+    template = _finalize("Hi {{band}}, welcome back to Acme Mobile. {{ opt_out_link }}", config)
+    assert template.status is CopyStatus.PENDING_REVIEW, template.block_reason
+    assert template.fields_used == ("band", "opt_out_link")
 
 
 def test_a_template_ending_in_opt_out_link_passes_every_check_when_one_way() -> None:
@@ -283,3 +325,83 @@ def test_generating_copy_with_a_one_way_sender_writes_sms_ending_in_the_opt_out_
     assert all("STOP" not in m.rendered_text for m in sms)
     whatsapp = [m for m in result.messages if m.channel == Channel.WHATSAPP.value]
     assert whatsapp and all(m.rendered_text.endswith("Reply STOP to opt out") for m in whatsapp)
+
+
+# ---------------------------------------------------------------------------
+# What the model is told: the allowed list must not contradict the required line
+# ---------------------------------------------------------------------------
+_PLACEHOLDERS_LINE = "Placeholders you may use:"
+
+
+def _prompt_user_texts(monkeypatch: pytest.MonkeyPatch, config: CampaignCopyConfig) -> dict[str, str]:
+    """Render the SMS band prompt and the SMS segment prompt, return each one's user text by name."""
+    seen: dict[str, str] = {}
+    real_render = prompts.render
+
+    def recording_render(prompt: Prompt, values: Mapping[str, object]) -> RenderedPrompt:
+        rendered = real_render(prompt, values)
+        seen[rendered.name] = rendered.user
+        return rendered
+
+    monkeypatch.setattr("engine.generative.win_back.render", recording_render)
+    meter = Meter(
+        FakeLLMClient(mode=FakeLLMMode.GROUNDED),
+        job_id="one_way_prompt",
+        llm=LlmConfig(),
+        budget=BudgetConfig(cache=False),
+    )
+    guardrails = Guardrails(load_policy(), meter=meter)
+    win_back._generate_for_band_channel(
+        band="High",
+        band_action="call",
+        channel=Channel.SMS,
+        reasons=(),
+        config=config,
+        entity="customer",
+        meter=meter,
+        guardrails=guardrails,
+        config_root=None,
+    )
+    segment = CopySegment(
+        segment="reason:tenure_months",
+        label="Main reason: tenure_months",
+        rows=10,
+        share_pct=50.0,
+        written=True,
+    )
+    win_back._generate_for_segment_channel(
+        segment=segment,
+        segment_by=CopySegmentBy.TOP_REASON,
+        channel=Channel.SMS,
+        config=config,
+        entity="customer",
+        score_name="churn risk",
+        meter=meter,
+        guardrails=guardrails,
+        config_root=None,
+    )
+    return seen
+
+
+def _placeholders_line(user_text: str) -> str:
+    return next(line for line in user_text.splitlines() if line.startswith(_PLACEHOLDERS_LINE))
+
+
+def test_the_one_way_sms_prompts_list_opt_out_link_among_the_placeholders_you_may_use(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _prompt_user_texts(monkeypatch, _config(sms_sender="one_way"))
+    assert set(seen) == {"copy_sms", "copy_segment_sms"}
+    for name, user_text in seen.items():
+        line = _placeholders_line(user_text)
+        assert "opt_out_link" in line, name
+        assert "snapshot_date" in line, name  # the configured fields are still there
+
+
+def test_the_default_sms_prompts_are_unchanged_and_do_not_mention_opt_out_link(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    seen = _prompt_user_texts(monkeypatch, _config())
+    for name, user_text in seen.items():
+        assert _placeholders_line(user_text) == f"{_PLACEHOLDERS_LINE} snapshot_date, band", name
+        assert "opt_out_link" not in user_text, name

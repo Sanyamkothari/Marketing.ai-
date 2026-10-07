@@ -951,12 +951,17 @@ so the model writes a template ending in it. The field is `OPT_OUT_LINK_FIELD` i
   (`opt_out_link`) for the sending system to replace per recipient, because this engine builds no URL
   and `allowed_url_domains` ships empty. The rendered-message check looks for that name rather than the
   braces.
-- A `required_lines.sms` the operator wrote that does not ask for a reply is kept as theirs; only a line
-  that does ask ("Reply STOP ...", the shipped default) is replaced.
+- Under `one_way` the SMS line *is* `{{opt_out_link}}`, whatever `required_lines.sms` says ("Reply STOP
+  ...", the shipped default, or any wording of the operator's, such as "To opt out SMS STOP to 1909").
+  The one line kept is an operator's own that already contains the placeholder. `{{ opt_out_link }}`
+  with spaces counts: the required-line check reads the template with its placeholders normalised.
+- The SMS prompts list `opt_out_link` on their "Placeholders you may use" line for `one_way` only
+  (`win_back._prompt_allowed_fields`), so the allowed list does not contradict the required line. The
+  default prompt text, and its cache keys, are byte-identical.
 
 **The `sms_reply_stop_one_way` guardrail rule** (`configs/guardrails.yaml`, `block`) refuses an SMS
 template or rendering that asks the customer to reply STOP ("Reply STOP", "Text 'STOP'", "Send STOP to
-..."). It runs only when the context says the sender is one-way (`CheckContext.one_way_sender`, set by
+56767", "SMS STOP to 1909", "Reply with the word STOP", "typing STOP"). It runs only when the context says the sender is one-way (`CheckContext.one_way_sender`, set by
 `win_back` for SMS under `sms_sender: one_way`), and sits before `required_lines` so a "Reply STOP"
 template is reported as that rather than as a missing link. It also covers a customer's own field value
 that carries the wording, since a rendering is checked again. Like every rule it names the problem and

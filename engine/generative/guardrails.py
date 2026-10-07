@@ -132,11 +132,13 @@ The host is taken from `urlsplit().hostname`, which strips userinfo, lower-cases
 port, so the comparison below sees a host and only a host.
 """
 _REPLY_STOP: Final[re.Pattern[str]] = re.compile(
-    r"\b(?:reply|text|send|respond|message|type)(?:ing)?\s+(?:with\s+|to\s+)?[\"'\u2018\u201c]?\s*stop\b",
+    r"\b(?:reply|replying|text|texting|send|sending|respond|responding|message|messaging|type|typing|sms)"
+    r"\s+(?:with\s+|to\s+)?(?:the\s+word\s+)?[\"'\u2018\u201c]?\s*stop\b",
     re.IGNORECASE,
 )
 """The wording that asks a customer to answer a message with STOP: "Reply STOP", "text 'STOP'", "send
-STOP to 56767". Matched on the verb and the word together, so "stop by our store" is not caught."""
+STOP to 56767", "SMS STOP to 1909", "Reply with the word STOP", "typing STOP". Matched on the verb and
+the word together, so "stop by our store" is not caught."""
 _URL_TRAILING: Final[str] = ".,;:!?'\")]}>"
 """Characters that end a sentence but never a URL; stripped before the host is read."""
 
