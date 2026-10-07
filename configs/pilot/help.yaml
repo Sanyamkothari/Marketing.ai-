@@ -325,6 +325,47 @@ codes:
     title: Past campaigns did not pick customers at random
     meaning: "Who past campaigns contacted can be told from the customers' own data, so they were chosen by a model or a rule. Comparing contacted with held-back customers would then mix what a campaign changed with how the chosen customers already differed, so this history cannot yet show who a campaign changes. This is a warning: nothing is blocked."
     fix: Hold back a randomly chosen control group in the next campaign, and rank customers by how likely they are to have the outcome until its results are in. Learning who each campaign changes can start from the next cycle.
+  # --- Plan J M94: campaigns, the one measurement path and the registered test plan (DEC-1304) -----
+  CAMPAIGN_NOT_FOUND:
+    title: "There is no such campaign"
+    meaning: "The campaign named in the address does not exist, or it was recorded in another workspace."
+    fix: "Open the campaign again from the Results page, where every recorded campaign is listed beside the runs."
+  CAMPAIGN_NOT_MATURED:
+    title: "The campaign's results are not in yet"
+    meaning: "Some customers are still inside the period their response is counted over. A result now would count only part of them, so no number is shown until every customer's period is over."
+    fix: "Measure again on or after the date shown. That date is counted from the day the campaign really went out."
+  CAMPAIGN_OUTCOMES_MISSING:
+    title: "The campaign has no outcomes file yet"
+    meaning: "A campaign is measured from a file saying, for each customer, whether they responded. None has been added to this campaign."
+    fix: "Add the outcomes file (the customer ID plus one column saying whether each customer responded), then measure."
+  CAMPAIGN_INVALID:
+    title: "The campaign request cannot be used"
+    meaning: "Something in the request does not fit this campaign. Examples: a send date before the list was made, bands on a list that already chose who to contact, an outcomes file missing a named column, or a measurement date that is still in the future."
+    fix: "Correct the item the message names and try again. Measure as of today or an earlier day, never a later one."
+  TEST_PLAN_EXISTS:
+    title: "This campaign already has a test plan"
+    meaning: "The way this campaign will be judged was fixed when its plan was registered. A different plan cannot silently replace it."
+    fix: "To change the plan, file an amendment with a reason. The new version is kept beside the old one, so the change is on the record."
+  TEST_PLAN_CHANGED:
+    title: "This measurement differs from the registered test plan"
+    meaning: "The measurement would use a different outcome, window, comparison group or adjustment column from the plan fixed in advance. Changing these after the results are known can make chance look like an effect. Customers removed by a privacy erasure request do not count as a change."
+    fix: "Measure exactly as planned, or amend the plan with a reason first."
+  TEST_PLAN_NOT_FOUND:
+    title: "This campaign has no test plan to amend"
+    meaning: "An amendment changes a registered plan, and this campaign has none yet."
+    fix: "Register the test plan first. Once it exists, amend it if needed."
+  TEST_PLAN_INVALID:
+    title: "The test plan cannot be accepted"
+    meaning: "The plan cannot be used as given. Its analysis date may fall before every customer's response is in, the outcome may be an amount (only yes-or-no outcomes can be measured today), the amendment may change nothing, or the result may already have been read, so a plan made now would not be fixed in advance."
+    fix: "Correct the item the message names. A plan must be registered, and amended, before the final result is read."
+  PLAN_UNDERPOWERED:
+    title: "The test may be too small to see the effect you expect"
+    meaning: "With this many customers contacted and kept back, an effect of the size you entered would often be missed and read as 'no clear effect'. This is a warning, not a block."
+    fix: "Keep back more customers, run the campaign to more of them, or plan for a larger effect. Otherwise go ahead knowing that a 'no clear effect' result may be inconclusive."
+  CAMPAIGN_EPOCH_MISMATCH:
+    title: "The campaign's control group was redrawn"
+    meaning: "This campaign kept a fixed control group of customers out. That group was redrawn (a new period started, at a lower share or with a new salt) before every customer's response was in, or the campaign's lists come from different periods or no longer match the period recorded with it. Customers in the control group may since have been contacted, so comparing the two groups would no longer show what the campaign changed, and no result is given."
+    fix: "Measure campaigns whose lists come from one period of the control group. Before starting a new period, wait until the responses of the campaigns still running are in."
 
 settings:
   actions.bands[*].min_score:

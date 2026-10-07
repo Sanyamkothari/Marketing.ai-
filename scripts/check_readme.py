@@ -260,6 +260,22 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/measurement/test_power_preview_route.py",
         "tests/integration/measurement/test_readiness_measure.py",
     ),
+    "M94": (
+        "tests/unit/measurement/test_campaign.py",
+        "tests/unit/measurement/test_campaign_migration.py",
+        "tests/unit/measurement/test_campaign_privacy.py",
+        "tests/unit/measurement/test_measure.py",
+        "tests/unit/measurement/test_plan.py",
+        "tests/unit/measurement/test_roi_campaign.py",
+        "tests/unit/measurement/test_campaign_epochs.py",
+        "tests/integration/measurement/test_campaigns_api.py",
+        "tests/integration/measurement/test_campaign_access.py",
+        "tests/integration/measurement/test_campaign_direction.py",
+        "tests/integration/measurement/test_campaign_erasure.py",
+        "tests/integration/measurement/test_campaign_ui.py",
+        "tests/integration/measurement/test_campaign_epochs.py",
+        "tests/integration/measurement/test_plan_preview.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

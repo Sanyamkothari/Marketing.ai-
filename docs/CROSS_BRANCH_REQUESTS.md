@@ -303,6 +303,95 @@ when `grace_days` is unset, so nothing moves under default config. At integratio
 **What is needed.** Nothing; this is an announcement. Pinned by
 `tests/unit/measurement/test_lapse_labels.py::test_a_measured_campaigns_default_window_includes_the_grace_period`.
 
+### 2026-10-07 — plan-j (on main) → all branches: M94 adds two report fields, a detail key and one measurement path (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M94; DEC-1304 (c), (f), (g)):
+
+* `engine/uplift/contracts.py` (Phase 3b): `IncrementalityReport` gains `test_plan_hash` (default `None`) and
+  `early_look` (default `False`). A report measured without a plan is byte-identical apart from `computed_at`.
+* `engine/audit/events.py` (Phase 4b): `DETAIL_KEYS` gains `plan_hash`, the registered test plan's hash on
+  `campaigns.plan` events.
+* `api/routes/uplift.py` (Phase 3b): `POST /runs/{run_id}/campaign-results` now delegates to
+  `engine.measurement.measure.measure_campaign` with the run's scores and no plan; its reports are unchanged
+  (`tests/integration/uplift/test_measure_campaign.py` and `test_campaign_results_phase1.py` pass unchanged).
+
+**What is needed.** Nothing; this is an announcement. Any new campaign measurement must go through
+`measure_campaign` and the campaign's test plan, never a fourth path.
+
+### 2026-10-07 — plan-j (on main) → Phase 4b (privacy owner): M94 campaign files are row-level, erased and retained (record of in-place edits)
+
+**What changed.** Pre-approved and additive (DEC-1304 (j)): `engine/privacy/contracts.py`
+`RetentionCategory.CAMPAIGN_ROW_LEVEL` (`campaign_row_level`); `engine/privacy/layout.py` `Store.CAMPAIGNS`,
+`CampaignInfo`, and `StoreIndex` reads `campaigns/<id>/campaign.json` so `key_columns_for` keys a campaign's files on
+the campaign's own primary key; `configs/privacy.yaml` `retention.row_level_campaign_artefacts`
+(`assignment.parquet`, `outcomes.parquet`). **Not pre-approved, in place and additive:** `engine/privacy/config.py`
+`RetentionPolicy.row_level_campaign_artefacts` (default `()`, so a privacy.yaml from before M94 still loads), and
+`engine/privacy/retention.py` `plan_retention` gains a campaigns block: dated from `campaign.json`, counted from the
+end of the outcome window, using the use case's retention days. The record and the aggregate report are kept.
+`ui/modules/production/retention.js` gains one label (`campaign_row_level`: "Customer rows from a campaign"). No
+route serves these files: M91's `ROW_LEVEL_ARTEFACTS` rule guards run files in `read_artefact`, which does not know
+the names (pinned at integration by `test_campaign_access.py::test_no_route_hands_out_a_campaigns_customer_rows`).
+
+**What is needed.** The owner's ratification of the two non-pre-approved edits (or a request to move them). Pinned
+by `tests/unit/measurement/test_campaign_privacy.py` and `tests/integration/measurement/test_campaign_erasure.py`.
+
+**What I did meanwhile.** The edits are in place on `main`; with no campaign recorded, erasure and retention behave
+exactly as before.
+
+### 2026-10-07 — plan-j (on main) → trunk / Phase 4b (owners of `alembic/` and `engine/platform_db.py`): M94 adds migration `0006_campaigns` (record of an in-place edit)
+
+**What changed** (DEC-1304 (a)): `alembic/versions/0006_campaigns.py` creates the `campaign` table and chains to
+`0005`; it is the only `0006` on `main` and the chain is linear (checked at integration). `engine/platform_db.py`
+`PLATFORM_TABLES` gains `campaign` (pre-approved). **Not pre-approved, in place:** `alembic/env.py` imports
+`engine.measurement.campaign.CampaignRow`, so autogenerate and the metadata check see the table.
+
+**What is needed.** The owner's ratification of the `alembic/env.py` import. Pinned by
+`tests/unit/measurement/test_campaign_migration.py` and `tests/unit/test_alembic_migrations.py` (the Postgres case
+needs `make postgres-up`).
+
+**What I did meanwhile.** The import is in place; the SQLite upgrade and downgrade test passes.
+
+### 2026-10-07 — plan-j (on main) → Plan H (owner of `ui/modules/simple/`): Results draws registered results lists beside the runs (record of an in-place edit)
+
+**What changed** (DEC-1304 (k)): `ui/modules/simple/pages.js` (pre-approved) `resultsHtml` gains `lists = []`,
+appended after the runs. **Not pre-approved, in place:** `ui/modules/simple/index.js` awaits
+`router.resultsListsHtml()` beside the runs and passes `lists`. With nothing registered, Results is unchanged.
+`ui/modules/router.js`'s PLAN-J block holds `registerResultsList` / `resultsListsHtml`.
+
+**What is needed.** The owner's choice: keep the fetch in `simple/index.js`, or ask Plan J to move it into the
+router's PLAN-J seam so that `simple/index.js` stays untouched.
+
+**What I did meanwhile.** The fetch is in place; `tests/integration/measurement/test_campaign_ui.py` (jsdom) shows
+Results unchanged with no campaign and the campaigns list beside the runs with some.
+
+### 2026-10-07 — plan-j (on main) → Plan E (owner of `engine/pilot/roi.py` and `configs/pilot/help.yaml`): the value view reads campaign reports; ten M94 codes (request and announcement)
+
+**What changed.** **Not pre-approved, in place** (DEC-1304 (i)): `engine/pilot/roi.py` `compute_roi` reads a
+campaign's final report first (`campaigns/<id>/incrementality_report.json`: the one named by `campaign_id`, otherwise
+the run's latest measured campaign), never prices an early look, and `RoiView` gains `campaign_id` (default `None`).
+With no campaign the view is unchanged. `configs/pilot/help.yaml` gains `CAMPAIGN_NOT_FOUND`,
+`CAMPAIGN_NOT_MATURED`, `CAMPAIGN_OUTCOMES_MISSING`, `CAMPAIGN_INVALID`, `TEST_PLAN_EXISTS`, `TEST_PLAN_CHANGED`,
+`TEST_PLAN_NOT_FOUND`, `TEST_PLAN_INVALID`, `PLAN_UNDERPOWERED` and `CAMPAIGN_EPOCH_MISMATCH` under a Plan J M94
+comment, matching `engine.decide.codes.PLAN_J_CODES` (worded without "holdout", which the catalogue treats as
+jargon). `tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Ratification of the `roi.py` edit, and one fix in Plan E's file: `_priced` still decides direction
+from `report.outcome_column`, as it did for run reports before M94, so for a churn outcomes file whose detected
+column is not the use case's own name the value view can point the other way from step 4 and the campaign page
+(which judge a detected column as the use case's own outcome, `CampaignOutcomes.outcome_named`).
+
+**What I did meanwhile.** Nothing in `_priced`; the campaign page and step 4 agree
+(`tests/integration/measurement/test_campaign_direction.py`).
+
+### 2026-10-07 — plan-j (on main) → trunk (owner of `tests/integration/test_api_config.py`): the campaign routes join the OpenAPI path set (announcement)
+
+**What changed** (found at M94's integration): `test_openapi_builds_and_documents_every_route` pins the exact set of
+paths, and M94's routes were mounted without being added. The set gains `/campaigns`, `/campaigns/{campaign_id}`,
+`.../outcomes`, `.../measure`, `.../plan`, `.../plan/amendments` and `.../plan-preview` under a Plan J M94 comment.
+`docs/API.md` regenerated. Nothing else in the test changed.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
@@ -422,6 +511,17 @@ run link and an alert's run link.
 **Re-filed 2026-09-23 (Plan D M58)** to the trunk. Half of it is covered: approving, rejecting and promoting a challenger now have their own screen, `#/approvals`, linked from the user bar (DEC-862, DEC-864). The link is still missing: `ui/pages.js` has no link from a scoring run's Output page to `#/monitoring/runs/<run_id>`. Plan D touched `ui/pages.js` only for uplift runs (DEC-858). Needed from: the trunk's owner of `ui/pages.js`, that one link on a finished scoring run's Output page.
 
 ## Resolved
+
+### 2026-10-07 — plan-j M94 → M92 / M93: the plan preview and holdout epochs are wired (resolved at integration)
+
+**What was asked** (M94's builder, 2026-10-07): M93 to add `GET /campaigns/{campaign_id}/plan-preview` over
+`engine.measurement.planner` and have `freeze_plan` take `achieved_power` from it; M92 to add `Campaign.holdout_epoch`
+and the `CAMPAIGN_EPOCH_MISMATCH` refusal.
+
+**Answer (2026-10-07, M94 integration on `main`).** Both done (DEC-1304 (l), (m)): the preview route, the card's slider
+over its points only (DEC-1204), `freeze_plan` on `planner.achieved_power`, the run's holdout recorded on the campaign
+and `CAMPAIGN_EPOCH_MISMATCH` at measurement. Still open, for whoever builds on the assignment next (M98): the
+assignment does not yet carry the explore flag and probability from `holdout_assignment.parquet`.
 
 ### 2026-10-07 — plan-j (on main) → trunk / Plan H (owners of `api/routes/runs.py` and the run UI): row-level downloads need Analyst (announcement)
 

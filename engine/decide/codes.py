@@ -31,6 +31,20 @@ PLAN_J_CODES: Final[frozenset[str]] = (
             "HOLDOUT_FRACTION_LOWERED",
             "HOLDOUT_FRACTION_MISMATCH",
             "HOLDOUT_SCOPE_RESERVED",
+            # M94 (DEC-1304): the campaign record, its one measurement path and its registered test plan
+            # (`api.routes.campaigns`, `engine.measurement.campaign`, `engine.measurement.plan`).
+            "CAMPAIGN_NOT_FOUND",
+            "CAMPAIGN_NOT_MATURED",
+            "CAMPAIGN_OUTCOMES_MISSING",
+            "CAMPAIGN_INVALID",
+            "TEST_PLAN_EXISTS",
+            "TEST_PLAN_CHANGED",
+            "TEST_PLAN_NOT_FOUND",
+            "TEST_PLAN_INVALID",
+            "PLAN_UNDERPOWERED",  # a warning carried by the plan, never a refusal
+            # M94 integration (DEC-1304 (l)): measuring a campaign whose control group is not one
+            # persistent holdout epoch's (`engine.measurement.campaign.epoch_mismatch`, M92's epochs).
+            "CAMPAIGN_EPOCH_MISMATCH",
         }
     )
     | MEASUREMENT_CHECK_CODES
