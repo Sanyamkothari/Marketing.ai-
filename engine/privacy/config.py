@@ -36,7 +36,7 @@ from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
 from sqlmodel import Session
 
-from engine.config import ConfigError, config_root, list_use_case_ids, load_yaml
+from engine.config import ConfigError, config_root, list_use_case_ids, load_use_case_document, load_yaml
 from engine.platform_db import PLATFORM_SETTING_TABLE, PlatformSettingRow, create_tables
 from engine.settings import ENV_VARS, Settings, SettingsError
 from engine.utils.logging import get_logger
@@ -173,8 +173,9 @@ def load_privacy_config(root: Path | None = None) -> PrivacyConfig:
     """`configs/privacy.yaml` of `root`, validated and cached; `ConfigError` when missing or wrong.
 
     Codes: `CONFIG_NOT_FOUND` / `CONFIG_YAML_ERROR` / `CONFIG_NOT_A_MAPPING` (from `load_yaml`),
-    `PRIVACY_SCHEMA_VERSION`, `CONFIG_INVALID`, and `PRIVACY_USE_CASE_UNKNOWN` when the purpose table
-    names a use case the same root does not define.
+    `PRIVACY_SCHEMA_VERSION`, `CONFIG_INVALID`, `PRIVACY_USE_CASE_UNKNOWN` when the purpose table
+    names a use case the same root does not define, and `CONSENT_PURPOSE_MISSING` when a use case
+    with `actions.contacts_customers: true` has no purpose in the table (it would never be gated).
     """
     base = config_root(root)
     cached = _CACHE.get(base)
@@ -202,8 +203,39 @@ def load_privacy_config(root: Path | None = None) -> PrivacyConfig:
             f"privacy.yaml maps use cases this configuration does not define: {', '.join(unknown)}.",
             path="use_case_purposes",
         )
+    _require_purpose_for_contacting_use_cases(loaded, known, base)
     _CACHE[base] = loaded
     return loaded
+
+
+def _require_purpose_for_contacting_use_cases(
+    loaded: PrivacyConfig, use_case_ids: set[str], base: Path
+) -> None:
+    """`CONSENT_PURPOSE_MISSING` when a use case that contacts customers has no consent purpose (M91).
+
+    Reads each use case's merged document rather than validating it in full, so the check depends on
+    nothing but `actions.contacts_customers` (true unless the use case says false).
+    """
+    missing = sorted(
+        use_case
+        for use_case in use_case_ids
+        if loaded.purpose_for(use_case) is None and _contacts_customers(use_case, base)
+    )
+    if missing:
+        raise ConfigError(
+            "CONSENT_PURPOSE_MISSING",
+            "These use cases contact customers but have no consent purpose in privacy.yaml, so the "
+            f"consent ledger would never stop them contacting someone who said no: {', '.join(missing)}. "
+            "Add each one under use_case_purposes.",
+            path="use_case_purposes",
+        )
+
+
+def _contacts_customers(use_case_id: str, base: Path) -> bool:
+    actions = load_use_case_document(use_case_id, base).get("actions")
+    if not isinstance(actions, dict):
+        return True
+    return bool(actions.get("contacts_customers", True))
 
 
 def privacy_config_or_none(root: Path | None = None) -> PrivacyConfig | None:
