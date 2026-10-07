@@ -26,6 +26,11 @@ use_case_purposes:                      # use-case id -> purpose; a use case lis
   telco-churn: marketing_communication
   rca: marketing_communication
   payment-propensity: account_servicing
+  retail-win-back: marketing_communication
+  bank-term-deposit: marketing_communication
+  insurance-cross-sell: marketing_communication
+  card-default-propensity: account_servicing
+  # Every use case with actions.contacts_customers true MUST be listed (CONSENT_PURPOSE_MISSING at load).
 
 retention:
   # Run artefacts that hold one row per customer. Deleted once the run is older than the use case's
