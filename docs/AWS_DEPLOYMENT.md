@@ -240,6 +240,7 @@ variable is missing from this document.
 | `demo_mode` | `MARKETING_AI_DEMO_MODE` | `demo_mode` | `false` | nothing; `true` serves the seeded synthetic "Demo Telecom" client for a demo (Plan E, DEC-901) | no: never on a client deployment |
 | `connections_key` | `MARKETING_AI_CONNECTIONS_KEY` | **the secret only**, §3.3 | none; a laptop generates one into its data directory (0600) | saving a connection's password or key; env=prod refuses to save one without it (Plan H, DEC-1101) | no: put a Fernet key into the secret by hand before the first connection is saved |
 | `allow_fake_ai` | `MARKETING_AI_ALLOW_FAKE_AI` | `allow_fake_ai` | `false` | nothing; `true` lets the deterministic test model answer when no AI service is connected (tests and developer checks only; DEC-1145) | no: never on a deployment - people connect Product AI and Deliverable AI on the Connections page |
+| `holdout_salt` | `MARKETING_AI_HOLDOUT_SALT` | **the secret only**, §3.3 | none, and no generated fallback | a use case with a persistent holdout (`actions.holdout.scope: use_case` or `universal`) refuses to score without it (`HOLDOUT_SALT_MISSING`); `scope: run` never reads it (Plan J M92, DEC-1302) | no: put a salt of at least 16 characters into the secret by hand before switching a use case to a persistent holdout, and never change it (a changed salt is refused, `HOLDOUT_SALT_CHANGED`) |
 
 Three fields are tuples filled from one comma-separated value: `sagemaker_subnet_ids`,
 `sagemaker_security_group_ids` and `cors_origins`.

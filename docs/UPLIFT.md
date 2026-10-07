@@ -666,6 +666,59 @@ only when `problem_type` is `uplift` (DEC-601).
 The control-group fraction and suppression rules live in `actions:`, are shared with Phase 1, and are
 not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns this map for Phase 5.
 
+### The holdout and the explore slice (Plan J M92, DEC-1302)
+
+Who is held out, and who is explored, is decided in `actions:` for propensity and uplift runs alike:
+an uplift run inherits it through Phase 1's `apply_actions`. Both settings are config-only (a use-case
+file or `configs/engine.yaml`); neither can be changed per run, and neither is agent-editable.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `actions.holdout.scope` | `run` | `run`: today's rule, unchanged - a new control group every run, the `control_group_fraction` of the eligible rows with the smallest run-seeded digests. `use_case`: the same customers held out of every run of this use case. `universal`: the same customers held out of every use case that uses this scope. |
+| `actions.holdout.fraction` | none | Required under `use_case` and `universal` (0 < f ≤ 0.50) and then **wins** over `control_group_fraction`; refused under `run`, where it would not be read. |
+| `actions.control_group_fraction` | 0.10 | Keeps its meaning under `scope: run`. |
+| `actions.explore_fraction` | 0 | 0 to 0.10. The share of explore candidates treated anyway (below). |
+
+**One fraction for every reader.** `engine.holdout.spec.effective_holdout_fraction(actions)` is the
+holdout share: `holdout.fraction` under a persistent scope, `control_group_fraction` under `run`.
+`measure_offered` (step 4), `incrementality_input.json`'s `control_group_fraction`
+(`engine/scheduling/outcomes.py`) and the browser's copy of the step-4 rule read it.
+
+**Membership.** Under a persistent scope a customer is a member when
+`int(sha256(f"{salt}:{scope_key}:{entity}")[:16], 16) < fraction × 2^64`, with `scope_key` the use-case
+id or `universal` and `entity` the key as text (the customer column of a two-column key). It does not
+depend on the run, on who is eligible or on row order, and smaller fractions nest inside larger ones.
+The control group is `eligible ∧ member`: a suppressed member stays a member, it was never going to be
+contacted. The realised share is binomial around the fraction (on 10,000 customers at 10%, within
+about ±0.9 points 99.9% of the time), not exact as under `run`.
+
+**The salt** is `MARKETING_AI_HOLDOUT_SALT` (a secret setting, at least 16 characters, no default).
+Its fingerprint - never the salt - is kept in `platform_setting`. A persistent scope without the salt
+fails the run at its first stage with `HOLDOUT_SALT_MISSING`; a different salt from the recorded one
+with `HOLDOUT_SALT_CHANGED`.
+
+**Epochs.** Each persistent holdout has a ledger entry: its epoch and the largest fraction used in it.
+Raising the fraction keeps every member and stays in the epoch. Lowering it would contact customers
+who were held out, so scoring is refused (`HOLDOUT_FRACTION_LOWERED`) until an Admin starts a new
+epoch at the lower share with `PUT /holdout` (audited). Rotating the salt (`PUT /holdout` with
+`rotate_salt: true`) starts a new epoch of every persistent holdout. `GET /holdout` (Viewer) shows the
+salt's state by fingerprint, every ledger entry and each use case's scope, fraction and explore share.
+
+**The explore slice.** Candidates are rows that are eligible, not holdout members, not selected (an
+uplift run: not `Treat`; a propensity run: in the lowest band) and not a predicted sleeping dog. Each
+candidate customer is explored when `sha256(f"{salt}:explore:{seed}:{entity}")` falls under
+`explore_fraction × 2^64` - a second label, re-drawn every run. A sleeping dog is never explored. The
+scored action in `scores.*` is unchanged; the flag is for the hand-off file.
+
+**What a run writes.** When the service is engaged (a persistent scope or an explore slice), every
+scoring run writes `holdout_assignment.parquet` - the key column(s), `holdout_member`, `explore` and
+`explore_probability` (the explore share for a candidate, 0 otherwise; the logging probability
+`ope.evaluate_policy` needs) for **every** row, suppressed rows included - and
+`holdout_assignment.json` (the run's `HoldoutSpec`: scope, fraction, salt fingerprint, epoch, and the
+counts). The parquet file is a row-level artefact (`configs/privacy.yaml`, `engine/privacy/layout.py`):
+retention deletes it and erasure rewrites it like `scores.parquet`. Under the default configuration
+nothing is engaged and the run is byte for byte what it was, with no extra file.
+
 ---
 
 ## 15. Limits
@@ -759,6 +812,9 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `MEASURE_NOT_OFFERED` | 409 | `POST /runs/{id}/measure`, `.../measure/learn` | The use case does not contact customers, or holds nobody back (section 9, step 4). | Nothing to measure; the Campaign results route still answers for any scoring run. |
 | `MEASURE_INVALID` | 422 | `POST /runs/{id}/measure`, `.../measure/learn` | The outcomes file has no customer id column, only the id, or several columns and none is the use case's outcome. | Keep the customer id and one outcome column, or name it with `outcome_column`. |
 | `MEASURE_NOT_READY` | 409 | `POST /runs/{id}/measure/learn` | The campaign was not measured yet, its window is still open, or a group is below the uplift floors (the message gives the counts). | Measure it, wait for the window, or run a larger campaign. |
+| `HOLDOUT_SALT_MISSING` | the run fails at ingest; 503 on `PUT /holdout` | any scoring run of a use case with a persistent holdout; `PUT /holdout` | `MARKETING_AI_HOLDOUT_SALT` is not set (section 14). | Set the salt (at least 16 characters, kept for as long as the holdout runs), or set `actions.holdout.scope` back to `run`. |
+| `HOLDOUT_SALT_CHANGED` | the run fails at ingest; 409 on `PUT /holdout` | any scoring run with a persistent holdout; `PUT /holdout` without `rotate_salt` | The configured salt is not the one the holdout was drawn with. | Set the original salt again, or have an Admin adopt the new one with `PUT /holdout` and `rotate_salt: true` (a new epoch of every holdout). |
+| `HOLDOUT_FRACTION_LOWERED` | the run fails at ingest | any scoring run with a persistent holdout | The use case asks for a smaller holdout than its current epoch has used. | Set the share back, or have an Admin start a new epoch at the lower share (`PUT /holdout`). |
 
 Phase 1's shared codes (`RUN_NOT_FOUND`, `UPLOAD_NOT_FOUND`, the ingest codes and the configuration
 codes) keep their Phase 1 meaning on these routes.

@@ -92,6 +92,9 @@ _RUN_FILE_STORES: Final[dict[str, Store]] = {
     "scores.parquet": Store.SCORES,
     "row_explanations.parquet": Store.ROW_EXPLANATIONS,
     "copy_messages.csv": Store.COPY_MESSAGES,
+    # Plan J M92: the run's holdout and explore flags per row, keyed like `scores.*` by the run's own
+    # primary key (so `StoreIndex.key_columns` finds its key columns in `run.json`).
+    "holdout_assignment.parquet": Store.SCORES,
 }
 
 _ROW_KEYS: Final[dict[str, tuple[str, ...]]] = {

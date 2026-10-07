@@ -175,6 +175,8 @@ SETTINGS_FIELDS: Final[tuple[str, ...]] = (
     "connections_key",
     # Configurable AI service (DEC-1140): one added field, off unless a test or a developer sets it.
     "allow_fake_ai",
+    # Plan J M92 (DEC-1302): one added field, a secret (the persistent holdout's salt).
+    "holdout_salt",
 )
 """Every field of `engine.settings.Settings`, in `engine.settings.ENV_VARS` order.
 

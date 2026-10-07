@@ -144,6 +144,10 @@ defaults:
       recently_contacted_days: 14       # int 1..90 step 1
     control_group_fraction: 0.10        # float 0..0.50 step 0.01; UI shows *100 as "%" (DEC-005); seeded by run_id
     contacts_customers: true            # bool; false for operational use cases: no "Measure the campaign" step (Plan H, DEC-1130)
+    holdout:                            # Plan J M92 (DEC-1302); config-only, never per run
+      scope: run                        # enum: run (a new control group each run, control_group_fraction) | use_case | universal
+                                        # use_case/universal also need `fraction: 0 < f <= 0.50` and MARKETING_AI_HOLDOUT_SALT
+    explore_fraction: 0.0               # float 0..0.10; share of eligible customers outside the target treated anyway (config-only)
 
   monitoring:                           # [UI 7] Monitoring & retraining
     drift_psi_threshold: 0.20           # float 0.05..1.00 step 0.05

@@ -1929,3 +1929,10 @@ def uplift_flow_for(pipeline: Pipeline, ctx: StageContext, mode: RunMode) -> _Tr
 # ---- END PLAN-E ----
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----
+# Plan J M92 (DEC-1302): the holdout service's seam (`engine.holdout.flow`). It wraps the score flow's
+# stage table; under the default configuration (`actions.holdout.scope: run`, no explore slice) it
+# returns the table untouched, so every run is today's byte for byte. Placed after the last block
+# because M90's PLAN-J block is not in this branch yet; the integrator moves these lines into it.
+from engine.holdout.flow import install_holdout_service  # noqa: E402
+
+install_holdout_service(_ScoreFlow)

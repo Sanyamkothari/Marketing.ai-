@@ -51,6 +51,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from engine.clients import ClientStoreError
 from engine.config import Metric, ProblemType, ResolvedConfig, RunMode, UseCaseConfig, get_catalog
 from engine.contracts import EvaluationReport, FeatureSchema, ModelVersion, RunRecord, RunState
+from engine.holdout.spec import effective_holdout_fraction
 from engine.onboarding.datasets import DATASET_MANIFEST_FILENAME, dataset_key
 from engine.onboarding.specs import DatasetManifest
 from engine.registry import ModelRegistry, RegistryError, to_utc
@@ -190,7 +191,12 @@ class IncrementalityInput(BaseModel):
     outcome_name: str = Field(description="Name of the outcome column that was ingested.")
     outcome_kind: Literal["binary", "continuous"] = Field(description="How the outcome is measured.")
     window: OutcomeWindow = Field(description="The outcome window the outcomes were observed over.")
-    control_group_fraction: float = Field(description="actions.control_group_fraction of the run.")
+    control_group_fraction: float = Field(
+        description=(
+            "The run's holdout share: actions.control_group_fraction, or actions.holdout.fraction under a "
+            "persistent holdout."
+        )
+    )
     treated: GroupOutcome = Field(description="All matched treated rows.")
     control: GroupOutcome = Field(description="All matched control rows.")
     by_band: tuple[BandOutcome, ...] = Field(description="The same split within each band, in band order.")
@@ -648,7 +654,8 @@ def _incrementality(
         outcome_name=outcome_name,
         outcome_kind="binary" if binary else "continuous",
         window=window,
-        control_group_fraction=config.actions.control_group_fraction,
+        # The effective share (Plan J M92): `actions.holdout.fraction` under a persistent holdout.
+        control_group_fraction=effective_holdout_fraction(config.actions),
         treated=treated,
         control=held_out,
         by_band=tuple(bands),
