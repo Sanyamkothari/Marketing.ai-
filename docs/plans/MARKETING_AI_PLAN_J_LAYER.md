@@ -1,4 +1,16 @@
-# Marketing AI — Plan J: Decide, hand off, prove
+# Marketing AI — Plan J: Decide, hand off, prove (hand-off reference design)
+
+> **Status, 7 October 2026: superseded in order, kept as the reference design for integration.**
+> The founders decided to build product value first and integrate after a manager review. The plan
+> being worked is [`MARKETING_AI_PLAN_J_PRODUCT.md`](MARKETING_AI_PLAN_J_PRODUCT.md), which owns
+> DEC-1300 … 1399 and the milestone numbers M90 onward. This document's milestone and decision numbers
+> are **not allocated**; they will be renumbered when the integration plan is written. Its product
+> milestones (holdout service, campaign record, test plan, validity harness, Proof Pack, revenue
+> outcomes, catalogue, value weighting, beats-risk check, cost estimate) moved into the product plan.
+> What stays here for later is the hand-off itself: the Activation Contract and destinations, send-log
+> import and reconciliation from engagement tools, deployment in client accounts, AWS Marketplace,
+> industry packs, the DPDP evidence pack and the starter-sender decision.
+
 
 **Companion to:** Plan H (`MARKETING_AI_PLAN_H_SIMPLE.md`), the positioning decision memo ([`docs/research/POSITIONING_DECISION_2026_10.md`](../research/POSITIONING_DECISION_2026_10.md): Option H, a decide-and-prove layer with a gated starter), the market research ([`docs/research/MARKET_RESEARCH_2026_10.md`](../research/MARKET_RESEARCH_2026_10.md)), `PARALLEL_WORK_PROTOCOL.md`
 **Owner:** Minfy — AI/ML team

@@ -2,7 +2,7 @@
 
 **Prepared:** 6 October 2026, as the decision Plan J implements (`docs/plans/MARKETING_AI_PLAN_J_LAYER.md` §1)
 **Owner:** Minfy — AI/ML team
-**Status:** recommendation, awaiting the founders' decision
+**Status:** recommendation. **Founders' decision, 7 October 2026:** the positioning (a layer on the client's existing tools, never a replacement CRM) stands, but the product is made strong first and integration comes after a manager review. See [`docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md`](../plans/MARKETING_AI_PLAN_J_PRODUCT.md).
 
 > **How this was decided.**
 > - **Three options were argued**, each by an advocate making its strongest case:
