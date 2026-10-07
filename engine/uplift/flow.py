@@ -49,7 +49,9 @@ spec, predicts - and measures drift against the training data, feature PSI throu
 `compute_drift` plus the treated-share check, into `uplift_drift.json` - explains every row, and
 replaces bands with segments through
 `engine.uplift.actions.apply_uplift_actions` - which in turn reuses Phase 1's suppression and control
-group rules unchanged.
+group rules unchanged. Before it, the consent ledger gates the rows through the same
+`engine.privacy.consent` seam a propensity run uses, so both suppress the same customers and both
+write `consent_report.json` (M91; see `UpliftScoreFlow._actions`).
 
 **Why the champion of another metric is never replaced.** The registry keeps one champion per use
 case. When that champion is a propensity model, an uplift model's AUUC cannot be compared with its
@@ -138,6 +140,7 @@ if TYPE_CHECKING:
 
     from engine.config import PrimaryKey, ResolvedConfig, UseCaseConfig
     from engine.contracts import DriftReport, ScoringSummary, ValidationReport
+    from engine.privacy.contracts import ConsentReport
     from engine.storage import Storage
     from engine.uplift.champion import UpliftChampionDecision
     from engine.uplift.contracts import (
@@ -1108,14 +1111,38 @@ class UpliftScoreFlow(_ScoreFlow):
         )
 
     def _actions(self) -> _StageOutcome:
-        """Segments instead of bands; Phase 1's suppression and control group, unchanged."""
+        """Segments instead of bands; Phase 1's suppression and control group, unchanged.
+
+        **Gated by the consent ledger exactly as a propensity run is (M91, DEC-732).** Phase 1's
+        score flow is gated by `engine.pipeline._consent_gated_actions`, which is rebound onto
+        `_ScoreFlow._actions`; this override replaces that method, so it applies the same seam
+        itself: when `consent_gate_for_run` finds a ledger for the run's client and the use case's
+        purpose, `apply_consent_gate` writes the ledger's verdict into the consent column *before*
+        `apply_uplift_actions` runs. Phase 1's `consent_false` rule inside it then suppresses exactly
+        the principals a propensity run of the same rows would, and `consent_report.json` is written.
+        With no ledger, nothing here runs and the stage is what it was before M91.
+        """
+        from engine.privacy.consent import apply_consent_gate, consent_gate_for_run
+        from engine.privacy.contracts import CONSENT_REPORT_FILENAME
         from engine.uplift.actions import apply_uplift_actions
 
         ctx = self._ctx
         card = _require(self._card, "the model card")
+        scored = _require(self._scored, "the scored rows")
+        config = ctx.config
+        gate = consent_gate_for_run(
+            self._storage, use_case_id=ctx.config.id, client_id=self._run.record.client_id
+        )
+        consent: ConsentReport | None = None
+        if gate is not None:
+            # Keyed by the data principal - the entity column, never a snapshot's row key - as the
+            # propensity seam keys it (Plan A M34, DEC-083).
+            scored, config, consent = apply_consent_gate(
+                scored, config, gate, primary_key=_entity(ctx), run_id=ctx.run_id, at=utc_now()
+            )
         scored, recommendation = apply_uplift_actions(
-            _require(self._scored, "the scored rows"),
-            ctx.config,
+            scored,
+            config,
             run_id=ctx.run_id,
             primary_key=ctx.row_key,
             entity_key=ctx.entity_key,
@@ -1130,12 +1157,18 @@ class UpliftScoreFlow(_ScoreFlow):
         self._write(POLICY_FILENAME, recommendation)
         suppressed = int(scored["suppressed_reason"].notna().sum())
         control = int(scored["control_group"].astype(bool).sum())
-        return _StageOutcome(
+        detail = (
             f"{humanise_count(len(scored.index))} rows segmented · "
             f"{humanise_count(recommendation.contacts_recommended)} to treat · "
-            f"{humanise_count(suppressed)} suppressed · {humanise_count(control)} held out as control",
-            len(scored.index),
+            f"{humanise_count(suppressed)} suppressed · {humanise_count(control)} held out as control"
         )
+        if consent is not None:
+            self._write(CONSENT_REPORT_FILENAME, consent)
+            detail += (
+                f" · {humanise_count(consent.excluded_total)} without valid consent "
+                f"for {consent.purpose.replace('_', ' ')}"
+            )
+        return _StageOutcome(detail, len(scored.index))
 
     def _training_holdout_share(self) -> Callable[[float], ConfidenceValue | None] | None:
         """The training run's measured hold-out uplift by top share, or `None` when unreadable.
