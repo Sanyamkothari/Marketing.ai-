@@ -275,6 +275,18 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/measurement/test_campaign_ui.py",
         "tests/integration/measurement/test_campaign_epochs.py",
         "tests/integration/measurement/test_plan_preview.py",
+        "tests/integration/measurement/test_campaign_explore.py",
+    ),
+    # M95's nightly statistical tests (tests/statistical/) are left out: the fallback run selects the
+    # fast suite, and a statistical file named on the command line would be collected (DEC-1300 (e)).
+    "M95": (
+        "tests/unit/measurement/test_simulate.py",
+        "tests/unit/pilot/test_synthetic_quarantine.py",
+        "tests/unit/test_docs_honesty.py",
+        "tests/unit/production/test_firing.py",
+        "tests/integration/test_synthetic_runs.py",
+        "tests/integration/uplift/test_measure_campaign.py",
+        "tests/integration/pilot/test_pilot_acceptance.py",
     ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.

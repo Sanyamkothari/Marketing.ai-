@@ -139,9 +139,13 @@ card with the server's values only.
   keeps only the current epoch's start, so two or more epochs since are refused: when the first began is
   not known. Tests: `tests/unit/measurement/test_campaign_epochs.py`,
   `tests/integration/measurement/test_campaign_epochs.py`.
-* *Still open:* `assignment.parquet` does not yet take its explore flag and probability from the run's
-  `holdout_assignment.parquet` (a run's `scores.*` carries no explore flag), so a campaign's `n_explore`
-  is 0 until that is joined on the key.
+* *Explore slice (M92, closed at M95's integration, DEC-1305 (k)).* A run's `scores.*` carries no explore
+  flag, so `POST /campaigns` reads the run's `holdout_assignment.parquet` when it wrote one and
+  `build_assignment` joins `explore` and `explore_probability` onto `assignment.parquet` by the key (a
+  scored customer the file does not list was not explored). The slice is drawn outside the selection, so
+  `n_explore` counts it over every eligible customer, not only the measured population (an uplift run's
+  intended set and the treat bands never contain it), and the plan preview prices it with
+  `planner.cost_of_explore` on that count. Tests: `tests/integration/measurement/test_campaign_explore.py`.
 
 ## 9. How we know our intervals are honest
 
@@ -164,7 +168,7 @@ receive it anyway. One seed is one campaign, exactly, on any machine.
 | The same when only some contacted customers receive the offer (the effect measured is then the effect of being *assigned*, intent to treat) | 2,000 | 95%, within the band |
 | A campaign with no effect is reported as having one (range excludes zero; p < 0.05) | 10,000 | 5%, within the band |
 | Leaving immature customers out does not bias the lift; counting them as non-converters does (towards zero, by the amount the model predicts) | 1,000 each | within four standard errors of the mean |
-| Achieved power at the planner's number of customers (when the planner, M93, is in) | 2,000 | 80%, within the band |
+| Achieved power at the planner's number of customers (`n_for_mde`, two cases: 4% to 3% and 10% to 8%), with the planner's own `achieved_power` and the plan preview's `power_preview` agreeing with it | 2,000 | 80%, within the band |
 
 **The band rule.** With `n` simulations and a true rate `p`, the observed share has a Monte Carlo standard error
 of `sqrt(p(1-p)/n)`. A check passes when the observed share is within **four** of them: 95% +/- 1.95 points at
@@ -177,9 +181,11 @@ at the change. **What a band detects.** Each 2,000-simulation coverage case sees
 1.95 points; the false-positive check, at +/- 0.87 points, is the most sensitive guard against an interval that
 is too narrow, and a narrowing of less than about a point is below what the suite can see.
 
-**Runtime.** The suite takes about seven minutes on one busy core (the 10,000-simulation false-positive check is
-about three of them), and the power checks add a few more once the planner is in: each simulated population is kept small (1,200 to 4,000
-customers) because the number of simulations, not the population size, sets the band.
+**Runtime.** The suite takes about fourteen minutes on one core (measured at M95's integration: 15 tests in 837
+seconds). The 10,000-simulation false-positive check takes about three and a half of them and the two power checks
+about five and a half, because their populations are the planner's own n (10,602 and 6,426 customers). The other
+simulated populations are kept small (1,200 to 4,000 customers) because the number of simulations, not the
+population size, sets the band.
 
 **What it does not show.** It shows that the *method* is honest on randomised data with the assumptions
 above. It does not show that a particular client's holdout was randomised, that their outcome data is complete,

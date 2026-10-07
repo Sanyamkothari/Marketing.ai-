@@ -392,6 +392,64 @@ paths, and M94's routes were mounted without being added. The set gains `/campai
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-07 — plan-j (on main) → all branches (owners of `engine/contracts.py`, `api/schemas.py`, `engine/runs.py`, `api/routes/uploads.py`): M95 adds `synthetic` to runs and uploads (announcement and record of in-place edits)
+
+**What changed** (DEC-1305 (b), (c)). **Pre-approved, in place:** `engine/contracts.py` `RunRecord.synthetic: bool = False`,
+declared in place because a pydantic field cannot be added from the PLAN-J block; every older `run.json` reads as
+`False`. **Not pre-approved, in place and additive:** `api/schemas.py` `UploadRecord.synthetic: bool = False` (every
+older `upload.json` reads as `False`); `api/routes/uploads.py` `POST /uploads` takes an optional `synthetic` form field
+and `finish_upload()` a `synthetic: bool = False` keyword; `engine/runs.py` `create_run` gains a `synthetic: bool = False`
+keyword. `docs/API.md` regenerated. Nothing changes for a caller that passes nothing.
+
+**What is needed.** Ratification of the `api/schemas.py`, `api/routes/uploads.py` and `engine/runs.py` edits. Any branch
+that creates a run from planted or generated data passes `synthetic=True` to `engine.runs.create_run` (or uploads the
+file with `synthetic=true`), so its reports carry "Synthetic data: planted effect, not a forecast". Pinned by
+`tests/unit/pilot/test_synthetic_quarantine.py` and `tests/integration/test_synthetic_runs.py`.
+
+**What I did meanwhile.** The edits are in place on `main`; the seeder (`scripts/seed_demo.py`) uploads with
+`synthetic=true` and marks every demo run.
+
+### 2026-10-07 — plan-j (on main) → trunk / Plan H (`api/routes/runs.py`, `api/routes/measure.py`), Phase 4b (`engine/scheduling/firing.py`), Plan G (`api/routes/agent_recipes.py`), Phase 3b (`api/routes/uplift.py`, `docs/UPLIFT.md`): the synthetic flag follows the data (record of in-place edits)
+
+**What changed** (DEC-1305 (c)), each a one-line, backward-compatible edit, not pre-approved:
+
+* `api/routes/runs.py` `create_run_endpoint`: a run is synthetic when its upload is, or when its dataset was built
+  from the seeded demo's client or broken client (`engine.pilot.demo.is_demo_client`).
+* `engine/scheduling/firing.py` `start_dataset_run`: the same rule for a schedule's firing on a demo dataset.
+* `api/routes/measure.py` `_write_upload` gains `synthetic: bool = False`; "Learn from this campaign" passes
+  `record.synthetic or outcomes_upload.synthetic`, so the experiment upload and the uplift run learned from it keep
+  the flag.
+* `api/routes/agent_recipes.py` `write_derived_upload` copies the source upload's flag onto a derived upload.
+* `api/routes/uplift.py` `create_uplift_run` passes `upload.synthetic` to `create_run`.
+* `docs/UPLIFT.md` gains a short paragraph saying the 95% range is tested nightly (`docs/DECIDE.md` §9).
+* `docs/V1_READINESS.md` labels the demo's churn figure as planted, and `docs/plans/MARKETING_AI_PLAN_J_LAYER.md`
+  (one line) says "the planted demo effect", so the tightened docs-honesty gate passes.
+
+With no synthetic upload and no seeded demo, every route behaves exactly as before.
+
+**What is needed.** The owners' ratification. Pinned by `tests/integration/pilot/test_pilot_acceptance.py` (a new
+training run on the demo's dataset is synthetic), `tests/unit/production/test_firing.py` (a demo firing is synthetic,
+an ordinary one is not) and `tests/integration/uplift/test_measure_campaign.py` (learn-from-campaign keeps the flag).
+
+**What I did meanwhile.** The edits are in place on `main`. Known gaps: the in-app Campaign results step shows no
+synthetic marker yet (the data is there: `GET /runs/{id}` returns `synthetic`), and a synthetic outcomes file ingested
+through a schedule (`IncrementalityInput`, which carries no upload id) is caught only through the scoring run's own
+flag.
+
+### 2026-10-07 — plan-j (on main) → Plan E (owner of `engine/pilot/` and `scripts/seed_demo.py`): the synthetic quarantine in reports and the demo (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M95; DEC-1305 (b)–(d)): `engine/pilot/document.py`
+`ReportDocument.synthetic` (default `False`) draws the block "Synthetic data: planted effect, not a forecast" in HTML
+and PDF; `engine/pilot/results.py` and `engine/pilot/roi.py` set it from the run (and, for the value view, from the
+outcomes upload the campaign was measured from: `campaign_measure.json`'s upload, or since this integration the
+outcomes upload named in a campaign record, M94); `engine/pilot/demo.py` gains `DemoManifest.run_ids`,
+`is_demo_client` and `mark_runs_synthetic`; `scripts/seed_demo.py` uploads with `synthetic=true` and marks every
+demo run. `tests/unit/test_docs_honesty.py` allows the planted figure only in demo documents, or on a line that says
+"planted".
+
+**What is needed.** Nothing; this is an announcement. A new report kind drawn from a run should set
+`ReportDocument.synthetic` from `RunRecord.synthetic`.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
@@ -522,6 +580,15 @@ and the `CAMPAIGN_EPOCH_MISMATCH` refusal.
 over its points only (DEC-1204), `freeze_plan` on `planner.achieved_power`, the run's holdout recorded on the campaign
 and `CAMPAIGN_EPOCH_MISMATCH` at measurement. Still open, for whoever builds on the assignment next (M98): the
 assignment does not yet carry the explore flag and probability from `holdout_assignment.parquet`.
+
+**Closed (2026-10-07, M95 integration on `main`; DEC-1305 (k)).** `POST /campaigns` now reads the run's
+`holdout_assignment.parquet` when it wrote one and `build_assignment(..., holdout=...)` joins `explore` and
+`explore_probability` onto `assignment.parquet` by the key, so a campaign's `counts.explore` and `n_explore` are the
+run's explore slice. The slice lies outside the selection, so it is counted over every eligible customer, and the
+plan preview prices it with `planner.cost_of_explore` on that count. Tests:
+`tests/integration/measurement/test_campaign_explore.py` and
+`tests/unit/measurement/test_campaign.py::test_the_explore_flag_and_probability_come_from_the_runs_holdout_assignment`
+(both fail on the commit before).
 
 ### 2026-10-07 — plan-j (on main) → trunk / Plan H (owners of `api/routes/runs.py` and the run UI): row-level downloads need Analyst (announcement)
 
