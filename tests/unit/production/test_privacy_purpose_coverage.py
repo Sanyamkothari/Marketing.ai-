@@ -77,8 +77,42 @@ def test_removing_a_contacting_use_cases_purpose_fails_at_load(
     assert use_case in excinfo.value.message
 
 
+def _set_contacts_customers(root: Path, file_name: str, value: str) -> None:
+    path = root / "use_cases" / file_name
+    text = path.read_text(encoding="utf-8")
+    assert "contacts_customers" not in text, f"{file_name} already sets contacts_customers"
+    path.write_text(
+        text.replace("\nactions:\n", f"\nactions:\n  contacts_customers: {value}\n", 1), encoding="utf-8"
+    )
+
+
+@pytest.mark.parametrize("value", ["false", '"false"', '"no"'])
 def test_a_use_case_that_does_not_contact_customers_needs_no_purpose(
+    config_root: Path, tmp_path: Path, value: str
+) -> None:
+    """The exemption itself: telco-churn made non-contacting loads without its mapping. A quoted
+    `"false"` / `"no"` is read as `ActionsConfig` reads it (pydantic's lax bool), not as truthy text."""
+    root = _copy_root(config_root, tmp_path)
+    _set_contacts_customers(root, "telco_churn.yaml", value)
+    assert load_use_case("telco-churn", root).actions.contacts_customers is False
+    _drop_mapping(root, "telco-churn")
+    assert load_privacy_config(root).purpose_for("telco-churn") is None
+
+
+def test_a_new_use_case_with_no_actions_block_contacts_customers_by_default(
     config_root: Path, tmp_path: Path
 ) -> None:
+    """A use case that says nothing inherits the engine default (`contacts_customers: true`), so it
+    needs a purpose like any other contacting use case."""
     root = _copy_root(config_root, tmp_path)
-    assert "fault-prediction" not in load_privacy_config(root).use_case_purposes
+    source = (root / "use_cases" / "telco_churn.yaml").read_text(encoding="utf-8")
+    head, _, _ = source.partition("\nactions:\n")
+    (root / "use_cases" / "telco_churn_copy.yaml").write_text(
+        head.replace("id: telco-churn", "id: telco-churn-copy", 1) + "\n", encoding="utf-8"
+    )
+    assert "telco-churn-copy" in list_use_case_ids(root)
+    assert load_use_case("telco-churn-copy", root).actions.contacts_customers is True
+    with pytest.raises(ConfigError) as excinfo:
+        load_privacy_config(root)
+    assert excinfo.value.code == "CONSENT_PURPOSE_MISSING"
+    assert "telco-churn-copy" in excinfo.value.message

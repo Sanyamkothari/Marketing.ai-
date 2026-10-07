@@ -7,8 +7,10 @@
 #
 # Engine data, like configs/roles.yaml: never merged into a use case. The engine never names a use
 # case (plan section 2.1, principle 1), so the ONLY place a use case is tied to a purpose is the
-# `use_case_purposes` table below. A use case that is not listed has no consent purpose, and its
-# scoring runs behave exactly as they did in Phase 1.
+# `use_case_purposes` table below. Only a use case that does not contact customers
+# (actions.contacts_customers: false) may be left out: it then has no consent purpose and its scoring
+# runs behave exactly as they did in Phase 1. Leaving out any other use case makes this file refuse to
+# load with CONSENT_PURPOSE_MISSING (Plan J M91).
 
 schema_version: 1
 

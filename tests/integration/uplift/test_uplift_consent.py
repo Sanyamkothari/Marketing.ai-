@@ -308,3 +308,51 @@ def _require_frame(frame: pd.DataFrame | None) -> pd.DataFrame:
 def _reasons(frame: pd.DataFrame) -> pd.Series:
     reasons = frame.set_index(PRIMARY_KEY)["suppressed_reason"].astype("object")
     return reasons.where(reasons.notna(), None).sort_index()
+
+
+# ---------------------------------------------------------------------------
+# No ledger leaves the stage as it was; a client with no ledger is failed closed
+# ---------------------------------------------------------------------------
+NO_LEDGER_RUN = "r_20261007_0d000005"
+OTHER_CLIENT_RUN = "r_20261007_0d000006"
+
+
+def _uplift_actions(world: World, scored: RunRecord, run_id: str) -> pd.DataFrame:
+    """`UpliftScoreFlow._actions` alone, on the uplift run's scored rows, under the caller's env."""
+    frame = world.scoring_frame.copy()
+    frame[PRIMARY_KEY] = frame[PRIMARY_KEY].astype(str)
+    uplift_scores = _scores(world.storage, SCORE_RUN).set_index(PRIMARY_KEY).loc[frame[PRIMARY_KEY]]
+    for column in ("uplift", "p_treated", "p_control"):
+        frame[column] = uplift_scores[column].to_numpy()
+    flow = UpliftScoreFlow(world.pipeline, world.score_context(run_id, upload=UNUSED_UPLOAD))
+    flow._scored = frame
+    flow._version = world.version
+    flow._card = world.storage.read_model(model_card_key(world.version.predictor_key), UpliftModelCard)
+    flow._actions()
+    return _require_frame(flow._scored)
+
+
+def test_with_no_client_the_uplift_stage_is_ungated_and_writes_no_consent_report(
+    world: World, scored: RunRecord
+) -> None:
+    """Neither the run nor the deployment names a client: `consent_gate_for_run` is None, nothing new runs."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.delenv("MARKETING_AI_CLIENT_ID", raising=False)
+        patch.setenv("MARKETING_AI_PRIVACY_SALT", PRIVACY_SALT)
+        frame = _uplift_actions(world, scored, NO_LEDGER_RUN)
+    assert not world.storage.exists(run_key(NO_LEDGER_RUN, CONSENT_REPORT_FILENAME))
+    assert not (frame["suppressed_reason"] == "consent_false").any()
+    assert LEDGER_CONSENT_COLUMN not in frame.columns
+
+
+def test_a_client_with_no_ledger_is_failed_closed_on_an_uplift_run(world: World, scored: RunRecord) -> None:
+    """Another client holds a ledger for the purpose and this one has none: nobody is contactable."""
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setenv("MARKETING_AI_CLIENT_ID", "someone-else")
+        patch.setenv("MARKETING_AI_PRIVACY_SALT", PRIVACY_SALT)
+        frame = _uplift_actions(world, scored, OTHER_CLIENT_RUN)
+    assert (frame["suppressed_reason"] == "consent_false").all()
+    assert not frame["control_group"].astype(bool).any()
+    report = world.storage.read_model(run_key(OTHER_CLIENT_RUN, CONSENT_REPORT_FILENAME), ConsentReport)
+    assert report.client_id == "someone-else"
+    assert report.excluded_total == SCORE_ROWS

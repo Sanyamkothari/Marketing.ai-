@@ -7,8 +7,10 @@ Minfy's legal team) can read and change it without reading Python (DEC-730):
 * **Which purpose a use case processes data for.** The consent ledger is keyed by purpose
   ("marketing communication"), a scoring run by use case. Something has to join the two, and the
   engine may not name a use case (plan section 2.1, principle 1, enforced by
-  `tests/unit/test_no_use_case_branching.py`), so the join is a YAML table. A use case missing from
-  it has no consent purpose and scores exactly as Phase 1 did.
+  `tests/unit/test_no_use_case_branching.py`), so the join is a YAML table. Only a use case that
+  does not contact customers (`actions.contacts_customers: false`) may be missing from it, and it
+  then scores exactly as Phase 1 did; leaving out any other use case is `CONSENT_PURPOSE_MISSING`
+  at load (Plan J M91).
 * **What counts as a row-level artefact.** Retention deletes row-level run artefacts and keeps
   aggregate reports; which files are which is a list here, so a later artefact is classified by
   adding a line rather than by editing the job.
@@ -30,7 +32,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Annotated, Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, model_validator
 from sqlalchemy import inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.exc import IntegrityError
@@ -146,7 +148,11 @@ class PrivacyConfig(_Model):
     schema_version: Literal[1] = Field(description="File format version; this engine reads 1.")
     purposes: dict[str, Purpose] = Field(description="Purpose id -> purpose.")
     use_case_purposes: dict[str, str] = Field(
-        default_factory=dict, description="Use-case id -> purpose id; unlisted use cases are ungated."
+        default_factory=dict,
+        description=(
+            "Use-case id -> purpose id. Only use cases with actions.contacts_customers false may be "
+            "left out (ungated); leaving out any other is CONSENT_PURPOSE_MISSING at load."
+        ),
     )
     retention: RetentionPolicy
     erasure: ErasurePolicy = Field(default_factory=ErasurePolicy)
@@ -231,11 +237,20 @@ def _require_purpose_for_contacting_use_cases(
         )
 
 
+_BOOL: Final[TypeAdapter[bool]] = TypeAdapter(bool)
+
+
 def _contacts_customers(use_case_id: str, base: Path) -> bool:
+    """`actions.contacts_customers` read the way `ActionsConfig` reads it (pydantic's lax bool, so a
+    quoted `"false"` or `"no"` is false here too); true when absent, and true for a value pydantic
+    would refuse, which `load_use_case` reports in its own words."""
     actions = load_use_case_document(use_case_id, base).get("actions")
     if not isinstance(actions, dict):
         return True
-    return bool(actions.get("contacts_customers", True))
+    try:
+        return _BOOL.validate_python(actions.get("contacts_customers", True))
+    except ValidationError:
+        return True
 
 
 def privacy_config_or_none(root: Path | None = None) -> PrivacyConfig | None:

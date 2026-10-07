@@ -89,7 +89,7 @@ separately granted Approver.
 | Role | May | Examples |
 |---|---|---|
 | Viewer | read every screen and report | runs, results, schedules, alerts, the consent report of a run |
-| Analyst | create and change work | upload, onboard, build datasets, train, score, generate copy, create and fire schedules, upload outcomes, acknowledge alerts |
+| Analyst | create and change work, and take customer rows away | upload, onboard, build datasets, train, score, generate copy, create and fire schedules, upload outcomes, acknowledge alerts; download scored rows and campaign messages |
 | Approver | approve | approve or promote a champion, approve campaign copy |
 | Admin | administer | users, AWS connection settings, the audit log and its exports, every privacy route (consent, retention, erasure, access requests) |
 
@@ -98,6 +98,15 @@ challenger but can never approve or promote it. Every route declares its role in
 `api/access_policy.py`; a route without one is refused (DEC-704). A refused control in the UI is
 shown disabled, never hidden, with the server's own sentence beside it: "Only an Approver can
 approve a champion." `GET /auth/me` lists every route with whether the caller may use it.
+
+**Customer-level files are Analyst (Plan J M91, DEC-1301 (e)).** A run file with one row per customer
+(`scores.csv`, `scores.parquet`, `row_explanations.parquet`, `copy_messages.csv`; `ROW_LEVEL_ARTEFACTS`
+in `api/access_policy.py`) needs Analyst when sign-in is on, on every route that serves it:
+`/runs/{run_id}/scores.csv`, `/runs/{run_id}/copy_messages.csv` and `/runs/{run_id}/artefacts/{name}`.
+The generic route stays Viewer for reports and charts. A refusal is `403 ROLE_REQUIRED`, "Only an
+Analyst can download customer-level rows.", audited with reason code `ROW_LEVEL_DOWNLOAD_REFUSED`, and
+a download through the generic route is audited as `runs.customer_rows_download`. With sign-in off
+nothing changes.
 
 ## 3. The audit trail
 
@@ -129,7 +138,12 @@ tombstones them. Without the file there are no privacy controls and every privac
   `expires_at`) per client; the whole file loads or none of it does, and problems are reported by row
   and column, never by value (DEC-734). When a ledger exists for a scoring run's client and purpose,
   principals without valid consent are suppressed through Phase 1's `consent_false` rule and counted
-  in `consent_report.json` (DEC-732). Without a ledger a run is Phase 1's, byte for byte.
+  in `consent_report.json` (DEC-732). An uplift scoring run is gated the same way and suppresses the
+  same customers (Plan J M91, DEC-1301 (a)). Without a ledger a run is Phase 1's, byte for byte.
+- **Every contacting use case has a purpose.** A use case whose `actions.contacts_customers` is true
+  (the default) must be listed in `use_case_purposes`; otherwise `privacy.yaml` refuses to load with
+  `CONSENT_PURPOSE_MISSING`, which stops scoring, retention and erasure until it is fixed. Only use
+  cases with `contacts_customers: false` may be left out (Plan J M91, DEC-1301 (b)).
 - **Retention.** `governance.retention_days` is enforced (DEC-736, DEC-795): uploads, datasets and
   row-level run artefacts past their deadline are deleted; models, manifests and aggregate reports
   are kept. The dry run is the default everywhere and applying executes exactly the plan reviewed:

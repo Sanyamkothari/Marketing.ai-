@@ -973,3 +973,34 @@ only. The v1 prompt files are unchanged: they already carry `required_line` as a
 how a one-way run reaches the model.
 
 Tests: `tests/unit/generative/test_sms_one_way.py`.
+
+## 15. Who approved the copy, and downloading only approved copy (M91)
+
+DEC-1301 (d) and (e). Code: `approve_copy_template`, `read_copy_messages` and `regenerate_copy_template`
+in `api/routes/generative.py`; `win_back.rerender_template_messages`.
+
+**The approver is the signed-in person.** With sign-in on, `POST
+/runs/{run_id}/campaign-copy/templates/{template_id}/approve` records the signed-in username as
+`approved_by` and ignores the name in the body; with sign-in off it records the typed name, as before.
+This is the rule model approval already follows (DEC-862).
+
+**`GET /runs/{run_id}/copy_messages.csv?approved_only=true`** keeps only the rows of templates that
+`copy_batch.json` says are approved *now*. The `status` column of each kept row reads `approved`, and
+rows a rule refused (`block_reason` set, so there is nothing to send) are left out. The header is
+always there, so a batch with nothing approved returns an empty table, not an error. Without the
+parameter the download is unchanged byte for byte.
+
+**A regenerate re-renders its template's rows.** A regenerate keeps the template's id and replaces its
+text, but `copy_messages.csv` used to be written only once, at generation. Now
+`rerender_template_messages` renders that template's rows again from the new text, for the same band's
+or segment's rows, and replaces them in place, so an approved row always reads the approved text. It
+uses the same renderer and the same field-coverage rule as generation, so a regenerate can answer
+`MISSING_FIELD` just as generation does. A batch regenerated before M91 keeps stale rows for that
+template until it is regenerated again.
+
+**The messages are customer rows.** With sign-in on, `copy_messages.csv` needs the Analyst role on every
+route that serves it, with or without `approved_only`, and each download writes one audit event (DEC-1301
+(e), `docs/PRODUCTION.md` §2).
+
+Tests: `tests/integration/test_api_generative_copy_identity.py`,
+`tests/integration/decide/test_row_level_downloads.py`.

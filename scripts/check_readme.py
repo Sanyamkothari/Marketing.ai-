@@ -234,6 +234,13 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/decide/test_plan_j_codes.py",
         "tests/unit/decide/test_statistical_collection.py",
     ),
+    "M91": (
+        "tests/integration/uplift/test_uplift_consent.py",
+        "tests/unit/production/test_privacy_purpose_coverage.py",
+        "tests/unit/generative/test_sms_one_way.py",
+        "tests/integration/test_api_generative_copy_identity.py",
+        "tests/integration/decide/test_row_level_downloads.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

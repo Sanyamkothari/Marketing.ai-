@@ -42,6 +42,93 @@ the result is identical until a Plan J milestone adds a code. From then on each 
 **What is needed.** Nothing; this is an announcement. **Also announced:** `pyproject.toml` gained the pytest marker
 `statistical` in place in `markers` (DEC-1300 (e)), as the plan's in-place-declaration rule allows. `tests/unit/test_pyproject_pins.py` pins the exact marker set, so its expected set gained `"statistical"` (still an exact-set check; nothing loosened).
 
+### 2026-10-07 — plan-j (on main) → Phase 3b: M91 gates uplift scoring runs by the consent ledger (announcement)
+
+**What changed in files §3 gives Phase 3b** (pre-approved in the Plan J plan, M91; DEC-1301 (a)):
+`engine/uplift/flow.py` `UpliftScoreFlow._actions` now calls `engine.privacy.consent.consent_gate_for_run` and,
+when it returns a gate, `apply_consent_gate` (keyed by the entity column) before `apply_uplift_actions`, writes
+`consent_report.json` and adds "N without valid consent for <purpose>" to the stage detail. With no ledger nothing
+new runs and the stage is what it was. The PHASE-4B block of `engine/pipeline.py` is not touched. `docs/UPLIFT.md`
+§8 gains the sentence that says so. New test: `tests/integration/uplift/test_uplift_consent.py` (in Phase 3b's
+`tests/**/uplift/**`). No existing uplift test changed.
+
+**What is needed.** Nothing; this is an announcement. A later change to `UpliftScoreFlow._actions` must keep the
+gate in front of `apply_uplift_actions`; the new tests fail if it is dropped.
+
+### 2026-10-07 — plan-j (on main) → Phase 4b: M91 consent-purpose coverage and row-level downloads (announcement)
+
+**What changed in files §3 gives Phase 4b** (pre-approved in the Plan J plan, M91; DEC-1301 (b), (e)):
+
+* `configs/privacy.yaml`: `use_case_purposes` gained `retail-win-back`, `bank-term-deposit`,
+  `insurance-cross-sell` (`marketing_communication`) and `card-default-propensity` (`account_servicing`); the
+  header comment now says only non-contacting use cases may be left out.
+* `engine/privacy/config.py`: `load_privacy_config` raises `ConfigError` `CONSENT_PURPOSE_MISSING` when a use case
+  with `actions.contacts_customers` true has no purpose (`_require_purpose_for_contacting_use_cases`, after the
+  `PRIVACY_USE_CASE_UNKNOWN` check). Because it is the shared loader, an unmapped contacting use case also stops
+  retention, erasure and the lifecycle backstop until it is fixed, the same blast radius `PRIVACY_USE_CASE_UNKNOWN`
+  already has. New test: `tests/unit/production/test_privacy_purpose_coverage.py`.
+* `api/access_policy.py`: `GET /runs/{run_id}/scores.csv` and `GET /runs/{run_id}/copy_messages.csv` are now
+  Analyst (were Viewer); new `ROW_LEVEL_ARTEFACTS` and `ROW_LEVEL_DOWNLOAD` (a policy tied to no route, action
+  `runs.customer_rows_download`). Audit reason code `ROW_LEVEL_DOWNLOAD_REFUSED` on a refusal.
+* `docs/PRODUCTION.md` §2 and §4 describe both.
+
+**What is needed.** A decision, not urgent: if deletion should keep running while a use-case mapping is broken,
+retention, erasure and lifecycle could call a loader that validates the schema but skips the coverage check. Until
+then, the help entry for `CONSENT_PURPOSE_MISSING` says those jobs stop too. Also an optional follow-up: `/auth/me`
+does not describe the per-name rule on the generic artefact route (`ROW_LEVEL_DOWNLOAD` is not in `all_policies()`).
+
+### 2026-10-07 — plan-j (on main) → Phase 3a: M91 one-way SMS, copy approver identity and approved-only export (announcement)
+
+**What changed in files §3 gives Phase 3a** (pre-approved in the Plan J plan, M91; DEC-1301 (c), (d), (e)):
+
+* `engine/config.py` `CampaignCopyConfig` gained `sms_sender: Literal["one_way", "two_way"] = "two_way"` in place,
+  and `configs/engine.yaml` its default; `docs/API.md` regenerated.
+* `engine/generative/win_back.py`: `OPT_OUT_LINK_FIELD`, `required_line_for`, `normalise_placeholders`,
+  `_prompt_allowed_fields` (one-way SMS only), and `rerender_template_messages`, which a regenerate now calls to
+  re-render that template's rows in `copy_messages.csv`.
+* `engine/generative/guardrails.py` and `configs/guardrails.yaml`: the rule `sms_reply_stop_one_way` (block,
+  before `required_lines`), `CheckContext.one_way_sender`, `asks_reply_stop`. Default runs record one more passed
+  check row.
+* `engine/llm.py` `FakeLLMClient` also reads the required line from the copy prompts' quoted last sentence
+  (`_REQUIRED_QUOTED`); the default line is unchanged.
+* `api/routes/generative.py`: the approve route records the signed-in username when sign-in is on;
+  `read_copy_messages` takes the `Request` (for the Analyst rule of DEC-1301 (e)) and an opt-in `approved_only`;
+  `regenerate_copy_template` re-renders the template's rows and keeps `messages_rendered` / `messages_blocked` in
+  step, and can now answer `MISSING_FIELD` as generation does. `api/schemas.py` `CopyTemplateApproveRequest`'s
+  description says sign-in replaces `approved_by`.
+* `docs/GENERATIVE.md` §14 (one-way SMS) and §15 (approver, `approved_only`, re-render).
+* New tests: `tests/unit/generative/test_sms_one_way.py`, `tests/integration/test_api_generative_copy_identity.py`.
+  No existing test changed; the v1 prompt files are unchanged.
+
+**What is needed.** Optional UI follow-ups, not done here: hide or disable "Download messages (CSV)" for a Viewer
+with sign-in on (`ui/modules/generative/copy.js`), using `can("GET", "/runs/{run_id}/copy_messages.csv")`; today
+the click shows the server's refusal. `_approver_name` duplicates `api/routes/models.py`'s `_decider_name`; they
+could share a helper in `api/access`.
+
+### 2026-10-07 — plan-j (on main) → trunk / Plan H (owners of `api/routes/runs.py` and the run UI): row-level downloads need Analyst (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M91; DEC-1301 (e)): `api.routes.runs.read_artefact(run_id, name,
+storage, request)` gained a **required** `request` argument and calls `require_row_level_role` before it looks the
+run up: with sign-in on (`auth_mode != off`), `scores.csv`, `scores.parquet`, `row_explanations.parquet` and
+`copy_messages.csv` are refused to a principal without Analyst (`403 ROLE_REQUIRED`), and a download through
+`GET /runs/{run_id}/artefacts/{name}` is audited as `runs.customer_rows_download`. `read_scores` and
+`read_copy_messages` pass the request. Backward compatible with sign-in off. New test:
+`tests/integration/decide/test_row_level_downloads.py`, which also requires every row-level file in
+`configs/privacy.yaml` (M98's `treat_list.csv` included, when it is registered) to be in `ROW_LEVEL_ARTEFACTS`.
+
+**What is needed.** Optional UI follow-up, not done here: show "Download contact list (CSV)" only when
+`can("GET", "/runs/{run_id}/scores.csv")` is true (`ui/usecase.js`, `ui/modules/uplift/controller.js`, `ui/app.js`),
+or show the refusal reason beside it as the Admin-only controls do; today a Viewer's click gets the server's
+refusal (DEC-793).
+
+### 2026-10-07 — plan-j (on main) → Plan E: two codes in `configs/pilot/help.yaml` (announcement)
+
+**What changed:** `configs/pilot/help.yaml` gained `CONSENT_PURPOSE_MISSING` and `ROW_LEVEL_DOWNLOAD_REFUSED` under
+a Plan J M91 comment, matching `engine.decide.codes.PLAN_J_CODES` (DEC-1300 (d), DEC-1301). `tests/unit/pilot/test_help.py`
+is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

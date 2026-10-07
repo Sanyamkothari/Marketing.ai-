@@ -1607,7 +1607,7 @@ in [`docs/DECIDE.md`](docs/DECIDE.md).
 | # | Milestone | Definition of done | Status | Tests that prove it |
 |---|---|---|---|---|
 | M90 | Plan J set-up | DEC-1300…1399 claimed; a PLAN-J block in the 12 shared files and in the marker test's `PHASES`; the stage-function amendment of protocol §3 (pending the owner's sign-off); `PLAN_J_CODES` and the `known_codes()` hook; the `statistical` marker and `make test-statistical`, kept out of `make test` and `make test-all`; `docs/DECIDE.md` skeleton | **done** | `tests/unit/test_shared_file_markers.py`, `tests/unit/decide/test_plan_j_codes.py`, `tests/unit/decide/test_statistical_collection.py` |
-| M91 | Fix what the research and the code review found | Uplift runs consult the consent ledger; every contacting use case has a consent purpose; a one-way SMS sender gets an opt-out link instead of "Reply STOP"; copy approval records the signed-in person; row-level downloads need Analyst and are audited | pending | — |
+| M91 | Fix what the research and the code review found | Uplift runs consult the consent ledger; every contacting use case has a consent purpose; a one-way SMS sender gets an opt-out link instead of "Reply STOP"; copy approval records the signed-in person; row-level downloads need Analyst and are audited | **done** | `tests/integration/uplift/test_uplift_consent.py`, `tests/unit/production/test_privacy_purpose_coverage.py`, `tests/unit/generative/test_sms_one_way.py`, `tests/integration/test_api_generative_copy_identity.py`, `tests/integration/decide/test_row_level_downloads.py` |
 | M92 | Persistent holdout and explore slice | A control group fixed per customer (opt-in, one holdout across use cases), nested by share; an opt-in explore slice of 0–10%; default behaviour unchanged | pending | — |
 | M93 | Plan the test, define the outcome well | A planner for the effect a campaign can detect at each holdout size, with the holdout's cost; outcome definitions with a grace period; random-or-not and sufficiency verdicts | pending | — |
 | M94 | One campaign record, one measurement path, a registered test plan | A campaign recorded once and measured through one path; a registered, hashed test plan; no partial number before outcomes mature | pending | — |
@@ -1633,4 +1633,27 @@ M90 changes no product behaviour. It claims the decision range, adds this block 
 the statistical suite: `make test-statistical` (also run nightly) runs `tests/statistical/`, which `make test` and
 `make test-all` never collect because `tests/statistical/conftest.py` ignores it unless
 `MARKETING_AI_STATISTICAL=1` (DEC-1300 (e)).
+
+M91 (DEC-1301) fixes five defects:
+
+- **Uplift runs and consent.** Uplift scoring runs are gated by the consent ledger just like propensity runs: a
+  customer whose consent is withdrawn, expired or not recorded is suppressed as `consent_false`, and the run writes
+  `consent_report.json`.
+- **Consent purposes.** `configs/privacy.yaml` now lists every use case that contacts customers (`retail-win-back`,
+  `bank-term-deposit`, `insurance-cross-sell` as `marketing_communication`; `card-default-propensity` as
+  `account_servicing`). A use case with `actions.contacts_customers` true and no purpose is refused at config load
+  with `CONSENT_PURPOSE_MISSING`; operational use cases (`contacts_customers: false`) need none.
+- **One-way SMS.** `generative.campaign_copy.sms_sender: two_way` (default) `| one_way`. With `one_way` the SMS
+  opt-out line is the `{{opt_out_link}}` merge field (replaced by the sending system per recipient) instead of
+  "Reply STOP to opt out", and the guardrail rule `sms_reply_stop_one_way` blocks any reply-to-STOP wording
+  ([`docs/GENERATIVE.md`](docs/GENERATIVE.md) §14).
+- **Copy approval.** With sign-in on, approving a template records the signed-in username as `approved_by`, whatever
+  the request body says. `GET /runs/{run_id}/copy_messages.csv?approved_only=true` returns only the rows of approved
+  templates (status `approved`, refused renderings left out); without the parameter the download is unchanged.
+  Regenerating a template re-renders its rows, so the file always matches the template text (§15).
+- **Row-level downloads.** `scores.csv`, `scores.parquet`, `row_explanations.parquet` and `copy_messages.csv` need
+  the Analyst role when sign-in is on, on every route that serves them, and each download writes one audit event
+  (`runs.customer_rows_download` on the generic artefact route). A refusal is `403 ROLE_REQUIRED`, "Only an Analyst
+  can download customer-level rows."; reports and charts stay open to Viewers, and with sign-in off nothing changes
+  ([`docs/PRODUCTION.md`](docs/PRODUCTION.md) §2).
 <!-- ---- END PLAN-J ---- -->

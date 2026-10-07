@@ -282,6 +282,15 @@ codes:
     title: A saved preparation step no longer applies
     meaning: One of the steps saved with the model cannot run on this file, or the file it was prepared from is gone. A model keeps the preparation rules it was approved with; only a model approved before those rules were saved with it is also stopped when this use case no longer allows one of its steps.
     fix: Train the model again with Guided setup so its preparation steps are saved again.
+  # --- Plan J M91: consent purposes and customer-level downloads (DEC-1301 (b), (e)) ---------------
+  CONSENT_PURPOSE_MISSING:
+    title: A use case that contacts customers has no consent purpose
+    meaning: One or more use cases send offers or reminders to customers, but the privacy settings do not say what purpose the customer agreed to. Without a purpose the consent ledger cannot check them, so a customer who said no could still be contacted. Until it is fixed the privacy settings do not load, so scoring, the retention job and erasure requests that read them stop too.
+    fix: Open configs/privacy.yaml and add each use case named in the message under use_case_purposes, choosing marketing_communication for offers and campaigns or account_servicing for account reminders. If the use case really does not contact customers, set actions.contacts_customers to false in its own file.
+  ROW_LEVEL_DOWNLOAD_REFUSED:
+    title: Only an Analyst can download customer-level rows
+    meaning: This file has one row per customer (scored customers, reasons per customer or campaign messages), so with sign-in on it needs the Analyst role. Every download is recorded in the audit log. Reports and charts for the run stay open to Viewers.
+    fix: Ask an Admin to give you the Analyst role, or ask an Analyst to share what you need.
 
 settings:
   actions.bands[*].min_score:

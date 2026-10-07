@@ -12,5 +12,14 @@ from typing import Final
 
 __all__ = ["PLAN_J_CODES"]
 
-PLAN_J_CODES: Final[frozenset[str]] = frozenset()
-"""Empty at M90: Plan J adds codes from M91 (for example `CONSENT_PURPOSE_MISSING`) onwards."""
+PLAN_J_CODES: Final[frozenset[str]] = frozenset(
+    {
+        # M91 (DEC-1301 (b)): `engine.privacy.config.load_privacy_config` refuses a contacting use case
+        # with no consent purpose.
+        "CONSENT_PURPOSE_MISSING",
+        # M91 (DEC-1301 (e)): the audit reason code of a row-level download refused to a non-Analyst
+        # (`api.routes.runs.require_row_level_role`); the HTTP error itself is `ROLE_REQUIRED`.
+        "ROW_LEVEL_DOWNLOAD_REFUSED",
+    }
+)
+"""Empty at M90; each Plan J milestone from M91 on adds the codes it raises."""
