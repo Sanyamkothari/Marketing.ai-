@@ -77,7 +77,7 @@ from engine.utils.ids import new_upload_id
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
-__all__ = ["LearnRequest", "MeasureRequest", "MeasureView", "router"]
+__all__ = ["LearnRequest", "MeasureRequest", "MeasureView", "default_outcome_window", "router"]
 
 router: APIRouter = APIRouter(tags=["measure"])
 
@@ -191,6 +191,17 @@ def read_measure(run_id: str, root: ConfigRootDep, storage: StorageDep) -> Measu
 # ---------------------------------------------------------------------------
 # POST /runs/{run_id}/measure
 # ---------------------------------------------------------------------------
+
+
+def default_outcome_window(config: UseCaseConfig) -> int | None:
+    """The outcome window a measured campaign uses when the request names none: the use case's uplift
+    window, else its label's whole window - the horizon plus any grace period (Plan J M93), the same
+    days `engine.scheduling.outcomes` waits for. Identical to the horizon while `grace_days` is unset."""
+    return config.uplift.outcome_window_days or (
+        config.label.window_days if config.label is not None else None
+    )
+
+
 @router.post(
     "/runs/{run_id}/measure",
     response_model=MeasureView,
@@ -219,9 +230,7 @@ def create_measure(
             raise http_error(422, MEASURE_INVALID, str(exc), path="upload_id") from exc
     window = body.outcome_window_days
     if window is None:
-        window = config.uplift.outcome_window_days or (
-            config.label.horizon_days if config.label is not None else None
-        )
+        window = default_outcome_window(config)
     request = CampaignResultsRequest(
         upload_id=upload.upload_id,
         outcome_column=outcome_column,

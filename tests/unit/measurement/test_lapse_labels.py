@@ -119,6 +119,44 @@ def test_a_port_out_inside_the_window_leaves_the_customer_out() -> None:
     assert EXCLUDED_COLUMN not in result.frame.columns
     (stat,) = result.per_snapshot
     assert (stat.entities, stat.positives, stat.positive_rate) == (12, 7, round(7 / 12, 4))
+    assert stat.excluded == 2
+
+
+def test_a_label_that_leaves_nobody_out_writes_no_excluded_count() -> None:
+    """Additive: the per-date count is written only for a label with exclude_roles."""
+    (stat,) = _label(LAPSE_30_GRACE_7).per_snapshot
+    assert stat.excluded is None
+    assert "excluded" not in stat.model_dump(mode="json")
+
+
+def test_a_window_past_the_end_of_a_table_that_leaves_customers_out_is_unfinished() -> None:
+    """Review M93: with the port-out extract ending on 20 Mar, a port-out between then and 7 May cannot
+    be seen, so a customer who left would be counted as lapsed. The window is unfinished, as it is when
+    the label's own table ends too early."""
+    con = duckdb.connect()
+    con.register("activity", _read("lapse_recharges.csv"))
+    port_outs = _read("lapse_port_outs.csv")
+    con.register("other_event", port_outs[port_outs["event_time"] <= pd.Timestamp("2024-03-20")])
+    result = build(
+        con,
+        LAPSE_30_GRACE_7_NO_PORT_OUTS,
+        _snapshots(PREDICTION_DATE),
+        drop_censored=True,
+        mapped_roles=frozenset({"activity", "other_event"}),
+        mode=SnapshotMode.PERIODIC,
+        inclusive=True,
+    )
+    assert [s.censored for s in result.per_snapshot] == [True]
+    assert result.frame.empty
+    (censored,) = [c for c in result.checks if c.code == "LABEL_HORIZON_CENSORED"]
+    assert censored.details["data_end"] == "2024-03-20"
+    assert censored.details["data_end_by_table"] == {"activity": "2024-06-30", "other_event": "2024-03-20"}
+
+
+def test_the_full_port_out_extract_leaves_the_window_finished() -> None:
+    """The control: the port-outs run to 1 Jun, past the 7 May end of the window."""
+    result = _label(LAPSE_30_GRACE_7_NO_PORT_OUTS)
+    assert [s.censored for s in result.per_snapshot] == [False]
 
 
 def test_the_grace_period_counts_towards_an_unfinished_window() -> None:
@@ -215,3 +253,21 @@ def test_a_campaigns_outcome_window_includes_the_grace_period(tmp_path: Path) ->
     graced = outcome_window(run, storage=storage, config=UseCaseConfig.model_validate(document))
     assert plain.horizon_days == 90 and graced.horizon_days == 97
     assert graced.matures_at - plain.matures_at == timedelta(days=7)
+
+
+@pytest.mark.parametrize(("grace_days", "expected"), [(None, 90), (7, 97)])
+def test_a_measured_campaigns_default_window_includes_the_grace_period(
+    grace_days: int | None, expected: int
+) -> None:
+    """Review M93: `POST /runs/{id}/measure` with no window of its own waits as long as outcome
+    ingestion does - the horizon plus the grace period - and exactly the horizon without one."""
+    import copy
+
+    from api.routes.measure import default_outcome_window
+    from engine.config import UseCaseConfig, load_use_case_document
+
+    document = copy.deepcopy(load_use_case_document("win-back-campaign"))
+    document["uplift"] = {**(document.get("uplift") or {}), "outcome_window_days": None}
+    if grace_days is not None:
+        document["label"] = {**document["label"], "grace_days": grace_days}
+    assert default_outcome_window(UseCaseConfig.model_validate(document)) == expected

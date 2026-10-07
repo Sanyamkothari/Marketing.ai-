@@ -27,7 +27,8 @@ so none of them changes the verdict:
 * *The outcome, checked* - the outcome definition in words (window, grace period, tables that leave
   a customer out), the share of customers with the outcome per month of prediction dates, how many
   there are, the future-data check's verdict, and `LABEL_RATE_UNSTABLE` when that share jumps from
-  one prediction date to the next by more than `configs/pilot/readiness.yaml` allows.
+  one month to the next (the month table's own sums) by more than `configs/pilot/readiness.yaml`
+  allows.
 * *Can we measure it?* - the smallest change a test is sure to see at a 3, 5, 10 and 15% control
   group (`engine.measurement.planner`), from the customers at the latest prediction date and the
   dataset's own base rate, which the report says it took from there.
@@ -44,7 +45,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, Literal, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, NamedTuple, TypeVar
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -65,6 +66,7 @@ if TYPE_CHECKING:
     from engine.clients import ClientStore
     from engine.config import UseCaseConfig
     from engine.contracts import ValidationCheck
+    from engine.measurement.planner import Direction
     from engine.onboarding.specs import (
         BuildReport,
         DatasetManifest,
@@ -78,13 +80,16 @@ if TYPE_CHECKING:
 
 __all__ = [
     "READINESS_SETTINGS_FILENAME",
+    "MonthRate",
     "ReadinessFacts",
     "ReadinessNotFoundError",
     "ReadinessSettings",
+    "campaign_aim",
     "collect_readiness",
     "label_in_words",
     "label_rate_checks",
     "load_readiness_settings",
+    "month_rates",
     "readiness_document",
 ]
 
@@ -575,7 +580,7 @@ def readiness_document(
 
     settings = load_readiness_settings(root)
     blocks += _outcome_checked(facts, files, root, settings)
-    blocks += _can_we_measure(facts, settings)
+    blocks += _can_we_measure(facts, settings, root)
     blocks += _past_campaigns(facts, files, root)
 
     personal = [
@@ -763,24 +768,47 @@ def _kept(snapshots: tuple[SnapshotStat, ...]) -> list[SnapshotStat]:
     ]
 
 
+class MonthRate(NamedTuple):
+    """One calendar month of prediction dates the dataset kept: what the month table shows."""
+
+    month: str
+    """`YYYY-MM`."""
+    label: str
+    """`Jan 2024`."""
+    customers: int
+    positives: int
+
+
+def month_rates(snapshots: tuple[SnapshotStat, ...]) -> list[MonthRate]:
+    """The kept prediction dates summed per calendar month, in date order (the "share per month" table)."""
+    months: dict[str, MonthRate] = {}
+    for s in sorted(_kept(snapshots), key=lambda s: s.date):
+        key = s.date.strftime("%Y-%m")
+        before = months.get(key)
+        customers = s.entities + (before.customers if before is not None else 0)
+        positives = (s.positives or 0) + (before.positives if before is not None else 0)
+        months[key] = MonthRate(key, s.date.strftime("%b %Y"), customers, positives)
+    return list(months.values())
+
+
 def label_rate_checks(
     snapshots: tuple[SnapshotStat, ...], *, tolerance: float, min_z: float
 ) -> tuple[ValidationCheck, ...]:
-    """`LABEL_RATE_UNSTABLE` for each prediction date whose outcome share jumped from the one before.
+    """`LABEL_RATE_UNSTABLE` for each month whose outcome share jumped from the month before.
 
-    A jump counts when it is more than `tolerance` of the earlier share (relative) AND more than
-    `min_z` standard errors of a two-proportion difference, so a small extract's noise is not called
-    unstable. Only the prediction dates the dataset kept are compared, in date order.
+    The kept prediction dates are summed per calendar month first (:func:`month_rates`, the same sums
+    as the report's month table), so weekly snapshots are judged month over month. A jump counts when
+    it is more than `tolerance` of the earlier month's share (relative) AND more than `min_z` standard
+    errors of a two-proportion difference, so a small extract's noise is not called unstable.
     """
     from engine.contracts import Severity, ValidationCheck
 
-    kept = sorted(_kept(snapshots), key=lambda s: s.date)
     found: list[ValidationCheck] = []
-    for before, after in pairwise(kept):
-        n1, n2 = before.entities, after.entities
-        r1, r2 = (before.positives or 0) / n1, (after.positives or 0) / n2
+    for before, after in pairwise(month_rates(snapshots)):
+        n1, n2 = before.customers, after.customers
+        r1, r2 = before.positives / n1, after.positives / n2
         change = abs(r2 - r1) / r1 if r1 > 0 else (math.inf if r2 > 0 else 0.0)
-        pooled = ((before.positives or 0) + (after.positives or 0)) / (n1 + n2)
+        pooled = (before.positives + after.positives) / (n1 + n2)
         spread = math.sqrt(pooled * (1.0 - pooled) * (1.0 / n1 + 1.0 / n2))
         z = abs(r2 - r1) / spread if spread > 0 else 0.0
         if change <= tolerance or z <= min_z:
@@ -791,8 +819,8 @@ def label_rate_checks(
                 code="LABEL_RATE_UNSTABLE",
                 severity=Severity.WARNING,
                 message=(
-                    f"The share of customers with the outcome went from {r1:.1%} at {before.date} to "
-                    f"{r2:.1%} at {after.date}: it {moved}, more than the {tolerance:.0%} allowed and "
+                    f"The share of customers with the outcome went from {r1:.1%} in {before.label} to "
+                    f"{r2:.1%} in {after.label}: it {moved}, more than the {tolerance:.0%} allowed and "
                     "more than chance would explain."
                 ),
                 suggestion=(
@@ -800,8 +828,8 @@ def label_rate_checks(
                     "a new product or a gap in the data can change what the outcome means."
                 ),
                 details={
-                    "from_date": str(before.date),
-                    "to_date": str(after.date),
+                    "from_date": before.month,
+                    "to_date": after.month,
                     "from_rate": round(r1, 4),
                     "to_rate": round(r2, 4),
                     "relative_change": None if not math.isfinite(change) else round(change, 4),
@@ -852,20 +880,28 @@ def _outcome_checked(
         )
     else:
         rows.append(("Customers with the outcome", "Not measured: no prediction date was kept."))
+    if facts.label.exclude_roles:
+        counted = [s.excluded for s in kept]
+        if kept and all(count is not None for count in counted):
+            left_out = sum(count or 0 for count in counted)
+            rows.append(
+                (
+                    "Customers left out",
+                    f"{left_out:,} across the {len(kept)} prediction date(s) used, for a record in a table "
+                    "that leaves a customer out",
+                )
+            )
+        else:
+            rows.append(("Customers left out", "Not recorded by this build."))
     rows.append(("Future-data check", _leak_verdict(report)))
     blocks: list[AnyBlock] = [Heading(text="The outcome, checked"), KeyValues(rows=tuple(rows))]
     if kept:
-        months: dict[str, tuple[int, int]] = {}
-        for s in sorted(kept, key=lambda s: s.date):
-            key = s.date.strftime("%b %Y")
-            customers, positives = months.get(key, (0, 0))
-            months[key] = (customers + s.entities, positives + (s.positives or 0))
         blocks.append(
             Table(
                 columns=("Month", "Customers", "With the outcome", "Share"),
                 rows=tuple(
-                    (month, f"{customers:,}", f"{positives:,}", f"{positives / customers:.1%}")
-                    for month, (customers, positives) in months.items()
+                    (m.label, f"{m.customers:,}", f"{m.positives:,}", f"{m.positives / m.customers:.1%}")
+                    for m in month_rates(report.snapshots if report is not None else ())
                 ),
                 caption="The base rate per month of prediction dates: it should move slowly, if at all.",
             )
@@ -903,8 +939,35 @@ def _base_rate(facts: ReadinessFacts) -> tuple[float | None, int | None, str]:
     return positives / customers, eligible, source
 
 
-def _can_we_measure(facts: ReadinessFacts, settings: ReadinessSettings) -> list[AnyBlock]:
-    """The smallest change a test is sure to see at each control-group share (engine.measurement)."""
+def campaign_aim(use_case_id: str, root: Path | None = None) -> Direction:
+    """Which way a campaign of this use case tries to move its outcome: `"down"` for an outcome the
+    use case exists to prevent (`engine.pilot.roi.outcome_is_good_by_default`, the pilot value view's
+    rule), `"up"` otherwise, and `"either"` when the use case cannot be read."""
+    from engine.config import load_use_case
+    from engine.pilot.roi import outcome_is_good_by_default
+
+    if not use_case_id:
+        return "either"
+    try:
+        config = load_use_case(use_case_id, root)
+    except Exception:  # a report shows what it can; an unreadable use case leaves the aim unknown
+        return "either"
+    outcome = config.label.name if config.label is not None else config.target.column
+    if outcome is None:
+        return "either"
+    return "up" if outcome_is_good_by_default(use_case_id, outcome, root) else "down"
+
+
+_AIM_WORDS: Final[dict[str, str]] = {
+    "down": "a fall in the outcome, which is what a campaign of this use case aims for",
+    "up": "a rise in the outcome, which is what a campaign of this use case aims for",
+    "either": "up or down",
+}
+
+
+def _can_we_measure(facts: ReadinessFacts, settings: ReadinessSettings, root: Path | None) -> list[AnyBlock]:
+    """The smallest change a test is sure to see at each control-group share (engine.measurement), in
+    the direction the use case's campaigns aim for (:func:`campaign_aim`)."""
     from engine.measurement.planner import arm_sizes, mde_two_proportions
 
     if facts.label is None and facts.report is None:
@@ -914,13 +977,14 @@ def _can_we_measure(facts: ReadinessFacts, settings: ReadinessSettings) -> list[
     if eligible is None or eligible <= 0:
         blocks.append(Paragraph(text="Not measured: the build did not record how many customers there are."))
         return blocks
+    aim = campaign_aim(facts.use_case_id, root)
     confidence = (1.0 - settings.alpha) * 100.0
     blocks.append(
         Paragraph(
             text=(
                 f"How small a change a campaign to the {eligible:,} customers at the latest prediction date "
                 f"can show, for each size of control group: the change is seen with a chance of "
-                f"{settings.power:.0%} at {confidence:g}% confidence, up or down. {source}"
+                f"{settings.power:.0%} at {confidence:g}% confidence, {_AIM_WORDS[aim]}. {source}"
             )
         )
     )
@@ -928,7 +992,9 @@ def _can_we_measure(facts: ReadinessFacts, settings: ReadinessSettings) -> list[
     reasons: list[str] = []
     for share in settings.control_group_shares:
         n_treat, n_control = arm_sizes(eligible, share)
-        mde = mde_two_proportions(n_treat, n_control, base_rate, settings.alpha, settings.power)
+        mde = mde_two_proportions(
+            n_treat, n_control, base_rate, settings.alpha, settings.power, direction=aim
+        )
         if mde.points is None or mde.relative is None:
             seen = "not measured"
             if mde.reason and mde.reason not in reasons:

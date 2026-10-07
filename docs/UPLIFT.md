@@ -160,10 +160,13 @@ the user names as "who past campaigns contacted" and answers two questions
    learn from), with the same limit, `uplift.randomness_auc_max`:
    - **random** - the out-of-fold score is at or below the limit;
    - **model-selected** - above it: past campaigns chose their customers by a model or a rule. The
-     report carries `TREATMENT_HISTORY_NOT_RANDOM`, a **warning** (Plan J's table of the one code
-     registry, not an uplift-run code: it blocks nothing, it changes the plan);
+     report carries `TREATMENT_HISTORY_NOT_RANDOM`, a **warning** (a Plan J code,
+     `engine.measurement.codes`, not an uplift-run code: it blocks nothing, it changes the plan);
    - **unknown** - the column is not in the dataset, holds values other than 0/1 or blanks, a group
-     has fewer than 30 customers, or there is nothing to test the choice against.
+     has fewer than 30 customers, there is nothing to test the choice against, or (with a two-column
+     key) a customer is contacted at some prediction dates and held back at others - the history an
+     uplift run refuses with `TREATMENT_VARIES_WITHIN_ENTITY`, so the verdict is never "uplift now"
+     there and no customer is counted in both groups.
 2. **Is it enough to learn who a campaign changes now?** The **sufficiency verdict** uses the floors
    `TREATMENT_ARM_TOO_SMALL` uses, `uplift.min_arm_rows` (default 1,000) and
    `uplift.min_arm_positives` (default 50), counted in customers for a two-column key:

@@ -361,12 +361,18 @@ label:
 
 - `grace_days` extends the window: the label above reads the 37 days after each snapshot. Censoring
   (below), the history a build needs, the future-data check and a scored campaign's outcome window
-  (when its outcomes may be uploaded) all use the whole 37 days; the leak
-  probe also dates a copy of its future rows inside the last snapshot's grace period, so a feature
-  that reads those days is `FUTURE_EVENTS_LEAKED` like any other.
+  (when its outcomes may be uploaded, and the default window of `POST /runs/{id}/measure`) all use
+  the whole 37 days; the leak probe also dates a copy of its future rows on every day of the last
+  snapshot's grace period, so a feature that reads any of those days, even only one, is
+  `FUTURE_EVENTS_LEAKED` like any other.
 - `exclude_roles` names event tables whose events inside the same window take a customer out of the
   label altogether: the row is dropped from the dataset rather than counted as a lapse or as staying.
-  A table named there that is not mapped is `LABEL_ROLE_MISSING`.
+  A table named there that is not mapped is `LABEL_ROLE_MISSING`. A window is finished only where
+  every table the label reads has data, so censoring uses the earliest of the label's table and these
+  tables' last dates (`LABEL_HORIZON_CENSORED` lists each in `details.data_end_by_table`): a
+  customer who ported out after the port-out extract ends is not counted as lapsed. The build report
+  counts the customers left out per snapshot date (`SnapshotStat.excluded`), and the readiness
+  report shows their total.
 - Neither is allowed on a `column` label, and a label cannot leave customers out by its own table.
   Both are omitted from the saved recipe while unset, so every existing recipe and its hash are
   unchanged.

@@ -45,7 +45,6 @@ __all__ = [
     "MODEL_DIRECTORY",
     "NO_CHAMPION_AT_DECISION",
     "ONBOARDING_VALIDATION_CODES",
-    "PLAN_J_VALIDATION_CODES",
     "SCORE_ARTEFACTS",
     "TABULAR_SCHEMAS",
     "TRAIN_ARTEFACTS",
@@ -528,7 +527,7 @@ class ValidationCheck(Artefact):
 
     @model_validator(mode="after")
     def _known_code(self) -> ValidationCheck:
-        if self.code not in CHECK_CODES:
+        if self.code not in CHECK_CODES and self.code not in _plan_j_check_codes():
             raise ValueError(f"unknown validation code {self.code!r}; known codes: {_known_codes()}")
         # Phase 2 plan section 7: a leak is a bug in the engine, so no screen may offer to wave it
         # through - enforced by the model rather than by a convention every producer must remember.
@@ -538,7 +537,19 @@ class ValidationCheck(Artefact):
 
 
 def _known_codes() -> str:
-    return ", ".join(sorted(CHECK_CODES))
+    return ", ".join(sorted(CHECK_CODES | _plan_j_check_codes()))
+
+
+# --- PLAN-J (M93): Plan J's readiness warnings travel as ValidationCheck rows ---------------------
+def _plan_j_check_codes() -> frozenset[str]:
+    """Plan J's check codes (`engine.measurement.codes`), read at call time. Plan J keeps its codes in
+    its own set (DEC-1300 (d)), not in `CHECK_CODE_TABLES`; this only lets a check row carry them."""
+    from engine.measurement.codes import MEASUREMENT_CHECK_CODES
+
+    return MEASUREMENT_CHECK_CODES
+
+
+# --- end PLAN-J ----------------------------------------------------------------------------------
 
 
 class ValidationReport(Artefact):
@@ -1662,18 +1673,6 @@ AGENT_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
 """Plan G's three codes (DEC-1006, DEC-1013): a scoring file the model's saved preparation recipe cannot
 prepare. Defined here, beside the other tables, for the one-registry ruling (DEC-950)."""
 
-PLAN_J_VALIDATION_CODES: Final[frozenset[str]] = frozenset(
-    {
-        "LABEL_RATE_UNSTABLE",
-        "TREATMENT_HISTORY_NOT_RANDOM",
-    }
-)
-"""Plan J's codes (M93): the readiness report's label section (`LABEL_RATE_UNSTABLE`, the outcome rate
-jumps between prediction dates beyond `configs/pilot/readiness.yaml`'s tolerance) and its
-treatment-history check (`TREATMENT_HISTORY_NOT_RANDOM`, `engine.uplift.checks.treatment_history`).
-Both are warnings that inform a plan; neither blocks a build or a run. A reviewed in-place edit of the
-one registry (Plan J §3.2), like Plan G's table."""
-
 CHECK_CODE_TABLES: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
     {
         "validation": VALIDATION_CODES,
@@ -1681,7 +1680,6 @@ CHECK_CODE_TABLES: Final[Mapping[str, frozenset[str]]] = MappingProxyType(
         "onboarding": ONBOARDING_VALIDATION_CODES,
         "uplift": UPLIFT_VALIDATION_CODES,
         "agent": AGENT_VALIDATION_CODES,  # Plan G (DEC-1013)
-        "plan_j": PLAN_J_VALIDATION_CODES,  # Plan J (M93)
     }
 )
 """The one code registry (DEC-950): every check code the platform can write, grouped by the table it
@@ -1696,8 +1694,7 @@ if sum(len(table) for table in CHECK_CODE_TABLES.values()) != len(CHECK_CODES): 
 
 
 def check_code_table(code: str) -> str | None:
-    """The registry table `code` belongs to (`validation`, `extension`, `onboarding`, `uplift`, `agent` or
-    `plan_j`)."""
+    """The registry table `code` belongs to (`validation`, `extension`, `onboarding`, `uplift` or `agent`)."""
     return next((name for name, table in CHECK_CODE_TABLES.items() if code in table), None)
 
 

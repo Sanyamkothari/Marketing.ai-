@@ -25,13 +25,19 @@ equal groups of `n`, solving it for `n` gives
 
 which is :func:`n_for_mde`: 4% → 3% needs 5,301 per group and 10% → 8% needs 3,213 (both at 95% and
 80%). The far tail (a significant result in the wrong direction) is ignored, as the closed form
-does; at any power worth planning for it is below one part in a million. `engine.uplift.power`
-(Plan I) keeps it, so the two agree to that tail.
+does. That makes the smallest detectable effect slightly conservative (a little larger than the exact
+one), and only matters for control groups of a few dozen customers at a low base rate: with 60 held
+back at 4%, counting the far tail adds about 0.02 to the power at the smallest fall. With control
+groups of hundreds or more it is negligible. `engine.uplift.power` (Plan I) keeps the far tail, so
+the two agree except in that small-group corner.
 
 **The smallest detectable effect** (:func:`mde_two_proportions`) is the smallest `|d|` with
 `power(d) ≥ power`, found by bisection. A fall and a rise of the same size are not equally easy to
 see (the spread depends on the rate), so `direction` says which: `"up"`, `"down"`, or `"either"`
 (the default), the larger of the two - the change the test is sure to see whichever way it goes.
+With a small or unequal control group the two differ a lot (20,000 eligible, 5% held back, a 4% base
+rate: a rise of 2.04 points, a fall of 1.53), so a caller that knows which way the campaign aims
+passes it: the readiness report passes `"down"` for an outcome the use case exists to prevent.
 
 **Null with a reason, never 0.** A number that cannot be computed - the base rate is unknown, a
 group would be empty, every customer already has the outcome, no value per conversion was entered -
@@ -478,6 +484,13 @@ class PowerPreviewRequest(BaseModel):
     offer_cost: float | None = Field(
         default=None, ge=0.0, le=1e9, description="Rupees an offer costs when it is taken."
     )
+    direction: Direction = Field(
+        default="either",
+        description=(
+            "Which way the campaign aims to move the outcome: `down` for one to prevent (churn, lapse), "
+            "`up` for one to have more of, `either` (the default) for the larger of the two."
+        ),
+    )
 
     @model_validator(mode="after")
     def _shares(self) -> PowerPreviewRequest:
@@ -496,7 +509,7 @@ class PowerPreviewPoint(BaseModel):
     n_treat: int = Field(description="Customers contacted.")
     n_control: int = Field(description="Customers held back.")
     mde_pp: float | None = Field(
-        description="Smallest change, up or down, the test is sure to see, in percentage points; null when it cannot be said."
+        description="Smallest change in the request's direction (up, down, or the larger of the two) the test is sure to see, in percentage points; null when it cannot be said."
     )
     cost_of_holdout: MoneyRange | None = Field(
         description="What holding the control group back costs if the campaign changes the outcome by exactly `mde_pp`; null when a value is missing."
@@ -521,9 +534,14 @@ class PowerPreview(BaseModel):
 def _basis(request: PowerPreviewRequest) -> str:
     confidence = round((1.0 - request.alpha) * 100.0, 2)
     chance = round(request.power * 100.0, 2)
+    aim = {
+        "up": "a rise of the size shown",
+        "down": "a fall of the size shown",
+        "either": "a real change of the size shown, up or down",
+    }[request.direction]
     return (
         f"A two-sided comparison of the contacted and the held-back customers at {confidence:g}% "
-        f"confidence, and a chance of {chance:g}% of seeing a real change of the size shown. The base rate "
+        f"confidence, and a chance of {chance:g}% of seeing {aim}. The base rate "
         "is the one entered. The cost of holding customers back assumes the campaign changes the "
         "outcome by exactly the size shown; contacting customers outside the selection costs every "
         "contact, plus the offer for those who take it. Every number is worked out from the counts "
@@ -538,7 +556,9 @@ def power_preview(request: PowerPreviewRequest) -> PowerPreview:
     points: list[PowerPreviewPoint] = []
     for share in request.holdout_shares:
         n_treat, n_control = arm_sizes(request.eligible, share)
-        mde = mde_two_proportions(n_treat, n_control, request.base_rate, request.alpha, request.power)
+        mde = mde_two_proportions(
+            n_treat, n_control, request.base_rate, request.alpha, request.power, direction=request.direction
+        )
         holdout = cost_of_holdout(n_control, mde.absolute, request.value_per_conversion)
         reasons = [mde.reason, holdout.reason if mde.reason is None else None, explore.reason]
         points.append(

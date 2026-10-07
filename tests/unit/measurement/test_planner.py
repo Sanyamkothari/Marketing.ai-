@@ -196,6 +196,28 @@ def test_the_preview_refuses_a_share_outside_its_range(shares: tuple[float, ...]
         PowerPreviewRequest(eligible=10_000, base_rate=0.04, holdout_shares=shares)
 
 
+def test_a_fall_is_easier_to_see_than_a_rise_with_a_small_control_group() -> None:
+    """Review M93: the pooled test is asymmetric with an unbalanced holdout (20,000 eligible, 5% held
+    back, 4% base rate: a rise of about 2.04 points, a fall of about 1.53), so the direction matters."""
+    n_treat, n_control = arm_sizes(20_000, 0.05)
+    up = mde_two_proportions(n_treat, n_control, 0.04, direction="up")
+    down = mde_two_proportions(n_treat, n_control, 0.04, direction="down")
+    assert up.points == pytest.approx(2.04, abs=0.01) and down.points == pytest.approx(1.53, abs=0.01)
+    assert mde_two_proportions(n_treat, n_control, 0.04).points == up.points
+
+
+@pytest.mark.parametrize("direction", ["up", "down", "either"])
+def test_the_preview_plans_for_the_direction_asked(direction: str) -> None:
+    request = PowerPreviewRequest(
+        eligible=20_000, base_rate=0.04, holdout_shares=(0.05,), direction=direction  # type: ignore[arg-type]
+    )
+    (point,) = power_preview(request).points
+    expected = mde_two_proportions(point.n_treat, point.n_control, 0.04, direction=direction)  # type: ignore[arg-type]
+    assert point.mde_pp == pytest.approx(expected.points, abs=1e-4)
+    assert PowerPreviewRequest(eligible=1, base_rate=0.1, holdout_shares=(0.1,)).direction == "either"
+    assert not jargon_in(power_preview(request).basis)
+
+
 def test_no_planner_message_uses_jargon() -> None:
     from engine.measurement import planner
 

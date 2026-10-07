@@ -20,7 +20,6 @@ from engine.contracts import (
     CHECK_CODES,
     EXTENSION_VALIDATION_CODES,
     ONBOARDING_VALIDATION_CODES,
-    PLAN_J_VALIDATION_CODES,
     UPLIFT_VALIDATION_CODES,
     VALIDATION_CODES,
     Severity,
@@ -44,14 +43,13 @@ def test_the_build_report_carries_the_phase_one_contract() -> None:
 def test_the_known_codes_are_every_table_and_the_phase_one_table_has_not_grown() -> None:
     # Plan A M36 added a third table beside the Phase 1 one (DEC-095); the one-registry ruling
     # (DEC-950) added the uplift table as the fourth. The union takes all of them.
-    # Plan G added the agent table, the fifth (DEC-1013). Plan J M93 added its own, the sixth.
+    # Plan G added the agent table, the fifth (DEC-1013).
     assert CHECK_CODES == (
         VALIDATION_CODES
         | ONBOARDING_VALIDATION_CODES
         | EXTENSION_VALIDATION_CODES
         | UPLIFT_VALIDATION_CODES
         | AGENT_VALIDATION_CODES
-        | PLAN_J_VALIDATION_CODES
     )
     assert len(VALIDATION_CODES) == 19
     assert not (VALIDATION_CODES & ONBOARDING_VALIDATION_CODES)
@@ -59,17 +57,11 @@ def test_the_known_codes_are_every_table_and_the_phase_one_table_has_not_grown()
 
 def test_one_registry_holds_every_table_and_no_code_is_in_two() -> None:
     """DEC-950: one code registry; a code means one thing wherever it appears."""
-    assert set(CHECK_CODE_TABLES) == {"validation", "extension", "onboarding", "uplift", "agent", "plan_j"}
+    assert set(CHECK_CODE_TABLES) == {"validation", "extension", "onboarding", "uplift", "agent"}
     assert sum(len(table) for table in CHECK_CODE_TABLES.values()) == len(CHECK_CODES)
     for name, table in CHECK_CODE_TABLES.items():
         assert all(check_code_table(code) == name for code in table)
     assert check_code_table("NOT_A_CODE") is None
-
-
-def test_plan_j_has_exactly_its_two_m93_codes() -> None:
-    """Plan J M93: the readiness report's two warnings, in a table of their own (no other table grows)."""
-    assert {"LABEL_RATE_UNSTABLE", "TREATMENT_HISTORY_NOT_RANDOM"} == PLAN_J_VALIDATION_CODES
-    assert CHECK_CODE_TABLES["plan_j"] is PLAN_J_VALIDATION_CODES
 
 
 def test_the_uplift_table_is_the_registrys_own_not_a_copy() -> None:

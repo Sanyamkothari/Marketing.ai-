@@ -17,7 +17,8 @@ import pandas as pd
 import pytest
 
 from engine.config import UseCaseConfig, load_use_case_document
-from engine.contracts import Severity, check_code_table
+from engine.contracts import CHECK_CODES, Severity
+from engine.measurement.codes import MEASUREMENT_CHECK_CODES
 from engine.pilot.plain import jargon_in
 from engine.uplift.checks import TreatmentHistory, sufficiency_verdict, treatment_history
 from tests.fixtures.make_uplift_data import make_uplift_data
@@ -67,7 +68,8 @@ def test_model_selected_treatment_is_reported_not_random(model_selected: pd.Data
     assert found.score is not None and found.score > found.threshold
     assert found.check is not None and found.check.code == "TREATMENT_HISTORY_NOT_RANDOM"
     assert found.check.severity is Severity.WARNING
-    assert check_code_table("TREATMENT_HISTORY_NOT_RANDOM") == "plan_j"
+    assert "TREATMENT_HISTORY_NOT_RANDOM" in MEASUREMENT_CHECK_CODES
+    assert "TREATMENT_HISTORY_NOT_RANDOM" not in CHECK_CODES
     assert "was not random" in found.message
     assert found.verdict == "propensity_first"
 
@@ -181,3 +183,48 @@ def test_every_sentence_is_plain(randomised: pd.DataFrame, model_selected: pd.Da
         if found.check is not None:
             texts += [found.check.message, found.check.suggestion]
         assert [text for text in texts if jargon_in(text)] == [], texts
+
+
+def two_snapshot_panel(randomised: pd.DataFrame, *, rerandomise: bool) -> pd.DataFrame:
+    """The 4,000 customers at two snapshots; in the second, contact is drawn again at random (or kept)."""
+    first = randomised.assign(snapshot_date=pd.Timestamp("2025-01-31"))
+    second = randomised.assign(snapshot_date=pd.Timestamp("2025-02-28"))
+    if rerandomise:
+        rng = np.random.default_rng(9)
+        second["treatment"] = rng.integers(0, 2, size=len(second))
+    return pd.concat([first, second], ignore_index=True)
+
+
+def panel_history(frame: pd.DataFrame, **uplift: Any) -> TreatmentHistory:
+    return treatment_history(
+        frame,
+        use_case(**uplift),
+        treatment_column="treatment",
+        primary_key=[PK, "snapshot_date"],
+        target=TARGET,
+        seed=0,
+    )
+
+
+def test_a_customer_in_both_groups_is_never_uplift_now(randomised: pd.DataFrame) -> None:
+    """Review M93: re-randomised across snapshots, run_uplift_checks refuses the file
+    (TREATMENT_VARIES_WITHIN_ENTITY), so the history check must not say "uplift now" or count a
+    customer in both groups."""
+    found = panel_history(
+        two_snapshot_panel(randomised, rerandomise=True), min_arm_rows=1, min_arm_positives=1
+    )
+    assert found.verdict == "propensity_first"
+    assert found.assignment == "unknown"
+    assert found.treated is None and found.control is None
+    assert "contacted at some prediction dates and held back at others" in found.message
+    assert not jargon_in(found.message) and not jargon_in(found.verdict_message)
+
+
+def test_a_panel_with_one_value_per_customer_counts_customers_once(randomised: pd.DataFrame) -> None:
+    found = panel_history(
+        two_snapshot_panel(randomised, rerandomise=False), min_arm_rows=1, min_arm_positives=1
+    )
+    assert found.assignment == "random"
+    assert found.verdict == "uplift_now"
+    assert found.treated is not None and found.control is not None
+    assert found.treated + found.control == len(randomised)

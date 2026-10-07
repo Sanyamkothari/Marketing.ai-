@@ -946,6 +946,27 @@ def treatment_history(
             y, _ = coerce_outcome(frame[target], config.target.positive_label)
         except ValueError:
             y = None
+    if entity is not None:
+        # The same refusal as run_uplift_checks' TREATMENT_VARIES_WITHIN_ENTITY: with a customer in both
+        # groups there are no per-customer groups to count or to compare, so an uplift run would stop.
+        campaign = uplift.campaign_id_column
+        if campaign is not None and campaign not in frame.columns:
+            campaign = None
+        mixed, entities = _mixed_entities(frame, t, entity, campaign)
+        if mixed:
+            within = f" within one campaign ('{campaign}')" if campaign is not None else ""
+            return _unknown_history(
+                treatment_column,
+                f"{_n(mixed)} of {_n(entities)} customers ({mixed / entities:.1%}) are contacted at some "
+                f"prediction dates and held back at others{within}, according to '{treatment_column}'. "
+                "Contacted and held-back groups are kept per customer, so such a customer would be "
+                "compared with itself and these campaigns cannot be compared as they are. Give each "
+                "customer the same value at every prediction date of a campaign.",
+                (None, None, None, None),
+                threshold=threshold,
+                min_rows=min_rows,
+                min_positives=min_positives,
+            )
     counts: ArmCounts
     if entity is None:
         counts = (

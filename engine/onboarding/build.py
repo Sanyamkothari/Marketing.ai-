@@ -630,9 +630,10 @@ def _run_leak_probe(
     what catches a leak that moves only an entity outside both groups - a join that reads one
     other, particular entity's events - which the narrowed rows cannot see (DEC-872).
 
-    `grace_window` is `(horizon_days, grace_days)` of a lapse label (Plan J M93), None otherwise. A
-    second copy of the same rows is then dated inside the last snapshot's grace period, the days the
-    outcome window was extended by, so a feature that reads that far ahead - and only that far - is
+    `grace_window` is `(horizon_days, grace_days)` of a lapse label (Plan J M93), None otherwise. One
+    more copy of the same rows is then dated on each day of the last snapshot's grace period, the days
+    the outcome window was extended by (`(h, h+g]` with an inclusive snapshot time, `[h, h+g)`
+    without), so a feature that reads any of those days - even only the first or only the last - is
     caught too; the rows dated the day after the last snapshot catch everything nearer.
     """
     import duckdb
@@ -641,7 +642,9 @@ def _run_leak_probe(
     last = pd.Timestamp(snapshots[SNAPSHOT_COLUMN].max())
     after = last + pd.Timedelta(days=1)
     in_grace = (
-        None if grace_window is None else last + pd.Timedelta(days=_grace_offset(*grace_window, inclusive))
+        []
+        if grace_window is None
+        else [last + pd.Timedelta(days=offset) for offset in _grace_offsets(*grace_window, inclusive)]
     )
     injected: dict[str, int] = {}
     witnesses: list[pd.Series[Any]] = []
@@ -652,8 +655,10 @@ def _run_leak_probe(
                 con.register(role, frame)
                 continue
             extra = frame.head(_PROBE_ROWS).assign(**{EVENT_TIME: after})
-            if in_grace is not None:
-                extra = pd.concat([extra, extra.assign(**{EVENT_TIME: in_grace})], ignore_index=True)
+            if in_grace:
+                extra = pd.concat(
+                    [extra, *(extra.assign(**{EVENT_TIME: day}) for day in in_grace)], ignore_index=True
+                )
             injected[role] = len(extra)
             if ENTITY_KEY in extra.columns:
                 witnesses.append(extra[ENTITY_KEY])
@@ -684,9 +689,10 @@ def _grace_window(label: LabelSpec | None) -> tuple[int, int] | None:
     return label.horizon_days, label.grace_days
 
 
-def _grace_offset(horizon_days: int, grace_days: int, inclusive: bool) -> int:
-    """Days after a snapshot that lie inside its grace period: `(h, h+g]` inclusive, `[h, h+g)` not."""
-    return horizon_days + ((grace_days + 1) // 2 if inclusive else grace_days // 2)
+def _grace_offsets(horizon_days: int, grace_days: int, inclusive: bool) -> range:
+    """Every day after a snapshot inside its grace period: `(h, h+g]` inclusive, `[h, h+g)` not."""
+    first = horizon_days + 1 if inclusive else horizon_days
+    return range(first, first + grace_days)
 
 
 def _full_rows(count: int) -> npt.NDArray[np.bool_]:

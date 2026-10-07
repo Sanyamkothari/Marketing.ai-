@@ -896,34 +896,43 @@ training data's in `uplift_drift.json` (`UPLIFT.md` §8).
 
 The readiness report of a built dataset (`GET /pilot/readiness/{dataset_id}`) adds three sections
 that help plan the pilot rather than judge the file. None of them changes the report's verdict, and
-their two codes are warnings in Plan J's table of the code registry
-(`engine.contracts.PLAN_J_VALIDATION_CODES`):
+their two codes are warnings. They are Plan J codes (`engine.measurement.codes.MEASUREMENT_CHECK_CODES`,
+part of Plan J's code set, DEC-1300 (d)), not rows of the Phase 1 to 3b tables of `CHECK_CODE_TABLES`;
+`ValidationCheck` accepts them through its PLAN-J hook:
 
 | Code | Severity | Blocks | Message | Suggestion |
 |---|---|---|---|---|
-| `LABEL_RATE_UNSTABLE` | warning | no | "The share of customers with the outcome went from {rate} at {date} to {rate} at {date}: it moved by {change} (or: more than doubled), more than the {tolerance} allowed and more than chance would explain." | "Check the outcome definition and the extract for those months: a changed process, a new product or a gap in the data can change what the outcome means." |
+| `LABEL_RATE_UNSTABLE` | warning | no | "The share of customers with the outcome went from {rate} in {month} to {rate} in {month}: it moved by {change} (or: more than doubled), more than the {tolerance} allowed and more than chance would explain." | "Check the outcome definition and the extract for those months: a changed process, a new product or a gap in the data can change what the outcome means." |
 | `TREATMENT_HISTORY_NOT_RANDOM` | warning | no | "Who was contacted in '{column}' was not random: it can be told from the customers' own data (score {score}, where a random choice scores about 0.50 and the limit is {limit}). [The strongest sign(s) was/were {columns}.] Past campaigns chose their customers by a model or a rule, so comparing contacted with held-back customers would mix what a campaign changed with how the chosen customers already differed." | "Hold back a randomly chosen control group in the next campaign; until its results are in, rank customers by how likely they are to have the outcome." |
 
 - **The outcome, checked.** The outcome definition in words (window, grace period, tables that leave a
   customer out: `docs/ONBOARDING.md` §5), the share of customers with the outcome per month of
-  prediction dates, how many there are, and the future-data check's verdict. `LABEL_RATE_UNSTABLE`
-  is raised for each pair of consecutive prediction dates the dataset kept whose share moved by more
+  prediction dates, how many there are, how many customers the label's `exclude_roles` left out
+  (`SnapshotStat.excluded`, written only for such a label), and the future-data check's verdict.
+  The prediction dates the dataset kept are summed per calendar month (the month table), and
+  `LABEL_RATE_UNSTABLE` is raised for each pair of consecutive months whose share moved by more
   than `label_rate_tolerance` of itself (default 0.5) **and** by more than `label_rate_min_z`
   standard errors (default 3), both in `configs/pilot/readiness.yaml`, so a small extract's noise is
-  not called unstable.
-- **Can we measure it?** The smallest change a test is sure to see, up or down, at a 3, 5, 10 and
-  15% control group (`control_group_shares`), with an 80% chance at 95% confidence
-  (`engine/measurement/planner.py`, the closed-form two-proportion formula). The customers are those
-  at the latest prediction date; the base rate is the dataset's own (the customers with the outcome
-  over the prediction dates kept) and the report says so. With no known base rate the row says
-  "not measured" and why; it is never 0.
+  not called unstable; `details.from_date` / `to_date` are the months, `YYYY-MM`.
+- **Can we measure it?** The smallest change a test is sure to see at a 3, 5, 10 and 15% control
+  group (`control_group_shares`), with an 80% chance at 95% confidence
+  (`engine/measurement/planner.py`, the closed-form two-proportion formula), in the direction the
+  use case's campaigns aim for: a fall for an outcome to prevent (`outcomes_to_prevent` in
+  `configs/pilot/value.yaml`, read through `engine.pilot.roi.outcome_is_good_by_default`), a rise
+  otherwise, and the larger of the two when the use case cannot be read. With a small or unequal
+  control group the two differ a lot, so a churn or lapse report does not show the larger rise.
+  The customers are those at the latest prediction date; the base rate is the dataset's own (the
+  customers with the outcome over the prediction dates kept) and the report says so. With no known
+  base rate the row says "not measured" and why; it is never 0.
 - **Past campaigns**, only with `?treatment_column=<column>`: whether past campaigns chose their
   customers at random, by a model, or cannot be told, and the sufficiency verdict ("uplift now", or
   "propensity + random control first, uplift from the next cycle"): `docs/UPLIFT.md` §3.
 
 `POST /measurement/power-preview` answers the same planning question from numbers typed in
-(eligible customers, base rate, control-group shares, an optional explore share and the value and
-cost inputs), with no customer data at all.
+(eligible customers, base rate, control-group shares, an optional explore share, the value and
+cost inputs, and an optional `direction`: `up`, `down` or `either`, the default), with no customer
+data at all. It is served once its router is registered in `api/main.py`'s PLAN-J block (M90's);
+until then only `api.routes.measurement.router` exists.
 
 ## 12. Files prepared by Guided setup (Plan G)
 

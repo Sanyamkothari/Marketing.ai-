@@ -14,6 +14,7 @@ Through the whole of `build_dataset`, with real files and mappings, like
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
@@ -158,21 +159,29 @@ def _build(root: Path, label: LabelSpec) -> BuildReport:
     )
 
 
-def _grace_period_join(event: str, snapshot: str, *, inclusive: bool) -> str:
-    """ "Own events up to the prediction date, or own events in the label's grace period."
+def _reads_days(first: int, last: int) -> Callable[..., str]:
+    """A join that also reads own events in (T+first, T+last]: "own events up to the prediction date,
+    or own events in (part of) the label's grace period".
 
     The guard line is exactly what `point_in_time_join_clause` writes, so `assert_point_in_time`
-    accepts the query; the `OR` branch reads only (T+30, T+37], the days a 30-day lapse label with
-    7 days' grace adds to its window.
+    accepts the query; the `OR` branch reads only the days given.
     """
-    bound = "<=" if inclusive else "<"
-    return (
-        f"{event}.entity_key = {snapshot}.entity_key\n"
-        f" AND {event}.event_time {bound} {snapshot}.snapshot_date  {POINT_IN_TIME_MARKER}\n"
-        f" OR {event}.entity_key = {snapshot}.entity_key"
-        f" AND {event}.event_time > {snapshot}.snapshot_date + INTERVAL {HORIZON} DAY"
-        f" AND {event}.event_time <= {snapshot}.snapshot_date + INTERVAL {HORIZON + GRACE} DAY"
-    )
+
+    def join(event: str, snapshot: str, *, inclusive: bool) -> str:
+        bound = "<=" if inclusive else "<"
+        return (
+            f"{event}.entity_key = {snapshot}.entity_key\n"
+            f" AND {event}.event_time {bound} {snapshot}.snapshot_date  {POINT_IN_TIME_MARKER}\n"
+            f" OR {event}.entity_key = {snapshot}.entity_key"
+            f" AND {event}.event_time > {snapshot}.snapshot_date + INTERVAL {first} DAY"
+            f" AND {event}.event_time <= {snapshot}.snapshot_date + INTERVAL {last} DAY"
+        )
+
+    return join
+
+
+_grace_period_join = _reads_days(HORIZON, HORIZON + GRACE)
+"""The whole grace period, (T+30, T+37]: the days a 30-day lapse label with 7 days' grace adds."""
 
 
 @pytest.fixture
@@ -206,3 +215,22 @@ def test_without_a_grace_period_the_probe_rows_lie_outside_the_buggy_window(
     """Why the probe dates a second copy inside the grace period: the day-after rows alone miss it."""
     report = _build(tmp_path, _label(None))
     assert _leaks(report) == []
+
+
+@pytest.mark.parametrize(
+    ("first", "last"),
+    [
+        (HORIZON, HORIZON + 1),  # only the first day of the grace period, (T+30, T+31]
+        (HORIZON + GRACE - 1, HORIZON + GRACE),  # only its last day, (T+36, T+37]
+    ],
+    ids=["first-grace-day", "last-grace-day"],
+)
+def test_a_feature_reading_a_single_grace_day_is_caught(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, first: int, last: int
+) -> None:
+    """Review M93: probe rows dated on one day of the grace period (its middle, T+34) miss a feature
+    that reads only the first or only the last grace day; a copy on every grace day catches both."""
+    monkeypatch.setattr(feature_engine, "point_in_time_join_clause", _reads_days(first, last))
+    report = _build(tmp_path, _label(GRACE))
+    assert _leaks(report), [check.code for check in report.checks]
+    assert not report.passed

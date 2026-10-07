@@ -47,7 +47,7 @@ from __future__ import annotations
 
 import ast
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Final, TypeVar
+from typing import TYPE_CHECKING, Any, Final, TypeVar, cast
 
 from engine.config import get_roles
 from engine.contracts import Severity
@@ -530,14 +530,26 @@ def build_labels(
         ) from exc
 
     excluded = 0
+    excluded_by_day: dict[datetime.date, int] = {}
     if EXCLUDED_COLUMN in labelled.columns:
         flagged = labelled[EXCLUDED_COLUMN].fillna(0).astype(bool)
         excluded = int(flagged.sum())
+        if excluded:
+            per_day = pd.to_datetime(labelled.loc[flagged, "snapshot_date"]).dt.date.value_counts()
+            excluded_by_day = {cast("datetime.date", day): int(count) for day, count in per_day.items()}
         labelled = labelled.loc[~flagged].drop(columns=[EXCLUDED_COLUMN]).reset_index(drop=True)
 
     window = spec.window_days
     horizon = None if window is None else pd.Timedelta(days=window)
     end = None if horizon is None else _data_end(con, role)
+    # A window is only complete where every table the label reads has data: a customer who left
+    # after an exclusion table's extract ends would otherwise be counted as lapsed (Plan J M93).
+    ends_by_table: dict[str, Any] = {}
+    if horizon is not None and spec.exclude_roles:
+        ends_by_table = {role: end, **{other: _data_end(con, other) for other in spec.exclude_roles}}
+        known = [value for other, value in ends_by_table.items() if other != role and value is not None]
+        if end is not None and known:
+            end = min([pd.Timestamp(end), *(pd.Timestamp(value) for value in known)])
     days = pd.to_datetime(labelled["snapshot_date"]).dt.date
 
     stats: list[SnapshotStat] = []
@@ -584,6 +596,7 @@ def build_labels(
                 positive_rate=None if positives is None else round(positives / len(values), 4),
                 censored=censored,
                 dropped_reason=reason,
+                excluded=excluded_by_day.get(day, 0) if spec.exclude_roles else None,
             )
         )
 
@@ -607,6 +620,16 @@ def build_labels(
                     "horizon_days": spec.horizon_days,
                     **({"grace_days": spec.grace_days} if spec.grace_days else {}),
                     "data_end": None if end is None else str(pd.Timestamp(end).date()),
+                    **(
+                        {
+                            "data_end_by_table": {
+                                table: None if value is None else str(pd.Timestamp(value).date())
+                                for table, value in ends_by_table.items()
+                            }
+                        }
+                        if ends_by_table
+                        else {}
+                    ),
                 },
             )
         )
