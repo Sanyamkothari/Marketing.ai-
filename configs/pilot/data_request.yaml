@@ -9,9 +9,10 @@
 
 schema_version: 1
 
-# The recommended first pilot (Plan E): one telecom client, churn first, then win-back with a
-# control group.
-default_use_cases: [telco-churn, win-back-campaign]
+# The default request when no use case is named (Plan J M93: neutral, not telecom). Win-back with a
+# control group fits any B2C business that has customers who go quiet; a pilot agreed on another
+# use case is requested with `--use-case` (`make pilot-generate` renders this default).
+default_use_cases: [win-back-campaign]
 
 # One entry per role in configs/roles.yaml. `file` is the name we ask for; `what` says what one row
 # is, in the client's words.
@@ -55,7 +56,7 @@ pseudonymisation:
   - "Do not use phone numbers, e-mail addresses or account numbers as the customer ID, even pseudonymised by hand."
 
 preflight:
-  - "Before sending, run the pre-flight checker on the folder of files: python -m scripts.preflight <folder> --use-case telco-churn (from the unzipped pilot kit)."
+  - "Before sending, run the pre-flight checker on the folder of files: python -m scripts.preflight <folder> --use-case <the use case agreed with Minfy> (from the unzipped pilot kit). Without --use-case it checks the files against this request."
   - "It reads the files on your laptop only. Nothing is uploaded; it writes one page, preflight_report.html, next to the files."
   - "It lists row counts, date ranges, how well the tables link up, columns that look like personal details, and format problems. Fix anything marked as a problem and run it again."
 
@@ -69,8 +70,8 @@ outcomes:
 # column listed here reads this sentence in the data request instead.
 column_meanings:
   signup_date: "When the customer joined."
-  plan_type: "The plan or product the customer is on (for example prepaid or postpaid)."
-  region: "Where the customer is, in your own geography (circle, zone or state)."
+  plan_type: "The plan or product the customer is on (for example a monthly or a yearly plan, or prepaid or postpaid)."
+  region: "Where the customer is, in your own geography (for example zone, state or city)."
   monthly_charges: "What the customer is billed in a normal month."
   marketing_opt_in: "Whether the customer agreed to marketing contact (Y or N). A do-not-disturb flag is fine too; tell us which one it is."
   last_contacted_at: "Date of the last marketing contact, so nobody is contacted too often."

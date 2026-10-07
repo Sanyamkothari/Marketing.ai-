@@ -20,9 +20,19 @@ from engine.pilot.data_request import (
 from engine.pilot.plain import jargon_in
 from scripts.gen_data_request import rendered_files, write_kit
 
+TELECOM_PILOT: tuple[str, ...] = ("telco-churn", "win-back-campaign")
+"""Plan E's first pilot, requested by name since Plan J M93 made the default neutral. The tests below
+that read telco-churn's own tables and features run on this request, exactly as they ran on the old
+default; the default itself is pinned by `test_the_default_request_is_neutral_not_telecom`."""
+
 
 @pytest.fixture(scope="module")
 def request_(config_root: Path):
+    return build_data_request(TELECOM_PILOT, config_root)
+
+
+@pytest.fixture(scope="module")
+def default_request(config_root: Path):
     return build_data_request(None, config_root)
 
 
@@ -32,8 +42,17 @@ def test_the_committed_kit_is_what_the_configs_generate(repo_root: Path, config_
     ), "docs/pilot is stale: run `make pilot-generate`"
 
 
-def test_the_default_request_is_the_pilots_two_use_cases(request_) -> None:
+def test_the_named_request_is_the_pilots_two_use_cases(request_) -> None:
     assert [line.id for line in request_.use_cases] == ["telco-churn", "win-back-campaign"]
+
+
+def test_the_default_request_is_neutral_not_telecom(default_request, config_root: Path) -> None:
+    """Plan J M93: the kit is sold to any B2C business, so the default assumes no industry."""
+    assert [line.id for line in default_request.use_cases] == ["win-back-campaign"]
+    assert not [line.id for line in default_request.use_cases if line.id.startswith("telco")]
+    wording = load_wording(config_root)
+    assert "telco" not in " ".join(wording.preflight).lower()
+    assert "telecom" not in " ".join(wording.preflight).lower()
 
 
 def test_the_minimum_history_is_the_sum_the_build_refuses_below(config_root: Path) -> None:
@@ -86,10 +105,11 @@ def test_every_kind_of_personal_detail_the_engine_detects_is_on_the_do_not_send_
         assert named in text
 
 
-def test_the_default_request_uses_no_model_jargon(request_, config_root: Path) -> None:
-    markdown = render_markdown(request_, load_wording(config_root))
-    offenders = [line for line in markdown.splitlines() if jargon_in(line)]
-    assert offenders == []
+def test_the_default_request_uses_no_model_jargon(request_, default_request, config_root: Path) -> None:
+    for request in (request_, default_request):
+        markdown = render_markdown(request, load_wording(config_root))
+        offenders = [line for line in markdown.splitlines() if jargon_in(line)]
+        assert offenders == []
 
 
 def test_the_request_explains_pseudonymisation_formats_and_the_preflight(request_, config_root: Path) -> None:
@@ -114,10 +134,13 @@ def test_a_template_is_a_header_row_with_the_customer_id_first(request_) -> None
         assert rows[0] == [column.name for column in table.columns]
 
 
-def test_every_requested_table_has_a_template_file(tmp_path: Path, config_root: Path, request_) -> None:
-    names = {path.name for path, _ in rendered_files(tmp_path, root=config_root)}
+def test_every_requested_table_has_a_template_file(
+    tmp_path: Path, config_root: Path, request_, default_request
+) -> None:
     wording = load_wording(config_root)
-    assert {template_filename(t.role, wording) for t in request_.tables} <= names
+    for use_cases, request in ((None, default_request), (TELECOM_PILOT, request_)):
+        names = {path.name for path, _ in rendered_files(tmp_path, use_cases=use_cases, root=config_root)}
+        assert {template_filename(t.role, wording) for t in request.tables} <= names
 
 
 def test_a_single_use_case_request_is_narrower(config_root: Path) -> None:

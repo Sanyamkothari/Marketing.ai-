@@ -27,6 +27,16 @@ the *whole* label role, deliberately not per entity and deliberately not filtere
 old is precisely the churner we are trying to find, so a per-entity cut-off would define the answer
 in terms of itself.
 
+**Lapse outcomes (Plan J M93).** "No purchase, renewal or recharge within N days" exists in every
+industry, and it usually comes with a grace period: a prepaid customer whose pack ran out may still
+recharge for a few days before the number counts as lapsed. `grace_days` extends the outcome window
+by that period - a 30-day lapse label with 7 days' grace reads `(T, T+37]` (inclusive) - and the
+censoring rule below uses the whole window, so a snapshot whose grace period runs past the end of the
+data is dropped like any other unfinished window. `exclude_roles` names event tables whose events
+inside the same window take a customer out of the label altogether (a port-out, a move to another
+plan): the row is dropped from the dataset rather than counted as a lapse or as staying. Both
+windows are written by `future_window_clause`, so the one-boundary rule holds for them too.
+
 Nothing here branches on a use-case id or a client id, and no user text ever reaches SQL unparsed:
 a `value_threshold` expression is walked as an `ast` and re-emitted from a closed list of node
 shapes, the same way `engine.onboarding.transforms.derive` does, so the only strings interpolated
@@ -103,12 +113,14 @@ class LabelResult:
     frame: pd.DataFrame
     per_snapshot: tuple[SnapshotStat, ...]
     checks: tuple[OnboardingCheck, ...]
+    excluded: int = 0
+    """Rows a lapse label left out because of an event in one of its `exclude_roles` (Plan J M93)."""
 
 
 # ---------------------------------------------------------------------------
 # The one place the future window is written
 # ---------------------------------------------------------------------------
-def future_window_clause(horizon_days: int, *, inclusive: bool) -> str:
+def future_window_clause(horizon_days: int, *, inclusive: bool, event_alias: str = EVENT_ALIAS) -> str:
     """The join condition that confines a label to events strictly after the snapshot date.
 
     The only function in this module that writes a comparison between `event_time` and
@@ -116,14 +128,27 @@ def future_window_clause(horizon_days: int, *, inclusive: bool) -> str:
     checks the returned SQL still contains it, so a future edit cannot quietly widen the window
     back over the past - which would not fail any test about counts, it would just make the label
     a summary of what already happened.
+
+    `horizon_days` is the whole window, grace period included (`LabelDefinition.window_days`).
+    `event_alias` names the event table the clause is about; only the exclusion subqueries of a
+    lapse label (`exclude_roles`) pass anything but the default.
     """
     after = ">" if inclusive else ">="
     until = "<=" if inclusive else "<"
     return (
-        f"{EVENT_ALIAS}.event_time {after} {SNAPSHOT_ALIAS}.snapshot_date "
-        f"AND {EVENT_ALIAS}.event_time {until} "
+        f"{event_alias}.event_time {after} {SNAPSHOT_ALIAS}.snapshot_date "
+        f"AND {event_alias}.event_time {until} "
         f"{SNAPSHOT_ALIAS}.snapshot_date + INTERVAL {horizon_days} DAY"
     )
+
+
+EXCLUDED_COLUMN: Final[str] = "__label_excluded"
+"""The flag column a lapse label with `exclude_roles` selects beside the label: 1 for a row left out
+because the customer had an event in one of those tables inside the window. `build_labels` drops the
+flagged rows and the column; it never reaches a dataset."""
+
+EXCLUDE_ALIAS: Final[str] = "x"
+"""The event alias of the exclusion subqueries, so their window cannot be mistaken for the label's."""
 
 
 # ---------------------------------------------------------------------------
@@ -293,13 +318,15 @@ def _aggregate_sql(spec: LabelSpec) -> str:
     return f"CASE WHEN {matched} = 0 THEN NULL ELSE CAST({holds} = {matched} AS INTEGER) END"
 
 
-def _select_sql(*, value: str, name: str, role: str, conditions: list[str], aggregated: bool) -> str:
+def _select_sql(
+    *, value: str, name: str, role: str, conditions: list[str], aggregated: bool, extra: str = ""
+) -> str:
     joined = "\n   AND ".join(conditions)
     grouping = f"\nGROUP BY {SNAPSHOT_ALIAS}.entity_key, {SNAPSHOT_ALIAS}.snapshot_date" if aggregated else ""
     return (
         f"SELECT {SNAPSHOT_ALIAS}.entity_key AS entity_key,\n"
         f"       {SNAPSHOT_ALIAS}.snapshot_date AS snapshot_date,\n"
-        f"       {value} AS {_identifier(name)}\n"
+        f"       {value} AS {_identifier(name)}{extra}\n"
         f"FROM snapshots {SNAPSHOT_ALIAS}\n"
         f"LEFT JOIN {_identifier(role)} {EVENT_ALIAS}\n"
         f"    ON {joined}{grouping}"
@@ -324,17 +351,25 @@ def compile_label_query(spec: LabelSpec, *, inclusive: bool) -> str:
             aggregated=False,
         )
 
-    horizon = _require(spec.horizon_days, field="outcome window", name=spec.name)
-    clause = future_window_clause(horizon, inclusive=inclusive)
+    _require(spec.horizon_days, field="outcome window", name=spec.name)
+    window = _require(spec.window_days, field="outcome window", name=spec.name)
+    clause = future_window_clause(window, inclusive=inclusive)
     conditions = [f"{EVENT_ALIAS}.entity_key = {SNAPSHOT_ALIAS}.entity_key", clause]
     if spec.where is not None:
         conditions.append(_where_sql(spec.where))
+    value = _aggregate_sql(spec)
+    extra = ""
+    if spec.exclude_roles:
+        excluded = _excluded_sql(spec.exclude_roles, window, inclusive=inclusive)
+        value = f"CASE WHEN {excluded} THEN NULL ELSE {value} END"
+        extra = f",\n       CAST({excluded} AS INTEGER) AS {_identifier(EXCLUDED_COLUMN)}"
     sql = _select_sql(
-        value=_aggregate_sql(spec),
+        value=value,
         name=spec.name,
         role=_require(spec.role, field="table", name=spec.name),
         conditions=conditions,
         aggregated=True,
+        extra=extra,
     )
     if clause not in sql:
         raise LabelError(
@@ -344,6 +379,17 @@ def compile_label_query(spec: LabelSpec, *, inclusive: bool) -> str:
             "This is an engine fault rather than a problem with the data; send the build id to support.",
         )
     return sql
+
+
+def _excluded_sql(roles: tuple[str, ...], window: int, *, inclusive: bool) -> str:
+    """True when the customer has an event in any of `roles` inside the label's own window."""
+    clause = future_window_clause(window, inclusive=inclusive, event_alias=EXCLUDE_ALIAS)
+    tests = [
+        f"EXISTS (SELECT 1 FROM {_identifier(role)} {EXCLUDE_ALIAS} "
+        f"WHERE {EXCLUDE_ALIAS}.entity_key = {SNAPSHOT_ALIAS}.entity_key AND {clause})"
+        for role in roles
+    ]
+    return "(" + " OR ".join(tests) + ")"
 
 
 # ---------------------------------------------------------------------------
@@ -378,6 +424,41 @@ def _data_end(con: duckdb.DuckDBPyConnection, role: str) -> Any:
     """The last `event_time` anywhere in the label role - how far the client's extract runs."""
     row = con.execute(f"SELECT max(event_time) FROM {_identifier(role)}").fetchone()
     return None if row is None else row[0]
+
+
+def _role_missing(snapshots: pd.DataFrame, spec: LabelSpec, role: str, *, excluded: bool) -> LabelResult:
+    """LABEL_ROLE_MISSING: the label's own table, or a table it leaves customers out by, is not mapped."""
+    if excluded:
+        message = (
+            f"The outcome '{spec.name}' leaves out customers with an event in the {role} table, which "
+            f"has not been mapped, so no row can be labelled."
+        )
+        suggestion = (
+            f"Upload the {role} table and map its columns, or take it off the outcome's list of tables "
+            f"that leave a customer out."
+        )
+    else:
+        message = (
+            f"The outcome '{spec.name}' is worked out from the {role} table, which has "
+            f"not been mapped, so no row can be labelled."
+        )
+        suggestion = (
+            f"Upload the {role} table and map its columns, or choose an outcome that is "
+            f"worked out from a table you already have."
+        )
+    return LabelResult(
+        frame=_empty_frame(snapshots, spec.name),
+        per_snapshot=(),
+        checks=(
+            OnboardingCheck(
+                code="LABEL_ROLE_MISSING",
+                severity=Severity.ERROR,
+                message=message,
+                suggestion=suggestion,
+                details={"role": role, "label": spec.name, **({"excluded_role": True} if excluded else {})},
+            ),
+        ),
+    )
 
 
 def build_labels(
@@ -432,25 +513,10 @@ def build_labels(
         else _require(spec.role, field="table", name=spec.name)
     )
     if role not in mapped_roles:
-        return LabelResult(
-            frame=_empty_frame(snapshots, spec.name),
-            per_snapshot=(),
-            checks=(
-                OnboardingCheck(
-                    code="LABEL_ROLE_MISSING",
-                    severity=Severity.ERROR,
-                    message=(
-                        f"The outcome '{spec.name}' is worked out from the {role} table, which has "
-                        f"not been mapped, so no row can be labelled."
-                    ),
-                    suggestion=(
-                        f"Upload the {role} table and map its columns, or choose an outcome that is "
-                        f"worked out from a table you already have."
-                    ),
-                    details={"role": role, "label": spec.name},
-                ),
-            ),
-        )
+        return _role_missing(snapshots, spec, role, excluded=False)
+    for excluded_role in spec.exclude_roles:
+        if excluded_role not in mapped_roles:
+            return _role_missing(snapshots, spec, excluded_role, excluded=True)
 
     sql = compile_label_query(spec, inclusive=inclusive)
     con.register("snapshots", snapshots)
@@ -463,7 +529,14 @@ def build_labels(
             f"Check that every column the outcome names is a mapped column of the {role} table.",
         ) from exc
 
-    horizon = None if spec.horizon_days is None else pd.Timedelta(days=spec.horizon_days)
+    excluded = 0
+    if EXCLUDED_COLUMN in labelled.columns:
+        flagged = labelled[EXCLUDED_COLUMN].fillna(0).astype(bool)
+        excluded = int(flagged.sum())
+        labelled = labelled.loc[~flagged].drop(columns=[EXCLUDED_COLUMN]).reset_index(drop=True)
+
+    window = spec.window_days
+    horizon = None if window is None else pd.Timedelta(days=window)
     end = None if horizon is None else _data_end(con, role)
     days = pd.to_datetime(labelled["snapshot_date"]).dt.date
 
@@ -525,13 +598,14 @@ def build_labels(
                     f"outcome window is not complete yet."
                 ),
                 suggestion=(
-                    f"Upload data that runs at least {spec.horizon_days} days past the last "
+                    f"Upload data that runs at least {window} days past the last "
                     f"snapshot date, or shorten the outcome window of '{spec.name}'."
                 ),
                 details={
                     "censored": censored_count,
                     "snapshot_dates": len(stats),
                     "horizon_days": spec.horizon_days,
+                    **({"grace_days": spec.grace_days} if spec.grace_days else {}),
                     "data_end": None if end is None else str(pd.Timestamp(end).date()),
                 },
             )
@@ -539,4 +613,4 @@ def build_labels(
     checks.extend(degenerate_checks)
 
     frame = labelled[~days.isin(dropped)].reset_index(drop=True)
-    return LabelResult(frame=frame, per_snapshot=tuple(stats), checks=tuple(checks))
+    return LabelResult(frame=frame, per_snapshot=tuple(stats), checks=tuple(checks), excluded=excluded)

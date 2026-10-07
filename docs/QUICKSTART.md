@@ -2,7 +2,7 @@
 
 This guide is for anyone who wants to try the product, not for developers. You copy a few commands
 into a terminal, wait for the demo to load, and open it in your browser. Nothing here needs an AWS
-account, a real AI service or any client data: the demo company, **Demo Telecom**, is synthetic.
+account, a real AI service or any client data: the demo company, **Demo Company**, is synthetic.
 
 Allow about 20 minutes the first time, most of it spent waiting for downloads.
 
@@ -62,7 +62,7 @@ It ends with a line like `setup ok: autogluon.tabular 1.6.3`. If it stops with a
 make demo-seed
 ```
 
-It ends with `Demo Telecom seeded in …`.
+It ends with `Demo Company seeded in …`.
 
 **Start the demo** (every time you want to use it):
 
@@ -111,7 +111,7 @@ offered only when the demo opens.
 These ten steps show the whole product in about fifteen minutes.
 
 1. **Home.** The use cases for a telecom business, laid out along the customer lifecycle. The top
-   bar has the six areas of the product and the client you are working on (**Demo Telecom**).
+   bar has the six areas of the product and the client you are working on (**Demo Company**).
 2. **Open Telco Customer Churn.** This is the demo's main use case: which subscribers are likely to
    leave in the next 60 days.
 3. **See the trained model.** Under **Previous runs**, open the training run, then its **Model**

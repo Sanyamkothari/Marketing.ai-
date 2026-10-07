@@ -13,7 +13,8 @@ the request cannot ask for less than a build needs, or for a column no feature r
   `standard_schema`. A column is *required* when the engine needs it to build at all (the customer
   ID, an event's date, a `standard_schema` column marked required), *needed* when a suggested
   feature or the label reads it, and *useful* otherwise.
-* **History.** The minimum is `onboarding.snapshots.min_history_days + label.horizon_days`, the
+* **History.** The minimum is `onboarding.snapshots.min_history_days + label.window_days` (the
+  horizon plus any grace period, Plan J M93), the
   same sum `engine.onboarding.snapshots` refuses a build below (`TOO_LITTLE_HISTORY`). The
   recommendation adds the longest feature window and the snapshots a year of monthly learning
   needs, and says why.
@@ -203,7 +204,7 @@ def _feature_columns(features: tuple[FeatureDef, ...], role: str) -> set[str]:
 def _history(config: UseCaseConfig) -> tuple[int, int]:
     """(minimum, recommended) days of history `config` needs from the event tables."""
     snapshots = config.onboarding.snapshots
-    horizon = config.label.horizon_days if config.label is not None and config.label.horizon_days else 0
+    horizon = config.label.window_days if config.label is not None and config.label.window_days else 0
     minimum = snapshots.min_history_days + horizon
     windows = [
         window for feature in config.suggested_features for window in feature.windows if window is not None

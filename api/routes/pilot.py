@@ -4,7 +4,8 @@
   advanced setting, the glossary).
 * `GET /pilot/data-request` and `GET /pilot/templates/{role}` - the client-facing data request and
   its header-only templates, for the use cases asked for.
-* `GET /pilot/readiness/{dataset_id}` - the data readiness report of one dataset build.
+* `GET /pilot/readiness/{dataset_id}` - the data readiness report of one dataset build (with
+  `treatment_column`, also what that column says about past campaigns: Plan J M93).
 * `GET /pilot/results` - the business results report of a use case's champion (or one model).
 * `GET /pilot/roi/{run_id}`, `PUT /pilot/roi/{run_id}` - the value view of a campaign and the
   client's value inputs, stored with the run.
@@ -226,12 +227,27 @@ def read_role_template(role: str, root: ConfigRootDep, use_case: UseCasesQuery =
     summary="The data readiness report of one dataset build: verdict, coverage, history, problems and fixes",
 )
 def read_readiness(
-    dataset_id: str, request: Request, storage: StorageDep, root: ConfigRootDep, fmt: FormatQuery = "html"
+    dataset_id: str,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    fmt: FormatQuery = "html",
+    treatment_column: Annotated[
+        str | None,
+        Query(
+            min_length=1,
+            max_length=128,
+            description="A column recording who past campaigns contacted (1) and held back (0): the report "
+            "then says whether they were chosen at random (Plan J M93). Counts only are shown.",
+        ),
+    ] = None,
 ) -> Response:
     from engine.pilot.readiness import ReadinessNotFoundError, collect_readiness, readiness_document
 
     try:
-        facts = collect_readiness(storage, get_client_store(request), dataset_id, root=root)
+        facts = collect_readiness(
+            storage, get_client_store(request), dataset_id, root=root, treatment_column=treatment_column
+        )
     except ReadinessNotFoundError as exc:
         raise http_error(404, "DATASET_NOT_FOUND", f"No build of dataset {dataset_id!r} was found.") from exc
     return _report(readiness_document(facts, root=root), fmt, f"readiness_{dataset_id}")

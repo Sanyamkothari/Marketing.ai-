@@ -20,16 +20,33 @@ The verdict is the build's own: *Not ready* exactly when the build report has an
 error (`BuildReport.passed` is false) or the build failed before writing one; *Ready with warnings*
 when it passed with warnings; *Ready* otherwise. The report explains the verdict; it never overrides
 it (Plan E §3: no change to checks).
+
+**Planning the test (Plan J M93).** Three sections help plan the pilot rather than judge the data,
+so none of them changes the verdict:
+
+* *The outcome, checked* - the outcome definition in words (window, grace period, tables that leave
+  a customer out), the share of customers with the outcome per month of prediction dates, how many
+  there are, the future-data check's verdict, and `LABEL_RATE_UNSTABLE` when that share jumps from
+  one prediction date to the next by more than `configs/pilot/readiness.yaml` allows.
+* *Can we measure it?* - the smallest change a test is sure to see at a 3, 5, 10 and 15% control
+  group (`engine.measurement.planner`), from the customers at the latest prediction date and the
+  dataset's own base rate, which the report says it took from there.
+* *Past campaigns* - only when a treatment column is named: whether past campaigns chose their
+  customers at random (`engine.uplift.checks.treatment_history`, `TREATMENT_HISTORY_NOT_RANDOM`), and
+  whether the history is enough to learn who a campaign changes now or only from the next cycle.
+  This one reads the built dataset itself, and shows counts only.
 """
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import date, datetime
+from itertools import pairwise
 from pathlib import Path
-from typing import TYPE_CHECKING, Final, TypeVar
+from typing import TYPE_CHECKING, Final, Literal, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from engine.pilot.document import (
     AnyBlock,
@@ -46,16 +63,30 @@ from engine.pilot.document import (
 
 if TYPE_CHECKING:
     from engine.clients import ClientStore
+    from engine.config import UseCaseConfig
     from engine.contracts import ValidationCheck
     from engine.onboarding.specs import (
         BuildReport,
         DatasetManifest,
+        LabelSpec,
         OnboardingSpec,
+        SnapshotStat,
         SourceSpec,
     )
     from engine.storage import Storage
+    from engine.uplift.checks import TreatmentHistory
 
-__all__ = ["ReadinessFacts", "ReadinessNotFoundError", "collect_readiness", "readiness_document"]
+__all__ = [
+    "READINESS_SETTINGS_FILENAME",
+    "ReadinessFacts",
+    "ReadinessNotFoundError",
+    "ReadinessSettings",
+    "collect_readiness",
+    "label_in_words",
+    "label_rate_checks",
+    "load_readiness_settings",
+    "readiness_document",
+]
 
 M = TypeVar("M", bound=BaseModel)
 
@@ -101,6 +132,12 @@ class ReadinessFacts:
     min_outcomes: int
     outcome_description: str
     built_at: datetime | None
+    label: LabelSpec | None = None
+    """The outcome definition the build used (the recipe's, else the use case's): Plan J M93."""
+    treatment: TreatmentHistory | None = None
+    """What the treatment column the user named says about past campaigns; None when none was named."""
+    treatment_note: str | None = None
+    """Why a named treatment column could not be looked at (the dataset was not built or not readable)."""
 
 
 def _read(storage: Storage, key: str, model: type[M]) -> M | None:
@@ -116,9 +153,18 @@ def _read(storage: Storage, key: str, model: type[M]) -> M | None:
 
 
 def collect_readiness(
-    storage: Storage, store: ClientStore, dataset_id: str, *, root: Path | None = None
+    storage: Storage,
+    store: ClientStore,
+    dataset_id: str,
+    *,
+    root: Path | None = None,
+    treatment_column: str | None = None,
 ) -> ReadinessFacts:
-    """Read the artefacts of one dataset build. Raises `ReadinessNotFoundError` when there is none."""
+    """Read the artefacts of one dataset build. Raises `ReadinessNotFoundError` when there is none.
+
+    With `treatment_column` (Plan J M93), the built dataset is read too and the treatment-history
+    check runs on that column; the report shows only its counts and verdicts.
+    """
     from engine.clients import ClientStoreError
     from engine.config import load_use_case
     from engine.onboarding.datasets import (
@@ -156,8 +202,14 @@ def collect_readiness(
         if spec is not None and spec.label_spec is not None
         else (config.label if config else None)
     )
-    horizon = label.horizon_days if label is not None else None
+    horizon = label.window_days if label is not None else None
     min_history = snapshots.min_history_days if snapshots is not None else 0
+    treatment: TreatmentHistory | None = None
+    treatment_note: str | None = None
+    if treatment_column:
+        treatment, treatment_note = _treatment_history(
+            storage, dataset_id, manifest, config, treatment_column=treatment_column
+        )
     return ReadinessFacts(
         dataset_id=dataset_id,
         client_name=client_name,
@@ -176,6 +228,52 @@ def collect_readiness(
         min_outcomes=config.validation.min_positive if config is not None else 0,
         outcome_description=(label.description if label is not None and label.description else ""),
         built_at=report.built_at if report is not None else None,
+        label=label,
+        treatment=treatment,
+        treatment_note=treatment_note,
+    )
+
+
+def _treatment_history(
+    storage: Storage,
+    dataset_id: str,
+    manifest: DatasetManifest | None,
+    config: UseCaseConfig | None,
+    *,
+    treatment_column: str,
+) -> tuple[TreatmentHistory | None, str | None]:
+    """`engine.uplift.checks.treatment_history` on the built dataset, or the reason it cannot run."""
+    import io
+
+    import pandas as pd
+
+    from engine.onboarding.datasets import DATASET_FRAME_FILENAME, dataset_key
+    from engine.storage import StorageError
+    from engine.uplift.checks import treatment_history
+
+    if manifest is None or config is None:
+        return None, (
+            f"Past campaigns were not looked at: the dataset was not built, so the column "
+            f"'{treatment_column}' cannot be read yet."
+        )
+    try:
+        frame = pd.read_parquet(
+            io.BytesIO(storage.read_bytes(dataset_key(dataset_id, DATASET_FRAME_FILENAME)))
+        )
+    except (StorageError, OSError, ValueError):
+        return None, "Past campaigns were not looked at: the built dataset could not be read."
+    primary_key: str | list[str] = (
+        manifest.primary_key[0] if len(manifest.primary_key) == 1 else list(manifest.primary_key)
+    )
+    return (
+        treatment_history(
+            frame,
+            config,
+            treatment_column=treatment_column,
+            primary_key=primary_key,
+            target=manifest.target,
+        ),
+        None,
     )
 
 
@@ -475,6 +573,11 @@ def readiness_document(
     else:
         blocks.append(Paragraph(text="Not measured: the build stopped before the outcome was worked out."))
 
+    settings = load_readiness_settings(root)
+    blocks += _outcome_checked(facts, files, root, settings)
+    blocks += _can_we_measure(facts, settings)
+    blocks += _past_campaigns(facts, files, root)
+
     personal = [
         (line.file_name, column, kinds, free, column == line.key_column)
         for line in facts.sources
@@ -559,3 +662,351 @@ def _role_title(role: str, root: Path | None) -> str:
 
     tables = load_wording(root).tables
     return tables[role].title if role in tables else role
+
+
+# ---------------------------------------------------------------------------
+# Plan J M93: planning the test - the outcome checked, "Can we measure it?", past campaigns
+# ---------------------------------------------------------------------------
+READINESS_SETTINGS_FILENAME: Final[str] = "pilot/readiness.yaml"
+"""Relative to the configuration root, like `pilot/help.yaml`."""
+
+
+class ReadinessSettings(BaseModel):
+    """`configs/pilot/readiness.yaml`: the planning sections' settings (defaults when the file is absent)."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: Literal[1] = 1
+    control_group_shares: tuple[float, ...] = Field(
+        default=(0.03, 0.05, 0.10, 0.15), min_length=1, max_length=10
+    )
+    alpha: float = Field(default=0.05, gt=0.0, lt=1.0)
+    power: float = Field(default=0.80, gt=0.0, lt=1.0)
+    label_rate_tolerance: float = Field(default=0.5, gt=0.0)
+    label_rate_min_z: float = Field(default=3.0, ge=0.0)
+
+    @model_validator(mode="after")
+    def _shares(self) -> ReadinessSettings:
+        if any(not 0.0 < share <= 0.5 for share in self.control_group_shares):
+            raise ValueError("Each control-group share must be more than 0 and at most 0.5.")
+        return self
+
+
+def load_readiness_settings(root: Path | None = None) -> ReadinessSettings:
+    """The settings under `root` (default: the configuration root), or the defaults with no file."""
+    from engine.config import config_root, load_yaml
+
+    path = config_root(root) / READINESS_SETTINGS_FILENAME
+    if not path.is_file():
+        return ReadinessSettings()
+    return ReadinessSettings.model_validate(load_yaml(path))
+
+
+_OPS_IN_WORDS: Final[dict[str, str]] = {
+    "eq": "is",
+    "ne": "is not",
+    "gt": "is above",
+    "gte": "is at least",
+    "lt": "is below",
+    "lte": "is at most",
+    "in": "is one of",
+    "is_null": "is blank",
+    "not_null": "is filled in",
+}
+
+
+def _table_word(role: str, root: Path | None) -> str:
+    return _role_title(role, root).lower()
+
+
+def label_in_words(label: LabelSpec, root: Path | None = None) -> str:
+    """The outcome definition as one plain sentence: what counts, over which days, who is left out."""
+    if label.type.value == "column":
+        return f"A customer has the outcome when the column '{label.column}' of the customer table says so."
+    table = _table_word(label.role or "", root)
+    days = label.horizon_days or 0
+    window = f"the {days:,} days after the prediction date"
+    if label.grace_days:
+        window += f", plus {label.grace_days:,} days' grace ({days + label.grace_days:,} days in all)"
+    if label.type.value == "event_absence":
+        sentence = f"A customer has the outcome when there is no {table} record in {window}"
+    elif label.type.value == "event_presence":
+        sentence = f"A customer has the outcome when there is at least one {table} record in {window}"
+    else:
+        which = "a" if label.any_event else "every"
+        sentence = (
+            f"A customer has the outcome when {which} {table} record in {window} meets the condition "
+            f"'{label.expression}'"
+        )
+    if label.where is not None:
+        value = label.where.value
+        shown = (
+            ""
+            if value is None
+            else " " + (", ".join(map(str, value)) if isinstance(value, list) else str(value))
+        )
+        sentence += f", counting only records whose '{label.where.column}' {_OPS_IN_WORDS[label.where.op.value]}{shown}"
+    sentence += "."
+    if label.exclude_roles:
+        tables = [_table_word(role, root) for role in label.exclude_roles]
+        listed = tables[0] if len(tables) == 1 else ", ".join(tables[:-1]) + " or " + tables[-1]
+        sentence += f" A customer with any {listed} record in that time is left out altogether."
+    return sentence
+
+
+def _kept(snapshots: tuple[SnapshotStat, ...]) -> list[SnapshotStat]:
+    """The prediction dates the dataset kept, with a known count of customers with the outcome."""
+    return [
+        s
+        for s in snapshots
+        if s.positives is not None and not s.censored and not s.dropped_reason and s.entities > 0
+    ]
+
+
+def label_rate_checks(
+    snapshots: tuple[SnapshotStat, ...], *, tolerance: float, min_z: float
+) -> tuple[ValidationCheck, ...]:
+    """`LABEL_RATE_UNSTABLE` for each prediction date whose outcome share jumped from the one before.
+
+    A jump counts when it is more than `tolerance` of the earlier share (relative) AND more than
+    `min_z` standard errors of a two-proportion difference, so a small extract's noise is not called
+    unstable. Only the prediction dates the dataset kept are compared, in date order.
+    """
+    from engine.contracts import Severity, ValidationCheck
+
+    kept = sorted(_kept(snapshots), key=lambda s: s.date)
+    found: list[ValidationCheck] = []
+    for before, after in pairwise(kept):
+        n1, n2 = before.entities, after.entities
+        r1, r2 = (before.positives or 0) / n1, (after.positives or 0) / n2
+        change = abs(r2 - r1) / r1 if r1 > 0 else (math.inf if r2 > 0 else 0.0)
+        pooled = ((before.positives or 0) + (after.positives or 0)) / (n1 + n2)
+        spread = math.sqrt(pooled * (1.0 - pooled) * (1.0 / n1 + 1.0 / n2))
+        z = abs(r2 - r1) / spread if spread > 0 else 0.0
+        if change <= tolerance or z <= min_z:
+            continue
+        moved = "more than doubled" if not math.isfinite(change) or change > 1.0 else f"moved by {change:.0%}"
+        found.append(
+            ValidationCheck(
+                code="LABEL_RATE_UNSTABLE",
+                severity=Severity.WARNING,
+                message=(
+                    f"The share of customers with the outcome went from {r1:.1%} at {before.date} to "
+                    f"{r2:.1%} at {after.date}: it {moved}, more than the {tolerance:.0%} allowed and "
+                    "more than chance would explain."
+                ),
+                suggestion=(
+                    "Check the outcome definition and the extract for those months: a changed process, "
+                    "a new product or a gap in the data can change what the outcome means."
+                ),
+                details={
+                    "from_date": str(before.date),
+                    "to_date": str(after.date),
+                    "from_rate": round(r1, 4),
+                    "to_rate": round(r2, 4),
+                    "relative_change": None if not math.isfinite(change) else round(change, 4),
+                    "z": round(z, 2),
+                    "tolerance": tolerance,
+                    "min_z": min_z,
+                },
+            )
+        )
+    return tuple(found)
+
+
+def _leak_verdict(report: BuildReport | None) -> str:
+    if report is None:
+        return "Not run: the build stopped before it."
+    if any(check.code == "FUTURE_EVENTS_LEAKED" for check in report.checks):
+        return (
+            "Failed: records dated after a prediction date reached what the model learns from. "
+            "Do not use this dataset."
+        )
+    check = report.leak_check
+    if check is None:
+        return "Not run: the build stopped before it."
+    return (
+        f"Passed: {check.rows_probed:,} of {check.rows_total:,} rows were built again with records dated "
+        "after the prediction dates added, and nothing changed."
+    )
+
+
+def _outcome_checked(
+    facts: ReadinessFacts, files: dict[str, str], root: Path | None, settings: ReadinessSettings
+) -> list[AnyBlock]:
+    """The outcome definition in words, its share per month, its count, the future-data check."""
+    if facts.label is None:
+        return []
+    report = facts.report
+    kept = _kept(report.snapshots if report is not None else ())
+    rows: list[tuple[str, str]] = [("Definition", label_in_words(facts.label, root))]
+    if kept:
+        positives = sum(s.positives or 0 for s in kept)
+        customers = sum(s.entities for s in kept)
+        rows.append(
+            (
+                "Customers with the outcome",
+                f"{positives:,} of {customers:,} across the {len(kept)} prediction date(s) used "
+                f"({positives / customers:.1%})",
+            )
+        )
+    else:
+        rows.append(("Customers with the outcome", "Not measured: no prediction date was kept."))
+    rows.append(("Future-data check", _leak_verdict(report)))
+    blocks: list[AnyBlock] = [Heading(text="The outcome, checked"), KeyValues(rows=tuple(rows))]
+    if kept:
+        months: dict[str, tuple[int, int]] = {}
+        for s in sorted(kept, key=lambda s: s.date):
+            key = s.date.strftime("%b %Y")
+            customers, positives = months.get(key, (0, 0))
+            months[key] = (customers + s.entities, positives + (s.positives or 0))
+        blocks.append(
+            Table(
+                columns=("Month", "Customers", "With the outcome", "Share"),
+                rows=tuple(
+                    (month, f"{customers:,}", f"{positives:,}", f"{positives / customers:.1%}")
+                    for month, (customers, positives) in months.items()
+                ),
+                caption="The base rate per month of prediction dates: it should move slowly, if at all.",
+            )
+        )
+        unstable = label_rate_checks(
+            report.snapshots if report is not None else (),
+            tolerance=settings.label_rate_tolerance,
+            min_z=settings.label_rate_min_z,
+        )
+        blocks += [_problem(check, files, root, tone="warning") for check in unstable]
+    return blocks
+
+
+def _base_rate(facts: ReadinessFacts) -> tuple[float | None, int | None, str]:
+    """`(base rate, customers at the latest prediction date, where the base rate came from)`.
+
+    The customers are counted at the latest prediction date the build made, outcome known or not; the
+    base rate pools only the dates the dataset kept with a known outcome."""
+    report = facts.report
+    every = report.snapshots if report is not None else ()
+    kept = _kept(every)
+    eligible: int | None = None
+    if every:
+        eligible = max(every, key=lambda s: s.date).entities
+    elif facts.manifest is not None:
+        eligible = facts.manifest.n_entities
+    if not kept:
+        return None, eligible, "Not measured: this dataset has no prediction date with a known outcome."
+    positives = sum(s.positives or 0 for s in kept)
+    customers = sum(s.entities for s in kept)
+    source = (
+        f"From this dataset: {positives:,} of {customers:,} customers had the outcome across the "
+        f"{len(kept)} prediction date(s) used, a base rate of {positives / customers:.1%}."
+    )
+    return positives / customers, eligible, source
+
+
+def _can_we_measure(facts: ReadinessFacts, settings: ReadinessSettings) -> list[AnyBlock]:
+    """The smallest change a test is sure to see at each control-group share (engine.measurement)."""
+    from engine.measurement.planner import arm_sizes, mde_two_proportions
+
+    if facts.label is None and facts.report is None:
+        return []
+    base_rate, eligible, source = _base_rate(facts)
+    blocks: list[AnyBlock] = [Heading(text="Can we measure it?")]
+    if eligible is None or eligible <= 0:
+        blocks.append(Paragraph(text="Not measured: the build did not record how many customers there are."))
+        return blocks
+    confidence = (1.0 - settings.alpha) * 100.0
+    blocks.append(
+        Paragraph(
+            text=(
+                f"How small a change a campaign to the {eligible:,} customers at the latest prediction date "
+                f"can show, for each size of control group: the change is seen with a chance of "
+                f"{settings.power:.0%} at {confidence:g}% confidence, up or down. {source}"
+            )
+        )
+    )
+    rows: list[tuple[str, str, str, str]] = []
+    reasons: list[str] = []
+    for share in settings.control_group_shares:
+        n_treat, n_control = arm_sizes(eligible, share)
+        mde = mde_two_proportions(n_treat, n_control, base_rate, settings.alpha, settings.power)
+        if mde.points is None or mde.relative is None:
+            seen = "not measured"
+            if mde.reason and mde.reason not in reasons:
+                reasons.append(mde.reason)
+        else:
+            seen = f"{mde.points:.1f} points ({mde.relative:.0%} of the base rate)"
+        rows.append((f"{share:.0%}", f"{n_control:,}", f"{n_treat:,}", seen))
+    blocks.append(
+        Table(
+            columns=(
+                "Control group",
+                "Customers held back",
+                "Customers contacted",
+                "Smallest change it can see",
+            ),
+            rows=tuple(rows),
+            caption=(
+                "A campaign whose real effect is smaller than this will usually read as no clear change. "
+                "To see a smaller change, hold back more customers or contact more of them."
+            ),
+        )
+    )
+    blocks += [Paragraph(text=f"Not measured: {reason}") for reason in reasons]
+    return blocks
+
+
+_ASSIGNMENT_WORDS: Final[dict[str, str]] = {
+    "random": "At random",
+    "model_selected": "Not at random: by a model or a rule",
+    "unknown": "Not known",
+}
+
+
+def _past_campaigns(facts: ReadinessFacts, files: dict[str, str], root: Path | None) -> list[AnyBlock]:
+    """What the named treatment column says about past campaigns, and what to do first."""
+    if facts.treatment is None and facts.treatment_note is None:
+        return []
+    blocks: list[AnyBlock] = [Heading(text="Past campaigns")]
+    history = facts.treatment
+    if history is None:
+        blocks.append(Paragraph(text=facts.treatment_note or ""))
+        return blocks
+
+    def count(value: int | None) -> str:
+        return "not known" if value is None else f"{value:,}"
+
+    blocks.append(
+        KeyValues(
+            rows=(
+                ("Column", history.column),
+                ("How customers were chosen", _ASSIGNMENT_WORDS[history.assignment]),
+                ("Contacted", count(history.treated)),
+                ("Held back", count(history.control)),
+                (
+                    "With the outcome",
+                    (
+                        "not known"
+                        if history.treated_positives is None or history.control_positives is None
+                        else f"{history.treated_positives:,} contacted, {history.control_positives:,} held back"
+                    ),
+                ),
+            )
+        )
+    )
+    if history.check is not None:
+        blocks.append(_problem(history.check, files, root, tone="warning"))
+    else:
+        blocks.append(Callout(title="How customers were chosen", text=history.message, tone="info"))
+    now = history.verdict == "uplift_now"
+    blocks.append(
+        Callout(
+            title=(
+                "Learn who each campaign changes: now"
+                if now
+                else "Learn who each campaign changes: next cycle"
+            ),
+            text=history.verdict_message,
+            tone="success" if now else "info",
+        )
+    )
+    return blocks

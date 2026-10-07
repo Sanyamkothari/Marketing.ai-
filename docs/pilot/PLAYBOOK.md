@@ -85,5 +85,5 @@ Customer IDs are pseudonymised on the client's side with a key only the client h
 ## 7. Demo before the pilot
 
 For the sales and kick-off meetings, use the demo environment rather than live training:
-`make demo-seed` once, then `make demo` and open `/ui`. The demo is "Demo Telecom", entirely
+`make demo-seed` once, then `make demo` and open `/ui`. The demo is "Demo Company", entirely
 synthetic; a guided tour runs on first visit, and the Pilot screen has every report ready.

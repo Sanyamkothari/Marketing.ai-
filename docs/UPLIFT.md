@@ -148,6 +148,35 @@ treatment date plus the window is after "now" has an outcome that may still chan
 blank or unreadable treatment date cannot be shown to be final. Both kinds are removed before
 training and counted in `rows_immature`.
 
+### Before the first uplift run: the treatment-history check and the sufficiency verdict (Plan J M93)
+
+Uplift needs randomised history the client may not have. So before anyone starts an uplift run, the
+readiness report (`GET /pilot/readiness/{dataset_id}?treatment_column=<column>`) looks at the column
+the user names as "who past campaigns contacted" and answers two questions
+(`engine/uplift/checks.py` `treatment_history`, `sufficiency_verdict`):
+
+1. **How were customers chosen?** The same randomness test as `TREATMENT_NOT_RANDOM`
+   (`treatment_predictability`: the small classifier, 3-fold, on the columns an uplift run would
+   learn from), with the same limit, `uplift.randomness_auc_max`:
+   - **random** - the out-of-fold score is at or below the limit;
+   - **model-selected** - above it: past campaigns chose their customers by a model or a rule. The
+     report carries `TREATMENT_HISTORY_NOT_RANDOM`, a **warning** (Plan J's table of the one code
+     registry, not an uplift-run code: it blocks nothing, it changes the plan);
+   - **unknown** - the column is not in the dataset, holds values other than 0/1 or blanks, a group
+     has fewer than 30 customers, or there is nothing to test the choice against.
+2. **Is it enough to learn who a campaign changes now?** The **sufficiency verdict** uses the floors
+   `TREATMENT_ARM_TOO_SMALL` uses, `uplift.min_arm_rows` (default 1,000) and
+   `uplift.min_arm_positives` (default 50), counted in customers for a two-column key:
+   - **"uplift now"** when the history is random and both groups reach both floors (`>=`, so the
+     verdict switches exactly where an uplift run stops being refused);
+   - otherwise **"propensity + random control (+ explore) first, uplift from the next cycle"**: rank
+     customers with a propensity model, hold back a random control group in the first campaign
+     (and, with M92, a small random explore slice outside the selection), and train uplift on that
+     campaign's results. A count that is not known never counts as enough.
+
+The report shows counts and the verdicts only, never a customer's value, and the verdict of the
+readiness report itself does not move.
+
 ---
 
 ## 4. What a training run does

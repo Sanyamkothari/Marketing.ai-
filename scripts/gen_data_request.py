@@ -1,7 +1,7 @@
 """Generate `docs/pilot/DATA_REQUEST.md` and `docs/pilot/templates/*_template.csv` (Plan E M59).
 
-The committed files are the pilot's default request (telco churn, then win-back with a control
-group). Like `templates/` (DEC-014) they are generated, committed and drift-checked: `--check`
+The committed files are the pilot's default request (`default_use_cases` in
+`configs/pilot/data_request.yaml`: since Plan J M93 a neutral one, win-back with a control group). Like `templates/` (DEC-014) they are generated, committed and drift-checked: `--check`
 writes nothing and exits 1 on drift, which is what `make pilot-check` and
 `tests/unit/pilot/test_data_request.py` run. `--use-case` renders a request for other use cases to
 any `--out` directory, for a client whose pilot is not the default one.
@@ -83,7 +83,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         action="append",
         dest="use_cases",
         default=None,
-        help="use case id to request data for; repeat for several (default: the pilot's two)",
+        help="use case id to request data for; repeat for several (default: the data request's default)",
     )
     parser.add_argument(
         "--configs", type=Path, default=None, help="configuration root (default: configs/ of this checkout)"

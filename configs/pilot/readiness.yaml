@@ -1,0 +1,21 @@
+# configs/pilot/readiness.yaml
+# The readiness report's planning sections (Plan J M93): "Can we measure it?" and the checks on the
+# outcome. engine/pilot/readiness.py reads this file; when it is missing, the defaults below apply.
+
+schema_version: 1
+
+# "Can we measure it?": the smallest change a test is sure to see, at each of these control-group
+# shares of the customers at the latest prediction date (0.05 holds back 5%).
+control_group_shares: [0.03, 0.05, 0.10, 0.15]
+
+# The test being planned: two-sided at this significance (0.05 is 95% confidence), with this chance
+# of seeing a real change.
+alpha: 0.05
+power: 0.80
+
+# LABEL_RATE_UNSTABLE: the share of customers with the outcome moves between one prediction date
+# and the next by more than this fraction of itself (0.5: from 4% to above 6% or below 2%) AND by
+# more than chance would explain (a two-proportion difference of more than `label_rate_min_z`
+# standard errors), so small extracts do not raise it on noise alone.
+label_rate_tolerance: 0.5
+label_rate_min_z: 3.0

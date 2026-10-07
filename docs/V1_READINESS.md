@@ -45,7 +45,7 @@ campaign is now measured on its Campaign results page (DEC-951).
 
 ## Caveats: fine for a demo, but say them out loud
 
-1. **Everything is synthetic.** "Demo Telecom" is generated data with planted effects. The numbers
+1. **Everything is synthetic.** "Demo Company" is generated data with planted effects. The numbers
    show how the product works, not how well it will work on a client's data.
 2. **No AI-written text in the demo.** The assistant, root-cause notes and campaign copy need an
    AI service (Amazon Bedrock) and show "Needs AI service connection". They work on Bedrock when it

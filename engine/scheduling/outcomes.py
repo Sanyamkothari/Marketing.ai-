@@ -14,7 +14,8 @@ module turns that knowledge into two artefacts under the run:
   the interface Plan B's incrementality report consumes; Plan B is not in this repository, so the
   pydantic model below *is* the contract, and `schema_version` is how a consumer detects a change.
 
-**The window (DEC-771).** The horizon is the label's `horizon_days`: the recipe's own label when the
+**The window (DEC-771).** The horizon is the label's `horizon_days` (plus its `grace_days`, when a
+lapse label has a grace period: Plan J M93): the recipe's own label when the
 run scored a built dataset (that is the definition its scores predict), else the use case's
 `label`. It runs from the scoring snapshot when the dataset records one (a periodic build's last
 snapshot date, the moment its features describe), otherwise from when the run finished scoring - a
@@ -280,10 +281,10 @@ def outcome_window(
             label = client_store.get_spec(manifest.spec_id).label_spec
         except ClientStoreError:  # a recipe deleted since: fall back to the use case's own label
             label = None
-        if label is not None and label.horizon_days is not None:
-            horizon, source = label.horizon_days, "recipe_label"
-    if horizon is None and config.label is not None and config.label.horizon_days is not None:
-        horizon = config.label.horizon_days
+        if label is not None and label.window_days is not None:
+            horizon, source = label.window_days, "recipe_label"
+    if horizon is None and config.label is not None and config.label.window_days is not None:
+        horizon = config.label.window_days
     if horizon is None:
         raise OutcomeError(
             "OUTCOME_WINDOW_UNKNOWN",

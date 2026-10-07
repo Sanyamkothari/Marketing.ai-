@@ -343,6 +343,37 @@ Choosing the horizon is a business decision, not a technical one. It should be t
 could still do something useful about the customer. Sixty days is a reasonable answer for telco
 churn; seven would predict a blip, and a year would predict something you cannot act on.
 
+### Lapse outcomes: a grace period, and customers to leave out (Plan J M93)
+
+"No purchase, renewal or recharge within N days" is an outcome every industry has, and it usually
+comes with a grace period: a prepaid customer whose pack ran out can still recharge for a few days
+before the number counts as lapsed. Two optional fields of the label say so:
+
+```yaml
+label:
+  name: lapsed_30d
+  type: event_absence
+  role: activity
+  horizon_days: 30
+  grace_days: 7                 # look 37 days ahead in all
+  exclude_roles: [other_event]  # a port-out in that time takes the customer out of the label
+```
+
+- `grace_days` extends the window: the label above reads the 37 days after each snapshot. Censoring
+  (below), the history a build needs, the future-data check and a scored campaign's outcome window
+  (when its outcomes may be uploaded) all use the whole 37 days; the leak
+  probe also dates a copy of its future rows inside the last snapshot's grace period, so a feature
+  that reads those days is `FUTURE_EVENTS_LEAKED` like any other.
+- `exclude_roles` names event tables whose events inside the same window take a customer out of the
+  label altogether: the row is dropped from the dataset rather than counted as a lapse or as staying.
+  A table named there that is not mapped is `LABEL_ROLE_MISSING`.
+- Neither is allowed on a `column` label, and a label cannot leave customers out by its own table.
+  Both are omitted from the saved recipe while unset, so every existing recipe and its hash are
+  unchanged.
+
+The readiness report says the definition back in words, with the share of customers with the outcome
+per month (`LABEL_RATE_UNSTABLE` when it jumps; `docs/DATA_CONTRACT.md` §11).
+
 ### Censoring — the part that surprises people
 
 Here is the situation. Your extract ends on the 28th of February. You have asked for monthly

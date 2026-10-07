@@ -1,1 +1,1 @@
-customer_id,signup_date,plan_type,region,monthly_charges,marketing_opt_in,last_contacted_at,churn_reason,preferred_channel,tenure_months,segment
+customer_id,signup_date,churn_reason,preferred_channel,marketing_opt_in,last_contacted_at,plan_type,region,segment

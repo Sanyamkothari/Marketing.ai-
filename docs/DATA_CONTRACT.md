@@ -892,6 +892,39 @@ skipped: with customers in both arms there are no per-customer arms to count.
 uplift model needs no treatment column; when it has one, its treated share is compared with the
 training data's in `uplift_drift.json` (`UPLIFT.md` §8).
 
+### 11.1 Before a pilot: the readiness report's planning checks (Plan J M93)
+
+The readiness report of a built dataset (`GET /pilot/readiness/{dataset_id}`) adds three sections
+that help plan the pilot rather than judge the file. None of them changes the report's verdict, and
+their two codes are warnings in Plan J's table of the code registry
+(`engine.contracts.PLAN_J_VALIDATION_CODES`):
+
+| Code | Severity | Blocks | Message | Suggestion |
+|---|---|---|---|---|
+| `LABEL_RATE_UNSTABLE` | warning | no | "The share of customers with the outcome went from {rate} at {date} to {rate} at {date}: it moved by {change} (or: more than doubled), more than the {tolerance} allowed and more than chance would explain." | "Check the outcome definition and the extract for those months: a changed process, a new product or a gap in the data can change what the outcome means." |
+| `TREATMENT_HISTORY_NOT_RANDOM` | warning | no | "Who was contacted in '{column}' was not random: it can be told from the customers' own data (score {score}, where a random choice scores about 0.50 and the limit is {limit}). [The strongest sign(s) was/were {columns}.] Past campaigns chose their customers by a model or a rule, so comparing contacted with held-back customers would mix what a campaign changed with how the chosen customers already differed." | "Hold back a randomly chosen control group in the next campaign; until its results are in, rank customers by how likely they are to have the outcome." |
+
+- **The outcome, checked.** The outcome definition in words (window, grace period, tables that leave a
+  customer out: `docs/ONBOARDING.md` §5), the share of customers with the outcome per month of
+  prediction dates, how many there are, and the future-data check's verdict. `LABEL_RATE_UNSTABLE`
+  is raised for each pair of consecutive prediction dates the dataset kept whose share moved by more
+  than `label_rate_tolerance` of itself (default 0.5) **and** by more than `label_rate_min_z`
+  standard errors (default 3), both in `configs/pilot/readiness.yaml`, so a small extract's noise is
+  not called unstable.
+- **Can we measure it?** The smallest change a test is sure to see, up or down, at a 3, 5, 10 and
+  15% control group (`control_group_shares`), with an 80% chance at 95% confidence
+  (`engine/measurement/planner.py`, the closed-form two-proportion formula). The customers are those
+  at the latest prediction date; the base rate is the dataset's own (the customers with the outcome
+  over the prediction dates kept) and the report says so. With no known base rate the row says
+  "not measured" and why; it is never 0.
+- **Past campaigns**, only with `?treatment_column=<column>`: whether past campaigns chose their
+  customers at random, by a model, or cannot be told, and the sufficiency verdict ("uplift now", or
+  "propensity + random control first, uplift from the next cycle"): `docs/UPLIFT.md` §3.
+
+`POST /measurement/power-preview` answers the same planning question from numbers typed in
+(eligible customers, base rate, control-group shares, an optional explore share and the value and
+cost inputs), with no customer data at all.
+
 ## 12. Files prepared by Guided setup (Plan G)
 
 Guided setup never changes the file a person uploads. The steps they approve (a *recipe*: turn

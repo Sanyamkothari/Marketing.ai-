@@ -1,4 +1,4 @@
-"""Seed the demo environment: "Demo Telecom", end to end, through the platform's own API (Plan E M63).
+"""Seed the demo environment: "Demo Company", end to end, through the platform's own API (Plan E M63).
 
     python -m scripts.seed_demo [--data-dir data] [--seed 20260923] [--force]
 
@@ -12,7 +12,7 @@ demo trains while anybody watches.
    customer IDs, `ENTITY_DUPLICATE_KEYS`), all kept under `pilot/demo/raw/` for the pre-flight check.
    4,000 rather than 2,000 so the churn campaign's control group (400) is large enough for Campaign
    results to show the planted effect with a range that excludes zero on almost every seed (DEC-960).
-2. The client "Demo Telecom": every table uploaded, its detected role confirmed, the suggested
+2. The client "Demo Company": every table uploaded, its detected role confirmed, the suggested
    mapping saved, the use case's suggested features and churn definition kept, a dataset built.
 3. A churn model trained on it (the fast search), approved and made champion.
 4. Next month's tables replayed through the same recipe and scored: bands, actions, reasons and a
@@ -556,7 +556,7 @@ def seed(data_dir: Path | None, *, rng_seed: int, force: bool) -> DemoManifest:
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(prog=COMMAND, description="Seed the Demo Telecom environment.")
+    parser = argparse.ArgumentParser(prog=COMMAND, description=f"Seed the {DEMO_CLIENT_NAME} environment.")
     parser.add_argument(
         "--data-dir", type=Path, default=None, help="artefact root (default: MARKETING_AI_DATA_DIR or data/)"
     )
@@ -573,7 +573,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         print(f"seed failed: {exc}", file=sys.stderr)
         return 1
     print(
-        f"Demo Telecom seeded in {time.monotonic() - started:.0f}s: client {manifest.client_id}, "
+        f"{DEMO_CLIENT_NAME} seeded in {time.monotonic() - started:.0f}s: client {manifest.client_id}, "
         f"champion {manifest.champion_model_id}, campaigns {', '.join(c.score_run_id for c in manifest.campaigns)}."
     )
     print("Start it with: make demo   (then open http://localhost:8000)")
