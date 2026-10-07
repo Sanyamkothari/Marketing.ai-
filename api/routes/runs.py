@@ -39,7 +39,8 @@ from typing import Annotated, Any, Final, Literal
 from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
-from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep
+from api.access_policy import ROW_LEVEL_ARTEFACTS, ROW_LEVEL_DOWNLOAD, refusal_message  # Plan J M91
+from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep, get_settings
 from api.routes.agent_recipes import (  # Plan G (DEC-1006)
     attach_recipe_to_run,
     load_recipe,
@@ -530,13 +531,17 @@ def read_run(run_id: str, storage: StorageDep, jobs: JobsDep) -> RunDetailRespon
     return RunDetailResponse(run=record, status=status)
 
 
+ARTEFACT_ROUTE: Final[str] = "/runs/{run_id}/artefacts/{name}"
+"""The generic artefact route; its audit event is renamed for a row-level file (Plan J M91)."""
+
+
 @router.get(
-    "/runs/{run_id}/artefacts/{name}",
+    ARTEFACT_ROUTE,
     response_class=Response,
     responses=_NOT_FOUND,
     summary="One artefact of a run, whitelisted against the artefact registry",
 )
-def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
+def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request) -> Response:
     """A whitelist, not a path join: no segment of the URL ever reaches the filesystem.
 
     The whitelist is the union of the predictive registry and the generative one (DEC-210): a
@@ -547,6 +552,10 @@ def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
     run never wrote; whitelisting them here costs nothing beyond a normal `ARTEFACT_NOT_FOUND` for a
     name this run's directory does not hold, the same 404 an unproduced predictive artefact already
     answers with.
+
+    A file with one row per customer (`ROW_LEVEL_ARTEFACTS`) needs Analyst once sign-in is on,
+    whichever route asked for it: every route that serves a run file comes through here, so this is
+    the one place the rule cannot be bypassed (Plan J M91, `require_row_level_role`).
     """
     known = name in ARTEFACT_REGISTRY or name in TABULAR_SCHEMAS
     known = known or name in GENERATIVE_ARTEFACTS or name in GENERATIVE_TABULAR_SCHEMAS
@@ -555,6 +564,7 @@ def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
     known = known or name in UPLIFT_ARTEFACTS
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
+    require_row_level_role(request, name)
     load_run(storage, run_id)
     try:
         payload = storage.read_bytes(run_key(run_id, name))
@@ -569,9 +579,9 @@ def read_artefact(run_id: str, name: str, storage: StorageDep) -> Response:
     responses=_NOT_FOUND,
     summary="The scored rows of a scoring run as CSV",
 )
-def read_scores(run_id: str, storage: StorageDep) -> Response:
+def read_scores(run_id: str, storage: StorageDep, request: Request) -> Response:
     """Registered now, produced by M4; until then every run answers `404 ARTEFACT_NOT_FOUND`."""
-    return read_artefact(run_id, "scores.csv", storage)
+    return read_artefact(run_id, "scores.csv", storage, request)
 
 
 @router.post(
@@ -702,6 +712,35 @@ def requested_by(request: Request) -> str | None:
     principal = getattr(request.state, "principal", None)
     user_id = getattr(principal, "user_id", None)
     return user_id if isinstance(user_id, str) else None
+
+
+def require_row_level_role(request: Request, name: str) -> None:
+    """Refuse a row-level file to anyone without Analyst while sign-in is on (Plan J M91, DEC-1301 (e)).
+
+    `GET /runs/{run_id}/artefacts/{name}` is Viewer, because most of what it serves - reports,
+    charts - is a result, and seeing results is what Viewer is for. A file with one row per customer
+    is a copy of customer data instead, so it takes `ROW_LEVEL_DOWNLOAD`'s role, refused with the
+    same `ROLE_REQUIRED` and sentence `api.access.enforce_access` uses, and the refusal's audit event
+    carries `reason_code` `ROW_LEVEL_DOWNLOAD_REFUSED`. On the generic route the event's action
+    becomes `runs.customer_rows_download`, so the trail tells a customer-row download from a report
+    read; the dedicated routes keep their own action. Each request is still exactly one event,
+    written by the audit middleware (`audit_reads` on every route that serves these files).
+
+    With sign-in off nothing changes: the local operator holds every role, and the event keeps its
+    route's action. Imported here: api.access imports api.routes.uploads, whose package imports
+    this module (as `require_roles_for_run_overrides` is, DEC-723).
+    """
+    if name not in ROW_LEVEL_ARTEFACTS or get_settings(request).auth_mode == "off":
+        return
+    from api.access import current_principal, route_path, set_audit_context
+
+    if route_path(request.scope) == ARTEFACT_ROUTE:
+        set_audit_context(request, action=ROW_LEVEL_DOWNLOAD.action)
+    principal = current_principal(request)
+    required = ROW_LEVEL_DOWNLOAD.role
+    if required is not None and not principal.has(required):
+        set_audit_context(request, details={"reason_code": "ROW_LEVEL_DOWNLOAD_REFUSED"})
+        raise http_error(403, "ROLE_REQUIRED", refusal_message(ROW_LEVEL_DOWNLOAD))
 
 
 def load_run(storage: Storage, run_id: str) -> RunRecord:

@@ -1785,6 +1785,7 @@ def regenerate_copy_template(
 def read_copy_messages(
     run_id: str,
     storage: StorageDep,
+    request: Request,
     approved_only: Annotated[
         bool,
         Query(
@@ -1799,8 +1800,11 @@ def read_copy_messages(
     the kept rows say `approved`. Rows a rule refused (`block_reason` set, nothing to send) are left out.
     A regenerate re-renders its template's rows, so a kept row always reads the approved text. The header
     is always kept, so a batch with nothing approved yet answers an empty table, not an error.
+
+    One row per customer, so Analyst once sign-in is on: `read_artefact` applies the rule (Plan J M91),
+    with or without `approved_only`.
     """
-    response = read_artefact(run_id, COPY_MESSAGES_FILENAME, storage)
+    response = read_artefact(run_id, COPY_MESSAGES_FILENAME, storage, request)
     if not approved_only:
         return response
     batch = _load_copy_batch(storage, run_id)
