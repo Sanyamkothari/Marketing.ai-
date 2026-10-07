@@ -38,6 +38,7 @@ from engine.contracts import (
 from engine.jobs import CancelToken
 from engine.onboarding.datasets import dataset_key
 from engine.onboarding.specs import DatasetManifest
+from engine.pilot.demo import DEMO_MANIFEST_KEY, DemoManifest
 from engine.pipeline import StageContext
 from engine.runs import fail_run, update_run
 from engine.scheduling.alerts import AlertKind, AlertQuery
@@ -240,6 +241,43 @@ def test_a_retrain_starts_a_normal_training_run_and_records_the_flags_it_answers
     assert record.model_version_id is None
     assert manifest_of(world, record.dataset_id or "").spec_id == world.spec.spec_id
     assert world.flags.cleared == [], "a flag is not cleared when a retrain merely starts"
+
+
+def _retrain_record(world: World) -> RunRecord:
+    firing = ScheduleFirer(world.services(registry=NoApprovals(world.registry))).fire(
+        world.schedule(ScheduleKind.RETRAIN)
+    )
+    assert firing is not None and firing.run_id is not None
+    return run_record(world, firing.run_id)
+
+
+def test_a_firing_for_an_ordinary_client_starts_an_ordinary_run(world: World) -> None:
+    assert _retrain_record(world).synthetic is False
+
+
+def test_a_firing_on_the_demo_clients_data_starts_a_synthetic_run(world: World) -> None:
+    """Plan J M95: a dataset built from the seeded demo's tables carries planted data, so a scheduled run
+    on it is recorded synthetic."""
+    world.storage.write_model(
+        DEMO_MANIFEST_KEY,
+        DemoManifest(
+            client_id=world.client_id,
+            use_case_id=USE_CASE,
+            train_dataset_id="d_train",
+            train_run_id="r_train",
+            champion_model_id="m_1",
+            score_dataset_id="d_score",
+            score_run_id="r_score",
+            uplift_use_case_id="winback",
+            uplift_run_id="r_uplift",
+            uplift_score_run_id="r_uplift_score",
+            campaigns=(),
+            data_sources=("generated",),
+            seeded_at=datetime(2026, 10, 1, tzinfo=UTC),
+            seed=1,
+        ),
+    )
+    assert _retrain_record(world).synthetic is True
 
 
 def _register_as_the_train_flow_would(world: World, run_id: str, *, beat_champion: bool) -> str:

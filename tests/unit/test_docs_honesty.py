@@ -295,12 +295,13 @@ def test_the_operator_guide_describes_the_sign_in_throttle(repo_root: Path) -> N
 # ---------------------------------------------------------------------------
 # The planted demo effect stays in demo documents (Plan J M95)
 # ---------------------------------------------------------------------------
-PLANTED_FIGURE = re.compile(r"\b12\.7[\s-]+points?\b", re.IGNORECASE)
-"""The demo's planted churn effect, as it is written in prose: `12.7 points` or `12.7-point`."""
+PLANTED_FIGURE = re.compile(r"\b12\.7\s*-?\s*(?:percentage[\s-]+)?(?:points?|pts?|pp)\b", re.IGNORECASE)
+"""The demo's planted churn effect, as it is written in prose: `12.7 points`, `12.7-point`,
+`12.7 percentage points`, `12.7pp`, `12.7 pts`."""
 
-PLANTED_LABEL = re.compile(r"planted|demo", re.IGNORECASE)
-"""What makes a line that quotes the figure a labelled one: it says the effect is planted, or that it is
-the demo's. A line that merely quotes the number is how a planted effect gets read as a result."""
+PLANTED_LABEL = re.compile(r"planted", re.IGNORECASE)
+"""What makes a line that quotes the figure a labelled one: it says the effect is planted. A line that
+merely quotes the number, or only mentions the demo, is how a planted effect gets read as a result."""
 
 LABELLED_ONLY: tuple[str, ...] = ("docs/V1_READINESS.md", "docs/plans/", "docs/research/")
 """Documents where the figure may appear only on a line that labels it: the readiness record's demo
@@ -357,11 +358,24 @@ def test_the_planted_figure_gate_catches_an_unlabelled_quotation(tmp_path: Path)
     (tmp_path / "README.md").write_text("The campaign cut churn by 12.7 points.\n", encoding="utf-8")
     (tmp_path / "docs" / "UPLIFT.md").write_text("A 12.7-point lift.\n", encoding="utf-8")
     (tmp_path / "docs" / "plans" / "PLAN.md").write_text(
-        "The effect was 12.7 points.\nThe demo's planted 12.7-point effect.\n", encoding="utf-8"
+        "The effect was 12.7 points.\nThe demo's planted 12.7-point effect.\n"
+        "The demo campaign achieved 12.7 points.\n",
+        encoding="utf-8",
+    )
+    (tmp_path / "docs" / "VARIANTS.md").write_text(
+        "Cut churn by 12.7 percentage points.\nA 12.7pp drop.\nA 12.7 pts drop.\nA 12.7-pt drop.\n"
+        "A 12.7 percentage-point drop.\n",
+        encoding="utf-8",
     )
     (tmp_path / "docs" / "pilot" / "DEMO.md").write_text("12.7 points fewer left.\n", encoding="utf-8")
     assert [(f, n) for f, n, _ in planted_figure_violations(tmp_path)] == [
         ("README.md", 1),
         ("docs/UPLIFT.md", 1),
+        ("docs/VARIANTS.md", 1),
+        ("docs/VARIANTS.md", 2),
+        ("docs/VARIANTS.md", 3),
+        ("docs/VARIANTS.md", 4),
+        ("docs/VARIANTS.md", 5),
         ("docs/plans/PLAN.md", 1),
+        ("docs/plans/PLAN.md", 3),
     ]

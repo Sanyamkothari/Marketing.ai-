@@ -267,6 +267,32 @@ def test_the_value_report_of_a_demo_campaign_says_the_effect_is_planted(
     assert client.get(f"/pilot/roi/{run_id}").json()["synthetic"] is True
 
 
+def test_a_new_run_on_the_demo_s_dataset_is_synthetic_too(
+    client: TestClient, manifest: DemoManifest, data_dir: Path
+) -> None:
+    """QUICKSTART asks a visitor to train a model on the demo's data: that run reads planted data, so it
+    is recorded synthetic although no upload was marked (the dataset's client is the demo's)."""
+    from engine.contracts import RunRecord
+    from engine.runs import RUN_FILENAME
+    from scripts.seed_demo import FAST_TRAIN
+
+    created = client.post(
+        "/runs",
+        json={
+            "use_case": manifest.use_case_id,
+            "mode": "train",
+            "dataset_id": manifest.train_dataset_id,
+            "overrides": FAST_TRAIN,
+        },
+    )
+    assert created.status_code == 202, created.text
+    run_id = created.json()["run_id"]
+    client.app.state.jobs.wait(run_id, 900.0)
+    record = LocalStorage(data_dir).read_model(run_key(run_id, RUN_FILENAME), RunRecord)
+    assert record.synthetic is True
+    assert client.get(f"/runs/{run_id}").json()["run"]["synthetic"] is True
+
+
 def test_a_report_that_is_not_about_a_synthetic_run_carries_no_such_block(
     client: TestClient, manifest: DemoManifest
 ) -> None:

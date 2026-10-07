@@ -326,7 +326,7 @@ class RunRecord(Artefact):
     )
     # Plan J M95 (DEC-1300 / M95 (b)): an added, defaulted field, so every run.json written before it
     # still reads, as False. Declared in place because a pydantic field cannot be added from a block at
-    # the foot of the file; announced in `docs/CROSS_BRANCH_REQUESTS.md`.
+    # the foot of the file; the integrator announces it in `docs/CROSS_BRANCH_REQUESTS.md` (Plan J M95).
     synthetic: bool = Field(
         default=False,
         description=(

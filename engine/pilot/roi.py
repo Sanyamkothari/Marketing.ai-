@@ -207,6 +207,33 @@ def _read(storage: Storage, key: str, model: type[BaseModel]) -> BaseModel | Non
         return None
 
 
+def _outcomes_upload_synthetic(storage: Storage, run_id: str) -> bool:
+    """True when the outcomes file the campaign was measured from was marked synthetic (Plan J M95).
+
+    The planted effect lives in the outcomes, not in the scoring run, so a synthetic outcomes upload
+    measured against a real scoring run still makes the value view synthetic. Read as plain JSON: this
+    package does not import `api`, and an absent, unreadable or older record is not synthetic.
+    """
+    import json
+
+    from engine.storage import StorageError, run_key, upload_key
+    from engine.uplift.measure import CAMPAIGN_MEASURE_FILENAME
+
+    try:
+        measure_key = run_key(run_id, CAMPAIGN_MEASURE_FILENAME)
+        if not storage.exists(measure_key):
+            return False
+        upload_id = json.loads(storage.read_bytes(measure_key)).get("upload_id")
+        if not isinstance(upload_id, str):
+            return False
+        record_key = upload_key(upload_id, "upload.json")
+        if not storage.exists(record_key):
+            return False
+        return json.loads(storage.read_bytes(record_key)).get("synthetic") is True
+    except (StorageError, ValueError, AttributeError):
+        return False
+
+
 def compute_roi(
     storage: Storage,
     run_id: str,
@@ -233,7 +260,7 @@ def compute_roi(
         "run_id": run_id,
         "use_case_id": record.use_case_id,
         "inputs": chosen,
-        "synthetic": record.synthetic,
+        "synthetic": record.synthetic or _outcomes_upload_synthetic(storage, run_id),
     }
     # A measurement wins over one still waiting: an immature report stays on disk after outcomes were
     # ingested for the same run, and the ingested counts are then the newer, usable measurement.

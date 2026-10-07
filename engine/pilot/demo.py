@@ -41,6 +41,7 @@ __all__ = [
     "EXCLUDED_DATA",
     "DemoCampaign",
     "DemoManifest",
+    "is_demo_client",
     "load_demo",
     "mark_runs_synthetic",
 ]
@@ -114,6 +115,19 @@ def load_demo(storage: Storage) -> DemoManifest | None:
         return storage.read_model(DEMO_MANIFEST_KEY, DemoManifest)
     except (StorageError, ValueError):  # a stale or corrupt manifest is no demo, not a 500
         return None
+
+
+def is_demo_client(storage: Storage, client_id: str | None) -> bool:
+    """True when `client_id` is the seeded demo's client (clean or broken extract) under `storage`.
+
+    A dataset built from the demo's generated raw tables carries that client id, so a run started on it
+    - a new training run, a schedule's firing - reads planted data and is recorded synthetic, exactly as
+    the runs the seeder made are (Plan J M95).
+    """
+    if client_id is None:
+        return False
+    demo = load_demo(storage)
+    return demo is not None and client_id in {demo.client_id, demo.broken_client_id}
 
 
 def mark_runs_synthetic(storage: Storage, run_ids: Iterable[str]) -> tuple[str, ...]:

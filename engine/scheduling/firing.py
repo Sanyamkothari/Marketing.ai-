@@ -91,6 +91,7 @@ from engine.onboarding.datasets import (
     dataset_key,
 )
 from engine.onboarding.specs import DatasetManifest, MappingSpec, OnboardingSpec, SourceSpec
+from engine.pilot.demo import is_demo_client
 from engine.pipeline import Pipeline
 from engine.registry import ModelRegistry, RegistryError, to_utc
 from engine.runs import (
@@ -393,6 +394,7 @@ def start_dataset_run(
         model_version_id=None if version is None else version.model_id,
         now=now,
         requested_by=requested_by,
+        synthetic=is_demo_client(storage, manifest.client_id),  # Plan J M95: planted data stays flagged
     )
     spec = job_spec_for(record, upload=source, client_id=client_tag)
     write_job_spec(storage, spec)

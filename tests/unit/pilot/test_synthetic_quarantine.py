@@ -18,7 +18,7 @@ import pytest
 from engine import __version__
 from engine.config import ProblemType, RunMode, load_use_case
 from engine.contracts import ModelStatus, ModelVersion, RunRecord, RunState
-from engine.pilot.demo import mark_runs_synthetic
+from engine.pilot.demo import DEMO_MANIFEST_KEY, DemoManifest, is_demo_client, mark_runs_synthetic
 from engine.pilot.document import (
     SYNTHETIC_HEADLINE,
     Paragraph,
@@ -246,3 +246,51 @@ def test_marking_runs_is_idempotent_and_keeps_the_rest_of_the_record(storage: Lo
 def test_marking_a_run_that_does_not_exist_is_an_error_not_a_skip(storage: LocalStorage) -> None:
     with pytest.raises(StorageError):
         mark_runs_synthetic(storage, ["r_nope"])
+
+
+# --- a run that reads planted data is synthetic whichever way it started (review follow-up) -------------
+
+
+def demo_manifest(client_id: str, broken_client_id: str | None = None) -> DemoManifest:
+    return DemoManifest(
+        client_id=client_id,
+        broken_client_id=broken_client_id,
+        use_case_id="customer-churn",
+        train_dataset_id="d_train",
+        train_run_id="r_train",
+        champion_model_id="m_1",
+        score_dataset_id="d_score",
+        score_run_id="r_score",
+        uplift_use_case_id="winback",
+        uplift_run_id="r_uplift",
+        uplift_score_run_id="r_uplift_score",
+        campaigns=(),
+        data_sources=("generated",),
+        seeded_at=NOW,
+        seed=1,
+    )
+
+
+def test_a_dataset_of_the_demo_s_client_is_synthetic_and_any_other_is_not(storage: LocalStorage) -> None:
+    assert not is_demo_client(storage, "c_demo"), "nobody has seeded a demo"
+    storage.write_model(DEMO_MANIFEST_KEY, demo_manifest("c_demo", broken_client_id="c_broken"))
+    assert is_demo_client(storage, "c_demo") and is_demo_client(storage, "c_broken")
+    assert not is_demo_client(storage, "c_real") and not is_demo_client(storage, None)
+
+
+def test_a_synthetic_outcomes_upload_makes_the_value_report_synthetic(storage: LocalStorage) -> None:
+    """The planted effect lives in the outcomes file: a real scoring run measured against it is marked."""
+    storage.write_model(run_key(CHURN_RUN, RUN_FILENAME), record(synthetic=False))
+    storage.write_model(run_key(CHURN_RUN, INCREMENTALITY_FILENAME), mature_report())
+    inputs = RoiInputs(value_per_outcome=4000.0)
+    assert compute_roi(storage, CHURN_RUN, inputs=inputs).synthetic is False
+
+    storage.write_bytes(
+        run_key(CHURN_RUN, "campaign_measure.json"), json.dumps({"upload_id": "u_outcomes"}).encode()
+    )
+    storage.write_bytes("uploads/u_outcomes/upload.json", json.dumps({"synthetic": False}).encode())
+    assert compute_roi(storage, CHURN_RUN, inputs=inputs).synthetic is False
+    storage.write_bytes("uploads/u_outcomes/upload.json", json.dumps({"synthetic": True}).encode())
+    view = compute_roi(storage, CHURN_RUN, inputs=inputs)
+    assert view.synthetic is True
+    assert PHRASE in render_html(roi_document(view, now=NOW))

@@ -1008,7 +1008,7 @@ The DS also gives a by-hand retrospective readout (E4) to any prospect who share
   - **Synthetic quarantine:**
     - `run.json` gains `synthetic: bool`, set by `scripts/seed_demo.py`, `engine/pilot/demo.py` and synthetic uploads;
     - `ReportDocument` gains `synthetic: bool = False`, and `render_html`/`render_pdf` in `engine/pilot/document.py` draw the "Synthetic data: planted effect, not a forecast" block when it is true. `engine/pilot/results.py` and `roi.py` set it from `RunRecord.synthetic`;
-    - `test_docs_honesty` asserts that the phrase "12.7 points" appears in `docs/` and `README.md` only in demo docs, with `V1_READINESS.md`'s labelled demo line explicitly allowed.
+    - `test_docs_honesty` asserts that the phrase "12.7 points" (the planted demo effect) appears in `docs/` and `README.md` only in demo docs, with `V1_READINESS.md`'s labelled demo line explicitly allowed.
 - **Where in the code.**
   - `engine/measurement/simulate.py` (new), `tests/statistical/` (new), `library/run_engine.py`, `docs/LIBRARY.md`
   - `engine/contracts.py` (§3.5: `RunRecord.synthetic`), `engine/pilot/{demo,document,results,roi}.py` and `scripts/seed_demo.py` (pre-approved)

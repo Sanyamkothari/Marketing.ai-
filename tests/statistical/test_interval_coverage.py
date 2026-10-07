@@ -6,8 +6,9 @@ them. This simulates 2,000 campaigns per case and requires the observed coverage
 Monte Carlo standard errors of 95% (`tests/statistical/bands.py` states the rule: 95% +/- 1.95 points).
 
 The three base rates are the cases the interval is most likely to get wrong: at 2% each arm has only a
-few dozen conversions, where an interval built on a normal approximation is known to under-cover, and
-the Newcombe score interval was chosen to avoid that. The effect at each is a realistic one to three
+few dozen conversions, where a score interval matters most. At these arm sizes a Wald interval would
+also pass every band here (measured: 94.6% at 2%), so this case guards against an interval that is too
+narrow by more than about 2 points of coverage, not against the choice of method. The effect at each is a realistic one to three
 points, a relative lift of about 40% at 5%, 10% at 20% and 100% at 2%. The populations are small
 (2,000 to 4,000 customers) to keep the suite's runtime reasonable; the number of simulations, not the
 population size, is what sets the band.

@@ -76,8 +76,12 @@ receive it anyway. One seed is one campaign, exactly, on any machine.
 of `sqrt(p(1-p)/n)`. A check passes when the observed share is within **four** of them: 95% +/- 1.95 points at
 2,000 simulations, 5% +/- 0.87 points at 10,000. The band comes from the number of simulations, never from
 choosing a width that happens to pass; a check that needs a tighter band runs more simulations. Four, not two,
-because a correct measurement then fails by chance about one night in sixteen thousand, so a red night means
-something and nobody is tempted to loosen the test. Seeds are fixed, so a result is reproducible.
+so that a check that goes red means something and nobody is tempted to loosen the test. Seeds are fixed, so the
+suite gives the same answer every night: a correct measurement would fall outside a four-standard-error band for
+about 1 seed set in 16,000 per check (about 1 in 2,000 across the suite), so a failure after a code change points
+at the change. **What a band detects.** Each 2,000-simulation coverage case sees coverage off by more than about
+1.95 points; the false-positive check, at +/- 0.87 points, is the most sensitive guard against an interval that
+is too narrow, and a narrowing of less than about a point is below what the suite can see.
 
 **Runtime.** The suite takes about seven minutes on one busy core (the 10,000-simulation false-positive check is
 about three of them), and the power checks add a few more once the planner is in: each simulated population is kept small (1,200 to 4,000

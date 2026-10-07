@@ -7,18 +7,25 @@ is `p`, the observed share has the Monte Carlo standard error
     se = sqrt(p * (1 - p) / sims)
 
 and the test passes when the observed share is within **four** of them: `|observed - p| <= 4 * se`.
-Four, not two, because a nightly job that fails one night in twenty by chance gets loosened by whoever
-is on call, and a loosened test proves nothing; at four standard errors a correct measurement fails by
-chance about one night in sixteen thousand. The band is *derived from the number of simulations*, never
+Four, not two, because a check that goes red one run in twenty for no reason gets loosened by whoever
+is on call, and a loosened test proves nothing. The seeds are fixed, so a run is deterministic: it gives
+the same answer every night. For a correct measurement, the chance that a given seed set lands outside
+one four-SE band is about 6e-5 (1 in 16,000) per check, and about 1 in 2,000 across the suite's eight
+or so checks, so a check that turns red after a change to the code very probably points at the change,
+not at noise. The band is *derived from the number of simulations*, never
 chosen by hand: a test that needs a wider band must run more simulations, not accept more error.
 
 For the 95% interval and 2,000 simulations that is 95% +/- 1.95 points; for the 5% false-positive rate
 and 10,000 simulations it is 5% +/- 0.87 points; for a mean (the bias test) the standard error is the
 standard deviation of the simulated estimates over the square root of the simulations.
 
-The seeds are fixed, so a run is exactly reproducible: the test passes or fails the same way tomorrow.
-The band is what keeps a *change to the code* that makes an interval too narrow from passing unnoticed,
-and what stops a pass from depending on a lucky seed.
+**What a band can detect.** The band is what keeps a *change to the code* that makes an interval too
+narrow from passing unnoticed, and what stops a pass from depending on a lucky seed. Each 2,000-simulation
+coverage case sees coverage that is off by more than about 1.95 points: an interval built at 90% nominal
+fails every case, but one at 92.8% still passes the 20% case and is caught only by the 2%, 5% and
+intention-to-treat cases and the false-positive check. The false-positive check, at +/- 0.87 points over
+10,000 simulations, is the most sensitive guard against an interval that is too narrow; a narrowing of
+less than about a point is below what this suite can see.
 """
 
 from __future__ import annotations
