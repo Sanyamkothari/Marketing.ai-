@@ -120,7 +120,7 @@ from engine.generative.errors import (
     RUN_WITHOUT_SCORES,
     generative_error,
 )
-from engine.generative.guardrails import MAX_LENGTH, CheckContext, Guardrails
+from engine.generative.guardrails import MAX_LENGTH, CheckContext, Guardrails, asks_reply_stop
 from engine.generative.prompts import load_prompt, prompt_hashes, prompt_versions, render
 from engine.generative.segments import cap_with_other, group_keys, top_reason_feature
 from engine.onboarding.datasets import run_source_key
@@ -141,6 +141,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "MAX_BAND_REASONS",
+    "OPT_OUT_LINK_FIELD",
     "OTHER_REASONS_SEGMENT",
     "OVER_BUDGET_SEGMENT",
     "PROFILE_FILENAME",
@@ -156,6 +157,7 @@ __all__ = [
     "placeholders_in",
     "regenerate_template",
     "render_message",
+    "required_line_for",
     "unsupported_markup",
 ]
 
@@ -176,6 +178,17 @@ names a domain, so this module substitutes the field's own name back in - visibl
 still recognisable to whatever system sends the message later - rather than fail the one channel
 that is supposed to carry it (DEC-201's `RequiredLines.email` default is this same string, chosen so
 a template that keeps `{{unsubscribe_link}}` also satisfies the required-line check word for word).
+"""
+
+OPT_OUT_LINK_FIELD: Final[str] = "opt_out_link"
+"""The SMS counterpart of `UNSUBSCRIBE_FIELD`, for a one-way sender ID (`campaign_copy.sms_sender:
+one_way`, M91).
+
+"Reply STOP to opt out" cannot work when the sender ID cannot receive replies (India's DLT headers,
+for one), so the SMS required line becomes `{{opt_out_link}}` and the message sends the customer to a
+link instead. It is allowed on SMS only, and only when `sms_sender` is `one_way`. Rendering here does
+not build a real link, for the reason `UNSUBSCRIBE_FIELD` gives: it is filled with its own name for
+whatever system sends the message to replace per recipient.
 """
 
 VARIANT_LETTERS: Final[str] = "ABCD"
@@ -226,7 +239,7 @@ _SHARE_DECIMALS: Final[int] = 1
 _SCORE_DECIMALS: Final[int] = 4
 
 _TEMPLATE_JUDGES: Final[tuple[str, ...]] = ("compliance", "toxicity")
-_RESERVED_FIELDS: Final[frozenset[str]] = frozenset({"band", UNSUBSCRIBE_FIELD})
+_RESERVED_FIELDS: Final[frozenset[str]] = frozenset({"band", UNSUBSCRIBE_FIELD, OPT_OUT_LINK_FIELD})
 """Placeholder names a template may use that are never read off the uploaded data."""
 
 _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"{{\s*([A-Za-z_][A-Za-z0-9_]*)\s*}}")
@@ -292,11 +305,38 @@ def unsupported_markup(text: str) -> int:
 
 def allowed_placeholder_fields(config: CampaignCopyConfig, channel: Channel) -> frozenset[str]:
     """The full set of placeholders a template on `channel` may use: the configured fields, plus the
-    unsubscribe merge field on email alone. Never customer data - only field *names*."""
+    unsubscribe merge field on email and the opt-out link on SMS sent from a one-way sender ID. Never
+    customer data - only field *names*."""
     fields = set(config.allowed_fields)
     if channel is Channel.EMAIL:
         fields.add(UNSUBSCRIBE_FIELD)
+    if _one_way_sms(config, channel):
+        fields.add(OPT_OUT_LINK_FIELD)
     return frozenset(fields)
+
+
+def _one_way_sms(config: CampaignCopyConfig, channel: Channel) -> bool:
+    """True for SMS from a sender ID that cannot receive replies (`campaign_copy.sms_sender`)."""
+    return channel is Channel.SMS and config.sms_sender == "one_way"
+
+
+def required_line_for(config: CampaignCopyConfig, channel: Channel) -> str:
+    """The line a template on `channel` must carry: `required_lines`, except that a one-way SMS sender
+    cannot ask for a reply, so a line that does (the default is "Reply STOP to opt out") becomes the
+    `{{opt_out_link}}` placeholder. A line the operator wrote that does not ask for a reply is theirs
+    and is kept."""
+    line = config.required_lines.for_channel(channel)
+    if _one_way_sms(config, channel) and asks_reply_stop(line):
+        return "{{" + OPT_OUT_LINK_FIELD + "}}"
+    return line
+
+
+def _rendered_line_for(config: CampaignCopyConfig, channel: Channel) -> str:
+    """What `required_line_for` reads like once a message is rendered. A merge-field line is written
+    into a message as its own name (see `UNSUBSCRIBE_FIELD`), so the rendered check looks for the name."""
+    line = required_line_for(config, channel)
+    match = _PLACEHOLDER.fullmatch(line)
+    return match.group(1) if match else line
 
 
 def fill_placeholders(text: str, values: Mapping[str, object]) -> str:
@@ -366,7 +406,8 @@ def render_message(
         check_text,
         CheckContext(
             target=template.template_id,
-            required_line=config.required_lines.for_channel(Channel(template.channel)),
+            required_line=_rendered_line_for(config, Channel(template.channel)),
+            one_way_sender=_one_way_sms(config, Channel(template.channel)),
             allowed_fields=(),
             banned_phrases=config.banned_claims,
         ),
@@ -409,8 +450,8 @@ def _row_values(record: Mapping[str, object], template: CopyTemplate) -> dict[st
     segment's template is rendered for rows from several bands."""
     values: dict[str, object] = {}
     for field in template.fields_used:
-        if field == UNSUBSCRIBE_FIELD:
-            values[field] = UNSUBSCRIBE_FIELD
+        if field in (UNSUBSCRIBE_FIELD, OPT_OUT_LINK_FIELD):
+            values[field] = field
         elif field == "band":
             values[field] = record.get(BAND_COLUMN, template.band)
         else:
@@ -510,7 +551,8 @@ def _finalize_template(
         check_text,
         CheckContext(
             target=template_id,
-            required_line=config.required_lines.for_channel(channel),
+            required_line=required_line_for(config, channel),
+            one_way_sender=_one_way_sms(config, channel),
             allowed_fields=tuple(allowed),
             banned_phrases=config.banned_claims,
             judges=_TEMPLATE_JUDGES,
@@ -587,7 +629,7 @@ def _generate_for_band_channel(
             "limits": _limits_for(channel, config.limits),
             "variant_labels": list(labels),
             "entity": entity,
-            "required_line": config.required_lines.for_channel(channel),
+            "required_line": required_line_for(config, channel),
         },
         unit=band,
         segment=None,
@@ -637,7 +679,7 @@ def _generate_for_segment_channel(
             "limits": _limits_for(channel, config.limits),
             "variant_labels": list(labels),
             "entity": entity,
-            "required_line": config.required_lines.for_channel(channel),
+            "required_line": required_line_for(config, channel),
         },
         unit=segment.segment,
         segment=segment.segment,

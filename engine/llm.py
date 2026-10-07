@@ -849,6 +849,10 @@ _LABELS: Final[re.Pattern[str]] = re.compile(r"labelled\s+([A-D](?:,\s*[A-D])*)"
 _REQUIRED: Final[re.Pattern[str]] = re.compile(
     r"^Every message ends with the opt-out line[,:]?\s*(.+)$", re.M
 )
+_REQUIRED_QUOTED: Final[re.Pattern[str]] = re.compile(r'characters including "([^"\n]+)"\.\s*$', re.M)
+"""The same line as the copy prompts' last sentence quotes it: `at most N characters including "<line>".`.
+`_REQUIRED` matches the system section's own wording, which the fake is never given, so this is the
+spelling that carries a configured line (an SMS from a one-way sender ID asks for `{{opt_out_link}}`)."""
 _REFUSAL: Final[re.Pattern[str]] = re.compile(
     r"^and set refused to true:\s*\n(.+?)\s*\n\s*\nQuestion:", re.M | re.S
 )
@@ -932,7 +936,7 @@ def _variant_labels(user: str) -> list[str]:
 
 def _required_line(user: str) -> str:
     """The opt-out line a channel demands, taken from the prompt that demanded it."""
-    match = _REQUIRED.search(user)
+    match = _REQUIRED.search(user) or _REQUIRED_QUOTED.search(user)
     return match.group(1).strip() if match else "Reply STOP to opt out"
 
 

@@ -110,7 +110,8 @@ copy may use only whitelisted fields. Three different mechanisms enforce this, o
 **Everything generated passes guardrails before it is stored.** `Guardrails.check`
 (`engine/generative/guardrails.py`) is the single gate every generated text passes through, and it
 runs in a fixed order for a reason: the deterministic rules in `RULES` - empty output, length,
-required lines, allowed fields, banned phrases, PII, URL whitelist, language - are ordinary regular
+the one-way-sender "Reply STOP" check, required lines, allowed fields, banned phrases, PII, URL
+whitelist, language - are ordinary regular
 expressions and dictionary lookups, so they cost nothing and cannot be talked out of a verdict by
 clever prompting. Only text that survives every one of them is handed to `_judge`, which asks an LLM
 judge about the things a regular expression cannot decide - is every claim supported, does this read
@@ -350,10 +351,10 @@ event.
 
 `configs/guardrails.yaml` is read by `Guardrails.check` and says, for each rule, one of `block`,
 `warn` or `off` - and `off` means the rule produces no check at all, never a silently passing one, so
-a guardrail report can never claim a text was checked for something nobody checked it for. The eight
+a guardrail report can never claim a text was checked for something nobody checked it for. The nine
 deterministic rules run first and in a deliberate order (`RULES`): an empty output makes every later
 rule meaningless, so it runs first; a length failure is worth reporting before a phrase failure inside
-a text that was never going to be used anyway. Every one of the eight is `block` in the shipped
+a text that was never going to be used anyway. Every one of the nine is `block` in the shipped
 configuration except `language_match`, which is `warn`: telling English from a wrong script needs
 only a character-class check, but telling Hindi from Marathi needs a model this rule does not have,
 so it says what it can see and nothing more.
@@ -918,3 +919,52 @@ the response.
 
 What is not done: no streaming, no server-side memory of conversations, no agent framework, and no
 retry of an answer blocked by anything other than the faithfulness check.
+
+## 14. One-way SMS sender IDs: the opt-out link (M91)
+
+"Reply STOP to opt out" cannot work when the SMS sender ID cannot receive replies. That is the case for
+India's DLT headers and for any other one-way sender ID: the customer has nothing to reply to, so the
+default opt-out line promises an opt-out that does not exist. `generative.campaign_copy.sms_sender` says
+which kind of sender the campaign uses:
+
+```yaml
+generative:
+  campaign_copy:
+    sms_sender: two_way       # two_way (default) | one_way
+```
+
+**`two_way` is today's behaviour, unchanged.** The SMS required line is `required_lines.sms`
+("Reply STOP to opt out") and every prompt, template and message is what it was. The only new thing a
+default run records is one more guardrail check, `sms_reply_stop_one_way`, which passes ("nothing
+found") because the rule has nothing to say about a two-way sender.
+
+**`one_way` swaps the SMS line for a merge field.** The required line of an SMS template becomes
+`{{opt_out_link}}` (`win_back.required_line_for`), and the SMS prompt is given that line like any other,
+so the model writes a template ending in it. The field is `OPT_OUT_LINK_FIELD` in
+`engine/generative/win_back.py`, beside `UNSUBSCRIBE_FIELD`:
+
+- It is in `_RESERVED_FIELDS`, so it is never read off the uploaded data.
+- `allowed_placeholder_fields` returns it for SMS, and for SMS only, when `sms_sender` is `one_way`; a
+  template on any other channel, or on SMS under the default, that uses it is blocked by
+  `allowed_fields_only` like any placeholder with no data behind it.
+- It is filled the way `{{unsubscribe_link}}` is: a rendered message carries the field's own name
+  (`opt_out_link`) for the sending system to replace per recipient, because this engine builds no URL
+  and `allowed_url_domains` ships empty. The rendered-message check looks for that name rather than the
+  braces.
+- A `required_lines.sms` the operator wrote that does not ask for a reply is kept as theirs; only a line
+  that does ask ("Reply STOP ...", the shipped default) is replaced.
+
+**The `sms_reply_stop_one_way` guardrail rule** (`configs/guardrails.yaml`, `block`) refuses an SMS
+template or rendering that asks the customer to reply STOP ("Reply STOP", "Text 'STOP'", "Send STOP to
+..."). It runs only when the context says the sender is one-way (`CheckContext.one_way_sender`, set by
+`win_back` for SMS under `sms_sender: one_way`), and sits before `required_lines` so a "Reply STOP"
+template is reported as that rather than as a missing link. It also covers a customer's own field value
+that carries the wording, since a rendering is checked again. Like every rule it names the problem and
+never quotes the text. Set it to `off` in `guardrails.yaml` and no check is recorded for it.
+
+**WhatsApp is not affected.** A WhatsApp business number has a reply channel of its own, so
+`required_lines.whatsapp` and the WhatsApp prompt stay as they are; `sms_sender` is about SMS sender IDs
+only. The v1 prompt files are unchanged: they already carry `required_line` as a variable, which is
+how a one-way run reaches the model.
+
+Tests: `tests/unit/generative/test_sms_one_way.py`.

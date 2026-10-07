@@ -59,12 +59,14 @@ __all__ = [
     "GUARDRAILS_FILENAME",
     "JUDGE_PROMPTS",
     "RULES",
+    "SMS_REPLY_STOP_ONE_WAY",
     "CheckContext",
     "GuardrailAction",
     "GuardrailPolicy",
     "GuardrailResult",
     "Guardrails",
     "JudgeRule",
+    "asks_reply_stop",
     "load_policy",
     "summarise",
 ]
@@ -76,6 +78,7 @@ GUARDRAILS_FILENAME: Final[str] = "guardrails.yaml"
 # Rule names, which are also the keys of `deterministic:` in the configuration file.
 EMPTY_OUTPUT: Final[str] = "empty_output"
 MAX_LENGTH: Final[str] = "max_length"
+SMS_REPLY_STOP_ONE_WAY: Final[str] = "sms_reply_stop_one_way"
 REQUIRED_LINES: Final[str] = "required_lines"
 ALLOWED_FIELDS_ONLY: Final[str] = "allowed_fields_only"
 BANNED_PHRASES: Final[str] = "banned_phrases"
@@ -86,6 +89,7 @@ LANGUAGE_MATCH: Final[str] = "language_match"
 RULES: Final[tuple[str, ...]] = (
     EMPTY_OUTPUT,
     MAX_LENGTH,
+    SMS_REPLY_STOP_ONE_WAY,
     REQUIRED_LINES,
     ALLOWED_FIELDS_ONLY,
     BANNED_PHRASES,
@@ -97,6 +101,8 @@ RULES: Final[tuple[str, ...]] = (
 
 Cheapest and most certain first: an empty output makes every later rule meaningless, and a length
 failure is worth reporting before a phrase failure inside a text that was never going to be used.
+`sms_reply_stop_one_way` sits before `required_lines` so that "Reply STOP" wording on a one-way sender
+is reported as that, rather than as the missing opt-out link it also implies.
 """
 
 JUDGE_PROMPTS: Final[Mapping[str, GenerativePurpose]] = {
@@ -125,6 +131,12 @@ default state, where `allowed_url_domains` is empty and means no link may appear
 The host is taken from `urlsplit().hostname`, which strips userinfo, lower-cases, and drops the
 port, so the comparison below sees a host and only a host.
 """
+_REPLY_STOP: Final[re.Pattern[str]] = re.compile(
+    r"\b(?:reply|text|send|respond|message|type)(?:ing)?\s+(?:with\s+|to\s+)?[\"'\u2018\u201c]?\s*stop\b",
+    re.IGNORECASE,
+)
+"""The wording that asks a customer to answer a message with STOP: "Reply STOP", "text 'STOP'", "send
+STOP to 56767". Matched on the verb and the word together, so "stop by our store" is not caught."""
 _URL_TRAILING: Final[str] = ".,;:!?'\")]}>"
 """Characters that end a sentence but never a URL; stripped before the host is read."""
 
@@ -179,6 +191,9 @@ class CheckContext:
     max_chars: int | None = None
     max_words: int | None = None
     required_line: str | None = None
+    one_way_sender: bool = False
+    """True for an SMS sent from a sender ID that cannot receive replies (`campaign_copy.sms_sender:
+    one_way`); the `sms_reply_stop_one_way` rule is silent without it."""
     allowed_fields: tuple[str, ...] = ()
     banned_phrases: tuple[str, ...] = ()
     expected_language: str | None = None
@@ -246,6 +261,18 @@ def _max_length(text: str, context: CheckContext, policy: GuardrailPolicy) -> st
         words = len(text.split())
         if words > context.max_words:
             return f"{words - context.max_words} words over the {context.max_words}-word limit"
+    return None
+
+
+def asks_reply_stop(text: str) -> bool:
+    """True when `text` asks the reader to reply with STOP (pure; the copywriter shares it)."""
+    return _REPLY_STOP.search(text) is not None
+
+
+def _sms_reply_stop_one_way(text: str, context: CheckContext, policy: GuardrailPolicy) -> str | None:
+    del policy
+    if context.one_way_sender and asks_reply_stop(text):
+        return "an instruction to reply to opt out, which a one-way sender ID cannot receive"
     return None
 
 
@@ -319,6 +346,7 @@ def _language_match(text: str, context: CheckContext, policy: GuardrailPolicy) -
 _CHECKS: Final[Mapping[str, Any]] = {
     EMPTY_OUTPUT: _empty_output,
     MAX_LENGTH: _max_length,
+    SMS_REPLY_STOP_ONE_WAY: _sms_reply_stop_one_way,
     REQUIRED_LINES: _required_lines,
     ALLOWED_FIELDS_ONLY: _allowed_fields_only,
     BANNED_PHRASES: _banned_phrases,

@@ -675,6 +675,7 @@ Spelled in full because a pydantic field called `copy` shadows `BaseModel.copy` 
 | `required_lines` | RequiredLines | no |  |
 | `segment_by` | CopySegmentBy ("band" \| "top_reason" \| "uplift_segment") | no | How campaign copy divides its audience into the groups it writes one message each for.  `band` is the original behaviour: one template set per score band. `top_reason` groups rows by their own strongest SHAP reason (the same grouping `SegmentBy.TOP_REASON` gives a root-cause run). `uplift_segment` writes for an uplift scoring run's persuadables only (DEC-1240). |
 | `max_segments` | integer | no |  |
+| `sms_sender` | "one_way" \| "two_way" | no |  |
 
 #### KpiConfig
 
@@ -1956,6 +1957,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `generative.campaign_copy.required_lines.sms` | str |
 | `generative.campaign_copy.required_lines.whatsapp` | str |
 | `generative.campaign_copy.required_lines.email` | str |
+| `generative.campaign_copy.sms_sender` | enum: two_way \| one_way; one_way if the SMS sender ID cannot receive replies |
 | `standard_schema` | Phase 2 §4.2; what one row per entity should look like, in OUR names |
 | `standard_schema.entity_key` | str; the column every source joins on after mapping |
 | `standard_schema.snapshot_column` | str; the as-of date a row's features are computed at; never a feature |
