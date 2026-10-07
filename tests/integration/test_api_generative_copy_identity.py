@@ -9,6 +9,7 @@ the way the model-approval route does (`kind == "user"`); with sign-in off the t
 from __future__ import annotations
 
 import io
+import shutil
 import time
 from collections.abc import Iterator
 from pathlib import Path
@@ -161,3 +162,92 @@ def test_approved_only_before_any_copy_is_still_404(
     )
     assert response.status_code == 404
     assert response.json()["detail"]["code"] == "ARTEFACT_NOT_FOUND"
+
+
+def test_approved_only_rows_say_approved_and_leave_out_refused_renderings(
+    signed_in: tuple[TestClient, str, dict[str, str]],
+) -> None:
+    client, run_id, headers = signed_in
+    batch = _generate_copy(client, run_id, headers)
+    approved = _pending(batch)[0]["template_id"]
+    client.post(_approve_url(run_id, approved), json={"approved_by": "x"}, headers=headers)
+
+    everything = _messages(client, run_id, headers)
+    only = _messages(client, run_id, headers, approved_only="true")
+
+    assert set(everything.loc[everything["template_id"] == approved, "status"]) == {"pending_review"}
+    assert len(only) > 0
+    assert set(only["status"]) == {"approved"}
+    assert (only["block_reason"] == "").all()
+    assert (only["rendered_text"] != "").all()
+
+
+@pytest.fixture
+def narrow_copy_config(tmp_path: Path, config_root: Path) -> Path:
+    """A copy of `configs/` whose win-back copy may use only the columns the fixture run really has."""
+    patched = tmp_path / "configs"
+    shutil.copytree(config_root, patched)
+    path = patched / "use_cases" / "win_back_campaign.yaml"
+    text = path.read_text(encoding="utf-8")
+    old = "allowed_fields: [first_name, plan_type, last_offer]"
+    assert old in text
+    path.write_text(
+        text.replace(old, f"allowed_fields: [{', '.join(COPY_ALLOWED_FIELDS)}]"), encoding="utf-8"
+    )
+    return patched
+
+
+def test_a_regenerated_then_approved_template_exports_its_current_text_not_the_old_rendering(
+    tmp_path: Path, narrow_copy_config: Path
+) -> None:
+    run_id = _write_copy_run(tmp_path, narrow_copy_config)
+    with TestClient(create_app(config_root=narrow_copy_config, data_dir=tmp_path)) as client:
+        batch = _generate_copy(client, run_id)
+        target = _pending(batch)[0]
+        template_id = target["template_id"]
+        before = _messages(client, run_id, {})
+        old_rows = before.loc[before["template_id"] == template_id]
+
+        # The fake backend writes the same prose for the same ask, so the ask changes: a person narrows the
+        # fields copy may use between the generation and the regenerate, as a real model's reply would differ.
+        config_file = narrow_copy_config / "use_cases" / "win_back_campaign.yaml"
+        config_file.write_text(
+            config_file.read_text(encoding="utf-8").replace(
+                f"allowed_fields: [{', '.join(COPY_ALLOWED_FIELDS)}]", "allowed_fields: [band]"
+            ),
+            encoding="utf-8",
+        )
+        regenerated = client.post(f"/runs/{run_id}/campaign-copy/templates/{template_id}/regenerate")
+        assert regenerated.status_code == 200, regenerated.text
+        fresh = regenerated.json()
+        assert fresh["text"] != target["text"], "the fixture must give a regenerate that changes the text"
+        approved = client.post(_approve_url(run_id, template_id), json={"approved_by": "x"})
+        assert approved.status_code == 200, approved.text
+
+        only = _messages(client, run_id, {}, approved_only="true")
+        everything = _messages(client, run_id, {})
+        stored = client.get(f"/runs/{run_id}/artefacts/copy_batch.json").json()
+
+    assert len(only) == len(old_rows) > 0
+    assert set(only["template_id"]) == {template_id}
+    assert not set(only["rendered_text"]) & set(old_rows["rendered_text"])
+    for text in only["rendered_text"]:
+        assert not _unrendered(text), text
+        assert _same_prose(text, fresh), (text, fresh["text"])
+    assert len(everything) == len(before), "a regenerate must not add or drop other templates' rows"
+    others = everything.loc[everything["template_id"] != template_id].reset_index(drop=True)
+    kept = before.loc[before["template_id"] != template_id].reset_index(drop=True)
+    assert others.equals(kept)
+    assert stored["messages_rendered"] == len(everything)
+
+
+def _unrendered(text: str) -> bool:
+    return "{{" in text
+
+
+def _same_prose(rendered: str, template: dict[str, Any]) -> bool:
+    """The rendering is the template's text with each `{{field}}` filled: every literal stretch survives."""
+    import re
+
+    literals = [part for part in re.split(r"{{[^}]*}}", template["text"]) if part.strip()]
+    return all(part in rendered for part in literals)

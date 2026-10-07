@@ -474,15 +474,17 @@ class CampaignCopyRequest(StrictBase):
 class CopyTemplateApproveRequest(StrictBase):
     """Body of `POST .../campaign-copy/templates/{template_id}/approve`.
 
-    Mirrors `ModelApproveRequest` in shape and in caveat: Phase 1 has no authentication, so
-    `approved_by` is whatever the caller typed, stored so the row is not anonymous and never read
-    as a verified identity - the same unverified-claim pattern DEC-055 already established, reused
-    here rather than reinvented.
+    Mirrors `ModelApproveRequest` in shape and in rule: with sign-in on, `approved_by` is replaced by
+    the signed-in username (M91); with sign-in off it is whatever the caller typed, stored so the row
+    is not anonymous and never read as a verified identity (DEC-055).
     """
 
     approved_by: str = Field(
         min_length=1,
-        description="Caller-supplied name of the approver. Unverified: Phase 1 has no authentication.",
+        description=(
+            "Name of the approver. With sign-in on it is replaced by the signed-in username (M91); "
+            "with sign-in off it is unverified."
+        ),
     )
 
 

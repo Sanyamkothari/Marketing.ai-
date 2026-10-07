@@ -166,6 +166,7 @@ from engine.generative.win_back import (
     generate_campaign_copy,
     is_uplift_scoring_run,
     regenerate_template,
+    rerender_template_messages,
 )
 from engine.jobs import CancelToken, JobFn
 from engine.llm import LLMError
@@ -1746,6 +1747,27 @@ def regenerate_copy_template(
         replacement if template.template_id == template_id else template for template in batch.templates
     )
     updated_batch = batch.model_copy(update={"templates": updated_templates})
+    # The id is kept but the text is not, so the rows rendered from the old text are re-rendered (M91):
+    # `approved_only` must never hand out a message the approved template does not say.
+    try:
+        messages = rerender_template_messages(
+            updated_batch,
+            replacement,
+            run_id=run_id,
+            use_case=config,
+            storage=storage,
+            guardrails=guardrails,
+            backend=meter.backend,
+        )
+    except GenerativeError as exc:
+        raise generative_http(exc) from exc
+    if messages:
+        updated_batch = updated_batch.model_copy(
+            update={
+                "messages_rendered": len(messages),
+                "messages_blocked": sum(1 for message in messages if message.block_reason is not None),
+            }
+        )
     storage.write_model(run_key(run_id, COPY_BATCH_FILENAME), updated_batch)
     _write_usage(storage, run_key(run_id, LLM_USAGE_FILENAME), meter)
     return replacement
@@ -1773,8 +1795,10 @@ def read_copy_messages(
     """Registered like `GET /runs/{run_id}/scores.csv`; `404 ARTEFACT_NOT_FOUND` before any copy exists.
 
     `approved_only=true` (M91) keeps the rows whose template is approved in `copy_batch.json` *now*: the
-    `status` column of a row is the template's state when it was rendered, so it is not what is read.
-    The header is always kept, so a batch with nothing approved yet answers an empty table, not an error.
+    `status` column of a row is the template's state when it was rendered, so it is not what is read, and
+    the kept rows say `approved`. Rows a rule refused (`block_reason` set, nothing to send) are left out.
+    A regenerate re-renders its template's rows, so a kept row always reads the approved text. The header
+    is always kept, so a batch with nothing approved yet answers an empty table, not an error.
     """
     response = read_artefact(run_id, COPY_MESSAGES_FILENAME, storage)
     if not approved_only:
@@ -1789,7 +1813,12 @@ def read_copy_messages(
     out = io.StringIO()
     writer = csv.writer(out, lineterminator="\n")
     writer.writerow(header)
-    writer.writerows(row for row in reader if row[template_column] in approved)
+    status_column = header.index("status")
+    block_column = header.index("block_reason")
+    for row in reader:
+        if row[template_column] in approved and not row[block_column]:
+            row[status_column] = CopyStatus.APPROVED.value
+            writer.writerow(row)
     return Response(content=out.getvalue(), media_type=response.media_type)
 
 

@@ -156,6 +156,7 @@ __all__ = [
     "placeholders_in",
     "regenerate_template",
     "render_message",
+    "rerender_template_messages",
     "unsupported_markup",
 ]
 
@@ -1509,6 +1510,108 @@ def regenerate_template(
     return replacement.model_copy(
         update={"template_id": target.template_id, "attempts": target.attempts + replacement.attempts}
     )
+
+
+def _read_messages_csv(storage: Storage, run_id: str) -> list[CopyMessage] | None:
+    """`copy_messages.csv` read back into `CopyMessage`s, or `None` when the run has none."""
+    import pandas as pd
+
+    key = run_key(run_id, COPY_MESSAGES_FILENAME)
+    if not storage.exists(key):
+        return None
+    frame = pd.read_csv(io.StringIO(storage.read_text(key)), dtype=str, keep_default_na=False)
+    messages: list[CopyMessage] = []
+    for record in frame.to_dict("records"):
+        row: dict[str, object] = {str(name): value for name, value in record.items()}
+        for optional in ("block_reason", "segment"):
+            if row.get(optional) == "":
+                row[optional] = None
+        messages.append(CopyMessage.model_validate(row))
+    return messages
+
+
+def rerender_template_messages(
+    batch: CopyBatch,
+    template: CopyTemplate,
+    *,
+    run_id: str,
+    use_case: UseCaseConfig,
+    storage: Storage,
+    guardrails: Guardrails,
+    backend: str,
+) -> tuple[CopyMessage, ...]:
+    """Re-render `template`'s rows of `copy_messages.csv` from its text as it stands now (M91).
+
+    `regenerate_template` keeps a template's id and replaces its text, but `copy_messages.csv` is written
+    once, by `generate_campaign_copy`: without this its rows for that id keep reading the old text. This
+    renders the template for the rows it was written for (the band's, or the segment's, eligible rows)
+    exactly as the first render did, and writes the file back with those rows replaced in place and every
+    other row untouched. A blocked template has no rows, as it had none the first time. Nothing is written
+    unless every row could be rendered (`MISSING_FIELD` otherwise, as for a first render).
+
+    Returns every message the file now holds, so the caller can keep `CopyBatch`'s counts in step. Returns
+    an empty tuple, and writes nothing, when the run has no `copy_messages.csv`.
+    """
+    existing = _read_messages_csv(storage, run_id)
+    if existing is None:
+        return ()
+    copy = use_case.generative.campaign_copy
+    record = storage.read_model(run_key(run_id, RUN_RECORD_FILENAME), RunRecord)
+    primary_key = sole_key(record.primary_key, what=f"Campaign copy for run {run_id}")
+    profile = storage.read_model(record.artefacts[PROFILE_FILENAME], DatasetProfile)
+    wanted = tuple(field for field in template.fields_used if field not in _RESERVED_FIELDS)
+    fields = _read_source_fields(storage, record, profile, wanted, primary_key)
+
+    fresh: list[CopyMessage] = []
+    if template.status is not CopyStatus.BLOCKED:
+        if template.segment is None:
+            scores = _read_scores(storage, record.artefacts[SCORES_CSV], primary_key)
+            audience, _holdout, _per_band = _classify(
+                scores, fields, primary_key=primary_key, bands_to_write=copy.bands_to_write
+            )
+            rows = audience.loc[audience[BAND_COLUMN] == template.band].copy()
+        else:
+            if batch.segment_by is None:
+                raise KeyError(f"{batch.batch_id} has no segment {template.segment!r} to render for.")
+            segmented = copy.model_copy(update={"segment_by": CopySegmentBy(batch.segment_by)})
+            generative = use_case.generative.model_copy(update={"campaign_copy": segmented})
+            plan = _plan(
+                run_id=run_id,
+                record=record,
+                use_case=use_case.model_copy(update={"generative": generative}),
+                storage=storage,
+            )
+            members = plan.audience.loc[plan.audience[_UNIT] == template.segment, [primary_key, BAND_COLUMN]]
+            rows = members.merge(fields, on=primary_key, how="left")
+        rows[_UNIT] = _unit_of(template)
+        _check_field_coverage(rows, [template], primary_key=primary_key, source_fields=frozenset(wanted))
+        for item in rows.to_dict("records"):
+            row_map: dict[str, object] = {str(key): value for key, value in item.items()}
+            fresh.append(
+                render_message(
+                    template,
+                    _row_values(row_map, template),
+                    entity_key=str(row_map[primary_key]),
+                    config=copy,
+                    guardrails=guardrails,
+                    backend=backend,
+                    band=_band_text(row_map.get(BAND_COLUMN)),
+                )
+            )
+        fresh.sort(key=lambda message: message.entity_key)
+
+    merged: list[CopyMessage] = []
+    placed = False
+    for message in existing:
+        if message.template_id != template.template_id:
+            merged.append(message)
+        elif not placed:
+            merged.extend(fresh)
+            placed = True
+    if not placed:
+        merged.extend(fresh)
+    _write_messages_csv(storage, run_id, merged)
+    return tuple(merged)
 
 
 def _regenerate_segment_template(
