@@ -103,6 +103,43 @@ def test_an_explore_flag_is_carried_when_the_run_has_one() -> None:
     assert assignment_counts(assignment).explore == 1
 
 
+def holdout_table() -> pd.DataFrame:
+    """A run's `holdout_assignment.parquet` (M92): keys as text, in another order, one customer missing."""
+    return pd.DataFrame(
+        {
+            "customer_id": ["108", "105", "104", "101", "102", "103", "107"],
+            "holdout_member": [True, True, False, False, True, False, False],
+            "explore": [False, False, True, False, False, False, False],
+            "explore_probability": [0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0],
+            "treated": [False, False, True, True, False, False, False],
+            "treatment_probability": [0.0, 0.0, 0.045, 0.9, 0.9, 0.0, 0.0],
+        }
+    )
+
+
+def test_the_explore_flag_and_probability_come_from_the_runs_holdout_assignment() -> None:
+    """`scores.*` carries no explore flag (DEC-1302 (c)): the campaign joins it from M92's file on the key."""
+    assignment = build_assignment(propensity_scores(), primary_key="customer_id", holdout=holdout_table())
+    assert assignment["explore"].tolist() == [False, False, False, True, False, False, False, False]
+    assert assignment["explore_probability"].tolist() == [0.0, 0.0, 0.0, 0.05, 0.0, 0.0, 0.0, 0.0]
+    assert assignment["customer_id"].tolist()[0] == 101, "the scores' key and order are kept"
+    assert assignment_counts(assignment).explore == 1
+    # Customer 106 is not in the file: not explored, never guessed.
+    assert not bool(assignment.loc[assignment["customer_id"] == 106, "explore"].item())
+    with pytest.raises(ValueError, match="explore_probability"):
+        build_assignment(
+            propensity_scores(),
+            primary_key="customer_id",
+            holdout=holdout_table().drop(columns=["explore_probability"]),
+        )
+    with pytest.raises(ValueError, match="holdout assignment repeats"):
+        build_assignment(
+            propensity_scores(),
+            primary_key="customer_id",
+            holdout=pd.concat([holdout_table(), holdout_table().head(1)]),
+        )
+
+
 def test_a_repeated_key_or_a_missing_column_is_refused() -> None:
     scores = propensity_scores()
     with pytest.raises(ValueError, match="repeats 1 primary key"):

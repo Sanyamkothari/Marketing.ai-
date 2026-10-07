@@ -7,12 +7,11 @@ Newcombe 95% interval excluding zero, as `measure_incrementality` reports it), a
 effect is found. The share must be within four Monte Carlo standard errors of 0.80
 (`tests/statistical/bands.py`: 0.80 +/- 3.6 points at 2,000 simulations) - or the planner is corrected.
 
-**Guarded.** M93 is built on another branch, so the planner is not in this branch's base, and a test of
-it must not be faked. The tests below are defined only when `engine.measurement.planner` can be found:
-without it the module defines nothing, so nothing is collected and nothing is reported as skipped; at
-merge, once M93 is in, they appear and run. The two lines marked ADAPT call the planner the way the plan's
-scope lists it (`n_for_mde`, `achieved_power`); if M93 named an argument differently, change those two
-lines and nothing else.
+**Guarded.** The tests below are defined only when `engine.measurement.planner` can be found: without it
+the module defines nothing, so nothing is collected and nothing is reported as skipped. M93 is merged, so
+they are collected and run. They call the planner's merged API: `n_for_mde` (signed change, returning
+`ArmSizes`), `achieved_power` (signed change, returning `PowerEstimate`) and `power_preview` (the numbers the
+"Plan the test" card shows), so the promise checked is the one the product makes.
 """
 
 from __future__ import annotations
@@ -44,16 +43,16 @@ if PLANNER_PRESENT:
     planner: Any = importlib.import_module(PLANNER_MODULE)
 
     def _n_per_arm(base_rate: float, effect: float) -> int:
-        # ADAPT: n_for_mde(base_rate, mde, alpha, power) -> customers per arm (the smallest n that reaches the power)
-        return int(planner.n_for_mde(base_rate=base_rate, mde=abs(effect), alpha=ALPHA, power=TARGET_POWER))
+        """Customers per arm the planner asks for to see `effect` (signed) with 80% power, equal arms."""
+        sizes = planner.n_for_mde(base_rate, effect, alpha=ALPHA, power=TARGET_POWER, control_ratio=1.0)
+        assert sizes.reason is None and sizes.n_treat is not None and sizes.n_control == sizes.n_treat
+        return int(sizes.n_treat)
 
     def _planner_power(base_rate: float, effect: float, n: int) -> float:
-        # ADAPT: achieved_power(n_treat, n_control, base_rate, effect, alpha) -> the planner's own power at n
-        return float(
-            planner.achieved_power(
-                n_treat=n, n_control=n, base_rate=base_rate, effect=abs(effect), alpha=ALPHA
-            )
-        )
+        """The planner's own power for a change of `effect` (signed) with `n` customers in each arm."""
+        estimate = planner.achieved_power(n, n, base_rate, effect, alpha=ALPHA)
+        assert estimate.reason is None and estimate.power is not None
+        return float(estimate.power)
 
     @pytest.mark.parametrize(("base_rate", "effect", "seed"), CASES, ids=["4pct-to-3pct", "10pct-to-8pct"])
     def test_the_measurement_finds_the_planned_effect_with_the_planned_power(
@@ -73,3 +72,27 @@ if PLANNER_PRESENT:
         del seed
         n = _n_per_arm(base_rate, effect)
         assert _planner_power(base_rate, effect, n) == pytest.approx(TARGET_POWER, abs=0.01)
+
+    @pytest.mark.parametrize(("base_rate", "effect", "seed"), CASES, ids=["4pct-to-3pct", "10pct-to-8pct"])
+    def test_the_plan_preview_at_the_planners_n_shows_the_planned_effect(
+        base_rate: float, effect: float, seed: int
+    ) -> None:
+        """The card's number agrees with the planner: at 2n customers split in half, the smallest fall
+        the test is sure to see is the planned one (no larger; at most a hair smaller, since n is rounded up).
+        """
+        del seed
+        n = _n_per_arm(base_rate, effect)
+        preview = planner.power_preview(
+            planner.PowerPreviewRequest(
+                eligible=2 * n,
+                base_rate=base_rate,
+                holdout_shares=(0.5,),
+                alpha=ALPHA,
+                power=TARGET_POWER,
+                direction="down" if effect < 0 else "up",
+            )
+        )
+        (point,) = preview.points
+        assert (point.n_treat, point.n_control) == (n, n)
+        assert point.mde_pp is not None
+        assert abs(effect) * 100.0 - 0.01 <= point.mde_pp <= abs(effect) * 100.0 + 1e-6

@@ -20,7 +20,9 @@ same database as the audit trail, through `CampaignStore`; a test or a laptop wi
                                 database) know the campaign's key columns and creation date
 `assignment.parquet`            one row per scored customer: the key column(s), `arm` (treated, holdout or
                                 suppressed), `intended` (inside the population the campaign is measured
-                                on), `band`, and `segment` / `explore` when the run has them
+                                on), `band`, `segment` when the run has one, and `explore` /
+                                `explore_probability` from the run's `holdout_assignment.parquet` (M92)
+                                when it wrote one
 `outcomes.parquet`              the key column(s), the outcome column and, when named, the per-row treatment
                                 date - copied from the outcomes upload, nothing else
 `incrementality_report.json`    the measured report (`engine.measurement.measure.measure_campaign`)
@@ -142,6 +144,7 @@ _INTENDED_TREATMENT_COLUMN: Final[str] = "intended_treatment"
 _BAND_COLUMN: Final[str] = "band"
 _SEGMENT_COLUMN: Final[str] = "segment"
 _EXPLORE_COLUMN: Final[str] = "explore"
+_EXPLORE_PROBABILITY_COLUMN: Final[str] = "explore_probability"
 
 
 def campaign_key(campaign_id: str, filename: str) -> str:
@@ -270,13 +273,22 @@ class Campaign(Artefact):
 # The assignment
 # ---------------------------------------------------------------------------
 def build_assignment(
-    scores: pd.DataFrame, *, primary_key: PrimaryKey, bands: Sequence[str] | None = None
+    scores: pd.DataFrame,
+    *,
+    primary_key: PrimaryKey,
+    bands: Sequence[str] | None = None,
+    holdout: pd.DataFrame | None = None,
 ) -> pd.DataFrame:
     """`assignment.parquet` from a scoring run's scores (DEC-1304 (b)); see the module docstring.
 
     The key column(s) keep their own dtype, so the measurement joins the outcomes exactly as it joins
     them against the scores (`engine.uplift.incrementality._joined_keys`). Raises `ValueError` for a
     missing column, a repeated key, or treat bands on an uplift run (measured within its intended set).
+
+    `holdout` is the run's `holdout_assignment.parquet` (M92), which an engaged run writes beside its
+    scores: `scores.*` never carries the explore flag (DEC-1302 (c)), so `explore` and
+    `explore_probability` are taken from it, joined on the key. A scored customer the file does not
+    list was not explored. Without it, an `explore` column of the scores is kept as it is.
     """
     import pandas as pd
 
@@ -322,9 +334,44 @@ def build_assignment(
     )
     if _SEGMENT_COLUMN in frame.columns:
         out[_SEGMENT_COLUMN] = frame[_SEGMENT_COLUMN].astype("string")
-    if _EXPLORE_COLUMN in frame.columns:
+    if holdout is not None:
+        explore, probability = _explore_from_holdout(frame, holdout, columns)
+        out[_EXPLORE_COLUMN] = explore
+        out[_EXPLORE_PROBABILITY_COLUMN] = probability
+    elif _EXPLORE_COLUMN in frame.columns:
         out[_EXPLORE_COLUMN] = _flag(frame[_EXPLORE_COLUMN]).astype(bool)
     return out
+
+
+def _explore_from_holdout(
+    frame: pd.DataFrame, holdout: pd.DataFrame, columns: tuple[str, ...]
+) -> tuple[pd.Series, pd.Series]:
+    """`(explore, explore_probability)` for each row of `frame`, read from a `holdout_assignment` table."""
+    import pandas as pd
+
+    from engine.uplift.incrementality import _flag, _joined_keys, _require_unique
+
+    wanted = (*columns, _EXPLORE_COLUMN, _EXPLORE_PROBABILITY_COLUMN)
+    missing = [name for name in wanted if name not in holdout.columns]
+    if missing:
+        raise ValueError(
+            f"The run's holdout assignment has no column {', '.join(repr(name) for name in missing)}."
+        )
+    table = holdout.reset_index(drop=True)
+    keys = _joined_keys(table, columns)
+    _require_unique(keys, what="The run's holdout assignment")
+    explored = pd.Series(_flag(table[_EXPLORE_COLUMN]).to_numpy(dtype=bool), index=keys.to_numpy())
+    chance = pd.Series(
+        pd.to_numeric(table[_EXPLORE_PROBABILITY_COLUMN], errors="coerce").fillna(0.0).to_numpy(dtype=float),
+        index=keys.to_numpy(),
+    )
+    ours = _joined_keys(frame, columns).to_numpy()
+    explore = explored.reindex(ours, fill_value=False).astype(bool).to_numpy()
+    probability = chance.reindex(ours, fill_value=0.0).astype("float64").to_numpy()
+    return (
+        pd.Series(explore, index=frame.index, dtype=bool),
+        pd.Series(probability, index=frame.index, dtype="float64"),
+    )
 
 
 def as_scores_frame(frame: pd.DataFrame) -> pd.DataFrame:

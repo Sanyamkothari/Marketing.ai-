@@ -294,3 +294,24 @@ def test_a_synthetic_outcomes_upload_makes_the_value_report_synthetic(storage: L
     view = compute_roi(storage, CHURN_RUN, inputs=inputs)
     assert view.synthetic is True
     assert PHRASE in render_html(roi_document(view, now=NOW))
+
+
+def test_a_campaign_measured_from_a_synthetic_outcomes_upload_makes_the_value_report_synthetic(
+    storage: LocalStorage,
+) -> None:
+    """The value view reads a campaign's report (M94): the outcomes upload named in its record counts."""
+    campaign_id = "c_20260923_0000abcd"
+    storage.write_model(run_key(CHURN_RUN, RUN_FILENAME), record(synthetic=False))
+    report = mature_report().model_copy(update={"campaign_id": campaign_id})
+    storage.write_model(f"campaigns/{campaign_id}/incrementality_report.json", report)
+    campaign = {"campaign_id": campaign_id, "run_ids": [CHURN_RUN], "outcomes": {"upload_id": "u_outcomes"}}
+    storage.write_bytes(f"campaigns/{campaign_id}/campaign.json", json.dumps(campaign).encode())
+    inputs = RoiInputs(value_per_outcome=4000.0)
+
+    storage.write_bytes("uploads/u_outcomes/upload.json", json.dumps({"synthetic": False}).encode())
+    view = compute_roi(storage, CHURN_RUN, inputs=inputs)
+    assert view.campaign_id == campaign_id and view.synthetic is False
+    storage.write_bytes("uploads/u_outcomes/upload.json", json.dumps({"synthetic": True}).encode())
+    view = compute_roi(storage, CHURN_RUN, inputs=inputs)
+    assert view.campaign_id == campaign_id and view.synthetic is True
+    assert PHRASE in render_html(roi_document(view, now=NOW))

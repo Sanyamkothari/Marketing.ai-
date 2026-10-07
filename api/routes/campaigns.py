@@ -61,7 +61,7 @@ from api.schemas import ErrorBody, ErrorResponse
 from engine.access.roles import Role
 from engine.audit.events import content_hash
 from engine.config import ConfigError, StrictBase, UseCaseConfig, key_columns
-from engine.holdout.assign import run_holdout_spec
+from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME, run_holdout_spec
 from engine.holdout.salt import HoldoutLedger
 from engine.holdout.spec import PERSISTENT_SCOPES
 from engine.measurement.campaign import (
@@ -110,6 +110,7 @@ from engine.measurement.planner import (
     MAX_HOLDOUT_SHARE,
     PowerPreviewPoint,
     PowerPreviewRequest,
+    cost_of_explore,
     power_preview,
 )
 from engine.pilot.roi import outcome_is_good_by_default
@@ -348,8 +349,11 @@ def create_campaign(
         raise http_error(
             409, RUN_NOT_SCORED, "This run has no scores file to build a campaign from."
         ) from exc
+    holdout_table = _holdout_table(storage, record.run_id)
     try:
-        assignment = build_assignment(scores, primary_key=record.primary_key, bands=body.bands)
+        assignment = build_assignment(
+            scores, primary_key=record.primary_key, bands=body.bands, holdout=holdout_table
+        )
     except ValueError as exc:
         raise http_error(422, CAMPAIGN_INVALID, str(exc), path="bands" if body.bands else None) from exc
     counts = assignment_counts(assignment)
@@ -792,10 +796,13 @@ def preview_plan(
             path="holdout",
         ) from exc
     preview = power_preview(preview_request)
-    index = next((i for i, point in enumerate(preview.points) if point.holdout_share == current), None)
-    return CampaignPlanPreview(
-        **answer, points=preview.points, current_index=index, basis=preview.basis, reason=None
-    )
+    # The explore cost is the campaign's own explore slice, counted, not a share of it rounded back
+    # (the request caps the share at 10% of the measured population, which an explore slice drawn
+    # outside a narrow selection can exceed).
+    explore_cost = cost_of_explore(realised.n_explore, contact_cost, offer_cost).amount
+    points = tuple(point.model_copy(update={"cost_of_explore": explore_cost}) for point in preview.points)
+    index = next((i for i, point in enumerate(points) if point.holdout_share == current), None)
+    return CampaignPlanPreview(**answer, points=points, current_index=index, basis=preview.basis, reason=None)
 
 
 # ---------------------------------------------------------------------------
@@ -922,6 +929,21 @@ def _resolved(campaign: Campaign, body: TestPlanInput) -> TestPlanInput:
                 path="analysis_date",
             )
     return decided
+
+
+def _holdout_table(storage: Storage, run_id: str) -> Any:
+    """The run's `holdout_assignment.parquet` (M92), or None when the run wrote none (a default run).
+
+    `scores.*` carries no explore flag (DEC-1302 (c)): the campaign's assignment takes `explore` and
+    `explore_probability` from this file, joined on the key.
+    """
+    import pandas as pd
+
+    key = run_key(run_id, HOLDOUT_ASSIGNMENT_FILENAME)
+    try:
+        return pd.read_parquet(_bytes(storage, key)) if storage.exists(key) else None
+    except StorageError:
+        return None
 
 
 def _realised(storage: Storage, campaign_id: str) -> Any:

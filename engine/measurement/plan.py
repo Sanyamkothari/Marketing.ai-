@@ -160,7 +160,13 @@ class RealisedPopulation(StrictBase):
     population_rows: int = Field(description="Customers in the measured population.")
     n_treat: int = Field(description="Treated customers in it.")
     n_holdout: int = Field(description="Held-back customers in it.")
-    n_explore: int = Field(default=0, description="Explore-slice customers in it (M92).")
+    n_explore: int = Field(
+        default=0,
+        description=(
+            "Explore-slice customers of the campaign (M92). The slice lies outside the selection, so it "
+            "is counted over every eligible customer, not only the measured population."
+        ),
+    )
 
     @property
     def holdout_fraction(self) -> float:
@@ -169,6 +175,7 @@ class RealisedPopulation(StrictBase):
 
     @property
     def explore_fraction(self) -> float:
+        """Explore-slice customers per customer of the measured population (the preview's explore share)."""
         return round(self.n_explore / self.population_rows, _SHARE_DIGITS) if self.population_rows else 0.0
 
 
@@ -192,11 +199,15 @@ class TestPlan(Artefact):
     holdout_fraction: float = Field(
         description="Held-back share of the measured population (from the assignment)."
     )
-    explore_fraction: float = Field(default=0.0, description="Explore-slice share of it (M92).")
+    explore_fraction: float = Field(
+        default=0.0, description="Explore-slice customers per customer of the measured population (M92)."
+    )
     population_rows: int = Field(description="Customers in the measured population.")
     n_treat: int = Field(description="Treated customers in it.")
     n_holdout: int = Field(description="Held-back customers in it.")
-    n_explore: int = Field(default=0, description="Explore-slice customers in it.")
+    n_explore: int = Field(
+        default=0, description="Explore-slice customers of the campaign, outside the selection (M92)."
+    )
     mde_pp: float | None = Field(default=None, description="The detectable effect planned for, in points.")
     base_rate: float | None = Field(default=None, description="The expected rate without the campaign.")
     base_rate_source: str | None = Field(default=None, description="Where that rate comes from.")
@@ -344,7 +355,9 @@ def realised_population(
         population_rows=int(population.sum()),
         n_treat=int((population & ~held_out).sum()),
         n_holdout=int((population & held_out).sum()),
-        n_explore=int((population & explore).sum()),
+        # The explore slice is drawn outside the selection (DEC-1302 (c)), so it never lies inside an
+        # uplift run's intended set or the treat bands: it is counted over every eligible customer.
+        n_explore=int((eligible & explore).sum()),
     )
 
 
