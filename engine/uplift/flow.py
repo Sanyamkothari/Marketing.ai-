@@ -188,16 +188,14 @@ _LOGGER = get_logger(__name__)
 UPLIFT_HOLDOUT_FILENAME: Final[str] = "uplift_holdout.parquet"
 """The hold-out's treatment, outcome and predictions, kept for OPE and expected conversions."""
 
-HOLDOUT_COLUMNS: Final[tuple[str, ...]] = (
-    "primary_key",
-    "t",
-    "y",
-    "uplift",
-    "p_treated",
-    "p_control",
-    "value",
-)
+HOLDOUT_COLUMNS: Final[tuple[str, ...]] = ("primary_key", "t", "y", "uplift", "p_treated", "p_control")
 """Columns of `uplift_holdout.parquet`, in order."""
+
+HOLDOUT_VALUE_COLUMN: Final[str] = "value"
+"""Plan J M97 (DEC-1307): the hold-out customers' `uplift.policy.value_column` values, after
+:data:`HOLDOUT_COLUMNS`, written only when the training run was configured with a value column that its
+file has. Missing values stay missing (NaN): nothing is filled in. Which column it holds is the training
+run's own `run_config.json` (:func:`training_value_column`)."""
 
 UPLIFT_COLUMN: Final[str] = "uplift"
 P_TREATED_COLUMN: Final[str] = "p_treated"
@@ -262,8 +260,17 @@ def model_card_key(predictor_key: str) -> str:
     return f"{predictor_key}/{UPLIFT_MODEL_CARD_FILENAME}"
 
 
-def scores_columns(primary_key: PrimaryKey, reason_columns: tuple[str, ...]) -> tuple[str, ...]:
-    """Header of an uplift run's `scores.csv` and `scores.parquet`, in order: every key column first."""
+def scores_columns(
+    primary_key: PrimaryKey, reason_columns: tuple[str, ...], *, ranked_by_value: bool = False
+) -> tuple[str, ...]:
+    """Header of an uplift run's `scores.csv` and `scores.parquet`, in order: every key column first.
+
+    A list ranked by value (Plan J M97, DEC-1307) adds `customer_value` and `net_value` at the end;
+    every other run's header is unchanged.
+    """
+    from engine.uplift.actions import CUSTOMER_VALUE_COLUMN, NET_VALUE_COLUMN
+
+    value_columns = (CUSTOMER_VALUE_COLUMN, NET_VALUE_COLUMN) if ranked_by_value else ()
     return (
         *keys.key_columns(primary_key),
         UPLIFT_COLUMN,
@@ -276,18 +283,44 @@ def scores_columns(primary_key: PrimaryKey, reason_columns: tuple[str, ...]) -> 
         "suppressed_reason",
         "control_group",
         "intended_treatment",
+        *value_columns,
     )
 
 
 def read_holdout(storage: Storage, key: str) -> pd.DataFrame:
-    """`uplift_holdout.parquet` as a frame with :data:`HOLDOUT_COLUMNS`; `StorageError` when absent."""
-    import numpy as np
+    """`uplift_holdout.parquet` as a frame with :data:`HOLDOUT_COLUMNS` (and :data:`HOLDOUT_VALUE_COLUMN`
+    when the training run wrote it); `StorageError` when absent. Nothing is added to an older file."""
     import pandas as pd
 
-    frame = pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
-    if "value" not in frame.columns:
-        frame["value"] = np.ones(len(frame.index), dtype=np.float64)
-    return frame
+    return pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
+
+
+def training_value_column(storage: Storage, run_id: str) -> str | None:
+    """The `uplift.policy.value_column` a training run was configured with; `None` when it had none
+    or its `run_config.json` cannot be read. It names what the hold-out's value column holds."""
+    from engine.config import ResolvedConfig
+
+    try:
+        resolved = storage.read_model(run_key(run_id, register.RUN_CONFIG_FILENAME), ResolvedConfig)
+    except (StorageError, OSError, ValueError):
+        return None
+    return resolved.config.uplift.policy.value_column
+
+
+def holdout_values(
+    holdout: pd.DataFrame, trained_column: str | None, value_column: str | None
+) -> FloatArray | None:
+    """The hold-out's customer values for `value_column`, or `None` when it has none for that column.
+
+    Only a hold-out written by a training run configured with the SAME value column carries them
+    (DEC-1307 (d)); missing values come back as NaN, never filled in.
+    """
+    import numpy as np
+
+    if value_column is None or trained_column != value_column or HOLDOUT_VALUE_COLUMN not in holdout.columns:
+        return None
+    values: FloatArray = np.asarray(holdout[HOLDOUT_VALUE_COLUMN], dtype=np.float64)
+    return values
 
 
 def _parquet_bytes(frame: pd.DataFrame) -> bytes:
@@ -299,13 +332,7 @@ def _parquet_bytes(frame: pd.DataFrame) -> bytes:
 
 
 def _observed_top_share(
-    uplift: FloatArray,
-    t: IntArray,
-    y: IntArray,
-    *,
-    samples: int,
-    seed: int,
-    value: FloatArray | None = None,
+    uplift: FloatArray, t: IntArray, y: IntArray, *, samples: int, seed: int
 ) -> Callable[[float], ConfidenceValue | None]:
     """The hold-out's observed uplift among its top `fraction`, with its bootstrap interval.
 
@@ -315,9 +342,8 @@ def _observed_top_share(
     from engine.uplift.metrics import bootstrap_uplift_at
 
     def observed(fraction: float) -> ConfidenceValue | None:
-        return bootstrap_uplift_at(uplift, t, y, fraction, samples=samples, seed=seed, value=value)
+        return bootstrap_uplift_at(uplift, t, y, fraction, samples=samples, seed=seed)
 
-    observed.is_value_weighted = value is not None  # type: ignore[attr-defined]
     return observed
 
 
@@ -631,7 +657,7 @@ class UpliftTrainFlow(_TrainFlow):
         and the policy are the configured ones, applied to rows the learners never saw.
         """
         from engine.uplift.metrics import evaluate_uplift
-        from engine.uplift.policy import recommend_policy
+        from engine.uplift.policy import holdout_lookups, recommend_policy
         from engine.uplift.segments import assign_segments, segment_report
 
         ctx = self._ctx
@@ -673,28 +699,48 @@ class UpliftTrainFlow(_TrainFlow):
                 causal=self._causal,
             ),
         )
-        kept = _require(self._kept, "the validated rows")
-        value_col = uplift.policy.value_column
-        holdout_val: FloatArray | None = None
-        if value_col and value_col in kept.columns:
-            val_series = pd.to_numeric(kept[value_col].iloc[rows], errors="coerce").fillna(1.0)
-            holdout_val = val_series.to_numpy(dtype=float)
-
-        recommendation, _ = recommend_policy(
-            prediction.uplift,
-            segments,
-            uplift.policy,
-            run_id=ctx.run_id,
-            computed_on="test",
-            causal=self._causal,
-            observed_top_share=_observed_top_share(
-                prediction.uplift, t, y, samples=uplift.bootstrap_samples, seed=self._seed, value=holdout_val
-            ),
-            values=holdout_val,
-            p_treated=prediction.p_treated,
-        )
+        values = self._holdout_values(rows)
+        if values is None:
+            recommendation, _ = recommend_policy(
+                prediction.uplift,
+                segments,
+                uplift.policy,
+                run_id=ctx.run_id,
+                computed_on="test",
+                causal=self._causal,
+                observed_top_share=_observed_top_share(
+                    prediction.uplift, t, y, samples=uplift.bootstrap_samples, seed=self._seed
+                ),
+            )
+        else:
+            # Plan J M97: ranked by each hold-out customer's net value, and quoted from the hold-out
+            # ranked the same way - conversions unweighted, money weighted by the customer's value.
+            lookups = holdout_lookups(
+                prediction.uplift,
+                t,
+                y,
+                policy=uplift.policy,
+                samples=uplift.bootstrap_samples,
+                seed=self._seed,
+                ranked_by_value=True,
+                values=values,
+                p_treated=prediction.p_treated,
+            )
+            recommendation, _ = recommend_policy(
+                prediction.uplift,
+                segments,
+                uplift.policy,
+                run_id=ctx.run_id,
+                computed_on="test",
+                causal=self._causal,
+                observed_top_share=None if lookups.conversions is None else lookups.conversions.at,
+                observed_top_value=None if lookups.value is None else lookups.value.at,
+                holdout_note=lookups.note,
+                values=values,
+                p_treated=prediction.p_treated,
+            )
         self._write(POLICY_FILENAME, recommendation)
-        self._write_holdout(rows, t, y, prediction)
+        self._write_holdout(rows, t, y, prediction, values)
         metrics = {
             Metric.AUUC.value: evaluation.auuc.value,
             "qini_coefficient": evaluation.qini_coefficient.value,
@@ -706,7 +752,7 @@ class UpliftTrainFlow(_TrainFlow):
         ):
             if bound is not None:
                 metrics[name] = bound
-            self._manifest.add_metrics(metrics)
+        self._manifest.add_metrics(metrics)
         verdict = "measurable uplift" if evaluation.measurable_uplift else "no measurable uplift"
         detail = f"{_auuc_line(evaluation)} · {verdict}{_not_causal_suffix(self._causal)}{evidence_note}"
         return _StageOutcome(detail, evaluation.rows_evaluated)
@@ -943,19 +989,37 @@ class UpliftTrainFlow(_TrainFlow):
         kept = _require(self._kept, "the validated rows")
         return [str(key) for key in kept[self._ctx.row_key].iloc[rows].tolist()]
 
-    def _write_holdout(self, rows: IntArray, t: IntArray, y: IntArray, prediction: UpliftPrediction) -> None:
-        """`uplift_holdout.parquet`: the logged data OPE and every expected-conversions figure use."""
+    def _holdout_values(self, rows: IntArray) -> FloatArray | None:
+        """The hold-out rows' `uplift.policy.value_column` values (NaN where missing or not a number),
+        or `None` when no value column is configured or the file has none (Plan J M97, DEC-1307)."""
         import numpy as np
         import pandas as pd
 
+        column = self._ctx.config.uplift.policy.value_column
         kept = _require(self._kept, "the validated rows")
-        value_col = self._ctx.config.uplift.policy.value_column
-        if value_col and value_col in kept.columns:
-            val_series = pd.to_numeric(kept[value_col].iloc[rows], errors="coerce").fillna(1.0)
-            values = val_series.to_numpy(dtype=np.float64)
-        else:
-            values = np.ones(len(rows), dtype=np.float64)
+        if column is None or column not in kept.columns:
+            return None
+        values: FloatArray = pd.to_numeric(kept[column].iloc[rows], errors="coerce").to_numpy(
+            dtype=np.float64
+        )
+        return values
 
+    def _write_holdout(
+        self,
+        rows: IntArray,
+        t: IntArray,
+        y: IntArray,
+        prediction: UpliftPrediction,
+        values: FloatArray | None = None,
+    ) -> None:
+        """`uplift_holdout.parquet`: the logged data OPE and every expected-conversions figure use.
+
+        With `values` (Plan J M97) the customers' values follow in :data:`HOLDOUT_VALUE_COLUMN`, missing
+        ones as NaN; without them the file is exactly :data:`HOLDOUT_COLUMNS`, as before M97.
+        """
+        import pandas as pd
+
+        kept = _require(self._kept, "the validated rows")
         frame = pd.DataFrame(
             {
                 "primary_key": kept[self._ctx.row_key].iloc[rows].astype(str).to_numpy(),
@@ -964,10 +1028,11 @@ class UpliftTrainFlow(_TrainFlow):
                 "uplift": prediction.uplift,
                 "p_treated": prediction.p_treated,
                 "p_control": prediction.p_control,
-                "value": values,
             },
             columns=list(HOLDOUT_COLUMNS),
         )
+        if values is not None:
+            frame[HOLDOUT_VALUE_COLUMN] = values
         key = run_key(self._ctx.run_id, UPLIFT_HOLDOUT_FILENAME)
         self._storage.write_bytes(key, _parquet_bytes(frame))
         self._artefacts[UPLIFT_HOLDOUT_FILENAME] = key
@@ -1420,6 +1485,11 @@ class UpliftScoreFlow(_ScoreFlow):
                 scored, config, gate, primary_key=_entity(ctx), run_id=ctx.run_id, at=utc_now()
             )
         decision, risk = self._ranking_decision(scored)
+        # A list ranked by the propensity model is not the hold-out's top uplift share, so the
+        # hold-out's measured uplift does not describe it: expected conversions stay null.
+        share, value, holdout_note = (
+            (None, None, None) if risk is not None else self._training_holdout(scored)
+        )
         scored, recommendation = apply_uplift_actions(
             scored,
             config,
@@ -1429,9 +1499,9 @@ class UpliftScoreFlow(_ScoreFlow):
             causal=card.causal,
             prediction_columns=PREDICTION_COLUMNS,
             thresholds=card.segment_thresholds,
-            # A list ranked by the propensity model is not the hold-out's top uplift share, so the
-            # hold-out's measured uplift does not describe it: expected conversions stay null.
-            observed_top_share=None if risk is not None else self._training_holdout_share(),
+            observed_top_share=share,
+            observed_top_value=value,
+            holdout_note=holdout_note,
         )
         if risk is not None:
             from engine.decide.ranking import rerank_by_risk
@@ -1575,14 +1645,58 @@ class UpliftScoreFlow(_ScoreFlow):
         except (StorageError, OSError, ValueError):
             _LOGGER.warning("actions: the training run's %s could not be read", UPLIFT_HOLDOUT_FILENAME)
             return None
-        holdout_val = np.asarray(holdout["value"], dtype=np.float64) if "value" in holdout.columns else None
         return _observed_top_share(
             np.asarray(holdout["uplift"], dtype=np.float64),
             np.asarray(holdout["t"], dtype=np.int_),
             np.asarray(holdout["y"], dtype=np.int_),
             samples=self._ctx.config.uplift.bootstrap_samples,
             seed=seed_from(version.run_id),
-            value=holdout_val,
+        )
+
+    def _training_holdout(self, scored: pd.DataFrame) -> tuple[
+        Callable[[float], ConfidenceValue | None] | None,
+        Callable[[float], ConfidenceValue | None] | None,
+        str | None,
+    ]:
+        """`(conversions lookup, value lookup, note)` from the training run's hold-out.
+
+        A list ranked by uplift gets :meth:`_training_holdout_share`, exactly as before Plan J M97. A
+        list ranked by value (`uplift.policy.value_column` set, and the scored rows carry it) asks the
+        hold-out ranked the same way, and only when the training run stored the hold-out's values of the
+        SAME column; otherwise nothing is quoted and the note says why (DEC-1307 (d)).
+        """
+        import numpy as np
+
+        from engine.uplift.policy import holdout_lookups
+
+        config = self._ctx.config
+        column = config.uplift.policy.value_column
+        if column is None or column not in scored.columns:
+            return self._training_holdout_share(), None, None
+        version = _require(self._version, "the model version")
+        key = version.artefact_keys.get(
+            UPLIFT_HOLDOUT_FILENAME, run_key(version.run_id, UPLIFT_HOLDOUT_FILENAME)
+        )
+        try:
+            holdout = read_holdout(self._storage, key)
+        except (StorageError, OSError, ValueError):
+            _LOGGER.warning("actions: the training run's %s could not be read", UPLIFT_HOLDOUT_FILENAME)
+            return None, None, None
+        lookups = holdout_lookups(
+            np.asarray(holdout["uplift"], dtype=np.float64),
+            np.asarray(holdout["t"], dtype=np.int_),
+            np.asarray(holdout["y"], dtype=np.int_),
+            policy=config.uplift.policy,
+            samples=config.uplift.bootstrap_samples,
+            seed=seed_from(version.run_id),
+            ranked_by_value=True,
+            values=holdout_values(holdout, training_value_column(self._storage, version.run_id), column),
+            p_treated=np.asarray(holdout["p_treated"], dtype=np.float64),
+        )
+        return (
+            None if lookups.conversions is None else lookups.conversions.at,
+            None if lookups.value is None else lookups.value.at,
+            lookups.note,
         )
 
     def _export(self) -> _StageOutcome:
@@ -1658,6 +1772,8 @@ def _write_scores(
     """
     import pandas as pd
 
+    from engine.uplift.actions import CUSTOMER_VALUE_COLUMN, NET_VALUE_COLUMN
+
     reason_names = explain.reason_column_names(config)
     columns = keys.key_columns(primary_key)
     data: dict[str, pd.Series] = (
@@ -1681,7 +1797,14 @@ def _write_scores(
     )
     data["control_group"] = frame["control_group"].astype(bool)
     data["intended_treatment"] = frame["intended_treatment"].astype(bool)
-    table = pd.DataFrame(data, columns=list(scores_columns(primary_key, reason_names)))
+    column = config.uplift.policy.value_column
+    ranked_by_value = column is not None and column in frame.columns and NET_VALUE_COLUMN in frame.columns
+    if ranked_by_value:
+        data[CUSTOMER_VALUE_COLUMN] = frame[CUSTOMER_VALUE_COLUMN].astype("float64")
+        data[NET_VALUE_COLUMN] = frame[NET_VALUE_COLUMN].astype("float64")
+    table = pd.DataFrame(
+        data, columns=list(scores_columns(primary_key, reason_names, ranked_by_value=ranked_by_value))
+    )
     csv_key = run_key(run_id, export.SCORES_CSV)
     storage.write_bytes(csv_key, table.to_csv(index=False, lineterminator="\n").encode("utf-8"))
     parquet_key = run_key(run_id, export.SCORES_PARQUET)

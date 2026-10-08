@@ -104,7 +104,7 @@ class RoiInputs(_Strict):
         description="Rupees an offer costs each time a contacted customer takes it.",
     )
     contact_cost: float = Field(
-        default=0.86, ge=0, le=1e9, description="Rupees each contact costs (SMS, call, e-mail)."
+        default=0.0, ge=0, le=1e9, description="Rupees each contact costs (SMS, call, e-mail)."
     )
     entered_by: str = Field(default="", max_length=120)
     entered_at: datetime | None = None
@@ -178,69 +178,54 @@ def outcome_is_good_by_default(use_case_id: str, outcome_name: str, root: Path |
     return outcome_name not in own
 
 
+DEFAULT_CHANNEL_CONTACT_COSTS: Final[dict[str, float]] = {
+    "whatsapp": 0.86,
+    "whatsapp_marketing": 0.86,
+    "whatsapp_utility": 0.13,
+    "sms": 0.15,
+    "email": 0.05,
+    "voice": 0.70,
+}
+"""India channel costs in rupees (Plan J M97): the editable defaults `configs/pilot/value.yaml` ships."""
+
+
 class ValueCosts(_Strict):
-    """Offer and contact costs from the configuration's value block."""
+    """Offer and contact costs from the `value:` block of `configs/pilot/value.yaml` (Plan J M97).
 
-    offer_cost: float = 0.0
-    contact_cost: float = 0.86
-    channel_contact_costs: dict[str, float] = Field(default_factory=dict)
-
-
-def lookup_value_costs(
-    channel: str | None = None,
-    *,
-    _use_case_id: str | None = None,
-    root: Path | None = None,
-) -> ValueCosts:
-    """The offer cost and contact cost from configuration.
-
-    Reads the `value:` block in `configs/pilot/value.yaml`. When M99's catalogue exists later
-    it will take these over, so all cost lookups go through this single function.
+    Read by the uplift policy when a run ranks by `uplift.policy.value_column` and has no
+    `cost_per_contact` of its own. They are suggestions the client can edit, never applied to a run
+    that did not opt in: `RoiInputs` keeps its own defaults (DEC-1307 (g)).
     """
-    from engine.config import config_root, load_yaml
 
-    defaults: dict[str, object] = {
-        "offer_cost": 0.0,
-        "contact_cost": 0.86,
-        "channel_contact_costs": {
-            "whatsapp": 0.86,
-            "whatsapp_marketing": 0.86,
-            "whatsapp_utility": 0.13,
-            "sms": 0.15,
-            "email": 0.05,
-            "voice": 0.70,
-        },
-    }
+    offer_cost: float = Field(default=0.0, ge=0)
+    contact_cost: float = Field(default=0.86, ge=0)
+    channel_contact_costs: dict[str, float] = Field(
+        default_factory=lambda: dict(DEFAULT_CHANNEL_CONTACT_COSTS)
+    )
+
+
+def lookup_value_costs(channel: str | None = None, *, root: Path | None = None) -> ValueCosts:
+    """The offer cost and contact cost the configuration gives: the ONE place costs are looked up.
+
+    Reads the `value:` block of `configs/pilot/value.yaml`; a missing file or block gives the
+    defaults of :class:`ValueCosts`. With `channel`, `contact_cost` is that channel's cost (the block's
+    `contact_cost` for a channel it does not list). M99's offer and channel catalogue takes these over
+    behind this function.
+    """
+    from engine.config import ConfigError, config_root, load_yaml
+
     try:
         data = load_yaml(config_root(root) / VALUE_CONFIG)
-        val_block = data.get("value") or {}
-    except Exception:
-        val_block = {}
-
-    offer_cost = float(val_block.get("offer_cost", defaults["offer_cost"]))
-    raw_channels = val_block.get("channel_contact_costs")
-    if isinstance(raw_channels, dict):
-        channel_costs = {str(k): float(v) for k, v in raw_channels.items()}
-    else:
-        channel_costs = {
-            "whatsapp": 0.86,
-            "whatsapp_marketing": 0.86,
-            "whatsapp_utility": 0.13,
-            "sms": 0.15,
-            "email": 0.05,
-            "voice": 0.70,
-        }
-    default_contact_cost = float(val_block.get("contact_cost", defaults["contact_cost"]))
-
-    if channel is not None:
-        c_cost = float(channel_costs.get(channel.lower(), default_contact_cost))
-    else:
-        c_cost = default_contact_cost
-
-    return ValueCosts(
-        offer_cost=offer_cost,
-        contact_cost=c_cost,
-        channel_contact_costs=channel_costs,
+    except ConfigError as exc:
+        if exc.code != "CONFIG_NOT_FOUND":
+            raise
+        data = {}
+    block = data.get("value") or {}
+    costs = ValueCosts.model_validate(block)
+    if channel is None:
+        return costs
+    return costs.model_copy(
+        update={"contact_cost": costs.channel_contact_costs.get(channel.lower(), costs.contact_cost)}
     )
 
 

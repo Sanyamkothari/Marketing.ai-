@@ -17,10 +17,13 @@ outcomes_to_prevent:
   - fault-prediction
   - order-fulfillment
 
-# Editable defaults for value and cost models (Plan J M97, DEC-1307).
-# One value block feeds both the uplift policy and the RoiInputs defaults in engine/pilot/roi.py.
-# Channel contact costs in INR reflect Indian telecom and messaging benchmarks:
-# WhatsApp marketing ~0.86 INR, WhatsApp utility ~0.13 INR, SMS ~0.15 INR, email ~0.05 INR, voice ~0.70 INR.
+# Editable defaults for the cost of a contact and of an offer, in rupees (Plan J M97, DEC-1307).
+# Read through one function, engine.pilot.roi.lookup_value_costs, by the uplift targeting policy of a
+# use case that ranks by customer value (uplift.policy.value_column) and sets no cost_per_contact of
+# its own. They are never applied to a run that did not opt in, and the ROI form's own defaults are
+# unchanged: these are suggestions to edit, not numbers anybody entered.
+# Channel costs reflect Indian messaging benchmarks: WhatsApp marketing ~0.86, WhatsApp utility ~0.13,
+# SMS ~0.15, e-mail ~0.05, voice ~0.70. M99's offer and channel catalogue takes these over.
 value:
   offer_cost: 0.0
   contact_cost: 0.86
@@ -31,4 +34,3 @@ value:
     sms: 0.15
     email: 0.05
     voice: 0.70
-

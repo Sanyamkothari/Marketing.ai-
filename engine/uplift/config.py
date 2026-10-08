@@ -91,10 +91,11 @@ class UpliftPolicyConfig(BaseModel):
     budget_contacts: Annotated[int | None, Field(ge=1)] = None
     cost_per_contact: Annotated[float | None, Field(ge=0.0)] = None
     value_per_conversion: Annotated[float | None, Field(ge=0.0)] = None
-    value_column: Annotated[str | None, Field()] = None
+    # Plan J M97 (DEC-1307): rank by each customer's expected net money (engine.uplift.policy).
+    value_column: Annotated[str | None, Field(min_length=1)] = None
     horizon_months: Annotated[int | None, Field(ge=1, le=120)] = None
     margin_pct: Annotated[float | None, Field(ge=0.0, le=100.0)] = None
-    min_roi: Annotated[float | None, Field()] = None
+    min_roi: Annotated[float | None, Field(ge=0.0)] = None
 
 
 class UpliftEvidenceConfig(BaseModel):

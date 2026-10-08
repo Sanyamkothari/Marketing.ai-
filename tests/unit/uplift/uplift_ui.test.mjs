@@ -756,6 +756,12 @@ test("budget card: inputs prefilled from the run, the slider on the configured b
     pricedPolicy,
   );
   assert.match(text(withBasis), /Value basis: balance\./);
+  const withNote = views.profitCard(
+    { curve: { ...profit, value_basis: "each customer's balance", money_note: "3 of 40 customers have no 'balance'; they count at zero value and are not given one." } },
+    pricedPolicy,
+  );
+  assert.match(text(withNote), /3 of 40 customers have no 'balance'; they count at zero value/);
+  assert.doesNotMatch(text(html), /count at zero value/);
   noJunk(html);
 });
 

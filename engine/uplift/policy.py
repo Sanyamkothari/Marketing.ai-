@@ -47,6 +47,25 @@ asking the hold-out.
 conversions × value_per_conversion`; `expected_net_value = value − cost`. Each is null unless every
 number it is made of exists: no field is ever filled with a placeholder.
 
+**Ranking by net money (Plan J M97, DEC-1307).** :func:`customer_net_values` computes every row's
+money ONCE (:class:`CustomerMoney`), and every entry point takes it: the ranking, the cut, the cost of
+each contact count (one cumulative sum, so the budget curve stays linear in the rows), the reported
+money and the curve. Two paths:
+
+* **scalar** - no `uplift.policy.value_column`: ranked by uplift as above; one conversion is worth
+  `value_per_conversion × margin × horizon` (with neither set, exactly `value_per_conversion`, so
+  every number of a run configured before M97 is what it was); `min_roi`, when set, cuts a row whose
+  `uplift × unit − cost` is below `min_roi × cost`;
+* **value** - `value_column` set and its values passed: net value per row is
+  `uplift × value × margin × horizon − offer_cost × p_treated − contact cost`, the contact cost being
+  `cost_per_contact`, else the `value:` block of `configs/pilot/value.yaml`. Rows are ranked by it and
+  cut where it is below `min_roi × the row's cost` (0 without `min_roi`). Expected conversions stay
+  `N ×` the hold-out's observed uplift; the expected value is `N ×` the hold-out's VALUE-WEIGHTED
+  observed uplift `× margin × horizon`, both read from the hold-out ranked the same way
+  (:func:`holdout_lookups`). A missing value is never invented: it counts as zero value and is
+  counted (`values_missing`); above :data:`MAX_MISSING_VALUE_SHARE`, or when the hold-out has no values
+  of the column, the money is null and `money_note` says why.
+
 **The budget curve** (`profit_curve`, DEC-1200). The same rules at every budget: for each number of
 contacts from 0 to the most the rules allow (every eligible persuadable that pays for its contact),
 the point is exactly what the recommendation would say with `budget_contacts` set to it - the same
@@ -63,6 +82,7 @@ fast.
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final, Literal, Protocol
 
 from engine.uplift.contracts import (
@@ -81,14 +101,20 @@ if TYPE_CHECKING:
 
     import numpy as np
 
+    from engine.pilot.roi import ValueCosts
     from engine.uplift.config import UpliftPolicyConfig
+    from engine.uplift.metrics import HoldoutUplift
 
 __all__ = [
     "DEFAULT_CURVE_POINTS",
+    "MAX_MISSING_VALUE_SHARE",
+    "CustomerMoney",
+    "HoldoutLookups",
     "ObservedUplift",
     "below_cost",
     "choose_contacts",
     "customer_net_values",
+    "holdout_lookups",
     "profit_curve",
     "rank_positions",
     "ranking",
@@ -113,6 +139,35 @@ NO_INTERVAL_NOTE: Final[str] = (
     "No band: a band needs a cost per contact, a value per conversion and a measured interval."
 )
 
+MAX_MISSING_VALUE_SHARE: Final[float] = 0.10
+"""Plan J M97 (DEC-1307): above this share of customers without a value, no money is shown.
+
+A customer whose value is missing is never given one: it counts at zero value (so it ranks below
+every customer who pays for the contact) and is counted in `values_missing`. Beyond this share the
+value-weighted money would describe too few of the customers it is quoted for, so it is null, with
+the reason."""
+
+NO_VALUE_COLUMN_NOTE: Final[str] = (
+    "The rows have no '{column}' column, so customers are ranked by predicted uplift and any money "
+    "uses the value of one conversion."
+)
+NO_HOLDOUT_VALUES_NOTE: Final[str] = (
+    "The model's training hold-out has no '{column}' values, so the expected conversions and money of a "
+    "list ranked by '{column}' cannot be measured. Train the model with uplift.policy.value_column set "
+    "to '{column}' to get them."
+)
+VALUES_MISSING_NOTE: Final[str] = (
+    "{missing} of {rows} customers have no '{column}'; they count at zero value and are not given one."
+)
+TOO_MANY_MISSING_NOTE: Final[str] = (
+    "{missing} of {rows} customers ({share}) have no '{column}', more than the {limit} the money can "
+    "leave out, so no expected value is shown. Fill in '{column}' to see it."
+)
+HOLDOUT_TOO_MANY_MISSING_NOTE: Final[str] = (
+    "{missing} of {rows} hold-out customers ({share}) have no '{column}', more than the {limit} the money "
+    "can leave out, so no expected value is shown."
+)
+
 
 class ObservedUplift(Protocol):
     """The hold-out's observed uplift by top share: `engine.uplift.metrics.HoldoutUplift`, or a fake."""
@@ -126,103 +181,245 @@ class ObservedUplift(Protocol):
         ...
 
 
+# ---------------------------------------------------------------------------
+# The money of every row, computed once (Plan J M97, DEC-1307)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True)
+class CustomerMoney:
+    """The money of one policy for every row: computed once, then passed to every step that needs it.
+
+    **Scalar path** (no `value_column`, or its values not given): the ranking is by predicted
+    uplift, one conversion is worth `value_per_conversion × margin × horizon` (exactly
+    `value_per_conversion` with neither set), a contact costs `cost_per_contact`, and a row is below
+    cost when `uplift × unit < cost` (with `min_roi`: when `uplift × unit − cost < min_roi × cost`).
+    Every number is what a run configured before M97 computed.
+
+    **Value path** (`value_column` set and its values given): net value per row is
+    `uplift × value × margin × horizon − offer_cost × p_treated − contact cost`, the contact cost being
+    `cost_per_contact`, else the `value:` block of `configs/pilot/value.yaml`
+    (`engine.pilot.roi.lookup_value_costs`). The ranking is by net value, a row is below cost when
+    `net value < min_roi × its cost` (0 without `min_roi`), and the money is the hold-out's
+    value-weighted observed uplift × margin × horizon. A missing value counts as zero value, never as
+    an invented one.
+    """
+
+    net_value: np.ndarray | None
+    """Net value per row on the value path (the ranking key); `None` on the scalar path."""
+    cost: np.ndarray | None
+    """Cost of contacting each row; `None` when no cost is configured."""
+    below_cost: np.ndarray
+    """Rows that would not pay for their contact (or would not reach `min_roi`)."""
+    unit: float | None
+    """What one unit of the hold-out's observed uplift is worth; `None` when no money can be shown."""
+    contact_cost: float | None
+    """The cost of every contact when it is the same for all rows (totals are `contacts × it`)."""
+    value_weighted: bool = False
+    """True on the value path: the money comes from the value-weighted hold-out."""
+    value_column: str | None = None
+    values_missing: int | None = None
+    """Rows without a value on the value path (counted at zero value); `None` on the scalar path."""
+    note: str | None = None
+    """Why money is missing, or what it leaves out, in plain words."""
+
+    def cost_totals(self, ranked: np.ndarray) -> np.ndarray | None:
+        """`totals[c]` is the cost of contacting the first `c` rows of `ranked`; `None` without a cost.
+
+        One cumulative sum, so every contact count costs O(1) afterwards. With one cost for every
+        contact the total is `c × cost`, the arithmetic a run configured before M97 used.
+        """
+        import numpy as np
+
+        if self.cost is None:
+            return None
+        if self.contact_cost is not None:
+            totals: np.ndarray = np.arange(len(ranked) + 1, dtype=np.float64) * self.contact_cost
+            return totals
+        return np.concatenate([[0.0], np.cumsum(self.cost[ranked], dtype=np.float64)])
+
+
+def _value_factor(policy: UpliftPolicyConfig) -> float:
+    """`margin × horizon`: 1.0 when neither is set, so the scalar path's numbers are unchanged."""
+    margin = 1.0 if policy.margin_pct is None else policy.margin_pct / 100.0
+    return margin * (1 if policy.horizon_months is None else policy.horizon_months)
+
+
 def customer_net_values(
     uplift: np.ndarray,
     policy: UpliftPolicyConfig,
     *,
-    net_value: np.ndarray | None = None,
     values: np.ndarray | None = None,
     p_treated: np.ndarray | None = None,
-) -> tuple[np.ndarray | None, np.ndarray | None]:
-    """Net value per customer and contact cost per customer (Plan J M97, DEC-1307).
+    value_costs: ValueCosts | None = None,
+) -> CustomerMoney:
+    """Every row's money under `policy` (see :class:`CustomerMoney` for the two paths).
 
-    Returns `(net_values, costs)` aligned to `uplift`, or `(None, None)` when money inputs are missing.
-    Net value = uplift × value × margin − offer_cost × p_treated − contact_cost.
+    `values` are the rows' `value_column` values (NaN where missing); they are used only when
+    `policy.value_column` is set. `p_treated` prices the offer (`offer_cost × p_treated`).
+    `value_costs` defaults to the `value:` block of `configs/pilot/value.yaml`, read once here.
     """
     import numpy as np
 
-    from engine.pilot.roi import lookup_value_costs
-
     lift = _finite_vector(uplift, "uplift")
-    if net_value is not None:
-        nv = _finite_vector(net_value, "net_value")
-        if len(nv) != len(lift):
-            raise ValueError(f"net_value has length {len(nv)}, expected {len(lift)}.")
-        costs = (
-            np.full(len(lift), policy.cost_per_contact, dtype=np.float64)
-            if policy.cost_per_contact is not None
-            else None
+    rows = len(lift)
+    factor = _value_factor(policy)
+    column = policy.value_column
+    if column is None or values is None:
+        unit = None if policy.value_per_conversion is None else policy.value_per_conversion * factor
+        each = policy.cost_per_contact
+        if unit is None or each is None:
+            below = np.zeros(rows, dtype=bool)
+        elif policy.min_roi is None:
+            below = np.asarray(lift * unit < each, dtype=bool)
+        else:
+            below = np.asarray(lift * unit - each < policy.min_roi * each, dtype=bool)
+        return CustomerMoney(
+            net_value=None,
+            cost=None if each is None else np.full(rows, each, dtype=np.float64),
+            below_cost=below,
+            unit=unit,
+            contact_cost=each,
+            note=None if column is None else NO_VALUE_COLUMN_NOTE.format(column=column),
         )
-        return nv, costs
 
-    has_value_input = (
-        values is not None or policy.value_column is not None or policy.value_per_conversion is not None
+    if value_costs is None:
+        from engine.pilot.roi import lookup_value_costs
+
+        value_costs = lookup_value_costs()
+    raw = np.asarray(values, dtype=np.float64)
+    if raw.ndim != 1 or len(raw) != rows:
+        raise ValueError(f"values must be a one-dimensional array of {rows} rows; got shape {raw.shape}.")
+    missing = int((~np.isfinite(raw)).sum())
+    known = np.where(np.isfinite(raw), raw, 0.0)
+    contact = policy.cost_per_contact if policy.cost_per_contact is not None else value_costs.contact_cost
+    same_cost: float | None = contact
+    cost = np.full(rows, contact, dtype=np.float64)
+    if value_costs.offer_cost and p_treated is not None:
+        taken = _finite_vector(p_treated, "p_treated")
+        if len(taken) != rows:
+            raise ValueError(f"p_treated has {len(taken)} rows, expected {rows}.")
+        cost = cost + value_costs.offer_cost * taken
+        same_cost = None
+    net = lift * known * factor - cost
+    threshold = 0.0 if policy.min_roi is None else policy.min_roi * cost
+    too_many = rows > 0 and missing / rows > MAX_MISSING_VALUE_SHARE
+    return CustomerMoney(
+        net_value=net,
+        cost=cost,
+        below_cost=np.asarray(net < threshold, dtype=bool),
+        unit=None if too_many else factor,
+        contact_cost=same_cost,
+        value_weighted=True,
+        value_column=column,
+        values_missing=missing,
+        note=_missing_note(missing, rows, column, TOO_MANY_MISSING_NOTE if too_many else None),
     )
-    has_cost_input = policy.cost_per_contact is not None or (
-        policy.value_column is not None and values is not None
+
+
+def _missing_note(missing: int, rows: int, column: str, too_many: str | None) -> str | None:
+    if not missing:
+        return None
+    template = too_many or VALUES_MISSING_NOTE
+    return template.format(
+        missing=missing,
+        rows=rows,
+        column=column,
+        share=f"{missing / rows:.0%}",
+        limit=f"{MAX_MISSING_VALUE_SHARE:.0%}",
     )
-    if not (has_value_input and has_cost_input):
-        return None, None
 
-    costs_cfg = lookup_value_costs()
-    contact_cost = policy.cost_per_contact if policy.cost_per_contact is not None else costs_cfg.contact_cost
-    offer_cost = costs_cfg.offer_cost
-    pt = (
-        np.asarray(p_treated, dtype=np.float64)
-        if p_treated is not None
-        else np.zeros(len(lift), dtype=np.float64)
+
+@dataclass(frozen=True)
+class HoldoutLookups:
+    """The hold-out's observed uplift for a ranking: conversions, and money when ranked by value."""
+
+    conversions: HoldoutUplift | None
+    """Unweighted: incremental conversions per customer contacted, by top share."""
+    value: HoldoutUplift | None
+    """Value-weighted (value path only): incremental value per customer contacted, by top share."""
+    note: str | None = None
+
+
+def holdout_lookups(
+    uplift: np.ndarray,
+    t: np.ndarray,
+    y: np.ndarray,
+    *,
+    policy: UpliftPolicyConfig,
+    samples: int,
+    seed: int,
+    ranked_by_value: bool,
+    values: np.ndarray | None = None,
+    p_treated: np.ndarray | None = None,
+    value_costs: ValueCosts | None = None,
+) -> HoldoutLookups:
+    """The lookups `recommend_policy` and `profit_curve` quote the hold-out with.
+
+    A list ranked by uplift (`ranked_by_value` false) asks the hold-out ranked by uplift, exactly as
+    before M97. A list ranked by value asks the hold-out ranked the same way - by each hold-out row's
+    net value under `policy` - so "the top share" is the same kind of customer the list chose; the
+    value lookup weights each outcome by the row's value (missing values count as zero). `values` are
+    the hold-out's own values of the same column, or `None` when it has none: then nothing is quoted
+    and the note says why.
+    """
+    import numpy as np
+
+    from engine.uplift.metrics import HoldoutUplift
+
+    treated = np.asarray(t, dtype=np.int64)
+    outcome = np.asarray(y, dtype=np.int64)
+    if not ranked_by_value:
+        pred = np.asarray(uplift, dtype=np.float64)
+        return HoldoutLookups(
+            HoldoutUplift(pred=pred, t=treated, y=outcome, samples=samples, seed=seed), None
+        )
+    if values is None:
+        return HoldoutLookups(None, None, NO_HOLDOUT_VALUES_NOTE.format(column=policy.value_column))
+    money = customer_net_values(uplift, policy, values=values, p_treated=p_treated, value_costs=value_costs)
+    key = money.net_value
+    if (
+        key is None or money.value_column is None or money.values_missing is None
+    ):  # value path by construction
+        raise RuntimeError("holdout_lookups: values were given but the value path was not taken.")
+    conversions = HoldoutUplift(pred=key, t=treated, y=outcome, samples=samples, seed=seed)
+    rows = len(key)
+    if money.unit is None:
+        note = _missing_note(money.values_missing, rows, money.value_column, HOLDOUT_TOO_MANY_MISSING_NOTE)
+        return HoldoutLookups(conversions, None, note)
+    raw = np.asarray(values, dtype=np.float64)
+    weights = np.where(np.isfinite(raw), raw, 0.0)
+    return HoldoutLookups(
+        conversions,
+        HoldoutUplift(pred=key, t=treated, y=outcome, samples=samples, seed=seed, value=weights),
     )
-    costs = offer_cost * pt + contact_cost
 
-    if values is not None:
-        val_arr = np.asarray(values, dtype=np.float64)
-    elif policy.value_per_conversion is not None:
-        val_arr = np.full(len(lift), policy.value_per_conversion, dtype=np.float64)
-    else:
-        return None, costs
 
-    margin = policy.margin_pct / 100.0 if policy.margin_pct is not None else 1.0
-    horizon = policy.horizon_months or 1
-    gross = lift * val_arr * margin * horizon
-    net = gross - costs
-    return net, costs
+def _resolve_money(
+    lift: np.ndarray,
+    policy: UpliftPolicyConfig,
+    money: CustomerMoney | None,
+    values: np.ndarray | None,
+    p_treated: np.ndarray | None,
+) -> CustomerMoney:
+    """`money` when the caller computed it, else :func:`customer_net_values` of the inputs."""
+    if money is None:
+        return customer_net_values(lift, policy, values=values, p_treated=p_treated)
+    if values is not None or p_treated is not None:
+        raise ValueError("Pass either money or values/p_treated, not both.")
+    if len(money.below_cost) != len(lift):
+        raise ValueError(f"money describes {len(money.below_cost)} rows, expected {len(lift)}.")
+    return money
 
 
 def below_cost(
-    uplift: np.ndarray,
-    policy: UpliftPolicyConfig,
-    *,
-    net_value: np.ndarray | None = None,
-    cost: np.ndarray | None = None,
+    uplift: np.ndarray, policy: UpliftPolicyConfig, *, money: CustomerMoney | None = None
 ) -> np.ndarray:
-    """Which rows would not pay for their contact: `net_value < min_roi × cost` (or `uplift × value < cost`).
+    """Which rows would not pay for their contact (see :class:`CustomerMoney` for the rule).
 
-    All `False` unless value and cost are configured - without both there is no money comparison to
-    make, and no row is cut for it.
+    All `False` on the scalar path unless both `value_per_conversion` and `cost_per_contact` are
+    configured - without both there is no money comparison to make, and no row is cut for it.
     """
-    import numpy as np
-
     lift = _finite_vector(uplift, "uplift")
-    if net_value is not None:
-        nv = np.asarray(net_value, dtype=np.float64)
-        c = (
-            np.asarray(cost, dtype=np.float64)
-            if cost is not None
-            else (
-                np.full(len(nv), policy.cost_per_contact, dtype=np.float64)
-                if policy.cost_per_contact is not None
-                else np.zeros(len(nv), dtype=np.float64)
-            )
-        )
-        threshold = c * policy.min_roi if policy.min_roi is not None else 0.0
-        return np.asarray(nv < threshold, dtype=bool)
-
-    value, cost_val = policy.value_per_conversion, policy.cost_per_contact
-    if value is None or cost_val is None:
-        return np.zeros(len(lift), dtype=bool)
-    net = lift * value - cost_val
-    threshold = cost_val * policy.min_roi if policy.min_roi is not None else 0.0
-    return np.asarray(net < threshold, dtype=bool)
+    return _resolve_money(lift, policy, money, None, None).below_cost
 
 
 def ranking(
@@ -231,17 +428,20 @@ def ranking(
     *,
     net_value: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Row indices, highest predicted net value (or uplift) first; ties by `tiebreak` ascending, then input order.
+    """Row indices, highest predicted uplift (or `net_value`, when given) first; ties by `tiebreak`
+    ascending, then input order.
 
     The one ordering every targeting decision uses: who is chosen (`choose_contacts`), how deep the
     choice reaches (`recommend_policy`) and which held-out rows would have been chosen
-    (`engine.uplift.actions`). Using one function is what keeps those three consistent.
+    (`engine.uplift.actions`). Using one function is what keeps those three consistent. A list ranked
+    by value passes its :attr:`CustomerMoney.net_value` (Plan J M97).
     """
     import numpy as np
 
-    score = (
-        _finite_vector(net_value, "net_value") if net_value is not None else _finite_vector(uplift, "uplift")
-    )
+    lift = _finite_vector(uplift, "uplift")
+    score = lift if net_value is None else _finite_vector(net_value, "net value")
+    if len(score) != len(lift):
+        raise ValueError(f"net_value has {len(score)} rows, expected {len(lift)}.")
     if tiebreak is None:
         order: np.ndarray = np.argsort(-score, kind="mergesort")
         return order
@@ -256,13 +456,72 @@ def rank_positions(
     *,
     net_value: np.ndarray | None = None,
 ) -> np.ndarray:
-    """Each row's 0-based position in :func:`ranking` (0 = the highest predicted net value or uplift)."""
+    """Each row's 0-based position in :func:`ranking` (0 = the highest predicted uplift or net value)."""
     import numpy as np
 
     order = ranking(uplift, tiebreak, net_value=net_value)
     positions = np.empty(len(order), dtype=np.int64)
     positions[order] = np.arange(len(order), dtype=np.int64)
     return positions
+
+
+@dataclass(frozen=True)
+class _Plan:
+    """Who can be chosen, in ranking order, and how many are: what every entry point shares."""
+
+    candidate_positions: np.ndarray
+    """Ranking positions (of every row) of the eligible persuadables, best first."""
+    ranked: np.ndarray
+    """Their row indices, in the same order."""
+    reachable: int
+    """How many of them pay for their contact: a prefix of `ranked`."""
+    take: int
+    reason: PolicyStopReason
+
+
+def _plan(
+    lift: np.ndarray,
+    labels: np.ndarray,
+    allowed: np.ndarray,
+    tiebreak: np.ndarray | None,
+    money: CustomerMoney,
+    budget: int | None,
+) -> _Plan:
+    import numpy as np
+
+    if len(labels) != len(lift):
+        raise ValueError(
+            f"uplift has {len(lift)} rows but segments has {len(labels)}; they must describe the same rows."
+        )
+    is_candidate = (labels == Segment.PERSUADABLE.value) & allowed
+    if not bool(is_candidate.any()):
+        empty = np.zeros(0, dtype=np.int64)
+        return _Plan(empty, empty, 0, 0, PolicyStopReason.NO_PERSUADABLES)
+    order = ranking(lift, tiebreak, net_value=money.net_value)
+    candidate_positions = np.flatnonzero(is_candidate[order])
+    ranked = order[candidate_positions]
+    cut = money.below_cost[ranked]
+    # The ranking is descending, so the rows that pay for themselves are a prefix of it.
+    paying = int(np.argmax(cut)) if cut.any() else len(ranked)
+    take = min(len(ranked), paying, len(ranked) if budget is None else budget)
+    if take == len(ranked):
+        reason = PolicyStopReason.ALL_PERSUADABLES
+    elif take == paying:
+        reason = PolicyStopReason.VALUE_BELOW_COST
+    else:
+        reason = PolicyStopReason.BUDGET
+    return _Plan(candidate_positions, ranked, paying, take, reason)
+
+
+def _selected(plan: _Plan, labels: np.ndarray) -> np.ndarray:
+    import numpy as np
+
+    selected = np.zeros(len(labels), dtype=bool)
+    selected[plan.ranked[: plan.take]] = True
+    sleeping = labels == Segment.SLEEPING_DOG.value
+    if bool((selected & sleeping).any()):  # unreachable by construction; the rule is too important to trust
+        raise RuntimeError("The targeting policy selected a sleeping dog; refusing to recommend it.")
+    return selected
 
 
 def choose_contacts(
@@ -272,55 +531,28 @@ def choose_contacts(
     *,
     eligible: np.ndarray | None = None,
     tiebreak: np.ndarray | None = None,
-    net_value: np.ndarray | None = None,
     values: np.ndarray | None = None,
     p_treated: np.ndarray | None = None,
+    money: CustomerMoney | None = None,
 ) -> tuple[np.ndarray, PolicyStopReason]:
     """The rows to treat (a boolean mask aligned to `uplift`) and why there are not more of them.
 
     Only eligible persuadables are candidates; the rest of the rules are in the module docstring.
     `eligible` defaults to every row; `tiebreak` (one number per row) orders rows of equal uplift,
-    and without it they keep input order.
+    and without it they keep input order. `money` is the rows' :class:`CustomerMoney` when the caller
+    has computed it, else it is computed from `values` and `p_treated`.
     """
-    import numpy as np
-
     lift = _finite_vector(uplift, "uplift")
     labels = _segment_vector(segments)
     allowed = _eligible_vector(eligible, len(lift))
-    if len(labels) != len(lift):
-        raise ValueError(
-            f"uplift has {len(lift)} rows but segments has {len(labels)}; they must describe the same rows."
-        )
+    resolved = _resolve_money(lift, policy, money, values, p_treated)
+    plan = _plan(lift, labels, allowed, tiebreak, resolved, policy.budget_contacts)
+    return _selected(plan, labels), plan.reason
 
-    selected = np.zeros(len(lift), dtype=bool)
-    is_candidate = (labels == Segment.PERSUADABLE.value) & allowed
-    if not bool(is_candidate.any()):
-        return selected, PolicyStopReason.NO_PERSUADABLES
 
-    net_val, row_costs = customer_net_values(
-        lift, policy, net_value=net_value, values=values, p_treated=p_treated
-    )
-    order = ranking(lift, tiebreak, net_value=net_val)
-    ranked = order[is_candidate[order]]
-    nv_ranked = net_val[ranked] if net_val is not None else None
-    c_ranked = row_costs[ranked] if row_costs is not None else None
-    cut = below_cost(lift[ranked], policy, net_value=nv_ranked, cost=c_ranked)
-    paying = int(np.argmax(cut)) if cut.any() else len(ranked)
-    budget = policy.budget_contacts
-    take = min(len(ranked), paying, len(ranked) if budget is None else budget)
-
-    if take == len(ranked):
-        reason = PolicyStopReason.ALL_PERSUADABLES
-    elif take == paying:
-        reason = PolicyStopReason.VALUE_BELOW_COST
-    else:
-        reason = PolicyStopReason.BUDGET
-    selected[ranked[:take]] = True
-
-    sleeping = labels == Segment.SLEEPING_DOG.value
-    if bool((selected & sleeping).any()):  # unreachable by construction; the rule is too important to trust
-        raise RuntimeError("The targeting policy selected a sleeping dog; refusing to recommend it.")
-    return selected, reason
+def _join(*notes: str | None) -> str | None:
+    kept = [note for note in notes if note]
+    return " ".join(kept) if kept else None
 
 
 def recommend_policy(
@@ -334,9 +566,11 @@ def recommend_policy(
     observed_top_share: Callable[[float], ConfidenceValue | None] | None = None,
     eligible: np.ndarray | None = None,
     tiebreak: np.ndarray | None = None,
-    net_value: np.ndarray | None = None,
+    observed_top_value: Callable[[float], ConfidenceValue | None] | None = None,
+    holdout_note: str | None = None,
     values: np.ndarray | None = None,
     p_treated: np.ndarray | None = None,
+    money: CustomerMoney | None = None,
 ) -> tuple[PolicyRecommendation, np.ndarray]:
     """`policy_recommendation.json` and the mask of rows it recommends treating.
 
@@ -344,65 +578,33 @@ def recommend_policy(
     `fraction` of it, with its interval, or `None` when it cannot be measured; it is asked about the
     ranking depth the selection reaches, not about `N / rows` (see the module docstring). `eligible`
     and `tiebreak` are passed to :func:`choose_contacts`.
+
+    A list ranked by value (Plan J M97) also takes `observed_top_value`, the same lookup weighted by
+    each hold-out customer's value: the expected value is `N ×` it `× margin × horizon`, while the
+    expected conversions stay `N ×` the unweighted one. `holdout_note` is the caller's reason when
+    the hold-out could not be asked (:class:`HoldoutLookups`).
     """
     started = time.perf_counter()
     lift = _finite_vector(uplift, "uplift")
     labels = _segment_vector(segments)
     allowed = _eligible_vector(eligible, len(lift))
-    net_val, row_costs = customer_net_values(
-        lift, policy, net_value=net_value, values=values, p_treated=p_treated
-    )
-    selected, reason = choose_contacts(
-        lift,
-        labels,
-        policy,
-        eligible=allowed,
-        tiebreak=tiebreak,
-        net_value=net_val,
-        values=values,
-        p_treated=p_treated,
-    )
+    resolved = _resolve_money(lift, policy, money, values, p_treated)
+    plan = _plan(lift, labels, allowed, tiebreak, resolved, policy.budget_contacts)
+    selected = _selected(plan, labels)
 
     rows = len(lift)
-    contacts = int(selected.sum())
-    candidates = int(((labels == Segment.PERSUADABLE.value) & allowed).sum())
-    depth = int(rank_positions(lift, tiebreak, net_value=net_val)[selected].max()) + 1 if contacts else 0
+    contacts = plan.take
+    candidates = len(plan.ranked)
+    depth = int(plan.candidate_positions[contacts - 1]) + 1 if contacts else 0
     expected = _expected_conversions(contacts, depth, rows, observed_top_share)
-
-    if contacts == 0:
-        cost = 0.0 if (row_costs is not None or policy.cost_per_contact is not None) else None
-    elif row_costs is not None:
-        cost = float(row_costs[selected].sum())
-    elif policy.cost_per_contact is not None:
-        cost = contacts * policy.cost_per_contact
-    else:
-        cost = None
-
-    is_val_weighted = policy.value_column is not None and (
-        getattr(observed_top_share, "is_value_weighted", False)
-        or getattr(getattr(observed_top_share, "__self__", None), "is_value_weighted", False)
+    basis = (
+        _expected_conversions(contacts, depth, rows, observed_top_value)
+        if resolved.value_weighted
+        else expected
     )
-    margin = policy.margin_pct / 100.0 if policy.margin_pct is not None else 1.0
-    horizon = policy.horizon_months or 1
-    mult: float | None = None
-    if is_val_weighted:
-        mult = margin * horizon
-    elif values is not None and policy.value_column is not None:
-        mean_v = float(values[selected].mean()) if contacts else 0.0
-        mult = mean_v * margin * horizon
-    elif policy.value_per_conversion is not None:
-        mult = policy.value_per_conversion
-
-    if expected is None or mult is None:
-        value = None
-        net = None
-        net_low = None
-        net_high = None
-    else:
-        value = expected.value * mult
-        net = None if cost is None else value - cost
-        net_low = None if expected.ci_low is None or cost is None else expected.ci_low * mult - cost
-        net_high = None if expected.ci_high is None or cost is None else expected.ci_high * mult - cost
+    totals = resolved.cost_totals(plan.ranked)
+    cost = None if totals is None else float(totals[contacts])
+    value, net, net_low, net_high = _money_fields(basis, resolved.unit, cost)
 
     recommendation = PolicyRecommendation(
         run_id=run_id,
@@ -410,7 +612,7 @@ def recommend_policy(
         rows=rows,
         eligible_persuadables=candidates,
         contacts_recommended=contacts,
-        stop_reason=reason,
+        stop_reason=plan.reason,
         budget_contacts=policy.budget_contacts,
         predicted_incremental_conversions=float(lift[selected].sum()),
         expected_incremental_conversions=expected,
@@ -421,6 +623,8 @@ def recommend_policy(
         expected_net_value=net,
         net_value_low=net_low,
         net_value_high=net_high,
+        money_note=_join(resolved.note, holdout_note),
+        values_missing=resolved.values_missing,
         causal=causal,
     )
     _LOGGER.info(
@@ -428,7 +632,7 @@ def recommend_policy(
         candidates,
         contacts,
         depth,
-        reason.value,
+        plan.reason.value,
     )
     log_stage(_LOGGER, "uplift_policy", rows=rows, seconds=time.perf_counter() - started)
     return recommendation, selected
@@ -447,16 +651,22 @@ def profit_curve(
     tiebreak: np.ndarray | None = None,
     points: int = DEFAULT_CURVE_POINTS,
     overridden: bool = False,
-    net_value: np.ndarray | None = None,
+    observed_value: ObservedUplift | None = None,
+    holdout_note: str | None = None,
     values: np.ndarray | None = None,
     p_treated: np.ndarray | None = None,
+    money: CustomerMoney | None = None,
 ) -> ProfitCurve:
     """Expected conversions, cost, value, net value and ROI against the number of customers contacted.
 
     The arguments are :func:`recommend_policy`'s, with `observed` in place of `observed_top_share`
-    (its `intervals` must answer what that callable would, share for share). `policy.budget_contacts`
-    only places the configured point: the curve runs to every contact the other rules allow.
-    `overridden` is recorded as given - only the caller knows whether the cost and value are the run's.
+    and `observed_value` in place of `observed_top_value` (their `intervals` must answer what those
+    callables would, share for share). `policy.budget_contacts` only places the configured point: the
+    curve runs to every contact the other rules allow. `overridden` is recorded as given - only the
+    caller knows whether the cost and value are the run's.
+
+    Linear in the rows: the money is computed once, the cost of every contact count comes from one
+    cumulative sum, and only the plotted counts sum the model's predictions.
     """
     import numpy as np
 
@@ -466,29 +676,12 @@ def profit_curve(
     lift = _finite_vector(uplift, "uplift")
     labels = _segment_vector(segments)
     allowed = _eligible_vector(eligible, len(lift))
-    net_val, row_costs = customer_net_values(
-        lift, policy, net_value=net_value, values=values, p_treated=p_treated
-    )
-    selected, configured_reason = choose_contacts(
-        lift,
-        labels,
-        policy,
-        eligible=allowed,
-        tiebreak=tiebreak,
-        net_value=net_val,
-        values=values,
-        p_treated=p_treated,
-    )
+    resolved = _resolve_money(lift, policy, money, values, p_treated)
+    plan = _plan(lift, labels, allowed, tiebreak, resolved, policy.budget_contacts)
+    selected = _selected(plan, labels)
 
     rows = len(lift)
-    order = ranking(lift, tiebreak, net_value=net_val)
-    is_candidate = (labels == Segment.PERSUADABLE.value) & allowed
-    candidate_positions = np.flatnonzero(is_candidate[order])  # ranking positions, best first
-    ranked = order[candidate_positions]
-    nv_ranked = net_val[ranked] if net_val is not None else None
-    c_ranked = row_costs[ranked] if row_costs is not None else None
-    cut = below_cost(lift[ranked], policy, net_value=nv_ranked, cost=c_ranked)
-    reachable = int(np.argmax(cut)) if cut.any() else len(ranked)
+    ranked, reachable = plan.ranked, plan.reachable
     if not len(ranked):
         max_reason = PolicyStopReason.NO_PERSUADABLES
     elif reachable < len(ranked):
@@ -500,17 +693,10 @@ def profit_curve(
         raise RuntimeError("The budget curve and the targeting policy disagree on who is chosen.")
 
     # `depths[c - 1]` is how far down the ranking of every row the first `c` contacts reach.
-    depths = candidate_positions[:reachable] + 1
-    is_val_weighted = policy.value_column is not None and getattr(observed, "is_value_weighted", False)
+    depths = plan.candidate_positions[:reachable] + 1
+    totals = resolved.cost_totals(ranked)
     best, optimum_note = _best_contacts(
-        depths,
-        rows,
-        policy,
-        observed,
-        ranked=ranked,
-        values=values,
-        row_costs=row_costs,
-        is_value_weighted=is_val_weighted,
+        depths, rows, resolved, observed, observed_value, totals, holdout_note
     )
     counts = sorted(
         {round(float(c)) for c in np.linspace(0, reachable, points)}
@@ -519,40 +705,25 @@ def profit_curve(
     )
     fractions = [int(depths[c - 1]) / rows for c in counts if c]
     looked_up = iter(list(observed.intervals(fractions)) if observed is not None and fractions else [])
+    valued_lookup = observed_value if resolved.value_weighted else None
+    valued = iter(list(valued_lookup.intervals(fractions)) if valued_lookup is not None and fractions else [])
     curve: list[ProfitPoint] = []
-    margin = policy.margin_pct / 100.0 if policy.margin_pct is not None else 1.0
-    horizon = policy.horizon_months or 1
     for contacts in counts:
         chosen = np.sort(ranked[:contacts])  # index order, as `lift[selected]` sums in recommend_policy
         expected = None if observed is None else _scaled(contacts, next(looked_up) if contacts else None)
-        if contacts == 0:
-            c = 0.0 if (row_costs is not None or policy.cost_per_contact is not None) else None
-        elif row_costs is not None:
-            c = float(row_costs[chosen].sum())
-        elif policy.cost_per_contact is not None:
-            c = contacts * policy.cost_per_contact
+        if not resolved.value_weighted:
+            basis = expected
         else:
-            c = None
-
-        if is_val_weighted:
-            mult = margin * horizon
-        elif values is not None and policy.value_column is not None:
-            mean_v = float(values[chosen].mean()) if contacts else 0.0
-            mult = mean_v * margin * horizon
-        elif policy.value_per_conversion is not None:
-            mult = policy.value_per_conversion
-        else:
-            mult = None
-
+            basis = None if valued_lookup is None else _scaled(contacts, next(valued) if contacts else None)
         curve.append(
             _profit_point(
                 contacts,
                 int(depths[contacts - 1]) if contacts else 0,
                 float(lift[chosen].sum()),
                 expected,
-                policy,
-                cost=c,
-                mult=mult,
+                basis,
+                resolved.unit,
+                None if totals is None else float(totals[contacts]),
             )
         )
     by_contacts = {point.contacts: point for point in curve}
@@ -572,20 +743,15 @@ def profit_curve(
         overridden=overridden,
         points=tuple(curve),
         configured=by_contacts[configured],
-        configured_stop_reason=configured_reason,
+        configured_stop_reason=plan.reason,
         optimum=None if best is None else by_contacts[best],
         optimum_note=optimum_note,
         bands_available=bands,
         bands_note=bands_note,
-        value_weighted=bool(policy.value_column is not None),
-        value_basis=(
-            policy.value_column
-            or (
-                f"₹{policy.value_per_conversion:g} per conversion"
-                if policy.value_per_conversion is not None
-                else None
-            )
-        ),
+        value_weighted=resolved.value_weighted,
+        value_basis=_value_basis(policy, resolved),
+        money_note=_join(resolved.note, holdout_note),
+        values_missing=resolved.values_missing,
         causal=causal,
     )
     _LOGGER.info(
@@ -599,66 +765,84 @@ def profit_curve(
     return result
 
 
+def _value_basis(policy: UpliftPolicyConfig, money: CustomerMoney) -> str | None:
+    """What the money is based on, in words; the rupees in the repository's INR format."""
+    from engine.pilot.roi import format_inr
+
+    if money.value_weighted:
+        base = f"each customer's {money.value_column}"
+    elif policy.value_per_conversion is not None:
+        base = f"{format_inr(policy.value_per_conversion)} per conversion"
+    else:
+        return None
+    if policy.margin_pct is not None:
+        base += f" × {policy.margin_pct:g}% margin"
+    if policy.horizon_months is not None:
+        base += f" × {policy.horizon_months} month{'' if policy.horizon_months == 1 else 's'}"
+    return base
+
+
 def _best_contacts(
     depths: np.ndarray,
     rows: int,
-    policy: UpliftPolicyConfig,
+    money: CustomerMoney,
     observed: ObservedUplift | None,
-    *,
-    ranked: np.ndarray | None = None,
-    values: np.ndarray | None = None,
-    row_costs: np.ndarray | None = None,
-    is_value_weighted: bool = False,
+    observed_value: ObservedUplift | None,
+    totals: np.ndarray | None,
+    holdout_note: str | None,
 ) -> tuple[int | None, str | None]:
     """The contact count of highest expected net value over EVERY count, or why there is none.
 
     Ties go to the fewest contacts: the same money for less contact. A count whose share the hold-out
     cannot measure is skipped, as its point would show "—"; zero contacts (net value exactly 0) is
-    always a candidate, so contacting nobody wins when every count loses money.
+    always a candidate, so contacting nobody wins when every count loses money. Linear: the costs
+    come from `totals` (one cumulative sum), never from a sum per count.
     """
     import numpy as np
 
-    has_money = (
-        policy.value_per_conversion is not None
-        or policy.value_column is not None
-        or values is not None
-        or is_value_weighted
-    ) and (
-        policy.cost_per_contact is not None
-        or policy.value_column is not None
-        or values is not None
-        or row_costs is not None
-    )
-    if not has_money:
+    lookup: ObservedUplift | None
+    if money.value_weighted:
+        lookup = observed_value
+        if lookup is None or money.unit is None:
+            return None, _join(money.note, holdout_note) or NO_HOLDOUT_NOTE
+    else:
+        lookup = observed
+        if lookup is None:
+            return None, NO_HOLDOUT_NOTE
+        if money.unit is None or totals is None:
+            return None, NO_MONEY_NOTE
+    if totals is None:  # a value-ranked list always has a cost; kept for the type checker
         return None, NO_MONEY_NOTE
-    if observed is None:
-        return None, NO_HOLDOUT_NOTE
     if not len(depths):
         return 0, None
-
     contacts = np.arange(1, len(depths) + 1, dtype=np.float64)
-    lift = np.asarray(observed.points(depths / rows), dtype=np.float64)
-    margin = policy.margin_pct / 100.0 if policy.margin_pct is not None else 1.0
-    horizon = policy.horizon_months or 1
-    if is_value_weighted:
-        gross = (contacts * lift) * (margin * horizon)
-    elif values is not None and ranked is not None:
-        mean_vals = np.asarray([float(values[ranked[:c]].mean()) for c in range(1, len(depths) + 1)])
-        gross = (contacts * lift) * (mean_vals * margin * horizon)
-    elif policy.value_per_conversion is not None:
-        gross = (contacts * lift) * policy.value_per_conversion
-    else:
-        return None, NO_MONEY_NOTE
-
-    if row_costs is not None and ranked is not None:
-        costs = np.asarray([float(row_costs[ranked[:c]].sum()) for c in range(1, len(depths) + 1)])
-    elif policy.cost_per_contact is not None:
-        costs = contacts * policy.cost_per_contact
-    else:
-        return None, NO_MONEY_NOTE
-
-    net = np.concatenate([[0.0], gross - costs])
+    lift = np.asarray(lookup.points(depths / rows), dtype=np.float64)
+    # The arithmetic of `_scaled` and `_money_fields`, in their order: (contacts × uplift) × unit − cost.
+    net = np.concatenate([[0.0], (contacts * lift) * money.unit - totals[1 : len(depths) + 1]])
     return int(np.nanargmax(net)), None
+
+
+def _money_fields(
+    basis: ConfidenceValue | None, unit: float | None, cost: float | None
+) -> tuple[float | None, float | None, float | None, float | None]:
+    """`(value, net, net at the low end, net at the high end)`: the one place money is formed.
+
+    `basis` is the expected incremental conversions (scalar path) or the expected value before margin
+    and horizon (value path); `unit` turns it into rupees. Each field is null unless every number it
+    is made of exists.
+    """
+    value = None if basis is None or unit is None else basis.value * unit
+    net = None if value is None or cost is None else value - cost
+
+    def at(bound: float | None) -> float | None:
+        """The net value were the basis at `bound` instead of the point estimate."""
+        if bound is None or unit is None or cost is None:
+            return None
+        return bound * unit - cost
+
+    if basis is None:
+        return value, net, None, None
+    return value, net, at(basis.ci_low), at(basis.ci_high)
 
 
 def _profit_point(
@@ -666,28 +850,12 @@ def _profit_point(
     depth: int,
     predicted: float,
     expected: ConfidenceValue | None,
-    policy: UpliftPolicyConfig,
-    *,
-    cost: float | None = None,
-    mult: float | None = None,
+    basis: ConfidenceValue | None,
+    unit: float | None,
+    cost: float | None,
 ) -> ProfitPoint:
     """One point of the budget curve; the money is computed exactly as `recommend_policy` does it."""
-    if cost is None and policy.cost_per_contact is not None:
-        cost = 0.0 if contacts == 0 else contacts * policy.cost_per_contact
-    if mult is None and policy.value_per_conversion is not None:
-        mult = policy.value_per_conversion
-
-    if expected is None or mult is None:
-        value = None
-        net = None
-        net_low = None
-        net_high = None
-    else:
-        value = expected.value * mult
-        net = None if cost is None else value - cost
-        net_low = None if expected.ci_low is None or cost is None else expected.ci_low * mult - cost
-        net_high = None if expected.ci_high is None or cost is None else expected.ci_high * mult - cost
-
+    value, net, net_low, net_high = _money_fields(basis, unit, cost)
     return ProfitPoint(
         contacts=contacts,
         ranking_depth=depth,

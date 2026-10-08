@@ -187,6 +187,152 @@ def test_the_configured_point_equals_the_recommendation_with_value_column(seed: 
     assert point in curve.points
 
 
+# Plan J M97 (DEC-1307): the identity in every money configuration a run can have. `offer` prices each
+# contact as `contact + offer_cost × p_treated` (per-row costs); `yaml` takes the contact cost from
+# `configs/pilot/value.yaml`; `missing` leaves some values out (counted at zero); `too_many` leaves out more
+# than the limit (no money, a reason); `no_holdout_values` is a model whose hold-out has no values.
+MONEY_CONFIGURATIONS = (
+    "scalar_margin_horizon_min_roi",
+    "value_with_cost",
+    "value_yaml_cost",
+    "value_offer_cost",
+    "value_missing",
+    "value_too_many_missing",
+    "value_no_holdout_values",
+)
+
+
+@pytest.mark.parametrize("seed", range(3))
+@pytest.mark.parametrize("configuration", MONEY_CONFIGURATIONS)
+def test_the_configured_point_equals_the_recommendation_in_every_money_configuration(
+    configuration: str, seed: int, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engine.pilot.roi import ValueCosts
+    from engine.uplift.policy import customer_net_values, holdout_lookups
+
+    if configuration == "value_offer_cost":
+        monkeypatch.setattr(
+            "engine.pilot.roi.lookup_value_costs",
+            lambda *_a, **_k: ValueCosts(offer_cost=3.0, contact_cost=0.4),
+        )
+    rng = np.random.default_rng(seed + 700)
+    rows = int(rng.integers(60, 300))
+    uplift = np.round(rng.normal(0.03, 0.06, rows), 3)
+    segments = np.empty(rows, dtype=object)
+    segments[:] = [
+        P if u >= 0.02 else D if u <= -0.01 else (S if rng.random() < 0.5 else L) for u in uplift.tolist()
+    ]
+    eligible = rng.random(rows) < 0.85
+    tiebreak = rng.integers(0, 2**62, rows).astype(np.uint64)
+    p_treated = rng.uniform(0.05, 0.6, rows)
+    budget = int(rng.integers(1, rows)) if seed % 2 else None
+    values: np.ndarray | None = rng.uniform(20.0, 400.0, rows)
+    assert values is not None
+    if configuration == "value_missing":
+        values[rng.choice(rows, size=3, replace=False)] = np.nan  # under the 10 % limit
+    if configuration == "value_too_many_missing":
+        values[rng.random(rows) < 0.4] = np.nan
+    if configuration == "scalar_margin_horizon_min_roi":
+        values = None
+        policy = UpliftPolicyConfig(
+            budget_contacts=budget,
+            cost_per_contact=float(rng.uniform(0.5, 2.0)),
+            value_per_conversion=float(rng.uniform(20.0, 80.0)),
+            margin_pct=40.0,
+            horizon_months=3,
+            min_roi=0.2,
+        )
+    else:
+        policy = UpliftPolicyConfig(
+            budget_contacts=budget,
+            cost_per_contact=None if configuration in {"value_yaml_cost", "value_offer_cost"} else 1.5,
+            value_column="customer_value",
+            margin_pct=60.0,
+            horizon_months=2,
+            min_roi=0.1,
+        )
+    hold = np.random.default_rng(seed + 900)
+    hold_rows = 600
+    hold_pred = hold.normal(0.03, 0.05, hold_rows)
+    hold_t = hold.integers(0, 2, hold_rows).astype(np.int64)
+    hold_y = (hold.random(hold_rows) < 0.2 + hold_t * np.clip(hold_pred, 0.0, None) * 3).astype(np.int64)
+    hold_values = hold.uniform(20.0, 400.0, hold_rows)
+    if configuration in {"value_missing", "value_too_many_missing"}:
+        hold_values[
+            hold.choice(hold_rows, size=30 if configuration == "value_missing" else 240, replace=False)
+        ] = np.nan
+    lookups = holdout_lookups(
+        hold_pred,
+        hold_t,
+        hold_y,
+        policy=policy,
+        samples=30,
+        seed=seed,
+        ranked_by_value=values is not None,
+        values=None if configuration == "value_no_holdout_values" else hold_values,
+        p_treated=hold.uniform(0.05, 0.6, hold_rows),
+    )
+    money = customer_net_values(uplift, policy, values=values, p_treated=p_treated)
+    recommendation, _ = recommend_policy(
+        uplift,
+        segments,
+        policy,
+        run_id=RUN_ID,
+        computed_on="scored",
+        causal=True,
+        observed_top_share=None if lookups.conversions is None else lookups.conversions.at,
+        observed_top_value=None if lookups.value is None else lookups.value.at,
+        holdout_note=lookups.note,
+        eligible=eligible,
+        tiebreak=tiebreak,
+        money=money,
+    )
+    curve = profit_curve(
+        uplift,
+        segments,
+        policy,
+        run_id=RUN_ID,
+        computed_on="scored",
+        causal=True,
+        observed=lookups.conversions,
+        observed_value=lookups.value,
+        holdout_note=lookups.note,
+        eligible=eligible,
+        tiebreak=tiebreak,
+        values=values,
+        p_treated=p_treated,
+    )
+    point = curve.configured
+    assert point.contacts == recommendation.contacts_recommended
+    assert point.predicted_incremental_conversions == recommendation.predicted_incremental_conversions
+    assert point.expected_incremental_conversions == recommendation.expected_incremental_conversions
+    assert point.expected_cost == recommendation.expected_cost
+    assert point.expected_value == recommendation.expected_value
+    assert point.expected_net_value == recommendation.expected_net_value
+    assert point.net_value_low == recommendation.net_value_low
+    assert point.net_value_high == recommendation.net_value_high
+    assert curve.configured_stop_reason is recommendation.stop_reason
+    assert curve.eligible_persuadables == recommendation.eligible_persuadables
+    assert curve.rows == recommendation.rows
+    assert curve.money_note == recommendation.money_note
+    assert curve.values_missing == recommendation.values_missing
+    assert curve.value_weighted is (values is not None)
+    assert point in curve.points
+    # The money is there exactly when every number it is made of is.
+    priced = configuration in {
+        "scalar_margin_horizon_min_roi",
+        "value_with_cost",
+        "value_yaml_cost",
+        "value_offer_cost",
+        "value_missing",
+    }
+    assert (recommendation.expected_value is not None) is priced
+    if not priced:
+        assert recommendation.money_note and curve.optimum is None and curve.optimum_note
+    # No sleeping dog, at any budget.
+    assert curve.optimum is None or curve.optimum in curve.points
+
+
 def test_without_a_lookup_the_configured_point_has_no_expectation_like_the_recommendation() -> None:
     uplift = np.array([0.3, 0.2, 0.1, -0.2])
     segments = segs(P, P, P, D)

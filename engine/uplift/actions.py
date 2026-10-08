@@ -71,7 +71,9 @@ if TYPE_CHECKING:
 
 __all__ = [
     "BELOW_COST_ACTION",
+    "CUSTOMER_VALUE_COLUMN",
     "INTENDED_TREATMENT_COLUMN",
+    "NET_VALUE_COLUMN",
     "OVER_BUDGET_ACTION",
     "SEGMENT_COLUMN",
     "TIEBREAK_SALT",
@@ -89,6 +91,13 @@ TREAT_ACTION: Final[str] = SEGMENT_ACTIONS[Segment.PERSUADABLE]
 OVER_BUDGET_ACTION: Final[str] = "Don't treat (over budget)"
 BELOW_COST_ACTION: Final[str] = "Don't treat (below cost)"
 
+CUSTOMER_VALUE_COLUMN: Final[str] = "customer_value"
+"""Plan J M97 (DEC-1307): on a list ranked by value, the customer's `uplift.policy.value_column` as the
+ranking read it (empty where missing: counted at zero value, never filled in)."""
+NET_VALUE_COLUMN: Final[str] = "net_value"
+"""Plan J M97: on a list ranked by value, the customer's predicted net value, in rupees:
+`uplift × value × margin × horizon − offer cost × p_treated − contact cost`."""
+
 TIEBREAK_SALT: Final[str] = "uplift-tie"
 """Prefix of the tie-break hash; differs from the control-group draw's so the two are independent."""
 
@@ -105,6 +114,8 @@ def apply_uplift_actions(
     thresholds: SegmentThresholds,
     now: datetime | None = None,
     observed_top_share: Callable[[float], ConfidenceValue | None] | None = None,
+    observed_top_value: Callable[[float], ConfidenceValue | None] | None = None,
+    holdout_note: str | None = None,
 ) -> tuple[pd.DataFrame, PolicyRecommendation]:
     """Segment, suppress, hold out and act on every scored row; see the module docstring.
 
@@ -119,6 +130,14 @@ def apply_uplift_actions(
     row (the row key of a composite key); `entity_key`, set for a composite key, is passed to Phase 1's
     `apply_actions` so the control group and suppression are decided per customer, not per snapshot
     (DEC-083, M53).
+
+    **Ranked by value (Plan J M97, DEC-1307).** When `uplift.policy.value_column` is set and `frame`
+    has it, the rows are ranked by net value (:class:`engine.uplift.policy.CustomerMoney`, computed
+    once here and passed to every step), `observed_top_value` and `holdout_note` go to
+    `recommend_policy`, and the copy also carries :data:`CUSTOMER_VALUE_COLUMN` and
+    :data:`NET_VALUE_COLUMN`. A value that is missing or not a number never fails the run: it counts
+    at zero value and the recommendation counts it. Without the column the list is ranked by uplift and
+    the recommendation says why.
     """
     import numpy as np
     import pandas as pd
@@ -142,8 +161,6 @@ def apply_uplift_actions(
         for name in (primary_key, uplift_column, p_treated_column, p_control_column)
         if name not in frame.columns
     ]
-    if policy.value_column and policy.value_column not in frame.columns:
-        missing.append(policy.value_column)
     if missing:
         raise ValueError(
             f"The scored frame is missing {', '.join(repr(name) for name in missing)}; uplift actions "
@@ -165,13 +182,12 @@ def apply_uplift_actions(
     control = acted[CONTROL_GROUP_COLUMN].to_numpy(dtype=bool)
     eligible = ~suppressed & ~control
 
-    val_arr = (
-        _numeric(frame[policy.value_column], policy.value_column)
-        if policy.value_column and policy.value_column in frame.columns
+    values = (
+        pd.to_numeric(frame[policy.value_column], errors="coerce").to_numpy(dtype=np.float64)
+        if policy.value_column is not None and policy.value_column in frame.columns
         else None
     )
-    p_treated_arr = p_treated
-    net_val, row_costs = customer_net_values(uplift, policy, values=val_arr, p_treated=p_treated_arr)
+    money = customer_net_values(uplift, policy, values=values, p_treated=p_treated)
 
     tiebreak = tiebreak_keys(frame[primary_key], run_id=run_id)
     recommendation, selected = recommend_policy(
@@ -184,9 +200,9 @@ def apply_uplift_actions(
         observed_top_share=observed_top_share,
         eligible=eligible,
         tiebreak=tiebreak,
-        net_value=net_val,
-        values=val_arr,
-        p_treated=p_treated_arr,
+        observed_top_value=observed_top_value,
+        holdout_note=holdout_note,
+        money=money,
     )
 
     seg_values = np.array([segment.value for segment in segments.tolist()], dtype=object)
@@ -196,14 +212,14 @@ def apply_uplift_actions(
     actions = np.array([SEGMENT_ACTIONS[segment] for segment in segments.tolist()], dtype=object)
     passed_over = persuadable & eligible & ~selected
     actions[passed_over] = OVER_BUDGET_ACTION
-    actions[passed_over & below_cost(uplift, policy, net_value=net_val, cost=row_costs)] = BELOW_COST_ACTION
+    actions[passed_over & below_cost(uplift, policy, money=money)] = BELOW_COST_ACTION
     actions[selected] = TREAT_ACTION
     actions[control] = acted[ACTION_COLUMN].to_numpy(dtype=object)[control]
     actions[suppressed] = acted[ACTION_COLUMN].to_numpy(dtype=object)[suppressed]
 
     intended = selected.copy()
     if selected.any():
-        positions = rank_positions(uplift, tiebreak, net_value=net_val)
+        positions = rank_positions(uplift, tiebreak, net_value=money.net_value)
         intended |= control & persuadable & (positions <= int(positions[selected].max()))
 
     if bool((sleeping & ((actions == TREAT_ACTION) | intended)).any()):
@@ -216,6 +232,9 @@ def apply_uplift_actions(
     result[ACTION_COLUMN] = actions
     result[SEGMENT_COLUMN] = seg_values
     result[INTENDED_TREATMENT_COLUMN] = pd.Series(intended, index=frame.index, dtype=bool)
+    if values is not None and money.net_value is not None:
+        result[CUSTOMER_VALUE_COLUMN] = pd.Series(values, index=frame.index, dtype="float64")
+        result[NET_VALUE_COLUMN] = pd.Series(money.net_value, index=frame.index, dtype="float64")
     result.attrs = dict(acted.attrs)
 
     _LOGGER.info(

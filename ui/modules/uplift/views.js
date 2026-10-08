@@ -1216,6 +1216,7 @@ export function profitCard(p, policy) {
     )}</div><p class="caption">${esc(
       [
         curve.value_basis ? `Value basis: ${curve.value_basis}.` : "",
+        curve.money_note || "",
         curve.bands_note,
         curve.overridden ? "The cost and value used here apply to this view only; the run's settings are unchanged." : "",
         curve.max_contacts_reason === "value_below_cost"

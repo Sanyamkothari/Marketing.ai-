@@ -586,9 +586,17 @@ class PolicyRecommendation(Artefact):
     )
     cost_per_contact: float | None = Field(description="Configured cost of one contact.")
     value_per_conversion: float | None = Field(description="Configured value of one conversion.")
-    expected_cost: float | None = Field(description="N × cost_per_contact, when a cost is configured.")
+    expected_cost: float | None = Field(
+        description=(
+            "N × cost_per_contact, when a cost is configured; on a list ranked by value (Plan J M97) the "
+            "sum of the chosen customers' contact and offer costs."
+        )
+    )
     expected_value: float | None = Field(
-        description="Expected incremental conversions × value_per_conversion, when configured."
+        description=(
+            "Expected incremental conversions × value_per_conversion (× margin × horizon when set); on a "
+            "list ranked by value, N × the hold-out's value-weighted observed uplift × margin × horizon."
+        )
     )
     expected_net_value: float | None = Field(description="expected_value − expected_cost, when both exist.")
     net_value_low: float | None = Field(
@@ -598,6 +606,20 @@ class PolicyRecommendation(Artefact):
     net_value_high: float | None = Field(
         default=None,
         description="expected_net_value at the high end of the conversions interval; null without one.",
+    )
+    money_note: str | None = Field(
+        default=None,
+        description=(
+            "Plan J M97 (DEC-1307): why a money field is null, or what the money leaves out (customers "
+            "without a value), in plain words; null when there is nothing to say."
+        ),
+    )
+    values_missing: int | None = Field(
+        default=None,
+        description=(
+            "Customers ranked by value (`uplift.policy.value_column`) that have no value: counted at zero "
+            "value, never given one. Null when the list is not ranked by value."
+        ),
     )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
@@ -685,11 +707,25 @@ class ProfitCurve(Artefact):
     bands_note: str = Field(description="What the band is, or why there is none.")
     value_weighted: bool = Field(
         default=False,
-        description="True when ranking and values were weighted by an individual customer value column.",
+        description=(
+            "True when customers are ranked by their own value (`uplift.policy.value_column`, Plan J M97) "
+            "and the money comes from the hold-out's value-weighted observed uplift."
+        ),
     )
     value_basis: str | None = Field(
         default=None,
-        description="Basis of the customer value (e.g. column name or scalar value description).",
+        description=(
+            "What the money is based on, in words: the value column, or the value of one conversion, "
+            "with the margin and horizon when set; null when there is no value."
+        ),
+    )
+    money_note: str | None = Field(
+        default=None,
+        description="Why a money field is null, or what the money leaves out, in plain words (DEC-1307).",
+    )
+    values_missing: int | None = Field(
+        default=None,
+        description="Customers without a value, counted at zero value; null when not ranked by value.",
     )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 

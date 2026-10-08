@@ -636,6 +636,10 @@ class HoldoutUplift:
     callable is - `intervals` the same for several shares from one bootstrap, and `points` the bare
     point estimate for any number of shares with no bootstrap at all (NaN where an arm of the top
     rows is empty), which is what lets the budget curve search every contact count for its optimum.
+
+    With `value` (Plan J M97, DEC-1307) every outcome is weighted by its row's value, so each answer
+    is the incremental *value* per customer contacted rather than incremental conversions; the
+    caller keeps an unweighted instance for the conversions (`engine.uplift.policy.holdout_lookups`).
     """
 
     pred: FloatArray
@@ -644,10 +648,6 @@ class HoldoutUplift:
     samples: int
     seed: int
     value: FloatArray | None = None
-
-    @property
-    def is_value_weighted(self) -> bool:
-        return self.value is not None
 
     def at(self, fraction: float) -> ConfidenceValue | None:
         return bootstrap_uplift_at(
