@@ -103,7 +103,11 @@ _REQUIRED_SCORE_COLUMNS: Final[tuple[str, ...]] = (
     SUPPRESSED_REASON_COLUMN,
     CONTROL_GROUP_COLUMN,
 )
-_NO_ASSIGNMENT_NOTE: Final[str] = "The run has no holdout assignment file, so the holdout flag is not known."
+_NO_ASSIGNMENT_NOTE: Final[str] = (
+    "This run wrote no holdout assignment file, so the holdout and explore columns are left blank. "
+    "Customers the run kept back as its own control group are marked control_group in the contact list, "
+    "and they are never treated."
+)
 _UNREADABLE_ASSIGNMENT_NOTE: Final[str] = (
     "The run's holdout assignment file could not be matched to its customers, so the holdout flag is not known."
 )
@@ -139,7 +143,10 @@ class TreatListSummary(Artefact):
         default=None,
         description="Rows with holdout = 1, or null when the run has no holdout assignment.",
     )
-    explore_rows: int = Field(default=0, description="Rows with explore = 1.")
+    explore_rows: int | None = Field(
+        default=0,
+        description="Rows with explore = 1, or null when the run has no holdout assignment (the column is blank).",
+    )
     suppressed_rows: int = Field(default=0, description="Rows with a suppression reason.")
     net_value_total: float | None = Field(
         default=None,
@@ -272,7 +279,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         total_rows=n_rows,
         treat_rows=int(treat.sum()),
         holdout_rows=int(holdout_true.sum()) if flags.holdout.notna().any() else None,
-        explore_rows=int(explore_true.sum()),
+        explore_rows=int(explore_true.sum()) if flags.explore.notna().any() else None,
         suppressed_rows=int(suppressed.sum()),
         net_value_total=_total(net_value, treat),
         net_value_unit="rupees" if net_value_unit else None,
@@ -284,7 +291,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
-        "Built treat list for run %s: %d rows (%d treat, %s holdout, %d explore)",
+        "Built treat list for run %s: %d rows (%d treat, %s holdout, %s explore)",
         run_id,
         n_rows,
         summary.treat_rows,

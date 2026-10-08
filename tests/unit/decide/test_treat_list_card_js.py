@@ -18,7 +18,7 @@ HERE: Final[Path] = Path(__file__).resolve().parent
 def test_the_treat_list_card_node_suite_passes() -> None:
     node = skip_without_node()
     result = subprocess.run(
-        [node, "--test", str(HERE / "treat_list_card.test.mjs")],
+        [node, "--test", str(HERE / "treat_list_card.test.mjs"), str(HERE / "treat_list_page.test.mjs")],
         capture_output=True,
         text=True,
         timeout=120,

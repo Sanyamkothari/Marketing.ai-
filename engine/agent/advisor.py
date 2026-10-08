@@ -1139,6 +1139,11 @@ _REASON_WORDING_SHOWN: Final[int] = 3
 """How many columns the wording note names; the rest are counted."""
 
 
+def _plain_phrase(phrase: str) -> str:
+    """A reason phrase as a person reads it: the template's `{value}` is "the customer's value"."""
+    return phrase.replace("{value}", "the customer's value")
+
+
 def _reason_wording(
     builder: _Builder,
     prepared: AgentContext,
@@ -1180,8 +1185,9 @@ def _reason_wording(
     first = suggestions[0]
     builder.assumptions.append(
         f"Reasons for {names} have no plain wording yet, so the treat list shows the model's own text. "
-        f"To check, for {quoted(display_name(first.feature))}: {quoted(first.up_phrase)} and "
-        f"{quoted(first.down_phrase)}. Wording you agree with goes in configs/decide/reasons.yaml."
+        f"To check, for {quoted(display_name(first.feature))}: {quoted(_plain_phrase(first.up_phrase))} and "
+        f"{quoted(_plain_phrase(first.down_phrase))}. Ask your administrator to add wording you agree with "
+        "to the reasons wording."
     )
 
 

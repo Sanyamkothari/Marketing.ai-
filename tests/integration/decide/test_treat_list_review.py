@@ -135,6 +135,22 @@ def test_an_assignment_that_repeats_a_key_is_not_guessed_at(tmp_path: Path) -> N
     assert summary.holdout_rows is None and summary.holdout_note
 
 
+def test_a_run_with_no_assignment_leaves_both_flag_columns_and_both_counts_blank(tmp_path: Path) -> None:
+    """The file and its summary agree: unknown is null in both, and the note does not call the control group unknown."""
+    storage = LocalStorage(tmp_path)
+    run = write_run(storage, "r_20261001_0c000018", rows=30)
+    summary = build_treat_list(storage, run.run_id)
+    out = _csv(storage, run.run_id)
+    assert (out["holdout"] == "").all() and (out["explore"] == "").all()
+    assert summary.holdout_rows is None and summary.explore_rows is None
+    assert summary.holdout_note is not None
+    assert "control_group" in summary.holdout_note and "never treated" in summary.holdout_note
+    # A control customer reads as not treated.
+    controls = run.scores.set_index("customer_id").loc[lambda f: f["control_group"].astype(bool)].index
+    assert len(controls) > 0
+    assert (out.set_index("customer_id").loc[controls, "treat"] == "0").all()
+
+
 # ---------------------------------------------------------------------------
 # Finding 3: the treat flag is M92's, read, and where M92 has none, M92's own function
 # ---------------------------------------------------------------------------
@@ -372,6 +388,41 @@ def test_the_route_answers_a_plain_reason_when_the_build_fails(tmp_path: Path, c
             detail = response.json()["detail"]
             assert detail["code"] == "RUN_NOT_SCORED"
             assert "run_config.json" in detail["message"] and "no artefact" not in detail["message"]
+
+
+def test_a_download_after_retention_removed_the_rows_answers_a_plain_reason(
+    tmp_path: Path, config_root: Path
+) -> None:
+    """Retention deletes `treat_list.*` and `scores.*` but keeps the summary: the card must not offer a 404."""
+    storage = LocalStorage(tmp_path)
+    run = write_run(storage, "r_20261001_0c000016", rows=20)
+    with _client(tmp_path, config_root) as client:
+        assert client.get(f"/runs/{run.run_id}/artefacts/treat_list_summary.json").status_code == 200
+        for name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, export.SCORES_PARQUET, export.SCORES_CSV):
+            storage.delete(run_key(run.run_id, name))
+        for path in (
+            f"/runs/{run.run_id}/treat_list.csv",
+            f"/runs/{run.run_id}/artefacts/treat_list.parquet",
+        ):
+            response = client.get(path)
+            assert response.status_code == 409, response.text
+            detail = response.json()["detail"]
+            assert detail["code"] == "RUN_NOT_SCORED" and "no scores file" in detail["message"]
+        # The summary is still served as it was.
+        assert client.get(f"/runs/{run.run_id}/artefacts/treat_list_summary.json").status_code == 200
+
+
+def test_a_removed_treat_list_is_rebuilt_while_the_scores_are_still_there(
+    tmp_path: Path, config_root: Path
+) -> None:
+    storage = LocalStorage(tmp_path)
+    run = write_run(storage, "r_20261001_0c000017", rows=20)
+    with _client(tmp_path, config_root) as client:
+        first = client.get(f"/runs/{run.run_id}/treat_list.csv")
+        storage.delete(run_key(run.run_id, TREAT_LIST_CSV))
+        again = client.get(f"/runs/{run.run_id}/treat_list.csv")
+    assert first.status_code == 200 and again.status_code == 200
+    assert again.content == first.content
 
 
 def test_the_route_says_when_the_run_is_not_finished_and_when_it_trained_a_model(

@@ -20,7 +20,9 @@ def test_the_clean_file_gets_a_wording_note_for_columns_reasons_yaml_lacks() -> 
     assert len(notes) == 1, advice.assumptions
     note = notes[0]
     assert "pushes the score up" in note and "pushes the score down" in note
-    assert "configs/decide/reasons.yaml" in note
+    # Plain words only: no template placeholder and no repository path reach a business user.
+    assert "{" not in note and "}" not in note and "configs/" not in note and ".yaml" not in note
+    assert "administrator" in note
     # The key, the outcome and the opt-in flag are not model inputs, so they are not worded.
     assert "customer_id" not in note and "converted_30d" not in note
     # It is a note, not a setting: nothing the run would apply.

@@ -81,7 +81,7 @@ output of that run.
      labelled "Download contact list (CSV)", which is `scores.csv`, into a local file it calls
      `treat_list.csv`. The test's own name for a local file is not a download name and is left as it is
      (it is a Phase 3b file, and a browser test); the product never serves `scores.csv` under that name. The
-     two links are now labelled apart: the Output page keeps "Download contact list (CSV)" and the treat
+     two links are now labelled apart (on the page itself only since the second review: `renderPage` had dropped the panel, see "Second review" below): the Output page keeps "Download contact list (CSV)" and the treat
      list card says "Download treat list (CSV)" and explains the difference; the route test
      `test_the_route_serves_the_builders_bytes_and_scores_csv_is_another_file` and the card's node test pin it.
    - A timing test of the **builder**: `tests/unit/decide/test_treat_list_scale.py` (20,000 rows in the
@@ -136,3 +136,19 @@ output of that run.
 - Never position-align two files: join on the key columns.
 - Use a value another milestone already writes; never re-derive it.
 - Run the tests you cite, and paste their real names and output into the hand-off.
+
+## Second review (two reviewers)
+
+- Blocker, both lenses: the treat list card appeared nowhere. `renderPage` ended with `outputPage(...)` without
+  `extra`, so `extra.panelsHtml` was always empty, and an uplift run's Output page (the uplift module's own)
+  never asked for a panel. Yet `app.js` still called `pagePanelsHtml`, so every visit built the file for nothing.
+  Fixed: `renderPage` passes `extra`; the uplift Output page asks for the panel and draws it after the contact
+  list card. The treat list button is secondary, so the page keeps one primary action.
+  `tests/unit/decide/treat_list_page.test.mjs` renders both real pages (it fails on the unfixed `renderPage`).
+  The statements above about the labels and the server's message are now true of the running page.
+- Minor, agreed: a run with no holdout assignment file now has `explore_rows` null (as the column is), and the
+  note no longer calls the control group unknown (DEC-1308 (m)).
+- Minor, agreed: the Guided setup note shows plain words only (DEC-1308 (n)); the deviation from "check
+  suggestions" is recorded for the integrator.
+- Minor, agreed: a missing `treat_list.csv` / `.parquet` after retention is rebuilt, or answered `409
+  RUN_NOT_SCORED` in plain words once the scores are gone.

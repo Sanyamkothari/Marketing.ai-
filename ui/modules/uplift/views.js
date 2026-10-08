@@ -1388,6 +1388,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
     </div>
     ${profitCard(extra.profit, policy)}
     ${listCard}
+    ${extra.panelsHtml || ""}
     <section class="card card-body udetails-card">${runTech(run)}</section>`;
   const actions = train
     ? headActions({ primary: { label: "Score customers with this model", href: routes.score(uc.id) } })

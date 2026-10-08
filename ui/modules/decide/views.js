@@ -131,7 +131,7 @@ export function treatListCardHtml(summary, { treatListHref = "", error = null } 
     : "";
   const downloadBtn = treatListHref
     ? `<div class="dc-actions">
-         <a class="btn primary" href="${esc(treatListHref)}" download data-download="treat-list">Download treat list (CSV)</a>
+         <a class="btn secondary" href="${esc(treatListHref)}" download data-download="treat-list">Download treat list (CSV)</a>
        </div>`
     : "";
   return `<div class="dc"><section class="card dc-card" data-treat-list-card>

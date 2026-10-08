@@ -245,7 +245,8 @@ for the hand-off, and the Output page labels them differently: **Download contac
   `expected_gross_value.json` and the uploaded rows. The builder is never imported by the pipeline's stages,
   adds no rebind, and changes no existing file (`scores.csv` is byte-identical with or without it). A run that
   cannot have one (not finished, trained a model, no scores, no saved `run_config.json`) answers `409
-  RUN_NOT_SCORED` with the reason in plain words.
+  RUN_NOT_SCORED` with the reason in plain words. Retention removes `treat_list.*` with `scores.*` but keeps the summary, so a
+  missing row-level file is rebuilt from the scores, or refused the same way once they are gone.
 * **The run's own settings.** The builder reads the settings the run was scored with (`run_config.json`),
   never today's use case file, so editing a use case does not change the treat list of a finished run.
 * **Columns** (CSV and parquet, in this order): the customer key (every column of a composite key), `use_case`,
@@ -291,12 +292,12 @@ for the hand-off, and the Output page labels them differently: **Download contac
   (`engine/decide/reasons.py`).
 * **Guided setup.** For the columns `reasons.yaml` does not cover, `engine/agent/recommend.py::suggest_reason_phrases`
   proposes wording as a **check** suggestion. No run setting can hold a phrase, so Guided setup lists it among
-  the helper's assumptions (with `configs/decide/reasons.yaml` as the place to add it) and applies nothing.
+  the helper's assumptions, in plain words, and applies nothing (DEC-1308 (n)).
 * **Row-level privacy and access.** Registered in `configs/privacy.yaml`, `engine/privacy/layout.py` and
   `api/access_policy.py` (`ROW_LEVEL_ARTEFACTS`). Served by `GET /runs/{id}/treat_list.csv` and
   `GET /runs/{id}/artefacts/{name}`. Analyst when sign-in is on, audited on read (`runs.treat_list_download`).
   The summary is not row-level and a Viewer may read it.
-* **UI.** The Output page of a scoring run shows the treat list card (`ui/modules/decide/`): the counts of the
+* **UI.** The Output page of every scoring run, propensity or uplift, shows the treat list card (`ui/modules/decide/`): the counts of the
   summary, "Include treat = 1, exclude holdout = 1", the money lines and the server's notes, and **Download
   treat list (CSV)**, gated by role in `ui/modules/production/gate.js`. If the summary cannot be loaded the card
   shows the server's message. The Output page's own **Download contact list (CSV)** is `scores.csv`.

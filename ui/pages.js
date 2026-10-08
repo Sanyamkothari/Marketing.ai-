@@ -1703,7 +1703,9 @@ export function problemTypeLabel(uc, value) {
 // --- entry point --------------------------------------------------------------------------------
 
 /**
- * `extra` carries what is not a run artefact: the Data page's `lineage` (or `lineageError`).
+ * `extra` carries what is not a run artefact: the Data page's `lineage` (or `lineageError`) and a
+ * module's `panelsHtml` (the Data page and a propensity scoring Output page draw it; an uplift run's
+ * Output page is the uplift module's own and draws it there).
  */
 export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
   const byPath = indexSchema(uc.advanced_settings || { stages: [] });
@@ -1712,5 +1714,5 @@ export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
   }
   if (kind === "data") return dataPage(uc, run, art, byPath, extra);
   if (kind === "model") return modelPage(uc, run, art, byPath);
-  return outputPage(uc, run, art, byPath, scoresHref);
+  return outputPage(uc, run, art, byPath, scoresHref, extra);
 }

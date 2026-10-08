@@ -102,6 +102,7 @@ from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
     TREAT_LIST_PARQUET,
     TREAT_LIST_SUMMARY_FILENAME,
     TreatListError,
+    build_treat_list,
     ensure_treat_list,
 )
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
@@ -596,8 +597,13 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
         run_key(run_id, name)
     ):
         # Built on first request, from the run's own artefacts; a file already there is served as it is.
+        # A row-level file retention removed is rebuilt from the scores, or refused in plain words once
+        # they are gone too; the summary alone is not proof that the rows are still there.
         try:
-            ensure_treat_list(storage, run_id, config_root=get_config_root(request))
+            if name == TREAT_LIST_SUMMARY_FILENAME:
+                ensure_treat_list(storage, run_id, config_root=get_config_root(request))
+            else:
+                build_treat_list(storage, run_id, config_root=get_config_root(request))
         except TreatListError as exc:
             # A run that cannot have a treat list says why, in the builder's plain words.
             raise http_error(404 if exc.code == "RUN_NOT_FOUND" else 409, exc.code, exc.message) from exc
