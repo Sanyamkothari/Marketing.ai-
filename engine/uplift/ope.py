@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 
     FloatArray = npt.NDArray[np.float64]
 
-__all__ = ["evaluate_policy", "policy_from_rule"]
+__all__ = ["dr_effect_terms", "evaluate_policy", "policy_from_rule"]
 
 _LOGGER = get_logger(__name__)
 
@@ -125,6 +125,45 @@ def evaluate_policy(
     _LOGGER.info("ope rows=%d causal=%s", rows, causal)
     log_stage(_LOGGER, "ope", rows=rows, seconds=time.perf_counter() - started)
     return report
+
+
+def dr_effect_terms(
+    t: np.ndarray,
+    y: np.ndarray,
+    *,
+    p_treated: np.ndarray,
+    p_control: np.ndarray,
+    propensity: float | np.ndarray,
+) -> FloatArray:
+    """Per-row doubly robust scores of the effect of treating: `Γ = μ1 − μ0 + t(y − μ1)/e − (1 − t)(y − μ0)/(1 − e)`.
+
+    Plan J M96. For any policy `π`, `evaluate_policy`'s DR value minus its `treat_none_value` is
+    exactly `mean(π·Γ)` (algebra: the two DR terms differ by `π·Γ` row by row), so `Σ π·Γ` is the
+    policy's extra conversions over contacting nobody and `Σ (π_a − π_b)·Γ` the paired difference of
+    two policies. Checked as `evaluate_policy` checks its inputs.
+    """
+    import numpy as np
+
+    treatment = _binary(t, name="t")
+    outcome = _binary(y, name="y")
+    rows = len(treatment)
+    if rows == 0 or len(outcome) != rows:
+        raise ValueError("t and y must describe the same, non-empty set of rows.")
+    mu1 = _probabilities(p_treated, rows=rows, name="p_treated")
+    mu0 = _probabilities(p_control, rows=rows, name="p_control")
+    logged = np.broadcast_to(np.asarray(propensity, dtype=np.float64), (rows,)).astype(np.float64)
+    if not np.all(np.isfinite(logged)) or np.any(logged <= 0.0) or np.any(logged >= 1.0):
+        raise ValueError(
+            "Every logging propensity must be strictly between 0 and 1; a row that could only get one "
+            "action says nothing about the other."
+        )
+    terms: FloatArray = (
+        mu1
+        - mu0
+        + treatment * (outcome - mu1) / logged
+        - (1.0 - treatment) * (outcome - mu0) / (1.0 - logged)
+    )
+    return terms
 
 
 def policy_from_rule(

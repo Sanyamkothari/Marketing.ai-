@@ -26,7 +26,7 @@ the user downloads (the treat list).
 | 7 | Planning a test and defining the outcome | M93 | not yet written |
 | 8 | The campaign record, the measurement path and the test plan | M94 | written (below) |
 | 9 | How we know our intervals are honest; the synthetic quarantine | M95 | written (below) |
-| 10 | Uplift stability, calibration and the beats-risk check | M96 | not yet written |
+| 10 | Uplift stability, calibration and the beats-risk check | M96 | written (below) |
 | 11 | Ranking by net value | M97 | not yet written |
 | 12 | The treat list and its reasons | M98 | not yet written |
 | 13 | The offer and channel catalogue; channel-aware consent | M99 | not yet written |
@@ -200,3 +200,32 @@ Every results and value report drawn from such a run, on screen and as PDF, open
 planted effect, not a forecast". A run recorded before the field existed, and any run that did not read generated
 data, carries nothing. `tests/unit/test_docs_honesty.py` keeps the planted figure out of the documentation: it
 may appear only in demo documents, or on a line that says it is planted.
+
+## 10. Uplift stability, calibration and the beats-risk check (M96)
+
+An uplift model is worth using only where it ranks customers better than plain risk ranking at the same
+budget. M96 measures that, out of sample, and acts on it; the frozen champion rule is unchanged. The full
+account, with the formulas, is `docs/UPLIFT.md` section 12 ("Does the model earn its place?").
+
+* **The beats-risk check.** Every uplift training run scores plain rankings of its own hold-out (the
+  model's `p_control`, its `p_treated`, and the use case's last approved propensity model) with the same
+  AUUC, and the model's AUUC minus each with a paired bootstrap that reuses the evaluation's own resamples
+  (`UpliftEvaluation.baseline_comparison`). It passes only when the lower bound of the difference against
+  risk (the propensity model, else `p_control`) is above zero.
+* **Calibration and fold stability.** `calibration_by_decile` (predicted against measured uplift per
+  decile, with intervals) is computed on every run; `fold_auuc` is off by default, LightGBM only, and says
+  what it would cost before it is turned on.
+* **The Approver's checks.** `engine/model_gates.py` turns these into advisory checks
+  (`UPLIFT_NOT_BETTER_THAN_RISK`, `UPLIFT_UNSTABLE_ACROSS_FOLDS`, `UPLIFT_MISCALIBRATED`) on the Approvals
+  screen. Not measured is shown as not measured, never as a pass. They do not block a decision.
+* **The ranking a list uses (J5).** A scoring run of a model whose stored check failed ranks its contact list
+  by the approved propensity model, at the same number of contacts, and writes `ranking_choice.json` with
+  the reason; with no approved propensity model it keeps the uplift ranking and says so. When the fallback
+  is not the model the training check compared with (a newer approval, or none at training), the reason
+  names both and `fallback_matches_check` is false. A model trained before M96 ranks exactly as before
+  (`engine/decide/ranking.py`).
+* **The equal-budget comparison.** Opt-in (`uplift.evidence.risk_comparison`): uplift top-N against risk
+  top-N in each fold of a ring cross-fit of the randomised rows, valued with `evaluate_policy` and the rows'
+  recorded treatment probabilities, by extra conversions and per rupee with 95% intervals
+  (`engine/measurement/compare.py`, `GET /runs/{run_id}/risk-comparison`, a Viewer's). Its nightly coverage
+  test is `tests/statistical/test_risk_comparison_coverage.py`.

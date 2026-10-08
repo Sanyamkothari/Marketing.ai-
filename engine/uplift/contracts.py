@@ -40,30 +40,43 @@ __all__ = [
     "OPE_FILENAME",
     "POLICY_FILENAME",
     "QINI_CURVE_FILENAME",
+    "RANKING_CHOICE_FILENAME",
+    "RISK_COMPARISON_FILENAME",
     "SEGMENTS_FILENAME",
     "UPLIFT_ARTEFACTS",
     "UPLIFT_DRIFT_FILENAME",
     "UPLIFT_EVALUATION_FILENAME",
     "UPLIFT_MODEL_CARD_FILENAME",
+    "UPLIFT_NOT_BETTER_THAN_RISK",
     "UPLIFT_VALIDATION_CODES",
     "UPLIFT_VALIDATION_FILENAME",
+    "BaselineAuuc",
+    "BaselineComparison",
+    "BaselineKind",
+    "CalibrationDecile",
     "ConfidenceValue",
+    "FoldAuuc",
+    "FoldAuucValue",
     "IncrementalityReport",
     "IncrementalityStatus",
     "OpeEstimate",
     "OpeReport",
+    "PolicyComparisonValue",
     "PolicyRecommendation",
     "PolicyStopReason",
     "ProfitCurve",
     "ProfitPoint",
     "QiniCurve",
     "QiniPoint",
+    "RankingChoice",
+    "RiskComparison",
     "Segment",
     "SegmentReport",
     "SegmentSummary",
     "SegmentThresholds",
     "TreatmentShareDrift",
     "UpliftAtK",
+    "UpliftCalibration",
     "UpliftCheck",
     "UpliftDecile",
     "UpliftDriftReport",
@@ -254,6 +267,162 @@ class UpliftDecile(Artefact):
     predicted_uplift: float = Field(description="Mean predicted uplift of the decile's rows.")
 
 
+# ---------------------------------------------------------------------------
+# Plan J M96: does uplift earn its place? (typed here, beside the evaluation they extend; computed by
+# `engine.uplift.metrics`, `engine.measurement.compare` and the train flow, read by `engine.model_gates`)
+# ---------------------------------------------------------------------------
+BaselineKind = Literal["p_control", "p_treated", "propensity_model"]
+"""The plain rankings an uplift model is compared with on its own hold-out (M96)."""
+
+
+class BaselineAuuc(Artefact):
+    """One plain ranking of the uplift hold-out, scored with the same AUUC as the model, and the gap."""
+
+    baseline: BaselineKind = Field(
+        description=(
+            "p_control: the uplift model's own chance of the outcome without contact (plain risk); "
+            "p_treated: its chance with contact; propensity_model: the use case's last approved "
+            "propensity model."
+        )
+    )
+    label: str = Field(description="The ranking in words, for the Approver's screen.")
+    available: bool = Field(description="False when this ranking could not be computed; `reason` says why.")
+    reason: str | None = Field(
+        default=None, description="Why the ranking is missing; null when it is present."
+    )
+    model_id: str | None = Field(
+        default=None, description="The propensity model's version id (propensity_model only)."
+    )
+    auuc: ConfidenceValue | None = Field(
+        default=None, description="AUUC of ranking the hold-out by this score, highest first."
+    )
+    difference: ConfidenceValue | None = Field(
+        default=None,
+        description=(
+            "Uplift model's AUUC minus this ranking's, with a PAIRED bootstrap interval: every "
+            "resample draws the same customers for both rankings."
+        ),
+    )
+    uplift_better: bool | None = Field(
+        default=None, description="True when the difference's lower bound is above zero; null when missing."
+    )
+
+
+class BaselineComparison(Artefact):
+    """Whether ranking by predicted uplift beats ranking by plain risk on the same hold-out (M96)."""
+
+    uplift_auuc: ConfidenceValue = Field(description="The uplift model's AUUC, as in `auuc`.")
+    baselines: tuple[BaselineAuuc, ...] = Field(
+        description="p_control, p_treated, propensity_model, in order."
+    )
+    risk_baseline: BaselineKind = Field(
+        description=(
+            "The ranking the beats-risk check is decided against: the propensity model when it could "
+            "be scored, otherwise p_control."
+        )
+    )
+    beats_risk: bool = Field(
+        description="True only when the paired difference against `risk_baseline` has its lower bound above 0."
+    )
+    bootstrap_samples: int = Field(description="Resamples behind every interval (the evaluation's own).")
+    summary: str = Field(description="One plain sentence for the Approver's screen.")
+
+
+class CalibrationDecile(Artefact):
+    """Predicted against observed uplift in one tenth of the hold-out, highest predicted first."""
+
+    decile: int = Field(description="1 is the tenth with the highest predicted uplift.")
+    rows: int = Field(description="Hold-out rows in the decile.")
+    predicted_uplift: float = Field(description="Mean predicted uplift of the decile's rows.")
+    observed_uplift: ConfidenceValue | None = Field(
+        description="Treated rate minus control rate in the decile, with its bootstrap interval; null when an arm is empty."
+    )
+    within_interval: bool | None = Field(
+        description="True when the predicted uplift lies inside the observed interval; null without one."
+    )
+
+
+class UpliftCalibration(Artefact):
+    """`calibration_by_decile`: does the model's predicted uplift match what the hold-out measured?"""
+
+    deciles: tuple[CalibrationDecile, ...] = Field(description="Up to ten rows, highest predicted first.")
+    weighted_abs_gap: float | None = Field(
+        description=(
+            "Row-weighted mean of |observed - predicted| over the deciles with an observed uplift; "
+            "null when none has one."
+        )
+    )
+    deciles_with_interval: int = Field(description="Deciles whose observed uplift has an interval.")
+    deciles_covered: int = Field(description="Of those, how many contain the predicted uplift.")
+    well_calibrated: bool | None = Field(
+        description=(
+            "True when at least 80% of the deciles with an interval contain the prediction; null when "
+            "fewer than five deciles have one."
+        )
+    )
+    summary: str = Field(description="One plain sentence for the Approver's screen.")
+
+
+class FoldAuucValue(Artefact):
+    """One fold of the cross-fit: the AUUC of a model refitted without these rows, on these rows."""
+
+    fold: int = Field(description="Fold number, from 1.")
+    rows: int = Field(description="Rows in the fold.")
+    auuc: float | None = Field(description="AUUC on the fold; null when the fold lacks an arm.")
+    interval: ConfidenceValue | None = Field(
+        default=None,
+        description=(
+            "The fold AUUC with its 95% bootstrap interval (resampled within arms on the fold's rows); "
+            "null when the fold lacks an arm."
+        ),
+    )
+
+
+class FoldAuuc(Artefact):
+    """`fold_auuc`: how much the model's AUUC moves when it is refitted on other rows (M96).
+
+    Off by default (`uplift.evidence.fold_auuc`), and only for the LightGBM base model: each fold
+    refits the meta-learner. When it was not computed, `computed` is false, `reason` says why and
+    `estimated_refit_seconds` says what turning it on would cost on this data.
+    """
+
+    computed: bool = Field(description="False when the folds were not refitted; `reason` says why.")
+    reason: str | None = Field(default=None, description="Why it was not computed; null when it was.")
+    folds: int = Field(description="Folds configured.")
+    values: tuple[FoldAuucValue, ...] = Field(default=(), description="One per fold, when computed.")
+    mean: float | None = Field(default=None, description="Mean AUUC over the folds with one.")
+    sd: float | None = Field(default=None, description="Standard deviation of those AUUCs (ddof 1).")
+    minimum: float | None = Field(default=None, description="Lowest fold AUUC.")
+    stable: bool | None = Field(
+        default=None,
+        description=(
+            "True when every fold was measured, no fold's 95% interval lies wholly at or below zero, "
+            "and the fold AUUCs differ no more than their bootstrap standard errors explain "
+            "(`heterogeneity` at or below `heterogeneity_critical`); null when not computed."
+        ),
+    )
+    heterogeneity: float | None = Field(
+        default=None,
+        description=(
+            "Cochran's Q of the fold AUUCs, weights 1/se² from each fold's bootstrap; null when not "
+            "computed or a fold's standard error is zero."
+        ),
+    )
+    heterogeneity_critical: float | None = Field(
+        default=None,
+        description="The chi-square 95th percentile on (measured folds - 1) degrees of freedom Q is held to.",
+    )
+    bootstrap_samples: int | None = Field(
+        default=None, description="Resamples behind each fold's interval; null when not computed."
+    )
+    estimated_refit_seconds: float | None = Field(
+        default=None,
+        description="What refitting every fold costs, estimated from this run's own fit time before it runs.",
+    )
+    refit_seconds: float | None = Field(default=None, description="What the refits took; null when not run.")
+    summary: str = Field(description="One plain sentence for the Approver's screen.")
+
+
 class UpliftEvaluation(Artefact):
     """`uplift_evaluation.json` - how well the model ranks customers by what the action changes.
 
@@ -301,6 +470,17 @@ class UpliftEvaluation(Artefact):
             "sha256 of the hold-out's sorted primary keys, so two evaluations can be shown to be on "
             "the same customers; null when the caller had no keys (DEC-670)."
         ),
+    )
+    # Plan J M96 (pre-approved, additive): the beats-risk, calibration and fold-stability evidence. Each is
+    # null on an evaluation written before M96, which every reader treats as "not checked".
+    baseline_comparison: BaselineComparison | None = Field(
+        default=None, description="AUUC of plain risk rankings on the same hold-out, and the paired gap."
+    )
+    calibration_by_decile: UpliftCalibration | None = Field(
+        default=None, description="Predicted against observed uplift per decile, with intervals."
+    )
+    fold_auuc: FoldAuuc | None = Field(
+        default=None, description="AUUC across refitted folds (off by default; LightGBM only)."
     )
 
 
@@ -599,6 +779,114 @@ class OpeReport(Artefact):
 
 
 # ---------------------------------------------------------------------------
+# risk_comparison.json and ranking_choice.json (Plan J M96)
+# ---------------------------------------------------------------------------
+RISK_COMPARISON_FILENAME: Final[str] = "risk_comparison.json"
+"""Written by an uplift training run when `uplift.evidence.risk_comparison` is on (M96)."""
+RANKING_CHOICE_FILENAME: Final[str] = "ranking_choice.json"
+"""Written by an uplift scoring run whose model carries the beats-risk check (M96)."""
+
+UPLIFT_NOT_BETTER_THAN_RISK: Final[str] = "UPLIFT_NOT_BETTER_THAN_RISK"
+"""The uplift model does not beat plain risk ranking (paired AUUC difference's lower bound <= 0)."""
+
+
+class PolicyComparisonValue(Artefact):
+    """One ranking's top-N at the comparison's budget: what it is estimated to add."""
+
+    ranking: Literal["uplift", "risk"] = Field(description="Which ranking chose the contacts.")
+    contacts: int = Field(description="Customers it contacts (the same for both rankings).")
+    incremental_conversions: ConfidenceValue = Field(
+        description="Extra conversions over contacting nobody, doubly robust, with its 95% interval."
+    )
+    per_rupee: ConfidenceValue | None = Field(
+        description="incremental_conversions / (contacts x cost per contact); null without a cost."
+    )
+    ope: OpeReport = Field(description="`evaluate_policy`'s IPS/SNIPS/DR report of this top-N.")
+
+
+class RiskComparison(Artefact):
+    """`risk_comparison.json` - uplift top-N against risk top-N at equal budget, cross-fitted (M96).
+
+    Every row is scored by fold models that never saw it: the uplift learner and a plain risk model
+    (a LightGBM classifier of the outcome) are refitted on the other folds. Both rankings contact the
+    same number of customers in every fold. The value of each top-N is estimated off-policy with the
+    rows' recorded treatment probabilities, and the difference is a paired, per-row estimate.
+    """
+
+    run_id: str = Field(description="Training run whose randomised rows were used.")
+    rows: int = Field(description="Randomised rows the comparison used.")
+    rows_excluded: int = Field(
+        description="Rows left out because their recorded treatment probability was not strictly inside (0, 1)."
+    )
+    folds: int = Field(description="Cross-fitting folds.")
+    top_share: float = Field(description="Share of each fold both rankings contact.")
+    propensity_source: Literal["recorded", "treated_share"] = Field(
+        description=(
+            "recorded: each row's own P(treated); treated_share: the constant share treated (random "
+            "assignment)."
+        )
+    )
+    cost_per_contact: float | None = Field(description="Cost of one contact; null leaves per_rupee null.")
+    uplift: PolicyComparisonValue = Field(description="Ranking by cross-fitted predicted uplift.")
+    risk: PolicyComparisonValue = Field(description="Ranking by cross-fitted plain risk.")
+    difference: ConfidenceValue = Field(
+        description="Uplift minus risk incremental conversions, paired per row, with its 95% interval."
+    )
+    difference_per_rupee: ConfidenceValue | None = Field(
+        description="The difference per rupee spent; null without a cost per contact."
+    )
+    uplift_better: bool = Field(description="True when the difference's lower bound is above zero.")
+    causal: bool = Field(description="False when the treatment was acknowledged as not random.")
+    summary: str = Field(description="One plain sentence for the Model page and the Approver's screen.")
+    computed_at: AwareDatetime = Field(description="UTC time of the comparison.")
+
+
+class RankingChoice(Artefact):
+    """`ranking_choice.json` - which ranking a scoring run's contact list used, and why (M96, J5).
+
+    Written only when the uplift model's training evaluation carries the beats-risk check
+    (`baseline_comparison`); a model trained before M96 ranks by uplift exactly as before and no file
+    is written.
+    """
+
+    run_id: str = Field(description="Scoring run the choice was made for.")
+    model_version_id: str = Field(description="The uplift model version that scored the rows.")
+    ranking: Literal["uplift", "propensity_model"] = Field(description="What ordered the contact list.")
+    code: str | None = Field(
+        description="UPLIFT_NOT_BETTER_THAN_RISK when the uplift model failed the check; null when it passed."
+    )
+    beats_risk: bool = Field(description="The training evaluation's beats-risk verdict.")
+    propensity_model_id: str | None = Field(
+        description="The approved propensity model that ranked the list, when it did."
+    )
+    compared_baseline: BaselineKind | None = Field(
+        default=None,
+        description=(
+            "The plain ranking the training run's beats-risk check was decided against "
+            "(`baseline_comparison.risk_baseline`)."
+        ),
+    )
+    compared_model_id: str | None = Field(
+        default=None,
+        description=(
+            "The propensity model that check compared the uplift model with; null when it compared "
+            "with the model's own p_control (no propensity model was approved then)."
+        ),
+    )
+    fallback_matches_check: bool | None = Field(
+        default=None,
+        description=(
+            "When the list is ranked by a propensity model: true when it is the model the training "
+            "check compared with, false when it is another (newer) one; null when the list is not "
+            "ranked by a propensity model."
+        ),
+    )
+    contacts: int = Field(description="Customers marked Treat (the uplift policy's own count: equal budget).")
+    reason: str = Field(description="The plain reason the Output page shows.")
+    computed_at: AwareDatetime = Field(description="UTC time the choice was made.")
+
+
+# ---------------------------------------------------------------------------
 # model/uplift_model.json
 # ---------------------------------------------------------------------------
 class UpliftModelCard(Artefact):
@@ -694,6 +982,8 @@ UPLIFT_ARTEFACTS: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
         INCREMENTALITY_FILENAME: IncrementalityReport,
         OPE_FILENAME: OpeReport,
         UPLIFT_DRIFT_FILENAME: UpliftDriftReport,
+        RISK_COMPARISON_FILENAME: RiskComparison,  # Plan J M96
+        RANKING_CHOICE_FILENAME: RankingChoice,  # Plan J M96
     }
 )
 """Uplift artefact filename -> its model. Served by `api/routes/uplift.py` (DEC-602)."""

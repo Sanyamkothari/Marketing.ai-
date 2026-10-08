@@ -327,6 +327,12 @@ defaults:
       budget_contacts: null             # int >= 1 | null; most customers to contact; null = every persuadable
       cost_per_contact: null            # float >= 0 | null
       value_per_conversion: null        # float >= 0 | null; with cost, stops where expected value per contact < cost
+    evidence:                           # Plan J M96: costly approval evidence, all off; each switch refits the model per fold (LightGBM base model only)
+      fold_auuc: false                  # bool; refit the model on `folds` folds and report each fold's AUUC (UPLIFT_UNSTABLE_ACROSS_FOLDS)
+      risk_comparison: false            # bool; write risk_comparison.json: uplift top-N against risk top-N at equal budget, cross-fitted
+      folds: 5                          # int 3..10; cross-fitting folds
+      top_share: 0.2                    # float 0..1; share of each fold both rankings contact in risk_comparison.json
+      propensity_column: null           # str | null; recorded per-row P(treated) (M92's treatment_probability); never a feature; null = the treated share
 
   agent:                                # Plan G §8.1. The Guided-setup helper of each use case (DEC-1003); not overridable per run
     enabled: true                       # bool; the Guided setup tab appears only when this is true and the use case trains a model

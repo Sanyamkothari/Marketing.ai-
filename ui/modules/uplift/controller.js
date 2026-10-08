@@ -468,6 +468,9 @@ export function createOutputController(uc, runId, rerender = () => {}) {
     scoreRuns: [],
     scoresHref: scoresUrl(runId),
     summary: null,
+    // Plan J M96: `ranking_choice.json`, which ranking ordered the contact list and why (null when the
+    // run wrote none: a model trained before the beats-risk check, or a training run).
+    ranking: null,
     // "What if the budget changed?": the curve the API computed, the inputs as typed, the slider's
     // point (an index into `curve.points`; `null` = the configured budget).
     profit: { curve: null, cost: null, value: null, index: null, loading: false, error: null },
@@ -492,15 +495,20 @@ export function createOutputController(uc, runId, rerender = () => {}) {
   async function load() {
     const [detail, runs] = await Promise.all([getRun(runId), upliftRuns(uc.id)]);
     s.run = detail.run;
-    const [art, summary] = await Promise.all([
+    const [art, summary, ranking] = await Promise.all([
       artefactsOf(runId, s.run, OUTPUT_ARTEFACTS),
       // How many customers were held back at random, for the "Held back to measure" tile.
       s.run.mode === "score"
         ? optional(s.run, "scoring_summary.json", () => getArtefact(runId, "scoring_summary.json"))
         : null,
+      // Asked for only when the run's record lists it, so an older run makes no failing request.
+      s.run.mode === "score"
+        ? optional(s.run, "ranking_choice.json", () => getArtefact(runId, "ranking_choice.json"))
+        : null,
     ]);
     s.art = art;
     s.summary = summary;
+    s.ranking = ranking;
     s.scoreRuns = runs.filter((r) => r.mode === "score");
     if (art["policy_recommendation.json"]) await loadCurve();
   }

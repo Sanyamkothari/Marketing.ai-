@@ -18,6 +18,11 @@ on the screen before anybody clicks. With sign-in off there is one operator hold
 cannot be enforced, and the screen says that rather than implying otherwise. A run recorded before
 `requested_by` existed has no known trainer: the rule cannot be checked and the screen says so.
 
+**Advisory checks (Plan J M96).** An uplift challenger also carries `checks` from
+`engine.model_gates`: whether it beats plain risk ranking, whether it is stable across refitted folds
+and whether its predicted uplift is calibrated, each read from what its training run measured. They
+inform the Approver; the champion rule and the decision routes ignore them.
+
 **Every decision is recorded with its reason** in `model_decision` (the platform database, migration
 `0005_plan_d`): approved, rejected or promoted, by whom (a user id), against which champion, when.
 The registry row keeps Phase 1's `approved_by` / `promoted_by`, now the signed-in username when
@@ -46,6 +51,7 @@ from engine.contracts import (
     RunManifest,
     RunRecord,
 )
+from engine.model_gates import ApprovalCheck, approval_checks
 from engine.platform_db import create_tables
 from engine.registry import ModelRegistry, aware_utc
 from engine.storage import Storage, StorageError, run_key
@@ -160,6 +166,12 @@ class ApprovalItem(_Model):
     blocked_reason: str | None = Field(description="Why not, in the sentence the screen shows.")
     decisions: tuple[ModelDecision, ...] = Field(
         description="Earlier decisions on this version, oldest first."
+    )
+    # Plan J M96 (additive): advisory checks beside the champion decision, from `engine.model_gates`.
+    # Empty for a model that is not an uplift model; they never approve, reject or block anything.
+    checks: tuple[ApprovalCheck, ...] = Field(
+        default=(),
+        description="Advisory checks ({code, passed, message}); passed is null when not measured.",
     )
 
 
@@ -280,6 +292,7 @@ def pending_approvals(
                 can_decide=blocked is None,
                 blocked_reason=blocked,
                 decisions=history.get(version.model_id, ()),
+                checks=approval_checks(storage, version),
             )
         )
     return tuple(items)

@@ -1231,6 +1231,25 @@ export function profitCard(p, policy) {
   )}</p>${form}${body}</section>`;
 }
 
+/**
+ * Plan J M96: which ranking ordered this contact list (`ranking_choice.json`, the server's words). A
+ * list that fell back to the propensity model, or kept the uplift ranking though the model does not
+ * beat risk ranking, says so above everything else; a model that passed the check gets one quiet line.
+ */
+export function rankingBanner(choice) {
+  if (!choice) return "";
+  if (!choice.code) {
+    return `<p class="caption" data-ranking="uplift">${esc(choice.reason)}</p>`;
+  }
+  const title =
+    choice.ranking === "propensity_model"
+      ? "This list is ranked by the propensity model, not by uplift"
+      : "The uplift model does not beat risk ranking";
+  return `<div class="unotcausal" role="note" data-ranking="${esc(choice.ranking)}" data-code="${esc(choice.code)}"><b>${esc(
+    title,
+  )}</b><span>${esc(choice.reason)}</span></div>`;
+}
+
 /** `#/uplift/<use case>/output/<run>`: who to contact, the four segments, the contact list download. */
 export function outputPageHtml(uc, run, art, extra = {}) {
   const validation = art["uplift_validation.json"];
@@ -1294,11 +1313,15 @@ export function outputPageHtml(uc, run, art, extra = {}) {
       ])}`
     : "";
   const costs = policy && [p.cost_per_contact, p.value_per_conversion].some(present);
+  // Plan J M96: a list that fell back to the propensity ranking is not "N of M persuadables".
+  const byPropensity = !!(extra.ranking && extra.ranking.ranking === "propensity_model");
   const policyRows = policy
     ? `${kvs([
         [
           "Recommended to contact",
-          `${fmtInt(policy.contacts_recommended)} of ${fmtInt(policy.eligible_persuadables)} persuadables`,
+          byPropensity
+            ? `${fmtInt(policy.contacts_recommended)} customers chosen by the propensity model`
+            : `${fmtInt(policy.contacts_recommended)} of ${fmtInt(policy.eligible_persuadables)} persuadables`,
         ],
         ["Contact budget", present(policy.budget_contacts) ? fmtInt(policy.budget_contacts) : "No limit set"],
         ...(present(policy.budget_contacts) || policy.stop_reason !== "all_persuadables"
@@ -1319,7 +1342,10 @@ export function outputPageHtml(uc, run, art, extra = {}) {
           : `<p class="caption">The value in money appears once a cost per contact and a value per response are set in the uplift settings.</p>`
       }${detailsKv("More about this recommendation", [
         ["Expected incremental conversions", fmtCi(expected, (v) => fmtCount(v))],
-        ["Model's own prediction", fmtCount(policy.predicted_incremental_conversions)],
+        [
+          byPropensity ? "Uplift model's prediction for these customers" : "Model's own prediction",
+          fmtCount(policy.predicted_incremental_conversions),
+        ],
         ...(costs ? [] : [["Cost per contact", EM_DASH]]),
       ])}`
     : `<div class="empty">No recommendation was made for this run.</div>`;
@@ -1352,6 +1378,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
   }
 
   const body = `${notCausalBanner(validation, segments, policy)}
+    ${rankingBanner(extra.ranking || null)}
     ${lead}${policy ? tileRow : ""}
     <div class="row">
       <section class="card"><h3>Four groups of customers</h3>${segmentChart(segments)}${segmentRows}</section>

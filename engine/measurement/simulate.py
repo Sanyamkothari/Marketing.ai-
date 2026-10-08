@@ -43,7 +43,9 @@ measurement reads, plus the true effect the interval is supposed to cover. The n
 The frames are what the engine consumes, not simplified copies: `scores` has the run's `control_group`,
 `suppressed_reason` and `intended_treatment` columns, `outcomes` has the outcome and the treatment date,
 both keyed by `customer_id`. :attr:`SimulatedCampaign.measure_kwargs` holds the matching arguments of
-`measure_incrementality`. M100 adds several arms and M102 continuous outcomes; they extend this module.
+`measure_incrementality`. M96 adds `uplift_population` (a known per-customer effect, for the equal-budget
+comparison of `engine.measurement.compare`); M100 adds several arms and M102 continuous outcomes; they
+extend this module.
 
 Pure and deterministic: no storage, no network, no clock. `pandas` is imported inside the function so
 `import engine` stays fast.
@@ -53,7 +55,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Literal
 
 import numpy as np
 
@@ -68,8 +70,11 @@ __all__ = [
     "OUTCOME_COLUMN",
     "OUTCOME_WINDOW_DAYS",
     "TREATMENT_DATE_COLUMN",
+    "UPLIFT_FEATURES",
     "SimulatedCampaign",
+    "SimulatedUpliftPopulation",
     "population",
+    "uplift_population",
 ]
 
 KEY_COLUMN: Final[str] = "customer_id"
@@ -214,4 +219,90 @@ def population(
         compliance=compliance,
         contamination=contamination,
         immature_share=immature_share,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan J M96: a population whose effect varies by customer, for the equal-budget comparison
+# ---------------------------------------------------------------------------
+UPLIFT_FEATURES: Final[tuple[str, ...]] = ("x1", "x2", "x3", "x4")
+"""The simulated customers' features: `x1` drives risk, `x2` drives the effect, `x3`, `x4` are noise."""
+
+
+@dataclass(frozen=True)
+class SimulatedUpliftPopulation:
+    """Randomised rows with a known per-customer effect: what `engine.measurement.compare` reads.
+
+    The treatment was drawn per row with the recorded probability `propensity`, the way M92's
+    holdout and explore slice draw it: "selected" customers (the riskiest `selected_share`) are
+    treated unless held out, the rest are explored at a lower rate. So `propensity` depends on the
+    features, and an estimator that ignored it would be biased.
+    """
+
+    features: pd.DataFrame
+    t: NDArray[np.int_]
+    y: NDArray[np.int_]
+    propensity: NDArray[np.float64]
+    """P(treated | x) as recorded: `1 - holdout_fraction` for a selected row, `(1 - h) * explore_fraction` otherwise."""
+    base: NDArray[np.float64]
+    """P(outcome | not treated, x): the true risk."""
+    tau: NDArray[np.float64]
+    """P(outcome | treated, x) - P(outcome | not treated, x): the true effect of treating each customer."""
+
+    def true_incremental(self, policy: NDArray[np.float64]) -> float:
+        """What treating the rows `policy` marks would add on these customers: `Σ π·τ`."""
+        return float(np.sum(np.asarray(policy, dtype=np.float64) * self.tau))
+
+
+def uplift_population(
+    n: int,
+    *,
+    seed: int,
+    effect: Literal["heterogeneous", "null", "risk"],
+    selected_share: float = 0.3,
+    holdout_fraction: float = 0.2,
+    explore_fraction: float = 0.5,
+) -> SimulatedUpliftPopulation:
+    """`n` randomised customers whose effect is known per row (Plan J M96).
+
+    * Risk: `base = sigmoid(-1.2 + 0.9 x1)`, about 25% on average.
+    * `effect="heterogeneous"`: `tau = 0.16 sigmoid(2 x2) - 0.04`, between -4 and +12 points and
+      unrelated to risk, so uplift ranking should beat risk ranking.
+    * `effect="null"`: `tau = 0` for everyone: neither ranking adds anything, and they tie.
+    * `effect="risk"`: `tau = 0.4 base`, the effect grows with risk: risk ranking is the right one.
+
+    `p(outcome | treated) = clip(base + tau, 0, 1)`. Deterministic for a seed.
+    """
+    import pandas as pd
+
+    if n < 10:
+        raise ValueError(f"n must be at least 10, not {n}.")
+    _check_share("selected_share", selected_share)
+    _check_share("holdout_fraction", holdout_fraction, below_one=True)
+    _check_share("explore_fraction", explore_fraction)
+    if holdout_fraction <= 0.0 or explore_fraction <= 0.0:
+        raise ValueError(
+            "holdout_fraction and explore_fraction must be above 0 for every row to be randomised."
+        )
+    rng = np.random.default_rng(seed)
+    x = rng.standard_normal((n, len(UPLIFT_FEATURES)))
+    base = 1.0 / (1.0 + np.exp(-(-1.2 + 0.9 * x[:, 0])))
+    if effect == "heterogeneous":
+        tau = 0.16 / (1.0 + np.exp(-2.0 * x[:, 1])) - 0.04
+    elif effect == "null":
+        tau = np.zeros(n)
+    elif effect == "risk":
+        tau = 0.4 * base
+    else:  # pragma: no cover - the Literal says which
+        raise ValueError(f"Unknown effect {effect!r}.")
+    treated_rate = np.clip(base + tau, 0.0, 1.0)
+    tau = treated_rate - base
+    cut = np.quantile(x[:, 0], 1.0 - selected_share) if selected_share > 0.0 else np.inf
+    selected = x[:, 0] >= cut
+    propensity = np.where(selected, 1.0 - holdout_fraction, (1.0 - holdout_fraction) * explore_fraction)
+    t = (rng.random(n) < propensity).astype(np.int_)
+    y = (rng.random(n) < np.where(t == 1, treated_rate, base)).astype(np.int_)
+    features = pd.DataFrame(x, columns=list(UPLIFT_FEATURES))
+    return SimulatedUpliftPopulation(
+        features=features, t=t, y=y, propensity=propensity.astype(np.float64), base=base, tau=tau
     )

@@ -31,6 +31,10 @@ not a copy of it. `engine.pipeline.uplift_flow_for` is the one-line lookup that 
 * *evaluate* measures the hold-out once (Qini, AUUC, deciles, bootstrap intervals), segments it,
   recommends a policy on it, and keeps its predictions as `uplift_holdout.parquet` - the logged
   data off-policy evaluation and every later "expected incremental conversions" are computed from.
+  Since Plan J M96 it also asks whether the model earns its place: the AUUC of plain risk rankings
+  of the same hold-out with a paired bootstrap of the gap (`baseline_comparison`), predicted against
+  observed uplift by decile (`calibration_by_decile`) and, when `uplift.evidence` asks, refitted
+  folds (`fold_auuc`) and the equal-budget comparison (`risk_comparison.json`).
 * *explain* is TreeSHAP of the predicted uplift on the hold-out (exact for the X-learner on
   LightGBM, a surrogate otherwise, and the chart's caption says which).
 * *register* writes `schema.json` over the raw training columns the model was fitted on, so a
@@ -51,7 +55,10 @@ replaces bands with segments through
 `engine.uplift.actions.apply_uplift_actions` - which in turn reuses Phase 1's suppression and control
 group rules unchanged. Before it, the consent ledger gates the rows through the same
 `engine.privacy.consent` seam a propensity run uses, so both suppress the same customers and both
-write `consent_report.json` (M91; see `UpliftScoreFlow._actions`).
+write `consent_report.json` (M91; see `UpliftScoreFlow._actions`). When the model's training run found
+that it does not beat risk ranking, the list is ranked by the use case's approved propensity model
+instead, at the same number of contacts, and `ranking_choice.json` says so (Plan J M96,
+`engine.decide.ranking`); a model trained before M96 ranks exactly as before.
 
 **Why the champion of another metric is never replaced.** The registry keeps one champion per use
 case. When that champion is a propensity model, an uplift model's AUUC cannot be compared with its
@@ -76,6 +83,7 @@ model on the Models page, later uplift runs are compared with it under the uplif
 from __future__ import annotations
 
 import io
+import time
 from typing import TYPE_CHECKING, Final
 
 from engine import __version__, keys
@@ -140,11 +148,13 @@ if TYPE_CHECKING:
 
     from engine.config import PrimaryKey, ResolvedConfig, UseCaseConfig
     from engine.contracts import DriftReport, ScoringSummary, ValidationReport
+    from engine.decide.ranking import RankingDecision
     from engine.privacy.contracts import ConsentReport
     from engine.storage import Storage
     from engine.uplift.champion import UpliftChampionDecision
     from engine.uplift.contracts import (
         ConfidenceValue,
+        FoldAuuc,
         PolicyRecommendation,
         SegmentReport,
         SegmentThresholds,
@@ -153,6 +163,7 @@ if TYPE_CHECKING:
     )
     from engine.uplift.data import FeatureSpec
     from engine.uplift.learners import UpliftModel, UpliftPrediction
+    from engine.uplift.metrics import BaselineInput
 
     IntArray = npt.NDArray[np.int_]
     FloatArray = npt.NDArray[np.float64]
@@ -352,6 +363,8 @@ class UpliftTrainFlow(_TrainFlow):
         self._holdout: UpliftPrediction | None = None
         self._uplift_evaluation: UpliftEvaluation | None = None
         self._rescored: bool = False
+        self._fit_seconds: float | None = None
+        """Plan J M96: how long the meta-learner's fit took, for the fold refit's cost estimate."""
 
     # -- the stages ---------------------------------------------------------
     def _validate(self) -> _StageOutcome:
@@ -542,6 +555,7 @@ class UpliftTrainFlow(_TrainFlow):
             time_limit_s=uplift.time_limit_minutes * 60.0,
             work_dir=directory,
         )
+        started = time.perf_counter()
         try:
             model.fit(features.iloc[rows], t[rows], y[rows])
         except ValueError as exc:
@@ -551,6 +565,7 @@ class UpliftTrainFlow(_TrainFlow):
                 suggestion="Check that both groups have customers who converted and who did not.",
                 stage=StageKey.TRAIN,
             ) from exc
+        self._fit_seconds = time.perf_counter() - started
         ctx.cancel.raise_if_cancelled()
         save_model(model, directory)
         # Written through `local_path`, so on a remote store it is a mirror until published - the
@@ -621,6 +636,7 @@ class UpliftTrainFlow(_TrainFlow):
             causal=self._causal,
             holdout_keys=self._holdout_keys(rows),
         )
+        evaluation, evidence_note = self._with_evidence(evaluation, rows, t, y, prediction)
         self._uplift_evaluation = evaluation
         self._write(UPLIFT_EVALUATION_FILENAME, evaluation)
         self._write(QINI_CURVE_FILENAME, curve)
@@ -664,8 +680,234 @@ class UpliftTrainFlow(_TrainFlow):
                 metrics[name] = bound
         self._manifest.add_metrics(metrics)
         verdict = "measurable uplift" if evaluation.measurable_uplift else "no measurable uplift"
-        detail = f"{_auuc_line(evaluation)} · {verdict}{_not_causal_suffix(self._causal)}"
+        detail = f"{_auuc_line(evaluation)} · {verdict}{_not_causal_suffix(self._causal)}{evidence_note}"
         return _StageOutcome(detail, evaluation.rows_evaluated)
+
+    # -- Plan J M96: does the model earn its place? ----------------------------------------------
+    def _with_evidence(
+        self,
+        evaluation: UpliftEvaluation,
+        rows: IntArray,
+        t: IntArray,
+        y: IntArray,
+        prediction: UpliftPrediction,
+    ) -> tuple[UpliftEvaluation, str]:
+        """The evaluation with `baseline_comparison`, `calibration_by_decile` and `fold_auuc` filled in,
+        `risk_comparison.json` written when asked for, and a note for the stage line.
+
+        The baseline comparison and the calibration read the hold-out the evaluation was measured on,
+        with its seed, so their uplift resamples are the evaluation's own (a paired bootstrap). The fold
+        refits and the equal-budget comparison are off by default (`uplift.evidence`).
+        """
+        from engine.uplift.metrics import BaselineInput, calibration_by_decile, compare_with_baselines
+
+        samples = self._ctx.config.uplift.bootstrap_samples
+        baselines = (
+            BaselineInput("p_control", prediction.p_control),
+            BaselineInput("p_treated", prediction.p_treated),
+            self._propensity_baseline(rows),
+        )
+        comparison = compare_with_baselines(
+            prediction.uplift, t, y, baselines, samples=samples, seed=self._seed
+        )
+        calibration = calibration_by_decile(prediction.uplift, t, y, samples=samples, seed=self._seed)
+        folds, note = self._cross_fitted_evidence()
+        updated = evaluation.model_copy(
+            update={
+                "baseline_comparison": comparison,
+                "calibration_by_decile": calibration,
+                "fold_auuc": folds,
+            }
+        )
+        risk = "beats risk ranking" if comparison.beats_risk else "does not beat risk ranking"
+        return updated, f" · {risk}{note}"
+
+    def _propensity_baseline(self, rows: IntArray) -> BaselineInput:
+        """The use case's last approved propensity model's score of the hold-out, or why there is none."""
+        from engine.decide.ranking import last_approved_propensity, score_rows
+        from engine.uplift.metrics import BaselineInput
+
+        ctx = self._ctx
+        version = last_approved_propensity(ctx.registry, ctx.config.id)
+        if version is None:
+            return BaselineInput(
+                "propensity_model", None, reason="This use case has no approved propensity model."
+            )
+        kept = _require(self._kept, "the validated rows")
+        try:
+            scores = score_rows(
+                kept.iloc[rows],
+                version,
+                config=ctx.config,
+                storage=self._storage,
+                registry=ctx.registry,
+                run_id=ctx.run_id,
+            )
+        except Exception as exc:  # any failure to score means "no such baseline", said in words
+            _LOGGER.warning(
+                "evaluate: propensity model %s could not score the hold-out: %s", version.model_id, exc
+            )
+            message = getattr(exc, "message", None) or str(exc) or type(exc).__name__
+            return BaselineInput(
+                "propensity_model",
+                None,
+                reason=(
+                    f"The approved propensity model ({version.model_display_name}, version "
+                    f"{version.version}) could not score this hold-out: {message}"
+                ),
+                model_id=version.model_id,
+            )
+        return BaselineInput("propensity_model", scores, model_id=version.model_id)
+
+    def _cross_fitted_evidence(self) -> tuple[FoldAuuc, str]:
+        """`fold_auuc` (computed, or why not and what it would cost) and the equal-budget comparison."""
+        from engine.measurement.compare import (
+            LIGHTGBM_ONLY_REASON,
+            OFF_REASON,
+            cross_fit,
+            estimate_refit_seconds,
+            fold_auuc_not_computed,
+            fold_auuc_report,
+            lightgbm_uplift_fitter,
+        )
+
+        ctx = self._ctx
+        uplift = ctx.config.uplift
+        evidence = uplift.evidence
+        t, y = _require(self._t, "the treatment array"), _require(self._y, "the outcome array")
+        fitted_rows = len(_require(self._train_rows, "the training rows"))
+        estimate = estimate_refit_seconds(
+            self._fit_seconds, folds=evidence.folds, rows_all=len(t), rows_fitted=fitted_rows
+        )
+        if not (evidence.fold_auuc or evidence.risk_comparison):
+            return (
+                fold_auuc_not_computed(
+                    folds=evidence.folds, reason=OFF_REASON, estimated_refit_seconds=estimate
+                ),
+                "",
+            )
+        if uplift.base_model is not UpliftBaseModel.LIGHTGBM:
+            not_run = fold_auuc_not_computed(
+                folds=evidence.folds, reason=LIGHTGBM_ONLY_REASON, estimated_refit_seconds=None
+            )
+            return not_run, " · fold checks not run (LightGBM base model only)"
+        features = _require(self._features, "the feature matrix")
+        groups = self._groups()
+        notes: list[str] = []
+        folds = fold_auuc_not_computed(
+            folds=evidence.folds, reason=OFF_REASON, estimated_refit_seconds=estimate
+        )
+        if evidence.fold_auuc:
+            try:
+                cross = cross_fit(
+                    features,
+                    t,
+                    y,
+                    folds=evidence.folds,
+                    seed=self._seed,
+                    fit_uplift=lightgbm_uplift_fitter(uplift.learner, seed=self._seed),
+                    fit_risk=None,
+                    scheme="k_fold",
+                    groups=groups,
+                )
+                folds = fold_auuc_report(
+                    cross,
+                    t,
+                    y,
+                    estimated_refit_seconds=estimate,
+                    samples=uplift.bootstrap_samples,
+                    seed=self._seed,
+                )
+                notes.append("stable across folds" if folds.stable else "unstable across folds")
+            except ValueError as exc:
+                folds = fold_auuc_not_computed(
+                    folds=evidence.folds,
+                    reason=f"The folds could not be refitted: {exc}",
+                    estimated_refit_seconds=estimate,
+                )
+                notes.append("fold check could not run")
+            ctx.cancel.raise_if_cancelled()
+        if evidence.risk_comparison:
+            notes.append(self._write_risk_comparison(features, t, y, groups))
+        return folds, "".join(f" · {note}" for note in notes)
+
+    def _groups(self) -> npt.NDArray[np.object_] | None:
+        """The customer of each row under a two-column key (folds then keep a customer together)."""
+        if not keys.is_composite(self._ctx.primary_key):
+            return None
+        kept = _require(self._kept, "the validated rows")
+        return kept[_entity(self._ctx)].to_numpy(dtype=object)
+
+    def _write_risk_comparison(
+        self, features: pd.DataFrame, t: IntArray, y: IntArray, groups: npt.NDArray[np.object_] | None
+    ) -> str:
+        """`risk_comparison.json` from a ring cross-fit of the randomised rows; the stage note."""
+        import numpy as np
+        import pandas as pd
+
+        from engine.measurement.compare import (
+            cross_fit,
+            equal_budget_comparison,
+            lightgbm_risk_fitter,
+            lightgbm_uplift_fitter,
+        )
+        from engine.uplift.contracts import RISK_COMPARISON_FILENAME
+
+        ctx = self._ctx
+        uplift = ctx.config.uplift
+        evidence = uplift.evidence
+        column = evidence.propensity_column
+        kept = _require(self._kept, "the validated rows")
+        if column is not None:
+            if column not in kept.columns:
+                _LOGGER.warning("evaluate: propensity column %r is not in the file", column)
+                return f"risk comparison not run: no column {column!r}"
+            recorded = pd.to_numeric(kept[column], errors="coerce").to_numpy(
+                dtype=np.float64, na_value=np.nan
+            )
+            randomised = np.isfinite(recorded) & (recorded > 0.0) & (recorded < 1.0)
+            propensity: float | npt.NDArray[np.float64] = recorded[randomised]
+            source: Literal["recorded", "treated_share"] = "recorded"
+        else:
+            randomised = np.ones(len(t), dtype=bool)
+            propensity = float(np.mean(t))
+            source = "treated_share"
+        rows = np.flatnonzero(randomised)
+        try:
+            cross = cross_fit(
+                features.iloc[rows],
+                t[rows],
+                y[rows],
+                folds=evidence.folds,
+                seed=self._seed,
+                fit_uplift=lightgbm_uplift_fitter(uplift.learner, seed=self._seed),
+                fit_risk=lightgbm_risk_fitter(seed=self._seed),
+                scheme="ring",
+                groups=None if groups is None else groups[rows],
+            )
+            report = equal_budget_comparison(
+                t=t[rows],
+                y=y[rows],
+                propensity=propensity,
+                cross=cross,
+                top_share=evidence.top_share,
+                cost_per_contact=uplift.policy.cost_per_contact,
+                run_id=ctx.run_id,
+                causal=self._causal,
+                propensity_source=source,
+                rows_excluded=int(len(t) - rows.shape[0]),
+                seed=self._seed,
+            )
+        except ValueError as exc:
+            _LOGGER.warning("evaluate: the equal-budget comparison could not run: %s", exc)
+            return "risk comparison could not run"
+        ctx.cancel.raise_if_cancelled()
+        self._write(RISK_COMPARISON_FILENAME, report)
+        return (
+            "uplift beats risk at equal budget"
+            if report.uplift_better
+            else "uplift not better than risk at equal budget"
+        )
 
     def _holdout_keys(self, rows: IntArray) -> list[str]:
         """The hold-out rows' keys as text (the row key of a composite key): what
@@ -1140,6 +1382,7 @@ class UpliftScoreFlow(_ScoreFlow):
             scored, config, consent = apply_consent_gate(
                 scored, config, gate, primary_key=_entity(ctx), run_id=ctx.run_id, at=utc_now()
             )
+        decision, risk = self._ranking_decision(scored)
         scored, recommendation = apply_uplift_actions(
             scored,
             config,
@@ -1149,8 +1392,31 @@ class UpliftScoreFlow(_ScoreFlow):
             causal=card.causal,
             prediction_columns=PREDICTION_COLUMNS,
             thresholds=card.segment_thresholds,
-            observed_top_share=self._training_holdout_share(),
+            # A list ranked by the propensity model is not the hold-out's top uplift share, so the
+            # hold-out's measured uplift does not describe it: expected conversions stay null.
+            observed_top_share=None if risk is not None else self._training_holdout_share(),
         )
+        if risk is not None:
+            from engine.decide.ranking import rerank_by_risk
+            from engine.uplift.actions import tiebreak_keys
+
+            scored = rerank_by_risk(
+                scored,
+                risk,
+                contacts=recommendation.contacts_recommended,
+                tiebreak=tiebreak_keys(scored[ctx.row_key], run_id=ctx.run_id),
+            )
+            # The uplift policy's own prediction summed the rows IT chose; the list now holds the
+            # propensity model's choice, so the model's prediction is re-summed over those rows.
+            from engine.stages.actions import ACTION_COLUMN
+            from engine.uplift.actions import TREAT_ACTION
+
+            treated = scored[ACTION_COLUMN].astype("object") == TREAT_ACTION
+            recommendation = recommendation.model_copy(
+                update={"predicted_incremental_conversions": float(scored.loc[treated, UPLIFT_COLUMN].sum())}
+            )
+        if decision is not None:
+            self._write_ranking_choice(decision, contacts=recommendation.contacts_recommended)
         self._scored = scored
         self._recommendation = recommendation
         self._write(SEGMENTS_FILENAME, _scored_segments(scored, card, run_id=ctx.run_id))
@@ -1168,7 +1434,91 @@ class UpliftScoreFlow(_ScoreFlow):
                 f" · {humanise_count(consent.excluded_total)} without valid consent "
                 f"for {consent.purpose.replace('_', ' ')}"
             )
+        if decision is not None and decision.code is not None:
+            detail += (
+                " · ranked by the approved propensity model: the uplift model does not beat risk ranking"
+                if decision.falls_back
+                else " · the uplift model does not beat risk ranking (no propensity model to rank by)"
+            )
         return _StageOutcome(detail, len(scored.index))
+
+    # -- Plan J M96 (J5): uplift must beat risk ranking to rank the list ---------------------------
+    def _ranking_decision(self, scored: pd.DataFrame) -> tuple[RankingDecision | None, FloatArray | None]:
+        """The training run's beats-risk verdict turned into this run's ranking, and the risk scores
+        when the list falls back to the approved propensity model (`engine.decide.ranking`).
+
+        `(None, None)` - nothing changes - when the model's evaluation carries no beats-risk check (a
+        model trained before M96) or cannot be read.
+        """
+        import numpy as np
+
+        from engine.decide.ranking import cannot_score, decide_ranking, last_approved_propensity, score_rows
+
+        ctx = self._ctx
+        version = _require(self._version, "the model version")
+        evaluation = self._training_evaluation(version)
+        if evaluation is None or evaluation.baseline_comparison is None:
+            return None, None
+        propensity = (
+            None
+            if evaluation.baseline_comparison.beats_risk
+            else last_approved_propensity(ctx.registry, ctx.config.id)
+        )
+        decision = decide_ranking(evaluation.baseline_comparison, propensity)
+        if decision is None or not decision.falls_back or propensity is None:
+            return decision, None
+        frame = _require(self._frame, "the uploaded rows")
+        try:
+            values = score_rows(
+                frame,
+                propensity,
+                config=ctx.config,
+                storage=self._storage,
+                registry=ctx.registry,
+                run_id=ctx.run_id,
+            )
+        except Exception as exc:  # the fallback cannot score this file: say so, keep the uplift ranking
+            _LOGGER.warning(
+                "actions: propensity model %s could not score the file: %s", propensity.model_id, exc
+            )
+            why = getattr(exc, "message", None) or str(exc) or type(exc).__name__
+            return cannot_score(decision, propensity, why), None
+        import pandas as pd
+
+        risk = pd.Series(values, index=frame.index).reindex(scored.index)
+        if risk.isna().any():
+            return cannot_score(decision, propensity, "some customers have no score"), None
+        return decision, np.asarray(risk, dtype=np.float64)
+
+    def _training_evaluation(self, version: ModelVersion) -> UpliftEvaluation | None:
+        """The model's training `uplift_evaluation.json`, or None when it cannot be read."""
+        from engine.uplift.contracts import UpliftEvaluation
+
+        key = version.artefact_keys.get(
+            UPLIFT_EVALUATION_FILENAME, run_key(version.run_id, UPLIFT_EVALUATION_FILENAME)
+        )
+        try:
+            return self._storage.read_model(key, UpliftEvaluation)
+        except (StorageError, OSError, ValueError):
+            _LOGGER.warning("actions: the training run's %s could not be read", UPLIFT_EVALUATION_FILENAME)
+            return None
+
+    def _write_ranking_choice(self, decision: RankingDecision, *, contacts: int) -> None:
+        """`ranking_choice.json`: what ordered the list and the plain reason the Output page shows."""
+        from engine.decide.ranking import ranking_choice
+        from engine.uplift.contracts import RANKING_CHOICE_FILENAME
+
+        version = _require(self._version, "the model version")
+        self._write(
+            RANKING_CHOICE_FILENAME,
+            ranking_choice(
+                decision,
+                run_id=self._ctx.run_id,
+                model_version_id=version.model_id,
+                contacts=contacts,
+                now=utc_now(),
+            ),
+        )
 
     def _training_holdout_share(self) -> Callable[[float], ConfidenceValue | None] | None:
         """The training run's measured hold-out uplift by top share, or `None` when unreadable.

@@ -129,6 +129,7 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/measure/learn` | Learn who to contact next time: an uplift training run on the measured campaign | RunCreatedResponse |
 | GET | `/runs/{run_id}/outcomes` | A scoring run's real-world performance | OutcomeReport |
 | POST | `/runs/{run_id}/outcomes` | Add a scoring run's real outcomes, once its window has matured | OutcomeReport |
+| GET | `/runs/{run_id}/risk-comparison` | Uplift top-N against risk top-N at equal budget, cross-fitted (an uplift training run's) | RiskComparison |
 | POST | `/runs/{run_id}/root-cause` | Start a root-cause summary over a finished scoring run | GenerativeJobStartedResponse |
 | GET | `/runs/{run_id}/scores.csv` | The scored rows of a scoring run as CSV | - |
 | POST | `/runs/{run_id}/uplift/ope` | Off-policy estimate of a targeting rule on an uplift training run's hold-out | OpeReport |
@@ -561,6 +562,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `drift_treated_share_tolerance` | number | no |  |
 | `segments` | UpliftSegmentsConfig | no | Where the four segments are cut. A Phase 5 agent may propose new cuts. |
 | `policy` | UpliftPolicyConfig | no | The budget the targeting recommendation works within. A Phase 5 agent may propose budgets. |
+| `evidence` | UpliftEvidenceConfig | no | `uplift.evidence` (Plan J M96): the costly evidence an Approver may ask for. All off by default.  Each switch refits the meta-learner `folds` times on the training rows, LightGBM base model only (`engine.measurement.compare`). `fold_auuc` reports each fold's AUUC of a model fitted on all the other folds; `risk_comparison` writes `risk_comparison.json`, uplift top-`top_share` against risk top-`top_share` at equal budget, from models fitted on the next `(folds - 1) // 2` folds round a ring (so its interval is honest) together with a plain LightGBM risk model. `propensity_column` names a column of recorded per-row treatment probabilities (M92's `treatment_probability`); it is never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence an approval rests on. |
 
 #### AgentConfig
 
@@ -843,6 +845,18 @@ The budget the targeting recommendation works within. A Phase 5 agent may propos
 | `budget_contacts` | integer \| null | no |  |
 | `cost_per_contact` | number \| null | no |  |
 | `value_per_conversion` | number \| null | no |  |
+
+#### UpliftEvidenceConfig
+
+`uplift.evidence` (Plan J M96): the costly evidence an Approver may ask for. All off by default.  Each switch refits the meta-learner `folds` times on the training rows, LightGBM base model only (`engine.measurement.compare`). `fold_auuc` reports each fold's AUUC of a model fitted on all the other folds; `risk_comparison` writes `risk_comparison.json`, uplift top-`top_share` against risk top-`top_share` at equal budget, from models fitted on the next `(folds - 1) // 2` folds round a ring (so its interval is honest) together with a plain LightGBM risk model. `propensity_column` names a column of recorded per-row treatment probabilities (M92's `treatment_probability`); it is never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence an approval rests on.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `fold_auuc` | boolean | no |  |
+| `risk_comparison` | boolean | no |  |
+| `folds` | integer | no |  |
+| `top_share` | number | no |  |
+| `propensity_column` | string \| null | no |  |
 
 #### AgentColumnHints
 
@@ -2039,6 +2053,12 @@ Keys of the default document that no advanced-settings field renders, with their
 | `uplift.policy.budget_contacts` | int >= 1 \| null; most customers to contact; null = every persuadable |
 | `uplift.policy.cost_per_contact` | float >= 0 \| null |
 | `uplift.policy.value_per_conversion` | float >= 0 \| null; with cost, stops where expected value per contact < cost |
+| `uplift.evidence` | Plan J M96: costly approval evidence, all off; each switch refits the model per fold (LightGBM base model only) |
+| `uplift.evidence.fold_auuc` | bool; refit the model on `folds` folds and report each fold's AUUC (UPLIFT_UNSTABLE_ACROSS_FOLDS) |
+| `uplift.evidence.risk_comparison` | bool; write risk_comparison.json: uplift top-N against risk top-N at equal budget, cross-fitted |
+| `uplift.evidence.folds` | int 3..10; cross-fitting folds |
+| `uplift.evidence.top_share` | float 0..1; share of each fold both rankings contact in risk_comparison.json |
+| `uplift.evidence.propensity_column` | str \| null; recorded per-row P(treated) (M92's treatment_probability); never a feature; null = the treated share |
 | `agent` | Plan G §8.1. The Guided-setup helper of each use case (DEC-1003); not overridable per run |
 | `agent.enabled` | bool; the Guided setup tab appears only when this is true and the use case trains a model |
 | `agent.display_name` | str \| null; null = "<use case name> helper" |
