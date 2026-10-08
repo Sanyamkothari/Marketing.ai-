@@ -113,16 +113,23 @@ class _Capture(logging.Handler):
 
 @pytest.fixture
 def captured() -> Iterator[_Capture]:
-    """Capture every record reaching the root logger while the test runs."""
+    """Capture every record reaching the root logger while the test runs.
+
+    The capture is the root logger's ONLY handler for the test. Several other test modules call
+    `configure_logging` (directly, or through `create_app` or a script's `main`) and leave its handler
+    on the root logger; under `pytest -n` any of them can run first on this worker. That handler would
+    format each record before the capture sees it, caching a redacted `exc_text` on the record and
+    breaking the assertions below that depend on the stock formatter's cache.
+    """
     handler = _Capture()
     root = logging.getLogger()
-    previous_level = root.level
-    root.addHandler(handler)
+    previous_handlers, previous_level = list(root.handlers), root.level
+    root.handlers = [handler]
     root.setLevel(logging.DEBUG)
     try:
         yield handler
     finally:
-        root.removeHandler(handler)
+        root.handlers = previous_handlers
         root.setLevel(previous_level)
 
 
@@ -134,10 +141,14 @@ def pristine_root(monkeypatch: pytest.MonkeyPatch) -> Iterator[logging.Logger]:
     A test that swaps the root logger's handler list out from under it would leave that global
     pointing at a handler nobody can reach, so the global is reset here as well - otherwise the
     first such test would quietly break every later one.
+
+    The handler list starts empty too: a handler an earlier test module left installed (see
+    `captured`) would otherwise carry a second `ContextFilter` into the count.
     """
     root = logging.getLogger()
     handlers, level = list(root.handlers), root.level
     monkeypatch.setattr(engine_logging, "_handler", None)
+    root.handlers = []
     try:
         yield root
     finally:

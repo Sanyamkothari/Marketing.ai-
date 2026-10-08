@@ -564,6 +564,23 @@ bench case with a `balance` column. Nothing else in the agent changed.
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-08 — plan-j (on main) → trunk (owner of `tests/unit/test_logging_audit.py`, DEC-381/383): the audit fixtures isolate the root logger (announcement and record of an in-place edit)
+
+**Why.** Under `pytest -n 4`, three tests in `test_logging_audit.py` failed whenever another module that
+leaves `configure_logging`'s handler on the root logger ran first on the same worker. At least seven do
+today: `test_utils.py`, `test_job_entrypoint.py`, `test_run_index.py`, `test_smoke_deployment.py`,
+`integration/agent/test_ask_api.py` and the two `integration/ai_service` API modules. The leaked handler
+formats each record first and caches a redacted `exc_text`, and `pristine_root` counted its
+`ContextFilter` as a second one. Reproduced serially by running any one of them first.
+
+**What changed.** `captured` makes its capture handler the root logger's only handler for the test, and
+`pristine_root` starts from an empty handler list. Both restore the previous handlers afterwards. No
+assertion changed.
+
+**What is needed.** Nothing, to keep the suite green. Optionally, the owners of those modules can restore
+the root logger after they call `configure_logging`, as `test_jobs_as_sagemaker.py`'s
+`restore_root_logging` fixture already does.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
