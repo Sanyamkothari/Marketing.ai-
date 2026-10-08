@@ -204,15 +204,21 @@ class ValueCosts(_Strict):
     )
 
 
-def lookup_value_costs(channel: str | None = None, *, root: Path | None = None) -> ValueCosts:
+def lookup_value_costs(
+    channel: str | None = None,
+    *,
+    action_id: str | None = None,
+    root: Path | None = None,
+) -> ValueCosts:
     """The offer cost and contact cost the configuration gives: the ONE place costs are looked up.
 
-    Reads the `value:` block of `configs/pilot/value.yaml`; a missing file or block gives the
-    defaults of :class:`ValueCosts`. With `channel`, `contact_cost` is that channel's cost (the block's
-    `contact_cost` for a channel it does not list). M99's offer and channel catalogue takes these over
-    behind this function.
+    Reads from `configs/decide/catalogue.yaml` when it exists (Plan J M99), falling back to the `value:`
+    block of `configs/pilot/value.yaml`; a missing file or block gives the defaults of :class:`ValueCosts`.
+    With `channel`, `contact_cost` is that channel's cost. With `action_id`, offer and contact costs come
+    from that catalogue action.
     """
     from engine.config import ConfigError, config_root, load_yaml
+    from engine.decide.catalogue import catalogue_or_none
 
     try:
         data = load_yaml(config_root(root) / VALUE_CONFIG)
@@ -222,6 +228,40 @@ def lookup_value_costs(channel: str | None = None, *, root: Path | None = None) 
         data = {}
     block = data.get("value") or {}
     costs = ValueCosts.model_validate(block)
+
+    catalogue = catalogue_or_none(root)
+    if catalogue is not None and catalogue.actions:
+        channel_costs = dict(costs.channel_contact_costs)
+        for act in catalogue.actions:
+            for ch in act.channels:
+                channel_costs[ch.lower()] = act.contact_cost
+
+        if action_id is not None:
+            action = catalogue.get_action(action_id)
+            if action is not None:
+                return ValueCosts(
+                    offer_cost=action.offer_cost,
+                    contact_cost=action.contact_cost,
+                    channel_contact_costs=channel_costs,
+                )
+
+        if channel is not None:
+            ch_lower = channel.lower()
+            matching_act = next((a for a in catalogue.actions if ch_lower in a.channels), None)
+            offer_cost = matching_act.offer_cost if matching_act is not None else costs.offer_cost
+            contact_cost = channel_costs.get(ch_lower, costs.contact_cost)
+            return ValueCosts(
+                offer_cost=offer_cost,
+                contact_cost=contact_cost,
+                channel_contact_costs=channel_costs,
+            )
+
+        return ValueCosts(
+            offer_cost=costs.offer_cost,
+            contact_cost=costs.contact_cost,
+            channel_contact_costs=channel_costs,
+        )
+
     if channel is None:
         return costs
     return costs.model_copy(

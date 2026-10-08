@@ -96,6 +96,8 @@ class UpliftPolicyConfig(BaseModel):
     horizon_months: Annotated[int | None, Field(ge=1, le=120)] = None
     margin_pct: Annotated[float | None, Field(ge=0.0, le=100.0)] = None
     min_roi: Annotated[float | None, Field(ge=0.0)] = None
+    # Plan J M99 (DEC-1309): treat action id from catalogue.
+    treat_action_id: Annotated[str | None, Field(min_length=1)] = None
 
 
 class UpliftEvidenceConfig(BaseModel):

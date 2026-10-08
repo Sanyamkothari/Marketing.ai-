@@ -1127,6 +1127,10 @@ class SuppressionCount(Artefact):
         description="Why the rows were suppressed."
     )
     rows: int = Field(description="Rows suppressed for this reason.")
+    channel_counts: dict[str, int] | None = Field(
+        default=None,
+        description="Per-channel suppression counts (Plan J M99).",
+    )
 
 
 class KpiValue(Artefact):
