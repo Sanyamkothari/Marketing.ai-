@@ -11,6 +11,7 @@ from __future__ import annotations
 from typing import Final
 
 from engine.measurement.codes import MEASUREMENT_CHECK_CODES
+from engine.model_gates import UPLIFT_GATE_CODES
 
 __all__ = ["PLAN_J_CODES"]
 
@@ -47,10 +48,13 @@ PLAN_J_CODES: Final[frozenset[str]] = (
             "CAMPAIGN_EPOCH_MISMATCH",
         }
     )
-    | MEASUREMENT_CHECK_CODES
-)  # M93 (DEC-1303 (h)): LABEL_RATE_UNSTABLE, TREATMENT_HISTORY_NOT_RANDOM
+    | MEASUREMENT_CHECK_CODES  # M93 (DEC-1303 (h)): LABEL_RATE_UNSTABLE, TREATMENT_HISTORY_NOT_RANDOM
+    | UPLIFT_GATE_CODES  # M96 (DEC-1306 (f)): UPLIFT_NOT_BETTER_THAN_RISK, UPLIFT_UNSTABLE_ACROSS_FOLDS,
+    # UPLIFT_MISCALIBRATED, the advisory approval checks (`engine.model_gates`)
+)
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
 M93's two readiness warnings are defined once, in `engine.measurement.codes.MEASUREMENT_CHECK_CODES`,
 and joined here, so `engine.contracts.ValidationCheck`'s PLAN-J hook and this set read the same
-definition (the one-registry rule, DEC-950)."""
+definition (the one-registry rule, DEC-950). M96's three advisory approval checks are joined the same
+way from `engine.model_gates.UPLIFT_GATE_CODES` (DEC-1306 (f))."""

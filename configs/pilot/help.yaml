@@ -366,6 +366,19 @@ codes:
     title: "The campaign's control group was redrawn"
     meaning: "This campaign kept a fixed control group of customers out. That group was redrawn (a new period started, at a lower share or with a new salt) before every customer's response was in, or the campaign's lists come from different periods or no longer match the period recorded with it. Customers in the control group may since have been contacted, so comparing the two groups would no longer show what the campaign changed, and no result is given."
     fix: "Measure campaigns whose lists come from one period of the control group. Before starting a new period, wait until the responses of the campaigns still running are in."
+  # --- Plan J M96: advisory checks on an uplift model's approval (DEC-1306 (f)) ------------------------
+  UPLIFT_NOT_BETTER_THAN_RISK:
+    title: "The campaign-effect model does not beat ranking by risk"
+    meaning: "The model that predicts who a campaign changes was checked on test customers it never saw. It was compared with plain risk ranking: the approved risk model (the one that predicts who will have the outcome), or the model's own chance of the outcome without contact when there was none. Ranking by the predicted effect of contact did not do clearly better; the 95% range of the difference was not wholly above zero. Contact lists from this model are therefore ranked by the approved risk model, at the same number of contacts. With no approved risk model, the list keeps the model's own ranking and carries this warning."
+    fix: "Approve a risk model for this use case so lists can fall back to it. Or retrain the campaign-effect model on more customers, or on a campaign with a clearer effect, and check that its test result beats risk ranking before approving it."
+  UPLIFT_UNSTABLE_ACROSS_FOLDS:
+    title: "The campaign-effect model is unstable across folds"
+    meaning: "The model was refitted several times, each time leaving out one part (fold) of the training customers, and measured on the part it did not see. Either at least one refitted model did no better than random even allowing for the noise of that fold, or the folds' results differed more than noise explains, or a fold could not be measured. Its quality depends on which customers it happened to learn from. This check is advisory: it does not block approval."
+    fix: "Train on more customers, use fewer columns, or try another model type, then look at each fold's result and range on the Approvals screen before approving."
+  UPLIFT_MISCALIBRATED:
+    title: "The predicted effect of contact does not match what was measured"
+    meaning: "The test customers were split into ten groups by the predicted effect of contact. In fewer than 8 of the groups with enough contacted and held-back customers did the measured effect's 95% range contain the predicted effect. The ranking may still be useful, but the predicted number of extra responses should not be trusted as a forecast. This check is advisory: it does not block approval."
+    fix: "Use the measured (expected) extra responses rather than the model's own prediction when planning, or retrain on more customers or a more recent campaign."
 
 settings:
   actions.bands[*].min_score:

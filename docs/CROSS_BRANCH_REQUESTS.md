@@ -450,6 +450,54 @@ demo run. `tests/unit/test_docs_honesty.py` allows the planted figure only in de
 **What is needed.** Nothing; this is an announcement. A new report kind drawn from a run should set
 `ReportDocument.synthetic` from `RunRecord.synthetic`.
 
+### 2026-10-08 — plan-j (on main) → Phase 3b (owners of `engine/uplift/` and the uplift UI): M96 beats-risk check, calibration, fold stability and the propensity fallback (announcement and record of in-place edits)
+
+**What changed** (pre-approved in the Plan J plan, M96; DEC-1306), each additive and off or null by default:
+
+* `engine/uplift/config.py`: `UpliftEvidenceConfig` as `uplift.evidence` (`fold_auuc`, `risk_comparison`, `folds`,
+  `top_share`, `propensity_column`), off by default, with defaults in `configs/engine.yaml`.
+* `engine/uplift/contracts.py`: optional `UpliftEvaluation.baseline_comparison`, `calibration_by_decile` and
+  `fold_auuc`; the new artefacts `RiskComparison` (`risk_comparison.json`) and `RankingChoice`
+  (`ranking_choice.json`); the code `UPLIFT_NOT_BETTER_THAN_RISK`.
+* `engine/uplift/flow.py`: the evaluate stage fills the new fields; `UpliftScoreFlow`'s actions stage may re-rank the
+  list by the approved propensity model (same number of Treat rows) and writes `ranking_choice.json`.
+* `engine/uplift/metrics.py`: `compare_with_baselines`, `paired_auuc_resamples` / `paired_auuc_difference`,
+  `calibration_by_decile`, `tie_broken_ranks` / `tie_key`, `percentile_interval` and `_bootstrap` windows.
+  `evaluate_uplift` is unchanged (its input-order tie-break is the champion rule's, DEC-605, DEC-613).
+* `engine/uplift/ope.py`: `dr_effect_terms`.
+* `api/routes/uplift.py`: the profit curve answers `409 PROFIT_CURVE_UNAVAILABLE` for a list ranked by the
+  propensity model.
+* `ui/modules/uplift/{controller,views}.js`: the ranking banner, and the contacts tile and prediction labels of a
+  list chosen by the propensity model.
+* `docs/UPLIFT.md`; tests `tests/unit/uplift/test_beats_risk.py` and `tests/unit/uplift/test_dr_effect_terms.py`.
+
+A model trained before M96 reads `baseline_comparison=None`, writes no `ranking_choice.json` and scores
+byte-identically; a model that passes the check keeps the same list.
+
+**What is needed.** Nothing; this is an announcement. A possible follow-up for Phase 3b: move the champion AUUC's
+tie-break to the seeded key (DEC-1306 (c)) if the champion rule is ever reopened.
+
+### 2026-10-08 — plan-j (on main) → Phase 4b (owners of the production area): M96 advisory checks on the Approvals screen (announcement and record of in-place edits)
+
+**What changed** (pre-approved in the Plan J plan, M96; DEC-1306 (f)): `engine/approvals.py` `ApprovalItem.checks`
+(default empty tuple), filled by the new `engine/model_gates.py` for uplift models only.
+`ui/modules/production/approvals.js` and `styles.js` show the advisory checks, with code, verdict and message taken
+from the server; Approve and Reject are never disabled. New test:
+`tests/integration/production/ui/approvals/checks.test.mjs`. A propensity model's item is unchanged.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-08 — plan-j (on main) → Plan E (owner of `configs/pilot/help.yaml`) and trunk (owner of `tests/integration/test_api_config.py`): three M96 codes and one route (announcement)
+
+**What changed** (DEC-1306 (f), (j)): `configs/pilot/help.yaml` gains `UPLIFT_NOT_BETTER_THAN_RISK`,
+`UPLIFT_UNSTABLE_ACROSS_FOLDS` and `UPLIFT_MISCALIBRATED` under a Plan J M96 comment, matching
+`engine.decide.codes.PLAN_J_CODES` (joined from `engine.model_gates.UPLIFT_GATE_CODES`). The plain-language rule
+forbids "uplift" and "feature", so the entries say "the campaign-effect model" and "the risk model".
+`test_openapi_builds_and_documents_every_route` gains `/runs/{run_id}/risk-comparison` (a Viewer route in
+`api/routes/measurement.py`); `docs/API.md` regenerated. Nothing else changed.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

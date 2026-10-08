@@ -288,6 +288,18 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/uplift/test_measure_campaign.py",
         "tests/integration/pilot/test_pilot_acceptance.py",
     ),
+    # M96's nightly coverage test (tests/statistical/test_risk_comparison_coverage.py, DEC-1300 (e)) and its
+    # node tests (ranking_banner.test.mjs, which test_ranking_banner_js.py runs, and the approvals
+    # checks.test.mjs) are left out: this map names pytest files only.
+    "M96": (
+        "tests/unit/uplift/test_beats_risk.py",
+        "tests/unit/uplift/test_dr_effect_terms.py",
+        "tests/unit/measurement/test_compare.py",
+        "tests/unit/decide/test_model_gates.py",
+        "tests/unit/decide/test_ranking_choice.py",
+        "tests/unit/decide/test_ranking_banner_js.py",
+        "tests/integration/decide/test_uplift_ranking_flow.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
