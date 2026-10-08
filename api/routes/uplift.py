@@ -426,6 +426,15 @@ def read_profit_curve(
             stored.value_per_conversion if value_per_conversion is None else value_per_conversion
         ),
     )
+    if record.mode is RunMode.SCORE and _ranked_by_propensity(storage, run_id):
+        # Plan J M96: the list was ranked by the approved propensity model, so a budget curve of the
+        # uplift ranking would describe a list this run did not make.
+        raise http_error(
+            409,
+            PROFIT_CURVE_UNAVAILABLE,
+            "This contact list is ranked by the approved propensity model because the uplift model does "
+            "not beat risk ranking, so it has no uplift budget curve.",
+        )
     inputs = (
         _training_curve_inputs(storage, record)
         if record.mode is RunMode.TRAIN
@@ -458,6 +467,17 @@ def read_profit_curve(
         points=points,
         overridden=policy != configured,
     )
+
+
+def _ranked_by_propensity(storage: Storage, run_id: str) -> bool:
+    """Whether the run's `ranking_choice.json` (Plan J M96) says the propensity model ranked its list."""
+    from engine.uplift.contracts import RANKING_CHOICE_FILENAME, RankingChoice
+
+    key = run_key(run_id, RANKING_CHOICE_FILENAME)
+    try:
+        return storage.exists(key) and storage.read_model(key, RankingChoice).ranking == "propensity_model"
+    except (StorageError, ValueError, OSError):
+        return False
 
 
 def _training_curve_inputs(storage: Storage, record: RunRecord) -> _CurveInputs:

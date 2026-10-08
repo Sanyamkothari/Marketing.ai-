@@ -44,6 +44,14 @@ its treatment and outcome columns are gathered from the ranked hold-out, and the
 sums - and from them every curve - are taken along the rows at once. Chunks cap the memory at a few
 tens of megabytes whatever the sample count.
 
+**Beats risk, and calibration (Plan J M96).** `compare_with_baselines` scores plain risk rankings
+(the model's own `p_control` and `p_treated`, and the use case's approved propensity model) with the
+same AUUC on the same hold-out, and the uplift model's AUUC minus each with a *paired* bootstrap: the
+resample draws depend only on the seed and the arm sizes, so with the evaluation's own seed resample
+`r` holds the same customers for every ranking (`paired_auuc_resamples`). `calibration_by_decile`
+compares each decile's mean predicted uplift with its observed uplift and interval, read from the
+same draws through `_bootstrap`'s `windows`.
+
 An interval is `None` (the page shows "—") when any resample leaves the statistic undefined, for
 example a top 10 % with no control customer in it: dropping those resamples would quietly bias the
 band, and a band made of the rest would claim a precision nobody measured.
@@ -57,16 +65,20 @@ from __future__ import annotations
 import hashlib
 import math
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Final
 
 from engine.config import Metric
 from engine.uplift.contracts import (
     NOT_CAUSAL_NOTE,
+    BaselineAuuc,
+    BaselineComparison,
+    CalibrationDecile,
     ConfidenceValue,
     QiniCurve,
     QiniPoint,
     UpliftAtK,
+    UpliftCalibration,
     UpliftDecile,
     UpliftEvaluation,
 )
@@ -80,21 +92,28 @@ if TYPE_CHECKING:
     import numpy.typing as npt
 
     from engine.uplift.config import UpliftBaseModel, UpliftLearner
+    from engine.uplift.contracts import BaselineKind
 
     FloatArray = npt.NDArray[np.float64]
     IntArray = npt.NDArray[np.int64]
 
 __all__ = [
+    "BEATS_RISK_LABELS",
     "CONFIDENCE_LEVEL",
     "DECILES",
     "UPLIFT_AT_FRACTIONS",
+    "BaselineInput",
     "HoldoutUplift",
     "auuc_score",
     "bootstrap_uplift_at",
     "bootstrap_uplift_at_many",
+    "calibration_by_decile",
+    "compare_with_baselines",
     "decile_table",
     "evaluate_uplift",
     "holdout_digest",
+    "paired_auuc_difference",
+    "paired_auuc_resamples",
     "qini_coefficient",
     "qini_points",
     "top_rows",
@@ -416,12 +435,24 @@ class _Resamples:
     ate: FloatArray | None
     uplift_at: dict[int, FloatArray]
     """Keyed by the number of top rows `k`, not the fraction, so equal `k` are computed once."""
+    windows: dict[tuple[int, int], FloatArray] = field(default_factory=dict)
+    """Plan J M96: the rate difference among ranked rows `a+1..b`, keyed by `(a, b)` (the deciles)."""
 
 
 def _bootstrap(
-    ranked: _Ranked, top_rows: Sequence[int], *, samples: int, seed: int, curves: bool
+    ranked: _Ranked,
+    top_rows: Sequence[int],
+    *,
+    samples: int,
+    seed: int,
+    curves: bool,
+    windows: Sequence[tuple[int, int]] = (),
 ) -> _Resamples:
-    """Resample within arms, re-rank, and evaluate every statistic on every resample at once."""
+    """Resample within arms, re-rank, and evaluate every statistic on every resample at once.
+
+    `windows` (Plan J M96) adds the rate difference among ranked rows `a+1..b` of each resample; it
+    reads the same cumulative sums, so asking for it changes no draw and no other statistic.
+    """
     import numpy as np
 
     if samples < 1:
@@ -438,6 +469,7 @@ def _bootstrap(
     qini: list[FloatArray] = []
     ate: list[FloatArray] = []
     at: dict[int, list[FloatArray]] = {k: [] for k in top_rows}
+    spans: dict[tuple[int, int], list[FloatArray]] = {span: [] for span in windows}
     for start in range(0, samples, chunk):
         size = min(chunk, samples - start)
         positions = np.empty((size, n), dtype=np.int64)
@@ -452,13 +484,30 @@ def _bootstrap(
             ate.append(_ate(c))
         for k in top_rows:
             at[k].append(_uplift_at_k(c, k))
+        for span in windows:
+            spans[span].append(_window_difference(c, *span))
 
     return _Resamples(
         auuc=np.concatenate(auuc) if curves else None,
         qini=np.concatenate(qini) if curves else None,
         ate=np.concatenate(ate) if curves else None,
         uplift_at={k: np.concatenate(values) for k, values in at.items()},
+        windows={span: np.concatenate(values) for span, values in spans.items()},
     )
+
+
+def _window_difference(c: _Cumulative, start: int, stop: int) -> FloatArray:
+    """Treated rate minus control rate among ranked rows `start+1..stop`, per matrix row; NaN where an
+    arm is empty there (Plan J M96: one decile of a resample)."""
+    import numpy as np
+
+    n_t = c.n_t[:, stop] - c.n_t[:, start]
+    n_c = c.n_c[:, stop] - c.n_c[:, start]
+    both = (n_t > 0) & (n_c > 0)
+    treated = np.divide(c.y_t[:, stop] - c.y_t[:, start], n_t, out=np.full_like(n_t, np.nan), where=both)
+    control = np.divide(c.y_c[:, stop] - c.y_c[:, start], n_c, out=np.full_like(n_c, np.nan), where=both)
+    difference: FloatArray = treated - control
+    return difference
 
 
 def _interval(point: float, resamples: FloatArray) -> ConfidenceValue:
@@ -688,3 +737,213 @@ def evaluate_uplift(
     curve = QiniCurve(run_id=run_id, rows_evaluated=n, points=qini_points(pred, t, y), causal=causal)
     log_stage(_LOGGER, "uplift_evaluate", rows=n, seconds=time.perf_counter() - started)
     return evaluation, curve
+
+
+# ---------------------------------------------------------------------------
+# Plan J M96: does ranking by uplift beat ranking by risk? Is the predicted uplift calibrated?
+# ---------------------------------------------------------------------------
+BEATS_RISK_LABELS: Final[dict[str, str]] = {
+    "p_control": "the model's own chance of the outcome without contact",
+    "p_treated": "the model's own chance of the outcome with contact",
+    "propensity_model": "the approved propensity model's score",
+}
+"""How the Approver's screen names each plain ranking."""
+
+CALIBRATION_MIN_DECILES: Final[int] = 5
+"""Fewer deciles with an observed interval than this, and calibration is not judged."""
+
+CALIBRATION_MIN_COVERED_SHARE: Final[float] = 0.8
+"""Share of those deciles whose interval must contain the prediction (8 of 10)."""
+
+
+@dataclass(frozen=True)
+class BaselineInput:
+    """One plain ranking to compare with the uplift model: its scores, or why there are none."""
+
+    kind: BaselineKind
+    scores: FloatArray | None
+    reason: str | None = None
+    model_id: str | None = None
+
+
+def paired_auuc_resamples(
+    pred: npt.ArrayLike, t: npt.ArrayLike, y: npt.ArrayLike, *, samples: int, seed: int
+) -> tuple[float, FloatArray]:
+    """The AUUC of ranking by `pred` and its bootstrap resamples, as `evaluate_uplift` draws them.
+
+    **Why two calls with the same `seed` are paired.** `_bootstrap` draws `rng.integers(0, n_arm,
+    n_arm)` into each arm's rows listed in INPUT order, treated arm first; the draws depend only on
+    the seed and the two arm sizes, never on the ranking. So for the same `t`, `y` and seed, resample
+    `r` of one ranking holds exactly the same customers (with the same multiplicities) as resample
+    `r` of any other ranking: the difference of the two AUUCs per resample is a paired bootstrap of
+    the difference, and the uplift model's resamples are the very ones behind its `auuc` interval.
+    """
+    ranked = _rank(pred, t, y)
+    _require_both_arms(ranked)
+    resamples = _bootstrap(ranked, (), samples=samples, seed=seed, curves=True)
+    assert resamples.auuc is not None
+    return float(_auuc(_single(ranked))[0]), resamples.auuc
+
+
+def paired_auuc_difference(
+    pred: npt.ArrayLike,
+    baseline: npt.ArrayLike,
+    t: npt.ArrayLike,
+    y: npt.ArrayLike,
+    *,
+    samples: int,
+    seed: int,
+) -> ConfidenceValue:
+    """AUUC(rank by `pred`) − AUUC(rank by `baseline`), with a paired percentile bootstrap interval."""
+    point_a, draws_a = paired_auuc_resamples(pred, t, y, samples=samples, seed=seed)
+    point_b, draws_b = paired_auuc_resamples(baseline, t, y, samples=samples, seed=seed)
+    return _interval(point_a - point_b, draws_a - draws_b)
+
+
+def compare_with_baselines(
+    pred: npt.ArrayLike,
+    t: npt.ArrayLike,
+    y: npt.ArrayLike,
+    baselines: Sequence[BaselineInput],
+    *,
+    samples: int,
+    seed: int,
+) -> BaselineComparison:
+    """`baseline_comparison`: each plain ranking's AUUC on the same hold-out and the paired gap (M96).
+
+    The beats-risk check is decided against the approved propensity model when it was scored, else
+    against `p_control` (the uplift model's own estimate of plain risk); it passes only when the
+    paired difference's lower bound is above zero. A difference with no interval does not pass.
+    """
+    uplift_point, uplift_draws = paired_auuc_resamples(pred, t, y, samples=samples, seed=seed)
+    uplift_auuc = _interval(uplift_point, uplift_draws)
+    rows: list[BaselineAuuc] = []
+    for item in baselines:
+        label = BEATS_RISK_LABELS[item.kind]
+        if item.scores is None:
+            rows.append(
+                BaselineAuuc(
+                    baseline=item.kind,
+                    label=label,
+                    available=False,
+                    reason=item.reason or "This ranking could not be computed.",
+                    model_id=item.model_id,
+                )
+            )
+            continue
+        point, draws = paired_auuc_resamples(item.scores, t, y, samples=samples, seed=seed)
+        difference = _interval(uplift_point - point, uplift_draws - draws)
+        rows.append(
+            BaselineAuuc(
+                baseline=item.kind,
+                label=label,
+                available=True,
+                model_id=item.model_id,
+                auuc=_interval(point, draws),
+                difference=difference,
+                uplift_better=difference.ci_low is not None and difference.ci_low > 0.0,
+            )
+        )
+    by_kind = {row.baseline: row for row in rows if row.available}
+    risk: BaselineKind = "propensity_model" if "propensity_model" in by_kind else "p_control"
+    decider = by_kind.get(risk)
+    beats = bool(decider is not None and decider.uplift_better)
+    return BaselineComparison(
+        uplift_auuc=uplift_auuc,
+        baselines=tuple(rows),
+        risk_baseline=risk,
+        beats_risk=beats,
+        bootstrap_samples=samples,
+        summary=_beats_risk_summary(decider, beats, label=BEATS_RISK_LABELS[risk]),
+    )
+
+
+def _beats_risk_summary(row: BaselineAuuc | None, beats: bool, *, label: str) -> str:
+    if row is None or row.difference is None:
+        return f"Not checked: ranking by {label} could not be computed on this hold-out."
+    gap = row.difference
+    if beats:
+        return (
+            f"Ranking by predicted uplift beats risk ranking (by {label}): its AUUC is higher by "
+            f"{_fmt(gap.value)} (95% CI {_fmt(gap.ci_low)} to {_fmt(gap.ci_high)})."
+        )
+    if gap.ci_low is None or gap.ci_high is None:
+        where = "has no interval"
+    elif gap.ci_high < 0.0:
+        where = "lies below zero"
+    else:
+        where = "includes zero"
+    return (
+        f"This model does not beat risk ranking (by {label}): the AUUC difference is {_fmt(gap.value)} "
+        f"(95% CI {_fmt(gap.ci_low)} to {_fmt(gap.ci_high)}), a range that {where}."
+    )
+
+
+def calibration_by_decile(
+    pred: npt.ArrayLike, t: npt.ArrayLike, y: npt.ArrayLike, *, samples: int, seed: int
+) -> UpliftCalibration:
+    """Predicted against observed uplift in each decile, with bootstrap intervals (M96).
+
+    The deciles are `decile_table`'s (ranked rows split by `np.array_split`); each resample is
+    re-ranked and cut at the same row counts, from the same draws as the evaluation's own intervals.
+    """
+    import numpy as np
+
+    ranked = _rank(pred, t, y)
+    _require_both_arms(ranked)
+    groups = [rows for rows in np.array_split(np.arange(ranked.n), DECILES) if rows.shape[0]]
+    spans = [(int(rows[0]), int(rows[-1]) + 1) for rows in groups]
+    resamples = _bootstrap(ranked, (), samples=samples, seed=seed, curves=False, windows=spans)
+    single = _single(ranked)
+    deciles: list[CalibrationDecile] = []
+    gaps: list[tuple[int, float]] = []
+    for number, (span, rows) in enumerate(zip(spans, groups, strict=True), start=1):
+        predicted = float(ranked.pred[rows].mean())
+        value = float(_window_difference(single, *span)[0])
+        observed: ConfidenceValue | None = None
+        inside: bool | None = None
+        if not np.isnan(value):
+            observed = _interval(value, resamples.windows[span])
+            gaps.append((int(rows.shape[0]), abs(value - predicted)))
+            if observed.ci_low is not None and observed.ci_high is not None:
+                inside = observed.ci_low <= predicted <= observed.ci_high
+        deciles.append(
+            CalibrationDecile(
+                decile=number,
+                rows=int(rows.shape[0]),
+                predicted_uplift=predicted,
+                observed_uplift=observed,
+                within_interval=inside,
+            )
+        )
+    weight = sum(rows for rows, _ in gaps)
+    weighted_gap = None if weight == 0 else sum(rows * gap for rows, gap in gaps) / weight
+    judged = [d.within_interval for d in deciles if d.within_interval is not None]
+    covered = sum(1 for inside in judged if inside)
+    calibrated = (
+        None
+        if len(judged) < CALIBRATION_MIN_DECILES
+        else covered >= math.ceil(CALIBRATION_MIN_COVERED_SHARE * len(judged) - 1e-9)
+    )
+    return UpliftCalibration(
+        deciles=tuple(deciles),
+        weighted_abs_gap=weighted_gap,
+        deciles_with_interval=len(judged),
+        deciles_covered=covered,
+        well_calibrated=calibrated,
+        summary=_calibration_summary(calibrated, covered, len(judged), weighted_gap),
+    )
+
+
+def _calibration_summary(calibrated: bool | None, covered: int, judged: int, gap: float | None) -> str:
+    points = "—" if gap is None else f"{gap * 100:.1f} points"
+    if calibrated is None:
+        return (
+            f"Not judged: only {judged} of the ten groups had enough treated and control customers "
+            f"to measure their uplift (average gap {points})."
+        )
+    verdict = "matches" if calibrated else "does not match"
+    return (
+        f"Predicted uplift {verdict} what was measured: {covered} of {judged} groups contain the "
+        f"prediction in their 95% range; the average gap is {points}."
+    )

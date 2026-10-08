@@ -389,6 +389,10 @@ the actions (`engine/uplift/actions.py`):
 2. Persuadables chosen by the policy get `Treat`.
 3. Persuadables not chosen get `Don't treat (below cost)` or `Don't treat (over budget)`.
 4. Everyone else gets their segment's action. The `band` column holds the segment label.
+5. **Plan J M96 (J5):** when the model's training run found that it does not beat risk ranking, and
+   the use case has an approved propensity model, the same number of `Treat` rows is chosen by that
+   model's score instead, and `ranking_choice.json` says why (`UPLIFT_NOT_BETTER_THAN_RISK`). A model
+   trained before M96 ranks exactly as before. See section 12.
 
 `scores.csv` columns: the key (each column of a two-column key), `uplift`, `p_treated`, `p_control`, `segment`, `band`, `action`,
 `reason_1…n`, `suppressed_reason`, `control_group`, `intended_treatment`. The Output page's
@@ -612,6 +616,83 @@ Then:
 
 Phase 1's champion rule in `engine/registry.py` is not changed.
 
+### Does the model earn its place? Beats-risk, calibration and fold stability (Plan J M96)
+
+An uplift model is worth using only where it ranks customers better than plain risk ranking does at
+the same budget. The champion rule above does not ask that, and it stays frozen; M96 measures it and
+shows it beside the decision.
+
+**What every training run now measures** (in `uplift_evaluation.json`, fields that are null on an
+evaluation written before M96):
+
+* `baseline_comparison` - the hold-out ranked three plain ways and scored with the same AUUC: by the
+  model's own `p_control` (plain risk), by its `p_treated`, and by the use case's **last approved
+  propensity model** (its most recently promoted binary-classification version, scored through
+  Phase 1's own `score.predict`; when there is none, or it cannot score the hold-out, the row says
+  why). Each row carries the uplift model's AUUC minus that ranking's, with a **paired** bootstrap:
+  the resample draws depend only on the seed and the arm sizes (section 5), so with the evaluation's
+  own seed every resample holds the same customers for both rankings
+  (`engine.uplift.metrics.paired_auuc_resamples`). The **beats-risk check** is decided against the
+  propensity model when it was scored, else against `p_control`, and passes only when the paired
+  difference's lower bound is above zero. Otherwise the sentence says "does not beat risk ranking"
+  and whether the range includes zero or lies below it.
+* `calibration_by_decile` - each decile's mean predicted uplift against its observed uplift, with a
+  bootstrap interval from the same draws, the row-weighted mean |observed − predicted|, and a verdict:
+  calibrated when at least 8 in 10 of the deciles with an interval contain the prediction (not judged
+  with fewer than five).
+* `fold_auuc` - **off by default** (`uplift.evidence.fold_auuc`) and for the LightGBM base model only.
+  When on, the meta-learner is refitted on all but one of `folds` folds (stratified on treatment and
+  outcome, by customer under a two-column key) and its AUUC measured on the fold it did not see.
+  Stable means every fold's AUUC is above zero. When off, the field still says what turning it on
+  would cost: `estimated_refit_seconds`, from this run's own fit time scaled to the fold sizes.
+
+**The Approver's screen** shows these as advisory checks (`ApprovalItem.checks`, `{code, passed,
+message}` from `engine/model_gates.py`): `UPLIFT_NOT_BETTER_THAN_RISK`, `UPLIFT_UNSTABLE_ACROSS_FOLDS`
+and `UPLIFT_MISCALIBRATED`. `passed` is null ("Not measured") for a model trained before M96 or a
+check that is off. They never disable Approve or Reject, and a propensity model has none.
+
+**Which ranking a contact list uses (J5).** A scoring run reads the beats-risk verdict its model's
+training run stored (`engine.decide.ranking`, called from the uplift actions stage):
+
+| Training verdict | Approved propensity model | The contact list | `ranking_choice.json` |
+|---|---|---|---|
+| not computed (model trained before M96) | - | ranked by uplift, exactly as before | not written |
+| beats risk | - | ranked by uplift | `ranking: uplift`, `code: null` |
+| does not beat risk | exists and scores the file | the same number of `Treat` rows the uplift policy chose (equal budget), chosen by the propensity model's score among eligible, non-sleeping-dog customers; `intended_treatment` follows the same ranking; expected incremental conversions are null (the hold-out's top-uplift share does not describe this list) | `ranking: propensity_model`, `code: UPLIFT_NOT_BETTER_THAN_RISK` |
+| does not beat risk | none, or it cannot score the file | ranked by uplift, with the warning | `ranking: uplift`, `code: UPLIFT_NOT_BETTER_THAN_RISK` |
+
+Suppression and the control group are Phase 1's, untouched, and a sleeping dog is never treated in
+either ranking. The Output page shows the reason above the contact list, and the budget curve of a
+list ranked by the propensity model is refused (`PROFIT_CURVE_UNAVAILABLE`), because it would describe
+a list the run did not make.
+
+**The equal-budget comparison** (`risk_comparison.json`, `GET /runs/{run_id}/risk-comparison`,
+Viewer). Off by default (`uplift.evidence.risk_comparison`, LightGBM base model only). On the
+training run's randomised rows, uplift top-N against risk top-N at the same budget
+(`engine.measurement.compare`):
+
+1. *Cross-fitted on a ring.* Every row is scored by an uplift learner and a plain LightGBM risk model
+   fitted on other folds only - fold `k`'s by the next `(folds - 1) // 2` folds, `k+1 .. k+L` round
+   the ring - so no row is ever scored by a model trained on it. Why not all other folds: then each
+   fold's outcomes help choose who is contacted in the others and the fold results are correlated;
+   the interval covered 92%, not 95%, on a null population. On the ring, of any two folds one never
+   trained the other's models, and the interval holds its coverage. Each comparison model therefore
+   learns from 40% of the rows (at 5 folds), which makes the comparison a little pessimistic for
+   models that need many rows.
+2. *Equal budget.* In every fold both rankings contact `top_share` of the fold.
+3. *Valued off-policy.* Each top-N goes through `engine.uplift.ope.evaluate_policy` with the rows'
+   recorded treatment probabilities (`uplift.evidence.propensity_column`, M92's
+   `treatment_probability`; rows outside (0, 1) are left out and counted; without the column, the
+   treated share) and the cross-fitted `p_treated`/`p_control` as its outcome model. The extra
+   conversions over contacting nobody are the sum of the per-row doubly robust effect scores of the
+   rows contacted (`ope.dr_effect_terms`), which equals `rows × (DR(policy) − DR(treat none))`; the
+   uplift-minus-risk difference is paired per row, with a 95% normal interval; per rupee divides by
+   contacts × `uplift.policy.cost_per_contact` and is null without a cost.
+
+The comparison's interval has a nightly coverage test on simulated heterogeneous-effect, null-effect
+and risk-driven populations (`tests/statistical/test_risk_comparison_coverage.py`, the four Monte
+Carlo standard error band of DEC-1305).
+
 ---
 
 ## 13. How to run it
@@ -715,6 +796,8 @@ only when `problem_type` is `uplift` (DEC-601).
 | `drift_treated_share_tolerance` | 0.05 (absolute difference in treated share; section 8, M53) | yes | no |
 | `segments.*` (the three cuts) | 0.02; −0.01; base rate | yes | **yes** |
 | `policy.*` (budget, cost, value) | none | yes | **yes** |
+| `evidence.fold_auuc`, `evidence.risk_comparison` (Plan J M96, section 12) | off; off | yes | no |
+| `evidence.folds`, `evidence.top_share`, `evidence.propensity_column` | 5 (3 to 10); 0.2; none (never a feature) | yes | no |
 
 The control-group fraction and suppression rules live in `actions:`, are shared with Phase 1, and are
 not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns this map for Phase 5.
@@ -898,7 +981,8 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `RUN_NOT_UPLIFT` | 409 | `POST /runs/{id}/uplift/ope` | The run is not a finished uplift training run, so it has no hold-out to replay. | Use an uplift training run. |
 | `RUN_NOT_UPLIFT` | 409 | `GET /runs/{id}/uplift/profit-curve` | The run is not a finished uplift run, or made no targeting recommendation, or (a training run) has no hold-out. | Use a finished uplift training or scoring run. |
 | `RUN_NOT_SCORED` | 409 | `GET /runs/{id}/uplift/profit-curve` | A scoring run without its scores file. | Score the customers again. |
-| `PROFIT_CURVE_UNAVAILABLE` | 409 | `GET /runs/{id}/uplift/profit-curve` | The saved scores no longer reproduce the run's recommendation, or lack the columns the curve needs. | Score the customers again. |
+| `PROFIT_CURVE_UNAVAILABLE` | 409 | `GET /runs/{id}/uplift/profit-curve` | The saved scores no longer reproduce the run's recommendation, or lack the columns the curve needs; or (Plan J M96) the list was ranked by the approved propensity model because the uplift model does not beat risk ranking. | Score the customers again; a list ranked by the propensity model has no uplift budget curve. |
+| `ARTEFACT_NOT_FOUND` | 404 | `GET /runs/{id}/risk-comparison` | The run computed no equal-budget comparison (section 12, M96). | Train with `uplift.evidence.risk_comparison` on and the LightGBM base model. |
 | `OPE_INVALID` | 422 | `POST /runs/{id}/uplift/ope` | The rule or the logged data cannot be evaluated (the message says why). | Correct the rule as the message says. |
 | `MEASURE_NOT_OFFERED` | 409 | `POST /runs/{id}/measure`, `.../measure/learn` | The use case does not contact customers, or holds nobody back (section 9, step 4). | Nothing to measure; the Campaign results route still answers for any scoring run. |
 | `MEASURE_INVALID` | 422 | `POST /runs/{id}/measure`, `.../measure/learn` | The outcomes file has no customer id column, only the id, or several columns and none is the use case's outcome. | Keep the customer id and one outcome column, or name it with `outcome_column`. |

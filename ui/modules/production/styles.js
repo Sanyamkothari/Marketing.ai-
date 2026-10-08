@@ -60,6 +60,7 @@ button.pb-off:not(.btn):not(.linkbtn):not(.cancel){background:var(--soft);color:
 .pb-note{margin:0 0 8px;font-size:13px;color:var(--muted)}
 .pb-meta{margin:0 0 12px;font-size:13px;color:var(--ink2)}
 .pb-stack{display:flex;flex-direction:column;gap:12px}
+.pb-checklist{list-style:none;margin:0 0 12px;padding:0;gap:8px}
 .pb-row-actions{display:flex;flex-wrap:wrap;gap:8px;align-items:center}
 .pb-row-actions .spacer{min-width:8px}
 .pb-confirm{display:inline-flex;flex-wrap:wrap;gap:8px;align-items:center}

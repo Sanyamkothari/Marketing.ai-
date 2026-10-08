@@ -489,6 +489,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/campaigns/{campaign_id}/plan",
         "/campaigns/{campaign_id}/plan/amendments",
         "/campaigns/{campaign_id}/plan-preview",
+        # Plan J M96: an uplift training run's equal-budget comparison against risk ranking (Viewer)
+        "/runs/{run_id}/risk-comparison",
     }
 
 

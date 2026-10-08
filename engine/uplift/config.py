@@ -22,6 +22,7 @@ __all__ = [
     "UPLIFT_RUN_LOCKED_PATHS",
     "UpliftBaseModel",
     "UpliftConfig",
+    "UpliftEvidenceConfig",
     "UpliftLearner",
     "UpliftPolicyConfig",
     "UpliftSegmentsConfig",
@@ -92,6 +93,29 @@ class UpliftPolicyConfig(BaseModel):
     value_per_conversion: Annotated[float | None, Field(ge=0.0)] = None
 
 
+class UpliftEvidenceConfig(BaseModel):
+    """`uplift.evidence` (Plan J M96): the costly evidence an Approver may ask for. All off by default.
+
+    Each switch refits the meta-learner `folds` times on the training rows, LightGBM base model only
+    (`engine.measurement.compare`). `fold_auuc` reports each fold's AUUC of a model fitted on all the
+    other folds; `risk_comparison` writes `risk_comparison.json`, uplift top-`top_share` against risk
+    top-`top_share` at equal budget, from models fitted on the next `(folds - 1) // 2` folds round a
+    ring (so its interval is honest) together with a plain LightGBM risk model. `propensity_column`
+    names a column of recorded per-row treatment probabilities (M92's `treatment_probability`); it is
+    never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated
+    share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence
+    an approval rests on.
+    """
+
+    model_config = ConfigDict(**_SETTINGS, json_schema_extra=_editable(False))
+
+    fold_auuc: bool = False
+    risk_comparison: bool = False
+    folds: Annotated[int, Field(ge=3, le=10)] = 5
+    top_share: Annotated[float, Field(gt=0.0, le=1.0)] = 0.2
+    propensity_column: str | None = None
+
+
 class UpliftConfig(BaseModel):
     """`uplift:` in a use case. Inert unless `problem_type` is `uplift`.
 
@@ -136,6 +160,7 @@ class UpliftConfig(BaseModel):
     significance test, because on a large file a z-test flags differences too small to matter."""
     segments: UpliftSegmentsConfig = UpliftSegmentsConfig()
     policy: UpliftPolicyConfig = UpliftPolicyConfig()
+    evidence: UpliftEvidenceConfig = UpliftEvidenceConfig()  # Plan J M96; off by default
 
     @field_validator("learner", mode="before")
     @classmethod
@@ -149,7 +174,12 @@ class UpliftConfig(BaseModel):
         """The configured columns that describe the experiment and so are never features."""
         return tuple(
             name
-            for name in (self.treatment_column, self.treatment_date_column, self.campaign_id_column)
+            for name in (
+                self.treatment_column,
+                self.treatment_date_column,
+                self.campaign_id_column,
+                self.evidence.propensity_column,  # Plan J M96: a recorded P(treated) is never a feature
+            )
             if name is not None
         )
 

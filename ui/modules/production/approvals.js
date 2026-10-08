@@ -221,6 +221,39 @@ function headToHead(h) {
   ${h.note ? `<p class="pb-small" role="note">${esc(h.note)}</p>` : ""}`;
 }
 
+// --- advisory checks (Plan J M96) -----------------------------------------------------------------
+
+/** What each check asks, in words; the verdict and its numbers are the server's `message`. */
+const CHECK_TITLE = {
+  UPLIFT_NOT_BETTER_THAN_RISK: "Beats plain risk ranking",
+  UPLIFT_UNSTABLE_ACROSS_FOLDS: "Stable when refitted on other customers",
+  UPLIFT_MISCALIBRATED: "Predicted uplift matches what was measured",
+};
+const CHECK_PILL = {
+  true: ["ok", "Passed"],
+  false: ["warn", "Check"],
+  null: ["pb-pill-none", "Not measured"],
+};
+
+/**
+ * `item.checks` from `GET /approvals` (`engine.model_gates`): advisory, so they never disable the
+ * buttons. Each row is the server's code, verdict and sentence; nothing is computed here.
+ */
+function checksList(checks) {
+  if (!checks || !checks.length) return "";
+  const rows = checks
+    .map((check) => {
+      const verdict = check.passed === true || check.passed === false ? String(check.passed) : "null";
+      const [cls, label] = CHECK_PILL[verdict];
+      const title = CHECK_TITLE[check.code] || check.code;
+      return `<li class="pb-check" data-check="${esc(check.code)}" data-passed="${esc(verdict)}"><span class="pill ${cls}">${esc(
+        label,
+      )}</span> <b>${esc(title)}</b><div class="pb-small">${esc(check.message)}</div></li>`;
+    })
+    .join("");
+  return `<div class="pb-checks" role="note"><p class="pb-meta">Checks for the Approver (advice only: they do not change the decision rule)</p><ul class="pb-stack pb-checklist">${rows}</ul></div>`;
+}
+
 function decisionsList(decisions) {
   if (!decisions || !decisions.length) return "";
   const verb = { approve: "Approved", reject: "Rejected" };
@@ -276,6 +309,7 @@ function itemCard(item) {
   return `<section class="card" data-approval="${esc(v.model_id)}"><h3>${esc(itemTitle(v))} ${statusPill(v.status)}</h3><div class="card-body">
     <p class="pb-meta">${esc(trainedBy(item))}</p>
     ${headToHead(item.head_to_head || { metrics: [] })}
+    ${checksList(item.checks)}
     ${decisionsList(item.decisions)}
     ${decisionForm(item)}
     ${techDetails([
