@@ -17,10 +17,11 @@ off a check (`validation.leakage_check`) or removes human approval (`governance.
 from __future__ import annotations
 
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import AgentConfidence
 from engine.agent.untrusted import display_name
@@ -36,13 +37,18 @@ from engine.config import (
     resolve_config,
 )
 
+if TYPE_CHECKING:
+    from engine.decide.reasons import BusinessReasonDictionary
+
 __all__ = [
     "NEVER_RECOMMENDED",
     "DataFacts",
+    "ReasonPhraseSuggestion",
     "SettingRecommendation",
     "recommend_settings",
     "setting_allowed",
     "settings_fields",
+    "suggest_reason_phrases",
 ]
 
 NEVER_RECOMMENDED: Final[frozenset[str]] = frozenset(
@@ -92,6 +98,64 @@ class SettingRecommendation:
     reason: str
     confidence: AgentConfidence
     evidence_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReasonPhraseSuggestion:
+    """A business-language phrase suggestion for a feature (Plan J M98, DEC-1308).
+
+    Both phrases follow `configs/decide/reasons.yaml`: `{value}` is the customer's own value, and the
+    phrase says which way it moved the score, never which way the value itself went.
+    """
+
+    feature: str
+    up_phrase: str
+    down_phrase: str
+    confidence: AgentConfidence = AgentConfidence.CHECK
+
+
+def _phrase_words(name: str) -> str:
+    """A column name as plain words for a phrase: no underscores, and nothing `reasons.yaml` refuses.
+
+    A word with a digit in it (`7d`, `90d`) or a brace is left out, because a phrase may hold no number
+    of its own and the file is refused when it loads.
+    """
+    parts = re.split(r"[_\s]+", name.replace("{", " ").replace("}", " "))
+    return " ".join(part for part in parts if part and not any(char.isdigit() for char in part)).lower()
+
+
+def suggest_reason_phrases(
+    features: Sequence[str],
+    *,
+    dictionary: BusinessReasonDictionary | None = None,
+    config_root: Path | None = None,
+) -> tuple[ReasonPhraseSuggestion, ...]:
+    """Propose plain-language phrases for features `reasons.yaml` does not cover, as check suggestions.
+
+    The phrase names the feature and the customer's `{value}` and says which way it pushed the score. It
+    cannot say the value was "higher" or "lower": a reason's direction is the effect on the score
+    (`engine.contracts.Reason`), not the movement of the customer's value.
+    """
+    from engine.decide.reasons import VALUE_PLACEHOLDER, load_reasons_dictionary
+
+    dict_obj = dictionary or load_reasons_dictionary(root=config_root)
+    suggestions: list[ReasonPhraseSuggestion] = []
+    for feat in features:
+        if feat in dict_obj.features:
+            continue
+        words = _phrase_words(display_name(feat))
+        if not words:
+            continue  # nothing of the name is left once digits and braces are taken out: a person writes this one
+        subject = f"{words[:1].upper()}{words[1:]} of {VALUE_PLACEHOLDER}"
+        suggestions.append(
+            ReasonPhraseSuggestion(
+                feature=feat,
+                up_phrase=f"{subject} pushes the score up",
+                down_phrase=f"{subject} pushes the score down",
+                confidence=AgentConfidence.CHECK,
+            )
+        )
+    return tuple(suggestions)
 
 
 def settings_fields(schema: AdvancedSettingsSchema) -> dict[str, FieldSpec]:

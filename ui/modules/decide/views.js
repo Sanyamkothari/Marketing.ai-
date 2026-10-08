@@ -5,7 +5,7 @@
 // report's own sentence, and with no verdict - the server sends none, and nothing here makes one up.
 // Every builder is pure: what it draws comes from its arguments (the API's own answers).
 
-import { crumbs, dataTable, EM_DASH, esc, fmtDate, fmtInt, pageHead, RESULTS_CRUMB, sortNote } from "../../dom.js";
+import { crumbs, dataTable, EM_DASH, esc, fmtDate, fmtInt, fmtMoney, pageHead, RESULTS_CRUMB, sortNote } from "../../dom.js";
 import { planCardHtml } from "./plan.js";
 
 /** A campaign's own page. */
@@ -98,6 +98,57 @@ export function campaignPageHtml({
   });
   const result = resultCard({ ...view, plan }, { canMeasure: can("POST", "/campaigns/{campaign_id}/measure"), busy, error: measureError });
   return `<main class="screen dc" data-module="decide" data-campaign-page="${esc(campaign.campaign_id)}">${head}<div class="dc-stack">${result}${card}</div></main>`;
+}
+
+/**
+ * The treat list card on a scoring run's Output page (Plan J M98, DEC-1308): the counts of
+ * `treat_list_summary.json` in the server's own words, the one-line instruction, and the download.
+ * `error` is what the summary request answered when it failed (an ApiError or any `{ message }`): the
+ * card then says so in the server's words instead of drawing nothing. `summary` null with no error is
+ * the moment before the answer arrives.
+ *
+ * The file this card downloads is the treat list. The Output page's own "Download contact list" is the
+ * scored list (`scores.csv`), which still holds the held-back customers and the ones not to contact.
+ */
+export function treatListCardHtml(summary, { treatListHref = "", error = null } = {}) {
+  if (error) {
+    const said = error.message ? esc(error.message) : "The server gave no reason.";
+    return `<div class="dc"><section class="card dc-card" data-treat-list-card data-treat-list-error>
+      <h3>Treat list</h3>
+      <p class="dc-error" role="alert">The treat list could not be loaded. ${said}</p>
+    </section></div>`;
+  }
+  if (!summary) return "";
+  const count = (n) => (n === null || n === undefined ? EM_DASH : fmtInt(n));
+  const money = (n) => (n === null || n === undefined ? null : fmtMoney(n));
+  const row = (label, value) =>
+    `<div class="dc-kv"><span class="dc-k">${esc(label)}</span><span class="dc-v">${esc(value)}</span></div>`;
+  const netValue = money(summary.net_value_total);
+  const grossValue = money(summary.expected_gross_value_total);
+  const notes = [summary.holdout_note, summary.net_value_note, summary.expected_gross_value_note].filter(Boolean);
+  const notesHtml = notes.length
+    ? `<div class="dc-note" data-treat-list-notes>${notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>`
+    : "";
+  const downloadBtn = treatListHref
+    ? `<div class="dc-actions">
+         <a class="btn secondary" href="${esc(treatListHref)}" download data-download="treat-list">Download treat list (CSV)</a>
+       </div>`
+    : "";
+  return `<div class="dc"><section class="card dc-card" data-treat-list-card>
+    <h3>Treat list</h3>
+    <p class="dc-text">The file to give your sending tool. Include treat = 1, exclude holdout = 1. The contact list above is the scored list before that choice.</p>
+    <div class="dc-kvs">
+      ${row("Customers", count(summary.total_rows))}
+      ${row("To treat (treat = 1)", count(summary.treat_rows))}
+      ${row("Held back (holdout = 1)", count(summary.holdout_rows))}
+      ${row("Explore (explore = 1)", count(summary.explore_rows))}
+      ${row("Not to be contacted", count(summary.suppressed_rows))}
+      ${netValue === null ? "" : row("Predicted net value of those treated", netValue)}
+      ${grossValue === null ? "" : row("Expected gross value of those treated (not incremental)", grossValue)}
+    </div>
+    ${notesHtml}
+    ${downloadBtn}
+  </section></div>`;
 }
 
 const CSS = `

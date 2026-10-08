@@ -95,6 +95,7 @@ export const ACTION_CONTROLS = [
   // (generative/copy.js), with or without `?approved_only=true`. Matched by href so every screen that
   // links the file is covered, whichever id or data attribute it gives the link.
   { selector: 'a[href$="/scores.csv"]', method: "GET", path: "/runs/{run_id}/scores.csv" },
+  { selector: 'a[href$="/treat_list.csv"]', method: "GET", path: "/runs/{run_id}/treat_list.csv" },
   { selector: 'a[href*="/copy_messages.csv"]', method: "GET", path: "/runs/{run_id}/copy_messages.csv" },
   // --- the client picker (onboarding/clients.js): "+ New client" --------------------------------------
   { selector: '#f-client option[value="__new__"]', method: "POST", path: "/clients", explain: false },

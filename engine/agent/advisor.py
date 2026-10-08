@@ -50,7 +50,7 @@ from engine.agent.contracts import (
 from engine.agent.formats import merge_from_pairs
 from engine.agent.placeholders import PLACEHOLDER_KIND, number_text
 from engine.agent.recipe import STEP_PHASE, RecipeError, run_recipe
-from engine.agent.recommend import DataFacts, recommend_settings
+from engine.agent.recommend import DataFacts, recommend_settings, suggest_reason_phrases
 from engine.agent.reshape import choose_dates, plan_combine
 from engine.agent.tools import AgentContext, AgentToolError, call_tool
 from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name, quoted
@@ -1132,6 +1132,63 @@ def _settings(
         builder.assumptions.append(
             f"Only {facts.positive_rate:.1%} of rows are 'yes'; the model search gives them extra weight automatically."
         )
+    _reason_wording(builder, prepared, key, target, exclude)
+
+
+_REASON_WORDING_SHOWN: Final[int] = 3
+"""How many columns the wording note names; the rest are counted."""
+
+
+def _plain_phrase(phrase: str) -> str:
+    """A reason phrase as a person reads it: the template's `{value}` is "the customer's value"."""
+    return phrase.replace("{value}", "the customer's value")
+
+
+def _reason_wording(
+    builder: _Builder,
+    prepared: AgentContext,
+    key: str | None,
+    target: str | None,
+    exclude: Iterable[str],
+) -> None:
+    """Note the columns whose reasons have no plain wording yet, with wording to check (Plan J M98, DEC-1308).
+
+    Reasons in the treat list use `configs/decide/reasons.yaml`; a column it does not cover keeps the
+    model's own text. The wording is a **check** suggestion (`suggest_reason_phrases`), recorded as an
+    assumption because no run setting can hold it: accepting a box would change nothing, and the helper
+    does not pretend otherwise. The key, the outcome, suspected leaks and the columns the helper hides
+    are not model inputs, so they are left out.
+    """
+    config = builder.ctx.config
+    skipped = {
+        key,
+        target,
+        config.governance.consent_column,
+        config.split.time_column,
+        *prepared.profile.time_column_candidates,
+        config.actions.suppression.opt_out_column,
+        config.actions.suppression.recently_contacted_column,
+        *exclude,
+        *(
+            p.step.column
+            for p in builder.proposals
+            if p.step is not None and p.step.kind is RecipeStepKind.DROP_COLUMN
+        ),
+    }
+    columns = [str(c) for c in prepared.frame.columns if c not in skipped]
+    suggestions = suggest_reason_phrases(columns, config_root=prepared.config_root)
+    if not suggestions:
+        return
+    shown = ", ".join(quoted(display_name(s.feature)) for s in suggestions[:_REASON_WORDING_SHOWN])
+    more = len(suggestions) - _REASON_WORDING_SHOWN
+    names = f"{shown} and {more} more" if more > 0 else shown
+    first = suggestions[0]
+    builder.assumptions.append(
+        f"Reasons for {names} have no plain wording yet, so the treat list shows the model's own text. "
+        f"To check, for {quoted(display_name(first.feature))}: {quoted(_plain_phrase(first.up_phrase))} and "
+        f"{quoted(_plain_phrase(first.down_phrase))}. Ask your administrator to add wording you agree with "
+        "to the reasons wording."
+    )
 
 
 # ---------------------------------------------------------------------------

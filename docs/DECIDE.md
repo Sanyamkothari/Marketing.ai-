@@ -28,7 +28,7 @@ the user downloads (the treat list).
 | 9 | How we know our intervals are honest; the synthetic quarantine | M95 | written (below) |
 | 10 | Uplift stability, calibration and the beats-risk check | M96 | written (below) |
 | 11 | Ranking by net value | M97 | not yet written |
-| 12 | The treat list and its reasons | M98 | not yet written |
+| 12 | The treat list and its reasons | M98 | written (below) |
 | 13 | The offer and channel catalogue; channel-aware consent | M99 | not yet written |
 | 14 | Choosing the offer (multi-treatment uplift) | M100 | not yet written |
 | 15 | One action per customer across use cases | M101 | not yet written |
@@ -229,3 +229,78 @@ account, with the formulas, is `docs/UPLIFT.md` section 12 ("Does the model earn
   recorded treatment probabilities, by extra conversions and per rupee with 95% intervals
   (`engine/measurement/compare.py`, `GET /runs/{run_id}/risk-comparison`, a Viewer's). Its nightly coverage
   test is `tests/statistical/test_risk_comparison_coverage.py`.
+
+## 12. The treat list and its reasons (M98, DEC-1308)
+
+Until integration, the downloaded file is the campaign hand-off. A campaign manager downloads it to hand
+to an execution tool (an ESP, SMS aggregator or dialler). `scores.csv` (the "contact list") stays as it was:
+a band, an action label and `reason_1..n` that read like feature names. The **treat list** is the file made
+for the hand-off, and the Output page labels them differently: **Download contact list (CSV)** is
+`scores.csv`, **Download treat list (CSV)** is `treat_list.csv`.
+
+* **The artefact.** `treat_list.csv`, `treat_list.parquet` and `treat_list_summary.json` are written beside
+  the scoring run (`engine/decide/treat_list.py`, `build_treat_list`) the first time one is asked for
+  (`GET /runs/{id}/treat_list.csv` or `/artefacts/<name>`), from the run's own files: `scores.parquet` (else
+  `scores.csv`), `run.json`, `run_config.json`, `holdout_assignment.parquet`, `row_explanations.parquet`,
+  `expected_gross_value.json` and the uploaded rows. The builder is never imported by the pipeline's stages,
+  adds no rebind, and changes no existing file (`scores.csv` is byte-identical with or without it). A run that
+  cannot have one (not finished, trained a model, no scores, no saved `run_config.json`) answers `409
+  RUN_NOT_SCORED` with the reason in plain words. Retention removes `treat_list.*` with `scores.*` but keeps the summary, so a
+  missing row-level file is rebuilt from the scores, or refused the same way once they are gone.
+* **The run's own settings.** The builder reads the settings the run was scored with (`run_config.json`),
+  never today's use case file, so editing a use case does not change the treat list of a finished run.
+* **Columns** (CSV and parquet, in this order): the customer key (every column of a composite key), `use_case`,
+  `model_version`, `band` (propensity) or `segment` (uplift), `treat`, `holdout`, `explore`,
+  `suppression_reason`, `offer`, `channel`, `net_value`, `expected_gross_value`, `reason_1`, `reason_2`,
+  `reason_3`. In the parquet the flags are booleans; in the CSV they are `1` and `0`, and **empty when
+  unknown**. Rupee columns are written to the paisa.
+* **Joined on the key, never by position.** `holdout_assignment.parquet` and `row_explanations.parquet` are
+  joined to the scores on **every** key column (`customer_id` and `snapshot_date` for a periodic dataset),
+  whatever order they list the customers in. A customer a file does not cover gets a null, never `false`:
+  the holdout and explore flags are null for that customer, and the summary says how many (`holdout_note`);
+  their reasons are the text `scores.csv` already holds for them. A file that repeats a key is not guessed at:
+  the flags are null for every customer, with a note.
+* **`treat`** is M92's own column. With `holdout_assignment.parquet` it is its `treated` column (selected, not
+  held out, not suppressed, or explored). Without one (a default run) or for a customer it does not cover it
+  is derived with M92's own functions (`engine.holdout.assign.selection_masks` and `treated_flags`), not a copy
+  of them. Whatever the source, `treat = 1` implies not suppressed, not in the holdout or control group, and
+  not a sleeping dog.
+* **`holdout`** is `holdout_member` of `holdout_assignment.parquet`, null when the file is missing (a plain
+  note in the summary) or does not cover the customer. **`explore`** likewise.
+* **`offer`** is the row's action (the band's, or the uplift policy's), null for a suppressed or control row.
+  A customer explored although the policy left them out gets the uplift policy's treat action, and none on a
+  propensity run (a band the list does not contact names no offer): the band's own action would contradict
+  `treat = 1`. **`channel`** is reserved and null until M99.
+* **Money, one unit per column, in rupees.** `net_value` is M97's `net_value` column of an uplift run's scores
+  (incremental: `uplift x value x margin x horizon - costs`), null when the run was not ranked by value.
+  `expected_gross_value` is M97's expected gross value of a **propensity** run
+  (`p x value x margin x horizon - costs`, `engine.decide.value.expected_gross_values` over the costs, value
+  column and score field in the run's `expected_gross_value.json` and the uploaded values), null when the run
+  did not opt in. It is **not incremental**: it counts customers who would have responded without a contact.
+  So a propensity run's `net_value` is always null, and the summary labels the gross figure. A missing or
+  non-numeric value stays null, never zero. If the gross value cannot be worked out (for example the upload was
+  deleted), the column is null, the summary says why and a warning is logged.
+* **Business-language reasons.** `configs/decide/reasons.yaml` (found under the configuration root) maps a
+  **feature** and a **direction** to a phrase. A reason's direction is whether the feature pushed the **score**
+  up or down, not whether the customer's value went up or down, so a phrase may say two things only: the
+  customer's own value (`{value}`, as the explain stage stored it) and which way it moved the score ("Monthly
+  spend of 1499 pushes the score down"). It never asserts a trend or a number the row does not carry: the file
+  is refused when it loads if a phrase holds a digit outside `{value}`. `none` is the phrase of a general reason
+  (no direction was measured). A feature or direction with no phrase, and a reason whose value is missing, keep
+  today's text. Fewer than three reasons leave the remaining columns null. Phrases pass
+  `engine.pilot.plain.jargon_in`. The mapping reads the Arrow list column once and runs in linear time
+  (`engine/decide/reasons.py`).
+* **Guided setup.** For the columns `reasons.yaml` does not cover, `engine/agent/recommend.py::suggest_reason_phrases`
+  proposes wording as a **check** suggestion. No run setting can hold a phrase, so Guided setup lists it among
+  the helper's assumptions, in plain words, and applies nothing (DEC-1308 (n)).
+* **Row-level privacy and access.** Registered in `configs/privacy.yaml`, `engine/privacy/layout.py` and
+  `api/access_policy.py` (`ROW_LEVEL_ARTEFACTS`). Served by `GET /runs/{id}/treat_list.csv` and
+  `GET /runs/{id}/artefacts/{name}`. Analyst when sign-in is on, audited on read (`runs.treat_list_download`).
+  The summary is not row-level and a Viewer may read it.
+* **UI.** The Output page of every scoring run, propensity or uplift, shows the treat list card (`ui/modules/decide/`): the counts of the
+  summary, "Include treat = 1, exclude holdout = 1", the money lines and the server's notes, and **Download
+  treat list (CSV)**, gated by role in `ui/modules/production/gate.js`. If the summary cannot be loaded the card
+  shows the server's message. The Output page's own **Download contact list (CSV)** is `scores.csv`.
+* **Scale.** The builder works on whole columns (Arrow compute and hash joins on the key), with no loop over
+  customers. 200,000 customers with every input take about 3 seconds on a shared 4-CPU machine, so one million
+  take about 13 to 16 seconds (`tests/unit/decide/test_treat_list_scale.py`).

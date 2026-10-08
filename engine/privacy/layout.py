@@ -100,6 +100,9 @@ _RUN_FILE_STORES: Final[dict[str, Store]] = {
     # Plan J M92: the run's holdout and explore flags per row, keyed like `scores.*` by the run's own
     # primary key (so `StoreIndex.key_columns` finds its key columns in `run.json`).
     "holdout_assignment.parquet": Store.SCORES,
+    # Plan J M98: treat list carrying customer key, flags, reasons and net value.
+    "treat_list.csv": Store.SCORES,
+    "treat_list.parquet": Store.SCORES,
 }
 
 _ROW_KEYS: Final[dict[str, tuple[str, ...]]] = {

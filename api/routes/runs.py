@@ -40,7 +40,15 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from api.access_policy import ROW_LEVEL_ARTEFACTS, ROW_LEVEL_DOWNLOAD, refusal_message  # Plan J M91
-from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep, get_settings
+from api.deps import (
+    ConfigRootDep,
+    JobsDep,
+    RegistryDep,
+    SettingsDep,
+    StorageDep,
+    get_config_root,
+    get_settings,
+)
 from api.routes.agent_recipes import (  # Plan G (DEC-1006)
     attach_recipe_to_run,
     load_recipe,
@@ -88,6 +96,14 @@ from engine.contracts import (
     RunState,
     RunStatus,
     ValidationReport,
+)
+from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
+    TREAT_LIST_CSV,
+    TREAT_LIST_PARQUET,
+    TREAT_LIST_SUMMARY_FILENAME,
+    TreatListError,
+    build_treat_list,
+    ensure_treat_list,
 )
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
 from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME  # Plan J M92 (DEC-1302 (e))
@@ -571,10 +587,26 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
     # An engaged run's holdout and explore flags per row (Analyst, `ROW_LEVEL_ARTEFACTS`) and its
     # aggregate summary, read by the hand-off and the delivery checks (Plan J M92, DEC-1302 (e)).
     known = known or name in (HOLDOUT_ASSIGNMENT_FILENAME, HOLDOUT_REPORT_FILENAME)
+    # The treat list and summary (Plan J M98, DEC-1308)
+    known = known or name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME)
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)
     load_run(storage, run_id)
+    if name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME) and not storage.exists(
+        run_key(run_id, name)
+    ):
+        # Built on first request, from the run's own artefacts; a file already there is served as it is.
+        # A row-level file retention removed is rebuilt from the scores, or refused in plain words once
+        # they are gone too; the summary alone is not proof that the rows are still there.
+        try:
+            if name == TREAT_LIST_SUMMARY_FILENAME:
+                ensure_treat_list(storage, run_id, config_root=get_config_root(request))
+            else:
+                build_treat_list(storage, run_id, config_root=get_config_root(request))
+        except TreatListError as exc:
+            # A run that cannot have a treat list says why, in the builder's plain words.
+            raise http_error(404 if exc.code == "RUN_NOT_FOUND" else 409, exc.code, exc.message) from exc
     try:
         payload = storage.read_bytes(run_key(run_id, name))
     except StorageError as exc:
@@ -591,6 +623,17 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
 def read_scores(run_id: str, storage: StorageDep, request: Request) -> Response:
     """Registered now, produced by M4; until then every run answers `404 ARTEFACT_NOT_FOUND`."""
     return read_artefact(run_id, "scores.csv", storage, request)
+
+
+@router.get(
+    "/runs/{run_id}/treat_list.csv",
+    response_class=Response,
+    responses=_NOT_FOUND,
+    summary="The treat list of a scoring run as CSV",
+)
+def read_treat_list(run_id: str, storage: StorageDep, request: Request) -> Response:
+    """The treat list carrying offer, channel, reasons, net value and holdout (Plan J M98)."""
+    return read_artefact(run_id, TREAT_LIST_CSV, storage, request)
 
 
 @router.post(

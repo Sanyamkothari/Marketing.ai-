@@ -28,7 +28,7 @@
 import { ApiError, getIndustries, getUseCase } from "../../api.js";
 import { RESULTS_CRUMB, SETTINGS_CRUMB, crumbs, errorBox, esc, notFound, pageHead, skeleton } from "../../dom.js";
 import { journeyFor } from "../../overview.js";
-import { registerModule, registerRunAction, setActiveNav } from "../router.js";
+import { pagePanelsHtml, registerModule, registerRunAction, setActiveNav } from "../router.js";
 import { campaignStep } from "../measure/rule.js";
 import {
   createCampaignController,
@@ -171,7 +171,8 @@ async function renderPage(app, mine, kind, ucId, runId) {
   const html = () => {
     const s = controller.state;
     if (kind === "model") return modelPageHtml(uc, s.run, s.art, s.ope);
-    if (kind === "output") return outputPageHtml(uc, s.run, s.art, s);
+    // A module's section on this page (the treat list card, `registerPagePanel`); "" with none registered.
+    if (kind === "output") return outputPageHtml(uc, s.run, s.art, { ...s, panelsHtml: pagePanelsHtml("output", uc, s.run) });
     return campaignPageHtml(uc, s.run, s);
   };
   controller =

@@ -56,3 +56,6 @@ export const postPlan = (id, payload) => request(`${campaignPath(id)}/plan`, pos
 
 /** Measure the campaign now (`POST /campaigns/{id}/measure`). */
 export const postMeasure = (id) => request(`${campaignPath(id)}/measure`, post({}));
+
+/** The treat list summary of a scoring run (`GET /runs/{id}/artefacts/treat_list_summary.json`). */
+export const getTreatListSummary = (runId) => request(`/runs/${encodeURIComponent(runId)}/artefacts/treat_list_summary.json`);

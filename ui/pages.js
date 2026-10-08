@@ -1350,7 +1350,7 @@ function retrainAction(uc, run) {
   return `<button type="button" class="btn secondary" data-retrain="${esc(uc.id)}"${client}>Retrain on recent data</button><div class="retrain-result" data-retrain-result></div>`;
 }
 
-function scoringOutputPage(uc, run, art, byPath, scoresHref) {
+function scoringOutputPage(uc, run, art, byPath, scoresHref, extra = {}) {
   const summary = art["scoring_summary.json"];
   const drift = art["drift.json"];
   const config = art["run_config.json"] && art["run_config.json"].config;
@@ -1444,7 +1444,7 @@ function scoringOutputPage(uc, run, art, byPath, scoresHref) {
     ${bandsCard}
     ${card("Is the held-back group big enough?", powerCardBody(uc, summary), 'data-power')}
     ${sampleCard(uc, run, summary)}
-    ${settingsCard(uc, run, config, byPath, summary, drift)}`;
+    ${settingsCard(uc, run, config, byPath, summary, drift)}${extra.panelsHtml || ""}`;
   return shell(uc, "output", run, body, {
     primary: `<a class="btn primary" href="${esc(scoresHref)}" data-download="scores">${DOWNLOAD_ICON}Download contact list (CSV)</a>`,
     tech: [["Training run", drift && drift.baseline_run_id]],
@@ -1503,7 +1503,7 @@ function trainingOutputPage(uc, run, art, byPath) {
   });
 }
 
-function outputPage(uc, run, art, byPath, scoresHref) {
+function outputPage(uc, run, art, byPath, scoresHref, extra = {}) {
   if (isScoring(run) && seams && seams.setActiveNav) {
     try {
       seams.setActiveNav("campaigns");
@@ -1512,7 +1512,7 @@ function outputPage(uc, run, art, byPath, scoresHref) {
     }
   }
   return isScoring(run)
-    ? scoringOutputPage(uc, run, art, byPath, scoresHref)
+    ? scoringOutputPage(uc, run, art, byPath, scoresHref, extra)
     : trainingOutputPage(uc, run, art, byPath);
 }
 
@@ -1703,7 +1703,9 @@ export function problemTypeLabel(uc, value) {
 // --- entry point --------------------------------------------------------------------------------
 
 /**
- * `extra` carries what is not a run artefact: the Data page's `lineage` (or `lineageError`).
+ * `extra` carries what is not a run artefact: the Data page's `lineage` (or `lineageError`) and a
+ * module's `panelsHtml` (the Data page and a propensity scoring Output page draw it; an uplift run's
+ * Output page is the uplift module's own and draws it there).
  */
 export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
   const byPath = indexSchema(uc.advanced_settings || { stages: [] });
@@ -1712,5 +1714,5 @@ export function renderPage(kind, uc, run, art, scoresHref, extra = {}) {
   }
   if (kind === "data") return dataPage(uc, run, art, byPath, extra);
   if (kind === "model") return modelPage(uc, run, art, byPath);
-  return outputPage(uc, run, art, byPath, scoresHref);
+  return outputPage(uc, run, art, byPath, scoresHref, extra);
 }
