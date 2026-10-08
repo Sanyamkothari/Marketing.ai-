@@ -581,6 +581,84 @@ assertion changed.
 the root logger after they call `configure_logging`, as `test_jobs_as_sagemaker.py`'s
 `restore_root_logging` fixture already does.
 
+### 2026-10-08 — plan-j (on main) → Phase 4b (owner of `configs/privacy.yaml`, `engine/privacy/`, `api/access_policy.py` and the production UI gate): M98's treat list is a row-level, Analyst-only download (announcement and record of in-place edits)
+
+**What changed** (DEC-1308 (d), (p)), each additive:
+
+* Pre-approved in the Plan J plan (M98):
+  * `configs/privacy.yaml`: `retention.row_level_run_artefacts` lists `treat_list.csv` and `treat_list.parquet`, so
+    retention deletes them with `scores.*`; `treat_list_summary.json` (aggregate) is kept.
+  * `engine/privacy/layout.py`: both files are stored as `Store.SCORES`, so erasure rewrites them like `scores.*`.
+* Not named in the plan:
+  * `api/access_policy.py`: `ROW_LEVEL_ARTEFACTS` gains both files (M91's `test_row_level_downloads.py` requires
+    every row-level run artefact there), and `GET /runs/{run_id}/treat_list.csv` has its own policy (Analyst,
+    `runs.treat_list_download`, `audit_reads=True`).
+  * `ui/modules/production/gate.js`: `ACTION_CONTROLS` gains `a[href$="/treat_list.csv"]`, so the card's
+    "Download treat list (CSV)" link is gated like the contact list's.
+* No test changed.
+
+**What is needed.** Ratification of the two edits not named in the plan. Nothing else.
+
+### 2026-10-08 — plan-j (on main) → trunk / Plan H (owners of `api/routes/runs.py`, `ui/pages.js`, `ui/api.js`, `tests/integration/test_api_config.py`): M98 serves the treat list and draws page panels on a scoring Output page (announcement and record of in-place edits)
+
+**What changed** (DEC-1308 (f), (k), (p)), each additive and identical under default configuration:
+
+* Pre-approved in the Plan J plan (M98): `api/routes/runs.py` `read_artefact` whitelists `treat_list.csv`,
+  `treat_list.parquet` and `treat_list_summary.json` (names imported from `engine.decide.treat_list`) and builds
+  them on first request; a missing row-level file is rebuilt from the scores even when the summary is still there
+  (retention removes the rows and keeps the summary). A run that cannot have one answers `409 RUN_NOT_SCORED`
+  (`404 RUN_NOT_FOUND`) with the builder's plain reason. New route `GET /runs/{run_id}/treat_list.csv`, which calls
+  `read_artefact`. `get_config_root` is imported from `api.deps`. `docs/API.md` regenerated.
+* Not named in the plan:
+  * `ui/pages.js`: `renderPage` passes `extra` through to `outputPage`, and `scoringOutputPage` draws
+    `extra.panelsHtml` after the settings card. Any page panel registered for kind `"output"`
+    (`registerPagePanel`) is now drawn on a propensity scoring run's Output page, as it already was on the Data
+    page; a panel's `applies` must check the run itself.
+  * `ui/api.js`: `treatListUrl(runId)`, beside `scoresUrl`.
+  * `tests/integration/test_api_config.py`: the OpenAPI route list pins `/runs/{run_id}/treat_list.csv`.
+
+**What is needed.** Ratification of the edits not named in the plan. Nothing else.
+
+### 2026-10-08 — plan-j (on main) → Phase 3b (owner of the uplift UI): an uplift scoring run's Output page draws page panels (announcement and record of in-place edits)
+
+**What changed** (DEC-1308 (f), (p); not named in the plan, additive): `ui/modules/uplift/index.js` asks
+`pagePanelsHtml("output", uc, run)` for the Output page and `ui/modules/uplift/views.js` `outputPageHtml` draws
+`extra.panelsHtml` after the contact list card (an empty string with no panel). M98's treat list panel applies to
+scoring runs only (`run.mode === "score"`), so an uplift training run's Output page is unchanged; any later panel
+whose `applies` accepts kind `"output"` also appears here and must check `run.mode` / `problem_type` itself. Pinned
+by `tests/unit/decide/treat_list_page.test.mjs`; `phase1_pages_uplift`, `uplift_ui` and `uplift_ui_wiring` node
+suites pass unchanged.
+
+Also for Phase 3b: `tests/integration/uplift/test_uplift_browser.py` saves the contact list (`scores.csv`) on disk
+under the local name `treat_list.csv`. The product never serves `scores.csv` under that name; renaming the test's
+local file (for example to `contact_list.csv`) would remove the coincidence and is left to the owner.
+
+**What is needed.** Ratification of the edit, and optionally the local file rename above.
+
+### 2026-10-08 — plan-j (on main) → Plan G (owner of `engine/agent/`): M98 suggests reason wording in Guided setup (announcement)
+
+**What changed** (DEC-1308 (e), (n), (p)):
+
+* Pre-approved in the Plan J plan (M98): `engine/agent/recommend.py` gains `ReasonPhraseSuggestion` and
+  `suggest_reason_phrases`, which propose wording, confidence `check`, in the `configs/decide/reasons.yaml` form for
+  columns that file does not cover.
+* Not named in the plan: `engine/agent/advisor.py` calls it and adds **one assumption**, not a proposal, because no
+  run setting can hold a phrase (DEC-1308 (n), approved at integration). The note is in plain words: the template's
+  `{value}` reads "the customer's value", and it names no file path. `tests/unit/agent/test_reason_wording.py`
+  (new) pins that it has no brace, no `configs/` and no `.yaml`; anything that matches on the note's text must
+  follow it. `tests/fixtures/agent_bench/expected.json` is unchanged (the digest lists proposals only).
+
+**What is needed.** Ratification of the `advisor.py` edit. Nothing else.
+
+### 2026-10-08 — plan-j (on main) → Plan E (owner of `configs/pilot/help.yaml`): one existing route code gets a help entry (announcement)
+
+**What changed** (DEC-1308 (o)): `RUN_NOT_SCORED`, an existing 409 of `api/routes/{uplift,measure,campaigns}.py`
+that the treat list routes now raise too, joins `engine.decide.codes.PLAN_J_CODES` and gets a
+`configs/pilot/help.yaml` entry under a Plan J M98 comment, worded for every route that raises it.
+`tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

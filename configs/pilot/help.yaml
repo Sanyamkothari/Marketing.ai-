@@ -384,6 +384,12 @@ codes:
     title: "The budget curve was asked for the value of a conversion twice"
     meaning: "The budget curve was asked for with both value and value_per_conversion. They are two names for the same setting, the money one extra response is worth, so the request does not say which to use."
     fix: "Give one of the two, value or value_per_conversion, and ask for the budget curve again."
+  # --- Plan J M98: the treat list's refusal (DEC-1308 (k), (o)); an API route error, also raised by the
+  # budget curve, campaign and measurement routes ------------------------------------------------------------
+  RUN_NOT_SCORED:
+    title: "This run has no finished scores to work from"
+    meaning: "What you asked for (the treat list, the budget curve, a campaign or its results) is built from the customers a scoring run scored. This run cannot give it: it trained a model instead of scoring customers, it has not finished yet, it did not save the settings it was scored with, or its scores file is no longer kept. The message says which."
+    fix: "Wait for the scoring run to finish, or choose a finished scoring run. If its scores file was removed when the keep period ended, score the customers again."
 
 settings:
   actions.bands[*].min_score:

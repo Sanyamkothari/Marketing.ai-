@@ -50,6 +50,12 @@ PLAN_J_CODES: Final[frozenset[str]] = (
             # `value_per_conversion`, of which `value` is an alias (`api.routes.uplift`, 422). An API route
             # error, joined here so the catalogue explains it as it does M94's campaign route errors.
             "PROFIT_CURVE_QUERY_INVALID",
+            # M98 (DEC-1308 (k), (o)): `GET /runs/{id}/treat_list.csv` and
+            # `/runs/{id}/artefacts/treat_list.(csv|parquet|_summary.json)` answer 409 for a run that cannot have
+            # a treat list (`engine.decide.treat_list.TreatListError`, mapped by `api.routes.runs.read_artefact`).
+            # An existing route code of `api/routes/{uplift,measure,campaigns}.py`, joined here because the treat
+            # list routes now raise it too, so the catalogue explains it as it does M97's route error.
+            "RUN_NOT_SCORED",
         }
     )
     | MEASUREMENT_CHECK_CODES  # M93 (DEC-1303 (h)): LABEL_RATE_UNSTABLE, TREATMENT_HISTORY_NOT_RANDOM

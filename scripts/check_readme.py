@@ -309,6 +309,21 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/pilot/test_roi.py",
         "tests/integration/uplift/test_net_value_flow.py",
     ),
+    # M98's node tests (treat_list_card.test.mjs, treat_list_page.test.mjs) run through
+    # tests/unit/decide/test_treat_list_card_js.py, named here. test_treat_list_real_propensity.py is wholly
+    # `slow`, so the fast-suite selection would collect nothing from it, and is left out.
+    "M98": (
+        "tests/unit/decide/test_treat_list.py",
+        "tests/unit/decide/test_treat_list_scale.py",
+        "tests/unit/decide/test_treat_list_card_js.py",
+        "tests/unit/decide/test_m98_handoff.py",
+        "tests/unit/holdout/test_selection_masks.py",
+        "tests/unit/agent/test_reason_wording.py",
+        "tests/integration/decide/test_treat_list_flow.py",
+        "tests/integration/decide/test_treat_list_golden.py",
+        "tests/integration/decide/test_treat_list_review.py",
+        "tests/integration/decide/test_treat_list_real_run.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
