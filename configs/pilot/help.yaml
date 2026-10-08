@@ -407,6 +407,11 @@ codes:
     title: "A consent row names a channel that is not a channel name"
     meaning: "A row of the imported consent file has a channel that could never match a configured channel, such as e-mail or text msg, so the customer's opt-out would never apply. A channel name is lower case letters, digits and _, such as sms or email; case and spaces around it are ignored. The row is refused rather than stored, and each such row is reported, like a row with an unreadable status."
     fix: "Correct the channel in the rows reported, or leave it empty for a record that applies to every channel, then import the file again."
+  # --- Plan J M100: a model that chooses between several offers is never champion (DEC-1310 (h)) -----------
+  MULTI_ARM_PROMOTION_REFUSED:
+    title: "A model that chooses between several offers is not made champion"
+    meaning: "This campaign-effect model was trained on several offers against one held-back group. The rule that picks the champion compares models of one offer only, so this model stays a candidate. It is not made champion by its training run, and it is not made champion when you press Promote on the Models page. The same refusal appears when the model's record and the settings of the run that trained it cannot be read, because then nobody can check that it is a model of one offer."
+    fix: "Score with this model by naming its version on the scoring run. To make a model champion by hand, train it with one offer: leave the treatment_levels setting of the campaign-effect use case empty. If the message says the model's record cannot be read, try again; if it keeps happening, train the model again."
 
 settings:
   actions.bands[*].min_score:

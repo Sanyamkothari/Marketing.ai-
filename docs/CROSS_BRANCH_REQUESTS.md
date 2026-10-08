@@ -746,6 +746,84 @@ contactable on. The four golden treat lists were updated as a reviewed edit. `sc
 
 **What is needed.** Consumers of the treat list should expect the extra column. Nothing else.
 
+### 2026-10-08 — plan-j M100 part A (on main) → trunk (owner of `api/routes/models.py`): hand promotion refuses a model of several offers (announcement and record of an in-place edit)
+
+**What changed** (DEC-1310 (h), (i); not named in the plan, additive). `promote_model` now calls
+`_refuse_multi_arm(registry, storage, model_id)` before `registry.promote`. For an AUUC version that
+`engine.measurement.arms.promotion_refusal` reports as a model of several offers, it answers
+`409 MULTI_ARM_PROMOTION_REFUSED`. The check reads the model card's `treatment_levels`, and falls back to
+`run_config.json`'s `uplift.treatment_levels`. It also refuses an AUUC version whose card and run configuration
+both cannot be read (it fails closed).
+
+**Why here.** DEC-668 (4) and DEC-1310 (h) refuse such a model "by the run or by hand", and the champion rule in
+`engine/registry.py` is frozen (DEC-605, DEC-613), so the refusal cannot live there.
+
+**Compatibility.** The change only adds a refusal: non-uplift versions, and binary uplift versions with a readable
+card or run configuration, promote exactly as before (`tests/integration/uplift/test_uplift_api.py`'s hand
+promotion and `tests/integration/test_api_models.py` pass unchanged).
+
+**What is needed.** Ratification of the edit. Nothing else.
+
+### 2026-10-08 — plan-j M100 part A (on main) → Phase 3b (owner of `engine/uplift/`, `ui/modules/uplift/` and `docs/UPLIFT.md`): several offers against one shared control (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M100; DEC-1310 (a)–(g), (k), (n)), each additive and
+byte-identical under default configuration (`tests/integration/decide/test_m100_binary_identity.py` checks every
+artefact of a default uplift run against digests recorded before the change):
+
+* `engine/uplift/config.py`: `UpliftConfig.treatment_levels` (control first, then at least two offers; not
+  agent-editable; left out of the dump while empty), `level_text` (one spelling per level) and the `multi_arm`
+  property. `docs/API.md` regenerated.
+* `engine/uplift/{data,checks}.py`: levels read through `level_text`; `TREATMENT_NOT_BINARY` means "a value outside
+  the configured levels" with several offers; `TREATMENT_ARM_TOO_SMALL` and the randomness check run per offer.
+* `engine/uplift/learners.py`: `MultiArmUpliftModel`, `ArmPrediction` (in place of the `uplift_by_arm` field DEC-668
+  (2) foresaw on `UpliftPrediction`, DEC-1310 (e)); with T or X on LightGBM the first offer's model is exactly the
+  binary learner on its rows.
+* `engine/uplift/contracts.py`: optional `arms: tuple[ArmSummary, ...]` on the evaluation, validation, segments,
+  policy and incrementality reports, `ArmPolicyValue`, and `UpliftModelCard.treatment_levels`, all left out while
+  unset. Every existing field stays the first offer against the control (DEC-668 (3)), `training_rows` included.
+* `engine/uplift/flow.py`: the several-offer train and score path, `arm_policy_value.json`, and the per-offer
+  `uplift_arm_<k>` / `p_treated_arm_<k>` columns in `scores.parquet` only; `scores.csv` and
+  `uplift_holdout.parquet` stay the first offer's.
+* `ui/modules/uplift/views.js`: a card per offer on the Model page, numbers from the server only.
+* `docs/UPLIFT.md` section 14: "Several offers against one shared control".
+
+**What is needed.** Nothing; this is an announcement. Branches reading uplift reports should ignore an `arms` key
+they do not know; it never appears on a binary run.
+
+### 2026-10-08 — plan-j M100 part A (on main) → partner (M101) and M100 part B: the several-offer interface (announcement)
+
+**What changed** (DEC-1310 (e), (k), (l), (m)). A model of several offers writes `uplift_arm_<k>` and
+`p_treated_arm_<k>` (k = 1..K, 1 = the first offer) to `scores.parquet` only; `scores.csv`, the contact list and the
+treat list stay the first offer's until part B. `engine/decide/offer_choice.py`:
+`arm_net_values(uplift, policy, *, arm_costs: Sequence[ValueCosts], p_treated=None, values=None) -> ArmMoney`. An
+offer cost requires `p_treated`, and offers are priced as offer_cost x p_treated on both money paths.
+`choose_offers(net_value, cost, *, sleeping_dog, eligible=None, budget=None, min_roi=0.0) -> OfferChoice` returns
+`arm`, `preferred_arm`, `net_value`, `cost`, `runner_up_arm`, `runner_up_net_value`, `reason_code` and `spent`.
+`measure_campaign(..., arm_column=...)` now requires `arms` (`uplift.treatment_levels[1:]`) and `control_level`
+(`uplift.treatment_levels[0]`). Every report's existing fields remain the first offer against the control (DEC-668
+(3)).
+
+**What is needed.** Nothing now. Part B passes M99's contactability per offer (`channel_contactability.parquet`,
+the treat list's `contactable_channels`) as `eligible` and the catalogue's per-offer costs as `arm_costs`.
+
+### 2026-10-08 — plan-j M100 part A (on main) → trunk (owner of `docs/DATA_CONTRACT.md`): the treatment column with several offers (record of an in-place edit)
+
+**What changed** (DEC-1310 (a), (c); integration, wording only): section 11's treatment-column bullet says that with
+`uplift.treatment_levels` the column holds named levels (control first) and links `docs/UPLIFT.md` section 14; the
+`TREATMENT_NOT_BINARY` row gives the several-offer message and suggestion beside the binary ones. No code or
+severity changed; `tests/unit/uplift/test_uplift_two_column_keys.py`'s documentation checks pass unchanged.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-08 — plan-j M100 part A (on main) → Plan E (owner of `configs/pilot/help.yaml`): one new code (announcement)
+
+**What changed** (DEC-1310 (h), (o)): `MULTI_ARM_PROMOTION_REFUSED` joins `engine.decide.codes.PLAN_J_CODES`
+(imported from `engine.measurement.arms.MULTI_ARM_CODES`, one definition) and gets a `configs/pilot/help.yaml`
+entry under a Plan J M100 comment, in plain words (the uplift model is "the campaign-effect model").
+`tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

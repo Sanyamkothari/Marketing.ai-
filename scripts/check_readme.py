@@ -334,6 +334,20 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_catalogue_consent.py",
         "tests/integration/decide/test_channel_consent_real_run.py",
     ),
+    # M100 is mapped by its part A tests while its row reads "part A done; part B ... pending": that status
+    # does not start with "pending", so the check reports the row and never flags it (DEC-1310). Part B adds
+    # its own tests here when the row turns done. The node test (arms_card.test.mjs) runs through
+    # test_arms_card_js.py, and the nightly coverage test (tests/statistical/test_arm_interval_coverage.py,
+    # DEC-1300 (e)) is left out, as for M95 and M96.
+    "M100": (
+        "tests/unit/decide/test_multi_arm_model.py",
+        "tests/unit/decide/test_offer_choice.py",
+        "tests/unit/decide/test_offer_choice_scale.py",
+        "tests/unit/decide/test_arms_card_js.py",
+        "tests/unit/measurement/test_arms.py",
+        "tests/integration/decide/test_multi_arm_flow.py",
+        "tests/integration/decide/test_m100_binary_identity.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
