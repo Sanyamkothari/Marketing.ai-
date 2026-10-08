@@ -28,7 +28,7 @@ the user downloads (the treat list).
 | 9 | How we know our intervals are honest; the synthetic quarantine | M95 | written (below) |
 | 10 | Uplift stability, calibration and the beats-risk check | M96 | written (below) |
 | 11 | Ranking by net value | M97 | not yet written |
-| 12 | The treat list and its reasons | M98 | not yet written |
+| 12 | The treat list and its reasons | M98 | written (below) |
 | 13 | The offer and channel catalogue; channel-aware consent | M99 | not yet written |
 | 14 | Choosing the offer (multi-treatment uplift) | M100 | not yet written |
 | 15 | One action per customer across use cases | M101 | not yet written |
@@ -229,3 +229,45 @@ account, with the formulas, is `docs/UPLIFT.md` section 12 ("Does the model earn
   recorded treatment probabilities, by extra conversions and per rupee with 95% intervals
   (`engine/measurement/compare.py`, `GET /runs/{run_id}/risk-comparison`, a Viewer's). Its nightly coverage
   test is `tests/statistical/test_risk_comparison_coverage.py`.
+
+## 12. The treat list and its reasons (M98, DEC-1308)
+
+Until integration, the downloaded file is the campaign hand-off. A campaign manager downloads it to hand
+to an execution tool (an ESP, SMS aggregator or dialler). Today `scores.csv` carries a band, an action label
+and `reason_1..n` that read like raw feature names; buyers repeatedly say they distrust black-box AI and want
+reasons they can explain to frontline staff or customers.
+
+* **The treat list artefact.** `treat_list.csv`, `treat_list.parquet`, and `treat_list_summary.json` are written
+  beside the scoring run in storage (`engine/decide/treat_list.py`). The builder is a pure function over finished
+  scoring run artefacts (`scores.parquet`, `scores.csv`, `run.json`, `features.parquet`, `explanations.parquet`,
+  `holdout_assignment.parquet`, `ranking_choice.json`); it is never imported by pipeline stage code and touches no
+  frozen stage files.
+* **Columns in `treat_list.csv` / `treat_list.parquet`:**
+  - Customer key (all primary key columns for composite keys).
+  - `use_case`: the use case identifier.
+  - `model_version`: the model version or run ID.
+  - `band`: the band name or uplift segment.
+  - `treat`: integer 1/0 in CSV, boolean in parquet. Indicates whether the customer should be contacted.
+  - `holdout`: integer 1/0 in CSV, boolean in parquet, or null when no holdout assignment exists (never defaulted to false).
+  - `explore`: integer 1/0 in CSV, boolean in parquet, or null when explore assignment is absent.
+  - `suppression_reason`: plain suppression reason when suppressed, else null.
+  - `offer` and `channel`: nullable reserved columns (populated from the band's action or M99/M100 catalogue).
+  - `net_value`: expected net value in INR from M97 when present, else null with a plain note in the summary (never defaulted to 0).
+  - `reason_1`, `reason_2`, `reason_3`: business-language explanation phrases.
+* **Invariants:**
+  - `treat == 1` implies `holdout != True` and `suppression_reason is None`. Sleeping dogs are never treated.
+  - Missing inputs are null (no fabricated booleans or numbers).
+* **Business-language reasons.** `configs/decide/reasons.yaml` maps feature names and direction/value thresholds to
+  human phrases ("Spent less each month for 3 months", "Raised two complaints in 30 days"). Unmapped features
+  keep existing reason text (`Feature direction value`). All configured phrases contain zero jargon per `jargon_in`.
+  `engine/decide/reasons.py` maps reasons vectorised without row-by-row python loops.
+* **Guided setup.** `engine/agent/recommend.py::suggest_reason_phrases` proposes plain phrase mappings for unmapped
+  features with confidence `CHECK`.
+* **Row-level privacy and access.** Registered in `configs/privacy.yaml`, `engine/privacy/layout.py`, and
+  `api/access_policy.py` (`ROW_LEVEL_ARTEFACTS`). Served via `GET /runs/{id}/treat_list.csv` and
+  `GET /runs/{id}/artefacts/{name}`. Access requires Analyst role when sign-in is active and generates an audited
+  read event. Customer IDs never appear in request URLs.
+* **UI.** The Output page displays a Treat List summary card with customer counts and download button, along with
+  the clear instruction: "include treat = 1, exclude holdout = 1". The button is role-gated in
+  `ui/modules/production/gate.js` for Analysts.
+

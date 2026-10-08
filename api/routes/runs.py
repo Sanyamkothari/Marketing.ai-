@@ -89,6 +89,12 @@ from engine.contracts import (
     RunStatus,
     ValidationReport,
 )
+from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
+    TREAT_LIST_CSV,
+    TREAT_LIST_PARQUET,
+    TREAT_LIST_SUMMARY_FILENAME,
+    ensure_treat_list,
+)
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
 from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME  # Plan J M92 (DEC-1302 (e))
 from engine.holdout.spec import HOLDOUT_REPORT_FILENAME  # Plan J M92 (DEC-1302 (e))
@@ -571,10 +577,17 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
     # An engaged run's holdout and explore flags per row (Analyst, `ROW_LEVEL_ARTEFACTS`) and its
     # aggregate summary, read by the hand-off and the delivery checks (Plan J M92, DEC-1302 (e)).
     known = known or name in (HOLDOUT_ASSIGNMENT_FILENAME, HOLDOUT_REPORT_FILENAME)
+    # The treat list and summary (Plan J M98, DEC-1308)
+    known = known or name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME)
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)
     load_run(storage, run_id)
+    if name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME):
+        try:
+            ensure_treat_list(storage, run_id)
+        except Exception as exc:
+            _LOGGER.debug("Could not ensure treat list for run %s: %s", run_id, exc)
     try:
         payload = storage.read_bytes(run_key(run_id, name))
     except StorageError as exc:
@@ -591,6 +604,17 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
 def read_scores(run_id: str, storage: StorageDep, request: Request) -> Response:
     """Registered now, produced by M4; until then every run answers `404 ARTEFACT_NOT_FOUND`."""
     return read_artefact(run_id, "scores.csv", storage, request)
+
+
+@router.get(
+    "/runs/{run_id}/treat_list.csv",
+    response_class=Response,
+    responses=_NOT_FOUND,
+    summary="The treat list of a scoring run as CSV",
+)
+def read_treat_list(run_id: str, storage: StorageDep, request: Request) -> Response:
+    """The treat list carrying offer, channel, reasons, net value and holdout (Plan J M98)."""
+    return read_artefact(run_id, TREAT_LIST_CSV, storage, request)
 
 
 @router.post(

@@ -100,6 +100,7 @@ export async function getArtefacts(runId, names) {
 }
 
 export const scoresUrl = (runId) => url(`/runs/${encodeURIComponent(runId)}/scores.csv`);
+export const treatListUrl = (runId) => url(`/runs/${encodeURIComponent(runId)}/treat_list.csv`);
 
 /**
  * Where a built dataset came from - its sources, mappings and recipe, each card already worded by
