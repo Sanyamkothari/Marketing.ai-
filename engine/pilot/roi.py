@@ -204,15 +204,27 @@ class ValueCosts(_Strict):
     )
 
 
-def lookup_value_costs(channel: str | None = None, *, root: Path | None = None) -> ValueCosts:
+def lookup_value_costs(
+    channel: str | None = None,
+    *,
+    action_id: str | None = None,
+    root: Path | None = None,
+) -> ValueCosts:
     """The offer cost and contact cost the configuration gives: the ONE place costs are looked up.
 
     Reads the `value:` block of `configs/pilot/value.yaml`; a missing file or block gives the
-    defaults of :class:`ValueCosts`. With `channel`, `contact_cost` is that channel's cost (the block's
-    `contact_cost` for a channel it does not list). M99's offer and channel catalogue takes these over
-    behind this function.
+    defaults of :class:`ValueCosts`. When `configs/decide/catalogue.yaml` exists (Plan J M99,
+    DEC-1309), its channels' contact costs replace the block's for those channels (the first action
+    listing a channel decides). With no catalogue the answer is exactly M97's.
+
+    * With `action_id`, the **offer cost** is that catalogue action's, and so is the contact cost
+      unless `channel` is also given. An offer's cost belongs to the action, never to a channel. An id
+      the catalogue does not declare (or any id with no catalogue) is `CATALOGUE_ACTION_UNKNOWN`.
+    * With `channel`, the **contact cost** is that channel's (the block's `contact_cost` for a channel
+      nobody lists). The offer cost is not read from a channel: it stays the block's.
     """
     from engine.config import ConfigError, config_root, load_yaml
+    from engine.decide.catalogue import catalogue_or_none
 
     try:
         data = load_yaml(config_root(root) / VALUE_CONFIG)
@@ -222,6 +234,25 @@ def lookup_value_costs(channel: str | None = None, *, root: Path | None = None) 
         data = {}
     block = data.get("value") or {}
     costs = ValueCosts.model_validate(block)
+
+    catalogue = catalogue_or_none(root)
+    if catalogue is not None:
+        costs = costs.model_copy(
+            update={
+                "channel_contact_costs": {**costs.channel_contact_costs, **catalogue.channel_contact_costs()}
+            }
+        )
+    if action_id is not None:
+        action = catalogue.get_action(action_id) if catalogue is not None else None
+        if action is None:
+            raise ConfigError(
+                "CATALOGUE_ACTION_UNKNOWN",
+                f"No action {action_id!r} in configs/decide/catalogue.yaml, so its costs are not known.",
+                path="action_id",
+            )
+        costs = costs.model_copy(
+            update={"offer_cost": action.offer_cost, "contact_cost": action.contact_cost}
+        )
     if channel is None:
         return costs
     return costs.model_copy(

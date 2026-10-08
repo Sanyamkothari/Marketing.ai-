@@ -45,6 +45,7 @@ retention:
     - holdout_assignment.parquet        # Plan J M92: key, holdout member, explore, explore probability
     - treat_list.csv                    # Plan J M98: customer key, flags, reasons, net value
     - treat_list.parquet                # Plan J M98
+    - channel_contactability.parquet    # Plan J M99: key, contactable flag per configured channel
   # Plan J M94: a campaign's files that hold one row per customer (`campaigns/<id>/`). Deleted once the
   # campaign is older than its use case's governance.retention_days; its record and report are kept.
   row_level_campaign_artefacts:

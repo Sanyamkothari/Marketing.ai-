@@ -599,6 +599,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `name` | string | yes |  |
 | `min_score` | number | yes |  |
 | `action` | string | yes |  |
+| `action_id` | string \| null | no |  |
 
 #### SuppressionConfig
 
@@ -609,6 +610,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `suppress_recently_contacted` | boolean | no |  |
 | `recently_contacted_column` | string \| null | no |  |
 | `recently_contacted_days` | integer | no |  |
+| `channels` | object of string -> ChannelSuppressionConfig | no |  |
 
 #### HoldoutConfig
 
@@ -850,6 +852,7 @@ The budget the targeting recommendation works within. A Phase 5 agent may propos
 | `horizon_months` | integer \| null | no |  |
 | `margin_pct` | number \| null | no |  |
 | `min_roi` | number \| null | no |  |
+| `treat_action_id` | string \| null | no |  |
 
 #### UpliftEvidenceConfig
 
@@ -873,6 +876,15 @@ Extra column-name hints the helper uses on top of the use case's own detection h
 | `consent` | list[string] | no |  |
 | `opt_out` | list[string] | no |  |
 | `recently_contacted` | list[string] | no |  |
+
+#### ChannelSuppressionConfig
+
+One channel's consent and contactability columns (Plan J M99, DEC-1309).  Either column may be null; a configured column the scoring file lacks is skipped with a warning, like a Phase 1 suppression column (DEC-030). Truthiness is Phase 1's (`engine.stages.actions`, read through `engine.decide.contactability.truthy`): a null is not a consent.
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `consent_column` | string \| null | no |  |
+| `contactable_column` | string \| null | no |  |
 
 #### CopyLimits
 
@@ -1541,6 +1553,7 @@ How many rows one suppression rule removed from targeting.
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `reason` | "opted_out" \| "recently_contacted" \| "consent_false" | yes | Why the rows were suppressed. |
 | `rows` | integer | yes | Rows suppressed for this reason. |
+| `channel_counts` | object of string -> integer \| null | no | Plan J M99: per configured channel, the rows neither suppressed nor held out as control that are not contactable on that channel (they stay unsuppressed, and are only not treated on it). Carried by the `opted_out` entry, else the `consent_false` entry; absent from the file when the use case configures no channels. |
 
 #### KpiValue
 

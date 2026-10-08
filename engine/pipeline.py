@@ -1943,4 +1943,12 @@ install_holdout_service(_ScoreFlow)
 from engine.decide.value import install_gross_value  # noqa: E402
 
 install_gross_value(_ScoreFlow)
+
+# Plan J M99 (DEC-1309): a run whose use case sets `actions.suppression.channels` writes per-channel
+# contactability (`channel_contactability.parquet` and `.json`) after the actions stage, while the
+# consent columns and the ledger can still be read. Off by default: the stage table is returned
+# untouched, so every default run is today's byte for byte.
+from engine.decide.contactability import install_contactability  # noqa: E402
+
+install_contactability(_ScoreFlow)
 # ---- END PLAN-J ----

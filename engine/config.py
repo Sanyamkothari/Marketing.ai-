@@ -29,6 +29,7 @@ from pydantic import (
 )
 
 from engine.agent.config import AgentConfig  # Plan G (DEC-1003); imports nothing from engine
+from engine.decide.spec import ChannelMap  # Plan J M99 (DEC-1309); imports nothing from engine
 from engine.holdout.spec import (  # Plan J M92 (DEC-1302); imports nothing from engine
     ExploreFraction,
     HoldoutConfig,
@@ -778,6 +779,12 @@ class Band(_Base):
     name: Annotated[str, Field(min_length=1, max_length=40)]
     min_score: Annotated[float, Field(ge=0.0, le=1.0)]
     action: Annotated[str, Field(min_length=1, max_length=80)]
+    # Plan J M99 (DEC-1309): the catalogue action the band sends (`configs/decide/catalogue.yaml`);
+    # `action` stays the label. Left out of the serialised config while unset, so a use case without
+    # one dumps (and hashes) exactly as before M99.
+    action_id: Annotated[str | None, Field(min_length=1)] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class SuppressionConfig(_Base):
@@ -786,6 +793,10 @@ class SuppressionConfig(_Base):
     suppress_recently_contacted: bool = True
     recently_contacted_column: str | None = "last_contacted_at"
     recently_contacted_days: Annotated[int, Field(ge=1, le=90)] = 14
+    # Plan J M99 (DEC-1309): per-channel consent and contactability, in order of preference. Never a
+    # suppression reason: a row not contactable on a channel is only not treated on it. Left out of the
+    # serialised config while empty, so a default use case dumps exactly as before M99.
+    channels: ChannelMap = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
 class ActionsConfig(_Base):
@@ -1703,6 +1714,7 @@ def load_use_case(use_case_id: str, root: Path | None = None) -> UseCaseConfig:
     document = load_use_case_document(use_case_id, root)
     config = _validate_use_case(document, catalog=get_catalog(root))
     check_dependencies(config)
+    _plan_j_validate_action_ids(config, root)  # Plan J M99 (DEC-1309): in place
     return config
 
 
@@ -2081,6 +2093,7 @@ def resolve_config(
         warnings.append(switch_note)
     final = _validate_use_case(document, catalog=catalog)
     check_dependencies(final)
+    _plan_j_validate_action_ids(final, root)  # Plan J M99 (DEC-1309): in place
     if final.split.type is SplitType.TIME_BASED and final.split.time_column is None:
         warnings.append("split.type is time_based and no time column is set yet")
     return ResolvedConfig(
@@ -3870,4 +3883,13 @@ ResolvedConfig.model_rebuild()
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----
 # ---- PLAN-J (product) — append only below this line ----
+
+
+def _plan_j_validate_action_ids(config: UseCaseConfig, root: Path | None) -> None:
+    """Plan J M99 (DEC-1309): refuse an action id the catalogue lacks (`engine.decide.catalogue`)."""
+    from engine.decide.catalogue import validate_action_ids  # it imports this module
+
+    validate_action_ids(config, root=root)
+
+
 # ---- END PLAN-J ----

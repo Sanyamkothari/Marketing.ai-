@@ -45,6 +45,7 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session, col, select
 
 from engine.audit.events import principal_hash
+from engine.decide.spec import CHANNEL_NAME, CHANNEL_NAME_RULE  # Plan J M99; imports nothing from engine
 from engine.platform_db import PLATFORM_DB_FILENAME, platform_engine, sqlite_engine
 from engine.privacy.config import PrivacyConfig, privacy_config_or_none, privacy_salt
 from engine.privacy.contracts import (
@@ -54,7 +55,12 @@ from engine.privacy.contracts import (
     ConsentReport,
     ConsentStatus,
 )
-from engine.privacy.tables import CONSENT_RECORD_TABLE, ConsentRecordRow, create_privacy_tables
+from engine.privacy.tables import (
+    CONSENT_RECORD_TABLE,
+    ConsentRecordRow,
+    add_missing_columns,
+    create_privacy_tables,
+)
 from engine.registry import aware_utc, to_utc
 from engine.settings import Settings, load_settings
 from engine.storage import LocalStorage, Storage
@@ -90,7 +96,7 @@ Never exported: `scores.csv` carries `scores_csv_columns(...)` and nothing else,
 only between the actions stage and the export stage of one run."""
 
 CONSENT_CSV_REQUIRED: Final[tuple[str, ...]] = ("principal_id", "purpose", "status", "recorded_at")
-CONSENT_CSV_OPTIONAL: Final[tuple[str, ...]] = ("source", "expires_at")
+CONSENT_CSV_OPTIONAL: Final[tuple[str, ...]] = ("source", "expires_at", "channel")
 DEFAULT_IMPORT_SOURCE: Final[str] = "csv_import"
 MAX_PRINCIPAL_ID_CHARS: Final[int] = 256
 FUTURE_TOLERANCE: Final[timedelta] = timedelta(minutes=5)
@@ -142,7 +148,9 @@ class ConsentLedger:
 
     `salt` is `privacy_salt(settings)`; every principal id is hashed with it on the way in and on
     every lookup. `create=False` is for readers that must not create a table as a side effect - the
-    scoring seam, which checks for the table instead.
+    scoring seam, which checks for the table instead. It still brings an existing SQLite table up to
+    date with a column a later revision added (`add_missing_columns`): a `platform.db` from before
+    Plan J M99 has no `consent_record.channel`, and every read selects it.
     """
 
     def __init__(self, engine: Engine, *, salt: str, create: bool = True) -> None:
@@ -150,6 +158,8 @@ class ConsentLedger:
         self._salt = salt
         if create:
             create_privacy_tables(engine)
+        else:
+            add_missing_columns(engine)
 
     @property
     def engine(self) -> Engine:
@@ -171,8 +181,16 @@ class ConsentLedger:
         source: str,
         recorded_at: datetime,
         expires_at: datetime | None = None,
+        channel: str | None = None,
     ) -> ConsentRecord:
-        """Append one record and return it. The caller has validated `purpose` against the config."""
+        """Append one record and return it. The caller has validated `purpose` against the config.
+
+        A `channel` that is not a channel name (`engine.decide.spec.CHANNEL_NAME`, after stripping and
+        lower-casing) raises `ValueError`: no configuration could name it, so the record would never apply.
+        """
+        stored_channel = _channel(channel)
+        if stored_channel is not None and not CHANNEL_NAME.fullmatch(stored_channel):
+            raise ValueError(f"channel is not a channel name ({CHANNEL_NAME_RULE})")
         row = ConsentRecordRow(
             client_id=client_id,
             principal_hash=self.hash(principal_id),
@@ -182,6 +200,7 @@ class ConsentLedger:
             recorded_at=to_utc(recorded_at),
             expires_at=None if expires_at is None else to_utc(expires_at),
             created_at=utc_now(),
+            channel=stored_channel,
         )
         with Session(self._engine) as session:
             session.add(row)
@@ -233,7 +252,7 @@ class ConsentLedger:
             parsed = _parse_row(cells, number, position, len(header), privacy, moment, errors)
             if parsed is None:
                 continue
-            principal, purpose, status, source, recorded_at, expires_at = parsed
+            principal, purpose, status, source, recorded_at, expires_at, channel = parsed
             rows.append(
                 ConsentRecordRow(
                     client_id=client_id,
@@ -244,6 +263,7 @@ class ConsentLedger:
                     recorded_at=recorded_at,
                     expires_at=expires_at,
                     created_at=moment,
+                    channel=channel,
                 )
             )
         write = bool(rows) and (partial or not errors)
@@ -298,21 +318,35 @@ class ConsentLedger:
             return session.exec(statement).first() is not None
 
     def valid_consent(
-        self, client_id: str, purpose: str, principal_ids: Iterable[str], at: datetime
+        self,
+        client_id: str,
+        purpose: str,
+        principal_ids: Iterable[str],
+        at: datetime,
+        channel: str | None = None,
     ) -> set[str]:
-        """The principal ids, of those given, validly consented to `purpose` at `at`."""
-        return set(self.classify(client_id, purpose, principal_ids, at).valid)
+        """The principal ids, of those given, validly consented to `purpose` at `at` (optionally for `channel`)."""
+        return set(self.classify(client_id, purpose, principal_ids, at, channel=channel).valid)
 
     def classify(
-        self, client_id: str, purpose: str, principal_ids: Iterable[str], at: datetime
+        self,
+        client_id: str,
+        purpose: str,
+        principal_ids: Iterable[str],
+        at: datetime,
+        channel: str | None = None,
     ) -> ConsentClassification:
-        """Every given id in one of four buckets: valid, withdrawn, expired or no record."""
+        """Every given id in one of four buckets: valid, withdrawn, expired or no record.
+
+        When `channel` is given, checks channel-specific consent (channel records, or all-channel records
+        where channel is null). When `channel` is None, checks all-channel consent.
+        """
         moment = to_utc(at)
         ids = {principal_key(value) for value in principal_ids}
         by_hash: dict[str, list[str]] = {}
         for principal in ids:
             by_hash.setdefault(self.hash(principal), []).append(principal)
-        latest = self._latest(client_id, purpose, list(by_hash), moment)
+        latest = self._latest(client_id, purpose, list(by_hash), moment, channel=channel)
         valid: set[str] = set()
         withdrawn: set[str] = set()
         expired: set[str] = set()
@@ -346,10 +380,20 @@ class ConsentLedger:
             return tuple(_to_contract(row) for row in session.exec(statement).all())
 
     def _latest(
-        self, client_id: str, purpose: str, hashes: list[str], at: datetime
+        self,
+        client_id: str,
+        purpose: str,
+        hashes: list[str],
+        at: datetime,
+        channel: str | None = None,
     ) -> dict[str, ConsentRecordRow]:
-        """The deciding row per hash: the latest `recorded_at <= at`, ties to the higher `seq`."""
+        """The deciding row per hash: the latest `recorded_at <= at`, ties to the higher `seq`.
+
+        When `channel` is given, matches rows for all channels (channel is null) or matching `channel`.
+        When `channel` is None, matches rows applying to all channels (channel is null).
+        """
         latest: dict[str, ConsentRecordRow] = {}
+        target_channel = _channel(channel)
         with Session(self._engine) as session:
             for start in range(0, len(hashes), _IN_CHUNK):
                 chunk = hashes[start : start + _IN_CHUNK]
@@ -362,6 +406,13 @@ class ConsentLedger:
                 for row in session.exec(statement).all():
                     if aware_utc(row.recorded_at) > at:
                         continue
+                    row_ch = row.channel.strip().lower() if row.channel is not None else None
+                    if target_channel is None:
+                        if row_ch is not None:
+                            continue
+                    else:
+                        if row_ch is not None and row_ch != target_channel:
+                            continue
                     current = latest.get(row.principal_hash)
                     if current is None or _order(row) > _order(current):
                         latest[row.principal_hash] = row
@@ -383,6 +434,7 @@ def _to_contract(row: ConsentRecordRow) -> ConsentRecord:
         recorded_at=aware_utc(row.recorded_at),
         expires_at=None if row.expires_at is None else aware_utc(row.expires_at),
         created_at=aware_utc(row.created_at),
+        channel=row.channel,
     )
 
 
@@ -397,7 +449,7 @@ def _parse_row(
     privacy: PrivacyConfig,
     now: datetime,
     errors: list[ConsentImportError],
-) -> tuple[str, str, ConsentStatus, str, datetime, datetime | None] | None:
+) -> tuple[str, str, ConsentStatus, str, datetime, datetime | None, str | None] | None:
     """One data row, or None after appending its errors. Messages never quote a cell."""
     before = len(errors)
     if len(cells) != width:
@@ -461,9 +513,26 @@ def _parse_row(
             f"Row {number}: expires_at is not after recorded_at.",
         )
     source = cell("source") or DEFAULT_IMPORT_SOURCE
+    channel = _channel(cell("channel"))
+    if channel is not None and not CHANNEL_NAME.fullmatch(channel):
+        # Plan J M99: a channel no configuration can name would store an opt-out that never applies.
+        fail(
+            "channel",
+            "CONSENT_CHANNEL_INVALID",
+            f"Row {number}: channel is not a channel name ({CHANNEL_NAME_RULE}), such as sms or email; "
+            "leave it empty for every channel.",
+        )
     if len(errors) > before or status is None or recorded_at is None:
         return None
-    return principal, purpose, status, source, recorded_at, expires_at
+    return principal, purpose, status, source, recorded_at, expires_at, channel
+
+
+def _channel(value: str | None) -> str | None:
+    """A record's channel as stored and compared: stripped lower case; empty is null (every channel)."""
+    if value is None:
+        return None
+    text = value.strip().lower()
+    return text or None
 
 
 def _parse_time(text: str) -> datetime | None:

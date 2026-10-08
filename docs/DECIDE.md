@@ -29,7 +29,7 @@ the user downloads (the treat list).
 | 10 | Uplift stability, calibration and the beats-risk check | M96 | written (below) |
 | 11 | Ranking by net value | M97 | not yet written |
 | 12 | The treat list and its reasons | M98 | written (below) |
-| 13 | The offer and channel catalogue; channel-aware consent | M99 | not yet written |
+| 13 | The offer and channel catalogue; channel-aware consent | M99 | written (below) |
 | 14 | Choosing the offer (multi-treatment uplift) | M100 | not yet written |
 | 15 | One action per customer across use cases | M101 | not yet written |
 | 16 | Revenue outcomes and CUPED | M102 | not yet written |
@@ -251,8 +251,8 @@ for the hand-off, and the Output page labels them differently: **Download contac
   never today's use case file, so editing a use case does not change the treat list of a finished run.
 * **Columns** (CSV and parquet, in this order): the customer key (every column of a composite key), `use_case`,
   `model_version`, `band` (propensity) or `segment` (uplift), `treat`, `holdout`, `explore`,
-  `suppression_reason`, `offer`, `channel`, `net_value`, `expected_gross_value`, `reason_1`, `reason_2`,
-  `reason_3`. In the parquet the flags are booleans; in the CSV they are `1` and `0`, and **empty when
+  `suppression_reason`, `offer`, `channel`, `contactable_channels`, `net_value`, `expected_gross_value`,
+  `reason_1`, `reason_2`, `reason_3`. In the parquet the flags are booleans; in the CSV they are `1` and `0`, and **empty when
   unknown**. Rupee columns are written to the paisa.
 * **Joined on the key, never by position.** `holdout_assignment.parquet` and `row_explanations.parquet` are
   joined to the scores on **every** key column (`customer_id` and `snapshot_date` for a periodic dataset),
@@ -264,13 +264,16 @@ for the hand-off, and the Output page labels them differently: **Download contac
   held out, not suppressed, or explored). Without one (a default run) or for a customer it does not cover it
   is derived with M92's own functions (`engine.holdout.assign.selection_masks` and `treated_flags`), not a copy
   of them. Whatever the source, `treat = 1` implies not suppressed, not in the holdout or control group, and
-  not a sleeping dog.
+  not a sleeping dog. M99 can then set `treat = 0` for a customer contactable on **none** of their planned
+  channels (§13), without suppressing them: `suppression_reason` stays empty and `scores.csv` is untouched.
 * **`holdout`** is `holdout_member` of `holdout_assignment.parquet`, null when the file is missing (a plain
   note in the summary) or does not cover the customer. **`explore`** likewise.
 * **`offer`** is the row's action (the band's, or the uplift policy's), null for a suppressed or control row.
   A customer explored although the policy left them out gets the uplift policy's treat action, and none on a
   propensity run (a band the list does not contact names no offer): the band's own action would contradict
-  `treat = 1`. **`channel`** is reserved and null until M99.
+  `treat = 1`. **`channel`** is the first planned channel the customer is contactable on, null when the
+  customer is not treated or no channel is planned; **`contactable_channels`** lists the configured channels
+  the customer is contactable on, null when the run configured none (§13).
 * **Money, one unit per column, in rupees.** `net_value` is M97's `net_value` column of an uplift run's scores
   (incremental: `uplift x value x margin x horizon - costs`), null when the run was not ranked by value.
   `expected_gross_value` is M97's expected gross value of a **propensity** run
@@ -304,3 +307,61 @@ for the hand-off, and the Output page labels them differently: **Download contac
 * **Scale.** The builder works on whole columns (Arrow compute and hash joins on the key), with no loop over
   customers. 200,000 customers with every input take about 3 seconds on a shared 4-CPU machine, so one million
   take about 13 to 16 seconds (`tests/unit/decide/test_treat_list_scale.py`).
+
+## 13. The offer and channel catalogue; channel-aware consent (M99, DEC-1309)
+
+* **The action catalogue (`configs/decide/catalogue.yaml`), absent by default.**
+  Validated by a frozen pydantic model `ActionCatalogue` (`engine/decide/catalogue.py`), following the
+  `configs/privacy.yaml` pattern. Each action has an `action_id`, a `label`, `channels` (a list, in order of
+  preference; a single `channel: sms` is accepted), `offer_cost` and `contact_cost` in rupees, an optional
+  `eligibility`, and channel requirements such as `dlt_template_id` and `message_category`. The repository
+  ships **no** catalogue: `configs/decide/catalogue.example.yaml` is a labelled example, never read. With no
+  catalogue nothing changes: no action id is checked, no cost is overridden, and the treat list's
+  `catalogue_sha256` is null. When one exists in the run's config root, the run writes `catalogue_stamp.json`
+  after the actions stage (the file's SHA-256 and the channels of each action the use case names). The treat
+  list, built later on demand, plans channels from that stamp and puts its SHA-256 on the summary; when the
+  file has since been edited, added or removed it logs a warning and says so in `catalogue_note`, and still
+  plans from the run's record.
+* **Costs (`engine/pilot/roi.py::lookup_value_costs`).** Still the one place costs are looked up. With a
+  catalogue, its channels' contact costs replace `configs/pilot/value.yaml`'s for those channels (the first
+  action listing a channel decides). An **offer** cost comes only from an action id (`action_id=`); a channel
+  gives a contact cost only. An unknown action id is `CATALOGUE_ACTION_UNKNOWN`.
+* **Use cases point at actions additively:** `actions.bands[].action_id` and `uplift.policy.treat_action_id`.
+  `Band.action` stays the label. An id the catalogue does not declare fails config load with
+  `CATALOGUE_ACTION_UNKNOWN` (`engine.decide.catalogue.validate_action_ids`). The channel types are declared
+  in `engine/decide/spec.py`, which imports nothing from `engine` (M92's `engine.holdout.spec` pattern). Unset, neither field is serialised, so a default config dumps as before.
+* **Per-channel consent and contactability (`actions.suppression.channels`).**
+  `{channel: {consent_column, contactable_column}}`, in order of preference. A channel opt-out is **not** a
+  suppression reason: the three reasons and their precedence (DEC-A2) are unchanged, and the customer keeps
+  their score, band and action in `scores.csv`. During the run, right after the actions stage
+  (`engine/decide/contactability.py`, installed in the Plan J block of `engine/pipeline.py`), each customer's
+  contactability per channel is worked out from the columns **as uploaded** (Phase 1's truthiness: a null is
+  not a consent) and, when the consent ledger gates the run, from the ledger's records for that channel
+  (`ConsentLedger.classify(..., channel=ch)`). It is written as `channel_contactability.parquet` (the key
+  columns and one `contactable_<channel>` flag per channel; row-level, Analyst-only) and
+  `channel_contactability.json` (counts). A configured column the file lacks is skipped with a warning. With
+  no channels configured, nothing runs and nothing new is written.
+* **`channel_counts`.** Per channel, the customers **eligible to be treated** (neither suppressed nor held out
+  as control) who are not contactable on it. They are in `channel_contactability.json`, in the treat list
+  summary, and on the `opted_out` entry (else the `consent_false` entry) of `scoring_summary.json`'s
+  `suppressed` list. No entry is added for them: when neither rule ran, the summary has none.
+* **The treat list.** It joins `channel_contactability.parquet` on every key column. The planned channels are
+  the catalogue action's as the run recorded them (`catalogue_stamp.json`; the band's `action_id`, or the
+  uplift run's `treat_action_id`); with no recorded catalogue action they are the configured channels. A treated customer is sent on the first planned channel they are
+  contactable on (`channel`); one contactable on none of them is **not treated** (`treat = 0`), is counted
+  in `uncontactable_rows`, and is not suppressed. `contactable_channels` lists every configured channel the
+  customer is contactable on; it is null for a customer the file does not cover (and for every customer of a
+  run with no channels configured), who is treated as before, on the first planned channel. It is labelled
+  from the flag patterns present, so the cost is linear in rows whatever the number of channels.
+* **The consent ledger per channel.** `consent_record.channel` is nullable (`alembic/versions/0007_consent_channel.py`;
+  on a laptop's SQLite `platform.db`, the column is added in place, also when the scoring seam opens the
+  ledger). Null means every channel, so every record stored before M99 keeps applying to all of them. The
+  scoring gate's all-channel question (`channel=None`) reads only all-channel records: an SMS-only
+  withdrawal closes SMS and does not suppress the customer. A channel must be a channel name (lower case
+  letters, digits and `_`, after stripping and lower-casing; the same rule as config and catalogue): an
+  imported row with `e-mail` is refused with `CONSENT_CHANNEL_INVALID`, so no opt-out is stored that no
+  configured channel could match.
+* **Region rules, data-driven.** `configs/regions/<region>.yaml` (such as `in.yaml`:
+  `sms_requires: [dlt_template_id, message_category]`) is applied to the catalogue's `region` without naming
+  any region in Python. A missing DLT template id is `ACTION_DLT_TEMPLATE_MISSING`; another missing required
+  field is `CATALOGUE_INVALID`. A value left as a placeholder in angle brackets counts as missing.

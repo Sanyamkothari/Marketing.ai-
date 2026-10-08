@@ -344,7 +344,16 @@ def _action_counts(frame: pd.DataFrame) -> tuple[ActionCount, ...]:
 
 
 def _suppression_counts(frame: pd.DataFrame, config: UseCaseConfig) -> tuple[SuppressionCount, ...]:
-    """One entry per suppression rule that ran, in precedence order; skipped rules are left out."""
+    """One entry per suppression rule that ran, in precedence order; skipped rules are left out.
+
+    Plan J M99 (DEC-1309): when the run worked out per-channel contactability (only when
+    `actions.suppression.channels` is configured; `engine.decide.contactability` leaves the counts in
+    `frame.attrs`), they ride on the `opted_out` entry, else on the `consent_false` entry - the two
+    rules about the customer's own say. No entry is ever added for them: a rule that did not run has
+    no entry, and with neither rule run the counts are only in `channel_contactability.json`.
+    """
+    from engine.decide.contactability import CHANNEL_COUNTS_ATTR
+
     recorded = frame.attrs.get(APPLIED_RULES_ATTR)
     if isinstance(recorded, tuple | list):
         applied = [str(code) for code in recorded]
@@ -353,8 +362,16 @@ def _suppression_counts(frame: pd.DataFrame, config: UseCaseConfig) -> tuple[Sup
         # column the frame still carries, which is the same set apply_actions would have run.
         applied = [code for code, column in suppression_rules(config) if column in frame.columns]
     counts = frame[SUPPRESSED_REASON_COLUMN].value_counts()
+    channel_counts = frame.attrs.get(CHANNEL_COUNTS_ATTR)
+    if not isinstance(channel_counts, dict):
+        channel_counts = None
+    carrier = next((code for code in ("opted_out", "consent_false") if code in applied), None)
     return tuple(
-        SuppressionCount(reason=code, rows=int(counts.get(code, 0)))
+        SuppressionCount(
+            reason=code,
+            rows=int(counts.get(code, 0)),
+            channel_counts=dict(channel_counts) if code == carrier and channel_counts is not None else None,
+        )
         for code in _REASON_CODES  # precedence order, and the only codes the contract allows
         if code in applied
     )
