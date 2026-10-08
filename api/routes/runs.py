@@ -97,6 +97,10 @@ from engine.contracts import (
     RunStatus,
     ValidationReport,
 )
+from engine.decide.contactability import (  # Plan J M99 (DEC-1309)
+    CHANNEL_CONTACTABILITY_FILENAME,
+    CHANNEL_CONTACTABILITY_SUMMARY_FILENAME,
+)
 from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
     TREAT_LIST_CSV,
     TREAT_LIST_PARQUET,
@@ -589,6 +593,9 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
     known = known or name in (HOLDOUT_ASSIGNMENT_FILENAME, HOLDOUT_REPORT_FILENAME)
     # The treat list and summary (Plan J M98, DEC-1308)
     known = known or name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME)
+    # Per-channel contactability of a run whose use case configures channels (Plan J M99, DEC-1309):
+    # the row-level flags (Analyst, `ROW_LEVEL_ARTEFACTS`) and their counts.
+    known = known or name in (CHANNEL_CONTACTABILITY_FILENAME, CHANNEL_CONTACTABILITY_SUMMARY_FILENAME)
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)

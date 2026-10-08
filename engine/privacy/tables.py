@@ -39,6 +39,7 @@ __all__ = [
     "ErasureProgressRow",
     "ErasureRequestRow",
     "ModelRetrainFlagRow",
+    "add_missing_columns",
     "create_privacy_tables",
 ]
 
@@ -148,10 +149,12 @@ class ModelRetrainFlagRow(SQLModel, table=True):
 
 _ADDED_COLUMNS: Final[tuple[tuple[str, str, str], ...]] = (
     (ERASURE_REQUEST_TABLE, "history_all_clients", "BOOLEAN NOT NULL DEFAULT 0"),
+    # Plan J M99 (DEC-1309): null = every channel, so every record already stored keeps applying to all.
+    (CONSENT_RECORD_TABLE, "channel", "VARCHAR"),
 )
 """Columns a later revision added to a table Phase 4b's `create_tables` may already have made in a
 SQLite file: `create_all` adds a missing table, never a missing column (DEC-341), so they are added
-here - `(table, column, SQLite DDL)`. Postgres gets them from Alembic (`0005_plan_d`)."""
+here - `(table, column, SQLite DDL)`. Postgres gets them from Alembic (`0005_plan_d`, `0007_consent_channel`)."""
 
 
 def create_privacy_tables(engine: Engine) -> None:
@@ -161,10 +164,23 @@ def create_privacy_tables(engine: Engine) -> None:
     version of this code created without it, so a laptop's `platform.db` keeps working (DEC-882).
     """
     create_tables(engine, (*PRIVACY_TABLES, ERASURE_PROGRESS_TABLE))
+    add_missing_columns(engine)
+
+
+def add_missing_columns(engine: Engine) -> None:
+    """On SQLite, add each `_ADDED_COLUMNS` column an existing table lacks; never create a table.
+
+    The scoring seam reads the ledger without creating anything (`ConsentLedger(create=False)`), but a
+    `platform.db` written before Plan J M99 has a `consent_record` without `channel`, which every read
+    of the table now selects; this brings that file up to date in place (Postgres: `0007`).
+    """
     if engine.dialect.name != "sqlite":
         return
     for table, column, ddl in _ADDED_COLUMNS:
-        present = {item["name"] for item in inspect(engine).get_columns(table)}
+        inspector = inspect(engine)
+        if not inspector.has_table(table):
+            continue
+        present = {item["name"] for item in inspector.get_columns(table)}
         if column in present:
             continue
         try:

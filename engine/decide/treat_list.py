@@ -5,8 +5,10 @@ and `treat_list_summary.json` beside them in storage, and is never imported by t
 
 **What it joins, and how.** Every file that carries one row per customer is joined to the scores on
 **all** the key columns (`_join_keys`, the text of `engine.keys.key_series`, built column-wise), never by position: `holdout_assignment.parquet`
-(holdout, explore and `treated` flags) and `row_explanations.parquet` (the reasons). A customer a file
-does not cover gets a null for what that file would have said, not a false.
+(holdout, explore and `treated` flags), `row_explanations.parquet` (the reasons) and, when the run's use case
+configures channels, `channel_contactability.parquet` (M99: which channels each customer may be contacted on,
+worked out during the run by `engine.decide.contactability`). A customer a file does not cover gets a null
+for what that file would have said, not a false.
 
 **What it reads and does not recompute.** The treat flag is M92's `treated` column from
 `holdout_assignment.parquet`; where there is none (a default run, or a customer the file does not cover)
@@ -41,6 +43,12 @@ from pydantic import Field
 from engine.config import ResolvedConfig, RunMode, UseCaseConfig
 from engine.contracts import Artefact, RunRecord, RunState
 from engine.decide.catalogue import catalogue_or_none, catalogue_sha256
+from engine.decide.contactability import (
+    CHANNEL_CONTACTABILITY_FILENAME,
+    CHANNEL_CONTACTABILITY_SUMMARY_FILENAME,
+    ChannelContactability,
+    contactable_column,
+)
 from engine.decide.reasons import extract_and_map_reasons_from_parquet, load_reasons_dictionary
 from engine.decide.value import EXPECTED_GROSS_VALUE_FILENAME, ExpectedGrossValue, expected_gross_values
 from engine.holdout.assign import (
@@ -61,7 +69,6 @@ from engine.stages.actions import (
     CONTROL_GROUP_COLUMN,
     SUPPRESSED_ACTION,
     SUPPRESSED_REASON_COLUMN,
-    _truthy,
 )
 from engine.stages.export import SCORES_CSV, SCORES_PARQUET
 from engine.storage import Storage, StorageError, run_key
@@ -180,6 +187,23 @@ class TreatListSummary(Artefact):
         default=None,
         description="SHA-256 fingerprint of configs/decide/catalogue.yaml, or null when absent.",
     )
+    channel_counts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan J M99: the run's per-channel counts (`channel_contactability.json`): rows neither "
+            "suppressed nor held out as control that are not contactable on the channel. Absent when the "
+            "run's use case configures no channels."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    uncontactable_rows: int | None = Field(
+        default=None,
+        description=(
+            "Plan J M99: rows that would be treated but are contactable on none of their planned channels, "
+            "so treat = 0 (they are not suppressed). Absent when the run wrote no per-channel contactability."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None = None) -> TreatListSummary:
@@ -240,7 +264,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
             int((chosen & ~treat).sum()),
         )
 
-    # 3. Offer (the band's action; M99/M100 fill it later) and channel (reserved).
+    # 3. Offer (the band's action; M100 fills it later). The channel is step 5.
     action = scores[ACTION_COLUMN].astype("object")
     has_offer = (
         ~suppressed & ~control & ~action.isin([SUPPRESSED_ACTION, CONTROL_ACTION]).to_numpy(dtype=bool)
@@ -258,15 +282,20 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     net_value, net_value_note, net_value_unit = _net_value(scores, is_uplift)
     gross_value, gross_note = _expected_gross_value(storage, record, config, scores, row_keys, is_uplift)
 
-    # 5. Channel and contactability (Plan J M99)
+    # 5. Channel, from the run's own per-channel contactability (Plan J M99).
     cat_sha = catalogue_sha256(root=config_root)
-    treat, channel, contactable_channels = _resolve_channels_and_treatment(
+    channels = _resolve_channels(
+        storage,
+        run_id,
+        primary_key,
+        row_keys,
         scores=scores,
         config=config,
         treat=treat,
         is_uplift=is_uplift,
         config_root=config_root,
     )
+    treat = channels.treat
 
     # 6. Reasons, in business words.
     reasons = _reasons(storage, run_id, scores, row_keys, config_root)
@@ -281,8 +310,8 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         flags=flags,
         suppression=suppression,
         offer=offer,
-        channel=channel,
-        contactable_channels=contactable_channels,
+        channel=channels.channel,
+        contactable_channels=channels.contactable_channels,
         net_value=net_value,
         gross_value=gross_value,
         reasons=reasons,
@@ -307,6 +336,8 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         expected_gross_value_note=gross_note,
         created_at=utc_now(),
         catalogue_sha256=cat_sha,
+        channel_counts=channels.channel_counts,
+        uncontactable_rows=channels.uncontactable_rows,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -565,102 +596,138 @@ def _total(values: pd.Series[Any], treat: np.ndarray) -> float | None:
     return float(np.nansum(np.where(treat, numbers, 0.0)))
 
 
-def _resolve_channels_and_treatment(
+class _Channels(NamedTuple):
+    """The channel each treated customer is sent on, and what the run said they are contactable on."""
+
+    treat: np.ndarray
+    channel: pd.Series[Any]
+    contactable_channels: pd.Series[Any]
+    channel_counts: dict[str, int] | None
+    uncontactable_rows: int | None
+
+
+def _read_contactability(
+    storage: Storage, run_id: str, primary_key: Any, row_keys: pd.Series[Any], channels: tuple[str, ...]
+) -> tuple[dict[str, np.ndarray], np.ndarray | None, dict[str, int] | None]:
+    """Join `channel_contactability.parquet` to the scores on every key column (Plan J M99).
+
+    Returns, per configured channel, whether each row may be contacted on it (True for a row the file
+    does not cover: nothing restricts it), which rows the file covers (None when the run wrote no file:
+    its use case configures no channels), and the run's `channel_counts`.
+    """
+    n = len(row_keys.index)
+    try:
+        data = storage.read_bytes(run_key(run_id, CHANNEL_CONTACTABILITY_FILENAME))
+    except StorageError:
+        return {}, None, None
+    table = pd.read_parquet(io.BytesIO(data))
+    key_cols = key_columns(primary_key)
+    wanted = [contactable_column(channel) for channel in channels]
+    if any(name not in table.columns for name in (*key_cols, *wanted)):
+        _LOGGER.warning(
+            "treat list %s: %s lacks the key or channel columns", run_id, CHANNEL_CONTACTABILITY_FILENAME
+        )
+        return {}, np.zeros(n, dtype=bool), None
+    index = pd.Index(_join_keys(table, primary_key))
+    if not index.is_unique:
+        _LOGGER.warning("treat list %s: %s repeats a customer key", run_id, CHANNEL_CONTACTABILITY_FILENAME)
+        return {}, np.zeros(n, dtype=bool), None
+    positions = index.get_indexer(pd.Index(row_keys))
+    covered = positions >= 0
+    flags = {
+        channel: np.where(covered, table[name].to_numpy(dtype=bool)[np.where(covered, positions, 0)], True)
+        for channel, name in zip(channels, wanted, strict=True)
+    }
+    counts: dict[str, int] | None = None
+    try:
+        counts = dict(
+            storage.read_model(
+                run_key(run_id, CHANNEL_CONTACTABILITY_SUMMARY_FILENAME), ChannelContactability
+            ).channel_counts
+        )
+    except (StorageError, ValueError):
+        _LOGGER.warning(
+            "treat list %s: %s could not be read", run_id, CHANNEL_CONTACTABILITY_SUMMARY_FILENAME
+        )
+    return flags, covered, counts
+
+
+def _resolve_channels(
+    storage: Storage,
+    run_id: str,
+    primary_key: Any,
+    row_keys: pd.Series[Any],
     *,
     scores: pd.DataFrame,
     config: UseCaseConfig,
     treat: np.ndarray,
     is_uplift: bool,
     config_root: Path | None,
-) -> tuple[np.ndarray, pd.Series[Any], pd.Series[Any]]:
-    """Determine channel contactability, select contactable channel, and enforce that untreated rows have no channel.
+) -> _Channels:
+    """Each treated customer's channel, and the treat flag of a customer with no planned channel open.
 
-    A row is treated only on a channel it is contactable on. A row with no contactable planned channel
-    is not treated (treat = 0), but is not suppressed in scores.csv.
+    The planned channels are the catalogue action's (`Band.action_id`, or `uplift.policy.treat_action_id`
+    on an uplift run), in its order; with no catalogue action they are the configured channels
+    (`actions.suppression.channels`), in theirs. A customer is sent the first planned channel the run's
+    `channel_contactability.parquet` says they are contactable on; one contactable on none of them is
+    not treated - and not suppressed: `suppression_reason` and `scores.csv` are untouched. A customer the
+    file does not cover (and every customer of a run that wrote none) is treated as before, on the first
+    planned channel, with a null `contactable_channels`.
     """
-    n_rows = len(scores.index)
-    channels_cfg = config.actions.suppression.channels or {}
+    n = len(scores.index)
+    configured = tuple(config.actions.suppression.channels)
+    flags, covered, counts = _read_contactability(storage, run_id, primary_key, row_keys, configured)
     catalogue = catalogue_or_none(root=config_root)
-    catalogue_actions = {a.action_id: a for a in catalogue.actions} if catalogue is not None else {}
+    actions = catalogue.actions_by_id if catalogue is not None else {}
 
-    # 1. Per-channel contactability masks from suppression.channels
-    channel_contactable_masks: dict[str, np.ndarray] = {}
-    for ch, ch_cfg in channels_cfg.items():
-        ch_lower = ch.lower()
-        mask = np.ones(n_rows, dtype=bool)
-        if ch_cfg.consent_column and ch_cfg.consent_column in scores.columns:
-            mask &= _truthy(scores[ch_cfg.consent_column]).to_numpy(dtype=bool)
-        if ch_cfg.contactable_column and ch_cfg.contactable_column in scores.columns:
-            mask &= _truthy(scores[ch_cfg.contactable_column]).to_numpy(dtype=bool)
-        channel_contactable_masks[ch_lower] = mask
+    def planned(action_id: str | None) -> tuple[str, ...]:
+        if action_id is not None and action_id in actions:
+            return actions[action_id].channels
+        return configured
 
-    # 2. contactable_channels column (all channels the customer is contactable on)
-    if channels_cfg:
-        cfg_channels = list(channels_cfg.keys())
-        code = np.zeros(n_rows, dtype=np.int32)
-        for idx, ch in enumerate(cfg_channels):
-            mask = channel_contactable_masks[ch.lower()]
-            code |= mask.astype(np.int32) << idx
-        lookup: dict[int, str | None] = {}
-        for m in range(1 << len(cfg_channels)):
-            active = [ch for idx, ch in enumerate(cfg_channels) if (m >> idx) & 1]
-            lookup[m] = ",".join(active) if active else None
-        contactable_channels_series = pd.Series(pd.Index(code).map(lookup), dtype="object")
-    else:
-        contactable_channels_series = pd.Series(None, index=range(n_rows), dtype="object")
-
-    # 3. Planned channels per band or uplift
-    treat_out = treat.copy()
-    chosen_channel: np.ndarray = np.empty(n_rows, dtype=object)
-    chosen_channel[:] = None
-
+    everyone = np.ones(n, dtype=bool)
     if is_uplift:
-        uplift_planned: list[str] = []
-        treat_aid = config.uplift.policy.treat_action_id if config.uplift and config.uplift.policy else None
-        if treat_aid and treat_aid in catalogue_actions:
-            uplift_planned = list(catalogue_actions[treat_aid].channels)
-        elif channels_cfg:
-            uplift_planned = [c.lower() for c in channels_cfg]
-
-        if uplift_planned:
-            has_any = np.zeros(n_rows, dtype=bool)
-            selected_ch = np.empty(n_rows, dtype=object)
-            selected_ch[:] = None
-            for ch in reversed(uplift_planned):
-                ch_ok = channel_contactable_masks.get(ch, np.ones(n_rows, dtype=bool))
-                selected_ch = np.where(ch_ok, ch, selected_ch)
-                has_any |= ch_ok
-            treat_out[~has_any] = False
-            chosen_channel[treat_out] = selected_ch[treat_out]
+        policy = getattr(getattr(config, "uplift", None), "policy", None)
+        groups = [(everyone, planned(getattr(policy, "treat_action_id", None)))]
     else:
-        band_planned: dict[str, list[str]] = {}
-        for b in config.actions.bands:
-            if b.action_id and b.action_id in catalogue_actions:
-                band_planned[b.name] = list(catalogue_actions[b.action_id].channels)
-            elif channels_cfg:
-                band_planned[b.name] = [c.lower() for c in channels_cfg]
-            else:
-                band_planned[b.name] = []
+        bands = scores[BAND_COLUMN].astype(str).to_numpy(dtype=object)
+        groups = [(bands == band.name, planned(band.action_id)) for band in config.actions.bands]
 
-        band_col = scores[BAND_COLUMN].astype(str)
-        for b_name, planned in band_planned.items():
-            if not planned:
-                continue
-            band_mask = (band_col == b_name).to_numpy(dtype=bool)
-            if not band_mask.any():
-                continue
-            has_any = np.zeros(n_rows, dtype=bool)
-            selected_ch = np.empty(n_rows, dtype=object)
-            selected_ch[:] = None
-            for ch in reversed(planned):
-                ch_ok = channel_contactable_masks.get(ch, np.ones(n_rows, dtype=bool))
-                selected_ch = np.where(ch_ok, ch, selected_ch)
-                has_any |= ch_ok
-            treat_out[band_mask & ~has_any] = False
-            chosen_channel[band_mask & treat_out] = selected_ch[band_mask & treat_out]
+    treat_out = treat.copy()
+    chosen = np.full(n, None, dtype=object)
+    for rows, channels in groups:
+        if not channels or not rows.any():
+            continue
+        first_open = np.full(n, None, dtype=object)
+        any_open = np.zeros(n, dtype=bool)
+        for channel in reversed(channels):
+            open_ = flags.get(channel, everyone)
+            first_open = np.where(open_, channel, first_open)
+            any_open |= open_
+        treat_out[rows & ~any_open] = False
+        sent = rows & treat_out
+        chosen[sent] = first_open[sent]
 
-    chosen_channel_series = pd.Series(chosen_channel, dtype="object")
-    return treat_out, chosen_channel_series, contactable_channels_series
+    if covered is None:
+        contactable = pd.Series([None] * n, dtype="object")
+    else:
+        code = np.zeros(n, dtype=np.int64)
+        for bit, channel in enumerate(configured):
+            code |= flags.get(channel, everyone).astype(np.int64) << bit
+        names = {
+            mask: ",".join(channel for bit, channel in enumerate(configured) if (mask >> bit) & 1)
+            for mask in range(1 << len(configured))
+        }
+        text = pd.Index(code).map(names).to_numpy(dtype=object).copy()
+        text[~covered] = None
+        contactable = pd.Series(text, dtype="object")
+    return _Channels(
+        treat=treat_out,
+        channel=pd.Series(chosen, dtype="object"),
+        contactable_channels=contactable,
+        channel_counts=counts,
+        uncontactable_rows=None if covered is None else int((treat & ~treat_out).sum()),
+    )
 
 
 # ---------------------------------------------------------------------------

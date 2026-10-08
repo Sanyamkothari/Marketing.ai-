@@ -1,19 +1,28 @@
 """`configs/decide/catalogue.yaml`: the offer and channel catalogue (Plan J M99, DEC-1309).
 
-Follows the `configs/privacy.yaml` pattern: validated by a frozen pydantic model, cached per config root,
-and checked with data-driven region rules.
+Follows the `configs/privacy.yaml` pattern: validated by a frozen pydantic model and cached per config
+root (and per file content, so an edited catalogue is read again).
 
-Region rule: `configs/regions/<region>.yaml` declares channel requirements (such as `sms_requires: [dlt_template_id, message_category]`);
-catalogue validation applies the configured region's list without naming any region in Python.
+**Absent by default.** The repository ships no catalogue: `configs/decide/catalogue.example.yaml` is a
+labelled example, never read. With no `catalogue.yaml` nothing here runs - no action id is checked, no
+cost is overridden, the treat list's `catalogue_sha256` is null - so every default run and config load
+is what it was before M99 (DEC-1309 (h)).
+
+**Region rule, data-driven.** `configs/regions/<region>.yaml` declares channel requirements (such as
+`sms_requires: [dlt_template_id, message_category]`); catalogue validation applies the configured
+region's list without naming any region in Python. A required field left as a placeholder in angle
+brackets (`"<your DLT template id>"`, as the example writes it) counts as missing, so a copied example
+is refused rather than sent.
 """
 
 from __future__ import annotations
 
 import hashlib
+import re
 from pathlib import Path
 from typing import Annotated, Any, Final
 
-from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from engine.config import ConfigError, config_root, load_yaml
 from engine.utils.logging import get_logger
@@ -31,8 +40,15 @@ __all__ = [
 _LOGGER = get_logger(__name__)
 
 CATALOGUE_FILENAME: Final[str] = "decide/catalogue.yaml"
+REGIONS_DIRECTORY: Final[str] = "regions"
 
-_CACHE: dict[Path, ActionCatalogue] = {}
+_CHANNEL: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,39}")
+"""A channel name: lower case, as `actions.suppression.channels` and the consent ledger write it."""
+
+_PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"\s*<[^>]*>\s*")
+"""A value an example leaves for the client to fill in, such as `<your DLT template id>`."""
+
+_CACHE: dict[tuple[Path, str], ActionCatalogue] = {}
 
 
 class _Model(BaseModel):
@@ -40,18 +56,25 @@ class _Model(BaseModel):
 
 
 class ActionItem(_Model):
-    """One action/offer item in the catalogue."""
+    """One action (an offer sent on one or more channels) in the catalogue."""
 
     action_id: Annotated[
         str, Field(min_length=1, description="Machine-readable unique identifier of the action.")
     ]
     label: Annotated[str, Field(min_length=1, description="Human-readable business label.")]
-    channel: Annotated[
-        str, Field(min_length=1, description="Primary channel or comma-separated list of planned channels.")
+    channels: Annotated[
+        tuple[str, ...],
+        Field(
+            min_length=1,
+            description=(
+                "Channels the action can be sent on, in order of preference. A single `channel: sms` "
+                "is accepted for a one-channel action."
+            ),
+        ),
     ]
     offer_cost: Annotated[float, Field(ge=0.0, description="Cost of the offer in rupees.")] = 0.0
     contact_cost: Annotated[
-        float, Field(ge=0.0, description="Cost of contacting the customer on this channel in rupees.")
+        float, Field(ge=0.0, description="Cost of one contact with this action, in rupees.")
     ] = 0.0
     eligibility: str | None = Field(default=None, description="Eligibility expression.")
     purpose: str | None = Field(default=None, description="Purpose id from privacy.yaml.")
@@ -66,19 +89,36 @@ class ActionItem(_Model):
     @model_validator(mode="before")
     @classmethod
     def _coerce_aliases(cls, data: Any) -> Any:
-        if isinstance(data, dict):
-            mapped = dict(data)
-            if "offer_cost_inr" in mapped and "offer_cost" not in mapped:
-                mapped["offer_cost"] = mapped.pop("offer_cost_inr")
-            if "contact_cost_inr" in mapped and "contact_cost" not in mapped:
-                mapped["contact_cost"] = mapped.pop("contact_cost_inr")
-            return mapped
-        return data
+        if not isinstance(data, dict):
+            return data
+        mapped = dict(data)
+        if "offer_cost_inr" in mapped and "offer_cost" not in mapped:
+            mapped["offer_cost"] = mapped.pop("offer_cost_inr")
+        if "contact_cost_inr" in mapped and "contact_cost" not in mapped:
+            mapped["contact_cost"] = mapped.pop("contact_cost_inr")
+        if "channel" in mapped:
+            if "channels" in mapped:
+                raise ValueError("give either `channel` (one channel) or `channels` (a list), not both")
+            single = mapped.pop("channel")
+            if isinstance(single, str) and "," in single:
+                raise ValueError("`channel` names one channel; list several under `channels: [sms, email]`")
+            mapped["channels"] = [single]
+        return mapped
 
-    @property
-    def channels(self) -> tuple[str, ...]:
-        """Parsed tuple of channels this action supports."""
-        return tuple(c.strip().lower() for c in self.channel.split(",") if c.strip())
+    @field_validator("channels", mode="before")
+    @classmethod
+    def _normalise_channels(cls, value: Any) -> Any:
+        if isinstance(value, str):
+            raise ValueError("`channels` is a list, such as `channels: [sms, email]`")
+        if not isinstance(value, list | tuple):
+            return value
+        names = [str(item).strip().lower() for item in value]
+        for name in names:
+            if not _CHANNEL.fullmatch(name):
+                raise ValueError(f"{name!r} is not a channel name (lower case letters, digits and _)")
+        if len(set(names)) != len(names):
+            raise ValueError("a channel is listed twice")
+        return tuple(names)
 
 
 class ActionCatalogue(_Model):
@@ -116,64 +156,78 @@ class ActionCatalogue(_Model):
         """Find an action by action_id, or None when missing."""
         return self.actions_by_id.get(action_id)
 
+    def channel_contact_costs(self) -> dict[str, float]:
+        """Contact cost per channel: the first action (in file order) that lists the channel decides."""
+        costs: dict[str, float] = {}
+        for action in self.actions:
+            for channel in action.channels:
+                costs.setdefault(channel, action.contact_cost)
+        return costs
+
 
 def load_catalogue(root: Path | None = None) -> ActionCatalogue:
-    """Load and validate `configs/decide/catalogue.yaml`, cached per root.
+    """Load and validate `configs/decide/catalogue.yaml`, cached per root and file content.
 
     Raises `ConfigError` with:
     - `CONFIG_NOT_FOUND` when missing.
-    - `CATALOGUE_INVALID` when schema is invalid or required region field is missing.
-    - `ACTION_DLT_TEMPLATE_MISSING` when SMS in region IN is missing DLT template ID.
+    - `CATALOGUE_INVALID` when the schema is invalid or a region's required field is missing.
+    - `ACTION_DLT_TEMPLATE_MISSING` when the region requires a DLT template id an action lacks.
     """
     base = config_root(root)
-    cached = _CACHE.get(base)
-    if cached is not None:
-        return cached
-
     cat_path = base / CATALOGUE_FILENAME
     if not cat_path.is_file():
         raise ConfigError("CONFIG_NOT_FOUND", f"No catalogue file at {cat_path}.", path=str(cat_path))
+    digest = hashlib.sha256(cat_path.read_bytes()).hexdigest()
+    cached = _CACHE.get((base, digest))
+    if cached is not None:
+        return cached
 
     data = load_yaml(cat_path)
     try:
         loaded = ActionCatalogue.model_validate(data)
     except ValidationError as exc:
         first = exc.errors()[0]
-        dotted = ".".join(str(part) for part in first["loc"])
+        dotted = ".".join(str(part) for part in first["loc"]) or "catalogue"
         raise ConfigError("CATALOGUE_INVALID", f"{dotted}: {first['msg']}.", path=dotted) from exc
 
-    # Apply data-driven region rules
     if loaded.region:
-        reg_file = base / "regions" / f"{loaded.region.strip().lower()}.yaml"
+        reg_file = base / REGIONS_DIRECTORY / f"{loaded.region.strip().lower()}.yaml"
         if reg_file.is_file():
-            reg_data = load_yaml(reg_file)
-            _apply_region_rules(loaded, reg_data)
+            _apply_region_rules(loaded, load_yaml(reg_file))
+        else:
+            _LOGGER.warning(
+                "catalogue region %r has no rules file; no channel requirement applied", loaded.region
+            )
 
-    _CACHE[base] = loaded
+    _CACHE[(base, digest)] = loaded
     return loaded
+
+
+def _missing(value: object) -> bool:
+    if value is None:
+        return True
+    return isinstance(value, str) and (not value.strip() or _PLACEHOLDER.fullmatch(value) is not None)
 
 
 def _apply_region_rules(catalogue: ActionCatalogue, region_data: dict[str, Any]) -> None:
     """Validate catalogue actions against channel requirements from region config without naming any region in code."""
     for key, req_list in region_data.items():
-        if key.endswith("_requires") and isinstance(req_list, list):
-            channel_name = key[: -len("_requires")].lower()
-            for action in catalogue.actions:
-                if channel_name in action.channels:
-                    for req in req_list:
-                        val = getattr(action, req, None)
-                        if val is None or (isinstance(val, str) and not val.strip()):
-                            code = (
-                                "ACTION_DLT_TEMPLATE_MISSING"
-                                if req == "dlt_template_id"
-                                else "CATALOGUE_INVALID"
-                            )
-                            raise ConfigError(
-                                code,
-                                f"Action {action.action_id!r} on channel {action.channel!r} is missing required field {req!r} "
-                                f"for region {catalogue.region!r}.",
-                                path=f"actions.{action.action_id}.{req}",
-                            )
+        if not (key.endswith("_requires") and isinstance(req_list, list)):
+            continue
+        channel_name = key[: -len("_requires")].lower()
+        for position, action in enumerate(catalogue.actions):
+            if channel_name not in action.channels:
+                continue
+            for req in req_list:
+                if not _missing(getattr(action, req, None)):
+                    continue
+                code = "ACTION_DLT_TEMPLATE_MISSING" if req == "dlt_template_id" else "CATALOGUE_INVALID"
+                raise ConfigError(
+                    code,
+                    f"Action {action.action_id!r} is sent by {channel_name}, which region {catalogue.region!r} "
+                    f"requires to have {req!r}; it is missing or still a placeholder.",
+                    path=f"actions[{position}].{req}",
+                )
 
 
 def catalogue_or_none(root: Path | None = None) -> ActionCatalogue | None:
@@ -186,8 +240,7 @@ def catalogue_or_none(root: Path | None = None) -> ActionCatalogue | None:
 
 def catalogue_sha256(root: Path | None = None) -> str | None:
     """SHA-256 fingerprint of `configs/decide/catalogue.yaml`, or None when absent."""
-    base = config_root(root)
-    path = base / CATALOGUE_FILENAME
+    path = config_root(root) / CATALOGUE_FILENAME
     if not path.is_file():
         return None
     return hashlib.sha256(path.read_bytes()).hexdigest()

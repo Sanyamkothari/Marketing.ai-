@@ -778,11 +778,24 @@ class Band(_Base):
     name: Annotated[str, Field(min_length=1, max_length=40)]
     min_score: Annotated[float, Field(ge=0.0, le=1.0)]
     action: Annotated[str, Field(min_length=1, max_length=80)]
-    action_id: Annotated[str | None, Field(min_length=1)] = None
+    # Plan J M99 (DEC-1309): the catalogue action the band sends (`configs/decide/catalogue.yaml`);
+    # `action` stays the label. Left out of the serialised config while unset, so a use case without
+    # one dumps (and hashes) exactly as before M99.
+    action_id: Annotated[str | None, Field(min_length=1)] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
+
+
+_CHANNEL_NAME: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,39}")
 
 
 class ChannelSuppressionConfig(_Base):
-    """Channel-level consent and contactability columns (Plan J M99)."""
+    """One channel's consent and contactability columns (Plan J M99, DEC-1309).
+
+    Either column may be null; a configured column the scoring file lacks is skipped with a warning,
+    like a Phase 1 suppression column (DEC-030). Truthiness is Phase 1's (`engine.stages.actions.truthy`):
+    a null is not a consent.
+    """
 
     consent_column: str | None = None
     contactable_column: str | None = None
@@ -794,7 +807,25 @@ class SuppressionConfig(_Base):
     suppress_recently_contacted: bool = True
     recently_contacted_column: str | None = "last_contacted_at"
     recently_contacted_days: Annotated[int, Field(ge=1, le=90)] = 14
-    channels: dict[str, ChannelSuppressionConfig] = Field(default_factory=dict)
+    # Plan J M99 (DEC-1309): per-channel consent and contactability, in order of preference. Never a
+    # suppression reason: a row not contactable on a channel is only not treated on it. Left out of the
+    # serialised config while empty, so a default use case dumps exactly as before M99.
+    channels: dict[str, ChannelSuppressionConfig] = Field(
+        default_factory=dict, exclude_if=lambda value: not value
+    )
+
+    @field_validator("channels", mode="before")
+    @classmethod
+    def _channel_names(cls, value: Any) -> Any:
+        if not isinstance(value, Mapping):
+            return value
+        names = [str(name).strip().lower() for name in value]
+        for name in names:
+            if not _CHANNEL_NAME.fullmatch(name):
+                raise ValueError(f"{name!r} is not a channel name (lower case letters, digits and _)")
+        if len(set(names)) != len(names):
+            raise ValueError("a channel is listed twice")
+        return dict(zip(names, value.values(), strict=True))
 
 
 class ActionsConfig(_Base):

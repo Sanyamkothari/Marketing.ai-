@@ -1,0 +1,32 @@
+# configs/decide/catalogue.example.yaml - AN EXAMPLE, NEVER READ (Plan J M99, DEC-1309).
+#
+# The engine reads only `configs/decide/catalogue.yaml`, and the repository ships none: with no
+# catalogue, no action id is checked, no channel cost is overridden and every run is what it was
+# before M99. To use a catalogue, copy this file to `catalogue.yaml` and replace EVERY value below with
+# the client's own. The ids, labels and rupee figures here are illustrations, not anyone's offers.
+#
+# The DLT template id is left as a placeholder in angle brackets. A placeholder counts as missing, so
+# with `region: IN` (whose `configs/regions/in.yaml` requires `dlt_template_id` for SMS) a copy made
+# without filling it in is refused at config load with ACTION_DLT_TEMPLATE_MISSING.
+#
+# Use cases point at an action additively: `actions.bands[].action_id` (a propensity band) or
+# `uplift.policy.treat_action_id` (an uplift run's treat action). An id that is not declared here
+# fails config load with CATALOGUE_ACTION_UNKNOWN.
+
+region: IN                                  # rules from configs/regions/<region>.yaml; omit for none
+actions:
+  - action_id: example_offer_sms            # unique; what a use case refers to
+    label: "Example offer (SMS)"            # what a person reads
+    channels: [sms]                         # channels it can be sent on, in order of preference
+    offer_cost: 0.0                         # rupees per offer taken - replace with the client's figure
+    contact_cost: 0.0                       # rupees per contact - replace with the client's figure
+    dlt_template_id: "<your DLT template id>"   # placeholder: refused until replaced
+    message_category: promotional           # promotional | service | transactional
+
+  - action_id: example_offer_any
+    label: "Example offer (email, else SMS)"
+    channels: [email, sms]                  # email when contactable by email, else SMS
+    offer_cost: 0.0
+    contact_cost: 0.0
+    dlt_template_id: "<your DLT template id>"
+    message_category: promotional

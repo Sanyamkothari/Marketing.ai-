@@ -345,6 +345,7 @@ ROW_LEVEL_ARTEFACTS: Final[frozenset[str]] = frozenset(
         "holdout_assignment.parquet",  # Plan J M92 (DEC-1302 (e)): holdout and explore flags per customer
         "treat_list.csv",  # Plan J M98 (DEC-1308): treat list with offer, channel, reasons, net value
         "treat_list.parquet",
+        "channel_contactability.parquet",  # Plan J M99 (DEC-1309): contactable flag per channel per customer
     }
 )
 """Run files that hold one row per customer (Plan J M91, M92). `configs/privacy.yaml`

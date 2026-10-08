@@ -54,7 +54,12 @@ from engine.privacy.contracts import (
     ConsentReport,
     ConsentStatus,
 )
-from engine.privacy.tables import CONSENT_RECORD_TABLE, ConsentRecordRow, create_privacy_tables
+from engine.privacy.tables import (
+    CONSENT_RECORD_TABLE,
+    ConsentRecordRow,
+    add_missing_columns,
+    create_privacy_tables,
+)
 from engine.registry import aware_utc, to_utc
 from engine.settings import Settings, load_settings
 from engine.storage import LocalStorage, Storage
@@ -142,7 +147,9 @@ class ConsentLedger:
 
     `salt` is `privacy_salt(settings)`; every principal id is hashed with it on the way in and on
     every lookup. `create=False` is for readers that must not create a table as a side effect - the
-    scoring seam, which checks for the table instead.
+    scoring seam, which checks for the table instead. It still brings an existing SQLite table up to
+    date with a column a later revision added (`add_missing_columns`): a `platform.db` from before
+    Plan J M99 has no `consent_record.channel`, and every read selects it.
     """
 
     def __init__(self, engine: Engine, *, salt: str, create: bool = True) -> None:
@@ -150,6 +157,8 @@ class ConsentLedger:
         self._salt = salt
         if create:
             create_privacy_tables(engine)
+        else:
+            add_missing_columns(engine)
 
     @property
     def engine(self) -> Engine:
@@ -183,7 +192,7 @@ class ConsentLedger:
             recorded_at=to_utc(recorded_at),
             expires_at=None if expires_at is None else to_utc(expires_at),
             created_at=utc_now(),
-            channel=channel,
+            channel=_channel(channel),
         )
         with Session(self._engine) as session:
             session.add(row)
@@ -376,7 +385,7 @@ class ConsentLedger:
         When `channel` is None, matches rows applying to all channels (channel is null).
         """
         latest: dict[str, ConsentRecordRow] = {}
-        target_channel = channel.strip().lower() if channel is not None else None
+        target_channel = _channel(channel)
         with Session(self._engine) as session:
             for start in range(0, len(hashes), _IN_CHUNK):
                 chunk = hashes[start : start + _IN_CHUNK]
@@ -496,11 +505,18 @@ def _parse_row(
             f"Row {number}: expires_at is not after recorded_at.",
         )
     source = cell("source") or DEFAULT_IMPORT_SOURCE
-    raw_channel = cell("channel")
-    channel = raw_channel.lower() if raw_channel else None
+    channel = _channel(cell("channel"))
     if len(errors) > before or status is None or recorded_at is None:
         return None
     return principal, purpose, status, source, recorded_at, expires_at, channel
+
+
+def _channel(value: str | None) -> str | None:
+    """A record's channel as stored and compared: stripped lower case; empty is null (every channel)."""
+    if value is None:
+        return None
+    text = value.strip().lower()
+    return text or None
 
 
 def _parse_time(text: str) -> datetime | None:
@@ -617,7 +633,7 @@ def apply_consent_gate(
 ) -> tuple[pd.DataFrame, UseCaseConfig, ConsentReport]:
     """The frame with the ledger's verdict in the consent column, the config naming it, and the report.
 
-    The verdict is a real boolean per row, so `actions._truthy` reads it the way it reads any
+    The verdict is a real boolean per row, so `actions.truthy` reads it the way it reads any
     consent column. The configuration is copied, never mutated; when the use case already has a
     consent column the copy is the same object and the column becomes the ledger lookup - the
     plan's "the Phase 1 consent column becomes a lookup against this ledger" - **combined with the
@@ -636,9 +652,9 @@ def apply_consent_gate(
         gated_config = config.model_copy(update={"governance": governance})
     ledger_valid = [key in verdict.valid for key in keys]
     if replaced:
-        from engine.stages.actions import _truthy  # the rule actions itself applies to the column
+        from engine.stages.actions import truthy  # the rule actions itself applies to the column
 
-        in_file = [bool(value) for value in _truthy(frame[column]).tolist()]
+        in_file = [bool(value) for value in truthy(frame[column]).tolist()]
     else:
         in_file = [True] * len(keys)
     final = [ledger and file for ledger, file in zip(ledger_valid, in_file, strict=True)]

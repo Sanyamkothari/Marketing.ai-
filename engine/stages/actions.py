@@ -105,6 +105,7 @@ __all__ = [
     "apply_actions",
     "assign_bands",
     "suppression_rules",
+    "truthy",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -286,8 +287,12 @@ def _suppression(
     return reasons, tuple(applied), tuple(skipped)
 
 
-def _truthy(values: pd.Series) -> pd.Series:
-    """A boolean series: which values count as true for a consent or opt-in column (nulls do not)."""
+def truthy(values: pd.Series) -> pd.Series:
+    """A boolean series: which values count as true for a consent or opt-in column (nulls do not).
+
+    Public (Plan J M99) so the consent gate and the per-channel contactability read a column exactly
+    as the suppression rules do; `_truthy` stays as an alias.
+    """
     import pandas as pd
 
     if pd.api.types.is_bool_dtype(values.dtype):
@@ -297,6 +302,10 @@ def _truthy(values: pd.Series) -> pd.Series:
     text = values.astype("string").str.strip().str.lower()
     from_text = text.isin(_TRUTHY_TEXT).fillna(value=False)
     return (from_number | from_text).astype(bool)
+
+
+_truthy = truthy
+"""The name this helper had before it was made public (Plan J M99)."""
 
 
 def _recently_contacted(values: pd.Series, *, days: int, now: datetime) -> pd.Series:

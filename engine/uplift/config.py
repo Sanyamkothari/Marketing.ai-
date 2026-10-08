@@ -96,8 +96,12 @@ class UpliftPolicyConfig(BaseModel):
     horizon_months: Annotated[int | None, Field(ge=1, le=120)] = None
     margin_pct: Annotated[float | None, Field(ge=0.0, le=100.0)] = None
     min_roi: Annotated[float | None, Field(ge=0.0)] = None
-    # Plan J M99 (DEC-1309): treat action id from catalogue.
-    treat_action_id: Annotated[str | None, Field(min_length=1)] = None
+    # Plan J M99 (DEC-1309): the catalogue action an uplift run's treat rows are sent
+    # (`configs/decide/catalogue.yaml`). Left out of the serialised config while unset, so a use
+    # case without one dumps exactly as before M99.
+    treat_action_id: Annotated[str | None, Field(min_length=1)] = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 class UpliftEvidenceConfig(BaseModel):

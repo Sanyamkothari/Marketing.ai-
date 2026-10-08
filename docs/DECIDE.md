@@ -307,32 +307,49 @@ for the hand-off, and the Output page labels them differently: **Download contac
 
 ## 13. The offer and channel catalogue; channel-aware consent (M99, DEC-1309)
 
-* **The action catalogue (`configs/decide/catalogue.yaml`).**
-  Validated by a frozen pydantic model `ActionCatalogue` (`engine/decide/catalogue.py`), following the `configs/privacy.yaml` pattern.
-  Each entry defines `action_id`, human-readable `label`, `channel` (single channel or comma-separated channels), `offer_cost` (in rupees),
-  `contact_cost` (in rupees), optional `eligibility`, and channel-specific requirements such as `dlt_template_id` and `message_category`.
-  A cryptographic fingerprint `catalogue_sha256` is computed over the catalogue and stamped on every treat list summary (`TreatListSummary.catalogue_sha256`).
-* **Single point of value costs lookup (`engine/pilot/roi.py::lookup_value_costs`).**
-  `lookup_value_costs` inspects `configs/decide/catalogue.yaml` first, returning offer and contact costs for an action or channel when present,
-  and falls back to `configs/pilot/value.yaml`. Both value ranking and ROI analysis draw from this unified lookup.
-* **Additive action references in use cases.**
-  Use cases reference catalogue actions additively via `Band.action_id` (propensity) and `uplift.policy.treat_action_id` (uplift).
-  The free-text `Band.action` remains as the display label. Referencing an unknown `action_id` fails configuration load with `CATALOGUE_ACTION_UNKNOWN`.
-* **Channel-aware suppression and contactability.**
-  Use case suppression configuration declares per-channel consent and contactability via `SuppressionConfig.channels {channel: {consent_column, contactable_column}}`.
-  The core 3-value suppression reason Literal (`consent_false`, `opted_out`, `recently_contacted`) and DEC-A2 precedence remain unchanged.
-  Opting out of a specific channel does NOT suppress the customer in `scores.csv` (preserving their model band and score).
-  Per-channel suppression tallies are emitted in `SuppressionCount.channel_counts: dict[str, int] | None`.
-* **Treat list contactability and channel selection.**
-  A customer is treated only on a channel they are contactable on. The treat list carries:
-  - `contactable_channels`: comma-separated list of channels the customer has consent and contactability for, or null when absent.
-  - `channel`: the specific contactable channel chosen for treatment.
-  If a customer's only planned channel is opted out, they are not treated (`treat = 0`), `channel` is left null, and they are tallied in `channel_counts`.
-* **Channel-aware Consent Ledger.**
-  The consent ledger table gains a nullable `channel` column (`alembic/versions/0007_consent_channel.py` chained to `0006_campaigns`).
-  A null channel represents universal consent across all channels. `ConsentLedger.classify(..., channel=None)` matches both universal records
-  and channel-specific records when a channel is queried.
-* **Data-driven regional rules.**
-  Regional compliance constraints are declared in data files under `configs/regions/<region>.yaml` (such as `in.yaml` specifying `sms_requires: [dlt_template_id, message_category]`).
-  Catalogue validation checks the configured region's rules dynamically without hardcoding any region names in Python code.
-  An SMS action in India missing a DLT template ID is rejected at config load with `ACTION_DLT_TEMPLATE_MISSING`.
+* **The action catalogue (`configs/decide/catalogue.yaml`), absent by default.**
+  Validated by a frozen pydantic model `ActionCatalogue` (`engine/decide/catalogue.py`), following the
+  `configs/privacy.yaml` pattern. Each action has an `action_id`, a `label`, `channels` (a list, in order of
+  preference; a single `channel: sms` is accepted), `offer_cost` and `contact_cost` in rupees, an optional
+  `eligibility`, and channel requirements such as `dlt_template_id` and `message_category`. The repository
+  ships **no** catalogue: `configs/decide/catalogue.example.yaml` is a labelled example, never read. With no
+  catalogue nothing changes: no action id is checked, no cost is overridden, and the treat list's
+  `catalogue_sha256` is null. When one exists, its SHA-256 is stamped on every treat list summary.
+* **Costs (`engine/pilot/roi.py::lookup_value_costs`).** Still the one place costs are looked up. With a
+  catalogue, its channels' contact costs replace `configs/pilot/value.yaml`'s for those channels (the first
+  action listing a channel decides). An **offer** cost comes only from an action id (`action_id=`); a channel
+  gives a contact cost only. An unknown action id is `CATALOGUE_ACTION_UNKNOWN`.
+* **Use cases point at actions additively:** `actions.bands[].action_id` and `uplift.policy.treat_action_id`.
+  `Band.action` stays the label. An id the catalogue does not declare fails config load with
+  `CATALOGUE_ACTION_UNKNOWN`. Unset, neither field is serialised, so a default config dumps as before.
+* **Per-channel consent and contactability (`actions.suppression.channels`).**
+  `{channel: {consent_column, contactable_column}}`, in order of preference. A channel opt-out is **not** a
+  suppression reason: the three reasons and their precedence (DEC-A2) are unchanged, and the customer keeps
+  their score, band and action in `scores.csv`. During the run, right after the actions stage
+  (`engine/decide/contactability.py`, installed in the Plan J block of `engine/pipeline.py`), each customer's
+  contactability per channel is worked out from the columns **as uploaded** (Phase 1's truthiness: a null is
+  not a consent) and, when the consent ledger gates the run, from the ledger's records for that channel
+  (`ConsentLedger.classify(..., channel=ch)`). It is written as `channel_contactability.parquet` (the key
+  columns and one `contactable_<channel>` flag per channel; row-level, Analyst-only) and
+  `channel_contactability.json` (counts). A configured column the file lacks is skipped with a warning. With
+  no channels configured, nothing runs and nothing new is written.
+* **`channel_counts`.** Per channel, the customers **eligible to be treated** (neither suppressed nor held out
+  as control) who are not contactable on it. They are in `channel_contactability.json`, in the treat list
+  summary, and on the `opted_out` entry (else the `consent_false` entry) of `scoring_summary.json`'s
+  `suppressed` list. No entry is added for them: when neither rule ran, the summary has none.
+* **The treat list.** It joins `channel_contactability.parquet` on every key column. The planned channels are
+  the catalogue action's (the band's `action_id`, or the uplift run's `treat_action_id`); with no catalogue
+  action they are the configured channels. A treated customer is sent on the first planned channel they are
+  contactable on (`channel`); one contactable on none of them is **not treated** (`treat = 0`), is counted
+  in `uncontactable_rows`, and is not suppressed. `contactable_channels` lists every configured channel the
+  customer is contactable on; it is null for a customer the file does not cover (and for every customer of a
+  run with no channels configured), who is treated as before, on the first planned channel.
+* **The consent ledger per channel.** `consent_record.channel` is nullable (`alembic/versions/0007_consent_channel.py`;
+  on a laptop's SQLite `platform.db`, the column is added in place, also when the scoring seam opens the
+  ledger). Null means every channel, so every record stored before M99 keeps applying to all of them. The
+  scoring gate's all-channel question (`channel=None`) reads only all-channel records: an SMS-only
+  withdrawal closes SMS and does not suppress the customer.
+* **Region rules, data-driven.** `configs/regions/<region>.yaml` (such as `in.yaml`:
+  `sms_requires: [dlt_template_id, message_category]`) is applied to the catalogue's `region` without naming
+  any region in Python. A missing DLT template id is `ACTION_DLT_TEMPLATE_MISSING`; another missing required
+  field is `CATALOGUE_INVALID`. A value left as a placeholder in angle brackets counts as missing.

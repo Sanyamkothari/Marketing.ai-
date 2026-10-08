@@ -1129,7 +1129,13 @@ class SuppressionCount(Artefact):
     rows: int = Field(description="Rows suppressed for this reason.")
     channel_counts: dict[str, int] | None = Field(
         default=None,
-        description="Per-channel suppression counts (Plan J M99).",
+        description=(
+            "Plan J M99: per configured channel, the rows neither suppressed nor held out as control "
+            "that are not contactable on that channel (they stay unsuppressed, and are only not "
+            "treated on it). Carried by the `opted_out` entry, else the `consent_false` entry; "
+            "absent from the file when the use case configures no channels."
+        ),
+        exclude_if=lambda value: value is None,
     )
 
 

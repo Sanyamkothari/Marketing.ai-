@@ -879,7 +879,7 @@ Extra column-name hints the helper uses on top of the use case's own detection h
 
 #### ChannelSuppressionConfig
 
-Channel-level consent and contactability columns (Plan J M99).
+One channel's consent and contactability columns (Plan J M99, DEC-1309).  Either column may be null; a configured column the scoring file lacks is skipped with a warning, like a Phase 1 suppression column (DEC-030). Truthiness is Phase 1's (`engine.stages.actions.truthy`): a null is not a consent.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -1553,7 +1553,7 @@ How many rows one suppression rule removed from targeting.
 | `schema_version` | integer | no | Version of the contract the file was written with. |
 | `reason` | "opted_out" \| "recently_contacted" \| "consent_false" | yes | Why the rows were suppressed. |
 | `rows` | integer | yes | Rows suppressed for this reason. |
-| `channel_counts` | object of string -> integer \| null | no | Per-channel suppression counts (Plan J M99). |
+| `channel_counts` | object of string -> integer \| null | no | Plan J M99: per configured channel, the rows neither suppressed nor held out as control that are not contactable on that channel (they stay unsuppressed, and are only not treated on it). Carried by the `opted_out` entry, else the `consent_false` entry; absent from the file when the use case configures no channels. |
 
 #### KpiValue
 
