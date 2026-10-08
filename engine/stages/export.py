@@ -345,6 +345,8 @@ def _action_counts(frame: pd.DataFrame) -> tuple[ActionCount, ...]:
 
 def _suppression_counts(frame: pd.DataFrame, config: UseCaseConfig) -> tuple[SuppressionCount, ...]:
     """One entry per suppression rule that ran, in precedence order; skipped rules are left out."""
+    from engine.stages.actions import _truthy
+
     recorded = frame.attrs.get(APPLIED_RULES_ATTR)
     if isinstance(recorded, tuple | list):
         applied = [str(code) for code in recorded]
@@ -353,11 +355,37 @@ def _suppression_counts(frame: pd.DataFrame, config: UseCaseConfig) -> tuple[Sup
         # column the frame still carries, which is the same set apply_actions would have run.
         applied = [code for code, column in suppression_rules(config) if column in frame.columns]
     counts = frame[SUPPRESSED_REASON_COLUMN].value_counts()
-    return tuple(
-        SuppressionCount(reason=code, rows=int(counts.get(code, 0)))
-        for code in _REASON_CODES  # precedence order, and the only codes the contract allows
-        if code in applied
-    )
+
+    # Per-channel counts (Plan J M99)
+    channel_counts: dict[str, int] = {}
+    channels_cfg = config.actions.suppression.channels
+    if channels_cfg:
+        for ch, ch_cfg in channels_cfg.items():
+            if ch_cfg.consent_column and ch_cfg.consent_column in frame.columns:
+                denied_count = int((~_truthy(frame[ch_cfg.consent_column])).sum())
+                channel_counts[f"consent_denied_{ch.lower()}"] = denied_count
+            if ch_cfg.contactable_column and ch_cfg.contactable_column in frame.columns:
+                not_contactable_count = int((~_truthy(frame[ch_cfg.contactable_column])).sum())
+                channel_counts[f"not_contactable_{ch.lower()}"] = not_contactable_count
+
+    ch_counts_or_none = channel_counts if channel_counts else None
+
+    results: list[SuppressionCount] = []
+    attached = False
+    for code in _REASON_CODES:  # precedence order, and the only codes the contract allows
+        if code in applied:
+            item_ch = None
+            if not attached and (code == "opted_out" or (code == applied[0] and "opted_out" not in applied)):
+                item_ch = ch_counts_or_none
+                attached = True
+            results.append(
+                SuppressionCount(reason=code, rows=int(counts.get(code, 0)), channel_counts=item_ch)
+            )
+
+    if not attached and ch_counts_or_none is not None:
+        results.append(SuppressionCount(reason="opted_out", rows=0, channel_counts=ch_counts_or_none))
+
+    return tuple(results)
 
 
 def _sample_rows(frame: pd.DataFrame, config: UseCaseConfig, *, primary_key: str) -> tuple[ScoreRow, ...]:

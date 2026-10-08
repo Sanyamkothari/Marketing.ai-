@@ -49,7 +49,7 @@ def cpu_model() -> str:
             )
             return out.stdout.strip() or "unknown CPU"
         except (OSError, subprocess.CalledProcessError):
-            return "unknown CPU"
+            pass
     cpuinfo = Path("/proc/cpuinfo")
     if cpuinfo.is_file():
         for line in cpuinfo.read_text(encoding="utf-8", errors="replace").splitlines():
@@ -65,7 +65,7 @@ def memory_gib() -> float | None:
             out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True)
             return int(out.stdout.strip()) / 1024**3
         except (OSError, ValueError, subprocess.CalledProcessError):
-            return None
+            pass
     meminfo = Path("/proc/meminfo")
     if meminfo.is_file():
         for line in meminfo.read_text(encoding="utf-8").splitlines():

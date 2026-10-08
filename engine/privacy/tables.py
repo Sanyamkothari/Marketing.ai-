@@ -80,6 +80,7 @@ class ConsentRecordRow(SQLModel, table=True):
         default=None, sa_column=Column("expires_at", DateTime(timezone=True), nullable=True)
     )
     created_at: datetime = SQLField(sa_column=Column("created_at", DateTime(timezone=True), nullable=False))
+    channel: str | None = SQLField(default=None, nullable=True)
 
 
 class ErasureRequestRow(SQLModel, table=True):

@@ -40,6 +40,7 @@ from pydantic import Field
 
 from engine.config import ResolvedConfig, RunMode, UseCaseConfig
 from engine.contracts import Artefact, RunRecord, RunState
+from engine.decide.catalogue import catalogue_or_none, catalogue_sha256
 from engine.decide.reasons import extract_and_map_reasons_from_parquet, load_reasons_dictionary
 from engine.decide.value import EXPECTED_GROSS_VALUE_FILENAME, ExpectedGrossValue, expected_gross_values
 from engine.holdout.assign import (
@@ -60,6 +61,7 @@ from engine.stages.actions import (
     CONTROL_GROUP_COLUMN,
     SUPPRESSED_ACTION,
     SUPPRESSED_REASON_COLUMN,
+    _truthy,
 )
 from engine.stages.export import SCORES_CSV, SCORES_PARQUET
 from engine.storage import Storage, StorageError, run_key
@@ -174,6 +176,10 @@ class TreatListSummary(Artefact):
         description="Says the figure is not incremental when it is filled, or why it is not filled.",
     )
     created_at: datetime = Field(description="UTC time the treat list was built.")
+    catalogue_sha256: str | None = Field(
+        default=None,
+        description="SHA-256 fingerprint of configs/decide/catalogue.yaml, or null when absent.",
+    )
 
 
 def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None = None) -> TreatListSummary:
@@ -252,10 +258,20 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     net_value, net_value_note, net_value_unit = _net_value(scores, is_uplift)
     gross_value, gross_note = _expected_gross_value(storage, record, config, scores, row_keys, is_uplift)
 
-    # 5. Reasons, in business words.
+    # 5. Channel and contactability (Plan J M99)
+    cat_sha = catalogue_sha256(root=config_root)
+    treat, channel, contactable_channels = _resolve_channels_and_treatment(
+        scores=scores,
+        config=config,
+        treat=treat,
+        is_uplift=is_uplift,
+        config_root=config_root,
+    )
+
+    # 6. Reasons, in business words.
     reasons = _reasons(storage, run_id, scores, row_keys, config_root)
 
-    # 6. Assemble, then write.
+    # 7. Assemble, then write.
     out = _assemble(
         scores=scores,
         key_cols=key_cols,
@@ -265,6 +281,8 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         flags=flags,
         suppression=suppression,
         offer=offer,
+        channel=channel,
+        contactable_channels=contactable_channels,
         net_value=net_value,
         gross_value=gross_value,
         reasons=reasons,
@@ -288,6 +306,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         net_value_note=net_value_note,
         expected_gross_value_note=gross_note,
         created_at=utc_now(),
+        catalogue_sha256=cat_sha,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -546,6 +565,104 @@ def _total(values: pd.Series[Any], treat: np.ndarray) -> float | None:
     return float(np.nansum(np.where(treat, numbers, 0.0)))
 
 
+def _resolve_channels_and_treatment(
+    *,
+    scores: pd.DataFrame,
+    config: UseCaseConfig,
+    treat: np.ndarray,
+    is_uplift: bool,
+    config_root: Path | None,
+) -> tuple[np.ndarray, pd.Series[Any], pd.Series[Any]]:
+    """Determine channel contactability, select contactable channel, and enforce that untreated rows have no channel.
+
+    A row is treated only on a channel it is contactable on. A row with no contactable planned channel
+    is not treated (treat = 0), but is not suppressed in scores.csv.
+    """
+    n_rows = len(scores.index)
+    channels_cfg = config.actions.suppression.channels or {}
+    catalogue = catalogue_or_none(root=config_root)
+    catalogue_actions = {a.action_id: a for a in catalogue.actions} if catalogue is not None else {}
+
+    # 1. Per-channel contactability masks from suppression.channels
+    channel_contactable_masks: dict[str, np.ndarray] = {}
+    for ch, ch_cfg in channels_cfg.items():
+        ch_lower = ch.lower()
+        mask = np.ones(n_rows, dtype=bool)
+        if ch_cfg.consent_column and ch_cfg.consent_column in scores.columns:
+            mask &= _truthy(scores[ch_cfg.consent_column]).to_numpy(dtype=bool)
+        if ch_cfg.contactable_column and ch_cfg.contactable_column in scores.columns:
+            mask &= _truthy(scores[ch_cfg.contactable_column]).to_numpy(dtype=bool)
+        channel_contactable_masks[ch_lower] = mask
+
+    # 2. contactable_channels column (all channels the customer is contactable on)
+    if channels_cfg:
+        cfg_channels = list(channels_cfg.keys())
+        code = np.zeros(n_rows, dtype=np.int32)
+        for idx, ch in enumerate(cfg_channels):
+            mask = channel_contactable_masks[ch.lower()]
+            code |= mask.astype(np.int32) << idx
+        lookup: dict[int, str | None] = {}
+        for m in range(1 << len(cfg_channels)):
+            active = [ch for idx, ch in enumerate(cfg_channels) if (m >> idx) & 1]
+            lookup[m] = ",".join(active) if active else None
+        contactable_channels_series = pd.Series(pd.Index(code).map(lookup), dtype="object")
+    else:
+        contactable_channels_series = pd.Series(None, index=range(n_rows), dtype="object")
+
+    # 3. Planned channels per band or uplift
+    treat_out = treat.copy()
+    chosen_channel: np.ndarray = np.empty(n_rows, dtype=object)
+    chosen_channel[:] = None
+
+    if is_uplift:
+        uplift_planned: list[str] = []
+        treat_aid = config.uplift.policy.treat_action_id if config.uplift and config.uplift.policy else None
+        if treat_aid and treat_aid in catalogue_actions:
+            uplift_planned = list(catalogue_actions[treat_aid].channels)
+        elif channels_cfg:
+            uplift_planned = [c.lower() for c in channels_cfg]
+
+        if uplift_planned:
+            has_any = np.zeros(n_rows, dtype=bool)
+            selected_ch = np.empty(n_rows, dtype=object)
+            selected_ch[:] = None
+            for ch in reversed(uplift_planned):
+                ch_ok = channel_contactable_masks.get(ch, np.ones(n_rows, dtype=bool))
+                selected_ch = np.where(ch_ok, ch, selected_ch)
+                has_any |= ch_ok
+            treat_out[~has_any] = False
+            chosen_channel[treat_out] = selected_ch[treat_out]
+    else:
+        band_planned: dict[str, list[str]] = {}
+        for b in config.actions.bands:
+            if b.action_id and b.action_id in catalogue_actions:
+                band_planned[b.name] = list(catalogue_actions[b.action_id].channels)
+            elif channels_cfg:
+                band_planned[b.name] = [c.lower() for c in channels_cfg]
+            else:
+                band_planned[b.name] = []
+
+        band_col = scores[BAND_COLUMN].astype(str)
+        for b_name, planned in band_planned.items():
+            if not planned:
+                continue
+            band_mask = (band_col == b_name).to_numpy(dtype=bool)
+            if not band_mask.any():
+                continue
+            has_any = np.zeros(n_rows, dtype=bool)
+            selected_ch = np.empty(n_rows, dtype=object)
+            selected_ch[:] = None
+            for ch in reversed(planned):
+                ch_ok = channel_contactable_masks.get(ch, np.ones(n_rows, dtype=bool))
+                selected_ch = np.where(ch_ok, ch, selected_ch)
+                has_any |= ch_ok
+            treat_out[band_mask & ~has_any] = False
+            chosen_channel[band_mask & treat_out] = selected_ch[band_mask & treat_out]
+
+    chosen_channel_series = pd.Series(chosen_channel, dtype="object")
+    return treat_out, chosen_channel_series, contactable_channels_series
+
+
 # ---------------------------------------------------------------------------
 # Assembling and writing
 # ---------------------------------------------------------------------------
@@ -559,6 +676,8 @@ def _assemble(
     flags: _Flags,
     suppression: pd.Series[Any],
     offer: pd.Series[Any],
+    channel: pd.Series[Any],
+    contactable_channels: pd.Series[Any],
     net_value: pd.Series[Any],
     gross_value: pd.Series[Any],
     reasons: pd.DataFrame,
@@ -574,7 +693,8 @@ def _assemble(
     data["explore"] = flags.explore
     data["suppression_reason"] = suppression.astype("object")
     data["offer"] = offer.astype("object")
-    data["channel"] = pd.Series([None] * n, dtype="object")
+    data["channel"] = channel.astype("object")
+    data["contactable_channels"] = contactable_channels.astype("object")
     data["net_value"] = net_value
     data[EXPECTED_GROSS_VALUE_COLUMN] = gross_value
     for name in REASON_COLUMNS:
@@ -594,6 +714,7 @@ def _schema(is_uplift: bool, key_cols: tuple[str, ...]) -> pa.Schema:
         pa.field("suppression_reason", pa.string()),
         pa.field("offer", pa.string()),
         pa.field("channel", pa.string()),
+        pa.field("contactable_channels", pa.string()),
         pa.field("net_value", pa.float64()),
         pa.field(EXPECTED_GROSS_VALUE_COLUMN, pa.float64()),
         *[pa.field(name, pa.string()) for name in REASON_COLUMNS],

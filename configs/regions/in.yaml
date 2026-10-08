@@ -1,0 +1,5 @@
+# Region profile for India (IN) - Plan J M99 stub.
+# Data-driven requirements for channels in this region.
+sms_requires:
+  - dlt_template_id
+  - message_category

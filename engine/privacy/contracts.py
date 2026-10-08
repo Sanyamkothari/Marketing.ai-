@@ -75,6 +75,9 @@ class ConsentRecord(_Doc):
     recorded_at: AwareDatetime = Field(description="When the principal gave or withdrew consent, UTC.")
     expires_at: AwareDatetime | None = Field(default=None, description="When a grant lapses; null = never.")
     created_at: AwareDatetime = Field(description="When the record entered the ledger, UTC.")
+    channel: str | None = Field(
+        default=None, description="Channel the consent applies to; null = all channels."
+    )
 
 
 class ConsentImportError(_Doc):

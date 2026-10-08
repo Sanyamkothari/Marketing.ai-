@@ -778,6 +778,14 @@ class Band(_Base):
     name: Annotated[str, Field(min_length=1, max_length=40)]
     min_score: Annotated[float, Field(ge=0.0, le=1.0)]
     action: Annotated[str, Field(min_length=1, max_length=80)]
+    action_id: Annotated[str | None, Field(min_length=1)] = None
+
+
+class ChannelSuppressionConfig(_Base):
+    """Channel-level consent and contactability columns (Plan J M99)."""
+
+    consent_column: str | None = None
+    contactable_column: str | None = None
 
 
 class SuppressionConfig(_Base):
@@ -786,6 +794,7 @@ class SuppressionConfig(_Base):
     suppress_recently_contacted: bool = True
     recently_contacted_column: str | None = "last_contacted_at"
     recently_contacted_days: Annotated[int, Field(ge=1, le=90)] = 14
+    channels: dict[str, ChannelSuppressionConfig] = Field(default_factory=dict)
 
 
 class ActionsConfig(_Base):
@@ -1703,7 +1712,37 @@ def load_use_case(use_case_id: str, root: Path | None = None) -> UseCaseConfig:
     document = load_use_case_document(use_case_id, root)
     config = _validate_use_case(document, catalog=get_catalog(root))
     check_dependencies(config)
+    _validate_action_ids(config, root=root)
     return config
+
+
+def _validate_action_ids(config: UseCaseConfig, *, root: Path | None = None) -> None:
+    """Refuse unknown action_id in Band.action_id or uplift.policy.treat_action_id when catalogue exists (Plan J M99)."""
+    from engine.decide.catalogue import catalogue_or_none
+
+    catalogue = catalogue_or_none(root)
+    if catalogue is None:
+        return
+    known = set(catalogue.action_ids)
+    for i, band in enumerate(config.actions.bands):
+        if band.action_id is not None and band.action_id not in known:
+            raise ConfigError(
+                "CATALOGUE_ACTION_UNKNOWN",
+                f"actions.bands[{i}] references unknown action_id {band.action_id!r}; "
+                f"known actions in catalogue: {', '.join(sorted(known)) or 'none'}.",
+                path=f"actions.bands[{i}].action_id",
+            )
+    if (
+        config.uplift is not None
+        and config.uplift.policy.treat_action_id is not None
+        and config.uplift.policy.treat_action_id not in known
+    ):
+        raise ConfigError(
+            "CATALOGUE_ACTION_UNKNOWN",
+            f"uplift.policy.treat_action_id references unknown action_id {config.uplift.policy.treat_action_id!r}; "
+            f"known actions in catalogue: {', '.join(sorted(known)) or 'none'}.",
+            path="uplift.policy.treat_action_id",
+        )
 
 
 def _validate_use_case(document: Mapping[str, Any], *, catalog: Catalog) -> UseCaseConfig:
@@ -2081,6 +2120,7 @@ def resolve_config(
         warnings.append(switch_note)
     final = _validate_use_case(document, catalog=catalog)
     check_dependencies(final)
+    _validate_action_ids(final, root=root)
     if final.split.type is SplitType.TIME_BASED and final.split.time_column is None:
         warnings.append("split.type is time_based and no time column is set yet")
     return ResolvedConfig(

@@ -29,7 +29,7 @@ the user downloads (the treat list).
 | 10 | Uplift stability, calibration and the beats-risk check | M96 | written (below) |
 | 11 | Ranking by net value | M97 | not yet written |
 | 12 | The treat list and its reasons | M98 | written (below) |
-| 13 | The offer and channel catalogue; channel-aware consent | M99 | not yet written |
+| 13 | The offer and channel catalogue; channel-aware consent | M99 | written (below) |
 | 14 | Choosing the offer (multi-treatment uplift) | M100 | not yet written |
 | 15 | One action per customer across use cases | M101 | not yet written |
 | 16 | Revenue outcomes and CUPED | M102 | not yet written |
@@ -304,3 +304,35 @@ for the hand-off, and the Output page labels them differently: **Download contac
 * **Scale.** The builder works on whole columns (Arrow compute and hash joins on the key), with no loop over
   customers. 200,000 customers with every input take about 3 seconds on a shared 4-CPU machine, so one million
   take about 13 to 16 seconds (`tests/unit/decide/test_treat_list_scale.py`).
+
+## 13. The offer and channel catalogue; channel-aware consent (M99, DEC-1309)
+
+* **The action catalogue (`configs/decide/catalogue.yaml`).**
+  Validated by a frozen pydantic model `ActionCatalogue` (`engine/decide/catalogue.py`), following the `configs/privacy.yaml` pattern.
+  Each entry defines `action_id`, human-readable `label`, `channel` (single channel or comma-separated channels), `offer_cost` (in rupees),
+  `contact_cost` (in rupees), optional `eligibility`, and channel-specific requirements such as `dlt_template_id` and `message_category`.
+  A cryptographic fingerprint `catalogue_sha256` is computed over the catalogue and stamped on every treat list summary (`TreatListSummary.catalogue_sha256`).
+* **Single point of value costs lookup (`engine/pilot/roi.py::lookup_value_costs`).**
+  `lookup_value_costs` inspects `configs/decide/catalogue.yaml` first, returning offer and contact costs for an action or channel when present,
+  and falls back to `configs/pilot/value.yaml`. Both value ranking and ROI analysis draw from this unified lookup.
+* **Additive action references in use cases.**
+  Use cases reference catalogue actions additively via `Band.action_id` (propensity) and `uplift.policy.treat_action_id` (uplift).
+  The free-text `Band.action` remains as the display label. Referencing an unknown `action_id` fails configuration load with `CATALOGUE_ACTION_UNKNOWN`.
+* **Channel-aware suppression and contactability.**
+  Use case suppression configuration declares per-channel consent and contactability via `SuppressionConfig.channels {channel: {consent_column, contactable_column}}`.
+  The core 3-value suppression reason Literal (`consent_false`, `opted_out`, `recently_contacted`) and DEC-A2 precedence remain unchanged.
+  Opting out of a specific channel does NOT suppress the customer in `scores.csv` (preserving their model band and score).
+  Per-channel suppression tallies are emitted in `SuppressionCount.channel_counts: dict[str, int] | None`.
+* **Treat list contactability and channel selection.**
+  A customer is treated only on a channel they are contactable on. The treat list carries:
+  - `contactable_channels`: comma-separated list of channels the customer has consent and contactability for, or null when absent.
+  - `channel`: the specific contactable channel chosen for treatment.
+  If a customer's only planned channel is opted out, they are not treated (`treat = 0`), `channel` is left null, and they are tallied in `channel_counts`.
+* **Channel-aware Consent Ledger.**
+  The consent ledger table gains a nullable `channel` column (`alembic/versions/0007_consent_channel.py` chained to `0006_campaigns`).
+  A null channel represents universal consent across all channels. `ConsentLedger.classify(..., channel=None)` matches both universal records
+  and channel-specific records when a channel is queried.
+* **Data-driven regional rules.**
+  Regional compliance constraints are declared in data files under `configs/regions/<region>.yaml` (such as `in.yaml` specifying `sms_requires: [dlt_template_id, message_category]`).
+  Catalogue validation checks the configured region's rules dynamically without hardcoding any region names in Python code.
+  An SMS action in India missing a DLT template ID is rejected at config load with `ACTION_DLT_TEMPLATE_MISSING`.

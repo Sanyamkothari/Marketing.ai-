@@ -90,7 +90,7 @@ Never exported: `scores.csv` carries `scores_csv_columns(...)` and nothing else,
 only between the actions stage and the export stage of one run."""
 
 CONSENT_CSV_REQUIRED: Final[tuple[str, ...]] = ("principal_id", "purpose", "status", "recorded_at")
-CONSENT_CSV_OPTIONAL: Final[tuple[str, ...]] = ("source", "expires_at")
+CONSENT_CSV_OPTIONAL: Final[tuple[str, ...]] = ("source", "expires_at", "channel")
 DEFAULT_IMPORT_SOURCE: Final[str] = "csv_import"
 MAX_PRINCIPAL_ID_CHARS: Final[int] = 256
 FUTURE_TOLERANCE: Final[timedelta] = timedelta(minutes=5)
@@ -171,6 +171,7 @@ class ConsentLedger:
         source: str,
         recorded_at: datetime,
         expires_at: datetime | None = None,
+        channel: str | None = None,
     ) -> ConsentRecord:
         """Append one record and return it. The caller has validated `purpose` against the config."""
         row = ConsentRecordRow(
@@ -182,6 +183,7 @@ class ConsentLedger:
             recorded_at=to_utc(recorded_at),
             expires_at=None if expires_at is None else to_utc(expires_at),
             created_at=utc_now(),
+            channel=channel,
         )
         with Session(self._engine) as session:
             session.add(row)
@@ -233,7 +235,7 @@ class ConsentLedger:
             parsed = _parse_row(cells, number, position, len(header), privacy, moment, errors)
             if parsed is None:
                 continue
-            principal, purpose, status, source, recorded_at, expires_at = parsed
+            principal, purpose, status, source, recorded_at, expires_at, channel = parsed
             rows.append(
                 ConsentRecordRow(
                     client_id=client_id,
@@ -244,6 +246,7 @@ class ConsentLedger:
                     recorded_at=recorded_at,
                     expires_at=expires_at,
                     created_at=moment,
+                    channel=channel,
                 )
             )
         write = bool(rows) and (partial or not errors)
@@ -298,21 +301,35 @@ class ConsentLedger:
             return session.exec(statement).first() is not None
 
     def valid_consent(
-        self, client_id: str, purpose: str, principal_ids: Iterable[str], at: datetime
+        self,
+        client_id: str,
+        purpose: str,
+        principal_ids: Iterable[str],
+        at: datetime,
+        channel: str | None = None,
     ) -> set[str]:
-        """The principal ids, of those given, validly consented to `purpose` at `at`."""
-        return set(self.classify(client_id, purpose, principal_ids, at).valid)
+        """The principal ids, of those given, validly consented to `purpose` at `at` (optionally for `channel`)."""
+        return set(self.classify(client_id, purpose, principal_ids, at, channel=channel).valid)
 
     def classify(
-        self, client_id: str, purpose: str, principal_ids: Iterable[str], at: datetime
+        self,
+        client_id: str,
+        purpose: str,
+        principal_ids: Iterable[str],
+        at: datetime,
+        channel: str | None = None,
     ) -> ConsentClassification:
-        """Every given id in one of four buckets: valid, withdrawn, expired or no record."""
+        """Every given id in one of four buckets: valid, withdrawn, expired or no record.
+
+        When `channel` is given, checks channel-specific consent (channel records, or all-channel records
+        where channel is null). When `channel` is None, checks all-channel consent.
+        """
         moment = to_utc(at)
         ids = {principal_key(value) for value in principal_ids}
         by_hash: dict[str, list[str]] = {}
         for principal in ids:
             by_hash.setdefault(self.hash(principal), []).append(principal)
-        latest = self._latest(client_id, purpose, list(by_hash), moment)
+        latest = self._latest(client_id, purpose, list(by_hash), moment, channel=channel)
         valid: set[str] = set()
         withdrawn: set[str] = set()
         expired: set[str] = set()
@@ -346,10 +363,20 @@ class ConsentLedger:
             return tuple(_to_contract(row) for row in session.exec(statement).all())
 
     def _latest(
-        self, client_id: str, purpose: str, hashes: list[str], at: datetime
+        self,
+        client_id: str,
+        purpose: str,
+        hashes: list[str],
+        at: datetime,
+        channel: str | None = None,
     ) -> dict[str, ConsentRecordRow]:
-        """The deciding row per hash: the latest `recorded_at <= at`, ties to the higher `seq`."""
+        """The deciding row per hash: the latest `recorded_at <= at`, ties to the higher `seq`.
+
+        When `channel` is given, matches rows for all channels (channel is null) or matching `channel`.
+        When `channel` is None, matches rows applying to all channels (channel is null).
+        """
         latest: dict[str, ConsentRecordRow] = {}
+        target_channel = channel.strip().lower() if channel is not None else None
         with Session(self._engine) as session:
             for start in range(0, len(hashes), _IN_CHUNK):
                 chunk = hashes[start : start + _IN_CHUNK]
@@ -362,6 +389,13 @@ class ConsentLedger:
                 for row in session.exec(statement).all():
                     if aware_utc(row.recorded_at) > at:
                         continue
+                    row_ch = row.channel.strip().lower() if row.channel is not None else None
+                    if target_channel is None:
+                        if row_ch is not None:
+                            continue
+                    else:
+                        if row_ch is not None and row_ch != target_channel:
+                            continue
                     current = latest.get(row.principal_hash)
                     if current is None or _order(row) > _order(current):
                         latest[row.principal_hash] = row
@@ -383,6 +417,7 @@ def _to_contract(row: ConsentRecordRow) -> ConsentRecord:
         recorded_at=aware_utc(row.recorded_at),
         expires_at=None if row.expires_at is None else aware_utc(row.expires_at),
         created_at=aware_utc(row.created_at),
+        channel=row.channel,
     )
 
 
@@ -397,7 +432,7 @@ def _parse_row(
     privacy: PrivacyConfig,
     now: datetime,
     errors: list[ConsentImportError],
-) -> tuple[str, str, ConsentStatus, str, datetime, datetime | None] | None:
+) -> tuple[str, str, ConsentStatus, str, datetime, datetime | None, str | None] | None:
     """One data row, or None after appending its errors. Messages never quote a cell."""
     before = len(errors)
     if len(cells) != width:
@@ -461,9 +496,11 @@ def _parse_row(
             f"Row {number}: expires_at is not after recorded_at.",
         )
     source = cell("source") or DEFAULT_IMPORT_SOURCE
+    raw_channel = cell("channel")
+    channel = raw_channel.lower() if raw_channel else None
     if len(errors) > before or status is None or recorded_at is None:
         return None
-    return principal, purpose, status, source, recorded_at, expires_at
+    return principal, purpose, status, source, recorded_at, expires_at, channel
 
 
 def _parse_time(text: str) -> datetime | None:
