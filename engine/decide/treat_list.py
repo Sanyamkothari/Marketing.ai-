@@ -42,7 +42,7 @@ from pydantic import Field
 
 from engine.config import ResolvedConfig, RunMode, UseCaseConfig
 from engine.contracts import Artefact, RunRecord, RunState
-from engine.decide.catalogue import catalogue_or_none, catalogue_sha256
+from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME, CatalogueStamp, catalogue_sha256
 from engine.decide.contactability import (
     CHANNEL_CONTACTABILITY_FILENAME,
     CHANNEL_CONTACTABILITY_SUMMARY_FILENAME,
@@ -185,7 +185,18 @@ class TreatListSummary(Artefact):
     created_at: datetime = Field(description="UTC time the treat list was built.")
     catalogue_sha256: str | None = Field(
         default=None,
-        description="SHA-256 fingerprint of configs/decide/catalogue.yaml, or null when absent.",
+        description=(
+            "SHA-256 of configs/decide/catalogue.yaml as the run read it (`catalogue_stamp.json`), or "
+            "null when the run had no catalogue."
+        ),
+    )
+    catalogue_note: str | None = Field(
+        default=None,
+        description=(
+            "Plan J M99: set when configs/decide/catalogue.yaml is not the file the run ran under (edited, "
+            "added or removed since); channels are still planned from the run's own record. Absent otherwise."
+        ),
+        exclude_if=lambda value: value is None,
     )
     channel_counts: dict[str, int] | None = Field(
         default=None,
@@ -282,8 +293,10 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     net_value, net_value_note, net_value_unit = _net_value(scores, is_uplift)
     gross_value, gross_note = _expected_gross_value(storage, record, config, scores, row_keys, is_uplift)
 
-    # 5. Channel, from the run's own per-channel contactability (Plan J M99).
-    cat_sha = catalogue_sha256(root=config_root)
+    # 5. Channel, from the run's own per-channel contactability and catalogue stamp (Plan J M99).
+    stamp = _read_stamp(storage, run_id)
+    cat_sha = None if stamp is None else stamp.catalogue_sha256
+    cat_note = _catalogue_note(run_id, cat_sha, catalogue_sha256(root=config_root))
     channels = _resolve_channels(
         storage,
         run_id,
@@ -293,7 +306,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         config=config,
         treat=treat,
         is_uplift=is_uplift,
-        config_root=config_root,
+        planned_by_action={} if stamp is None else stamp.planned_channels,
     )
     treat = channels.treat
 
@@ -336,6 +349,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         expected_gross_value_note=gross_note,
         created_at=utc_now(),
         catalogue_sha256=cat_sha,
+        catalogue_note=cat_note,
         channel_counts=channels.channel_counts,
         uncontactable_rows=channels.uncontactable_rows,
     )
@@ -652,6 +666,64 @@ def _read_contactability(
     return flags, covered, counts
 
 
+def _channel_labels(
+    configured: tuple[str, ...], flags: dict[str, np.ndarray], covered: np.ndarray, n: int
+) -> np.ndarray:
+    """Per row, the channels it is contactable on (`"sms,email"`), None where the file does not cover it.
+
+    Only the combinations present are labelled (`np.unique` over the rows' flag patterns): at most
+    min(rows, 2**channels) labels, so the work is linear in rows and never exponential in channels.
+    """
+    text = np.full(n, "", dtype=object)
+    if configured and n:
+        matrix = np.column_stack(
+            [np.asarray(flags.get(channel, np.ones(n, dtype=bool)), dtype=bool) for channel in configured]
+        )
+        present, inverse = np.unique(matrix, axis=0, return_inverse=True)
+        labels = np.array(
+            [",".join(name for name, on in zip(configured, row, strict=True) if on) for row in present],
+            dtype=object,
+        )
+        text = labels[np.asarray(inverse).reshape(-1)].copy()
+    text[~covered] = None
+    return text
+
+
+def _read_stamp(storage: Storage, run_id: str) -> CatalogueStamp | None:
+    """The catalogue the run ran under (`catalogue_stamp.json`), or None when it had none."""
+    key = run_key(run_id, CATALOGUE_STAMP_FILENAME)
+    if not storage.exists(key):
+        return None
+    try:
+        return storage.read_model(key, CatalogueStamp)
+    except (StorageError, ValueError):
+        _LOGGER.warning("treat list %s: %s could not be read", run_id, CATALOGUE_STAMP_FILENAME)
+        return None
+
+
+def _catalogue_note(run_id: str, at_run: str | None, now: str | None) -> str | None:
+    """Why the catalogue file today is not the run's, or None when it is (or neither exists)."""
+    if at_run == now:
+        return None
+    if at_run is None:
+        note = (
+            "configs/decide/catalogue.yaml was added after the run, which had no catalogue; channels are "
+            "planned from the run's configured channels, not from the new file."
+        )
+    elif now is None:
+        note = (
+            "configs/decide/catalogue.yaml was removed after the run; channels are planned from the "
+            "catalogue the run ran under (catalogue_stamp.json)."
+        )
+    else:
+        note = (
+            "configs/decide/catalogue.yaml has changed since the run; channels are planned from the "
+            "catalogue the run ran under (catalogue_stamp.json), whose sha256 is catalogue_sha256."
+        )
+    _LOGGER.warning("treat list %s: %s", run_id, note)
+    return note
+
+
 def _resolve_channels(
     storage: Storage,
     run_id: str,
@@ -662,13 +734,14 @@ def _resolve_channels(
     config: UseCaseConfig,
     treat: np.ndarray,
     is_uplift: bool,
-    config_root: Path | None,
+    planned_by_action: dict[str, tuple[str, ...]],
 ) -> _Channels:
     """Each treated customer's channel, and the treat flag of a customer with no planned channel open.
 
     The planned channels are the catalogue action's (`Band.action_id`, or `uplift.policy.treat_action_id`
-    on an uplift run), in its order; with no catalogue action they are the configured channels
-    (`actions.suppression.channels`), in theirs. A customer is sent the first planned channel the run's
+    on an uplift run), in its order, as the run recorded them (`planned_by_action`, from
+    `catalogue_stamp.json` - never the catalogue file as it is now); with no recorded catalogue action
+    they are the configured channels (`actions.suppression.channels`), in theirs. A customer is sent the first planned channel the run's
     `channel_contactability.parquet` says they are contactable on; one contactable on none of them is
     not treated - and not suppressed: `suppression_reason` and `scores.csv` are untouched. A customer the
     file does not cover (and every customer of a run that wrote none) is treated as before, on the first
@@ -677,12 +750,10 @@ def _resolve_channels(
     n = len(scores.index)
     configured = tuple(config.actions.suppression.channels)
     flags, covered, counts = _read_contactability(storage, run_id, primary_key, row_keys, configured)
-    catalogue = catalogue_or_none(root=config_root)
-    actions = catalogue.actions_by_id if catalogue is not None else {}
 
     def planned(action_id: str | None) -> tuple[str, ...]:
-        if action_id is not None and action_id in actions:
-            return actions[action_id].channels
+        if action_id is not None and action_id in planned_by_action:
+            return tuple(planned_by_action[action_id])
         return configured
 
     everyone = np.ones(n, dtype=bool)
@@ -711,16 +782,7 @@ def _resolve_channels(
     if covered is None:
         contactable = pd.Series([None] * n, dtype="object")
     else:
-        code = np.zeros(n, dtype=np.int64)
-        for bit, channel in enumerate(configured):
-            code |= flags.get(channel, everyone).astype(np.int64) << bit
-        names = {
-            mask: ",".join(channel for bit, channel in enumerate(configured) if (mask >> bit) & 1)
-            for mask in range(1 << len(configured))
-        }
-        text = pd.Index(code).map(names).to_numpy(dtype=object).copy()
-        text[~covered] = None
-        contactable = pd.Series(text, dtype="object")
+        contactable = pd.Series(_channel_labels(configured, flags, covered, n), dtype="object")
     return _Channels(
         treat=treat_out,
         channel=pd.Series(chosen, dtype="object"),

@@ -62,7 +62,9 @@ Claude Code fixed the findings on the way to `main`; the fix commit is the refer
 - `ActionItem.channel` was "one channel or a comma-separated list" in a string. It is now
   `channels: list[str]` (a single `channel:` is still accepted; a comma in it is refused).
 - `_truthy` (private to `engine/stages/actions.py`) was imported from two other modules. It is now a
-  public helper, `truthy`, with `_truthy` kept as an alias.
+  public helper in `engine/decide/contactability.py` (`truthy`), one documented import of Phase 1's rule;
+  `engine/stages/actions.py` itself is `main`'s, byte for byte (the first fix made it public there, which
+  breaks the Phase 1 edit rule; the second review reverted that).
 - The hand-off's self-check claimed "defaults unchanged" and "stay in your lane" while a shipped
   catalogue changed every run's configuration and `bench_1m.py` was edited. `docs/handoff/M99.md` §2, §3 and
   §8 are rewritten to be true.
@@ -81,12 +83,31 @@ Claude Code fixed the findings on the way to `main`; the fix commit is the refer
 - The catalogue cache was keyed by root only, so an edited catalogue was not read again in a running
   process while `catalogue_sha256` already reported the new file. It is now keyed by content too.
 
+## Second review (correctness; compatibility and protocol), fixed
+
+- **Major: a Phase 1 stage file edited outside the four functions Plan J may edit.** Reverted;
+  `engine/decide/contactability.py::truthy` reads `actions._truthy` through one import.
+- **Major: code added to the shared `engine/config.py` outside its PLAN-J block.** `ChannelSuppressionConfig`,
+  the channel-name rule and the field type live in `engine/decide/spec.py` (imports nothing from `engine`,
+  the M92 pattern); `validate_action_ids` lives in `engine/decide/catalogue.py`. `config.py` keeps the import,
+  the two fields and the two one-line calls, all listed in `docs/handoff/M99.md` §2.
+- **The treat list read the catalogue as it was when the list was built.** A run now writes
+  `catalogue_stamp.json`; the treat list plans from it and says when the file has changed
+  (`test_a_catalogue_edited_after_the_run_changes_nothing_the_treat_list_plans`).
+- **A consent channel no configuration could name was stored.** Refused: `CONSENT_CHANNEL_INVALID`
+  (`test_an_import_refuses_a_channel_no_configuration_can_name`).
+- **The default real-run test ran with a catalogue present.** Its variant now has none, and the test checks
+  `catalogue_sha256` is null.
+- **Docs.** `docs/handoff/M99.md` §8.5 names the treat list's reviewed change (a `contactable_channels`
+  column and a `catalogue_sha256: null` field on every treat list); `docs/DECIDE.md` §12 is up to date.
+
 ## What was good
 
 - The migration and the ledger filter: `null` = all channels, so existing records stay valid.
 - Region rules read from `configs/regions/<region>.yaml`, so no region name appears in Python.
 - An unknown `action_id` refused at config load, with a clear path in the error.
-- The bitmask for `contactable_channels`: neat, and linear (kept in the treat list).
+- The bitmask for `contactable_channels`: neat, and linear in rows, but its label table was built for all 2^k
+  combinations of channels (exponential in channels); the second review labels only the patterns present.
 - Golden files regenerated with `--update`, and the change explained.
 
 ## For M101

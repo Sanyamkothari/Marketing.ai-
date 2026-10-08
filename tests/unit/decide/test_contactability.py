@@ -14,8 +14,9 @@ import pandas as pd
 import pytest
 
 from engine.config import ConfigError, UseCaseConfig, load_use_case
-from engine.decide.contactability import CHANNEL_COUNTS_ATTR, contactability_masks
-from engine.stages.actions import _truthy, apply_actions, truthy
+from engine.decide.contactability import CHANNEL_COUNTS_ATTR, contactability_masks, truthy
+from engine.stages import actions as actions_stage
+from engine.stages.actions import apply_actions
 from engine.stages.export import _suppression_counts
 
 USE_CASE = "win-back-campaign"
@@ -34,8 +35,23 @@ CHANNELS = {
 }
 
 
-def test_truthy_is_public_and_the_old_name_is_the_same_function() -> None:
-    assert _truthy is truthy
+@pytest.mark.parametrize(
+    "values",
+    [
+        pd.Series([True, False, True]),
+        pd.Series([True, None, False], dtype="boolean"),
+        pd.Series([1, 0, 2, -1]),
+        pd.Series([1.0, 0.0, float("nan"), 0.5]),
+        pd.Series(["yes", "no", "TRUE", " y ", "1", "0", "", "maybe"]),
+        pd.Series(["yes", None, 1, 0, "false"], dtype="object"),
+        pd.Series([None, None], dtype="object"),
+    ],
+    ids=["bool", "nullable-bool", "int", "float-nan", "text", "mixed", "all-null"],
+)
+def test_truthy_agrees_with_phase_1_s_own_rule(values: pd.Series) -> None:
+    """The helper Plan J reads channel columns with is `actions._truthy`, untouched in that file."""
+    assert "truthy" not in actions_stage.__all__, "engine/stages/actions.py is main's, byte for byte"
+    assert truthy(values).tolist() == actions_stage._truthy(values).tolist()
     assert truthy(pd.Series(["yes", "no", None, 1, 0])).tolist() == [True, False, False, True, False]
 
 
@@ -132,3 +148,54 @@ def test_channel_names_are_normalised_and_checked() -> None:
     for bad in ({"e mail": {}}, {"sms": {}, "SMS": {}}):
         with pytest.raises((ConfigError, ValueError)):
             _with_suppression({"channels": bad})
+
+
+def test_contactable_channel_labels_cover_only_the_combinations_present() -> None:
+    """Labels are built for the flag patterns the rows have, not for all 2**channels combinations.
+
+    With 70 configured channels the old table (`range(1 << 70)`, and an int64 bit code) could not be
+    built at all; here it is one label per distinct row pattern, and a row the file does not cover is null.
+    """
+    from engine.decide.treat_list import _channel_labels
+
+    configured = tuple(f"ch{i:02d}" for i in range(70))
+    n = 5
+    flags = {name: np.ones(n, dtype=bool) for name in configured}
+    flags["ch00"] = np.array([True, False, True, False, True])
+    flags["ch69"] = np.array([False, False, True, True, True])
+    covered = np.array([True, True, True, True, False])
+    labels = _channel_labels(configured, flags, covered, n)
+    middle = [f"ch{i:02d}" for i in range(1, 69)]
+    assert labels[0] == ",".join(["ch00", *middle])
+    assert labels[1] == ",".join(middle)
+    assert labels[2] == ",".join(["ch00", *middle, "ch69"])
+    assert labels[3] == ",".join([*middle, "ch69"])
+    assert labels[4] is None
+
+
+def test_contactable_channel_labels_keep_configuration_order() -> None:
+    from engine.decide.treat_list import _channel_labels
+
+    flags = {"sms": np.array([True, False, False, True]), "email": np.array([True, True, False, False])}
+    labels = _channel_labels(("sms", "email"), flags, np.ones(4, dtype=bool), 4)
+    assert labels.tolist() == ["sms,email", "email", "", "sms"]
+
+
+def test_the_channel_types_live_in_a_plan_j_module_that_imports_nothing_from_engine() -> None:
+    import ast
+    from pathlib import Path
+
+    import engine.config as config_module
+    import engine.decide.spec as spec
+
+    tree = ast.parse(Path(spec.__file__).read_text(encoding="utf-8"))
+    imported = [
+        node.module
+        for node in ast.walk(tree)
+        if isinstance(node, ast.ImportFrom) and node.module is not None
+    ] + [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
+    assert not [name for name in imported if name == "engine" or name.startswith("engine.")]
+    assert not hasattr(config_module, "ChannelSuppressionConfig"), "declared in engine.decide.spec"
+    assert not hasattr(config_module, "_validate_action_ids"), "moved to engine.decide.catalogue"
+    field = config_module.SuppressionConfig.model_fields["channels"]
+    assert field.annotation == dict[str, spec.ChannelSuppressionConfig]

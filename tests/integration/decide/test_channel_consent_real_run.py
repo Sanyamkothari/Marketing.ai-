@@ -16,11 +16,18 @@ every channel, and that the ledger's channel was never consulted. These tests fa
 * only SMS planned and opted out of it: not treated, counted in `channel_counts`, not suppressed in
   `scores.csv`;
 * a rule that did not run gets no `SuppressionCount` entry;
-* a run without `actions.suppression.channels` writes nothing new.
+* a run without `actions.suppression.channels` and without a catalogue writes nothing new, and its treat
+  list stamps no catalogue;
+* a catalogue edited between the run and the first treat-list request changes nothing the treat list
+  plans: it reads the run's own `catalogue_stamp.json` and says the file has changed (the second review).
+
+Each run is scored with `MARKETING_AI_CONFIG_DIR` pointing at its variant's config root, as a deployment
+runs: the run reads `privacy.yaml` and `decide/catalogue.yaml` from there.
 """
 
 from __future__ import annotations
 
+import hashlib
 import io
 import json
 import shutil
@@ -69,6 +76,7 @@ RUN_NO_LEDGER = "r_20261008_0c000004"
 RUN_DEFAULT = "r_20261008_0c000005"
 CONTACTABILITY_PARQUET = "channel_contactability.parquet"
 CONTACTABILITY_JSON = "channel_contactability.json"
+STAMP_JSON = "catalogue_stamp.json"
 
 UPLIFT: dict[str, Any] = {
     "problem_type": "uplift",
@@ -94,6 +102,8 @@ actions:
     offer_cost: 20.0
     contact_cost: 0.15
 """
+EDITED_CATALOGUE = CATALOGUE.replace("channel: sms", "channels: [email, sms]")
+"""The same action, edited after the run to prefer email."""
 
 
 VARIANTS: dict[str, tuple[bool, bool]] = {
@@ -103,12 +113,15 @@ VARIANTS: dict[str, tuple[bool, bool]] = {
 }
 """Config roots by name: `(actions.suppression.channels set, uplift.policy.treat_action_id set)`.
 
-Both are use-case settings, not per-run overrides, so each variant is its own copy of `configs/`."""
+Both are use-case settings, not per-run overrides, so each variant is its own copy of `configs/`. Only the
+variants that configure channels carry a catalogue: `plain` is the default, with no `catalogue.yaml`."""
 
 
 def _variant_root(source: Path, target: Path, *, channels: bool, sms_only: bool) -> Path:
     shutil.copytree(source, target)
-    (target / "decide" / "catalogue.yaml").write_text(CATALOGUE, encoding="utf-8")
+    assert not (target / "decide" / "catalogue.yaml").exists(), "the repository ships no catalogue"
+    if channels:
+        (target / "decide" / "catalogue.yaml").write_text(CATALOGUE, encoding="utf-8")
     path = target / "use_cases" / "win_back_campaign.yaml"
     document = yaml.safe_load(path.read_text(encoding="utf-8"))
     if channels:
@@ -256,6 +269,7 @@ def _score(world: World, run_id: str, variant: str, *, client: str | None) -> Sc
         else:
             patch.setenv("MARKETING_AI_CLIENT_ID", client)
         patch.setenv("MARKETING_AI_PRIVACY_SALT", PRIVACY_SALT)
+        patch.setenv("MARKETING_AI_CONFIG_DIR", str(world.roots[variant]))
         resolved = resolve_config(USE_CASE, UPLIFT, root=world.roots[variant])
         storage = world.storage
         storage.write_model(run_key(run_id, "run_config.json"), resolved)  # as `POST /runs` does
@@ -305,8 +319,9 @@ def _scores(world: World, run_id: str) -> pd.DataFrame:
     return pd.read_parquet(io.BytesIO(data)).astype({PRIMARY_KEY: str})
 
 
-def _treat_list(world: World, run: Scored) -> tuple[pd.DataFrame, Any]:
-    summary = build_treat_list(world.storage, run.run_id, config_root=run.config_root)
+def _treat_list(world: World, run: Scored, *, config_root: Path | None = None) -> tuple[pd.DataFrame, Any]:
+    root = run.config_root if config_root is None else config_root
+    summary = build_treat_list(world.storage, run.run_id, config_root=root)
     text = world.storage.read_bytes(run_key(run.run_id, TREAT_LIST_CSV)).decode("utf-8")
     return pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False), summary
 
@@ -454,6 +469,52 @@ def test_a_default_run_writes_nothing_new(world: World, default: Scored) -> None
     assert "channels" not in saved["actions"]["suppression"]
     assert all("action_id" not in band for band in saved["actions"]["bands"])
     assert "treat_action_id" not in saved["uplift"]["policy"]
+    assert not (default.config_root / "decide" / "catalogue.yaml").exists()
+    assert not storage.exists(run_key(default.run_id, STAMP_JSON))
+    assert STAMP_JSON not in default.record.artefacts
     out, summary = _treat_list(world, default)
     assert (out["contactable_channels"] == "").all() and (out["channel"] == "").all()
     assert summary.channel_counts is None and summary.uncontactable_rows is None
+    assert summary.catalogue_sha256 is None
+    saved_summary = json.loads(storage.read_text(run_key(default.run_id, "treat_list_summary.json")))
+    assert "catalogue_sha256" in saved_summary and saved_summary["catalogue_sha256"] is None
+    assert "catalogue_note" not in saved_summary
+
+
+# ---------------------------------------------------------------------------
+# The catalogue the run ran under, not the file as it is when the treat list is built
+# ---------------------------------------------------------------------------
+def test_the_run_stamps_the_catalogue_it_ran_under(world: World, sms_only: Scored, both: Scored) -> None:
+    digest = hashlib.sha256(CATALOGUE.encode("utf-8")).hexdigest()
+    stamp = json.loads(world.storage.read_text(run_key(sms_only.run_id, STAMP_JSON)))
+    assert stamp["catalogue_sha256"] == digest
+    assert stamp["planned_channels"] == {"winback_sms": ["sms"]}
+    assert sms_only.record.artefacts[STAMP_JSON] == run_key(sms_only.run_id, STAMP_JSON)
+    # A use case that names no catalogue action still records which catalogue was in force.
+    other = json.loads(world.storage.read_text(run_key(both.run_id, STAMP_JSON)))
+    assert other["catalogue_sha256"] == digest and other["planned_channels"] == {}
+
+
+def test_a_catalogue_edited_after_the_run_changes_nothing_the_treat_list_plans(
+    world: World, sms_only: Scored, tmp_path: Path
+) -> None:
+    before, summary_before = _treat_list(world, sms_only)
+    edited = tmp_path / "edited"
+    shutil.copytree(sms_only.config_root, edited)
+    (edited / "decide" / "catalogue.yaml").write_text(EDITED_CATALOGUE, encoding="utf-8")
+    after, summary = _treat_list(world, sms_only, config_root=edited)
+    # The edit would send everyone with email open by email; the run planned SMS only.
+    assert list(after["channel"]) == list(before["channel"])
+    assert list(after["treat"]) == list(before["treat"])
+    assert set(after.loc[after["treat"] == "1", "channel"]) == {"sms"}
+    assert summary.catalogue_sha256 == hashlib.sha256(CATALOGUE.encode("utf-8")).hexdigest()
+    assert summary.catalogue_sha256 == summary_before.catalogue_sha256
+    assert summary_before.catalogue_note is None
+    assert summary.catalogue_note is not None and "changed since the run" in summary.catalogue_note
+    # Removing the action from the file does not fall back to the configured channels either.
+    (edited / "decide" / "catalogue.yaml").write_text(
+        CATALOGUE.replace("winback_sms", "winback_other"), encoding="utf-8"
+    )
+    removed, _ = _treat_list(world, sms_only, config_root=edited)
+    assert list(removed["channel"]) == list(before["channel"])
+    _treat_list(world, sms_only)  # leave the run's treat list as the run's own config root builds it

@@ -14,7 +14,8 @@ returned untouched: nothing is read, nothing is written, and the run is byte for
 **What makes a customer contactable on a channel.** All of, for each configured channel:
 
 * the channel's `consent_column` is truthy, read from the rows **as uploaded** (joined by the run's row
-  key) with Phase 1's rule (`engine.stages.actions.truthy`): a null is not a consent;
+  key) with Phase 1's rule (:func:`truthy`, which is `engine.stages.actions`' own): a null is not a
+  consent;
 * its `contactable_column` is truthy, the same way;
 * when the consent ledger gates the run (`engine.privacy.consent.consent_gate_for_run`, the same lookup
   the actions stage makes), the ledger gives the customer valid consent for the run's purpose **on
@@ -41,6 +42,12 @@ per entity (DEC-083).
 The treat list (`engine.decide.treat_list`) joins the parquet file on every key column to choose each
 treated customer's channel; a customer it does not cover is treated as before, with a null
 `contactable_channels`.
+
+**The catalogue the run ran under.** When `configs/decide/catalogue.yaml` exists, the same seam writes
+`catalogue_stamp.json` (`engine.decide.catalogue.CatalogueStamp`: the file's sha256 and the channels of
+each action the use case names), with or without channels configured. The treat list is built later, on
+demand, and plans channels from that stamp, never from the file as it is then. With no catalogue and no
+channels the seam returns the stage table untouched.
 """
 
 from __future__ import annotations
@@ -71,6 +78,7 @@ __all__ = [
     "contactability_masks",
     "contactable_column",
     "install_contactability",
+    "truthy",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -129,6 +137,18 @@ class ChannelContactability(Artefact):
     created_at: datetime = Field(description="UTC time the file was written.")
 
 
+def truthy(values: pd.Series) -> pd.Series:
+    """Which values count as true for a consent or contactable column: Phase 1's own rule.
+
+    `engine.stages.actions._truthy` read through one documented import, so a channel's column is read
+    exactly as the suppression rules read a consent column (a null is not a consent), and Plan J edits
+    nothing in that Phase 1 file to share it.
+    """
+    from engine.stages.actions import _truthy  # Phase 1's rule; private there, shared only from here
+
+    return _truthy(values)
+
+
 def contactable_column(channel: str) -> str:
     """The parquet column holding one channel's flag."""
     return f"{CONTACTABLE_PREFIX}{channel}"
@@ -153,7 +173,6 @@ def contactability_masks(
     import numpy as np
 
     from engine.keys import key_text
-    from engine.stages.actions import truthy
 
     n_rows = len(banded.index)
     masks: dict[str, np.ndarray] = {}
@@ -205,10 +224,11 @@ def _column(name: str, banded: pd.DataFrame, uploaded: pd.DataFrame | None, row_
 # The seam
 # ---------------------------------------------------------------------------
 def install_contactability(score_flow: type[Any]) -> None:
-    """Wrap `score_flow._bodies` so a run whose use case configures channels writes its contactability.
+    """Wrap `score_flow._bodies` so a run writes its contactability and catalogue stamp after actions.
 
     Idempotent. Both the propensity and the uplift score flows use the stage table, so one rebinding
-    covers both. The wrapper returns the table untouched when `actions.suppression.channels` is empty.
+    covers both. The wrapper returns the table untouched when `actions.suppression.channels` is empty
+    and there is no `configs/decide/catalogue.yaml` (the default).
     """
     if getattr(score_flow, _INSTALLED, False):
         return
@@ -219,12 +239,19 @@ def install_contactability(score_flow: type[Any]) -> None:
         config = getattr(getattr(self, "_ctx", None), "config", None)
         actions = getattr(config, "actions", None)
         suppression = getattr(actions, "suppression", None)
-        if not getattr(suppression, "channels", None):
+        if not getattr(suppression, "channels", None) and not _catalogue_present():
             return bodies
         return tuple((key, _after_actions(self, key, body)) for key, body in bodies)
 
     score_flow._bodies = _bodies
     setattr(score_flow, _INSTALLED, True)
+
+
+def _catalogue_present() -> bool:
+    from engine.config import config_root
+    from engine.decide.catalogue import CATALOGUE_FILENAME
+
+    return (config_root() / CATALOGUE_FILENAME).is_file()
 
 
 def _after_actions(flow: Any, key: Any, body: Callable[[], Any]) -> Callable[[], Any]:
@@ -238,10 +265,29 @@ def _after_actions(flow: Any, key: Any, body: Callable[[], Any]) -> Callable[[],
     @wraps(body)
     def acted() -> Any:
         outcome = body()
-        _write_contactability(flow)
+        if flow._ctx.config.actions.suppression.channels:
+            _write_contactability(flow)
+        _write_catalogue_stamp(flow)
         return outcome
 
     return acted
+
+
+def _write_catalogue_stamp(flow: Any) -> None:
+    """`catalogue_stamp.json`, when the run's config root has a catalogue (the run-time config root)."""
+    from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME, catalogue_stamp
+    from engine.utils.time import utc_now
+
+    ctx = flow._ctx
+    stamp = catalogue_stamp(ctx.config, run_id=ctx.run_id, created_at=utc_now())
+    if stamp is None:
+        return
+    flow._write(CATALOGUE_STAMP_FILENAME, stamp)
+    _LOGGER.info(
+        "catalogue stamp sha256=%s actions=%s",
+        stamp.catalogue_sha256[:12],
+        ",".join(stamp.planned_channels) or "-",
+    )
 
 
 def _ledger_verdicts(

@@ -3,13 +3,15 @@
 Slow: it reuses the trained AutoGluon champion of `tests/integration/test_score_flow.py` (a real
 `Pipeline.run_train`, about a minute) and scores a fresh file with `Pipeline.run_score` under a use case
 that configures two channels and points its top band at a catalogue action sent only by SMS. Everything
-the treat list reads is what the run wrote. The fast counterpart, on uplift runs and with the consent
+the treat list reads is what the run wrote, including the catalogue it ran under (`catalogue_stamp.json`:
+the run is scored with `MARKETING_AI_CONFIG_DIR` at the test's config root, as a deployment runs). The fast counterpart, on uplift runs and with the consent
 ledger, is `test_channel_consent_real_run.py`.
 """
 
 # ruff: noqa: F811, F401 - the imported pytest fixtures are used by name
 from __future__ import annotations
 
+import hashlib
 import io
 import shutil
 from pathlib import Path
@@ -66,7 +68,10 @@ def channel_run(
     position = np.arange(len(frame.index))
     frame["sms_opt_in"] = np.where(position % 3 == 1, "no", "yes")
     frame["email_opt_in"] = np.where(position % 4 == 2, "false", "true")
-    flow = score_file(trained.storage, trained.registry, resolved, frame, name="channels")
+    with pytest.MonkeyPatch.context() as patch:
+        # As a deployment runs: the run reads `decide/catalogue.yaml` from its config root and stamps it.
+        patch.setenv("MARKETING_AI_CONFIG_DIR", str(root))
+        flow = score_file(trained.storage, trained.registry, resolved, frame, name="channels")
     assert flow.record.state is RunState.DONE, flow.record.error
     return flow, root
 
@@ -113,3 +118,6 @@ def test_each_band_is_sent_on_its_planned_channels_only(channel_run: tuple[Flow,
         (base & ((high & ~sms_ok) | (medium & ~email_ok & ~sms_ok))).sum()
     )
     assert summary.catalogue_sha256 is not None
+    assert summary.catalogue_sha256 == hashlib.sha256(CATALOGUE.encode("utf-8")).hexdigest()
+    assert summary.catalogue_note is None
+    assert flow.storage.exists(run_key(flow.run_id, "catalogue_stamp.json"))

@@ -45,6 +45,7 @@ from sqlalchemy.engine import Engine
 from sqlmodel import Session, col, select
 
 from engine.audit.events import principal_hash
+from engine.decide.spec import CHANNEL_NAME, CHANNEL_NAME_RULE  # Plan J M99; imports nothing from engine
 from engine.platform_db import PLATFORM_DB_FILENAME, platform_engine, sqlite_engine
 from engine.privacy.config import PrivacyConfig, privacy_config_or_none, privacy_salt
 from engine.privacy.contracts import (
@@ -182,7 +183,14 @@ class ConsentLedger:
         expires_at: datetime | None = None,
         channel: str | None = None,
     ) -> ConsentRecord:
-        """Append one record and return it. The caller has validated `purpose` against the config."""
+        """Append one record and return it. The caller has validated `purpose` against the config.
+
+        A `channel` that is not a channel name (`engine.decide.spec.CHANNEL_NAME`, after stripping and
+        lower-casing) raises `ValueError`: no configuration could name it, so the record would never apply.
+        """
+        stored_channel = _channel(channel)
+        if stored_channel is not None and not CHANNEL_NAME.fullmatch(stored_channel):
+            raise ValueError(f"channel is not a channel name ({CHANNEL_NAME_RULE})")
         row = ConsentRecordRow(
             client_id=client_id,
             principal_hash=self.hash(principal_id),
@@ -192,7 +200,7 @@ class ConsentLedger:
             recorded_at=to_utc(recorded_at),
             expires_at=None if expires_at is None else to_utc(expires_at),
             created_at=utc_now(),
-            channel=_channel(channel),
+            channel=stored_channel,
         )
         with Session(self._engine) as session:
             session.add(row)
@@ -506,6 +514,14 @@ def _parse_row(
         )
     source = cell("source") or DEFAULT_IMPORT_SOURCE
     channel = _channel(cell("channel"))
+    if channel is not None and not CHANNEL_NAME.fullmatch(channel):
+        # Plan J M99: a channel no configuration can name would store an opt-out that never applies.
+        fail(
+            "channel",
+            "CONSENT_CHANNEL_INVALID",
+            f"Row {number}: channel is not a channel name ({CHANNEL_NAME_RULE}), such as sms or email; "
+            "leave it empty for every channel.",
+        )
     if len(errors) > before or status is None or recorded_at is None:
         return None
     return principal, purpose, status, source, recorded_at, expires_at, channel
@@ -633,7 +649,7 @@ def apply_consent_gate(
 ) -> tuple[pd.DataFrame, UseCaseConfig, ConsentReport]:
     """The frame with the ledger's verdict in the consent column, the config naming it, and the report.
 
-    The verdict is a real boolean per row, so `actions.truthy` reads it the way it reads any
+    The verdict is a real boolean per row, so `actions._truthy` reads it the way it reads any
     consent column. The configuration is copied, never mutated; when the use case already has a
     consent column the copy is the same object and the column becomes the ledger lookup - the
     plan's "the Phase 1 consent column becomes a lookup against this ledger" - **combined with the
@@ -652,9 +668,9 @@ def apply_consent_gate(
         gated_config = config.model_copy(update={"governance": governance})
     ledger_valid = [key in verdict.valid for key in keys]
     if replaced:
-        from engine.stages.actions import truthy  # the rule actions itself applies to the column
+        from engine.stages.actions import _truthy  # the rule actions itself applies to the column
 
-        in_file = [bool(value) for value in truthy(frame[column]).tolist()]
+        in_file = [bool(value) for value in _truthy(frame[column]).tolist()]
     else:
         in_file = [True] * len(keys)
     final = [ledger and file for ledger, file in zip(ledger_valid, in_file, strict=True)]

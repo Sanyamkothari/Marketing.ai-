@@ -879,7 +879,7 @@ Extra column-name hints the helper uses on top of the use case's own detection h
 
 #### ChannelSuppressionConfig
 
-One channel's consent and contactability columns (Plan J M99, DEC-1309).  Either column may be null; a configured column the scoring file lacks is skipped with a warning, like a Phase 1 suppression column (DEC-030). Truthiness is Phase 1's (`engine.stages.actions.truthy`): a null is not a consent.
+One channel's consent and contactability columns (Plan J M99, DEC-1309).  Either column may be null; a configured column the scoring file lacks is skipped with a warning, like a Phase 1 suppression column (DEC-030). Truthiness is Phase 1's (`engine.stages.actions`, read through `engine.decide.contactability.truthy`): a null is not a consent.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|

@@ -19,22 +19,33 @@ from __future__ import annotations
 
 import hashlib
 import re
+from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Any, Final
+from typing import TYPE_CHECKING, Annotated, Any, Final
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator, model_validator
 
 from engine.config import ConfigError, config_root, load_yaml
+from engine.contracts import Artefact
+from engine.decide.spec import CHANNEL_NAME, CHANNEL_NAME_RULE
 from engine.utils.logging import get_logger
+
+if TYPE_CHECKING:
+    from engine.config import UseCaseConfig
 
 __all__ = [
     "CATALOGUE_FILENAME",
+    "CATALOGUE_STAMP_FILENAME",
     "ActionCatalogue",
     "ActionItem",
+    "CatalogueStamp",
     "catalogue_or_none",
     "catalogue_sha256",
+    "catalogue_stamp",
     "clear_catalogue_cache",
     "load_catalogue",
+    "referenced_action_ids",
+    "validate_action_ids",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -42,8 +53,8 @@ _LOGGER = get_logger(__name__)
 CATALOGUE_FILENAME: Final[str] = "decide/catalogue.yaml"
 REGIONS_DIRECTORY: Final[str] = "regions"
 
-_CHANNEL: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,39}")
-"""A channel name: lower case, as `actions.suppression.channels` and the consent ledger write it."""
+CATALOGUE_STAMP_FILENAME: Final[str] = "catalogue_stamp.json"
+"""Run file: the catalogue a scoring run ran under (:class:`CatalogueStamp`)."""
 
 _PLACEHOLDER: Final[re.Pattern[str]] = re.compile(r"\s*<[^>]*>\s*")
 """A value an example leaves for the client to fill in, such as `<your DLT template id>`."""
@@ -114,8 +125,8 @@ class ActionItem(_Model):
             return value
         names = [str(item).strip().lower() for item in value]
         for name in names:
-            if not _CHANNEL.fullmatch(name):
-                raise ValueError(f"{name!r} is not a channel name (lower case letters, digits and _)")
+            if not CHANNEL_NAME.fullmatch(name):
+                raise ValueError(f"{name!r} is not a channel name ({CHANNEL_NAME_RULE})")
         if len(set(names)) != len(names):
             raise ValueError("a channel is listed twice")
         return tuple(names)
@@ -244,6 +255,84 @@ def catalogue_sha256(root: Path | None = None) -> str | None:
     if not path.is_file():
         return None
     return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def referenced_action_ids(config: UseCaseConfig) -> tuple[str, ...]:
+    """The catalogue action ids a use case names: each band's `action_id`, then the uplift treat action."""
+    ids = [band.action_id for band in config.actions.bands if band.action_id is not None]
+    uplift = config.uplift
+    if uplift is not None and uplift.policy.treat_action_id is not None:
+        ids.append(uplift.policy.treat_action_id)
+    return tuple(dict.fromkeys(ids))
+
+
+def validate_action_ids(config: UseCaseConfig, *, root: Path | None = None) -> None:
+    """Refuse a `Band.action_id` or `uplift.policy.treat_action_id` the catalogue lacks.
+
+    Does nothing when there is no `catalogue.yaml` (the default). Called in place by
+    `engine.config.load_use_case` and `resolve_config` (`CATALOGUE_ACTION_UNKNOWN`).
+    """
+    catalogue = catalogue_or_none(root)
+    if catalogue is None:
+        return
+    known = set(catalogue.action_ids)
+    listed = ", ".join(sorted(known)) or "none"
+    for i, band in enumerate(config.actions.bands):
+        if band.action_id is not None and band.action_id not in known:
+            raise ConfigError(
+                "CATALOGUE_ACTION_UNKNOWN",
+                f"actions.bands[{i}] references unknown action_id {band.action_id!r}; "
+                f"known actions in catalogue: {listed}.",
+                path=f"actions.bands[{i}].action_id",
+            )
+    treat_action_id = None if config.uplift is None else config.uplift.policy.treat_action_id
+    if treat_action_id is not None and treat_action_id not in known:
+        raise ConfigError(
+            "CATALOGUE_ACTION_UNKNOWN",
+            f"uplift.policy.treat_action_id references unknown action_id {treat_action_id!r}; "
+            f"known actions in catalogue: {listed}.",
+            path="uplift.policy.treat_action_id",
+        )
+
+
+class CatalogueStamp(Artefact):
+    """`catalogue_stamp.json`: the catalogue a scoring run ran under (Plan J M99, DEC-1309).
+
+    Written during the run, after the actions stage, only when a `catalogue.yaml` exists. The treat list
+    is built later, on demand, and plans each band's channels from this record, not from the file as it
+    is then, so an edit between the run and the first treat-list request changes nothing it says.
+    """
+
+    run_id: str = Field(description="Scoring run the stamp belongs to.")
+    catalogue_sha256: str = Field(description="SHA-256 of configs/decide/catalogue.yaml as the run read it.")
+    planned_channels: dict[str, tuple[str, ...]] = Field(
+        description=(
+            "Per catalogue action id the use case names (bands, uplift treat action) and the catalogue "
+            "declares: its channels, in order of preference."
+        )
+    )
+    created_at: datetime = Field(description="UTC time the stamp was written.")
+
+
+def catalogue_stamp(
+    config: UseCaseConfig, *, run_id: str, created_at: datetime, root: Path | None = None
+) -> CatalogueStamp | None:
+    """The stamp for a run of `config`, or None when there is no catalogue (nothing is then written)."""
+    path = config_root(root) / CATALOGUE_FILENAME
+    if not path.is_file():
+        return None
+    digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    actions = load_catalogue(root).actions_by_id
+    return CatalogueStamp(
+        run_id=run_id,
+        catalogue_sha256=digest,
+        planned_channels={
+            action_id: actions[action_id].channels
+            for action_id in referenced_action_ids(config)
+            if action_id in actions
+        },
+        created_at=created_at,
+    )
 
 
 def clear_catalogue_cache() -> None:

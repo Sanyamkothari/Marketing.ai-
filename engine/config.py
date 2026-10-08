@@ -29,6 +29,7 @@ from pydantic import (
 )
 
 from engine.agent.config import AgentConfig  # Plan G (DEC-1003); imports nothing from engine
+from engine.decide.spec import ChannelMap  # Plan J M99 (DEC-1309); imports nothing from engine
 from engine.holdout.spec import (  # Plan J M92 (DEC-1302); imports nothing from engine
     ExploreFraction,
     HoldoutConfig,
@@ -786,21 +787,6 @@ class Band(_Base):
     )
 
 
-_CHANNEL_NAME: Final[re.Pattern[str]] = re.compile(r"[a-z][a-z0-9_]{0,39}")
-
-
-class ChannelSuppressionConfig(_Base):
-    """One channel's consent and contactability columns (Plan J M99, DEC-1309).
-
-    Either column may be null; a configured column the scoring file lacks is skipped with a warning,
-    like a Phase 1 suppression column (DEC-030). Truthiness is Phase 1's (`engine.stages.actions.truthy`):
-    a null is not a consent.
-    """
-
-    consent_column: str | None = None
-    contactable_column: str | None = None
-
-
 class SuppressionConfig(_Base):
     suppress_opted_out: bool = True
     opt_out_column: str | None = "marketing_opt_in"
@@ -810,22 +796,7 @@ class SuppressionConfig(_Base):
     # Plan J M99 (DEC-1309): per-channel consent and contactability, in order of preference. Never a
     # suppression reason: a row not contactable on a channel is only not treated on it. Left out of the
     # serialised config while empty, so a default use case dumps exactly as before M99.
-    channels: dict[str, ChannelSuppressionConfig] = Field(
-        default_factory=dict, exclude_if=lambda value: not value
-    )
-
-    @field_validator("channels", mode="before")
-    @classmethod
-    def _channel_names(cls, value: Any) -> Any:
-        if not isinstance(value, Mapping):
-            return value
-        names = [str(name).strip().lower() for name in value]
-        for name in names:
-            if not _CHANNEL_NAME.fullmatch(name):
-                raise ValueError(f"{name!r} is not a channel name (lower case letters, digits and _)")
-        if len(set(names)) != len(names):
-            raise ValueError("a channel is listed twice")
-        return dict(zip(names, value.values(), strict=True))
+    channels: ChannelMap = Field(default_factory=dict, exclude_if=lambda value: not value)
 
 
 class ActionsConfig(_Base):
@@ -1743,37 +1714,8 @@ def load_use_case(use_case_id: str, root: Path | None = None) -> UseCaseConfig:
     document = load_use_case_document(use_case_id, root)
     config = _validate_use_case(document, catalog=get_catalog(root))
     check_dependencies(config)
-    _validate_action_ids(config, root=root)
+    _plan_j_validate_action_ids(config, root)  # Plan J M99 (DEC-1309): in place
     return config
-
-
-def _validate_action_ids(config: UseCaseConfig, *, root: Path | None = None) -> None:
-    """Refuse unknown action_id in Band.action_id or uplift.policy.treat_action_id when catalogue exists (Plan J M99)."""
-    from engine.decide.catalogue import catalogue_or_none
-
-    catalogue = catalogue_or_none(root)
-    if catalogue is None:
-        return
-    known = set(catalogue.action_ids)
-    for i, band in enumerate(config.actions.bands):
-        if band.action_id is not None and band.action_id not in known:
-            raise ConfigError(
-                "CATALOGUE_ACTION_UNKNOWN",
-                f"actions.bands[{i}] references unknown action_id {band.action_id!r}; "
-                f"known actions in catalogue: {', '.join(sorted(known)) or 'none'}.",
-                path=f"actions.bands[{i}].action_id",
-            )
-    if (
-        config.uplift is not None
-        and config.uplift.policy.treat_action_id is not None
-        and config.uplift.policy.treat_action_id not in known
-    ):
-        raise ConfigError(
-            "CATALOGUE_ACTION_UNKNOWN",
-            f"uplift.policy.treat_action_id references unknown action_id {config.uplift.policy.treat_action_id!r}; "
-            f"known actions in catalogue: {', '.join(sorted(known)) or 'none'}.",
-            path="uplift.policy.treat_action_id",
-        )
 
 
 def _validate_use_case(document: Mapping[str, Any], *, catalog: Catalog) -> UseCaseConfig:
@@ -2151,7 +2093,7 @@ def resolve_config(
         warnings.append(switch_note)
     final = _validate_use_case(document, catalog=catalog)
     check_dependencies(final)
-    _validate_action_ids(final, root=root)
+    _plan_j_validate_action_ids(final, root)  # Plan J M99 (DEC-1309): in place
     if final.split.type is SplitType.TIME_BASED and final.split.time_column is None:
         warnings.append("split.type is time_based and no time column is set yet")
     return ResolvedConfig(
@@ -3941,4 +3883,13 @@ ResolvedConfig.model_rebuild()
 # ---- PLAN-G (agents) — append only below this line ----
 # ---- END PLAN-G ----
 # ---- PLAN-J (product) — append only below this line ----
+
+
+def _plan_j_validate_action_ids(config: UseCaseConfig, root: Path | None) -> None:
+    """Plan J M99 (DEC-1309): refuse an action id the catalogue lacks (`engine.decide.catalogue`)."""
+    from engine.decide.catalogue import validate_action_ids  # it imports this module
+
+    validate_action_ids(config, root=root)
+
+
 # ---- END PLAN-J ----

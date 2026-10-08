@@ -120,3 +120,64 @@ def test_an_old_sqlite_platform_db_keeps_working_for_the_scoring_seam(tmp_path: 
         assert "C-1" in ledger.classify("acme", PURPOSE, ["C-1"], AT, channel="email").valid
     finally:
         engine.dispose()
+
+
+def _privacy() -> Any:
+    from engine.privacy.config import load_privacy_config
+
+    return load_privacy_config()
+
+
+def test_an_import_refuses_a_channel_no_configuration_can_name(tmp_path: Path) -> None:
+    """`e-mail` or `text msg` would be stored and accepted, and never match a configured channel."""
+    engine = create_engine(f"sqlite:///{tmp_path / 'platform.db'}")
+    ledger = ConsentLedger(engine, salt=SALT)
+    lines = [
+        "principal_id,purpose,status,recorded_at,channel",
+        f"c1,{PURPOSE},withdrawn,2026-09-01,e-mail",
+        f"c2,{PURPOSE},withdrawn,2026-09-01,text msg",
+        f"c3,{PURPOSE},withdrawn,2026-09-01, SMS ",
+        f"c4,{PURPOSE},granted,2026-09-01,",
+    ]
+    report = ledger.import_csv("\n".join(lines) + "\n", client_id="acme", privacy=_privacy())
+    assert [(error.row, error.column, error.code) for error in report.errors] == [
+        (2, "channel", "CONSENT_CHANNEL_INVALID"),
+        (3, "channel", "CONSENT_CHANNEL_INVALID"),
+    ]
+    assert all("e-mail" not in error.message and "text msg" not in error.message for error in report.errors)
+    assert report.rows_imported == 0, "an import with a bad row is refused whole unless partial"
+    partial = ledger.import_csv(
+        "\n".join(lines) + "\n", client_id="acme", privacy=_privacy(), partial=True
+    )
+    assert partial.rows_imported == 2
+    assert [record.channel for record in ledger.history("c3", client_id="acme")] == ["sms"]
+    assert [record.channel for record in ledger.history("c4", client_id="acme")] == [None]
+    assert ledger.history("c1", client_id="acme") == ()
+
+
+def test_a_recorded_channel_must_be_a_channel_name(tmp_path: Path) -> None:
+    import pytest
+
+    from engine.privacy.contracts import ConsentStatus
+
+    ledger = ConsentLedger(create_engine(f"sqlite:///{tmp_path / 'platform.db'}"), salt=SALT)
+    with pytest.raises(ValueError, match="not a channel name"):
+        ledger.record(
+            client_id="acme",
+            principal_id="c1",
+            purpose=PURPOSE,
+            status=ConsentStatus.WITHDRAWN,
+            source="api",
+            recorded_at=AT,
+            channel="e-mail",
+        )
+    record = ledger.record(
+        client_id="acme",
+        principal_id="c1",
+        purpose=PURPOSE,
+        status=ConsentStatus.WITHDRAWN,
+        source="api",
+        recorded_at=AT,
+        channel=" Email ",
+    )
+    assert record.channel == "email"
