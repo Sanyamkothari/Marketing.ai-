@@ -20,7 +20,7 @@ import json
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final
 
 from engine.agent.contracts import AgentConfidence
 from engine.agent.untrusted import display_name
@@ -36,13 +36,18 @@ from engine.config import (
     resolve_config,
 )
 
+if TYPE_CHECKING:
+    from engine.decide.reasons import BusinessReasonDictionary
+
 __all__ = [
     "NEVER_RECOMMENDED",
     "DataFacts",
+    "ReasonPhraseSuggestion",
     "SettingRecommendation",
     "recommend_settings",
     "setting_allowed",
     "settings_fields",
+    "suggest_reason_phrases",
 ]
 
 NEVER_RECOMMENDED: Final[frozenset[str]] = frozenset(
@@ -92,6 +97,41 @@ class SettingRecommendation:
     reason: str
     confidence: AgentConfidence
     evidence_ids: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReasonPhraseSuggestion:
+    """A business-language phrase suggestion for a feature (Plan J M98, DEC-1308)."""
+
+    feature: str
+    up_phrase: str
+    down_phrase: str
+    confidence: AgentConfidence = AgentConfidence.CHECK
+
+
+def suggest_reason_phrases(
+    features: Sequence[str],
+    *,
+    dictionary: BusinessReasonDictionary | None = None,
+) -> tuple[ReasonPhraseSuggestion, ...]:
+    """Propose plain-language phrases for unmapped features as check suggestions (Plan J M98, DEC-1308)."""
+    from engine.decide.reasons import load_reasons_dictionary
+
+    dict_obj = dictionary or load_reasons_dictionary()
+    suggestions: list[ReasonPhraseSuggestion] = []
+    for feat in features:
+        if feat in dict_obj.features:
+            continue
+        clean = display_name(feat).lower()
+        suggestions.append(
+            ReasonPhraseSuggestion(
+                feature=feat,
+                up_phrase=f"Higher {clean}",
+                down_phrase=f"Lower {clean}",
+                confidence=AgentConfidence.CHECK,
+            )
+        )
+    return tuple(suggestions)
 
 
 def settings_fields(schema: AdvancedSettingsSchema) -> dict[str, FieldSpec]:

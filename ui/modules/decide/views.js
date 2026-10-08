@@ -5,7 +5,7 @@
 // report's own sentence, and with no verdict - the server sends none, and nothing here makes one up.
 // Every builder is pure: what it draws comes from its arguments (the API's own answers).
 
-import { crumbs, dataTable, EM_DASH, esc, fmtDate, fmtInt, pageHead, RESULTS_CRUMB, sortNote } from "../../dom.js";
+import { crumbs, dataTable, EM_DASH, esc, fmtDate, fmtInt, fmtMoney, pageHead, RESULTS_CRUMB, sortNote } from "../../dom.js";
 import { planCardHtml } from "./plan.js";
 
 /** A campaign's own page. */
@@ -98,6 +98,51 @@ export function campaignPageHtml({
   });
   const result = resultCard({ ...view, plan }, { canMeasure: can("POST", "/campaigns/{campaign_id}/measure"), busy, error: measureError });
   return `<main class="screen dc" data-module="decide" data-campaign-page="${esc(campaign.campaign_id)}">${head}<div class="dc-stack">${result}${card}</div></main>`;
+}
+
+/**
+ * Treat list summary card and download button (Plan J M98, DEC-1308).
+ * One line instruction: include treat = 1, exclude holdout = 1.
+ */
+export function treatListCardHtml(summary, { treatListHref = "" } = {}) {
+  if (!summary) return "";
+  const rows = summary.rows || 0;
+  const treated = summary.treated || 0;
+  const heldOut = summary.held_out !== null && summary.held_out !== undefined ? fmtInt(summary.held_out) : EM_DASH;
+  const explored = summary.explored || 0;
+  const suppressed = summary.suppressed || 0;
+  const netValue =
+    summary.net_value_total !== null && summary.net_value_total !== undefined ? fmtMoney(summary.net_value_total) : null;
+
+  const notesHtml =
+    summary.notes && summary.notes.length
+      ? `<div class="dc-note" style="margin-top:8px;">${summary.notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>`
+      : "";
+
+  const downloadBtn = treatListHref
+    ? `<div class="dc-actions" style="margin-top:12px;">
+         <a class="btn primary" href="${esc(treatListHref)}" download>Download treat list</a>
+       </div>`
+    : "";
+
+  const netValueRow = netValue
+    ? `<div class="dc-kv"><span class="dc-k">Total net value</span><span class="dc-v">${esc(netValue)}</span></div>`
+    : "";
+
+  return `<section class="card dc-card" data-treat-list-card>
+    <h3>Treat list</h3>
+    <p class="caption" style="margin-top:4px;color:var(--muted);">Include treat = 1, exclude holdout = 1.</p>
+    <div class="dc-kvs">
+      <div class="dc-kv"><span class="dc-k">Total rows</span><span class="dc-v">${esc(fmtInt(rows))}</span></div>
+      <div class="dc-kv"><span class="dc-k">Treat (1)</span><span class="dc-v">${esc(fmtInt(treated))}</span></div>
+      <div class="dc-kv"><span class="dc-k">Holdout (1)</span><span class="dc-v">${esc(heldOut)}</span></div>
+      <div class="dc-kv"><span class="dc-k">Explore</span><span class="dc-v">${esc(fmtInt(explored))}</span></div>
+      <div class="dc-kv"><span class="dc-k">Suppressed</span><span class="dc-v">${esc(fmtInt(suppressed))}</span></div>
+      ${netValueRow}
+    </div>
+    ${notesHtml}
+    ${downloadBtn}
+  </section>`;
 }
 
 const CSS = `

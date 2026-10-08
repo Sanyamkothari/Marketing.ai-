@@ -8,12 +8,14 @@
 // on the page, registering the plan and measuring now, are offered only to a person whose role may
 // do them, and every event is delegated from `document`, so a repaint needs no re-binding.
 
-import { canAccess, registerModule, registerResultsList, setActiveNav } from "../router.js";
+import { canAccess, registerModule, registerPagePanel, registerResultsList, setActiveNav } from "../router.js";
 import { errorBox, skeleton } from "../../dom.js";
-import { getCampaign, getCampaigns, getPlan, getPlanPreview, postMeasure, postPlan } from "./api.js";
+import { treatListUrl } from "../../api.js";
+import { getCampaign, getCampaigns, getPlan, getPlanPreview, getTreatListSummary, postMeasure, postPlan } from "./api.js";
 import { planBody, previewHtml, previewReadoutHtml } from "./plan.js";
-import { campaignPageHtml, campaignsListHtml, injectStyles } from "./views.js";
+import { campaignPageHtml, campaignsListHtml, injectStyles, treatListCardHtml } from "./views.js";
 
+export { treatListCardHtml };
 export const ROUTES = ["campaigns"];
 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
@@ -155,3 +157,49 @@ document.addEventListener("change", async (event) => {
   const section = document.querySelector("[data-plan-preview]");
   if (section) section.outerHTML = previewHtml(screen.preview, screen.previewIndex);
 });
+
+// --- Treat list page panel (Plan J M98, DEC-1308) ------------------------------------------------
+const treatStates = new Map();
+
+async function loadTreatSummary(runId) {
+  let st = treatStates.get(runId);
+  if (!st) {
+    st = { runId, summary: null, loading: true, error: null };
+    treatStates.set(runId, st);
+    try {
+      st.summary = await getTreatListSummary(runId);
+    } catch (err) {
+      st.error = err;
+    }
+    st.loading = false;
+    repaintTreatPanel(runId);
+  }
+  return st;
+}
+
+function repaintTreatPanel(runId) {
+  if (typeof document === "undefined") return;
+  const el = document.querySelector(`[data-treat-panel="${encodeURIComponent(runId)}"]`);
+  if (!el) return;
+  const st = treatStates.get(runId);
+  if (!st || !st.summary) return;
+  el.innerHTML = treatListCardHtml(st.summary, { treatListHref: treatListUrl(runId) });
+}
+
+function treatListPanelHtml(kind, uc, run) {
+  if (!run || !run.run_id) return "";
+  const runId = run.run_id;
+  loadTreatSummary(runId);
+  const st = treatStates.get(runId);
+  const summary = st ? st.summary : null;
+  return `<div data-treat-panel="${encodeURIComponent(runId)}">${treatListCardHtml(summary, {
+    treatListHref: treatListUrl(runId),
+  })}</div>`;
+}
+
+registerPagePanel({
+  name: "treat_list",
+  applies: (kind, uc, run) => kind === "output" && !!run && run.mode === "score",
+  html: treatListPanelHtml,
+});
+

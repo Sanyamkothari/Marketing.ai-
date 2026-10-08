@@ -145,6 +145,15 @@ LEGACY_POLICIES: Final[dict[PolicyKey, RoutePolicy]] = {
         object_param="run_id",
         audit_reads=True,
     ),
+    # Plan J M98: the treat list carrying offer, channel, reasons, net value and holdout
+    ("GET", "/runs/{run_id}/treat_list.csv"): _policy(
+        _AN,
+        "runs.treat_list_download",
+        "download treat list",
+        object_type="run",
+        object_param="run_id",
+        audit_reads=True,
+    ),
     ("POST", "/runs/{run_id}/cancel"): _policy(
         _AN, "runs.cancel", "cancel a run", object_type="run", object_param="run_id"
     ),
@@ -334,6 +343,8 @@ ROW_LEVEL_ARTEFACTS: Final[frozenset[str]] = frozenset(
         "row_explanations.parquet",
         "copy_messages.csv",
         "holdout_assignment.parquet",  # Plan J M92 (DEC-1302 (e)): holdout and explore flags per customer
+        "treat_list.csv",  # Plan J M98 (DEC-1308): treat list with offer, channel, reasons, net value
+        "treat_list.parquet",
     }
 )
 """Run files that hold one row per customer (Plan J M91, M92). `configs/privacy.yaml`
