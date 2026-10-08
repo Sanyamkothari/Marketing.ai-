@@ -17,6 +17,7 @@ actually written to justify.
 | Plan G: use-case agents (Guided setup) | [`MARKETING_AI_PLAN_G_AGENTS.md`](MARKETING_AI_PLAN_G_AGENTS.md) | new branch from `main`, M70 … M77, DEC-1000 … 1099 |
 | Plan H: one simple product (generic journey, four pages, Connections) | [`MARKETING_AI_PLAN_H_SIMPLE.md`](MARKETING_AI_PLAN_H_SIMPLE.md) | same branch as Plan G, M80 … M84, DEC-1100 … 1199 |
 | Plan J: product value first (the plan being worked; proposal) | [`MARKETING_AI_PLAN_J_PRODUCT.md`](MARKETING_AI_PLAN_J_PRODUCT.md); evidence in [`docs/research/`](../research/) | M90 … M111, DEC-1300 … 1399 (claimed by M90) |
+| Plan J Phase 2 delegation: who builds what, the rules for a partner agent, and its prompts | [`PLAN_J_DELEGATION.md`](PLAN_J_DELEGATION.md) | partner branches `plan-j/<milestone>-<name>`, merged by the main session |
 | Hand-off reference design for the later integration phase (not allocated) | [`MARKETING_AI_PLAN_J_LAYER.md`](MARKETING_AI_PLAN_J_LAYER.md) | renumbered when the integration plan is written |
 | The parallel-work protocol (the contract between the phase branches, not a phase plan) | [`PARALLEL_WORK_PROTOCOL.md`](../../PARALLEL_WORK_PROTOCOL.md) | all |
 
