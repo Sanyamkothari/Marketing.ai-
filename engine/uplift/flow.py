@@ -188,7 +188,15 @@ _LOGGER = get_logger(__name__)
 UPLIFT_HOLDOUT_FILENAME: Final[str] = "uplift_holdout.parquet"
 """The hold-out's treatment, outcome and predictions, kept for OPE and expected conversions."""
 
-HOLDOUT_COLUMNS: Final[tuple[str, ...]] = ("primary_key", "t", "y", "uplift", "p_treated", "p_control")
+HOLDOUT_COLUMNS: Final[tuple[str, ...]] = (
+    "primary_key",
+    "t",
+    "y",
+    "uplift",
+    "p_treated",
+    "p_control",
+    "value",
+)
 """Columns of `uplift_holdout.parquet`, in order."""
 
 UPLIFT_COLUMN: Final[str] = "uplift"
@@ -273,9 +281,13 @@ def scores_columns(primary_key: PrimaryKey, reason_columns: tuple[str, ...]) -> 
 
 def read_holdout(storage: Storage, key: str) -> pd.DataFrame:
     """`uplift_holdout.parquet` as a frame with :data:`HOLDOUT_COLUMNS`; `StorageError` when absent."""
+    import numpy as np
     import pandas as pd
 
-    return pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
+    frame = pd.read_parquet(io.BytesIO(storage.read_bytes(key)))
+    if "value" not in frame.columns:
+        frame["value"] = np.ones(len(frame.index), dtype=np.float64)
+    return frame
 
 
 def _parquet_bytes(frame: pd.DataFrame) -> bytes:
@@ -287,7 +299,13 @@ def _parquet_bytes(frame: pd.DataFrame) -> bytes:
 
 
 def _observed_top_share(
-    uplift: FloatArray, t: IntArray, y: IntArray, *, samples: int, seed: int
+    uplift: FloatArray,
+    t: IntArray,
+    y: IntArray,
+    *,
+    samples: int,
+    seed: int,
+    value: FloatArray | None = None,
 ) -> Callable[[float], ConfidenceValue | None]:
     """The hold-out's observed uplift among its top `fraction`, with its bootstrap interval.
 
@@ -297,8 +315,9 @@ def _observed_top_share(
     from engine.uplift.metrics import bootstrap_uplift_at
 
     def observed(fraction: float) -> ConfidenceValue | None:
-        return bootstrap_uplift_at(uplift, t, y, fraction, samples=samples, seed=seed)
+        return bootstrap_uplift_at(uplift, t, y, fraction, samples=samples, seed=seed, value=value)
 
+    observed.is_value_weighted = value is not None  # type: ignore[attr-defined]
     return observed
 
 
@@ -654,6 +673,13 @@ class UpliftTrainFlow(_TrainFlow):
                 causal=self._causal,
             ),
         )
+        kept = _require(self._kept, "the validated rows")
+        value_col = uplift.policy.value_column
+        holdout_val: FloatArray | None = None
+        if value_col and value_col in kept.columns:
+            val_series = pd.to_numeric(kept[value_col].iloc[rows], errors="coerce").fillna(1.0)
+            holdout_val = val_series.to_numpy(dtype=float)
+
         recommendation, _ = recommend_policy(
             prediction.uplift,
             segments,
@@ -662,8 +688,10 @@ class UpliftTrainFlow(_TrainFlow):
             computed_on="test",
             causal=self._causal,
             observed_top_share=_observed_top_share(
-                prediction.uplift, t, y, samples=uplift.bootstrap_samples, seed=self._seed
+                prediction.uplift, t, y, samples=uplift.bootstrap_samples, seed=self._seed, value=holdout_val
             ),
+            values=holdout_val,
+            p_treated=prediction.p_treated,
         )
         self._write(POLICY_FILENAME, recommendation)
         self._write_holdout(rows, t, y, prediction)
@@ -678,7 +706,7 @@ class UpliftTrainFlow(_TrainFlow):
         ):
             if bound is not None:
                 metrics[name] = bound
-        self._manifest.add_metrics(metrics)
+            self._manifest.add_metrics(metrics)
         verdict = "measurable uplift" if evaluation.measurable_uplift else "no measurable uplift"
         detail = f"{_auuc_line(evaluation)} · {verdict}{_not_causal_suffix(self._causal)}{evidence_note}"
         return _StageOutcome(detail, evaluation.rows_evaluated)
@@ -917,9 +945,17 @@ class UpliftTrainFlow(_TrainFlow):
 
     def _write_holdout(self, rows: IntArray, t: IntArray, y: IntArray, prediction: UpliftPrediction) -> None:
         """`uplift_holdout.parquet`: the logged data OPE and every expected-conversions figure use."""
+        import numpy as np
         import pandas as pd
 
         kept = _require(self._kept, "the validated rows")
+        value_col = self._ctx.config.uplift.policy.value_column
+        if value_col and value_col in kept.columns:
+            val_series = pd.to_numeric(kept[value_col].iloc[rows], errors="coerce").fillna(1.0)
+            values = val_series.to_numpy(dtype=np.float64)
+        else:
+            values = np.ones(len(rows), dtype=np.float64)
+
         frame = pd.DataFrame(
             {
                 "primary_key": kept[self._ctx.row_key].iloc[rows].astype(str).to_numpy(),
@@ -928,6 +964,7 @@ class UpliftTrainFlow(_TrainFlow):
                 "uplift": prediction.uplift,
                 "p_treated": prediction.p_treated,
                 "p_control": prediction.p_control,
+                "value": values,
             },
             columns=list(HOLDOUT_COLUMNS),
         )
@@ -1538,12 +1575,14 @@ class UpliftScoreFlow(_ScoreFlow):
         except (StorageError, OSError, ValueError):
             _LOGGER.warning("actions: the training run's %s could not be read", UPLIFT_HOLDOUT_FILENAME)
             return None
+        holdout_val = np.asarray(holdout["value"], dtype=np.float64) if "value" in holdout.columns else None
         return _observed_top_share(
             np.asarray(holdout["uplift"], dtype=np.float64),
             np.asarray(holdout["t"], dtype=np.int_),
             np.asarray(holdout["y"], dtype=np.int_),
             samples=self._ctx.config.uplift.bootstrap_samples,
             seed=seed_from(version.run_id),
+            value=holdout_val,
         )
 
     def _export(self) -> _StageOutcome:

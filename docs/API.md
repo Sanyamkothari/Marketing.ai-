@@ -845,6 +845,10 @@ The budget the targeting recommendation works within. A Phase 5 agent may propos
 | `budget_contacts` | integer \| null | no |  |
 | `cost_per_contact` | number \| null | no |  |
 | `value_per_conversion` | number \| null | no |  |
+| `value_column` | string \| null | no |  |
+| `horizon_months` | integer \| null | no |  |
+| `margin_pct` | number \| null | no |  |
+| `min_roi` | number \| null | no |  |
 
 #### UpliftEvidenceConfig
 

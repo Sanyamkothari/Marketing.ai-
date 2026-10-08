@@ -591,6 +591,14 @@ class PolicyRecommendation(Artefact):
         description="Expected incremental conversions × value_per_conversion, when configured."
     )
     expected_net_value: float | None = Field(description="expected_value − expected_cost, when both exist.")
+    net_value_low: float | None = Field(
+        default=None,
+        description="expected_net_value at the low end of the conversions interval; null without one.",
+    )
+    net_value_high: float | None = Field(
+        default=None,
+        description="expected_net_value at the high end of the conversions interval; null without one.",
+    )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
 
@@ -675,6 +683,14 @@ class ProfitCurve(Artefact):
     )
     bands_available: bool = Field(description="True when the points carry a low/high net value band.")
     bands_note: str = Field(description="What the band is, or why there is none.")
+    value_weighted: bool = Field(
+        default=False,
+        description="True when ranking and values were weighted by an individual customer value column.",
+    )
+    value_basis: str | None = Field(
+        default=None,
+        description="Basis of the customer value (e.g. column name or scalar value description).",
+    )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
 

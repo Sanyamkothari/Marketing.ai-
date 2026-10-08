@@ -131,23 +131,26 @@ def apply_uplift_actions(
         SUPPRESSED_REASON_COLUMN,
         apply_actions,
     )
-    from engine.uplift.policy import below_cost, rank_positions, recommend_policy
+    from engine.uplift.policy import below_cost, customer_net_values, rank_positions, recommend_policy
     from engine.uplift.segments import assign_segments
 
     started = time.perf_counter()
+    policy = config.uplift.policy
     uplift_column, p_treated_column, p_control_column = prediction_columns
     missing = [
         name
         for name in (primary_key, uplift_column, p_treated_column, p_control_column)
         if name not in frame.columns
     ]
+    if policy.value_column and policy.value_column not in frame.columns:
+        missing.append(policy.value_column)
     if missing:
         raise ValueError(
             f"The scored frame is missing {', '.join(repr(name) for name in missing)}; uplift actions "
             f"need the primary key and the three prediction columns."
         )
     uplift = _numeric(frame[uplift_column], uplift_column)
-    _numeric(frame[p_treated_column], p_treated_column)
+    p_treated = _numeric(frame[p_treated_column], p_treated_column)
     p_control = _numeric(frame[p_control_column], p_control_column)
 
     # Phase 1's suppression and control group, unchanged, on a copy whose score column is the uplift.
@@ -162,7 +165,14 @@ def apply_uplift_actions(
     control = acted[CONTROL_GROUP_COLUMN].to_numpy(dtype=bool)
     eligible = ~suppressed & ~control
 
-    policy = config.uplift.policy
+    val_arr = (
+        _numeric(frame[policy.value_column], policy.value_column)
+        if policy.value_column and policy.value_column in frame.columns
+        else None
+    )
+    p_treated_arr = p_treated
+    net_val, row_costs = customer_net_values(uplift, policy, values=val_arr, p_treated=p_treated_arr)
+
     tiebreak = tiebreak_keys(frame[primary_key], run_id=run_id)
     recommendation, selected = recommend_policy(
         uplift,
@@ -174,23 +184,26 @@ def apply_uplift_actions(
         observed_top_share=observed_top_share,
         eligible=eligible,
         tiebreak=tiebreak,
+        net_value=net_val,
+        values=val_arr,
+        p_treated=p_treated_arr,
     )
 
-    values = np.array([segment.value for segment in segments.tolist()], dtype=object)
-    persuadable = values == Segment.PERSUADABLE.value
-    sleeping = values == Segment.SLEEPING_DOG.value
+    seg_values = np.array([segment.value for segment in segments.tolist()], dtype=object)
+    persuadable = seg_values == Segment.PERSUADABLE.value
+    sleeping = seg_values == Segment.SLEEPING_DOG.value
 
     actions = np.array([SEGMENT_ACTIONS[segment] for segment in segments.tolist()], dtype=object)
     passed_over = persuadable & eligible & ~selected
     actions[passed_over] = OVER_BUDGET_ACTION
-    actions[passed_over & below_cost(uplift, policy)] = BELOW_COST_ACTION
+    actions[passed_over & below_cost(uplift, policy, net_value=net_val, cost=row_costs)] = BELOW_COST_ACTION
     actions[selected] = TREAT_ACTION
     actions[control] = acted[ACTION_COLUMN].to_numpy(dtype=object)[control]
     actions[suppressed] = acted[ACTION_COLUMN].to_numpy(dtype=object)[suppressed]
 
     intended = selected.copy()
     if selected.any():
-        positions = rank_positions(uplift, tiebreak)
+        positions = rank_positions(uplift, tiebreak, net_value=net_val)
         intended |= control & persuadable & (positions <= int(positions[selected].max()))
 
     if bool((sleeping & ((actions == TREAT_ACTION) | intended)).any()):
@@ -201,7 +214,7 @@ def apply_uplift_actions(
         result[column] = acted[column].to_numpy()
     result[BAND_COLUMN] = [SEGMENT_LABELS[segment] for segment in segments.tolist()]
     result[ACTION_COLUMN] = actions
-    result[SEGMENT_COLUMN] = values
+    result[SEGMENT_COLUMN] = seg_values
     result[INTENDED_TREATMENT_COLUMN] = pd.Series(intended, index=frame.index, dtype=bool)
     result.attrs = dict(acted.attrs)
 

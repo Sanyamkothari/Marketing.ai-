@@ -353,6 +353,10 @@ ValueQuery = Annotated[
         ge=0.0, description="Value of one conversion to compute with; the run's configured value when absent."
     ),
 ]
+MinRoiQuery = Annotated[
+    float | None,
+    Query(ge=0.0, description="Minimum ROI to require; the run's configured min_roi when absent."),
+]
 PointsQuery = Annotated[
     int,
     Query(
@@ -375,6 +379,8 @@ class _CurveInputs:
     tiebreak: np.ndarray | None = None
     treated: np.ndarray | None = None
     """The rows the run marked `Treat` (a scoring run), to check the replay against."""
+    values: np.ndarray | None = None
+    p_treated: np.ndarray | None = None
 
 
 @router.get(
@@ -389,6 +395,8 @@ def read_profit_curve(
     registry: RegistryDep,
     cost_per_contact: CostQuery = None,
     value_per_conversion: ValueQuery = None,
+    value: ValueQuery = None,
+    min_roi: MinRoiQuery = None,
     points: PointsQuery = DEFAULT_CURVE_POINTS,
 ) -> ProfitCurve:
     """The targeting recommendation replayed at every budget (`engine.uplift.policy.profit_curve`).
@@ -414,17 +422,31 @@ def read_profit_curve(
         raise http_error(
             409, RUN_NOT_UPLIFT, "This run made no targeting recommendation, so it has no budget to vary."
         ) from exc
+
+    try:
+        resolved = storage.read_model(run_key(run_id, RUN_CONFIG_FILENAME), ResolvedConfig)
+        saved_policy = resolved.config.uplift.policy
+    except Exception:
+        saved_policy = UpliftPolicyConfig()
+
+    effective_val = value if value is not None else value_per_conversion
     configured = UpliftPolicyConfig(
         budget_contacts=stored.budget_contacts,
         cost_per_contact=stored.cost_per_contact,
         value_per_conversion=stored.value_per_conversion,
+        value_column=saved_policy.value_column,
+        horizon_months=saved_policy.horizon_months,
+        margin_pct=saved_policy.margin_pct,
+        min_roi=saved_policy.min_roi,
     )
     policy = UpliftPolicyConfig(
         budget_contacts=stored.budget_contacts,
         cost_per_contact=stored.cost_per_contact if cost_per_contact is None else cost_per_contact,
-        value_per_conversion=(
-            stored.value_per_conversion if value_per_conversion is None else value_per_conversion
-        ),
+        value_per_conversion=(stored.value_per_conversion if effective_val is None else effective_val),
+        value_column=saved_policy.value_column,
+        horizon_months=saved_policy.horizon_months,
+        margin_pct=saved_policy.margin_pct,
+        min_roi=saved_policy.min_roi if min_roi is None else min_roi,
     )
     if record.mode is RunMode.SCORE and _ranked_by_propensity(storage, run_id):
         # Plan J M96: the list was ranked by the approved propensity model, so a budget curve of the
@@ -441,7 +463,13 @@ def read_profit_curve(
         else _scoring_curve_inputs(storage, registry, record)
     )
     replayed, _reason = choose_contacts(
-        inputs.uplift, inputs.segments, configured, eligible=inputs.eligible, tiebreak=inputs.tiebreak
+        inputs.uplift,
+        inputs.segments,
+        configured,
+        eligible=inputs.eligible,
+        tiebreak=inputs.tiebreak,
+        values=inputs.values,
+        p_treated=inputs.p_treated,
     )
     agrees = int(replayed.sum()) == stored.contacts_recommended and (
         inputs.treated is None or bool((replayed == inputs.treated).all())
@@ -464,6 +492,8 @@ def read_profit_curve(
         observed=inputs.observed,
         eligible=inputs.eligible,
         tiebreak=inputs.tiebreak,
+        values=inputs.values,
+        p_treated=inputs.p_treated,
         points=points,
         overridden=policy != configured,
     )
@@ -498,6 +528,16 @@ def _training_curve_inputs(storage: Storage, record: RunRecord) -> _CurveInputs:
             "This run did not train an uplift model, so it has no hold-out to vary the budget on.",
         ) from exc
     uplift = np.asarray(holdout["uplift"], dtype=np.float64)
+    holdout_val = (
+        np.asarray(holdout["value"], dtype=np.float64)
+        if (resolved.config.uplift.policy.value_column and "value" in holdout.columns)
+        else None
+    )
+    holdout_pt = (
+        np.asarray(holdout["p_treated"], dtype=np.float64)
+        if (resolved.config.uplift.policy.value_column and "p_treated" in holdout.columns)
+        else None
+    )
     return _CurveInputs(
         uplift=uplift,
         segments=assign_segments(
@@ -510,7 +550,10 @@ def _training_curve_inputs(storage: Storage, record: RunRecord) -> _CurveInputs:
             y=np.asarray(holdout["y"], dtype=np.int64),
             samples=resolved.config.uplift.bootstrap_samples,
             seed=seed_from(record.run_id),
+            value=holdout_val,
         ),
+        values=holdout_val,
+        p_treated=holdout_pt,
     )
 
 
@@ -549,6 +592,13 @@ def _scoring_curve_inputs(storage: Storage, registry: ModelRegistry, record: Run
             PROFIT_CURVE_UNAVAILABLE,
             "This run's scores file does not have the columns a budget curve needs.",
         ) from exc
+    values: np.ndarray | None = None
+    if (
+        resolved.config.uplift.policy.value_column
+        and resolved.config.uplift.policy.value_column in scores.columns
+    ):
+        values = scores[resolved.config.uplift.policy.value_column].to_numpy(dtype=np.float64)
+    p_treated = scores["p_treated"].to_numpy(dtype=np.float64) if "p_treated" in scores.columns else None
     observed: HoldoutUplift | None = None
     try:
         version = registry.get(record.model_version_id or "")
@@ -564,6 +614,7 @@ def _scoring_curve_inputs(storage: Storage, registry: ModelRegistry, record: Run
             y=np.asarray(holdout["y"], dtype=np.int64),
             samples=resolved.config.uplift.bootstrap_samples,
             seed=seed_from(version.run_id),
+            value=np.asarray(holdout["value"], dtype=np.float64) if "value" in holdout.columns else None,
         )
     except (RegistryError, StorageError, OSError, ValueError):
         _LOGGER.warning("profit-curve: run=%s the training hold-out could not be read", record.run_id)
@@ -575,6 +626,8 @@ def _scoring_curve_inputs(storage: Storage, registry: ModelRegistry, record: Run
         eligible=eligible,
         tiebreak=tiebreak,
         treated=treated,
+        values=values,
+        p_treated=p_treated,
     )
 
 

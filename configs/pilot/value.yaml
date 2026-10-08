@@ -16,3 +16,19 @@ outcomes_to_prevent:
   - card-default-propensity
   - fault-prediction
   - order-fulfillment
+
+# Editable defaults for value and cost models (Plan J M97, DEC-1307).
+# One value block feeds both the uplift policy and the RoiInputs defaults in engine/pilot/roi.py.
+# Channel contact costs in INR reflect Indian telecom and messaging benchmarks:
+# WhatsApp marketing ~0.86 INR, WhatsApp utility ~0.13 INR, SMS ~0.15 INR, email ~0.05 INR, voice ~0.70 INR.
+value:
+  offer_cost: 0.0
+  contact_cost: 0.86
+  channel_contact_costs:
+    whatsapp: 0.86
+    whatsapp_marketing: 0.86
+    whatsapp_utility: 0.13
+    sms: 0.15
+    email: 0.05
+    voice: 0.70
+
