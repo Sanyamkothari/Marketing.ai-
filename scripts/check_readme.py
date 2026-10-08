@@ -300,6 +300,15 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/decide/test_ranking_banner_js.py",
         "tests/integration/decide/test_uplift_ranking_flow.py",
     ),
+    # M97's node tests (uplift_ui.test.mjs) run through tests/unit/uplift/test_uplift_ui.py, named here.
+    "M97": (
+        "tests/unit/uplift/test_net_value.py",
+        "tests/unit/uplift/test_profit_curve.py",
+        "tests/unit/uplift/test_uplift_ui.py",
+        "tests/unit/decide/test_gross_value.py",
+        "tests/unit/pilot/test_roi.py",
+        "tests/integration/uplift/test_net_value_flow.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

@@ -379,6 +379,11 @@ codes:
     title: "The predicted effect of contact does not match what was measured"
     meaning: "The test customers were split into ten groups by the predicted effect of contact. In fewer than 8 of the groups with enough contacted and held-back customers did the measured effect's 95% range contain the predicted effect. The ranking may still be useful, but the predicted number of extra responses should not be trusted as a forecast. This check is advisory: it does not block approval."
     fix: "Use the measured (expected) extra responses rather than the model's own prediction when planning, or retrain on more customers or a more recent campaign."
+  # --- Plan J M97: the budget curve's query (DEC-1307 (i)); an API route error of api/routes/uplift.py --
+  PROFIT_CURVE_QUERY_INVALID:
+    title: "The budget curve was asked for the value of a conversion twice"
+    meaning: "The budget curve was asked for with both value and value_per_conversion. They are two names for the same setting, the money one extra response is worth, so the request does not say which to use."
+    fix: "Give one of the two, value or value_per_conversion, and ask for the budget curve again."
 
 settings:
   actions.bands[*].min_score:

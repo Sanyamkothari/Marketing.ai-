@@ -46,6 +46,10 @@ PLAN_J_CODES: Final[frozenset[str]] = (
             # M94 integration (DEC-1304 (l)): measuring a campaign whose control group is not one
             # persistent holdout epoch's (`engine.measurement.campaign.epoch_mismatch`, M92's epochs).
             "CAMPAIGN_EPOCH_MISMATCH",
+            # M97 (DEC-1307 (i)): `GET /runs/{id}/uplift/profit-curve` given both `value` and
+            # `value_per_conversion`, of which `value` is an alias (`api.routes.uplift`, 422). An API route
+            # error, joined here so the catalogue explains it as it does M94's campaign route errors.
+            "PROFIT_CURVE_QUERY_INVALID",
         }
     )
     | MEASUREMENT_CHECK_CODES  # M93 (DEC-1303 (h)): LABEL_RATE_UNSTABLE, TREATMENT_HISTORY_NOT_RANDOM

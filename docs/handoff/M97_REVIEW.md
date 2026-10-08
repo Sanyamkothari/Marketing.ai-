@@ -94,7 +94,9 @@ otherwise.
 
 - The DEC number: Plan J uses one DEC per milestone, so M97 is **DEC-1307**. The hand-off said 1310, the code 1307. `M97.md` is kept as the partner's record with a "superseded" banner and inline corrections.
 - `value_basis` hard-coded `₹`. It now uses the repository's INR formatting helper (`format_inr`:
-  "₹1,50,000 (1.50 lakh) per conversion"), and names the margin and horizon when set.
+  "₹1,50,000 (1.50 lakh) per conversion"), and names the margin and horizon when set. Since the second
+  review (finding 3 below) it keeps the paise and is null when none of `value_column`, `margin_pct` and
+  `horizon_months` is set.
 - The `value` query parameter duplicated `value_per_conversion`. It is kept as the spec asks, documented
   as an alias, and both given → 422 `PROFIT_CURVE_QUERY_INVALID` (no generic code for a bad query
   parameter exists, so the route has its own, like `OPE_INVALID`).
@@ -103,6 +105,8 @@ otherwise.
   (`observed_top_value` on `recommend_policy`, `observed_value` on `profit_curve`), and
   `CustomerMoney.value_weighted` says which path a list is on.
 - Hand-off claim "zero shared files modified": `docs/API.md` is generated, which is fine, but say so.
+  (The fix itself adds one shared-file edit, inside the PLAN-J block of `engine/pipeline.py`: the
+  gross-value seam of finding 7.)
   `M97.md` now says so, with the other reverted claims (`RoiInputs`, `actions.py`, `HOLDOUT_COLUMNS`,
   `bench_1m.py`, `test_actions.py`) corrected inline under its banner.
 

@@ -498,6 +498,72 @@ forbids "uplift" and "feature", so the entries say "the campaign-effect model" a
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-08 — plan-j (on main) → Phase 3b (owners of `engine/uplift/`, `api/routes/uplift.py` and the uplift UI): M97 ranks by net value (announcement and record of in-place edits)
+
+**What changed** (DEC-1307), each additive and identical under default configuration (a configuration without
+M97's settings writes every pre-M97 field bit-identically to `main`):
+
+* Pre-approved in the Plan J plan (M97):
+  * `engine/uplift/config.py`: `UpliftPolicyConfig` gains `value_column`, `margin_pct`, `horizon_months` and
+    `min_roi`, all optional.
+  * `engine/uplift/policy.py`: `customer_net_values` returns one `CustomerMoney`; `choose_contacts`,
+    `recommend_policy` and `profit_curve` share one `_plan`. A row below `min_roi ×` its own cost is left out
+    wherever it ranks, so with per-row offer costs the chosen set need not be a prefix of the net-value ranking
+    (with one threshold for every row it is the old cut). `eligible_persuadables` still counts every eligible
+    persuadable; `max_contacts` counts those that pay. New public constant `HOLDOUT_UNREADABLE_NOTE`.
+  * `engine/uplift/flow.py`: the hold-out carries a `value` column only for a training run configured with
+    `value_column`; the score flow reads the value costs once and records them. `engine/uplift/metrics.py`:
+    the value-weighted hold-out lookup.
+  * `ui/modules/uplift/views.js` `profitCard`: shows `value_basis` and `money_note` when present (both null
+    on a pre-M97 configuration). `docs/UPLIFT.md` §14 and the error table.
+* Not named in the plan, additive:
+  * `engine/uplift/contracts.py`: `PolicyRecommendation` gains `net_value_low`, `net_value_high`,
+    `money_note`, `values_missing`, `contact_cost` and `offer_cost`; `ProfitCurve` gains `value_weighted`,
+    `value_basis`, `money_note`, `values_missing`, `contact_cost` and `offer_cost`. `net_value_low`/`high`
+    are populated on every run with a cost, a value and a measured interval, default configurations
+    included; the others are null unless the list is ranked by value. `docs/API.md` regenerated.
+  * `engine/uplift/actions.py`: `apply_uplift_actions` gains the optional keywords `observed_top_value`,
+    `holdout_note` and `value_costs`. A value-ranked list's scores gain `customer_value` and `net_value`
+    (M98's treat list can read `net_value` from `scores.parquet`). Control rows below cost are no longer
+    `intended_treatment`, which changes nothing with a single cost threshold.
+  * `api/routes/uplift.py`: the profit-curve replay replays a value-ranked run with its recorded
+    `contact_cost`/`offer_cost`, never the current `value.yaml`, and must also reproduce the recorded
+    `expected_cost`, else `409 PROFIT_CURVE_UNAVAILABLE`. New query parameters `min_roi` and `value` (an alias
+    of `value_per_conversion`); both `value` and `value_per_conversion` → `422 PROFIT_CURVE_QUERY_INVALID`.
+  * Tests: `tests/unit/uplift/test_net_value.py` (new), `tests/unit/uplift/test_profit_curve.py` (the identity
+    test extended, never loosened), `tests/unit/uplift/uplift_ui.test.mjs`,
+    `tests/integration/uplift/test_net_value_flow.py` (new).
+
+**What is needed.** Ratification of the three edits not named in the plan. Nothing else; M98 and M100 should read
+the chosen set from the Treat mask, not as a prefix of the ranking.
+
+### 2026-10-08 — plan-j (on main) → Plan E (owner of `engine/pilot/roi.py` and `configs/pilot/`): M97 value costs, `format_inr(decimals=)` and one code (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M97; DEC-1307 (a), (g), (i), (k)):
+
+* `engine/pilot/roi.py`: `ValueCosts` and `lookup_value_costs(channel=None, *, root=None)`, the one seam for
+  contact and offer costs, which M99's catalogue should take over. `format_inr(amount, *, decimals=0)` gains a
+  keyword-only `decimals` that keeps the paise (₹0.40); the default output is unchanged. `RoiInputs` defaults
+  are unchanged (`contact_cost` 0.0): the ROI form is not prefilled from the value block.
+* `configs/pilot/value.yaml`: a new `value:` block (`offer_cost`, `contact_cost`, `channel_contact_costs`) of
+  editable India defaults, read only by a use case that sets `uplift.policy.value_column`.
+* `configs/pilot/help.yaml`: `PROFIT_CURVE_QUERY_INVALID` under a Plan J M97 comment, matching
+  `engine.decide.codes.PLAN_J_CODES`; it is an API route error, listed like M94's campaign route errors.
+* Tests: `tests/unit/pilot/test_roi.py` (four tests added). `tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement. Offering the value block's costs on the ROI form is left
+to Plan E.
+
+### 2026-10-08 — plan-j (on main) → Plan G (owner of `engine/agent/`): Guided setup proposes a value column (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M97; DEC-1307 (l)): `engine/agent/recommend.py` gains
+`_value_rules`: when `uplift.policy.value_column` is unset and the data has a column named like customer value
+(`order_value`, `premium`, `balance`, `arpu` and spellings), it proposes it as a "check" recommendation for
+`uplift.policy.value_column`. `tests/fixtures/agent_bench/expected.json` gains that recommendation for the one
+bench case with a `balance` column. Nothing else in the agent changed.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
