@@ -38,7 +38,7 @@ milestones back.
 | Wave | Partner agent | Claude Code | Starts when |
 |---|---|---|---|
 | **1** | **M97** (trial) | **M96**; `make test-all`; the Help-menu test | now |
-| **1b** | **M98** (only if M97's review was light) | reviews and merges M97 | M97 branch pushed |
+| **1b** | **M98** (M97's review was not light, so it waits for M97 on `main`; it reads the review first) | fixes, reviews and merges M97 | M97 merged |
 | **2** | **M99** (needs M97 on `main`) | reviews and merges M98 | M97 merged |
 | **2** | **M101** (needs M97 and M98 on `main`) | reviews and merges M99, then M101 | M98 merged |
 | **3** | — | **M100** (needs M96, M97, M99 on `main`) | M99 merged |
@@ -133,6 +133,39 @@ Sections, all required:
    with context, decision and consequence.
 6. **README note** — one paragraph for the milestone row.
 7. **Open questions and known gaps** — anything you were unsure of or left out, honestly.
+8. **Self-check** — each item of §4.7 with one line of evidence (a test name, a timing, a command's
+   output). "Done" without evidence counts as not done.
+
+### 4.7 Checklist before pushing (lessons from the M97 review)
+The M97 review (`docs/handoff/M97_REVIEW.md`) found eight blocking problems that lint and `make test`
+did not catch. Each item below is one of them turned into a check. Answer every item in §8 of the hand-off file.
+1. **Test the public entry point, with a real run's configuration.** Acceptance tests must go through
+   the function or route a real run calls, not only the inner helper. Use the configuration a real run
+   has: costs from `configs/pilot/value.yaml` as well as explicit settings, and the artefacts a real
+   pipeline run writes (use the synthetic-run fixtures under `tests/integration/`), not only hand-made
+   frames. (M97: `min_roi` held in `choose_contacts` but was lost in `recommend_policy`.)
+2. **Compute once, pass everything down.** If a value is computed in one function and passed to
+   another, pass every part of it (for example net value AND per-row cost). Do not recompute a
+   different version further down.
+3. **Linear time at 1M rows.** Nothing per row inside a loop over rows; use `cumsum`, vectorised pandas
+   or numpy, or a join. Add a timing test on at least 200k rows (mark it `slow` if it takes more than
+   ~3 s) and report the 1M-row estimate. (M97's profit curve was O(N²): about 13 minutes at 1M rows.)
+4. **Nothing fabricated, nothing mislabelled.** A missing input gives `null` with a plain reason. Never
+   use `fillna(1.0)` or `fillna(0)` to make a number appear, and never default an old file's missing
+   column to a made-up value. A field named for one unit (conversions, rupees, a probability) never
+   holds another.
+5. **Defaults unchanged.** No default that existing runs see may change: config defaults, `RoiInputs`,
+   column lists, file names, artefact bytes. Prove it with a test that runs the default configuration
+   and compares with `main`. If you believe a default must change, do not change it: raise it as an
+   open question.
+6. **Stay in your lane.** Run `git diff origin/main --stat` before pushing; every file must be explained
+   by the milestone in §2 of the hand-off file. No drive-by fixes in other workstreams' files: list
+   them as open questions instead.
+7. **Merge the latest `origin/main` before pushing** and resolve conflicts. Do not re-apply a fix that is
+   already on `main`.
+8. **Read your own diff line by line** (`git diff origin/main`) before pushing, looking for indentation
+   changes, moved statements and leftover debug code. (M97 moved one `add_metrics` call into a loop by
+   accident.)
 
 ---
 
@@ -186,12 +219,15 @@ the hand-off file. Do not edit the files in §4.4 of the delegation doc. Run mak
 before pushing. Write docs/handoff/M97.md (§4.6), commit, and push the branch. Do not push main.
 ```
 
-### 5.2 Partner agent — M98 The treat list and business-language reasons (after M97's review)
+### 5.2 Partner agent — M98 The treat list and business-language reasons (after M97 is merged on `main`)
 
 ```text
 You are building milestone M98 of Plan J in the Marketing AI repository. Read first, in full:
-docs/plans/PLAN_J_DELEGATION.md (§3 and §4 are your rules, and the feedback Claude Code gave on M97),
-PARALLEL_WORK_PROTOCOL.md, docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md §3 and the M98 section of §4.
+docs/plans/PLAN_J_DELEGATION.md (§3 and §4 are your rules; §4.7 is the checklist you must answer in
+your hand-off file), docs/handoff/M97_REVIEW.md (the review of your M97 build: what went wrong and
+why), PARALLEL_WORK_PROTOCOL.md, docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md §3 and the M98 section of §4.
+Then read how M97 landed on main: engine/uplift/policy.py and docs/UPLIFT.md §14, where the net value
+and its null reasons come from.
 
 Branch: git fetch origin && git checkout -b plan-j/m98-treat-list origin/main
 
@@ -227,8 +263,28 @@ Acceptance tests (write them first and show they fail on unchanged code):
 - A mapped feature renders its phrase; an unmapped one keeps today's text; jargon_in finds nothing.
 - The download is refused to a Viewer when sign-in is on and audited for an Analyst.
 
-Do not edit the files in §4.4 of the delegation doc. Run make lint and make test before pushing.
-Write docs/handoff/M98.md (§4.6), commit, and push the branch. Do not push main.
+M98 checks (from the M97 review; each is a test, and each is answered in §8 of your hand-off file):
+- Public path, real run: the golden tests build the treat list from the artefacts of a real synthetic
+  pipeline run (a propensity run and an uplift run, through the same code the API calls), not from
+  hand-made frames. The download test goes through GET on the real route.
+- Nulls, never fake values: no holdout_assignment.parquet → holdout flag null (not False) and a plain
+  note in the summary; no net value from M97 → net value null; fewer than three explainable features
+  → the remaining reason columns are null, not empty strings or repeated text. Test each.
+- One unit per column: net value is in rupees and named and documented that way. Flags are booleans,
+  not "1"/"0" text in the parquet; the CSV writes 1/0 and the hand-off says so.
+- Scale: building the treat list for 200k rows (reason mapping included) has a timing test; report
+  the 1M-row estimate. No per-row Python loop or DataFrame.apply over rows for the reasons; map
+  them vectorised or through a join.
+- Defaults unchanged: scores.csv, scores_csv_columns, every existing artefact and download name, and
+  the existing reason text for unmapped features are byte-identical to main (a test compares a
+  default run's scores.csv with and without your change). The agent-benchmark golden diff contains
+  only your new "check" suggestions; list each one in the hand-off file.
+- Lane: the files you may touch are the ones named above plus their tests and docs/DECIDE.md.
+  Anything else goes under open questions, not into the diff.
+
+Do not edit the files in §4.4 of the delegation doc. Merge the latest origin/main, then run make lint
+and make test before pushing. Write docs/handoff/M98.md (§4.6, including the §8 self-check), commit,
+and push the branch. Do not push main.
 ```
 
 ### 5.3 Partner agent — M99 Offer and channel catalogue (after M97 is merged on `main`)
@@ -272,8 +328,11 @@ Acceptance tests (write them first and show they fail on unchanged code):
 - Every existing suppression test and the SuppressionCount schema test pass unchanged.
 - With region IN, an SMS action without a DLT template id is refused at config load.
 
-Do not edit the files in §4.4 of the delegation doc. Run make lint and make test before pushing.
-Write docs/handoff/M99.md (§4.6), commit, and push the branch. Do not push main.
+Work through the §4.7 checklist as you build (public entry points with a real run's configuration,
+linear time at 1M rows, nulls instead of made-up values, defaults unchanged, stay in your lane).
+Do not edit the files in §4.4 of the delegation doc. Merge the latest origin/main, then run make lint
+and make test before pushing. Write docs/handoff/M99.md (§4.6, including the §8 self-check), commit,
+and push the branch. Do not push main.
 ```
 
 ### 5.4 Partner agent — M101 One action per customer across use cases (after M97 and M98 are merged)
@@ -306,8 +365,11 @@ Acceptance tests (write them first and show they fail on unchanged code):
 - Each use case's campaign measures only its winning rows.
 - With one use case selected, the output equals that use case's treat list (M98).
 
-Do not edit the files in §4.4 of the delegation doc. Run make lint and make test before pushing.
-Write docs/handoff/M101.md (§4.6), commit, and push the branch. Do not push main.
+Work through the §4.7 checklist as you build (public entry points with a real run's configuration,
+linear time at 1M rows, nulls instead of made-up values, defaults unchanged, stay in your lane).
+Do not edit the files in §4.4 of the delegation doc. Merge the latest origin/main, then run make lint
+and make test before pushing. Write docs/handoff/M101.md (§4.6, including the §8 self-check), commit,
+and push the branch. Do not push main.
 ```
 
 ### 5.5 Claude Code — its own work
