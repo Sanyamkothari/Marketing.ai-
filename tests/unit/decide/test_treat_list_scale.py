@@ -161,14 +161,18 @@ def test_building_the_treat_list_for_20k_customers_is_fast(tmp_path: Path) -> No
 @pytest.mark.slow
 def test_building_the_treat_list_for_200k_customers_is_linear(tmp_path: Path) -> None:
     """Slow because the 200k run's own fixture and the build take about 3 s: the review's line for `slow`."""
-    small, _ = _timed_build(tmp_path / "small", FAST_ROWS, "r_20261001_0d000002")
+    # The best of three small builds: a single timing on a machine shared with other test workers can
+    # be inflated several-fold by contention, which made the ratio below fail at random under -n 4.
+    small = min(_timed_build(tmp_path / f"small{i}", FAST_ROWS, "r_20261001_0d000002")[0] for i in range(3))
     large, rows = _timed_build(tmp_path / "large", ROWS, "r_20261001_0d000003")
     print(
         f"\n[Perf] build_treat_list, {rows:,} rows (scores, shuffled assignment, 3 reasons each, gross value): "
         f"{large:.2f}s; 1M estimate {large * 5:.1f}s; {FAST_ROWS:,} rows {small:.2f}s"
     )
     assert large < 2 * BUDGET_SECONDS, f"{rows:,} rows took {large:.2f}s"
-    assert large < 14 * max(small, 0.05), "ten times the rows took far more than ten times as long"
+    # Linear work gives about 10x for ten times the rows and quadratic work about 100x; 30x leaves room
+    # for contention while still catching anything worse than linear.
+    assert large < 30 * max(small, 0.05), "ten times the rows took far more than ten times as long"
 
 
 def test_the_fixture_explanation_schema_is_the_explain_stages() -> None:
