@@ -1,34 +1,56 @@
 # configs/decide/reasons.yaml
-# Plain-language dictionary for model explanations (Plan J M98, DEC-1308).
+# Plain-language dictionary for per-customer reasons (Plan J M98, DEC-1308).
 #
-# Maps feature names and value directions (up/down) to plain business phrases.
-# Every phrase is written in plain English: jargon_in() returns an empty tuple.
-# Features not mapped here keep today's text from row_explanations.parquet.
+# A reason's direction is whether the feature pushed the customer's SCORE up or down. It is not
+# whether the customer's own value went up or down, so a phrase must never say "less", "fewer",
+# "newer", "increased" or any trend. A phrase may say two things that are true for every row:
+#
+#   {value}   the customer's own value for that feature, filled in from the row
+#             (numbers as the explain stage stored them, for example 3.5 or 12)
+#   the score moved up or down because of it
+#
+# A phrase must not hold a number of its own (a digit outside {value}) or name a period it cannot
+# know: the file is refused when it loads. Every phrase passes engine.pilot.plain.jargon_in.
+#
+# Directions per feature:
+#   up    the feature pushed the score up
+#   down  the feature pushed the score down
+#   none  a general reason: the feature matters across the customer base and no direction was
+#         measured for this customer
+# A feature or direction not listed keeps the model's own text for that reason.
 
-schema_version: 1
+schema_version: 2
 
 features:
   monthly_spend:
-    down: "Spent less each month for 3 months"
-    up: "Increased monthly spend"
+    up: "Monthly spend of {value} pushes the score up"
+    down: "Monthly spend of {value} pushes the score down"
+    none: "Monthly spend of {value} matters across customers, not measured for this customer"
   complaints_30d:
-    up: "Raised two complaints in 30 days"
-    down: "Fewer complaints in the last 30 days"
+    up: "A recent complaint count of {value} pushes the score up"
+    down: "A recent complaint count of {value} pushes the score down"
+    none: "A recent complaint count of {value} matters across customers, not measured for this customer"
   tenure_months:
-    down: "Account is newer than average"
-    up: "Long-standing account"
+    up: "Time as a customer of {value} months pushes the score up"
+    down: "Time as a customer of {value} months pushes the score down"
+    none: "Time as a customer of {value} months matters across customers, not measured for this customer"
   days_since_last_activity:
-    up: "No activity in recent days"
-    down: "Active in the last few days"
+    up: "{value} days since the last activity pushes the score up"
+    down: "{value} days since the last activity pushes the score down"
+    none: "{value} days since the last activity matters across customers, not measured for this customer"
   visits_last_7d:
-    down: "Fewer site visits in the last week"
-    up: "More site visits in the last week"
+    up: "A site visit count of {value} in the latest week pushes the score up"
+    down: "A site visit count of {value} in the latest week pushes the score down"
+    none: "A site visit count of {value} in the latest week matters across customers, not measured for this customer"
   visits_30d:
-    down: "Fewer site visits this month"
-    up: "More site visits this month"
+    up: "A site visit count of {value} in the latest month pushes the score up"
+    down: "A site visit count of {value} in the latest month pushes the score down"
+    none: "A site visit count of {value} in the latest month matters across customers, not measured for this customer"
   support_tickets_90d:
-    up: "Multiple support tickets in 90 days"
-    down: "Few support tickets in 90 days"
+    up: "A support ticket count of {value} in recent months pushes the score up"
+    down: "A support ticket count of {value} in recent months pushes the score down"
+    none: "A support ticket count of {value} in recent months matters across customers, not measured for this customer"
   ad_ctr_90d:
-    down: "Lower ad click rate in 90 days"
-    up: "Higher ad click rate in 90 days"
+    up: "An ad click rate of {value} in recent months pushes the score up"
+    down: "An ad click rate of {value} in recent months pushes the score down"
+    none: "An ad click rate of {value} in recent months matters across customers, not measured for this customer"

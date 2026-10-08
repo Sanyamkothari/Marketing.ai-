@@ -40,7 +40,15 @@ from fastapi import APIRouter, HTTPException, Query, Request, Response
 from fastapi.responses import JSONResponse
 
 from api.access_policy import ROW_LEVEL_ARTEFACTS, ROW_LEVEL_DOWNLOAD, refusal_message  # Plan J M91
-from api.deps import ConfigRootDep, JobsDep, RegistryDep, SettingsDep, StorageDep, get_settings
+from api.deps import (
+    ConfigRootDep,
+    JobsDep,
+    RegistryDep,
+    SettingsDep,
+    StorageDep,
+    get_config_root,
+    get_settings,
+)
 from api.routes.agent_recipes import (  # Plan G (DEC-1006)
     attach_recipe_to_run,
     load_recipe,
@@ -93,6 +101,7 @@ from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
     TREAT_LIST_CSV,
     TREAT_LIST_PARQUET,
     TREAT_LIST_SUMMARY_FILENAME,
+    TreatListError,
     ensure_treat_list,
 )
 from engine.generative.contracts import GENERATIVE_ARTEFACTS, GENERATIVE_TABULAR_SCHEMAS
@@ -583,11 +592,15 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)
     load_run(storage, run_id)
-    if name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME):
+    if name in (TREAT_LIST_CSV, TREAT_LIST_PARQUET, TREAT_LIST_SUMMARY_FILENAME) and not storage.exists(
+        run_key(run_id, name)
+    ):
+        # Built on first request, from the run's own artefacts; a file already there is served as it is.
         try:
-            ensure_treat_list(storage, run_id)
-        except Exception as exc:
-            _LOGGER.debug("Could not ensure treat list for run %s: %s", run_id, exc)
+            ensure_treat_list(storage, run_id, config_root=get_config_root(request))
+        except TreatListError as exc:
+            # A run that cannot have a treat list says why, in the builder's plain words.
+            raise http_error(404 if exc.code == "RUN_NOT_FOUND" else 409, exc.code, exc.message) from exc
     try:
         payload = storage.read_bytes(run_key(run_id, name))
     except StorageError as exc:

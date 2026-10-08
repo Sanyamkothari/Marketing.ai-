@@ -1,14 +1,26 @@
-"""Business-language reasons mapping (Plan J M98, DEC-1308).
+"""Business-language reasons (Plan J M98, DEC-1308).
 
-Translates technical model explanations (`feature`, `direction`, `contribution`)
-into plain business sentences using `configs/decide/reasons.yaml`.
-Unmapped features retain their original explanation text.
-All operations are vectorized for linear performance at scale.
+Turns the model's per-row reasons (`feature`, `direction`, `value`, `text`) into plain sentences with
+`configs/decide/reasons.yaml`. Unmapped features keep today's text.
+
+**What a reason says.** `Reason.direction` is whether the feature pushed the *score* up or down
+(`engine.contracts.Reason`), not whether the customer's own value went up or down. A phrase therefore
+may say only two things, both true for every row it can be printed on: the row's own value (the
+`{value}` placeholder, filled from `Reason.value` exactly as the explain stage stored it) and which way
+that value moved the score. It never asserts a trend ("for 3 months") or a number the row does not
+carry. The dictionary refuses, when it loads, a phrase with a digit outside `{value}`.
+
+**Directions.** `up` and `down` are the two measured directions. `none` is a general reason
+(`Direction.NONE`: the tiers measured the row as all-zero, so the feature is named from the run's
+importance chart and no arrow was measured); a phrase for it must not claim a direction either. A
+feature with no phrase for a row's direction keeps today's text for that row.
+
+All operations are vectorised over the Arrow list column, so the cost is linear in the reasons kept.
 """
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Final
@@ -16,8 +28,9 @@ from typing import TYPE_CHECKING, Any, Final
 import numpy as np
 import pandas as pd
 import yaml
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
+from engine.config import config_root
 from engine.contracts import Reason
 from engine.utils.logging import get_logger
 
@@ -25,111 +38,227 @@ if TYPE_CHECKING:
     import pyarrow as pa
 
 __all__ = [
-    "CONFIG_PATH",
+    "REASONS_FILE",
+    "REASON_DIRECTIONS",
+    "VALUE_PLACEHOLDER",
     "BusinessReasonDictionary",
     "extract_and_map_reasons_from_parquet",
     "load_reasons_dictionary",
     "map_reasons",
     "map_reasons_from_explanations",
+    "reasons_path",
 ]
 
 _LOGGER = get_logger(__name__)
 
-CONFIG_PATH: Final[Path] = Path("configs/decide/reasons.yaml")
+REASONS_FILE: Final[Path] = Path("decide") / "reasons.yaml"
+"""`reasons.yaml` relative to the configuration root (`engine.config.config_root`)."""
+
+VALUE_PLACEHOLDER: Final[str] = "{value}"
+"""Replaced by the row's own value for the feature (`Reason.value`); the only text a phrase may fill in."""
+
+REASON_DIRECTIONS: Final[tuple[str, ...]] = ("up", "down", "none")
+"""`Direction`'s values: the feature pushed the score up, pushed it down, or was not measured on this row."""
+
+_SLOTS: Final[int] = 3
+
+_MISSING: Final[str] = "missing"
+"""`engine.stages.explain.MISSING_VALUE`: what `Reason.value` holds for a value the row does not have.
+A phrase that prints the value would read "Monthly spend of missing", so such a reason keeps its text."""
 
 
 class BusinessReasonDictionary(BaseModel):
-    """Configuration mapping feature names and directions to plain business phrases."""
+    """`reasons.yaml`: feature -> direction (`up`, `down`, `none`) -> a phrase true for any row.
 
-    schema_version: int = Field(default=1)
+    A phrase is validated when the file loads: at most one `{value}`, no other braces, and no digit
+    outside the placeholder (a digit there would be a number the row does not carry).
+    """
+
+    schema_version: int = Field(default=2)
     features: dict[str, dict[str, str]] = Field(default_factory=dict)
 
-    def lookup(self, feature: str, direction: str) -> str | None:
-        """Return the business phrase for a feature and direction, or None if unmapped."""
-        by_feat = self.features.get(feature)
-        if by_feat is None:
+    @field_validator("features")
+    @classmethod
+    def _phrases_are_true_for_any_row(cls, features: dict[str, dict[str, str]]) -> dict[str, dict[str, str]]:
+        for feature, by_direction in features.items():
+            for direction, phrase in by_direction.items():
+                where = f"reasons.yaml, {feature!r} / {direction!r}"
+                if direction not in REASON_DIRECTIONS:
+                    raise ValueError(f"{where}: the direction must be one of {', '.join(REASON_DIRECTIONS)}.")
+                if not phrase.strip():
+                    raise ValueError(f"{where}: the phrase is empty.")
+                if phrase.count(VALUE_PLACEHOLDER) > 1:
+                    raise ValueError(f"{where}: {VALUE_PLACEHOLDER} may appear once.")
+                bare = phrase.replace(VALUE_PLACEHOLDER, "")
+                if "{" in bare or "}" in bare:
+                    raise ValueError(f"{where}: the only placeholder is {VALUE_PLACEHOLDER}.")
+                if any(char.isdigit() for char in bare):
+                    raise ValueError(
+                        f"{where}: a phrase cannot hold a number of its own (it would be printed for a "
+                        f"row that does not carry it); put the row's {VALUE_PLACEHOLDER} in instead."
+                    )
+        return features
+
+    def phrase(self, feature: str, direction: str) -> str | None:
+        """The template for a feature and direction, or None when unmapped."""
+        by_direction = self.features.get(feature)
+        if by_direction is None:
             return None
-        return by_feat.get(direction.lower())
+        return by_direction.get(direction.lower())
+
+    def render(self, feature: str, direction: str, value: str, text: str) -> str:
+        """The phrase with the row's `value`, or `text` when unmapped or the value is blank."""
+        template = self.phrase(feature, direction)
+        if template is None:
+            return text
+        if VALUE_PLACEHOLDER in template:
+            if not value.strip() or value.strip().lower() == _MISSING:
+                return text
+            return template.replace(VALUE_PLACEHOLDER, value)
+        return template
 
 
-@lru_cache(maxsize=1)
-def load_reasons_dictionary(path: Path | None = None) -> BusinessReasonDictionary:
-    """Load and validate the business reason dictionary from YAML."""
-    target = path or CONFIG_PATH
+def reasons_path(root: Path | None = None) -> Path:
+    """Where `reasons.yaml` is read from: under the configuration root, never the working directory."""
+    return config_root(root) / REASONS_FILE
+
+
+def load_reasons_dictionary(
+    path: Path | None = None, *, root: Path | None = None
+) -> BusinessReasonDictionary:
+    """Load and validate the dictionary: `path`, else `reasons.yaml` under `config_root(root)`.
+
+    A missing file gives an empty dictionary (every reason keeps today's text) and a warning; an
+    invalid file raises, with the phrase to fix named.
+    """
+    target = Path(path) if path is not None else reasons_path(root)
     if not target.is_file():
-        _LOGGER.warning("Reasons dictionary file not found at %s; returning empty dictionary", target)
+        _LOGGER.warning("Reasons dictionary file not found at %s; reasons keep the model's own text", target)
         return BusinessReasonDictionary()
-    with target.open(encoding="utf-8") as handle:
+    return _load(str(target.resolve()), target.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=8)
+def _load(resolved: str, mtime_ns: int) -> BusinessReasonDictionary:
+    """Cached on the file's path and modification time, so an edit is picked up without a restart."""
+    del mtime_ns
+    with Path(resolved).open(encoding="utf-8") as handle:
         data = yaml.safe_load(handle) or {}
     return BusinessReasonDictionary.model_validate(data)
 
 
+def _render_flat(
+    features: pd.Series[Any],
+    directions: pd.Series[Any],
+    values: pd.Series[Any] | None,
+    texts: pd.Series[Any],
+    dictionary: BusinessReasonDictionary,
+) -> np.ndarray:
+    """One phrase (or today's text) per flat reason, with no loop over the rows.
+
+    The feature and the direction are each reduced to integer codes once (`pd.factorize`), the dictionary
+    is looked up for the few distinct pairs only, and the result is taken back per reason by indexing.
+    """
+    feature_codes, feature_names = pd.factorize(features.astype(str))
+    direction_codes, direction_names = pd.factorize(directions.astype(str).str.lower())
+    shape = (len(feature_names), len(direction_names))
+    head = np.full(shape, None, dtype=object)
+    tail = np.full(shape, "", dtype=object)
+    needs = np.zeros(shape, dtype=bool)
+    mapped = np.zeros(shape, dtype=bool)
+    for row, feature in enumerate(feature_names):
+        by_direction = dictionary.features.get(str(feature), {})
+        for col, direction in enumerate(direction_names):
+            phrase = by_direction.get(str(direction))
+            if phrase is not None:
+                before, found, after = phrase.partition(VALUE_PLACEHOLDER)
+                head[row, col], tail[row, col], needs[row, col] = before, after, bool(found)
+                mapped[row, col] = True
+    heads = head[feature_codes, direction_codes]
+    tails = tail[feature_codes, direction_codes]
+    needed = needs[feature_codes, direction_codes]
+    if values is None:
+        shown = np.full(len(features), "", dtype=object)
+    else:
+        shown = values.astype("object").where(values.notna(), "").astype(str).to_numpy(dtype=object)
+    shown_codes, shown_names = pd.factorize(
+        shown
+    )  # a value repeats across reasons: test each distinct one once
+    blank = pd.Series(shown_names).str.strip().str.lower().isin(["", _MISSING]).to_numpy()[shown_codes]
+    usable = mapped[feature_codes, direction_codes] & ~(needed & blank)
+    rendered = pd.Series(np.where(usable, heads, ""), dtype="object")
+    rendered = (
+        rendered + pd.Series(np.where(needed, shown, ""), dtype="object") + pd.Series(tails, dtype="object")
+    )
+    return np.where(usable, rendered.to_numpy(dtype=object), texts.to_numpy(dtype=object))
+
+
 def map_reasons(
-    features: Sequence[str] | np.ndarray | pd.Series,
-    directions: Sequence[str] | np.ndarray | pd.Series,
-    texts: Sequence[str] | np.ndarray | pd.Series,
+    features: Sequence[str] | np.ndarray | pd.Series[Any],
+    directions: Sequence[str] | np.ndarray | pd.Series[Any],
+    texts: Sequence[str] | np.ndarray | pd.Series[Any],
     *,
+    values: Sequence[str] | np.ndarray | pd.Series[Any] | None = None,
     dictionary: BusinessReasonDictionary | None = None,
 ) -> np.ndarray:
-    """Vectorized lookup of business phrases for parallel arrays of feature, direction, and text.
+    """Vectorised phrases for parallel arrays of feature, direction and text (and the row's value).
 
-    Unmapped features keep the original text from `texts`.
+    Unmapped features keep the original text from `texts`; so does a mapped one whose phrase needs the
+    row's `{value}` when none is given.
     """
     dict_obj = dictionary or load_reasons_dictionary()
-    pair_map = {
-        f"{feat}::{dir_val.lower()}": phrase
-        for feat, d_map in dict_obj.features.items()
-        for dir_val, phrase in d_map.items()
-    }
+    return _render_flat(
+        pd.Series(features, dtype="object"),
+        pd.Series(directions, dtype="object"),
+        None if values is None else pd.Series(values, dtype="object"),
+        pd.Series(texts, dtype="object"),
+        dict_obj,
+    )
 
-    f_ser = pd.Series(features, dtype="object")
-    d_ser = pd.Series(directions, dtype="object").str.lower()
-    t_ser = pd.Series(texts, dtype="object")
 
-    keys = f_ser.astype(str) + "::" + d_ser.astype(str)
-    mapped = keys.map(pair_map)
-    return mapped.combine_first(t_ser).to_numpy()
+def _empty_slots(n: int) -> dict[str, pd.Series[Any]]:
+    return {f"reason_{slot + 1}": pd.Series([None] * n, dtype="object") for slot in range(_SLOTS)}
+
+
+def _slot_columns(mapped_flat: np.ndarray, offsets: np.ndarray, n: int) -> pd.DataFrame:
+    """Cut the flat phrases into `reason_1..3` per row from the list offsets; missing slots stay null."""
+    lengths = offsets[1:] - offsets[:-1]
+    columns: dict[str, pd.Series[Any]] = {}
+    for slot in range(_SLOTS):
+        has_slot = lengths > slot
+        column = np.full(n, None, dtype=object)
+        column[has_slot] = mapped_flat[offsets[:-1][has_slot] + slot]
+        columns[f"reason_{slot + 1}"] = pd.Series(column, dtype="object")
+    return pd.DataFrame(columns)
 
 
 def map_reasons_from_explanations(
-    reasons_per_row: Sequence[Sequence[Reason | dict[str, Any]]],
+    reasons_per_row: Sequence[Sequence[Reason | Mapping[str, Any]]],
     *,
     dictionary: BusinessReasonDictionary | None = None,
 ) -> pd.DataFrame:
-    """Extract top 3 reasons per row and map them to business language.
+    """The top three reasons per row in business words, as `reason_1`, `reason_2`, `reason_3`.
 
-    Returns a DataFrame with columns `["reason_1", "reason_2", "reason_3"]`.
-    If a row has fewer than 3 reasons, remaining slots are set to None (null).
+    A row with fewer than three reasons has null in the remaining slots. The rows are flattened once
+    and rendered by the same vectorised path as the Arrow reader.
     """
     dict_obj = dictionary or load_reasons_dictionary()
     n = len(reasons_per_row)
+    lengths = np.fromiter((len(row) for row in reasons_per_row), dtype=np.int64, count=n)
+    offsets = np.concatenate(([0], np.cumsum(lengths)))
+    flat = [item for row in reasons_per_row for item in row]
 
-    r1: list[str | None] = [None] * n
-    r2: list[str | None] = [None] * n
-    r3: list[str | None] = [None] * n
+    def field(item: Reason | Mapping[str, Any], name: str) -> str:
+        return str(item.get(name, "")) if isinstance(item, Mapping) else str(getattr(item, name))
 
-    for i, row_reasons in enumerate(reasons_per_row):
-        for slot, slot_list in enumerate((r1, r2, r3)):
-            if slot < len(row_reasons):
-                item = row_reasons[slot]
-                if isinstance(item, dict):
-                    feat = str(item.get("feature", ""))
-                    direction = str(item.get("direction", "")).lower()
-                    text = str(item.get("text", ""))
-                else:
-                    feat = str(item.feature)
-                    direction = str(item.direction).lower()
-                    text = str(item.text)
-                phrase = dict_obj.lookup(feat, direction)
-                slot_list[i] = phrase if phrase is not None else text
-
-    return pd.DataFrame(
-        {
-            "reason_1": pd.Series(r1, dtype="object"),
-            "reason_2": pd.Series(r2, dtype="object"),
-            "reason_3": pd.Series(r3, dtype="object"),
-        }
+    mapped = _render_flat(
+        pd.Series([field(item, "feature") for item in flat], dtype="object"),
+        pd.Series([field(item, "direction") for item in flat], dtype="object"),
+        pd.Series([field(item, "value") for item in flat], dtype="object"),
+        pd.Series([field(item, "text") for item in flat], dtype="object"),
+        dict_obj,
     )
+    return _slot_columns(mapped, offsets, n)
 
 
 def extract_and_map_reasons_from_parquet(
@@ -137,56 +266,25 @@ def extract_and_map_reasons_from_parquet(
     *,
     dictionary: BusinessReasonDictionary | None = None,
 ) -> pd.DataFrame:
-    """Fast vectorized extraction and mapping of top 3 reasons directly from a PyArrow table.
+    """Top three reasons per row straight from the Arrow `reasons` list column, in business words.
 
-    Operates in O(N) vectorized numpy/pyarrow time without row-by-row iteration.
+    O(N): the list's offsets and child arrays are read once, with no row-by-row iteration.
     """
+    n = table.num_rows
     if "reasons" not in table.column_names:
-        n = table.num_rows
-        return pd.DataFrame(
-            {
-                "reason_1": pd.Series([None] * n, dtype="object"),
-                "reason_2": pd.Series([None] * n, dtype="object"),
-                "reason_3": pd.Series([None] * n, dtype="object"),
-            }
-        )
+        return pd.DataFrame(_empty_slots(n))
 
-    reasons_chunked = table["reasons"]
-    reasons_arr = reasons_chunked.combine_chunks()
-    n = len(reasons_arr)
-
+    reasons_arr = table["reasons"].combine_chunks()
     offsets = reasons_arr.offsets.to_numpy()
     flat_values = reasons_arr.values
-
-    # Flat arrays of all reasons across all rows
-    feat_all = flat_values.field("feature").to_pandas()
-    dir_all = flat_values.field("direction").to_pandas()
-    txt_all = flat_values.field("text").to_pandas()
-
+    names = set(flat_values.type.names) if hasattr(flat_values.type, "names") else set()
     dict_obj = dictionary or load_reasons_dictionary()
-    pair_map = {
-        f"{feat}::{dir_val.lower()}": phrase
-        for feat, d_map in dict_obj.features.items()
-        for dir_val, phrase in d_map.items()
-    }
 
-    key_flat = feat_all.astype(str) + "::" + dir_all.astype(str).str.lower()
-    mapped_flat = key_flat.map(pair_map).combine_first(txt_all).to_numpy()
-
-    lengths = offsets[1:] - offsets[:-1]
-    reason_cols: dict[str, np.ndarray] = {}
-
-    for slot in range(3):
-        has_slot = lengths > slot
-        slot_indices = offsets[:-1][has_slot] + slot
-        col_res = np.full(n, None, dtype=object)
-        col_res[has_slot] = mapped_flat[slot_indices]
-        reason_cols[f"reason_{slot + 1}"] = col_res
-
-    return pd.DataFrame(
-        {
-            "reason_1": pd.Series(reason_cols["reason_1"], dtype="object"),
-            "reason_2": pd.Series(reason_cols["reason_2"], dtype="object"),
-            "reason_3": pd.Series(reason_cols["reason_3"], dtype="object"),
-        }
+    mapped = _render_flat(
+        flat_values.field("feature").to_pandas(),
+        flat_values.field("direction").to_pandas(),
+        flat_values.field("value").to_pandas() if "value" in names else None,
+        flat_values.field("text").to_pandas(),
+        dict_obj,
     )
+    return _slot_columns(mapped, offsets, n)

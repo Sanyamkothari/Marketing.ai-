@@ -101,48 +101,54 @@ export function campaignPageHtml({
 }
 
 /**
- * Treat list summary card and download button (Plan J M98, DEC-1308).
- * One line instruction: include treat = 1, exclude holdout = 1.
+ * The treat list card on a scoring run's Output page (Plan J M98, DEC-1308): the counts of
+ * `treat_list_summary.json` in the server's own words, the one-line instruction, and the download.
+ * `error` is what the summary request answered when it failed (an ApiError or any `{ message }`): the
+ * card then says so in the server's words instead of drawing nothing. `summary` null with no error is
+ * the moment before the answer arrives.
+ *
+ * The file this card downloads is the treat list. The Output page's own "Download contact list" is the
+ * scored list (`scores.csv`), which still holds the held-back customers and the ones not to contact.
  */
-export function treatListCardHtml(summary, { treatListHref = "" } = {}) {
+export function treatListCardHtml(summary, { treatListHref = "", error = null } = {}) {
+  if (error) {
+    const said = error.message ? esc(error.message) : "The server gave no reason.";
+    return `<div class="dc"><section class="card dc-card" data-treat-list-card data-treat-list-error>
+      <h3>Treat list</h3>
+      <p class="dc-error" role="alert">The treat list could not be loaded. ${said}</p>
+    </section></div>`;
+  }
   if (!summary) return "";
-  const rows = summary.rows || 0;
-  const treated = summary.treated || 0;
-  const heldOut = summary.held_out !== null && summary.held_out !== undefined ? fmtInt(summary.held_out) : EM_DASH;
-  const explored = summary.explored || 0;
-  const suppressed = summary.suppressed || 0;
-  const netValue =
-    summary.net_value_total !== null && summary.net_value_total !== undefined ? fmtMoney(summary.net_value_total) : null;
-
-  const notesHtml =
-    summary.notes && summary.notes.length
-      ? `<div class="dc-note" style="margin-top:8px;">${summary.notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>`
-      : "";
-
+  const count = (n) => (n === null || n === undefined ? EM_DASH : fmtInt(n));
+  const money = (n) => (n === null || n === undefined ? null : fmtMoney(n));
+  const row = (label, value) =>
+    `<div class="dc-kv"><span class="dc-k">${esc(label)}</span><span class="dc-v">${esc(value)}</span></div>`;
+  const netValue = money(summary.net_value_total);
+  const grossValue = money(summary.expected_gross_value_total);
+  const notes = [summary.holdout_note, summary.net_value_note, summary.expected_gross_value_note].filter(Boolean);
+  const notesHtml = notes.length
+    ? `<div class="dc-note" data-treat-list-notes>${notes.map((n) => `<p>${esc(n)}</p>`).join("")}</div>`
+    : "";
   const downloadBtn = treatListHref
-    ? `<div class="dc-actions" style="margin-top:12px;">
-         <a class="btn primary" href="${esc(treatListHref)}" download>Download treat list</a>
+    ? `<div class="dc-actions">
+         <a class="btn primary" href="${esc(treatListHref)}" download data-download="treat-list">Download treat list (CSV)</a>
        </div>`
     : "";
-
-  const netValueRow = netValue
-    ? `<div class="dc-kv"><span class="dc-k">Total net value</span><span class="dc-v">${esc(netValue)}</span></div>`
-    : "";
-
-  return `<section class="card dc-card" data-treat-list-card>
+  return `<div class="dc"><section class="card dc-card" data-treat-list-card>
     <h3>Treat list</h3>
-    <p class="caption" style="margin-top:4px;color:var(--muted);">Include treat = 1, exclude holdout = 1.</p>
+    <p class="dc-text">The file to give your sending tool. Include treat = 1, exclude holdout = 1. The contact list above is the scored list before that choice.</p>
     <div class="dc-kvs">
-      <div class="dc-kv"><span class="dc-k">Total rows</span><span class="dc-v">${esc(fmtInt(rows))}</span></div>
-      <div class="dc-kv"><span class="dc-k">Treat (1)</span><span class="dc-v">${esc(fmtInt(treated))}</span></div>
-      <div class="dc-kv"><span class="dc-k">Holdout (1)</span><span class="dc-v">${esc(heldOut)}</span></div>
-      <div class="dc-kv"><span class="dc-k">Explore</span><span class="dc-v">${esc(fmtInt(explored))}</span></div>
-      <div class="dc-kv"><span class="dc-k">Suppressed</span><span class="dc-v">${esc(fmtInt(suppressed))}</span></div>
-      ${netValueRow}
+      ${row("Customers", count(summary.total_rows))}
+      ${row("To treat (treat = 1)", count(summary.treat_rows))}
+      ${row("Held back (holdout = 1)", count(summary.holdout_rows))}
+      ${row("Explore (explore = 1)", count(summary.explore_rows))}
+      ${row("Not to be contacted", count(summary.suppressed_rows))}
+      ${netValue === null ? "" : row("Predicted net value of those treated", netValue)}
+      ${grossValue === null ? "" : row("Expected gross value of those treated (not incremental)", grossValue)}
     </div>
     ${notesHtml}
     ${downloadBtn}
-  </section>`;
+  </section></div>`;
 }
 
 const CSS = `

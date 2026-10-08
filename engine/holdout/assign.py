@@ -110,6 +110,8 @@ __all__ = [
     "ope_rows",
     "persistent_control_mask",
     "run_holdout_spec",
+    "selection_masks",
+    "treated_flags",
 ]
 
 HOLDOUT_ASSIGNMENT_FILENAME: Final[str] = "holdout_assignment.parquet"
@@ -232,6 +234,41 @@ def explore_flags(
     return flags, eligible
 
 
+def selection_masks(banded: pd.DataFrame, config: UseCaseConfig) -> tuple[BoolArray, BoolArray]:
+    """`(selected, sleeping)` per row of the actions stage's output, decided before the holdout.
+
+    On an uplift run (a `segment` column) `selected` is the policy's `intended_treatment` (its `Treat`
+    rows plus the held-out rows it would have treated), else its `action` being `Treat`, and `sleeping`
+    marks a predicted sleeping dog. On a propensity run `selected` is every band but the lowest (the
+    "rest") and nothing is a sleeping dog. This is the one definition of "selected": the assignment
+    uses it, and so does the treat list (M98) for a row the assignment does not cover.
+    """
+    import numpy as np
+
+    from engine.stages.actions import ACTION_COLUMN, BAND_COLUMN
+
+    if _SEGMENT_COLUMN in banded.columns:
+        segments = banded[_SEGMENT_COLUMN].astype("object").to_numpy()
+        sleeping = segments == _SLEEPING_DOG
+        if _INTENDED_COLUMN in banded.columns:  # selected before the holdout: Treat, or held out from it
+            selected = banded[_INTENDED_COLUMN].to_numpy(dtype=bool)
+        else:
+            selected = banded[ACTION_COLUMN].astype("object").to_numpy() == _TREAT_ACTION
+    else:
+        sleeping = np.zeros(len(banded.index), dtype=bool)
+        floor = config.actions.bands[-1].name
+        selected = banded[BAND_COLUMN].astype("object").to_numpy() != floor
+    return selected, sleeping
+
+
+def treated_flags(
+    eligible: BoolArray, selected: BoolArray, control: BoolArray, explore: BoolArray
+) -> BoolArray:
+    """The logged action: eligible, selected and not in the control group, or explored."""
+    treated: BoolArray = (eligible & selected & ~control) | explore
+    return treated
+
+
 @dataclass(frozen=True)
 class Assignment:
     """`holdout_assignment.parquet`'s table and the counts the run's summary reports."""
@@ -268,12 +305,7 @@ def assignment_frame(
 
     from engine.holdout.spec import effective_holdout_fraction
     from engine.keys import key_text
-    from engine.stages.actions import (
-        ACTION_COLUMN,
-        BAND_COLUMN,
-        CONTROL_GROUP_COLUMN,
-        SUPPRESSED_REASON_COLUMN,
-    )
+    from engine.stages.actions import CONTROL_GROUP_COLUMN, SUPPRESSED_REASON_COLUMN
     from engine.stages.export import _key_output
     from engine.utils.ids import seed_from
 
@@ -292,17 +324,7 @@ def assignment_frame(
                 "refusing to record a holdout the scores do not carry."
             )
 
-    if _SEGMENT_COLUMN in banded.columns:
-        segments = banded[_SEGMENT_COLUMN].astype("object").to_numpy()
-        sleeping = segments == _SLEEPING_DOG
-        if _INTENDED_COLUMN in banded.columns:  # selected before the holdout: Treat, or held out from it
-            selected = banded[_INTENDED_COLUMN].to_numpy(dtype=bool)
-        else:
-            selected = banded[ACTION_COLUMN].astype("object").to_numpy() == _TREAT_ACTION
-    else:
-        sleeping = np.zeros(len(banded.index), dtype=bool)
-        floor = config.actions.bands[-1].name
-        selected = banded[BAND_COLUMN].astype("object").to_numpy() != floor
+    selected, sleeping = selection_masks(banded, config)
     explorable_rows = eligible & ~selected & ~sleeping
     candidate = explorable_rows & ~member
 
@@ -317,7 +339,7 @@ def assignment_frame(
 
     held_out = active.fraction if active is not None else effective_holdout_fraction(config.actions)
     explorable, _ = _every_row(entities, explorable_rows)
-    treated = (eligible & selected & ~control) | explore
+    treated = treated_flags(eligible, selected, control, explore)
     treatment_probability = np.where(
         eligible & selected & ~sleeping,
         1.0 - held_out,

@@ -180,21 +180,24 @@ async function loadTreatSummary(runId) {
 function repaintTreatPanel(runId) {
   if (typeof document === "undefined") return;
   const el = document.querySelector(`[data-treat-panel="${encodeURIComponent(runId)}"]`);
-  if (!el) return;
   const st = treatStates.get(runId);
-  if (!st || !st.summary) return;
-  el.innerHTML = treatListCardHtml(st.summary, { treatListHref: treatListUrl(runId) });
+  if (!el || !st || st.loading) return;
+  el.innerHTML = treatListCardHtml(st.summary, { treatListHref: treatListUrl(runId), error: st.error });
 }
 
 function treatListPanelHtml(kind, uc, run) {
   if (!run || !run.run_id) return "";
   const runId = run.run_id;
+  injectStyles();
   loadTreatSummary(runId);
   const st = treatStates.get(runId);
-  const summary = st ? st.summary : null;
-  return `<div data-treat-panel="${encodeURIComponent(runId)}">${treatListCardHtml(summary, {
-    treatListHref: treatListUrl(runId),
-  })}</div>`;
+  const inner =
+    st && !st.loading
+      ? treatListCardHtml(st.summary, { treatListHref: treatListUrl(runId), error: st.error })
+      : "";
+  // A failure is shown once; the next visit to the page asks the server again.
+  if (st && st.error) treatStates.delete(runId);
+  return `<div data-treat-panel="${encodeURIComponent(runId)}">${inner}</div>`;
 }
 
 registerPagePanel({
@@ -202,4 +205,3 @@ registerPagePanel({
   applies: (kind, uc, run) => kind === "output" && !!run && run.mode === "score",
   html: treatListPanelHtml,
 });
-
