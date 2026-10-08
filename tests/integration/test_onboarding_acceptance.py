@@ -348,7 +348,9 @@ def journey(
     at = mark("create_client", started)
 
     # 2. The use case, Step 1's second card, and the client's raw tables into the panel.
-    page.get_by_role("link", name=USE_CASE_NAME).click()
+    # DEC-1126 took Telco Churn off Home's cards (its file stays and it opens by id), so the journey
+    # opens it by its address, the way a bookmark or a link to it would.
+    page.goto(f"{server}/ui/#/uc/{USE_CASE}")
     try:
         expect(page.get_by_role("heading", name=USE_CASE_NAME)).to_be_visible(timeout=ACTION_TIMEOUT_MS)
     except AssertionError:
