@@ -305,8 +305,133 @@ def test_min_roi_holds_with_per_row_offer_costs(monkeypatch: pytest.MonkeyPatch)
         values=values,
         p_treated=p_treated,
     )
-    assert chosen.tolist() == [False, False, False, False]  # the top row (10 < 15) stops the prefix
+    # The top row (10 < 15) and row 2 (2 < 9) fall short; rows 1 (8 ≥ 3) and 3 (4 ≥ 3) still clear
+    # min_roi and are chosen, although the top row ranks above them (second review, finding 1).
+    assert chosen.tolist() == [False, True, False, True]
+    assert recommendation.contacts_recommended == 2 and recommendation.eligible_persuadables == 4
     assert recommendation.stop_reason is PolicyStopReason.VALUE_BELOW_COST
+    assert recommendation.expected_cost == pytest.approx(4.0)
+    curve = profit_curve(
+        uplift,
+        segments,
+        stricter,
+        run_id=RUN_ID,
+        computed_on="test",
+        causal=True,
+        values=values,
+        p_treated=p_treated,
+    )
+    assert curve.max_contacts == 2 and curve.max_contacts_reason is PolicyStopReason.VALUE_BELOW_COST
+    assert curve.configured.contacts == 2
+    assert curve.configured.expected_cost == recommendation.expected_cost
+
+
+def _offer_costs(monkeypatch: pytest.MonkeyPatch, *, offer: float, contact: float) -> None:
+    monkeypatch.setattr(
+        "engine.pilot.roi.lookup_value_costs",
+        lambda *_a, **_k: ValueCosts(offer_cost=offer, contact_cost=contact),
+    )
+
+
+REPRO_UPLIFT = np.array([0.5, 0.4, 0.3])
+REPRO_VALUES = np.array([100.0, 30.0, 50.0])
+REPRO_P_TREATED = np.array([0.9, 0.05, 0.1])
+"""The second review's reproduction: net 13, 9, 10; cost 37, 3, 5; ROI 0.35, 3.0, 2.0."""
+
+
+def test_min_roi_keeps_every_customer_who_clears_it_when_costs_differ_per_row(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Second review, finding 1: the cut is not a prefix when each row has its own cost.
+
+    Ranked by net value the order is 0 (13), 2 (10), 1 (9); row 0 earns 0.35× its ₹37 cost and misses
+    min_roi 1, rows 2 and 1 earn 2× and 3× theirs. Stopping at the first row below min_roi chose nobody.
+    """
+    _offer_costs(monkeypatch, offer=40.0, contact=1.0)
+    policy = UpliftPolicyConfig(value_column="order_value", min_roi=1.0)
+    segments = segs(P, P, P)
+    money = customer_net_values(REPRO_UPLIFT, policy, values=REPRO_VALUES, p_treated=REPRO_P_TREATED)
+    assert money.net_value is not None and money.cost is not None
+    assert money.net_value.tolist() == pytest.approx([13.0, 9.0, 10.0])
+    assert money.cost.tolist() == pytest.approx([37.0, 3.0, 5.0])
+
+    selected, reason = choose_contacts(
+        REPRO_UPLIFT, segments, policy, values=REPRO_VALUES, p_treated=REPRO_P_TREATED
+    )
+    recommendation, chosen = recommend_policy(
+        REPRO_UPLIFT,
+        segments,
+        policy,
+        run_id=RUN_ID,
+        computed_on="test",
+        causal=True,
+        values=REPRO_VALUES,
+        p_treated=REPRO_P_TREATED,
+    )
+    curve = profit_curve(
+        REPRO_UPLIFT,
+        segments,
+        policy,
+        run_id=RUN_ID,
+        computed_on="test",
+        causal=True,
+        values=REPRO_VALUES,
+        p_treated=REPRO_P_TREATED,
+    )
+    assert selected.tolist() == chosen.tolist() == [False, True, True]
+    assert reason is recommendation.stop_reason is PolicyStopReason.VALUE_BELOW_COST
+    assert recommendation.contacts_recommended == 2 and recommendation.eligible_persuadables == 3
+    assert recommendation.expected_cost == pytest.approx(8.0)
+    assert recommendation.contact_cost == 1.0 and recommendation.offer_cost == 40.0
+    assert curve.max_contacts == 2 and curve.max_contacts_reason is PolicyStopReason.VALUE_BELOW_COST
+    assert [point.contacts for point in curve.points][-1] == 2
+    assert curve.configured.contacts == recommendation.contacts_recommended
+    assert curve.configured.expected_cost == recommendation.expected_cost
+    assert curve.contact_cost == 1.0 and curve.offer_cost == 40.0
+
+    # With a budget of one, the better-ranked of the two that clear min_roi is chosen.
+    budgeted = policy.model_copy(update={"budget_contacts": 1})
+    recommendation, chosen = recommend_policy(
+        REPRO_UPLIFT,
+        segments,
+        budgeted,
+        run_id=RUN_ID,
+        computed_on="test",
+        causal=True,
+        values=REPRO_VALUES,
+        p_treated=REPRO_P_TREATED,
+    )
+    assert chosen.tolist() == [False, False, True]
+    assert recommendation.stop_reason is PolicyStopReason.BUDGET
+    assert recommendation.expected_cost == pytest.approx(5.0)
+
+
+def test_the_actions_stage_labels_the_customers_who_clear_min_roi_treat(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The same reproduction through `apply_uplift_actions`: no customer is called "over budget"
+    without a budget, and the one below min_roi is called below cost."""
+    from engine.uplift.actions import BELOW_COST_ACTION, TREAT_ACTION, apply_uplift_actions
+    from tests.unit.uplift.test_uplift_actions import THRESHOLDS, use_case
+
+    _offer_costs(monkeypatch, offer=40.0, contact=1.0)
+    frame = pd.DataFrame(
+        {
+            "customer_id": ["C-1", "C-2", "C-3"],
+            "uplift": REPRO_UPLIFT,
+            "p_treated": REPRO_P_TREATED,
+            "p_control": [0.1, 0.1, 0.1],
+            "opted_out": [False, False, False],
+            "order_value": REPRO_VALUES,
+        }
+    )
+    config = use_case(control_fraction=0.0, policy={"value_column": "order_value", "min_roi": 1.0})
+    result, recommendation = apply_uplift_actions(
+        frame, config, run_id=RUN_ID, primary_key="customer_id", causal=True, thresholds=THRESHOLDS
+    )
+    assert result["action"].tolist() == [BELOW_COST_ACTION, TREAT_ACTION, TREAT_ACTION]
+    assert recommendation.contacts_recommended == 2
+    assert recommendation.contact_cost == 1.0 and recommendation.offer_cost == 40.0
 
 
 def test_money_computed_once_is_used_as_given() -> None:
@@ -578,17 +703,38 @@ def test_margin_and_horizon_apply_to_the_cut_and_to_the_reported_value_alike() -
     assert curve.value_basis == "₹50 per conversion × 30% margin × 2 months"
 
 
-def test_value_basis_uses_the_repository_inr_format() -> None:
-    curve = profit_curve(
-        np.array([0.1]),
-        segs(P),
-        UpliftPolicyConfig(cost_per_contact=1.0, value_per_conversion=150000.0),
-        run_id=RUN_ID,
-        computed_on="test",
-        causal=True,
-    )
-    assert curve.value_basis == "₹1,50,000 (1.50 lakh) per conversion"
+def _basis(policy: UpliftPolicyConfig) -> str | None:
+    curve = profit_curve(np.array([0.1]), segs(P), policy, run_id=RUN_ID, computed_on="test", causal=True)
     assert not curve.value_weighted
+    return curve.value_basis
+
+
+def test_value_basis_uses_the_repository_inr_format() -> None:
+    policy = UpliftPolicyConfig(cost_per_contact=1.0, value_per_conversion=150000.0, margin_pct=40.0)
+    assert _basis(policy) == "₹1,50,000 (1.50 lakh) per conversion × 40% margin"
+
+
+@pytest.mark.parametrize(
+    ("value", "text"),
+    [
+        (0.4, "₹0.40"),
+        (7.7, "₹7.70"),
+        (11.3, "₹11.30"),
+        (2.5, "₹2.50"),
+        (123456.75, "₹1,23,456.75 (1.23 lakh)"),
+    ],
+)
+def test_value_basis_keeps_the_paise(value: float, text: str) -> None:
+    """Second review: the basis said '₹0 per conversion' for 0.4 and '₹8' for 7.7."""
+    policy = UpliftPolicyConfig(cost_per_contact=0.1, value_per_conversion=value, horizon_months=1)
+    assert _basis(policy) == f"{text} per conversion × 1 month"
+
+
+def test_a_configuration_from_before_m97_has_no_value_basis() -> None:
+    """Second review: a plain value + cost policy reads as on main - no new caption on its curve."""
+    assert _basis(UpliftPolicyConfig(cost_per_contact=1.0, value_per_conversion=11.3)) is None
+    assert _basis(UpliftPolicyConfig(value_per_conversion=0.4)) is None
+    assert _basis(UpliftPolicyConfig(cost_per_contact=1.0)) is None
 
 
 # ---------------------------------------------------------------------------

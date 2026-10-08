@@ -553,10 +553,21 @@ def _priced(
 # ---------------------------------------------------------------------------
 # Formatting and the page
 # ---------------------------------------------------------------------------
-def format_inr(amount: float) -> str:
-    """₹ with Indian digit grouping (₹12,34,567), lakh and crore shown in words beside large sums."""
+def format_inr(amount: float, *, decimals: int = 0) -> str:
+    """₹ with Indian digit grouping (₹12,34,567), lakh and crore shown in words beside large sums.
+
+    `decimals` keeps that many digits of paise (₹0.40 with 2); the default rounds to whole rupees.
+    """
+    if decimals < 0:
+        raise ValueError(f"decimals must be 0 or more, got {decimals}.")
     negative = amount < 0
-    whole = round(abs(amount))
+    fraction = ""
+    if decimals:
+        whole_text, fraction_text = f"{abs(amount):.{decimals}f}".split(".")
+        whole = int(whole_text)
+        fraction = f".{fraction_text}"
+    else:
+        whole = round(abs(amount))
     digits = str(whole)
     if len(digits) > 3:
         head, tail = digits[:-3], digits[-3:]
@@ -567,7 +578,7 @@ def format_inr(amount: float) -> str:
         if head:
             groups.insert(0, head)
         digits = ",".join(groups) + "," + tail
-    text = f"{'-' if negative else ''}₹{digits}"
+    text = f"{'-' if negative else ''}₹{digits}{fraction}"
     if whole >= 10_000_000:
         text += f" ({abs(amount) / 10_000_000:.2f} crore)"
     elif whole >= 100_000:

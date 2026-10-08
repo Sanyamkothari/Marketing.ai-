@@ -305,3 +305,23 @@ def test_the_value_block_is_read_through_one_function(tmp_path: Path) -> None:
     assert (edited.offer_cost, edited.contact_cost) == (12.5, 2.0)
     assert edited.channel_contact_costs == ValueCosts().channel_contact_costs
     assert lookup_value_costs(root=tmp_path / "nowhere") == ValueCosts()
+
+
+@pytest.mark.parametrize(
+    ("amount", "decimals", "text"),
+    [
+        (0.4, 2, "₹0.40"),
+        (7.7, 2, "₹7.70"),
+        (-11.305, 2, "-₹11.30"),  # 11.305 is 11.3049… in binary
+        (1234567.891, 2, "₹12,34,567.89 (12.35 lakh)"),
+        (7.7, 0, "₹8"),  # the default is unchanged: whole rupees
+    ],
+)
+def test_format_inr_can_keep_the_paise(amount: float, decimals: int, text: str) -> None:
+    """Plan J M97 second review: the budget curve's value basis must not round ₹0.40 to ₹0."""
+    assert format_inr(amount, decimals=decimals) == text
+
+
+def test_format_inr_refuses_negative_decimals() -> None:
+    with pytest.raises(ValueError, match="decimals"):
+        format_inr(1.0, decimals=-1)

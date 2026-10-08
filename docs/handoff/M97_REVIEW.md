@@ -92,7 +92,7 @@ otherwise.
 
 ## Should fix (fixed)
 
-- The DEC number: Plan J uses one DEC per milestone, so M97 is **DEC-1307**. The hand-off said 1310, the code 1307.
+- The DEC number: Plan J uses one DEC per milestone, so M97 is **DEC-1307**. The hand-off said 1310, the code 1307. `M97.md` is kept as the partner's record with a "superseded" banner and inline corrections.
 - `value_basis` hard-coded `₹`. It now uses the repository's INR formatting helper (`format_inr`:
   "₹1,50,000 (1.50 lakh) per conversion"), and names the margin and horizon when set.
 - The `value` query parameter duplicated `value_per_conversion`. It is kept as the spec asks, documented
@@ -103,6 +103,8 @@ otherwise.
   (`observed_top_value` on `recommend_policy`, `observed_value` on `profit_curve`), and
   `CustomerMoney.value_weighted` says which path a list is on.
 - Hand-off claim "zero shared files modified": `docs/API.md` is generated, which is fine, but say so.
+  `M97.md` now says so, with the other reverted claims (`RoiInputs`, `actions.py`, `HOLDOUT_COLUMNS`,
+  `bench_1m.py`, `test_actions.py`) corrected inline under its banner.
 
 ## Also changed in the fix (not in the findings)
 
@@ -114,7 +116,39 @@ otherwise.
   M98's treat list can read the net value.
 - `policy_recommendation.json` and the budget curve carry `money_note` and `values_missing`; the
   budget card shows the note.
+- `policy_recommendation.json` gains `net_value_low` and `net_value_high` on **every** run with a cost,
+  a value and a measured interval - default configurations included - as the band of the curve's point
+  at the budget, so the identity covers it. Every field a pre-M97 configuration wrote is bit-identical to
+  `main`; the new fields have defaults, so older files still read.
 - `min_roi` must be ≥ 0 and `value_column` non-empty (config validation).
+
+## Second review (fixed)
+
+Two reviewers read the fix commit (`4456806`). Default configurations matched `main` exactly in both
+(36 and 40 fixtures); the findings below were fixed with regression tests that fail on `4456806`.
+
+1. **`min_roi` with per-row costs threw away customers who clear it** (major). The cut stopped at the
+   first row below `min_roi × its cost`, which assumes those rows are a tail of the ranking by net
+   value. With an offer cost (`offer_cost × p_treated` per row) and `min_roi` they need not be:
+   net 13, 9, 10 at costs 37, 3, 5 and `min_roi` 1 chose nobody, although two customers earn 3× and 2×
+   their cost, and the actions stage called them "over budget" with no budget. **Fixed:** a row below
+   `min_roi × its cost` is left out wherever it ranks, and `N` is a prefix of the rest. With one
+   threshold for every row (every run without an offer cost, and every run without `value_column`) this
+   is the same set as before. The identity test gains a configuration where a skipped row ranks above a
+   chosen one.
+2. **The costs read from `value.yaml` were not recorded** (major), so the budget curve re-read the
+   file at request time: after an edit that does not change who is chosen, the curve's configured
+   point showed different money from the recommendation, with `overridden` false. **Fixed:** a run reads
+   the costs once and records them (`contact_cost`, `offer_cost` on `policy_recommendation.json`, echoed
+   on the curve); the curve replays the recorded costs, and the replay must also reproduce the recorded
+   `expected_cost`, else 409.
+3. **`value_basis` rounded to whole rupees** (₹0.40 read "₹0") and appeared as a new caption on every
+   default run. **Fixed:** `format_inr` takes `decimals` (default 0, unchanged), the basis keeps the
+   paise when the value is not whole, and it is null for a configuration with neither `value_column`,
+   `margin_pct` nor `horizon_months`, so a pre-M97 budget card reads as on `main`.
+4. **An unreadable training hold-out left `money_note` null** on a list ranked by value. It now says
+   "The model's training hold-out could not be read, so no expected conversions or money are shown.",
+   on the recommendation and on the curve.
 
 ## What was good
 

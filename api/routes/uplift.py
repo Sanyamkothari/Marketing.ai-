@@ -47,6 +47,7 @@ curve that is not the run's. Nothing is written.
 from __future__ import annotations
 
 import io
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
@@ -127,6 +128,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from engine.contracts import ValidationReport
+    from engine.pilot.roi import ValueCosts
     from engine.registry import ModelRegistry
     from engine.uplift.policy import HoldoutLookups
 
@@ -455,9 +457,11 @@ def read_profit_curve(
 
     A run configured with `uplift.policy.value_column` (Plan J M97) is replayed ranked by net value,
     with the margin, horizon and minimum ROI it was configured with; `min_roi` overrides the last for
-    this answer only. `value` is an alias of `value_per_conversion`.
+    this answer only. `value` is an alias of `value_per_conversion`. Such a run is replayed with the
+    contact and offer costs it recorded, never with `configs/pilot/value.yaml` as it reads now, and
+    the replay must also reproduce the recorded cost of the list.
     """
-    from engine.uplift.policy import choose_contacts, profit_curve
+    from engine.uplift.policy import customer_net_values, profit_curve, recommend_policy
 
     if value is not None and value_per_conversion is not None:
         raise http_error(
@@ -512,17 +516,28 @@ def read_profit_curve(
             "min_roi": configured.min_roi if min_roi is None else min_roi,
         }
     )
-    replayed, _reason = choose_contacts(
+    value_costs = _recorded_costs(stored)
+    replay, replayed = recommend_policy(
         inputs.uplift,
         inputs.segments,
         configured,
+        run_id=run_id,
+        computed_on=inputs.computed_on,
+        causal=stored.causal,
         eligible=inputs.eligible,
         tiebreak=inputs.tiebreak,
-        values=inputs.values,
-        p_treated=inputs.p_treated,
+        money=customer_net_values(
+            inputs.uplift,
+            configured,
+            values=inputs.values,
+            p_treated=inputs.p_treated,
+            value_costs=value_costs,
+        ),
     )
-    agrees = int(replayed.sum()) == stored.contacts_recommended and (
-        inputs.treated is None or bool((replayed == inputs.treated).all())
+    agrees = (
+        replay.contacts_recommended == stored.contacts_recommended
+        and _same_amount(replay.expected_cost, stored.expected_cost)
+        and (inputs.treated is None or bool((replayed == inputs.treated).all()))
     )
     if not agrees:
         _LOGGER.warning("profit-curve: run=%s the replayed selection differs from the stored one", run_id)
@@ -532,7 +547,7 @@ def read_profit_curve(
             "This run's saved scores no longer reproduce its targeting recommendation, so no budget "
             "curve is shown for it. Score the customers again to get one.",
         )
-    lookups = _lookups(inputs, policy)
+    lookups = _lookups(inputs, policy, value_costs)
     return profit_curve(
         inputs.uplift,
         inputs.segments,
@@ -545,20 +560,45 @@ def read_profit_curve(
         holdout_note=None if lookups is None else lookups.note,
         eligible=inputs.eligible,
         tiebreak=inputs.tiebreak,
-        values=inputs.values,
-        p_treated=inputs.p_treated,
+        money=customer_net_values(
+            inputs.uplift, policy, values=inputs.values, p_treated=inputs.p_treated, value_costs=value_costs
+        ),
         points=points,
         overridden=policy != configured,
     )
 
 
-def _lookups(inputs: _CurveInputs, policy: UpliftPolicyConfig) -> HoldoutLookups | None:
-    """The hold-out lookups the run quoted, for `policy`; `None` when the hold-out could not be read."""
-    from engine.uplift.policy import holdout_lookups
+def _recorded_costs(stored: PolicyRecommendation) -> ValueCosts | None:
+    """The contact and offer costs a list ranked by value recorded (Plan J M97), as `ValueCosts`.
 
+    `None` when the run recorded none (a list ranked by uplift, whose cost is `cost_per_contact`): the
+    replay then needs no `configs/pilot/value.yaml` cost.
+    """
+    from engine.pilot.roi import ValueCosts
+
+    if stored.contact_cost is None or stored.offer_cost is None:
+        return None
+    return ValueCosts(contact_cost=stored.contact_cost, offer_cost=stored.offer_cost)
+
+
+def _same_amount(replayed: float | None, recorded: float | None) -> bool:
+    """Whether the replay's cost is the recorded one: both absent, or equal up to float summation."""
+    if replayed is None or recorded is None:
+        return replayed is recorded
+    return math.isclose(replayed, recorded, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def _lookups(
+    inputs: _CurveInputs, policy: UpliftPolicyConfig, value_costs: ValueCosts | None
+) -> HoldoutLookups | None:
+    """The hold-out lookups the run quoted, for `policy` and the run's recorded costs; `None` when the
+    hold-out could not be read on a list ranked by uplift (a list ranked by value says why)."""
+    from engine.uplift.policy import HOLDOUT_UNREADABLE_NOTE, HoldoutLookups, holdout_lookups
+
+    ranked_by_value = inputs.values is not None and policy.value_column is not None
     holdout = inputs.holdout
     if holdout is None:
-        return None
+        return HoldoutLookups(None, None, HOLDOUT_UNREADABLE_NOTE) if ranked_by_value else None
     return holdout_lookups(
         holdout.uplift,
         holdout.t,
@@ -566,9 +606,10 @@ def _lookups(inputs: _CurveInputs, policy: UpliftPolicyConfig) -> HoldoutLookups
         policy=policy,
         samples=holdout.samples,
         seed=holdout.seed,
-        ranked_by_value=inputs.values is not None and policy.value_column is not None,
+        ranked_by_value=ranked_by_value,
         values=holdout.values,
         p_treated=holdout.p_treated,
+        value_costs=value_costs,
     )
 
 

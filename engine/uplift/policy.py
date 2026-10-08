@@ -15,18 +15,17 @@ predicted uplift are ordered by the caller's `tiebreak` key when one is given, t
 (a stable sort, so the answer is deterministic either way). A scoring run passes a run-seeded
 per-customer hash as `tiebreak` (see `engine.uplift.actions`): a coarse model can give thousands of
 customers the same uplift, and when the budget cuts through such a block, input order would let the
-file's sort order - often correlated with the outcome - decide who is contacted. `N` is the longest
-prefix of that ranking that
-
-1. stays within `budget_contacts`, when a budget is set, and
-2. when *both* `value_per_conversion` and `cost_per_contact` are set, stops before the first row
-   whose expected gain `uplift × value` is below the cost of contacting it. The ranking is
-   descending, so every row after that one is below cost too.
+file's sort order - often correlated with the outcome - decide who is contacted. A candidate that
+does not pay for its contact is left out (when *both* `value_per_conversion` and `cost_per_contact`
+are set: a row whose expected gain `uplift × value` is below the cost of contacting it; the ranking
+is descending and the cost the same for every row, so those rows are the tail of the ranking), and
+`N` is the longest prefix of the remaining ranking that stays within `budget_contacts`, when a budget
+is set.
 
 `stop_reason` says why `N` is not larger: `no_persuadables` when there is no eligible persuadable,
-`all_persuadables` when every one was chosen, `value_below_cost` when the next row would not pay for
-itself (also when the budget happens to end at the same row: a bigger budget would not change `N`),
-and `budget` otherwise.
+`all_persuadables` when every one was chosen, `value_below_cost` when some were left out for their
+cost and every other one was chosen (also when the budget happens to end at the same row: a bigger
+budget would not change `N`), and `budget` otherwise.
 
 **Expected incremental conversions.** The model's own sum of predicted uplift over the chosen rows
 is reported as `predicted_incremental_conversions`, but a model is not evidence for itself. The
@@ -58,8 +57,11 @@ money and the curve. Two paths:
   `uplift × unit − cost` is below `min_roi × cost`;
 * **value** - `value_column` set and its values passed: net value per row is
   `uplift × value × margin × horizon − offer_cost × p_treated − contact cost`, the contact cost being
-  `cost_per_contact`, else the `value:` block of `configs/pilot/value.yaml`. Rows are ranked by it and
-  cut where it is below `min_roi × the row's cost` (0 without `min_roi`). Expected conversions stay
+  `cost_per_contact`, else the `value:` block of `configs/pilot/value.yaml`, read once per run and
+  recorded on the recommendation (`contact_cost`, `offer_cost`) so the budget curve replays the same
+  costs. Rows are ranked by it, and a row whose net value is below `min_roi × its own cost` (0 without
+  `min_roi`) is left out wherever it ranks: with per-row offer costs and `min_roi` such rows need not
+  be the tail of the ranking, and a row further down that does reach `min_roi` stays a candidate. Expected conversions stay
   `N ×` the hold-out's observed uplift; the expected value is `N ×` the hold-out's VALUE-WEIGHTED
   observed uplift `× margin × horizon`, both read from the hold-out ranked the same way
   (:func:`holdout_lookups`). A missing value is never invented: it counts as zero value and is
@@ -107,6 +109,7 @@ if TYPE_CHECKING:
 
 __all__ = [
     "DEFAULT_CURVE_POINTS",
+    "HOLDOUT_UNREADABLE_NOTE",
     "MAX_MISSING_VALUE_SHARE",
     "CustomerMoney",
     "HoldoutLookups",
@@ -163,6 +166,9 @@ TOO_MANY_MISSING_NOTE: Final[str] = (
     "{missing} of {rows} customers ({share}) have no '{column}', more than the {limit} the money can "
     "leave out, so no expected value is shown. Fill in '{column}' to see it."
 )
+HOLDOUT_UNREADABLE_NOTE: Final[str] = (
+    "The model's training hold-out could not be read, so no expected conversions or money are shown."
+)
 HOLDOUT_TOO_MANY_MISSING_NOTE: Final[str] = (
     "{missing} of {rows} hold-out customers ({share}) have no '{column}', more than the {limit} the money "
     "can leave out, so no expected value is shown."
@@ -216,6 +222,11 @@ class CustomerMoney:
     value_weighted: bool = False
     """True on the value path: the money comes from the value-weighted hold-out."""
     value_column: str | None = None
+    resolved_contact_cost: float | None = None
+    """The contact cost the value path used (`cost_per_contact`, else value.yaml's); `None` on the
+    scalar path, whose cost is `cost_per_contact` itself."""
+    offer_cost: float | None = None
+    """The offer cost the value path used (`× p_treated` per row); `None` on the scalar path."""
     values_missing: int | None = None
     """Rows without a value on the value path (counted at zero value); `None` on the scalar path."""
     note: str | None = None
@@ -310,6 +321,8 @@ def customer_net_values(
         contact_cost=same_cost,
         value_weighted=True,
         value_column=column,
+        resolved_contact_cost=contact,
+        offer_cost=value_costs.offer_cost,
         values_missing=missing,
         note=_missing_note(missing, rows, column, TOO_MANY_MISSING_NOTE if too_many else None),
     )
@@ -470,13 +483,19 @@ class _Plan:
     """Who can be chosen, in ranking order, and how many are: what every entry point shares."""
 
     candidate_positions: np.ndarray
-    """Ranking positions (of every row) of the eligible persuadables, best first."""
+    """Ranking positions (of every row) of the eligible persuadables that pay for their contact, best
+    first."""
     ranked: np.ndarray
     """Their row indices, in the same order."""
-    reachable: int
-    """How many of them pay for their contact: a prefix of `ranked`."""
+    persuadables: int
+    """Every eligible persuadable, including those left out because they do not pay for their contact."""
     take: int
     reason: PolicyStopReason
+
+    @property
+    def reachable(self) -> int:
+        """How many can be chosen at all: every eligible persuadable that pays for its contact."""
+        return len(self.ranked)
 
 
 def _plan(
@@ -493,24 +512,28 @@ def _plan(
         raise ValueError(
             f"uplift has {len(lift)} rows but segments has {len(labels)}; they must describe the same rows."
         )
-    is_candidate = (labels == Segment.PERSUADABLE.value) & allowed
-    if not bool(is_candidate.any()):
+    is_persuadable = (labels == Segment.PERSUADABLE.value) & allowed
+    persuadables = int(is_persuadable.sum())
+    if not persuadables:
         empty = np.zeros(0, dtype=np.int64)
         return _Plan(empty, empty, 0, 0, PolicyStopReason.NO_PERSUADABLES)
+    # A row that does not pay for its contact (or does not reach min_roi) is left out, wherever it
+    # ranks. With one threshold for every row those rows are a tail of the ranking and this is the
+    # cut "stop at the first row below cost"; with a per-row cost and min_roi they need not be, and
+    # a row further down that does reach min_roi must stay a candidate (Plan J M97 review).
+    is_candidate = is_persuadable & ~money.below_cost
     order = ranking(lift, tiebreak, net_value=money.net_value)
     candidate_positions = np.flatnonzero(is_candidate[order])
     ranked = order[candidate_positions]
-    cut = money.below_cost[ranked]
-    # The ranking is descending, so the rows that pay for themselves are a prefix of it.
-    paying = int(np.argmax(cut)) if cut.any() else len(ranked)
-    take = min(len(ranked), paying, len(ranked) if budget is None else budget)
-    if take == len(ranked):
+    paying = len(ranked)
+    take = paying if budget is None else min(paying, budget)
+    if take == persuadables:
         reason = PolicyStopReason.ALL_PERSUADABLES
     elif take == paying:
         reason = PolicyStopReason.VALUE_BELOW_COST
     else:
         reason = PolicyStopReason.BUDGET
-    return _Plan(candidate_positions, ranked, paying, take, reason)
+    return _Plan(candidate_positions, ranked, persuadables, take, reason)
 
 
 def _selected(plan: _Plan, labels: np.ndarray) -> np.ndarray:
@@ -594,7 +617,7 @@ def recommend_policy(
 
     rows = len(lift)
     contacts = plan.take
-    candidates = len(plan.ranked)
+    candidates = plan.persuadables
     depth = int(plan.candidate_positions[contacts - 1]) + 1 if contacts else 0
     expected = _expected_conversions(contacts, depth, rows, observed_top_share)
     basis = (
@@ -625,6 +648,8 @@ def recommend_policy(
         net_value_high=net_high,
         money_note=_join(resolved.note, holdout_note),
         values_missing=resolved.values_missing,
+        contact_cost=resolved.resolved_contact_cost,
+        offer_cost=resolved.offer_cost,
         causal=causal,
     )
     _LOGGER.info(
@@ -682,9 +707,9 @@ def profit_curve(
 
     rows = len(lift)
     ranked, reachable = plan.ranked, plan.reachable
-    if not len(ranked):
+    if not plan.persuadables:
         max_reason = PolicyStopReason.NO_PERSUADABLES
-    elif reachable < len(ranked):
+    elif reachable < plan.persuadables:
         max_reason = PolicyStopReason.VALUE_BELOW_COST
     else:
         max_reason = PolicyStopReason.ALL_PERSUADABLES
@@ -734,7 +759,7 @@ def profit_curve(
         run_id=run_id,
         computed_on=computed_on,
         rows=rows,
-        eligible_persuadables=len(ranked),
+        eligible_persuadables=plan.persuadables,
         max_contacts=reachable,
         max_contacts_reason=max_reason,
         budget_contacts=policy.budget_contacts,
@@ -752,6 +777,8 @@ def profit_curve(
         value_basis=_value_basis(policy, resolved),
         money_note=_join(resolved.note, holdout_note),
         values_missing=resolved.values_missing,
+        contact_cost=resolved.resolved_contact_cost,
+        offer_cost=resolved.offer_cost,
         causal=causal,
     )
     _LOGGER.info(
@@ -766,13 +793,17 @@ def profit_curve(
 
 
 def _value_basis(policy: UpliftPolicyConfig, money: CustomerMoney) -> str | None:
-    """What the money is based on, in words; the rupees in the repository's INR format."""
-    from engine.pilot.roi import format_inr
+    """What the money is based on, in words; the rupees in the repository's INR format, paise kept.
 
+    `None` when there is nothing to add to the run's own numbers: no value, or the value of one
+    conversion with neither a margin nor a horizon (a configuration from before M97 reads as it did).
+    """
     if money.value_weighted:
         base = f"each customer's {money.value_column}"
-    elif policy.value_per_conversion is not None:
-        base = f"{format_inr(policy.value_per_conversion)} per conversion"
+    elif policy.value_per_conversion is not None and (
+        policy.margin_pct is not None or policy.horizon_months is not None
+    ):
+        base = f"{_rupees(policy.value_per_conversion)} per conversion"
     else:
         return None
     if policy.margin_pct is not None:
@@ -780,6 +811,13 @@ def _value_basis(policy: UpliftPolicyConfig, money: CustomerMoney) -> str | None
     if policy.horizon_months is not None:
         base += f" × {policy.horizon_months} month{'' if policy.horizon_months == 1 else 's'}"
     return base
+
+
+def _rupees(amount: float) -> str:
+    """`format_inr`, with the paise shown when the amount is not a whole number of rupees."""
+    from engine.pilot.roi import format_inr
+
+    return format_inr(amount, decimals=0 if float(amount).is_integer() else 2)
 
 
 def _best_contacts(

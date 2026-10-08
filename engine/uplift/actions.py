@@ -67,6 +67,7 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from engine.config import UseCaseConfig
+    from engine.pilot.roi import ValueCosts
     from engine.uplift.contracts import ConfidenceValue, PolicyRecommendation, SegmentThresholds
 
 __all__ = [
@@ -116,6 +117,7 @@ def apply_uplift_actions(
     observed_top_share: Callable[[float], ConfidenceValue | None] | None = None,
     observed_top_value: Callable[[float], ConfidenceValue | None] | None = None,
     holdout_note: str | None = None,
+    value_costs: ValueCosts | None = None,
 ) -> tuple[pd.DataFrame, PolicyRecommendation]:
     """Segment, suppress, hold out and act on every scored row; see the module docstring.
 
@@ -137,7 +139,8 @@ def apply_uplift_actions(
     `recommend_policy`, and the copy also carries :data:`CUSTOMER_VALUE_COLUMN` and
     :data:`NET_VALUE_COLUMN`. A value that is missing or not a number never fails the run: it counts
     at zero value and the recommendation counts it. Without the column the list is ranked by uplift and
-    the recommendation says why.
+    the recommendation says why. `value_costs` are the run's offer and contact costs, read once by the
+    caller (`engine.pilot.roi.lookup_value_costs` when absent); the recommendation records them.
     """
     import numpy as np
     import pandas as pd
@@ -187,7 +190,7 @@ def apply_uplift_actions(
         if policy.value_column is not None and policy.value_column in frame.columns
         else None
     )
-    money = customer_net_values(uplift, policy, values=values, p_treated=p_treated)
+    money = customer_net_values(uplift, policy, values=values, p_treated=p_treated, value_costs=value_costs)
 
     tiebreak = tiebreak_keys(frame[primary_key], run_id=run_id)
     recommendation, selected = recommend_policy(
@@ -212,7 +215,8 @@ def apply_uplift_actions(
     actions = np.array([SEGMENT_ACTIONS[segment] for segment in segments.tolist()], dtype=object)
     passed_over = persuadable & eligible & ~selected
     actions[passed_over] = OVER_BUDGET_ACTION
-    actions[passed_over & below_cost(uplift, policy, money=money)] = BELOW_COST_ACTION
+    below = below_cost(uplift, policy, money=money)
+    actions[passed_over & below] = BELOW_COST_ACTION
     actions[selected] = TREAT_ACTION
     actions[control] = acted[ACTION_COLUMN].to_numpy(dtype=object)[control]
     actions[suppressed] = acted[ACTION_COLUMN].to_numpy(dtype=object)[suppressed]
@@ -220,7 +224,8 @@ def apply_uplift_actions(
     intended = selected.copy()
     if selected.any():
         positions = rank_positions(uplift, tiebreak, net_value=money.net_value)
-        intended |= control & persuadable & (positions <= int(positions[selected].max()))
+        # A control row the policy would have left out for its cost is not one it intended to treat.
+        intended |= control & persuadable & ~below & (positions <= int(positions[selected].max()))
 
     if bool((sleeping & ((actions == TREAT_ACTION) | intended)).any()):
         raise RuntimeError("A sleeping dog was marked for treatment; refusing to export the actions.")

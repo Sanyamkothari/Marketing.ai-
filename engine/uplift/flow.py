@@ -149,6 +149,7 @@ if TYPE_CHECKING:
     from engine.config import PrimaryKey, ResolvedConfig, UseCaseConfig
     from engine.contracts import DriftReport, ScoringSummary, ValidationReport
     from engine.decide.ranking import RankingDecision
+    from engine.pilot.roi import ValueCosts
     from engine.privacy.contracts import ConsentReport
     from engine.storage import Storage
     from engine.uplift.champion import UpliftChampionDecision
@@ -657,7 +658,7 @@ class UpliftTrainFlow(_TrainFlow):
         and the policy are the configured ones, applied to rows the learners never saw.
         """
         from engine.uplift.metrics import evaluate_uplift
-        from engine.uplift.policy import holdout_lookups, recommend_policy
+        from engine.uplift.policy import customer_net_values, holdout_lookups, recommend_policy
         from engine.uplift.segments import assign_segments, segment_report
 
         ctx = self._ctx
@@ -715,6 +716,10 @@ class UpliftTrainFlow(_TrainFlow):
         else:
             # Plan J M97: ranked by each hold-out customer's net value, and quoted from the hold-out
             # ranked the same way - conversions unweighted, money weighted by the customer's value.
+            # The offer and contact costs are read once, and the recommendation records them.
+            from engine.pilot.roi import lookup_value_costs
+
+            value_costs = lookup_value_costs()
             lookups = holdout_lookups(
                 prediction.uplift,
                 t,
@@ -725,6 +730,7 @@ class UpliftTrainFlow(_TrainFlow):
                 ranked_by_value=True,
                 values=values,
                 p_treated=prediction.p_treated,
+                value_costs=value_costs,
             )
             recommendation, _ = recommend_policy(
                 prediction.uplift,
@@ -736,8 +742,13 @@ class UpliftTrainFlow(_TrainFlow):
                 observed_top_share=None if lookups.conversions is None else lookups.conversions.at,
                 observed_top_value=None if lookups.value is None else lookups.value.at,
                 holdout_note=lookups.note,
-                values=values,
-                p_treated=prediction.p_treated,
+                money=customer_net_values(
+                    prediction.uplift,
+                    uplift.policy,
+                    values=values,
+                    p_treated=prediction.p_treated,
+                    value_costs=value_costs,
+                ),
             )
         self._write(POLICY_FILENAME, recommendation)
         self._write_holdout(rows, t, y, prediction, values)
@@ -1487,8 +1498,9 @@ class UpliftScoreFlow(_ScoreFlow):
         decision, risk = self._ranking_decision(scored)
         # A list ranked by the propensity model is not the hold-out's top uplift share, so the
         # hold-out's measured uplift does not describe it: expected conversions stay null.
+        value_costs = self._value_costs(scored)
         share, value, holdout_note = (
-            (None, None, None) if risk is not None else self._training_holdout(scored)
+            (None, None, None) if risk is not None else self._training_holdout(scored, value_costs)
         )
         scored, recommendation = apply_uplift_actions(
             scored,
@@ -1502,6 +1514,7 @@ class UpliftScoreFlow(_ScoreFlow):
             observed_top_share=share,
             observed_top_value=value,
             holdout_note=holdout_note,
+            value_costs=value_costs,
         )
         if risk is not None:
             from engine.decide.ranking import rerank_by_risk
@@ -1653,7 +1666,21 @@ class UpliftScoreFlow(_ScoreFlow):
             seed=seed_from(version.run_id),
         )
 
-    def _training_holdout(self, scored: pd.DataFrame) -> tuple[
+    def _value_costs(self, scored: pd.DataFrame) -> ValueCosts | None:
+        """The offer and contact costs of a list ranked by value, read ONCE per run (Plan J M97).
+
+        Every step of the run - the ranking, the hold-out lookups and the recorded recommendation - uses
+        these, so an edit to `configs/pilot/value.yaml` during or after the run cannot change its money;
+        `None` when the list is ranked by uplift and no such cost applies.
+        """
+        column = self._ctx.config.uplift.policy.value_column
+        if column is None or column not in scored.columns:
+            return None
+        from engine.pilot.roi import lookup_value_costs
+
+        return lookup_value_costs()
+
+    def _training_holdout(self, scored: pd.DataFrame, value_costs: ValueCosts | None = None) -> tuple[
         Callable[[float], ConfidenceValue | None] | None,
         Callable[[float], ConfidenceValue | None] | None,
         str | None,
@@ -1663,11 +1690,12 @@ class UpliftScoreFlow(_ScoreFlow):
         A list ranked by uplift gets :meth:`_training_holdout_share`, exactly as before Plan J M97. A
         list ranked by value (`uplift.policy.value_column` set, and the scored rows carry it) asks the
         hold-out ranked the same way, and only when the training run stored the hold-out's values of the
-        SAME column; otherwise nothing is quoted and the note says why (DEC-1307 (d)).
+        SAME column; otherwise nothing is quoted and the note says why (DEC-1307 (d)), also when the
+        hold-out cannot be read. `value_costs` are the run's costs, read once (:meth:`_value_costs`).
         """
         import numpy as np
 
-        from engine.uplift.policy import holdout_lookups
+        from engine.uplift.policy import HOLDOUT_UNREADABLE_NOTE, holdout_lookups
 
         config = self._ctx.config
         column = config.uplift.policy.value_column
@@ -1681,7 +1709,7 @@ class UpliftScoreFlow(_ScoreFlow):
             holdout = read_holdout(self._storage, key)
         except (StorageError, OSError, ValueError):
             _LOGGER.warning("actions: the training run's %s could not be read", UPLIFT_HOLDOUT_FILENAME)
-            return None, None, None
+            return None, None, HOLDOUT_UNREADABLE_NOTE
         lookups = holdout_lookups(
             np.asarray(holdout["uplift"], dtype=np.float64),
             np.asarray(holdout["t"], dtype=np.int_),
@@ -1692,6 +1720,7 @@ class UpliftScoreFlow(_ScoreFlow):
             ranked_by_value=True,
             values=holdout_values(holdout, training_value_column(self._storage, version.run_id), column),
             p_treated=np.asarray(holdout["p_treated"], dtype=np.float64),
+            value_costs=value_costs,
         )
         return (
             None if lookups.conversions is None else lookups.conversions.at,

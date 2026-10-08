@@ -835,7 +835,17 @@ The contact cost is `cost_per_contact`, else the `value:` block of `configs/pilo
 India defaults: WhatsApp marketing ₹0.86, WhatsApp utility ₹0.13, SMS ₹0.15, e-mail ₹0.05, voice ₹0.70;
 offer cost ₹0), read through one function, `engine.pilot.roi.lookup_value_costs`, which M99's
 catalogue will take over. The block is read only by a use case that sets `value_column`; the ROI
-form's defaults (`RoiInputs`) are not changed by it.
+form's defaults (`RoiInputs`) are not changed by it. A run reads it **once**, uses those costs for
+every step, and records them on `policy_recommendation.json` (`contact_cost`, `offer_cost`); the
+budget curve replays the recorded costs, never the file as it reads later, and answers 409 when the
+replay does not reproduce the recorded cost of the list.
+
+**Who is chosen.** Eligible persuadables whose net value reaches `min_roi ×` their own cost, best net
+value first, up to the budget. A customer below that is left out *wherever it ranks*: with an offer
+cost each customer has its own cost (`offer cost × p_treated`), so a customer with a high net value
+and a high cost can miss `min_roi` while a customer below it in the ranking, with a lower cost,
+reaches it - and is chosen. With one cost for every customer (and on every run without
+`value_column`) the customers left out are exactly the tail of the ranking, as before M97.
 
 * **The money is computed once and passed down.** `engine.uplift.policy.customer_net_values` returns
   every row's net value, cost and cut; the ranking, the cut, `choose_contacts`, `recommend_policy` and
@@ -861,9 +871,19 @@ form's defaults (`RoiInputs`) are not changed by it.
   fails a scoring run.
 * **What a value-ranked scoring run writes.** `scores.csv` gains two columns at the end,
   `customer_value` and `net_value`; `policy_recommendation.json` and the budget curve gain
-  `money_note` and `values_missing`, and the curve `value_weighted` and `value_basis` (in words, with
-  rupees in the INR format: "₹1,500 per conversion × 30% margin"). A run without `value_column`
-  writes exactly the columns it did.
+  `money_note`, `values_missing`, `contact_cost` and `offer_cost`, and the curve `value_weighted` and
+  `value_basis`. A run without `value_column` writes exactly the scores columns it did, and those four
+  fields are null on it - except `money_note`, never set on such a run either.
+* **What every run with money gains.** `policy_recommendation.json` gains `net_value_low` and
+  `net_value_high` on **every** run, value-ranked or not, that has a cost, a value and a measured
+  interval: the band of the curve's point at the budget, so the identity "point at the budget = the
+  recommendation" covers it too. Every other field of a run configured before M97 is what it was; the
+  new fields have defaults, so older files still read.
+* **The value basis.** The curve's `value_basis` says, in words, what the money is based on: "each
+  customer's monthly_spend × 30% margin", or "₹1,500 per conversion × 30% margin × 3 months" in the
+  INR format, the paise kept when the value is not whole ("₹7.70 per conversion × 1 month"). It is null
+  - and the budget card shows no caption - for a run with neither `value_column`, `margin_pct` nor
+  `horizon_months`, whose money is the value of one conversion as configured.
 * **The budget curve** (`GET /runs/{id}/uplift/profit-curve`) replays a value-ranked run the same way,
   and takes `min_roi` for that answer only. `value` is another name for `value_per_conversion`; giving
   both answers `422 PROFIT_CURVE_QUERY_INVALID`.

@@ -7,7 +7,9 @@ hold-out carries no values. Checked here and not in the unit tests: what the flo
 value column, the scores' `customer_value`/`net_value`), that one missing value does not fail a scoring
 run, that a hold-out without values quotes no money, that the budget curve replays both runs, the
 `value` alias, and that the run manifest keeps its AUUC metric when the interval has no bounds (review
-finding 3).
+finding 3). From the second review: the costs read from `configs/pilot/value.yaml` are recorded and the
+budget curve replays them, never the file as it reads later; a recorded cost the replay does not
+reproduce answers 409; an unreadable hold-out on a list ranked by value gives its reason.
 """
 
 from __future__ import annotations
@@ -26,7 +28,8 @@ from fastapi.testclient import TestClient
 from api.main import create_app
 from engine.config import Metric
 from engine.contracts import RunManifest, RunRecord
-from engine.storage import run_key
+from engine.pilot.roi import ValueCosts
+from engine.storage import StorageError, run_key
 from engine.uplift.contracts import (
     ConfidenceValue,
     PolicyRecommendation,
@@ -35,6 +38,7 @@ from engine.uplift.contracts import (
     UpliftEvaluation,
 )
 from engine.uplift.flow import HOLDOUT_COLUMNS, HOLDOUT_VALUE_COLUMN, UPLIFT_HOLDOUT_FILENAME
+from engine.uplift.policy import HOLDOUT_UNREADABLE_NOTE
 from tests.fixtures.make_uplift_data import make_uplift_data, make_winback_campaign
 from tests.integration.uplift.test_uplift_api import (
     PRIMARY_KEY,
@@ -259,3 +263,88 @@ def test_value_is_an_alias_of_value_per_conversion_and_not_both(app: App, unboun
     both = app.client.get(url, params={"value": 40.0, "value_per_conversion": 40.0})
     assert both.status_code == 422, both.text
     assert both.json()["detail"]["code"] == "PROFIT_CURVE_QUERY_INVALID"
+
+
+# ---------------------------------------------------------------------------
+# Second review: value.yaml costs are recorded and replayed; an unreadable hold-out says why
+# ---------------------------------------------------------------------------
+MONEY_FIELDS = (
+    "contacts",
+    "expected_incremental_conversions",
+    "expected_cost",
+    "expected_value",
+    "expected_net_value",
+    "net_value_low",
+    "net_value_high",
+)
+"""What the curve's configured point and the recommendation both carry, under the same names."""
+
+
+def _recommendation_fields(policy: PolicyRecommendation) -> dict[str, object]:
+    fields = {name: getattr(policy, name) for name in MONEY_FIELDS if name != "contacts"}
+    return {"contacts": policy.contacts_recommended, **fields}
+
+
+@pytest.mark.parametrize("which", ["train", "score"])
+def test_the_curve_replays_the_recorded_costs_after_value_yaml_is_edited(
+    app: App, valued: Runs, which: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    run = valued.train if which == "train" else valued.score
+    policy = uplift_artefact(app, run.run_id, "policy_recommendation.json")
+    assert isinstance(policy, PolicyRecommendation)
+    # The client edits value.yaml after the run: a dearer contact and an offer cost.
+    monkeypatch.setattr(
+        "engine.pilot.roi.lookup_value_costs",
+        lambda *_a, **_k: ValueCosts(contact_cost=3.0, offer_cost=25.0),
+    )
+    response = app.client.get(f"/runs/{run.run_id}/uplift/profit-curve")
+    assert response.status_code == 200, response.text
+    curve = ProfitCurve.model_validate(response.json())
+    assert not curve.overridden
+    configured = {name: getattr(curve.configured, name) for name in MONEY_FIELDS}
+    assert configured == _recommendation_fields(policy)  # `==`: the same floats, field by field
+    # The costs the run used are on both artefacts: value.yaml's ₹0.86 contact, no offer cost.
+    assert (policy.contact_cost, policy.offer_cost) == (0.86, 0.0)
+    assert (curve.contact_cost, curve.offer_cost) == (0.86, 0.0)
+
+
+def test_a_recorded_cost_the_replay_does_not_reproduce_answers_409(app: App, valued: Runs) -> None:
+    key = run_key(valued.score.run_id, "policy_recommendation.json")
+    original = app.storage.read_bytes(key)
+    policy = PolicyRecommendation.model_validate_json(original)
+    assert policy.expected_cost is not None
+    tampered = policy.model_copy(update={"expected_cost": policy.expected_cost + 1.0})
+    app.storage.write_bytes(key, tampered.model_dump_json().encode("utf-8"))
+    try:
+        response = app.client.get(f"/runs/{valued.score.run_id}/uplift/profit-curve")
+    finally:
+        app.storage.write_bytes(key, original)
+    assert response.status_code == 409, response.text
+    assert response.json()["detail"]["code"] == "PROFIT_CURVE_UNAVAILABLE"
+
+
+def test_an_unreadable_hold_out_on_a_list_ranked_by_value_gives_its_reason(
+    app: App, valued: Runs, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def unreadable(*_args: Any, **_kwargs: Any) -> pd.DataFrame:
+        raise StorageError("KEY_NOT_FOUND", "the hold-out is gone")
+
+    monkeypatch.setattr("engine.uplift.flow.read_holdout", unreadable)
+    monkeypatch.setattr("api.routes.uplift.read_holdout", unreadable)
+    campaign = scoring_frame(make_winback_campaign(1_000, seed=37))
+    body = {
+        "upload_id": upload(app, campaign, mode="score"),
+        "primary_key": PRIMARY_KEY,
+        "model_version_id": valued.train.model_version_id,
+        "overrides": {"uplift": {"policy": VALUE_POLICY}},
+    }
+    score = finish(app, start_score(app, body, run_id="r_20261008_0e000005"))
+    policy = uplift_artefact(app, score.run_id, "policy_recommendation.json")
+    assert isinstance(policy, PolicyRecommendation)
+    assert policy.expected_incremental_conversions is None and policy.expected_value is None
+    assert policy.money_note == HOLDOUT_UNREADABLE_NOTE
+    response = app.client.get(f"/runs/{score.run_id}/uplift/profit-curve")
+    assert response.status_code == 200, response.text
+    curve = ProfitCurve.model_validate(response.json())
+    assert curve.money_note == policy.money_note
+    assert curve.configured.expected_value is None and curve.optimum is None

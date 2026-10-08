@@ -22,6 +22,7 @@ from engine.uplift.policy import (
     NO_HOLDOUT_NOTE,
     NO_MONEY_NOTE,
     profit_curve,
+    ranking,
     recommend_policy,
 )
 
@@ -196,6 +197,7 @@ MONEY_CONFIGURATIONS = (
     "value_with_cost",
     "value_yaml_cost",
     "value_offer_cost",
+    "value_offer_cost_min_roi",
     "value_missing",
     "value_too_many_missing",
     "value_no_holdout_values",
@@ -214,6 +216,13 @@ def test_the_configured_point_equals_the_recommendation_in_every_money_configura
         monkeypatch.setattr(
             "engine.pilot.roi.lookup_value_costs",
             lambda *_a, **_k: ValueCosts(offer_cost=3.0, contact_cost=0.4),
+        )
+    if configuration == "value_offer_cost_min_roi":
+        # Second review: a dear offer and min_roi 1, so the rows below min_roi are not a tail of the
+        # ranking by net value - the cut must leave them out wherever they rank.
+        monkeypatch.setattr(
+            "engine.pilot.roi.lookup_value_costs",
+            lambda *_a, **_k: ValueCosts(offer_cost=30.0, contact_cost=0.4),
         )
     rng = np.random.default_rng(seed + 700)
     rows = int(rng.integers(60, 300))
@@ -245,11 +254,15 @@ def test_the_configured_point_equals_the_recommendation_in_every_money_configura
     else:
         policy = UpliftPolicyConfig(
             budget_contacts=budget,
-            cost_per_contact=None if configuration in {"value_yaml_cost", "value_offer_cost"} else 1.5,
+            cost_per_contact=(
+                None
+                if configuration in {"value_yaml_cost", "value_offer_cost", "value_offer_cost_min_roi"}
+                else 1.5
+            ),
             value_column="customer_value",
             margin_pct=60.0,
             horizon_months=2,
-            min_roi=0.1,
+            min_roi=1.0 if configuration == "value_offer_cost_min_roi" else 0.1,
         )
     hold = np.random.default_rng(seed + 900)
     hold_rows = 600
@@ -273,7 +286,7 @@ def test_the_configured_point_equals_the_recommendation_in_every_money_configura
         p_treated=hold.uniform(0.05, 0.6, hold_rows),
     )
     money = customer_net_values(uplift, policy, values=values, p_treated=p_treated)
-    recommendation, _ = recommend_policy(
+    recommendation, chosen = recommend_policy(
         uplift,
         segments,
         policy,
@@ -317,13 +330,29 @@ def test_the_configured_point_equals_the_recommendation_in_every_money_configura
     assert curve.money_note == recommendation.money_note
     assert curve.values_missing == recommendation.values_missing
     assert curve.value_weighted is (values is not None)
+    assert (curve.contact_cost, curve.offer_cost) == (recommendation.contact_cost, recommendation.offer_cost)
     assert point in curve.points
+    # Who is chosen: the eligible persuadables that pay for their contact, best first, up to the budget.
+    paying = (segments == P) & eligible & ~money.below_cost
+    order = ranking(uplift, tiebreak, net_value=money.net_value)
+    expected_chosen = np.zeros(rows, dtype=bool)
+    expected_chosen[order[paying[order]][: budget if budget is not None else rows]] = True
+    assert chosen.tolist() == expected_chosen.tolist()
+    assert curve.max_contacts == int(paying.sum())
+    if configuration == "value_offer_cost_min_roi":
+        # The case the review found: a row below min_roi ranks above a row that is chosen.
+        positions = np.empty(rows, dtype=np.int64)
+        positions[order] = np.arange(rows)
+        skipped = (segments == P) & eligible & money.below_cost
+        assert chosen.any() and skipped.any()
+        assert int(positions[skipped].min()) < int(positions[chosen].max())
     # The money is there exactly when every number it is made of is.
     priced = configuration in {
         "scalar_margin_horizon_min_roi",
         "value_with_cost",
         "value_yaml_cost",
         "value_offer_cost",
+        "value_offer_cost_min_roi",
         "value_missing",
     }
     assert (recommendation.expected_value is not None) is priced

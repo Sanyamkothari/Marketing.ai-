@@ -621,6 +621,21 @@ class PolicyRecommendation(Artefact):
             "value, never given one. Null when the list is not ranked by value."
         ),
     )
+    contact_cost: float | None = Field(
+        default=None,
+        description=(
+            "Plan J M97: the cost of one contact a list ranked by value used, in rupees - cost_per_contact, "
+            "else the contact_cost of configs/pilot/value.yaml when the run was made. Recorded so the "
+            "budget curve replays the run's own costs; null when the list is not ranked by value."
+        ),
+    )
+    offer_cost: float | None = Field(
+        default=None,
+        description=(
+            "Plan J M97: the offer cost a list ranked by value used (charged × p_treated per customer), "
+            "from configs/pilot/value.yaml when the run was made; null when the list is not ranked by value."
+        ),
+    )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
 
@@ -726,6 +741,17 @@ class ProfitCurve(Artefact):
     values_missing: int | None = Field(
         default=None,
         description="Customers without a value, counted at zero value; null when not ranked by value.",
+    )
+    contact_cost: float | None = Field(
+        default=None,
+        description=(
+            "The cost of one contact the curve used when ranked by value (the run's recorded cost unless "
+            "cost_per_contact overrides it); null when not ranked by value."
+        ),
+    )
+    offer_cost: float | None = Field(
+        default=None,
+        description="The offer cost (× p_treated) the curve used when ranked by value; null otherwise.",
     )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
