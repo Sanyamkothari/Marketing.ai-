@@ -448,9 +448,13 @@ def test_a_warning_pill_painted_by_any_screen_gets_its_explanation(page: Any, se
 
 def test_feedback_from_the_screen_is_recorded(page: Any, server: str, data_dir: Path) -> None:
     page.goto(f"{server}/ui/#/pilot")
-    # "Send feedback" lives in the top bar's Help menu (v1 WP8): open the menu, then the entry.
-    page.locator("#pb-bar [data-menu='tn-help']").click()
-    page.locator("#pe-fb-btn").click()
+    # DEC-1123 hid the top bar's Help menu (the Minfy logo took its place), so "Send feedback" has no
+    # button in the bar for now; its slot stays so the menu can return. Until it does, open the same
+    # panel through the module's own entry point (what the menu's button calls); everything after
+    # that - the form, the submit, the stored and redacted record - is exercised exactly as before.
+    page.locator("#pe-fb").wait_for(state="attached", timeout=30_000)
+    page.evaluate("import('/ui/modules/pilot/feedback.js').then((feedback) => feedback.openFeedback())")
+    page.locator("#pe-fb").wait_for(state="visible")
     page.locator("#pe-fb textarea").fill("The value page is clear; call 9876543210")
     page.locator("#pe-fb button[type='submit']").click()
     page.get_by_text("Thank you, it was recorded.").wait_for(timeout=15_000)
