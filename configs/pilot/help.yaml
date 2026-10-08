@@ -390,6 +390,23 @@ codes:
     title: "This run has no finished scores to work from"
     meaning: "What you asked for (the treat list, the budget curve, a campaign or its results) is built from the customers a scoring run scored. This run cannot give it: it trained a model instead of scoring customers, it has not finished yet, it did not save the settings it was scored with, or its scores file is no longer kept. The message says which."
     fix: "Wait for the scoring run to finish, or choose a finished scoring run. If its scores file was removed when the keep period ended, score the customers again."
+  # --- Plan J M99: the action catalogue and consent per channel (DEC-1309 (c), (j), (k), (m)) --------------
+  CATALOGUE_ACTION_UNKNOWN:
+    title: "The use case names an action the catalogue does not have"
+    meaning: "A band's action_id, the treat_action_id of a campaign-effect use case, or a cost lookup names an action that configs/decide/catalogue.yaml does not declare, or there is no catalogue at all. The message lists the ids the catalogue does declare."
+    fix: "Add the action to configs/decide/catalogue.yaml, or correct the id in the use case."
+  ACTION_DLT_TEMPLATE_MISSING:
+    title: "An SMS action has no registered DLT template"
+    meaning: "The catalogue's region (configs/regions/<region>.yaml) requires a DLT template id for SMS. This action is sent by SMS and has no id, or still has the example's placeholder, such as <your DLT template id>."
+    fix: "Enter the template id registered with your DLT operator for this action in configs/decide/catalogue.yaml."
+  CATALOGUE_INVALID:
+    title: "The action catalogue is not valid"
+    meaning: "The file configs/decide/catalogue.yaml failed its checks. Possible causes: a missing or unknown field, the same action_id twice, channels that are not a list of channel names (lower case letters, digits and _), or a field the region requires that is missing or still a placeholder. The message names the field."
+    fix: "Correct the field the message names in configs/decide/catalogue.yaml. The file configs/decide/catalogue.example.yaml shows every field."
+  CONSENT_CHANNEL_INVALID:
+    title: "A consent row names a channel that is not a channel name"
+    meaning: "A row of the imported consent file has a channel that could never match a configured channel, such as e-mail or text msg, so the customer's opt-out would never apply. A channel name is lower case letters, digits and _, such as sms or email; case and spaces around it are ignored. The row is refused rather than stored, and each such row is reported, like a row with an unreadable status."
+    fix: "Correct the channel in the rows reported, or leave it empty for a record that applies to every channel, then import the file again."
 
 settings:
   actions.bands[*].min_score:

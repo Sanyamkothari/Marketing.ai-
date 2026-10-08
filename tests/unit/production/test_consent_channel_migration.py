@@ -146,9 +146,7 @@ def test_an_import_refuses_a_channel_no_configuration_can_name(tmp_path: Path) -
     ]
     assert all("e-mail" not in error.message and "text msg" not in error.message for error in report.errors)
     assert report.rows_imported == 0, "an import with a bad row is refused whole unless partial"
-    partial = ledger.import_csv(
-        "\n".join(lines) + "\n", client_id="acme", privacy=_privacy(), partial=True
-    )
+    partial = ledger.import_csv("\n".join(lines) + "\n", client_id="acme", privacy=_privacy(), partial=True)
     assert partial.rows_imported == 2
     assert [record.channel for record in ledger.history("c3", client_id="acme")] == ["sms"]
     assert [record.channel for record in ledger.history("c4", client_id="acme")] == [None]

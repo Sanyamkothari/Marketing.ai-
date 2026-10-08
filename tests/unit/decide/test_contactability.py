@@ -190,9 +190,7 @@ def test_the_channel_types_live_in_a_plan_j_module_that_imports_nothing_from_eng
 
     tree = ast.parse(Path(spec.__file__).read_text(encoding="utf-8"))
     imported = [
-        node.module
-        for node in ast.walk(tree)
-        if isinstance(node, ast.ImportFrom) and node.module is not None
+        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom) and node.module is not None
     ] + [alias.name for node in ast.walk(tree) if isinstance(node, ast.Import) for alias in node.names]
     assert not [name for name in imported if name == "engine" or name.startswith("engine.")]
     assert not hasattr(config_module, "ChannelSuppressionConfig"), "declared in engine.decide.spec"

@@ -324,6 +324,16 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_treat_list_review.py",
         "tests/integration/decide/test_treat_list_real_run.py",
     ),
+    # M99: test_channel_consent_real_propensity.py is wholly `slow`, so the fast-suite selection would collect
+    # nothing from it, and is left out.
+    "M99": (
+        "tests/unit/decide/test_catalogue.py",
+        "tests/unit/decide/test_contactability.py",
+        "tests/unit/decide/test_m99_handoff.py",
+        "tests/unit/production/test_consent_channel_migration.py",
+        "tests/integration/decide/test_catalogue_consent.py",
+        "tests/integration/decide/test_channel_consent_real_run.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

@@ -659,6 +659,93 @@ that the treat list routes now raise too, joins `engine.decide.codes.PLAN_J_CODE
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-08 — plan-j (on main) → trunk (owners of `engine/config.py`, `engine/contracts.py`, `engine/stages/export.py`): M99 in-place edits (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M99; DEC-1300 (c), DEC-1309 (c), (f), (l)), each additive and
+identical under default configuration:
+
+* `engine/config.py`, in place only: a top-level `from engine.decide.spec import ChannelMap` beside
+  `engine.holdout.spec` (`engine/decide/spec.py` imports nothing from `engine`); the field `Band.action_id`; the
+  field `SuppressionConfig.channels: ChannelMap`; one call `_plan_j_validate_action_ids(...)` in `load_use_case` and
+  one in `resolve_config`. The function itself is in the PLAN-J block. Both fields are left out of the serialised
+  config while unset (`exclude_if`), so every shipped use case dumps exactly as before; `docs/API.md` regenerated.
+* `engine/contracts.py`: `SuppressionCount.channel_counts: dict[str, int] | None`, left out of the file while unset.
+* `engine/stages/export.py` `_suppression_counts` (a DEC-1300 (c) function): when a run worked out per-channel
+  contactability, the counts ride on the `opted_out` entry, else on `consent_false`. No entry is added for a rule
+  that did not run.
+* `engine/stages/actions.py` is **not** changed: Plan J reads `_truthy` through one documented import in
+  `engine.decide.contactability.truthy`.
+
+**What is needed.** Nothing; this is an announcement. Branches editing `Band`, `SuppressionConfig`,
+`load_use_case` or `resolve_config` should expect these lines. `tests/unit/test_actions.py`, `test_export.py` and
+`test_contracts.py` pass unchanged.
+
+### 2026-10-08 — plan-j (on main) → Phase 4b (owner of `engine/privacy/`, `configs/privacy.yaml`, `api/access_policy.py` and `alembic/`): M99 consent per channel, migration `0007` and a row-level file (announcement and record of in-place edits)
+
+**What changed** (DEC-1309 (e), (j), (n)):
+
+* Pre-approved in the Plan J plan (M99):
+  * `engine/privacy/tables.py`: `ConsentRecordRow.channel` (nullable; null = every channel), and
+    `add_missing_columns`, which adds the column in place to an old SQLite `platform.db` (also under
+    `ConsentLedger(create=False)`, and skipping a table that does not exist).
+  * `engine/privacy/contracts.py`: `ConsentRecord.channel`.
+  * `engine/privacy/consent.py`: `channel` in the import, `record`, `classify`, `valid_consent` and the latest-record
+    lookup. The channel is stored stripped and lower case and must match `engine.decide.spec.CHANNEL_NAME`; an
+    import row that breaks it is refused with the new row code `CONSENT_CHANNEL_INVALID`, and `record` raises
+    `ValueError`. The scoring gate's all-channel question reads only all-channel records.
+  * `alembic/versions/0007_consent_channel.py`: nullable `consent_record.channel`, chained to `0006` (checked at
+    integration: the only `0007` on `main`, chain linear). Any Phase 4b branch adding a `0007` must rebase onto it.
+* Not named in the plan, each additive: `channel_contactability.parquet` (row-level) is registered in
+  `configs/privacy.yaml` (`row_level_run_artefacts`), `engine/privacy/layout.py` (`Store.SCORES`) and
+  `api/access_policy.py` `ROW_LEVEL_ARTEFACTS`.
+* Tests: `tests/unit/production/test_consent_channel_migration.py` (new). `test_platform_migration.py`,
+  `test_consent_ledger.py` and the Alembic tests pass unchanged (the Postgres case needs `make postgres-up`).
+
+**What is needed.** Ratification of the three registrations not named in the plan. Nothing else.
+
+### 2026-10-08 — plan-j (on main) → trunk / Plan H (owners of `api/routes/runs.py`): M99 serves the contactability files and the catalogue stamp (record of an in-place edit)
+
+**What changed** (DEC-1309 (e), (i); not named in the plan, additive): `read_artefact` also serves
+`channel_contactability.parquet` (Analyst, through `ROW_LEVEL_ARTEFACTS`), `channel_contactability.json` and
+`catalogue_stamp.json`, with the names imported from `engine.decide.contactability` and `engine.decide.catalogue`.
+No route was added.
+
+**What is needed.** Ratification of the edit. Nothing else.
+
+### 2026-10-08 — plan-j (on main) → Phase 3b (owner of `engine/uplift/`): an uplift policy can name a catalogue action (announcement)
+
+**What changed** (pre-approved in the Plan J plan, M99; DEC-1309 (c)): `engine/uplift/config.py`
+`UpliftPolicyConfig.treat_action_id: str | None`, left out of the serialised config while unset. An id the
+catalogue does not declare fails config load with `CATALOGUE_ACTION_UNKNOWN`. Default uplift configurations dump
+exactly as before.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-08 — plan-j (on main) → Plan E (owner of `engine/pilot/roi.py` and `configs/pilot/help.yaml`): M99 catalogue costs and four codes (announcement)
+
+**What changed** (DEC-1309 (d), (m)):
+
+* Pre-approved in the Plan J plan (M99; DEC-1307 (l) foresaw it): `engine/pilot/roi.py`
+  `lookup_value_costs(channel=None, *, action_id=None, root=None)` reads contact costs from
+  `configs/decide/catalogue.yaml` for the channels it lists, and an offer cost only from an action id. With no
+  catalogue it behaves exactly as M97; an unknown action id is `CATALOGUE_ACTION_UNKNOWN`.
+* `configs/pilot/help.yaml`: `CATALOGUE_ACTION_UNKNOWN`, `ACTION_DLT_TEMPLATE_MISSING`, `CATALOGUE_INVALID` and
+  `CONSENT_CHANNEL_INVALID` under a Plan J M99 comment, matching `engine.decide.codes.PLAN_J_CODES`.
+  `tests/unit/pilot/test_help.py` and `tests/unit/pilot/test_roi.py` are unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-08 — plan-j (on main) → all branches reading the treat list (M100, M101, Plan H, Phase 3b): every treat list gains `contactable_channels` and `catalogue_sha256` (announcement)
+
+**What changed** (DEC-1309 (g), (h), (i)): every `treat_list.csv` / `.parquet` gains a `contactable_channels`
+column after `channel` (empty for runs that configure no channels), and every `treat_list_summary.json` gains
+`catalogue_sha256` (null when the run had no catalogue). The optional `catalogue_note`, `channel_counts` and
+`uncontactable_rows` are left out while unset. `channel` is now filled: the first planned channel the customer is
+contactable on. The four golden treat lists were updated as a reviewed edit. `scores.*`, `run_config.json` and
+`scoring_summary.json` are byte-identical by default.
+
+**What is needed.** Consumers of the treat list should expect the extra column. Nothing else.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

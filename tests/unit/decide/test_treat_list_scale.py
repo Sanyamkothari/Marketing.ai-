@@ -169,7 +169,9 @@ def test_building_the_treat_list_for_200k_customers_is_linear(tmp_path: Path) ->
         f"\n[Perf] build_treat_list, {rows:,} rows (scores, shuffled assignment, 3 reasons each, gross value): "
         f"{large:.2f}s; 1M estimate {large * 5:.1f}s; {FAST_ROWS:,} rows {small:.2f}s"
     )
-    assert large < 2 * BUDGET_SECONDS, f"{rows:,} rows took {large:.2f}s"
+    # A loose ceiling against gross regressions only: under pytest -n 4 another worker can double the wall
+    # time (6.5 s seen against about 3 s alone). The ratio below is what catches non-linear work.
+    assert large < 5 * BUDGET_SECONDS, f"{rows:,} rows took {large:.2f}s"
     # Linear work gives about 10x for ten times the rows and quadratic work about 100x; 30x leaves room
     # for contention while still catching anything worse than linear.
     assert large < 30 * max(small, 0.05), "ten times the rows took far more than ten times as long"

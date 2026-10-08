@@ -56,6 +56,16 @@ PLAN_J_CODES: Final[frozenset[str]] = (
             # An existing route code of `api/routes/{uplift,measure,campaigns}.py`, joined here because the treat
             # list routes now raise it too, so the catalogue explains it as it does M97's route error.
             "RUN_NOT_SCORED",
+            # M99 (DEC-1309 (c), (k)): the action catalogue's refusals, raised as `ConfigError` by
+            # `engine.decide.catalogue` (catalogue load and `validate_action_ids`, called by `load_use_case` and
+            # `resolve_config`) and by `engine.pilot.roi.lookup_value_costs` for an action id the catalogue lacks.
+            "CATALOGUE_ACTION_UNKNOWN",
+            "ACTION_DLT_TEMPLATE_MISSING",
+            "CATALOGUE_INVALID",
+            # M99 (DEC-1309 (j), (m)): a consent import row whose channel is not a channel name
+            # (`engine.privacy.consent`, a per-row `ConsentImportError`). The other CONSENT_* row codes predate
+            # Plan J and are not in the catalogue; this one is joined because it is new and user-facing.
+            "CONSENT_CHANNEL_INVALID",
         }
     )
     | MEASUREMENT_CHECK_CODES  # M93 (DEC-1303 (h)): LABEL_RATE_UNSTABLE, TREATMENT_HISTORY_NOT_RANDOM
