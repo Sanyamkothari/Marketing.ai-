@@ -84,6 +84,7 @@ from __future__ import annotations
 
 import io
 import time
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Final
 
 from engine import __version__, keys
@@ -163,7 +164,7 @@ if TYPE_CHECKING:
         UpliftEvaluation,
     )
     from engine.uplift.data import FeatureSpec
-    from engine.uplift.learners import UpliftModel, UpliftPrediction
+    from engine.uplift.learners import ArmPrediction, MultiArmUpliftModel, UpliftModel, UpliftPrediction
     from engine.uplift.metrics import BaselineInput
 
     IntArray = npt.NDArray[np.int_]
@@ -176,6 +177,7 @@ __all__ = [
     "UPLIFT_KPI_LABEL",
     "UpliftScoreFlow",
     "UpliftTrainFlow",
+    "arm_columns",
     "check_seed",
     "model_card_key",
     "model_display_name",
@@ -202,6 +204,18 @@ UPLIFT_COLUMN: Final[str] = "uplift"
 P_TREATED_COLUMN: Final[str] = "p_treated"
 P_CONTROL_COLUMN: Final[str] = "p_control"
 PREDICTION_COLUMNS: Final[tuple[str, str, str]] = (UPLIFT_COLUMN, P_TREATED_COLUMN, P_CONTROL_COLUMN)
+
+
+def arm_columns(k: int) -> tuple[str, str]:
+    """`(uplift_arm_<k>, p_treated_arm_<k>)`: treatment `k`'s columns of a scoring run's `scores.parquet`.
+
+    Plan J M100 (DEC-1310 (e)): a model of several offers writes, after every column of `scores.csv`,
+    each treatment's predicted uplift and P(outcome | treated), `k` counting the treatments of
+    `uplift.treatment_levels` from 1 (the control's `p_control` is the file's own). `scores.csv` stays
+    the contact list of the first treatment and gains nothing.
+    """
+    return f"uplift_arm_{k}", f"p_treated_arm_{k}"
+
 
 UPLIFT_KPI_LABEL: Final[str] = "Persuadables recommended to contact"
 UPLIFT_KPI_FORMULA: Final[str] = 'count_where_action_in(["Treat"])'
@@ -384,6 +398,39 @@ def _entity(ctx: StageContext) -> str:
     return keys.entity_column(ctx.primary_key)
 
 
+@dataclass
+class _Arms:
+    """A training run of several treatments (Plan J M100, DEC-668): every arm's rows, kept beside the
+    first treatment's.
+
+    The binary stages read `UpliftTrainFlow._kept`, `_t`, `_y` and `_features`, which hold only the
+    control's and the first treatment's rows, so every field they write keeps its meaning (DEC-668 (3)).
+    These hold every row; `binary` is where the first treatment's rows sit among them.
+    """
+
+    levels: tuple[str, ...]
+    kept: pd.DataFrame
+    codes: IntArray
+    y: IntArray
+    features: pd.DataFrame
+    binary: IntArray
+    train: IntArray | None = None
+    test: IntArray | None = None
+    prediction: ArmPrediction | None = None
+    """Every arm's prediction on the `test` rows, once evaluated."""
+
+
+def _values_at(kept: pd.DataFrame, column: str | None, rows: IntArray) -> FloatArray | None:
+    """`kept[column]` at `rows` as numbers (NaN where missing), or `None` without such a column."""
+    import numpy as np
+    import pandas as pd
+
+    if column is None or column not in kept.columns:
+        return None
+    values: FloatArray = pd.to_numeric(kept[column].iloc[rows], errors="coerce").to_numpy(dtype=np.float64)
+    return values
+
+
 # ---------------------------------------------------------------------------
 # The train flow
 # ---------------------------------------------------------------------------
@@ -411,6 +458,8 @@ class UpliftTrainFlow(_TrainFlow):
         self._rescored: bool = False
         self._fit_seconds: float | None = None
         """Plan J M96: how long the meta-learner's fit took, for the fold refit's cost estimate."""
+        self._arms: _Arms | None = None
+        """Plan J M100: every arm's rows when `uplift.treatment_levels` names several treatments."""
 
     # -- the stages ---------------------------------------------------------
     def _validate(self) -> _StageOutcome:
@@ -472,6 +521,8 @@ class UpliftTrainFlow(_TrainFlow):
         from engine.uplift.data import apply_feature_spec, coerce_outcome, coerce_treatment, fit_feature_spec
 
         ctx = self._ctx
+        if ctx.config.uplift.multi_arm:
+            return self._prepare_arms()
         kept = _require(self._kept, "the validated rows")
         treatment = _require(self._treatment, "the treatment column")
         target = _require(ctx.target, "the target column")
@@ -527,6 +578,77 @@ class UpliftTrainFlow(_TrainFlow):
             segments.append(f"{dropped} {'column' if dropped == 1 else 'columns'} dropped")
         return _StageOutcome(" · ".join(segments), len(kept.index))
 
+    def _prepare_arms(self) -> _StageOutcome:
+        """`_prepare` for several treatments (Plan J M100): arm codes, the outcome and one feature spec
+        over every arm's rows; the binary stages then see the control's and the first treatment's."""
+        import numpy as np
+
+        from engine.uplift.data import apply_feature_spec, coerce_arms, coerce_outcome, fit_feature_spec
+
+        ctx = self._ctx
+        levels = ctx.config.uplift.treatment_levels
+        kept = _require(self._kept, "the validated rows")
+        treatment = _require(self._treatment, "the treatment column")
+        target = _require(ctx.target, "the target column")
+        codes, bad = coerce_arms(kept[treatment], levels)
+        if codes is None:  # pragma: no cover - TREATMENT_NOT_BINARY blocked this file at validate
+            raise EngineError(
+                UPLIFT_OUTCOME_UNUSABLE,
+                f"{bad} rows have a treatment value outside the configured treatment levels.",
+                stage=StageKey.PREPARE,
+            )
+        try:
+            y, positive = coerce_outcome(kept[target], ctx.config.target.positive_label)
+        except ValueError as exc:
+            raise EngineError(
+                UPLIFT_OUTCOME_UNUSABLE,
+                str(exc),
+                suggestion="Choose an outcome column with exactly two values, recorded for every row.",
+                stage=StageKey.PREPARE,
+            ) from exc
+        spec = fit_feature_spec(
+            kept,
+            ctx.config,
+            primary_key=ctx.key,
+            target=target,
+            treatment_column=treatment,
+            validation=self._validation_report,
+        )
+        if not spec.feature_columns:
+            raise EngineError(
+                UPLIFT_NO_FEATURES,
+                "No column of this file can be used to describe a customer: every one is reserved, "
+                "a date, personal data, constant or an identifier.",
+                suggestion="Add columns that describe the customers before the campaign.",
+                stage=StageKey.PREPARE,
+            )
+        features = apply_feature_spec(kept, spec)
+        binary = np.asarray(np.flatnonzero(codes <= 1), dtype=np.int_)
+        self._arms = _Arms(levels=levels, kept=kept, codes=codes, y=y, features=features, binary=binary)
+        self._kept = kept.iloc[binary]
+        self._t = np.asarray(codes[binary] == 1, dtype=np.int_)
+        self._y = y[binary]
+        self._positive_label, self._spec = positive, spec
+        self._features = features.iloc[binary]
+        self._recipe = recipe_from_config(
+            ctx.config,
+            primary_key=ctx.key,
+            feature_columns=spec.feature_columns,
+            seed=self._seed,
+            target=target,
+        )
+        self._manifest.recipe = self._recipe
+        features_used = len(spec.feature_columns)
+        segments = [
+            f"{humanise_count(len(kept.index))} rows ready",
+            f"{len(levels) - 1} offers and a shared control",
+            f"{features_used} {'feature' if features_used == 1 else 'features'}",
+        ]
+        dropped = len(spec.dropped)
+        if dropped:
+            segments.append(f"{dropped} {'column' if dropped == 1 else 'columns'} dropped")
+        return _StageOutcome(" · ".join(segments), len(kept.index))
+
     def _split_and_fit(self) -> _StageOutcome:
         """The hold-out, stratified on treatment and outcome, and an honest `split.json`.
 
@@ -539,13 +661,31 @@ class UpliftTrainFlow(_TrainFlow):
         t, y = _require(self._t, "the treatment array"), _require(self._y, "the outcome array")
         fraction = ctx.config.uplift.test_fraction
         group_column = _entity(ctx) if keys.is_composite(ctx.primary_key) else None
-        groups = (
-            None
-            if group_column is None
-            else _require(self._kept, "the validated rows")[group_column].to_numpy(dtype=object)
-        )
-        train_rows, test_rows = split_holdout(t, y, test_fraction=fraction, seed=self._seed, groups=groups)
-        self._train_rows, self._test_rows = train_rows, test_rows
+        if self._arms is not None:
+            # Plan J M100: one split of every arm's rows, stratified on (arm, outcome), so the shared
+            # control is on one side for every arm; the first treatment's rows follow it.
+            t, y = self._arms.codes, self._arms.y
+            groups = None if group_column is None else self._arms.kept[group_column].to_numpy(dtype=object)
+            train_rows, test_rows = split_holdout(
+                t,
+                y,
+                test_fraction=fraction,
+                seed=self._seed,
+                groups=groups,
+                arm_count=len(self._arms.levels),
+            )
+            self._arms.train, self._arms.test = train_rows, test_rows
+            self._train_rows, self._test_rows = self._arms_binary_rows(test_rows)
+        else:
+            groups = (
+                None
+                if group_column is None
+                else _require(self._kept, "the validated rows")[group_column].to_numpy(dtype=object)
+            )
+            train_rows, test_rows = split_holdout(
+                t, y, test_fraction=fraction, seed=self._seed, groups=groups
+            )
+            self._train_rows, self._test_rows = train_rows, test_rows
         total = len(t)
         detail = (
             f"train {humanise_count(len(train_rows))} · test {humanise_count(len(test_rows))} · "
@@ -581,9 +721,23 @@ class UpliftTrainFlow(_TrainFlow):
         self._write(SPLIT_FILENAME, report)
         return _StageOutcome(detail, total)
 
+    def _arms_binary_rows(self, test_all: IntArray) -> tuple[IntArray, IntArray]:
+        """Plan J M100: the first treatment's training and hold-out rows, as positions among its own rows,
+        from the split of every arm's rows (so each binary stage reads exactly that split)."""
+        import numpy as np
+
+        arms = _require(self._arms, "the arms")
+        in_test = np.zeros(len(arms.codes), dtype=bool)
+        in_test[test_all] = True
+        chosen = in_test[arms.binary]
+        return (
+            np.asarray(np.flatnonzero(~chosen), dtype=np.int_),
+            np.asarray(np.flatnonzero(chosen), dtype=np.int_),
+        )
+
     def _train(self) -> _StageOutcome:
         """Fit the meta-learner into the run's model directory, publish it, write its card."""
-        from engine.uplift.learners import make_learner, save_model
+        from engine.uplift.learners import make_learner, make_multi_arm_learner, save_model
         from engine.uplift.segments import resolve_thresholds
 
         ctx = self._ctx
@@ -594,16 +748,35 @@ class UpliftTrainFlow(_TrainFlow):
         spec = _require(self._spec, "the feature spec")
         predictor_key = predictor_key_for(ctx.run_id)
         directory = self._storage.local_path(predictor_key)
-        model = make_learner(
-            uplift.learner,
-            uplift.base_model,
-            seed=self._seed,
-            time_limit_s=uplift.time_limit_minutes * 60.0,
-            work_dir=directory,
-        )
+        arms = self._arms
+        multi: MultiArmUpliftModel | None = None
+        model: UpliftModel
+        if arms is None:
+            model = make_learner(
+                uplift.learner,
+                uplift.base_model,
+                seed=self._seed,
+                time_limit_s=uplift.time_limit_minutes * 60.0,
+                work_dir=directory,
+            )
+        else:
+            multi = make_multi_arm_learner(
+                uplift.learner,
+                uplift.base_model,
+                levels=arms.levels,
+                seed=self._seed,
+                time_limit_s=uplift.time_limit_minutes * 60.0,
+                work_dir=directory,
+            )
+            model = multi
         started = time.perf_counter()
         try:
-            model.fit(features.iloc[rows], t[rows], y[rows])
+            if arms is None or multi is None:
+                model.fit(features.iloc[rows], t[rows], y[rows])
+            else:
+                # Plan J M100: every arm's training rows; the first treatment's are among them.
+                fitted = _require(arms.train, "the training rows of every arm")
+                multi.fit_arms(arms.features.iloc[fitted], arms.codes[fitted], arms.y[fitted])
         except ValueError as exc:
             raise EngineError(
                 UPLIFT_TRAIN_FAILED,
@@ -629,11 +802,12 @@ class UpliftTrainFlow(_TrainFlow):
             positive_label=_require(self._positive_label, "the positive label"),
             propensity=model.propensity,
             base_rate=base_rate,
-            training_rows=len(rows),
+            training_rows=len(rows),  # the first treatment's and the control's, as propensity (DEC-668 (3))
             causal=self._causal,
             segment_thresholds=resolve_thresholds(uplift.segments, base_rate=base_rate),
             engine_version=__version__,
             trained_at=utc_now(),
+            treatment_levels=None if arms is None else arms.levels,
         )
         self._storage.write_model(model_card_key(predictor_key), card)
         self._uplift_model, self._card = model, card
@@ -649,6 +823,14 @@ class UpliftTrainFlow(_TrainFlow):
             f"{model_display_name(uplift.learner, uplift.base_model)} · "
             f"{humanise_count(len(rows))} training rows · {model.propensity:.0%} treated"
         )
+        if arms is not None:
+            fitted_rows = len(_require(arms.train, "the training rows"))
+            detail = (
+                f"{model_display_name(uplift.learner, uplift.base_model)} · "
+                f"{humanise_count(fitted_rows)} training rows · {len(arms.levels) - 1} offers against a "
+                f"shared control, one model per offer"
+            )
+            return _StageOutcome(detail, fitted_rows)
         return _StageOutcome(detail, len(rows))
 
     def _evaluate(self) -> _StageOutcome:
@@ -658,7 +840,6 @@ class UpliftTrainFlow(_TrainFlow):
         and the policy are the configured ones, applied to rows the learners never saw.
         """
         from engine.uplift.metrics import evaluate_uplift
-        from engine.uplift.policy import customer_net_values, holdout_lookups, recommend_policy
         from engine.uplift.segments import assign_segments, segment_report
 
         ctx = self._ctx
@@ -683,73 +864,37 @@ class UpliftTrainFlow(_TrainFlow):
             holdout_keys=self._holdout_keys(rows),
         )
         evaluation, evidence_note = self._with_evidence(evaluation, rows, t, y, prediction)
-        self._uplift_evaluation = evaluation
-        self._write(UPLIFT_EVALUATION_FILENAME, evaluation)
-        self._write(QINI_CURVE_FILENAME, curve)
         segments = assign_segments(prediction.uplift, prediction.p_control, card.segment_thresholds)
-        self._write(
-            SEGMENTS_FILENAME,
-            segment_report(
-                prediction.uplift,
-                prediction.p_treated,
-                prediction.p_control,
-                segments,
-                card.segment_thresholds,
-                run_id=ctx.run_id,
-                computed_on="test",
-                causal=self._causal,
-            ),
+        segments_report = segment_report(
+            prediction.uplift,
+            prediction.p_treated,
+            prediction.p_control,
+            segments,
+            card.segment_thresholds,
+            run_id=ctx.run_id,
+            computed_on="test",
+            causal=self._causal,
         )
         values = self._holdout_values(rows)
-        if values is None:
-            recommendation, _ = recommend_policy(
-                prediction.uplift,
-                segments,
-                uplift.policy,
-                run_id=ctx.run_id,
-                computed_on="test",
-                causal=self._causal,
-                observed_top_share=_observed_top_share(
-                    prediction.uplift, t, y, samples=uplift.bootstrap_samples, seed=self._seed
-                ),
-            )
-        else:
-            # Plan J M97: ranked by each hold-out customer's net value, and quoted from the hold-out
-            # ranked the same way - conversions unweighted, money weighted by the customer's value.
-            # The offer and contact costs are read once, and the recommendation records them.
+        value_costs: ValueCosts | None = None
+        if values is not None:
+            # Plan J M97: the offer and contact costs are read once, and the recommendation records them.
             from engine.pilot.roi import lookup_value_costs
 
             value_costs = lookup_value_costs()
-            lookups = holdout_lookups(
-                prediction.uplift,
-                t,
-                y,
-                policy=uplift.policy,
-                samples=uplift.bootstrap_samples,
-                seed=self._seed,
-                ranked_by_value=True,
-                values=values,
-                p_treated=prediction.p_treated,
-                value_costs=value_costs,
+        recommendation = self._holdout_recommendation(
+            prediction.uplift, prediction.p_treated, segments, t, y, values, value_costs
+        )
+        arms_note = ""
+        if self._arms is not None:
+            # Plan J M100: every arm against the shared control, beside the first treatment's own fields.
+            evaluation, segments_report, recommendation, arms_note = self._with_arms(
+                evaluation, segments_report, recommendation, t, y, value_costs
             )
-            recommendation, _ = recommend_policy(
-                prediction.uplift,
-                segments,
-                uplift.policy,
-                run_id=ctx.run_id,
-                computed_on="test",
-                causal=self._causal,
-                observed_top_share=None if lookups.conversions is None else lookups.conversions.at,
-                observed_top_value=None if lookups.value is None else lookups.value.at,
-                holdout_note=lookups.note,
-                money=customer_net_values(
-                    prediction.uplift,
-                    uplift.policy,
-                    values=values,
-                    p_treated=prediction.p_treated,
-                    value_costs=value_costs,
-                ),
-            )
+        self._uplift_evaluation = evaluation
+        self._write(UPLIFT_EVALUATION_FILENAME, evaluation)
+        self._write(QINI_CURVE_FILENAME, curve)
+        self._write(SEGMENTS_FILENAME, segments_report)
         self._write(POLICY_FILENAME, recommendation)
         self._write_holdout(rows, t, y, prediction, values)
         metrics = {
@@ -765,8 +910,195 @@ class UpliftTrainFlow(_TrainFlow):
                 metrics[name] = bound
         self._manifest.add_metrics(metrics)
         verdict = "measurable uplift" if evaluation.measurable_uplift else "no measurable uplift"
-        detail = f"{_auuc_line(evaluation)} · {verdict}{_not_causal_suffix(self._causal)}{evidence_note}"
+        detail = f"{_auuc_line(evaluation)} · {verdict}{_not_causal_suffix(self._causal)}{evidence_note}{arms_note}"
         return _StageOutcome(detail, evaluation.rows_evaluated)
+
+    def _holdout_recommendation(
+        self,
+        uplift: FloatArray,
+        p_treated: FloatArray,
+        segments: npt.NDArray[np.object_],
+        t: IntArray,
+        y: IntArray,
+        values: FloatArray | None,
+        value_costs: ValueCosts | None,
+    ) -> PolicyRecommendation:
+        """The policy recommended on a hold-out of one treatment and the control, quoted from that hold-out.
+
+        Ranked by uplift and quoted from the hold-out's observed uplift by top share; or, with `values`
+        (Plan J M97), ranked by each hold-out customer's net value and quoted from the hold-out ranked the
+        same way - conversions unweighted, money weighted by the customer's value.
+        """
+        from engine.uplift.policy import customer_net_values, holdout_lookups, recommend_policy
+
+        ctx = self._ctx
+        uplift_config = ctx.config.uplift
+        if values is None:
+            recommendation, _ = recommend_policy(
+                uplift,
+                segments,
+                uplift_config.policy,
+                run_id=ctx.run_id,
+                computed_on="test",
+                causal=self._causal,
+                observed_top_share=_observed_top_share(
+                    uplift, t, y, samples=uplift_config.bootstrap_samples, seed=self._seed
+                ),
+            )
+            return recommendation
+        lookups = holdout_lookups(
+            uplift,
+            t,
+            y,
+            policy=uplift_config.policy,
+            samples=uplift_config.bootstrap_samples,
+            seed=self._seed,
+            ranked_by_value=True,
+            values=values,
+            p_treated=p_treated,
+            value_costs=value_costs,
+        )
+        recommendation, _ = recommend_policy(
+            uplift,
+            segments,
+            uplift_config.policy,
+            run_id=ctx.run_id,
+            computed_on="test",
+            causal=self._causal,
+            observed_top_share=None if lookups.conversions is None else lookups.conversions.at,
+            observed_top_value=None if lookups.value is None else lookups.value.at,
+            holdout_note=lookups.note,
+            money=customer_net_values(
+                uplift,
+                uplift_config.policy,
+                values=values,
+                p_treated=p_treated,
+                value_costs=value_costs,
+            ),
+        )
+        return recommendation
+
+    # -- Plan J M100: several treatments against one shared control --------------------------------
+    def _with_arms(
+        self,
+        evaluation: UpliftEvaluation,
+        segments_report: SegmentReport,
+        recommendation: PolicyRecommendation,
+        t: IntArray,
+        y: IntArray,
+        value_costs: ValueCosts | None,
+    ) -> tuple[UpliftEvaluation, SegmentReport, PolicyRecommendation, str]:
+        """The three reports with `arms`, `arm_policy_value.json` written, and a note for the stage line.
+
+        Each treatment after the first is measured exactly as the first one is - `evaluate_uplift`,
+        `segment_report` and the same policy on its own hold-out customers and the control's - so every
+        `arms` entry means the same thing, and `arms[0]` is built from the reports' own fields
+        (DEC-668 (3)). The best-offer policy's value is measured on the hold-out of every arm.
+        """
+        import numpy as np
+
+        from engine.measurement.arms import (
+            arm_from_evaluation,
+            arm_from_policy,
+            arm_from_segments,
+            arm_policy_value,
+        )
+        from engine.uplift.contracts import ARM_POLICY_VALUE_FILENAME
+        from engine.uplift.learners import MultiArmUpliftModel
+        from engine.uplift.metrics import evaluate_uplift
+        from engine.uplift.segments import assign_segments, segment_report
+
+        ctx = self._ctx
+        uplift_config = ctx.config.uplift
+        arms = _require(self._arms, "the arms")
+        card = _require(self._card, "the model card")
+        model = _require(self._uplift_model, "the fitted uplift model")
+        test_all = _require(arms.test, "the hold-out rows of every arm")
+        if not isinstance(model, MultiArmUpliftModel):  # pragma: no cover - _train made it
+            raise RuntimeError("A run of several treatments needs a model of several treatments.")
+        predicted = model.predict_arms(arms.features.iloc[test_all])
+        arms.prediction = predicted
+        codes, outcome = arms.codes[test_all], arms.y[test_all]
+        control, levels = arms.levels[0], arms.levels
+        value_column = uplift_config.policy.value_column
+        evaluated = [arm_from_evaluation(levels[1], 1, control, evaluation, t, y)]
+        segmented = [arm_from_segments(levels[1], 1, control, segments_report)]
+        recommended = [arm_from_policy(levels[1], 1, control, recommendation)]
+        row_keys = arms.kept[ctx.row_key].iloc[test_all].astype(str).to_numpy()
+        for k in range(2, len(levels)):
+            chosen = np.flatnonzero((codes == 0) | (codes == k))
+            lift = predicted.uplift[chosen, k - 1]
+            treated = predicted.p_treated[chosen, k - 1]
+            base = predicted.p_control[chosen]
+            t_k = np.asarray(codes[chosen] == k, dtype=np.int_)
+            y_k = outcome[chosen]
+            evaluation_k, _ = evaluate_uplift(
+                lift,
+                t_k,
+                y_k,
+                run_id=ctx.run_id,
+                learner=card.learner,
+                base_model=card.base_model,
+                bootstrap_samples=uplift_config.bootstrap_samples,
+                seed=self._seed,
+                causal=self._causal,
+                holdout_keys=row_keys[chosen].tolist(),
+            )
+            evaluated.append(arm_from_evaluation(levels[k], k, control, evaluation_k, t_k, y_k))
+            segments_k = assign_segments(lift, base, card.segment_thresholds)
+            segmented.append(
+                arm_from_segments(
+                    levels[k],
+                    k,
+                    control,
+                    segment_report(
+                        lift,
+                        treated,
+                        base,
+                        segments_k,
+                        card.segment_thresholds,
+                        run_id=ctx.run_id,
+                        computed_on="test",
+                        causal=self._causal,
+                    ),
+                )
+            )
+            values_k = (
+                _values_at(arms.kept, value_column, test_all[chosen]) if value_costs is not None else None
+            )
+            recommended.append(
+                arm_from_policy(
+                    levels[k],
+                    k,
+                    control,
+                    self._holdout_recommendation(lift, treated, segments_k, t_k, y_k, values_k, value_costs),
+                )
+            )
+        value = arm_policy_value(
+            predicted.uplift,
+            codes,
+            outcome,
+            levels=levels,
+            values=_values_at(arms.kept, value_column, test_all),
+            value_column=value_column,
+            samples=uplift_config.bootstrap_samples,
+            seed=self._seed,
+            run_id=ctx.run_id,
+            causal=self._causal,
+            now=utc_now(),
+        )
+        self._write(ARM_POLICY_VALUE_FILENAME, value)
+        note = (
+            " · the best offer per customer beats the first offer alone"
+            if value.best_offer_better
+            else " · the best offer per customer is not shown to beat the first offer alone"
+        )
+        return (
+            evaluation.model_copy(update={"arms": tuple(evaluated)}),
+            segments_report.model_copy(update={"arms": tuple(segmented)}),
+            recommendation.model_copy(update={"arms": tuple(recommended)}),
+            f" · {len(levels) - 1} offers{note}",
+        )
 
     # -- Plan J M96: does the model earn its place? ----------------------------------------------
     def _with_evidence(
@@ -1132,6 +1464,8 @@ class UpliftTrainFlow(_TrainFlow):
         )
         self._write(register.DRIFT_BASELINE_FILENAME, baseline)
         champion = ctx.registry.get_champion(ctx.config.id)
+        if self._arms is not None:
+            return self._register_arms(model_id, number, champion)
         champion_evaluation, unavailable = self._rescore_uplift_champion(champion)
         decision: UpliftChampionDecision | None = None
         if champion is None and not uplift_owns_champion_slot(ctx.resolved):
@@ -1161,6 +1495,32 @@ class UpliftTrainFlow(_TrainFlow):
         )
         _LOGGER.info("register: %s", reason)
         return _StageOutcome(f"{_PROMOTION_WORDS[stored.status]} · {reason}", None)
+
+    def _register_arms(self, model_id: str, number: int, champion: ModelVersion | None) -> _StageOutcome:
+        """Plan J M100 (DEC-668 (4), DEC-1310 (h)): a model of several treatments stays a candidate.
+
+        The champion rule compares one treatment's AUUC and is frozen (`engine/registry.py`, DEC-605,
+        DEC-613), so the rule is not asked and the reigning champion is not re-scored: the version is
+        registered as a candidate with the plain reason (`MULTI_ARM_PROMOTION_REFUSED`), whatever
+        `governance.approval_required` says. A scoring run that names it uses it.
+        """
+        from engine.measurement.arms import MULTI_ARM_PROMOTION_REFUSED, PROMOTION_REFUSED_REASON
+
+        ctx = self._ctx
+        self._rescored = False
+        version = self._model_version(
+            model_id, number, champion, None, schema_key=run_key(ctx.run_id, register.SCHEMA_FILENAME)
+        )
+        stored = register.store_model_version(ctx.registry, version)
+        self._version = stored
+        _LOGGER.info(
+            "register: %s version %d status=%s (%s)",
+            stored.model_id,
+            number,
+            stored.status,
+            MULTI_ARM_PROMOTION_REFUSED,
+        )
+        return _StageOutcome(f"{_PROMOTION_WORDS[stored.status]} · {PROMOTION_REFUSED_REASON}", None)
 
     def _rescore_uplift_champion(self, champion: ModelVersion | None) -> tuple[UpliftEvaluation | None, str]:
         """The reigning uplift champion measured on **this** hold-out, or why it could not be.
@@ -1345,6 +1705,8 @@ class UpliftScoreFlow(_ScoreFlow):
         self._prediction: UpliftPrediction | None = None
         self._recommendation: PolicyRecommendation | None = None
         self._drift: UpliftDriftReport | None = None
+        self._arm_prediction: ArmPrediction | None = None
+        """Plan J M100: every treatment's prediction, when the model has several."""
 
     def _validate_against_schema(self) -> _StageOutcome:
         """Phase 1's stage, unchanged; then `run.json` says what kind of run this turned out to be.
@@ -1398,20 +1760,31 @@ class UpliftScoreFlow(_ScoreFlow):
         """Load the model once, predict both counterfactual probabilities and the uplift, and
         measure drift against the training data (`uplift_drift.json`, M53)."""
         from engine.uplift.drift import measure_uplift_drift
-        from engine.uplift.learners import load_model
+        from engine.uplift.learners import MultiArmUpliftModel, load_model
 
         version = _require(self._version, "the model version")
         features = _require(self._features, "the prepared features")
         model = load_model(self._storage.local_path(version.predictor_key))
-        prediction = model.predict(features)
+        card = _require(self._card, "the model card")
+        if card.treatment_levels and isinstance(model, MultiArmUpliftModel):
+            # Plan J M100: every treatment's prediction; the scores' own columns are the first's.
+            arm_prediction = model.predict_arms(features)
+            self._arm_prediction = arm_prediction
+            prediction = arm_prediction.arm(1)
+        else:
+            prediction = model.predict(features)
         scored = _require(self._frame, "the uploaded rows").copy()
         scored[UPLIFT_COLUMN] = prediction.uplift
         scored[P_TREATED_COLUMN] = prediction.p_treated
         scored[P_CONTROL_COLUMN] = prediction.p_control
+        if self._arm_prediction is not None:
+            for k in range(1, self._arm_prediction.arms + 1):
+                uplift_name, treated_name = arm_columns(k)
+                scored[uplift_name] = self._arm_prediction.uplift[:, k - 1]
+                scored[treated_name] = self._arm_prediction.p_treated[:, k - 1]
         self._model, self._prediction, self._scored = model, prediction, scored
         rows = len(scored.index)
         self._manifest.add_metrics({"mean_predicted_uplift": float(prediction.uplift.mean())} if rows else {})
-        card = _require(self._card, "the model card")
         drift = measure_uplift_drift(
             _require(self._frame, "the uploaded rows"),
             self._ctx.config,
@@ -1537,9 +1910,15 @@ class UpliftScoreFlow(_ScoreFlow):
             )
         if decision is not None:
             self._write_ranking_choice(decision, contacts=recommendation.contacts_recommended)
+        segments_report = _scored_segments(scored, card, run_id=ctx.run_id)
+        if self._arm_prediction is not None:
+            # Plan J M100: what each treatment's own policy would do, beside the first treatment's list.
+            segments_report, recommendation = self._with_scored_arms(
+                scored, card, segments_report, recommendation, value_costs
+            )
         self._scored = scored
         self._recommendation = recommendation
-        self._write(SEGMENTS_FILENAME, _scored_segments(scored, card, run_id=ctx.run_id))
+        self._write(SEGMENTS_FILENAME, segments_report)
         self._write(POLICY_FILENAME, recommendation)
         suppressed = int(scored["suppressed_reason"].notna().sum())
         control = int(scored["control_group"].astype(bool).sum())
@@ -1561,6 +1940,91 @@ class UpliftScoreFlow(_ScoreFlow):
                 else " · the uplift model does not beat risk ranking (no propensity model to rank by)"
             )
         return _StageOutcome(detail, len(scored.index))
+
+    # -- Plan J M100: several treatments against one shared control --------------------------------
+    def _with_scored_arms(
+        self,
+        scored: pd.DataFrame,
+        card: UpliftModelCard,
+        segments_report: SegmentReport,
+        recommendation: PolicyRecommendation,
+        value_costs: ValueCosts | None,
+    ) -> tuple[SegmentReport, PolicyRecommendation]:
+        """`segments.json` and `policy_recommendation.json` with `arms` (DEC-668 (2)).
+
+        `arms[0]` is built from the two reports' own fields (the first treatment's list, as written).
+        Every later treatment is segmented by its own predicted uplift and given the run's policy on the
+        same eligible customers (not suppressed, not in the control group) with the same tie-break; its
+        expected conversions are null, because only the first treatment's hold-out is stored with the
+        model. Which offer each customer gets is a per-customer choice (`engine.decide.offer_choice`).
+        """
+        import numpy as np
+        import pandas as pd
+
+        from engine.measurement.arms import arm_from_policy, arm_from_segments, no_holdout_note
+        from engine.uplift.actions import tiebreak_keys
+        from engine.uplift.policy import customer_net_values, recommend_policy
+        from engine.uplift.segments import assign_segments, segment_report
+
+        ctx = self._ctx
+        levels = card.treatment_levels or ()
+        predicted = _require(self._arm_prediction, "the predictions of every treatment")
+        policy = ctx.config.uplift.policy
+        control = levels[0]
+        segmented = [arm_from_segments(levels[1], 1, control, segments_report)]
+        recommended = [arm_from_policy(levels[1], 1, control, recommendation)]
+        eligible = ~scored["suppressed_reason"].notna().to_numpy(dtype=bool) & ~scored[
+            "control_group"
+        ].astype(bool).to_numpy(dtype=bool)
+        tiebreak = tiebreak_keys(scored[ctx.row_key], run_id=ctx.run_id)
+        base = np.asarray(scored[P_CONTROL_COLUMN], dtype=np.float64)
+        values = (
+            pd.to_numeric(scored[policy.value_column], errors="coerce").to_numpy(dtype=np.float64)
+            if policy.value_column is not None and policy.value_column in scored.columns
+            else None
+        )
+        for k in range(2, predicted.arms + 1):
+            uplift_name, treated_name = arm_columns(k)
+            lift = np.asarray(scored[uplift_name], dtype=np.float64)
+            treated = np.asarray(scored[treated_name], dtype=np.float64)
+            segments_k = assign_segments(lift, base, card.segment_thresholds)
+            segmented.append(
+                arm_from_segments(
+                    levels[k],
+                    k,
+                    control,
+                    segment_report(
+                        lift,
+                        treated,
+                        base,
+                        segments_k,
+                        card.segment_thresholds,
+                        run_id=ctx.run_id,
+                        computed_on="scored",
+                        causal=card.causal,
+                    ),
+                )
+            )
+            recommendation_k, _ = recommend_policy(
+                lift,
+                segments_k,
+                policy,
+                run_id=ctx.run_id,
+                computed_on="scored",
+                causal=card.causal,
+                eligible=eligible,
+                tiebreak=tiebreak,
+                money=customer_net_values(
+                    lift, policy, values=values, p_treated=treated, value_costs=value_costs
+                ),
+            )
+            recommended.append(
+                arm_from_policy(levels[k], k, control, recommendation_k, note=no_holdout_note())
+            )
+        return (
+            segments_report.model_copy(update={"arms": tuple(segmented)}),
+            recommendation.model_copy(update={"arms": tuple(recommended)}),
+        )
 
     # -- Plan J M96 (J5): uplift must beat risk ranking to rank the list ---------------------------
     def _ranking_decision(self, scored: pd.DataFrame) -> tuple[RankingDecision | None, FloatArray | None]:
@@ -1740,6 +2204,7 @@ class UpliftScoreFlow(_ScoreFlow):
             run_id=ctx.run_id,
             primary_key=ctx.key,
             storage=self._storage,
+            arms=0 if self._arm_prediction is None else self._arm_prediction.arms,
         )
         self._artefacts.update(files)
         summary = _scoring_summary(
@@ -1791,13 +2256,22 @@ def _reason_text(cell: object) -> str | None:
 
 
 def _write_scores(
-    frame: pd.DataFrame, config: UseCaseConfig, *, run_id: str, primary_key: PrimaryKey, storage: Storage
+    frame: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    run_id: str,
+    primary_key: PrimaryKey,
+    storage: Storage,
+    arms: int = 0,
 ) -> dict[str, str]:
     """The uplift `scores.csv` and `scores.parquet`: the same table, in :func:`scores_columns` order.
 
     A one-column key is written as the frame holds it, as it always was. Each column of a composite
     key is written separately as text (`engine.keys.key_text`), as Phase 1's `scores.csv` does, so an
     id keeps its leading zeros and a snapshot date reads as the date (DEC-083).
+
+    A model of several treatments (Plan J M100, `arms` > 0) adds each treatment's :func:`arm_columns`
+    to `scores.parquet` only, after the same columns: `scores.csv` stays the first treatment's list.
     """
     import pandas as pd
 
@@ -1837,6 +2311,11 @@ def _write_scores(
     csv_key = run_key(run_id, export.SCORES_CSV)
     storage.write_bytes(csv_key, table.to_csv(index=False, lineterminator="\n").encode("utf-8"))
     parquet_key = run_key(run_id, export.SCORES_PARQUET)
+    if arms:
+        table = table.copy()
+        for k in range(1, arms + 1):
+            for name in arm_columns(k):
+                table[name] = frame[name].astype("float64").to_numpy()
     storage.write_bytes(parquet_key, _parquet_bytes(table))
     return {export.SCORES_CSV: csv_key, export.SCORES_PARQUET: parquet_key}
 

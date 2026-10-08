@@ -63,6 +63,7 @@ __all__ = [
     "FeatureSpec",
     "apply_feature_spec",
     "candidate_feature_columns",
+    "coerce_arms",
     "coerce_outcome",
     "coerce_treatment",
     "date_like_columns",
@@ -180,6 +181,28 @@ def _treatment_code(value: object) -> float | None:
         if text in _CONTROL_TEXT:
             return 0.0
     return None
+
+
+def coerce_arms(values: pd.Series, levels: Sequence[str]) -> tuple[IntArray | None, int]:
+    """`(arm code array, bad count)` for a several-offer treatment column (Plan J M100, DEC-668 (1)).
+
+    `levels` is `uplift.treatment_levels`: the control value first, so the control is code 0 and the
+    treatments 1..K in the configured order. A cell is matched by one normalised spelling
+    (`engine.uplift.config.level_text`), so `1`, `1.0` and `"1"` are one level. A null, or a value
+    outside the levels, is bad - never guessed into an arm - and the array is then `None`, as
+    :func:`coerce_treatment` does for a binary column.
+    """
+    import numpy as np
+
+    from engine.uplift.config import level_text
+
+    codes = {level_text(level): position for position, level in enumerate(levels)}
+    mapped = values.astype(object).map(lambda value: codes.get(level_text(value)), na_action="ignore")
+    numbers = mapped.to_numpy(dtype=float, na_value=np.nan)
+    bad = int(np.isnan(numbers).sum())
+    if bad:
+        return None, bad
+    return np.asarray(numbers, dtype=np.int_), 0
 
 
 def coerce_outcome(values: pd.Series, positive_label: object | None) -> tuple[IntArray, str]:
@@ -552,6 +575,7 @@ def split_holdout(
     test_fraction: float,
     seed: int,
     groups: Sequence[object] | npt.NDArray[Any] | None = None,
+    arm_count: int = 2,
 ) -> tuple[IntArray, IntArray]:
     """`(train positions, test positions)`, both sorted, stratified on the four `(t, y)` cells.
 
@@ -566,6 +590,10 @@ def split_holdout(
     model on a customer it was fitted on. The cells are then the entity's treatment (constant per
     entity; `TREATMENT_VARIES_WITHIN_ENTITY` refuses data where it is not) and whether the entity
     converted at any snapshot. Without `groups` the result is exactly what it always was.
+
+    **Several offers (Plan J M100).** `t` may hold arm codes `0..arm_count-1` (the control first); the
+    cells are then every `(arm, outcome)` pair, drawn in that order, so the shared control lands on one
+    side once for every arm. With the default `arm_count=2` the draws are the binary ones, unchanged.
     """
     import numpy as np
 
@@ -575,11 +603,15 @@ def split_holdout(
         raise ValueError("t and y must be one-dimensional arrays of the same length.")
     if not 0.0 < test_fraction < 1.0:
         raise ValueError("test_fraction must lie strictly between 0 and 1.")
+    if arm_count < 2:
+        raise ValueError("arm_count counts the control and at least one treatment.")
     if groups is not None:
-        return _grouped_holdout(treatment, outcome, groups, test_fraction=test_fraction, seed=seed)
+        return _grouped_holdout(
+            treatment, outcome, groups, test_fraction=test_fraction, seed=seed, arm_count=arm_count
+        )
     rng = np.random.default_rng(seed)
     test_parts: list[IntArray] = []
-    for arm in (0, 1):
+    for arm in range(arm_count):
         for label in (0, 1):
             cell = np.flatnonzero((treatment == arm) & (outcome == label))
             size = math.floor(len(cell) * test_fraction + 0.5)
@@ -598,6 +630,7 @@ def _grouped_holdout(
     *,
     test_fraction: float,
     seed: int,
+    arm_count: int = 2,
 ) -> tuple[IntArray, IntArray]:
     """:func:`split_holdout` over entities: stratified on (entity arm, entity ever converted)."""
     import numpy as np
@@ -615,7 +648,7 @@ def _grouped_holdout(
     np.maximum.at(entity_converted, codes, outcome.astype(np.int_))
     rng = np.random.default_rng(seed)
     test_entities: list[IntArray] = []
-    for arm in (0, 1):
+    for arm in range(arm_count):
         for label in (0, 1):
             cell = np.flatnonzero((entity_arm == arm) & (entity_converted == label))
             size = math.floor(len(cell) * test_fraction + 0.5)

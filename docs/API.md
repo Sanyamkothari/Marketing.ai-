@@ -564,6 +564,7 @@ How the target is derived (plan section 5.2).  `agent_editable` is `False` and c
 | `segments` | UpliftSegmentsConfig | no | Where the four segments are cut. A Phase 5 agent may propose new cuts. |
 | `policy` | UpliftPolicyConfig | no | The budget the targeting recommendation works within. A Phase 5 agent may propose budgets. |
 | `evidence` | UpliftEvidenceConfig | no | `uplift.evidence` (Plan J M96): the costly evidence an Approver may ask for. All off by default.  Each switch refits the meta-learner `folds` times on the training rows, LightGBM base model only (`engine.measurement.compare`). `fold_auuc` reports each fold's AUUC of a model fitted on all the other folds; `risk_comparison` writes `risk_comparison.json`, uplift top-`top_share` against risk top-`top_share` at equal budget, from models fitted on the next `(folds - 1) // 2` folds round a ring (so its interval is honest) together with a plain LightGBM risk model. `propensity_column` names a column of recorded per-row treatment probabilities (M92's `treatment_probability`); it is never a feature, rows outside (0, 1) are left out of the comparison, and without it the treated share is the propensity, as for a randomised file. Not agent-editable: they decide what evidence an approval rests on. |
+| `treatment_levels` | list[string] | no | Several offers against one shared control (Plan J M100): the control value first, then each offer's value in the treatment column. Empty: one treatment, recorded as 0/1. |
 
 #### AgentConfig
 

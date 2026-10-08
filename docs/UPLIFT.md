@@ -982,13 +982,60 @@ builder - derives it from `scores.*` with `engine.holdout.assign.assignment_fram
 explore_fraction=0)`: `holdout_member` is the run's `control_group`, nobody is explored, and
 `treatment_probability` is `1 − control_group_fraction` on eligible selected rows.
 
+### Several offers against one shared control (Plan J M100, DEC-1310)
+
+A campaign that tried two offers and held a random group back can be learned from in one run. Name
+the values of the treatment column, the held-back group's first:
+
+```yaml
+uplift:
+  treatment_column: offer
+  treatment_levels: [none, offer_a, offer_b]   # control first; empty (the default) is one 0/1 treatment
+```
+
+It is not agent-editable and may be set per run (`overrides.uplift.treatment_levels`), like the
+treatment column. A cell matches a level by one spelling (`1`, `1.0`, `"1.0"` and `" 1 "` are one
+level, and YAML levels `[0.0, 1.0, 2.0]` read as `0`, `1`, `2`; text is compared without case). With the setting empty nothing changes: every artefact of a default run is
+byte for byte what it was (`tests/integration/decide/test_m100_binary_identity.py`), and the dump of
+the configuration in `run_config.json` does not even mention it.
+
+**The rule DEC-668 recorded.** Every existing field keeps its meaning as **the first treatment against
+the control** (`offer_a` above): `treated_rows`, `control_rows`, the rates, `p_treated`, `uplift`, the
+model card's `propensity`, `base_rate` and `training_rows`, the hold-out file, the contact list. Every report that has arms gains `arms`, one `ArmSummary` per
+treatment against the same control, in the configured order; `arms[0]` repeats the report's own
+fields. A binary run's reports carry no `arms` key at all.
+
+| Step | What changes with several levels |
+|---|---|
+| Checks | `TREATMENT_NOT_BINARY` means "a value outside the configured levels" and lists them. `TREATMENT_ARM_TOO_SMALL` is checked for the control and every offer (by name). The randomness check runs once per offer, on its customers and the control's; one offer that was targeted makes the run not causal, and its `TREATMENT_NOT_RANDOM` names the offer. `uplift_validation.json` lists each offer's counts and randomness score in `arms`. |
+| Split | One hold-out of every row, stratified on (level, outcome), so the shared control is on one side for every offer. |
+| Learning | One model per offer against the shared control: a T- or X-learner per offer, or one S-learner with the offer as a feature (one 0/1 column per offer). With the T- or X-learner on LightGBM, the first offer's model is exactly the binary learner on its rows; the S-learner is one model of every arm, and AutoGluon's time budget is shared across the offers (`engine/uplift/learners.py` `MultiArmUpliftModel`). |
+| Evaluation | `uplift_evaluation.json` `arms`: each offer's effect (the bootstrap within each arm), AUUC and Qini, measured on its own hold-out customers and the control's. `segments.json` and `policy_recommendation.json` `arms`: the segments by each offer's uplift, and what the run's policy would do with each offer on its own. |
+| Value of choosing | `arm_policy_value.json` (served by `GET /runs/{id}/uplift/arm_policy_value.json`): what giving each customer the offer with the highest predicted uplift × value (or no offer) is worth per customer on the hold-out, against the first offer alone, by inverse probability weighting and a paired bootstrap within each arm. Offer costs are not in it yet (they come with M99's catalogue). |
+| Champion | Never promoted (`MULTI_ARM_PROMOTION_REFUSED`), by the run or on the Models page (`POST /models/{id}/promote` answers 409): the champion rule compares one treatment's AUUC and is frozen. The guard reads the model card, else the run's `run_config.json`; an uplift version whose card and run configuration both cannot be read is refused too, never let through. Score with the model by naming its version. |
+| Scoring | `scores.csv` is unchanged: the first offer's contact list. `scores.parquet` adds `uplift_arm_<k>` and `p_treated_arm_<k>` for every offer `k` (1 = the first), after the same columns. |
+| Measurement | `measure_campaign(..., arm_column=..., arms=..., control_level=...)` measures each offer against the shared control with the unchanged Newcombe interval; `arms` (the configured offers) and `control_level` are required, so the report's own fields are the first configured offer's whatever the file's row order, and `arms` lists every offer. |
+
+**Choosing the offer per customer.** `engine/decide/offer_choice.py` is the choice, as a pure function
+(Part B of M100 wires it into the scoring run and the treat list, once M99's channel consent can say
+which offers a customer may get): the eligible offer, not one the customer is a sleeping dog for, with
+the highest M97 net value (`arm_net_values`: uplift × value × margin × horizon − offer cost × p_treated −
+contact cost, with each offer's own costs, priced the same way with or without `value_column`; an
+offer cost needs `p_treated`), or no offer when none pays for itself; the runner-up
+offer's net value is kept. Under a total budget, customers keep their best offer and are taken by net
+value per rupee until the budget is spent.
+
+The Model page shows a card per offer (its effect with the likely range, both response rates) and
+whether choosing per customer does better than the first offer alone; every number is the server's.
+
 ---
 
 ## 15. Limits
 
-* **Binary treatment only.** One action versus no action. Several offers (multi-treatment) are not
-  supported. The artefacts are designed so they can be added without renaming anything: DEC-668
-  describes the extension path.
+* **Several offers are learned and measured, not yet acted on.** A model of several offers (section
+  14, Plan J M100) reports every offer and writes each offer's predicted uplift, but the contact list
+  is still the first offer's, the offer chosen per customer reaches the treat list only with M100's
+  second part, and such a model is never champion. Offer costs per arm wait for M99's catalogue.
 * **Binary outcome only.** Converted or not. Revenue or other continuous outcomes are not modelled.
 * **Two-column keys: uploads train, datasets score.** Since M53 `POST /uplift/runs` takes a
   two-column key (customer + snapshot date) on an uploaded file, and uplift scoring and campaign
@@ -1080,6 +1127,7 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `PROFIT_CURVE_UNAVAILABLE` | 409 | `GET /runs/{id}/uplift/profit-curve` | The saved scores no longer reproduce the run's recommendation, or lack the columns the curve needs; or (Plan J M96) the list was ranked by the approved propensity model because the uplift model does not beat risk ranking. | Score the customers again; a list ranked by the propensity model has no uplift budget curve. |
 | `ARTEFACT_NOT_FOUND` | 404 | `GET /runs/{id}/risk-comparison` | The run computed no equal-budget comparison (section 12, M96). | Train with `uplift.evidence.risk_comparison` on and the LightGBM base model. |
 | `PROFIT_CURVE_QUERY_INVALID` | 422 | `GET /runs/{id}/uplift/profit-curve` | The query names the value of one conversion twice: `value` (Plan J M97) is another name for `value_per_conversion`. | Give one of the two. |
+| `MULTI_ARM_PROMOTION_REFUSED` | 409 | `POST /models/{id}/promote` (and the reason a training run keeps the model a candidate) | The model chooses between several offers (Plan J M100), and the champion rule compares models of one offer only. | Keep it a candidate and score with it by naming its version. |
 | `OPE_INVALID` | 422 | `POST /runs/{id}/uplift/ope` | The rule or the logged data cannot be evaluated (the message says why). | Correct the rule as the message says. |
 | `MEASURE_NOT_OFFERED` | 409 | `POST /runs/{id}/measure`, `.../measure/learn` | The use case does not contact customers, or holds nobody back (section 9, step 4). | Nothing to measure; the Campaign results route still answers for any scoring run. |
 | `MEASURE_INVALID` | 422 | `POST /runs/{id}/measure`, `.../measure/learn` | The outcomes file has no customer id column, only the id, or several columns and none is the use case's outcome. | Keep the customer id and one outcome column, or name it with `outcome_column`. |

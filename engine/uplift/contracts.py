@@ -36,6 +36,7 @@ from engine.contracts import (
 from engine.uplift.config import UpliftBaseModel, UpliftLearner
 
 __all__ = [
+    "ARM_POLICY_VALUE_FILENAME",
     "INCREMENTALITY_FILENAME",
     "OPE_FILENAME",
     "POLICY_FILENAME",
@@ -50,6 +51,9 @@ __all__ = [
     "UPLIFT_NOT_BETTER_THAN_RISK",
     "UPLIFT_VALIDATION_CODES",
     "UPLIFT_VALIDATION_FILENAME",
+    "ArmPolicyValue",
+    "ArmSegmentCount",
+    "ArmSummary",
     "BaselineAuuc",
     "BaselineComparison",
     "BaselineKind",
@@ -156,6 +160,90 @@ SEGMENT_ACTIONS: Final[Mapping[Segment, str]] = MappingProxyType(
 """The recommended action per segment. Only persuadables inside the budget are ever `Treat`."""
 
 
+def _absent(value: object) -> bool:
+    """`exclude_if` of the Plan J M100 fields: a binary run's artefact carries no `arms` key at all."""
+    return value is None
+
+
+# ---------------------------------------------------------------------------
+# Plan J M100 (DEC-668 (2), DEC-1310): one treatment against the shared control
+# ---------------------------------------------------------------------------
+class ArmSegmentCount(Artefact):
+    """How many customers fall in one segment when this arm's predicted uplift is the one that counts."""
+
+    segment: Segment = Field(description="Segment id.")
+    rows: int = Field(description="Customers in the segment for this arm.")
+    share_pct: float = Field(description="Share of the customers segmented, as a percentage.")
+    mean_predicted_uplift: float | None = Field(
+        description="Mean predicted uplift of this arm; null when empty."
+    )
+
+
+class ArmSummary(Artefact):
+    """One treatment level against the shared control (Plan J M100, DEC-668 (2)).
+
+    Every report that has arms lists them in `uplift.treatment_levels` order, the first treatment
+    first; the report's own fields describe that first treatment against the control, exactly as
+    on a binary run, so `arms[0]` repeats them. Each report fills the fields it measures and leaves
+    the others null: the evaluation its effect, AUUC and Qini; the segments its counts; the policy
+    its contacts; the incrementality report its measured lift.
+    """
+
+    arm: str = Field(description="The treatment level, as configured in uplift.treatment_levels.")
+    position: int = Field(description="1 for the first treatment (the one the report's own fields describe).")
+    control: str = Field(description="The control level every arm is compared with.")
+    rows: int | None = Field(default=None, description="Customers compared: this arm's and the control's.")
+    treated_rows: int | None = Field(default=None, description="Customers given this treatment.")
+    control_rows: int | None = Field(default=None, description="Customers in the shared control.")
+    treated_conversions: int | None = Field(default=None, description="Outcomes among this arm's customers.")
+    control_conversions: int | None = Field(
+        default=None, description="Outcomes among the control's customers."
+    )
+    treated_rate: float | None = Field(default=None, description="Outcome rate of this arm.")
+    control_rate: float | None = Field(default=None, description="Outcome rate of the shared control.")
+    effect: ConfidenceValue | None = Field(
+        default=None,
+        description=(
+            "treated_rate - control_rate, with its 95% interval: the bootstrap within each arm on a "
+            "hold-out (DEC-605), the Newcombe interval on a measured campaign."
+        ),
+    )
+    auuc: ConfidenceValue | None = Field(default=None, description="This arm's AUUC on the hold-out.")
+    qini_coefficient: ConfidenceValue | None = Field(
+        default=None, description="This arm's Qini coefficient on the hold-out."
+    )
+    measurable_uplift: bool | None = Field(
+        default=None, description="True when this arm's AUUC interval lies entirely above zero."
+    )
+    randomness_auc: float | None = Field(
+        default=None, description="How well the features predict who got this arm rather than the control."
+    )
+    segments: tuple[ArmSegmentCount, ...] | None = Field(
+        default=None, description="The four segments by this arm's predicted uplift."
+    )
+    eligible_persuadables: int | None = Field(
+        default=None, description="Persuadables for this arm the policy could choose from."
+    )
+    contacts_recommended: int | None = Field(
+        default=None, description="Customers this arm alone would treat under the run's policy."
+    )
+    predicted_incremental_conversions: float | None = Field(
+        default=None, description="Sum of this arm's predicted uplift over those customers."
+    )
+    expected_incremental_conversions: ConfidenceValue | None = Field(
+        default=None,
+        description="Those customers x the uplift observed for this arm on the hold-out; null when not measured.",
+    )
+    expected_net_value: float | None = Field(
+        default=None, description="Expected value minus cost for this arm, when both exist."
+    )
+    incremental_conversions: ConfidenceValue | None = Field(
+        default=None, description="Measured lift x this arm's customers, with its interval."
+    )
+    p_value: float | None = Field(default=None, description="Two-sided two-proportion z-test p-value.")
+    note: str | None = Field(default=None, description="Why a number is missing, in plain words.")
+
+
 # ---------------------------------------------------------------------------
 # uplift_validation.json
 # ---------------------------------------------------------------------------
@@ -237,6 +325,14 @@ class UpliftValidationReport(Artefact):
     )
     control_entities: int | None = Field(
         default=None, description="Distinct control entities; set only with a two-column key."
+    )
+    arms: tuple[ArmSummary, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Plan J M100: each treatment level's customers and randomness check against the shared "
+            "control; absent on a run with one treatment."
+        ),
     )
 
 
@@ -482,6 +578,14 @@ class UpliftEvaluation(Artefact):
     fold_auuc: FoldAuuc | None = Field(
         default=None, description="AUUC across refitted folds (off by default; LightGBM only)."
     )
+    arms: tuple[ArmSummary, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Plan J M100: every treatment level's effect, AUUC and Qini against the shared control on the "
+            "hold-out; absent on a run with one treatment."
+        ),
+    )
 
 
 class QiniPoint(Artefact):
@@ -554,6 +658,11 @@ class SegmentReport(Artefact):
         description="Persuadables, sure things, lost causes, sleeping dogs, in that order."
     )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
+    arms: tuple[ArmSummary, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Plan J M100: the segments by each treatment level's predicted uplift; absent with one treatment.",
+    )
 
 
 class PolicyStopReason(StrEnum):
@@ -637,6 +746,14 @@ class PolicyRecommendation(Artefact):
         ),
     )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
+    arms: tuple[ArmSummary, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Plan J M100: what the run's policy would do with each treatment level on its own; absent with "
+            "one treatment. Which offer each customer gets is chosen per customer, not here."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -818,6 +935,13 @@ class IncrementalityReport(Artefact):
         default=False,
         description="True when measured before the test plan's analysis date: an early look, not a final result.",
     )
+    # Plan J M100 (DEC-668 (2)): each offer against the shared control, written by `measure_campaign` when
+    # the assignment names each customer's arm. The fields above then describe the first offer.
+    arms: tuple[ArmSummary, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Each treatment level's measured lift against the shared control; absent with one treatment.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -965,6 +1089,60 @@ class RankingChoice(Artefact):
 
 
 # ---------------------------------------------------------------------------
+# arm_policy_value.json (Plan J M100)
+# ---------------------------------------------------------------------------
+ARM_POLICY_VALUE_FILENAME: Final[str] = "arm_policy_value.json"
+"""Written by an uplift training run with several treatment levels (Plan J M100)."""
+
+
+class ArmPolicyValue(Artefact):
+    """`arm_policy_value.json` - what choosing an offer per customer is worth, out of sample (M100).
+
+    Measured on the hold-out, which the learners never saw, by inverse probability weighting with each
+    arm's share of the hold-out (the arms were assigned at random). The "best offer" policy gives each
+    customer the arm with the highest predicted uplift x value, or no offer when none is above zero; it
+    is compared with the first treatment's own policy (treat when its uplift x value is above zero) by a
+    paired bootstrap within each arm, so the two values move together.
+    """
+
+    run_id: str = Field(description="Training run whose hold-out was used.")
+    rows: int = Field(description="Hold-out customers, every arm.")
+    arms: tuple[str, ...] = Field(description="The treatment levels, control first.")
+    arm_rows: tuple[int, ...] = Field(description="Hold-out customers per level, in `arms` order.")
+    value_weighted: bool = Field(
+        description="True when each conversion is weighted by the customer's value (uplift.policy.value_column)."
+    )
+    value_column: str | None = Field(description="The value column the conversions were weighted by.")
+    values_missing: int = Field(description="Hold-out customers without a value, counted at zero value.")
+    best_offer: ConfidenceValue = Field(
+        description="The best-offer policy's extra value per customer over treating nobody, with its interval."
+    )
+    first_treatment: ConfidenceValue = Field(
+        description="The first treatment's policy's extra value per customer over treating nobody."
+    )
+    difference: ConfidenceValue = Field(
+        description="best_offer - first_treatment, paired per resample, with its 95% interval."
+    )
+    best_offer_better: bool = Field(description="True when the difference's lower bound is above zero.")
+    policy_shares: dict[str, float] = Field(
+        description="Share of hold-out customers the best-offer policy gives each level (the control is no offer)."
+    )
+    bootstrap_samples: int = Field(description="Resamples behind every interval.")
+    costs_included: bool = Field(
+        default=False,
+        description="False: offer and contact costs per arm come with the offer catalogue (M99).",
+    )
+    promotion: str = Field(description="What the champion rule does with this model, in plain words.")
+    promotion_code: str | None = Field(
+        default=None,
+        description="MULTI_ARM_PROMOTION_REFUSED while the champion rule compares one offer only.",
+    )
+    causal: bool = Field(description="False when the treatment was acknowledged as not random.")
+    summary: str = Field(description="One plain sentence for the Model page.")
+    computed_at: AwareDatetime = Field(description="UTC time of the comparison.")
+
+
+# ---------------------------------------------------------------------------
 # model/uplift_model.json
 # ---------------------------------------------------------------------------
 class UpliftModelCard(Artefact):
@@ -994,6 +1172,15 @@ class UpliftModelCard(Artefact):
     segment_thresholds: SegmentThresholds = Field(description="Cuts applied when this model segments rows.")
     engine_version: str = Field(description="Engine version that trained the model.")
     trained_at: AwareDatetime = Field(description="UTC time the model was trained.")
+    treatment_levels: tuple[str, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Plan J M100: the control value and the treatments the model was fitted on, control first; "
+            "absent on a model of one treatment. `propensity`, `base_rate` and `training_rows` describe "
+            "the first treatment against the control; the run's train stage line counts every arm's rows."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1062,6 +1249,7 @@ UPLIFT_ARTEFACTS: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
         UPLIFT_DRIFT_FILENAME: UpliftDriftReport,
         RISK_COMPARISON_FILENAME: RiskComparison,  # Plan J M96
         RANKING_CHOICE_FILENAME: RankingChoice,  # Plan J M96
+        ARM_POLICY_VALUE_FILENAME: ArmPolicyValue,  # Plan J M100
     }
 )
 """Uplift artefact filename -> its model. Served by `api/routes/uplift.py` (DEC-602)."""

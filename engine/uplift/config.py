@@ -11,6 +11,7 @@ Every field is read only when `problem_type` is `uplift` (DEC-601).
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Annotated, Any, Final, Self
 
@@ -26,6 +27,7 @@ __all__ = [
     "UpliftLearner",
     "UpliftPolicyConfig",
     "UpliftSegmentsConfig",
+    "level_text",
     "uplift_agent_editable_paths",
 ]
 
@@ -127,6 +129,41 @@ class UpliftEvidenceConfig(BaseModel):
     propensity_column: str | None = None
 
 
+_WHOLE_NUMBER_TEXT: Final = re.compile(r"[+-]?\d+\.0*")
+"""Text of a whole number written with a decimal point (`1.0`, `2.`, `-3.00`): the same level as `1`."""
+
+
+def level_text(value: object) -> str:
+    """One comparable spelling of a treatment level (Plan J M100): `1`, `1.0`, `"1.0"` and `" 1 "` are one.
+
+    The same normalisation the outcome labels use (`engine.uplift.data._label_key`): booleans as
+    `true`/`false`, whole floats without their `.0`, text stripped and lower-cased. Text that writes a
+    whole number with a decimal point (`"1.0"`, a CSV cell of a float column) loses its `.0` too, so a
+    level reads the same from a number, a float cell or a text cell.
+    """
+    if hasattr(value, "item") and not isinstance(value, str | bytes):  # numpy scalars
+        value = value.item()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else repr(value)
+    text = str(value).strip().lower()
+    if _WHOLE_NUMBER_TEXT.fullmatch(text):
+        return str(int(float(text)))
+    return text
+
+
+def _number_as_text(item: object) -> object:
+    """A YAML number as level text (`1.0` -> `"1"`); anything else unchanged for the validators."""
+    if isinstance(item, bool) or not isinstance(item, int | float):
+        return item
+    if isinstance(item, float) and item.is_integer():
+        return str(int(item))
+    return str(item)
+
+
 class UpliftConfig(BaseModel):
     """`uplift:` in a use case. Inert unless `problem_type` is `uplift`.
 
@@ -172,6 +209,51 @@ class UpliftConfig(BaseModel):
     segments: UpliftSegmentsConfig = UpliftSegmentsConfig()
     policy: UpliftPolicyConfig = UpliftPolicyConfig()
     evidence: UpliftEvidenceConfig = UpliftEvidenceConfig()  # Plan J M96; off by default
+    # Plan J M100 (DEC-668 (1), DEC-1310): several offers against one shared control. Empty (the default)
+    # is one treatment level: the treatment column holds 0/1 and every rule is today's. Otherwise the
+    # control value first, then at least two treatment values; the first of them is the treatment every
+    # existing field describes. Left out of the configuration's dump when empty, so a run configured
+    # without it records exactly what it recorded before.
+    treatment_levels: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Several offers against one shared control (Plan J M100): the control value first, then each "
+            "offer's value in the treatment column. Empty: one treatment, recorded as 0/1."
+        ),
+        json_schema_extra=_editable(False),
+        exclude_if=lambda levels: not levels,
+    )
+
+    @field_validator("treatment_levels", mode="before")
+    @classmethod
+    def _levels_as_text(cls, value: Any) -> Any:
+        """A YAML list of numbers (`[0, 1, 2]` or `[0.0, 1.0, 2.0]`) names levels as text, as the file's
+        cells are compared: a whole float without its `.0`, the spelling `level_text` gives a cell."""
+        if isinstance(value, list | tuple):
+            return tuple(_number_as_text(item) for item in value)
+        return value
+
+    @field_validator("treatment_levels")
+    @classmethod
+    def _levels_valid(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value:
+            return value
+        if len(value) < 3:
+            raise ValueError(
+                "treatment_levels lists the control value first and then at least two treatment values; "
+                "leave it empty for one treatment recorded as 0/1"
+            )
+        if any(not level for level in value):
+            raise ValueError("treatment_levels may not contain an empty value")
+        keys = [level_text(level) for level in value]
+        if len(set(keys)) != len(keys):
+            raise ValueError("treatment_levels names the same value twice")
+        return value
+
+    @property
+    def multi_arm(self) -> bool:
+        """True when several treatments share one control (Plan J M100); False is today's binary run."""
+        return bool(self.treatment_levels)
 
     @field_validator("learner", mode="before")
     @classmethod
