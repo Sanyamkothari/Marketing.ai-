@@ -299,3 +299,70 @@ def test_the_reranked_list_contacts_exactly_the_budget(contacts: int) -> None:
         acted, risk, contacts=contacts, tiebreak=tiebreak_keys(acted["customer_id"], run_id=RUN_ID)
     )
     assert int((reranked["action"].to_numpy() == TREAT_ACTION).sum()) == contacts
+
+
+# ---------------------------------------------------------------------------
+# The model the check compared with, against the model the list falls back to
+# ---------------------------------------------------------------------------
+def verdict_against_propensity(compared_id: str) -> BaselineComparison:
+    """`verdict("risk", "minus_risk")`, decided against an approved propensity model `compared_id`."""
+    rng = np.random.default_rng(17)
+    risk = 0.1 + 0.4 * rng.random(ROWS)
+    tau = 0.5 * (risk - 0.1)
+    t = rng.integers(0, 2, ROWS)
+    y = (rng.random(ROWS) < risk + t * tau).astype(int)
+    return compare_with_baselines(
+        0.35 - risk,
+        t,
+        y,
+        [
+            BaselineInput("p_control", risk),
+            BaselineInput("p_treated", risk + tau),
+            BaselineInput("propensity_model", risk, model_id=compared_id),
+        ],
+        samples=200,
+        seed=96,
+    )
+
+
+def test_a_fallback_to_the_model_the_check_compared_with_adds_no_caveat() -> None:
+    comparison = verdict_against_propensity("m_prop_1")
+    assert comparison.risk_baseline == "propensity_model" and comparison.beats_risk is False
+    decision = decide_ranking(comparison, propensity_version("m_prop_1"))
+    assert decision is not None and decision.falls_back
+    assert decision.fallback_matches_check is True and decision.compared_model_id == "m_prop_1"
+    assert "Note:" not in decision.reason
+    choice = ranking_choice(decision, run_id=RUN_ID, model_version_id="m_up", contacts=BUDGET, now=NOW)
+    assert choice.compared_baseline == "propensity_model" and choice.compared_model_id == "m_prop_1"
+    assert choice.fallback_matches_check is True
+
+
+def test_a_fallback_to_a_newer_propensity_model_names_both_models() -> None:
+    comparison = verdict_against_propensity("m_prop_1")
+    decision = decide_ranking(comparison, propensity_version("m_prop_2", version=2))
+    assert decision is not None and decision.falls_back and decision.propensity_model_id == "m_prop_2"
+    assert decision.fallback_matches_check is False
+    assert (
+        "Note: the check compared the uplift model with the propensity model approved at the time "
+        "(m_prop_1); this list is ranked by the propensity model approved now (LightGBM, version 2 "
+        "(m_prop_2)), which the check did not compare it with."
+    ) in decision.reason
+    choice = ranking_choice(decision, run_id=RUN_ID, model_version_id="m_up", contacts=BUDGET, now=NOW)
+    assert choice.compared_model_id == "m_prop_1" and choice.propensity_model_id == "m_prop_2"
+    assert choice.fallback_matches_check is False and choice.reason == decision.reason
+
+
+def test_a_fallback_when_the_check_compared_with_p_control_says_the_model_was_never_compared() -> None:
+    comparison = verdict("risk", "minus_risk")
+    assert comparison.risk_baseline == "p_control"
+    decision = decide_ranking(comparison, propensity_version())
+    assert decision is not None and decision.falls_back
+    assert decision.compared_baseline == "p_control" and decision.compared_model_id is None
+    assert decision.fallback_matches_check is False
+    assert (
+        "Note: when the uplift model was trained there was no approved propensity model, so its check "
+        "compared it with its own chance of the outcome without contact, not with the model now ranking "
+        "this list (LightGBM, version 1 (m_prop_1)), which was approved later."
+    ) in decision.reason
+    kept = cannot_score(decision, propensity_version(), "it needs the column tenure_months")
+    assert kept.fallback_matches_check is None and "Note:" not in kept.reason

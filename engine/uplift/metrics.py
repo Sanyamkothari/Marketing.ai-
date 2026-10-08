@@ -52,6 +52,17 @@ resample draws depend only on the seed and the arm sizes, so with the evaluation
 compares each decile's mean predicted uplift with its observed uplift and interval, read from the
 same draws through `_bootstrap`'s `windows`.
 
+*Ties in the comparison.* The ranking rule above orders equal predictions by input position, and a
+hold-out stays in file order. A plain risk score is often a step function (an isotonic-calibrated
+propensity model gives whole blocks of customers the same score), and a campaign export often lists
+the treated customers before the control customers: then every tie block puts its treated rows first
+and the baseline's AUUC is biased (on a homogeneous effect a useless uplift model "beat" a five-level
+risk score with 95% CI 0.014 to 0.033). So every ranking the comparison and the calibration read is
+first made strict by `tie_broken_ranks`: equal scores are ordered by a key drawn from the seed alone,
+fixed per row - it depends on neither treatment nor outcome, and it is the same for every ranking, so
+the pairing holds. A ranking without ties is left exactly as it is, so a continuous uplift model's
+`uplift_auuc` is the evaluation's own `auuc`. The champion rule's `evaluate_uplift` is unchanged.
+
 An interval is `None` (the page shows "—") when any resample leaves the statistic undefined, for
 example a top 10 % with no control customer in it: dropping those resamples would quietly bias the
 band, and a band made of the rest would claim a precision nobody measured.
@@ -114,8 +125,11 @@ __all__ = [
     "holdout_digest",
     "paired_auuc_difference",
     "paired_auuc_resamples",
+    "percentile_interval",
     "qini_coefficient",
     "qini_points",
+    "tie_broken_ranks",
+    "tie_key",
     "top_rows",
     "uplift_at_fraction",
 ]
@@ -510,6 +524,11 @@ def _window_difference(c: _Cumulative, start: int, stop: int) -> FloatArray:
     return difference
 
 
+def percentile_interval(point: float, resamples: FloatArray) -> ConfidenceValue:
+    """The 95% percentile interval of `resamples` around `point` (`None` bounds when any is NaN)."""
+    return _interval(point, resamples)
+
+
 def _interval(point: float, resamples: FloatArray) -> ConfidenceValue:
     """Percentile interval; no interval at all if any resample left the statistic undefined."""
     import numpy as np
@@ -756,6 +775,38 @@ CALIBRATION_MIN_COVERED_SHARE: Final[float] = 0.8
 """Share of those deciles whose interval must contain the prediction (8 of 10)."""
 
 
+_TIE_STREAM: Final[int] = 0x7469_6573
+"""Second word of the tie-break key's seed (`[seed, _TIE_STREAM]`): a stream of its own, never the
+bootstrap's draws."""
+
+
+def tie_key(rows: int, *, seed: int) -> FloatArray:
+    """One uniform key per row from the seed alone: the order equal scores take (M96)."""
+    import numpy as np
+
+    key: FloatArray = np.random.default_rng([seed, _TIE_STREAM]).random(rows)
+    return key
+
+
+def tie_broken_ranks(scores: npt.ArrayLike, *, seed: int) -> FloatArray:
+    """`scores` made strict: `n` for the highest, `1` for the lowest, equal scores in `tie_key` order.
+
+    Returned unchanged (as float64) when no two scores are equal, or when a score is missing or
+    infinite (so `_rank` still names the bad values). The key depends only on the seed and the row
+    count, never on treatment or outcome, so a tied block no longer follows the file's order.
+    """
+    import numpy as np
+
+    values = np.asarray(scores, dtype=np.float64)
+    if values.ndim != 1 or not np.isfinite(values).all() or np.unique(values).shape[0] == values.shape[0]:
+        return values
+    rows = values.shape[0]
+    order = np.lexsort((tie_key(rows, seed=seed), -values))
+    ranks = np.empty(rows, dtype=np.float64)
+    ranks[order] = rows - np.arange(rows, dtype=np.float64)
+    return ranks
+
+
 @dataclass(frozen=True)
 class BaselineInput:
     """One plain ranking to compare with the uplift model: its scores, or why there are none."""
@@ -777,8 +828,12 @@ def paired_auuc_resamples(
     `r` of one ranking holds exactly the same customers (with the same multiplicities) as resample
     `r` of any other ranking: the difference of the two AUUCs per resample is a paired bootstrap of
     the difference, and the uplift model's resamples are the very ones behind its `auuc` interval.
+
+    Equal scores are first ordered by `tie_broken_ranks` (module docstring, "Ties in the comparison"),
+    with the same key for every ranking; scores without ties are ranked exactly as `evaluate_uplift`
+    ranks them.
     """
-    ranked = _rank(pred, t, y)
+    ranked = _rank(tie_broken_ranks(pred, seed=seed), t, y)
     _require_both_arms(ranked)
     resamples = _bootstrap(ranked, (), samples=samples, seed=seed, curves=True)
     assert resamples.auuc is not None
@@ -886,11 +941,16 @@ def calibration_by_decile(
 
     The deciles are `decile_table`'s (ranked rows split by `np.array_split`); each resample is
     re-ranked and cut at the same row counts, from the same draws as the evaluation's own intervals.
+    Equal predictions are ordered by `tie_broken_ranks`, as in the comparison, so a tied block that
+    straddles a cut does not send its treated rows to the higher decile because of the file's order.
     """
     import numpy as np
 
-    ranked = _rank(pred, t, y)
+    scores = np.asarray(pred, dtype=np.float64)
+    ranked = _rank(tie_broken_ranks(scores, seed=seed), t, y)
     _require_both_arms(ranked)
+    predicted_by_rank = np.empty(ranked.n, dtype=np.float64)
+    predicted_by_rank[ranked.rank_of] = scores
     groups = [rows for rows in np.array_split(np.arange(ranked.n), DECILES) if rows.shape[0]]
     spans = [(int(rows[0]), int(rows[-1]) + 1) for rows in groups]
     resamples = _bootstrap(ranked, (), samples=samples, seed=seed, curves=False, windows=spans)
@@ -898,7 +958,7 @@ def calibration_by_decile(
     deciles: list[CalibrationDecile] = []
     gaps: list[tuple[int, float]] = []
     for number, (span, rows) in enumerate(zip(spans, groups, strict=True), start=1):
-        predicted = float(ranked.pred[rows].mean())
+        predicted = float(predicted_by_rank[rows].mean())
         value = float(_window_difference(single, *span)[0])
         observed: ConfidenceValue | None = None
         inside: bool | None = None

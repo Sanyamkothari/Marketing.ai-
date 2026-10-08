@@ -141,6 +141,24 @@ def test_both_rankings_spend_the_same_budget_in_every_fold() -> None:
         assert a[fold_of == fold].sum() == b[fold_of == fold].sum() == np.ceil(0.3 * (fold_of == fold).sum())
 
 
+def test_tied_scores_are_not_cut_in_file_order() -> None:
+    # A file that lists its treated customers first, and a score with one tied block straddling the
+    # cut: with ties in input order the top share was all treated, so pi depended on t, not on x.
+    rows = 2_000
+    t = np.r_[np.ones(rows // 2, dtype=int), np.zeros(rows // 2, dtype=int)]
+    fold_of = np.zeros(rows, dtype=int)
+    scores = np.full(rows, 0.5)
+    policy = top_share_policy(scores, fold_of, top_share=0.2, seed=4)
+    assert policy.sum() == 400
+    treated_share = float(t[policy == 1].mean())
+    assert 0.4 < treated_share < 0.6, treated_share
+    # Distinct scores still decide; only the tie order is drawn, and from the seed alone.
+    graded = np.where(np.arange(rows) % 10 == 0, 0.9, 0.5)
+    chosen = top_share_policy(graded, fold_of, top_share=0.2, seed=4)
+    assert chosen[graded == 0.9].all()
+    np.testing.assert_array_equal(chosen, top_share_policy(graded, fold_of, top_share=0.2, seed=4))
+
+
 def _compare(cost: float | None = 25.0, effect: str = "heterogeneous"):
     population = uplift_population(3_000, seed=8, effect=effect)  # type: ignore[arg-type]
     cross = cross_fit(
@@ -246,7 +264,18 @@ def test_fold_auuc_is_measured_on_each_fold_by_a_model_that_never_saw_it() -> No
     assert sum(value.rows for value in report.values) == 4_000
     measured = [value.auuc for value in report.values]
     assert all(value is not None for value in measured)
-    assert report.stable is all(value > 0.0 for value in measured if value is not None)
+    intervals = [value.interval for value in report.values]
+    assert all(
+        band is not None and band.value == value.auuc
+        for band, value in zip(intervals, report.values, strict=True)
+    )
+    clearly_below = any(
+        band is not None and band.ci_high is not None and band.ci_high <= 0.0 for band in intervals
+    )
+    assert report.heterogeneity is not None and report.heterogeneity_critical == 7.815  # chi-square, 3 df
+    differ = report.heterogeneity > report.heterogeneity_critical
+    assert report.stable is (not clearly_below and not differ)
+    assert report.bootstrap_samples == 200
     assert report.minimum == min(v for v in measured if v is not None)
     assert report.estimated_refit_seconds == 12.0 and report.refit_seconds is not None
 
@@ -263,9 +292,71 @@ def test_a_fold_that_does_no_better_than_random_is_unstable() -> None:
         fit_risk=None,
     )
     report = fold_auuc_report(cross, population.t, population.y, estimated_refit_seconds=None)
-    if any(value.auuc is not None and value.auuc <= 0.0 for value in report.values):
+    if any(
+        value.interval is not None and value.interval.ci_high is not None and value.interval.ci_high <= 0.0
+        for value in report.values
+    ):
         assert report.stable is False
         assert report.summary.startswith("Unstable across folds")
+
+
+def _planted(rows: int, *, seed: int, flipped: tuple[int, ...] = (), folds: int = 5):
+    from engine.measurement.compare import CrossFit
+
+    population = uplift_population(rows, seed=seed, effect="heterogeneous")
+    fold_of = fold_assignment(population.t, population.y, folds=folds, seed=seed)
+    # A model that knows the effect's direction, scored with noise as a fold model would be.
+    noise = np.random.default_rng(seed + 1).normal(scale=0.05, size=rows)
+    uplift = np.asarray(population.tau, dtype=np.float64) + noise
+    for fold in flipped:
+        uplift[fold_of == fold] *= -1.0
+    cross = CrossFit(
+        fold_of=fold_of,
+        uplift=uplift,
+        p_treated=np.full(rows, 0.5),
+        p_control=np.full(rows, 0.5),
+        risk=np.full(rows, np.nan),
+        folds=folds,
+        scheme="k_fold",
+        seconds=0.0,
+    )
+    return cross, population.t, population.y
+
+
+def test_a_sound_model_on_a_typical_file_is_not_called_unstable_by_one_noisy_fold() -> None:
+    # 4,000 rows in 5 folds: a fold's AUUC has a standard error about the size of the effect, so a
+    # point-estimate rule ("every fold above zero") flagged a third of sound models. Seeds where a
+    # fold's point AUUC is at or below zero, judged against its own noise, are stable.
+    noisy = 0
+    for seed in range(40):
+        cross, t, y = _planted(4_000, seed=seed)
+        report = fold_auuc_report(cross, t, y, estimated_refit_seconds=None, samples=200, seed=seed)
+        if any(value.auuc is not None and value.auuc <= 0.0 for value in report.values):
+            noisy += 1
+            if report.stable:
+                assert report.summary.startswith("Stable across folds")
+                return
+    raise AssertionError(f"no seed of 40 gave a fold at or below zero that was judged stable ({noisy} noisy)")
+
+
+def test_the_false_alarm_rate_on_sound_models_is_small() -> None:
+    flagged = 0
+    for seed in range(40):
+        cross, t, y = _planted(4_000, seed=seed)
+        report = fold_auuc_report(cross, t, y, estimated_refit_seconds=None, samples=200, seed=seed)
+        flagged += report.stable is False
+    assert flagged <= 6, f"{flagged} of 40 sound models were called unstable"
+
+
+def test_a_fold_whose_model_ranks_backwards_is_unstable_and_named() -> None:
+    cross, t, y = _planted(10_000, seed=1, flipped=(2,))
+    report = fold_auuc_report(cross, t, y, estimated_refit_seconds=None, samples=200, seed=1)
+    assert report.stable is False
+    assert report.summary.startswith("Unstable across folds")
+    assert "fold 3" in report.summary
+    assert "95% CI" in report.summary
+    third = report.values[2]
+    assert third.interval is not None and third.interval.ci_high is not None and third.interval.ci_high <= 0.0
 
 
 def test_when_not_run_it_says_why_and_what_it_would_cost() -> None:

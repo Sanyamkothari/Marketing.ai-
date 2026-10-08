@@ -369,6 +369,13 @@ class FoldAuucValue(Artefact):
     fold: int = Field(description="Fold number, from 1.")
     rows: int = Field(description="Rows in the fold.")
     auuc: float | None = Field(description="AUUC on the fold; null when the fold lacks an arm.")
+    interval: ConfidenceValue | None = Field(
+        default=None,
+        description=(
+            "The fold AUUC with its 95% bootstrap interval (resampled within arms on the fold's rows); "
+            "null when the fold lacks an arm."
+        ),
+    )
 
 
 class FoldAuuc(Artefact):
@@ -388,7 +395,25 @@ class FoldAuuc(Artefact):
     minimum: float | None = Field(default=None, description="Lowest fold AUUC.")
     stable: bool | None = Field(
         default=None,
-        description="True when every fold's AUUC is above zero; null when not computed.",
+        description=(
+            "True when every fold was measured, no fold's 95% interval lies wholly at or below zero, "
+            "and the fold AUUCs differ no more than their bootstrap standard errors explain "
+            "(`heterogeneity` at or below `heterogeneity_critical`); null when not computed."
+        ),
+    )
+    heterogeneity: float | None = Field(
+        default=None,
+        description=(
+            "Cochran's Q of the fold AUUCs, weights 1/se² from each fold's bootstrap; null when not "
+            "computed or a fold's standard error is zero."
+        ),
+    )
+    heterogeneity_critical: float | None = Field(
+        default=None,
+        description="The chi-square 95th percentile on (measured folds - 1) degrees of freedom Q is held to.",
+    )
+    bootstrap_samples: int | None = Field(
+        default=None, description="Resamples behind each fold's interval; null when not computed."
     )
     estimated_refit_seconds: float | None = Field(
         default=None,
@@ -833,6 +858,28 @@ class RankingChoice(Artefact):
     beats_risk: bool = Field(description="The training evaluation's beats-risk verdict.")
     propensity_model_id: str | None = Field(
         description="The approved propensity model that ranked the list, when it did."
+    )
+    compared_baseline: BaselineKind | None = Field(
+        default=None,
+        description=(
+            "The plain ranking the training run's beats-risk check was decided against "
+            "(`baseline_comparison.risk_baseline`)."
+        ),
+    )
+    compared_model_id: str | None = Field(
+        default=None,
+        description=(
+            "The propensity model that check compared the uplift model with; null when it compared "
+            "with the model's own p_control (no propensity model was approved then)."
+        ),
+    )
+    fallback_matches_check: bool | None = Field(
+        default=None,
+        description=(
+            "When the list is ranked by a propensity model: true when it is the model the training "
+            "check compared with, false when it is another (newer) one; null when the list is not "
+            "ranked by a propensity model."
+        ),
     )
     contacts: int = Field(description="Customers marked Treat (the uplift policy's own count: equal budget).")
     reason: str = Field(description="The plain reason the Output page shows.")

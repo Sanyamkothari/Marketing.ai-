@@ -28,6 +28,7 @@ from engine.uplift.metrics import (
     evaluate_uplift,
     paired_auuc_difference,
     paired_auuc_resamples,
+    tie_broken_ranks,
 )
 
 ROWS = 8_000
@@ -212,3 +213,68 @@ def test_too_few_deciles_with_an_interval_are_not_judged() -> None:
     result = calibration_by_decile(pred, t, y, samples=20, seed=1)
     assert result.well_calibrated is None
     assert result.summary.startswith("Not judged")
+
+
+# ---------------------------------------------------------------------------
+# Ties: a step-function risk score on a file that lists treated customers first
+# ---------------------------------------------------------------------------
+def treated_first(rows: int = 6_000, *, seed: int = 0) -> Holdout:
+    """A homogeneous effect (every ranking is worth about zero AUUC), exported treated rows first."""
+    rng = np.random.default_rng(seed)
+    risk = 0.1 + 0.4 * rng.random(rows)
+    t = rng.integers(0, 2, rows)
+    order = np.argsort(-t, kind="mergesort")
+    risk, t = risk[order], t[order]
+    tau = np.full(rows, 0.1)
+    y = (rng.random(rows) < risk + t * tau).astype(int)
+    return Holdout(risk=risk, tau=tau, t=t, y=y)
+
+
+@pytest.mark.parametrize("levels", [5, 12])
+def test_a_noise_model_does_not_beat_a_tied_risk_score_because_of_the_files_order(levels: int) -> None:
+    # An isotonic-calibrated propensity model scores in steps; with ties left in file order every
+    # tie block put its treated rows first, the baseline's AUUC was biased down, and a useless model
+    # "beat" it (95% CI 0.014 to 0.033 at five levels on the code before the fix).
+    data = treated_first()
+    step = np.round(data.risk * levels) / levels
+    noise = np.random.default_rng(1).normal(size=data.t.shape[0])
+    result = compare_with_baselines(
+        noise,
+        data.t,
+        data.y,
+        [BaselineInput("propensity_model", step, model_id="m_prop")],
+        samples=SAMPLES,
+        seed=SEED,
+    )
+    (row,) = result.baselines
+    assert row.uplift_better is False
+    assert result.beats_risk is False
+    assert row.difference is not None and row.difference.ci_low is not None
+    assert row.difference.ci_low <= 0.0 <= (row.difference.ci_high or 0.0)
+    # The same scores in a shuffled file give the same verdict: the order no longer decides it.
+    shuffled = np.random.default_rng(2).permutation(data.t.shape[0])
+    again = paired_auuc_difference(
+        noise[shuffled], step[shuffled], data.t[shuffled], data.y[shuffled], samples=SAMPLES, seed=SEED
+    )
+    assert again.ci_low is not None and again.ci_low <= 0.0
+
+
+def test_tie_broken_ranks_keep_the_order_of_distinct_scores_and_break_ties_by_the_seed_alone() -> None:
+    distinct = np.array([0.3, 0.1, 0.2])
+    np.testing.assert_array_equal(tie_broken_ranks(distinct, seed=1), distinct)
+    tied = np.array([0.5, 0.2, 0.5, 0.2, 0.9, 0.5])
+    ranks = tie_broken_ranks(tied, seed=3)
+    assert sorted(ranks.tolist()) == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    # Strict, and consistent with the scores: a higher score always ranks higher.
+    for i in range(tied.shape[0]):
+        for j in range(tied.shape[0]):
+            if tied[i] > tied[j]:
+                assert ranks[i] > ranks[j]
+    np.testing.assert_array_equal(ranks, tie_broken_ranks(tied, seed=3))
+    # Two rankings with the same seed share the key: equal ties fall the same way in both.
+    np.testing.assert_array_equal(tie_broken_ranks(tied * 2.0, seed=3), ranks)
+    # A missing score passes through, so the metrics still name it.
+    with pytest.raises(ValueError, match="missing or infinite"):
+        paired_auuc_resamples(
+            np.array([np.nan, 1.0, 1.0, 0.0]), [1, 0, 1, 0], [1, 0, 0, 1], samples=5, seed=1
+        )

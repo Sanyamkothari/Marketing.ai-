@@ -270,6 +270,14 @@ def test_an_uplift_model_that_does_not_beat_risk_hands_the_list_to_the_propensit
     assert (
         policy["expected_incremental_conversions"] is None
     ), "the hold-out's top uplift share does not describe it"
+    # The model's own prediction describes the list this run made, not the uplift policy's choice.
+    assert policy["predicted_incremental_conversions"] == pytest.approx(
+        float(scores.loc[treat, "uplift"].sum())
+    )
+    # The check compared the uplift model with its own p_control (no propensity model then): said so.
+    assert choice.compared_baseline == "p_control" and choice.compared_model_id is None
+    assert choice.fallback_matches_check is False
+    assert "Note: when the uplift model was trained there was no approved propensity model" in choice.reason
     spend = (
         world.scoring_frame.set_index("customer_id").loc[scores["customer_id"], "monthly_spend"].to_numpy()
     )

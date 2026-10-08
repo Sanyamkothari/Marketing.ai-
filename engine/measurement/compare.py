@@ -26,8 +26,11 @@ errors are uncorrelated and the per-row interval is honest. The price is that ea
 learns from 40% of the rows rather than 80%, which is said wherever the result is shown.
 
 **2. Equal-budget comparison** (:func:`equal_budget_comparison`). In every fold, both rankings
-contact the same number of customers, `top_rows(top_share, fold size)` (stable sort on the score,
-ties in input order): the same budget, spent two ways. Each top-N's value is estimated off-policy
+contact the same number of customers, `top_rows(top_share, fold size)` (highest score first, equal
+scores in the order of a key drawn from the seed alone, `engine.uplift.metrics.tie_key`): the same
+budget, spent two ways. Ties are never left in file order: a file that lists treated customers first
+would let a tied block straddling the cut pick treated rows over control rows, and `π` would then
+depend on treatment, not on the customer alone, which off-policy evaluation forbids. Each top-N's value is estimated off-policy
 with `engine.uplift.ope.evaluate_policy`, with the rows' recorded treatment probabilities as the
 logging propensities and the cross-fitted `p_treated`/`p_control` as its outcome model. The extra
 conversions over contacting nobody are `Σ π·Γ` with `Γ` the per-row doubly robust effect score
@@ -43,8 +46,14 @@ populations (`tests/statistical/test_risk_comparison_coverage.py`, DEC-1305's ba
 
 **Fold AUUC** (:func:`fold_auuc_report`). A K-fold cross-fit gives each fold's AUUC of the uplift
 learner refitted without it: how much the model's ranking quality moves with the rows it learns from.
-`UPLIFT_UNSTABLE_ACROSS_FOLDS` is raised (by `engine.model_gates`) when any fold's AUUC is at or
-below zero.
+Each fold's AUUC is judged against its own sampling noise, not as a bare number: a fold of a few
+hundred rows often lands at or below zero for a model that works (a point-estimate rule flagged 35%
+of sound models at 4,000 rows). Each fold gets a bootstrap interval (`_bootstrap`'s, drawn within
+arms, `samples` resamples), and the folds are **unstable** when any fold's interval lies wholly at or
+below zero, or when the fold AUUCs differ by more than their bootstrap standard errors explain
+(Cochran's Q, `Σ w_k (a_k − ā_w)²` with `w_k = 1/se_k²`, against the chi-square 95th percentile on
+`K − 1` degrees of freedom). `UPLIFT_UNSTABLE_ACROSS_FOLDS` is raised (by `engine.model_gates`) then,
+or when a fold could not be measured.
 
 `numpy` and `pandas` are imported inside function bodies, as everywhere in the engine.
 """
@@ -102,6 +111,22 @@ LIGHTGBM_ONLY_REASON: Final[str] = (
     "whole training time again for every fold."
 )
 OFF_REASON: Final[str] = "Off by default: turn on uplift.evidence.fold_auuc to refit the model on each fold."
+
+FOLD_BOOTSTRAP_SAMPLES: Final[int] = 200
+"""Resamples per fold for the fold AUUC's interval and standard error, when the caller gives none."""
+
+_CHI2_95: Final[dict[int, float]] = {
+    1: 3.841,
+    2: 5.991,
+    3: 7.815,
+    4: 9.488,
+    5: 11.070,
+    6: 12.592,
+    7: 14.067,
+    8: 15.507,
+    9: 16.919,
+}
+"""Chi-square 95th percentiles by degrees of freedom (`uplift.evidence.folds` is 3..10)."""
 
 
 @dataclass(frozen=True)
@@ -304,19 +329,27 @@ def lightgbm_risk_fitter(*, seed: int) -> RiskFitter:
 # ---------------------------------------------------------------------------
 # The equal-budget comparison
 # ---------------------------------------------------------------------------
-def top_share_policy(scores: npt.ArrayLike, fold_of: npt.ArrayLike, *, top_share: float) -> FloatArray:
-    """`π(1|x)`: 1 for the top `top_rows(top_share, fold size)` rows of each fold by `scores`."""
+def top_share_policy(
+    scores: npt.ArrayLike, fold_of: npt.ArrayLike, *, top_share: float, seed: int = 0
+) -> FloatArray:
+    """`π(1|x)`: 1 for the top `top_rows(top_share, fold size)` rows of each fold by `scores`.
+
+    Equal scores are ordered by `tie_key(rows, seed=seed)`, a key of the seed alone, never by input
+    position (module docstring), so `π` depends on the customer's score and nothing the file's order
+    carries.
+    """
     import numpy as np
 
-    from engine.uplift.metrics import top_rows
+    from engine.uplift.metrics import tie_key, top_rows
 
     values = np.asarray(scores, dtype=np.float64)
     folds = np.asarray(fold_of)
+    key = tie_key(values.shape[0], seed=seed)
     policy = np.zeros(values.shape[0], dtype=np.float64)
     for fold in np.unique(folds).tolist():
         members = np.flatnonzero(folds == fold)
         count = top_rows(top_share, members.shape[0])
-        order = members[np.argsort(-values[members], kind="mergesort")]
+        order = members[np.lexsort((key[members], -values[members]))]
         policy[order[:count]] = 1.0
     return policy
 
@@ -348,8 +381,12 @@ def equal_budget_comparison(
     propensity_source: Literal["recorded", "treated_share"],
     rows_excluded: int = 0,
     now: datetime | None = None,
+    seed: int = 0,
 ) -> RiskComparison:
-    """Uplift top-N against risk top-N at equal budget, by extra conversions (and per rupee)."""
+    """Uplift top-N against risk top-N at equal budget, by extra conversions (and per rupee).
+
+    `seed` orders equal scores (`top_share_policy`); both rankings use the same key.
+    """
     import numpy as np
 
     from engine.uplift.ope import dr_effect_terms, evaluate_policy
@@ -366,8 +403,8 @@ def equal_budget_comparison(
     )
     share = f"{top_share * 100:g}%"
     policies = {
-        "uplift": top_share_policy(cross.uplift, cross.fold_of, top_share=top_share),
-        "risk": top_share_policy(cross.risk, cross.fold_of, top_share=top_share),
+        "uplift": top_share_policy(cross.uplift, cross.fold_of, top_share=top_share, seed=seed),
+        "risk": top_share_policy(cross.risk, cross.fold_of, top_share=top_share, seed=seed),
     }
     contacts = int(policies["uplift"].sum())
     if contacts != int(policies["risk"].sum()):
@@ -481,30 +518,55 @@ def fold_auuc_not_computed(*, folds: int, reason: str, estimated_refit_seconds: 
 
 
 def fold_auuc_report(
-    cross: CrossFit, t: npt.ArrayLike, y: npt.ArrayLike, *, estimated_refit_seconds: float | None
+    cross: CrossFit,
+    t: npt.ArrayLike,
+    y: npt.ArrayLike,
+    *,
+    estimated_refit_seconds: float | None,
+    samples: int = FOLD_BOOTSTRAP_SAMPLES,
+    seed: int = 0,
 ) -> FoldAuuc:
-    """Each fold's AUUC of the uplift learner refitted without it, and whether every one is above 0."""
+    """Each fold's AUUC of the uplift learner refitted without it, with its bootstrap interval, and
+    whether the folds agree within their noise (module docstring, "Fold AUUC")."""
     import numpy as np
 
-    from engine.uplift.metrics import auuc_score
+    from engine.uplift.metrics import paired_auuc_resamples, percentile_interval
 
     treatment = np.asarray(t).astype(np.int_)
     outcome = np.asarray(y).astype(np.int_)
     values: list[FoldAuucValue] = []
+    errors: list[float] = []
     for fold in range(cross.folds):
         rows = np.flatnonzero(cross.fold_of == fold)
         arm = treatment[rows]
-        auuc = (
-            auuc_score(cross.uplift[rows], arm, outcome[rows])
-            if rows.shape[0] and (arm == 1).any() and (arm == 0).any()
-            else None
+        if not (rows.shape[0] and (arm == 1).any() and (arm == 0).any()):
+            values.append(FoldAuucValue(fold=fold + 1, rows=int(rows.shape[0]), auuc=None))
+            continue
+        point, draws = paired_auuc_resamples(
+            cross.uplift[rows], arm, outcome[rows], samples=samples, seed=seed + fold
         )
-        values.append(FoldAuucValue(fold=fold + 1, rows=int(rows.shape[0]), auuc=auuc))
+        errors.append(float(np.std(draws, ddof=1)) if draws.shape[0] > 1 else 0.0)
+        values.append(
+            FoldAuucValue(
+                fold=fold + 1,
+                rows=int(rows.shape[0]),
+                auuc=point,
+                interval=percentile_interval(point, draws),
+            )
+        )
     measured = [value.auuc for value in values if value.auuc is not None]
     mean = float(np.mean(measured)) if measured else None
     sd = float(np.std(measured, ddof=1)) if len(measured) > 1 else None
     minimum = min(measured) if measured else None
-    stable = bool(measured) and len(measured) == len(values) and all(value > 0.0 for value in measured)
+    below = [
+        value.fold
+        for value in values
+        if value.interval is not None and value.interval.ci_high is not None and value.interval.ci_high <= 0.0
+    ]
+    q, critical = _heterogeneity(measured, errors)
+    complete = bool(measured) and len(measured) == len(values)
+    differ = q is not None and critical is not None and q > critical
+    stable = complete and not below and not differ
     return FoldAuuc(
         computed=True,
         folds=cross.folds,
@@ -513,26 +575,72 @@ def fold_auuc_report(
         sd=sd,
         minimum=minimum,
         stable=stable,
+        heterogeneity=q,
+        heterogeneity_critical=critical,
+        bootstrap_samples=samples,
         estimated_refit_seconds=estimated_refit_seconds,
         refit_seconds=round(cross.seconds, 1),
-        summary=_fold_summary(stable, measured, len(values), mean, minimum),
+        summary=_fold_summary(
+            stable,
+            values,
+            below=below,
+            missing=len(values) - len(measured),
+            differ=differ,
+            mean=mean,
+        ),
     )
 
 
+def _heterogeneity(points: list[float], errors: list[float]) -> tuple[float | None, float | None]:
+    """Cochran's Q of the fold AUUCs with weights `1/se²`, and its chi-square 95th percentile."""
+    if len(points) < 2 or any(error <= 0.0 for error in errors):
+        return None, None
+    weights = [1.0 / (error * error) for error in errors]
+    centre = sum(w * a for w, a in zip(weights, points, strict=True)) / sum(weights)
+    q = sum(w * (a - centre) ** 2 for w, a in zip(weights, points, strict=True))
+    critical = _CHI2_95.get(len(points) - 1)
+    return float(q), critical
+
+
 def _fold_summary(
-    stable: bool, measured: list[float], folds: int, mean: float | None, low: float | None
+    stable: bool,
+    values: list[FoldAuucValue],
+    *,
+    below: list[int],
+    missing: int,
+    differ: bool,
+    mean: float | None,
 ) -> str:
     def fmt(value: float | None) -> str:
         return "—" if value is None else f"{value:.4f}"
 
+    def one(value: FoldAuucValue) -> str:
+        if value.auuc is None:
+            return f"fold {value.fold} —"
+        band = value.interval
+        if band is None or band.ci_low is None or band.ci_high is None:
+            return f"fold {value.fold} {fmt(value.auuc)}"
+        return f"fold {value.fold} {fmt(value.auuc)} ({fmt(band.ci_low)} to {fmt(band.ci_high)})"
+
+    folds = len(values)
+    detail = f"AUUC by fold with 95% CI: {'; '.join(one(value) for value in values)}; {fmt(mean)} on average."
     if stable:
-        return f"Stable across folds: all {folds} refitted models beat random (AUUC {fmt(low)} at the lowest, {fmt(mean)} on average)."
-    below = sum(1 for value in measured if value <= 0.0)
-    missing = folds - len(measured)
-    parts = [f"{below} of {folds} refitted models do no better than random"] if below else []
+        return (
+            f"Stable across folds: none of the {folds} refitted models is clearly worse than random, "
+            f"and they differ no more than their sampling noise explains. {detail}"
+        )
+    parts: list[str] = []
+    if below:
+        names = ", ".join(str(fold) for fold in below)
+        parts.append(
+            f"{len(below)} of {folds} refitted models do no better than random even allowing for noise "
+            f"(fold{'s' if len(below) != 1 else ''} {names})"
+        )
+    if differ:
+        parts.append("the folds' AUUCs differ more than their sampling noise explains")
     if missing:
         parts.append(f"{missing} fold{'s' if missing != 1 else ''} could not be measured")
-    return f"Unstable across folds: {' and '.join(parts)} (AUUC {fmt(low)} at the lowest, {fmt(mean)} on average)."
+    return f"Unstable across folds: {' and '.join(parts)}. {detail}"
 
 
 def _duration(seconds: float) -> str:

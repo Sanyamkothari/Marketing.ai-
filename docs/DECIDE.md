@@ -220,8 +220,10 @@ account, with the formulas, is `docs/UPLIFT.md` section 12 ("Does the model earn
   screen. Not measured is shown as not measured, never as a pass. They do not block a decision.
 * **The ranking a list uses (J5).** A scoring run of a model whose stored check failed ranks its contact list
   by the approved propensity model, at the same number of contacts, and writes `ranking_choice.json` with
-  the reason; with no approved propensity model it keeps the uplift ranking and says so. A model trained
-  before M96 ranks exactly as before (`engine/decide/ranking.py`).
+  the reason; with no approved propensity model it keeps the uplift ranking and says so. When the fallback
+  is not the model the training check compared with (a newer approval, or none at training), the reason
+  names both and `fallback_matches_check` is false. A model trained before M96 ranks exactly as before
+  (`engine/decide/ranking.py`).
 * **The equal-budget comparison.** Opt-in (`uplift.evidence.risk_comparison`): uplift top-N against risk
   top-N in each fold of a ring cross-fit of the randomised rows, valued with `evaluate_policy` and the rows'
   recorded treatment probabilities, by extra conversions and per rupee with 95% intervals

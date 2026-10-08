@@ -90,9 +90,11 @@ def compare_once(seed: int, *, n: int, effect: str) -> Draw:
         run_id="simulated",
         causal=True,
         propensity_source="recorded",
+        seed=seed,
     )
-    uplift_policy = top_share_policy(cross.uplift, cross.fold_of, top_share=TOP_SHARE)
-    risk_policy = top_share_policy(cross.risk, cross.fold_of, top_share=TOP_SHARE)
+    # The same tie key the comparison used, so the truths are of the very policies it evaluated.
+    uplift_policy = top_share_policy(cross.uplift, cross.fold_of, top_share=TOP_SHARE, seed=seed)
+    risk_policy = top_share_policy(cross.risk, cross.fold_of, top_share=TOP_SHARE, seed=seed)
     return Draw(
         report=report,
         true_uplift=population.true_incremental(uplift_policy),

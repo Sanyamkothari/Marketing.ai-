@@ -79,3 +79,12 @@ test("the reason is escaped, never markup", () => {
   const html = views.rankingBanner({ ...fallback, reason: "<b>x</b>" });
   assert.ok(html.includes("&lt;b&gt;x&lt;/b&gt;"));
 });
+
+test("a list ranked by the propensity model is not described as the uplift policy's persuadables", () => {
+  const html = views.outputPageHtml(uc, scoreRun, { "policy_recommendation.json": policy }, { ranking: fallback });
+  assert.ok(html.includes("80 customers chosen by the propensity model"));
+  assert.equal(html.includes("80 of 300 persuadables"), false);
+  assert.ok(html.includes("Uplift model&#39;s prediction for these customers") || html.includes("Uplift model's prediction for these customers"));
+  const plain = views.outputPageHtml(uc, scoreRun, { "policy_recommendation.json": policy }, {});
+  assert.ok(plain.includes("80 of 300 persuadables"));
+});

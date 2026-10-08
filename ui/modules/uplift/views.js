@@ -1313,11 +1313,15 @@ export function outputPageHtml(uc, run, art, extra = {}) {
       ])}`
     : "";
   const costs = policy && [p.cost_per_contact, p.value_per_conversion].some(present);
+  // Plan J M96: a list that fell back to the propensity ranking is not "N of M persuadables".
+  const byPropensity = !!(extra.ranking && extra.ranking.ranking === "propensity_model");
   const policyRows = policy
     ? `${kvs([
         [
           "Recommended to contact",
-          `${fmtInt(policy.contacts_recommended)} of ${fmtInt(policy.eligible_persuadables)} persuadables`,
+          byPropensity
+            ? `${fmtInt(policy.contacts_recommended)} customers chosen by the propensity model`
+            : `${fmtInt(policy.contacts_recommended)} of ${fmtInt(policy.eligible_persuadables)} persuadables`,
         ],
         ["Contact budget", present(policy.budget_contacts) ? fmtInt(policy.budget_contacts) : "No limit set"],
         ...(present(policy.budget_contacts) || policy.stop_reason !== "all_persuadables"
@@ -1338,7 +1342,10 @@ export function outputPageHtml(uc, run, art, extra = {}) {
           : `<p class="caption">The value in money appears once a cost per contact and a value per response are set in the uplift settings.</p>`
       }${detailsKv("More about this recommendation", [
         ["Expected incremental conversions", fmtCi(expected, (v) => fmtCount(v))],
-        ["Model's own prediction", fmtCount(policy.predicted_incremental_conversions)],
+        [
+          byPropensity ? "Uplift model's prediction for these customers" : "Model's own prediction",
+          fmtCount(policy.predicted_incremental_conversions),
+        ],
         ...(costs ? [] : [["Cost per contact", EM_DASH]]),
       ])}`
     : `<div class="empty">No recommendation was made for this run.</div>`;

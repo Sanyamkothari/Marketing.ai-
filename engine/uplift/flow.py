@@ -810,7 +810,14 @@ class UpliftTrainFlow(_TrainFlow):
                     scheme="k_fold",
                     groups=groups,
                 )
-                folds = fold_auuc_report(cross, t, y, estimated_refit_seconds=estimate)
+                folds = fold_auuc_report(
+                    cross,
+                    t,
+                    y,
+                    estimated_refit_seconds=estimate,
+                    samples=uplift.bootstrap_samples,
+                    seed=self._seed,
+                )
                 notes.append("stable across folds" if folds.stable else "unstable across folds")
             except ValueError as exc:
                 folds = fold_auuc_not_computed(
@@ -889,6 +896,7 @@ class UpliftTrainFlow(_TrainFlow):
                 causal=self._causal,
                 propensity_source=source,
                 rows_excluded=int(len(t) - rows.shape[0]),
+                seed=self._seed,
             )
         except ValueError as exc:
             _LOGGER.warning("evaluate: the equal-budget comparison could not run: %s", exc)
@@ -1397,6 +1405,15 @@ class UpliftScoreFlow(_ScoreFlow):
                 risk,
                 contacts=recommendation.contacts_recommended,
                 tiebreak=tiebreak_keys(scored[ctx.row_key], run_id=ctx.run_id),
+            )
+            # The uplift policy's own prediction summed the rows IT chose; the list now holds the
+            # propensity model's choice, so the model's prediction is re-summed over those rows.
+            from engine.stages.actions import ACTION_COLUMN
+            from engine.uplift.actions import TREAT_ACTION
+
+            treated = scored[ACTION_COLUMN].astype("object") == TREAT_ACTION
+            recommendation = recommendation.model_copy(
+                update={"predicted_incremental_conversions": float(scored.loc[treated, UPLIFT_COLUMN].sum())}
             )
         if decision is not None:
             self._write_ranking_choice(decision, contacts=recommendation.contacts_recommended)

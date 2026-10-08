@@ -9,7 +9,9 @@ other rows. This module reads what the training run measured and turns it into c
 * `UPLIFT_NOT_BETTER_THAN_RISK` - from `UpliftEvaluation.baseline_comparison`: passes when the paired
   AUUC difference against risk ranking has its lower bound above zero. When the run also wrote the
   equal-budget comparison (`risk_comparison.json`), its sentence is added.
-* `UPLIFT_UNSTABLE_ACROSS_FOLDS` - from `fold_auuc`: passes when every refitted fold beats random.
+* `UPLIFT_UNSTABLE_ACROSS_FOLDS` - from `fold_auuc`: passes when every fold was measured, no fold's
+  bootstrap interval lies wholly at or below zero, and the folds' AUUCs differ no more than their
+  sampling noise explains (`engine.measurement.compare.fold_auuc_report`).
   Off by default; the message then says what turning it on would cost.
 * `UPLIFT_MISCALIBRATED` - from `calibration_by_decile`: passes when at least 8 in 10 deciles'
   intervals contain the predicted uplift.

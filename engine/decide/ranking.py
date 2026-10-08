@@ -16,6 +16,14 @@ ranking:
 * **The check was never computed** (a model trained before M96): nothing here runs; the run is
   exactly what it was.
 
+**The model the check compared with, and the model the list falls back to.** The check was decided at
+training time against the propensity model approved *then* (`baseline_comparison.baselines`, its
+`model_id`), or against the uplift model's own `p_control` when none was. The fallback is the
+propensity model approved *now*. When the two differ (a newer model was approved since, or none was
+approved at training), the list still falls back, as the rule says, but the reason names both and
+`ranking_choice.json` records `compared_model_id` and `fallback_matches_check: false`: the check did
+not compare the uplift model with the model now ranking the list.
+
 **Where the choice is made (DEC sub-decision).** In the uplift scoring flow's actions stage, from the
 *training* run's stored verdict: a scoring run never re-measures the model, and an evaluation without
 `baseline_comparison` changes nothing. So every run of a model trained before M96 is byte-identical,
@@ -53,13 +61,14 @@ if TYPE_CHECKING:
     from engine.contracts import ModelVersion
     from engine.registry import ModelRegistry
     from engine.storage import Storage
-    from engine.uplift.contracts import BaselineComparison
+    from engine.uplift.contracts import BaselineComparison, BaselineKind
 
     FloatArray = npt.NDArray[np.float64]
 
 __all__ = [
     "RankingDecision",
     "cannot_score",
+    "compared_model_id",
     "decide_ranking",
     "last_approved_propensity",
     "ranking_choice",
@@ -83,6 +92,12 @@ class RankingDecision:
     reason: str
     check: str
     """The training run's beats-risk sentence the reason starts from."""
+    compared_baseline: BaselineKind | None = None
+    """The plain ranking the training check was decided against."""
+    compared_model_id: str | None = None
+    """The propensity model the training check compared with; None when it compared with `p_control`."""
+    fallback_matches_check: bool | None = None
+    """For a propensity fallback: is it the model the check compared with? None otherwise."""
 
     @property
     def falls_back(self) -> bool:
@@ -126,6 +141,7 @@ def decide_ranking(
     """The ranking for a scoring run, from the training run's verdict; None when it was never checked."""
     if comparison is None:
         return None
+    compared = compared_model_id(comparison)
     if comparison.beats_risk:
         return RankingDecision(
             ranking="uplift",
@@ -134,8 +150,12 @@ def decide_ranking(
             propensity_model_id=None,
             reason=f"Ranked by predicted uplift. {comparison.summary}",
             check=comparison.summary,
+            compared_baseline=comparison.risk_baseline,
+            compared_model_id=compared,
         )
     if propensity is not None:
+        matches = compared is not None and compared == propensity.model_id
+        caveat = "" if matches else " " + _mismatch_sentence(compared, propensity)
         return RankingDecision(
             ranking="propensity_model",
             code=UPLIFT_NOT_BETTER_THAN_RISK,
@@ -144,9 +164,12 @@ def decide_ranking(
             reason=(
                 f"{comparison.summary} So this contact list is ranked by the approved propensity model "
                 f"({propensity.model_display_name}, version {propensity.version}), contacting the same "
-                f"number of customers the uplift model chose."
+                f"number of customers the uplift model chose.{caveat}"
             ),
             check=comparison.summary,
+            compared_baseline=comparison.risk_baseline,
+            compared_model_id=compared,
+            fallback_matches_check=matches,
         )
     return RankingDecision(
         ranking="uplift",
@@ -158,6 +181,34 @@ def decide_ranking(
             f"so the list keeps the uplift ranking: treat its order with caution."
         ),
         check=comparison.summary,
+        compared_baseline=comparison.risk_baseline,
+        compared_model_id=compared,
+    )
+
+
+def compared_model_id(comparison: BaselineComparison) -> str | None:
+    """The propensity model the beats-risk check was decided against; None when it was `p_control`."""
+    if comparison.risk_baseline != "propensity_model":
+        return None
+    for row in comparison.baselines:
+        if row.baseline == "propensity_model" and row.available:
+            return row.model_id
+    return None
+
+
+def _mismatch_sentence(compared: str | None, propensity: ModelVersion) -> str:
+    """Says that the fallback is not the model the training check compared the uplift model with."""
+    now = f"{propensity.model_display_name}, version {propensity.version} ({propensity.model_id})"
+    if compared is None:
+        return (
+            "Note: when the uplift model was trained there was no approved propensity model, so its "
+            "check compared it with its own chance of the outcome without contact, not with the model "
+            f"now ranking this list ({now}), which was approved later."
+        )
+    return (
+        f"Note: the check compared the uplift model with the propensity model approved at the time "
+        f"({compared}); this list is ranked by the propensity model approved now ({now}), which the "
+        "check did not compare it with."
     )
 
 
@@ -167,6 +218,7 @@ def cannot_score(decision: RankingDecision, propensity: ModelVersion, why: str) 
         decision,
         ranking="uplift",
         propensity_model_id=None,
+        fallback_matches_check=None,
         reason=(
             f"{decision.check} The approved propensity model "
             f"({propensity.model_display_name}, version {propensity.version}) could not score this file "
@@ -277,6 +329,9 @@ def ranking_choice(
         code=decision.code,
         beats_risk=decision.beats_risk,
         propensity_model_id=decision.propensity_model_id,
+        compared_baseline=decision.compared_baseline,
+        compared_model_id=decision.compared_model_id,
+        fallback_matches_check=decision.fallback_matches_check,
         contacts=contacts,
         reason=decision.reason,
         computed_at=now,

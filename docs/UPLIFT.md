@@ -636,6 +636,13 @@ evaluation written before M96):
   propensity model when it was scored, else against `p_control`, and passes only when the paired
   difference's lower bound is above zero. Otherwise the sentence says "does not beat risk ranking"
   and whether the range includes zero or lies below it.
+  *Ties.* Every ranking in the comparison (and in the calibration below) orders equal scores by a key
+  drawn from the evaluation's seed alone, the same key for every ranking
+  (`engine.uplift.metrics.tie_broken_ranks`), not by file order. A calibrated propensity score is often
+  a step function, and a file that lists treated customers first would otherwise put every tie
+  block's treated rows on top and bias the baseline's AUUC: a useless uplift model "beat" a five-level
+  risk score that way. A ranking without ties is ranked exactly as the evaluation ranks it, so the
+  uplift model's AUUC here is the evaluation's own; the champion rule's AUUC is unchanged.
 * `calibration_by_decile` - each decile's mean predicted uplift against its observed uplift, with a
   bootstrap interval from the same draws, the row-weighted mean |observed − predicted|, and a verdict:
   calibrated when at least 8 in 10 of the deciles with an interval contain the prediction (not judged
@@ -643,8 +650,14 @@ evaluation written before M96):
 * `fold_auuc` - **off by default** (`uplift.evidence.fold_auuc`) and for the LightGBM base model only.
   When on, the meta-learner is refitted on all but one of `folds` folds (stratified on treatment and
   outcome, by customer under a two-column key) and its AUUC measured on the fold it did not see.
-  Stable means every fold's AUUC is above zero. When off, the field still says what turning it on
-  would cost: `estimated_refit_seconds`, from this run's own fit time scaled to the fold sizes.
+  Each fold's AUUC carries a bootstrap interval (resampled within arms on that fold, the run's
+  `bootstrap_samples`). Stable means every fold was measured, no fold's interval lies wholly at or
+  below zero, and the fold AUUCs differ no more than their bootstrap standard errors explain
+  (Cochran's Q against the chi-square 95th percentile on `folds − 1` degrees of freedom). A bare
+  "every fold above zero" rule called a third of sound models unstable on a 4,000-row file, because
+  a fold of 800 rows often lands below zero by chance. The summary lists each fold's AUUC with its
+  interval. When off, the field still says what turning it on would cost: `estimated_refit_seconds`,
+  from this run's own fit time scaled to the fold sizes.
 
 **The Approver's screen** shows these as advisory checks (`ApprovalItem.checks`, `{code, passed,
 message}` from `engine/model_gates.py`): `UPLIFT_NOT_BETTER_THAN_RISK`, `UPLIFT_UNSTABLE_ACROSS_FOLDS`
@@ -658,8 +671,13 @@ training run stored (`engine.decide.ranking`, called from the uplift actions sta
 |---|---|---|---|
 | not computed (model trained before M96) | - | ranked by uplift, exactly as before | not written |
 | beats risk | - | ranked by uplift | `ranking: uplift`, `code: null` |
-| does not beat risk | exists and scores the file | the same number of `Treat` rows the uplift policy chose (equal budget), chosen by the propensity model's score among eligible, non-sleeping-dog customers; `intended_treatment` follows the same ranking; expected incremental conversions are null (the hold-out's top-uplift share does not describe this list) | `ranking: propensity_model`, `code: UPLIFT_NOT_BETTER_THAN_RISK` |
+| does not beat risk | exists and scores the file | the same number of `Treat` rows the uplift policy chose (equal budget), chosen by the propensity model's score among eligible, non-sleeping-dog customers; `intended_treatment` follows the same ranking; expected incremental conversions are null (the hold-out's top-uplift share does not describe this list) and `predicted_incremental_conversions` is the uplift model's prediction summed over the customers this list contacts | `ranking: propensity_model`, `code: UPLIFT_NOT_BETTER_THAN_RISK` |
 | does not beat risk | none, or it cannot score the file | ranked by uplift, with the warning | `ranking: uplift`, `code: UPLIFT_NOT_BETTER_THAN_RISK` |
+
+The check was decided at training time against the propensity model approved then (or `p_control`
+when there was none); the fallback is the propensity model approved now. When they differ, the list
+still falls back, and the reason names both: `ranking_choice.json` records `compared_baseline`,
+`compared_model_id` and `fallback_matches_check: false`.
 
 Suppression and the control group are Phase 1's, untouched, and a sleeping dog is never treated in
 either ranking. The Output page shows the reason above the contact list, and the budget curve of a
@@ -679,7 +697,9 @@ training run's randomised rows, uplift top-N against risk top-N at the same budg
    trained the other's models, and the interval holds its coverage. Each comparison model therefore
    learns from 40% of the rows (at 5 folds), which makes the comparison a little pessimistic for
    models that need many rows.
-2. *Equal budget.* In every fold both rankings contact `top_share` of the fold.
+2. *Equal budget.* In every fold both rankings contact `top_share` of the fold; equal scores are
+   ordered by a key drawn from the run's seed, never by file order, so who is contacted depends on
+   the score alone, not on whether the file listed treated customers first.
 3. *Valued off-policy.* Each top-N goes through `engine.uplift.ope.evaluate_policy` with the rows'
    recorded treatment probabilities (`uplift.evidence.propensity_column`, M92's
    `treatment_probability`; rows outside (0, 1) are left out and counted; without the column, the
