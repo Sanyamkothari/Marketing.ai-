@@ -11,6 +11,7 @@ Every field is read only when `problem_type` is `uplift` (DEC-601).
 
 from __future__ import annotations
 
+import re
 from enum import StrEnum
 from typing import Annotated, Any, Final, Self
 
@@ -122,11 +123,17 @@ class UpliftEvidenceConfig(BaseModel):
     propensity_column: str | None = None
 
 
+_WHOLE_NUMBER_TEXT: Final = re.compile(r"[+-]?\d+\.0*")
+"""Text of a whole number written with a decimal point (`1.0`, `2.`, `-3.00`): the same level as `1`."""
+
+
 def level_text(value: object) -> str:
-    """One comparable spelling of a treatment level (Plan J M100): `1`, `1.0` and `" 1 "` are one level.
+    """One comparable spelling of a treatment level (Plan J M100): `1`, `1.0`, `"1.0"` and `" 1 "` are one.
 
     The same normalisation the outcome labels use (`engine.uplift.data._label_key`): booleans as
-    `true`/`false`, whole floats without their `.0`, text stripped and lower-cased.
+    `true`/`false`, whole floats without their `.0`, text stripped and lower-cased. Text that writes a
+    whole number with a decimal point (`"1.0"`, a CSV cell of a float column) loses its `.0` too, so a
+    level reads the same from a number, a float cell or a text cell.
     """
     if hasattr(value, "item") and not isinstance(value, str | bytes):  # numpy scalars
         value = value.item()
@@ -136,7 +143,19 @@ def level_text(value: object) -> str:
         return str(value)
     if isinstance(value, float):
         return str(int(value)) if value.is_integer() else repr(value)
-    return str(value).strip().lower()
+    text = str(value).strip().lower()
+    if _WHOLE_NUMBER_TEXT.fullmatch(text):
+        return str(int(float(text)))
+    return text
+
+
+def _number_as_text(item: object) -> object:
+    """A YAML number as level text (`1.0` -> `"1"`); anything else unchanged for the validators."""
+    if isinstance(item, bool) or not isinstance(item, int | float):
+        return item
+    if isinstance(item, float) and item.is_integer():
+        return str(int(item))
+    return str(item)
 
 
 class UpliftConfig(BaseModel):
@@ -202,12 +221,10 @@ class UpliftConfig(BaseModel):
     @field_validator("treatment_levels", mode="before")
     @classmethod
     def _levels_as_text(cls, value: Any) -> Any:
-        """A YAML list of numbers (`[0, 1, 2]`) names levels as text, as the file's cells are compared."""
+        """A YAML list of numbers (`[0, 1, 2]` or `[0.0, 1.0, 2.0]`) names levels as text, as the file's
+        cells are compared: a whole float without its `.0`, the spelling `level_text` gives a cell."""
         if isinstance(value, list | tuple):
-            return tuple(
-                str(item) if isinstance(item, int | float) and not isinstance(item, bool) else item
-                for item in value
-            )
+            return tuple(_number_as_text(item) for item in value)
         return value
 
     @field_validator("treatment_levels")

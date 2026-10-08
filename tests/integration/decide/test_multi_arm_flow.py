@@ -185,11 +185,53 @@ def test_a_model_of_several_offers_is_never_promoted(app: App, runs: Runs) -> No
     assert "chooses between several offers" in register["detail"]
     card = app.storage.read_model(model_card_key(version.predictor_key), UpliftModelCard)
     assert card.treatment_levels == tuple(LEVELS)
+    # DEC-668 (3), review finding: training_rows, like propensity, is the first offer's and the
+    # control's rows, so propensity x training_rows is a whole count of the first offer's customers.
+    evaluation = uplift_artefact(app, runs.train.run_id, "uplift_evaluation.json")
+    first_and_control = evaluation.treated_rows + evaluation.control_rows
+    assert card.training_rows < 0.8 * TRAIN_ROWS
+    assert abs(card.training_rows / first_and_control - 0.7 / 0.3) < 0.1  # the split's 70/30
+    treated = card.propensity * card.training_rows
+    assert abs(treated - round(treated)) < 1e-6
     response = app.client.post(
         f"/models/{version.model_id}/promote", json={"promoted_by": "test", "reason": "by hand"}
     )
     assert response.status_code == 409, response.text
     assert response.json()["detail"]["code"] == "MULTI_ARM_PROMOTION_REFUSED"
+    assert app.registry.get_champion(USE_CASE) is None
+
+
+def test_the_promote_route_still_refuses_when_the_model_card_cannot_be_read(app: App, runs: Runs) -> None:
+    """Review finding: the hand-promotion guard failed open on an unreadable card. Without the card the
+    run's `run_config.json` (`uplift.treatment_levels`) says the model has several offers; without
+    either, the promotion is refused as unchecked. Both files are put back afterwards."""
+    version = app.registry.get(runs.train.model_version_id or "")
+    card_key = model_card_key(version.predictor_key)
+    card_bytes = app.storage.read_bytes(card_key)
+    config_bytes = app.storage.read_bytes(version.run_config_key)
+
+    def promote() -> Any:
+        return app.client.post(
+            f"/models/{version.model_id}/promote", json={"promoted_by": "test", "reason": "by hand"}
+        )
+
+    try:
+        app.storage.delete(card_key)
+        response = promote()
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "MULTI_ARM_PROMOTION_REFUSED"
+        assert "chooses between several offers" in detail["message"]
+        app.storage.write_bytes(card_key, b"{not json")  # a corrupt card is no better than a lost one
+        assert promote().status_code == 409
+        app.storage.write_bytes(version.run_config_key, b"{not json")
+        response = promote()
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "MULTI_ARM_PROMOTION_REFUSED" and "cannot be checked" in detail["message"]
+    finally:
+        app.storage.write_bytes(card_key, card_bytes)
+        app.storage.write_bytes(version.run_config_key, config_bytes)
     assert app.registry.get_champion(USE_CASE) is None
 
 

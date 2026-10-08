@@ -802,7 +802,7 @@ class UpliftTrainFlow(_TrainFlow):
             positive_label=_require(self._positive_label, "the positive label"),
             propensity=model.propensity,
             base_rate=base_rate,
-            training_rows=len(rows) if arms is None else len(_require(arms.train, "the training rows")),
+            training_rows=len(rows),  # the first treatment's and the control's, as propensity (DEC-668 (3))
             causal=self._causal,
             segment_thresholds=resolve_thresholds(uplift.segments, base_rate=base_rate),
             engine_version=__version__,

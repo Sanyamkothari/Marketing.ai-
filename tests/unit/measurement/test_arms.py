@@ -9,19 +9,31 @@ offer. `arm_policy_value` is the paired, out-of-sample comparison a later champi
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 import numpy as np
 import pytest
 
+from engine.config import Metric
 from engine.measurement.arms import (
     MULTI_ARM_CODES,
     MULTI_ARM_PROMOTION_REFUSED,
+    PROMOTION_REFUSED_REASON,
+    PROMOTION_UNCHECKED_REASON,
     arm_policy_value,
+    promotion_refusal,
 )
 from engine.measurement.measure import measure_campaign
 from engine.measurement.simulate import ARM_COLUMN, multi_arm_campaign, population
+from engine.storage import StorageError
 from engine.uplift.contracts import IncrementalityReport
+from engine.uplift.flow import model_card_key
 from engine.uplift.incrementality import measure_incrementality
+
+if TYPE_CHECKING:
+    from engine.contracts import ModelVersion
+    from engine.storage import Storage
 
 NOW = datetime(2026, 10, 8, tzinfo=UTC)
 
@@ -31,7 +43,9 @@ def test_each_offer_is_measured_against_the_shared_control() -> None:
     report = measure_campaign(campaign.scores, campaign.outcomes, **campaign.measure_kwargs)
     assert report.arms is not None and [a.arm for a in report.arms] == ["offer_1", "offer_2"]
     first, second = report.arms
-    assert first.position == 1 and second.position == 2 and first.control == "control"
+    # Each summary names the configured control level, not a made-up label (review finding).
+    assert first.position == 1 and second.position == 2
+    assert first.control == second.control == campaign.levels[0] == "none"
     # The shared control is the same customers for both offers.
     assert first.control_rows == second.control_rows == report.control_rows == 2_000
     assert first.treated_rows == second.treated_rows == 2_000
@@ -42,7 +56,11 @@ def test_each_offer_is_measured_against_the_shared_control() -> None:
         alone = measure_incrementality(
             mine,
             campaign.outcomes,
-            **{k: v for k, v in campaign.measure_kwargs.items() if k not in {"arm_column", "arms"}},
+            **{
+                k: v
+                for k, v in campaign.measure_kwargs.items()
+                if k not in {"arm_column", "arms", "control_level"}
+            },
         )
         assert summary.effect == alone.absolute_lift
         assert summary.treated_rate == alone.treated_rate and summary.p_value == alone.p_value
@@ -60,12 +78,9 @@ def test_the_report_fields_keep_their_meaning_as_the_first_offer_against_the_con
     assert report.treated_conversions == first.treated_conversions
 
 
-def test_the_offers_are_listed_in_the_order_given_or_as_they_first_appear() -> None:
+def test_the_offers_are_listed_in_the_order_configured_whatever_the_row_order() -> None:
     campaign = multi_arm_campaign(1_200, 0.2, (0.0, 0.0, 0.0), seed=3)
-    kwargs = {k: v for k, v in campaign.measure_kwargs.items() if k != "arms"}
-    seen = measure_campaign(campaign.scores, campaign.outcomes, **kwargs)
-    first_seen = list(dict.fromkeys(campaign.scores.loc[~campaign.scores["control_group"], ARM_COLUMN]))
-    assert seen.arms is not None and [a.arm for a in seen.arms] == first_seen
+    kwargs = dict(campaign.measure_kwargs)
     given = measure_campaign(
         campaign.scores,
         campaign.outcomes,
@@ -73,6 +88,24 @@ def test_the_offers_are_listed_in_the_order_given_or_as_they_first_appear() -> N
     )
     assert given.arms is not None and [a.arm for a in given.arms] == ["offer_3", "offer_1"]
     assert given.arms[0].control == "none"
+    assert given.treated_rows == given.arms[0].treated_rows
+    # Review finding: the report's own fields are the first CONFIGURED offer's, so sorting the file
+    # differently changes nothing.
+    report = measure_campaign(campaign.scores, campaign.outcomes, **kwargs)
+    shuffled = campaign.scores.sort_values(ARM_COLUMN, ascending=False, kind="stable")
+    again = measure_campaign(shuffled, campaign.outcomes, **kwargs)
+    assert report.arms is not None and again.arms is not None
+    assert [a.arm for a in report.arms] == ["offer_1", "offer_2", "offer_3"]
+    assert again.model_copy(update={"computed_at": report.computed_at}) == report
+
+
+def test_several_offers_need_the_configured_offers_and_control_level() -> None:
+    """Review findings: no implicit order from the file, and no made-up "control" label."""
+    campaign = multi_arm_campaign(600, 0.2, (0.0, 0.0), seed=8)
+    kwargs = dict(campaign.measure_kwargs)
+    for missing in ("arms", "control_level"):
+        with pytest.raises(ValueError, match=f"needs `{missing}`"):
+            measure_campaign(campaign.scores, campaign.outcomes, **{**kwargs, missing: None})
 
 
 def test_without_an_arm_column_the_report_is_exactly_the_binary_one() -> None:
@@ -90,8 +123,8 @@ def test_a_missing_arm_column_or_no_offer_named_is_refused() -> None:
     with pytest.raises(ValueError, match="no column"):
         measure_campaign(campaign.scores, campaign.outcomes, **{**kwargs, "arm_column": "nope"})
     blank = campaign.scores.assign(**{ARM_COLUMN: ""})
-    with pytest.raises(ValueError, match="names an offer"):
-        measure_campaign(blank, campaign.outcomes, **{**kwargs, "arms": None})
+    with pytest.raises(ValueError, match="names one of the offers"):
+        measure_campaign(blank, campaign.outcomes, **kwargs)
 
 
 def test_the_arms_round_trip_through_the_report_contract() -> None:
@@ -182,3 +215,45 @@ def test_the_paired_bootstrap_is_deterministic_for_a_seed() -> None:
 
 def test_the_new_code_is_upper_snake_case_and_published_once() -> None:
     assert frozenset({"MULTI_ARM_PROMOTION_REFUSED"}) == MULTI_ARM_CODES
+
+
+# ---------------------------------------------------------------------------
+# promotion_refusal: the hand-promotion guard fails closed (review finding)
+# ---------------------------------------------------------------------------
+class _Store:
+    """A storage whose model card and run configuration are given, or unreadable when None."""
+
+    def __init__(self, card: object | None, resolved: object | None) -> None:
+        self._files = {model_card_key("models/m"): card, "runs/r/run_config.json": resolved}
+
+    def read_model(self, key: str, model_type: type) -> object:
+        found = self._files.get(key)
+        if found is None:
+            raise StorageError("KEY_NOT_FOUND", f"no {key}", key=key)
+        return found
+
+
+def _version(metric: Metric = Metric.AUUC) -> ModelVersion:
+    return cast(
+        "ModelVersion",
+        SimpleNamespace(metric=metric, predictor_key="models/m", run_config_key="runs/r/run_config.json"),
+    )
+
+
+def _resolved(levels: tuple[str, ...]) -> object:
+    return SimpleNamespace(config=SimpleNamespace(uplift=SimpleNamespace(treatment_levels=levels)))
+
+
+def test_the_promotion_guard_reads_the_card_then_the_run_config_and_fails_closed() -> None:
+    several = SimpleNamespace(treatment_levels=("none", "a", "b"))
+    one = SimpleNamespace(treatment_levels=None)
+
+    def refusal(card: object | None, resolved: object | None, metric: Metric = Metric.AUUC) -> str | None:
+        return promotion_refusal(cast("Storage", _Store(card, resolved)), _version(metric))
+
+    assert refusal(several, None) == PROMOTION_REFUSED_REASON
+    assert refusal(one, _resolved(("none", "a", "b"))) is None  # a readable card is the record
+    assert refusal(None, _resolved(("none", "a", "b"))) == PROMOTION_REFUSED_REASON
+    assert refusal(None, _resolved(())) is None  # a binary model whose card is lost may still be promoted
+    assert refusal(None, None) == PROMOTION_UNCHECKED_REASON
+    assert refusal(None, None, Metric.ROC_AUC) is None  # not an uplift model: nothing to check

@@ -1177,8 +1177,8 @@ class UpliftModelCard(Artefact):
         exclude_if=_absent,
         description=(
             "Plan J M100: the control value and the treatments the model was fitted on, control first; "
-            "absent on a model of one treatment. `propensity` and `base_rate` describe the first "
-            "treatment against the control."
+            "absent on a model of one treatment. `propensity`, `base_rate` and `training_rows` describe "
+            "the first treatment against the control; the run's train stage line counts every arm's rows."
         ),
     )
 

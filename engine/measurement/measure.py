@@ -84,9 +84,11 @@ def measure_campaign(
     **Several offers (Plan J M100, DEC-668 (2)).** With `arm_column`, the column naming each treated
     customer's offer, every offer is measured against the shared control (`control_group`) by
     `measure_incrementality` on that offer's customers and the control's, and the report carries
-    `arms` (in `arms` order, else the order the offers first appear). The report's own fields are the
-    first offer's against the control (DEC-668 (3)); a treated customer with no offer named is in no
-    offer's comparison. Without `arm_column` nothing changes.
+    `arms` in `arms` order. `arms` (the configured offers, `uplift.treatment_levels[1:]`) and
+    `control_level` (`uplift.treatment_levels[0]`) are then required (`ValueError` otherwise), so the
+    report's own fields are the first configured offer's against the control (DEC-668 (3)) whatever
+    the file's row order; a treated customer with no offer named is in no offer's comparison. Without
+    `arm_column` nothing changes.
     """
     from engine.uplift.incrementality import measure_incrementality
 

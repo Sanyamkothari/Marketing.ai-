@@ -206,8 +206,45 @@ def test_cost_per_contact_is_every_offers_contact_cost_as_in_m97() -> None:
             ValueCosts(contact_cost=9.0, offer_cost=0.0),
             ValueCosts(contact_cost=9.0, offer_cost=1.0),
         ],
+        p_treated=np.array([[1.0, 1.0]]),
     )
     assert np.allclose(money.cost, [[0.5, 1.5]])
+
+
+def test_the_scalar_and_value_paths_price_the_same_offer_the_same_way() -> None:
+    """Review finding: without p_treated the scalar path charged the whole offer cost and the value path
+    none, so one customer got opposite choices. The offer is now priced as offer_cost x p_treated on
+    both paths, and an offer cost without p_treated is refused."""
+    uplift = np.array([[0.05, 0.20], [0.30, 0.01]])
+    p_treated = np.array([[0.4, 0.9], [1.0, 0.2]])
+    costs = [ValueCosts(contact_cost=1.0, offer_cost=10.0), ValueCosts(contact_cost=2.0, offer_cost=5.0)]
+    scalar = arm_net_values(
+        uplift,
+        UpliftPolicyConfig(value_per_conversion=100.0, margin_pct=50.0, horizon_months=2),
+        arm_costs=costs,
+        p_treated=p_treated,
+    )
+    valued = arm_net_values(
+        uplift,
+        UpliftPolicyConfig(value_column="spend", margin_pct=50.0, horizon_months=2),
+        arm_costs=costs,
+        p_treated=p_treated,
+        values=np.array([100.0, 100.0]),
+    )
+    assert np.allclose(scalar.cost, valued.cost)
+    assert np.allclose(scalar.net_value, valued.net_value)
+    # The reviewer's customer: uplift 0.05, contact 1, offer 10, unit value 100, taken for certain.
+    one = [ValueCosts(contact_cost=1.0, offer_cost=10.0)]
+    for policy, values in (
+        (UpliftPolicyConfig(value_per_conversion=100.0), None),
+        (UpliftPolicyConfig(value_column="spend"), np.array([100.0])),
+    ):
+        money = arm_net_values(
+            np.array([[0.05]]), policy, arm_costs=one, p_treated=np.array([[1.0]]), values=values
+        )
+        assert np.allclose(money.net_value, [[-6.0]]) and np.allclose(money.cost, [[11.0]])
+        with pytest.raises(ValueError, match="p_treated"):
+            arm_net_values(np.array([[0.05]]), policy, arm_costs=one, values=values)
 
 
 def test_no_stated_value_cannot_choose_by_money() -> None:

@@ -161,8 +161,11 @@ def arm_net_values(
     (`cost_per_contact` in `policy`, when set, is every offer's contact cost, as in M97). With
     `policy.value_column` and `values` the value path: `uplift x value x margin x horizon - offer cost x
     p_treated - contact cost` (a missing value counts as zero). Without them each conversion is worth
-    `value_per_conversion x margin x horizon`; `ValueError` when no value is configured at all, because
-    an offer cannot be chosen by money nobody stated.
+    `value_per_conversion x margin x horizon`, and the costs are the same on both paths. `ValueError`
+    when no value is configured at all, because an offer cannot be chosen by money nobody stated, and
+    when an offer has an offer cost but `p_treated` is not given: the offer is paid by the customers
+    who take it, and without `p_treated` that cost would be charged in full on one path and not at all
+    on the other (M97's `customer_net_values`), so the same customer could get opposite choices.
     """
     import numpy as np
 
@@ -173,6 +176,11 @@ def arm_net_values(
     if len(arm_costs) != arms:
         raise ValueError(f"arm_costs names {len(arm_costs)} offers, expected {arms}.")
     taken = None if p_treated is None else _matrix(p_treated, "p_treated", rows, arms)
+    if taken is None and any(costs.offer_cost for costs in arm_costs):
+        raise ValueError(
+            "An offer with an offer cost needs p_treated, each customer's chance of taking it: "
+            "the offer cost is offer_cost x p_treated."
+        )
     value_path = policy.value_column is not None and values is not None
     if not value_path and policy.value_per_conversion is None:
         raise ValueError(
@@ -183,8 +191,7 @@ def arm_net_values(
     for k in range(arms):
         costs = arm_costs[k]
         contact = policy.cost_per_contact if policy.cost_per_contact is not None else costs.contact_cost
-        offer_cost = costs.offer_cost * (taken[:, k] if taken is not None else 1.0)
-        cost[:, k] = contact + offer_cost
+        cost[:, k] = contact + (0.0 if taken is None else costs.offer_cost * taken[:, k])
         if value_path:
             money = customer_net_values(
                 lift[:, k],

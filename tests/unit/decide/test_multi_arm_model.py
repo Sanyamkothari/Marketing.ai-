@@ -77,6 +77,21 @@ def test_levels_and_cells_compare_by_one_spelling() -> None:
     assert codes is None and bad == 2
 
 
+def test_whole_numbers_written_as_text_or_floats_are_one_level() -> None:
+    """Review finding: `"1.0"` text cells and YAML levels `[0.0, 1.0, 2.0]` matched no level."""
+    assert level_text("1.0") == level_text(1) == level_text(1.0) == "1"
+    assert level_text(" -2.00 ") == "-2" and level_text("1.5") == "1.5" and level_text("1e0") == "1e0"
+    codes, bad = coerce_arms(pd.Series(["0", "1.0", "2"]), ("0", "1", "2"))
+    assert bad == 0 and codes is not None and codes.tolist() == [0, 1, 2]
+    floats = UpliftConfig(treatment_levels=[0.0, 1.0, 2.0])  # type: ignore[arg-type]
+    assert floats.treatment_levels == ("0", "1", "2")
+    assert UpliftConfig(treatment_levels=[0, 1, 2.5]).treatment_levels == ("0", "1", "2.5")  # type: ignore[arg-type]
+    codes, bad = coerce_arms(pd.Series([0.0, 1.0, 2.0, 1.0]), floats.treatment_levels)
+    assert bad == 0 and codes is not None and codes.tolist() == [0, 1, 2, 1]
+    with pytest.raises(ValidationError, match="same value twice"):
+        UpliftConfig(treatment_levels=("0", "1", "1.0"))
+
+
 def test_the_split_keeps_every_arm_and_the_binary_split_is_unchanged() -> None:
     rng = np.random.default_rng(1)
     t = rng.integers(0, 2, 2_000)

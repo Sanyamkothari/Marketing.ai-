@@ -365,6 +365,7 @@ class SimulatedMultiArmCampaign:
             "as_of": AS_OF,
             "arm_column": ARM_COLUMN,
             "arms": self.levels[1:],
+            "control_level": self.levels[0],
         }
 
 

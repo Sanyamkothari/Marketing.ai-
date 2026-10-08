@@ -55,13 +55,14 @@ __all__ = [
     "MULTI_ARM_CODES",
     "MULTI_ARM_PROMOTION_REFUSED",
     "PROMOTION_REFUSED_REASON",
+    "PROMOTION_UNCHECKED_REASON",
     "arm_from_evaluation",
     "arm_from_incrementality",
     "arm_from_policy",
     "arm_from_segments",
     "arm_policy_value",
-    "is_multi_arm_version",
     "measure_arms",
+    "promotion_refusal",
 ]
 
 MULTI_ARM_PROMOTION_REFUSED: Final[str] = "MULTI_ARM_PROMOTION_REFUSED"
@@ -77,29 +78,46 @@ PROMOTION_REFUSED_REASON: Final[str] = (
 )
 """The plain reason a model of several offers stays a candidate (`MULTI_ARM_PROMOTION_REFUSED`)."""
 
+PROMOTION_UNCHECKED_REASON: Final[str] = (
+    "Not promoted: neither this uplift model's card nor its run configuration can be read, so it cannot "
+    "be checked that it is a model of one offer. Try again; if it keeps happening, retrain the model."
+)
+"""The plain reason an uplift version whose card and run configuration are both unreadable is refused."""
+
 _NO_HOLDOUT_FOR_ARM: Final[str] = (
     "This offer's measured hold-out uplift is not stored with the model, so no expected conversions are "
     "shown for it."
 )
 
 
-def is_multi_arm_version(storage: Storage, version: ModelVersion) -> bool:
-    """True when `version` is an uplift model of several offers (its card lists `treatment_levels`).
+def promotion_refusal(storage: Storage, version: ModelVersion) -> str | None:
+    """Why `version` may not be promoted by hand, or None when it may (Plan J M100, DEC-668 (4)).
 
-    A version whose card cannot be read is not one: only a card that says so refuses a promotion.
+    Only an uplift (AUUC) version can be a model of several offers. Its model card lists
+    `treatment_levels`; when the card cannot be read, the run's `run_config.json`
+    (`uplift.treatment_levels`) says the same. When neither can be read the promotion is refused too
+    (:data:`PROMOTION_UNCHECKED_REASON`): the guard fails closed, because a lost or corrupt card must
+    not let a model of several offers take the champion slot.
     """
-    from engine.config import Metric
+    from engine.config import Metric, ResolvedConfig
     from engine.storage import StorageError
     from engine.uplift.contracts import UpliftModelCard
     from engine.uplift.flow import model_card_key
 
     if version.metric != Metric.AUUC:
-        return False
+        return None
+    unreadable = (StorageError, OSError, ValueError)  # a pydantic ValidationError is a ValueError
     try:
         card = storage.read_model(model_card_key(version.predictor_key), UpliftModelCard)
-    except (StorageError, OSError, ValueError):
-        return False
-    return bool(card.treatment_levels)
+    except unreadable:
+        pass
+    else:
+        return PROMOTION_REFUSED_REASON if card.treatment_levels else None
+    try:
+        resolved = storage.read_model(version.run_config_key, ResolvedConfig)
+    except unreadable:
+        return PROMOTION_UNCHECKED_REASON
+    return PROMOTION_REFUSED_REASON if resolved.config.uplift.treatment_levels else None
 
 
 # ---------------------------------------------------------------------------
@@ -247,22 +265,32 @@ def measure_arms(
 ) -> IncrementalityReport:
     """Every offer against the shared control; the first offer's report with `arms` (see `measure_campaign`).
 
-    Raises `ValueError` when `arm_column` is missing, when no treated customer names an offer, or for
-    anything `measure_incrementality` refuses on an offer's customers.
+    `arms` (the configured treatment levels after the control, `uplift.treatment_levels[1:]`) and
+    `control_level` (`uplift.treatment_levels[0]`) are required: the report's own fields are the first
+    configured offer's (DEC-668 (3)), never whichever offer happens to come first in the file, and every
+    `ArmSummary.control` names the configured control level. Raises `ValueError` when either is missing,
+    when `arm_column` is missing, when no treated customer names one of `arms`, or for anything
+    `measure_incrementality` refuses on an offer's customers.
     """
     from engine.uplift.incrementality import _flag, measure_incrementality
 
+    if arms is None or not arms:
+        raise ValueError(
+            "Measuring several offers needs `arms`, the configured offers in order "
+            "(uplift.treatment_levels after the control): the report's own fields are the first one's."
+        )
+    if control_level is None or not str(control_level).strip():
+        raise ValueError(
+            "Measuring several offers needs `control_level`, the configured control value "
+            "(the first of uplift.treatment_levels)."
+        )
     if arm_column not in frame.columns:
         raise ValueError(f"The assignment has no column {arm_column!r} naming each customer's offer.")
     control = _flag(frame["control_group"]).to_numpy(dtype=bool)
     offer = _offer_text(frame[arm_column])
-    if arms is None:
-        seen = offer[~control].dropna()
-        levels = [str(level) for level in dict.fromkeys(seen.tolist())]
-    else:
-        levels = [str(level).strip() for level in arms]
-    if not levels:
-        raise ValueError(f"No treated customer names an offer in {arm_column!r}.")
+    levels = [str(level).strip() for level in arms]
+    if not offer[~control].isin(levels).fillna(value=False).any():
+        raise ValueError(f"No treated customer names one of the offers {levels} in {arm_column!r}.")
     reports: list[IncrementalityReport] = []
     for level in levels:
         mine = (offer == level).fillna(value=False).to_numpy(dtype=bool) & ~control
@@ -283,7 +311,7 @@ def measure_arms(
                 campaign_id=campaign_id,
             )
         )
-    held = control_level if control_level is not None else "control"
+    held = str(control_level).strip()
     summaries = tuple(
         arm_from_incrementality(level, position, held, report)
         for position, (level, report) in enumerate(zip(levels, reports, strict=True), start=1)
