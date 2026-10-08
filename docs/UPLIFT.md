@@ -714,7 +714,22 @@ only when `problem_type` is `uplift` (DEC-601).
 | `bootstrap_samples`, `test_fraction`, `time_limit_minutes` | 200; 0.30; 10 | yes | no |
 | `drift_treated_share_tolerance` | 0.05 (absolute difference in treated share; section 8, M53) | yes | no |
 | `segments.*` (the three cuts) | 0.02; −0.01; base rate | yes | **yes** |
-| `policy.*` (budget, cost, value) | none | yes | **yes** |
+| `policy.*` (budget, cost, value, margin, ROI) | none | yes | **yes** |
+
+The policy block in `uplift.policy` accepts:
+* `budget_contacts` (integer, optional): Maximum contacts to recommend.
+* `cost_per_contact` (float, optional): Direct cost of one contact (INR).
+* `value_per_conversion` (float, optional): Scalar value of one conversion (INR).
+* `value_column` (string, optional): Column name holding customer value (e.g. order value, balance, premium, ARPU).
+* `horizon_months` (integer, optional): Value horizon in months (defaults to 1).
+* `margin_pct` (float, optional): Margin percentage between 0 and 100 (defaults to 100%).
+* `min_roi` (float, optional): Minimum ROI floor (e.g. 0.15 for 15% ROI). Contacts where `net_value < cost * min_roi` are cut as below cost.
+
+**Net value per customer (Plan J M97, DEC-1304):**
+$$\text{Net value} = \text{uplift} \times \text{value} \times \text{margin} - \text{offer\_cost} \times p_{\text{treated}} - \text{contact\_cost}$$
+Ranking, `choose_contacts`, `recommend_policy`, and `profit_curve` rank and cut on this net value vector.
+Persuadable-only and sleeping-dog guards are strictly preserved (sleeping dogs are never treated).
+One value block in `configs/pilot/value.yaml` defines editable India channel-cost defaults (WhatsApp ₹0.86, SMS ₹0.15, Email ₹0.05, Voice ₹0.70) and offer cost, feeding both the policy ranking and `engine.pilot.roi.RoiInputs` defaults.
 
 The control-group fraction and suppression rules live in `actions:`, are shared with Phase 1, and are
 not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns this map for Phase 5.

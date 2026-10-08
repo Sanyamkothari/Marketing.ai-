@@ -95,7 +95,8 @@
       "role target=converted_30d (sure)",
       "setting split.type=time_based (check)",
       "setting split.time_column=snapshot_date (check)",
-      "setting model_search.time_limit_minutes=10 (sure)"
+      "setting model_search.time_limit_minutes=10 (sure)",
+      "setting uplift.policy.value_column=balance (check)"
     ],
     "questions": [
       {

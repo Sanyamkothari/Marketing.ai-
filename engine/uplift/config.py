@@ -90,6 +90,10 @@ class UpliftPolicyConfig(BaseModel):
     budget_contacts: Annotated[int | None, Field(ge=1)] = None
     cost_per_contact: Annotated[float | None, Field(ge=0.0)] = None
     value_per_conversion: Annotated[float | None, Field(ge=0.0)] = None
+    value_column: Annotated[str | None, Field()] = None
+    horizon_months: Annotated[int | None, Field(ge=1, le=120)] = None
+    margin_pct: Annotated[float | None, Field(ge=0.0, le=100.0)] = None
+    min_roi: Annotated[float | None, Field()] = None
 
 
 class UpliftConfig(BaseModel):

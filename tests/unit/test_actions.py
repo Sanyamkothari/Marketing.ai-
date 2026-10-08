@@ -498,3 +498,20 @@ def test_a_frame_without_the_key_or_the_score_column_is_refused(config: UseCaseC
 def test_the_control_group_column_is_boolean() -> None:
     result = apply_actions(population(), control_config(), run_id=RUN_ID, primary_key="customer_id")
     assert result[CONTROL_GROUP_COLUMN].dtype == bool
+
+
+def test_propensity_run_expected_gross_value() -> None:
+    from engine.stages.actions import EXPECTED_GROSS_VALUE_COLUMN, EXPECTED_GROSS_VALUE_LABEL
+
+    assert EXPECTED_GROSS_VALUE_LABEL == "not incremental"
+    # p = 0.5, value = 100, cost = 10 -> expected gross value = 0.5 * 100 - 10 = 40.0
+    config = use_case(
+        uplift__policy={
+            "value_column": "order_value",
+            "cost_per_contact": 10.0,
+        }
+    )
+    frame = scored([0.5], order_value=[100.0])
+    result = apply_actions(frame, config, run_id=RUN_ID, primary_key="customer_id")
+    assert EXPECTED_GROSS_VALUE_COLUMN in result.columns
+    assert result[EXPECTED_GROSS_VALUE_COLUMN].iat[0] == pytest.approx(40.0)

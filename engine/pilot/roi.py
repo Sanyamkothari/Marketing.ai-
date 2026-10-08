@@ -61,9 +61,11 @@ __all__ = [
     "Money",
     "RoiInputs",
     "RoiView",
+    "ValueCosts",
     "compute_roi",
     "format_inr",
     "load_roi_inputs",
+    "lookup_value_costs",
     "roi_document",
     "save_roi_inputs",
 ]
@@ -102,7 +104,7 @@ class RoiInputs(_Strict):
         description="Rupees an offer costs each time a contacted customer takes it.",
     )
     contact_cost: float = Field(
-        default=0.0, ge=0, le=1e9, description="Rupees each contact costs (SMS, call, e-mail)."
+        default=0.86, ge=0, le=1e9, description="Rupees each contact costs (SMS, call, e-mail)."
     )
     entered_by: str = Field(default="", max_length=120)
     entered_at: datetime | None = None
@@ -174,6 +176,72 @@ def outcome_is_good_by_default(use_case_id: str, outcome_name: str, root: Path |
     if config.label is not None:
         own.add(config.label.name)
     return outcome_name not in own
+
+
+class ValueCosts(_Strict):
+    """Offer and contact costs from the configuration's value block."""
+
+    offer_cost: float = 0.0
+    contact_cost: float = 0.86
+    channel_contact_costs: dict[str, float] = Field(default_factory=dict)
+
+
+def lookup_value_costs(
+    channel: str | None = None,
+    *,
+    _use_case_id: str | None = None,
+    root: Path | None = None,
+) -> ValueCosts:
+    """The offer cost and contact cost from configuration.
+
+    Reads the `value:` block in `configs/pilot/value.yaml`. When M99's catalogue exists later
+    it will take these over, so all cost lookups go through this single function.
+    """
+    from engine.config import config_root, load_yaml
+
+    defaults: dict[str, object] = {
+        "offer_cost": 0.0,
+        "contact_cost": 0.86,
+        "channel_contact_costs": {
+            "whatsapp": 0.86,
+            "whatsapp_marketing": 0.86,
+            "whatsapp_utility": 0.13,
+            "sms": 0.15,
+            "email": 0.05,
+            "voice": 0.70,
+        },
+    }
+    try:
+        data = load_yaml(config_root(root) / VALUE_CONFIG)
+        val_block = data.get("value") or {}
+    except Exception:
+        val_block = {}
+
+    offer_cost = float(val_block.get("offer_cost", defaults["offer_cost"]))
+    raw_channels = val_block.get("channel_contact_costs")
+    if isinstance(raw_channels, dict):
+        channel_costs = {str(k): float(v) for k, v in raw_channels.items()}
+    else:
+        channel_costs = {
+            "whatsapp": 0.86,
+            "whatsapp_marketing": 0.86,
+            "whatsapp_utility": 0.13,
+            "sms": 0.15,
+            "email": 0.05,
+            "voice": 0.70,
+        }
+    default_contact_cost = float(val_block.get("contact_cost", defaults["contact_cost"]))
+
+    if channel is not None:
+        c_cost = float(channel_costs.get(channel.lower(), default_contact_cost))
+    else:
+        c_cost = default_contact_cost
+
+    return ValueCosts(
+        offer_cost=offer_cost,
+        contact_cost=c_cost,
+        channel_contact_costs=channel_costs,
+    )
 
 
 class _Common(TypedDict):

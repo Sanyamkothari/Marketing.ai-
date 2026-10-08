@@ -7,6 +7,10 @@ itself (coverage, false positives, bias) live in `tests/statistical/` and run ni
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 import pandas as pd
 import pytest
@@ -17,8 +21,14 @@ from engine.uplift.incrementality import measure_incrementality
 
 
 @pytest.fixture(autouse=True)
-def _quiet() -> None:
-    logging.getLogger("engine").setLevel(logging.WARNING)
+def _quiet() -> Iterator[None]:
+    logger = logging.getLogger("engine")
+    level = logger.level
+    logger.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        logger.setLevel(level)
 
 
 def test_a_seed_is_one_campaign_bit_for_bit() -> None:

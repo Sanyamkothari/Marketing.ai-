@@ -130,6 +130,7 @@ class _Ranked:
     y: IntArray
     rank_of: IntArray
     """`rank_of[i]` is the ranked position of input row `i`."""
+    value: FloatArray | None = None
 
     @property
     def n(self) -> int:
@@ -160,8 +161,13 @@ def _binary(values: npt.ArrayLike, name: str) -> IntArray:
     return array.astype(np.int64)
 
 
-def _rank(pred: npt.ArrayLike, t: npt.ArrayLike, y: npt.ArrayLike) -> _Ranked:
-    """Validate the three arrays and rank them; see the module docstring for the tie rule."""
+def _rank(
+    pred: npt.ArrayLike,
+    t: npt.ArrayLike,
+    y: npt.ArrayLike,
+    value: npt.ArrayLike | None = None,
+) -> _Ranked:
+    """Validate the arrays and rank them; see the module docstring for the tie rule."""
     import numpy as np
 
     scores = np.asarray(pred, dtype=np.float64)
@@ -179,10 +185,27 @@ def _rank(pred: npt.ArrayLike, t: npt.ArrayLike, y: npt.ArrayLike) -> _Ranked:
     not_finite = int(np.count_nonzero(~np.isfinite(scores)))
     if not_finite:
         raise ValueError(f"{not_finite} predicted uplift values are missing or infinite.")
+    val_ordered: FloatArray | None = None
+    if value is not None:
+        val_arr = np.asarray(value, dtype=np.float64)
+        if val_arr.ndim != 1 or val_arr.shape[0] != scores.shape[0]:
+            raise ValueError(
+                f"value must be one-dimensional with same length as pred ({scores.shape[0]}), got shape {val_arr.shape}."
+            )
+        if not np.all(np.isfinite(val_arr)):
+            raise ValueError("value must contain finite numbers.")
     order = np.argsort(-scores, kind="mergesort")
     rank_of = np.empty(order.shape[0], dtype=np.int64)
     rank_of[order] = np.arange(order.shape[0], dtype=np.int64)
-    return _Ranked(pred=scores[order], t=treatment[order], y=outcome[order], rank_of=rank_of)
+    if value is not None:
+        val_ordered = val_arr[order]
+    return _Ranked(
+        pred=scores[order],
+        t=treatment[order],
+        y=outcome[order],
+        rank_of=rank_of,
+        value=val_ordered,
+    )
 
 
 def _require_both_arms(ranked: _Ranked) -> None:
@@ -226,15 +249,16 @@ class _Cumulative:
         return int(self.n_t.shape[-1]) - 1
 
 
-def _cumulative(t: IntArray, y: IntArray) -> _Cumulative:
+def _cumulative(t: IntArray, y: IntArray, value: FloatArray | None = None) -> _Cumulative:
     """Cumulative arm counts and outcome sums of ranked 2-D arrays, with the `k = 0` column."""
     import numpy as np
 
     rows = t.shape[0]
     zero = np.zeros((rows, 1), dtype=np.float64)
     n_t = np.concatenate([zero, np.cumsum(t, axis=1, dtype=np.float64)], axis=1)
-    y_t = np.concatenate([zero, np.cumsum(t * y, axis=1, dtype=np.float64)], axis=1)
-    y_all = np.concatenate([zero, np.cumsum(y, axis=1, dtype=np.float64)], axis=1)
+    y_weighted = y * value if value is not None else y
+    y_t = np.concatenate([zero, np.cumsum(t * y_weighted, axis=1, dtype=np.float64)], axis=1)
+    y_all = np.concatenate([zero, np.cumsum(y_weighted, axis=1, dtype=np.float64)], axis=1)
     k = np.arange(t.shape[1] + 1, dtype=np.float64)
     return _Cumulative(n_t=n_t, n_c=k - n_t, y_t=y_t, y_c=y_all - y_t)
 
@@ -296,7 +320,8 @@ def _qini_area(c: _Cumulative) -> FloatArray:
 
 
 def _single(ranked: _Ranked) -> _Cumulative:
-    return _cumulative(ranked.t[None, :], ranked.y[None, :])
+    val_matrix = ranked.value[None, :] if ranked.value is not None else None
+    return _cumulative(ranked.t[None, :], ranked.y[None, :], val_matrix)
 
 
 # ---------------------------------------------------------------------------
@@ -445,7 +470,8 @@ def _bootstrap(
             positions[row, :n_t] = treated_positions[rng.integers(0, n_t, n_t)] if n_t else 0
             positions[row, n_t:] = control_positions[rng.integers(0, n_c, n_c)] if n_c else 0
         positions.sort(axis=1)  # re-rank: ranked position order = predicted uplift, ties by input order
-        c = _cumulative(ranked.t[positions], ranked.y[positions])
+        val_matrix = ranked.value[positions] if ranked.value is not None else None
+        c = _cumulative(ranked.t[positions], ranked.y[positions], val_matrix)
         if curves:
             auuc.append(_auuc(c))
             qini.append(_qini_area(c))
@@ -475,7 +501,14 @@ def _interval(point: float, resamples: FloatArray) -> ConfidenceValue:
 
 
 def bootstrap_uplift_at(
-    pred: npt.ArrayLike, t: npt.ArrayLike, y: npt.ArrayLike, fraction: float, *, samples: int, seed: int
+    pred: npt.ArrayLike,
+    t: npt.ArrayLike,
+    y: npt.ArrayLike,
+    fraction: float,
+    *,
+    samples: int,
+    seed: int,
+    value: npt.ArrayLike | None = None,
 ) -> ConfidenceValue | None:
     """`uplift_at_fraction` with its 95 % bootstrap interval; `None` when the point is undefined.
 
@@ -484,7 +517,7 @@ def bootstrap_uplift_at(
     """
     import numpy as np
 
-    ranked = _rank(pred, t, y)
+    ranked = _rank(pred, t, y, value=value)
     k = _top_rows(fraction, ranked.n)
     point = float(_uplift_at_k(_single(ranked), k)[0])
     if np.isnan(point):  # an arm is empty in the top rows of the hold-out itself
@@ -501,6 +534,7 @@ def bootstrap_uplift_at_many(
     *,
     samples: int,
     seed: int,
+    value: npt.ArrayLike | None = None,
 ) -> tuple[ConfidenceValue | None, ...]:
     """:func:`bootstrap_uplift_at` for several shares at once, from ONE set of resamples.
 
@@ -512,7 +546,7 @@ def bootstrap_uplift_at_many(
     """
     import numpy as np
 
-    ranked = _rank(pred, t, y)
+    ranked = _rank(pred, t, y, value=value)
     single = _single(ranked)
     ks = [_top_rows(fraction, ranked.n) for fraction in fractions]
     points = [float(_uplift_at_k(single, k)[0]) for k in ks]
@@ -541,19 +575,26 @@ class HoldoutUplift:
     y: IntArray
     samples: int
     seed: int
+    value: FloatArray | None = None
+
+    @property
+    def is_value_weighted(self) -> bool:
+        return self.value is not None
 
     def at(self, fraction: float) -> ConfidenceValue | None:
-        return bootstrap_uplift_at(self.pred, self.t, self.y, fraction, samples=self.samples, seed=self.seed)
+        return bootstrap_uplift_at(
+            self.pred, self.t, self.y, fraction, samples=self.samples, seed=self.seed, value=self.value
+        )
 
     def intervals(self, fractions: Sequence[float]) -> tuple[ConfidenceValue | None, ...]:
         return bootstrap_uplift_at_many(
-            self.pred, self.t, self.y, fractions, samples=self.samples, seed=self.seed
+            self.pred, self.t, self.y, fractions, samples=self.samples, seed=self.seed, value=self.value
         )
 
     def points(self, fractions: FloatArray) -> FloatArray:
         import numpy as np
 
-        ranked = _rank(self.pred, self.t, self.y)
+        ranked = _rank(self.pred, self.t, self.y, value=self.value)
         # `_top_rows` itself, one share at a time: numpy's rounding is not Python's in every last
         # digit, and a share must count exactly the rows `at` counts for it.
         ks = np.asarray(

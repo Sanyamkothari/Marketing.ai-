@@ -97,6 +97,8 @@ __all__ = [
     "BAND_COLUMN",
     "CONTROL_ACTION",
     "CONTROL_GROUP_COLUMN",
+    "EXPECTED_GROSS_VALUE_COLUMN",
+    "EXPECTED_GROSS_VALUE_LABEL",
     "OUTPUT_COLUMNS",
     "SKIPPED_RULES_ATTR",
     "SUPPRESSED_ACTION",
@@ -113,6 +115,8 @@ BAND_COLUMN: Final[str] = "band"
 ACTION_COLUMN: Final[str] = "action"
 SUPPRESSED_REASON_COLUMN: Final[str] = "suppressed_reason"
 CONTROL_GROUP_COLUMN: Final[str] = "control_group"
+EXPECTED_GROSS_VALUE_COLUMN: Final[str] = "expected_gross_value"
+EXPECTED_GROSS_VALUE_LABEL: Final[str] = "not incremental"
 
 OUTPUT_COLUMNS: Final[tuple[str, ...]] = (
     BAND_COLUMN,
@@ -195,6 +199,8 @@ def apply_actions(
     is the reference time of the recency rule and defaults to the current UTC time; pass the run's
     start time to make a run reproducible end to end.
     """
+    import pandas as pd
+
     from engine.utils.time import utc_now
 
     started = time.perf_counter()
@@ -241,6 +247,33 @@ def apply_actions(
     result[ACTION_COLUMN] = actions
     result[SUPPRESSED_REASON_COLUMN] = reasons
     result[CONTROL_GROUP_COLUMN] = control
+
+    val_col = config.uplift.policy.value_column
+    if val_col and val_col in frame.columns:
+        from engine.pilot.roi import lookup_value_costs
+
+        val_series = pd.to_numeric(frame[val_col], errors="coerce")
+        costs = lookup_value_costs()
+        cost = (
+            config.uplift.policy.cost_per_contact
+            if config.uplift.policy.cost_per_contact is not None
+            else costs.contact_cost
+        )
+        p = pd.to_numeric(result[score_field], errors="coerce")
+        result[EXPECTED_GROSS_VALUE_COLUMN] = p * val_series - cost
+    elif config.uplift.policy.value_per_conversion is not None:
+        from engine.pilot.roi import lookup_value_costs
+
+        val = config.uplift.policy.value_per_conversion
+        costs = lookup_value_costs()
+        cost = (
+            config.uplift.policy.cost_per_contact
+            if config.uplift.policy.cost_per_contact is not None
+            else costs.contact_cost
+        )
+        p = pd.to_numeric(result[score_field], errors="coerce")
+        result[EXPECTED_GROSS_VALUE_COLUMN] = p * val - cost
+
     result.attrs = {**frame.attrs, APPLIED_RULES_ATTR: applied, SKIPPED_RULES_ATTR: skipped}
 
     _LOGGER.info(

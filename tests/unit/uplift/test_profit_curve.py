@@ -119,6 +119,68 @@ def test_the_configured_point_equals_the_recommendation_exactly(seed: int) -> No
     assert point.expected_cost == recommendation.expected_cost
     assert point.expected_value == recommendation.expected_value
     assert point.expected_net_value == recommendation.expected_net_value
+    assert point.net_value_low == recommendation.net_value_low
+    assert point.net_value_high == recommendation.net_value_high
+    assert curve.configured_stop_reason is recommendation.stop_reason
+    assert curve.eligible_persuadables == recommendation.eligible_persuadables
+    assert curve.rows == recommendation.rows
+    assert point in curve.points
+
+
+@pytest.mark.parametrize("seed", range(6))
+def test_the_configured_point_equals_the_recommendation_with_value_column(seed: int) -> None:
+    rng = np.random.default_rng(seed + 100)
+    rows = int(rng.integers(50, 200))
+    uplift = np.round(rng.normal(0.02, 0.06, rows), 3)
+    segments = np.empty(rows, dtype=object)
+    segments[:] = [
+        P if u >= 0.02 else D if u <= -0.01 else (S if rng.random() < 0.5 else L) for u in uplift.tolist()
+    ]
+    eligible = rng.random(rows) < 0.8
+    tiebreak = rng.integers(0, 2**62, rows).astype(np.uint64)
+    budget = int(rng.integers(1, rows)) if seed % 2 else None
+    values = rng.uniform(10.0, 500.0, rows)
+    policy = UpliftPolicyConfig(
+        budget_contacts=budget,
+        cost_per_contact=float(rng.uniform(0.5, 3.0)),
+        value_column="customer_value",
+        margin_pct=75.0,
+        min_roi=0.1,
+    )
+    lookup = holdout(seed + 100)
+    recommendation, _ = recommend_policy(
+        uplift,
+        segments,
+        policy,
+        run_id=RUN_ID,
+        computed_on="scored",
+        causal=True,
+        observed_top_share=lookup.at,
+        eligible=eligible,
+        tiebreak=tiebreak,
+        values=values,
+    )
+    curve = profit_curve(
+        uplift,
+        segments,
+        policy,
+        run_id=RUN_ID,
+        computed_on="scored",
+        causal=True,
+        observed=lookup,
+        eligible=eligible,
+        tiebreak=tiebreak,
+        values=values,
+    )
+    point = curve.configured
+    assert point.contacts == recommendation.contacts_recommended
+    assert point.predicted_incremental_conversions == recommendation.predicted_incremental_conversions
+    assert point.expected_incremental_conversions == recommendation.expected_incremental_conversions
+    assert point.expected_cost == recommendation.expected_cost
+    assert point.expected_value == recommendation.expected_value
+    assert point.expected_net_value == recommendation.expected_net_value
+    assert point.net_value_low == recommendation.net_value_low
+    assert point.net_value_high == recommendation.net_value_high
     assert curve.configured_stop_reason is recommendation.stop_reason
     assert curve.eligible_persuadables == recommendation.eligible_persuadables
     assert curve.rows == recommendation.rows

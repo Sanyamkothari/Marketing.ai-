@@ -42,7 +42,7 @@ _PEAK: Final[re.Pattern[str]] = re.compile(r"^peak memory\s*:\s*(?P<mb>[\d,]+) M
 
 def cpu_model() -> str:
     """The CPU's marketing name, from the OS; `unknown CPU` when it will not say."""
-    if sys.platform == "darwin":
+    if platform.system() == "Darwin":
         try:
             out = subprocess.run(
                 ["sysctl", "-n", "machdep.cpu.brand_string"], capture_output=True, text=True, check=True
@@ -60,7 +60,7 @@ def cpu_model() -> str:
 
 def memory_gib() -> float | None:
     """Total RAM in GiB, or None when the OS will not say."""
-    if sys.platform == "darwin":
+    if platform.system() == "Darwin":
         try:
             out = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, check=True)
             return int(out.stdout.strip()) / 1024**3

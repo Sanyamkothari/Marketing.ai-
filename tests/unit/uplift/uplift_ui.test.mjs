@@ -751,6 +751,11 @@ test("budget card: inputs prefilled from the run, the slider on the configured b
     /The best budget is 4 customers: expected net value 10 \(likely 6 to 14\)\. At your budget of 7 customers it is 6\./,
   );
   assert.match(text(html), /Sleeping dogs are never contacted at any budget\./);
+  const withBasis = views.profitCard(
+    { curve: { ...profit, value_basis: "balance" } },
+    pricedPolicy,
+  );
+  assert.match(text(withBasis), /Value basis: balance\./);
   noJunk(html);
 });
 
