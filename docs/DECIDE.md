@@ -30,7 +30,7 @@ the user downloads (the treat list).
 | 11 | Ranking by net value | M97 | not yet written |
 | 12 | The treat list and its reasons | M98 | written (below) |
 | 13 | The offer and channel catalogue; channel-aware consent | M99 | written (below) |
-| 14 | Choosing the offer (multi-treatment uplift) | M100 | not yet written |
+| 14 | Choosing the offer (multi-treatment uplift) | M100 | written (below) |
 | 15 | One action per customer across use cases | M101 | not yet written |
 | 16 | Revenue outcomes and CUPED | M102 | not yet written |
 | 17 | Auditing a campaign another tool ran; the programme readout | M103 | not yet written |
@@ -357,7 +357,9 @@ for the hand-off, and the Output page labels them differently: **Download contac
   on a laptop's SQLite `platform.db`, the column is added in place, also when the scoring seam opens the
   ledger). Null means every channel, so every record stored before M99 keeps applying to all of them. The
   scoring gate's all-channel question (`channel=None`) reads only all-channel records: an SMS-only
-  withdrawal closes SMS and does not suppress the customer. A channel must be a channel name (lower case
+  withdrawal closes SMS and does not suppress the customer. Since M100 part B, when the use case configures
+  channels, a valid grant on at least one configured channel (with no newer all-channel withdrawal) also
+  passes that question, so consent recorded per channel only is not read as no consent (section 14). A channel must be a channel name (lower case
   letters, digits and `_`, after stripping and lower-casing; the same rule as config and catalogue): an
   imported row with `e-mail` is refused with `CONSENT_CHANNEL_INVALID`, so no opt-out is stored that no
   configured channel could match.
@@ -365,3 +367,38 @@ for the hand-off, and the Output page labels them differently: **Download contac
   `sms_requires: [dlt_template_id, message_category]`) is applied to the catalogue's `region` without naming
   any region in Python. A missing DLT template id is `ACTION_DLT_TEMPLATE_MISSING`; another missing required
   field is `CATALOGUE_INVALID`. A value left as a placeholder in angle brackets counts as missing.
+
+## 14. Choosing the offer (M100, DEC-1310)
+
+Part A (learning, checking, evaluating and measuring several offers against one shared control) is
+described in `docs/UPLIFT.md` section 14, "Several offers against one shared control". Part B makes the
+choice inside the scoring run and puts it on the treat list:
+
+* **Where.** `engine/decide/offer_run.py`, installed on the score flow's stage table after M99's
+  contactability seam: after the actions stage of a scoring run of a model of several offers. A run of one
+  offer is untouched (`tests/integration/decide/test_m100_binary_identity.py`,
+  `tests/integration/decide/test_offer_choice_binary.py`).
+* **The rule.** Per customer, the offer with the highest net value (M97, each offer priced with its own
+  catalogue action's costs, `uplift.policy.arm_action_ids`) among the offers they are eligible for (not
+  suppressed, not held back, contactable on one of the offer's planned channels, M99) and not a sleeping dog
+  for; no offer when none pays for itself; a total budget in rupees (`uplift.policy.total_budget`) and in
+  contacts (`budget_contacts`), greedy by net value per rupee. `docs/UPLIFT.md` section 14 has the details.
+* **Files.** `offer_choice.parquet` (row-level: registered in `configs/privacy.yaml`,
+  `engine/privacy/layout.py`, `ROW_LEVEL_ARTEFACTS`) and `offer_choice.json`. The treat list gains three
+  columns on every run: `runner_up_offer`, `runner_up_net_value` and `offer_reason` (empty on a run of one
+  offer), and its summary `offer_counts` (a run that chose offers) and `channel_rows` (any run whose treated
+  rows have a channel).
+* **The catalogue the run is checked against is the one it is priced with.** The route that creates a
+  scoring run (and an uplift training run that maps offers to actions) writes `catalogue_stamp.json` from
+  the config root it resolved the use case from (`create_app(config_root=...)`, else
+  `MARKETING_AI_CONFIG_DIR`, else `configs/`); the run keeps that stamp rather than stamping again from its
+  own root (`engine.decide.catalogue.stamp_checked_catalogue`).
+* **Channel consent columns are never model inputs.** A training run whose use case configures
+  `actions.suppression.channels` leaves those channels' consent and contactable columns out of the
+  features, through `prepare.exclude_columns` (`engine/decide/channel_columns.py`), without an edit to a
+  Phase 1 stage file.
+* **Channel-only consent.** With channels configured, the scoring gate passes a customer with a valid grant
+  on at least one configured channel (section 13); without channels it is unchanged.
+* **On screen.** The uplift Output page shows "Which offer each customer gets" (per offer: customers,
+  channels, net value, costs; no offer and why), and the treat list card counts the treated rows per
+  offer and per channel. Every number is the server's.

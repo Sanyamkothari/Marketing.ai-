@@ -305,6 +305,12 @@ def create_uplift_run(
         run_key(record.run_id, UPLIFT_VALIDATION_FILENAME),
         checked.report.model_copy(update={"run_id": record.run_id}),
     )
+    if config.uplift.policy.arm_action_ids:
+        # Plan J M100 part B (DEC-1310): the offers' catalogue actions as this root declares them (the
+        # root their ids were just checked against), for the costs `arm_policy_value.json` records.
+        from engine.decide.catalogue import stamp_checked_catalogue
+
+        stamp_checked_catalogue(storage, record.run_id, config, root=root, created_at=record.created_at)
     spec = job_spec_for(record, upload=upload, client_id=settings.client_id)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))

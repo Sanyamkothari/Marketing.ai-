@@ -104,6 +104,14 @@ _RUPEE_DECIMALS: Final[int] = 2
 
 REASON_COLUMNS: Final[tuple[str, str, str]] = ("reason_1", "reason_2", "reason_3")
 
+RUNNER_UP_OFFER_COLUMN: Final[str] = "runner_up_offer"
+"""Plan J M100 part B: the next-best offer the customer could be given (its catalogue label, else its
+level); empty on a run of one offer, and when there is none."""
+RUNNER_UP_VALUE_COLUMN: Final[str] = "runner_up_net_value"
+"""Its predicted net value, in rupees (whatever its sign); empty when there is none."""
+OFFER_REASON_COLUMN: Final[str] = "offer_reason"
+"""Why a customer who could be treated got no offer, in plain words; empty otherwise."""
+
 _NOT_SCORED: Final[str] = "RUN_NOT_SCORED"
 _SEGMENT_COLUMN: Final[str] = "segment"
 _REQUIRED_SCORE_COLUMNS: Final[tuple[str, ...]] = (
@@ -215,6 +223,22 @@ class TreatListSummary(Artefact):
         ),
         exclude_if=lambda value: value is None,
     )
+    offer_counts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan J M100 part B: treat = 1 rows per offer (its label), on a run that chose the offer per "
+            "customer. Absent otherwise."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    channel_rows: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan J M100 part B: treat = 1 rows per channel they are sent on. Absent when no treated row "
+            "has a channel (a run that configures no channels and names no catalogue action)."
+        ),
+        exclude_if=lambda value: value is None,
+    )
 
 
 def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None = None) -> TreatListSummary:
@@ -309,6 +333,37 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         planned_by_action={} if stamp is None else stamp.planned_channels,
     )
     treat = channels.treat
+    channel = channels.channel
+    uncontactable_rows = channels.uncontactable_rows
+
+    # 5b. The offer chosen per customer on a run of several offers (Plan J M100 part B).
+    runner_up_offer = pd.Series(np.full(n_rows, None, dtype=object), dtype="object")
+    runner_up_value = pd.Series(np.full(n_rows, np.nan), dtype="float64")
+    offer_reason = pd.Series(np.full(n_rows, None, dtype=object), dtype="object")
+    offer_counts: dict[str, int] | None = None
+    offer_choice = _read_offer_choice(storage, run_id, primary_key, row_keys)
+    if offer_choice is not None:
+        applied = _apply_offer_choice(
+            offer_choice,
+            suppressed=suppressed,
+            held_out=held_out,
+            explore=explore_true,
+            fallback_treat=treat,
+            fallback_offer=offer,
+            fallback_channel=channel,
+            fallback_net_value=net_value,
+            contactability_written=uncontactable_rows is not None,
+        )
+        treat, offer, channel = applied.treat, applied.offer, applied.channel
+        net_value, runner_up_offer, runner_up_value = (
+            applied.net_value,
+            applied.runner_up_offer,
+            applied.runner_up_value,
+        )
+        offer_reason, uncontactable_rows = applied.offer_reason, applied.uncontactable_rows
+        offer_counts = applied.offer_counts
+        if net_value.notna().any():
+            net_value_note, net_value_unit = None, "rupees"
 
     # 6. Reasons, in business words.
     reasons = _reasons(storage, run_id, scores, row_keys, config_root)
@@ -323,11 +378,14 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         flags=flags,
         suppression=suppression,
         offer=offer,
-        channel=channels.channel,
+        channel=channel,
         contactable_channels=channels.contactable_channels,
         net_value=net_value,
         gross_value=gross_value,
         reasons=reasons,
+        runner_up_offer=runner_up_offer,
+        runner_up_value=runner_up_value,
+        offer_reason=offer_reason,
     )
     table = _table(out, is_uplift, key_cols)
     storage.write_bytes(run_key(run_id, TREAT_LIST_PARQUET), _parquet_bytes(table))
@@ -351,7 +409,9 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         catalogue_sha256=cat_sha,
         catalogue_note=cat_note,
         channel_counts=channels.channel_counts,
-        uncontactable_rows=channels.uncontactable_rows,
+        uncontactable_rows=uncontactable_rows,
+        offer_counts=offer_counts,
+        channel_rows=_channel_rows(channel, treat),
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -792,6 +852,138 @@ def _resolve_channels(
     )
 
 
+class _OfferChoice(NamedTuple):
+    """`offer_choice.parquet` joined to the scores on every key column (Plan J M100 part B)."""
+
+    covered: np.ndarray
+    arm: np.ndarray
+    label: np.ndarray
+    channel: np.ndarray
+    net_value: np.ndarray
+    runner_up_arm: np.ndarray
+    runner_up_label: np.ndarray
+    runner_up_channel: np.ndarray
+    runner_up_value: np.ndarray
+    reason: np.ndarray
+
+
+def _read_offer_choice(
+    storage: Storage, run_id: str, primary_key: Any, row_keys: pd.Series[Any]
+) -> _OfferChoice | None:
+    """The run's choice of offer per customer, or None when it made none (a run of one offer, or a run
+    of several with no value to choose by: its treat list is then the first offer's, as before)."""
+    from engine.decide.offer_run import OFFER_CHOICE_FILENAME
+
+    try:
+        data = storage.read_bytes(run_key(run_id, OFFER_CHOICE_FILENAME))
+    except StorageError:
+        return None
+    table = pd.read_parquet(io.BytesIO(data))
+    index = pd.Index(_join_keys(table, primary_key))
+    if not index.is_unique:
+        _LOGGER.warning("treat list %s: %s repeats a customer key", run_id, OFFER_CHOICE_FILENAME)
+        return None
+    positions = index.get_indexer(pd.Index(row_keys))
+    covered = positions >= 0
+    at = np.where(covered, positions, 0)
+
+    def take(name: str, missing: Any) -> np.ndarray:
+        values = table[name].to_numpy()[at]
+        return np.where(covered, values, missing)
+
+    return _OfferChoice(
+        covered=covered,
+        arm=take("offer_arm", 0).astype(np.int64),
+        label=take("offer_label", None).astype(object),
+        channel=take("offer_channel", None).astype(object),
+        net_value=take("offer_net_value", np.nan).astype(np.float64),
+        runner_up_arm=take("runner_up_arm", 0).astype(np.int64),
+        runner_up_label=take("runner_up_label", None).astype(object),
+        runner_up_channel=take("runner_up_channel", None).astype(object),
+        runner_up_value=take("runner_up_net_value", np.nan).astype(np.float64),
+        reason=take("offer_reason", None).astype(object),
+    )
+
+
+class _Applied(NamedTuple):
+    treat: np.ndarray
+    offer: pd.Series[Any]
+    channel: pd.Series[Any]
+    net_value: pd.Series[Any]
+    runner_up_offer: pd.Series[Any]
+    runner_up_value: pd.Series[Any]
+    offer_reason: pd.Series[Any]
+    uncontactable_rows: int | None
+    offer_counts: dict[str, int]
+
+
+def _apply_offer_choice(
+    chosen: _OfferChoice,
+    *,
+    suppressed: np.ndarray,
+    held_out: np.ndarray,
+    explore: np.ndarray,
+    fallback_treat: np.ndarray,
+    fallback_offer: pd.Series[Any],
+    fallback_channel: pd.Series[Any],
+    fallback_net_value: pd.Series[Any],
+    contactability_written: bool,
+) -> _Applied:
+    """The treat flag, offer, channel and money of a run that chose the offer per customer.
+
+    A customer is treated with the offer the run chose (never suppressed, held out, or given an offer
+    they are a sleeping dog for or cannot be reached on: the run's choice already says so). An explored
+    customer (M92) the choice left without an offer is given the best offer they could be given (the
+    choice's runner-up), outside the budget, as M92 treats them outside the policy; one with no such
+    offer is not treated. A customer the file does not cover keeps what the list said before.
+    """
+    from engine.decide.offer_run import OFFER_REASON_TEXT
+
+    covered = chosen.covered
+    open_ = ~suppressed & ~held_out
+    offered = covered & (chosen.arm > 0) & open_
+    explored = covered & ~offered & open_ & explore & (chosen.runner_up_arm > 0)
+    treat = np.where(covered, offered | explored, fallback_treat)
+
+    nothing = np.full(len(covered), None, dtype=object)
+    label = np.where(offered, chosen.label, np.where(explored, chosen.runner_up_label, nothing))
+    channel = np.where(offered, chosen.channel, np.where(explored, chosen.runner_up_channel, nothing))
+    value = np.where(offered, chosen.net_value, np.where(explored, chosen.runner_up_value, np.nan))
+    offer = fallback_offer.mask(pd.Series(covered), pd.Series(label, dtype="object"))
+    channel_out = fallback_channel.mask(pd.Series(covered), pd.Series(channel, dtype="object"))
+    net = fallback_net_value.mask(pd.Series(covered), pd.Series(np.round(value, _RUPEE_DECIMALS)))
+
+    has_runner = covered & (chosen.runner_up_arm > 0) & ~explored
+    runner_offer = pd.Series(np.where(has_runner, chosen.runner_up_label, nothing), dtype="object")
+    runner_value = pd.Series(
+        np.round(np.where(has_runner, chosen.runner_up_value, np.nan), _RUPEE_DECIMALS), dtype="float64"
+    )
+    told = covered & open_ & ~treat & (chosen.reason != "offer")
+    texts = np.array([OFFER_REASON_TEXT.get(str(code)) for code in chosen.reason], dtype=object)
+    reason = pd.Series(np.where(told, texts, nothing), dtype="object")
+    unreachable = int((told & (chosen.reason == "no_eligible_offer")).sum())
+    labels, counts = np.unique(label[treat & covered].astype(str), return_counts=True)
+    return _Applied(
+        treat=np.asarray(treat, dtype=bool),
+        offer=offer,
+        channel=channel_out,
+        net_value=net.astype("float64"),
+        runner_up_offer=runner_offer,
+        runner_up_value=runner_value,
+        offer_reason=reason,
+        uncontactable_rows=unreachable if contactability_written else None,
+        offer_counts={str(name): int(count) for name, count in zip(labels, counts, strict=True)},
+    )
+
+
+def _channel_rows(channel: pd.Series[Any], treat: np.ndarray) -> dict[str, int] | None:
+    """treat = 1 rows per channel, or None when no treated row has a channel."""
+    sent = channel[pd.Series(treat) & channel.notna()]
+    if sent.empty:
+        return None
+    return {str(name): int(count) for name, count in sent.value_counts(sort=False).sort_index().items()}
+
+
 # ---------------------------------------------------------------------------
 # Assembling and writing
 # ---------------------------------------------------------------------------
@@ -810,6 +1002,9 @@ def _assemble(
     net_value: pd.Series[Any],
     gross_value: pd.Series[Any],
     reasons: pd.DataFrame,
+    runner_up_offer: pd.Series[Any],
+    runner_up_value: pd.Series[Any],
+    offer_reason: pd.Series[Any],
 ) -> pd.DataFrame:
     n = len(scores.index)
     data: dict[str, Any] = {name: key_text(scores[name]).astype("object") for name in key_cols}
@@ -824,6 +1019,10 @@ def _assemble(
     data["offer"] = offer.astype("object")
     data["channel"] = channel.astype("object")
     data["contactable_channels"] = contactable_channels.astype("object")
+    # Plan J M100 part B: the next-best offer and its net value, and why a customer got no offer.
+    data[RUNNER_UP_OFFER_COLUMN] = runner_up_offer.astype("object")
+    data[RUNNER_UP_VALUE_COLUMN] = runner_up_value
+    data[OFFER_REASON_COLUMN] = offer_reason.astype("object")
     data["net_value"] = net_value
     data[EXPECTED_GROSS_VALUE_COLUMN] = gross_value
     for name in REASON_COLUMNS:
@@ -844,6 +1043,9 @@ def _schema(is_uplift: bool, key_cols: tuple[str, ...]) -> pa.Schema:
         pa.field("offer", pa.string()),
         pa.field("channel", pa.string()),
         pa.field("contactable_channels", pa.string()),
+        pa.field(RUNNER_UP_OFFER_COLUMN, pa.string()),
+        pa.field(RUNNER_UP_VALUE_COLUMN, pa.float64()),
+        pa.field(OFFER_REASON_COLUMN, pa.string()),
         pa.field("net_value", pa.float64()),
         pa.field(EXPECTED_GROSS_VALUE_COLUMN, pa.float64()),
         *[pa.field(name, pa.string()) for name in REASON_COLUMNS],

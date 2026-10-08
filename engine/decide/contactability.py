@@ -239,12 +239,24 @@ def install_contactability(score_flow: type[Any]) -> None:
         config = getattr(getattr(self, "_ctx", None), "config", None)
         actions = getattr(config, "actions", None)
         suppression = getattr(actions, "suppression", None)
-        if not getattr(suppression, "channels", None) and not _catalogue_present():
+        if not getattr(suppression, "channels", None) and not _catalogue_present() and not _stamped(self):
             return bodies
         return tuple((key, _after_actions(self, key, body)) for key, body in bodies)
 
     score_flow._bodies = _bodies
     setattr(score_flow, _INSTALLED, True)
+
+
+def _stamped(flow: Any) -> bool:
+    """Whether the route that created the run already stamped the catalogue it was checked against."""
+    from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME
+    from engine.storage import run_key
+
+    ctx = getattr(flow, "_ctx", None)
+    storage = getattr(flow, "_storage", None)
+    if ctx is None or storage is None:
+        return False
+    return bool(storage.exists(run_key(ctx.run_id, CATALOGUE_STAMP_FILENAME)))
 
 
 def _catalogue_present() -> bool:
@@ -274,11 +286,20 @@ def _after_actions(flow: Any, key: Any, body: Callable[[], Any]) -> Callable[[],
 
 
 def _write_catalogue_stamp(flow: Any) -> None:
-    """`catalogue_stamp.json`, when the run's config root has a catalogue (the run-time config root)."""
+    """`catalogue_stamp.json`, when the run's config root has a catalogue (the run-time config root).
+
+    Plan J M100 part B (DEC-1310): a stamp the route that created the run already wrote, from the config
+    root the use case was checked against (`engine.decide.catalogue.stamp_checked_catalogue`), is kept
+    and only listed among the run's files, so the run never stamps a catalogue from another root.
+    """
     from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME, catalogue_stamp
+    from engine.storage import run_key
     from engine.utils.time import utc_now
 
     ctx = flow._ctx
+    if _stamped(flow):
+        flow._artefacts[CATALOGUE_STAMP_FILENAME] = run_key(ctx.run_id, CATALOGUE_STAMP_FILENAME)
+        return
     stamp = catalogue_stamp(ctx.config, run_id=ctx.run_id, created_at=utc_now())
     if stamp is None:
         return
