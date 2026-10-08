@@ -7,6 +7,7 @@ itself (coverage, false positives, bias) live in `tests/statistical/` and run ni
 from __future__ import annotations
 
 import logging
+from typing import TYPE_CHECKING
 
 import pandas as pd
 import pytest
@@ -15,10 +16,24 @@ from engine.measurement.simulate import AS_OF, OUTCOME_WINDOW_DAYS, population
 from engine.uplift.contracts import IncrementalityStatus
 from engine.uplift.incrementality import measure_incrementality
 
+if TYPE_CHECKING:
+    from collections.abc import Iterator
+
 
 @pytest.fixture(autouse=True)
-def _quiet() -> None:
-    logging.getLogger("engine").setLevel(logging.WARNING)
+def _quiet() -> Iterator[None]:
+    """Silence the engine's INFO lines for these tests, then give the logger its level back.
+
+    Leaving "engine" at WARNING would swallow every `engine.*` INFO record in every later test of
+    the session, which is how `tests/unit/test_logging_audit.py` came to capture nothing.
+    """
+    engine_logger = logging.getLogger("engine")
+    previous = engine_logger.level
+    engine_logger.setLevel(logging.WARNING)
+    try:
+        yield
+    finally:
+        engine_logger.setLevel(previous)
 
 
 def test_a_seed_is_one_campaign_bit_for_bit() -> None:
