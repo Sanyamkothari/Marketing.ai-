@@ -126,12 +126,33 @@ def promote_model(
     only record of why the rule was overridden.
     """
     principal, champion = _check_decider(request, registry, storage, model_id)
+    _refuse_multi_arm(registry, storage, model_id)  # Plan J M100 (DEC-668 (4), DEC-1310 (h))
     try:
         version = registry.promote(model_id, by=_decider_name(principal, body.promoted_by), note=body.reason)
     except RegistryError as exc:
         raise registry_http(exc) from exc
     _record(request, version, "promoted", principal, body.reason, champion)
     return as_response(version)
+
+
+def _refuse_multi_arm(registry: ModelRegistry, storage: Storage, model_id: str) -> None:
+    """Plan J M100: `409 MULTI_ARM_PROMOTION_REFUSED` for an uplift model of several offers.
+
+    The champion rule compares one treatment's AUUC and is frozen; until a decision says how models of
+    several offers are compared, none takes the champion slot, by the run or by hand (DEC-668 (4)).
+    """
+    from engine.measurement.arms import (
+        MULTI_ARM_PROMOTION_REFUSED,
+        PROMOTION_REFUSED_REASON,
+        is_multi_arm_version,
+    )
+
+    try:
+        version = registry.get(model_id)
+    except RegistryError as exc:
+        raise registry_http(exc) from exc
+    if is_multi_arm_version(storage, version):
+        raise http_error(409, MULTI_ARM_PROMOTION_REFUSED, PROMOTION_REFUSED_REASON)
 
 
 def _principal(request: Request) -> Principal | None:

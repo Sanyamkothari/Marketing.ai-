@@ -26,6 +26,7 @@ __all__ = [
     "UpliftLearner",
     "UpliftPolicyConfig",
     "UpliftSegmentsConfig",
+    "level_text",
     "uplift_agent_editable_paths",
 ]
 
@@ -121,6 +122,23 @@ class UpliftEvidenceConfig(BaseModel):
     propensity_column: str | None = None
 
 
+def level_text(value: object) -> str:
+    """One comparable spelling of a treatment level (Plan J M100): `1`, `1.0` and `" 1 "` are one level.
+
+    The same normalisation the outcome labels use (`engine.uplift.data._label_key`): booleans as
+    `true`/`false`, whole floats without their `.0`, text stripped and lower-cased.
+    """
+    if hasattr(value, "item") and not isinstance(value, str | bytes):  # numpy scalars
+        value = value.item()
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, int):
+        return str(value)
+    if isinstance(value, float):
+        return str(int(value)) if value.is_integer() else repr(value)
+    return str(value).strip().lower()
+
+
 class UpliftConfig(BaseModel):
     """`uplift:` in a use case. Inert unless `problem_type` is `uplift`.
 
@@ -166,6 +184,53 @@ class UpliftConfig(BaseModel):
     segments: UpliftSegmentsConfig = UpliftSegmentsConfig()
     policy: UpliftPolicyConfig = UpliftPolicyConfig()
     evidence: UpliftEvidenceConfig = UpliftEvidenceConfig()  # Plan J M96; off by default
+    # Plan J M100 (DEC-668 (1), DEC-1310): several offers against one shared control. Empty (the default)
+    # is one treatment level: the treatment column holds 0/1 and every rule is today's. Otherwise the
+    # control value first, then at least two treatment values; the first of them is the treatment every
+    # existing field describes. Left out of the configuration's dump when empty, so a run configured
+    # without it records exactly what it recorded before.
+    treatment_levels: tuple[str, ...] = Field(
+        default=(),
+        description=(
+            "Several offers against one shared control (Plan J M100): the control value first, then each "
+            "offer's value in the treatment column. Empty: one treatment, recorded as 0/1."
+        ),
+        json_schema_extra=_editable(False),
+        exclude_if=lambda levels: not levels,
+    )
+
+    @field_validator("treatment_levels", mode="before")
+    @classmethod
+    def _levels_as_text(cls, value: Any) -> Any:
+        """A YAML list of numbers (`[0, 1, 2]`) names levels as text, as the file's cells are compared."""
+        if isinstance(value, list | tuple):
+            return tuple(
+                str(item) if isinstance(item, int | float) and not isinstance(item, bool) else item
+                for item in value
+            )
+        return value
+
+    @field_validator("treatment_levels")
+    @classmethod
+    def _levels_valid(cls, value: tuple[str, ...]) -> tuple[str, ...]:
+        if not value:
+            return value
+        if len(value) < 3:
+            raise ValueError(
+                "treatment_levels lists the control value first and then at least two treatment values; "
+                "leave it empty for one treatment recorded as 0/1"
+            )
+        if any(not level for level in value):
+            raise ValueError("treatment_levels may not contain an empty value")
+        keys = [level_text(level) for level in value]
+        if len(set(keys)) != len(keys):
+            raise ValueError("treatment_levels names the same value twice")
+        return value
+
+    @property
+    def multi_arm(self) -> bool:
+        """True when several treatments share one control (Plan J M100); False is today's binary run."""
+        return bool(self.treatment_levels)
 
     @field_validator("learner", mode="before")
     @classmethod

@@ -67,6 +67,9 @@ def measure_campaign(
     campaign_id: str | None = None,
     plan: TestPlan | None = None,
     covariate_column: str | None = None,
+    arm_column: str | None = None,
+    arms: Sequence[str] | None = None,
+    control_level: str | None = None,
 ) -> IncrementalityReport:
     """Measure a campaign: `measure_incrementality` on `assignment`, checked against `plan`.
 
@@ -77,6 +80,13 @@ def measure_campaign(
     so far and no conclusion (`early_look_summary`).
     `covariate_column` is compared with the plan now and used by M102's adjusted estimate. Raises
     `ValueError` for anything `measure_incrementality` refuses.
+
+    **Several offers (Plan J M100, DEC-668 (2)).** With `arm_column`, the column naming each treated
+    customer's offer, every offer is measured against the shared control (`control_group`) by
+    `measure_incrementality` on that offer's customers and the control's, and the report carries
+    `arms` (in `arms` order, else the order the offers first appear). The report's own fields are the
+    first offer's against the control (DEC-668 (3)); a treated customer with no offer named is in no
+    offer's comparison. Without `arm_column` nothing changes.
     """
     from engine.uplift.incrementality import measure_incrementality
 
@@ -92,21 +102,43 @@ def measure_campaign(
         )
         if differences:
             raise TestPlanChangedError(differences)
-    report = measure_incrementality(
-        frame,
-        outcomes,
-        run_id=run_id,
-        primary_key=primary_key,
-        outcome_column=outcome_column,
-        positive_label=positive_label,
-        intended_column=intended_column,
-        bands=bands,
-        treatment_time=treatment_time,
-        treatment_date_column=treatment_date_column,
-        outcome_window_days=outcome_window_days,
-        as_of=as_of,
-        campaign_id=campaign_id,
-    )
+    if arm_column is not None:
+        from engine.measurement.arms import measure_arms
+
+        report = measure_arms(
+            frame,
+            outcomes,
+            arm_column=arm_column,
+            arms=arms,
+            control_level=control_level,
+            run_id=run_id,
+            primary_key=primary_key,
+            outcome_column=outcome_column,
+            positive_label=positive_label,
+            intended_column=intended_column,
+            bands=bands,
+            treatment_time=treatment_time,
+            treatment_date_column=treatment_date_column,
+            outcome_window_days=outcome_window_days,
+            as_of=as_of,
+            campaign_id=campaign_id,
+        )
+    else:
+        report = measure_incrementality(
+            frame,
+            outcomes,
+            run_id=run_id,
+            primary_key=primary_key,
+            outcome_column=outcome_column,
+            positive_label=positive_label,
+            intended_column=intended_column,
+            bands=bands,
+            treatment_time=treatment_time,
+            treatment_date_column=treatment_date_column,
+            outcome_window_days=outcome_window_days,
+            as_of=as_of,
+            campaign_id=campaign_id,
+        )
     if plan is None:
         return report
     early = is_early_look(plan, as_of)

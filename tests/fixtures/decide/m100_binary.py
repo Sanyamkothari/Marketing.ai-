@@ -52,7 +52,9 @@ SCORE_JSON: Final[tuple[str, ...]] = (
 )
 
 _TIMESTAMP = re.compile(r"\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?")
-_DURATIONS = re.compile(r'"(duration_s|seconds|elapsed_s|estimated_refit_seconds|refit_seconds)": [0-9.eE+-]+')
+_DURATIONS = re.compile(
+    r'"(duration_s|seconds|elapsed_s|estimated_refit_seconds|refit_seconds)": [0-9.eE+-]+'
+)
 _SPOKEN_DURATION = re.compile(r"about [0-9.,]+ (seconds?|minutes?|hours?)")
 
 

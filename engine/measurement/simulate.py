@@ -44,8 +44,10 @@ The frames are what the engine consumes, not simplified copies: `scores` has the
 `suppressed_reason` and `intended_treatment` columns, `outcomes` has the outcome and the treatment date,
 both keyed by `customer_id`. :attr:`SimulatedCampaign.measure_kwargs` holds the matching arguments of
 `measure_incrementality`. M96 adds `uplift_population` (a known per-customer effect, for the equal-budget
-comparison of `engine.measurement.compare`); M100 adds several arms and M102 continuous outcomes; they
-extend this module.
+comparison of `engine.measurement.compare`); M100 adds several arms (`multi_arm_campaign`, a campaign of
+several offers against one shared control, and `multi_arm_population`, an uplift training file where
+different segments answer different offers and some are put off by both); M102 adds continuous
+outcomes; they extend this module.
 
 Pure and deterministic: no storage, no network, no clock. `pandas` is imported inside the function so
 `import engine` stays fast.
@@ -64,15 +66,22 @@ if TYPE_CHECKING:
     from numpy.typing import NDArray
 
 __all__ = [
+    "ARM_COLUMN",
     "AS_OF",
     "CONTROL_SHARE",
     "KEY_COLUMN",
+    "MULTI_ARM_LEVELS",
+    "MULTI_ARM_SEGMENTS",
     "OUTCOME_COLUMN",
     "OUTCOME_WINDOW_DAYS",
     "TREATMENT_DATE_COLUMN",
     "UPLIFT_FEATURES",
     "SimulatedCampaign",
+    "SimulatedMultiArmCampaign",
+    "SimulatedMultiArmPopulation",
     "SimulatedUpliftPopulation",
+    "multi_arm_campaign",
+    "multi_arm_population",
     "population",
     "uplift_population",
 ]
@@ -305,4 +314,207 @@ def uplift_population(
     features = pd.DataFrame(x, columns=list(UPLIFT_FEATURES))
     return SimulatedUpliftPopulation(
         features=features, t=t, y=y, propensity=propensity.astype(np.float64), base=base, tau=tau
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan J M100: several offers against one shared control
+# ---------------------------------------------------------------------------
+ARM_COLUMN: Final[str] = "offer"
+"""The column of a simulated multi-offer campaign naming each customer's offer (blank for the control);
+not `arm`, which a campaign's `assignment.parquet` uses for treated, holdout or suppressed (M94)."""
+
+MULTI_ARM_LEVELS: Final[tuple[str, str, str]] = ("none", "offer_a", "offer_b")
+"""The planted population's treatment levels: the control first, then the two offers."""
+
+MULTI_ARM_SEGMENTS: Final[tuple[str, str, str, str]] = (
+    "offer_a_responders",
+    "offer_b_responders",
+    "unmoved",
+    "sleeping_dogs",
+)
+"""The planted segments, cut on `offer_affinity`: who answers offer A, who answers B, nobody, and who
+is put off by both."""
+
+
+@dataclass(frozen=True)
+class SimulatedMultiArmCampaign:
+    """A campaign of several offers with a known effect per offer (Plan J M100)."""
+
+    scores: pd.DataFrame
+    """`customer_id`, `control_group`, `suppressed_reason` (empty), `intended_treatment` (True) and `offer`
+    (the offer's level; blank for a held-out customer)."""
+    outcomes: pd.DataFrame
+    """`customer_id`, `converted` (0/1) and `treatment_date`; every outcome is mature on `AS_OF`."""
+    levels: tuple[str, ...]
+    """The control level, then the offers."""
+    base_rate: float
+    effects: tuple[float, ...]
+    """Each offer's true effect (the difference in conversion rate it causes), in `levels[1:]` order."""
+
+    @property
+    def measure_kwargs(self) -> dict[str, Any]:
+        """The arguments of `engine.measurement.measure.measure_campaign` that read these frames."""
+        return {
+            "run_id": "simulated",
+            "primary_key": KEY_COLUMN,
+            "outcome_column": OUTCOME_COLUMN,
+            "treatment_date_column": TREATMENT_DATE_COLUMN,
+            "outcome_window_days": OUTCOME_WINDOW_DAYS,
+            "treatment_time": AS_OF - timedelta(days=OUTCOME_WINDOW_DAYS),
+            "as_of": AS_OF,
+            "arm_column": ARM_COLUMN,
+            "arms": self.levels[1:],
+        }
+
+
+def multi_arm_campaign(
+    n: int,
+    base_rate: float,
+    effects: tuple[float, ...],
+    *,
+    seed: int,
+    control_share: float | None = None,
+    levels: tuple[str, ...] | None = None,
+) -> SimulatedMultiArmCampaign:
+    """`n` customers split at random between a shared control and `len(effects)` offers (Plan J M100).
+
+    Complete randomisation: `round(control_share * n)` customers are held back (an equal share with the
+    offers when `control_share` is None), the rest are dealt to the offers in equal numbers at random.
+    A customer converts with probability `base_rate` (+ the offer's effect). Every outcome is mature.
+    Deterministic for a seed.
+    """
+    import pandas as pd
+
+    arms = len(effects)
+    if arms < 1:
+        raise ValueError("A multi-offer campaign needs at least one offer.")
+    names = levels if levels is not None else ("none", *(f"offer_{k}" for k in range(1, arms + 1)))
+    if len(names) != arms + 1:
+        raise ValueError("levels names the control and one level per effect.")
+    share = 1.0 / (arms + 1) if control_share is None else control_share
+    _check_share("control_share", share, below_one=True)
+    _check_share("base_rate", base_rate)
+    for effect in effects:
+        if not 0.0 <= base_rate + effect <= 1.0:
+            raise ValueError(f"base_rate + effect must be in [0, 1], not {base_rate + effect}.")
+    n_control = round(share * n)
+    if not 1 <= n_control <= n - arms:
+        raise ValueError("control_share leaves the control or an offer empty.")
+    rng = np.random.default_rng(seed)
+    order = rng.permutation(n)
+    code = np.zeros(n, dtype=np.int_)
+    treated = order[n_control:]
+    code[treated] = 1 + np.arange(len(treated)) % arms
+    lift = np.concatenate([[0.0], np.asarray(effects, dtype=np.float64)])
+    converts = rng.random(n) < base_rate + lift[code]
+    age_days = rng.integers(OUTCOME_WINDOW_DAYS + 1, OUTCOME_WINDOW_DAYS + _MATURE_SPREAD_DAYS + 1, size=n)
+    keys = np.char.add("C", np.char.zfill(np.arange(n).astype(str), 7))
+    treated_on = np.datetime64(AS_OF.date()) - age_days.astype("timedelta64[D]")
+    labels = np.asarray(names, dtype=object)[code]
+    labels[code == 0] = ""
+    scores = pd.DataFrame(
+        {
+            KEY_COLUMN: keys,
+            "control_group": code == 0,
+            "suppressed_reason": np.full(n, "", dtype=object),
+            "intended_treatment": np.ones(n, dtype=bool),
+            ARM_COLUMN: labels,
+        }
+    )
+    outcomes = pd.DataFrame(
+        {
+            KEY_COLUMN: keys,
+            OUTCOME_COLUMN: converts.astype(np.int64),
+            TREATMENT_DATE_COLUMN: treated_on.astype(str),
+        }
+    )
+    return SimulatedMultiArmCampaign(
+        scores=scores,
+        outcomes=outcomes,
+        levels=tuple(names),
+        base_rate=base_rate,
+        effects=tuple(float(e) for e in effects),
+    )
+
+
+@dataclass(frozen=True)
+class SimulatedMultiArmPopulation:
+    """Customers with a planted effect per offer, as an uplift training file (Plan J M100).
+
+    `frame` has `customer_id`, the features (`offer_affinity`, `tenure_months`, `noise_1`, `noise_2`),
+    the treatment column (a level of `levels`) and the 0/1 outcome column.
+    """
+
+    frame: pd.DataFrame
+    levels: tuple[str, ...]
+    segment: NDArray[np.object_]
+    """Each customer's planted segment (:data:`MULTI_ARM_SEGMENTS`)."""
+    base: NDArray[np.float64]
+    """P(outcome | control, x)."""
+    tau: NDArray[np.float64]
+    """True effect of each offer on each customer: `tau[:, k-1]` is offer `k`'s."""
+    arm: NDArray[np.int_]
+    """The level each customer was dealt: 0 the control, 1..K the offers."""
+
+    def true_ate(self, k: int, rows: NDArray[np.int_] | None = None) -> float:
+        """Offer `k`'s average effect over `rows` (every customer when None)."""
+        values = self.tau[:, k - 1] if rows is None else self.tau[rows, k - 1]
+        return float(np.mean(values))
+
+
+def multi_arm_population(
+    n: int,
+    *,
+    seed: int,
+    outcome_column: str = OUTCOME_COLUMN,
+    treatment_column: str = "offer",
+    effect: float = 0.25,
+    harm: float = 0.25,
+    levels: tuple[str, str, str] = MULTI_ARM_LEVELS,
+) -> SimulatedMultiArmPopulation:
+    """`n` customers, a third dealt to each of the control and two offers at random (Plan J M100).
+
+    The segments are cut on `offer_affinity`, uniform on [0, 1): below 0.35 a customer answers offer A
+    (+`effect`) and not B; from 0.35 to 0.70 offer B (+`effect`) and not A; from 0.70 to 0.85 neither;
+    from 0.85 both offers put them off (-`harm`, from a higher base rate of 35%, so they are sleeping
+    dogs for both). Everyone else converts at 15% without an offer, a little more with longer tenure.
+    The default effects (25 points either way) are planted large on purpose: a meta-learner's
+    per-customer estimate on a few thousand customers per arm scatters by several points, and the
+    fixture tests the choice, not the learner's resolution. Deterministic for a seed.
+    """
+    import pandas as pd
+
+    if n < 30:
+        raise ValueError(f"n must be at least 30, not {n}.")
+    rng = np.random.default_rng(seed)
+    affinity = rng.random(n)
+    tenure = rng.integers(1, 72, size=n)
+    noise = rng.standard_normal((n, 2))
+    segment = np.select(
+        [affinity < 0.35, affinity < 0.70, affinity < 0.85],
+        list(MULTI_ARM_SEGMENTS[:3]),
+        default=MULTI_ARM_SEGMENTS[3],
+    ).astype(object)
+    base = np.where(segment == MULTI_ARM_SEGMENTS[3], 0.35, 0.15) + 0.03 * (tenure / 72.0)
+    tau = np.zeros((n, 2), dtype=np.float64)
+    tau[segment == MULTI_ARM_SEGMENTS[0], 0] = effect
+    tau[segment == MULTI_ARM_SEGMENTS[1], 1] = effect
+    tau[segment == MULTI_ARM_SEGMENTS[3], :] = -harm
+    arm = np.asarray(rng.permutation(np.arange(n) % 3), dtype=np.int_)
+    lift = np.where(arm == 0, 0.0, tau[np.arange(n), np.maximum(arm - 1, 0)])
+    y = (rng.random(n) < np.clip(base + lift, 0.0, 1.0)).astype(np.int64)
+    frame = pd.DataFrame(
+        {
+            KEY_COLUMN: np.char.add("M", np.char.zfill(np.arange(n).astype(str), 7)),
+            "offer_affinity": np.round(affinity, 4),
+            "tenure_months": tenure,
+            "noise_1": noise[:, 0],
+            "noise_2": noise[:, 1],
+            treatment_column: np.asarray(levels, dtype=object)[arm],
+            outcome_column: y,
+        }
+    )
+    return SimulatedMultiArmPopulation(
+        frame=frame, levels=tuple(levels), segment=segment, base=base, tau=tau, arm=arm
     )

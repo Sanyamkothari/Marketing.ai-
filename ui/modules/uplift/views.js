@@ -77,6 +77,7 @@ export const MODEL_ARTEFACTS = [
   "segments.json",
   "policy_recommendation.json",
   "ope_report.json",
+  "arm_policy_value.json", // Plan J M100: written only by a model of several offers
 ];
 export const OUTPUT_ARTEFACTS = ["uplift_validation.json", "segments.json", "policy_recommendation.json"];
 
@@ -911,6 +912,72 @@ function opeCard(o) {
     ${o && o.error ? errorBox(o.error) : ""}</form>${opeResult(report)}</details></section>`;
 }
 
+/**
+ * Plan J M100: one card per offer of a model of several offers, each against the shared control, and
+ * what choosing the offer per customer is worth. Every number is the server's own
+ * (`uplift_evaluation.json`'s `arms`, `arm_policy_value.json`); a model of one offer shows nothing here.
+ */
+export function armsCard(evaluation, value) {
+  const arms = (evaluation && evaluation.arms) || [];
+  if (!arms.length) return "";
+  const pts = (v) => fmtPts(v).replace(" pts", "");
+  const cards = arms
+    .map((a) => {
+      const effect = a.effect || null;
+      const auuc = a.auuc || null;
+      const verdict = a.measurable_uplift
+        ? "The model finds who this offer changes."
+        : "The model does not yet find who this offer changes.";
+      return `<section class="card uarm" data-arm="${esc(a.arm)}"><h3>${esc(
+        `Offer ${a.position}: ${a.arm}`,
+      )}</h3><p class="uv-x">${esc(verdict)}</p>${tiles([
+        {
+          label: "Everyone given this offer",
+          value: effect ? fmtPts(effect.value) : EM_DASH,
+          sub: effect ? fmtLikely(effect.ci_low, effect.ci_high, pts) : "",
+        },
+        {
+          label: "Responded with this offer",
+          value: fmtRate(a.treated_rate),
+          sub: present(a.treated_rows) ? `${fmtInt(a.treated_rows)} customers` : "",
+        },
+        {
+          label: "Responded with no offer",
+          value: fmtRate(a.control_rate),
+          sub: present(a.control_rows) ? `${fmtInt(a.control_rows)} customers` : "",
+        },
+      ])}${detailsKv("Technical metrics", [
+        ["AUUC", fmtCi(auuc)],
+        ["Qini coefficient", fmtCi(a.qini_coefficient)],
+        ["Effect of the offer (ATE)", fmtCi(effect, (v) => fmtPts(v))],
+      ])}</section>`;
+    })
+    .join("");
+  let choice = "";
+  if (value) {
+    const diff = value.difference || null;
+    choice = verdictCard(
+      value.best_offer_better ? "ok" : "warn",
+      value.best_offer_better
+        ? "Choosing the offer for each customer does better than the first offer alone."
+        : "Choosing the offer for each customer is not yet shown to do better than the first offer alone.",
+      value.promotion || "",
+      detailsKv("How this was estimated", [
+        ["Finding", dash(value.summary)],
+        ["Best offer per customer", fmtCi(value.best_offer)],
+        ["First offer alone", fmtCi(value.first_treatment)],
+        ["Difference", fmtCi(diff)],
+        ["Weighted by customer value", value.value_weighted ? "Yes" : "No"],
+        ["Test customers", dash(value.rows, fmtInt)],
+        ["Bootstrap resamples", dash(value.bootstrap_samples, fmtInt)],
+      ]),
+    );
+  }
+  return `<section class="card uarms"><h3>Each offer against no offer</h3><p class="caption">${esc(
+    "Every offer is compared with the same customers who got no offer. Tested on customers the model never saw.",
+  )}</p></section>${choice}<div class="row uarm-row">${cards}</div>`;
+}
+
 /** `#/uplift/<use case>/model/<run>`: the finding first, the Qini curve and deciles, metrics behind Details. */
 export function modelPageHtml(uc, run, art, ope) {
   const validation = art["uplift_validation.json"];
@@ -1041,6 +1108,7 @@ export function modelPageHtml(uc, run, art, ope) {
       <section class="card"><h3>Gain in the top customers</h3>${upliftAt}<p class="caption">Response rate of contacted minus not-contacted customers, among those the model ranks highest.</p></section>
     </div>
     <section class="card"><h3>Gain in each tenth of customers</h3>${decile}${decileTable}</section>
+    ${armsCard(evaluation, art["arm_policy_value.json"])}
     ${opeCard(ope)}
     <section class="card card-body udetails-card">${metrics}${detailsKv("Training setup", setupRows)}${runTech(run)}</section>`;
   return pageShell(

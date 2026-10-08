@@ -64,6 +64,7 @@ from engine.contracts import Severity
 from engine.uplift.contracts import UpliftCheck, UpliftValidationReport
 from engine.uplift.data import (
     apply_feature_spec,
+    coerce_arms,
     coerce_outcome,
     coerce_treatment,
     date_like_columns,
@@ -84,6 +85,7 @@ if TYPE_CHECKING:
 
     from engine.config import UseCaseConfig
     from engine.contracts import ValidationCheck
+    from engine.uplift.contracts import ArmSummary
 
     BoolArray = npt.NDArray[np.bool_]
     IntArray = npt.NDArray[np.int_]
@@ -237,6 +239,78 @@ def _treatment_not_binary(column: str, series: pd.Series, bad: int) -> UpliftChe
         "customers whose treatment is unknown from the file.",
         column=column,
         details={"bad_values": bad, "null_values": nulls, "rows": rows, "bad_rate": round(share, 4)},
+    )
+
+
+def _outside_levels(column: str, series: pd.Series, bad: int, levels: Sequence[str]) -> UpliftCheck:
+    """`TREATMENT_NOT_BINARY` with several treatments (Plan J M100, DEC-668 (1)): a value outside the levels."""
+    rows = len(series)
+    nulls = int(series.isna().sum())
+    share = bad / rows if rows else 0.0
+    return _finding(
+        "TREATMENT_NOT_BINARY",
+        Severity.ERROR,
+        f"'{column}' should hold one of the configured treatment values ({_join(list(levels))}), but "
+        f"{_n(bad)} of {_n(rows)} rows ({share:.1%}) are blank or hold another value.",
+        "Record every customer with one of the configured values: the held-out value first, then each "
+        "offer. Remove customers whose treatment is unknown from the file.",
+        column=column,
+        details={
+            "bad_values": bad,
+            "null_values": nulls,
+            "rows": rows,
+            "bad_rate": round(share, 4),
+            "treatment_levels": list(levels),
+        },
+    )
+
+
+def _arms_too_small(
+    *,
+    target: str,
+    levels: Sequence[str],
+    rows: Sequence[int],
+    positives: Sequence[int | None],
+    min_rows: int,
+    min_positives: int,
+    rows_excluded: int,
+) -> UpliftCheck | None:
+    """`TREATMENT_ARM_TOO_SMALL` for every group of a several-treatment file, the shared control first."""
+    shortfalls: list[str] = []
+    for position, (level, count, positive) in enumerate(zip(levels, rows, positives, strict=True)):
+        group = "control group" if position == 0 else f"'{level}' group"
+        if count < min_rows:
+            shortfalls.append(f"the {group} has {_n(count)} customers (at least {_n(min_rows)} needed)")
+        if positive is not None and positive < min_positives:
+            shortfalls.append(
+                f"only {_n(positive)} customers in the {group} had a positive '{target}' "
+                f"(at least {_n(min_positives)} needed)"
+            )
+    if not shortfalls:
+        return None
+    after = (
+        f" after leaving out {_n(rows_excluded)} customers whose outcome is not final yet"
+        if rows_excluded
+        else ""
+    )
+    return _finding(
+        "TREATMENT_ARM_TOO_SMALL",
+        Severity.ERROR,
+        f"There are too few customers to measure what each offer changed{after}: {'; '.join(shortfalls)}.",
+        "Use a longer period or a larger campaign, or hold out a bigger control group next time.",
+        details={
+            "treated_rows": rows[1],
+            "control_rows": rows[0],
+            "treated_positives": positives[1],
+            "control_positives": positives[0],
+            "min_arm_rows": min_rows,
+            "min_arm_positives": min_positives,
+            "rows_excluded": rows_excluded,
+            "arms": [
+                {"level": level, "rows": count, "positives": positive}
+                for level, count, positive in zip(levels, rows, positives, strict=True)
+            ],
+        },
     )
 
 
@@ -445,6 +519,182 @@ def _not_random(
     )
 
 
+def _arm_not_random(
+    column: str,
+    level: str,
+    auc: float,
+    signals: Sequence[str],
+    rows_used: int,
+    threshold: float,
+    acknowledged: bool,
+) -> UpliftCheck:
+    """`TREATMENT_NOT_RANDOM` for one offer of a several-treatment file: who got it rather than the control."""
+    finding = _not_random(column, auc, signals, rows_used, threshold, acknowledged)
+    return finding.model_copy(
+        update={
+            "message": f"For the '{level}' group: {finding.message}",
+            "details": {**finding.details, "arm": level},
+        }
+    )
+
+
+@dataclass(frozen=True)
+class _ArmsChecked:
+    """What the several-treatment branch of :func:`run_uplift_checks` found (Plan J M100)."""
+
+    findings: list[UpliftCheck]
+    arms: tuple[ArmSummary, ...] | None
+    treated_rows: int | None
+    control_rows: int | None
+    treated_entities: int | None
+    control_entities: int | None
+    randomness_auc: float | None
+    causal: bool
+
+
+def _check_arms(
+    frame: pd.DataFrame,
+    config: UseCaseConfig,
+    *,
+    primary_key: PrimaryKey,
+    target: str,
+    treatment_column: str,
+    keep: BoolArray | None,
+    rows_immature: int,
+    entity: str | None,
+    campaign: str | None,
+    wanted: frozenset[str],
+    seed: int,
+) -> _ArmsChecked:
+    """The arm checks for `uplift.treatment_levels` (Plan J M100, DEC-668 (1)).
+
+    `TREATMENT_NOT_BINARY` becomes "a value outside the configured levels"; `TREATMENT_ARM_TOO_SMALL`
+    is checked for the control and for every treatment; the randomness check runs once per treatment,
+    on its customers and the shared control's. The report's own fields keep their meaning as the first
+    treatment against the control (DEC-668 (3)); `arms` lists every treatment.
+    """
+    import numpy as np
+
+    from engine.uplift.contracts import ArmSummary
+
+    uplift = config.uplift
+    levels = uplift.treatment_levels
+    rows = len(frame)
+    codes_all, bad = coerce_arms(frame[treatment_column], levels)
+    if codes_all is None:
+        return _ArmsChecked(
+            [_outside_levels(treatment_column, frame[treatment_column], bad, levels)],
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            True,
+        )
+    findings: list[UpliftCheck] = []
+    mask = keep if keep is not None else np.ones(rows, dtype=np.bool_)
+    codes = codes_all[mask]
+    y: IntArray | None = None
+    if target in frame.columns:
+        try:
+            y_all, _ = coerce_outcome(frame[target], config.target.positive_label)
+            y = y_all[mask]
+        except ValueError:
+            y = None  # Phase 1's TARGET_* checks report an unusable outcome.
+    kept = frame.loc[mask]
+    if entity is not None:
+        mixed, entities = _mixed_entities(frame, codes_all, entity, campaign)
+        if mixed:
+            findings.append(
+                _varies_within_entity(
+                    entity, treatment_column, mixed=mixed, entities=entities, campaign=campaign
+                )
+            )
+            return _ArmsChecked(findings, None, None, None, None, None, None, True)
+    counts: list[int] = []
+    positives: list[int | None] = []
+    for k in range(len(levels)):
+        in_arm = codes == k
+        if entity is None:
+            counts.append(int(in_arm.sum()))
+            positives.append(None if y is None else int(y[in_arm].sum()))
+        else:
+            ids = kept[entity].reset_index(drop=True)
+            counts.append(int(ids[in_arm].nunique()))
+            positives.append(None if y is None else int(ids[in_arm & (y == 1)].nunique()))
+    too_small = _arms_too_small(
+        target=target,
+        levels=levels,
+        rows=counts,
+        positives=positives,
+        min_rows=uplift.min_arm_rows,
+        min_positives=uplift.min_arm_positives,
+        rows_excluded=rows_immature,
+    )
+    if too_small is not None:
+        findings.append(too_small)
+    spec = fit_feature_spec(
+        kept, config, primary_key=primary_key, target=target, treatment_column=treatment_column
+    )
+    features = apply_feature_spec(kept, spec)
+    groups = None if entity is None else kept[entity].to_numpy(dtype=object)
+    causal = True
+    summaries: list[ArmSummary] = []
+    first_auc: float | None = None
+    for k in range(1, len(levels)):
+        both = np.flatnonzero((codes == 0) | (codes == k))
+        measured = treatment_predictability(
+            features.iloc[both],
+            np.asarray(codes[both] == k, dtype=np.int_),
+            seed=seed,
+            groups=None if groups is None else groups[both],
+        )
+        auc_k: float | None = None
+        if measured is not None:
+            auc, signals, rows_used = measured
+            auc_k = round(auc, 4)
+            if auc > uplift.randomness_auc_max:
+                causal = False
+                findings.append(
+                    _arm_not_random(
+                        treatment_column,
+                        levels[k],
+                        auc,
+                        signals,
+                        rows_used,
+                        uplift.randomness_auc_max,
+                        _is_acknowledged("TREATMENT_NOT_RANDOM", treatment_column, wanted),
+                    )
+                )
+        if k == 1:
+            first_auc = auc_k
+        summaries.append(
+            ArmSummary(
+                arm=levels[k],
+                position=k,
+                control=levels[0],
+                rows=counts[0] + counts[k],
+                treated_rows=counts[k],
+                control_rows=counts[0],
+                treated_conversions=positives[k],
+                control_conversions=positives[0],
+                randomness_auc=auc_k,
+            )
+        )
+    by_entity = entity is not None
+    return _ArmsChecked(
+        findings,
+        tuple(summaries),
+        int((codes == 1).sum()),
+        int((codes == 0).sum()),
+        counts[1] if by_entity else None,
+        counts[0] if by_entity else None,
+        first_auc,
+        causal,
+    )
+
+
 def _treatment_dates(frame: pd.DataFrame, column: str) -> pd.Series:
     import pandas as pd
 
@@ -607,6 +857,7 @@ def run_uplift_checks(
     control_rows: int | None = None
     treated_entities: int | None = None
     control_entities: int | None = None
+    arms: tuple[ArmSummary, ...] | None = None
 
     # OUTCOME_WINDOW_IMMATURE first in time: the arm sizes are counted on the rows it keeps.
     date_column = uplift.treatment_date_column
@@ -621,6 +872,27 @@ def run_uplift_checks(
     treatment_column = detect_treatment_column([str(c) for c in frame.columns], uplift)
     if treatment_column is None:
         findings.append(_treatment_missing(config))
+    elif uplift.multi_arm:
+        # Plan J M100: several treatments against one shared control (DEC-668 (1)).
+        checked = _check_arms(
+            frame,
+            config,
+            primary_key=primary_key,
+            target=target,
+            treatment_column=treatment_column,
+            keep=keep,
+            rows_immature=rows_immature,
+            entity=entity,
+            campaign=campaign,
+            wanted=wanted,
+            seed=seed,
+        )
+        findings.extend(checked.findings)
+        arms = checked.arms
+        treated_rows, control_rows = checked.treated_rows, checked.control_rows
+        treated_entities, control_entities = checked.treated_entities, checked.control_entities
+        randomness_auc = checked.randomness_auc
+        causal = checked.causal
     else:
         t_all, bad = coerce_treatment(frame[treatment_column])
         if t_all is None:
@@ -730,6 +1002,7 @@ def run_uplift_checks(
         entity_column=entity,
         treated_entities=treated_entities,
         control_entities=control_entities,
+        arms=arms,
     )
     log_stage(_LOGGER, "uplift_checks", rows=rows, seconds=time.perf_counter() - started)
     _LOGGER.info(
