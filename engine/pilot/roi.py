@@ -61,9 +61,11 @@ __all__ = [
     "Money",
     "RoiInputs",
     "RoiView",
+    "ValueCosts",
     "compute_roi",
     "format_inr",
     "load_roi_inputs",
+    "lookup_value_costs",
     "roi_document",
     "save_roi_inputs",
 ]
@@ -174,6 +176,57 @@ def outcome_is_good_by_default(use_case_id: str, outcome_name: str, root: Path |
     if config.label is not None:
         own.add(config.label.name)
     return outcome_name not in own
+
+
+DEFAULT_CHANNEL_CONTACT_COSTS: Final[dict[str, float]] = {
+    "whatsapp": 0.86,
+    "whatsapp_marketing": 0.86,
+    "whatsapp_utility": 0.13,
+    "sms": 0.15,
+    "email": 0.05,
+    "voice": 0.70,
+}
+"""India channel costs in rupees (Plan J M97): the editable defaults `configs/pilot/value.yaml` ships."""
+
+
+class ValueCosts(_Strict):
+    """Offer and contact costs from the `value:` block of `configs/pilot/value.yaml` (Plan J M97).
+
+    Read by the uplift policy when a run ranks by `uplift.policy.value_column` and has no
+    `cost_per_contact` of its own. They are suggestions the client can edit, never applied to a run
+    that did not opt in: `RoiInputs` keeps its own defaults (DEC-1307 (g)).
+    """
+
+    offer_cost: float = Field(default=0.0, ge=0)
+    contact_cost: float = Field(default=0.86, ge=0)
+    channel_contact_costs: dict[str, float] = Field(
+        default_factory=lambda: dict(DEFAULT_CHANNEL_CONTACT_COSTS)
+    )
+
+
+def lookup_value_costs(channel: str | None = None, *, root: Path | None = None) -> ValueCosts:
+    """The offer cost and contact cost the configuration gives: the ONE place costs are looked up.
+
+    Reads the `value:` block of `configs/pilot/value.yaml`; a missing file or block gives the
+    defaults of :class:`ValueCosts`. With `channel`, `contact_cost` is that channel's cost (the block's
+    `contact_cost` for a channel it does not list). M99's offer and channel catalogue takes these over
+    behind this function.
+    """
+    from engine.config import ConfigError, config_root, load_yaml
+
+    try:
+        data = load_yaml(config_root(root) / VALUE_CONFIG)
+    except ConfigError as exc:
+        if exc.code != "CONFIG_NOT_FOUND":
+            raise
+        data = {}
+    block = data.get("value") or {}
+    costs = ValueCosts.model_validate(block)
+    if channel is None:
+        return costs
+    return costs.model_copy(
+        update={"contact_cost": costs.channel_contact_costs.get(channel.lower(), costs.contact_cost)}
+    )
 
 
 class _Common(TypedDict):
@@ -500,10 +553,21 @@ def _priced(
 # ---------------------------------------------------------------------------
 # Formatting and the page
 # ---------------------------------------------------------------------------
-def format_inr(amount: float) -> str:
-    """₹ with Indian digit grouping (₹12,34,567), lakh and crore shown in words beside large sums."""
+def format_inr(amount: float, *, decimals: int = 0) -> str:
+    """₹ with Indian digit grouping (₹12,34,567), lakh and crore shown in words beside large sums.
+
+    `decimals` keeps that many digits of paise (₹0.40 with 2); the default rounds to whole rupees.
+    """
+    if decimals < 0:
+        raise ValueError(f"decimals must be 0 or more, got {decimals}.")
     negative = amount < 0
-    whole = round(abs(amount))
+    fraction = ""
+    if decimals:
+        whole_text, fraction_text = f"{abs(amount):.{decimals}f}".split(".")
+        whole = int(whole_text)
+        fraction = f".{fraction_text}"
+    else:
+        whole = round(abs(amount))
     digits = str(whole)
     if len(digits) > 3:
         head, tail = digits[:-3], digits[-3:]
@@ -514,7 +578,7 @@ def format_inr(amount: float) -> str:
         if head:
             groups.insert(0, head)
         digits = ",".join(groups) + "," + tail
-    text = f"{'-' if negative else ''}₹{digits}"
+    text = f"{'-' if negative else ''}₹{digits}{fraction}"
     if whole >= 10_000_000:
         text += f" ({abs(amount) / 10_000_000:.2f} crore)"
     elif whole >= 100_000:

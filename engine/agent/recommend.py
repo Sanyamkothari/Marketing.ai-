@@ -281,6 +281,30 @@ def _consent_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecom
     ]
 
 
+VALUE_LIKE_CANDIDATES: Final[frozenset[str]] = frozenset(
+    {"order_value", "ordervalue", "order_val", "premium", "balance", "arpu"}
+)
+
+
+def _value_rules(config: UseCaseConfig, facts: DataFacts) -> list[SettingRecommendation]:
+    if config.uplift.policy.value_column is not None:
+        return []
+    for col in facts.columns:
+        norm = col.lower().strip().replace("-", "_").replace(" ", "_")
+        if norm in VALUE_LIKE_CANDIDATES:
+            return [
+                SettingRecommendation(
+                    "uplift.policy.value_column",
+                    col,
+                    f"Use '{display_name(col)}' as customer value for targeting",
+                    f"'{display_name(col)}' looks like customer value (order value, premium, balance, ARPU) that the targeting policy can rank by.",
+                    AgentConfidence.CHECK,
+                    facts.evidence_ids,
+                )
+            ]
+    return []
+
+
 def recommend_settings(
     config: UseCaseConfig,
     facts: DataFacts,
@@ -303,6 +327,7 @@ def recommend_settings(
         *([rec] for rec in _metric_rules(config, facts)),
         *([rec] for rec in _time_rules(config, facts)),
         *([rec] for rec in _consent_rules(config, facts)),
+        *([rec] for rec in _value_rules(config, facts)),
     ]
     allowed = [
         list(group)

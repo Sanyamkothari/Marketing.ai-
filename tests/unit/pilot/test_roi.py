@@ -279,3 +279,49 @@ def test_a_measured_ingestion_wins_over_an_immature_report(storage: LocalStorage
     )
     view = compute_roi(storage, RUN, inputs=INPUTS)
     assert view.status == "measured" and view.source == "outcome_ingestion"
+
+
+# ---------------------------------------------------------------------------
+# Plan J M97 (DEC-1307 (g)): the value block is offered, never silently applied
+# ---------------------------------------------------------------------------
+def test_roi_inputs_keep_a_zero_contact_cost_by_default() -> None:
+    """A pilot that never entered a contact cost is not charged one it did not type (review finding 7)."""
+    assert RoiInputs(value_per_outcome=1000.0).contact_cost == 0.0
+    assert RoiInputs(value_per_outcome=1000.0).offer_cost == 0.0
+
+
+def test_the_value_block_is_read_through_one_function(tmp_path: Path) -> None:
+    from engine.pilot.roi import ValueCosts, lookup_value_costs
+
+    shipped = lookup_value_costs()
+    assert shipped.contact_cost == 0.86 and shipped.offer_cost == 0.0
+    assert lookup_value_costs("SMS").contact_cost == 0.15
+    assert lookup_value_costs("pigeon").contact_cost == 0.86  # a channel it does not list: the default
+    (tmp_path / "pilot").mkdir()
+    (tmp_path / "pilot" / "value.yaml").write_text(
+        "schema_version: 1\nvalue:\n  offer_cost: 12.5\n  contact_cost: 2.0\n", encoding="utf-8"
+    )
+    edited = lookup_value_costs(root=tmp_path)
+    assert (edited.offer_cost, edited.contact_cost) == (12.5, 2.0)
+    assert edited.channel_contact_costs == ValueCosts().channel_contact_costs
+    assert lookup_value_costs(root=tmp_path / "nowhere") == ValueCosts()
+
+
+@pytest.mark.parametrize(
+    ("amount", "decimals", "text"),
+    [
+        (0.4, 2, "₹0.40"),
+        (7.7, 2, "₹7.70"),
+        (-11.305, 2, "-₹11.30"),  # 11.305 is 11.3049… in binary
+        (1234567.891, 2, "₹12,34,567.89 (12.35 lakh)"),
+        (7.7, 0, "₹8"),  # the default is unchanged: whole rupees
+    ],
+)
+def test_format_inr_can_keep_the_paise(amount: float, decimals: int, text: str) -> None:
+    """Plan J M97 second review: the budget curve's value basis must not round ₹0.40 to ₹0."""
+    assert format_inr(amount, decimals=decimals) == text
+
+
+def test_format_inr_refuses_negative_decimals() -> None:
+    with pytest.raises(ValueError, match="decimals"):
+        format_inr(1.0, decimals=-1)

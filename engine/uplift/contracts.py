@@ -586,11 +586,56 @@ class PolicyRecommendation(Artefact):
     )
     cost_per_contact: float | None = Field(description="Configured cost of one contact.")
     value_per_conversion: float | None = Field(description="Configured value of one conversion.")
-    expected_cost: float | None = Field(description="N × cost_per_contact, when a cost is configured.")
+    expected_cost: float | None = Field(
+        description=(
+            "N × cost_per_contact, when a cost is configured; on a list ranked by value (Plan J M97) the "
+            "sum of the chosen customers' contact and offer costs."
+        )
+    )
     expected_value: float | None = Field(
-        description="Expected incremental conversions × value_per_conversion, when configured."
+        description=(
+            "Expected incremental conversions × value_per_conversion (× margin × horizon when set); on a "
+            "list ranked by value, N × the hold-out's value-weighted observed uplift × margin × horizon."
+        )
     )
     expected_net_value: float | None = Field(description="expected_value − expected_cost, when both exist.")
+    net_value_low: float | None = Field(
+        default=None,
+        description="expected_net_value at the low end of the conversions interval; null without one.",
+    )
+    net_value_high: float | None = Field(
+        default=None,
+        description="expected_net_value at the high end of the conversions interval; null without one.",
+    )
+    money_note: str | None = Field(
+        default=None,
+        description=(
+            "Plan J M97 (DEC-1307): why a money field is null, or what the money leaves out (customers "
+            "without a value), in plain words; null when there is nothing to say."
+        ),
+    )
+    values_missing: int | None = Field(
+        default=None,
+        description=(
+            "Customers ranked by value (`uplift.policy.value_column`) that have no value: counted at zero "
+            "value, never given one. Null when the list is not ranked by value."
+        ),
+    )
+    contact_cost: float | None = Field(
+        default=None,
+        description=(
+            "Plan J M97: the cost of one contact a list ranked by value used, in rupees - cost_per_contact, "
+            "else the contact_cost of configs/pilot/value.yaml when the run was made. Recorded so the "
+            "budget curve replays the run's own costs; null when the list is not ranked by value."
+        ),
+    )
+    offer_cost: float | None = Field(
+        default=None,
+        description=(
+            "Plan J M97: the offer cost a list ranked by value used (charged × p_treated per customer), "
+            "from configs/pilot/value.yaml when the run was made; null when the list is not ranked by value."
+        ),
+    )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
 
@@ -675,6 +720,39 @@ class ProfitCurve(Artefact):
     )
     bands_available: bool = Field(description="True when the points carry a low/high net value band.")
     bands_note: str = Field(description="What the band is, or why there is none.")
+    value_weighted: bool = Field(
+        default=False,
+        description=(
+            "True when customers are ranked by their own value (`uplift.policy.value_column`, Plan J M97) "
+            "and the money comes from the hold-out's value-weighted observed uplift."
+        ),
+    )
+    value_basis: str | None = Field(
+        default=None,
+        description=(
+            "What the money is based on, in words: the value column, or the value of one conversion, "
+            "with the margin and horizon when set; null when there is no value."
+        ),
+    )
+    money_note: str | None = Field(
+        default=None,
+        description="Why a money field is null, or what the money leaves out, in plain words (DEC-1307).",
+    )
+    values_missing: int | None = Field(
+        default=None,
+        description="Customers without a value, counted at zero value; null when not ranked by value.",
+    )
+    contact_cost: float | None = Field(
+        default=None,
+        description=(
+            "The cost of one contact the curve used when ranked by value (the run's recorded cost unless "
+            "cost_per_contact overrides it); null when not ranked by value."
+        ),
+    )
+    offer_cost: float | None = Field(
+        default=None,
+        description="The offer cost (× p_treated) the curve used when ranked by value; null otherwise.",
+    )
     causal: bool = Field(description="False when the treatment was acknowledged as not random.")
 
 

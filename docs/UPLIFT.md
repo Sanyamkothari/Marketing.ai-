@@ -815,9 +815,85 @@ only when `problem_type` is `uplift` (DEC-601).
 | `bootstrap_samples`, `test_fraction`, `time_limit_minutes` | 200; 0.30; 10 | yes | no |
 | `drift_treated_share_tolerance` | 0.05 (absolute difference in treated share; section 8, M53) | yes | no |
 | `segments.*` (the three cuts) | 0.02; −0.01; base rate | yes | **yes** |
-| `policy.*` (budget, cost, value) | none | yes | **yes** |
+| `policy.*` (budget, cost, value, margin, ROI) | none | yes | **yes** |
 | `evidence.fold_auuc`, `evidence.risk_comparison` (Plan J M96, section 12) | off; off | yes | no |
 | `evidence.folds`, `evidence.top_share`, `evidence.propensity_column` | 5 (3 to 10); 0.2; none (never a feature) | yes | no |
+
+### Ranking by net money (Plan J M97, DEC-1307)
+
+`uplift.policy` takes, besides `budget_contacts`, `cost_per_contact` and `value_per_conversion`:
+
+| Setting | Meaning | When unset |
+|---|---|---|
+| `value_column` | The column holding each customer's value in rupees (order value, premium, balance, ARPU). Setting it ranks customers by expected net money. | ranked by uplift, as before |
+| `margin_pct` | The share of that value that is margin, 0 to 100. | 100 % |
+| `horizon_months` | Months of value counted, 1 to 120. | 1 |
+| `min_roi` | The least return each contact must make, as net value ÷ cost (0.15 is 15 %). | 0: a contact must pay for itself |
+
+**Net value per customer** = uplift × value × margin × horizon − offer cost × p_treated − contact cost.
+The contact cost is `cost_per_contact`, else the `value:` block of `configs/pilot/value.yaml` (editable
+India defaults: WhatsApp marketing ₹0.86, WhatsApp utility ₹0.13, SMS ₹0.15, e-mail ₹0.05, voice ₹0.70;
+offer cost ₹0), read through one function, `engine.pilot.roi.lookup_value_costs`, which M99's
+catalogue will take over. The block is read only by a use case that sets `value_column`; the ROI
+form's defaults (`RoiInputs`) are not changed by it. A run reads it **once**, uses those costs for
+every step, and records them on `policy_recommendation.json` (`contact_cost`, `offer_cost`); the
+budget curve replays the recorded costs, never the file as it reads later, and answers 409 when the
+replay does not reproduce the recorded cost of the list.
+
+**Who is chosen.** Eligible persuadables whose net value reaches `min_roi ×` their own cost, best net
+value first, up to the budget. A customer below that is left out *wherever it ranks*: with an offer
+cost each customer has its own cost (`offer cost × p_treated`), so a customer with a high net value
+and a high cost can miss `min_roi` while a customer below it in the ranking, with a lower cost,
+reaches it - and is chosen. With one cost for every customer (and on every run without
+`value_column`) the customers left out are exactly the tail of the ranking, as before M97.
+
+* **The money is computed once and passed down.** `engine.uplift.policy.customer_net_values` returns
+  every row's net value, cost and cut; the ranking, the cut, `choose_contacts`, `recommend_policy` and
+  `profit_curve` all take that one result, so `min_roi` and the per-row costs hold through every entry
+  point, and the curve's point at the budget is the recommendation, field for field, in every money
+  configuration. The cost of every contact count comes from one cumulative sum: the curve is linear in
+  the rows (about a second at 200,000 rows with per-row costs).
+* **Conversions stay conversions.** `expected_incremental_conversions` is `N ×` the hold-out's observed
+  uplift; `expected_value` is `N ×` the hold-out's **value-weighted** observed uplift × margin × horizon.
+  Both are read from the hold-out ranked the same way as the list (by each hold-out customer's net
+  value), so "the top share" is the same kind of customer the list chose.
+* **Margin and horizon apply everywhere.** On a run without `value_column`, one conversion is worth
+  `value_per_conversion × margin × horizon` in the ranking cut, the reported value and the curve alike.
+  With neither set it is exactly `value_per_conversion`: a run configured before M97 computes the same
+  numbers, to the last digit.
+* **Nothing is invented.** The training hold-out (`uplift_holdout.parquet`) carries a `value` column
+  only when the training run was configured with `value_column` and its file has it; missing values
+  stay missing. A scoring run ranked by value quotes the hold-out only when the training run stored
+  values of the **same** column (its `run_config.json` says which); otherwise the expected conversions
+  and money are null and `money_note` says why. A customer without a value counts as zero value (so
+  is never chosen for its value) and is counted in `values_missing`; when more than 10 % of the
+  customers (or of the hold-out) have none, the money is null with the reason. One missing value never
+  fails a scoring run.
+* **What a value-ranked scoring run writes.** `scores.csv` gains two columns at the end,
+  `customer_value` and `net_value`; `policy_recommendation.json` and the budget curve gain
+  `money_note`, `values_missing`, `contact_cost` and `offer_cost`, and the curve `value_weighted` and
+  `value_basis`. A run without `value_column` writes exactly the scores columns it did, and those four
+  fields are null on it - except `money_note`, never set on such a run either.
+* **What every run with money gains.** `policy_recommendation.json` gains `net_value_low` and
+  `net_value_high` on **every** run, value-ranked or not, that has a cost, a value and a measured
+  interval: the band of the curve's point at the budget, so the identity "point at the budget = the
+  recommendation" covers it too. Every other field of a run configured before M97 is what it was; the
+  new fields have defaults, so older files still read.
+* **The value basis.** The curve's `value_basis` says, in words, what the money is based on: "each
+  customer's monthly_spend × 30% margin", or "₹1,500 per conversion × 30% margin × 3 months" in the
+  INR format, the paise kept when the value is not whole ("₹7.70 per conversion × 1 month"). It is null
+  - and the budget card shows no caption - for a run with neither `value_column`, `margin_pct` nor
+  `horizon_months`, whose money is the value of one conversion as configured.
+* **The budget curve** (`GET /runs/{id}/uplift/profit-curve`) replays a value-ranked run the same way,
+  and takes `min_roi` for that answer only. `value` is another name for `value_per_conversion`; giving
+  both answers `422 PROFIT_CURVE_QUERY_INVALID`.
+* **Propensity runs** of a use case that sets `value_column` write `expected_gross_value.json`
+  (`engine.decide.value`): p × value × margin × horizon − cost, per band, labelled **not incremental**
+  everywhere, with two run-manifest metrics (`expected_gross_value_not_incremental`,
+  `expected_gross_value_rows_missing`). Phase 1's `apply_actions` and `scores.csv` are not changed.
+
+The persuadable-only and sleeping-dog guards are unchanged: a sleeping dog is never treated at any
+value.
 
 The control-group fraction and suppression rules live in `actions:`, are shared with Phase 1, and are
 not agent-editable. `engine.uplift.config.uplift_agent_editable_paths()` returns this map for Phase 5.
@@ -1003,6 +1079,7 @@ The uplift routes answer errors in Phase 1's envelope, `{"detail": {"code", "mes
 | `RUN_NOT_SCORED` | 409 | `GET /runs/{id}/uplift/profit-curve` | A scoring run without its scores file. | Score the customers again. |
 | `PROFIT_CURVE_UNAVAILABLE` | 409 | `GET /runs/{id}/uplift/profit-curve` | The saved scores no longer reproduce the run's recommendation, or lack the columns the curve needs; or (Plan J M96) the list was ranked by the approved propensity model because the uplift model does not beat risk ranking. | Score the customers again; a list ranked by the propensity model has no uplift budget curve. |
 | `ARTEFACT_NOT_FOUND` | 404 | `GET /runs/{id}/risk-comparison` | The run computed no equal-budget comparison (section 12, M96). | Train with `uplift.evidence.risk_comparison` on and the LightGBM base model. |
+| `PROFIT_CURVE_QUERY_INVALID` | 422 | `GET /runs/{id}/uplift/profit-curve` | The query names the value of one conversion twice: `value` (Plan J M97) is another name for `value_per_conversion`. | Give one of the two. |
 | `OPE_INVALID` | 422 | `POST /runs/{id}/uplift/ope` | The rule or the logged data cannot be evaluated (the message says why). | Correct the rule as the message says. |
 | `MEASURE_NOT_OFFERED` | 409 | `POST /runs/{id}/measure`, `.../measure/learn` | The use case does not contact customers, or holds nobody back (section 9, step 4). | Nothing to measure; the Campaign results route still answers for any scoring run. |
 | `MEASURE_INVALID` | 422 | `POST /runs/{id}/measure`, `.../measure/learn` | The outcomes file has no customer id column, only the id, or several columns and none is the use case's outcome. | Keep the customer id and one outcome column, or name it with `outcome_column`. |

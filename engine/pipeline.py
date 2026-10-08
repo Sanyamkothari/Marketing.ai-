@@ -1936,4 +1936,11 @@ def uplift_flow_for(pipeline: Pipeline, ctx: StageContext, mode: RunMode) -> _Tr
 from engine.holdout.flow import install_holdout_service  # noqa: E402
 
 install_holdout_service(_ScoreFlow)
+
+# Plan J M97 (DEC-1307 (g)): a propensity run whose use case sets `uplift.policy.value_column` writes its
+# expected gross value (labelled "not incremental") after export. Off by default: the stage table is
+# returned untouched, so every default run is today's byte for byte.
+from engine.decide.value import install_gross_value  # noqa: E402
+
+install_gross_value(_ScoreFlow)
 # ---- END PLAN-J ----

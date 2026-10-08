@@ -47,6 +47,7 @@ curve that is not the run's. Nothing is written.
 from __future__ import annotations
 
 import io
+import math
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal
 
@@ -86,7 +87,13 @@ from engine.runs import RUN_CONFIG_FILENAME, build_job_fn, create_run, job_spec_
 from engine.stages import export, ingest, validate
 from engine.stages.train import predictor_key_for
 from engine.storage import Storage, StorageError, run_key, upload_key
-from engine.uplift.actions import INTENDED_TREATMENT_COLUMN, SEGMENT_COLUMN, TREAT_ACTION, tiebreak_keys
+from engine.uplift.actions import (
+    CUSTOMER_VALUE_COLUMN,
+    INTENDED_TREATMENT_COLUMN,
+    SEGMENT_COLUMN,
+    TREAT_ACTION,
+    tiebreak_keys,
+)
 from engine.uplift.config import UpliftPolicyConfig
 from engine.uplift.contracts import (
     INCREMENTALITY_FILENAME,
@@ -101,7 +108,14 @@ from engine.uplift.contracts import (
     UpliftModelCard,
     UpliftValidationReport,
 )
-from engine.uplift.flow import UPLIFT_HOLDOUT_FILENAME, check_seed, model_card_key, read_holdout
+from engine.uplift.flow import (
+    UPLIFT_HOLDOUT_FILENAME,
+    check_seed,
+    holdout_values,
+    model_card_key,
+    read_holdout,
+    training_value_column,
+)
 from engine.uplift.policy import DEFAULT_CURVE_POINTS
 from engine.utils.ids import seed_from
 from engine.utils.logging import get_logger
@@ -114,8 +128,9 @@ if TYPE_CHECKING:
     import pandas as pd
 
     from engine.contracts import ValidationReport
+    from engine.pilot.roi import ValueCosts
     from engine.registry import ModelRegistry
-    from engine.uplift.metrics import HoldoutUplift
+    from engine.uplift.policy import HoldoutLookups
 
 router: APIRouter = APIRouter(tags=["uplift"])
 
@@ -131,6 +146,8 @@ CAMPAIGN_RESULTS_INVALID: Final[str] = "CAMPAIGN_RESULTS_INVALID"
 CAMPAIGN_RESULTS_NOT_FOUND: Final[str] = "CAMPAIGN_RESULTS_NOT_FOUND"
 UPLOAD_MODE_MISMATCH: Final[str] = "UPLOAD_MODE_MISMATCH"
 PROFIT_CURVE_UNAVAILABLE: Final[str] = "PROFIT_CURVE_UNAVAILABLE"
+PROFIT_CURVE_QUERY_INVALID: Final[str] = "PROFIT_CURVE_QUERY_INVALID"
+"""Plan J M97: the budget-curve query names the value of a conversion twice (`value` and `value_per_conversion`)."""
 
 PROFIT_CURVE_PATH: Final[str] = "/runs/{run_id}/uplift/profit-curve"
 MAX_CURVE_POINTS: Final[int] = 201
@@ -353,6 +370,26 @@ ValueQuery = Annotated[
         ge=0.0, description="Value of one conversion to compute with; the run's configured value when absent."
     ),
 ]
+ValueAliasQuery = Annotated[
+    float | None,
+    Query(
+        ge=0.0,
+        description=(
+            "Alias of value_per_conversion (Plan J M97). Give one or the other: both answer "
+            "422 PROFIT_CURVE_QUERY_INVALID."
+        ),
+    ),
+]
+MinRoiQuery = Annotated[
+    float | None,
+    Query(
+        ge=0.0,
+        description=(
+            "Minimum return on each contact to require, as net value ÷ cost (0.15 is 15 %); the run's "
+            "configured min_roi when absent."
+        ),
+    ),
+]
 PointsQuery = Annotated[
     int,
     Query(
@@ -364,17 +401,34 @@ PointsQuery = Annotated[
 
 
 @dataclass(frozen=True)
+class _HoldoutArrays:
+    """A training run's hold-out as the lookups need it (`engine.uplift.policy.holdout_lookups`)."""
+
+    uplift: np.ndarray
+    t: np.ndarray
+    y: np.ndarray
+    p_treated: np.ndarray
+    values: np.ndarray | None
+    """The hold-out's values of the run's `value_column`, when the training run stored them."""
+    samples: int
+    seed: int
+
+
+@dataclass(frozen=True)
 class _CurveInputs:
     """What `recommend_policy` was given when the run made its recommendation, read back."""
 
     uplift: np.ndarray
     segments: np.ndarray
     computed_on: Literal["test", "scored"]
-    observed: HoldoutUplift | None
+    holdout: _HoldoutArrays | None
+    p_treated: np.ndarray
     eligible: np.ndarray | None = None
     tiebreak: np.ndarray | None = None
     treated: np.ndarray | None = None
     """The rows the run marked `Treat` (a scoring run), to check the replay against."""
+    values: np.ndarray | None = None
+    """Each row's customer value when the run ranked by value (Plan J M97), else `None`."""
 
 
 @router.get(
@@ -389,6 +443,8 @@ def read_profit_curve(
     registry: RegistryDep,
     cost_per_contact: CostQuery = None,
     value_per_conversion: ValueQuery = None,
+    value: ValueAliasQuery = None,
+    min_roi: MinRoiQuery = None,
     points: PointsQuery = DEFAULT_CURVE_POINTS,
 ) -> ProfitCurve:
     """The targeting recommendation replayed at every budget (`engine.uplift.policy.profit_curve`).
@@ -398,9 +454,22 @@ def read_profit_curve(
     tie-break. Before anything is plotted the replay is checked against the stored recommendation
     (and, on a scoring run, against who its file marks `Treat`); a replay that disagrees answers
     `409 PROFIT_CURVE_UNAVAILABLE` rather than a curve that is not this run's.
-    """
-    from engine.uplift.policy import choose_contacts, profit_curve
 
+    A run configured with `uplift.policy.value_column` (Plan J M97) is replayed ranked by net value,
+    with the margin, horizon and minimum ROI it was configured with; `min_roi` overrides the last for
+    this answer only. `value` is an alias of `value_per_conversion`. Such a run is replayed with the
+    contact and offer costs it recorded, never with `configs/pilot/value.yaml` as it reads now, and
+    the replay must also reproduce the recorded cost of the list.
+    """
+    from engine.uplift.policy import customer_net_values, profit_curve, recommend_policy
+
+    if value is not None and value_per_conversion is not None:
+        raise http_error(
+            422,
+            PROFIT_CURVE_QUERY_INVALID,
+            "Give the value of one conversion once: `value` is another name for `value_per_conversion`.",
+        )
+    value_per_conversion = value if value is not None else value_per_conversion
     record = load_run(storage, run_id)
     if record.state is not RunState.DONE or record.problem_type is not ProblemType.UPLIFT:
         raise http_error(
@@ -414,18 +483,7 @@ def read_profit_curve(
         raise http_error(
             409, RUN_NOT_UPLIFT, "This run made no targeting recommendation, so it has no budget to vary."
         ) from exc
-    configured = UpliftPolicyConfig(
-        budget_contacts=stored.budget_contacts,
-        cost_per_contact=stored.cost_per_contact,
-        value_per_conversion=stored.value_per_conversion,
-    )
-    policy = UpliftPolicyConfig(
-        budget_contacts=stored.budget_contacts,
-        cost_per_contact=stored.cost_per_contact if cost_per_contact is None else cost_per_contact,
-        value_per_conversion=(
-            stored.value_per_conversion if value_per_conversion is None else value_per_conversion
-        ),
-    )
+
     if record.mode is RunMode.SCORE and _ranked_by_propensity(storage, run_id):
         # Plan J M96: the list was ranked by the approved propensity model, so a budget curve of the
         # uplift ranking would describe a list this run did not make.
@@ -435,16 +493,51 @@ def read_profit_curve(
             "This contact list is ranked by the approved propensity model because the uplift model does "
             "not beat risk ranking, so it has no uplift budget curve.",
         )
-    inputs = (
+    inputs, saved = (
         _training_curve_inputs(storage, record)
         if record.mode is RunMode.TRAIN
         else _scoring_curve_inputs(storage, registry, record)
     )
-    replayed, _reason = choose_contacts(
-        inputs.uplift, inputs.segments, configured, eligible=inputs.eligible, tiebreak=inputs.tiebreak
+    # The run's own policy: the budget, cost and value it recorded, and (Plan J M97) the value column,
+    # margin, horizon and minimum ROI of its configuration.
+    configured = saved.model_copy(
+        update={
+            "budget_contacts": stored.budget_contacts,
+            "cost_per_contact": stored.cost_per_contact,
+            "value_per_conversion": stored.value_per_conversion,
+        }
     )
-    agrees = int(replayed.sum()) == stored.contacts_recommended and (
-        inputs.treated is None or bool((replayed == inputs.treated).all())
+    policy = configured.model_copy(
+        update={
+            "cost_per_contact": stored.cost_per_contact if cost_per_contact is None else cost_per_contact,
+            "value_per_conversion": (
+                stored.value_per_conversion if value_per_conversion is None else value_per_conversion
+            ),
+            "min_roi": configured.min_roi if min_roi is None else min_roi,
+        }
+    )
+    value_costs = _recorded_costs(stored)
+    replay, replayed = recommend_policy(
+        inputs.uplift,
+        inputs.segments,
+        configured,
+        run_id=run_id,
+        computed_on=inputs.computed_on,
+        causal=stored.causal,
+        eligible=inputs.eligible,
+        tiebreak=inputs.tiebreak,
+        money=customer_net_values(
+            inputs.uplift,
+            configured,
+            values=inputs.values,
+            p_treated=inputs.p_treated,
+            value_costs=value_costs,
+        ),
+    )
+    agrees = (
+        replay.contacts_recommended == stored.contacts_recommended
+        and _same_amount(replay.expected_cost, stored.expected_cost)
+        and (inputs.treated is None or bool((replayed == inputs.treated).all()))
     )
     if not agrees:
         _LOGGER.warning("profit-curve: run=%s the replayed selection differs from the stored one", run_id)
@@ -454,6 +547,7 @@ def read_profit_curve(
             "This run's saved scores no longer reproduce its targeting recommendation, so no budget "
             "curve is shown for it. Score the customers again to get one.",
         )
+    lookups = _lookups(inputs, policy, value_costs)
     return profit_curve(
         inputs.uplift,
         inputs.segments,
@@ -461,11 +555,61 @@ def read_profit_curve(
         run_id=run_id,
         computed_on=inputs.computed_on,
         causal=stored.causal,
-        observed=inputs.observed,
+        observed=None if lookups is None else lookups.conversions,
+        observed_value=None if lookups is None else lookups.value,
+        holdout_note=None if lookups is None else lookups.note,
         eligible=inputs.eligible,
         tiebreak=inputs.tiebreak,
+        money=customer_net_values(
+            inputs.uplift, policy, values=inputs.values, p_treated=inputs.p_treated, value_costs=value_costs
+        ),
         points=points,
         overridden=policy != configured,
+    )
+
+
+def _recorded_costs(stored: PolicyRecommendation) -> ValueCosts | None:
+    """The contact and offer costs a list ranked by value recorded (Plan J M97), as `ValueCosts`.
+
+    `None` when the run recorded none (a list ranked by uplift, whose cost is `cost_per_contact`): the
+    replay then needs no `configs/pilot/value.yaml` cost.
+    """
+    from engine.pilot.roi import ValueCosts
+
+    if stored.contact_cost is None or stored.offer_cost is None:
+        return None
+    return ValueCosts(contact_cost=stored.contact_cost, offer_cost=stored.offer_cost)
+
+
+def _same_amount(replayed: float | None, recorded: float | None) -> bool:
+    """Whether the replay's cost is the recorded one: both absent, or equal up to float summation."""
+    if replayed is None or recorded is None:
+        return replayed is recorded
+    return math.isclose(replayed, recorded, rel_tol=1e-9, abs_tol=1e-9)
+
+
+def _lookups(
+    inputs: _CurveInputs, policy: UpliftPolicyConfig, value_costs: ValueCosts | None
+) -> HoldoutLookups | None:
+    """The hold-out lookups the run quoted, for `policy` and the run's recorded costs; `None` when the
+    hold-out could not be read on a list ranked by uplift (a list ranked by value says why)."""
+    from engine.uplift.policy import HOLDOUT_UNREADABLE_NOTE, HoldoutLookups, holdout_lookups
+
+    ranked_by_value = inputs.values is not None and policy.value_column is not None
+    holdout = inputs.holdout
+    if holdout is None:
+        return HoldoutLookups(None, None, HOLDOUT_UNREADABLE_NOTE) if ranked_by_value else None
+    return holdout_lookups(
+        holdout.uplift,
+        holdout.t,
+        holdout.y,
+        policy=policy,
+        samples=holdout.samples,
+        seed=holdout.seed,
+        ranked_by_value=ranked_by_value,
+        values=holdout.values,
+        p_treated=holdout.p_treated,
+        value_costs=value_costs,
     )
 
 
@@ -480,11 +624,26 @@ def _ranked_by_propensity(storage: Storage, run_id: str) -> bool:
         return False
 
 
-def _training_curve_inputs(storage: Storage, record: RunRecord) -> _CurveInputs:
-    """A training run's hold-out, segmented as its evaluate stage segmented it."""
+def _holdout_arrays(
+    holdout: pd.DataFrame, *, values: np.ndarray | None, samples: int, seed: int
+) -> _HoldoutArrays:
     import numpy as np
 
-    from engine.uplift.metrics import HoldoutUplift
+    return _HoldoutArrays(
+        uplift=np.asarray(holdout["uplift"], dtype=np.float64),
+        t=np.asarray(holdout["t"], dtype=np.int64),
+        y=np.asarray(holdout["y"], dtype=np.int64),
+        p_treated=np.asarray(holdout["p_treated"], dtype=np.float64),
+        values=values,
+        samples=samples,
+        seed=seed,
+    )
+
+
+def _training_curve_inputs(storage: Storage, record: RunRecord) -> tuple[_CurveInputs, UpliftPolicyConfig]:
+    """A training run's hold-out, segmented as its evaluate stage segmented it, and its policy."""
+    import numpy as np
+
     from engine.uplift.segments import assign_segments
 
     try:
@@ -497,35 +656,42 @@ def _training_curve_inputs(storage: Storage, record: RunRecord) -> _CurveInputs:
             RUN_NOT_UPLIFT,
             "This run did not train an uplift model, so it has no hold-out to vary the budget on.",
         ) from exc
-    uplift = np.asarray(holdout["uplift"], dtype=np.float64)
-    return _CurveInputs(
-        uplift=uplift,
+    saved = resolved.config.uplift.policy
+    # The hold-out's values are the ones the run ranked by: its own value column, never filled in.
+    values = holdout_values(holdout, saved.value_column, saved.value_column)
+    arrays = _holdout_arrays(
+        holdout,
+        values=values,
+        samples=resolved.config.uplift.bootstrap_samples,
+        seed=seed_from(record.run_id),
+    )
+    inputs = _CurveInputs(
+        uplift=arrays.uplift,
         segments=assign_segments(
-            uplift, np.asarray(holdout["p_control"], dtype=np.float64), card.segment_thresholds
+            arrays.uplift, np.asarray(holdout["p_control"], dtype=np.float64), card.segment_thresholds
         ),
         computed_on="test",
-        observed=HoldoutUplift(
-            pred=uplift,
-            t=np.asarray(holdout["t"], dtype=np.int64),
-            y=np.asarray(holdout["y"], dtype=np.int64),
-            samples=resolved.config.uplift.bootstrap_samples,
-            seed=seed_from(record.run_id),
-        ),
+        holdout=arrays,
+        p_treated=arrays.p_treated,
+        values=values,
     )
+    return inputs, saved
 
 
-def _scoring_curve_inputs(storage: Storage, registry: ModelRegistry, record: RunRecord) -> _CurveInputs:
-    """A scoring run's scored rows, eligibility and tie-break, and its model's training hold-out.
+def _scoring_curve_inputs(
+    storage: Storage, registry: ModelRegistry, record: RunRecord
+) -> tuple[_CurveInputs, UpliftPolicyConfig]:
+    """A scoring run's scored rows, eligibility and tie-break, its model's training hold-out, its policy.
 
     The tie-break is rebuilt from the saved keys with the scoring run's id, as the actions stage built
-    it (`engine.uplift.actions.tiebreak_keys`); the hold-out lookup is the one the score flow used -
-    the training run's hold-out and seed, this run's bootstrap size - and is absent, as it was
-    there, when that hold-out cannot be read.
+    it (`engine.uplift.actions.tiebreak_keys`); the hold-out is the one the score flow used - the
+    training run's hold-out and seed, this run's bootstrap size - and is absent, as it was there, when
+    it cannot be read. A list ranked by value reads each customer's value back from the scores file's
+    `customer_value` column, and the hold-out's values only when the training run stored them for the
+    same column.
     """
     import numpy as np
     import pandas as pd
-
-    from engine.uplift.metrics import HoldoutUplift
 
     try:
         scores = pd.read_parquet(
@@ -534,10 +700,12 @@ def _scoring_curve_inputs(storage: Storage, registry: ModelRegistry, record: Run
         resolved = storage.read_model(run_key(record.run_id, RUN_CONFIG_FILENAME), ResolvedConfig)
     except StorageError as exc:
         raise http_error(409, RUN_NOT_SCORED, "This run has no scores file to vary the budget on.") from exc
+    saved = resolved.config.uplift.policy
     try:
         keyed = with_row_key(scores, record.primary_key)
         tiebreak = tiebreak_keys(keyed[row_key_column(record.primary_key)], run_id=record.run_id)
         uplift = scores["uplift"].to_numpy(dtype=np.float64)
+        p_treated = scores["p_treated"].to_numpy(dtype=np.float64)
         segments = scores[SEGMENT_COLUMN].to_numpy(dtype=object)
         eligible = scores["suppressed_reason"].isna().to_numpy(dtype=bool) & ~scores[
             "control_group"
@@ -549,33 +717,40 @@ def _scoring_curve_inputs(storage: Storage, registry: ModelRegistry, record: Run
             PROFIT_CURVE_UNAVAILABLE,
             "This run's scores file does not have the columns a budget curve needs.",
         ) from exc
-    observed: HoldoutUplift | None = None
+    values = (
+        scores[CUSTOMER_VALUE_COLUMN].to_numpy(dtype=np.float64)
+        if saved.value_column is not None and CUSTOMER_VALUE_COLUMN in scores.columns
+        else None
+    )
+    holdout: _HoldoutArrays | None = None
     try:
         version = registry.get(record.model_version_id or "")
-        holdout = read_holdout(
+        frame = read_holdout(
             storage,
             version.artefact_keys.get(
                 UPLIFT_HOLDOUT_FILENAME, run_key(version.run_id, UPLIFT_HOLDOUT_FILENAME)
             ),
         )
-        observed = HoldoutUplift(
-            pred=np.asarray(holdout["uplift"], dtype=np.float64),
-            t=np.asarray(holdout["t"], dtype=np.int64),
-            y=np.asarray(holdout["y"], dtype=np.int64),
+        holdout = _holdout_arrays(
+            frame,
+            values=holdout_values(frame, training_value_column(storage, version.run_id), saved.value_column),
             samples=resolved.config.uplift.bootstrap_samples,
             seed=seed_from(version.run_id),
         )
-    except (RegistryError, StorageError, OSError, ValueError):
+    except (RegistryError, StorageError, OSError, ValueError, KeyError):
         _LOGGER.warning("profit-curve: run=%s the training hold-out could not be read", record.run_id)
-    return _CurveInputs(
+    inputs = _CurveInputs(
         uplift=uplift,
         segments=segments,
         computed_on="scored",
-        observed=observed,
+        holdout=holdout,
+        p_treated=p_treated,
         eligible=eligible,
         tiebreak=tiebreak,
         treated=treated,
+        values=values,
     )
+    return inputs, saved
 
 
 # ---------------------------------------------------------------------------
