@@ -103,6 +103,9 @@ _RUN_FILE_STORES: Final[dict[str, Store]] = {
     # Plan J M98: treat list carrying customer key, flags, reasons and net value.
     "treat_list.csv": Store.SCORES,
     "treat_list.parquet": Store.SCORES,
+    # Plan J M101: arbitrated treat list across use cases.
+    "arbitrated_treat_list.csv": Store.SCORES,
+    "arbitrated_treat_list.parquet": Store.SCORES,
 }
 
 _ROW_KEYS: Final[dict[str, tuple[str, ...]]] = {

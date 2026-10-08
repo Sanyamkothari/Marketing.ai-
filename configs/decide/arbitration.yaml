@@ -1,0 +1,28 @@
+# configs/decide/arbitration.yaml
+# Cross-use-case arbitration configuration (Plan J M101, DEC-1311).
+#
+# Arbitration ensures a customer receives at most one action per cycle across
+# all participating use cases, selected deterministically by priority weight x net value.
+
+schema_version: 1
+
+# Per-use-case priority weights. Higher weights are preferred when choosing between
+# actions for a customer. Default weight is 1.0 for any unlisted use case.
+use_cases:
+  win-back-campaign:
+    priority: 1.2
+  targeted-advertisement:
+    priority: 1.0
+  telco-churn:
+    priority: 1.5
+  payment-propensity:
+    priority: 1.1
+
+# Maximum number of treatments / contacts a customer can receive in a cycle across all use cases.
+contact_cap_per_customer: 1
+
+# Optional capacity caps per delivery channel across the entire cycle.
+channel_caps:
+  sms: 100000
+  email: 200000
+  whatsapp: 50000
