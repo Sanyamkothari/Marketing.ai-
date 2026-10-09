@@ -34,10 +34,13 @@ latest effect is below the first. That is one tail, so when the true effect neve
 campaign's lower bound"), and only of campaigns the Value Proof Pack accepts and whose causal basis is
 `engine_random` or `verified_random`. A lower bound is the low end of the 95% range of what the campaign changed,
 read from the pack's own figures: a campaign that might have done harm adds a negative number. Units are never
-mixed: yes/no outcomes ("extra outcomes", or "outcomes prevented" when the aim is fewer), each amount in its own
-column, and rupees (the pack's net value after contacts and offers) each have a total of their own. Listed apart
-and never added: campaigns random only by the person's statement, descriptive ones, and programme readouts (which
-cover the customers of the campaigns). Excluded with their reason: generated data, an unfinished result.
+mixed: yes/no outcomes ("extra outcomes", or "outcomes prevented" when the aim is fewer) and each amount are
+totalled per outcome column, and rupees (the pack's net value after contacts and offers) have a total of their
+own. **Customers are counted once:** campaigns that measure the same customers (the same scoring runs, or the
+same assignment file of an audit) would add the same effect again, so only the latest measured is added and the
+others are listed apart. Listed apart and never added: those, campaigns random only by the person's statement,
+descriptive ones, and programme readouts (which cover the customers of the campaigns). Excluded with their
+reason: generated data, an unfinished result, no control group. Every campaign of the installation is read.
 
 **Traced.** The total is a :class:`~engine.pilot.proof.Figure` whose sources name every lower bound it adds;
 :func:`build_summary` re-reads every source and every digit of its own words with
@@ -51,9 +54,9 @@ import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from statistics import NormalDist
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
-from pydantic import AwareDatetime, BaseModel, Field
+from pydantic import AwareDatetime, Field
 
 from engine.config import StrictBase
 from engine.measurement.campaign import Campaign, CampaignKind
@@ -75,6 +78,8 @@ from engine.pilot.proof import (
     derived,
     figures_of,
     format_value,
+    free_text,
+    safe_identifier,
 )
 
 if TYPE_CHECKING:
@@ -215,10 +220,10 @@ class ProvenLine(StrictBase):
 class ProvenTotal(StrictBase):
     """The sum of the lower bounds of one unit; never mixed with another unit."""
 
-    unit: str = Field(description="`outcomes`, `prevented`, `amount:<column>` or `rupees`.")
-    unit_column: Figure | None = Field(
-        default=None, description="For an amount: the column it is measured in."
+    unit: str = Field(
+        description="`outcomes:<column>`, `prevented:<column>`, `amount:<column>` or `rupees`: one total per column."
     )
+    unit_column: Figure | None = Field(default=None, description="The outcome column it is measured in.")
     total: Figure = Field(description="The sum, a figure whose sources are every lower bound added.")
     label: str = Field(description="`at least <total> <unit>, the sum of each campaign's lower bound`.")
     campaigns: tuple[ProvenLine, ...]
@@ -234,6 +239,9 @@ class CampaignNote(StrictBase):
     results_available_on: Figure | None = Field(
         default=None, description="The day it can be read as final, when an artefact records it."
     )
+    results_available_label: str | None = Field(
+        default=None, description="What that day is, in words; set exactly when the day is."
+    )
 
 
 class ApartCampaign(StrictBase):
@@ -241,13 +249,20 @@ class ApartCampaign(StrictBase):
 
     campaign_id: str
     campaign_name: Figure
-    kind: Literal["stated_random", "descriptive", "programme"]
+    kind: Literal["stated_random", "descriptive", "programme", "same_customers"]
     claim_label: str
     reason: str
     lower_bounds: tuple[ProvenLine, ...] = Field(
         default=(), description="What it shows, in its unit; empty for a descriptive one."
     )
     unit: str | None = None
+    unit_label: str | None = Field(
+        default=None, description="The unit of `lower_bounds` in words, e.g. `extra converted outcomes`."
+    )
+    counted_as: Figure | None = Field(
+        default=None, description="For `same_customers`: the name of the campaign that is counted instead."
+    )
+    counted_as_id: str | None = None
 
 
 class ProvenToDate(StrictBase):
@@ -372,7 +387,8 @@ def sum_figures(figures: Sequence[Figure], fmt: FigureFormat) -> Figure:
 _RULE: Final[str] = (
     "Each total is the sum of every campaign's measured lower bound, so it is a floor, not an estimate. Only "
     "campaigns whose control group the engine drew at random, or whose random assignment it verified, are "
-    "added, and each unit has a total of its own."
+    "added, customers measured by more than one campaign are counted once, and each unit has a total of its "
+    "own."
 )
 _APART: Final[dict[str, str]] = {
     "stated_random": (
@@ -387,6 +403,10 @@ _APART: Final[dict[str, str]] = {
         "A programme readout compares everyone outside the control group with it, so it covers the same "
         "customers as the campaigns; it is listed apart so that nothing is counted twice."
     ),
+    "same_customers": (
+        "It measures the same customers as the campaign named here, which is already counted, so it is not "
+        "added again."
+    ),
 }
 _EXCLUDED: Final[dict[str, str]] = {
     PROOF_SYNTHETIC_DATA: (
@@ -397,7 +417,11 @@ _EXCLUDED: Final[dict[str, str]] = {
         "A number of this campaign could not be traced back to its record, so it is not counted."
     ),
     "no_lower_bound": "The groups were too small to compare, so no lower bound could be read for it.",
+    "CAMPAIGN_NO_CONTROL": (
+        "Nobody was held back, so what this campaign changed cannot be measured and it is never counted."
+    ),
 }
+_AVAILABLE_LABEL: Final[str] = "Day the final result can be read"
 _UNPRICED: Final[str] = (
     "No value inputs were entered for this campaign, or its cost could not be read, so its money is not counted."
 )
@@ -492,8 +516,22 @@ _STATED: Final[str] = "If the groups were random as you said: "
 # ---------------------------------------------------------------------------
 # Building
 # ---------------------------------------------------------------------------
-def _safe(identifier: object) -> bool:
-    return isinstance(identifier, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,128}", identifier) is not None
+_safe = safe_identifier
+"""M104's own guard for an id that is one path segment (never `..`, a slash or empty)."""
+
+
+@dataclass(frozen=True)
+class _Candidate:
+    """A proven campaign waiting to be added: of those measuring the same customers only the latest is."""
+
+    rank: tuple[str, str, str]
+    campaign: Campaign
+    name: Figure
+    view: ProofView
+    bound: Figure
+    net: Figure | None
+    unit: str
+    column: Figure
 
 
 @dataclass
@@ -529,6 +567,9 @@ class _Builder:
         self.unpriced: list[CampaignNote] = []
         self.cycles: dict[tuple[str, ...], list[_Cycle]] = {}
         self.view_artefacts: set[str] = set()
+        self.candidates: dict[tuple[str, ...], list[_Candidate]] = {}
+        self.carded: set[tuple[str, str]] = set()
+        """`(kind, run id)` of the run-level cards already drawn: a run is carded once, however many campaigns use it."""
 
     # --- one campaign ---------------------------------------------------------------------------------
     def campaign(self, campaign: Campaign) -> None:
@@ -559,7 +600,10 @@ class _Builder:
             self._backfire(campaign, name, view)
             self._count(campaign, name, view)
         elif refusal is not None:
-            self._exclude(cid, name, refusal.code, self._available(campaign))
+            if self._nobody_held_back(campaign):  # it can never be measured: not "no final result yet"
+                self._exclude(cid, name, CARD_CODES["no_control"], None)
+            else:
+                self._exclude(cid, name, refusal.code, self._available(campaign))
         elif not traced:
             self._exclude(cid, name, PROOF_NOT_TRACEABLE, None)
 
@@ -571,6 +615,10 @@ class _Builder:
             return self.reader.fig(f"campaigns/{cid}/test_plan.json", "analysis_date", "date")
         return self.reader.fig(report, "results_available_on", "date")
 
+    def _nobody_held_back(self, campaign: Campaign) -> bool:
+        held = self.reader.get(f"campaigns/{campaign.campaign_id}/campaign.json", "counts.intended_holdout")
+        return campaign.kind is not CampaignKind.PROGRAMME and type(held) is int and held == 0
+
     def _exclude(self, cid: str, name: Figure, code: str, available: Figure | None) -> None:
         self.excluded.append(
             CampaignNote(
@@ -579,6 +627,7 @@ class _Builder:
                 code=code if code.isupper() else None,
                 reason=_EXCLUDED.get(code, _EXCLUDED[PROOF_NOT_MATURE]),
                 results_available_on=available,
+                results_available_label=_AVAILABLE_LABEL if available is not None else None,
             )
         )
 
@@ -621,8 +670,7 @@ class _Builder:
         plan = f"campaigns/{cid}/test_plan.json"
         contacts = f"campaigns/{cid}/contact_readout.json"
 
-        held = reader.get(record, "counts.intended_holdout")
-        if campaign.kind is not CampaignKind.PROGRAMME and type(held) is int and held == 0:
+        if self._nobody_held_back(campaign):
             self._card(
                 "no_control",
                 campaign_id=cid,
@@ -687,10 +735,11 @@ class _Builder:
             self._card("drift", campaign_id=cid, name=name, use_case_id=campaign.use_case_id, read=drifted)
 
         for run_id in campaign.run_ids:
-            if not _safe(run_id):
+            if not _safe(run_id) or ("uplift_not_better_than_risk", run_id) in self.carded:
                 continue
             ranking = f"runs/{run_id}/ranking_choice.json"
             if reader.get(ranking, "code") == "UPLIFT_NOT_BETTER_THAN_RISK":
+                self.carded.add(("uplift_not_better_than_risk", run_id))
                 fell_back = reader.get(ranking, "ranking") == "propensity_model"
                 self._card(
                     "uplift_not_better_than_risk",
@@ -702,18 +751,24 @@ class _Builder:
                 )
 
     def _drifted_files(self, campaign: Campaign) -> Iterator[str]:
+        """The drift reports of the campaign's runs that say drifted, run by run, each run once (newest campaign)."""
         for run_id in campaign.run_ids:
-            if not _safe(run_id):
+            if not _safe(run_id) or ("drift", run_id) in self.carded:
                 continue
             plain = f"runs/{run_id}/drift.json"
+            found = False
             if self.reader.get(plain, "status") == "drifted":
+                found = True
                 yield plain
             moved = f"runs/{run_id}/uplift_drift.json"
             if (
                 self.reader.get(moved, "features.status") == "drifted"
                 or self.reader.get(moved, "treatment.status") == "outside_tolerance"
             ):
+                found = True
                 yield moved
+            if found:
+                self.carded.add(("drift", run_id))
 
     def _backfire(self, campaign: Campaign, name: Figure, view: ProofView) -> None:
         cid = campaign.campaign_id
@@ -768,22 +823,71 @@ class _Builder:
                     reason=_APART[kind],
                     lower_bounds=bounds,
                     unit=unit if bounds else None,
+                    unit_label=_unit_words(unit, column) if bounds else None,
                 )
             )
             return
         if benefit is None or benefit.low is None:
             self._exclude(cid, name, "no_lower_bound", None)
             return
-        self._add(unit, cid, name, view, benefit.low)
-        if column is not None:
-            self.unit_columns[unit] = column
         net = _net_line(view)
-        if net is None or net.low is None:
-            self.unpriced.append(CampaignNote(campaign_id=cid, campaign_name=name, reason=_UNPRICED))
-        else:
-            self._add("rupees", cid, name, view, net.low)
-        # The cycle this campaign is, for the fading rule.
-        self._cycle(campaign, view)
+        self.candidates.setdefault(self._customers_of(campaign), []).append(
+            _Candidate(
+                rank=(str(view.measured_on.value), campaign.created_at.isoformat(), cid),
+                campaign=campaign,
+                name=name,
+                view=view,
+                bound=benefit.low,
+                net=net.low if net is not None else None,
+                unit=unit,
+                column=column,
+            )
+        )
+
+    def _customers_of(self, campaign: Campaign) -> tuple[str, ...]:
+        """Who the campaign measures: its scoring runs, or an audit's assignment file; else only itself.
+
+        Two campaigns with the same key read the same customers, so what they measured is the same effect."""
+        cid = campaign.campaign_id
+        if campaign.kind is CampaignKind.EXTERNAL:
+            upload = self.reader.get(f"campaigns/{cid}/audit.json", "assignment_upload_id")
+            if not _safe(upload) and campaign.outcomes is not None:
+                upload = campaign.outcomes.upload_id
+            if _safe(upload):
+                return ("upload", str(upload))
+        elif campaign.run_ids and all(_safe(run_id) for run_id in campaign.run_ids):
+            return ("runs", *sorted(campaign.run_ids))
+        return ("campaign", cid)
+
+    def settle(self) -> None:
+        """Add each set of customers once, by its latest measured campaign; list the rest apart."""
+        for found in self.candidates.values():
+            ordered = sorted(found, key=lambda candidate: candidate.rank, reverse=True)
+            chosen = ordered[0]
+            self._add(chosen.unit, chosen.campaign.campaign_id, chosen.name, chosen.view, chosen.bound)
+            self.unit_columns[chosen.unit] = chosen.column
+            if chosen.net is None:
+                self.unpriced.append(
+                    CampaignNote(
+                        campaign_id=chosen.campaign.campaign_id, campaign_name=chosen.name, reason=_UNPRICED
+                    )
+                )
+            else:
+                self._add("rupees", chosen.campaign.campaign_id, chosen.name, chosen.view, chosen.net)
+            # The cycle this campaign is, for the fading rule: one per set of customers, never the same effect twice.
+            self._cycle(chosen.campaign, chosen.view)
+            for other in ordered[1:]:
+                self.apart.append(
+                    ApartCampaign(
+                        campaign_id=other.campaign.campaign_id,
+                        campaign_name=other.name,
+                        kind="same_customers",
+                        claim_label=other.view.claim_label,
+                        reason=_APART["same_customers"],
+                        counted_as=chosen.name,
+                        counted_as_id=chosen.campaign.campaign_id,
+                    )
+                )
 
     def _add(self, unit: str, cid: str, name: Figure, view: ProofView, bound: Figure) -> None:
         self.lines.setdefault(unit, []).append(
@@ -886,43 +990,55 @@ class _Builder:
 
     # --- the answer ------------------------------------------------------------------------------------------
     def totals(self) -> tuple[ProvenTotal, ...]:
-        order = ["outcomes", "prevented", *sorted(u for u in self.lines if u.startswith("amount:")), "rupees"]
+        def order(unit: str) -> tuple[int, str]:
+            return (_UNIT_ORDER.get(unit.partition(":")[0], len(_UNIT_ORDER)), unit)
+
         out: list[ProvenTotal] = []
-        for unit in order:
-            lines = self.lines.get(unit)
-            if not lines:
-                continue
-            fmt: FigureFormat = (
-                "inr" if unit == "rupees" else "amount" if unit.startswith("amount:") else "count"
-            )
+        for unit in sorted(self.lines, key=order):
+            lines = self.lines[unit]
+            kind = unit.partition(":")[0]
+            fmt: FigureFormat = "inr" if kind == "rupees" else "amount" if kind == "amount" else "count"
             total = sum_figures([line.lower_bound for line in lines], fmt)
             column = self.unit_columns.get(unit)
-            words = {
-                "outcomes": "extra outcomes",
-                "prevented": "outcomes prevented",
-                "rupees": "net of what contacts and offers cost",
-            }.get(unit)
-            tail = words if words is not None else f"in {column.text if column is not None else unit}"
             out.append(
                 ProvenTotal(
                     unit=unit,
                     unit_column=column,
                     total=total,
-                    label=f"at least {total.text} {tail}, the sum of each campaign's lower bound",
+                    label=f"at least {total.text} {_unit_words(unit, column)}, the sum of each campaign's lower bound",
                     campaigns=tuple(lines),
                 )
             )
         return tuple(out)
 
 
+_UNIT_ORDER: Final[dict[str, int]] = {"outcomes": 0, "prevented": 1, "amount": 2, "rupees": 3}
+
+
+def _unit_words(unit: str, column: Figure | None) -> str:
+    """The unit in plain words after `at least <n>`; a yes/no outcome is named by its column."""
+    kind = unit.partition(":")[0]
+    name = column.text if column is not None else unit.partition(":")[2]
+    if kind == "rupees":
+        return "net of what contacts and offers cost"
+    if kind == "outcomes":
+        return f"extra {name} outcomes"
+    if kind == "prevented":
+        return f"{name} outcomes prevented"
+    return f"in {name}"
+
+
 def _number(value: object) -> float | None:
     return float(value) if isinstance(value, int | float) and not isinstance(value, bool) else None
 
 
-def _unit(view: ProofView) -> tuple[str, Figure | None]:
+def _unit(view: ProofView) -> tuple[str, Figure]:
+    """The total a campaign adds to: one per outcome column, so two different yes/no outcomes are never summed."""
     if view.outcome_kind == "continuous":
-        return f"amount:{view.outcome.value}", view.outcome
-    return ("outcomes" if view.outcome_is_good else "prevented"), None
+        kind = "amount"
+    else:
+        kind = "outcomes" if view.outcome_is_good else "prevented"
+    return f"{kind}:{view.outcome.value}", view.outcome
 
 
 def _benefit_line(view: ProofView) -> ProofLine | None:
@@ -943,24 +1059,19 @@ def _net_line(view: ProofView) -> ProofLine | None:
 
 
 _UNPRINTED: Final[frozenset[str]] = frozenset(
-    {"campaign_id", "use_case_id", "read", "artefacts", "unit", "code", "kind", "schema_version"}
+    {
+        "campaign_id",
+        "use_case_id",
+        "read",
+        "artefacts",
+        "unit",
+        "code",
+        "kind",
+        "schema_version",
+        "counted_as_id",
+    }
 )
-
-
-def _free_text(item: Any) -> Iterator[str]:
-    """Every string of the summary outside a figure, an identifier or an artefact name."""
-    if isinstance(item, Figure):
-        return
-    if isinstance(item, str):
-        yield item
-    elif isinstance(item, BaseModel):
-        for name in type(item).model_fields:
-            if name in _UNPRINTED:
-                continue
-            yield from _free_text(getattr(item, name))
-    elif isinstance(item, tuple | list):
-        for element in item:
-            yield from _free_text(element)
+"""Fields of the summary that are identifiers or artefact names, never read as words."""
 
 
 def build_summary(
@@ -982,6 +1093,7 @@ def build_summary(
     builder = _Builder(storage, registry, root, now, rules or SummaryRules())
     for campaign in campaigns:
         builder.campaign(campaign)
+    builder.settle()
     names = {line.campaign_id: line.campaign_name for lines in builder.lines.values() for line in lines}
     builder.fading(names)
     builder.challengers(list(dict.fromkeys(c.use_case_id for c in campaigns if c.use_case_id is not None)))
@@ -997,7 +1109,7 @@ def build_summary(
         artefacts=tuple(sorted(set(builder.reader.read) | builder.view_artefacts)),
         built_at=now or utc_now(),
     )
-    failures = check_figures(list(figures_of(summary)), list(_free_text(summary)), storage)
+    failures = check_figures(list(figures_of(summary)), list(free_text(summary, _UNPRINTED)), storage)
     if failures:
         raise SummaryTraceError(failures)
     return summary

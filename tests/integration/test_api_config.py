@@ -507,6 +507,8 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/pilot/proof/{campaign_id}",
         "/pilot/proof/{campaign_id}/value",
         "/pilot/proof/{campaign_id}/suppressions",
+        # Plan J M105: what needs attention across the campaigns, and the value proven to date (DEC-1315)
+        "/campaigns/summary",
     }
 
 

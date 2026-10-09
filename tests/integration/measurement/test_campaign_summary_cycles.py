@@ -9,16 +9,17 @@ trend over at least three measured cycles lies wholly below zero, and:
 * a series whose effect never moves is not (the rate at which noise alone would flag one is checked in
   `tests/statistical/test_fading_false_alarm.py`), and neither is a rising one;
 * two cycles are too few to call a trend, however steep;
-* a cycle that is only an early look does not count.
+* a cycle that is only an early look does not count;
+* campaigns that measure the same customers are one cycle, not several: repeating a cycle's campaign cannot turn a
+  series that does not fall into one that does.
 """
 
 from __future__ import annotations
 
-import json
-from collections.abc import Callable, Iterator
-from datetime import timedelta
+from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import Any
+from typing import Any, Protocol
 
 import pytest
 from fastapi.testclient import TestClient
@@ -28,19 +29,33 @@ from engine.measurement.simulate import segment_outcomes
 from engine.pilot.plain import jargon_in
 from engine.storage import LocalStorage
 from tests.integration.measurement.support import SENT, ok, propensity_run
-from tests.integration.measurement.test_campaign_summary import _add_outcomes, _measure
+from tests.integration.measurement.test_campaign_summary import POWERED, _add_outcomes, _measure, _plan
 from tests.integration.pilot.test_proof_pack import assert_traced
 
 pytestmark = pytest.mark.integration
 
-Series = Callable[[list[float]], tuple[TestClient, LocalStorage, Path, list[str]]]
+
+class Series(Protocol):
+    def __call__(
+        self,
+        effects: list[float],
+        early: frozenset[int] = frozenset(),
+        repeats: dict[int, int] | None = None,
+    ) -> tuple[TestClient, LocalStorage, Path, list[str]]: ...
 
 
 @pytest.fixture
 def series(config_root: Path, tmp_path: Path) -> Iterator[Series]:
     clients: list[TestClient] = []
 
-    def build(effects: list[float]) -> tuple[TestClient, LocalStorage, Path, list[str]]:
+    def build(
+        effects: list[float],
+        early: frozenset[int] = frozenset(),
+        repeats: dict[int, int] | None = None,
+    ) -> tuple[TestClient, LocalStorage, Path, list[str]]:
+        """One campaign per cycle, each on its own scoring run. `early`: cycles whose plan fixes a day still to
+        come, so they are measured early. `repeats`: extra campaigns on the same run and outcomes as a cycle.
+        """
         data_dir = tmp_path / f"data{len(clients)}"
         data_dir.mkdir()
         storage = LocalStorage(data_dir)
@@ -65,21 +80,26 @@ def series(config_root: Path, tmp_path: Path) -> Iterator[Series]:
                 effects={"Low": effect, "Medium": effect},
                 seed=1050 + index,
             )
-            created = ok(
-                client.post(
-                    "/campaigns",
-                    json={
-                        "run_id": run.run_id,
-                        "name": f"Cycle {index + 1}",
-                        "treatment_start": (SENT + timedelta(days=7 * index)).isoformat(),
-                    },
-                ),
-                201,
-            )
-            campaign_id = str(created["campaign"]["campaign_id"])
-            _add_outcomes(client, campaign_id, outcomes)
-            _measure(client, campaign_id)
-            ids.append(campaign_id)
+            for repeat in range((repeats or {}).get(index, 0) + 1):
+                created = ok(
+                    client.post(
+                        "/campaigns",
+                        json={
+                            "run_id": run.run_id,
+                            "name": f"Cycle {index + 1}" + ("" if repeat == 0 else f" again {repeat}"),
+                            "treatment_start": (SENT + timedelta(days=7 * index)).isoformat(),
+                        },
+                    ),
+                    201,
+                )
+                campaign_id = str(created["campaign"]["campaign_id"])
+                if index in early:
+                    later = (datetime.now(UTC) + timedelta(days=30)).date().isoformat()
+                    _plan(client, campaign_id, later, **POWERED)
+                _add_outcomes(client, campaign_id, outcomes)
+                _measure(client, campaign_id)
+                if repeat == 0:
+                    ids.append(campaign_id)
         return client, storage, data_dir, ids
 
     yield build
@@ -120,16 +140,36 @@ def test_noise_a_rise_and_too_few_cycles_do_not_raise_it(series: Series, effects
 
 
 def test_a_cycle_that_is_only_an_early_look_does_not_count(series: Series) -> None:
-    """Four cycles fall; one of them is an early look, so three are left and the card names those three."""
-    client, storage, _, ids = series([0.12, 0.08, 0.04, 0.0])
-    assert len(_fading(client)) == 1
-    report = f"campaigns/{ids[1]}/incrementality_report.json"
-    original = storage.read_bytes(report)
-    document = json.loads(original)
-    document["early_look"] = True
-    storage.write_bytes(report, json.dumps(document).encode())
-    try:
-        cards = _fading(client)
-    finally:
-        storage.write_bytes(report, original)
-    assert all(report not in card["read"] for card in cards), "an early look is not one of the cycles"
+    """Four cycles fall; the second was read before its planned day, so three are left and the card names those."""
+    client, _, _, ids = series([0.12, 0.08, 0.04, 0.0], early=frozenset({1}))
+    excluded = {
+        note["campaign_id"]: note for note in ok(client.get("/campaigns/summary"))["proven"]["excluded"]
+    }
+    assert excluded[ids[1]]["code"] == "PROOF_NOT_MATURE", "the early look is not a final result"
+    cards = _fading(client)
+    assert len(cards) == 1
+    assert cards[0]["read"] == [
+        f"campaigns/{campaign_id}/incrementality_report.json" for campaign_id in (ids[0], ids[2], ids[3])
+    ], "the other three cycles are still read, and the early look is not one of them"
+
+
+def test_a_cycle_measured_by_several_campaigns_counts_once(series: Series) -> None:
+    """The same customers' outcome repeated is not independent evidence: it cannot make a flat series fall."""
+    effects = REPEATED_EFFECTS
+    client, _, data_dir, _ = series(effects, repeats={0: 2, 1: 1})
+    assert (
+        _fading(client) == []
+    ), "three cycles that do not fall by more than noise, the first said three times and the second twice"
+    summary = ok(client.get("/campaigns/summary"))
+    apart = [line for line in summary["proven"]["apart"] if line["kind"] == "same_customers"]
+    assert len(apart) == 3, "two repeats of the first cycle and one of the second are listed apart"
+    counted = {line["counted_as_id"] for line in apart}
+    assert len(counted) == 2 and counted.isdisjoint(line["campaign_id"] for line in apart)
+    totals = {total["unit"]: total for total in summary["proven"]["totals"]}
+    assert len(totals["outcomes:converted"]["campaigns"]) == len(effects), "one lower bound per cycle"
+    assert_traced(data_dir, summary)
+
+
+REPEATED_EFFECTS = [0.12, 0.08, 0.06]
+"""Three cycles whose measured trend is inside the noise (about 1.4 of the 1.96 it would need). Counting the first
+cycle three times and the second twice, each repeat taken for a cycle of its own, makes it about 2.5: fading."""

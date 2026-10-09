@@ -120,6 +120,7 @@ export function summaryCardHtml(summary) {
   const totals = (proven && proven.totals) || [];
   const apart = (proven && proven.apart) || [];
   const excluded = (proven && proven.excluded) || [];
+  const unpriced = (proven && proven.unpriced) || [];
   const text = (figure) => (figure && figure.text != null ? String(figure.text) : "");
   const attention = cards.length
     ? `<section class="card sp-summary" data-attention><h3>Needs your attention</h3><ul class="sp-list">${cards
@@ -141,7 +142,8 @@ export function summaryCardHtml(summary) {
         })
         .join("")}</ul></section>`
     : "";
-  const line = (item) => `<li data-line="${esc(item.campaign_id)}">${esc(text(item.campaign_name))}: ${esc(text(item.lower_bound))}</li>`;
+  const line = (item, unit) =>
+    `<li data-line="${esc(item.campaign_id)}">${esc(text(item.campaign_name))}: ${esc(text(item.lower_bound))}${unit ? ` ${esc(unit)}` : ""}</li>`;
   const sums = totals
     .map(
       (total) =>
@@ -157,8 +159,10 @@ export function summaryCardHtml(summary) {
       (item) =>
         `<li class="sp-entry" data-apart="${esc(item.campaign_id)}"><span class="sp-label">${esc(text(item.campaign_name))}</span><span class="sp-text">${esc(
           item.claim_label,
-        )}. ${esc(item.reason)}</span>${
-          (item.lower_bounds || []).length ? `<ul class="sp-facts">${item.lower_bounds.map(line).join("")}</ul>` : ""
+        )}. ${esc(item.reason)}${text(item.counted_as) ? ` <strong data-counted-as>${esc(text(item.counted_as))}</strong>` : ""}</span>${
+          (item.lower_bounds || []).length
+            ? `<ul class="sp-facts">${item.lower_bounds.map((bound) => line(bound, item.unit_label)).join("")}</ul>`
+            : ""
         }</li>`,
     )
     .join("");
@@ -167,7 +171,19 @@ export function summaryCardHtml(summary) {
       (item) =>
         `<li class="sp-entry" data-excluded="${esc(item.campaign_id)}"><span class="sp-label">${esc(text(item.campaign_name))}</span><span class="sp-text">${esc(
           item.reason,
-        )}${item.results_available_on ? ` ${esc(text(item.results_available_on))}.` : ""}</span></li>`,
+        )}</span>${
+          text(item.results_available_on) && item.results_available_label
+            ? `<span class="sp-text" data-available>${esc(item.results_available_label)}: <strong>${esc(text(item.results_available_on))}</strong></span>`
+            : ""
+        }</li>`,
+    )
+    .join("");
+  const unpricedList = unpriced
+    .map(
+      (item) =>
+        `<li class="sp-entry" data-unpriced="${esc(item.campaign_id)}"><span class="sp-label">${esc(text(item.campaign_name))}</span><span class="sp-text">${esc(
+          item.reason,
+        )}</span></li>`,
     )
     .join("");
   const value =
@@ -175,6 +191,8 @@ export function summaryCardHtml(summary) {
       ? `<section class="card sp-summary" data-proven><h3>Value proven to date</h3>${
           proven && proven.rule ? `<p class="sp-note">${esc(proven.rule)}</p>` : ""
         }<ul class="sp-list">${sums}</ul>${
+          sums && unpricedList ? `<h4 class="sp-sub">In the totals above but not in rupees</h4><ul class="sp-list" data-unpriced-list>${unpricedList}</ul>` : ""
+        }${
           aside ? `<h4 class="sp-sub">Listed apart, never added</h4><ul class="sp-list" data-apart-list>${aside}</ul>` : ""
         }${left ? `<h4 class="sp-sub">Not counted</h4><ul class="sp-list" data-excluded-list>${left}</ul>` : ""}</section>`
       : "";

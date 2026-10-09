@@ -801,7 +801,7 @@ figures read from them (the same `Figure` as the Value Proof Pack):
 
 | Card (code) | Shown when | Read from |
 |---|---|---|
-| No customers held back (`CAMPAIGN_NO_CONTROL`) | the campaign recorded nobody held back (a programme readout is never this) | `campaign.json` |
+| No customers held back (`CAMPAIGN_NO_CONTROL`) | the campaign recorded nobody held back (a programme readout is never this); it is also the campaign's reason under "Not counted" | `campaign.json` |
 | Read early (`CAMPAIGN_EARLY_LOOK`) | the stored result was read before the plan's analysis date | `incrementality_report.json`, `test_plan.json` |
 | Too small a test (`PLAN_UNDERPOWERED`) | the plan carries the warning and there is no final result yet | `test_plan.json` |
 | Held-back customers contacted (`CONTROL_GROUP_CONTACTED`) | the contact file shows at least 5% of them contacted | `contact_readout.json` |
@@ -826,11 +826,21 @@ and the latest effect is below the first. That is one tail, so when the true eff
 campaign's lower bound". A lower bound is the low end of the 95% range of what the campaign changed, read from the pack's
 own figures, so a campaign that may have done harm adds a negative number. Only campaigns the pack accepts and whose
 causal basis is `engine_random` or `verified_random` (M103, M104) are added. There is one total per unit and units are never
-mixed: yes/no outcomes ("extra outcomes", or "outcomes prevented" when the aim is fewer), each amount column, and rupees
-(the pack's net value after contacts and offers; a campaign with no value inputs is counted in its outcomes and listed as
-not priced). Listed apart and never added: campaigns random only by the person's statement, descriptive ones, and
-programme readouts (which cover the customers of the campaigns). Excluded with their reason: generated data and results
-that are not final yet (with the day when it is known, as a figure).
+mixed: yes/no outcomes and amounts each have a total **per outcome column** (`outcomes:<column>` "extra <column>
+outcomes", `prevented:<column>` "<column> outcomes prevented" when the aim is fewer, `amount:<column>`), so a win-back's
+reactivations and a bank's deposits are never summed, and rupees (the pack's net value after contacts and offers; a
+campaign with no value inputs is counted in its outcomes, listed as not priced and shown so on Results).
+**Customers are counted once.** Campaigns that measure the same customers (the same scoring runs, or the same assignment
+file of an audit) measure the same effect again, so only the latest measured (by the report's day, then creation) is
+added, to the totals and to the fading rule; the others are listed apart as `same_customers` with the campaign that is
+counted in their place. Listed apart and never added: those, campaigns random only by the person's statement,
+descriptive ones, and programme readouts (which cover the customers of the campaigns), each lower bound with its unit in
+words. Excluded with their reason: generated data, results that are not final yet (with the day when it is known as a
+labelled figure, "Day the final result can be read"), and a campaign with nobody held back, whose reason is its own
+(`CAMPAIGN_NO_CONTROL`: it can never be measured, so "no final result yet" would promise a count that cannot come).
+**Every campaign is read**, not the newest page the list shows: a total "to date" must not fall because newer campaigns
+were made (`CampaignStore.list(limit=None)`). A run-level card (drifted, does not beat risk) is drawn once per run, on
+the newest campaign that uses it.
 
 **Traced.** The total is a `Figure` whose sources name every lower bound added. `build_summary` re-reads every source and
 every digit of its own words with `engine.pilot.proof.check_figures` (the check the pack uses, now shared) and refuses to
@@ -843,4 +853,6 @@ only; with no answer, an empty one or a role that may not read it, nothing is dr
 **How we know it is honest.** `tests/integration/measurement/test_campaign_summary*.py` build campaigns through the real
 scoring stages, the API and the engine's simulators (a planted harmful band, a leaking audit, a stated-random and a
 descriptive audit, generated data, a run with nobody held back) and check the total against the sum of each report's lower
-bound, each card in both directions, and that stated-random, descriptive and generated campaigns are never added.
+bound, each card in both directions, that stated-random, descriptive and generated campaigns are never added, that three
+campaigns on one run add one lower bound, that a repeated cycle cannot turn a series that does not fall into one that does,
+that two yes/no columns give two totals, and that a proven campaign beyond the newest hundred is still in the total.

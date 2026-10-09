@@ -762,8 +762,11 @@ def list_campaigns(
 def campaigns_summary(
     request: Request, root: ConfigRootDep, storage: StorageDep, registry: RegistryDep
 ) -> CampaignSummary:
-    """Declared before `/campaigns/{campaign_id}`, so "summary" is never read as a campaign id (DEC-1315 (a))."""
-    campaigns = get_campaign_store(request).list(limit=CAMPAIGNS_SHOWN)
+    """Declared before `/campaigns/{campaign_id}`, so "summary" is never read as a campaign id (DEC-1315 (a)).
+
+    Reads every campaign, not the newest page the list shows: a total "to date" that dropped older proven
+    campaigns would fall from one day to the next without saying so."""
+    campaigns = get_campaign_store(request).list(limit=None)
     try:
         return build_summary(storage, campaigns, registry=registry, root=root)
     except SummaryTraceError as exc:

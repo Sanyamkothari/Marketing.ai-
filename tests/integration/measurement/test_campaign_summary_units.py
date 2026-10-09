@@ -14,21 +14,24 @@ The worlds are the revenue campaign of `test_campaign_amounts.py` and the univer
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
+from fastapi.testclient import TestClient
 
+from api.main import create_app
 from engine.measurement.simulate import COVARIATE_COLUMN, REVENUE_COLUMN
 from tests.integration.measurement.support import ok, propensity_run
 from tests.integration.measurement.test_campaign_amounts import COVARIATE, _campaign, _measure, _plan
 from tests.integration.measurement.test_campaign_amounts import RUN as REVENUE_RUN
 from tests.integration.measurement.test_campaign_amounts import World as AmountsWorld
 from tests.integration.measurement.test_campaign_amounts import world as amounts_world
-from tests.integration.measurement.test_campaign_summary import _banded_outcomes, _scored
+from tests.integration.measurement.test_campaign_summary import _scored, _simulated_audit
 from tests.integration.measurement.test_programme_readout import World as ProgrammeWorld
 from tests.integration.measurement.test_programme_readout import _body, _outcomes
 from tests.integration.measurement.test_programme_readout import world as programme_world
-from tests.integration.pilot.test_proof_pack import VALUE_INPUTS, assert_traced
+from tests.integration.pilot.test_proof_pack import VALUE_INPUTS, _banded_outcomes, assert_traced
 
 pytestmark = pytest.mark.integration
 
@@ -49,7 +52,7 @@ def test_an_amount_a_yes_no_campaign_and_rupees_are_three_totals_never_added(
 
     summary = ok(world.client.get("/campaigns/summary"))
     totals = {total["unit"]: total for total in summary["proven"]["totals"]}
-    assert set(totals) == {"outcomes", f"amount:{REVENUE_COLUMN}", "rupees"}
+    assert set(totals) == {"outcomes:converted", f"amount:{REVENUE_COLUMN}", "rupees"}
 
     # The amount is added in its own unit, from the adjusted interval its plan registered.
     report = json.loads(world.storage.read_bytes(f"campaigns/{revenue}/incrementality_report.json"))
@@ -63,8 +66,8 @@ def test_an_amount_a_yes_no_campaign_and_rupees_are_three_totals_never_added(
 
     # The yes/no total holds the yes/no campaign only.
     yes_no_report = json.loads(world.storage.read_bytes(f"campaigns/{yes_no}/incrementality_report.json"))
-    assert [line["campaign_id"] for line in totals["outcomes"]["campaigns"]] == [yes_no]
-    assert totals["outcomes"]["total"]["value"] == pytest.approx(
+    assert [line["campaign_id"] for line in totals["outcomes:converted"]["campaigns"]] == [yes_no]
+    assert totals["outcomes:converted"]["total"]["value"] == pytest.approx(
         yes_no_report["incremental_conversions"]["ci_low"]
     )
 
@@ -93,3 +96,41 @@ def test_a_programme_readout_is_listed_apart_and_never_added(programme_world: Pr
     assert apart[campaign_id]["lower_bounds"], "what it shows is shown"
     assert "same customers" in apart[campaign_id]["reason"]
     assert_traced(world.data_dir, summary)
+
+
+def test_yes_no_outcomes_of_different_columns_are_never_summed(config_root: Path, tmp_path: Path) -> None:
+    """A win-back's reactivations and a bank's deposits are different outcomes: each column has its own total."""
+    with TestClient(create_app(config_root=config_root, data_dir=tmp_path / "data")) as client:
+        reactivated = _simulated_audit(
+            client, "Win-back", 10511, contamination=0.0, outcome_column="reactivated"
+        )
+        deposits = _simulated_audit(
+            client, "Deposits", 10512, contamination=0.0, outcome_column="deposit_made"
+        )
+        again = _simulated_audit(
+            client, "Win-back again", 10513, contamination=0.0, outcome_column="reactivated"
+        )
+        summary = ok(client.get("/campaigns/summary"))
+        totals = {total["unit"]: total for total in summary["proven"]["totals"]}
+        assert set(totals) == {"outcomes:reactivated", "outcomes:deposit_made"}, "two columns, two totals"
+        assert [total["unit"] for total in summary["proven"]["totals"]] == [
+            "outcomes:deposit_made",
+            "outcomes:reactivated",
+        ], "in a stable order"
+        assert {line["campaign_id"] for line in totals["outcomes:reactivated"]["campaigns"]} == {
+            reactivated,
+            again,
+        }
+        assert [line["campaign_id"] for line in totals["outcomes:deposit_made"]["campaigns"]] == [deposits]
+        for column, total in (
+            ("reactivated", totals["outcomes:reactivated"]),
+            ("deposit_made", totals["outcomes:deposit_made"]),
+        ):
+            assert total["unit_column"]["text"] == column
+            assert total["label"] == (
+                f"at least {total['total']['text']} extra {column} outcomes, the sum of each campaign's lower bound"
+            )
+            assert total["total"]["value"] == pytest.approx(
+                sum(line["lower_bound"]["value"] for line in total["campaigns"])
+            )
+        assert_traced(tmp_path / "data", summary)

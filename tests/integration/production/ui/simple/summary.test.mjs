@@ -4,6 +4,8 @@
    * the card for the harmed group, in the server's words, with the figures it sent and a way to the pack;
    * the total labelled as the server labelled it, with each campaign's lower bound under it;
    * nothing at all of either without a server value: no answer, an empty answer, a refused role;
+   * a unit beside every lower bound listed apart, the day an unfinished result can be read with its label, the
+     campaign a duplicate is counted as, and the campaigns left out of the rupee total, all as the server sent them;
    * jargon-free words, and no number that the server did not send. */
 import { test } from "node:test";
 import assert from "node:assert/strict";
@@ -11,6 +13,7 @@ import { $, $$, settle, until } from "../harness.mjs";
 import { fixture, installWholePage } from "./fake.mjs";
 
 const summary = fixture("campaign_summary");
+const full = fixture("campaign_summary_full");
 const world = { runs: fixture("runs_empty"), waiting: null, summary };
 const { w } = await installWholePage({ hash: "#/results", world });
 const { resultsHtml, summaryCardHtml } = await import("../../../../../ui/modules/simple/pages.js");
@@ -88,4 +91,64 @@ test("a role without the summary sees Results as before, with no card and no err
   assert.equal($("[data-proven]"), null);
   assert.equal($(".error-box"), null);
   world.summary = summary;
+});
+
+const html = (summary) => {
+  const box = w.document.createElement("div");
+  box.innerHTML = summaryCardHtml(summary);
+  return box;
+};
+
+test("a lower bound listed apart carries the unit the server sent, never a bare number", () => {
+  const body = html(full);
+  const stated = full.proven.apart.find((item) => item.kind === "stated_random");
+  assert.ok(stated.unit_label && stated.lower_bounds.length, "the server sent a unit and a bound");
+  const row = body.querySelector(`[data-apart="${stated.campaign_id}"]`);
+  for (const bound of stated.lower_bounds) {
+    const li = row.querySelector(`[data-line="${bound.campaign_id}"]`);
+    assert.ok(text(li).endsWith(`${bound.lower_bound.text} ${stated.unit_label}`), text(li));
+  }
+});
+
+test("a campaign counted once names the campaign that is counted in its place", () => {
+  const body = html(full);
+  const copy = full.proven.apart.find((item) => item.kind === "same_customers");
+  const row = body.querySelector(`[data-apart="${copy.campaign_id}"]`);
+  assert.ok(text(row).includes(copy.reason));
+  assert.equal(text(row.querySelector("[data-counted-as]")), copy.counted_as.text);
+  assert.equal(row.querySelector("[data-line]"), null, "nothing of it is added or shown as a bound");
+});
+
+test("an unfinished campaign says what its date is, in the server's label", () => {
+  const body = html(full);
+  const [note] = full.proven.excluded;
+  assert.ok(note.results_available_on && note.results_available_label);
+  const row = body.querySelector(`[data-excluded="${note.campaign_id}"]`);
+  assert.equal(
+    text(row.querySelector("[data-available]")),
+    `${note.results_available_label}: ${note.results_available_on.text}`,
+  );
+  assert.ok(!/\.\s*\d{4}-\d{2}-\d{2}\.?$/.test(text(row)), "no bare date after the reason");
+});
+
+test("the campaigns in the totals but not in rupees are listed with the server's reason", () => {
+  for (const data of [full, summary]) {
+    const body = html(data);
+    assert.ok(data.proven.unpriced.length, "the campaign has no value inputs");
+    for (const item of data.proven.unpriced) {
+      const row = body.querySelector(`[data-unpriced="${item.campaign_id}"]`);
+      assert.ok(row && text(row).includes(item.reason) && text(row).includes(item.campaign_name.text));
+    }
+  }
+  const none = html({ ...full, proven: { ...full.proven, unpriced: [] } });
+  assert.equal(none.querySelector("[data-unpriced-list]"), null, "nothing to say, nothing drawn");
+});
+
+test("every number on the full page is one the server sent, and the words are plain", () => {
+  const page = text(html(full));
+  const sent = JSON.stringify(full);
+  for (const digit of page.match(/\d(?:[\d,]*\d)?(?:\.\d+)?/g) || []) assert.ok(sent.includes(digit), digit);
+  for (const jargon of [/uplift/i, /confidence/i, /p-value/i, /\bCI\b/, /interval/i, /incrementality/i]) {
+    assert.doesNotMatch(page, jargon);
+  }
 });

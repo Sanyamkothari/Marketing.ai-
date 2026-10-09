@@ -103,7 +103,9 @@ __all__ = [
     "derived",
     "figures_of",
     "format_value",
+    "free_text",
     "proof_document",
+    "safe_identifier",
     "save_campaign_value_inputs",
     "verify_provenance",
 ]
@@ -130,9 +132,12 @@ _SAFE_ID: Final[re.Pattern[str]] = re.compile(r"[A-Za-z0-9_.-]{1,128}")
 """The characters of a campaign, run or upload id: one path segment."""
 
 
-def _safe(identifier: object) -> bool:
-    """True for an id that is one path segment: never `..`, a slash or empty."""
+def safe_identifier(identifier: object) -> bool:
+    """True for an id that is one path segment: never `..`, a slash or empty (the one guard M104 and M105 share)."""
     return isinstance(identifier, str) and bool(_SAFE_ID.fullmatch(identifier)) and ".." not in identifier
+
+
+_safe = safe_identifier
 
 
 _CAMPAIGN: Final[str] = "campaign.json"
@@ -532,20 +537,27 @@ _UNPRINTED: Final[frozenset[str]] = frozenset({"campaign_id", "use_case_id", "ar
 """Fields of the view that are identifiers, never printed as a number of the pack."""
 
 
-def _free_text(item: Any) -> Iterator[str]:
-    """Every string of the view outside a figure: labels, notes, reasons, the headline, string table cells."""
+def free_text(
+    item: Any, unprinted: frozenset[str] = frozenset(), scope: type[BaseModel] | None = None
+) -> Iterator[str]:
+    """Every string of `item` outside a figure: labels, notes, reasons, the headline, string table cells.
+
+    Fields named in `unprinted` are identifiers or artefact names, never read as words; they are skipped on a
+    model of type `scope` (every model when `scope` is None). The Value Proof Pack and the campaigns' summary
+    (Plan J M105) both walk their words with this one function, so the check cannot drift apart.
+    """
     if isinstance(item, Figure):
         return
     if isinstance(item, str):
         yield item
     elif isinstance(item, BaseModel):
         for name in type(item).model_fields:
-            if isinstance(item, ProofView) and name in _UNPRINTED:
+            if name in unprinted and (scope is None or isinstance(item, scope)):
                 continue
-            yield from _free_text(getattr(item, name))
+            yield from free_text(getattr(item, name), unprinted, scope)
     elif isinstance(item, tuple | list):
         for element in item:
-            yield from _free_text(element)
+            yield from free_text(element, unprinted, scope)
 
 
 def check_figures(figures: Sequence[Figure], free_texts: Iterable[str], storage: Storage) -> list[str]:
@@ -595,7 +607,7 @@ def verify_provenance(view: ProofView, storage: Storage) -> None:
     Every digit in the view's own words (a label, a note, a reason, the headline) must also be one a figure
     prints, so a number written into a sentence cannot reach the page untraced (:func:`check_figures`).
     """
-    failures = check_figures(list(figures_of(view)), _free_text(view), storage)
+    failures = check_figures(list(figures_of(view)), free_text(view, _UNPRINTED, ProofView), storage)
     if failures:
         raise ProvenanceError(tuple(failures))
 

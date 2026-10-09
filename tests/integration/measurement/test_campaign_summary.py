@@ -152,6 +152,7 @@ def _audit(
     basis: str,
     contacts: pd.DataFrame | None = None,
     arm: dict[str, Any] | None = None,
+    outcome_column: str = "converted",
 ) -> str:
     body: dict[str, Any] = {
         "name": name,
@@ -163,7 +164,7 @@ def _audit(
         },
         "outcomes": {
             "upload_id": upload(client, outcomes, name="outcomes.csv"),
-            "outcome_column": "converted",
+            "outcome_column": outcome_column,
             "treatment_date_column": "treatment_date",
         },
         "assignment_basis": basis,
@@ -179,7 +180,9 @@ def _audit(
     return str(ok(client.post("/campaigns/audit", json=body), 201)["campaign"]["campaign_id"])
 
 
-def _simulated_audit(client: TestClient, name: str, seed: int, *, contamination: float) -> str:
+def _simulated_audit(
+    client: TestClient, name: str, seed: int, *, contamination: float, outcome_column: str = "converted"
+) -> str:
     """A verified-random audit (the file has unrelated details) with a contact file of known leakage."""
     sim = population(
         8_000, 0.10, 0.04, seed=seed, control_share=0.2, compliance=1.0, contamination=contamination
@@ -196,7 +199,10 @@ def _simulated_audit(client: TestClient, name: str, seed: int, *, contamination:
     contacts = pd.DataFrame(
         {"customer_id": sim.scores["customer_id"], "contacted": sim.received_treatment.astype(int)}
     )
-    return _audit(client, name, frame, sim.outcomes, basis="random", contacts=contacts)
+    outcomes = sim.outcomes.rename(columns={"converted": outcome_column})
+    return _audit(
+        client, name, frame, outcomes, basis="random", contacts=contacts, outcome_column=outcome_column
+    )
 
 
 @pytest.fixture(scope="module")
@@ -263,8 +269,14 @@ def world(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterat
         yield World(client, storage, data_dir, banded_run, ids)
 
 
-PROVEN = ("banded", "banded_again", "uplift", "under_final", "clean", "leaky")
-"""The campaigns whose lower bounds are added: random by the engine or verified, final, the client's own."""
+OUTCOMES = "outcomes:converted"
+"""The yes/no total of the outcome column every campaign of this world measures."""
+PROVEN = ("under_final", "uplift", "clean", "leaky")
+"""The campaigns whose lower bounds are added: random by the engine or verified, final, the client's own, and
+the latest measured of those that read the same customers."""
+SAME_CUSTOMERS = ("banded", "banded_again")
+"""Measured on the same scoring run and outcomes as `under_final`, the latest of the three: their effect is the
+same effect, so it is listed apart and added once."""
 
 
 def _summary(world: World) -> dict[str, Any]:
@@ -333,7 +345,7 @@ def test_the_total_equals_the_sum_of_the_campaigns_lower_bounds(world: World) ->
     summary = _summary(world)
     totals = _totals(summary)
     expected = sum(_report(world, name)["incremental_conversions"]["ci_low"] for name in PROVEN)
-    outcomes = totals["outcomes"]
+    outcomes = totals[OUTCOMES]
     assert outcomes["total"]["value"] == pytest.approx(expected)
     assert {line["campaign_id"] for line in outcomes["campaigns"]} == {world.ids[name] for name in PROVEN}
     for line in outcomes["campaigns"]:
@@ -345,9 +357,9 @@ def test_the_total_equals_the_sum_of_the_campaigns_lower_bounds(world: World) ->
 
 
 def test_the_total_is_labelled_as_what_it_is(world: World) -> None:
-    outcomes = _totals(_summary(world))["outcomes"]
+    outcomes = _totals(_summary(world))[OUTCOMES]
     assert outcomes["label"] == (
-        f"at least {outcomes['total']['text']} extra outcomes, the sum of each campaign's lower bound"
+        f"at least {outcomes['total']['text']} extra converted outcomes, the sum of each campaign's lower bound"
     )
     assert "lower bound" in outcomes["label"] and outcomes["label"].startswith("at least ")
 
@@ -373,9 +385,9 @@ def test_the_money_is_the_sum_of_each_campaigns_net_lower_bound_in_its_own_total
 def test_conversions_and_rupees_are_never_added_together(world: World) -> None:
     summary = _summary(world)
     totals = _totals(summary)
-    assert {"outcomes", "rupees"} <= set(totals)
+    assert {OUTCOMES, "rupees"} <= set(totals)
     assert len(totals) == len(summary["proven"]["totals"]), "one total per unit"
-    outcomes, rupees = totals["outcomes"]["total"], totals["rupees"]["total"]
+    outcomes, rupees = totals[OUTCOMES]["total"], totals["rupees"]["total"]
     assert outcomes["format"] == "count" and rupees["format"] == "inr"
     # No figure of the summary is a sum across the two units: the outcomes total is read from reports alone,
     # the rupees total also from the value inputs that priced them.
@@ -400,12 +412,60 @@ def test_generated_and_unfinished_campaigns_are_excluded_with_their_reason(world
     summary = _summary(world)
     excluded = {line["campaign_id"]: line for line in summary["proven"]["excluded"]}
     assert excluded[world.ids["synthetic"]]["code"] == "PROOF_SYNTHETIC_DATA"
-    for name in ("waiting", "early", "under", "powered", "no_control"):
+    for name in ("waiting", "early", "under", "powered"):
         assert excluded[world.ids[name]]["code"] == "PROOF_NOT_MATURE", name
+        assert "no final result yet" in excluded[world.ids[name]]["reason"], name
+    nobody = excluded[world.ids["no_control"]]
+    assert nobody["code"] == "CAMPAIGN_NO_CONTROL", "the page's own card says why; it will never be counted"
+    assert nobody["results_available_on"] is None and "never counted" in nobody["reason"]
+    assert "no final result yet" not in nobody["reason"], "it cannot become final, so it must not say it may"
     added = {line["campaign_id"] for total in summary["proven"]["totals"] for line in total["campaigns"]}
     assert not added & set(excluded), "an excluded campaign is not in any total"
     assert all(line["reason"] for line in excluded.values())
     assert set(added) == {world.ids[name] for name in PROVEN}
+
+
+def test_an_unfinished_campaign_says_which_day_its_result_can_be_read(world: World) -> None:
+    excluded = {line["campaign_id"]: line for line in _summary(world)["proven"]["excluded"]}
+    note = excluded[world.ids["early"]]
+    assert note["results_available_on"]["format"] == "date", "the plan's day, for a result read early"
+    assert note["results_available_label"] == "Day the final result can be read"
+    for line in excluded.values():
+        assert (line["results_available_label"] is None) == (line["results_available_on"] is None)
+
+
+# --- customers are counted once --------------------------------------------------------------------------------
+def test_campaigns_on_the_same_customers_add_one_lower_bound_not_one_each(world: World) -> None:
+    summary = _summary(world)
+    outcomes = _totals(summary)[OUTCOMES]
+    one = _report(world, "under_final")["incremental_conversions"]["ci_low"]
+    for name in SAME_CUSTOMERS:
+        assert _report(world, name)["incremental_conversions"]["ci_low"] == pytest.approx(one), "same data"
+    added = [line["campaign_id"] for line in outcomes["campaigns"]]
+    assert [world.ids[name] in added for name in ("banded", "banded_again", "under_final")] == [
+        False,
+        False,
+        True,
+    ]
+    assert len(added) == len(set(added)) == len(PROVEN), "every proven campaign once"
+    from_banded_run = [
+        line["lower_bound"]["value"]
+        for line in outcomes["campaigns"]
+        if line["campaign_id"] in {world.ids[n] for n in (*SAME_CUSTOMERS, "under_final")}
+    ]
+    assert from_banded_run == [pytest.approx(one)], "three campaigns on one run add exactly one lower bound"
+    apart = {line["campaign_id"]: line for line in summary["proven"]["apart"]}
+    for name in SAME_CUSTOMERS:
+        line = apart[world.ids[name]]
+        assert line["kind"] == "same_customers" and line["lower_bounds"] == []
+        assert line["counted_as_id"] == world.ids["under_final"]
+        assert line["counted_as"]["text"] == "Small plan, read"
+        assert "same customers" in line["reason"] and not jargon_in(line["reason"])
+
+
+def test_a_campaign_on_a_different_run_or_audit_file_is_still_added(world: World) -> None:
+    added = {line["campaign_id"] for line in _totals(_summary(world))[OUTCOMES]["campaigns"]}
+    assert {world.ids["uplift"], world.ids["clean"], world.ids["leaky"]} <= added, "other customers"
 
 
 # --- every number is traced, in plain words, with no customer row --------------------------------------------
@@ -430,6 +490,7 @@ def _free_strings(item: Any, key: str = "") -> Iterator[str]:
                 "unit",
                 "code",
                 "kind",
+                "counted_as_id",
                 "built_at",
             }:
                 continue
@@ -585,6 +646,40 @@ def test_drift_appears_only_when_the_scored_customers_have_moved(world: World) -
         card = _cards(_summary(world), "DRIFT_DRIFTED")[0]
         assert card["read"] == [key]
     assert _card_campaigns(world, "DRIFT_DRIFTED") == set()
+
+
+def test_a_run_used_by_several_campaigns_is_carded_once(world: World) -> None:
+    _, drifted = _stable_and_drifted()
+    assert drifted is not None
+    key = run_key(RUN_BANDED, "drift.json")
+    on_the_run = {
+        world.ids[name]
+        for name in ("banded", "banded_again", "under_final", "under", "powered", "early", "waiting")
+    }
+    with _written(world, key, drifted):
+        cards = _cards(_summary(world), "DRIFT_DRIFTED")
+        assert len(cards) == 1, "seven campaigns read one drifted run: one card, not seven"
+        assert cards[0]["campaign_id"] in on_the_run and cards[0]["read"] == [key]
+    ranking = run_key(RUN_BANDED, RANKING_CHOICE_FILENAME)
+    with _written(world, ranking, _verdict(beats=False)):
+        assert len(_cards(_summary(world), "UPLIFT_NOT_BETTER_THAN_RISK")) == 1
+
+
+def test_a_run_id_with_dots_reads_no_file_outside_the_runs(world: World) -> None:
+    """The guard is M104's own: `..` is never a run id, so `runs/../drift.json` is never read."""
+    from engine.measurement.summary import build_summary
+
+    _, drifted = _stable_and_drifted()
+    store = world.client.app.state.campaign_store  # type: ignore[attr-defined]
+    odd = store.get(world.ids["uplift"]).model_copy(update={"run_ids": ("..",)})
+    with (
+        _written(world, "drift.json", drifted),
+        _written(world, RANKING_CHOICE_FILENAME, _verdict(beats=False)),
+    ):
+        summary = build_summary(world.storage, [odd])
+    assert [
+        card.code for card in summary.cards if card.kind in {"drift", "uplift_not_better_than_risk"}
+    ] == []
 
 
 def _verdict(*, beats: bool) -> Any:
