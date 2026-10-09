@@ -22,7 +22,10 @@ Contract schema version: 1.
 | GET | `/auth/me` | Who am I, and what may I do | MeResponse |
 | GET | `/campaigns` | Campaigns, newest first | CampaignListResponse |
 | POST | `/campaigns` | Record a campaign sent from a finished scoring run's list | CampaignView |
+| POST | `/campaigns/audit` | Audit a campaign another tool ran: who was in which group, and what happened | CampaignView |
+| POST | `/campaigns/programme` | The whole programme: every customer not held back against the universal holdout, over a period | CampaignView |
 | GET | `/campaigns/{campaign_id}` | One campaign: its record, its measured result and its test plan | CampaignView |
+| POST | `/campaigns/{campaign_id}/contacts` | Say who a campaign actually contacted: the contact rate, contamination and the effect on the contacted | CampaignView |
 | POST | `/campaigns/{campaign_id}/measure` | Measure a campaign through the one measurement path, against its test plan | CampaignView |
 | POST | `/campaigns/{campaign_id}/outcomes` | Give a campaign its outcomes file: customer id, outcome and optionally a treatment date | CampaignView |
 | GET | `/campaigns/{campaign_id}/plan` | A campaign's registered test plan and every earlier version | TestPlanView |

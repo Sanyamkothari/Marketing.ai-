@@ -88,11 +88,15 @@ function approvalsNotice(waiting) {
  * The Results page. `runs` is `GET /runs`'s list (null while loading), `error` its failure,
  * `waiting` how many models wait for approval (null or 0: no notice). `lists` are the drawn results
  * lists other modules register beside the runs (Plan J M94: campaigns; `registerResultsList`).
+ * `auditHref` (Plan J M103) is where "Audit a campaign" goes, for a person who may audit one; null: no link.
  */
-export function resultsHtml({ runs = null, error = null, waiting = null, lists = [] } = {}) {
+export function resultsHtml({ runs = null, error = null, waiting = null, lists = [], auditHref = null } = {}) {
   const head = pageHead(
     `${crumbs([{ label: "Results" }])}<h1 class="h1">Results</h1><p class="desc">Every run, newest first. Open one to see its scores, reasons and next steps.</p>${headActions(
-      { related: { label: "All reports", href: "#/pilot" } },
+      {
+        secondary: auditHref ? [{ label: "Audit a campaign", href: auditHref, attrs: "data-audit-link" }] : [],
+        related: { label: "All reports", href: "#/pilot" },
+      },
     )}`,
   );
   let body;

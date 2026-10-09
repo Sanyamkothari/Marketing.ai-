@@ -23,7 +23,8 @@ Key                                     Written by                             D
 `llm_cache/<xx>/<key>.json`             `engine/generative/cache.py`           a cache entry: deleted,
                                                                                never edited
 `campaigns/<id>/*`                      `api/routes/campaigns.py` (Plan J      `campaign.json` created_at
-                                        M94, `engine/measurement/campaign.py`)  and primary_key
+                                        M94, M103: `assignment`, `outcomes`     and primary_key
+                                        and `contact` `.parquet`)
 ======================================  =====================================  =========================
 
 Root-level files (`registry.db`, `clients.db`, `platform.db` and their journals) are databases, not

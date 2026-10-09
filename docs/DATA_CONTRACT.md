@@ -1002,3 +1002,29 @@ step is skipped (`skipped: true` in the receipt) rather than refused.
 | `RECIPE_COLUMN_MISSING` | error | no | "The file has no column '{column}'." | "Add the column back under the name the model was trained with, or open Guided setup to tell the helper what it is called now." |
 | `RECIPE_VALUES_UNCONVERTED` | error | no | "{n} of {non_empty} values in '{column}' could not be converted ({share}), more than the {limit}% limit." | "Check how this column is written in the new file. Open Guided setup to see the values that could not be read." |
 | `RECIPE_STEP_INVALID` | error | no | Why the saved step cannot run. | "Retrain the model with Guided setup, so its preparation steps are saved again." |
+
+---
+
+## 13. Files for auditing a campaign another tool ran (Plan J M103)
+
+`POST /campaigns/audit` reads two files uploaded the ordinary way (`POST /uploads`), and a third that is optional.
+Every customer appears once in each (a repeat is refused, with its count); the id is compared as text, so `1` and
+`1.0` are the same customer.
+
+* **Who was in which group** - the id column(s) and a *group* column: `1`/`0`, `yes`/`no`, `treated`/`control` and
+  similar words are read as they are; any other values are named (`control_value`, and `treated_values` when there is
+  more than one offer, each measured against the shared control). A blank group puts the customer in neither. Optional
+  columns: the date the customer was contacted, and whether the customer was meant to be contacted at all (every
+  customer is compared when absent). Every other column is a detail about the customer, used once to test whether the
+  groups look random and never stored. At least 30 customers in each group are needed for that test.
+* **What happened** - the id column(s), the outcome (yes/no, or an amount) and, if the assignment file has no dates,
+  the date the customer was contacted. A customer with no outcome is left out and counted, never counted as a
+  non-responder.
+* **Who was actually contacted (optional)** - the id column(s) and whether the customer was contacted. A customer the
+  file does not list is unknown, or not contacted when the person says the file lists only the customers it sent to.
+* **What you say** - how the groups were chosen (`random` or `not_random`; required, never assumed), when the campaign
+  went out (or the dates above), and the days the outcome is counted over.
+
+`POST /campaigns/programme` reads one file with the outcome of every customer of the base over a period, and splits it by
+the universal control group. Row-level campaign files (`assignment`, `outcomes` and `contact` `.parquet`) are covered by
+retention and erasure like the others (`configs/privacy.yaml`).

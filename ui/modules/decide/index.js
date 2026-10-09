@@ -10,8 +10,20 @@
 
 import { canAccess, registerModule, registerPagePanel, registerResultsList, setActiveNav } from "../router.js";
 import { errorBox, skeleton } from "../../dom.js";
-import { treatListUrl } from "../../api.js";
-import { getArbitrationConflicts, getCampaign, getCampaigns, getPlan, getPlanPreview, getTreatListSummary, postMeasure, postPlan } from "./api.js";
+import { getIndustries, postUpload, treatListUrl } from "../../api.js";
+import {
+  getArbitrationConflicts,
+  getCampaign,
+  getCampaigns,
+  getPlan,
+  getPlanPreview,
+  getTreatListSummary,
+  postAudit,
+  postMeasure,
+  postPlan,
+  postProgramme,
+} from "./api.js";
+import { AUDIT_ROUTE, auditBody, auditPageHtml, fileOf, programmeBody } from "./audit.js";
 import { planBody, previewHtml, previewReadoutHtml } from "./plan.js";
 import { campaignPageHtml, campaignsListHtml, conflictsCardHtml, injectStyles, treatListCardHtml } from "./views.js";
 
@@ -205,4 +217,111 @@ registerPagePanel({
   name: "treat_list",
   applies: (kind, uc, run) => kind === "output" && !!run && run.mode === "score",
   html: treatListPanelHtml,
+});
+
+// --- Audit a campaign, and the programme readout (Plan J M103, DEC-1313) ------------------------------
+// One page, `#/audit`: the form for a campaign another tool ran and the one for the whole programme. A file
+// goes through the ordinary upload (`POST /uploads`), the form then offers that file's own columns, and the
+// answer is the campaign's page, where the server's label says what its numbers can claim.
+
+const audit = {
+  files: { assignment: null, outcomes: null, contact: null, programme: null },
+  busy: false,
+  error: null,
+  programmeBusy: false,
+  programmeError: null,
+  useCase: null,
+};
+
+function drawAudit(app) {
+  if (hashParts()[0] !== AUDIT_ROUTE) return;
+  // The values typed so far survive a repaint (choosing a file draws the page again).
+  const kept = {};
+  for (const form of document.querySelectorAll("[data-audit-form], [data-programme-form]")) {
+    for (const [key, value] of new FormData(form).entries()) {
+      if (typeof value === "string") kept[key] = value;
+    }
+  }
+  app.innerHTML = auditPageHtml({ can: canAccess, state: audit });
+  for (const [key, value] of Object.entries(kept)) {
+    const input = app.querySelector(`[name="${key}"]`);
+    if (!input) continue;
+    if (input.type === "radio") {
+      const chosen = app.querySelector(`[name="${key}"][value="${value}"]`);
+      if (chosen) chosen.checked = true;
+    } else {
+      input.value = value;
+    }
+  }
+  document.title = "Audit a campaign · Marketing AI";
+  setActiveNav("results");
+}
+
+registerModule({
+  name: "audit",
+  routes: [AUDIT_ROUTE],
+  render: async (app) => {
+    injectStyles();
+    drawAudit(app);
+  },
+});
+
+/** The use case an uploaded file is filed under: the first one open today (the file is not about it). */
+async function uploadUseCase() {
+  if (audit.useCase) return audit.useCase;
+  const payload = await getIndustries();
+  for (const industry of (payload && payload.industries) || []) {
+    for (const stage of industry.stages || []) {
+      const found = (stage.use_cases || []).find((u) => !u.status || u.status === "available");
+      if (found) {
+        audit.useCase = found.id;
+        return found.id;
+      }
+    }
+  }
+  throw new Error("No use case is set up yet, so a file cannot be uploaded.");
+}
+
+document.addEventListener("change", async (event) => {
+  const input = event.target && event.target.closest ? event.target.closest("[data-audit-file]") : null;
+  if (!input || !input.files || !input.files[0]) return;
+  const kind = input.dataset.auditFile;
+  const failed = kind === "programme" ? "programmeError" : "error";
+  const app = document.getElementById("app");
+  try {
+    audit.files[kind] = fileOf(await postUpload(input.files[0], await uploadUseCase(), "score"));
+    audit[failed] = null;
+  } catch (error) {
+    audit[failed] = error;
+  }
+  drawAudit(app);
+});
+
+document.addEventListener("submit", async (event) => {
+  const auditForm = event.target && event.target.closest ? event.target.closest("[data-audit-form]") : null;
+  const programmeForm = event.target && event.target.closest ? event.target.closest("[data-programme-form]") : null;
+  const form = auditForm || programmeForm;
+  if (!form) return;
+  event.preventDefault();
+  const app = document.getElementById("app");
+  const values = Object.fromEntries(new FormData(form).entries());
+  const busy = auditForm ? "busy" : "programmeBusy";
+  const failed = auditForm ? "error" : "programmeError";
+  audit[busy] = true;
+  audit[failed] = null;
+  drawAudit(app);
+  try {
+    const view = auditForm
+      ? await postAudit(auditBody(values, audit.files))
+      : await postProgramme(programmeBody(values, audit.files));
+    audit.files = { assignment: null, outcomes: null, contact: null, programme: null };
+    audit[busy] = false;
+    window.location.hash = `#/campaigns/${encodeURIComponent(view.campaign.campaign_id)}`;
+    return;
+  } catch (error) {
+    // `CAMPAIGN_NOT_MATURED` says the day to come back; the files stay chosen so the person can try again.
+    audit[failed] = error;
+  }
+  audit[busy] = false;
+  drawAudit(app);
 });

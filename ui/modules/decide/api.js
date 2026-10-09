@@ -62,3 +62,12 @@ export const getTreatListSummary = (runId) => request(`/runs/${encodeURIComponen
 
 /** The conflicts summary across arbitrated use cases (`GET /decide/conflicts`). */
 export const getArbitrationConflicts = () => request("/decide/conflicts");
+
+/** Audit a campaign another tool ran (`POST /campaigns/audit`, Plan J M103). */
+export const postAudit = (payload) => request("/campaigns/audit", post(payload));
+
+/** The whole programme against the universal holdout (`POST /campaigns/programme`, Plan J M103). */
+export const postProgramme = (payload) => request("/campaigns/programme", post(payload));
+
+/** Say who a campaign actually contacted (`POST /campaigns/{id}/contacts`, Plan J M103). */
+export const postContacts = (id, payload) => request(`${campaignPath(id)}/contacts`, post(payload));

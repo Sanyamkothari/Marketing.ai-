@@ -38,7 +38,9 @@ async function renderResults(app, parts) {
     waitingForApproval(),
     resultsListsHtml(), // Plan J M94: the campaigns beside the runs
   ]);
-  paint(resultsHtml({ ...answer, waiting, lists }));
+  // Plan J M103: a person who may audit a campaign another tool ran gets the way to it, beside the runs.
+  const auditHref = canAccess("POST", "/campaigns/audit") ? "#/audit" : null;
+  paint(resultsHtml({ ...answer, waiting, lists, auditHref }));
   document.title = "Results · Marketing AI";
 }
 
