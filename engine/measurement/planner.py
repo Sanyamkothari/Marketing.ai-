@@ -96,6 +96,7 @@ __all__ = [
     "achieved_power",
     "achieved_power_continuous",
     "arm_sizes",
+    "continuous_power_preview",
     "cost_of_explore",
     "cost_of_holdout",
     "holdout_for_mde",
@@ -530,6 +531,15 @@ class PowerPreviewPoint(BaseModel):
     mde_pp: float | None = Field(
         description="Smallest change in the request's direction (up, down, or the larger of the two) the test is sure to see, in percentage points; null when it cannot be said."
     )
+    mde_amount: float | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Plan J M102: on a campaign planned on an amount, the smallest change in the average amount per "
+            "customer the test is sure to see, in the amount's own unit (`mde_pp` is then null); absent on a "
+            "yes/no outcome."
+        ),
+    )
     cost_of_holdout: MoneyRange | None = Field(
         description="What holding the control group back costs if the campaign changes the outcome by exactly `mde_pp`; null when a value is missing."
     )
@@ -566,6 +576,57 @@ def _basis(request: PowerPreviewRequest) -> str:
         "contact, plus the offer for those who take it. Every number is worked out from the counts "
         "entered; no customer data is used."
     )
+
+
+def continuous_power_preview(
+    request: PowerPreviewRequest, sd: float | None, *, rho2: float = 0.0
+) -> PowerPreview:
+    """`power_preview` for a campaign planned on an amount (Plan J M102, DEC-1312).
+
+    Each point's `mde_amount` is `mde_continuous` at that share, with the plan's spread `sd` and the
+    share `rho2` its registered covariate is expected to remove, so the slider shows the change the
+    measurement (Welch's interval, adjusted when the plan names a covariate) can see. `base_rate` and
+    `direction` are not used: an amount's change is the same size either way. `value_per_conversion`
+    is read as the value of one unit of the amount for the cost of holding customers back.
+    """
+    contacted_at_random = math.floor(request.eligible * request.explore_share + 0.5)
+    explore = cost_of_explore(contacted_at_random, request.contact_cost, request.offer_cost)
+    points: list[PowerPreviewPoint] = []
+    for share in request.holdout_shares:
+        n_treat, n_control = arm_sizes(request.eligible, share)
+        mde = mde_continuous(n_treat, n_control, sd, request.alpha, request.power, rho2=rho2)
+        holdout = cost_of_holdout(n_control, mde.absolute, request.value_per_conversion)
+        reasons = [mde.reason, holdout.reason if mde.reason is None else None, explore.reason]
+        points.append(
+            PowerPreviewPoint(
+                holdout_share=share,
+                n_treat=n_treat,
+                n_control=n_control,
+                mde_pp=None,
+                mde_amount=None if mde.absolute is None else round(mde.absolute, 4),
+                cost_of_holdout=holdout.amount,
+                cost_of_explore=explore.amount,
+                reason=" ".join(reason for reason in reasons if reason) or None,
+            )
+        )
+    confidence = round((1.0 - request.alpha) * 100.0, 2)
+    chance = round(request.power * 100.0, 2)
+    adjusted = (
+        f" The test plan's earlier amount is expected to explain {round(rho2 * 100.0, 2):g}% of the spread, "
+        "and the adjusted comparison removes that much of it."
+        if rho2 > 0.0
+        else ""
+    )
+    basis = (
+        f"A two-sided comparison of the average amount of the contacted and the held-back customers at "
+        f"{confidence:g}% confidence, and a chance of {chance:g}% of seeing a change of the size shown, up "
+        f"or down. The spread of the amount is the one in the test plan.{adjusted} The cost of holding "
+        "customers back assumes the campaign changes each customer's amount by exactly the size shown, "
+        "valued at what one unit is worth; contacting customers outside the selection costs every contact, "
+        "plus the offer for those who take it. Every number is worked out from the counts entered; no "
+        "customer data is used."
+    )
+    return PowerPreview(points=tuple(points), basis=basis)
 
 
 def power_preview(request: PowerPreviewRequest) -> PowerPreview:

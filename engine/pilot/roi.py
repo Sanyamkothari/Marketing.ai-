@@ -592,6 +592,9 @@ def _priced_amount(
         confidence_level=estimate.confidence_level,
         inputs=inputs,
         root=root,
+        # An amount: the offer is paid by every contacted customer whose amount is above zero, whichever
+        # way the amount should move (not by the zero-amount ones, as a bad yes/no outcome's would be).
+        takers=report.treated_conversions,
     )
     unit = (
         f"The difference in {report.outcome_column} is measured in its own unit and multiplied by the value of "
@@ -631,7 +634,11 @@ def _priced(
     confidence_level: float,
     inputs: RoiInputs | None,
     root: Path | None = None,
+    takers: int | None = None,
 ) -> RoiView:
+    """`takers`, when given, is how many contacted customers the offer cost is paid for (Plan J M102: an
+    amount's customers with an amount above zero); else the contacted customers with the outcome when it
+    is good, and those without it when it is bad."""
     gross = net = roi = None
     contact_total = offer_total = None
     chosen = inputs.outcome_is_good if inputs is not None else None
@@ -655,7 +662,8 @@ def _priced(
 
         gross = Money(value=benefit.value * per, low=scaled(benefit.low), high=scaled(benefit.high))
         contact_total = treated[0] * inputs.contact_cost
-        takers = treated[1] if good else treated[0] - treated[1]
+        if takers is None:
+            takers = treated[1] if good else treated[0] - treated[1]
         offer_total = takers * inputs.offer_cost
         spent = contact_total + offer_total
 

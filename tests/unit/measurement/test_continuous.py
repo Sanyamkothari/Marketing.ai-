@@ -215,6 +215,29 @@ def test_a_covariate_measured_on_or_after_the_campaign_is_refused() -> None:
         measure_incrementality(campaign.scores, campaign.outcomes, **undated)
 
 
+def test_a_covariate_dated_the_day_of_a_contact_later_that_day_is_refused() -> None:
+    """Review fix (DEC-1312): a covariate date is the day it was measured up to, so it includes that whole
+    day. With one treatment time at 10:00 and no treatment date column, a covariate dated that same day
+    may hold spend after the contact and is refused; dated the day before, it is accepted."""
+    from datetime import timedelta
+
+    campaign = revenue_campaign(400, 4.0, seed=26, rho=0.6)
+    sent = datetime(2026, 3, 1, 10, 0, tzinfo=UTC)
+    kwargs = {
+        **campaign.adjusted_kwargs,
+        "treatment_date_column": None,
+        "treatment_time": sent,
+        "as_of": sent + timedelta(days=60),
+    }
+    same_day = campaign.outcomes.assign(**{COVARIATE_DATE_COLUMN: "2026-03-01"})
+    with pytest.raises(CovariateNotBeforeCampaignError, match="400 customers") as raised:
+        measure_incrementality(campaign.scores, same_day, **kwargs)
+    assert raised.value.code == COVARIATE_NOT_BEFORE_CAMPAIGN
+    day_before = campaign.outcomes.assign(**{COVARIATE_DATE_COLUMN: "2026-02-28"})
+    report = measure_incrementality(campaign.scores, day_before, **kwargs)
+    assert report.adjusted_interval is not None
+
+
 def test_a_customer_with_no_earlier_amount_keeps_their_row() -> None:
     campaign = revenue_campaign(4_000, 2.0, seed=15, rho=0.6)
     outcomes = campaign.outcomes.copy()
@@ -281,6 +304,27 @@ def test_a_covariate_without_a_registered_plan_is_a_change_of_plan() -> None:
     with pytest.raises(TestPlanChangedError, match="No test plan is registered") as raised:
         measure_campaign(campaign.scores, campaign.outcomes, **campaign.adjusted_kwargs)
     assert [d.field for d in raised.value.differences] == ["covariate_column"]
+
+
+def test_a_yes_no_campaign_with_a_covariate_and_no_plan_is_measured_as_before() -> None:
+    """Review fix (DEC-1312): a yes/no outcome never uses the covariate, so naming one with no registered
+    plan is ignored (as before M102), not refused as a change of plan; several offers likewise."""
+    from engine.measurement.simulate import population
+
+    campaign = population(2_000, 0.1, 0.02, seed=19)
+    plain = measure_campaign(campaign.scores, campaign.outcomes, **campaign.measure_kwargs)
+    named = measure_campaign(
+        campaign.scores, campaign.outcomes, covariate_column="tenure", **campaign.measure_kwargs
+    )
+    assert plain.model_dump(exclude={"computed_at"}) == named.model_dump(exclude={"computed_at"})
+    offers = multi_arm_campaign(600, 0.05, (0.02, 0.04), seed=22)
+    plain_offers = measure_campaign(offers.scores, offers.outcomes, **offers.measure_kwargs)
+    named_offers = measure_campaign(
+        offers.scores, offers.outcomes, covariate_column="tenure", **offers.measure_kwargs
+    )
+    assert plain_offers.model_dump(exclude={"computed_at"}) == named_offers.model_dump(
+        exclude={"computed_at"}
+    )
 
 
 def test_a_covariate_or_kind_the_plan_did_not_register_is_refused() -> None:

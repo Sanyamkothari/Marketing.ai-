@@ -39,8 +39,11 @@ fix how it will be judged before it is (`engine.measurement.plan`):
 (`covariate_column`, `covariate_date_column`; a covariate without its date is **422
 `COVARIATE_NOT_BEFORE_CAMPAIGN`**), and the measurement reads the amount with Welch's interval and, with
 the registered covariate, the CUPED adjusted estimate. A covariate dated on or after a customer's
-treatment date is **422 `COVARIATE_NOT_BEFORE_CAMPAIGN`** and nothing is stored; a covariate or outcome
-kind the plan did not register is **409 `TEST_PLAN_CHANGED`**, and so is any covariate with no plan.
+treatment date (compared by day: a covariate dated the day of contact is too late) is **422
+`COVARIATE_NOT_BEFORE_CAMPAIGN`** and nothing is stored; a covariate or outcome kind the plan did not
+register is **409 `TEST_PLAN_CHANGED`**, and so is a covariate on an amount with no plan (a yes/no
+outcome never uses one, so it is ignored as before). The plan preview's points of a plan on an amount
+carry `mde_amount` (`mde_continuous` with the plan's `outcome_sd` and `expected_rho2`) and no `mde_pp`.
 
 **Holdout epochs (M92).** `POST /campaigns` records the scoring run's holdout (scope, key and epoch,
 from `holdout_assignment.json`; a run that wrote none drew per run). `POST /campaigns/{id}/measure`
@@ -122,6 +125,7 @@ from engine.measurement.planner import (
     MAX_HOLDOUT_SHARE,
     PowerPreviewPoint,
     PowerPreviewRequest,
+    continuous_power_preview,
     cost_of_explore,
     power_preview,
 )
@@ -814,7 +818,10 @@ def preview_plan(
     campaign = _load(get_campaign_store(request), campaign_id)
     realised = _realised(storage, campaign_id)
     plan = _current_plan(storage, campaign_id)
-    rate, source = (base_rate, "request") if base_rate is not None else (None, None)
+    amount = (
+        plan is not None and plan.outcome_kind == "continuous"
+    )  # Plan J M102: points in the amount's unit
+    rate, source = (base_rate, "request") if base_rate is not None and not amount else (None, None)
     if rate is None and plan is not None and plan.base_rate is not None:
         rate, source = plan.base_rate, "plan"
     good, _ = _direction(campaign, root)
@@ -864,7 +871,21 @@ def preview_plan(
             "Each control-group share must be more than 0 and at most 0.5, and at most 20 may be asked for.",
             path="holdout",
         ) from exc
-    preview = power_preview(preview_request)
+    if plan is not None and amount:
+        if plan.outcome_sd is None:
+            return CampaignPlanPreview(
+                **answer,
+                points=(),
+                current_index=None,
+                basis=None,
+                reason=(
+                    "The test plan measures an amount but gives no spread for it, so the smallest change "
+                    "the test can see cannot be worked out. Amend the plan with the amount's spread."
+                ),
+            )
+        preview = continuous_power_preview(preview_request, plan.outcome_sd, rho2=plan.expected_rho2 or 0.0)
+    else:
+        preview = power_preview(preview_request)
     # The explore cost is the campaign's own explore slice, counted, not a share of it rounded back
     # (the request caps the share at 10% of the measured population, which an explore slice drawn
     # outside a narrow selection can exceed).

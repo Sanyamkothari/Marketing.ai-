@@ -181,8 +181,8 @@ def measure_incrementality(
     (revenue) and reports the difference in means with Welch's interval (`engine.measurement.amounts`);
     the population, join and maturity rules are the same. `covariate_column` then names an amount from
     before the campaign in the outcomes file, dated by `covariate_date_column`, for the adjusted
-    (CUPED) estimate: a covariate dated on or after a customer's treatment date, or not dated at all,
-    is refused (`CovariateNotBeforeCampaignError`). Only `measure_campaign` decides whether a covariate
+    (CUPED) estimate: a covariate dated on or after the day of a customer's treatment (compared by day,
+    since a value dated a day includes all of it), or not dated at all, is refused (`CovariateNotBeforeCampaignError`). Only `measure_campaign` decides whether a covariate
     may be used (the registered plan); a yes/no outcome ignores it, so its report is unchanged.
     """
     import pandas as pd
@@ -587,8 +587,10 @@ def _amount_report(
     if covariate_column is not None:
         value = joined["covariate"].to_numpy(dtype=np.float64)
         # Both already UTC timestamps (`_parse_dates`), compared as columns: never through Python objects.
-        measured_on = pd.to_datetime(joined["covariate_date"], utc=True).reset_index(drop=True)
-        treated_on = pd.to_datetime(dates, utc=True).reset_index(drop=True)
+        # Compared by day (DEC-1312): a covariate dated 2026-03-01 was measured up to the end of that day,
+        # so it may hold spend after a contact at 10:00 that day. Dated the day of the contact is too late.
+        measured_on = pd.to_datetime(joined["covariate_date"], utc=True).reset_index(drop=True).dt.normalize()
+        treated_on = pd.to_datetime(dates, utc=True).reset_index(drop=True).dt.normalize()
         dated = measured_on.notna().to_numpy() & ~np.isnan(value)
         too_late = dated & in_both & (measured_on >= treated_on).fillna(value=False).to_numpy(dtype=bool)
         late = int(too_late.sum())

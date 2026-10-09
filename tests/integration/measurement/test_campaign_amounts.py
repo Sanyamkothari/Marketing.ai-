@@ -212,3 +212,71 @@ def test_step_four_measures_an_amount_and_does_not_offer_to_learn_from_it(world:
     assert view["learn"]["ready"] is False and "yes/no outcome" in view["learn"]["reason"]
     learn = world.client.post(f"/runs/{RUN}/measure/learn", json={})
     assert learn.status_code == 409 and "yes/no outcome" in learn.json()["detail"]["message"]
+
+
+def test_a_covariate_dated_the_day_of_contact_is_refused_without_a_date_column(world: World) -> None:
+    """Review fix (DEC-1312): with no per-row treatment date, the campaign's treatment start (10:00 here)
+    is the contact; a covariate dated that same day is measured up to its end, so it is refused."""
+    sent = FINISHED + timedelta(hours=10)
+    created = ok(
+        world.client.post(
+            "/campaigns",
+            json={"run_id": RUN, "outcome_window_days": 30, "treatment_start": sent.isoformat()},
+        ),
+        201,
+    )
+    campaign_id = str(created["campaign"]["campaign_id"])
+    same_day = world.campaign.outcomes.drop(columns=[TREATMENT_DATE_COLUMN]).assign(
+        **{COVARIATE_DATE_COLUMN: sent.date().isoformat()}
+    )
+    upload_id = upload(world.client, same_day, name="revenue_same_day.csv")
+    body = {"upload_id": upload_id, "outcome_column": REVENUE_COLUMN, **COVARIATE}
+    ok(world.client.post(f"/campaigns/{campaign_id}/outcomes", json=body))
+    _plan(world, campaign_id, covariate_column=COVARIATE_COLUMN)
+    refused = _measure(world, campaign_id)
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"]["code"] == "COVARIATE_NOT_BEFORE_CAMPAIGN"
+    assert not world.storage.exists(campaign_key(campaign_id, REPORT_FILENAME))
+
+
+def test_a_yes_no_campaign_ignores_a_covariate_named_without_a_plan(world: World) -> None:
+    """Review fix (DEC-1312): as before M102, a yes/no measurement with a covariate and no plan is measured
+    (the covariate is never used on a yes/no outcome), not refused as a change of plan."""
+    bought = world.campaign.outcomes.assign(
+        bought=(world.campaign.outcomes[REVENUE_COLUMN] > 100).astype(int)
+    )
+    upload_id = upload(world.client, bought, name="bought.csv")
+    created = ok(world.client.post("/campaigns", json={"run_id": RUN, "outcome_window_days": 30}), 201)
+    campaign_id = str(created["campaign"]["campaign_id"])
+    body = {
+        "upload_id": upload_id,
+        "outcome_column": "bought",
+        "treatment_date_column": TREATMENT_DATE_COLUMN,
+    }
+    ok(world.client.post(f"/campaigns/{campaign_id}/outcomes", json=body))
+    named = IncrementalityReport.model_validate(
+        ok(_measure(world, campaign_id, covariate_column=COVARIATE_COLUMN))["report"]
+    )
+    plain = IncrementalityReport.model_validate(ok(_measure(world, campaign_id))["report"])
+    assert named.outcome_kind is None and named.treated_rate is not None, "a yes/no report, as before M102"
+    assert named.model_dump(exclude={"computed_at"}) == plain.model_dump(exclude={"computed_at"})
+
+
+def test_the_plan_slider_of_an_amount_shows_the_change_in_the_average(world: World) -> None:
+    """Review fix (DEC-1312): the slider's points of a plan on an amount are `mde_continuous` with the
+    plan's spread and expected rho², the change the measurement will be able to see."""
+    from engine.measurement.planner import mde_continuous
+
+    campaign_id = _campaign(world, **COVARIATE)
+    _plan(world, campaign_id, covariate_column=COVARIATE_COLUMN, expected_rho2=0.36)
+    preview = ok(world.client.get(f"/campaigns/{campaign_id}/plan-preview", params={"base_rate": 0.2}))
+    assert preview["reason"] is None and preview["points"] and preview["base_rate"] is None
+    for point in preview["points"]:
+        expected = mde_continuous(point["n_treat"], point["n_control"], 40.0, 0.05, 0.8, rho2=0.36).absolute
+        assert expected is not None
+        assert point["mde_pp"] is None and point["mde_amount"] == pytest.approx(round(expected, 4))
+    assert "average amount" in preview["basis"] and not jargon_in(preview["basis"])
+    unsized = _campaign(world)
+    _plan(world, unsized, outcome_sd=None, mde_value=None)
+    empty = ok(world.client.get(f"/campaigns/{unsized}/plan-preview"))
+    assert empty["points"] == [] and "spread" in empty["reason"]

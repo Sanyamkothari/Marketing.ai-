@@ -122,3 +122,19 @@ def test_a_yes_no_view_has_no_new_key(storage: LocalStorage) -> None:
     storage.write_model(run_key(RUN, INCREMENTALITY_FILENAME), mature_report(low=30.0, high=90.0))
     payload = compute_roi(storage, RUN, inputs=INPUTS).model_dump(mode="json")
     assert not {"outcome_kind", "treated_mean", "control_mean", "adjusted", "value_note"} & set(payload)
+
+
+@pytest.mark.parametrize("good", [True, False])
+def test_the_offer_cost_of_an_amount_is_paid_for_the_customers_with_an_amount(
+    storage: LocalStorage, good: bool
+) -> None:
+    """Review fix (DEC-1312): whichever way the amount should move (revenue, or refunds), the offer is
+    counted for the contacted customers whose amount is above zero, as the value note says."""
+    report = _report(adjusted=False)
+    storage.write_model(run_key(RUN, INCREMENTALITY_FILENAME), report)
+    inputs = RoiInputs(value_per_outcome=1.0, contact_cost=2.0, offer_cost=5.0, outcome_is_good=good)
+    view = compute_roi(storage, RUN, inputs=inputs)
+    assert view.outcome_is_good is good
+    assert report.treated_conversions < report.treated_rows, "some contacted customers spent nothing"
+    assert view.offer_cost_total == pytest.approx(5.0 * report.treated_conversions)
+    assert view.value_note is not None and "above zero" in view.value_note

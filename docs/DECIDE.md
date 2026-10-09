@@ -572,14 +572,16 @@ reports recorded on the commit before M102).
   the known ones (`rows_covariate_missing`); a covariate that does not vary gives `adjustment_note`, never a number.
   A yes/no outcome never uses a covariate.
 * **Only a covariate registered in advance.** `measure_campaign` uses a covariate only when the test plan in force
-  names it: a different one, or any covariate with no plan registered, is `409 TEST_PLAN_CHANGED`, because choosing
-  the adjustment after seeing the outcomes is one more way to move the goalposts. When it was registered, the
+  names it: a different one, or a covariate on an amount with no plan registered, is `409 TEST_PLAN_CHANGED`,
+  because choosing the adjustment after seeing the outcomes is one more way to move the goalposts. On a yes/no
+  outcome a covariate is never used, so one named with no plan is ignored, as before M102. When it was registered, the
   verdict (`engine.measurement.measure.amount_verdict`) and the value view read the adjusted estimate: it is the
   planned analysis. The unadjusted one is always reported beside it.
 * **Point in time, no leakage.** The covariate comes with the outcomes file (`POST /campaigns/{id}/outcomes
-  {covariate_column, covariate_date_column}`), with the date each value was measured up to. A value dated on or
-  after the customer's treatment date (their own, or the campaign's start), or a covariate with no date column, is
-  refused with `422 COVARIATE_NOT_BEFORE_CAMPAIGN`, and nothing is stored: such a value could contain the campaign's
+  {covariate_column, covariate_date_column}`), with the date each value was measured up to. The dates are compared
+  by day, since a value dated a day includes that whole day: a value dated on or after the day of the customer's
+  treatment (their own date, or the campaign's start, even when that start is later in the day), or a covariate with
+  no date column, is refused with `422 COVARIATE_NOT_BEFORE_CAMPAIGN`, and nothing is stored: such a value could contain the campaign's
   own effect. A value with no date on its row is treated as unknown.
 * **Skewed revenue.** Most customers spend nothing and a few spend a hundred times the median. The interval rests on
   the average being close to normal, which a long tail delays; Kohavi, Deng, Longbotham and Xu (2014, rule 7) give
@@ -591,8 +593,9 @@ reports recorded on the commit before M102).
   36% of the spread needs 36% fewer customers for the same change. A test plan of an amount takes `mde_value` (in the
   amount's unit), `outcome_sd` and `expected_rho2` (which needs the covariate), and its `achieved_power` and
   `PLAN_UNDERPOWERED` come from them; it never mixes them with `mde_pp` / `base_rate`. A plan that does not use them
-  stores and hashes as before. The "Plan the test" card (`GET /campaigns/{id}/plan-preview`) still plans a yes/no
-  outcome only.
+  stores and hashes as before. On a plan of an amount the "Plan the test" card (`GET /campaigns/{id}/plan-preview`)
+  gives each point's `mde_amount` (`mde_continuous` with the plan's `outcome_sd` and `expected_rho2`; `mde_pp` is
+  null), or, with no `outcome_sd`, no points and a plain reason; a yes/no plan's points are unchanged.
 * **Money (`engine/pilot/roi.py`).** A report on an amount is priced from its per-customer difference (adjusted when
   registered) times the contacted customers; `value_per_outcome` is what one unit is worth in rupees (1 when it is
   revenue in rupees), and the offer cost is counted for every contacted customer whose amount is above zero. Without

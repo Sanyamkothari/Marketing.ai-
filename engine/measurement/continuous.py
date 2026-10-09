@@ -48,8 +48,9 @@ intervals on a zero-inflated lognormal (80% of customers spend nothing) at the s
 Amounts are never capped or trimmed: that would change what is measured.
 
 **Point in time.** The adjustment is honest only if `X` was fixed before the campaign. A covariate dated
-on or after a customer's treatment date could contain the campaign's own effect, and a column with no
-date cannot be shown not to. Either way the measurement is refused (`COVARIATE_NOT_BEFORE_CAMPAIGN`,
+on or after the day of a customer's treatment (compared by day: a value dated a day was measured up to
+its end, so it may follow a contact earlier that day) could contain the campaign's own effect, and a
+column with no date cannot be shown not to. Either way the measurement is refused (`COVARIATE_NOT_BEFORE_CAMPAIGN`,
 `CovariateNotBeforeCampaignError`), never quietly run. `measure_incrementality` applies the rule;
 `engine.measurement.measure.measure_campaign` adds that only a covariate the registered test plan
 named in advance is used (`TEST_PLAN_CHANGED` otherwise).

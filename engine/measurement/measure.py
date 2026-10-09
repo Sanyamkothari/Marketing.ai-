@@ -101,12 +101,14 @@ def measure_campaign(
     an amount (`measure_incrementality`'s Welch difference in means); the plan's `outcome_kind` must
     match. `covariate_column` (with `covariate_date_column`, the date each value was measured up to)
     adjusts an amount by what each customer had before the campaign, and is used **only when the
-    registered test plan named that covariate in advance**: with no plan, a covariate is refused with
-    `TestPlanChangedError` (`TEST_PLAN_CHANGED`) just as a covariate different from the plan's is,
-    because choosing the adjustment after seeing the outcomes is one more way to move the goalposts.
-    A yes/no outcome never uses a covariate, so its report is exactly as before. Several offers
-    (`arm_column`) are measured on a yes/no outcome only: an amount or a covariate there is refused
-    with a plain `ValueError` (DEC-1312), since no nightly check covers per-offer amounts yet.
+    registered test plan named that covariate in advance**: with no plan, a covariate on an amount is
+    refused with `TestPlanChangedError` (`TEST_PLAN_CHANGED`) just as a covariate different from the
+    plan's is, because choosing the adjustment after seeing the outcomes is one more way to move the
+    goalposts. A yes/no outcome never uses a covariate, so with no plan it is ignored and the report
+    is exactly as before M102. Several offers (`arm_column`) are measured on a yes/no outcome only:
+    an amount there is refused with a plain `ValueError` (DEC-1312), since no nightly check covers
+    per-offer amounts or their adjustment yet; a covariate on a yes/no several-offer campaign is
+    ignored, as before.
 
     **Several offers (Plan J M100, DEC-668 (2)).** With `arm_column`, the column naming each treated
     customer's offer, every offer is measured against the shared control (`control_group`) by
@@ -120,12 +122,12 @@ def measure_campaign(
     from engine.uplift.incrementality import measure_incrementality
 
     frame = as_scores_frame(assignment)
-    if plan is None and covariate_column is not None:
+    if plan is None and covariate_column is not None and outcome_kind == "continuous":
         raise TestPlanChangedError(
             (PlanDifference(field="covariate_column", planned="none", realised=covariate_column),),
             unplanned=True,
         )
-    if arm_column is not None and (outcome_kind != "binary" or covariate_column is not None):
+    if arm_column is not None and outcome_kind != "binary":
         raise ValueError(
             "Several offers are measured on a yes/no outcome only: measuring each offer on an amount, or "
             "adjusting it by an amount from before the campaign, is not offered yet. Measure the campaign "

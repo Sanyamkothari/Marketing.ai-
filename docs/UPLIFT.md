@@ -1091,8 +1091,8 @@ whether choosing per customer does better than the first offer alone; every numb
   amount such as revenue (`outcome_kind: continuous`): the difference in the two groups' averages with a
   **Welch** interval (unequal variances, Student's t), and - when the registered test plan named an amount
   from before the campaign - the **CUPED** adjusted difference, `adjusted_lift` / `adjusted_interval`, with the
-  `variance_reduction` it bought (about rho²). The covariate must be dated before each customer's treatment
-  date (`COVARIATE_NOT_BEFORE_CAMPAIGN` otherwise) and registered in advance (`TEST_PLAN_CHANGED` otherwise).
+  `variance_reduction` it bought (about rho²). The covariate must be dated a day before each customer's treatment
+  day or earlier (`COVARIATE_NOT_BEFORE_CAMPAIGN` otherwise) and registered in advance (`TEST_PLAN_CHANGED` otherwise).
   Long-tailed revenue is never capped; below Kohavi et al.'s size (355 g² customers per arm) the report
   carries `OUTCOME_SKEWED`: the range may be too narrow. Both intervals' coverage is tested nightly, on
   normal and on zero-inflated lognormal revenue. On a yes/no outcome nothing changes: every M102 field is
