@@ -97,6 +97,11 @@ from engine.contracts import (
     RunStatus,
     ValidationReport,
 )
+from engine.decide.arbitrate import (  # Plan J M101 (DEC-1311)
+    ARBITRATED_TREAT_LIST_CSV,
+    ARBITRATED_TREAT_LIST_PARQUET,
+    ARBITRATION_SUMMARY_FILENAME,
+)
 from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME  # Plan J M99 (DEC-1309)
 from engine.decide.contactability import (  # Plan J M99 (DEC-1309)
     CHANNEL_CONTACTABILITY_FILENAME,
@@ -601,6 +606,12 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
         CHANNEL_CONTACTABILITY_FILENAME,
         CHANNEL_CONTACTABILITY_SUMMARY_FILENAME,
         CATALOGUE_STAMP_FILENAME,
+    )
+    # The arbitrated treat list and summary (Plan J M101, DEC-1311)
+    known = known or name in (
+        ARBITRATED_TREAT_LIST_CSV,
+        ARBITRATED_TREAT_LIST_PARQUET,
+        ARBITRATION_SUMMARY_FILENAME,
     )
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")

@@ -65,6 +65,11 @@ Contract schema version: 1.
 | GET | `/datasets/{dataset_id}/lineage` | Where one built dataset came from: its sources, mappings and recipe, already worded | Lineage |
 | GET | `/datasets/{dataset_id}/report` | The build review screen's report for one dataset | BuildReport |
 | GET | `/datasets/{dataset_id}/sample` | A stringified, PII-redacted sample of one built dataset | DatasetSampleResponse |
+| GET | `/decide/arbitrate` | Get latest arbitration summary | ArbitrationSummary |
+| POST | `/decide/arbitrate` | Arbitrate treatments across use cases | ArbitrateResponse |
+| GET | `/decide/arbitrated-treat-list.csv` | Download arbitrated treat list CSV | - |
+| GET | `/decide/arbitrated-treat-list.parquet` | Download arbitrated treat list Parquet | - |
+| GET | `/decide/conflicts` | Get arbitration conflicts summary for Results UI | dict |
 | GET | `/healthz` | Liveness probe | HealthResponse |
 | GET | `/holdout` | The holdout: salt, epochs, use cases | HoldoutView |
 | PUT | `/holdout` | Start a new holdout epoch (Admin): a lower share, or a new salt | HoldoutView |

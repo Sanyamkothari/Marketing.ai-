@@ -59,3 +59,6 @@ export const postMeasure = (id) => request(`${campaignPath(id)}/measure`, post({
 
 /** The treat list summary of a scoring run (`GET /runs/{id}/artefacts/treat_list_summary.json`). */
 export const getTreatListSummary = (runId) => request(`/runs/${encodeURIComponent(runId)}/artefacts/treat_list_summary.json`);
+
+/** The conflicts summary across arbitrated use cases (`GET /decide/conflicts`). */
+export const getArbitrationConflicts = () => request("/decide/conflicts");
