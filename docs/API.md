@@ -24,6 +24,7 @@ Contract schema version: 1.
 | POST | `/campaigns` | Record a campaign sent from a finished scoring run's list | CampaignView |
 | POST | `/campaigns/audit` | Audit a campaign another tool ran: who was in which group, and what happened | CampaignView |
 | POST | `/campaigns/programme` | The whole programme: every customer not held back against the universal holdout, over a period | CampaignView |
+| GET | `/campaigns/summary` | What needs attention across the campaigns, and the value proven to date | CampaignSummary |
 | GET | `/campaigns/{campaign_id}` | One campaign: its record, its measured result and its test plan | CampaignView |
 | POST | `/campaigns/{campaign_id}/contacts` | Say who a campaign actually contacted: the contact rate, contamination and the effect on the contacted | CampaignView |
 | POST | `/campaigns/{campaign_id}/measure` | Measure a campaign through the one measurement path, against its test plan | CampaignView |
