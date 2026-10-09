@@ -78,3 +78,9 @@ test("names the contested customers a channel cap left with no action, only when
   assert.match(plain, /Wanted by several use cases, left with no action by a channel cap 6/);
   assert.doesNotMatch(text(conflictsCardHtml(summary)), /left with no action/);
 });
+
+test("names the actions another use case's control group blocked, only when there are some", () => {
+  const plain = text(conflictsCardHtml({ ...summary, control_blocked_actions: 9 }));
+  assert.match(plain, /Actions blocked by another use case's control group 9/);
+  assert.doesNotMatch(text(conflictsCardHtml(summary)), /control group/);
+});

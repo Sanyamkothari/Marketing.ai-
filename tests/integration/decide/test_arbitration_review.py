@@ -69,7 +69,7 @@ def test_each_campaign_compares_the_rows_its_use_case_won(tmp_path: Path, compos
 
     Fails on 98b2959 for a composite key: the route named the winners by the first key column only, so no
     row of the scores matched and every campaign measured nobody. A customer a rival use case won is in
-    neither arm; one the hold-out of another use case kept from being contacted stays in both.
+    neither arm; one the hold-out or control group of another use case kept from being contacted stays in both.
     """
     options: dict[str, Any] = {"kind": "propensity", "rows": 60, "composite": composite, "value": True}
     # The composite-key fixture is a propensity run; a one-column key also gets an uplift run.
@@ -93,7 +93,10 @@ def test_each_campaign_compares_the_rows_its_use_case_won(tmp_path: Path, compos
     winners = arbitrated[arbitrated["treat"]]
     assert not winners.duplicated(subset=key).any(), "no customer has two actions"
     assert winners["winning_use_case"].nunique() >= (1 if composite else 2)
-    held_by_others = arbitrated[arbitrated["holdout_use_cases"].notna()]
+    # Customers another use case's hold-out, or its run's control group (DEC-1311 (al)), kept from being contacted.
+    held_by_others = arbitrated[
+        arbitrated["holdout_use_cases"].notna() | arbitrated["control_use_cases"].notna()
+    ]
     storage = LocalStorage(tmp_path)
     created = [c for c in body["campaigns"] if c["outcome"] == "created"]
     assert len(created) >= 2

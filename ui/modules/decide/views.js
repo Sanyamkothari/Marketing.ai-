@@ -217,6 +217,7 @@ export function conflictsCardHtml(summary) {
       ${summary.customers_decided_by_explore ? row("Kept because chosen at random (explore)", count(summary.customers_decided_by_explore)) : ""}
       ${summary.contested_customers_channel_capped ? row("Wanted by several use cases, left with no action by a channel cap", count(summary.contested_customers_channel_capped)) : ""}
       ${summary.holdout_blocked_actions ? row("Actions blocked by a hold-out", count(summary.holdout_blocked_actions)) : ""}
+      ${summary.control_blocked_actions ? row("Actions blocked by another use case's control group", count(summary.control_blocked_actions)) : ""}
     </div>
     ${ucTable}
   </section></div>`;

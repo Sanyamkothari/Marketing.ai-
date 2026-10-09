@@ -181,7 +181,11 @@ def test_an_action_treated_at_random_survives_a_use_case_that_would_win(storage:
         assert row["offer"] == _row(explorer, customer)["offer"]
         assert row["arbitration_reason"] == "explore_treated"
         assert "uc-rival" in row["losing_actions"]
-    assert summary.explore_kept_count == len(random_pick)
+    # A customer the rival's own run kept as its control group is protected like a hold-out member (DEC-1311
+    # (al)): the explore action does not override it, so that customer is not kept.
+    rival_control = set(rival.loc[_flag(rival, "control_group"), "customer_id"])
+    kept_at_random = random_pick[~random_pick["customer_id"].isin(rival_control)]
+    assert summary.explore_kept_count == len(kept_at_random)
     assert summary.customers_decided_by_explore == len(wanted_by_rival)
 
     # The rival still wins the customers that were not treated at random.
@@ -323,7 +327,13 @@ def test_three_overlapping_use_cases_one_action_each_and_the_caps_hold(storage: 
     propensity = treat_list_for_use_case(storage, "uc-c", kind="propensity", value=True)
     lists = [uplift_a, uplift_b, propensity]
     priorities = {"uc-a": 1.5, "uc-b": 1.0, "uc-c": 2.0}
-    held = set(uplift_a.loc[_flag(uplift_a, "holdout"), "customer_id"])
+    # Held back by A's persistent hold-out, or by the control group of any of the three runs (DEC-1311 (al)).
+    held = {
+        customer
+        for frame in lists
+        for column in ("holdout", "control_group")
+        for customer in frame.loc[_flag(frame, column), "customer_id"]
+    }
     on_lists = pd.concat([f.loc[f["treat"], "customer_id"] for f in lists]).value_counts()
     assert on_lists.max() == 3, "some customer is on all three lists"
 
@@ -332,7 +342,7 @@ def test_three_overlapping_use_cases_one_action_each_and_the_caps_hold(storage: 
 
     treated = out[out["treat"]]
     assert treated["customer_id"].is_unique, "no customer has two actions"
-    assert not (set(treated["customer_id"]) & held), "hold-out members are never treated"
+    assert not (set(treated["customer_id"]) & held), "hold-out and control group members are never treated"
     assert set(treated["customer_id"]) == set(expected), "everyone wanted and not held back is treated once"
     assert {
         c: [w] for c, w in zip(treated["customer_id"], treated["winning_use_case"], strict=True)

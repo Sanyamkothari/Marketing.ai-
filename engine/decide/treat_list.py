@@ -20,7 +20,9 @@ its own column, `expected_gross_value`, because it is not incremental. The setti
 `run_config.json`, never today's use case file.
 
 **Units and nulls.** `net_value` and `expected_gross_value` are rupees. A missing input stays null: an
-unknown holdout flag is null, not false; a value that was not configured is null, not zero; a reason
+unknown holdout flag is null, not false; `control_group` is the run's own control group (Phase 1's
+actions stage, DEC-1311 (al)): true for a customer the run kept back as its control, false for every other,
+and the column is absent from a treat list written before it existed; a value that was not configured is null, not zero; a reason
 the customer has no more of is null, not an empty string. Parquet holds the flags as booleans; the CSV
 writes `1` and `0` (empty for null).
 """
@@ -500,6 +502,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         runner_up_offer=runner_up_offer,
         runner_up_value=runner_up_value,
         offer_reason=offer_reason,
+        control=control,
     )
     table = _table(out, is_uplift, key_cols)
     storage.write_bytes(run_key(run_id, TREAT_LIST_PARQUET), _parquet_bytes(table))
@@ -1200,6 +1203,7 @@ def _assemble(
     runner_up_offer: pd.Series[Any],
     runner_up_value: pd.Series[Any],
     offer_reason: pd.Series[Any],
+    control: np.ndarray,
 ) -> pd.DataFrame:
     n = len(scores.index)
     data: dict[str, Any] = {name: key_text(scores[name]).astype("object") for name in key_cols}
@@ -1221,6 +1225,10 @@ def _assemble(
     data[RUNNER_UP_OFFER_COLUMN] = runner_up_offer.astype("object")
     data[RUNNER_UP_VALUE_COLUMN] = runner_up_value
     data[OFFER_REASON_COLUMN] = offer_reason.astype("object")
+    # The run's own control group (Phase 1's actions stage), beside M92's `holdout`, which it never changes
+    # (DEC-1311 (al)). After offer_reason for the same reason: no earlier column moves from the start, and
+    # net_value, expected_gross_value and the reasons keep their places from the end.
+    data[CONTROL_GROUP_COLUMN] = pd.Series(control, dtype="bool")
     data["net_value"] = net_value
     data[EXPECTED_GROSS_VALUE_COLUMN] = gross_value
     for name in REASON_COLUMNS:
@@ -1244,6 +1252,7 @@ def _schema(is_uplift: bool, key_cols: tuple[str, ...]) -> pa.Schema:
         pa.field(RUNNER_UP_OFFER_COLUMN, pa.string()),
         pa.field(RUNNER_UP_VALUE_COLUMN, pa.float64()),
         pa.field(OFFER_REASON_COLUMN, pa.string()),
+        pa.field(CONTROL_GROUP_COLUMN, pa.bool_()),
         pa.field("net_value", pa.float64()),
         pa.field(EXPECTED_GROSS_VALUE_COLUMN, pa.float64()),
         *[pa.field(name, pa.string()) for name in REASON_COLUMNS],

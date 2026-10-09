@@ -26,7 +26,12 @@ from engine.decide.arbitrate import (
     ARBITRATION_SUMMARY_FILENAME,
 )
 from engine.decide.treat_list import ensure_treat_list
-from engine.measurement.campaign import InMemoryCampaignStore
+from engine.measurement.campaign import (
+    ASSIGNMENT_FILENAME,
+    InMemoryCampaignStore,
+    campaign_key,
+    read_frame,
+)
 from engine.storage import LocalStorage, run_key
 from tests.fixtures.decide.treat_runs import write_run
 from tests.integration.production.access_support import (
@@ -111,8 +116,21 @@ def test_arbitrate_api_and_campaign_creation(tmp_path: Path) -> None:
         assert campaign is not None
         uc_id = campaign.use_case_id
         # Expected winners for this use case
-        expected_winners = int((arb_df["treat"] & (arb_df["winning_use_case"] == uc_id)).sum())
-        assert campaign.counts.intended_treated == expected_winners
+        won = set(arb_df.loc[arb_df["treat"] & (arb_df["winning_use_case"] == uc_id), "customer_id"])
+        # A customer another run's control group kept from being contacted stays in the treated arm of a use
+        # case that asked for them (intent to treat, DEC-1311 (n) and (al)); nobody else is compared.
+        kept_by_a_control = set(arb_df.loc[arb_df["control_use_cases"].notna(), "customer_id"])
+        own_list = pd.read_parquet(
+            io.BytesIO(storage.read_bytes(run_key(campaign.run_ids[0], "treat_list.parquet")))
+        )
+        asked_for = set(own_list.loc[own_list["treat"], "customer_id"])
+        assignment = read_frame(storage, campaign_key(campaign.campaign_id, ASSIGNMENT_FILENAME))
+        compared = set(
+            assignment.loc[(assignment["arm"] == "treated") & assignment["intended"], "customer_id"]
+        )
+        assert won <= compared
+        assert compared - won <= kept_by_a_control & asked_for
+        assert campaign.counts.intended_treated == len(compared)
 
 
 def test_get_decide_conflicts_and_downloads(tmp_path: Path) -> None:
