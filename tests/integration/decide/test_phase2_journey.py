@@ -23,9 +23,10 @@ are the use cases' own settings), and the work is done by the API's routes:
 6. each use case's campaign given outcomes drawn from a planted truth and measured. Each campaign's two
    arms are checked against the cut worked out here from the lists and the scores alone.
 
-Not shown (a gap in the product, asserted as it is): the multi-offer campaign is measured within
-`intended_treatment`, the first offer against the control (DEC-668 (3)), not within the customers the
-offer-choice list treats. Some customers that use case contacts are therefore in neither arm.
+The multi-offer campaign is measured within the customers its offer choice would give an offer to if nobody
+were held back (`policy_intended`, DEC-1311 (af)-(aj)), not within `intended_treatment`, the first offer against
+the control (DEC-668 (3)): every customer that use case wins and contacts is in its treated arm. Before, about
+one in five of them was in neither arm (DEC-1311 (ab)).
 
 Why the data looks the way it does. The customers are the same in every use case (`K0000000`...), and
 each file repeats the same consent columns, so "opted out of SMS" means one thing everywhere. A scoring
@@ -1148,6 +1149,13 @@ def scores(journey: Journey) -> dict[str, pd.DataFrame]:
     for use_case, record in journey.score.items():
         frame = pd.read_parquet(io.BytesIO(journey.api.artefact(record.run_id, "scores.parquet")))
         out[use_case] = frame.astype({KEY: str}).set_index(KEY)
+    # The multi-offer run also wrote, for every customer, the offer its policy would choose if nobody were
+    # held back (DEC-1311 (af)); the campaign is measured within the customers it is given to.
+    chosen = pd.read_parquet(
+        io.BytesIO(journey.api.artefact(journey.score[MULTI].run_id, "offer_choice.parquet"))
+    )
+    chosen = chosen.astype({KEY: str}).set_index(KEY)
+    out[MULTI] = out[MULTI].join(chosen[["policy_intended", "policy_offer_arm", "policy_offer_net_value"]])
     return out
 
 
@@ -1178,13 +1186,20 @@ def arms(journey: Journey, arbitrated: Arbitrated) -> dict[str, Arms]:
 def intended_by(use_case: str, scores: dict[str, pd.DataFrame]) -> pd.Series:
     """Per customer: does the use case's policy mean to contact them (and have not been suppressed)?
 
-    A campaign of an uplift run is measured within `intended_treatment`, the first offer against the control
-    (DEC-668 (3)); a risk model's within its treat bands. Neither knows about the offer the list then chose.
+    A one-offer uplift run's campaign is measured within `intended_treatment`, a risk model's within its treat
+    bands, and a run that chose the offer per customer within the customers its policy would give some offer to
+    if nobody were held back (`policy_intended` of `offer_choice.parquet`, DEC-1311 (af), (ai)): not the first
+    offer's `intended_treatment` (DEC-668 (3)), which leaves out a customer whose best offer is another one.
     """
     frame = scores[use_case]
     reason = frame["suppressed_reason"]
     free = reason.isna() | (reason == "")
-    chosen = frame["band"].isin(["High", "Medium"]) if use_case == RISK else frame["intended_treatment"]
+    if use_case == RISK:
+        chosen = frame["band"].isin(["High", "Medium"])
+    elif use_case == MULTI:
+        chosen = frame["policy_intended"]
+    else:
+        chosen = frame["intended_treatment"]
     return chosen.astype(bool) & free
 
 
@@ -1203,9 +1218,11 @@ class Cut:
 def counterfactual_cut(lists: dict[str, pd.DataFrame], scores: dict[str, pd.DataFrame]) -> Cut:
     """Who wins each customer in the arbitration run again without the hold-outs, by the rules the module tests.
 
-    The use cases keep to the request's order, except that two values of one kind (the net value of the
-    multi-offer and the one-offer use cases, both of whose lists chose to treat the customer) are compared.
-    A held-back row has no offer chosen and so no value to compare: the request order decides.
+    The use cases keep to the request's order, except that two values of one kind are compared: the net value of
+    the multi-offer and the one-offer use cases, whichever of the two lists treats the customer or holds them
+    back. A held-back row of the multi-offer use case carries the net value of the offer its policy would have
+    chosen (`policy_offer_net_value`, DEC-1311 (ah)); a held-back row of the one-offer use case its own, so the
+    larger value decides, not the request order.
     """
     index = pd.Index(lists[MULTI][KEY])
     by_key = {use_case: frame.set_index(KEY).reindex(index) for use_case, frame in lists.items()}
@@ -1222,10 +1239,13 @@ def counterfactual_cut(lists: dict[str, pd.DataFrame], scores: dict[str, pd.Data
     first = np.array(USE_CASES, dtype=object)[wants.to_numpy().argmax(axis=1)]
     winner = pd.Series(first, index=index, dtype=object)
     winner[~wants.any(axis=1)] = ""
-    both = flag(by_key[MULTI]["treat"]) & flag(by_key[BINARY]["treat"]) & ~wants[RISK]
-    larger = np.where(
-        number(by_key[MULTI]["net_value"]) >= number(by_key[BINARY]["net_value"]), MULTI, BINARY
+    both = wants[MULTI] & wants[BINARY] & ~wants[RISK]
+    multi_value = np.where(
+        flag(by_key[MULTI]["treat"]),
+        number(by_key[MULTI]["net_value"]),
+        scores[MULTI]["policy_offer_net_value"].reindex(index).round(2),
     )
+    larger = np.where(multi_value >= number(by_key[BINARY]["net_value"]), MULTI, BINARY)
     winner[both] = pd.Series(larger, index=index)[both]
     return Cut(wants, ~explored, winner)
 
@@ -1276,7 +1296,11 @@ def test_the_holdout_arm_drops_the_held_back_customers_a_rival_use_case_would_ha
         held = pd.Series(cut.settled.index.isin(list(holders[use_case])), index=cut.settled.index)
         held_intended = set(cut.settled.index[held & intended])
         rival_wants = cut.wants[list(rivals)].any(axis=1)
-        contested = set(cut.settled.index[cut.settled & held & intended & rival_wants])
+        # A rival that wants the customer takes them only if it wins (a larger value, a higher priority or the
+        # request order); one that wants them and loses leaves the customer to this use case (DEC-1311 (aj)).
+        lost = cut.winner != use_case
+        contested = set(cut.settled.index[cut.settled & held & intended & lost])
+        assert (lost & rival_wants)[list(contested)].all()
         free = set(cut.settled.index[cut.settled & held & intended & ~rival_wants])
         assert contested and free, use_case
         assert not contested & arms[use_case].held_back, f"{use_case}: a rival would have contacted them"
@@ -1332,27 +1356,76 @@ def test_a_customer_kept_back_only_by_another_use_cases_holdout_stays_in_both_ar
         assert not flag(table.loc[sorted(kept_back), "treat"]).any(), "and nobody contacted them"
 
 
-def test_the_multi_offer_campaign_is_cut_by_the_first_offers_rule_so_some_contacted_customers_are_in_neither_arm(
-    scores: dict[str, pd.DataFrame], arbitrated: Arbitrated, arms: dict[str, Arms]
+def test_every_customer_the_multi_offer_use_case_wins_and_contacts_is_in_its_treated_arm(
+    lists: dict[str, pd.DataFrame],
+    scores: dict[str, pd.DataFrame],
+    arbitrated: Arbitrated,
+    arms: dict[str, Arms],
 ) -> None:
-    """A known gap, shown and not hidden. The multi-offer list treats by the best offer per customer, but the
-    campaign is measured within `intended_treatment`, which keeps its meaning as the first offer against the
-    control (DEC-668 (3)). Customers the use case won whose first offer is not worth a contact (a sleeping dog
-    to Offer A, say) are contacted with their best offer and measured in neither arm: the campaign says
-    nothing about them. The one-offer and the risk use cases have no such gap."""
+    """DEC-1311 (ab), closed by (ai). The multi-offer list treats by the best offer per customer, and its campaign
+    is now measured within the customers that choice would give an offer to, held back or not, not within
+    `intended_treatment` (the first offer against the control, DEC-668 (3)). Before, a customer whose first offer
+    is not worth a contact (a sleeping dog to Offer A, say) but whose best offer is, was contacted and measured in
+    neither arm (413 of 1,945). Now every customer a use case wins and contacts is in its treated arm, and the
+    multi-offer arms are exactly the customers its policy meant to contact, cut by the one rule of (n)."""
     table = arbitrated.table
     for use_case in USE_CASES:
         won = table[flag(table["treat"]) & (table["winning_use_case"] == use_case) & ~flag(table["explore"])]
-        missing = set(won[KEY]) - arms[use_case].compared
-        if use_case != MULTI:
-            assert not missing, use_case
-            continue
-        assert len(missing) > 0.05 * len(
-            won
-        ), "the campaign leaves out a real share of the customers it contacts"
-        assert not scores[MULTI].loc[sorted(missing), "intended_treatment"].astype(bool).any()
-        # They were not left out for a reason that is the campaign's: they are customers the list chose.
-        assert (won.set_index(KEY).loc[sorted(missing), "net_value"].pipe(number) > 0).all()
+        assert len(won) > 300, use_case
+        assert set(won[KEY]) <= arms[use_case].compared, use_case
+    # The customers the old rule left out are real, and they are all in now.
+    won = table[flag(table["treat"]) & (table["winning_use_case"] == MULTI) & ~flag(table["explore"])]
+    first_offer = scores[MULTI]["intended_treatment"].astype(bool)
+    outside = set(won[KEY]) & set(first_offer.index[~first_offer])
+    assert len(outside) > 0.05 * len(won), "customers whose first offer is not worth a contact are contacted"
+    assert outside <= arms[MULTI].compared
+    assert (won.set_index(KEY).loc[sorted(outside), "net_value"].pipe(number) > 0).all()
+    # Exactly: the multi-offer arms are the customers the policy meant to contact that the use case wins in the
+    # arbitration run again without the hold-outs; nobody else and nobody less.
+    cut = counterfactual_cut(lists, scores)
+    holders = holders_of(lists)
+    intended = intended_by(MULTI, scores).reindex(cut.settled.index)
+    held = pd.Series(cut.settled.index.isin(list(holders[MULTI])), index=cut.settled.index)
+    mine = cut.settled & (cut.winner == MULTI) & intended
+    settled = set(cut.settled.index[cut.settled])
+    assert arms[MULTI].compared & settled == set(mine.index[mine & ~held])
+    assert arms[MULTI].held_back & settled == set(mine.index[mine & held])
+    # A held-back customer the policy meant to contact (and no rival won) is in the hold-out arm, and the policy's
+    # intended customers outside the first offer's set are among them.
+    first_only_held = {key for key in arms[MULTI].held_back if not bool(first_offer.get(key, False))}
+    assert len(first_only_held) > 0.05 * len(arms[MULTI].held_back)
+
+
+def test_a_customer_held_back_and_wanted_by_the_multi_offer_and_the_one_offer_use_cases_goes_to_the_larger_value(
+    lists: dict[str, pd.DataFrame], scores: dict[str, pd.DataFrame], arms: dict[str, Arms]
+) -> None:
+    """DEC-1311 (aj), the observation of 2026-10-09: a held-back multi-offer row used to carry no net value, so
+    these customers all went to the multi-offer use case by the request order (66 of 66). Both use cases hold
+    them back (one universal hold-out) and both mean to contact them: the use case whose offer is worth more
+    keeps the customer in its hold-out arm, and the other does not have them."""
+    cut = counterfactual_cut(lists, scores)
+    holders = holders_of(lists)
+    index = cut.settled.index
+    shared = pd.Series(index.isin(list(holders[MULTI] & holders[BINARY])), index=index)
+    twice = (
+        cut.settled
+        & shared
+        & cut.wants[MULTI]
+        & cut.wants[BINARY]
+        & ~cut.wants[RISK]
+        & intended_by(MULTI, scores).reindex(index)
+        & intended_by(BINARY, scores).reindex(index)
+    )
+    binary = lists[BINARY].set_index(KEY).reindex(index)["net_value"].pipe(number)
+    multi = scores[MULTI]["policy_offer_net_value"].reindex(index).round(2)
+    keys = list(index[twice])
+    assert len(keys) > 30
+    for_multi = {key for key in keys if multi[key] >= binary[key]}
+    for_binary = set(keys) - for_multi
+    assert for_multi and for_binary, "the value decides, not the request order"
+    assert for_multi == {key for key in keys if key in arms[MULTI].held_back}
+    assert for_binary == {key for key in keys if key in arms[BINARY].held_back}
+    assert not {key for key in keys if key in arms[MULTI].held_back and key in arms[BINARY].held_back}
 
 
 def test_a_campaign_measured_too_early_gives_a_date_and_never_a_number(

@@ -7,7 +7,8 @@ fix how it will be judged before it is (`engine.measurement.plan`):
 
 * `POST /campaigns {run_id, treatment_start?, bands?, outcome_window_days?, name?}` (Analyst) - kind
   `scored`. The assignment (`campaigns/<id>/assignment.parquet`) is built from the run's scores:
-  holdout, intended population (an uplift run's `intended_treatment`, or the treat bands), band or
+  holdout, intended population (an uplift run's `intended_treatment` - for a run that chose the offer per
+  customer, the customers its policy would give an offer to, DEC-1311 (ai) - or the treat bands), band or
   segment. `treatment_start` is the day the campaign really went out, defaulting to the run's finish
   time and never before it (DEC-1304 (d)), so a campaign sent days later matures on the right date.
 * `GET /campaigns` and `GET /campaigns/{id}` (Viewer) - the record, its stored report, the plain
@@ -84,6 +85,7 @@ from engine.measurement.campaign import (
     assignment_counts,
     build_assignment,
     campaign_key,
+    chosen_intended_keys,
     epoch_mismatch,
     holdout_identity,
     new_campaign_id,
@@ -351,9 +353,18 @@ def create_campaign(
             409, RUN_NOT_SCORED, "This run has no scores file to build a campaign from."
         ) from exc
     holdout_table = _holdout_table(storage, record.run_id)
+    # A run that chose the offer per customer is measured within the customers its policy meant to contact
+    # (DEC-1311 (ai)), not within the first offer's `intended_treatment`.
+    intended_keys = (
+        chosen_intended_keys(storage, record.run_id) if "intended_treatment" in scores.columns else None
+    )
     try:
         assignment = build_assignment(
-            scores, primary_key=record.primary_key, bands=body.bands, holdout=holdout_table
+            scores,
+            primary_key=record.primary_key,
+            bands=body.bands,
+            holdout=holdout_table,
+            intended_keys=intended_keys,
         )
     except ValueError as exc:
         raise http_error(422, CAMPAIGN_INVALID, str(exc), path="bands" if body.bands else None) from exc
@@ -383,6 +394,7 @@ def create_campaign(
         holdout_scope_key=holdout_key,
         holdout_epoch=holdout_epoch,
         counts=counts,
+        intended_source=None if intended_keys is None else "offer_choice",
         status=CampaignStatus.LIVE,
         created_at=now,
         created_by=requested_by(request) or "local",

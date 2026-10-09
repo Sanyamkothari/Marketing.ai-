@@ -35,7 +35,10 @@ their key columns and retention deletes them with the campaign (DEC-1304 (j)).
 
 **Like with like (DEC-1304 (b)).** `intended` marks the customers the campaign is measured on, and
 both arms are compared inside it: for an uplift run, the rows its policy intended to treat
-(`intended_treatment`, DEC-624); for a propensity run, the eligible rows of the campaign's treat
+(`intended_treatment`, DEC-624; for a run that chose the offer per customer, the customers its policy would give
+some offer to if nobody were held back - `policy_intended` of `offer_choice.parquet`, DEC-1311 (ai) - because
+`intended_treatment` is the first offer against the control and leaves out a customer whose best offer is
+another one); for a propensity run, the eligible rows of the campaign's treat
 bands, or every eligible row (intent to treat) when it names none. Suppressed rows were never
 eligible for either arm and are never intended.
 
@@ -99,6 +102,7 @@ __all__ = [
     "assignment_counts",
     "build_assignment",
     "campaign_key",
+    "chosen_intended_keys",
     "create_arbitrated_campaign",
     "epoch_mismatch",
     "holdout_identity",
@@ -268,6 +272,15 @@ class Campaign(Artefact):
             "the arbitration used; the same inputs give back the campaign already made."
         ),
     )
+    intended_source: Literal["intended_treatment", "offer_choice"] | None = Field(
+        default=None,
+        description=(
+            "DEC-1311 (ai): where `population: intended` comes from. `offer_choice` for a run that chose the "
+            "offer per customer: the customers the policy would give some offer to (`policy_intended` of "
+            "`offer_choice.parquet`). Null otherwise: the scores' `intended_treatment`, as before."
+        ),
+        exclude_if=lambda value: value is None,
+    )
     test_plan_hash: str | None = Field(default=None, description="`plan_hash` of the test plan in force.")
     test_plan_version: int | None = Field(default=None, description="Its version.")
     created_at: AwareDatetime = Field(description="When the record was created.")
@@ -287,6 +300,7 @@ def build_assignment(
     bands: Sequence[str] | None = None,
     holdout: pd.DataFrame | None = None,
     scope_keys: Collection[str] | pd.Index[Any] | None = None,
+    intended_keys: Collection[str] | pd.Index[Any] | None = None,
 ) -> pd.DataFrame:
     """`assignment.parquet` from a scoring run's scores (DEC-1304 (b)); see the module docstring.
 
@@ -298,6 +312,12 @@ def build_assignment(
     scores: `scores.*` never carries the explore flag (DEC-1302 (c)), so `explore` and
     `explore_probability` are taken from it, joined on the key. A scored customer the file does not
     list was not explored. Without it, an `explore` column of the scores is kept as it is.
+
+    `intended_keys` (DEC-1311 (ai)): on an uplift run that chose the offer per customer, the customers
+    (key text, as the treat list spells it) the policy meant to contact, whether held back or not
+    (`engine.decide.treat_list.offer_policy_intended`). They replace the scores' `intended_treatment`, which is
+    the first offer against the control and leaves out a customer whose best offer is another one. Not for
+    treat bands. A scored customer outside the set is not intended.
 
     `scope_keys` (Plan J M101, DEC-1311): when measuring an arbitrated cycle, the customers (key text, as
     the treat list spells it) this campaign may compare. An intended customer outside the set is put in
@@ -331,7 +351,13 @@ def build_assignment(
     arm = pd.Series(ARM_TREATED, index=frame.index, dtype="string")
     arm[held_out] = ARM_HOLDOUT
     arm[suppressed] = ARM_SUPPRESSED  # a suppressed row is in neither arm, whatever its control flag
-    if uplift_run:
+    if intended_keys is not None:
+        if bands is not None:
+            raise ValueError(
+                "A run that chose the offer per customer is measured within its policy; bands do not apply to it."
+            )
+        intended = _treat_list_keys(frame, columns).isin(intended_keys).to_numpy(dtype=bool)
+    elif uplift_run:
         intended = _flag(frame[_INTENDED_TREATMENT_COLUMN]).to_numpy(dtype=bool)
     elif bands is not None:
         wanted = {str(band) for band in bands}
@@ -675,6 +701,20 @@ def _treat_list_keys(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series
     return joined
 
 
+def chosen_intended_keys(storage: Storage, run_id: str) -> pd.Index[Any] | None:
+    """The customers (key text) a run that chose the offer per customer meant to contact, else `None`.
+
+    DEC-1311 (ai): the population of such a run's campaign. `None` for every other run, whose campaign is
+    measured within the scores' `intended_treatment` (or its treat bands), exactly as before.
+    """
+    from engine.decide.treat_list import offer_policy_intended
+
+    flags = offer_policy_intended(storage, run_id)
+    if flags is None:
+        return None
+    return flags.index[flags.to_numpy(dtype=bool)]
+
+
 def create_arbitrated_campaign(
     storage: Storage,
     store: CampaignStore,
@@ -721,6 +761,7 @@ def create_arbitrated_campaign(
     holdout_table = pd.read_parquet(io.BytesIO(storage.read_bytes(h_key))) if storage.exists(h_key) else None
 
     uplift_run = _INTENDED_TREATMENT_COLUMN in scores.columns
+    intended_keys = chosen_intended_keys(storage, run_id) if uplift_run else None
     bands: tuple[str, ...] | None = None
     if not uplift_run:
         # The policy's own treat bands, by the one definition of "selected" (M92): every band but the lowest.
@@ -734,6 +775,7 @@ def create_arbitrated_campaign(
         bands=bands,
         holdout=holdout_table,
         scope_keys=scope_keys,
+        intended_keys=intended_keys,
     )
     counts = assignment_counts(assignment)
 
@@ -763,6 +805,7 @@ def create_arbitrated_campaign(
         holdout_epoch=holdout_epoch,
         counts=counts,
         arbitration_id=arbitration_id,
+        intended_source=None if intended_keys is None else "offer_choice",
         status=CampaignStatus.LIVE,
         created_at=now,
         created_by=created_by,

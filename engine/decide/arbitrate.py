@@ -851,6 +851,11 @@ def comparable_keys(
     (`intended`, one `Series` per list, indexed by customer key text, or None for a list that has none)
     competing like a treated one. A customer is compared in a use case when it would win him then.
 
+    A held-back row competes with the value its list carries. A one-offer uplift list carries its own net value on
+    a held-back row; a list that chose the offer per customer carries the net value of the offer its policy would
+    have chosen (DEC-1311 (ah)), so a customer held back and intended by that use case and by a one-offer use case
+    goes to the larger value (between values of one kind, (h)), not to whichever list came first.
+
     What is left out of both arms is therefore the same kind of customer: those another use case beats,
     and the customers a rival's random (explore) action took. A customer the hold-out of another use case
     or a channel cap kept from being contacted stays in both arms (intent to treat): nothing in them

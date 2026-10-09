@@ -89,6 +89,7 @@ __all__ = [
     "TreatListSummary",
     "build_treat_list",
     "ensure_treat_list",
+    "offer_policy_intended",
     "policy_intended",
     "table_csv_bytes",
 ]
@@ -120,6 +121,10 @@ RUNNER_UP_VALUE_COLUMN: Final[str] = "runner_up_net_value"
 OFFER_REASON_COLUMN: Final[str] = "offer_reason"
 """Why a customer who could be treated got no offer, in plain words; empty otherwise."""
 
+_HELD_BACK_VALUE_NOTE: Final[str] = (
+    "On a held-back row the net value is that of the offer the policy would have chosen had nobody been held "
+    "back. It is the policy's intended offer, not an action taken: the row's offer and channel are empty."
+)
 _EXPLORE_NOTE: Final[str] = (
     "Customers picked at random to learn from (the explore slice) are given an offer although the choice "
     "left them without one. Their offers are outside the campaign budget (uplift.policy.total_budget): "
@@ -268,6 +273,22 @@ class TreatListSummary(Artefact):
         description="Plan J M100 part B: says the explored offers are outside the budget, when there are any.",
         exclude_if=lambda value: value is None,
     )
+    held_back_value_rows: int | None = Field(
+        default=None,
+        description=(
+            "DEC-1311 (ah): on a run that chose the offer per customer, the held-back rows whose `net_value` is "
+            "the net value of the offer the policy would have chosen had nobody been held back. Absent otherwise."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    held_back_value_note: str | None = Field(
+        default=None,
+        description=(
+            "DEC-1311 (ah): says those held-back values are the policy's intended offer, never an action "
+            "taken (their `offer` and `channel` stay empty), when there are any. Absent otherwise."
+        ),
+        exclude_if=lambda value: value is None,
+    )
     channel_rows: dict[str, int] | None = Field(
         default=None,
         description=(
@@ -286,6 +307,33 @@ def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None
         return build_treat_list(storage, run_id, config_root=config_root)
 
 
+def offer_policy_intended(storage: Storage, run_id: str) -> pd.Series[Any] | None:
+    """Per customer (indexed by key text, as the treat list spells it): did the policy mean to contact them?
+
+    On a scoring run that chose the offer per customer (`offer_choice.json` `chosen`), this is the
+    `policy_intended` column of `offer_choice.parquet` (DEC-1311 (af)): the customer would be given some
+    offer if nobody were held back, whether or not the hold-out then kept them back. It replaces the first
+    offer's `intended_treatment`, which says nothing of a customer whose best offer is another one. `None`
+    for every other run - a run of one offer, a run that could not choose, or a file written before the
+    column existed - and then the caller keeps the run's own `intended_treatment`.
+    """
+    from engine.decide.offer_run import OFFER_CHOICE_FILENAME, POLICY_INTENDED_COLUMN
+
+    try:
+        data = storage.read_bytes(run_key(run_id, OFFER_CHOICE_FILENAME))
+    except StorageError:
+        return None
+    table = pd.read_parquet(io.BytesIO(data))
+    if POLICY_INTENDED_COLUMN not in table.columns:
+        return None
+    record = _read_record(storage, run_id)
+    series = pd.Series(
+        table[POLICY_INTENDED_COLUMN].fillna(False).to_numpy(dtype=bool),
+        index=_join_keys(table, record.primary_key),
+    )
+    return series[~series.index.duplicated(keep="first")]
+
+
 def policy_intended(storage: Storage, run_id: str) -> pd.Series[Any]:
     """Per customer of the run (indexed by key text, as the treat list spells it): did the policy intend to contact them?
 
@@ -293,7 +341,13 @@ def policy_intended(storage: Storage, run_id: str) -> pd.Series[Any]:
     definition M92 and the treat list use), who is not a predicted sleeping dog and was not suppressed,
     whether or not a hold-out then kept them back. `treat` is 0 for a held-back customer, so this is what
     lets arbitration (M101) ask whom a use case would have contacted had it not held them back.
+
+    On a run that chose the offer per customer it is the offer choice's own answer
+    (:func:`offer_policy_intended`, DEC-1311 (af)), not the first offer's `intended_treatment`.
     """
+    chosen = offer_policy_intended(storage, run_id)
+    if chosen is not None:
+        return chosen
     record = _read_record(storage, run_id)
     config = _read_config(storage, run_id)
     scores = _read_scores(storage, run_id, key_columns(record.primary_key))
@@ -398,6 +452,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     offer_counts: dict[str, int] | None = None
     explore_offer_counts: dict[str, int] | None = None
     explore_cost: float | None = None
+    held_back_value_rows: int | None = None
     offer_choice = _read_offer_choice(storage, run_id, primary_key, row_keys)
     if offer_choice is not None:
         applied = _apply_offer_choice(
@@ -420,6 +475,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         offer_reason, uncontactable_rows = applied.offer_reason, applied.uncontactable_rows
         offer_counts = applied.offer_counts
         explore_offer_counts, explore_cost = applied.explore_offer_counts, applied.explore_cost
+        held_back_value_rows = applied.held_back_value_rows
         if net_value.notna().any():
             net_value_note, net_value_unit = None, "rupees"
 
@@ -473,6 +529,8 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         explore_offer_counts=explore_offer_counts,
         explore_cost=explore_cost,
         explore_note=None if explore_cost is None else _EXPLORE_NOTE,
+        held_back_value_rows=held_back_value_rows,
+        held_back_value_note=None if held_back_value_rows is None else _HELD_BACK_VALUE_NOTE,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -945,6 +1003,11 @@ class _OfferChoice(NamedTuple):
     explore_channel: np.ndarray
     explore_value: np.ndarray
     explore_cost: np.ndarray
+    policy_intended: np.ndarray | None = None
+    """DEC-1311 (af): the policy meant to contact the customer, held back or not. None: the file has no such column
+    (a file written before it), and no held-back row is given a value."""
+    policy_value: np.ndarray | None = None
+    """The net value of the offer the policy would have chosen had nobody been held back; NaN for none."""
 
 
 def _read_offer_choice(
@@ -952,7 +1015,11 @@ def _read_offer_choice(
 ) -> _OfferChoice | None:
     """The run's choice of offer per customer, or None when it made none (a run of one offer, or a run
     of several with no value to choose by: its treat list is then the first offer's, as before)."""
-    from engine.decide.offer_run import OFFER_CHOICE_FILENAME
+    from engine.decide.offer_run import (
+        OFFER_CHOICE_FILENAME,
+        POLICY_INTENDED_COLUMN,
+        POLICY_VALUE_COLUMN,
+    )
 
     try:
         data = storage.read_bytes(run_key(run_id, OFFER_CHOICE_FILENAME))
@@ -989,6 +1056,16 @@ def _read_offer_choice(
         explore_channel=take("explore_channel", None).astype(object),
         explore_value=take("explore_net_value", np.nan).astype(np.float64),
         explore_cost=take("explore_total_cost", 0.0).astype(np.float64),
+        policy_intended=(
+            take(POLICY_INTENDED_COLUMN, False).astype(bool)
+            if POLICY_INTENDED_COLUMN in table.columns
+            else None
+        ),
+        policy_value=(
+            take(POLICY_VALUE_COLUMN, np.nan).astype(np.float64)
+            if POLICY_VALUE_COLUMN in table.columns
+            else None
+        ),
     )
 
 
@@ -1004,6 +1081,7 @@ class _Applied(NamedTuple):
     offer_counts: dict[str, int]
     explore_offer_counts: dict[str, int] | None
     explore_cost: float | None
+    held_back_value_rows: int | None
 
 
 def _apply_offer_choice(
@@ -1035,11 +1113,23 @@ def _apply_offer_choice(
     offered = covered & (chosen.arm > 0) & open_
     explored = covered & ~offered & open_ & explore & (chosen.explore_arm > 0)
     treat = np.where(covered, offered | explored, fallback_treat)
+    # DEC-1311 (ah): a held-back customer the policy meant to contact carries the net value of the offer it
+    # would have chosen (as a binary uplift run's held-back rows carry theirs), so arbitration can compare it
+    # by value. Their offer and channel stay empty: nothing was done.
+    would = np.zeros(len(covered), dtype=bool)
+    policy_value = np.full(len(covered), np.nan)
+    if chosen.policy_intended is not None and chosen.policy_value is not None:
+        policy_value = chosen.policy_value
+        would = covered & held_out & ~suppressed & chosen.policy_intended & np.isfinite(policy_value)
 
     nothing = np.full(len(covered), None, dtype=object)
     label = np.where(offered, chosen.label, np.where(explored, chosen.explore_label, nothing))
     channel = np.where(offered, chosen.channel, np.where(explored, chosen.explore_channel, nothing))
-    value = np.where(offered, chosen.net_value, np.where(explored, chosen.explore_value, np.nan))
+    value = np.where(
+        offered,
+        chosen.net_value,
+        np.where(explored, chosen.explore_value, np.where(would, policy_value, np.nan)),
+    )
     offer = fallback_offer.mask(pd.Series(covered), pd.Series(label, dtype="object"))
     channel_out = fallback_channel.mask(pd.Series(covered), pd.Series(channel, dtype="object"))
     net = fallback_net_value.mask(pd.Series(covered), pd.Series(np.round(value, _RUPEE_DECIMALS)))
@@ -1077,6 +1167,7 @@ def _apply_offer_choice(
         explore_cost=(
             round(float(chosen.explore_cost[explored].sum()), _RUPEE_DECIMALS) if any_explored else None
         ),
+        held_back_value_rows=int(would.sum()) if bool(would.any()) else None,
     )
 
 
