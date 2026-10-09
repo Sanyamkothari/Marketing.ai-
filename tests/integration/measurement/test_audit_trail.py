@@ -7,6 +7,7 @@ universal holdout's epoch - and nothing else: not an id, not a column name, not 
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 
 import numpy as np
@@ -24,8 +25,11 @@ from engine.holdout.spec import HoldoutConfig
 from engine.measurement.simulate import AS_OF, OUTCOME_WINDOW_DAYS, population
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.settings import Settings
-from tests.integration.measurement.support import SENT, USE_CASE
+from tests.integration.measurement.support import USE_CASE
 from tests.integration.production.access_support import audit_log_at, bearer, local_app, make_user
+
+BEFORE_PERIOD = datetime(2025, 12, 15, 9, 0, tzinfo=UTC)
+"""The universal holdout was first used before the programme's period began."""
 
 pytestmark = pytest.mark.integration
 
@@ -69,7 +73,7 @@ def test_each_route_writes_one_event_with_the_campaign_and_a_short_token(tmp_pat
         config,
         Settings(data_dir=tmp_path, holdout_salt=SecretStr(SALT)),
         sqlite_engine(tmp_path / PLATFORM_DB_FILENAME),
-        at=SENT,
+        at=BEFORE_PERIOD,
         record=True,
     )
     sim = population(3_000, 0.10, 0.05, seed=10341, control_share=0.2)

@@ -119,6 +119,10 @@ class ComplierEffect(StrictBase):
     )
     treated_rows: int = Field(description="Customers meant to be contacted that the estimate rests on.")
     control_rows: int = Field(description="Held-back customers that it rests on.")
+    offer: str | None = Field(
+        default=None,
+        description="The offer the estimate is for, when the campaign had several (the first offer's customers and the held-back ones); null for a single offer.",
+    )
     label: str = Field(description="What this number is and is not, in one plain paragraph.")
 
 
@@ -405,6 +409,7 @@ def complier_effect(
     outcome: NDArray[np.float64],
     *,
     unit: Literal["rate", "amount"],
+    offer: str | None = None,
 ) -> tuple[ComplierEffect | None, str | None]:
     """`(effect, None)` or `(None, reason)`: the Wald ratio with Fieller's 95% interval.
 
@@ -448,10 +453,11 @@ def complier_effect(
         low, high = min(low, point), max(high, point)
     first = ConfidenceValue(value=dd, ci_low=first_low, ci_high=first_high, confidence_level=CONFIDENCE_LEVEL)
     effect = ConfidenceValue(value=point, ci_low=low, ci_high=high, confidence_level=CONFIDENCE_LEVEL)
-    per = "responder" if unit == "rate" else "amount"
+    for_offer = f" for offer {offer!r}" if offer is not None else ""
     label = (
-        f"Secondary result, not the headline. This is the change per customer who was actually contacted "
-        f"({'extra responders' if unit == 'rate' else 'extra amount'} per {per} contacted), worked out from the "
+        f"Secondary result, not the headline. This is the change per customer who was actually contacted"
+        f"{for_offer} ({'extra responders' if unit == 'rate' else 'extra amount'} per customer contacted), "
+        f"worked out from the "
         f"main result and the difference in who was contacted ({md1:.1%} against {md0:.1%}). It assumes that "
         f"being picked for the campaign mattered only by getting the customer contacted. Its range is wider than "
         f"the main result's, and the fewer customers were reached the wider it is."
@@ -463,6 +469,7 @@ def complier_effect(
             first_stage=first,
             treated_rows=n1,
             control_rows=n0,
+            offer=offer,
             label=label,
         ),
         None,
@@ -584,6 +591,7 @@ def reconcile_contacts(
                 rows["d"].to_numpy(dtype=np.float64),
                 rows["y"].to_numpy(dtype=np.float64),
                 unit="amount" if outcome_kind == "continuous" else "rate",
+                offer=first_offer if offer_column is not None else None,
             )
             if (
                 complier is not None

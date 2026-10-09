@@ -11,6 +11,7 @@ from __future__ import annotations
 import json
 import os
 import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -27,7 +28,10 @@ from engine.measurement.simulate import AS_OF, OUTCOME_WINDOW_DAYS, population
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.settings import Settings
 from tests.fixtures.node import skip_without_node
-from tests.integration.measurement.support import SENT, USE_CASE, ok, upload
+from tests.integration.measurement.support import USE_CASE, ok, upload
+
+BEFORE_PERIOD = datetime(2025, 12, 15, 9, 0, tzinfo=UTC)
+"""The universal holdout was first used before the programme's period began."""
 
 SALT = "audit-view-salt-0000001"
 TEST = Path(__file__).resolve().parent / "audit_view.test.mjs"
@@ -51,7 +55,9 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
         }
     )
     settings = Settings(data_dir=data_dir, holdout_salt=SecretStr(SALT))
-    resolve_holdout(config, settings, sqlite_engine(data_dir / PLATFORM_DB_FILENAME), at=SENT, record=True)
+    resolve_holdout(
+        config, settings, sqlite_engine(data_dir / PLATFORM_DB_FILENAME), at=BEFORE_PERIOD, record=True
+    )
     app = create_app(config_root=config_root, data_dir=data_dir)
     app.state.settings = settings
     rng = np.random.default_rng(5)

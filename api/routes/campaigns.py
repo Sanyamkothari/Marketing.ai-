@@ -62,8 +62,10 @@ audited, on uploads that went through `POST /uploads`:
   until the result is final: results not yet in are **409 `CAMPAIGN_NOT_MATURED`** with the day, as for any
   campaign.
 * `POST /campaigns/programme` - every customer not held back against the universal holdout's members over a
-  period (intent to treat; `engine.measurement.programme`), with the adjusted estimate when a plan registered
-  in the same request names the covariate. **409 `PROGRAMME_NO_HOLDOUT`** without a universal holdout.
+  period (intent to treat; `engine.measurement.programme`), as a plain difference in means (a plan sent with a
+  finished period could not have been fixed in advance: **409 `TEST_PLAN_INVALID`**). **409
+  `PROGRAMME_NO_HOLDOUT`** without a universal holdout, and **409 `CAMPAIGN_EPOCH_MISMATCH`** when the holdout
+  began after the period did.
 * `POST /campaigns/{id}/contacts` - who was actually contacted (any campaign): the contact rate, the
   contamination of the held-back group and, labelled secondary, the effect on the contacted
   (`engine.measurement.reconcile`). Optional on the two routes above.
@@ -73,6 +75,7 @@ Customer ids are never in a URL or an audit record: every route names a campaign
 
 from __future__ import annotations
 
+import math
 from datetime import UTC, date, datetime, timedelta
 from typing import Annotated, Any, Final, Literal
 
@@ -90,10 +93,15 @@ from api.routes.uploads import http_error, load_upload, use_case_config
 from api.schemas import ErrorBody, ErrorResponse
 from engine.access.roles import Role
 from engine.audit.events import content_hash
-from engine.config import ConfigError, PrimaryKey, StrictBase, UseCaseConfig, key_columns
+from engine.config import ConfigError, PrimaryKey, RunMode, StrictBase, UseCaseConfig, key_columns
+from engine.contracts import RunRecord, RunState
 from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME, run_holdout_spec
 from engine.holdout.salt import HoldoutLedger, configured_salt, salt_fingerprint, salt_id
-from engine.holdout.spec import HOLDOUT_SALT_CHANGED, PERSISTENT_SCOPES, UNIVERSAL_SCOPE_KEY
+from engine.holdout.spec import (
+    HOLDOUT_SALT_CHANGED,
+    PERSISTENT_SCOPES,
+    UNIVERSAL_SCOPE_KEY,
+)
 from engine.measurement.audit import (
     AUDIT_FILENAME,
     AUDIT_SEED,
@@ -476,7 +484,10 @@ class ProgrammeRequest(StrictBase):
     primary_key: PrimaryKey = Field(description="The customer id column(s) of the outcomes file.")
     plan: TestPlanInput | None = Field(
         default=None,
-        description="A test plan registered with this request, before the outcomes are read; the adjusted estimate needs one.",
+        description=(
+            "Not accepted: a programme is read after its period has ended, so a plan sent with the outcomes "
+            "could not have been fixed in advance (409 TEST_PLAN_INVALID). The difference in means is given."
+        ),
     )
     contact: ContactFile | None = Field(default=None, description="Who was actually contacted, if known.")
     name: str | None = Field(
@@ -916,8 +927,17 @@ def measure_campaign_results(
         covariate = plan.covariate_column
     # Plan J M102: the outcome is read as the plan registered it (a different kind named in the body is a
     # change of plan, refused by `measure_campaign`), else as the body says, else as yes/no.
-    kind = body.outcome_kind or (plan.outcome_kind if plan is not None else "binary")
+    # An audited or programme campaign that measured an amount without a plan keeps its kind: the page's
+    # "Measure now" sends this request without one (M103).
     audit = _stored(storage, campaign_key(campaign_id, AUDIT_FILENAME), AuditReadout)
+    programme = _stored(storage, campaign_key(campaign_id, PROGRAMME_FILENAME), ProgrammeReadout)
+    kind = (
+        body.outcome_kind
+        or (plan.outcome_kind if plan is not None else None)
+        or (audit.outcome_kind if audit is not None else None)
+        or (programme.outcome_kind if programme is not None else None)
+        or "binary"
+    )
     offers = {} if audit is None or not audit.offers else _offer_arguments(audit)  # several offers (M103)
     try:
         report = measure_campaign(
@@ -1645,7 +1665,7 @@ def audit_campaign(
         run_ids=(),
         primary_key=body.primary_key,
         treatment_start=start,
-        treatment_start_source="entered",
+        treatment_start_source="entered" if body.treatment_start is not None else "file",
         outcome_window_days=body.outcome_window_days,
         population="intended" if spec.intended_column is not None else "eligible",
         causal=causal,
@@ -1702,13 +1722,88 @@ def _period_text(period: ProgrammePeriod) -> str:
     return f"{start.day} {start:%b %Y} to {end.day} {end:%b %Y}"
 
 
-def _programme_notes(counts: Any, fraction: float) -> tuple[str, ...]:
+SAMPLE_RATIO_ALPHA: Final[float] = 0.001
+"""Below this chance the file's share of held-back customers is called far from what the rule gives."""
+
+
+def _share_p_value(members: int, rows: int, fraction: float) -> float | None:
+    """Two-sided chance of a share this far from `fraction` (normal approximation), or None for a tiny file."""
+    spread = rows * fraction * (1.0 - fraction)
+    if rows <= 0 or spread < 5.0:
+        return None
+    z = abs(members - rows * fraction) / math.sqrt(spread)
+    return math.erfc(z / math.sqrt(2.0))
+
+
+def _runs_outside_the_universal_holdout(
+    storage: Storage, period: ProgrammePeriod
+) -> tuple[int, tuple[str, ...]]:
+    """`(runs, use cases)`: scoring runs finished inside `period` that did not use the universal control group.
+
+    A run that wrote no `holdout_assignment.json` drew its control group per run. Their lists may have gone to
+    customers the universal holdout keeps back, which contaminates the control group of the programme.
+    """
+    from engine.runs import RUN_FILENAME
+
+    runs, use_cases = 0, set()
+    for key in storage.list_keys("runs/"):
+        if not key.endswith(f"/{RUN_FILENAME}"):
+            continue
+        try:
+            record = storage.read_model(key, RunRecord)
+        except (StorageError, ValueError):
+            continue
+        if (
+            record.mode is not RunMode.SCORE
+            or record.state is not RunState.DONE
+            or record.finished_at is None
+        ):
+            continue
+        if not period.start <= record.finished_at.astimezone(UTC).date() <= period.end:
+            continue
+        spec = run_holdout_spec(storage, record.run_id)
+        if spec is not None and spec.scope == "universal":
+            continue
+        runs += 1
+        use_cases.add(record.use_case_id or record.run_id)
+    return runs, tuple(sorted(use_cases))
+
+
+def _programme_notes(
+    counts: Any,
+    fraction: float,
+    *,
+    outside_runs: int,
+    outside_use_cases: tuple[str, ...],
+    has_contacts: bool,
+) -> tuple[str, ...]:
     if not counts.rows:
         return ("The outcomes file has no customer.",)
-    notes = [
-        f"The universal control group keeps {fraction:.0%} of customers out of every campaign. By chance the share in "
-        f"this file can differ a little: here it is {counts.holdout / counts.rows:.1%}."
-    ]
+    notes: list[str] = []
+    p_value = _share_p_value(counts.holdout, counts.rows, fraction)
+    if p_value is not None and p_value < SAMPLE_RATIO_ALPHA:
+        notes.append(
+            f"The share of held-back customers in this file ({counts.holdout / counts.rows:.1%}) is far from what "
+            f"the rule gives ({fraction:.0%}). The file may not hold the whole customer base, for example if only "
+            f"customers who were active were kept, and then the comparison is not fair. Check the file before "
+            f"relying on the result."
+        )
+    notes.append(
+        f"The universal control group keeps {fraction:.0%} of customers out of every list scored with it. By "
+        f"chance the share in this file can differ a little: here it is {counts.holdout / counts.rows:.1%}."
+    )
+    if outside_runs:
+        names = ", ".join(outside_use_cases)
+        notes.append(
+            f"{outside_runs} list{'s' if outside_runs != 1 else ''} made in this period ({names}) did not use the "
+            f"universal control group, so some customers it keeps back may have been contacted. This narrows the "
+            f"difference between the groups, so the result understates what the programme does. Campaigns sent "
+            f"outside this tool are not known either."
+        )
+    if not has_contacts:
+        notes.append(
+            "Add a contact file to see whether any of the customers kept back were contacted anyway."
+        )
     if counts.holdout < 2 or counts.treated < 2:
         notes.append("One of the two groups has fewer than two customers, so no result can be given.")
     return tuple(notes)
@@ -1732,8 +1827,10 @@ def programme_readout(
     """Intent to treat for everything done over `period`, read from one outcomes file of the whole customer base.
 
     The universal holdout's members are found by the salted rule every scoring run used, at the fraction the
-    ledger recorded for the current epoch; a plan sent with the request is registered before the outcomes are
-    read, so the adjusted estimate (M102) is the planned one.
+    ledger recorded for the current epoch. That is only the split of the period when the epoch began before
+    it (409 `CAMPAIGN_EPOCH_MISMATCH` otherwise). The period is over by the time the outcomes exist, so no
+    plan could have been registered first: a `plan` or an earlier-amount column is refused (409
+    `TEST_PLAN_INVALID`) and an amount is read as a plain difference in means.
     """
     now = utc_now()
     _check_as_of(body.as_of, now)
@@ -1755,18 +1852,29 @@ def programme_readout(
             "customers cannot be split as the lists were.",
         )
     outcome_spec = body.outcome
-    upload, frame = _upload_frame(storage, outcome_spec.upload_id)
     window = period_window_days(body.period)
     start = datetime(body.period.start.year, body.period.start.month, body.period.start.day, tzinfo=UTC)
-    cov, cov_date = outcome_spec.covariate_column, outcome_spec.covariate_date_column
-    if cov is not None and cov_date is None:
+    began = entry.started_at if entry.started_at.tzinfo is not None else entry.started_at.replace(tzinfo=UTC)
+    if began > start:
+        set_audit_context(request, details={"reason_code": CAMPAIGN_EPOCH_MISMATCH})
         raise http_error(
-            422,
-            COVARIATE_NOT_BEFORE_CAMPAIGN,
-            f"Name the column holding the date each {cov!r} value was measured up to: without it the value cannot "
-            f"be shown to come from before the programme.",
-            path="outcome.covariate_date_column",
+            409,
+            CAMPAIGN_EPOCH_MISMATCH,
+            f"The universal control group was started or redrawn on {began.date().isoformat()}, after the period "
+            f"began on {body.period.start.isoformat()}, so the customers held back during the period cannot be "
+            f"found. Read a period that begins on or after that day.",
         )
+    if body.plan is not None or outcome_spec.covariate_column is not None:
+        set_audit_context(request, details={"reason_code": TEST_PLAN_INVALID})
+        raise http_error(
+            409,
+            TEST_PLAN_INVALID,
+            "A programme is read after its period has ended, so a plan or an earlier-amount column sent with "
+            "the outcomes could not have been fixed before they were seen. Send the request without them: the "
+            "difference between the groups is given as it is.",
+            path="plan" if body.plan is not None else "outcome.covariate_column",
+        )
+    upload, frame = _upload_frame(storage, outcome_spec.upload_id)
     try:
         outcome_column = outcome_spec.outcome_column or detect_outcome_column(
             [str(name) for name in frame.columns],
@@ -1778,7 +1886,6 @@ def programme_readout(
             primary_key=body.primary_key,
             outcome_column=outcome_column,
             file_keys=outcome_spec.key_columns,
-            also=[cov, cov_date] if cov is not None and cov_date is not None else (),
         )
     except AuditInputError as exc:
         raise http_error(422, exc.code, str(exc), path=exc.path) from exc
@@ -1815,8 +1922,6 @@ def programme_readout(
             positive_label=outcome_spec.positive_label,
             rows=len(outcomes.index),
             added_at=now,
-            covariate_column=cov,
-            covariate_date_column=cov_date if cov is not None else None,
         ),
         created_at=now,
         created_by=requested_by(request) or "local",
@@ -1826,17 +1931,7 @@ def programme_readout(
     if mismatch is not None:
         set_audit_context(request, details={"reason_code": CAMPAIGN_EPOCH_MISMATCH})
         raise http_error(409, CAMPAIGN_EPOCH_MISMATCH, mismatch)
-    plan: TestPlan | None = None
-    if body.plan is not None:
-        plan = freeze_plan(
-            _resolved(campaign, body.plan),
-            realised_population(assignment, intended_column=INTENDED_COLUMN),
-            campaign_id=campaign_id,
-            registered_by=requested_by(request) or "local",
-            registered_at=now,
-        )
-    kind = outcome_spec.outcome_kind or (plan.outcome_kind if plan is not None else "binary")
-    covariate = cov if cov is not None else (plan.covariate_column if plan is not None else None)
+    kind = outcome_spec.outcome_kind or "binary"
     try:
         report = measure_campaign(
             assignment,
@@ -1851,22 +1946,14 @@ def programme_readout(
             outcome_window_days=window,
             as_of=as_of,
             campaign_id=campaign_id,
-            plan=plan,
-            covariate_column=covariate,
             outcome_kind=kind,
-            covariate_date_column=cov_date if covariate == cov else None,
         )
-    except TestPlanChangedError as exc:
-        set_audit_context(request, details={"reason_code": TEST_PLAN_CHANGED})
-        raise http_error(409, TEST_PLAN_CHANGED, str(exc)) from exc
-    except CovariateNotBeforeCampaignError as exc:
-        set_audit_context(request, details={"reason_code": COVARIATE_NOT_BEFORE_CAMPAIGN})
-        raise http_error(422, COVARIATE_NOT_BEFORE_CAMPAIGN, str(exc)) from exc
     except ValueError as exc:
         raise http_error(422, CAMPAIGN_INVALID, str(exc)) from exc
     refusal = _not_matured(request, report)
     if refusal is not None:
         return refusal
+    outside_runs, outside_use_cases = _runs_outside_the_universal_holdout(storage, body.period)
     readout = ProgrammeReadout(
         campaign_id=campaign_id,
         period_start=body.period.start,
@@ -1883,29 +1970,28 @@ def programme_readout(
         label=PROGRAMME_LABEL,
         explanation=(
             "Everyone who was not held back is compared with the customers the universal control group kept out of "
-            "every campaign. That group is chosen at random from the customer id, so the comparison is fair. Not "
-            "everyone outside it was contacted, so this is the effect of running the whole programme, not of one "
-            "message on the customers who received it."
+            "every list scored with it. That group is chosen at random from the customer id, so the comparison is "
+            "fair. Not everyone outside it was contacted, so this is the effect of running the whole programme, "
+            "not of one message on the customers who received it."
         ),
         synthetic=bool(upload.synthetic),
-        notes=_programme_notes(counts, entry.fraction),
+        notes=_programme_notes(
+            counts,
+            entry.fraction,
+            outside_runs=outside_runs,
+            outside_use_cases=outside_use_cases,
+            has_contacts=body.contact is not None,
+        ),
         computed_at=now,
-    )
-    plan_fields: dict[str, Any] = (
-        {"test_plan_hash": plan.plan_hash, "test_plan_version": plan.version} if plan is not None else {}
     )
     updated = campaign.model_copy(
         update={
             "status": CampaignStatus.LIVE if report.early_look else CampaignStatus.MEASURED,
             "measured_at": report.computed_at,
-            **plan_fields,
         }
     )
     frames: dict[str, Any] = {ASSIGNMENT_FILENAME: assignment, OUTCOMES_FILENAME: outcomes}
     models: dict[str, Any] = {REPORT_FILENAME: report, PROGRAMME_FILENAME: readout}
-    if plan is not None:
-        models[TEST_PLAN_FILENAME] = plan
-        models[test_plan_version_filename(plan.version)] = plan
     if body.contact is not None:
         _, contacts = _contact_frame(storage, body.contact, body.primary_key)
         frames[CONTACT_FILENAME] = contacts
@@ -1921,15 +2007,7 @@ def programme_readout(
         )
     _persist_new(request, storage, updated, frames=frames, models=models)
     # The audit trail's detail keys are a closed list (DEC-705): the record names the upload and the epoch.
-    audit_details: dict[str, Any] = {"outcome": f"universal_epoch_{entry.epoch}"}
-    if plan is not None:
-        audit_details["plan_hash"] = plan.plan_hash
-    set_audit_context(
-        request,
-        object_id=campaign_id,
-        after_hash=content_hash(plan) if plan is not None else None,
-        details=audit_details,
-    )
+    set_audit_context(request, object_id=campaign_id, details={"outcome": f"universal_epoch_{entry.epoch}"})
     response.headers["Location"] = f"/campaigns/{campaign_id}"
     _LOGGER.info(
         "campaigns.programme campaign=%s customers=%d holdout=%d epoch=%d",

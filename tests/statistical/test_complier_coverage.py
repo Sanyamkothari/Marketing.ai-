@@ -9,12 +9,14 @@ receives it is `effect` and the Wald ratio's target is exactly that) and measure
 chain: `build_assignment`, `measured_rows` and `complier_effect`. The observed coverage must lie within four
 Monte Carlo standard errors of 95% (`tests/statistical/bands.py`: 95% +/- 1.95 points).
 
-**Unbounded draws count as covering.** When the contact rates are close, a draw's data cannot tell the
-effect on the contacted from anything at all, Fieller's set is the whole line, and the product gives no
-interval (it says why). The set does hold the truth, so the draw counts as covered; the test also reports the
-share of such draws, which must stay small where the contact rates differ by a fair margin, so the interval
-is not a sleight of hand that answers nothing. The case with 5% reached and 2% leaked is the one that
-produces them: that is the "honest when compliance is low" case.
+**Withheld draws are checked against the truth, not assumed to cover.** When the contact rates are close, a
+draw's data cannot tell the effect on the contacted from anything at all, and the product gives no interval (it
+says why). Fieller's set is then the whole line *or two rays* (when the quadratic's leading term is negative and
+its discriminant is not), and two rays can leave the truth out. So each withheld draw is evaluated at the true
+effect `t`: it counts as covered only when `(dy - t*dd)^2 <= z^2 * Var(dy - t*dd)`, the inequality that defines
+the set. The test also reports the share of withheld draws, which must stay small where the contact rates differ
+by a fair margin, so the interval is not a sleight of hand that answers nothing. The case with 5% reached and 2%
+leaked is the one that produces them: that is the "honest when compliance is low" case.
 """
 
 from __future__ import annotations
@@ -28,8 +30,9 @@ import pandas as pd
 import pytest
 
 from engine.measurement.campaign import build_assignment
-from engine.measurement.reconcile import complier_effect, measured_rows
+from engine.measurement.reconcile import _moments, complier_effect, measured_rows
 from engine.measurement.simulate import AS_OF, KEY_COLUMN, OUTCOME_WINDOW_DAYS, population
+from engine.uplift.incrementality import Z_95
 from tests.statistical.bands import assert_share_in_band, seeds
 
 pytestmark = pytest.mark.statistical
@@ -47,10 +50,21 @@ def quiet() -> Iterator[None]:
         logging.disable(logging.NOTSET)
 
 
+def in_fiellers_set(treated: np.ndarray, d: np.ndarray, y: np.ndarray, truth: float) -> bool:
+    """Whether `truth` lies in Fieller's 95% set of the draw, whether or not the set is bounded."""
+    my1, md1, vy1, vd1, c1 = _moments(y[treated], d[treated])
+    my0, md0, vy0, vd0, c0 = _moments(y[~treated], d[~treated])
+    dy, dd = my1 - my0, md1 - md0
+    q = (dy - truth * dd) ** 2 - Z_95 * Z_95 * (
+        (vy1 + vy0) - 2.0 * truth * (c1 + c0) + truth * truth * (vd1 + vd0)
+    )
+    return q <= 0.0
+
+
 def coverage(
     base_seed: int, *, n: int, base_rate: float, effect: float, compliance: float, contamination: float
 ) -> tuple[float, float]:
-    """`(share covered, share unbounded)` over `SIMS` simulated campaigns, each through the production chain."""
+    """`(share covered, share withheld)` over `SIMS` simulated campaigns, each through the production chain."""
     covered = unbounded = 0
     with quiet():
         for seed in seeds(base_seed, SIMS):
@@ -77,15 +91,13 @@ def coverage(
                 outcome_window_days=OUTCOME_WINDOW_DAYS,
                 as_of=AS_OF,
             )
-            result, _ = complier_effect(
-                rows["treated"].to_numpy(dtype=bool),
-                rows["d"].to_numpy(dtype=np.float64),
-                rows["y"].to_numpy(dtype=np.float64),
-                unit="rate",
-            )
+            treated = rows["treated"].to_numpy(dtype=bool)
+            contacted = rows["d"].to_numpy(dtype=np.float64)
+            measured = rows["y"].to_numpy(dtype=np.float64)
+            result, _ = complier_effect(treated, contacted, measured, unit="rate")
             if result is None:
                 unbounded += 1
-                covered += 1  # the whole line holds the truth
+                covered += int(in_fiellers_set(treated, contacted, measured, effect))
                 continue
             low, high = result.effect.ci_low, result.effect.ci_high
             assert low is not None and high is not None

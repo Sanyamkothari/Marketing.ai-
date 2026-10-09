@@ -21,12 +21,25 @@ deployment's holdout salt and a ledger entry for the universal holdout (a scorin
 scope records one); with either missing, or with a salt that is not the recorded one, nothing is
 computed (`PROGRAMME_NO_HOLDOUT`, `HOLDOUT_SALT_CHANGED`).
 
+**What the universal holdout does and does not guarantee.** It keeps its members out of the lists of use cases
+configured with `actions.holdout.scope: universal`. A use case on scope `run` or `use_case`, and any campaign
+the team sent outside this tool, can still contact them, which narrows the difference. The readout therefore
+says "every list scored with it", lists the scoring runs of the period that did not use it, and points to the
+contact file as the way to count the held-back customers who were contacted anyway.
+
+**The epoch must have begun before the period.** The split uses the ledger's current epoch (its fraction and
+salt). For a period that began before that epoch started, the customers held back at the time cannot be
+found, so the readout is refused (`CAMPAIGN_EPOCH_MISMATCH`), and so is one whose epoch was redrawn before
+its outcomes were in, as for any campaign.
+
 **One path.** The split is written as an ordinary campaign `assignment.parquet` (kind `programme`,
-holdout scope `universal` with the epoch), and the result is `measure_campaign`'s, unchanged, so an
-amount and the adjusted estimate (CUPED) work exactly as in M102: the adjustment is used only when a
-test plan registered the covariate before the outcomes were read. The epoch is checked too: a campaign
-whose universal holdout was redrawn before its outcomes were in is refused (`CAMPAIGN_EPOCH_MISMATCH`),
-as for any campaign.
+holdout scope `universal` with the epoch), and the result is `measure_campaign`'s, unchanged. An amount is
+read as a plain difference in means: the adjusted estimate (CUPED, M102) needs a plan registered before the
+outcomes are read, and a programme can only be read after its period has ended, so a plan or earlier-amount
+column sent with the request is refused (`TEST_PLAN_INVALID`).
+
+The share of held-back customers in the file is checked against the rule's fraction; a share far from it
+(a sample-ratio mismatch) is noted, as the file may then not be the whole base.
 
 The period is what makes the readout mature: its outcome window is the period's length, counted from
 its first day, so the result is final only after the period has ended.

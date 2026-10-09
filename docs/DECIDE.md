@@ -663,7 +663,9 @@ The label is on the campaign (`causal`, `causal_basis`: `verified_random`, `decl
 `audit.json` with its reason, the test's score and the columns that gave the groups away. The stored report carries
 `causal: false` unless verified; a descriptive-only report's sentence describes how the groups differ and says it does
 not show what the campaign changed, and **no verdict** ("the campaign added N") is ever drawn from it; a campaign random
-by statement alone gets the usual verdict with the label in front of it. Measuring the campaign again later keeps the
+by statement alone gets a conditional verdict, which never says the campaign "added", "prevented" or "caused" anything
+("Random by your statement, not verified: about N more conversions among contacted customers"; its summary starts "If the
+groups were chosen at random as you said"). Measuring the campaign again later keeps the
 label and the offers. Every sentence is checked with `jargon_in`.
 
 **Who was actually contacted (`POST /campaigns/{id}/contacts`, or `contact` beside an audit).** A contact file (the id
@@ -675,7 +677,7 @@ is the main difference divided by the difference in contact rates (the Wald rati
 given Fieller's interval and **labelled secondary**: it rests on one more assumption than the main result, and it is
 withheld, with the reason, when the contact rates differ by no more than chance (the interval would be unbounded and any
 number invented). It is computed on the rows `measure_incrementality` measured, rebuilt and checked against the report's
-counts, and is unadjusted. `contact.parquet` (one row per customer) is registered in `configs/privacy.yaml` and
+counts, and is unadjusted; with several offers it is the first offer's customers against the held-back ones and names that offer. `contact.parquet` (one row per customer) is registered in `configs/privacy.yaml` and
 `engine/privacy/layout.py` like the other campaign files; `contact_readout.json` holds counts only.
 `tests/statistical/test_complier_coverage.py` (nightly) checks the interval's 95% coverage.
 
@@ -684,10 +686,16 @@ and one outcomes file of **every customer** over the period. Members of the univ
 rule every scoring run used (`member_flags`, at the fraction and epoch the ledger recorded), and everyone else is
 compared with them: **intent to treat**, the effect of running the programme, diluted by everyone it did not reach
 (`kind: programme`, causal basis `engine_random`, holdout scope `universal` with its epoch, so a redrawn holdout is
-refused as for any campaign). The period is the outcome window, so the result is final the day after it ends. An amount
-and the adjusted estimate work as in §16, with a `plan` sent in the same request, registered before the outcomes are
-read. Without a universal holdout in use (or with a salt that is not the one it was drawn with) nothing is computed:
-`409 PROGRAMME_NO_HOLDOUT` / `HOLDOUT_SALT_CHANGED`.
+refused as for any campaign). The period is the outcome window, so the result is final the day after it ends. The split
+is the period's only if the current epoch **began before the period**: a universal holdout started or redrawn after the
+period began is `409 CAMPAIGN_EPOCH_MISMATCH` (the customers held back at the time cannot be found). An amount is read as a plain difference in means: the adjusted estimate (§16) needs a plan
+registered before the outcomes are read, and a programme exists only after its period has ended, so a `plan` or an
+earlier-amount column is refused (`409 TEST_PLAN_INVALID`). The universal holdout only keeps its members out of the use
+cases configured with `actions.holdout.scope: universal`, so the explanation says "every list scored with it", the notes
+count the scoring runs of the period that did not use it (their lists may have reached held-back customers) and point to
+the contact file as the way to measure that contamination; a share of held-back customers in the file far from the
+rule's fraction (p < 0.001) is noted as a possible partial file. Without a universal holdout in use (or with a salt that
+is not the one it was drawn with) nothing is computed: `409 PROGRAMME_NO_HOLDOUT` / `HOLDOUT_SALT_CHANGED`.
 
 **Screens.** `#/audit` (`ui/modules/decide/audit.js`; "Audit a campaign" on Results for an Analyst) has the two forms; a
 campaign's page shows the label and why, who was contacted, and the programme's holdout. Every number and sentence is the

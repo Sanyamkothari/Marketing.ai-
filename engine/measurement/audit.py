@@ -82,6 +82,7 @@ __all__ = [
     "build_outcomes_frame",
     "check_randomness",
     "decide_basis",
+    "declared_summary",
     "descriptive_summary",
     "earliest_date",
     "encode_features",
@@ -703,19 +704,72 @@ def descriptive_summary(report: IncrementalityReport) -> str:
     return report.summary
 
 
+def declared_summary(report: IncrementalityReport) -> str:
+    """The sentence for a report whose groups are random only by the person's statement.
+
+    It states the two groups' numbers under the person's own condition ("if the groups were chosen at
+    random as you said") and never says the campaign added, prevented or caused anything: the engine has not
+    checked how the groups were chosen. A report without a comparison keeps its own sentence.
+    """
+    lead = f"{DECLARED_LABEL}. If the groups were chosen at random as you said, "
+    tail = " We could not check how the groups were chosen, so this is not shown as a proven effect."
+    estimate = report.adjusted_interval if report.adjusted_interval is not None else report.mean_difference_ci
+    if (
+        report.outcome_kind == "continuous"
+        and report.treated_mean is not None
+        and report.control_mean is not None
+        and estimate is not None
+        and estimate.ci_low is not None
+        and estimate.ci_high is not None
+    ):
+        what = (
+            f"contacted customers averaged {report.treated_mean:,.2f} and the others {report.control_mean:,.2f}, "
+            f"a difference of {estimate.value:+,.2f} per customer (95% interval {estimate.ci_low:+,.2f} to "
+            f"{estimate.ci_high:+,.2f})"
+        )
+        chance = "" if estimate.excludes_zero else ", which could be chance"
+        return f"{lead}{what}{chance}.{tail}"
+    lift = report.absolute_lift
+    if (
+        lift is not None
+        and lift.ci_low is not None
+        and lift.ci_high is not None
+        and report.treated_rate is not None
+        and report.control_rate is not None
+    ):
+        from engine.uplift.incrementality import _points
+
+        what = (
+            f"{report.treated_rate:.1%} of contacted customers had the outcome against {report.control_rate:.1%} "
+            f"of the others, a difference of {_points(lift.value)} (95% interval {_points(lift.ci_low)} to "
+            f"{_points(lift.ci_high)})"
+        )
+        incremental = report.incremental_conversions
+        if lift.excludes_zero and incremental is not None:
+            direction = "more" if incremental.value > 0 else "fewer"
+            what += (
+                f", about {abs(incremental.value):,.0f} {direction} conversions among the contacted customers"
+            )
+        else:
+            what += ", which could be chance"
+        return f"{lead}{what}.{tail}"
+    return f"{DECLARED_LABEL}. {report.summary}"
+
+
 def label_report(report: IncrementalityReport, basis: CausalBasisKind) -> IncrementalityReport:
     """The report to store: exactly `measure_campaign`'s when the groups are verified random, else labelled.
 
     `causal` follows the claim the numbers support, so every later reader (the value view, the Proof
     Pack) sees it false for a campaign that is only described. A claim from the person's statement alone
-    keeps its sentence with the label in front; a descriptive one gets `descriptive_summary`.
+    gets `declared_summary` (the numbers, under the person's condition, and no word of cause); a
+    descriptive one gets `descriptive_summary`.
     """
     if basis == "verified_random":
         return report
     if report.early_look:  # an early look already states the counts and no conclusion
         return report.model_copy(update={"causal": False})
     if basis == "declared_random":
-        return report.model_copy(update={"causal": False, "summary": f"{DECLARED_LABEL}. {report.summary}"})
+        return report.model_copy(update={"causal": False, "summary": declared_summary(report)})
     return report.model_copy(update={"causal": False, "summary": descriptive_summary(report)})
 
 
@@ -728,11 +782,13 @@ def audit_verdict(
     """The plain verdict of an audited campaign, or none when it must not be drawn.
 
     None for an early look and for a descriptive-only campaign (no "the campaign added N" from groups that
-    were not random). For a campaign random by the person's statement the usual verdict is drawn with the
-    label in front of its detail, as the report's `causal` is false and the usual wording would say "held
-    nobody back".
+    were not random). For a campaign random by the person's statement the usual verdict is drawn, but its
+    headline is conditional and carries the label ("Random by your statement, not verified: about N more
+    conversions among contacted customers"), never "the campaign added" or "caused": the engine has not
+    verified the randomness.
     """
     from engine.measurement.measure import campaign_verdict_for
+    from engine.uplift.measure import VerdictKind
 
     if report.early_look or readout.causal_basis == "not_random":
         return None
@@ -742,4 +798,22 @@ def audit_verdict(
     )
     if verdict is None or readout.causal:
         return verdict
-    return verdict.model_copy(update={"detail": f"{DECLARED_LABEL}. {verdict.detail}"})
+    update: dict[str, object] = {"detail": f"{DECLARED_LABEL}. {verdict.detail}"}
+    if verdict.amount is not None and verdict.kind in (
+        VerdictKind.ADDED,
+        VerdictKind.PREVENTED,
+        VerdictKind.HARMED,
+    ):
+        more = verdict.kind is VerdictKind.ADDED or (
+            verdict.kind is VerdictKind.HARMED and not readout.outcome_is_good
+        )
+        if report.outcome_kind == "continuous":
+            what = outcome_label or report.outcome_column
+        else:
+            word = "conversion" if readout.outcome_is_good else "case"
+            what = word if verdict.amount == 1 else f"{word}s"
+        update["headline"] = (
+            f"{DECLARED_LABEL}: about {verdict.amount:,} {'more' if more else 'fewer'} {what} among "
+            f"contacted customers"
+        )
+    return verdict.model_copy(update=update)

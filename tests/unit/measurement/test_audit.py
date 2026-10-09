@@ -404,6 +404,64 @@ def test_a_report_random_by_statement_loses_its_claim_but_keeps_its_numbers_and_
     verdict = audit_verdict(labelled, readout("declared_random", causal=False, label=DECLARED_LABEL))
     assert verdict is not None and verdict.kind.value == "added"
     assert verdict.detail.startswith(DECLARED_LABEL), "the label is in front of what it says"
+    # the randomness is not verified, so neither sentence asserts a cause
+    assert "If the groups were chosen at random as you said" in labelled.summary
+    assert "caused" not in labelled.summary and "campaign added" not in labelled.summary
+    assert (
+        verdict.headline.startswith(f"{DECLARED_LABEL}: about ")
+        and "among contacted customers" in verdict.headline
+    )
+    assert not verdict.headline.startswith("The campaign")
+    assert not any(word in verdict.headline for word in ("added", "prevented", "caused", "cost"))
+    assert jargon_in(labelled.summary) == () and jargon_in(verdict.headline) == ()
+
+
+def test_a_declared_headline_reads_the_direction_and_the_unit_of_the_outcome() -> None:
+    _, report = measured()
+    bad_outcome = readout("declared_random", causal=False, label=DECLARED_LABEL).model_copy(
+        update={"outcome_is_good": False}
+    )
+    harmed = audit_verdict(label_report(report, "declared_random"), bad_outcome)
+    assert harmed is not None and harmed.kind.value == "harmed"
+    assert (
+        harmed.headline.startswith(f"{DECLARED_LABEL}: about ")
+        and " more cases among contacted" in harmed.headline
+    )
+    assert "raised" not in harmed.headline and "caused" not in harmed.headline
+
+
+def test_a_declared_amount_reads_in_the_amounts_own_name_without_a_cause() -> None:
+    from engine.measurement.simulate import REVENUE_COLUMN, revenue_campaign
+
+    sim = revenue_campaign(6_000, 6.0, seed=21)
+    assignment = pd.DataFrame(
+        {
+            "customer_id": sim.scores["customer_id"],
+            "arm": np.where(sim.scores["control_group"], "holdout", "treated"),
+            "intended": True,
+            "band": pd.NA,
+        }
+    )
+    report = measure_campaign(
+        assignment,
+        sim.outcomes,
+        run_id="c_20261009_aaaaaaaa",
+        primary_key="customer_id",
+        outcome_column=REVENUE_COLUMN,
+        intended_column="intended",
+        treatment_time=AS_OF,
+        treatment_date_column="treatment_date",
+        outcome_window_days=OUTCOME_WINDOW_DAYS,
+        as_of=AS_OF,
+        outcome_kind="continuous",
+    )
+    labelled = label_report(report, "declared_random")
+    assert labelled.causal is False and "If the groups were chosen at random as you said" in labelled.summary
+    assert "per customer" in labelled.summary and "caused" not in labelled.summary
+    verdict = audit_verdict(labelled, readout("declared_random", causal=False, label=DECLARED_LABEL))
+    assert verdict is not None
+    assert verdict.headline.startswith(f"{DECLARED_LABEL}: about ") and REVENUE_COLUMN in verdict.headline
+    assert not verdict.headline.startswith("The campaign")
 
 
 def test_a_descriptive_report_never_says_caused_and_has_no_verdict() -> None:

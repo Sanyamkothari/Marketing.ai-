@@ -35,6 +35,16 @@ test("the label, the reason and the check are the server's own words", () => {
   }
 });
 
+test("a limit the server did not send is a dash, never NaN", () => {
+  const audit = read("verified").audit;
+  const without = { ...audit, randomness: { ...audit.randomness } };
+  delete without.randomness.threshold;
+  const html = text(auditCardHtml(without));
+  assert.ok(!html.includes("NaN"), "no number invented");
+  assert.ok(html.includes("our limit is —"), "the missing limit is a dash");
+  assert.ok(text(auditCardHtml(audit)).includes(`our limit is ${Number(audit.randomness.threshold).toFixed(2)}`));
+});
+
 test("a campaign's page shows the result, the claim and nothing else invented", () => {
   const verified = campaignPageHtml({ view: read("verified") });
   assert.ok(verified.includes("data-audit-card") && verified.includes("data-verdict"));

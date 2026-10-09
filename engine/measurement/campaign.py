@@ -253,14 +253,16 @@ class Campaign(Artefact):
     """One campaign: what went out, to whom, when, and how it is measured."""
 
     campaign_id: str = Field(description="`c_<yyyymmdd>_<8 hex>`.")
-    kind: CampaignKind = Field(description="`scored` (from our scoring run) or `external` (M103).")
+    kind: CampaignKind = Field(
+        description="`scored` (from our scoring run), `external` (another tool's campaign, audited: M103) or `programme` (the whole programme against the universal holdout: M103)."
+    )
     name: str = Field(description="A short name for the Results list.")
     use_case_id: str | None = Field(default=None, description="The use case whose list it sent.")
     run_ids: tuple[str, ...] = Field(default=(), description="The scoring run(s) the assignment came from.")
     primary_key: PrimaryKey = Field(description="The key column(s) of the assignment and outcomes files.")
     treatment_start: AwareDatetime = Field(description="When the campaign actually went out (UTC).")
-    treatment_start_source: Literal["entered", "run_finished"] = Field(
-        description="`entered` when the person gave the date; `run_finished` for the scoring run's finish time."
+    treatment_start_source: Literal["entered", "run_finished", "file"] = Field(
+        description="`entered` when the person gave the date; `run_finished` for the scoring run's finish time; `file` when it is the earliest date in the uploaded file (M103)."
     )
     outcome_window_days: int | None = Field(
         default=None, description="Days after treatment the outcome is counted over; null: every row mature."

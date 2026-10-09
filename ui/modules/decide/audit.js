@@ -35,7 +35,7 @@ export function auditCardHtml(audit) {
             fmtInt(check.columns_used || 0),
           )} details of each customer, on ${esc(fmtInt(check.rows_used || 0))} customers. Guessing score: ${esc(
             present(check.auc) ? Number(check.auc).toFixed(2) : EM_DASH,
-          )} (0.50 is chance, our limit is ${esc(Number(check.threshold).toFixed(2))}).</p>`
+          )} (0.50 is chance, our limit is ${esc(present(check.threshold) ? Number(check.threshold).toFixed(2) : EM_DASH)}).</p>`
         : "";
   const notes = (audit.notes || []).map((n) => `<li>${esc(n)}</li>`).join("");
   const offers = (audit.offers || []).length

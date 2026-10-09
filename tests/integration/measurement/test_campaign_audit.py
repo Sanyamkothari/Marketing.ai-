@@ -253,6 +253,13 @@ def test_random_by_statement_alone_is_labelled_as_such_and_never_causal(world: W
     verdict = view["verdict"]
     assert verdict is not None and verdict["detail"].startswith("Random by your statement, not verified")
     assert view["report"]["summary"].startswith("Random by your statement, not verified")
+    # the engine has not verified how the groups were chosen: no word of cause, in the summary or the headline
+    summary, headline = view["report"]["summary"], verdict["headline"]
+    assert "If the groups were chosen at random as you said" in summary
+    assert not any(word in summary.lower() for word in ("caused", "added", "prevented")), summary
+    assert headline.startswith("Random by your statement, not verified: about ")
+    assert not headline.startswith("The campaign")
+    assert not any(word in headline.lower() for word in ("caused", "added", "prevented")), headline
     # the numbers are the same ones the verified file gets
     lift = view["report"]["absolute_lift"]
     assert lift["ci_low"] <= campaign.true_itt <= lift["ci_high"]
@@ -299,6 +306,7 @@ def test_the_date_each_customer_was_sent_can_come_from_the_assignment_file(world
     expected = pd.to_datetime(dates).min().tz_localize("UTC")
     assert pd.Timestamp(view["campaign"]["treatment_start"]) == expected
     assert view["audit"]["sent_dates"] == "assignment"
+    assert view["campaign"]["treatment_start_source"] == "file", "taken from the file, not entered"
     # the same customers are measured as when the dates come with the outcomes
     direct = ok(_audit(world, assignment.drop(columns=["sent"]), campaign.outcomes), 201)
     for field in (
@@ -400,6 +408,14 @@ def test_an_amount_is_audited_with_a_difference_in_means_and_no_adjustment(world
     assert "adjusted_interval" not in report, "an audit has no registered covariate to adjust by"
     low, high = report["mean_difference_ci"]["ci_low"], report["mean_difference_ci"]["ci_high"]
     assert low <= sim.true_effect <= high
+    # "Measure now" on the campaign's page posts nothing but a date: the amount is still read as an amount
+    again = ok(
+        world.client.post(
+            f"/campaigns/{view['campaign']['campaign_id']}/measure", json={"as_of": AS_OF.isoformat()}
+        )
+    )
+    assert again["report"]["outcome_kind"] == "continuous"
+    assert again["report"]["mean_difference_ci"] == report["mean_difference_ci"]
 
 
 # --- bad input is refused in plain words ----------------------------------------------------------------

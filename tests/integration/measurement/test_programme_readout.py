@@ -7,17 +7,22 @@ every scoring run used - and everyone not held back is compared with the members
   universal holdout) held back are the readout's holdout members, to the customer;
 * a simulated programme effect is recovered inside the interval, with and without a contact file (which
   also recovers the effect on the contacted);
-* an amount and the adjusted estimate (M102) work as for any campaign, but only with a plan registered in the
-  same request, before the outcomes are read;
+* an amount is read as a plain difference in means: the adjusted estimate (M102) needs a plan registered before
+  the outcomes are read, and a programme exists only once its period is over, so a plan or an earlier-amount
+  column is refused (409 `TEST_PLAN_INVALID`);
+* a universal holdout started or redrawn after the period began cannot say who was held back in it (409
+  `CAMPAIGN_EPOCH_MISMATCH`); lists made without the universal holdout during the period
+  and a share of held-back customers far from the rule's are said in the notes;
 * no universal holdout (or a salt that is not the one it was drawn with) is a 409, a period still running a
-  409 `CAMPAIGN_NOT_MATURED`, and the readout lists beside the other campaigns and measures again.
+  409 `CAMPAIGN_NOT_MATURED`, and the readout lists beside the other campaigns and measures again (an amount
+  is still an amount).
 """
 
 from __future__ import annotations
 
 from collections.abc import Iterator
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -30,16 +35,16 @@ from pydantic import SecretStr
 from api.main import create_app
 from engine.config import load_use_case
 from engine.holdout.assign import holdout_context, member_flags
-from engine.holdout.salt import HoldoutLedger, resolve_holdout, salt_fingerprint
-from engine.holdout.spec import HoldoutConfig
+from engine.holdout.salt import HoldoutLedger, resolve_holdout, salt_fingerprint, start_epoch
+from engine.holdout.spec import HoldoutAssignmentReport, HoldoutConfig, HoldoutSpec
 from engine.keys import key_text
 from engine.pilot.plain import jargon_in
 from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
 from engine.settings import Settings
 from engine.stages.actions import apply_actions
-from engine.storage import LocalStorage
+from engine.storage import LocalStorage, run_key
 from tests.fixtures.make_uplift_data import make_winback_campaign
-from tests.integration.measurement.support import SENT, USE_CASE, ok, upload
+from tests.integration.measurement.support import SENT, USE_CASE, ok, record, upload
 
 pytestmark = pytest.mark.integration
 
@@ -47,6 +52,8 @@ SALT = "programme-test-salt-0001"
 FRACTION = 0.10
 ROWS = 30_000
 PERIOD = {"start": "2026-01-01", "end": "2026-03-31"}
+BEFORE = datetime(2025, 12, 15, 9, 0, tzinfo=UTC)
+"""When the universal holdout was first used: before the period, as a programme read needs."""
 KEY = "customer_id"
 
 
@@ -81,7 +88,7 @@ def world(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterat
         }
     )
     engine = sqlite_engine(data_dir / PLATFORM_DB_FILENAME)
-    resolved = resolve_holdout(config, settings, engine, at=SENT, record=True)
+    resolved = resolve_holdout(config, settings, engine, at=BEFORE, record=True)
     campaign = make_winback_campaign(ROWS, seed=17)
     frame = campaign.frame.drop(columns=["reactivated_90d", "treatment", "treatment_date"])
     frame["marketing_opt_in"] = [index % 10 != 3 for index in range(ROWS)]
@@ -232,62 +239,65 @@ def _plan() -> dict[str, Any]:
     }
 
 
-def test_an_amount_is_adjusted_by_the_planned_earlier_amount_only_with_a_plan(world: World) -> None:
-    revenue = _revenue(world, seed=4)
-    outcome = {
-        "upload_id": upload(world.client, revenue, name="programme_revenue.csv"),
+def _amount_outcome(world: World, *, seed: int, covariate: bool = False) -> dict[str, Any]:
+    outcome: dict[str, Any] = {
+        "upload_id": upload(world.client, _revenue(world, seed=seed), name=f"programme_revenue_{seed}.csv"),
         "outcome_column": "revenue",
         "outcome_kind": "continuous",
-        "covariate_column": "pre_revenue",
-        "covariate_date_column": "pre_until",
     }
-    before = len(world.client.get("/campaigns").json()["campaigns"])
-    unplanned = world.client.post(
-        "/campaigns/programme", json={"period": PERIOD, "primary_key": KEY, "outcome": outcome}
-    )
-    assert unplanned.status_code == 409, unplanned.text
-    assert unplanned.json()["detail"]["code"] == "TEST_PLAN_CHANGED"
-    assert len(world.client.get("/campaigns").json()["campaigns"]) == before, "nothing stored"
+    if covariate:
+        outcome |= {"covariate_column": "pre_revenue", "covariate_date_column": "pre_until"}
+    return outcome
 
+
+def test_an_amount_is_a_plain_difference_in_means_and_is_still_an_amount_when_measured_again(
+    world: World,
+) -> None:
     view = ok(
         world.client.post(
             "/campaigns/programme",
-            json={"period": PERIOD, "primary_key": KEY, "outcome": outcome, "plan": _plan()},
+            json={"period": PERIOD, "primary_key": KEY, "outcome": _amount_outcome(world, seed=4)},
         ),
         201,
     )
     report = view["report"]
-    assert report["outcome_kind"] == "continuous" and report["covariate_column"] == "pre_revenue"
-    assert abs(report["variance_reduction"] - 0.36) < 0.05, report["variance_reduction"]
-    plain, adjusted = report["mean_difference_ci"], report["adjusted_interval"]
-    assert adjusted["ci_high"] - adjusted["ci_low"] < plain["ci_high"] - plain["ci_low"]
-    assert adjusted["ci_low"] <= 6.0 <= adjusted["ci_high"]
+    assert report["outcome_kind"] == "continuous" and view["programme"]["outcome_kind"] == "continuous"
+    assert report.get("adjusted_interval") is None and report.get("covariate_column") is None
+    plain = report["mean_difference_ci"]
     assert plain["ci_low"] <= 6.0 <= plain["ci_high"]
-    plan = view["plan"]
-    assert plan["plan_hash"] == report["test_plan_hash"] == view["campaign"]["test_plan_hash"]
-    assert plan["campaign_id"] == view["campaign"]["campaign_id"]
-    # the plan is on the campaign's page and in its history, as for any campaign
-    plans = ok(world.client.get(f"/campaigns/{view['campaign']['campaign_id']}/plan"))
-    assert [p["version"] for p in plans["versions"]] == [1]
+    assert view["verdict"]["kind"] == "added" and view["plan"] is None
+    # "Measure now" on the campaign's page posts nothing: the amount must not be read as yes/no
     again = ok(world.client.post(f"/campaigns/{view['campaign']['campaign_id']}/measure", json={}))
-    assert again["report"]["adjusted_interval"] == report["adjusted_interval"]
+    assert again["report"]["outcome_kind"] == "continuous"
+    assert again["report"]["mean_difference_ci"] == plain
 
 
-def test_a_covariate_dated_after_the_period_started_is_refused(world: World) -> None:
-    revenue = _revenue(world, seed=5).assign(pre_until="2026-01-01")  # the first day of the period: too late
-    outcome = {
-        "upload_id": upload(world.client, revenue, name="programme_revenue_late.csv"),
-        "outcome_column": "revenue",
-        "outcome_kind": "continuous",
-        "covariate_column": "pre_revenue",
-        "covariate_date_column": "pre_until",
-    }
-    response = world.client.post(
-        "/campaigns/programme",
-        json={"period": PERIOD, "primary_key": KEY, "outcome": outcome, "plan": _plan()},
+def test_a_plan_or_an_earlier_amount_is_refused_because_a_finished_period_cannot_pre_register_one(
+    world: World,
+) -> None:
+    before = len(world.client.get("/campaigns").json()["campaigns"])
+    outcome = _amount_outcome(world, seed=5, covariate=True)
+    for extra, path in (
+        ({"plan": _plan()}, "plan"),  # the plan arrives with outcomes that already exist
+        ({}, "outcome.covariate_column"),  # a covariate named without a plan
+    ):
+        response = world.client.post(
+            "/campaigns/programme", json={"period": PERIOD, "primary_key": KEY, "outcome": outcome, **extra}
+        )
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "TEST_PLAN_INVALID" and detail["path"] == path
+        assert "could not have been fixed" in detail["message"]
+    assert len(world.client.get("/campaigns").json()["campaigns"]) == before, "nothing stored"
+    # re-posting with other covariate columns cannot shop for the narrowest interval: none is ever used
+    plain = ok(
+        world.client.post(
+            "/campaigns/programme",
+            json={"period": PERIOD, "primary_key": KEY, "outcome": _amount_outcome(world, seed=5)},
+        ),
+        201,
     )
-    assert response.status_code == 422, response.text
-    assert response.json()["detail"]["code"] == "COVARIATE_NOT_BEFORE_CAMPAIGN"
+    assert plain["report"].get("adjusted_interval") is None
 
 
 # --- no holdout to read against ----------------------------------------------------------------------------------
@@ -350,3 +360,167 @@ def test_a_programme_lists_with_the_campaigns_and_every_sentence_is_plain(world:
         assert jargon_in(sentence) == (), sentence
     now = datetime.now(UTC)
     assert datetime.fromisoformat(view["programme"]["computed_at"]) <= now
+
+
+# --- the holdout must have been in force for the whole period -------------------------------------------------------
+def _universal_config() -> Any:
+    config = load_use_case(USE_CASE)
+    return config.model_copy(
+        update={
+            "actions": config.actions.model_copy(
+                update={"holdout": HoldoutConfig(scope="universal", fraction=FRACTION)}
+            )
+        }
+    )
+
+
+def _record_holdout(data_dir: Path, *, at: datetime, salt: str = SALT, fraction: float = FRACTION) -> Any:
+    """A data directory whose universal holdout was first used at `at`."""
+    data_dir.mkdir(parents=True, exist_ok=True)
+    engine = sqlite_engine(data_dir / PLATFORM_DB_FILENAME)
+    config = _universal_config()
+    config = config.model_copy(
+        update={
+            "actions": config.actions.model_copy(
+                update={"holdout": HoldoutConfig(scope="universal", fraction=fraction)}
+            )
+        }
+    )
+    resolve_holdout(
+        config, Settings(data_dir=data_dir, holdout_salt=SecretStr(salt)), engine, at=at, record=True
+    )
+    return engine
+
+
+def _post_binary(client: TestClient, world: World, **extra: Any) -> Any:
+    outcomes, _ = _outcomes(world, seed=11)
+    period = extra.pop("period", PERIOD)
+    return client.post(
+        "/campaigns/programme",
+        json={
+            "period": period,
+            "primary_key": KEY,
+            "outcome": {"upload_id": upload(client, outcomes), "outcome_column": "converted"},
+            **extra,
+        },
+    )
+
+
+def test_a_holdout_first_used_after_the_period_began_cannot_say_who_was_held_back_in_it(
+    config_root: Path, tmp_path: Path, world: World
+) -> None:
+    data_dir = tmp_path / "late"
+    _record_holdout(data_dir, at=SENT)  # 1 May 2026: after the first quarter began
+    with TestClient(_app(config_root, data_dir)) as client:
+        response = _post_binary(client, world)
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "CAMPAIGN_EPOCH_MISMATCH"
+        assert "2026-05-01" in detail["message"] and "2026-01-01" in detail["message"]
+        assert jargon_in(detail["message"]) == (), detail["message"]
+        assert client.get("/campaigns").json()["campaigns"] == [], "nothing stored"
+        # a period that began after the holdout was first used is read
+        later = {"start": "2026-06-01", "end": "2026-08-31"}
+        ok(_post_binary(client, world, period=later), 201)
+
+
+def test_a_salt_rotated_during_the_period_is_refused_because_the_old_draw_cannot_be_found(
+    config_root: Path, tmp_path: Path, world: World
+) -> None:
+    data_dir = tmp_path / "rotated"
+    engine = _record_holdout(data_dir, at=BEFORE)
+    new_salt = "programme-test-salt-0002"
+    start_epoch(
+        HoldoutLedger(engine),
+        scope="universal",
+        key="universal",
+        fraction=FRACTION,
+        settings=Settings(data_dir=data_dir, holdout_salt=SecretStr(new_salt)),
+        rotate_salt=True,
+        at=datetime(2026, 2, 10, 9, 0, tzinfo=UTC),
+    )
+    entry = HoldoutLedger(engine).entry("universal", "universal")
+    assert entry is not None and entry.epoch == 2
+    with TestClient(_app(config_root, data_dir, salt=new_salt)) as client:
+        response = _post_binary(client, world)
+        assert response.status_code == 409, response.text
+        detail = response.json()["detail"]
+        assert detail["code"] == "CAMPAIGN_EPOCH_MISMATCH" and "2026-02-10" in detail["message"]
+        assert client.get("/campaigns").json()["campaigns"] == []
+
+
+# --- what the universal holdout does not promise -----------------------------------------------------------------
+def test_lists_made_without_the_universal_holdout_in_the_period_are_named_and_the_wording_does_not_overreach(
+    config_root: Path, tmp_path: Path, world: World
+) -> None:
+    data_dir = tmp_path / "contaminated"
+    _record_holdout(data_dir, at=BEFORE)
+    storage = LocalStorage(data_dir)
+
+    def run(run_id: str, finished: datetime, scope: str | None, use_case: str) -> None:
+        storage.write_model(
+            run_key(run_id, "run.json"),
+            record(run_id, problem_type=world_problem(), rows=1_000).model_copy(
+                update={"finished_at": finished, "use_case_id": use_case}
+            ),
+        )
+        if scope is None:  # a default run wrote no holdout file: it drew its own control group
+            return
+        storage.write_model(
+            run_key(run_id, "holdout_assignment.json"),
+            HoldoutAssignmentReport(
+                run_id=run_id,
+                use_case_id=use_case,
+                spec=HoldoutSpec(
+                    scope=scope,  # type: ignore[arg-type]
+                    fraction=FRACTION,
+                    salt_id="0123456789abcdef",
+                    epoch=1,
+                    scope_key="universal" if scope == "universal" else use_case,
+                ),
+                rows=1_000,
+                holdout_members=100,
+                control_rows=90,
+                explore_candidates=0,
+                explore_rows=0,
+                created_at=finished,
+            ),
+        )
+
+    inside = datetime(2026, 2, 1, 9, 0, tzinfo=UTC)
+    run("r_20260201_00000001", inside, "universal", "uses-universal")  # fine
+    run("r_20260202_00000002", inside + timedelta(days=1), "use_case", "winback-b")  # contaminates
+    run("r_20260203_00000003", inside + timedelta(days=2), None, "spring-promo")  # contaminates
+    run("r_20250601_00000004", datetime(2025, 6, 1, tzinfo=UTC), None, "long-ago")  # before the period
+    with TestClient(_app(config_root, data_dir)) as client:
+        view = ok(_post_binary(client, world), 201)
+    programme = view["programme"]
+    notes = " ".join(programme["notes"])
+    assert "2 lists made in this period (spring-promo, winback-b)" in notes
+    assert "uses-universal" not in notes and "long-ago" not in notes
+    assert "outside this tool" in notes and "contact file" in notes
+    explanation = programme["explanation"]
+    assert "every campaign" not in explanation and "every list scored with it" in explanation
+    assert "not of one message" in explanation
+    for sentence in (*programme["notes"], explanation):
+        assert jargon_in(sentence) == (), sentence
+
+
+def world_problem() -> Any:
+    from engine.config import ProblemType
+
+    return ProblemType.BINARY_CLASSIFICATION
+
+
+def test_a_file_whose_share_of_held_back_customers_is_far_from_the_rule_is_flagged(world: World) -> None:
+    outcomes, _ = _outcomes(world, seed=12)
+    members = pd.Series(world.members, index=outcomes.index)
+    rng = np.random.default_rng(3)
+    # a file kept only for customers who "did something": most held-back customers are missing from it
+    keep = ~members | (rng.random(len(outcomes)) < 0.25)
+    view = ok(world.client.post("/campaigns/programme", json=_body(world, outcomes[keep.to_numpy()])), 201)
+    notes = " ".join(view["programme"]["notes"])
+    assert "far from what the rule gives" in notes and "may not hold the whole customer base" in notes
+    fair = ok(world.client.post("/campaigns/programme", json=_body(world, outcomes)), 201)
+    assert "far from what the rule gives" not in " ".join(fair["programme"]["notes"])
+    assert jargon_in(notes) == ()

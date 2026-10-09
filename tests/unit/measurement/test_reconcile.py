@@ -192,6 +192,19 @@ def test_when_everyone_meant_to_be_reached_was_the_effect_is_the_main_difference
     assert effect.first_stage.value == 1.0
 
 
+def test_the_label_names_the_unit_and_the_right_denominator() -> None:
+    treated, d, y = groups(6)
+    rate, _ = complier_effect(treated, d, y, unit="rate")
+    amount, _ = complier_effect(treated, d, y * 250.0, unit="amount", offer="Offer A")
+    assert rate is not None and amount is not None
+    assert "(extra responders per customer contacted)" in rate.label and rate.offer is None
+    assert "(extra amount per customer contacted)" in amount.label
+    assert "for offer 'Offer A'" in amount.label and amount.offer == "Offer A"
+    assert "for offer" not in rate.label
+    assert "per responder contacted" not in rate.label and "per amount contacted" not in amount.label
+    assert jargon_in(rate.label) == () and jargon_in(amount.label) == ()
+
+
 def test_an_amount_is_scaled_and_the_effect_scales_with_it() -> None:
     treated, d, y = groups(6)
     base, _ = complier_effect(treated, d, y, unit="rate")
@@ -336,3 +349,40 @@ def test_the_readout_holds_the_counts_the_rates_and_the_effect_and_checks_itself
     assert early.contact_rate == readout.contact_rate
     for sentence in (*readout.notes, str(readout.complier.label), str(wrong.complier_reason)):
         assert jargon_in(sentence) == (), sentence
+
+
+def test_with_several_offers_the_effect_names_the_offer_it_is_for() -> None:
+    assignment, outcomes, contacts, _ = simulated(34, compliance=0.7, contamination=0.1)
+    labelled = assignment.assign(offer=["" if arm == "holdout" else "Offer A" for arm in assignment["arm"]])
+    report = measure_incrementality(
+        labelled.assign(control_group=labelled["arm"].eq("holdout"), suppressed_reason=""),
+        outcomes,
+        run_id="x",
+        primary_key="customer_id",
+        outcome_column="converted",
+        treatment_time=AS_OF,
+        treatment_date_column="treatment_date",
+        outcome_window_days=OUTCOME_WINDOW_DAYS,
+        as_of=AS_OF,
+    )
+    readout = reconcile_contacts(
+        labelled,
+        outcomes,
+        contacts,
+        campaign_id="c_x",
+        primary_key="customer_id",
+        outcome_column="converted",
+        positive_label=None,
+        outcome_kind="binary",
+        report_treated_rows=report.treated_rows,
+        report_control_rows=report.control_rows,
+        treatment_time=AS_OF,
+        treatment_date_column="treatment_date",
+        outcome_window_days=OUTCOME_WINDOW_DAYS,
+        as_of=AS_OF,
+        offer_column="offer",
+        first_offer="Offer A",
+        computed_at=NOW,
+    )
+    assert readout.complier is not None, readout.complier_reason
+    assert readout.complier.offer == "Offer A" and "for offer 'Offer A'" in readout.complier.label
