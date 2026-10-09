@@ -11,11 +11,11 @@
 import { canAccess, registerModule, registerPagePanel, registerResultsList, setActiveNav } from "../router.js";
 import { errorBox, skeleton } from "../../dom.js";
 import { treatListUrl } from "../../api.js";
-import { getCampaign, getCampaigns, getPlan, getPlanPreview, getTreatListSummary, postMeasure, postPlan } from "./api.js";
+import { getArbitrationConflicts, getCampaign, getCampaigns, getPlan, getPlanPreview, getTreatListSummary, postMeasure, postPlan } from "./api.js";
 import { planBody, previewHtml, previewReadoutHtml } from "./plan.js";
-import { campaignPageHtml, campaignsListHtml, injectStyles, treatListCardHtml } from "./views.js";
+import { campaignPageHtml, campaignsListHtml, conflictsCardHtml, injectStyles, treatListCardHtml } from "./views.js";
 
-export { treatListCardHtml };
+export { conflictsCardHtml, treatListCardHtml };
 export const ROUTES = ["campaigns"];
 
 const hashParts = () => window.location.hash.replace(/^#\/?/, "").split("/").filter(Boolean);
@@ -95,6 +95,7 @@ async function renderCampaign(app, parts) {
 registerModule({ name: "decide", routes: ROUTES, render: renderCampaign });
 
 registerResultsList({ name: "campaigns", load: getCampaigns, html: campaignsListHtml });
+registerResultsList({ name: "arbitration_conflicts", load: getArbitrationConflicts, html: conflictsCardHtml });
 
 // --- the page's two actions, delegated -----------------------------------------------------------
 

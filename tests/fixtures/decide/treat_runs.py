@@ -26,6 +26,14 @@ import pandas as pd
 from engine import __version__
 from engine.config import ProblemType, ResolvedConfig, RunMode, UseCaseConfig, resolve_config
 from engine.contracts import Direction, Reason, RowExplanation, RunRecord, RunState
+from engine.decide.contactability import (
+    CHANNEL_CONTACTABILITY_FILENAME,
+    CHANNEL_CONTACTABILITY_SUMMARY_FILENAME,
+    ChannelContactability,
+    ChannelSource,
+    contactability_masks,
+    contactable_column,
+)
 from engine.decide.treat_list import TREAT_LIST_CSV, build_treat_list
 from engine.decide.value import EXPECTED_GROSS_VALUE_FILENAME, expected_gross_value_report
 from engine.holdout.assign import (
@@ -45,6 +53,7 @@ from engine.uplift.actions import apply_uplift_actions
 from engine.uplift.contracts import SegmentThresholds
 
 __all__ = [
+    "CHANNEL_COLUMNS",
     "COSTS",
     "GOLDEN_DIR",
     "GOLDEN_RUNS",
@@ -99,7 +108,13 @@ def run_config(overrides: dict[str, Any] | None = None) -> ResolvedConfig:
     return resolve_config(USE_CASE, overrides or {}, now=FINISHED)
 
 
-def _customers(rows: int, *, composite: bool) -> pd.DataFrame:
+CHANNEL_COLUMNS: Final[dict[str, str]] = {"sms": "sms_opt_in", "email": "email_opt_in"}
+"""The channels a run written with `channels=True` configures (`actions.suppression.channels`), in order of
+preference, and the consent column of each. SMS is withheld from every third customer, email from every
+fourth, so some customers can be reached on both, one or neither."""
+
+
+def _customers(rows: int, *, composite: bool, channels: bool = False) -> pd.DataFrame:
     """Fixed customers: a score spread over all three bands, some opted out, some without a value."""
     index = np.arange(rows)
     customers = rows // 2 if composite else rows
@@ -113,6 +128,9 @@ def _customers(rows: int, *, composite: bool) -> pd.DataFrame:
     )
     if composite:
         frame["snapshot_date"] = ["2026-08-01" if i < customers else "2026-09-01" for i in index]
+    if channels:
+        frame["sms_opt_in"] = (index % 3) != 1
+        frame["email_opt_in"] = (index % 4) != 2
     frame[VALUE_COLUMN] = frame[VALUE_COLUMN].astype("object")
     frame.loc[frame.index % 9 == 4, VALUE_COLUMN] = None  # a missing value stays null in the treat list
     frame.loc[frame.index % 13 == 7, VALUE_COLUMN] = "n/a"  # so does one that is not a number
@@ -186,6 +204,7 @@ def write_run(
     drop_explanations: int = 0,
     config_overrides: dict[str, Any] | None = None,
     config: ResolvedConfig | None = None,
+    channels: bool = False,
 ) -> WrittenRun:
     """Write a finished scoring run's artefacts: `run.json`, `run_config.json`, `scores.*` and friends.
 
@@ -194,19 +213,29 @@ def write_run(
     stage under a persistent holdout and writes `holdout_assignment.parquet` (`shuffle_assignment` in
     another row order, `drop_from_assignment` rows missing). `composite` keys by customer and snapshot.
     `shuffle_explanations` and `drop_explanations` do the same to `row_explanations.parquet`.
+    `channels` configures `actions.suppression.channels` (`CHANNEL_COLUMNS`) and writes the run's
+    `channel_contactability.parquet` and `.json` with the product's own `contactability_masks`, as the actions
+    stage's hook does, so the treat list plans a channel for each treated customer.
     """
     if composite and kind == "uplift":
         raise ValueError("the composite-key fixture is a propensity run")
     overrides = dict(config_overrides or {})
     if value:
-        overrides |= {"uplift.policy.value_column": VALUE_COLUMN, "uplift.policy.margin_pct": 30.0}
+        # `config_overrides` win, so a test can give one run another margin (and so other net values).
+        overrides = {"uplift.policy.value_column": VALUE_COLUMN, "uplift.policy.margin_pct": 30.0} | overrides
     resolved = config if config is not None else run_config(overrides)
+    if channels:  # channels are a use case setting, not a per-run override
+        document = resolved.config.model_dump(mode="json", by_alias=True)
+        document["actions"]["suppression"]["channels"] = {
+            name: {"consent_column": column} for name, column in CHANNEL_COLUMNS.items()
+        }
+        resolved = resolved.model_copy(update={"config": UseCaseConfig.model_validate(document)})
     cfg = resolved.config
     primary_key: str | list[str] = ["customer_id", "snapshot_date"] if composite else "customer_id"
     row_key = ROW_KEY_COLUMN if composite else "customer_id"
     entity_key = "customer_id" if composite else None
 
-    frame = _customers(rows, composite=composite)
+    frame = _customers(rows, composite=composite, channels=channels)
     framed = with_row_key(frame, primary_key) if composite else frame
     active = ActiveHoldout(salt=SALT, scope_key="universal", fraction=HOLDOUT_FRACTION) if holdout else None
     reasons = _explanations(framed[row_key].astype(str).tolist())
@@ -247,6 +276,9 @@ def write_run(
             explain.with_reason_columns(reasons, banded, cfg, primary_key=row_key) if explanations else banded
         )
         uplift_flow._write_scores(scored, cfg, run_id=run_id, primary_key=primary_key, storage=storage)
+
+    if channels:
+        _write_contactability(storage, run_id, banded, framed, cfg, row_key=row_key, entity_key=entity_key)
 
     scores = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(run_id, export.SCORES_PARQUET))))
     if explanations:
@@ -294,6 +326,53 @@ def write_run(
         _record(run_id, kind=kind, rows=rows, primary_key=primary_key, upload_id=upload_id),
     )
     return WrittenRun(run_id, kind, scores, assignment, reasons, cfg)
+
+
+def _write_contactability(
+    storage: Storage,
+    run_id: str,
+    banded: pd.DataFrame,
+    uploaded: pd.DataFrame,
+    cfg: UseCaseConfig,
+    *,
+    row_key: str,
+    entity_key: str | None,
+) -> None:
+    """`channel_contactability.parquet` and `.json`, worked out by the product's `contactability_masks`."""
+    masks, _missing = contactability_masks(banded, uploaded, cfg, row_key=row_key, entity_key=entity_key)
+    names = tuple(masks)
+    key_names = [row_key] if row_key != ROW_KEY_COLUMN else []
+    table = pd.DataFrame({name: banded[name].to_numpy() for name in key_names})
+    for name in names:
+        table[contactable_column(name)] = masks[name]
+    buffer = io.BytesIO()
+    table.to_parquet(buffer, engine="pyarrow", index=False)
+    storage.write_bytes(run_key(run_id, CHANNEL_CONTACTABILITY_FILENAME), buffer.getvalue())
+    storage.write_model(
+        run_key(run_id, CHANNEL_CONTACTABILITY_SUMMARY_FILENAME),
+        ChannelContactability(
+            run_id=run_id,
+            use_case_id=cfg.id,
+            channels=names,
+            rows=len(banded.index),
+            eligible_rows=len(banded.index),
+            ledger_purpose=None,
+            channel_counts={name: int((~masks[name]).sum()) for name in names},
+            by_channel=tuple(
+                ChannelSource(
+                    channel=name,
+                    consent_column=CHANNEL_COLUMNS[name],
+                    contactable_column=None,
+                    columns_missing=(),
+                    ledger=False,
+                    contactable_rows=int(masks[name].sum()),
+                    not_contactable_eligible_rows=int((~masks[name]).sum()),
+                )
+                for name in names
+            ),
+            created_at=FINISHED,
+        ),
+    )
 
 
 GOLDEN_RUNS: Final[dict[str, dict[str, Any]]] = {

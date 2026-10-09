@@ -31,7 +31,7 @@ the user downloads (the treat list).
 | 12 | The treat list and its reasons | M98 | written (below) |
 | 13 | The offer and channel catalogue; channel-aware consent | M99 | written (below) |
 | 14 | Choosing the offer (multi-treatment uplift) | M100 | written (below) |
-| 15 | One action per customer across use cases | M101 | not yet written |
+| 15 | One action per customer across use cases | M101 | written (below) |
 | 16 | Revenue outcomes and CUPED | M102 | not yet written |
 | 17 | Auditing a campaign another tool ran; the programme readout | M103 | not yet written |
 | 18 | The Value Proof Pack | M104 | not yet written |
@@ -424,3 +424,98 @@ choice inside the scoring run and puts it on the treat list:
 * **On screen.** The uplift Output page shows "Which offer each customer gets" (per offer: customers,
   channels, net value, costs; no offer and why), and the treat list card counts the treated rows per
   offer and per channel. Every number is the server's.
+
+## 15. One action per customer across use cases (M101, DEC-1311)
+
+**Arbitration resolves competing actions across use cases.** When a client runs several campaigns at once
+(win-back, cross-sell, churn prevention), a customer can be on more than one use case's treat list in the same
+cycle. Without arbitration they get several messages, and no use case can tell what its own contact did.
+`POST /decide/arbitrate` (Analyst) takes the latest finished scoring run of each selected use case (or explicit
+`run_ids`), over the same customer key, builds or reads each run's treat list (M98) and writes
+`arbitrated_treat_list.csv` and `.parquet` into every participating run: at most one action per customer (or the
+configured contact cap), with the winning use case, the actions that lost and why. "Latest" is the run that
+finished last (then created last, then the larger run id): run ids end in random characters, so their text order
+says nothing about which is later.
+
+* **Who wins (`engine/decide/arbitrate.py`).** A candidate is a treat-list row with `treat = 1`, in a customer no
+  hold-out keeps back. For one customer, in this order:
+  1. **Hold-out members are never treated** by any use case, even one that does not know the hold-out.
+  2. **A row M92 treated at random keeps its action** (`explore = 1` and `treat = 1`): it is kept before any
+     comparison, so the random sample stays random. If two use cases both treat the same customer at random,
+     both are kept only if the contact cap allows; otherwise the first in the request's use case order is kept,
+     and the other is listed in `losing_actions` and counted in `explore_dropped_count`.
+  3. **The rest are ranked by priority x value only when every candidate carries the same kind of value**: all a
+     `net_value` (incremental, from an uplift run), or all an `expected_gross_value` (not incremental, from a
+     propensity run). The two are never compared with each other. A candidate with no value is never given one
+     (no value of 1, no zero). When the kinds differ, or one candidate has no value, the customer is ranked by
+     priority alone.
+  4. **A tie is broken by the order of the use cases in the request** (with no use case named, by use case id).
+* **Why each row is what it is.** `arbitration_reason` on every row: `only_action`, `within_contact_cap`,
+  `net_value`, `expected_gross_value`, `priority`, `request_order`, `explore_treated`, `explore_request_order`
+  for a winner; `held_out`, `channel_cap`, `not_selected` for a customer nobody treats. `priority_weight` is the
+  weight used; `priority_score` is priority x value, and is blank where the choice was not made on a value.
+  The summary counts the customers who end with an action by how it was chosen when several use cases wanted
+  them: `customers_decided_by_value`, `_by_priority`, `_by_request_order`, `_by_explore` (each matches the
+  `arbitration_reason` of the treated rows), and apart from them `contested_customers_channel_capped`, the contested
+  customers whose chosen action a channel cap then removed (they end with no action); and `holdout_blocked_actions`,
+  `explore_kept_count`, `explore_dropped_count`. The summary also names the `run_ids` arbitrated.
+* **No configuration ships.** `configs/decide/arbitration.example.yaml` is a labelled example that is never read.
+  With no `decide/arbitration.yaml` in the config root, every use case has priority 1, a customer gets at most one
+  action per cycle, and there are no channel caps. A client's file sets `use_cases.<id>.priority`,
+  `contact_cap_per_customer` and `channel_caps` (a cap of 0 or more per channel). A file that is there but cannot be
+  read (not YAML, an unknown key, a contact cap below 1, a negative channel cap) is refused: **422
+  `ARBITRATION_CONFIG_INVALID`**, naming the setting. It is never replaced by the defaults, which would drop the
+  caps and priorities the client wrote without saying so.
+* **Contact and channel caps.** `contact_cap_per_customer` limits the winning actions per customer. `channel_caps`
+  limit the actions per channel over the cycle (the `channel` column is M99's planned channel). Capacity goes to
+  explore rows first, then to rows with an incremental value, then to rows with a gross value, then to rows with
+  no value; inside each group by priority x value (priority alone for a row with no value), then by request order.
+  **The explore rows are the exception inside their group: they are kept in a fixed pseudo-random order of
+  (use case, customer) that ignores their value**, so a binding cap keeps a random sample of the explore rows, not
+  the most valuable ones (the explore sample stays random).
+  A customer whose only action is capped out is not treated (`arbitration_reason = channel_cap`, the dropped action
+  is in `losing_actions`); no action moves to another channel.
+* **What a non-winning row says.** A customer nobody treats has one row, `treat = 0`. If a hold-out kept them back,
+  the row is a use case that held them back, `holdout` is that row's own flag (true) and `holdout_use_cases` names
+  every use case whose hold-out held them. A customer capped out of a channel keeps no offer, channel or offer
+  detail on the row: the action not taken is in `losing_actions`. Customers keep the order they first appear in
+  (one use case selected: the treat list's own row order).
+* **One use case selected equals its treat list.** Every column of the treat list (including M99's
+  `contactable_channels` and M100's runner-up and offer-reason columns when it has them) comes through with its
+  values, and the arbitration columns are added; both `segment` (uplift) and `band` (propensity) are kept when the
+  use cases differ in kind.
+* **One campaign per use case, comparing like with like.** `create_arbitrated_campaign`
+  (`engine/measurement/campaign.py`) builds a campaign from a run's scores. The population is the use case's own
+  policy (an uplift run's `intended_treatment`, a propensity run's treat bands), never every eligible customer, and
+  **both arms are cut by one rule that does not look at the hold-out**: `comparable_keys` runs the arbitration again
+  as if no one were held back, a held-back customer the policy intended to contact (`policy_intended`, M92's
+  one definition of "selected") competing like a treated one, and a customer is compared in a use case when it wins
+  him in that run. A customer another use case wins, or one a rival's random (explore) action took, is in neither
+  arm (`suppressed`, not intended), the held-back ones as the treated ones. A customer kept from being contacted by
+  another use case's hold-out or by a channel cap stays in both arms (intent to treat): nothing in that depends
+  on the customer's own random draw. (Cutting only the treated arm to the winners, as the first version did, left
+  the held-back arm with every eligible customer, and the measured effect came from who was in each arm.) Keys are
+  matched in the treat list's spelling (`engine.keys.key_text`, so a composite key and a whole-number id match).
+  The campaign has the terms `POST /campaigns` gives: its start is the run's finish time
+  (`treatment_start_source = "run_finished"`), its outcome window the use case's own, and a use case that holds
+  nobody back (`measure_offered`) or won no customer gets no campaign; the response lists each use case's campaign
+  (`created`, `reused`, or `skipped` with the reason). Posting the same arbitration again (the same runs in the
+  same order under the same settings, `Campaign.arbitration_id`) returns the campaigns already made.
+  `POST /decide/arbitrate` refuses two runs of one use case (`ARBITRATION_USE_CASE_REPEATED`).
+* **Row-level privacy and access.** `arbitrated_treat_list.csv` and `.parquet` are row-level run artefacts
+  (`configs/privacy.yaml`, `engine/privacy/layout.py` `Store.SCORES`, `api/access_policy.py` `ROW_LEVEL_ARTEFACTS`),
+  kept **only in the runs that took part** (`runs/<id>/`), where retention and erasure find them: no customer-level
+  copy is kept at the store root. `GET /decide/arbitrated-treat-list.csv` and `.parquet` (Analyst, audited:
+  `decide.arbitrated_treat_list_download`) serve the first participating run's copy that is still kept, and answer
+  404 `ARBITRATION_NOT_FOUND` once every copy has aged out. The aggregate `arbitration_summary.json` (no customer id)
+  is kept at `decide/` and in each participating run; `GET /decide/arbitrate` and `GET /decide/conflicts` return it
+  to a Viewer.
+* **Results.** The `Arbitration & Conflicts` card (`conflictsCardHtml`, `ui/modules/decide/views.js`) shows customers
+  evaluated, with conflicts, treated, actions dropped, how conflicts were settled (and the contested customers a
+  channel cap left with no action), and a table by use case.
+* **Scale.** Whole-array sorts and Arrow string kernels, no Python loop over the rows: 200,000 customers across
+  two or three use cases take about 1 to 1.5 seconds on a quiet 4-CPU machine, so a million take about 5 to 8.
+  `tests/unit/decide/test_arbitrate_scale.py::test_arbitration_time_grows_linearly_with_the_rows` (fast) compares
+  200,000 rows with 50,000 in one process, so machine load slows both; the wall-clock budget tests
+  (`test_arbitrate_200k_rows_with_mixed_values_explore_and_caps`, `test_arbitrate.py::test_arbitrate_scale_200k_rows`)
+  are marked `slow`, because a 3 second budget fails on a shared machine under load.

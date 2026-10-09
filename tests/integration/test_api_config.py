@@ -493,6 +493,11 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/runs/{run_id}/risk-comparison",
         # Plan J M98: the treat list (DEC-1308)
         "/runs/{run_id}/treat_list.csv",
+        # Plan J M101: one action per customer across use cases (DEC-1311)
+        "/decide/arbitrate",
+        "/decide/conflicts",
+        "/decide/arbitrated-treat-list.csv",
+        "/decide/arbitrated-treat-list.parquet",
     }
 
 

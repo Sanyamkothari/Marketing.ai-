@@ -78,6 +78,10 @@ from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
 __all__ = [
+    "EXPECTED_GROSS_VALUE_COLUMN",
+    "REASON_COLUMNS",
+    "RUPEE_DECIMALS",
+    "SEGMENT_COLUMN",
     "TREAT_LIST_CSV",
     "TREAT_LIST_PARQUET",
     "TREAT_LIST_SUMMARY_FILENAME",
@@ -85,6 +89,8 @@ __all__ = [
     "TreatListSummary",
     "build_treat_list",
     "ensure_treat_list",
+    "policy_intended",
+    "table_csv_bytes",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -100,8 +106,9 @@ EXPECTED_GROSS_VALUE_COLUMN: Final[str] = "expected_gross_value"
 """M97's expected gross value per customer, in rupees. Not incremental: it counts customers who would have
 converted without a contact. Filled on a propensity run that opted in; null otherwise."""
 
-_RUPEE_DECIMALS: Final[int] = 2
-"""Rupees are written to the paisa, so a figure never reads `71.53999999999999`."""
+RUPEE_DECIMALS: Final[int] = 2
+"""Rupees are written to the paisa, so a figure never reads `71.53999999999999`. Public since M101."""
+_RUPEE_DECIMALS: Final[int] = RUPEE_DECIMALS
 
 REASON_COLUMNS: Final[tuple[str, str, str]] = ("reason_1", "reason_2", "reason_3")
 
@@ -119,7 +126,9 @@ _EXPLORE_NOTE: Final[str] = (
     "explore_cost is what they are expected to cost, on top of what the choice spent."
 )
 _NOT_SCORED: Final[str] = "RUN_NOT_SCORED"
-_SEGMENT_COLUMN: Final[str] = "segment"
+SEGMENT_COLUMN: Final[str] = "segment"
+"""The uplift treat list's group column (the propensity one has `band`). Public since M101."""
+_SEGMENT_COLUMN: Final[str] = SEGMENT_COLUMN
 _REQUIRED_SCORE_COLUMNS: Final[tuple[str, ...]] = (
     BAND_COLUMN,
     ACTION_COLUMN,
@@ -275,6 +284,24 @@ def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None
         return storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
     except StorageError:
         return build_treat_list(storage, run_id, config_root=config_root)
+
+
+def policy_intended(storage: Storage, run_id: str) -> pd.Series[Any]:
+    """Per customer of the run (indexed by key text, as the treat list spells it): did the policy intend to contact them?
+
+    True for a customer the run's policy selected (`engine.holdout.assign.selection_masks`, the one
+    definition M92 and the treat list use), who is not a predicted sleeping dog and was not suppressed,
+    whether or not a hold-out then kept them back. `treat` is 0 for a held-back customer, so this is what
+    lets arbitration (M101) ask whom a use case would have contacted had it not held them back.
+    """
+    record = _read_record(storage, run_id)
+    config = _read_config(storage, run_id)
+    scores = _read_scores(storage, run_id, key_columns(record.primary_key))
+    selected, sleeping = selection_masks(scores, config)
+    suppression = scores[SUPPRESSED_REASON_COLUMN].astype("object")
+    suppressed = (suppression.notna() & (suppression != "")).to_numpy(dtype=bool)
+    intended = pd.Series(selected & ~sleeping & ~suppressed, index=_join_keys(scores, record.primary_key))
+    return intended[~intended.index.duplicated(keep="first")]
 
 
 class _Flags(NamedTuple):
@@ -1176,3 +1203,11 @@ def _csv_bytes(table: pa.Table) -> bytes:
     body = pc.binary_join(one_list, newline)[0]
     # The joined text is copied out as bytes, never decoded to a Python string and encoded again.
     return header.getvalue().encode("utf-8") + bytes(body.as_buffer()) + b"\n"
+
+
+def table_csv_bytes(table: pa.Table) -> bytes:
+    """Any typed table of the treat list's kinds (flags, floats, strings) as the treat list's CSV text.
+
+    Public for the arbitrated treat list (Plan J M101), which writes its CSV the same way.
+    """
+    return _csv_bytes(table)

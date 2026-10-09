@@ -293,6 +293,10 @@ PHASE_ROUTERS.append(measurement_router)
 from api.routes.campaigns import router as campaigns_router  # noqa: E402
 
 PHASE_ROUTERS.append(campaigns_router)
+# Plan J M101 (DEC-1311): cross-use-case arbitration - one action per customer across use cases.
+from api.routes.decide import router as decide_router  # noqa: E402
+
+PHASE_ROUTERS.append(decide_router)
 # ---- END PLAN-J ----
 
 app: FastAPI = create_app()

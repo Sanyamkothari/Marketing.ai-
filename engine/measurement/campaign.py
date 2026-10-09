@@ -47,10 +47,10 @@ from __future__ import annotations
 import io
 import secrets
 import threading
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from datetime import datetime
 from enum import StrEnum
-from typing import TYPE_CHECKING, Final, Literal, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any, Final, Literal, Protocol, runtime_checkable
 
 from pydantic import AwareDatetime, Field
 from sqlalchemy import Column, DateTime
@@ -99,6 +99,7 @@ __all__ = [
     "assignment_counts",
     "build_assignment",
     "campaign_key",
+    "create_arbitrated_campaign",
     "epoch_mismatch",
     "holdout_identity",
     "new_campaign_id",
@@ -260,6 +261,13 @@ class Campaign(Artefact):
     counts: AssignmentCounts = Field(description="Customers in each arm.")
     status: CampaignStatus = Field(description="`live` until a report is stored, then `measured`.")
     outcomes: CampaignOutcomes | None = Field(default=None, description="The outcomes file, once added.")
+    arbitration_id: str | None = Field(
+        default=None,
+        description=(
+            "Plan J M101: for a campaign made from an arbitrated cycle, a hash of the runs and settings "
+            "the arbitration used; the same inputs give back the campaign already made."
+        ),
+    )
     test_plan_hash: str | None = Field(default=None, description="`plan_hash` of the test plan in force.")
     test_plan_version: int | None = Field(default=None, description="Its version.")
     created_at: AwareDatetime = Field(description="When the record was created.")
@@ -278,6 +286,7 @@ def build_assignment(
     primary_key: PrimaryKey,
     bands: Sequence[str] | None = None,
     holdout: pd.DataFrame | None = None,
+    scope_keys: Collection[str] | pd.Index[Any] | None = None,
 ) -> pd.DataFrame:
     """`assignment.parquet` from a scoring run's scores (DEC-1304 (b)); see the module docstring.
 
@@ -289,6 +298,11 @@ def build_assignment(
     scores: `scores.*` never carries the explore flag (DEC-1302 (c)), so `explore` and
     `explore_probability` are taken from it, joined on the key. A scored customer the file does not
     list was not explored. Without it, an `explore` column of the scores is kept as it is.
+
+    `scope_keys` (Plan J M101, DEC-1311): when measuring an arbitrated cycle, the customers (key text, as
+    the treat list spells it) this campaign may compare. An intended customer outside the set is put in
+    neither arm - treated or held back alike - so the two arms are cut by one rule and stay comparable
+    (`engine.decide.arbitrate.comparable_keys` draws the set).
     """
     import pandas as pd
 
@@ -324,9 +338,15 @@ def build_assignment(
         intended = frame[_BAND_COLUMN].astype("string").isin(wanted).fillna(value=False).to_numpy(dtype=bool)
     else:
         intended = pd.Series(True, index=frame.index).to_numpy(dtype=bool)
+    if scope_keys is not None:
+        # The customers are named by the treat list's own key text (`engine.keys.key_text`, joined by
+        # `KEY_SEPARATOR`), so a composite key and a whole-number id that pandas read as a float match.
+        row_keys = _treat_list_keys(frame, columns)
+        left_out = intended & ~row_keys.isin(scope_keys).to_numpy(dtype=bool)
+        arm[left_out & (arm != ARM_SUPPRESSED).to_numpy(dtype=bool)] = ARM_SUPPRESSED
     out = frame[list(columns)].copy()
     out["arm"] = arm
-    out[INTENDED_COLUMN] = pd.Series(intended & ~suppressed, index=frame.index, dtype=bool)
+    out[INTENDED_COLUMN] = pd.Series(intended & (arm != ARM_SUPPRESSED), index=frame.index, dtype=bool)
     out[_BAND_COLUMN] = (
         frame[_BAND_COLUMN].astype("string")
         if _BAND_COLUMN in frame.columns
@@ -643,3 +663,110 @@ def epoch_mismatch(
         f"now {ledger.epoch}), and when it first changed is not recorded, so it may have changed before the "
         "outcomes were all in. The comparison cannot be shown to be clean."
     )
+
+
+def _treat_list_keys(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    """One text key per row, spelled as the treat list spells it: `key_text` of each column, joined by `KEY_SEPARATOR`."""
+    from engine.keys import KEY_SEPARATOR, key_text
+
+    joined = key_text(frame[columns[0]]).astype("object")
+    for name in columns[1:]:
+        joined = joined + KEY_SEPARATOR + key_text(frame[name]).astype("object")
+    return joined
+
+
+def create_arbitrated_campaign(
+    storage: Storage,
+    store: CampaignStore,
+    run_id: str,
+    scope_keys: Collection[str] | pd.Index[Any],
+    *,
+    arbitration_id: str,
+    treatment_start: datetime | None = None,
+    outcome_window_days: int | None = None,
+    name: str | None = None,
+    created_by: str = "system",
+) -> Campaign:
+    """Create a campaign from a scoring run for an arbitrated cycle, comparing only the customers in `scope_keys`.
+
+    DEC-1311 (Plan J M101): measuring an arbitrated cycle creates one campaign per use case, so each use
+    case's effect stays measurable. Both arms are cut to `scope_keys` (see `build_assignment`), and the
+    population is the use case's own policy (an uplift run's `intended_treatment`, a propensity run's
+    treat bands), never every eligible customer: a rival use case that took a treated customer must also
+    take the held-back one. `treatment_start` is the run's finish time unless given, as for
+    `POST /campaigns` (the route checks it is not earlier).
+    """
+    import io
+
+    import pandas as pd
+
+    from engine.config import ResolvedConfig
+    from engine.contracts import RunRecord
+    from engine.holdout.assign import HOLDOUT_ASSIGNMENT_FILENAME, run_holdout_spec, selection_masks
+    from engine.runs import RUN_CONFIG_FILENAME, RUN_FILENAME
+    from engine.stages import export
+    from engine.storage import run_key
+
+    record = storage.read_model(run_key(run_id, RUN_FILENAME), RunRecord)
+    start = treatment_start if treatment_start is not None else record.finished_at
+    if start is None:
+        raise ValueError("The run has not finished, so it has no list that went out.")
+    scores_key = run_key(run_id, export.SCORES_PARQUET)
+    if storage.exists(scores_key):
+        scores = pd.read_parquet(io.BytesIO(storage.read_bytes(scores_key)))
+    else:
+        scores = pd.read_csv(io.BytesIO(storage.read_bytes(run_key(run_id, export.SCORES_CSV))))
+
+    h_key = run_key(run_id, HOLDOUT_ASSIGNMENT_FILENAME)
+    holdout_table = pd.read_parquet(io.BytesIO(storage.read_bytes(h_key))) if storage.exists(h_key) else None
+
+    uplift_run = _INTENDED_TREATMENT_COLUMN in scores.columns
+    bands: tuple[str, ...] | None = None
+    if not uplift_run:
+        # The policy's own treat bands, by the one definition of "selected" (M92): every band but the lowest.
+        run_config = storage.read_model(run_key(run_id, RUN_CONFIG_FILENAME), ResolvedConfig).config
+        selected, _sleeping = selection_masks(scores, run_config)
+        present = set(scores[_BAND_COLUMN].astype("string")[selected].dropna())
+        bands = tuple(band.name for band in run_config.actions.bands if band.name in present)
+    assignment = build_assignment(
+        scores,
+        primary_key=record.primary_key,
+        bands=bands,
+        holdout=holdout_table,
+        scope_keys=scope_keys,
+    )
+    counts = assignment_counts(assignment)
+
+    holdout_scope, holdout_key, holdout_epoch = holdout_identity(run_holdout_spec(storage, record.run_id))
+    camp_name = (
+        name or f"{record.use_case_name or record.use_case_id} (arbitrated), sent {start.day} {start:%b %Y}"
+    )
+    now = utc_now()
+    cid = new_campaign_id(now)
+
+    campaign = Campaign(
+        campaign_id=cid,
+        kind=CampaignKind.SCORED,
+        name=camp_name,
+        use_case_id=record.use_case_id,
+        run_ids=(record.run_id,),
+        primary_key=record.primary_key,
+        treatment_start=start,
+        treatment_start_source="entered" if treatment_start is not None else "run_finished",
+        outcome_window_days=outcome_window_days,
+        population="intended" if uplift_run else "bands",
+        bands=bands,
+        causal=counts.holdout > 0,
+        causal_basis="engine_random" if counts.holdout > 0 else "not_random",
+        holdout_scope=holdout_scope,
+        holdout_scope_key=holdout_key,
+        holdout_epoch=holdout_epoch,
+        counts=counts,
+        arbitration_id=arbitration_id,
+        status=CampaignStatus.LIVE,
+        created_at=now,
+        created_by=created_by,
+    )
+
+    write_frame(storage, campaign_key(cid, ASSIGNMENT_FILENAME), assignment)
+    return save_campaign(store, storage, campaign, create=True)

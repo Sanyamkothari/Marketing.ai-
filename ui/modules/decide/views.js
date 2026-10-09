@@ -171,6 +171,57 @@ export function treatListCardHtml(summary, { treatListHref = "", error = null } 
   </section></div>`;
 }
 
+/**
+ * Cross-use-case arbitration conflicts card for the Results page (Plan J M101, DEC-1311):
+ * count of customers qualifying for >1 action, dropped actions, channel caps, and breakdown by use case.
+ */
+export function conflictsCardHtml(summary) {
+  if (!summary || (!summary.total_customers && !summary.customers_with_actions)) return "";
+  const count = (n) => (n === null || n === undefined ? EM_DASH : fmtInt(n));
+  const row = (label, value) =>
+    `<div class="dc-kv"><span class="dc-k">${esc(label)}</span><span class="dc-v">${esc(value)}</span></div>`;
+
+  const ucRows = [];
+  const allUcs = new Set([
+    ...Object.keys(summary.winning_by_use_case || {}),
+    ...Object.keys(summary.dropped_by_use_case || {}),
+  ]);
+  for (const uc of Array.from(allUcs).sort()) {
+    const won = (summary.winning_by_use_case && summary.winning_by_use_case[uc]) || 0;
+    const dropped = (summary.dropped_by_use_case && summary.dropped_by_use_case[uc]) || 0;
+    ucRows.push([esc(uc), esc(fmtInt(won)), esc(fmtInt(dropped))]);
+  }
+
+  const ucTable =
+    ucRows.length > 0
+      ? `<div style="margin-top:12px">${dataTable(
+          [{ label: "Use Case" }, { label: "Winning actions", num: true }, { label: "Dropped actions", num: true }],
+          ucRows,
+          { cls: "sp-runs" },
+        )}</div>`
+      : "";
+
+  return `<div class="dc"><section class="card dc-card" data-arbitration-conflicts>
+    <h3>Arbitration & Conflicts</h3>
+    <p class="dc-text">One action per customer across overlapping use cases. A conflict is settled by priority times value when every action carries the same kind of value, and by priority alone when it does not. A tie goes to the use case named first.</p>
+    <div class="dc-kvs">
+      ${row("Total customers evaluated", count(summary.total_customers))}
+      ${row("Customers qualifying for actions", count(summary.customers_with_actions))}
+      ${row("Customers with conflicts (>1 action)", count(summary.customers_with_conflicts))}
+      ${row("Treated customers (winners)", count(summary.treated_customers))}
+      ${row("Dropped actions (conflict suppressed)", count(summary.dropped_actions_count))}
+      ${summary.channel_capped_count ? row("Channel cap suppressed", count(summary.channel_capped_count)) : ""}
+      ${summary.customers_decided_by_value ? row("Settled by priority times value", count(summary.customers_decided_by_value)) : ""}
+      ${summary.customers_decided_by_priority ? row("Settled by priority alone (value missing or of a different kind)", count(summary.customers_decided_by_priority)) : ""}
+      ${summary.customers_decided_by_request_order ? row("Settled by use case order (a tie)", count(summary.customers_decided_by_request_order)) : ""}
+      ${summary.customers_decided_by_explore ? row("Kept because chosen at random (explore)", count(summary.customers_decided_by_explore)) : ""}
+      ${summary.contested_customers_channel_capped ? row("Wanted by several use cases, left with no action by a channel cap", count(summary.contested_customers_channel_capped)) : ""}
+      ${summary.holdout_blocked_actions ? row("Actions blocked by a hold-out", count(summary.holdout_blocked_actions)) : ""}
+    </div>
+    ${ucTable}
+  </section></div>`;
+}
+
 const CSS = `
 .dc .dc-stack{display:flex;flex-direction:column;gap:16px}
 .dc .dc-card h3{margin:0}
