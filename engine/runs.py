@@ -317,8 +317,14 @@ def update_stage(
     return updated
 
 
-def cancel_run(storage: Storage, run_id: str, *, now: datetime | None = None) -> RunRecord:
-    """Rewrite both documents as cancelled: every unfinished stage stops, and the record is terminal."""
+def cancel_run(
+    storage: Storage, run_id: str, *, now: datetime | None = None, error: RunError | None = None
+) -> RunRecord:
+    """Rewrite both documents as cancelled: every unfinished stage stops, and the record is terminal.
+
+    `error` is for a stop the run did not ask for and a person should be told the reason of (Plan J
+    M108: the cost cap). Left out, the record is written exactly as it always was.
+    """
     moment = now or utc_now()
     key = run_key(run_id, STATUS_FILENAME)
     status = storage.read_model(key, RunStatus)
@@ -342,6 +348,8 @@ def cancel_run(storage: Storage, run_id: str, *, now: datetime | None = None) ->
             }
         ),
     )
+    if error is not None:
+        return update_run(storage, run_id, state=RunState.CANCELLED, finished_at=moment, error=error)
     return update_run(storage, run_id, state=RunState.CANCELLED, finished_at=moment)
 
 

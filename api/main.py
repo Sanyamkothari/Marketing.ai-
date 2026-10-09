@@ -297,6 +297,10 @@ PHASE_ROUTERS.append(campaigns_router)
 from api.routes.decide import router as decide_router  # noqa: E402
 
 PHASE_ROUTERS.append(decide_router)
+# Plan J M108 (DEC-1318): cost before each run - the exchange rate (Admin) and the monthly spend view.
+from api.routes.cost import router as cost_router  # noqa: E402
+
+PHASE_ROUTERS.append(cost_router)
 # ---- END PLAN-J ----
 
 app: FastAPI = create_app()

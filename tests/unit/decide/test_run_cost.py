@@ -248,7 +248,9 @@ def test_the_ai_text_ceiling_is_unknown_when_the_models_have_no_price(
     assert result.known_usd is not None, "what is known is still shown"
 
 
-def test_a_use_case_with_no_text_service_has_no_ai_text_line(config: UseCaseConfig, table: PriceTable) -> None:
+def test_a_use_case_with_no_text_service_has_no_ai_text_line(
+    config: UseCaseConfig, table: PriceTable
+) -> None:
     assert all(line.kind != "ai_text" for line in estimate(config, table).lines)
 
 
@@ -325,8 +327,13 @@ def test_the_running_cost_is_elapsed_time_times_the_same_rate(
 
 
 def test_the_running_cost_is_null_when_nothing_is_billed_or_priced(table: PriceTable) -> None:
-    assert running_cost_usd(RunMode.TRAIN, elapsed_seconds=60.0, settings=local_settings(), table=table).usd is None
-    assert running_cost_usd(RunMode.TRAIN, elapsed_seconds=60.0, settings=deployment(), table=None).usd is None
+    assert (
+        running_cost_usd(RunMode.TRAIN, elapsed_seconds=60.0, settings=local_settings(), table=table).usd
+        is None
+    )
+    assert (
+        running_cost_usd(RunMode.TRAIN, elapsed_seconds=60.0, settings=deployment(), table=None).usd is None
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -344,7 +351,12 @@ def test_every_sentence_in_an_estimate_is_plain_words(config: UseCaseConfig, tab
     ]
     sentences: list[str] = []
     for result in cases:
-        sentences += [result.basis, result.reason or "", result.inr_reason or "", result.confirmation_reason or ""]
+        sentences += [
+            result.basis,
+            result.reason or "",
+            result.inr_reason or "",
+            result.confirmation_reason or "",
+        ]
         for line in result.lines:
             assert isinstance(line, CostLine)
             sentences += [line.label, line.detail, line.reason or ""]
@@ -352,4 +364,4 @@ def test_every_sentence_in_an_estimate_is_plain_words(config: UseCaseConfig, tab
 
 
 def test_the_new_codes_are_the_two_a_person_can_meet() -> None:
-    assert RUN_COST_CODES == frozenset({"RUN_COST_NEEDS_CONFIRMATION", "RUN_COST_CAP_REACHED"})
+    assert frozenset({"RUN_COST_NEEDS_CONFIRMATION", "RUN_COST_CAP_REACHED"}) == RUN_COST_CODES

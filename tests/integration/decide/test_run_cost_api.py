@@ -122,8 +122,6 @@ def make_client(
     config_root: Path, data_dir: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> Iterator[AppFactory]:
     """Build an app over a copy of `configs/`, on a SageMaker-described deployment, with a blocking job."""
-    install_ingest_stub(monkeypatch)
-    install_validate_stub(monkeypatch)
     clients: list[TestClient] = []
 
     def build(
@@ -132,7 +130,11 @@ def make_client(
         prices: bool = True,
         deployment: Any = None,
         blocking: bool = True,
+        stubs: bool = True,
     ) -> TestClient:
+        if stubs:
+            install_ingest_stub(monkeypatch)
+            install_validate_stub(monkeypatch)
         root = tmp_path / f"configs-{len(clients)}"
         shutil.copytree(config_root, root)
         if cap is not None:
@@ -164,6 +166,9 @@ def make_client(
 
     yield build
     for client in clients:
+        for watch in getattr(client.app.state, "cost_watches", []):
+            watch.stop()
+        client.app.state.jobs.shutdown(wait=False)
         client.__exit__(None, None, None)
 
 
@@ -241,7 +246,9 @@ def test_a_use_case_that_does_not_exist_is_a_404_with_a_code(make_client: AppFac
 
 
 def test_a_mode_that_is_not_one_is_refused(make_client: AppFactory) -> None:
-    assert make_client().get(f"/use-cases/{DEMO_ID}/cost-estimate", params={"mode": "bogus"}).status_code == 422
+    assert (
+        make_client().get(f"/use-cases/{DEMO_ID}/cost-estimate", params={"mode": "bogus"}).status_code == 422
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -285,7 +292,7 @@ def test_an_exchange_rate_without_a_positive_number_or_a_source_is_refused(
 
 
 def test_the_cost_routes_have_the_right_roles() -> None:
-    assert policy_for("GET", f"/use-cases/{{use_case_id}}/cost-estimate").role is Role.VIEWER
+    assert policy_for("GET", "/use-cases/{use_case_id}/cost-estimate").role is Role.VIEWER
     assert policy_for("GET", "/cost/spend").role is Role.VIEWER
     assert policy_for("GET", "/cost/fx-rate").role is Role.VIEWER
     assert policy_for("PUT", "/cost/fx-rate").role is Role.ADMIN
@@ -324,7 +331,9 @@ def test_a_run_within_the_cap_starts_without_asking(make_client: AppFactory, tab
     assert start(client).status_code == 202
 
 
-def test_with_no_cap_nothing_changes_about_starting_a_run(make_client: AppFactory, storage: LocalStorage) -> None:
+def test_with_no_cap_nothing_changes_about_starting_a_run(
+    make_client: AppFactory, storage: LocalStorage
+) -> None:
     client = make_client()
     response = start(client)
     assert response.status_code == 202
@@ -466,7 +475,7 @@ def priced_run(storage: LocalStorage, table: PriceTable, *, when: datetime, bill
 def test_the_monthly_spend_adds_up_the_list_price_estimates_by_month(
     make_client: AppFactory, table: PriceTable, storage: LocalStorage
 ) -> None:
-    client = make_client()
+    client = make_client(stubs=False)
     now = utc_now()
     this_month = now.replace(day=1, hour=9, minute=0, second=0, microsecond=0)
     last_month = (this_month - timedelta(days=3)).replace(day=10)
@@ -488,7 +497,9 @@ def test_the_monthly_spend_adds_up_the_list_price_estimates_by_month(
     assert all(row["inr"] is None for row in view["months"]), "no rupees without an exchange rate"
 
     assert client.put("/cost/fx-rate", json=FX_BODY).status_code == 200
-    with_rupees = {row["month"]: row for row in client.get("/cost/spend", params={"months": 3}).json()["months"]}
+    with_rupees = {
+        row["month"]: row for row in client.get("/cost/spend", params={"months": 3}).json()["months"]
+    }
     assert with_rupees[f"{this_month:%Y-%m}"]["inr"]["amount"] == pytest.approx(
         current["estimated_usd"] * 84.5, abs=0.01
     )
@@ -498,7 +509,7 @@ def test_the_monthly_spend_adds_up_the_list_price_estimates_by_month(
 def test_a_month_with_no_priced_run_has_no_amount_not_a_zero(
     make_client: AppFactory, table: PriceTable, storage: LocalStorage
 ) -> None:
-    client = make_client()
+    client = make_client(stubs=False)
     when = utc_now().replace(day=1, hour=9, minute=0, second=0, microsecond=0)
     priced_run(storage, table, when=when, billable=None)
     row = next(r for r in client.get("/cost/spend").json()["months"] if r["month"] == f"{when:%Y-%m}")

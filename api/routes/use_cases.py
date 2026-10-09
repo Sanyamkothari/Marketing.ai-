@@ -9,9 +9,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Annotated
 
-from fastapi import APIRouter, HTTPException, Query, Response
+from fastapi import APIRouter, HTTPException, Query, Request, Response
 
-from api.deps import ConfigRootDep
+from api.deps import ConfigRootDep, SettingsDep
 from api.schemas import (
     ApiChoice,
     ErrorResponse,
@@ -22,6 +22,7 @@ from api.schemas import (
     TargetBlock,
     UseCaseResponse,
 )
+from engine.aws.run_cost import RunCostEstimate, cached_price_table, estimate_run_cost  # Plan J M108
 from engine.config import (
     TIME_LIKE_PATTERN,
     Catalog,
@@ -37,6 +38,7 @@ from engine.config import (
     load_industry,
     load_use_case,
 )
+from engine.generative.budget import load_prices  # Plan J M108
 from engine.pipeline import running_rows
 from engine.templates import render_template_csv, render_template_readme, template_filenames
 
@@ -103,6 +105,40 @@ def read_use_case(
         advanced_settings=advanced_settings_schema(
             config, columns=_split_columns(columns), primary_key=primary_key, target=target
         ),
+    )
+
+
+@router.get(
+    "/use-cases/{use_case_id}/cost-estimate",
+    response_model=RunCostEstimate,
+    responses=_NOT_FOUND,
+    summary="What one run of this use case could cost at list price, and the cap on it (Plan J M108)",
+)
+def read_cost_estimate(
+    use_case_id: str,
+    root: ConfigRootDep,
+    settings: SettingsDep,
+    request: Request,
+    mode: RunMode = RunMode.TRAIN,
+) -> RunCostEstimate:
+    """The list-price ceiling of one run, beside the Run button (DEC-1318).
+
+    In US dollars; null, with a reason, when it cannot be worked out; rupees only beside an Admin's saved
+    exchange rate and its source. Reads the price list, the deployment's settings and the use case; it
+    starts nothing and spends nothing.
+    """
+    # A deliberate local import: api.access imports api.routes.uploads, whose package imports this module.
+    from api.access import get_platform_engine
+    from engine.aws.spend import FxStore
+
+    config = _use_case(use_case_id, root)
+    return estimate_run_cost(
+        config,
+        mode,
+        settings=settings,
+        table=cached_price_table(root),
+        llm_prices=load_prices(root),
+        fx=FxStore(get_platform_engine(request)).get(),
     )
 
 

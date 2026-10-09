@@ -158,6 +158,7 @@ defaults:
     retention_days: 90                  # int 0..730 step 30; 0 = delete uploads right after the run
     consent_column: null                # str | null; keep only rows where truthy
     approval_required: true             # bool; champion waits for POST /models/{id}/approve
+    max_run_cost_usd: null              # float > 0 | null; Plan J M108: a run above this (USD, list price) needs confirming and is stopped at it (config-only)
 
   output:                               # non-UI (plan §5)
     kpi:
