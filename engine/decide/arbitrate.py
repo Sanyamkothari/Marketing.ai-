@@ -635,7 +635,6 @@ def arbitrate_treat_lists(
     treat_flag = stack.treat_flag
     holdout_own = stack.holdout_own
     control_own = stack.control_own
-    held_own = holdout_own | control_own
     uc_codes = stack.uc_codes
     uc_names = stack.uc_names
 
@@ -756,7 +755,10 @@ def arbitrate_treat_lists(
 
     rows_nw = np.flatnonzero(~has_winner[cid])
     held_row = held_cust[cid[rows_nw]]
-    tier = np.where(held_row, ~held_own[rows_nw], ~is_cand[rows_nw]).astype(np.int64)
+    # A held-back customer's row is the use case that held them back; M92's hold-out is named before a run's own
+    # control group, so a customer in both keeps the hold-out row as before the control group was protected.
+    held_tier = np.where(holdout_own[rows_nw], 0, np.where(control_own[rows_nw], 1, 2))
+    tier = np.where(held_row, held_tier, np.where(is_cand[rows_nw], 0, 1)).astype(np.int64)
     pick = np.lexsort((rows_nw, src[rows_nw], tier, cid[rows_nw]))
     ordered_nw = rows_nw[pick]
     nw_first = (

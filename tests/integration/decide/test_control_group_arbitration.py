@@ -32,6 +32,7 @@ from engine.measurement.campaign import (
 )
 from engine.stages import export
 from engine.storage import LocalStorage, run_key
+from tests.fixtures.decide import arbitration_runs
 from tests.fixtures.decide.arbitration_runs import run_for_use_case
 from tests.integration.production.access_support import bearer, local_app, make_user
 
@@ -41,10 +42,18 @@ FIRST = "uc-first"
 SECOND = "uc-second"
 
 
+@pytest.fixture(autouse=True)
+def _fixed_run_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The actions stage draws a run's control group from its run id, and the fixture takes run ids from a counter
+    shared by every test of the process: start it at the same place in every test, so who is in a control
+    group does not depend on the tests that ran before."""
+    monkeypatch.setitem(arbitration_runs._COUNTER, "n", 0)
+
+
 class _Cycle:
     """Two scoring runs, the API they were arbitrated through, and what it wrote."""
 
-    def __init__(self, tmp_path: Path, priorities: dict[str, float]) -> None:
+    def __init__(self, tmp_path: Path, priorities: dict[str, float], *, old_lists: bool = False) -> None:
         self.storage = LocalStorage(tmp_path)
         # An uplift run of a net value and a propensity run of a gross value: the values are of different
         # kinds, so priority alone decides the customers both want.
@@ -54,6 +63,16 @@ class _Cycle:
         }
         for run_id in self.run_ids.values():
             ensure_treat_list(self.storage, run_id)
+        # A list written before the column existed: its stored files are what was handed off.
+        self.stored: dict[str, bytes] = {}
+        if old_lists:
+            for run_id in self.run_ids.values():
+                key = run_key(run_id, TREAT_LIST_PARQUET)
+                frame = pd.read_parquet(io.BytesIO(self.storage.read_bytes(key)))
+                buffer = io.BytesIO()
+                frame.drop(columns=["control_group"]).to_parquet(buffer, index=False)
+                self.storage.write_bytes(key, buffer.getvalue())
+                self.stored[run_id] = buffer.getvalue()
         root = tmp_path / "config-root"
         (root / "decide").mkdir(parents=True)
         lines = "".join(f"  {name}:\n    priority: {value}\n" for name, value in priorities.items())
@@ -179,3 +198,18 @@ def test_the_campaign_arms_of_both_use_cases_follow_dec_1311_n_for_a_control_cus
     assert taken
     arms = cycle.assignment(preferred).set_index("customer_id")["arm"]
     assert (arms[sorted(taken)] == "treated").all()
+
+
+def test_an_old_treat_list_is_protected_in_memory_and_its_stored_files_are_left_alone(tmp_path: Path) -> None:
+    """A list written before the `control_group` column is not rebuilt (it may already be handed off): the column
+    is read from the run's scores for this arbitration, and the stored list stays byte for byte as it was."""
+    cycle = _Cycle(tmp_path, {SECOND: 3.0}, old_lists=True)
+    for run_id, before in cycle.stored.items():
+        assert cycle.storage.read_bytes(run_key(run_id, TREAT_LIST_PARQUET)) == before
+        assert "control_group" not in pd.read_parquet(io.BytesIO(before)).columns
+    first_control, second_control = cycle.control(FIRST), cycle.control(SECOND)
+    table = cycle.arbitrated.set_index("customer_id")
+    treated = set(table.index[table["treat"]])
+    assert not (treated & (first_control | second_control)), "nobody in a control group is contacted"
+    held = first_control - second_control
+    assert held and (table.loc[sorted(held), "control_use_cases"] == FIRST).all()

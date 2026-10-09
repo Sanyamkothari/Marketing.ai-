@@ -17,11 +17,25 @@ from typing import Any
 import pandas as pd
 import pytest
 
-from engine.decide.arbitrate import ArbitrationConfig, arbitrate_treat_lists, comparable_keys
+from engine.decide.arbitrate import (
+    ArbitrationConfig,
+    UseCasePriorityConfig,
+    arbitrate_treat_lists,
+    comparable_keys,
+)
 from engine.decide.treat_list import TREAT_LIST_PARQUET, build_treat_list, policy_intended
 from engine.stages import export
 from engine.storage import LocalStorage, run_key
+from tests.fixtures.decide import arbitration_runs
 from tests.fixtures.decide.arbitration_runs import KEY, run_for_use_case
+
+
+@pytest.fixture(autouse=True)
+def _fixed_run_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Run ids come from a counter shared by every test of the process, and the actions stage draws each run's
+    control group from its run id. Start the counter at the same place in every test so that who is in a control
+    group, and so the thresholds below, do not depend on the tests that ran before."""
+    monkeypatch.setitem(arbitration_runs._COUNTER, "n", 0)
 
 
 @pytest.fixture
@@ -50,7 +64,9 @@ class _Run:
 
 def _config(**priorities: float) -> ArbitrationConfig:
     return ArbitrationConfig(
-        use_cases={name.replace("_", "-"): {"priority": p} for name, p in priorities.items()}
+        use_cases={
+            name.replace("_", "-"): UseCasePriorityConfig(priority=p) for name, p in priorities.items()
+        }
     )
 
 
@@ -162,6 +178,24 @@ def test_a_persistent_holdout_member_is_named_by_the_holdout_only(storage: Local
         assert row["control_use_cases"] == "uc-rival" and pd.isna(row["holdout_use_cases"])
 
 
+def test_a_customer_in_a_control_group_and_another_use_cases_holdout_keeps_the_holdout_row(
+    storage: LocalStorage,
+) -> None:
+    """M92's hold-out row wins over a control-group row, whichever use case is listed first (DEC-1311 (aq))."""
+    controlled = _Run(storage, "uc-a", kind="propensity", value=True)
+    holder = _Run(storage, "uc-b", kind="uplift", value=True, holdout=True)
+    members = set(holder.treat_list.loc[holder.treat_list["holdout"].astype(bool), "customer_id"])
+    both = sorted(controlled.control & members)
+    assert len(both) >= 3, "the fixture puts customers in both"
+    for lists in ([controlled.treat_list, holder.treat_list], [holder.treat_list, controlled.treat_list]):
+        out, _ = arbitrate_treat_lists(lists, ArbitrationConfig(), KEY)
+        for customer in both:
+            row = _row(out, customer)
+            assert row["use_case"] == "uc-b" and bool(row["holdout"]) is True
+            assert row["holdout_use_cases"] == "uc-b" and row["control_use_cases"] == "uc-a"
+            assert not row["treat"] and row["arbitration_reason"] == "held_out"
+
+
 def test_a_treat_list_without_the_column_is_arbitrated_as_before(storage: LocalStorage) -> None:
     """A list written before the column existed protects nobody, and no run without a control group changes."""
     first, second = _pair(storage)
@@ -225,7 +259,9 @@ def test_comparable_keys_treat_a_control_customer_like_a_held_back_one(
     """Fails on main: A's control customers never compete for A, so a rival always takes them and A's
     control arm loses the customers its treated arm keeps."""
     first, second = _pair(storage)
-    config = ArbitrationConfig(use_cases={n: {"priority": p} for n, p in priorities.items()})
+    config = ArbitrationConfig(
+        use_cases={n: UseCasePriorityConfig(priority=p) for n, p in priorities.items()}
+    )
     scopes = comparable_keys(
         [first.treat_list, second.treat_list], [first.intended, second.intended], config, KEY
     )
@@ -238,6 +274,7 @@ def test_comparable_keys_treat_a_control_customer_like_a_held_back_one(
         assert contested, "B also wants some of A's control customers"
         assert not (contested & set(scopes[0])), "B beats A on these customers, in the control arm too"
         assert contested <= set(scopes[1])
-        assert (held_a - second.treated) <= set(scopes[0]), "A keeps the ones B does not want"
+        b_wants = second.treated | {c for c in second.control if bool(second.intended.get(c, False))}
+        assert (held_a - b_wants) <= set(scopes[0]), "A keeps the ones B does not want"
     else:
         assert held_a <= set(scopes[0]), "A keeps every control customer it would have won"

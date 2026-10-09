@@ -262,8 +262,8 @@ for the hand-off, and the Output page labels them differently: **Download contac
   unknown**. Rupee columns are written to the paisa.
 * **`control_group` is the run's own control group (DEC-1311 (al)).** `1` for a customer the run kept back as its
   control (Phase 1's actions stage: the per-run draw, or the eligible members of a persistent hold-out), `0` for
-  every other; a treat list written before the column existed has no such column (it is built again when it is
-  arbitrated). It never changes `holdout`, which stays M92's flag and stays empty on a run that wrote no
+  every other; a treat list written before the column existed has no such column; arbitration reads it from the
+  run's scores in memory and leaves the stored files as they were. It never changes `holdout`, which stays M92's flag and stays empty on a run that wrote no
   assignment file. A customer in the control group is never treated.
 * **Joined on the key, never by position.** `holdout_assignment.parquet` and `row_explanations.parquet` are
   joined to the scores on **every** key column (`customer_id` and `snapshot_date` for a periodic dataset),
@@ -511,10 +511,10 @@ says nothing about which is later.
   is in `losing_actions`); no action moves to another channel.
 * **What a non-winning row says.** A customer nobody treats has one row, `treat = 0`. If a hold-out kept them back,
   the row is a use case that held them back, `holdout` is that row's own flag (true) and `holdout_use_cases` names
-  every use case whose hold-out held them. A customer in a use case's control group (and in no hold-out) is
-  named the same way in `control_use_cases`, the row is that use case's, `control_group` is true, and
+  every use case whose hold-out held them. A customer in a use case's control group is
+  named the same way in `control_use_cases`; when no hold-out held them the row is that use case's, `control_group` is true, and
   `arbitration_reason` is `held_out` when the control group kept an action from them; a control customer nobody
-  wanted reads `not_selected`, as before (the one use case's own control group included). A customer capped out of a channel keeps no offer, channel or offer
+  wanted reads `not_selected`, as before (the one use case's own control group included). A customer in both a hold-out and another use case's control group keeps the hold-out's row, whichever is listed first (DEC-1311 (aq)). A customer capped out of a channel keeps no offer, channel or offer
   detail on the row: the action not taken is in `losing_actions`. Customers keep the order they first appear in
   (one use case selected: the treat list's own row order).
 * **One use case selected equals its treat list.** Every column of the treat list (including M99's

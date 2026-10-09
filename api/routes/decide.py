@@ -50,9 +50,9 @@ from engine.decide.arbitrate import (
 from engine.decide.treat_list import (
     TREAT_LIST_PARQUET,
     TreatListError,
-    build_treat_list,
     ensure_treat_list,
     policy_intended,
+    with_control_group,
 )
 from engine.measurement.campaign import Campaign, create_arbitrated_campaign
 from engine.runs import RUN_CONFIG_FILENAME, RUN_FILENAME
@@ -255,10 +255,10 @@ def arbitrate_treatments(
             tl_bytes = storage.read_bytes(run_key(r.run_id, TREAT_LIST_PARQUET))
             frame = pd.read_parquet(io.BytesIO(tl_bytes))
             if CONTROL_GROUP_COLUMN not in frame.columns:
-                # Written before the list said who the run kept as its control (DEC-1311 (al)): build it again
-                # from the run's own scores, so that customer is not treated by another use case.
-                build_treat_list(storage, r.run_id, config_root=root)
-                frame = pd.read_parquet(io.BytesIO(storage.read_bytes(run_key(r.run_id, TREAT_LIST_PARQUET))))
+                # Written before the list said who the run kept as its control (DEC-1311 (al)): the column is
+                # added in memory from the run's own scores, so that customer is not treated by another use
+                # case. The stored treat list, which may have been handed off, is not touched.
+                frame = with_control_group(storage, r.run_id, frame)
             treat_lists.append(frame)
             intended.append(policy_intended(storage, r.run_id))
         except TreatListError as exc:

@@ -27,10 +27,19 @@ from engine.measurement.campaign import (
     read_frame,
 )
 from engine.storage import LocalStorage, run_key
+from tests.fixtures.decide import arbitration_runs
 from tests.fixtures.decide.arbitration_runs import run_for_use_case
 from tests.integration.production.access_support import bearer, local_app, make_user
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def _fixed_run_ids(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A run's control group is drawn from its run id and the fixture takes run ids from a counter shared by every
+    test of the process (DEC-1311 (al)): start it at the same place in every test, so who is held back, and so how
+    many campaigns these small runs can make, does not depend on the tests that ran before."""
+    monkeypatch.setitem(arbitration_runs._COUNTER, "n", 0)
 
 
 def _prepare(

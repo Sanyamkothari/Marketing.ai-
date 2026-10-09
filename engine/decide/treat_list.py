@@ -94,6 +94,7 @@ __all__ = [
     "offer_policy_intended",
     "policy_intended",
     "table_csv_bytes",
+    "with_control_group",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -358,6 +359,28 @@ def policy_intended(storage: Storage, run_id: str) -> pd.Series[Any]:
     suppressed = (suppression.notna() & (suppression != "")).to_numpy(dtype=bool)
     intended = pd.Series(selected & ~sleeping & ~suppressed, index=_join_keys(scores, record.primary_key))
     return intended[~intended.index.duplicated(keep="first")]
+
+
+def with_control_group(storage: Storage, run_id: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """A copy of a stored treat list that has no `control_group` column, with the column added in memory.
+
+    A treat list written before the column existed (DEC-1311 (al)) is not rebuilt: its files are what was handed
+    off and stay as they are. The run's own scores say who it kept back as its control; they are joined to the list
+    on every key column (never by position), and a customer the scores do not cover gets null (unknown, not false).
+    The column sits where `build_treat_list` puts it, before `net_value`.
+    """
+    record = _read_record(storage, run_id)
+    scores = _read_scores(storage, run_id, key_columns(record.primary_key))
+    flags = pd.Series(
+        scores[CONTROL_GROUP_COLUMN].astype(bool).to_numpy(dtype=bool),
+        index=_join_keys(scores, record.primary_key),
+    )
+    flags = flags[~flags.index.duplicated(keep="first")]
+    joined = flags.reindex(pd.Index(_join_keys(frame, record.primary_key))).astype("boolean")
+    out = frame.copy()
+    position = list(out.columns).index("net_value") if "net_value" in out.columns else len(out.columns)
+    out.insert(position, CONTROL_GROUP_COLUMN, pd.Series(joined.array, index=out.index))
+    return out
 
 
 class _Flags(NamedTuple):
