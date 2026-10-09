@@ -51,6 +51,7 @@ from engine.contracts import (
     RunManifest,
     RunRecord,
 )
+from engine.measurement.learn import LiveCalibration, live_calibration_for
 from engine.model_gates import ApprovalCheck, approval_checks
 from engine.platform_db import create_tables
 from engine.registry import ModelRegistry, aware_utc
@@ -156,6 +157,11 @@ class HeadToHead(_Model):
     note: str | None = Field(default=None, description="What the comparison could not include, and why.")
 
 
+def _absent(value: object) -> bool:
+    """`exclude_if` of M106's field: an item without a live block carries no `live_calibration` key."""
+    return value is None
+
+
 class ApprovalItem(_Model):
     """One challenger waiting for an Approver, with everything the decision needs."""
 
@@ -172,6 +178,14 @@ class ApprovalItem(_Model):
     checks: tuple[ApprovalCheck, ...] = Field(
         default=(),
         description="Advisory checks ({code, passed, message}); passed is null when not measured.",
+    )
+    # Plan J M106 (additive): for a challenger learned from a cycle, how the model that chose that
+    # cycle's list did, predicted against measured by tenth (`engine.measurement.learn`). Absent, not
+    # null, for every other model, so their items are unchanged.
+    live_calibration: LiveCalibration | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Predicted against measured change by tenth on the last campaign; absent when not learned from one.",
     )
 
 
@@ -293,6 +307,7 @@ def pending_approvals(
                 blocked_reason=blocked,
                 decisions=history.get(version.model_id, ()),
                 checks=approval_checks(storage, version),
+                live_calibration=live_calibration_for(storage, version),
             )
         )
     return tuple(items)

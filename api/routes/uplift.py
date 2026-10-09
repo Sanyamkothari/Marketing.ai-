@@ -76,6 +76,7 @@ from api.schemas import (
     TreatmentCandidatesResponse,
     UpliftRunRequest,
     UpliftValidationErrorResponse,
+    UploadRecord,
 )
 from engine.access.roles import Role
 from engine.config import ProblemType, ResolvedConfig, RunMode, get_catalog, resolve_config
@@ -230,7 +231,7 @@ def treatment_candidates(
     response_model=RunCreatedResponse,
     status_code=202,
     responses=_RUN_ERRORS,
-    summary="Validate an upload as an experiment and, when it passes, start an uplift training run",
+    summary="Validate an upload or a built dataset as an experiment and, when it passes, start an uplift training run",
 )
 def create_uplift_run(
     body: UpliftRunRequest,
@@ -253,22 +254,40 @@ def create_uplift_run(
     resolved = split_config_for_key(resolved, primary_key)
     config = resolved.config
     catalog = get_catalog(root)
-    upload = load_upload(storage, body.upload_id)
-    if upload.mode is not RunMode.TRAIN:
-        raise http_error(
-            409,
-            UPLOAD_MODE_MISMATCH,
-            f"This file was uploaded for {upload.mode.value}. Upload it again for train.",
-        )
-    profile = load_upload_profile(storage, body.upload_id)
-    frame = read_frame(storage, upload.source_key, upload.file_format, profile_row_cap(config))
+    # Plan J M106 (DEC-1316): the run reads an upload or a built dataset, exactly as `POST /runs` does; a
+    # dataset is seen through the same four-property source, and its id seeds the check and names the
+    # lineage on `run.json`.
+    upload: UploadRecord | None = None
+    dataset: Any = None
+    if body.dataset_id is not None:
+        from api.routes.runs import _dataset_source
+        from engine.pilot.demo import is_demo_client
+
+        dataset = _dataset_source(storage, body.dataset_id, config=config, client_id=None)
+        source: Any = dataset
+        profile = dataset.profile
+        source_id: str = dataset.manifest.dataset_id
+        synthetic = is_demo_client(storage, dataset.manifest.client_id)
+    else:
+        upload = load_upload(storage, body.upload_id or "")
+        if upload.mode is not RunMode.TRAIN:
+            raise http_error(
+                409,
+                UPLOAD_MODE_MISMATCH,
+                f"This file was uploaded for {upload.mode.value}. Upload it again for train.",
+            )
+        source = upload
+        profile = load_upload_profile(storage, upload.upload_id)
+        source_id = upload.upload_id
+        synthetic = upload.synthetic
+    frame = read_frame(storage, source.source_key, source.file_format, profile_row_cap(config))
     report = validate.validate_for_training(
         frame,
         config,
         primary_key=primary_key,
         target=body.target,
         acknowledged=config.validation.acknowledged,
-        upload_id=upload.upload_id,
+        upload_id=source_id,
         row_count=profile.row_count,
     )
     checked = run_uplift_checks(
@@ -276,12 +295,14 @@ def create_uplift_run(
         config,
         primary_key=primary_key,
         target=body.target,
-        upload_id=upload.upload_id,
+        upload_id=source_id,
         acknowledged=config.validation.acknowledged,
-        seed=check_seed(upload.upload_id),
+        seed=check_seed(source_id),
     )
-    storage.write_model(upload_key(upload.upload_id, UPLOAD_VALIDATION_FILENAME), report)
-    storage.write_model(upload_key(upload.upload_id, UPLIFT_VALIDATION_FILENAME), checked.report)
+    if upload is not None:
+        # A dataset is never written to: several runs may read one, so its checks travel on the run.
+        storage.write_model(upload_key(upload.upload_id, UPLOAD_VALIDATION_FILENAME), report)
+        storage.write_model(upload_key(upload.upload_id, UPLIFT_VALIDATION_FILENAME), checked.report)
     if not (report.passed and checked.report.passed):
         return _validation_conflict(report, checked.report)
 
@@ -290,7 +311,8 @@ def create_uplift_run(
         Pipeline(storage, registry, jobs),
         resolved=resolved,
         catalog=catalog,
-        upload=upload,
+        upload=source,
+        dataset=dataset.lineage if dataset is not None else None,
         profile=profile,
         report=report,
         mode=RunMode.TRAIN,
@@ -299,7 +321,7 @@ def create_uplift_run(
         model_choice=config.uplift.learner.value,
         model_version_id=None,
         requested_by=requested_by(request),
-        synthetic=upload.synthetic,
+        synthetic=synthetic,
     )
     storage.write_model(
         run_key(record.run_id, UPLIFT_VALIDATION_FILENAME),
@@ -311,7 +333,7 @@ def create_uplift_run(
         # Plan J M100 part B (DEC-1310): the offers' catalogue actions as this root declares them (the
         # root their ids were just checked against), for the costs `arm_policy_value.json` records.
         stamp_checked_catalogue(storage, record.run_id, config, root=root, created_at=record.created_at)
-    spec = job_spec_for(record, upload=upload, client_id=settings.client_id)
+    spec = job_spec_for(record, upload=source, client_id=settings.client_id)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
     response.headers["Location"] = f"/runs/{record.run_id}"
