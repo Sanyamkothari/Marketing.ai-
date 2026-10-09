@@ -209,7 +209,10 @@ def test_the_campaign_starts_when_the_run_finished_and_has_the_use_cases_window(
     app, client, store, _ = _prepare(
         tmp_path,
         [
-            ("win-back-campaign", {"kind": "propensity", "rows": 120}),
+            # churn-prevention scores more customers than win-back, so it wins some: a customer in win-back's
+            # control group is no longer free for it to take (DEC-1311 (al)), and two lists of the very same
+            # customers would leave it with none.
+            ("win-back-campaign", {"kind": "propensity", "rows": 100}),
             ("churn-prevention", {"kind": "propensity", "rows": 120}),
         ],
     )

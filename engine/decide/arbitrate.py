@@ -5,7 +5,10 @@ that a customer gets at most `contact_cap_per_customer` actions in one cycle acr
 
 **Who wins (DEC-1311 (a), (h)).** A candidate is a treat-list row with `treat = 1`. For one customer:
 
-1. A customer a hold-out kept back in *any* use case is never treated by any other (DEC-1311 (c)).
+1. A customer a hold-out kept back in *any* use case is never treated by any other (DEC-1311 (c)). So is a
+   customer in the control group of *any* selected run (`control_group` in its treat list, Phase 1's per-run
+   control, DEC-1311 (al)): the row names the use case that held them back (`control_use_cases`), and
+   `holdout` and `holdout_use_cases` keep meaning M92's hold-out only.
 2. A row M92 treated at random (`explore = 1`, `treat = 1`) keeps its action: it wins before any
    comparison, like hold-out protection, so the random sample stays random (DEC-1311 (i)). Two
    explore-treated rows of one customer are both kept only if the contact cap allows; otherwise the first in
@@ -28,8 +31,9 @@ the exception: they keep their places in a fixed pseudo-random order that ignore
 binding cap leaves a random sample of them.
 
 **Measuring an arbitrated cycle (DEC-1311 (n)).** `comparable_keys` says, for each use case, which customers
-its campaign compares: the arbitration run again as if no hold-out held anyone back, a held-back customer the
-use case's policy intended to contact competing like a treated one. Both arms of the campaign are cut with that
+its campaign compares: the arbitration run again as if no hold-out and no control group held anyone back, a
+held-back customer (hold-out member or control group) the use case's policy intended to contact competing
+like a treated one. Both arms of the campaign are cut with that
 one set, so they stay comparable.
 
 **No config, no surprises.** With no `configs/decide/arbitration.yaml` every use case has priority 1, the
@@ -64,7 +68,7 @@ from engine.decide.treat_list import (
     table_csv_bytes,
 )
 from engine.keys import KEY_SEPARATOR, key_text
-from engine.stages.actions import BAND_COLUMN
+from engine.stages.actions import BAND_COLUMN, CONTROL_GROUP_COLUMN
 from engine.utils.logging import get_logger
 from engine.utils.time import utc_now
 
@@ -75,6 +79,7 @@ __all__ = [
     "ARBITRATION_CONFIG_INVALID",
     "ARBITRATION_REASON_COLUMN",
     "ARBITRATION_SUMMARY_FILENAME",
+    "CONTROL_USE_CASES_COLUMN",
     "HOLDOUT_USE_CASES_COLUMN",
     "LOSING_ACTIONS_COLUMN",
     "PRIORITY_SCORE_COLUMN",
@@ -111,6 +116,7 @@ PRIORITY_SCORE_COLUMN: Final[str] = "priority_score"
 PRIORITY_WEIGHT_COLUMN: Final[str] = "priority_weight"
 ARBITRATION_REASON_COLUMN: Final[str] = "arbitration_reason"
 HOLDOUT_USE_CASES_COLUMN: Final[str] = "holdout_use_cases"
+CONTROL_USE_CASES_COLUMN: Final[str] = "control_use_cases"
 
 _DEFAULT_CONFIG_PATH = Path("configs/decide/arbitration.yaml")
 
@@ -138,7 +144,7 @@ _DECIDED_ORDER: Final[int] = 3
 _DECIDED_EXPLORE: Final[int] = 4
 _DECIDED_EXPLORE_ORDER: Final[int] = 5
 
-_BOOL_COLUMNS: Final[tuple[str, ...]] = ("treat", "holdout", "explore")
+_BOOL_COLUMNS: Final[tuple[str, ...]] = ("treat", "holdout", "explore", CONTROL_GROUP_COLUMN)
 _STRING_COLUMNS: Final[tuple[str, ...]] = (
     "use_case",
     "model_version",
@@ -227,6 +233,14 @@ class ArbitrationSummary(Artefact):
     holdout_blocked_actions: int = Field(
         default=0,
         description="Actions a use case wanted that were not allowed because a hold-out kept the customer back.",
+    )
+    control_blocked_actions: int = Field(
+        default=0,
+        description=(
+            "Actions a use case wanted that were not allowed because the customer is in another use case's "
+            "control group for the run (its own per-run control, not M92's hold-out), and no hold-out "
+            "kept them back either."
+        ),
     )
     explore_kept_count: int = Field(
         default=0, description="Actions M92 treated at random that kept their action."
@@ -401,6 +415,7 @@ class _Stack:
     source_dtypes: dict[str, set[str]]
     treat_flag: np.ndarray
     holdout_own: np.ndarray
+    control_own: np.ndarray
     explore_own: np.ndarray
     uc_codes: np.ndarray
     uc_names: pd.Index[Any]
@@ -444,6 +459,13 @@ def _stack_lists(
     holdout_own = (
         combined["holdout"].fillna(False).to_numpy(dtype=bool) if "holdout" in combined else np.zeros(n, bool)
     )
+    # The run's own control group (Phase 1's actions stage), when M92's hold-out flag does not already say it:
+    # a list written before the column existed has none, and a null is not a control (DEC-1311 (al)).
+    control_own = (
+        combined[CONTROL_GROUP_COLUMN].fillna(False).to_numpy(dtype=bool) & ~holdout_own
+        if CONTROL_GROUP_COLUMN in combined
+        else np.zeros(n, bool)
+    )
     explore_own = (
         combined["explore"].fillna(False).to_numpy(dtype=bool) if "explore" in combined else np.zeros(n, bool)
     )
@@ -475,6 +497,7 @@ def _stack_lists(
         source_dtypes=source_dtypes,
         treat_flag=treat_flag,
         holdout_own=holdout_own,
+        control_own=control_own,
         explore_own=explore_own,
         uc_codes=uc_codes,
         uc_names=uc_names,
@@ -611,14 +634,19 @@ def arbitrate_treat_lists(
     combined = stack.combined
     treat_flag = stack.treat_flag
     holdout_own = stack.holdout_own
+    control_own = stack.control_own
     uc_codes = stack.uc_codes
     uc_names = stack.uc_names
 
-    # ---- hold-out protection ---------------------------------------------------------------------------
-    held_cust = np.zeros(n_cust, dtype=bool)
-    held_cust[cid[holdout_own]] = True
+    # ---- hold-out protection: M92's hold-out, and the control group of any run (DEC-1311 (c), (al)) ------
+    held_by_holdout = np.zeros(n_cust, dtype=bool)
+    held_by_holdout[cid[holdout_own]] = True
+    held_by_control = np.zeros(n_cust, dtype=bool)
+    held_by_control[cid[control_own]] = True
+    held_cust = held_by_holdout | held_by_control
     is_cand = treat_flag & ~held_cust[cid]
-    holdout_blocked = int((treat_flag & held_cust[cid]).sum())
+    holdout_blocked = int((treat_flag & held_by_holdout[cid]).sum())
+    control_blocked = int((treat_flag & held_by_control[cid] & ~held_by_holdout[cid]).sum())
 
     # ---- rank the candidates of each customer ---------------------------------------------------------
     cap = cfg.contact_cap_per_customer
@@ -727,7 +755,10 @@ def arbitrate_treat_lists(
 
     rows_nw = np.flatnonzero(~has_winner[cid])
     held_row = held_cust[cid[rows_nw]]
-    tier = np.where(held_row, ~holdout_own[rows_nw], ~is_cand[rows_nw]).astype(np.int64)
+    # A held-back customer's row is the use case that held them back; M92's hold-out is named before a run's own
+    # control group, so a customer in both keeps the hold-out row as before the control group was protected.
+    held_tier = np.where(holdout_own[rows_nw], 0, np.where(control_own[rows_nw], 1, 2))
+    tier = np.where(held_row, held_tier, np.where(is_cand[rows_nw], 0, 1)).astype(np.int64)
     pick = np.lexsort((rows_nw, src[rows_nw], tier, cid[rows_nw]))
     ordered_nw = rows_nw[pick]
     nw_first = (
@@ -759,8 +790,12 @@ def arbitrate_treat_lists(
     row_reason = by_pos_reason[sel]
     cust_has_candidate = np.zeros(n_cust, dtype=bool)
     cust_has_candidate[c_cid] = True
+    # A control group is `held_out` when it kept an action from the customer; a customer in it whom no use case
+    # asked to treat reads as before (`not_selected`), for the one use case's own control included (DEC-1311 (am)).
+    asked_for = np.zeros(n_cust, dtype=bool)
+    asked_for[cid[treat_flag]] = True
     nw_reason = np.where(
-        held_cust[sel_cid],
+        held_by_holdout[sel_cid] | (held_by_control[sel_cid] & asked_for[sel_cid]),
         REASON_HELD_OUT,
         np.where(cust_has_candidate[sel_cid], REASON_CHANNEL_CAP, REASON_NOT_SELECTED),
     ).astype(object)
@@ -793,6 +828,14 @@ def arbitrate_treat_lists(
         distinct, joined = _join_by_group(cid[by_cust], pa.array(uc_all[by_cust], pa.large_string()))
         holdout_text[distinct] = joined
     out[HOLDOUT_USE_CASES_COLUMN] = holdout_text[sel_cid]
+    # The use cases whose own run kept the customer back as its control group (and no hold-out did, per list).
+    control_text = np.full(n_cust, None, dtype=object)
+    control_at = np.flatnonzero(control_own)
+    if control_at.size:
+        by_cust = control_at[np.argsort(cid[control_at], kind="stable")]
+        distinct, joined = _join_by_group(cid[by_cust], pa.array(uc_all[by_cust], pa.large_string()))
+        control_text[distinct] = joined
+    out[CONTROL_USE_CASES_COLUMN] = control_text[sel_cid]
 
     # ---- the summary -----------------------------------------------------------------------------------
     lost_counts = (
@@ -819,6 +862,7 @@ def arbitrate_treat_lists(
         winning_by_use_case={str(uc_names[i]): int(c) for i, c in enumerate(win_counts) if c > 0},
         dropped_by_use_case={str(uc_names[i]): int(c) for i, c in enumerate(lost_counts) if c > 0},
         holdout_blocked_actions=holdout_blocked,
+        control_blocked_actions=control_blocked,
         explore_kept_count=int((s_explore & final).sum()),
         explore_dropped_count=int((s_explore & lost).sum()),
         customers_decided_by_value=int((decided_won == _DECIDED_VALUE).sum()),
@@ -873,7 +917,8 @@ def comparable_keys(
             aligned = flags.reindex(stack.keys[offset : offset + size]).fillna(False)
             would[offset : offset + size] = aligned.to_numpy(dtype=bool)
         offset += size
-    ranking = _rank(stack, stack.treat_flag | (stack.holdout_own & would), cfg.contact_cap_per_customer)
+    held = stack.holdout_own | stack.control_own
+    ranking = _rank(stack, stack.treat_flag | (held & would), cfg.contact_cap_per_customer)
     won = np.zeros(stack.n, dtype=bool)
     won[ranking.s_pos[ranking.keep]] = True
     return [pd.Index(stack.keys[won & (stack.src == i)]) for i in range(len(treat_lists))]
@@ -897,6 +942,7 @@ def _output_columns(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> list[str]
         "runner_up_offer",
         "runner_up_net_value",
         "offer_reason",
+        CONTROL_GROUP_COLUMN,
         "net_value",
         EXPECTED_GROSS_VALUE_COLUMN,
         *REASON_COLUMNS,
@@ -910,6 +956,7 @@ def _output_columns(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> list[str]
         PRIORITY_WEIGHT_COLUMN,
         ARBITRATION_REASON_COLUMN,
         HOLDOUT_USE_CASES_COLUMN,
+        CONTROL_USE_CASES_COLUMN,
     ]
 
 

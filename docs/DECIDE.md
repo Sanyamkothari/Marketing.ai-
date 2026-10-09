@@ -254,11 +254,17 @@ for the hand-off, and the Output page labels them differently: **Download contac
 * **Columns** (CSV and parquet, in this order): the customer key (every column of a composite key), `use_case`,
   `model_version`, `band` (propensity) or `segment` (uplift), `treat`, `holdout`, `explore`,
   `suppression_reason`, `offer`, `channel`, `contactable_channels`, `runner_up_offer`,
-  `runner_up_net_value`, `offer_reason` (Plan J M100 part B, §14; empty on a run of one offer), `net_value`,
-  `expected_gross_value`, `reason_1`, `reason_2`, `reason_3`. The M100 columns sit before `net_value`, so
-  every column before them keeps its position from the start and the last five keep theirs from the end
+  `runner_up_net_value`, `offer_reason` (Plan J M100 part B, §14; empty on a run of one offer), `control_group`
+  (below), `net_value`, `expected_gross_value`, `reason_1`, `reason_2`, `reason_3`. The M100 columns and
+  `control_group` sit before `net_value`, so every column before them keeps its position from the start and the
+  last five keep theirs from the end
   (the reasons are always the last three columns). In the parquet the flags are booleans; in the CSV they are `1` and `0`, and **empty when
   unknown**. Rupee columns are written to the paisa.
+* **`control_group` is the run's own control group (DEC-1311 (al)).** `1` for a customer the run kept back as its
+  control (Phase 1's actions stage: the per-run draw, or the eligible members of a persistent hold-out), `0` for
+  every other; a treat list written before the column existed has no such column; arbitration reads it from the
+  run's scores in memory and leaves the stored files as they were. It never changes `holdout`, which stays M92's flag and stays empty on a run that wrote no
+  assignment file. A customer in the control group is never treated.
 * **Joined on the key, never by position.** `holdout_assignment.parquet` and `row_explanations.parquet` are
   joined to the scores on **every** key column (`customer_id` and `snapshot_date` for a periodic dataset),
   whatever order they list the customers in. A customer a file does not cover gets a null, never `false`:
@@ -462,8 +468,11 @@ finished last (then created last, then the larger run id): run ids end in random
 says nothing about which is later.
 
 * **Who wins (`engine/decide/arbitrate.py`).** A candidate is a treat-list row with `treat = 1`, in a customer no
-  hold-out keeps back. For one customer, in this order:
-  1. **Hold-out members are never treated** by any use case, even one that does not know the hold-out.
+  hold-out or control group keeps back. For one customer, in this order:
+  1. **Hold-out members are never treated** by any use case, even one that does not know the hold-out. **So is a
+     customer in the control group of any selected use case's run** (`control_group` of its treat list,
+     DEC-1311 (al)), which another use case's list may still want: the run kept them back to see what happens
+     without a contact, so no other use case contacts them either.
   2. **A row M92 treated at random keeps its action** (`explore = 1` and `treat = 1`): it is kept before any
      comparison, so the random sample stays random. If two use cases both treat the same customer at random,
      both are kept only if the contact cap allows; otherwise the first in the request's use case order is kept,
@@ -482,7 +491,8 @@ says nothing about which is later.
   them: `customers_decided_by_value`, `_by_priority`, `_by_request_order`, `_by_explore` (each matches the
   `arbitration_reason` of the treated rows), and apart from them `contested_customers_channel_capped`, the contested
   customers whose chosen action a channel cap then removed (they end with no action); and `holdout_blocked_actions`,
-  `explore_kept_count`, `explore_dropped_count`. The summary also names the `run_ids` arbitrated.
+  `control_blocked_actions` (actions kept back by another use case's control group where no hold-out held the
+  customer), `explore_kept_count`, `explore_dropped_count`. The summary also names the `run_ids` arbitrated.
 * **No configuration ships.** `configs/decide/arbitration.example.yaml` is a labelled example that is never read.
   With no `decide/arbitration.yaml` in the config root, every use case has priority 1, a customer gets at most one
   action per cycle, and there are no channel caps. A client's file sets `use_cases.<id>.priority`,
@@ -501,7 +511,10 @@ says nothing about which is later.
   is in `losing_actions`); no action moves to another channel.
 * **What a non-winning row says.** A customer nobody treats has one row, `treat = 0`. If a hold-out kept them back,
   the row is a use case that held them back, `holdout` is that row's own flag (true) and `holdout_use_cases` names
-  every use case whose hold-out held them. A customer capped out of a channel keeps no offer, channel or offer
+  every use case whose hold-out held them. A customer in a use case's control group is
+  named the same way in `control_use_cases`; when no hold-out held them the row is that use case's, `control_group` is true, and
+  `arbitration_reason` is `held_out` when the control group kept an action from them; a control customer nobody
+  wanted reads `not_selected`, as before (the one use case's own control group included). A customer in both a hold-out and another use case's control group keeps the hold-out's row, whichever is listed first (DEC-1311 (aq)). A customer capped out of a channel keeps no offer, channel or offer
   detail on the row: the action not taken is in `losing_actions`. Customers keep the order they first appear in
   (one use case selected: the treat list's own row order).
 * **One use case selected equals its treat list.** Every column of the treat list (including M99's
@@ -514,11 +527,11 @@ says nothing about which is later.
   **both arms are cut by one rule that does not look at the hold-out**: for a use case that chose the offer per
   customer the population is the customers whose policy offer exists (`policy_intended` of
   `offer_choice.parquet`, DEC-1311 (ai)), not the first offer's `intended_treatment`; `comparable_keys` runs the arbitration again
-  as if no one were held back, a held-back customer the policy intended to contact (`policy_intended`, M92's
+  as if no one were held back (no hold-out and no control group), a held-back customer the policy intended to contact (`policy_intended`, M92's
   one definition of "selected") competing like a treated one, and a customer is compared in a use case when it wins
   him in that run. A customer another use case wins, or one a rival's random (explore) action took, is in neither
   arm (`suppressed`, not intended), the held-back ones as the treated ones. A customer kept from being contacted by
-  another use case's hold-out or by a channel cap stays in both arms (intent to treat): nothing in that depends
+  another use case's hold-out or control group, or by a channel cap, stays in both arms (intent to treat): nothing in that depends
   on the customer's own random draw. (Cutting only the treated arm to the winners, as the first version did, left
   the held-back arm with every eligible customer, and the measured effect came from who was in each arm.) Keys are
   matched in the treat list's spelling (`engine.keys.key_text`, so a composite key and a whole-number id match).

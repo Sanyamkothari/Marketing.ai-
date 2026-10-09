@@ -20,7 +20,9 @@ its own column, `expected_gross_value`, because it is not incremental. The setti
 `run_config.json`, never today's use case file.
 
 **Units and nulls.** `net_value` and `expected_gross_value` are rupees. A missing input stays null: an
-unknown holdout flag is null, not false; a value that was not configured is null, not zero; a reason
+unknown holdout flag is null, not false; `control_group` is the run's own control group (Phase 1's
+actions stage, DEC-1311 (al)): true for a customer the run kept back as its control, false for every other,
+and the column is absent from a treat list written before it existed; a value that was not configured is null, not zero; a reason
 the customer has no more of is null, not an empty string. Parquet holds the flags as booleans; the CSV
 writes `1` and `0` (empty for null).
 """
@@ -92,6 +94,7 @@ __all__ = [
     "offer_policy_intended",
     "policy_intended",
     "table_csv_bytes",
+    "with_control_group",
 ]
 
 _LOGGER = get_logger(__name__)
@@ -358,6 +361,28 @@ def policy_intended(storage: Storage, run_id: str) -> pd.Series[Any]:
     return intended[~intended.index.duplicated(keep="first")]
 
 
+def with_control_group(storage: Storage, run_id: str, frame: pd.DataFrame) -> pd.DataFrame:
+    """A copy of a stored treat list that has no `control_group` column, with the column added in memory.
+
+    A treat list written before the column existed (DEC-1311 (al)) is not rebuilt: its files are what was handed
+    off and stay as they are. The run's own scores say who it kept back as its control; they are joined to the list
+    on every key column (never by position), and a customer the scores do not cover gets null (unknown, not false).
+    The column sits where `build_treat_list` puts it, before `net_value`.
+    """
+    record = _read_record(storage, run_id)
+    scores = _read_scores(storage, run_id, key_columns(record.primary_key))
+    flags = pd.Series(
+        scores[CONTROL_GROUP_COLUMN].astype(bool).to_numpy(dtype=bool),
+        index=_join_keys(scores, record.primary_key),
+    )
+    flags = flags[~flags.index.duplicated(keep="first")]
+    joined = flags.reindex(pd.Index(_join_keys(frame, record.primary_key))).astype("boolean")
+    out = frame.copy()
+    position = list(out.columns).index("net_value") if "net_value" in out.columns else len(out.columns)
+    out.insert(position, CONTROL_GROUP_COLUMN, pd.Series(joined.array, index=out.index))
+    return out
+
+
 class _Flags(NamedTuple):
     """Nullable per-row flags joined from `holdout_assignment.parquet`, aligned to the scores' rows."""
 
@@ -500,6 +525,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         runner_up_offer=runner_up_offer,
         runner_up_value=runner_up_value,
         offer_reason=offer_reason,
+        control=control,
     )
     table = _table(out, is_uplift, key_cols)
     storage.write_bytes(run_key(run_id, TREAT_LIST_PARQUET), _parquet_bytes(table))
@@ -1200,6 +1226,7 @@ def _assemble(
     runner_up_offer: pd.Series[Any],
     runner_up_value: pd.Series[Any],
     offer_reason: pd.Series[Any],
+    control: np.ndarray,
 ) -> pd.DataFrame:
     n = len(scores.index)
     data: dict[str, Any] = {name: key_text(scores[name]).astype("object") for name in key_cols}
@@ -1221,6 +1248,10 @@ def _assemble(
     data[RUNNER_UP_OFFER_COLUMN] = runner_up_offer.astype("object")
     data[RUNNER_UP_VALUE_COLUMN] = runner_up_value
     data[OFFER_REASON_COLUMN] = offer_reason.astype("object")
+    # The run's own control group (Phase 1's actions stage), beside M92's `holdout`, which it never changes
+    # (DEC-1311 (al)). After offer_reason for the same reason: no earlier column moves from the start, and
+    # net_value, expected_gross_value and the reasons keep their places from the end.
+    data[CONTROL_GROUP_COLUMN] = pd.Series(control, dtype="bool")
     data["net_value"] = net_value
     data[EXPECTED_GROSS_VALUE_COLUMN] = gross_value
     for name in REASON_COLUMNS:
@@ -1244,6 +1275,7 @@ def _schema(is_uplift: bool, key_cols: tuple[str, ...]) -> pa.Schema:
         pa.field(RUNNER_UP_OFFER_COLUMN, pa.string()),
         pa.field(RUNNER_UP_VALUE_COLUMN, pa.float64()),
         pa.field(OFFER_REASON_COLUMN, pa.string()),
+        pa.field(CONTROL_GROUP_COLUMN, pa.bool_()),
         pa.field("net_value", pa.float64()),
         pa.field(EXPECTED_GROSS_VALUE_COLUMN, pa.float64()),
         *[pa.field(name, pa.string()) for name in REASON_COLUMNS],
