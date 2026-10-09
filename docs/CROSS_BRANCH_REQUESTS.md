@@ -968,32 +968,6 @@ words. `tests/unit/pilot/test_help.py` is unchanged and green.
 
 **What is needed.** Nothing; this is an announcement.
 
-### 2026-10-09 — plan-j Phase 2 gate (on main) → owner of `engine/measurement/` and `engine/decide/` (M102 to M105): a multi-offer campaign leaves about 21% of its contacted customers out of both arms (request)
-
-**What is needed.** An arbitrated campaign of a use case with several offers takes its population from the first
-offer's `intended_treatment` (DEC-668 (3)), not from the offer-choice treat flag that built the list. In the Phase 2
-journey run, 413 of the 1,945 customers that use case wins and contacts (about 21%) have `intended_treatment =
-False`: they are sleeping dogs or sure things for the first offer, yet another offer has a positive net value for
-them. They are in neither arm, so the campaign says nothing about them. It could be fixed by passing the offer-choice
-policy-intended flag as the campaign's `intended` for a run of several offers. Until then DEC-1311 (n)'s "compares
-like with like" holds only for the customers inside the first-offer set. The one-offer and risk campaigns have no
-such gap.
-
-**What I did meanwhile.** No product change. `tests/integration/decide/test_phase2_journey.py`
-(`test_the_multi_offer_campaign_is_cut_by_the_first_offers_rule_so_some_contacted_customers_are_in_neither_arm`)
-asserts the gap as it is, so a fix makes that test fail and it should then assert equality (DEC-1311 (ab)). The gap
-is listed in `docs/handoff/M101.md` section 7 and in the README's Phase 2 gate section.
-
-### 2026-10-09 — plan-j Phase 2 gate (on main) → owner of `engine/decide/arbitrate.py`: held-back multi-offer rows are decided by request order in `comparable_keys` (record)
-
-**What is needed.** Nothing required; a decision if the behaviour should change. In the counterfactual re-arbitration
-(`comparable_keys`, DEC-1311 (n)) a held-back row of a use case with several offers carries no offer and so no net
-value. A customer held back and intended by both that use case and a one-offer use case is therefore decided by the
-request order, not by value (all 66 such customers went to the multi-offer use case in the journey run).
-
-**What I did meanwhile.** No product change. The journey test asserts only that such a customer is in exactly one of
-the two hold-out arms, and records the request-order behaviour as an observation, not a requirement (DEC-1311 (aa)).
-
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
@@ -1113,6 +1087,59 @@ run link and an alert's run link.
 **Re-filed 2026-09-23 (Plan D M58)** to the trunk. Half of it is covered: approving, rejecting and promoting a challenger now have their own screen, `#/approvals`, linked from the user bar (DEC-862, DEC-864). The link is still missing: `ui/pages.js` has no link from a scoring run's Output page to `#/monitoring/runs/<run_id>`. Plan D touched `ui/pages.js` only for uplift runs (DEC-858). Needed from: the trunk's owner of `ui/pages.js`, that one link on a finished scoring run's Output page.
 
 ## Resolved
+
+### 2026-10-09 — plan-j Phase 2 gate (on main) → owner of `engine/measurement/` and `engine/decide/` (M102 to M105): a multi-offer campaign leaves about 21% of its contacted customers out of both arms (request; closed 2026-10-09)
+
+**What is needed.** An arbitrated campaign of a use case with several offers takes its population from the first
+offer's `intended_treatment` (DEC-668 (3)), not from the offer-choice treat flag that built the list. In the Phase 2
+journey run, 413 of the 1,945 customers that use case wins and contacts (about 21%) have `intended_treatment =
+False`: they are sleeping dogs or sure things for the first offer, yet another offer has a positive net value for
+them. They are in neither arm, so the campaign says nothing about them. It could be fixed by passing the offer-choice
+policy-intended flag as the campaign's `intended` for a run of several offers. Until then DEC-1311 (n)'s "compares
+like with like" holds only for the customers inside the first-offer set. The one-offer and risk campaigns have no
+such gap.
+
+**What I did meanwhile.** No product change. `tests/integration/decide/test_phase2_journey.py`
+(`test_the_multi_offer_campaign_is_cut_by_the_first_offers_rule_so_some_contacted_customers_are_in_neither_arm`)
+asserts the gap as it is, so a fix makes that test fail and it should then assert equality (DEC-1311 (ab)). The gap
+is listed in `docs/handoff/M101.md` section 7 and in the README's Phase 2 gate section.
+
+**Closed (2026-10-09, Plan J Phase 2 gap integration on `main`, merge 5278d59 of 613404d; DEC-1311 (af)-(ak)).**
+Fixed inside Plan J's own paths as suggested. A scoring run of several offers now writes, in `offer_choice.parquet`,
+for every customer held back or not, the offer its policy would choose if nobody were held back:
+`policy_offer_arm`, `policy_offer_label`, `policy_offer_net_value` and `policy_intended` (four columns between
+`offer_reason` and `explore_arm`; the first 13 keep their place and the explore columns stay last). Under a total
+budget the run's budget walk is replayed with its own fit test at each customer's place, so the treated arm is
+exactly the contacted list, a customer the walk skipped is in neither arm, and a held-back customer is in the
+hold-out arm when the walk had room for their offer. `create_arbitrated_campaign` (through `comparable_keys`) and
+`POST /campaigns` on the single run both take the population from `policy_intended`, and the campaign record says so
+with the optional `Campaign.intended_source = "offer_choice"`. `intended_treatment` keeps its DEC-668 meaning. All
+of it is additive: `Campaign.intended_source` and the new `OfferChoiceSummary` / `TreatListSummary` fields are left
+out when None, a one-offer run writes no `offer_choice.parquet`, and a file written before this change keeps the
+first offer's population. Plan G / Plan E readers of `offer_choice.parquet` see four new columns and nothing else.
+`tests/integration/decide/test_phase2_journey.py` now asserts the multi-offer arms exactly
+(`test_every_customer_the_multi_offer_use_case_wins_and_contacts_is_in_its_treated_arm`, which replaces the test
+that pinned the gap), and `tests/integration/decide/test_policy_offer.py` does so on a budgeted run, arbitrated and
+through `POST /campaigns`; `tests/unit/decide/test_policy_offers.py` covers the replay.
+
+### 2026-10-09 — plan-j Phase 2 gate (on main) → owner of `engine/decide/arbitrate.py`: held-back multi-offer rows are decided by request order in `comparable_keys` (record; closed 2026-10-09)
+
+**What is needed.** Nothing required; a decision if the behaviour should change. In the counterfactual re-arbitration
+(`comparable_keys`, DEC-1311 (n)) a held-back row of a use case with several offers carries no offer and so no net
+value. A customer held back and intended by both that use case and a one-offer use case is therefore decided by the
+request order, not by value (all 66 such customers went to the multi-offer use case in the journey run).
+
+**What I did meanwhile.** No product change. The journey test asserts only that such a customer is in exactly one of
+the two hold-out arms, and records the request-order behaviour as an observation, not a requirement (DEC-1311 (aa)).
+
+**Closed (2026-10-09, the same integration; DEC-1311 (ah)).** A held-back row of a treat list that chose the offer
+per customer now carries the would-be offer's net value in `net_value` (its offer and channel stay empty, and
+`net_value_total` still counts treated rows only), so `comparable_keys` decides a customer held back and intended
+by both a multi-offer and a one-offer use case by the larger value, not by request order. The journey test asserts
+it (`test_a_customer_held_back_and_wanted_by_the_multi_offer_and_the_one_offer_use_cases_goes_to_the_larger_value`:
+both use cases keep some of these customers), and
+`tests/integration/decide/test_policy_offer.py::test_a_held_back_multi_offer_row_competes_by_its_would_be_net_value_not_by_request_order`
+pins it with the lists in either order.
 
 ### 2026-10-07 — plan-j M94 → M92 / M93: the plan preview and holdout epochs are wired (resolved at integration)
 

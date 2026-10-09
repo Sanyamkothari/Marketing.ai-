@@ -1706,13 +1706,15 @@ M95 (DEC-1305) shows that the measurement is honest and keeps planted data out o
 **Phase 2 (M96–M101), against its exit gate** ([`docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md`](docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md)):
 the gate asks for M96–M101 merged, `make test-all` green, and one journey end to end on fixtures: approve with
 checks → value-ranked, offer-chosen, channel-aware treat list → arbitration across three use cases → campaigns
-created and measured. **The gate is met except for one known gap:** the multi-offer campaign is measured within the
-first offer's `intended_treatment`, so about 1 in 5 of the customers it contacts are in neither arm (below).
+created and measured. **The gate is met.** Its one known gap, the multi-offer campaign's population (DEC-1311 (ab)),
+was closed on 2026-10-09 by DEC-1311 (af)–(ak) (below).
 
 - M96–M101 are merged on `main` and all read **done** above. `make test-all` (every test except the `bedrock` and
   `aws` ones) is green at 2e27bd1 (M101's integration) on 2026-10-09: 11,404 passed, 62 skipped, 11 xfailed and 0
-  failed in 30.5 minutes under three workers (`-n 3`). The journey module below merged after that run; it passed
-  on its own on `main` after the merge (27 passed, run serially).
+  failed in 30.5 minutes under three workers (`-n 3`). That run predates the journey module below and the Phase 2
+  gap fix (DEC-1311 (af)–(ak)), which merged after it; `make test-all` has not been re-run in full since. Both were
+  run on `main` after their merges: the journey module on its own, serially (27 passed at the gate, 28 after the
+  gap fix, together with `tests/integration/decide/test_policy_offer.py`), and the fast suite in full.
 - The Phase 2 journey test (`tests/integration/decide/test_phase2_journey.py`, DEC-1311 (z)–(ae)) chains, through
   the API on fixtures, three use cases trained; the M96 checks shown to an Approver (one fails and the approval
   still goes ahead); the multi-offer model refused as champion and scored by naming its version; value-ranked,
@@ -1720,11 +1722,15 @@ first offer's `intended_treatment`, so about 1 in 5 of the customers it contacts
   risk model's own hold-out enforced (customers one use case holds back get no action from any); and one campaign
   per use case measured against a planted truth, each campaign's two arms checked exactly against the cut of
   DEC-1311 (n). The module is marked `slow`, so `make test` does not run it; it builds its journey once (about
-  60 s, 27 tests in about 70 s); run it with `--dist loadgroup` under xdist.
-- Not yet shown, and asserted as a known gap: the multi-offer campaign is measured within the first offer's
-  `intended_treatment`, not within the offer-choice treat list, so about 1 in 5 of the customers that use case
-  contacts are in neither arm (413 of 1,945 in the journey run). The one-offer and risk campaigns have no such gap.
-  The fix is recorded for the owner of `engine/measurement/` in `docs/CROSS_BRANCH_REQUESTS.md` (2026-10-09).
+  60 s, 28 tests in about 70 s); run it with `--dist loadgroup` under xdist.
+- The known gap is closed. A campaign of a use case that chooses the offer per customer is measured within the
+  customers the policy meant to contact (`policy_intended` of `offer_choice.parquet`, DEC-1311 (af)–(ak)), not
+  within the first offer's `intended_treatment`. Under a total budget the budget walk is replayed with its own fit
+  test, so the treated arm is exactly the contacted list, a customer the walk skipped is in neither arm, and a
+  held-back customer is in the hold-out arm when the walk had room for their offer at their place. Before, about
+  1 in 5 of the customers that use case contacts were in neither arm (413 of 1,945 in the journey run); now the
+  journey test asserts the multi-offer arms exactly, `tests/integration/decide/test_policy_offer.py` does so on a
+  budgeted run, and `tests/unit/decide/test_policy_offers.py` covers the replay of the budget walk.
 - Each step is also tested on its own: the advisory approval checks and the fallback to risk ranking (M96,
   `tests/unit/decide/test_model_gates.py`, `tests/integration/decide/test_uplift_ranking_flow.py`), the net-value
   ranking (M97, `tests/integration/uplift/test_net_value_flow.py`), the offer chosen per customer on a channel the

@@ -1297,7 +1297,7 @@ def test_the_holdout_arm_drops_the_held_back_customers_a_rival_use_case_would_ha
         held_intended = set(cut.settled.index[held & intended])
         rival_wants = cut.wants[list(rivals)].any(axis=1)
         # A rival that wants the customer takes them only if it wins (a larger value, a higher priority or the
-        # request order); one that wants them and loses leaves the customer to this use case (DEC-1311 (aj)).
+        # request order); one that wants them and loses leaves the customer to this use case (DEC-1311 (ah)).
         lost = cut.winner != use_case
         contested = set(cut.settled.index[cut.settled & held & intended & lost])
         assert (lost & rival_wants)[list(contested)].all()
@@ -1399,7 +1399,7 @@ def test_every_customer_the_multi_offer_use_case_wins_and_contacts_is_in_its_tre
 def test_a_customer_held_back_and_wanted_by_the_multi_offer_and_the_one_offer_use_cases_goes_to_the_larger_value(
     lists: dict[str, pd.DataFrame], scores: dict[str, pd.DataFrame], arms: dict[str, Arms]
 ) -> None:
-    """DEC-1311 (aj), the observation of 2026-10-09: a held-back multi-offer row used to carry no net value, so
+    """DEC-1311 (ah), the observation of 2026-10-09: a held-back multi-offer row used to carry no net value, so
     these customers all went to the multi-offer use case by the request order (66 of 66). Both use cases hold
     them back (one universal hold-out) and both mean to contact them: the use case whose offer is worth more
     keeps the customer in its hold-out arm, and the other does not have them."""
