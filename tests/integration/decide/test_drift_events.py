@@ -77,6 +77,9 @@ def test_a_noted_event_appears_on_the_drift_view(tmp_path: Path) -> None:
     assert setup.storage.read_bytes(run_key(setup.run.run_id, "drift.json")) == drift_bytes
     assert setup.storage.exists(run_key(setup.run.run_id, DRIFT_ANNOTATIONS_FILENAME))
     assert "does not change the measured change" in view["note"]
+    assert view["window_note"] == (
+        "Events count from 1 Aug 2026 (when the model was trained) to 20 Sep 2026 (when this change was measured)."
+    )
 
 
 def test_an_event_outside_the_period_is_kept_but_not_counted(tmp_path: Path) -> None:

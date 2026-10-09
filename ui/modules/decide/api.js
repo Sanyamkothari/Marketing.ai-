@@ -71,3 +71,15 @@ export const postProgramme = (payload) => request("/campaigns/programme", post(p
 
 /** Say who a campaign actually contacted (`POST /campaigns/{id}/contacts`, Plan J M103). */
 export const postContacts = (id, payload) => request(`${campaignPath(id)}/contacts`, post(payload));
+
+const driftEventsPath = (runId) => `/runs/${encodeURIComponent(runId)}/drift-events`;
+
+/** The events noted against a scoring run's change report, with the server's reading (Plan J M109). */
+export const getDriftEvents = (runId) => request(driftEventsPath(runId));
+
+/** Note an event (`POST /runs/{id}/drift-events`, Analyst); the answer is the whole view. */
+export const postDriftEvent = (runId, payload) => request(driftEventsPath(runId), post(payload));
+
+/** Remove a noted event (`DELETE /runs/{id}/drift-events/{annotation_id}`, Analyst); the answer is the whole view. */
+export const deleteDriftEvent = (runId, annotationId) =>
+  request(`${driftEventsPath(runId)}/${encodeURIComponent(annotationId)}`, { method: "DELETE" });

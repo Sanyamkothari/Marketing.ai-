@@ -189,6 +189,9 @@ class DriftEventsView(BaseModel):
     window_end: date | None = Field(
         description="Events after this day are not counted; null when not measured."
     )
+    window_note: str | None = Field(
+        description="The period events count in, in words; null when the change was not measured."
+    )
     events: tuple[DriftEventRow, ...] = Field(description="Every noted event, oldest first.")
     explained_measures: tuple[str, ...] = Field(description="Moved measures a counted event names.")
     unexplained_measures: tuple[str, ...] = Field(
@@ -318,6 +321,18 @@ def _day(value: date) -> str:
     return f"{value.day} {value:%b %Y}"
 
 
+def _window_note(start: date | None, end: date) -> str:
+    if start is None:
+        return (
+            f"Events count up to {_day(end)}, when this change was measured. The day the model was trained "
+            "could not be found, so no earlier event is set aside."
+        )
+    return (
+        f"Events count from {_day(start)} (when the model was trained) to {_day(end)} "
+        "(when this change was measured)."
+    )
+
+
 def _moved(drift: DriftReport) -> tuple[str, ...]:
     return tuple(item.feature for item in drift.features if item.status is not DriftStatus.STABLE)
 
@@ -398,6 +413,7 @@ def build_view(storage: Storage, run_id: str) -> DriftEventsView:
             moved_measures=(),
             window_start=None,
             window_end=None,
+            window_note=None,
             events=rows,
             explained_measures=(),
             unexplained_measures=(),
@@ -423,6 +439,7 @@ def build_view(storage: Storage, run_id: str) -> DriftEventsView:
         moved_measures=moved,
         window_start=start,
         window_end=end,
+        window_note=_window_note(start, end),
         events=rows,
         explained_measures=explained,
         unexplained_measures=unexplained,
