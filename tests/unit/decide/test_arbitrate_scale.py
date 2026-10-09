@@ -20,7 +20,7 @@ from engine.decide.arbitrate import ArbitrationConfig, arbitrate_treat_lists
 N = 200_000
 SMALL = 50_000
 BUDGET_SECONDS = 3.0
-GROWTH_LIMIT = 6.0
+GROWTH_LIMIT = 10.0  # linear work gives about 4x for 4x the rows, quadratic about 16x; 10x leaves room for a busy machine (6.3x seen under pytest -n 4)
 """Four times the rows may take at most this many times as long (linear is 4; the sorts add a little)."""
 
 
@@ -63,10 +63,10 @@ def _lists(n: int, seed: int) -> list[pd.DataFrame]:
 
 
 def _timed(n: int, config: ArbitrationConfig) -> float:
-    """The best of two runs (the lists are built once): a busy machine slows a run, rarely every run."""
+    """The best of three runs (the lists are built once): a busy machine slows a run, rarely every run."""
     lists = _lists(n, seed=7)
     best = float("inf")
-    for _ in range(2):
+    for _ in range(3):
         start = time.perf_counter()
         arbitrate_treat_lists(lists, config=config)
         best = min(best, time.perf_counter() - start)
