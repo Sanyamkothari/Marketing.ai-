@@ -442,6 +442,15 @@ codes:
     title: "The arbitration settings file could not be read"
     meaning: "The arbitration settings file (decide/arbitration.yaml) is there but could not be read. The message names the setting to correct: for example a negative channel cap, a contact cap below 1, a misspelt setting, or a file that is not valid YAML. The arbitration does not run until the file is fixed, so the caps and priorities you wrote are never silently dropped."
     fix: "Correct the setting the message names, or remove the file to use the defaults (every use case equal, one action per customer, no channel caps). The file configs/decide/arbitration.example.yaml shows every setting."
+  # --- Plan J M102: campaigns measured on an amount such as revenue (DEC-1312 (e), (f)) ----------------------
+  COVARIATE_NOT_BEFORE_CAMPAIGN:
+    title: "The earlier amount may include the campaign's effect"
+    meaning: "The amount used to adjust the result (for example last quarter's revenue) is dated on or after the day a customer was contacted, or has no date column, so it could already include what the campaign changed. Nothing was measured or stored."
+    fix: "Use an amount measured before each customer was contacted, dated at least one day before the contact, and name its date column."
+  OUTCOME_SKEWED:
+    title: "A few very large amounts make the range less reliable"
+    meaning: "Most customers spent little or nothing and a few spent far more, so with this many customers the range around the result may be too narrow. The numbers are kept and nothing was capped."
+    fix: "Wait for more customers, or read the range as approximate."
 
 settings:
   actions.bands[*].min_score:

@@ -14,6 +14,7 @@ from engine.decide.channel_columns import CHANNEL_COLUMN_CODES
 from engine.decide.offer_run import OFFER_CHOICE_CODES
 from engine.measurement.arms import MULTI_ARM_CODES
 from engine.measurement.codes import MEASUREMENT_CHECK_CODES
+from engine.measurement.continuous import CONTINUOUS_CODES
 from engine.model_gates import UPLIFT_GATE_CODES
 
 __all__ = ["PLAN_J_CODES"]
@@ -88,6 +89,8 @@ PLAN_J_CODES: Final[frozenset[str]] = (
     # when a run of several offers has no value to choose by (`engine.decide.offer_run`)
     | CHANNEL_COLUMN_CODES  # M100 part B (DEC-1310 (y)): CHANNEL_COLUMN_MODEL_INPUT, a scoring run refuses a
     # model trained with a channel's consent or contactable column as an input (`engine.decide.channel_columns`)
+    | CONTINUOUS_CODES  # M102 (DEC-1312 (e), (f), (m)): COVARIATE_NOT_BEFORE_CAMPAIGN (422, the adjusting amount
+    # is not dated before the contact) and OUTCOME_SKEWED (a report warning) (`engine.measurement.continuous`)
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
@@ -97,4 +100,5 @@ definition (the one-registry rule, DEC-950). M96's three advisory approval check
 way from `engine.model_gates.UPLIFT_GATE_CODES` (DEC-1306 (f)), and M100's promotion refusal from
 `engine.measurement.arms.MULTI_ARM_CODES` (DEC-1310 (h)). M100 part B's two codes are joined from
 `engine.decide.offer_run.OFFER_CHOICE_CODES` and `engine.decide.channel_columns.CHANNEL_COLUMN_CODES`
-(DEC-1310 (r), (y)). M101's five arbitration route codes are listed above (DEC-1311)."""
+(DEC-1310 (r), (y)). M101's five arbitration route codes are listed above (DEC-1311). M102's two are
+joined from `engine.measurement.continuous.CONTINUOUS_CODES` (DEC-1312 (m))."""

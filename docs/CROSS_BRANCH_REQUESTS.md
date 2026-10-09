@@ -968,6 +968,61 @@ words. `tests/unit/pilot/test_help.py` is unchanged and green.
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-09 — plan-j M102 (on main) → Phase 3b (owner of `engine/uplift/`, `api/routes/uplift.py`, `docs/UPLIFT.md` and the PHASE-3B block of `api/schemas.py`): campaigns measured on an amount (announcement and record of in-place edits)
+
+**What changed** (DEC-1312 (a)–(f), (j), (l)):
+
+* Pre-approved in the Plan J plan (M102), each additive:
+  * `engine/uplift/incrementality.py`: `measure_incrementality` takes `outcome_kind='continuous'`,
+    `covariate_column` and `covariate_date_column`, all defaulting to binary and none. An amount gets Welch's
+    interval and, when an earlier amount is named, the adjusted (CUPED) estimate. The point-in-time check compares
+    the earlier amount's date with the treatment by day (a value dated the day of contact is refused). Several
+    offers (`arm_column`) stay yes/no only: an amount there is a plain `ValueError`, and an earlier amount named on
+    a yes/no measurement is ignored as before.
+  * `engine/uplift/contracts.py`: `IncrementalityReport` gains optional fields (`treated_mean`, `control_mean`,
+    `mean_difference`, `mean_difference_ci`, `adjusted_lift`, `adjusted_interval`, `variance_reduction`,
+    `rows_covariate_missing`, `adjustment_note`, `outcome_warnings`, `outcome_kind`, `covariate_column`), left out
+    of a binary report's JSON, so binary reports are byte-identical
+    (`tests/unit/measurement/test_m102_binary_identity.py`, recorded on bc38024). `docs/API.md` regenerated.
+  * `docs/UPLIFT.md` section 15: one bullet on amounts and the day-granularity check.
+* Not named in the plan, additive:
+  * `api/schemas.py`: one in-place, defaulted field, `CampaignResultsRequest.outcome_kind` (null, meaning binary),
+    inside the PHASE-3B block, because it belongs to that existing request model; nothing was added to the PLAN-J
+    block.
+  * `api/routes/uplift.py`: one line in `create_campaign_results` passing `outcome_kind` through
+    (`body.outcome_kind or "binary"`).
+
+**What is needed.** Ratification of the two edits not named in the plan. Readers of `IncrementalityReport` should
+read the new fields by name and treat their absence as a yes/no report.
+
+### 2026-10-09 — plan-j M102 (on main) → Phase 3b (owner of `tests/integration/uplift/test_measure_campaign.py`): a learn test measures first (record of an in-place edit)
+
+**Why.** `test_too_small_a_campaign_says_how_much_more_it_needs` failed under `pytest -n 4` in the M102
+integration run ("Measure the campaign first: upload its outcomes.") and also fails run alone on the commit before
+this edit. Like the two learn tests ef4bd2a fixed, it relied on an earlier test in the module having measured the
+campaign in the module-scoped world, and under `-n 4` it can land on a worker where none did.
+
+**What changed.** The test calls `_measure(world, as_of=LATER.isoformat())` before it asks to learn, as its two
+neighbours do. No assertion changed; the module passes alone, serially and under `-n 4`.
+
+**What is needed.** Nothing.
+
+### 2026-10-09 — plan-j M102 (on main) → Plan E (owner of `engine/pilot/roi.py` and `configs/pilot/help.yaml`): amounts in the value view and two new codes (announcement and record of in-place edits)
+
+**What changed** (DEC-1312 (i), (m)):
+
+* `engine/pilot/roi.py` (pre-approved for M102): `RoiView` gains optional amount fields (`outcome_kind`,
+  `treated_mean`, `control_mean`, `adjusted`), left out while unset. An amount is priced from the per-customer
+  difference (the adjusted one when the plan registered it) times the contacted customers. `_priced` takes an
+  optional `takers` argument that only the amount branch uses (the contacted customers whose amount is above zero),
+  so yes/no pricing is unchanged.
+* `COVARIATE_NOT_BEFORE_CAMPAIGN` and `OUTCOME_SKEWED` (`engine.measurement.continuous.CONTINUOUS_CODES`) join
+  `engine.decide.codes.PLAN_J_CODES` by import (one definition) and get `configs/pilot/help.yaml` entries under a
+  Plan J M102 comment, in plain words (the adjusting amount is "the earlier amount"). `tests/unit/pilot/test_help.py`
+  is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

@@ -369,6 +369,17 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_arbitration_review.py",
         "tests/integration/decide/test_arbitration_second_review.py",
     ),
+    # M102 (DEC-1312). The nightly coverage test (tests/statistical/test_continuous_coverage.py, DEC-1300 (e))
+    # is left out, as for M95, M96 and M100; m102_binary_golden.py is the golden's helper, not a test module.
+    # test_amounts_scale.py keeps a fast linearity test beside its `slow` 1,000,000-row one, so it stays mapped.
+    "M102": (
+        "tests/unit/measurement/test_continuous.py",
+        "tests/unit/measurement/test_planner_continuous.py",
+        "tests/unit/measurement/test_roi_amount.py",
+        "tests/unit/measurement/test_amounts_scale.py",
+        "tests/unit/measurement/test_m102_binary_identity.py",
+        "tests/integration/measurement/test_campaign_amounts.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 
