@@ -48,6 +48,7 @@ retention:
     - channel_contactability.parquet    # Plan J M99: key, contactable flag per configured channel
     - arbitrated_treat_list.csv         # Plan J M101: one action per customer across use cases
     - arbitrated_treat_list.parquet     # Plan J M101
+    - offer_choice.parquet              # Plan J M100: key, offer chosen, channel, net value, runner-up
   # Plan J M94: a campaign's files that hold one row per customer (`campaigns/<id>/`). Deleted once the
   # campaign is older than its use case's governance.retention_days; its record and report are kept.
   row_level_campaign_artefacts:

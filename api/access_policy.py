@@ -348,6 +348,7 @@ ROW_LEVEL_ARTEFACTS: Final[frozenset[str]] = frozenset(
         "channel_contactability.parquet",  # Plan J M99 (DEC-1309): contactable flag per channel per customer
         "arbitrated_treat_list.csv",  # Plan J M101 (DEC-1311): cross-use-case arbitrated treat list
         "arbitrated_treat_list.parquet",
+        "offer_choice.parquet",  # Plan J M100 part B (DEC-1310): the offer chosen per customer, net value
     }
 )
 """Run files that hold one row per customer (Plan J M91, M92). `configs/privacy.yaml`

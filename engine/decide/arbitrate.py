@@ -650,11 +650,11 @@ def _output_columns(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> list[str]
         "offer",
         "channel",
         "contactable_channels",
-        "net_value",
-        EXPECTED_GROSS_VALUE_COLUMN,
         "runner_up_offer",
         "runner_up_net_value",
         "offer_reason",
+        "net_value",
+        EXPECTED_GROSS_VALUE_COLUMN,
         *REASON_COLUMNS,
     ]
     own = [c for c in treat_list_columns if c in frame.columns]

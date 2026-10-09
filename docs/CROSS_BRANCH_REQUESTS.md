@@ -824,6 +824,88 @@ entry under a Plan J M100 comment, in plain words (the uplift model is "the camp
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-09 — plan-j M100 part B (on main) → all branches reading the treat list (partner M101, Plan H, Phase 3b): three new columns and new summary fields (announcement)
+
+**What changed** (DEC-1310 (t), (v)): every `treat_list.csv` and `treat_list.parquet` gains `runner_up_offer`,
+`runner_up_net_value` and `offer_reason`, empty on a run of one offer. They sit between `contactable_channels` and
+`net_value`: every column up to `contactable_channels` keeps its position from the start, and `net_value`,
+`expected_gross_value` and `reason_1..3` keep theirs from the end (the reasons are still the last three columns, as
+`tests/integration/decide/test_treat_list_flow.py` pins them). `treat_list_summary.json` gains `offer_counts`,
+`channel_rows`, `explore_offer_counts`, `explore_cost` and `explore_note`, each left out of the file when not set.
+On a run of several offers, `offer`, `channel` and `net_value` are the chosen offer's. The four golden treat lists
+changed only by the three empty columns, as a reviewed edit.
+
+**What is needed.** Read columns by name. The partner branch (M101, `plan-j/m101-arbitration`, not merged or
+touched here): add your columns by name and keep the last five columns last; tell plan-j if you need a different
+position.
+
+### 2026-10-09 — plan-j M100 part B (on main) → Phase 4b (owner of `engine/scheduling/firing.py`) and trunk / Plan H (owners of `api/routes/runs.py`): the catalogue is stamped where the run is created (record of in-place edits)
+
+**What changed** (DEC-1310 (s), (z); not named in the plan, additive):
+
+* `engine/scheduling/firing.py`: `start_dataset_run` takes a new optional keyword `config_root` (default `None`,
+  which keeps today's behaviour), and `ScheduleFirer` passes `services.config_root` to it. After `create_run` it
+  writes `catalogue_stamp.json` from that root when `engine.decide.catalogue.stamped_at_creation(config,
+  scoring=...)` says to: every scoring run, and a training run whose offers map to catalogue actions.
+* `api/routes/runs.py`: `create_run_endpoint` asks the same question and stamps from its resolved root before the job
+  starts; `read_artefact` also serves `offer_choice.parquet` (row-level, through `ROW_LEVEL_ARTEFACTS`).
+* A root with no catalogue writes nothing, so a default deployment's run directory is unchanged. Test:
+  `tests/unit/decide/test_scheduled_catalogue_stamp.py` (a real schedule firing, no `MARKETING_AI_CONFIG_DIR`).
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M100 part B (on main) → Phase 4b (owner of `engine/privacy/`, `configs/privacy.yaml` and `api/access_policy.py`): channel-only consent, and one more row-level file (announcement and record of in-place edits)
+
+**What changed** (DEC-1310 (s), (w), (x); not named in the plan, additive):
+
+* `engine/privacy/consent.py` `apply_consent_gate`: when `actions.suppression.channels` is configured, a customer
+  with a valid grant on a configured channel and no newer all-channel withdrawal passes; the exclusion counts count
+  only the customers the gate left out. Without channels it is unchanged.
+* When the gate lets anyone through on a channel grant alone, `channel_contactability.parquet` gains an
+  `all_channel_consent` column (bool per row) and `channel_contactability.json` gains `channel_only_consent_rows`. A
+  channel the use case does not configure is then closed to rows where `all_channel_consent` is false. A run where
+  every customer's consent covers every channel writes M99's file unchanged.
+* `offer_choice.parquet` (row-level) is registered in `configs/privacy.yaml` (`row_level_run_artefacts`),
+  `engine/privacy/layout.py` (`Store.SCORES`) and `api/access_policy.py` `ROW_LEVEL_ARTEFACTS`.
+* Tests: `tests/unit/decide/test_channel_gaps.py`, `tests/integration/decide/test_channel_gate_real_run.py` and
+  `tests/integration/decide/test_offer_choice_run.py` (new); the production consent tests pass unchanged.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M100 part B (on main) → Phase 3b (owner of `engine/uplift/`, `api/routes/uplift.py`, `ui/modules/uplift/` and `docs/UPLIFT.md`): the offer chosen per customer (announcement and record of in-place edits)
+
+**What changed** (DEC-1310 (r), (s), (u), (z), (aa)):
+
+* Pre-approved in the Plan J plan (M100), each additive:
+  * `engine/uplift/config.py`: `UpliftPolicyConfig.arm_action_ids` and `total_budget`, both left out of the dump
+    while unset, so `run_config.json` is unchanged. `arm_action_ids` names offers, never the control (checked at
+    load).
+  * `engine/uplift/contracts.py`: `ArmOfferCost`, `ArmPolicyValue.offer_costs` (left out while unset), and
+    `offer_choice.json` in `UPLIFT_ARTEFACTS`. `docs/API.md` regenerated.
+  * `engine/uplift/flow.py`: `UpliftScoreFlow` keeps the value costs its actions stage read in
+    `self._run_value_costs`, so the choice of offer reads `configs/pilot/value.yaml` once per run;
+    `UpliftTrainFlow` writes `offer_costs` on `arm_policy_value.json`.
+  * `ui/modules/uplift/views.js`: "Which offer each customer gets" on the Output page, numbers from the server only.
+  * `docs/UPLIFT.md` section 14: the choice in the run, the explore slice and the channel rule.
+* Not named in the plan, additive: `api/routes/uplift.py` `create_uplift_run` stamps the catalogue from its resolved
+  root for a training run whose offers map to catalogue actions (`stamped_at_creation(config, scoring=False)`); a
+  binary use case or one without `arm_action_ids` writes nothing new.
+
+**What is needed.** Ratification of the `api/routes/uplift.py` edit. One issue for the owner of `engine/config.py`
+(trunk): `uplift.policy.arm_action_ids` appears in `overridable_paths`, but a per-run override of a mapping is
+refused with `OVERRIDE_UNKNOWN_PATH`, because overrides expand to leaf paths such as
+`uplift.policy.arm_action_ids.offer_a`. Either make it overridable as a whole value or drop it from the list. Plan
+J's tests set it in the use case instead.
+
+### 2026-10-09 — plan-j M100 part B (on main) → Plan E (owner of `configs/pilot/help.yaml`): two new codes (announcement)
+
+**What changed** (DEC-1310 (bb)): `OFFER_CHOICE_NOT_MADE` (`engine.decide.offer_run.OFFER_CHOICE_CODES`) and
+`CHANNEL_COLUMN_MODEL_INPUT` (`engine.decide.channel_columns.CHANNEL_COLUMN_CODES`) join
+`engine.decide.codes.PLAN_J_CODES` by import (one definition each) and get `configs/pilot/help.yaml` entries under a
+Plan J M100 part B comment, in plain words. `tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

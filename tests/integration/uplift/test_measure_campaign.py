@@ -285,6 +285,9 @@ def test_an_operational_use_case_has_no_step_4(world: World, config_root: Path) 
 
 
 def test_learning_builds_the_treatment_on_the_server_and_trains_an_uplift_model(world: World) -> None:
+    _measure(
+        world, as_of=LATER.isoformat()
+    )  # self-contained: under pytest -n the module is split across workers
     response = world.client.post(f"/runs/{RUN_ID}/measure/learn", json={"overrides": FAST})
     assert response.status_code == 202, response.text
     uplift_run = str(response.json()["run_id"])
@@ -316,6 +319,9 @@ def test_learning_from_a_synthetic_campaign_trains_a_synthetic_uplift_run(world:
     stored = json.loads(world.storage.read_bytes(key))
     stored["synthetic"] = True
     world.storage.write_bytes(key, json.dumps(stored).encode())
+    # Self-contained: under pytest -n this test can run on a worker where no other test measured the
+    # campaign, and learning needs a mature measurement (it failed there with MEASURE_NOT_READY).
+    _measure(world, as_of=LATER.isoformat())
 
     response = world.client.post(f"/runs/{RUN_ID}/measure/learn", json={"overrides": FAST})
     assert response.status_code == 202, response.text

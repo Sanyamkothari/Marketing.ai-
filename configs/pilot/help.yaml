@@ -412,6 +412,15 @@ codes:
     title: "A model that chooses between several offers is not made champion"
     meaning: "This campaign-effect model was trained on several offers against one held-back group. The rule that picks the champion compares models of one offer only, so this model stays a candidate. It is not made champion by its training run, and it is not made champion when you press Promote on the Models page. The same refusal appears when the model's record and the settings of the run that trained it cannot be read, because then nobody can check that it is a model of one offer."
     fix: "Score with this model by naming its version on the scoring run. To make a model champion by hand, train it with one offer: leave the treatment_levels setting of the campaign-effect use case empty. If the message says the model's record cannot be read, try again; if it keeps happening, train the model again."
+  # --- Plan J M100 part B: the offer chosen per customer, and consent columns kept out of the model (DEC-1310 (r), (y))
+  OFFER_CHOICE_NOT_MADE:
+    title: "No offer was chosen for each customer"
+    meaning: "This scoring run used a model of several offers, but it had no value per response to compare the offers by. Without that value it cannot tell which offer is worth more for a customer, so it chose no offer per customer. The treat list is the first offer's list, as for a model of one offer. The file offer_choice.json says so. This is a note on the run, not a failure."
+    fix: "In the campaign-effect use case's policy, set the money one extra response is worth (value_per_conversion), or name a column of customer values (value_column), then score again."
+  CHANNEL_COLUMN_MODEL_INPUT:
+    title: "The model uses a channel's consent column as an input"
+    meaning: "The model chosen for this scoring run was trained with a column that this use case uses to record whether a customer agreed to be contacted on a channel, or can be reached on it (actions.suppression.channels), as one of its inputs. The message names the columns. Whether someone agreed to be contacted must not decide how they are ranked, so this model cannot score for this use case. The run stops before it scores anyone."
+    fix: "Train the model again. Training now leaves each channel's consent and contactable columns out of the model's inputs. Then score with the new version."
 
 settings:
   actions.bands[*].min_score:

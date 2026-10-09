@@ -221,12 +221,15 @@ def choose_offers(
     eligible: npt.ArrayLike | None = None,
     budget: float | None = None,
     min_roi: float = 0.0,
+    max_offers: int | None = None,
 ) -> OfferChoice:
     """The offer per customer, or no offer, under an optional total budget (see the module docstring).
 
     `net_value`, `cost`, `sleeping_dog` and `eligible` are `rows x K`, offer `k` in column `k-1`;
     `eligible` defaults to every offer for everyone (Part B passes contactability). A NaN net value is
     never chosen. `budget` is in the same unit as `cost`; `min_roi` is M97's (DEC-1307 (c)).
+    `max_offers` (Plan J M100 part B: the policy's `budget_contacts`) caps how many customers get an
+    offer, taken in the same greedy order as the budget; a customer left out is `over_budget` too.
     """
     import numpy as np
 
@@ -239,6 +242,8 @@ def choose_offers(
     allowed = _mask(eligible, "eligible", (rows, arms), default=True)
     if budget is not None and budget < 0:
         raise ValueError("budget cannot be negative.")
+    if max_offers is not None and max_offers < 0:
+        raise ValueError("max_offers cannot be negative.")
     if min_roi < 0:
         raise ValueError("min_roi cannot be negative.")
 
@@ -271,8 +276,8 @@ def choose_offers(
     chosen_cost = np.where(has_offer, costs[rows_index, best], 0.0)
     chosen_value = np.where(has_offer, net[rows_index, best], np.nan)
     arm = preferred.copy()
-    if budget is not None:
-        taken = _within_budget(chosen_value, chosen_cost, has_offer, budget)
+    if budget is not None or max_offers is not None:
+        taken = _within_budget(chosen_value, chosen_cost, has_offer, budget, max_offers)
         dropped = has_offer & ~taken
         arm[dropped] = NO_OFFER
         reason[dropped] = OFFER_REASONS.index("over_budget")
@@ -291,8 +296,16 @@ def choose_offers(
     )
 
 
-def _within_budget(value: FloatArray, cost: FloatArray, offered: BoolArray, budget: float) -> BoolArray:
-    """The greedy walk: by net value per rupee (zero cost first), then net value, then row order."""
+def _within_budget(
+    value: FloatArray,
+    cost: FloatArray,
+    offered: BoolArray,
+    budget: float | None,
+    max_offers: int | None = None,
+) -> BoolArray:
+    """The greedy walk: by net value per rupee (zero cost first), then net value, then row order.
+
+    Without a `budget` only `max_offers` limits it: the first `max_offers` customers in that order."""
     import numpy as np
 
     candidates = np.flatnonzero(offered)
@@ -303,12 +316,35 @@ def _within_budget(value: FloatArray, cost: FloatArray, offered: BoolArray, budg
     )
     # np.lexsort sorts by the last key first: ratio (desc), then value (desc), then row order (asc).
     order = candidates[np.lexsort((candidates, -value[candidates], -per_rupee))]
-    ordered_cost = cost[order]
     taken = np.zeros(len(value), dtype=np.bool_)
+    if budget is None:
+        taken[order[: max_offers if max_offers is not None else len(order)]] = True
+        return taken
+    if max_offers is not None:
+        # The walk still skips an offer that does not fit; the count is of the offers given.
+        return _budget_walk(order, cost, budget, len(value), max_offers)
+    ordered_cost = cost[order]
     spent = 0.0
     # One pass; a customer whose offer does not fit is skipped and the walk goes on.
     for position, each in zip(order.tolist(), ordered_cost.tolist(), strict=True):
         if spent + each <= budget + 1e-9:
             spent += each
+            taken[position] = True
+    return taken
+
+
+def _budget_walk(order: IntArray, cost: FloatArray, budget: float, rows: int, max_offers: int) -> BoolArray:
+    """The walk with both limits: by `order`, skipping what does not fit, until `max_offers` are given."""
+    import numpy as np
+
+    taken = np.zeros(rows, dtype=np.bool_)
+    spent = 0.0
+    given = 0
+    for position, each in zip(order.tolist(), cost[order].tolist(), strict=True):
+        if given >= max_offers:
+            break
+        if spent + each <= budget + 1e-9:
+            spent += each
+            given += 1
             taken[position] = True
     return taken

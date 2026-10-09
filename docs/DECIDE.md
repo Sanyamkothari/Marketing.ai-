@@ -30,7 +30,7 @@ the user downloads (the treat list).
 | 11 | Ranking by net value | M97 | not yet written |
 | 12 | The treat list and its reasons | M98 | written (below) |
 | 13 | The offer and channel catalogue; channel-aware consent | M99 | written (below) |
-| 14 | Choosing the offer (multi-treatment uplift) | M100 | not yet written |
+| 14 | Choosing the offer (multi-treatment uplift) | M100 | written (below) |
 | 15 | One action per customer across use cases | M101 | written (below) |
 | 16 | Revenue outcomes and CUPED | M102 | not yet written |
 | 17 | Auditing a campaign another tool ran; the programme readout | M103 | not yet written |
@@ -251,8 +251,11 @@ for the hand-off, and the Output page labels them differently: **Download contac
   never today's use case file, so editing a use case does not change the treat list of a finished run.
 * **Columns** (CSV and parquet, in this order): the customer key (every column of a composite key), `use_case`,
   `model_version`, `band` (propensity) or `segment` (uplift), `treat`, `holdout`, `explore`,
-  `suppression_reason`, `offer`, `channel`, `contactable_channels`, `net_value`, `expected_gross_value`,
-  `reason_1`, `reason_2`, `reason_3`. In the parquet the flags are booleans; in the CSV they are `1` and `0`, and **empty when
+  `suppression_reason`, `offer`, `channel`, `contactable_channels`, `runner_up_offer`,
+  `runner_up_net_value`, `offer_reason` (Plan J M100 part B, §14; empty on a run of one offer), `net_value`,
+  `expected_gross_value`, `reason_1`, `reason_2`, `reason_3`. The M100 columns sit before `net_value`, so
+  every column before them keeps its position from the start and the last five keep theirs from the end
+  (the reasons are always the last three columns). In the parquet the flags are booleans; in the CSV they are `1` and `0`, and **empty when
   unknown**. Rupee columns are written to the paisa.
 * **Joined on the key, never by position.** `holdout_assignment.parquet` and `row_explanations.parquet` are
   joined to the scores on **every** key column (`customer_id` and `snapshot_date` for a periodic dataset),
@@ -357,7 +360,9 @@ for the hand-off, and the Output page labels them differently: **Download contac
   on a laptop's SQLite `platform.db`, the column is added in place, also when the scoring seam opens the
   ledger). Null means every channel, so every record stored before M99 keeps applying to all of them. The
   scoring gate's all-channel question (`channel=None`) reads only all-channel records: an SMS-only
-  withdrawal closes SMS and does not suppress the customer. A channel must be a channel name (lower case
+  withdrawal closes SMS and does not suppress the customer. Since M100 part B, when the use case configures
+  channels, a valid grant on at least one configured channel (with no newer all-channel withdrawal) also
+  passes that question, so consent recorded per channel only is not read as no consent (section 14). A channel must be a channel name (lower case
   letters, digits and `_`, after stripping and lower-casing; the same rule as config and catalogue): an
   imported row with `e-mail` is refused with `CONSENT_CHANNEL_INVALID`, so no opt-out is stored that no
   configured channel could match.
@@ -365,6 +370,60 @@ for the hand-off, and the Output page labels them differently: **Download contac
   `sms_requires: [dlt_template_id, message_category]`) is applied to the catalogue's `region` without naming
   any region in Python. A missing DLT template id is `ACTION_DLT_TEMPLATE_MISSING`; another missing required
   field is `CATALOGUE_INVALID`. A value left as a placeholder in angle brackets counts as missing.
+
+## 14. Choosing the offer (M100, DEC-1310)
+
+Part A (learning, checking, evaluating and measuring several offers against one shared control) is
+described in `docs/UPLIFT.md` section 14, "Several offers against one shared control". Part B makes the
+choice inside the scoring run and puts it on the treat list:
+
+* **Where.** `engine/decide/offer_run.py`, installed on the score flow's stage table after M99's
+  contactability seam: after the actions stage of a scoring run of a model of several offers. A run of one
+  offer is untouched (`tests/integration/decide/test_m100_binary_identity.py`,
+  `tests/integration/decide/test_offer_choice_binary.py`).
+* **The rule.** Per customer, the offer with the highest net value (M97, each offer priced with its own
+  catalogue action's costs, `uplift.policy.arm_action_ids`) among the offers they are eligible for (not
+  suppressed, not held back, contactable on one of the offer's planned channels, M99) and not a sleeping dog
+  for; no offer when none pays for itself; a total budget in rupees (`uplift.policy.total_budget`) and in
+  contacts (`budget_contacts`), greedy by net value per rupee. `docs/UPLIFT.md` section 14 has the details.
+* **Files.** `offer_choice.parquet` (row-level: registered in `configs/privacy.yaml`,
+  `engine/privacy/layout.py`, `ROW_LEVEL_ARTEFACTS`; its `offer_total_cost` is the offer's total expected
+  cost, contact + offer cost x `p_treated`, in rupees, not the catalogue's offer cost alone) and
+  `offer_choice.json`. The treat list gains three columns on every run, between `contactable_channels`
+  and `net_value` (section 12): `runner_up_offer`, `runner_up_net_value` and `offer_reason` (empty on a run
+  of one offer), and its summary
+  `offer_counts` (a run that chose offers: the choice's own offers, `offered_rows` of `offer_choice.json`)
+  and `channel_rows` (any run whose treated rows have a channel).
+* **The explore slice (M92).** An explored customer the choice left without an offer is given the best
+  offer they could be given (`explore_arm` of `offer_choice.parquet`: the offer the choice preferred for
+  them when the budget dropped them, else the best eligible offer that is not a sleeping dog for them),
+  outside the budget. The treat list summary counts those offers apart (`explore_offer_counts`), gives
+  their expected cost (`explore_cost`, rupees) and says they are outside `uplift.policy.total_budget`
+  (`explore_note`), so the list's cost is the choice's `spent` plus `explore_cost`.
+* **The catalogue the run is checked against is the one it is priced with.** Whatever creates a scoring
+  run (and an uplift training run that maps offers to actions) writes `catalogue_stamp.json` from the
+  config root it resolved the use case from: `POST /runs` and `POST /uplift/runs` (`create_app(config_root=...)`,
+  else `MARKETING_AI_CONFIG_DIR`, else `configs/`), and a scheduled firing
+  (`engine.scheduling.firing.start_dataset_run`, from `FiringServices.config_root`); the run keeps that
+  stamp rather than stamping again from its own root (`engine.decide.catalogue.stamp_checked_catalogue`,
+  `stamped_at_creation`).
+* **Channel consent columns are never model inputs.** A training run whose use case configures
+  `actions.suppression.channels` leaves those channels' consent and contactable columns out of the
+  features, through `prepare.exclude_columns` (`engine/decide/channel_columns.py`), without an edit to a
+  Phase 1 stage file. A model trained before that with one of them among its inputs (its `schema.json`)
+  does not score for a use case that names them: the run stops before predicting with
+  `CHANNEL_COLUMN_MODEL_INPUT` and says to retrain.
+* **Channel-only consent.** With channels configured, the scoring gate passes a customer with a valid grant
+  on at least one configured channel (section 13); without channels it is unchanged. A planned channel the
+  use case does not configure (a catalogue action's push, say) has no flag of its own, so it is open only
+  to a customer whose consent covers every channel: when the gate lets anyone through on a channel grant
+  alone, `channel_contactability.parquet` gains `all_channel_consent` (and its summary
+  `channel_only_consent_rows`), and the choice of offer and the treat list read it. A customer who consented
+  to SMS alone is never sent anything on push. Without such a customer the file is M99's, and such a channel
+  restricts nobody, as before.
+* **On screen.** The uplift Output page shows "Which offer each customer gets" (per offer: customers,
+  channels, net value, costs; no offer and why), and the treat list card counts the treated rows per
+  offer and per channel. Every number is the server's.
 
 ## 15. One action per customer across use cases (M101, DEC-1311)
 

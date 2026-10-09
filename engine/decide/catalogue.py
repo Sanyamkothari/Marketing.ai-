@@ -32,6 +32,7 @@ from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
     from engine.config import UseCaseConfig
+    from engine.storage import Storage
 
 __all__ = [
     "CATALOGUE_FILENAME",
@@ -39,12 +40,15 @@ __all__ = [
     "ActionCatalogue",
     "ActionItem",
     "CatalogueStamp",
+    "StampedAction",
     "catalogue_or_none",
     "catalogue_sha256",
     "catalogue_stamp",
     "clear_catalogue_cache",
     "load_catalogue",
     "referenced_action_ids",
+    "stamp_checked_catalogue",
+    "stamped_at_creation",
     "validate_action_ids",
 ]
 
@@ -258,16 +262,20 @@ def catalogue_sha256(root: Path | None = None) -> str | None:
 
 
 def referenced_action_ids(config: UseCaseConfig) -> tuple[str, ...]:
-    """The catalogue action ids a use case names: each band's `action_id`, then the uplift treat action."""
+    """The catalogue action ids a use case names: each band's `action_id`, then the uplift treat action,
+    then each offer's action (`uplift.policy.arm_action_ids`, Plan J M100 part B), in that order."""
     ids = [band.action_id for band in config.actions.bands if band.action_id is not None]
     uplift = config.uplift
     if uplift is not None and uplift.policy.treat_action_id is not None:
         ids.append(uplift.policy.treat_action_id)
+    if uplift is not None:
+        ids.extend(uplift.policy.arm_action_ids.values())
     return tuple(dict.fromkeys(ids))
 
 
 def validate_action_ids(config: UseCaseConfig, *, root: Path | None = None) -> None:
-    """Refuse a `Band.action_id` or `uplift.policy.treat_action_id` the catalogue lacks.
+    """Refuse a `Band.action_id`, `uplift.policy.treat_action_id` or an `uplift.policy.arm_action_ids`
+    action (Plan J M100 part B) the catalogue lacks.
 
     Does nothing when there is no `catalogue.yaml` (the default). Called in place by
     `engine.config.load_use_case` and `resolve_config` (`CATALOGUE_ACTION_UNKNOWN`).
@@ -293,6 +301,24 @@ def validate_action_ids(config: UseCaseConfig, *, root: Path | None = None) -> N
             f"known actions in catalogue: {listed}.",
             path="uplift.policy.treat_action_id",
         )
+    arm_action_ids = {} if config.uplift is None else config.uplift.policy.arm_action_ids
+    for level, action_id in arm_action_ids.items():
+        if action_id not in known:
+            raise ConfigError(
+                "CATALOGUE_ACTION_UNKNOWN",
+                f"uplift.policy.arm_action_ids names unknown action_id {action_id!r} for offer {level!r}; "
+                f"known actions in catalogue: {listed}.",
+                path=f"uplift.policy.arm_action_ids.{level}",
+            )
+
+
+class StampedAction(_Model):
+    """One catalogue action as a run read it: what the offer is called, where it goes, what it costs."""
+
+    label: str = Field(description="The action's business label.")
+    channels: tuple[str, ...] = Field(description="Its channels, in order of preference.")
+    offer_cost: float = Field(description="Cost of the offer, in rupees, paid by a customer who takes it.")
+    contact_cost: float = Field(description="Cost of one contact, in rupees.")
 
 
 class CatalogueStamp(Artefact):
@@ -307,11 +333,18 @@ class CatalogueStamp(Artefact):
     catalogue_sha256: str = Field(description="SHA-256 of configs/decide/catalogue.yaml as the run read it.")
     planned_channels: dict[str, tuple[str, ...]] = Field(
         description=(
-            "Per catalogue action id the use case names (bands, uplift treat action) and the catalogue "
-            "declares: its channels, in order of preference."
+            "Per catalogue action id the use case names (bands, uplift treat action, offers) and the "
+            "catalogue declares: its channels, in order of preference."
         )
     )
     created_at: datetime = Field(description="UTC time the stamp was written.")
+    actions: dict[str, StampedAction] = Field(
+        default_factory=dict,
+        description=(
+            "Plan J M100 part B: the same actions' labels and costs as the run read them, so a choice "
+            "of offer is priced from the catalogue the use case was checked against."
+        ),
+    )
 
 
 def catalogue_stamp(
@@ -323,16 +356,57 @@ def catalogue_stamp(
         return None
     digest = hashlib.sha256(path.read_bytes()).hexdigest()
     actions = load_catalogue(root).actions_by_id
+    named = [action_id for action_id in referenced_action_ids(config) if action_id in actions]
     return CatalogueStamp(
         run_id=run_id,
         catalogue_sha256=digest,
-        planned_channels={
-            action_id: actions[action_id].channels
-            for action_id in referenced_action_ids(config)
-            if action_id in actions
-        },
+        planned_channels={action_id: actions[action_id].channels for action_id in named},
         created_at=created_at,
+        actions={
+            action_id: StampedAction(
+                label=actions[action_id].label,
+                channels=actions[action_id].channels,
+                offer_cost=actions[action_id].offer_cost,
+                contact_cost=actions[action_id].contact_cost,
+            )
+            for action_id in named
+        },
     )
+
+
+def stamp_checked_catalogue(
+    storage: Storage, run_id: str, config: UseCaseConfig, *, root: Path | None, created_at: datetime
+) -> CatalogueStamp | None:
+    """Write `catalogue_stamp.json` for a run from the config root its use case was checked against.
+
+    Called by everything that creates a run (the routes, beside `run_config.json`, and a scheduled
+    firing; :func:`stamped_at_creation` says which runs), with the root the configuration was resolved
+    from (`create_app(config_root=...)`, else `MARKETING_AI_CONFIG_DIR`, else `configs/`; a firing's
+    `FiringServices.config_root`). The run keeps a stamp it finds instead of stamping again from its own root, so the
+    catalogue a run is stamped and priced with is the one its action ids were checked against, even
+    when the API was given a root the run's process does not know (the M99 gap, DEC-1309). Nothing is
+    written when that root has no catalogue.
+    """
+    from engine.storage import run_key
+
+    stamp = catalogue_stamp(config, run_id=run_id, created_at=created_at, root=root)
+    if stamp is not None:
+        storage.write_model(run_key(run_id, CATALOGUE_STAMP_FILENAME), stamp)
+    return stamp
+
+
+def stamped_at_creation(config: UseCaseConfig, *, scoring: bool) -> bool:
+    """Whether whoever creates a run stamps its catalogue (:func:`stamp_checked_catalogue`) before it starts.
+
+    Every scoring run (its actions stage plans channels and, with several offers, prices them from the
+    stamp), and a training run whose offers are mapped to catalogue actions (`arm_policy_value.json`
+    records their costs). The routes that create runs (`POST /runs`, `POST /uplift/runs`) and a
+    scheduled firing (`engine.scheduling.firing.start_dataset_run`) ask the same question, so no creator
+    of a run leaves the run to stamp from a root other than the one its use case was checked against.
+    """
+    if scoring:
+        return True
+    return config.uplift is not None and bool(config.uplift.policy.arm_action_ids)
 
 
 def clear_catalogue_cache() -> None:

@@ -656,6 +656,10 @@ def apply_consent_gate(
     file's own value by AND** (DEC-738): a customer the client's file marks as not consenting today
     stays uncontactable even when the ledger holds an older grant, because the more restrictive of
     two consent records is the one that can be relied on.
+
+    Plan J M100 part B (DEC-1310): when the use case configures `actions.suppression.channels`, a
+    customer with a valid grant on at least one configured channel (and no all-channel withdrawal
+    newer than it) passes too, so consent recorded per channel only is not read as no consent.
     """
     keys = [principal_key(value) for value in frame[primary_key].tolist()]
     verdict = gate.ledger.classify(gate.client_id, gate.purpose, keys, at)
@@ -667,6 +671,16 @@ def apply_consent_gate(
         governance = config.governance.model_copy(update={"consent_column": column})
         gated_config = config.model_copy(update={"governance": governance})
     ledger_valid = [key in verdict.valid for key in keys]
+    channels = tuple(config.actions.suppression.channels)
+    if channels:
+        # Plan J M100 part B (DEC-1310): with channels configured, a valid grant on one of them passes the
+        # all-channel question too - the latest of the customer's all-channel records and that channel's,
+        # so an all-channel withdrawal newer than the grant still fails it. Per-channel contactability
+        # (`engine.decide.contactability`) then decides which channel. Without channels: unchanged.
+        by_channel: set[str] = set()
+        for channel in channels:
+            by_channel |= gate.ledger.classify(gate.client_id, gate.purpose, keys, at, channel=channel).valid
+        ledger_valid = [ok or key in by_channel for ok, key in zip(ledger_valid, keys, strict=True)]
     if replaced:
         from engine.stages.actions import _truthy  # the rule actions itself applies to the column
 
@@ -689,9 +703,17 @@ def apply_consent_gate(
         replaced_file_column=replaced,
         principals_checked=rows,
         principals_with_valid_consent=sum(ledger_valid),
-        excluded_no_consent=sum(1 for key in keys if key in verdict.missing),
-        excluded_withdrawn=sum(1 for key in keys if key in verdict.withdrawn),
-        excluded_expired=sum(1 for key in keys if key in verdict.expired),
+        # Only the customers the gate left out (with channels, a channel grant passes some the
+        # all-channel verdict lists); without channels this is every one the verdict lists, as before.
+        excluded_no_consent=sum(
+            1 for key, ok in zip(keys, ledger_valid, strict=True) if not ok and key in verdict.missing
+        ),
+        excluded_withdrawn=sum(
+            1 for key, ok in zip(keys, ledger_valid, strict=True) if not ok and key in verdict.withdrawn
+        ),
+        excluded_expired=sum(
+            1 for key, ok in zip(keys, ledger_valid, strict=True) if not ok and key in verdict.expired
+        ),
         excluded_file_opt_out=sum(
             1 for ledger, file in zip(ledger_valid, in_file, strict=True) if ledger and not file
         ),

@@ -104,6 +104,34 @@ class UpliftPolicyConfig(BaseModel):
     treat_action_id: Annotated[str | None, Field(min_length=1)] = Field(
         default=None, exclude_if=lambda value: value is None
     )
+    # Plan J M100 part B (DEC-1310 (q) on): with several offers, the catalogue action each offer is sent
+    # as ({offer level: action id}; its label, channels and costs), and the most the offers chosen for
+    # one scoring run may cost in total, in rupees. Both are left out of the serialised config while
+    # unset, so a use case without them dumps exactly as before.
+    arm_action_ids: dict[str, str] = Field(
+        default_factory=dict,
+        description=(
+            "Several offers (Plan J M100): the catalogue action each offer level is sent as, "
+            "{level: action_id}. An offer not named here is priced from the value settings."
+        ),
+        exclude_if=lambda value: not value,
+    )
+    total_budget: Annotated[float | None, Field(ge=0.0)] = Field(
+        default=None,
+        description=(
+            "Several offers (Plan J M100): the most the offers chosen in one scoring run may cost in "
+            "total, contact and offer costs together, in rupees. Unset: no total budget."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+
+    @field_validator("arm_action_ids", mode="before")
+    @classmethod
+    def _arm_levels_as_text(cls, value: Any) -> Any:
+        """Levels as `level_text` spells them, so YAML `{1: x}` and `{"1.0": x}` name one offer."""
+        if isinstance(value, dict):
+            return {level_text(key): str(action).strip() for key, action in value.items()}
+        return value
 
 
 class UpliftEvidenceConfig(BaseModel):
@@ -249,6 +277,25 @@ class UpliftConfig(BaseModel):
         if len(set(keys)) != len(keys):
             raise ValueError("treatment_levels names the same value twice")
         return value
+
+    @model_validator(mode="after")
+    def _arm_actions_name_offers(self) -> Self:
+        """Plan J M100 part B: `policy.arm_action_ids` names offers, never the control.
+
+        Checked against `treatment_levels` when they are set here; a scoring run whose levels come from
+        the model checks the same against the model's levels and says which it ignored."""
+        levels = [level_text(level) for level in self.treatment_levels]
+        for key in self.policy.arm_action_ids:
+            if levels and key == levels[0]:
+                raise ValueError(
+                    f"policy.arm_action_ids names {key!r}, the control level: the control gets no offer"
+                )
+            if levels and key not in levels[1:]:
+                raise ValueError(
+                    f"policy.arm_action_ids names {key!r}, which is not one of the offers in "
+                    f"treatment_levels ({', '.join(levels[1:])})"
+                )
+        return self
 
     @property
     def multi_arm(self) -> bool:

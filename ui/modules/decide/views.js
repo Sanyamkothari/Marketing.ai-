@@ -101,6 +101,24 @@ export function campaignPageHtml({
 }
 
 /**
+ * Plan J M100 part B: the treat = 1 rows per offer (`offer_counts`, a run that chose the offer per
+ * customer) or per channel (`channel_rows`), as the summary counts them; `""` when it has none.
+ */
+function countsHtml(title, kind, counts, count) {
+  const entries = Object.entries(counts || {});
+  if (!entries.length) return "";
+  return `<div class="dc-kvs" data-treat-list-${kind}s>
+      <div class="dc-kv"><span class="dc-k"><b>${esc(title)}</b></span><span class="dc-v"></span></div>
+      ${entries
+        .map(
+          ([name, n]) =>
+            `<div class="dc-kv"><span class="dc-k">${esc(name)}</span><span class="dc-v">${esc(count(n))}</span></div>`,
+        )
+        .join("")}
+    </div>`;
+}
+
+/**
  * The treat list card on a scoring run's Output page (Plan J M98, DEC-1308): the counts of
  * `treat_list_summary.json` in the server's own words, the one-line instruction, and the download.
  * `error` is what the summary request answered when it failed (an ApiError or any `{ message }`): the
@@ -146,6 +164,8 @@ export function treatListCardHtml(summary, { treatListHref = "", error = null } 
       ${netValue === null ? "" : row("Predicted net value of those treated", netValue)}
       ${grossValue === null ? "" : row("Expected gross value of those treated (not incremental)", grossValue)}
     </div>
+    ${countsHtml("By offer", "offer", summary.offer_counts, count)}
+    ${countsHtml("By channel", "channel", summary.channel_rows, count)}
     ${notesHtml}
     ${downloadBtn}
   </section></div>`;

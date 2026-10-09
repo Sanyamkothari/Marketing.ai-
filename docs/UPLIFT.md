@@ -1011,19 +1011,67 @@ fields. A binary run's reports carry no `arms` key at all.
 | Split | One hold-out of every row, stratified on (level, outcome), so the shared control is on one side for every offer. |
 | Learning | One model per offer against the shared control: a T- or X-learner per offer, or one S-learner with the offer as a feature (one 0/1 column per offer). With the T- or X-learner on LightGBM, the first offer's model is exactly the binary learner on its rows; the S-learner is one model of every arm, and AutoGluon's time budget is shared across the offers (`engine/uplift/learners.py` `MultiArmUpliftModel`). |
 | Evaluation | `uplift_evaluation.json` `arms`: each offer's effect (the bootstrap within each arm), AUUC and Qini, measured on its own hold-out customers and the control's. `segments.json` and `policy_recommendation.json` `arms`: the segments by each offer's uplift, and what the run's policy would do with each offer on its own. |
-| Value of choosing | `arm_policy_value.json` (served by `GET /runs/{id}/uplift/arm_policy_value.json`): what giving each customer the offer with the highest predicted uplift × value (or no offer) is worth per customer on the hold-out, against the first offer alone, by inverse probability weighting and a paired bootstrap within each arm. Offer costs are not in it yet (they come with M99's catalogue). |
+| Value of choosing | `arm_policy_value.json` (served by `GET /runs/{id}/uplift/arm_policy_value.json`): what giving each customer the offer with the highest predicted uplift × value (or no offer) is worth per customer on the hold-out, against the first offer alone, by inverse probability weighting and a paired bootstrap within each arm. The comparison is before costs (`costs_included: false`); `offer_costs` lists each offer's offer and contact cost as a scoring run's choice prices it (its catalogue action's, else the value settings or the run's cost per contact). |
 | Champion | Never promoted (`MULTI_ARM_PROMOTION_REFUSED`), by the run or on the Models page (`POST /models/{id}/promote` answers 409): the champion rule compares one treatment's AUUC and is frozen. The guard reads the model card, else the run's `run_config.json`; an uplift version whose card and run configuration both cannot be read is refused too, never let through. Score with the model by naming its version. |
 | Scoring | `scores.csv` is unchanged: the first offer's contact list. `scores.parquet` adds `uplift_arm_<k>` and `p_treated_arm_<k>` for every offer `k` (1 = the first), after the same columns. |
 | Measurement | `measure_campaign(..., arm_column=..., arms=..., control_level=...)` measures each offer against the shared control with the unchanged Newcombe interval; `arms` (the configured offers) and `control_level` are required, so the report's own fields are the first configured offer's whatever the file's row order, and `arms` lists every offer. |
 
-**Choosing the offer per customer.** `engine/decide/offer_choice.py` is the choice, as a pure function
-(Part B of M100 wires it into the scoring run and the treat list, once M99's channel consent can say
-which offers a customer may get): the eligible offer, not one the customer is a sleeping dog for, with
-the highest M97 net value (`arm_net_values`: uplift × value × margin × horizon − offer cost × p_treated −
-contact cost, with each offer's own costs, priced the same way with or without `value_column`; an
-offer cost needs `p_treated`), or no offer when none pays for itself; the runner-up
-offer's net value is kept. Under a total budget, customers keep their best offer and are taken by net
-value per rupee until the budget is spent.
+**Choosing the offer per customer.** `engine/decide/offer_choice.py` is the choice, as a pure function:
+the eligible offer, not one the customer is a sleeping dog for, with the highest M97 net value
+(`arm_net_values`: uplift × value × margin × horizon − offer cost × p_treated − contact cost, with each
+offer's own costs, priced the same way with or without `value_column`; an offer cost needs `p_treated`),
+or no offer when none pays for itself; the runner-up offer's net value is kept. Under a total budget,
+customers keep their best offer and are taken by net value per rupee until the budget is spent.
+
+**In the scoring run (M100 part B, DEC-1310 (q) on).** A scoring run of a model of several offers makes
+that choice after the actions stage (`engine/decide/offer_run.py`, installed in the Plan J block of
+`engine/pipeline.py` after M99's contactability), once suppression, the control group and per-channel
+contactability are known:
+
+```yaml
+uplift:
+  treatment_levels: [none, offer_a, offer_b]
+  policy:
+    value_per_conversion: 1000          # or value_column; with neither, no offer is chosen
+    arm_action_ids: {offer_a: offer_a_sms, offer_b: offer_b_email}   # catalogue actions; optional
+    total_budget: 50000                 # rupees, contact and offer costs together; optional
+```
+
+* **Costs per offer.** An offer mapped to a catalogue action (`arm_action_ids`, checked at config load
+  like `treat_action_id`: `CATALOGUE_ACTION_UNKNOWN`; a key must be an offer of `treatment_levels`, never
+  the control) is priced with that action's offer cost (× the customer's `p_treated_arm_k`) and contact
+  cost, read from the run's `catalogue_stamp.json` - the catalogue the use case was checked against. The
+  catalogue's contact cost wins over `uplift.policy.cost_per_contact` for that offer. An offer with no
+  action is priced as M97 prices the first offer's list (`configs/pilot/value.yaml` on the value path,
+  else `cost_per_contact`), with the costs the run's actions stage read from that file - read once per
+  run, so an edit during the run cannot price the choice differently from the first offer's list.
+* **Eligibility per offer.** Not suppressed, not held back as control (the persistent holdout included),
+  and contactable on at least one of the offer's planned channels (the action's, else the configured
+  channels), from `channel_contactability.parquet` joined on every key column. A customer the file does
+  not cover, and every customer of a run with no channels configured, is eligible as before. A planned
+  channel the use case does not configure is open only to a customer whose consent covers every channel
+  (`all_channel_consent`, `docs/DECIDE.md` section 14): one who consented on SMS alone never gets an offer
+  on push.
+* **Sleeping dogs per offer.** An offer whose predicted effect is at or below the model's sleeping-dog cut
+  is never given to that customer; a customer who is a sleeping dog for every offer gets none.
+* **Budget.** `total_budget` (rupees) and `budget_contacts` (a count) both hold; customers are taken by net
+  value per rupee, and an offer is never switched to a cheaper one to fit.
+* **What it writes.** `offer_choice.parquet` (row-level, Analyst-only: the offer given, its channel - the
+  first planned channel of that offer the customer is contactable on - its net value and its total
+  expected cost `offer_total_cost` (contact + offer cost x `p_treated`, rupees), the runner-up and its net
+  value, the reason, and the offer an explored customer would be given, `explore_*`) and `offer_choice.json` (counts and rupees per offer, the
+  budget and the spend; served with the uplift reports and shown on the Output page). `scores.csv` and
+  `scores.parquet` are unchanged; a run of one offer writes neither file.
+* **The treat list** reads the choice: `offer` is the offer's catalogue label (else its level), `channel`
+  its channel, `net_value` its net value; `runner_up_offer` and `runner_up_net_value` the next-best offer
+  the customer could be given; a customer who could be contacted but got no offer has `treat = 0` and a
+  plain `offer_reason`. An explored customer (M92) left without an offer is given the best offer they
+  could be given - the one the choice preferred when the budget dropped them, else the best eligible
+  offer that is not a sleeping dog for them - outside the budget, as the explore slice is outside the
+  policy; the treat list summary counts and prices those offers apart (`explore_offer_counts`,
+  `explore_cost`, `explore_note`). With no value set the run says so
+  (`offer_choice.json` `chosen: false`, `OFFER_CHOICE_NOT_MADE`) and the treat list stays the first
+  offer's.
 
 The Model page shows a card per offer (its effect with the likely range, both response rates) and
 whether choosing per customer does better than the first offer alone; every number is the server's.

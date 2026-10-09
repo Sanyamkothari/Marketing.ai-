@@ -33,6 +33,7 @@ from engine.contracts import (
     Severity,
     check_code_table,
 )
+from engine.decide.offer_run import OFFER_CHOICE_SUMMARY_FILENAME, OfferChoiceSummary  # Plan J M100 part B
 from engine.uplift.config import UpliftBaseModel, UpliftLearner
 
 __all__ = [
@@ -1095,6 +1096,16 @@ ARM_POLICY_VALUE_FILENAME: Final[str] = "arm_policy_value.json"
 """Written by an uplift training run with several treatment levels (Plan J M100)."""
 
 
+class ArmOfferCost(Artefact):
+    """One offer's costs, as the choice of offer prices it (Plan J M100 part B)."""
+
+    level: str = Field(description="The offer's value in the treatment column.")
+    action_id: str | None = Field(description="Its catalogue action, or null.")
+    offer_cost: float = Field(description="Offer cost in rupees, paid by a customer who takes it.")
+    contact_cost: float | None = Field(description="Cost of one contact in rupees; null when none is set.")
+    cost_source: str = Field(description="catalogue, value_settings or run_settings.")
+
+
 class ArmPolicyValue(Artefact):
     """`arm_policy_value.json` - what choosing an offer per customer is worth, out of sample (M100).
 
@@ -1130,7 +1141,18 @@ class ArmPolicyValue(Artefact):
     bootstrap_samples: int = Field(description="Resamples behind every interval.")
     costs_included: bool = Field(
         default=False,
-        description="False: offer and contact costs per arm come with the offer catalogue (M99).",
+        description=(
+            "False: the comparison is of conversions (or value) before costs. Each offer's costs, as a "
+            "scoring run prices its choice, are listed in `offer_costs`."
+        ),
+    )
+    offer_costs: tuple[ArmOfferCost, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description=(
+            "Plan J M100 part B: each offer's offer and contact cost in rupees and where they come from "
+            "(its catalogue action, else the value settings or the run's cost per contact), in levels order."
+        ),
     )
     promotion: str = Field(description="What the champion rule does with this model, in plain words.")
     promotion_code: str | None = Field(
@@ -1250,6 +1272,7 @@ UPLIFT_ARTEFACTS: Final[Mapping[str, type[BaseModel]]] = MappingProxyType(
         RISK_COMPARISON_FILENAME: RiskComparison,  # Plan J M96
         RANKING_CHOICE_FILENAME: RankingChoice,  # Plan J M96
         ARM_POLICY_VALUE_FILENAME: ArmPolicyValue,  # Plan J M100
+        OFFER_CHOICE_SUMMARY_FILENAME: OfferChoiceSummary,  # Plan J M100 part B: the offer per customer
     }
 )
 """Uplift artefact filename -> its model. Served by `api/routes/uplift.py` (DEC-602)."""

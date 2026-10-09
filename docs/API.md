@@ -859,6 +859,8 @@ The budget the targeting recommendation works within. A Phase 5 agent may propos
 | `margin_pct` | number \| null | no |  |
 | `min_roi` | number \| null | no |  |
 | `treat_action_id` | string \| null | no |  |
+| `arm_action_ids` | object of string -> string | no | Several offers (Plan J M100): the catalogue action each offer level is sent as, {level: action_id}. An offer not named here is priced from the value settings. |
+| `total_budget` | number \| null | no | Several offers (Plan J M100): the most the offers chosen in one scoring run may cost in total, contact and offer costs together, in rupees. Unset: no total budget. |
 
 #### UpliftEvidenceConfig
 
