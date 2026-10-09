@@ -41,6 +41,7 @@ from engine.config import (
 from engine.generative.budget import load_prices  # Plan J M108
 from engine.pipeline import running_rows
 from engine.templates import render_template_csv, render_template_readme, template_filenames
+from engine.utils.logging import get_logger, log_failure
 
 router: APIRouter = APIRouter(tags=["use-cases"])
 
@@ -132,13 +133,20 @@ def read_cost_estimate(
     from engine.aws.spend import FxStore
 
     config = _use_case(use_case_id, root)
+    try:
+        fx = FxStore(get_platform_engine(request)).get()
+    except (
+        Exception
+    ) as exc:  # no saved rate is a safe answer (dollars only); a dead database is not this route's 500
+        log_failure(get_logger(__name__), "use_cases.cost_fx", exc)
+        fx = None
     return estimate_run_cost(
         config,
         mode,
         settings=settings,
         table=cached_price_table(root),
         llm_prices=load_prices(root),
-        fx=FxStore(get_platform_engine(request)).get(),
+        fx=fx,
     )
 
 

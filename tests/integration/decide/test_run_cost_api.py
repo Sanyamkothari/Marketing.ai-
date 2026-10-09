@@ -529,3 +529,18 @@ def test_the_number_of_months_is_bounded(make_client: AppFactory) -> None:
     client = make_client()
     assert client.get("/cost/spend", params={"months": 0}).status_code == 422
     assert client.get("/cost/spend", params={"months": 61}).status_code == 422
+
+
+def test_an_unreadable_exchange_rate_leaves_the_estimate_in_dollars(
+    make_client: AppFactory, table: PriceTable, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from engine.aws import spend
+
+    def broken(self: Any) -> Any:
+        raise RuntimeError("the database is not there")
+
+    monkeypatch.setattr(spend.FxStore, "get", broken)
+    response = make_client().get(f"/use-cases/{DEMO_ID}/cost-estimate")
+    assert response.status_code == 200
+    body = response.json()
+    assert body["estimated_usd"] == pytest.approx(ceiling_usd(table), abs=1e-4) and body["inr"] is None
