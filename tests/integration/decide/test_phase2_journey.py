@@ -14,10 +14,18 @@ are the use cases' own settings), and the work is done by the API's routes:
    the risk model is approved too; the model of three offers is never champion
    (`MULTI_ARM_PROMOTION_REFUSED`) and is scored by naming its version;
 3. each use case scored with a catalogue (actions per offer and channel, region rules), per-channel consent
-   columns in the file and a persistent hold-out with an explore slice;
+   columns in the file, an explore slice and a persistent hold-out: one universal hold-out shared by the
+   first two use cases, and one of its own for the risk model, so that each list treats customers another
+   use case holds back and the arbitration's hold-out protection and the campaigns' intent to treat
+   (DEC-1311 (n)) have work to do;
 4. the treat lists, downloaded as an Analyst (a Viewer is refused);
 5. `POST /decide/arbitrate` across the three use cases;
-6. each use case's campaign given outcomes drawn from a planted truth and measured.
+6. each use case's campaign given outcomes drawn from a planted truth and measured. Each campaign's two
+   arms are checked against the cut worked out here from the lists and the scores alone.
+
+Not shown (a gap in the product, asserted as it is): the multi-offer campaign is measured within
+`intended_treatment`, the first offer against the control (DEC-668 (3)), not within the customers the
+offer-choice list treats. Some customers that use case contacts are therefore in neither arm.
 
 Why the data looks the way it does. The customers are the same in every use case (`K0000000`...), and
 each file repeats the same consent columns, so "opted out of SMS" means one thing everywhere. A scoring
@@ -73,12 +81,17 @@ from tests.integration.production.access_support import (
     make_user,
 )
 
-pytestmark = [pytest.mark.slow, pytest.mark.integration]
+pytestmark = [pytest.mark.slow, pytest.mark.integration, pytest.mark.xdist_group("phase2_journey")]
+"""The module-scoped `journey` fixture takes about a minute to build: under `pytest -n --dist loadgroup` the
+group keeps the module on one worker, so it is built once, not once per worker that is handed a test."""
 
 MULTI: Final[str] = "win-back-campaign"
 BINARY: Final[str] = "retail-win-back"
 RISK: Final[str] = "targeted-advertisement"
 USE_CASES: Final[tuple[str, str, str]] = (MULTI, BINARY, RISK)
+
+HOLDOUT_SCOPE: Final[dict[str, str]] = {MULTI: "universal", BINARY: "universal", RISK: "use_case"}
+"""Each use case's persistent hold-out: two share one, the third holds back customers of its own."""
 
 KEY: Final[str] = "customer_id"
 OUTCOME: Final[str] = "reactivated_90d"
@@ -89,9 +102,9 @@ EXPLORE_FRACTION: Final[float] = 0.05
 VALUE: Final[float] = 1000.0
 BINARY_VALUE: Final[str] = "monthly_spend"
 """The column the campaign-effect use case ranks customers by: each customer's own value."""
-BINARY_BUDGET: Final[int] = 600
+BINARY_BUDGET: Final[int] = 1200
 RISK_VALUE: Final[str] = "monthly_value"
-SCORE_ROWS: Final[int] = 4_000
+SCORE_ROWS: Final[int] = 8_000
 RUN_TIMEOUT_S: Final[float] = 900.0
 
 CATALOGUE: Final[str] = """\
@@ -166,10 +179,10 @@ def _edit(root: Path, name: str, change: Any) -> None:
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
 
 
-def _shared(document: dict[str, Any]) -> None:
+def _shared(document: dict[str, Any], *, holdout_scope: str = HOLDOUT_SCOPE[MULTI]) -> None:
     actions = document.setdefault("actions", {})
     actions.setdefault("suppression", {})["channels"] = {k: dict(v) for k, v in CHANNELS.items()}
-    actions["holdout"] = {"scope": "universal", "fraction": HOLDOUT_FRACTION}
+    actions["holdout"] = {"scope": holdout_scope, "fraction": HOLDOUT_FRACTION}
     actions["explore_fraction"] = EXPLORE_FRACTION
 
 
@@ -210,7 +223,9 @@ def make_root(config_root: Path, target: Path) -> Path:
         )
 
     def risk(document: dict[str, Any]) -> None:
-        _shared(document)
+        # The one use case with a hold-out of its own, so that the others' lists treat customers it holds
+        # back and the arbitration's hold-out protection (and the campaigns' intent to treat) has work to do.
+        _shared(document, holdout_scope=HOLDOUT_SCOPE[RISK])
         document.setdefault("uplift", {}).setdefault("policy", {}).update(
             {"value_column": RISK_VALUE, "margin_pct": 30.0}
         )
@@ -707,18 +722,23 @@ def test_the_approvals_screen_shows_the_advisory_checks_of_the_campaign_effect_m
     assert served.status_code == 200, served.text
 
 
-def test_the_checks_are_advice_the_approver_acts_on_and_the_approved_models_become_champions(
-    journey: Journey,
-) -> None:
+def test_a_failed_check_is_advice_and_the_approver_still_decides(journey: Journey) -> None:
+    """The model of one offer was approved (the fixture asserts the 200) although a check had failed."""
+    waiting = {item["version"]["use_case_id"]: item for item in journey.pending}
+    failed = [check["code"] for check in waiting[BINARY]["checks"] if check["passed"] is False]
+    assert failed, "the seeded journey's model fails a check, so approving it shows that a check never blocks"
+    assert waiting[BINARY]["can_decide"] is True
     response = journey.api.client.get("/models")
     assert response.status_code == 200, response.text
     versions = {item["version"]["use_case_id"]: item for item in response.json()["versions"]}
-    for use_case in (BINARY, RISK):
-        assert versions[use_case]["is_champion"] is True
-        assert versions[use_case]["version"]["status"] == ModelStatus.CHAMPION.value
-        assert versions[use_case]["version"]["model_id"] == journey.train[use_case].model_version_id
+    assert versions[BINARY]["is_champion"] is True, "approved with a failed check"
+    assert versions[BINARY]["version"]["status"] == ModelStatus.CHAMPION.value
+    assert versions[BINARY]["version"]["model_id"] == journey.train[BINARY].model_version_id
     # Approved by the signed-in Approver, not by the name typed in the request.
     assert versions[BINARY]["version"]["approved_by"] == "approver"
+    # The risk model has no such checks and is approved the same way.
+    assert versions[RISK]["is_champion"] is True and versions[RISK]["version"]["approved_by"] == "approver"
+    assert versions[RISK]["version"]["model_id"] == journey.train[RISK].model_version_id
 
 
 def test_a_model_of_three_offers_is_never_champion_and_is_scored_by_naming_its_version(
@@ -767,12 +787,20 @@ def test_a_catalogue_that_breaks_the_regions_sms_rules_is_refused(journey: Journ
     assert "ACTION_DLT_TEMPLATE_MISSING" in response.text
 
 
-def test_one_persistent_holdout_and_an_explore_slice_are_shared_by_the_three_lists(
+def test_one_universal_holdout_is_shared_and_one_use_case_holds_back_customers_of_its_own(
     journey: Journey, lists: dict[str, pd.DataFrame]
 ) -> None:
-    held = {use_case: set(frame.loc[flag(frame["holdout"]), KEY]) for use_case, frame in lists.items()}
-    assert held[MULTI] == held[BINARY] == held[RISK], "a universal hold-out is the same customers everywhere"
-    assert abs(len(held[MULTI]) / SCORE_ROWS - HOLDOUT_FRACTION) < 0.03
+    held = holders_of(lists)
+    assert (
+        held[MULTI] == held[BINARY]
+    ), "a universal hold-out is the same customers in every use case asking for it"
+    assert len(held[RISK] - held[MULTI]) > 300 and len(held[MULTI] - held[RISK]) > 300, "RISK's is its own"
+    for use_case in USE_CASES:
+        assert abs(len(held[use_case]) / SCORE_ROWS - HOLDOUT_FRACTION) < 0.03, use_case
+    # A hold-out is one use case's promise: the other lists still want to treat those customers.
+    for use_case, rival in ((MULTI, RISK), (BINARY, RISK), (RISK, MULTI)):
+        own = lists[use_case]
+        assert (flag(own["treat"]) & own[KEY].isin(held[rival])).sum() > 50, (use_case, rival)
     for use_case, frame in lists.items():
         assert len(frame) == SCORE_ROWS and frame[KEY].is_unique
         explored = frame[flag(frame["explore"])]
@@ -914,9 +942,32 @@ def test_the_reasons_are_in_plain_words(lists: dict[str, pd.DataFrame]) -> None:
 # ---------------------------------------------------------------------------
 # 5. Arbitration across the three use cases
 # ---------------------------------------------------------------------------
+def holders_of(lists: dict[str, pd.DataFrame]) -> dict[str, set[str]]:
+    """Per use case: the customers its own list holds back."""
+    return {use_case: set(frame.loc[flag(frame["holdout"]), KEY]) for use_case, frame in lists.items()}
+
+
+def held_anywhere(lists: dict[str, pd.DataFrame]) -> set[str]:
+    return set().union(*holders_of(lists).values())
+
+
 def candidates_of(lists: dict[str, pd.DataFrame]) -> pd.DataFrame:
-    """Every `treat = 1` row of the three lists: what each use case asked for."""
-    parts = [frame[flag(frame["treat"])].assign(source=use_case) for use_case, frame in lists.items()]
+    """Every `treat = 1` row of a customer no list holds back: what arbitration may choose between."""
+    held = held_anywhere(lists)
+    parts = [
+        frame[flag(frame["treat"]) & ~frame[KEY].isin(held)].assign(source=use_case)
+        for use_case, frame in lists.items()
+    ]
+    return pd.concat(parts, ignore_index=True)
+
+
+def blocked_by_a_holdout(lists: dict[str, pd.DataFrame]) -> pd.DataFrame:
+    """The `treat = 1` rows of customers that another use case's list holds back: arbitration may not act on them."""
+    held = held_anywhere(lists)
+    parts = [
+        frame[flag(frame["treat"]) & frame[KEY].isin(held)].assign(source=use_case)
+        for use_case, frame in lists.items()
+    ]
     return pd.concat(parts, ignore_index=True)
 
 
@@ -941,7 +992,9 @@ def test_the_holdout_is_untouched_and_the_explore_actions_are_kept(
     held = {key for frame in lists.values() for key in frame.loc[flag(frame["holdout"]), KEY]}
     assert held and not flag(table.loc[sorted(held), "treat"]).any()
     assert (table.loc[sorted(held), "arbitration_reason"] == "held_out").all()
-    asked = candidates_of(lists)
+    asked = candidates_of(
+        lists
+    )  # not the customers a list holds back: an explore action does not override that
     explored = asked[flag(asked["explore"])]
     once = explored.groupby(KEY).size()
     sole = explored[explored[KEY].isin(once.index[once == 1])].set_index(KEY)
@@ -951,6 +1004,27 @@ def test_the_holdout_is_untouched_and_the_explore_actions_are_kept(
     assert (table.loc[sole.index, "winning_use_case"] == sole["source"]).all()
     assert (table.loc[sole.index, "offer"] == sole["offer"]).all()
     assert (table.loc[sole.index, "channel"] == sole["channel"]).all()
+
+
+def test_a_customer_any_use_case_holds_back_gets_no_action_from_any_use_case(
+    lists: dict[str, pd.DataFrame], arbitrated: Arbitrated
+) -> None:
+    """The arbitration's own protection: the lists of the other use cases still want these customers."""
+    table = arbitrated.table.set_index(KEY)
+    holders = holders_of(lists)
+    blocked = blocked_by_a_holdout(lists)
+    assert arbitrated.body["summary"]["holdout_blocked_actions"] == len(blocked) > 100
+    assert set(blocked["source"]) == set(
+        USE_CASES
+    ), "every use case had actions blocked by a rival's hold-out"
+    keys = sorted(set(blocked[KEY]))
+    rows = table.loc[keys]
+    assert not flag(rows["treat"]).any() and (rows["winning_use_case"] == "").all()
+    assert (rows["arbitration_reason"] == "held_out").all()
+    # The row says whose hold-out it was, in the request's order.
+    named = {key: ", ".join(u for u in USE_CASES if key in holders[u]) for key in keys}
+    assert rows["holdout_use_cases"].to_dict() == named
+    assert {RISK, f"{MULTI}, {BINARY}"} <= set(named.values()), "RISK's own hold-out and the universal one"
 
 
 def test_the_winning_action_is_that_use_cases_own_row(
@@ -1002,7 +1076,8 @@ def test_the_conflicts_summary_counts_what_the_lists_hold(
     assert summary["total_customers"] == SCORE_ROWS
     assert summary["customers_with_conflicts"] == int((per_customer > 1).sum())
     assert summary["dropped_actions_count"] == int((per_customer - 1).sum())
-    assert summary["channel_capped_count"] == 0 and summary["holdout_blocked_actions"] == 0
+    assert summary["channel_capped_count"] == 0
+    assert summary["holdout_blocked_actions"] == len(blocked_by_a_holdout(lists))
     assert summary["run_ids"] == [journey.score[use_case].run_id for use_case in USE_CASES]
     table = arbitrated.table
     won = table[flag(table["treat"])]
@@ -1058,7 +1133,7 @@ def test_the_arbitration_made_one_campaign_per_use_case_and_asking_again_makes_n
         campaign = view.json()["campaign"]
         assert campaign["run_ids"] == [journey.score[entry["use_case_id"]].run_id]
         assert campaign["treatment_start_source"] == "run_finished"
-        assert campaign["holdout_scope"] == "universal" and campaign["causal"] is True
+        assert campaign["holdout_scope"] == HOLDOUT_SCOPE[entry["use_case_id"]] and campaign["causal"] is True
         assert campaign["arbitration_id"].startswith("a_")
     again = journey.secured.analyst.post("/decide/arbitrate", json={"use_cases": list(USE_CASES)})
     assert again.status_code == 200, again.text
@@ -1066,40 +1141,218 @@ def test_the_arbitration_made_one_campaign_per_use_case_and_asking_again_makes_n
     assert again.json()["campaign_ids"] == arbitrated.body["campaign_ids"]
 
 
-def test_each_campaigns_arms_hold_only_customers_its_use_case_won_or_its_holdout_kept_back(
-    journey: Journey,
-    lists: dict[str, pd.DataFrame],
-    arbitrated: Arbitrated,
-    measured: dict[str, Measured],
-) -> None:
-    """DEC-1311 (n). The campaign record is read from its stored assignment: no route returns it row by row."""
-    storage = journey.api.storage
-    table = arbitrated.table
-    for use_case, outcome in measured.items():
-        assignment = read_frame(storage, campaign_key(outcome.campaign_id, ASSIGNMENT_FILENAME))
+@pytest.fixture(scope="module")
+def scores(journey: Journey) -> dict[str, pd.DataFrame]:
+    """Each scoring run's own `scores.parquet`, indexed by customer key text."""
+    out = {}
+    for use_case, record in journey.score.items():
+        frame = pd.read_parquet(io.BytesIO(journey.api.artefact(record.run_id, "scores.parquet")))
+        out[use_case] = frame.astype({KEY: str}).set_index(KEY)
+    return out
+
+
+@dataclass(frozen=True)
+class Arms:
+    """What a use case's stored campaign assignment says, read from the store (no route returns it row by row)."""
+
+    compared: set[str]
+    """The customers in the treated arm (intended, and not held back)."""
+    held_back: set[str]
+    """The customers in the hold-out arm (intended, and held back)."""
+
+
+@pytest.fixture(scope="module")
+def arms(journey: Journey, arbitrated: Arbitrated) -> dict[str, Arms]:
+    out = {}
+    for entry in arbitrated.body["campaigns"]:
+        assignment = read_frame(journey.api.storage, campaign_key(entry["campaign_id"], ASSIGNMENT_FILENAME))
         assignment[KEY] = assignment[KEY].astype(str)
         within = assignment[assignment["intended"]]
-        compared = set(within.loc[within["arm"] == "treated", KEY])
-        held_back = set(within.loc[within["arm"] == "holdout", KEY])
-        won = table[flag(table["treat"]) & (table["winning_use_case"] == use_case) & ~flag(table["explore"])]
-        own = lists[use_case]
-        held_by_this = set(own.loc[flag(own["holdout"]), KEY])
-        held_by_others = {
-            key
-            for other, frame in lists.items()
-            if other != use_case
-            for key in frame.loc[flag(frame["holdout"]), KEY]
+        out[entry["use_case_id"]] = Arms(
+            compared=set(within.loc[within["arm"] == "treated", KEY]),
+            held_back=set(within.loc[within["arm"] == "holdout", KEY]),
+        )
+    return out
+
+
+def intended_by(use_case: str, scores: dict[str, pd.DataFrame]) -> pd.Series:
+    """Per customer: does the use case's policy mean to contact them (and have not been suppressed)?
+
+    A campaign of an uplift run is measured within `intended_treatment`, the first offer against the control
+    (DEC-668 (3)); a risk model's within its treat bands. Neither knows about the offer the list then chose.
+    """
+    frame = scores[use_case]
+    reason = frame["suppressed_reason"]
+    free = reason.isna() | (reason == "")
+    chosen = frame["band"].isin(["High", "Medium"]) if use_case == RISK else frame["intended_treatment"]
+    return chosen.astype(bool) & free
+
+
+@dataclass(frozen=True)
+class Cut:
+    """The cut of DEC-1311 (n), worked out from the lists and the scores alone."""
+
+    wants: pd.DataFrame
+    """Per customer and use case: the use case treats the customer, or would have had it not held them back."""
+    settled: pd.Series
+    """Customers with no random (explore) action in any list: the explore draw is decided first, apart from this."""
+    winner: pd.Series
+    """Who wins each customer as if no one were held back ("" where no use case wants them)."""
+
+
+def counterfactual_cut(lists: dict[str, pd.DataFrame], scores: dict[str, pd.DataFrame]) -> Cut:
+    """Who wins each customer in the arbitration run again without the hold-outs, by the rules the module tests.
+
+    The use cases keep to the request's order, except that two values of one kind (the net value of the
+    multi-offer and the one-offer use cases, both of whose lists chose to treat the customer) are compared.
+    A held-back row has no offer chosen and so no value to compare: the request order decides.
+    """
+    index = pd.Index(lists[MULTI][KEY])
+    by_key = {use_case: frame.set_index(KEY).reindex(index) for use_case, frame in lists.items()}
+    wants = pd.DataFrame(
+        {
+            use_case: flag(by_key[use_case]["treat"])
+            | (flag(by_key[use_case]["holdout"]) & intended_by(use_case, scores).reindex(index))
+            for use_case in USE_CASES
         }
-        assert compared and held_back, use_case
-        assert compared <= set(won[KEY]) | held_by_others, use_case
-        assert held_back <= held_by_this, use_case
-        # Nothing a rival won is in either arm.
-        rival = table[
-            flag(table["treat"]) & (table["winning_use_case"] != use_case) & ~flag(table["explore"])
+    )
+    explored = pd.DataFrame(
+        {u: flag(by_key[u]["treat"]) & flag(by_key[u]["explore"]) for u in USE_CASES}
+    ).any(axis=1)
+    first = np.array(USE_CASES, dtype=object)[wants.to_numpy().argmax(axis=1)]
+    winner = pd.Series(first, index=index, dtype=object)
+    winner[~wants.any(axis=1)] = ""
+    both = flag(by_key[MULTI]["treat"]) & flag(by_key[BINARY]["treat"]) & ~wants[RISK]
+    larger = np.where(
+        number(by_key[MULTI]["net_value"]) >= number(by_key[BINARY]["net_value"]), MULTI, BINARY
+    )
+    winner[both] = pd.Series(larger, index=index)[both]
+    return Cut(wants, ~explored, winner)
+
+
+def test_each_campaigns_arms_are_cut_by_one_rule_that_ignores_the_holdouts(
+    journey: Journey,
+    lists: dict[str, pd.DataFrame],
+    scores: dict[str, pd.DataFrame],
+    arbitrated: Arbitrated,
+    arms: dict[str, Arms],
+    measured: dict[str, Measured],
+) -> None:
+    """DEC-1311 (n), use case by use case and exactly: both arms hold the customers the use case wins when the
+    arbitration is run again as if no one were held back, and only those it meant to contact."""
+    cut = counterfactual_cut(lists, scores)
+    holders = holders_of(lists)
+    table = arbitrated.table.set_index(KEY)
+    assert 0.9 < cut.settled.mean() < 1.0
+    for use_case in USE_CASES:
+        intended = intended_by(use_case, scores).reindex(cut.settled.index)
+        held = pd.Series(cut.settled.index.isin(list(holders[use_case])), index=cut.settled.index)
+        mine = cut.settled & (cut.winner == use_case) & intended
+        expected_treated = set(mine.index[mine & ~held])
+        expected_held = set(mine.index[mine & held])
+        settled = set(cut.settled.index[cut.settled])
+        got = arms[use_case]
+        assert got.compared & settled == expected_treated, use_case
+        assert got.held_back & settled == expected_held, use_case
+        assert not got.compared & holders[use_case] and got.held_back <= holders[use_case], use_case
+        # A customer another use case won in the real arbitration is in neither arm.
+        rival = table.index[flag(table["treat"]) & (table["winning_use_case"] != use_case)]
+        assert not (set(rival) & (got.compared | got.held_back)), use_case
+        counts = measured[use_case].view["campaign"]["counts"]
+        assert counts["intended_treated"] == len(got.compared) and counts["intended_holdout"] == len(
+            got.held_back
+        )
+        assert len(got.compared) > 100 and len(got.held_back) > 30, use_case
+
+
+def test_the_holdout_arm_drops_the_held_back_customers_a_rival_use_case_would_have_contacted(
+    lists: dict[str, pd.DataFrame], scores: dict[str, pd.DataFrame], arms: dict[str, Arms]
+) -> None:
+    """The like-with-unlike bias (n) exists to prevent: a held-back customer the use case would not have won."""
+    cut = counterfactual_cut(lists, scores)
+    holders = holders_of(lists)
+    for use_case, rivals in ((BINARY, (MULTI,)), (RISK, (MULTI, BINARY))):
+        intended = intended_by(use_case, scores).reindex(cut.settled.index)
+        held = pd.Series(cut.settled.index.isin(list(holders[use_case])), index=cut.settled.index)
+        held_intended = set(cut.settled.index[held & intended])
+        rival_wants = cut.wants[list(rivals)].any(axis=1)
+        contested = set(cut.settled.index[cut.settled & held & intended & rival_wants])
+        free = set(cut.settled.index[cut.settled & held & intended & ~rival_wants])
+        assert contested and free, use_case
+        assert not contested & arms[use_case].held_back, f"{use_case}: a rival would have contacted them"
+        assert free <= arms[use_case].held_back, f"{use_case}: nobody else wanted them"
+        assert len(held_intended - arms[use_case].held_back) >= len(contested), use_case
+    # Held back by both of two use cases that would each contact them: the customer is in one hold-out arm.
+    both = (
+        cut.settled
+        & cut.wants[MULTI]
+        & cut.wants[BINARY]
+        & pd.Series(cut.settled.index.isin(list(holders[MULTI])), index=cut.settled.index)
+    )
+    twice = set(
+        cut.settled.index[
+            both
+            & intended_by(MULTI, scores).reindex(cut.settled.index)
+            & intended_by(BINARY, scores).reindex(cut.settled.index)
         ]
-        assert not (set(rival[KEY]) - held_by_others) & (compared | held_back), use_case
-        counts = outcome.view["campaign"]["counts"]
-        assert counts["intended_treated"] == len(compared) and counts["intended_holdout"] == len(held_back)
+    )
+    assert twice
+    for key in twice:
+        assert (key in arms[MULTI].held_back) != (key in arms[BINARY].held_back), key
+
+
+def treated_keys(lists: dict[str, pd.DataFrame], use_case: str) -> set[str]:
+    """The customers a use case's list treats."""
+    frame = lists[use_case]
+    return set(frame.loc[flag(frame["treat"]), KEY])
+
+
+def test_a_customer_kept_back_only_by_another_use_cases_holdout_stays_in_both_arms(
+    lists: dict[str, pd.DataFrame],
+    scores: dict[str, pd.DataFrame],
+    arbitrated: Arbitrated,
+    arms: dict[str, Arms],
+) -> None:
+    """Intent to treat (DEC-1311 (n)): the rival's hold-out kept the contact from being made, not the draw."""
+    cut = counterfactual_cut(lists, scores)
+    holders = holders_of(lists)
+    table = arbitrated.table.set_index(KEY)
+    for use_case in USE_CASES:
+        rivals_hold = set().union(*(held for other, held in holders.items() if other != use_case))
+        intended = intended_by(use_case, scores).reindex(cut.settled.index)
+        mine = cut.settled & (cut.winner == use_case) & intended
+        listed = treated_keys(lists, use_case)
+        kept_back = {
+            key
+            for key in mine.index[mine]
+            if key in rivals_hold and key not in holders[use_case] and key in listed
+        }
+        assert len(kept_back) > 10, use_case
+        assert kept_back <= arms[use_case].compared, use_case
+        assert not flag(table.loc[sorted(kept_back), "treat"]).any(), "and nobody contacted them"
+
+
+def test_the_multi_offer_campaign_is_cut_by_the_first_offers_rule_so_some_contacted_customers_are_in_neither_arm(
+    scores: dict[str, pd.DataFrame], arbitrated: Arbitrated, arms: dict[str, Arms]
+) -> None:
+    """A known gap, shown and not hidden. The multi-offer list treats by the best offer per customer, but the
+    campaign is measured within `intended_treatment`, which keeps its meaning as the first offer against the
+    control (DEC-668 (3)). Customers the use case won whose first offer is not worth a contact (a sleeping dog
+    to Offer A, say) are contacted with their best offer and measured in neither arm: the campaign says
+    nothing about them. The one-offer and the risk use cases have no such gap."""
+    table = arbitrated.table
+    for use_case in USE_CASES:
+        won = table[flag(table["treat"]) & (table["winning_use_case"] == use_case) & ~flag(table["explore"])]
+        missing = set(won[KEY]) - arms[use_case].compared
+        if use_case != MULTI:
+            assert not missing, use_case
+            continue
+        assert len(missing) > 0.05 * len(
+            won
+        ), "the campaign leaves out a real share of the customers it contacts"
+        assert not scores[MULTI].loc[sorted(missing), "intended_treatment"].astype(bool).any()
+        # They were not left out for a reason that is the campaign's: they are customers the list chose.
+        assert (won.set_index(KEY).loc[sorted(missing), "net_value"].pipe(number) > 0).all()
 
 
 def test_a_campaign_measured_too_early_gives_a_date_and_never_a_number(
