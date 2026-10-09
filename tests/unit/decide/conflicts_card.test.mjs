@@ -51,3 +51,24 @@ test("renders use case breakdown table", () => {
   assert.match(plain, /Winning actions/);
   assert.match(plain, /Dropped actions/);
 });
+
+test("says how conflicts were settled, only for the ways that happened", () => {
+  const plain = text(
+    conflictsCardHtml({
+      ...summary,
+      customers_decided_by_value: 12,
+      customers_decided_by_priority: 7,
+      customers_decided_by_request_order: 3,
+      customers_decided_by_explore: 2,
+      holdout_blocked_actions: 4,
+    }),
+  );
+  assert.match(plain, /Settled by priority times value 12/);
+  assert.match(plain, /Settled by priority alone \(value missing or of a different kind\) 7/);
+  assert.match(plain, /Settled by use case order \(a tie\) 3/);
+  assert.match(plain, /Kept because chosen at random \(explore\) 2/);
+  assert.match(plain, /Actions blocked by a hold-out 4/);
+  const none = text(conflictsCardHtml(summary));
+  assert.doesNotMatch(none, /Settled by/);
+  assert.doesNotMatch(none, /hold-out/);
+});

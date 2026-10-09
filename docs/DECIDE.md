@@ -368,51 +368,64 @@ for the hand-off, and the Output page labels them differently: **Download contac
 
 ## 15. One action per customer across use cases (M101, DEC-1311)
 
-**Arbitration resolves competing actions across use cases.** When an enterprise runs several campaigns
-concurrently (e.g. Win-Back, Cross-Sell, Churn Prevention), a customer often qualifies for actions in more
-than one use case. Without arbitration, that customer receives multiple conflicting messages in the same cycle,
-exhausting contact fatigue and muddling causal measurement. M101 provides cross-use-case arbitration to enforce
-at most one action per customer (or a configured contact cap) deterministically, choosing the action with the
-highest expected return.
+**Arbitration resolves competing actions across use cases.** When a client runs several campaigns at once
+(win-back, cross-sell, churn prevention), a customer can be on more than one use case's treat list in the same
+cycle. Without arbitration they get several messages, and no use case can tell what its own contact did.
+`POST /decide/arbitrate` (Analyst) takes the latest finished scoring run of each selected use case (or explicit
+`run_ids`), over the same customer key, builds or reads each run's treat list (M98) and writes
+`arbitrated_treat_list.csv` and `.parquet`: at most one action per customer (or the configured contact cap),
+with the winning use case, the actions that lost and why.
 
-* **Deterministic winner selection.** For every customer key present across the treat lists, competing candidate
-  actions (rows where `treat = 1`) are scored by:
-  $$\text{priority\_score} = \text{priority\_weight} \times \text{net\_value}$$
-  Priority weights are configured per usecase in `configs/decide/arbitration.yaml` (defaulting to 1.0). Where
-  `net_value` is not available (such as in propensity runs), it falls back to `expected_gross_value`, then raw
-  model score, and finally deterministic use-case ordering.
-* **Contact caps and channel caps.**
-  - `contact_cap_per_customer` (default `1` in `configs/decide/arbitration.yaml`) limits the maximum number of
-    winning actions a single customer may receive across all use cases in the cycle.
-  - `channel_caps` optionally sets global cycle limits on specific delivery channels (e.g. SMS, Email). Once a
-    channel's cap is exhausted, subsequent actions requesting that channel are suppressed.
-* **Losing and suppressed actions.** Candidate rows that lose arbitration have `treat = 0` in the output
-  arbitrated treat list, with `suppression_reason = "ARBITRATION_LOST"`. The winning action retains `treat = 1`
-  and records `winning_use_case` (its own use case id) and `losing_actions` (comma-separated list of suppressed
-  competing actions).
-* **Holdout and explore integrity.**
-  - Universal holdout members (`holdout = 1`) stay untouched across every usecase; they are never treated under any
-    circumstances (`treat = 0`).
-  - Explore rows (`explore = 1, treat = 1`) preserve randomisation and are retained.
-* **Clean campaign measurement isolation.** When an arbitrated cycle is measured via `create_arbitrated_campaign`
-  (`engine/measurement/campaign.py`), one campaign is created for each participating use case. The campaign's
-  assignment marks only its winning customers as `arm = "treated"`; losing candidate customers who would have been
-  treated by that usecase alone are marked `arm = "suppressed"`. This ensures each use case's incrementality and
-  treatment effect are measured cleanly without cross-contamination.
-* **Row-level privacy and access control.**
-  - `arbitrated_treat_list.csv` and `arbitrated_treat_list.parquet` are registered row-level artefacts in
-    `configs/privacy.yaml`, `engine/privacy/layout.py` (`Store.SCORES`), and `api/access_policy.py` (`ROW_LEVEL_ARTEFACTS`).
-  - `POST /decide/arbitrate` (Analyst) runs arbitration over the latest scoring runs of specified use cases
-    or explicit `run_ids`.
-  - `GET /decide/arbitrated-treat-list.csv` and `.parquet` are restricted to Analyst and above, and access is
-    strictly audited (`decide.arbitrated_treat_list_download`). Viewers are refused with `403`.
-  - `GET /decide/conflicts` and `GET /decide/arbitrate` return aggregate summary statistics (`ArbitrationSummary`)
-    accessible to Viewers.
-* **Results UI integration.** The Results page registers the `Arbitration & Conflicts` card (`conflictsCardHtml` in
-  `ui/modules/decide/views.js` via `registerResultsList`), showing total customers evaluated, customers with conflicts
-  (qualifying for >1 action), treated winners, dropped actions count, and a breakdown table of won vs. dropped
-  actions per usecase.
-* **Scale and linear performance.** Arbitration operates vectorised over columns using Pandas and PyArrow.
-  Processing 200,000 candidate rows across multiple use cases completes in ~0.28 seconds, well below the 3.0s
-  budget, scaling linearly to under 1.5s for 1,000,000 customers.
-
+* **Who wins (`engine/decide/arbitrate.py`).** A candidate is a treat-list row with `treat = 1`, in a customer no
+  hold-out keeps back. For one customer, in this order:
+  1. **Hold-out members are never treated** by any use case, even one that does not know the hold-out.
+  2. **A row M92 treated at random keeps its action** (`explore = 1` and `treat = 1`): it is kept before any
+     comparison, so the random sample stays random. If two use cases both treat the same customer at random,
+     both are kept only if the contact cap allows; otherwise the first in the request's use case order is kept,
+     and the other is listed in `losing_actions` and counted in `explore_dropped_count`.
+  3. **The rest are ranked by priority x value only when every candidate carries the same kind of value**: all a
+     `net_value` (incremental, from an uplift run), or all an `expected_gross_value` (not incremental, from a
+     propensity run). The two are never compared with each other. A candidate with no value is never given one
+     (no value of 1, no zero). When the kinds differ, or one candidate has no value, the customer is ranked by
+     priority alone.
+  4. **A tie is broken by the order of the use cases in the request** (with no use case named, by use case id).
+* **Why each row is what it is.** `arbitration_reason` on every row: `only_action`, `within_contact_cap`,
+  `net_value`, `expected_gross_value`, `priority`, `request_order`, `explore_treated`, `explore_request_order`
+  for a winner; `held_out`, `channel_cap`, `not_selected` for a customer nobody treats. `priority_weight` is the
+  weight used; `priority_score` is priority x value, and is blank where the choice was not made on a value.
+  The summary counts the customers who lost an action by how they were decided: `customers_decided_by_value`,
+  `_by_priority`, `_by_request_order`, `_by_explore`; and `holdout_blocked_actions`, `explore_kept_count`,
+  `explore_dropped_count`.
+* **No configuration ships.** `configs/decide/arbitration.example.yaml` is a labelled example that is never read.
+  With no `decide/arbitration.yaml` in the config root, every use case has priority 1, a customer gets at most one
+  action per cycle, and there are no channel caps. A client's file sets `use_cases.<id>.priority`,
+  `contact_cap_per_customer` and `channel_caps` (a cap of 0 or more per channel).
+* **Contact and channel caps.** `contact_cap_per_customer` limits the winning actions per customer. `channel_caps`
+  limit the actions per channel over the cycle (the `channel` column is M99's planned channel). Capacity goes to
+  explore rows first, then to rows with an incremental value, then to rows with a gross value, then to rows with
+  no value; inside each group by priority x value (priority alone for a row with no value), then by request order.
+  A customer whose only action is capped out is not treated (`arbitration_reason = channel_cap`, the dropped action
+  is in `losing_actions`); no action moves to another channel.
+* **What a non-winning row says.** A customer nobody treats has one row, `treat = 0`. If a hold-out kept them back,
+  the row is a use case that held them back, `holdout` is that row's own flag (true) and `holdout_use_cases` names
+  every use case whose hold-out held them. A customer capped out of a channel keeps no offer, channel or offer
+  detail on the row: the action not taken is in `losing_actions`. Customers keep the order they first appear in
+  (one use case selected: the treat list's own row order).
+* **One use case selected equals its treat list.** Every column of the treat list (including M99's
+  `contactable_channels` and M100's runner-up and offer-reason columns when it has them) comes through with its
+  values, and the arbitration columns are added; both `segment` (uplift) and `band` (propensity) are kept when the
+  use cases differ in kind.
+* **One campaign per use case.** `create_arbitrated_campaign` (`engine/measurement/campaign.py`) builds a campaign
+  from a run's scores in which only the use case's winning customers are in the treated arm (`engine.keys.key_text`
+  spelling, so a composite key and a whole-number id match); other customers who would have been treated are
+  `suppressed` and not intended, so each use case measures only its winning rows. The hold-out stays the control.
+  `POST /decide/arbitrate` refuses two runs of one use case (`ARBITRATION_USE_CASE_REPEATED`).
+* **Row-level privacy and access.** `arbitrated_treat_list.csv` and `.parquet` are row-level run artefacts
+  (`configs/privacy.yaml`, `engine/privacy/layout.py` `Store.SCORES`, `api/access_policy.py` `ROW_LEVEL_ARTEFACTS`);
+  their downloads are Analyst-only and audited (`decide.arbitrated_treat_list_download`); `GET /decide/arbitrate` and
+  `GET /decide/conflicts` return the aggregate summary to a Viewer.
+* **Results.** The `Arbitration & Conflicts` card (`conflictsCardHtml`, `ui/modules/decide/views.js`) shows customers
+  evaluated, with conflicts, treated, actions dropped, how conflicts were settled, and a table by use case.
+* **Scale.** Whole-array sorts and Arrow string kernels, no Python loop over the rows: 200,000 customers across
+  two or three use cases take about 1 to 1.5 seconds on a shared 4-CPU machine, so a million take about 5 to 8
+  (`tests/unit/decide/test_arbitrate.py`, `test_arbitrate_scale.py`).

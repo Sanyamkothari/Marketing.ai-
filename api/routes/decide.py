@@ -25,7 +25,7 @@ from api.routes.runs import load_run
 from api.routes.uploads import http_error
 from api.schemas import ErrorResponse
 from engine.access.roles import Role
-from engine.config import RunMode, StrictBase
+from engine.config import RunMode, StrictBase, key_columns
 from engine.contracts import RunRecord, RunState
 from engine.decide.arbitrate import (
     ARBITRATED_TREAT_LIST_CSV,
@@ -37,6 +37,7 @@ from engine.decide.arbitrate import (
     csv_bytes,
     load_arbitration_config,
     parquet_bytes,
+    winning_keys,
 )
 from engine.decide.treat_list import (
     TREAT_LIST_PARQUET,
@@ -171,21 +172,29 @@ def arbitrate_treatments(
                 )
             runs = [latest_map[uc] for uc in uc_list]
         else:
-            runs = list(latest_map.values())
+            # No use case named: every use case with a finished scoring run, in use case id order, so the
+            # tie-break (the request's use case order) is the same on every call.
+            runs = [latest_map[uc] for uc in sorted(latest_map)]
 
     if not runs:
         raise http_error(400, "NO_RUNS_TO_ARBITRATE", "No finished scoring runs found to arbitrate across.")
 
-    # 2. Check primary key consistency
-    primary_keys = {r.primary_key for r in runs}
+    # 2. Check primary key consistency, and that no use case is named twice (its rows would be counted twice)
+    repeated = sorted({r.use_case_id for r in runs if [x.use_case_id for x in runs].count(r.use_case_id) > 1})
+    if repeated:
+        raise http_error(
+            422,
+            "ARBITRATION_USE_CASE_REPEATED",
+            f"Two of the runs are for the same use case ({', '.join(repeated)}); give one run per use case.",
+        )
+    primary_keys = {key_columns(r.primary_key) for r in runs}  # a composite key is a list on the record
     if len(primary_keys) > 1:
         raise http_error(
             422,
             "PRIMARY_KEY_MISMATCH",
             f"Cannot arbitrate runs with different customer keys: {primary_keys}",
         )
-    key_cols = runs[0].primary_key
-    key_cols_tuple = (key_cols,) if isinstance(key_cols, str) else tuple(key_cols)
+    key_cols_tuple = key_columns(runs[0].primary_key)
 
     # 3. Load treat lists for all runs
     treat_lists: list[pd.DataFrame] = []
@@ -224,13 +233,11 @@ def arbitrate_treatments(
 
     for r in runs:
         uc = r.use_case_id
-        winning_rows = arb_df[arb_df["treat"] & (arb_df["winning_use_case"] == uc)]
-        winning_keys = set(winning_rows[key_cols_tuple[0]].astype(str)) if not winning_rows.empty else set()
         campaign = create_arbitrated_campaign(
             storage=storage,
             store=campaign_store,
             run_id=r.run_id,
-            winning_keys=winning_keys,
+            winning_keys=winning_keys(arb_df, key_cols_tuple, uc),
         )
         created_campaign_ids.append(campaign.campaign_id)
 

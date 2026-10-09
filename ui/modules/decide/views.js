@@ -183,7 +183,7 @@ export function conflictsCardHtml(summary) {
 
   return `<div class="dc"><section class="card dc-card" data-arbitration-conflicts>
     <h3>Arbitration & Conflicts</h3>
-    <p class="dc-text">One action per customer across overlapping use cases, resolved by priority weight and net value.</p>
+    <p class="dc-text">One action per customer across overlapping use cases. A conflict is settled by priority times value when every action carries the same kind of value, and by priority alone when it does not. A tie goes to the use case named first.</p>
     <div class="dc-kvs">
       ${row("Total customers evaluated", count(summary.total_customers))}
       ${row("Customers qualifying for actions", count(summary.customers_with_actions))}
@@ -191,6 +191,11 @@ export function conflictsCardHtml(summary) {
       ${row("Treated customers (winners)", count(summary.treated_customers))}
       ${row("Dropped actions (conflict suppressed)", count(summary.dropped_actions_count))}
       ${summary.channel_capped_count ? row("Channel cap suppressed", count(summary.channel_capped_count)) : ""}
+      ${summary.customers_decided_by_value ? row("Settled by priority times value", count(summary.customers_decided_by_value)) : ""}
+      ${summary.customers_decided_by_priority ? row("Settled by priority alone (value missing or of a different kind)", count(summary.customers_decided_by_priority)) : ""}
+      ${summary.customers_decided_by_request_order ? row("Settled by use case order (a tie)", count(summary.customers_decided_by_request_order)) : ""}
+      ${summary.customers_decided_by_explore ? row("Kept because chosen at random (explore)", count(summary.customers_decided_by_explore)) : ""}
+      ${summary.holdout_blocked_actions ? row("Actions blocked by a hold-out", count(summary.holdout_blocked_actions)) : ""}
     </div>
     ${ucTable}
   </section></div>`;

@@ -1,0 +1,30 @@
+# configs/decide/arbitration.example.yaml - AN EXAMPLE, NEVER READ (Plan J M101, DEC-1311).
+#
+# The engine reads only `configs/decide/arbitration.yaml`, and the repository ships none. With no file
+# every use case has priority 1, a customer gets at most one action across all the use cases in a cycle,
+# and there are no channel caps. To change that, copy this file to `arbitration.yaml` and replace EVERY
+# value below with the client's own: the use case ids, priorities and caps here are illustrations, not
+# anyone's real figures.
+#
+# How a customer's action is chosen when several use cases want to contact them:
+#   * a customer a hold-out keeps back in any use case is never contacted by another;
+#   * a customer M92 chose at random to contact (explore) keeps that action;
+#   * the rest are ranked by priority x value, but only when every candidate carries the same kind of
+#     value (all an incremental net value, or all an expected gross value). Otherwise they are ranked by
+#     priority alone. A tie goes to the use case named first in the request.
+
+schema_version: 1
+
+# Higher priority is preferred. A use case not listed has priority 1.
+use_cases:
+  example_use_case_a:
+    priority: 2.0
+  example_use_case_b:
+    priority: 1.0
+
+# The most actions one customer can get in a cycle, across all the use cases.
+contact_cap_per_customer: 1
+
+# The most actions that can go out on a channel in a cycle (omit a channel for no cap).
+channel_caps:
+  example_channel: 1000

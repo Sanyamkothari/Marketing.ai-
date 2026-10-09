@@ -324,7 +324,9 @@ def build_assignment(
     arm[held_out] = ARM_HOLDOUT
     arm[suppressed] = ARM_SUPPRESSED  # a suppressed row is in neither arm, whatever its control flag
     if treated_keys is not None:
-        row_keys = _joined_keys(frame, columns)
+        # The winners are named by the treat list's own key text (`engine.keys.key_text`, joined by
+        # `KEY_SEPARATOR`), so a composite key and a whole-number id that pandas read as a float match.
+        row_keys = _treat_list_keys(frame, columns)
         not_winning = (arm == ARM_TREATED) & ~row_keys.isin(set(treated_keys))
         arm[not_winning] = ARM_SUPPRESSED
     if uplift_run:
@@ -653,6 +655,16 @@ def epoch_mismatch(
         f"now {ledger.epoch}), and when it first changed is not recorded, so it may have changed before the "
         "outcomes were all in. The comparison cannot be shown to be clean."
     )
+
+
+def _treat_list_keys(frame: pd.DataFrame, columns: tuple[str, ...]) -> pd.Series:
+    """One text key per row, spelled as the treat list spells it: `key_text` of each column, joined by `KEY_SEPARATOR`."""
+    from engine.keys import KEY_SEPARATOR, key_text
+
+    joined = key_text(frame[columns[0]]).astype("object")
+    for name in columns[1:]:
+        joined = joined + KEY_SEPARATOR + key_text(frame[name]).astype("object")
+    return joined
 
 
 def create_arbitrated_campaign(

@@ -1,33 +1,59 @@
 """Cross-use-case arbitration (Plan J M101, DEC-1311).
 
-Arbitrates between multiple finished scoring runs over the same customer key:
-- Each customer receives at most one action per cycle across all use cases (or within contact cap).
-- Chosen deterministically by priority weight x net value (M97).
-- Holdout members stay untouched across every use case; explore rows preserve randomisation (M92).
-- Records winning use case, losing actions, priority score, and conflicts summary.
+Arbitrates between the treat lists (M98) of several finished scoring runs over the same customer key, so
+that a customer gets at most `contact_cap_per_customer` actions in one cycle across all the use cases.
+
+**Who wins (DEC-1311 (a), (h)).** A candidate is a treat-list row with `treat = 1`. For one customer:
+
+1. A customer a hold-out kept back in *any* use case is never treated by any other (DEC-1311 (c)).
+2. A row M92 treated at random (`explore = 1`, `treat = 1`) keeps its action: it wins before any
+   comparison, like hold-out protection, so the random sample stays random (DEC-1311 (i)). Two
+   explore-treated rows of one customer are both kept only if the contact cap allows; otherwise the first in
+   the request's use case order is kept and the other is recorded as dropped.
+3. The rest are ranked by `priority x value` **only when every candidate of that customer carries the same
+   kind of value**: all an incremental `net_value` (uplift runs), or all an `expected_gross_value`
+   (propensity runs, not incremental). Rupees of the two kinds are never compared, and a candidate with no
+   value is never given one. When the kinds differ, or one has no value, the customer is ranked by priority
+   alone (DEC-1311 (h)).
+4. A tie is broken by the order of the treat lists in the request (the use case order), which is stable.
+
+Why a customer's choice was made is written on every row (`arbitration_reason`) and counted in the
+summary (`customers_decided_by_*`).
+
+**Caps (DEC-1311 (b)).** `contact_cap_per_customer` limits the actions per customer; `channel_caps` limit
+the actions per channel over the whole cycle. Capacity goes to explore rows first, then to rows with an
+incremental value, then to rows with an expected gross value, then to rows without a value; inside each group
+by `priority x value` (priority alone for rows without a value), then by request order.
+
+**No config, no surprises.** With no `configs/decide/arbitration.yaml` every use case has priority 1, the
+cap is one action per customer, and there are no channel caps. The repository ships only
+`configs/decide/arbitration.example.yaml`, which is never read.
+
+Everything is whole-array work (sorts, bincounts, Arrow string kernels): no Python loop over the rows, so
+the time is linear in the rows up to the sorts.
 """
 
 from __future__ import annotations
 
-import csv
 import io
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Final
+from typing import Any, Final
 
 import numpy as np
 import pandas as pd
 import pyarrow as pa
+import pyarrow.compute as _pc
 import pyarrow.parquet as pq
 import yaml
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
 
 from engine.contracts import Artefact
 from engine.decide.treat_list import (
-    _RUPEE_DECIMALS,
-    _SEGMENT_COLUMN,
     EXPECTED_GROSS_VALUE_COLUMN,
     REASON_COLUMNS,
+    SEGMENT_COLUMN,
+    table_csv_bytes,
 )
 from engine.keys import KEY_SEPARATOR, key_text
 from engine.stages.actions import BAND_COLUMN
@@ -38,9 +64,12 @@ __all__ = [
     "ARBITRATED_TREAT_LIST_CSV",
     "ARBITRATED_TREAT_LIST_PARQUET",
     "ARBITRATION_CONFIG_FILE",
+    "ARBITRATION_REASON_COLUMN",
     "ARBITRATION_SUMMARY_FILENAME",
+    "HOLDOUT_USE_CASES_COLUMN",
     "LOSING_ACTIONS_COLUMN",
     "PRIORITY_SCORE_COLUMN",
+    "PRIORITY_WEIGHT_COLUMN",
     "WINNING_USE_CASE_COLUMN",
     "ArbitrationConfig",
     "ArbitrationError",
@@ -51,9 +80,13 @@ __all__ = [
     "csv_bytes",
     "load_arbitration_config",
     "parquet_bytes",
+    "winning_keys",
 ]
 
 _LOGGER = get_logger(__name__)
+
+pc: Any = _pc
+"""`pyarrow.compute`, untyped: its stubs miss most kernels."""
 
 ARBITRATED_TREAT_LIST_CSV: Final[str] = "arbitrated_treat_list.csv"
 ARBITRATED_TREAT_LIST_PARQUET: Final[str] = "arbitrated_treat_list.parquet"
@@ -63,8 +96,54 @@ ARBITRATION_CONFIG_FILE: Final[str] = "decide/arbitration.yaml"
 WINNING_USE_CASE_COLUMN: Final[str] = "winning_use_case"
 LOSING_ACTIONS_COLUMN: Final[str] = "losing_actions"
 PRIORITY_SCORE_COLUMN: Final[str] = "priority_score"
+PRIORITY_WEIGHT_COLUMN: Final[str] = "priority_weight"
+ARBITRATION_REASON_COLUMN: Final[str] = "arbitration_reason"
+HOLDOUT_USE_CASES_COLUMN: Final[str] = "holdout_use_cases"
 
 _DEFAULT_CONFIG_PATH = Path("configs/decide/arbitration.yaml")
+
+# Why a row is (or is not) the customer's action. The values written to `arbitration_reason`.
+REASON_ONLY_ACTION: Final[str] = "only_action"
+REASON_WITHIN_CAP: Final[str] = "within_contact_cap"
+REASON_NET_VALUE: Final[str] = "net_value"
+REASON_GROSS_VALUE: Final[str] = "expected_gross_value"
+REASON_PRIORITY: Final[str] = "priority"
+REASON_REQUEST_ORDER: Final[str] = "request_order"
+REASON_EXPLORE: Final[str] = "explore_treated"
+REASON_EXPLORE_ORDER: Final[str] = "explore_request_order"
+REASON_HELD_OUT: Final[str] = "held_out"
+REASON_CHANNEL_CAP: Final[str] = "channel_cap"
+REASON_NOT_SELECTED: Final[str] = "not_selected"
+
+_KIND_NET: Final[int] = 0
+_KIND_GROSS: Final[int] = 1
+_KIND_NONE: Final[int] = 2
+
+_DECIDED_NONE: Final[int] = 0
+_DECIDED_VALUE: Final[int] = 1
+_DECIDED_PRIORITY: Final[int] = 2
+_DECIDED_ORDER: Final[int] = 3
+_DECIDED_EXPLORE: Final[int] = 4
+_DECIDED_EXPLORE_ORDER: Final[int] = 5
+
+_BOOL_COLUMNS: Final[tuple[str, ...]] = ("treat", "holdout", "explore")
+_STRING_COLUMNS: Final[tuple[str, ...]] = (
+    "use_case",
+    "model_version",
+    SEGMENT_COLUMN,
+    BAND_COLUMN,
+    "suppression_reason",
+    "offer",
+    "channel",
+    "contactable_channels",
+    "runner_up_offer",
+    "offer_reason",
+    *REASON_COLUMNS,
+)
+_FLOAT_COLUMNS: Final[tuple[str, ...]] = ("net_value", EXPECTED_GROSS_VALUE_COLUMN, "runner_up_net_value")
+_OFFER_DETAIL_COLUMNS: Final[tuple[str, ...]] = ("runner_up_offer", "runner_up_net_value", "offer_reason")
+"""M100's columns that describe the offer chosen: they go with the offer when the action is not taken."""
+_REQUIRED_COLUMNS: Final[tuple[str, ...]] = ("use_case", "treat")
 
 
 class ArbitrationError(Exception):
@@ -85,7 +164,7 @@ class UseCasePriorityConfig(BaseModel):
 
 
 class ArbitrationConfig(BaseModel):
-    """Configuration for cross-use-case arbitration (`configs/decide/arbitration.yaml`)."""
+    """Configuration for cross-use-case arbitration (`configs/decide/arbitration.yaml`, absent by default)."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -99,6 +178,14 @@ class ArbitrationConfig(BaseModel):
     channel_caps: dict[str, int] = Field(
         default_factory=dict, description="Max treatments allowed per channel."
     )
+
+    @field_validator("channel_caps")
+    @classmethod
+    def _caps_not_negative(cls, value: dict[str, int]) -> dict[str, int]:
+        bad = sorted(name for name, cap in value.items() if cap < 0)
+        if bad:
+            raise ValueError(f"A channel cap cannot be negative: {', '.join(bad)}.")
+        return value
 
     def priority_for(self, use_case_id: str) -> float:
         if use_case_id in self.use_cases:
@@ -114,7 +201,7 @@ class ArbitrationSummary(Artefact):
     customers_with_conflicts: int = Field(
         description="Customers eligible for more than one treatment across use cases."
     )
-    treated_customers: int = Field(description="Customers awarded a winning treatment.")
+    treated_customers: int = Field(description="Customers awarded at least one winning treatment.")
     dropped_actions_count: int = Field(description="Total candidate actions dropped in arbitration.")
     channel_capped_count: int = Field(
         default=0, description="Candidate actions dropped due to channel capacity caps."
@@ -125,11 +212,40 @@ class ArbitrationSummary(Artefact):
     dropped_by_use_case: dict[str, int] = Field(
         default_factory=dict, description="Dropped treatment counts by use case."
     )
+    holdout_blocked_actions: int = Field(
+        default=0,
+        description="Actions a use case wanted that were not allowed because a hold-out kept the customer back.",
+    )
+    explore_kept_count: int = Field(
+        default=0, description="Actions M92 treated at random that kept their action."
+    )
+    explore_dropped_count: int = Field(
+        default=0,
+        description="Explore-treated actions dropped because the customer's contact cap or a channel cap was reached.",
+    )
+    customers_decided_by_value: int = Field(
+        default=0,
+        description="Customers whose action was chosen by priority times value, every candidate carrying the same kind of value.",
+    )
+    customers_decided_by_priority: int = Field(
+        default=0,
+        description="Customers chosen by priority alone because a candidate had no value or the values were of different kinds.",
+    )
+    customers_decided_by_request_order: int = Field(
+        default=0,
+        description="Customers whose candidates tied, decided by the order of the use cases requested.",
+    )
+    customers_decided_by_explore: int = Field(
+        default=0, description="Customers whose action was kept because it was treated at random (explore)."
+    )
     created_at: AwareDatetime = Field(description="UTC timestamp of arbitration completion.")
 
 
 def load_arbitration_config(config_root: Path | None = None) -> ArbitrationConfig:
-    """Load and validate `configs/decide/arbitration.yaml` or return defaults if missing."""
+    """Load and validate `decide/arbitration.yaml` under the config root, or return the defaults.
+
+    The defaults (no file) are priority 1 for every use case, one action per customer and no channel caps.
+    """
     path = config_root / ARBITRATION_CONFIG_FILE if config_root is not None else _DEFAULT_CONFIG_PATH
 
     if not path.is_file():
@@ -143,11 +259,82 @@ def load_arbitration_config(config_root: Path | None = None) -> ArbitrationConfi
         return ArbitrationConfig()
 
 
-def _join_keys_vectorised(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> pd.Series:
+def _join_keys_vectorised(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> pd.Series[Any]:
     joined = key_text(frame[key_cols[0]]).astype("object")
     for name in key_cols[1:]:
         joined = joined + KEY_SEPARATOR + key_text(frame[name]).astype("object")
     return joined
+
+
+def _stack(frames: Sequence[pd.DataFrame], name: str, kind: str) -> pd.Series[Any] | None:
+    """One column of all the lists stacked, in one dtype, or None when no list has it.
+
+    A list without the column contributes nulls, so the stacked column never mixes dtypes (and never
+    triggers pandas' all-null concat deprecation).
+    """
+    if not any(name in f.columns for f in frames):
+        return None
+    parts: list[pd.Series[Any]] = []
+    for f in frames:
+        n = len(f.index)
+        if name not in f.columns:
+            if kind == "bool":
+                parts.append(pd.Series(pd.array([None] * n, dtype="boolean")))
+            elif kind == "float":
+                parts.append(pd.Series(np.full(n, np.nan), dtype="float64"))
+            else:
+                parts.append(pd.Series(np.full(n, None, dtype=object), dtype="object"))
+            continue
+        col = f[name].reset_index(drop=True)
+        if kind == "bool":
+            parts.append(col.astype("boolean"))
+        elif kind == "float":
+            parts.append(pd.to_numeric(col, errors="coerce").astype("float64"))
+        else:
+            parts.append(col.astype("object"))
+    return pd.concat(parts, ignore_index=True)
+
+
+def _restore_dtype(series: pd.Series[Any], dtypes: set[str]) -> pd.Series[Any]:
+    """Give a column back the dtype every input list had it in, when it can hold the values."""
+    if len(dtypes) != 1:
+        return series
+    wanted = next(iter(dtypes))
+    if wanted == "object":
+        return series.astype("object").where(series.notna(), None)
+    try:
+        return series.astype(wanted)  # type: ignore[no-any-return,call-overload]
+    except (TypeError, ValueError):
+        return series
+
+
+def _join_by_group(group: np.ndarray, labels: pa.Array, sep: str = ", ") -> tuple[np.ndarray, np.ndarray]:
+    """Join `labels` of equal `group` values (the groups consecutive, `group` sorted) with `sep`.
+
+    Returns (the distinct groups, one joined text per group), built by Arrow's list join: no Python loop.
+    """
+    if group.size == 0:
+        return group, np.empty(0, dtype=object)
+    starts = np.flatnonzero(np.r_[True, group[1:] != group[:-1]])
+    offsets = pa.array(np.r_[starts, group.size].astype(np.int32))
+    lists = pa.ListArray.from_arrays(offsets, labels)
+    joined = pc.binary_join(lists, pa.scalar(sep, pa.large_string()))
+    return group[starts], np.asarray(joined.to_numpy(zero_copy_only=False), dtype=object)
+
+
+def _action_labels(use_case: np.ndarray, offer: np.ndarray, tag: np.ndarray) -> pa.Array:
+    """`use_case:offer` (just `use_case` for a row with no offer), then `tag` (empty for none)."""
+    uc = pa.array(use_case, pa.large_string())
+    off = pc.fill_null(pa.array(offer, pa.large_string()), "")
+    has_offer = pc.not_equal(off, "")
+    colon = pa.scalar(":", pa.large_string())
+    empty = pa.scalar("", pa.large_string())
+    label = pc.if_else(has_offer, pc.binary_join_element_wise(uc, off, colon), uc)
+    return pc.binary_join_element_wise(label, pa.array(tag, pa.large_string()), empty)
+
+
+def _empty_object(n: int) -> np.ndarray:
+    return np.full(n, None, dtype=object)
 
 
 def arbitrate_treat_lists(
@@ -155,328 +342,367 @@ def arbitrate_treat_lists(
     config: ArbitrationConfig | None = None,
     key_cols: tuple[str, ...] = ("customer_id",),
 ) -> tuple[pd.DataFrame, ArbitrationSummary]:
-    """Arbitrate across treat lists to assign at most one action per customer.
+    """Arbitrate across treat lists to assign at most `contact_cap_per_customer` actions per customer.
 
-    Pure function executing in O(N) time with vectorized operations.
+    The order of `treat_lists` is the request's use case order: it breaks ties. Pure function. Rows come
+    back in the order each customer is first met (the first list's order for one list, so one list gives
+    back its own rows); a customer with a winning action has one row per winning action, any other has one
+    row, with `treat = False`.
     """
     if not treat_lists:
         raise ValueError("At least one treat list must be provided.")
 
     cfg = config or ArbitrationConfig()
     now = utc_now()
-
-    # Verify key columns present in all treat lists
-    for idx, tl in enumerate(treat_lists):
-        missing = [c for c in key_cols if c not in tl.columns]
+    frames = [tl.reset_index(drop=True) for tl in treat_lists]
+    for idx, tl in enumerate(frames):
+        missing = [c for c in (*key_cols, *_REQUIRED_COLUMNS) if c not in tl.columns]
         if missing:
-            raise KeyError(f"Treat list {idx} missing key column(s): {', '.join(repr(c) for c in missing)}")
+            raise KeyError(f"Treat list {idx} missing column(s): {', '.join(repr(c) for c in missing)}")
 
-    # Fast path for single use case without channel caps
-    if len(treat_lists) == 1 and not cfg.channel_caps:
-        tl = treat_lists[0].copy()
-        n = len(tl)
-        uc = str(tl["use_case"].iloc[0]) if n > 0 else "unknown"
-        priority_weight = cfg.priority_for(uc)
+    # ---- stack the lists into one frame, one dtype per column -----------------------------------------
+    sizes = [len(f.index) for f in frames]
+    n = int(sum(sizes))
+    src = np.repeat(np.arange(len(frames), dtype=np.int64), sizes)
+    keys = pd.concat([_join_keys_vectorised(f, key_cols) for f in frames], ignore_index=True)
+    cid, uniques = pd.factorize(keys)  # customer ids in order of first appearance
+    n_cust = len(uniques)
+    stacked: dict[str, pd.Series[Any]] = {}
+    for name in key_cols:
+        stacked[name] = pd.concat([f[name].astype("object") for f in frames], ignore_index=True)
+    for names, column_kind in ((_BOOL_COLUMNS, "bool"), (_STRING_COLUMNS, "str"), (_FLOAT_COLUMNS, "float")):
+        for name in names:
+            column = _stack(frames, name, column_kind)
+            if column is not None:
+                stacked[name] = column
+    combined = pd.DataFrame(stacked)
+    source_dtypes: dict[str, set[str]] = {}
+    for f in frames:
+        for name in f.columns:
+            source_dtypes.setdefault(str(name), set()).add(str(f[name].dtype))
 
-        # Compute priority score
-        net_val = pd.to_numeric(tl.get("net_value", pd.Series(np.nan, index=tl.index)), errors="coerce")
-        gross_val = pd.to_numeric(
-            tl.get(EXPECTED_GROSS_VALUE_COLUMN, pd.Series(np.nan, index=tl.index)), errors="coerce"
-        )
-        val = net_val.where(net_val.notna(), gross_val).fillna(1.0)
-        p_scores = priority_weight * val
-
-        is_treated = tl["treat"].fillna(False).astype(bool).to_numpy()
-
-        tl[WINNING_USE_CASE_COLUMN] = pd.Series(uc, index=tl.index, dtype="object").where(
-            is_treated, other=None
-        )
-        tl[LOSING_ACTIONS_COLUMN] = pd.Series([None] * n, index=tl.index, dtype="object")
-        tl[PRIORITY_SCORE_COLUMN] = pd.Series(p_scores, index=tl.index, dtype="float64").where(
-            is_treated, other=np.nan
-        )
-
-        treated_count = int(is_treated.sum())
-        summary = ArbitrationSummary(
-            total_customers=n,
-            customers_with_actions=treated_count,
-            customers_with_conflicts=0,
-            treated_customers=treated_count,
-            dropped_actions_count=0,
-            channel_capped_count=0,
-            winning_by_use_case={uc: treated_count} if treated_count > 0 else {},
-            dropped_by_use_case={},
-            created_at=now,
-        )
-        return tl, summary
-
-    # Multi use case arbitration
-    prepared: list[pd.DataFrame] = []
-    holdout_key_set: set[str] = set()
-
-    for idx, tl in enumerate(treat_lists):
-        df = tl.copy()
-        df["_source_idx"] = idx
-        df["_row_key"] = _join_keys_vectorised(df, key_cols)
-
-        # Record holdouts across all inputs
-        if "holdout" in df.columns:
-            h_mask = df["holdout"].fillna(False).astype(bool).to_numpy()
-            if h_mask.any():
-                holdout_key_set.update(df.loc[h_mask, "_row_key"].astype(str))
-
-        # Check candidate treatment eligibility
-        is_treat = df["treat"].fillna(False).astype(bool).to_numpy()
-        df["_is_candidate"] = is_treat
-
-        # Calculate priority score
-        uc_series = df["use_case"].astype(str)
-        p_weights = uc_series.map(lambda u: cfg.priority_for(u)).astype(float).to_numpy()
-
-        net_val = pd.to_numeric(df.get("net_value", pd.Series(np.nan, index=df.index)), errors="coerce")
-        gross_val = pd.to_numeric(
-            df.get(EXPECTED_GROSS_VALUE_COLUMN, pd.Series(np.nan, index=df.index)), errors="coerce"
-        )
-        val_s = net_val.where(net_val.notna(), gross_val).fillna(1.0)
-        val_arr = val_s.to_numpy(dtype=float)
-
-        df["_priority_score"] = pd.Series(p_weights * val_arr, index=df.index, dtype="float64")
-        df["_val"] = pd.Series(val_arr, index=df.index, dtype="float64")
-        prepared.append(df)
-
-    combined = pd.concat(prepared, ignore_index=True)
-
-    # Enforce holdout protection: customers in holdout in ANY use case are disqualified from treatment
-    if holdout_key_set:
-        is_holdout_cust = combined["_row_key"].isin(holdout_key_set)
-        combined.loc[is_holdout_cust, "_is_candidate"] = False
-
-    # Extract all candidate actions
-    candidates = combined[combined["_is_candidate"]].copy()
-
-    total_unique_customers = int(combined["_row_key"].nunique())
-    customers_with_actions = int(candidates["_row_key"].nunique()) if not candidates.empty else 0
-
-    # Count conflicts (customers with >1 candidate action)
-    if not candidates.empty:
-        cand_counts = candidates.groupby("_row_key").size()
-        customers_with_conflicts = int((cand_counts > 1).sum())
-    else:
-        customers_with_conflicts = 0
-
-    # Sort candidates by:
-    # 1. _priority_score descending
-    # 2. _val descending
-    # 3. _source_idx ascending (deterministic tie-breaker)
-    if not candidates.empty:
-        candidates.sort_values(
-            by=["_row_key", "_priority_score", "_val", "_source_idx"],
-            ascending=[True, False, False, True],
-            inplace=True,
-        )
-
-        # Rank candidates per customer
-        candidates["_rank"] = candidates.groupby("_row_key").cumcount() + 1
-        cap = cfg.contact_cap_per_customer
-
-        initial_winners = candidates[candidates["_rank"] <= cap].copy()
-        initial_losers = candidates[candidates["_rank"] > cap].copy()
-    else:
-        initial_winners = pd.DataFrame(columns=combined.columns)
-        initial_losers = pd.DataFrame(columns=combined.columns)
-
-    # Enforce channel capacity caps on initial winners
-    channel_capped_losers: list[pd.DataFrame] = []
-    final_winners: pd.DataFrame
-    channel_capped_count = 0
-
-    if not initial_winners.empty and cfg.channel_caps:
-        # Sort initial winners globally by priority score descending
-        initial_winners.sort_values(by=["_priority_score", "_val"], ascending=[False, False], inplace=True)
-        channel_col = initial_winners.get("channel", pd.Series(None, index=initial_winners.index)).astype(
-            "object"
-        )
-
-        keep_mask = np.ones(len(initial_winners), dtype=bool)
-        for ch, ch_cap in cfg.channel_caps.items():
-            is_ch = channel_col == ch
-            if is_ch.any():
-                ch_cum = is_ch.astype(int).cumsum()
-                exceeded = is_ch & (ch_cum > ch_cap)
-                keep_mask &= ~exceeded
-
-        final_winners = initial_winners[keep_mask].copy()
-        dropped_by_channel = initial_winners[~keep_mask].copy()
-        if not dropped_by_channel.empty:
-            channel_capped_count = len(dropped_by_channel)
-            channel_capped_losers.append(dropped_by_channel)
-    else:
-        final_winners = initial_winners
-
-    # Combine all losing actions
-    all_losers_list = [initial_losers, *channel_capped_losers]
-    all_losers = (
-        pd.concat(all_losers_list, ignore_index=True)
-        if any(not df.empty for df in all_losers_list)
-        else pd.DataFrame()
+    treat_flag = combined["treat"].fillna(False).to_numpy(dtype=bool)
+    holdout_own = (
+        combined["holdout"].fillna(False).to_numpy(dtype=bool) if "holdout" in combined else np.zeros(n, bool)
+    )
+    explore_own = (
+        combined["explore"].fillna(False).to_numpy(dtype=bool) if "explore" in combined else np.zeros(n, bool)
     )
 
-    # Compute dropped actions breakdown by use case
-    dropped_by_uc: dict[str, int] = {}
-    if not all_losers.empty:
-        counts = all_losers["use_case"].value_counts()
-        dropped_by_uc = {str(k): int(v) for k, v in counts.items()}
+    # ---- priority weights, one config lookup per distinct use case ------------------------------------
+    uc_codes, uc_names = pd.factorize(combined["use_case"].astype(str))
+    uc_weight = np.array([cfg.priority_for(str(u)) for u in uc_names], dtype=float)
+    weight = uc_weight[uc_codes] if n else np.empty(0)
 
-    # Compute winning actions breakdown by use case
-    winning_by_uc: dict[str, int] = {}
-    if not final_winners.empty:
-        counts = final_winners["use_case"].value_counts()
-        winning_by_uc = {str(k): int(v) for k, v in counts.items()}
+    # ---- the kind of value each row carries: incremental, gross, or none ------------------------------
+    net = combined["net_value"].to_numpy(dtype=float) if "net_value" in combined else np.full(n, np.nan)
+    gross = (
+        combined[EXPECTED_GROSS_VALUE_COLUMN].to_numpy(dtype=float)
+        if EXPECTED_GROSS_VALUE_COLUMN in combined
+        else np.full(n, np.nan)
+    )
+    net_ok = np.isfinite(net)
+    gross_ok = np.isfinite(gross) & ~net_ok
+    kind = np.where(net_ok, _KIND_NET, np.where(gross_ok, _KIND_GROSS, _KIND_NONE))
+    value = np.where(net_ok, net, np.where(gross_ok, gross, 0.0))
 
-    # Map losing actions string per customer
-    losing_actions_map: dict[str, str] = {}
-    if not all_losers.empty:
-        offers = all_losers["offer"].fillna("")
-        all_losers["_action_desc"] = np.where(
-            offers != "",
-            all_losers["use_case"].astype(str) + ":" + offers.astype(str),
-            all_losers["use_case"].astype(str),
+    # ---- hold-out protection ---------------------------------------------------------------------------
+    held_cust = np.zeros(n_cust, dtype=bool)
+    held_cust[cid[holdout_own]] = True
+    is_cand = treat_flag & ~held_cust[cid]
+    holdout_blocked = int((treat_flag & held_cust[cid]).sum())
+
+    # ---- rank the candidates of each customer ---------------------------------------------------------
+    ci = np.flatnonzero(is_cand)
+    c_cid = cid[ci]
+    c_kind = kind[ci]
+    c_weight = weight[ci]
+    c_value = value[ci]
+    c_explore = explore_own[ci]
+    c_src = src[ci]
+    cand_count = np.bincount(c_cid, minlength=n_cust)
+    kind_counts = np.bincount(c_cid * 3 + c_kind, minlength=n_cust * 3).reshape(n_cust, 3)
+    uniform_kind = (kind_counts > 0).sum(axis=1) == 1
+    cust_kind = kind_counts.argmax(axis=1)
+    by_value_cust = uniform_kind & (cust_kind != _KIND_NONE)
+    row_by_value = by_value_cust[c_cid]
+    score = np.where(row_by_value, c_weight * c_value, c_weight)
+    rank_key = np.where(c_explore, 0.0, -score)
+    order = np.lexsort((ci, c_src, rank_key, ~c_explore, c_cid))
+    s_pos = ci[order]
+    s_cid = c_cid[order]
+    s_explore = c_explore[order]
+    s_score = score[order]
+    s_value_row = row_by_value[order]
+    s_weight = c_weight[order]
+    cap = cfg.contact_cap_per_customer
+    m = len(order)
+    if m:
+        first_of_group = np.r_[True, s_cid[1:] != s_cid[:-1]]
+        group_start = np.flatnonzero(first_of_group)
+        group_id = np.cumsum(first_of_group) - 1
+        rank = np.arange(m) - group_start[group_id]
+        group_size = cand_count[s_cid[group_start]]
+    else:
+        group_start = np.empty(0, dtype=np.int64)
+        group_id = np.empty(0, dtype=np.int64)
+        rank = np.empty(0, dtype=np.int64)
+        group_size = np.empty(0, dtype=np.int64)
+    keep = rank < cap
+
+    # How each customer who lost a candidate was decided: at the boundary between the last kept and the
+    # first dropped candidate.
+    decided = np.full(len(group_start), _DECIDED_NONE, dtype=np.int64)
+    contested = np.flatnonzero(group_size > cap)
+    if contested.size:
+        last_kept = group_start[contested] + cap - 1
+        first_dropped = last_kept + 1
+        both_explore = s_explore[last_kept] & s_explore[first_dropped]
+        kept_explore = s_explore[last_kept]
+        tie = ~kept_explore & (s_score[last_kept] == s_score[first_dropped])
+        by_value = by_value_cust[s_cid[last_kept]]
+        decided[contested] = np.where(
+            both_explore,
+            _DECIDED_EXPLORE_ORDER,
+            np.where(
+                kept_explore,
+                _DECIDED_EXPLORE,
+                np.where(tie, _DECIDED_ORDER, np.where(by_value, _DECIDED_VALUE, _DECIDED_PRIORITY)),
+            ),
         )
-        losing_grouped = all_losers.groupby("_row_key")["_action_desc"].agg(lambda items: ", ".join(items))
-        losing_actions_map = {str(k): str(v) for k, v in losing_grouped.to_dict().items()}
+    s_decided = decided[group_id] if m else decided
 
-    # Build final result per customer key
-    # 1. Winning rows keep their full data with treat = True
-    if not final_winners.empty:
-        final_winners["treat"] = True
-        final_winners[WINNING_USE_CASE_COLUMN] = final_winners["use_case"].astype("object")
-        final_winners[PRIORITY_SCORE_COLUMN] = final_winners["_priority_score"].astype("float64")
-        final_winners[LOSING_ACTIONS_COLUMN] = (
-            final_winners["_row_key"].map(losing_actions_map).astype("object")
+    # ---- channel capacity, given to explore rows first, then by kind of value, then priority x value ----
+    capped = np.zeros(m, dtype=bool)
+    if cfg.channel_caps and m:
+        own_score = np.where(c_kind != _KIND_NONE, c_weight * c_value, c_weight)[order]
+        kept_at = np.flatnonzero(keep)
+        alloc = np.lexsort(
+            (
+                s_pos[kept_at],
+                c_src[order][kept_at],
+                -own_score[kept_at],
+                c_kind[order][kept_at],
+                ~s_explore[kept_at],
+            )
         )
+        ordered = kept_at[alloc]
+        channel_of = (
+            combined["channel"].to_numpy(dtype=object)[s_pos[ordered]] if "channel" in combined else None
+        )
+        if channel_of is not None:
+            for channel_name, channel_cap in cfg.channel_caps.items():
+                in_channel = np.flatnonzero(channel_of == channel_name)
+                capped[ordered[in_channel[channel_cap:]]] = True
+    final = keep & ~capped
+    lost = ~final
 
-    # 2. Non-winning customers (no candidate won)
-    winning_keys_set = set(final_winners["_row_key"]) if not final_winners.empty else set()
-    all_unique_keys = combined["_row_key"].unique()
-    non_winning_keys = [k for k in all_unique_keys if k not in winning_keys_set]
+    # ---- reasons, per winning row ----------------------------------------------------------------------
+    cust_value_reason = np.where(cust_kind == _KIND_NET, REASON_NET_VALUE, REASON_GROSS_VALUE).astype(object)
+    s_reason = np.full(m, REASON_WITHIN_CAP, dtype=object)
+    by_value_rows = s_decided == _DECIDED_VALUE
+    s_reason[by_value_rows] = cust_value_reason[s_cid[by_value_rows]]
+    s_reason[s_decided == _DECIDED_PRIORITY] = REASON_PRIORITY
+    s_reason[s_decided == _DECIDED_ORDER] = REASON_REQUEST_ORDER
+    s_reason[s_explore] = REASON_EXPLORE
+    s_reason[s_explore & (s_decided == _DECIDED_EXPLORE_ORDER)] = REASON_EXPLORE_ORDER
+    if m:
+        s_reason[group_size[group_id] == 1] = REASON_ONLY_ACTION
 
-    non_winning_rows: list[pd.DataFrame] = []
-    if non_winning_keys:
-        # Take representative row for each non-winning customer (e.g. from lowest _source_idx)
-        nw_df = combined[combined["_row_key"].isin(non_winning_keys)].copy()
-        nw_df.sort_values(by=["_source_idx"], ascending=True, inplace=True)
-        nw_rep = nw_df.drop_duplicates(subset=["_row_key"]).copy()
+    # ---- losing actions per customer -------------------------------------------------------------------
+    offers_all = combined["offer"].to_numpy(dtype=object) if "offer" in combined else _empty_object(n)
+    uc_all = combined["use_case"].astype(str).to_numpy(dtype=object)
+    lost_at = np.flatnonzero(lost)
+    tag = np.full(lost_at.size, "", dtype=object)
+    tag[capped[lost_at]] = " (channel cap)"
+    tag[(s_explore & ~capped)[lost_at]] = " (explore, over the cap)"
+    tag[(s_explore & capped)[lost_at]] = " (explore, channel cap)"
+    losing_text = np.full(n_cust, None, dtype=object)
+    if lost_at.size:
+        labels = _action_labels(uc_all[s_pos[lost_at]], offers_all[s_pos[lost_at]], tag)
+        distinct, joined = _join_by_group(s_cid[lost_at], labels)
+        losing_text[distinct] = joined
 
-        nw_rep["treat"] = False
-        nw_rep["offer"] = None
-        nw_rep["channel"] = None
-        nw_rep[WINNING_USE_CASE_COLUMN] = None
-        nw_rep[PRIORITY_SCORE_COLUMN] = np.nan
-        nw_rep[LOSING_ACTIONS_COLUMN] = nw_rep["_row_key"].map(losing_actions_map).astype("object")
+    # ---- winners and the rows of customers nobody treats ----------------------------------------------
+    win_at = np.flatnonzero(final)
+    win_pos = s_pos[win_at]
+    win_cid = s_cid[win_at]
+    has_winner = np.zeros(n_cust, dtype=bool)
+    has_winner[win_cid] = True
 
-        # Mark holdout if customer was in holdout set
-        if holdout_key_set:
-            is_h = nw_rep["_row_key"].isin(holdout_key_set)
-            nw_rep.loc[is_h, "holdout"] = True
+    rows_nw = np.flatnonzero(~has_winner[cid])
+    held_row = held_cust[cid[rows_nw]]
+    tier = np.where(held_row, ~holdout_own[rows_nw], ~is_cand[rows_nw]).astype(np.int64)
+    pick = np.lexsort((rows_nw, src[rows_nw], tier, cid[rows_nw]))
+    ordered_nw = rows_nw[pick]
+    nw_first = (
+        np.r_[True, cid[ordered_nw][1:] != cid[ordered_nw][:-1]] if ordered_nw.size else np.empty(0, bool)
+    )
+    rep_pos = ordered_nw[nw_first]
+    rep_cid = cid[rep_pos]
 
-        non_winning_rows.append(nw_rep)
+    sel = np.concatenate([win_pos, rep_pos])
+    sel_cid = np.concatenate([win_cid, rep_cid])
+    sel_rank = np.concatenate([rank[win_at], np.zeros(rep_pos.size, dtype=np.int64)])
+    final_order = np.lexsort((sel_rank, sel_cid))
+    sel = sel[final_order]
+    sel_cid = sel_cid[final_order]
+    is_winner = np.concatenate([np.ones(win_pos.size, bool), np.zeros(rep_pos.size, bool)])[final_order]
 
-    # Combine winners and non-winners
-    parts_to_combine = []
-    if not final_winners.empty:
-        parts_to_combine.append(final_winners)
-    if non_winning_rows:
-        parts_to_combine.extend(non_winning_rows)
+    out = combined.iloc[sel].reset_index(drop=True)
+    for name in out.columns:
+        out[name] = _restore_dtype(out[name], source_dtypes.get(str(name), set()))
 
-    result_combined = pd.concat(parts_to_combine, ignore_index=True)
+    # Per-row columns of the winners, aligned to `sel`.
+    by_pos_reason = np.full(n, None, dtype=object)
+    by_pos_reason[win_pos] = s_reason[win_at]
+    by_pos_score = np.full(n, np.nan)
+    by_pos_score[win_pos] = np.where(s_value_row[win_at], s_score[win_at], np.nan)
+    by_pos_weight = np.full(n, np.nan)
+    by_pos_weight[win_pos] = s_weight[win_at]
+    # A winner's position can be repeated only across customers, never within one: positions are unique.
+    row_reason = by_pos_reason[sel]
+    cust_has_candidate = np.zeros(n_cust, dtype=bool)
+    cust_has_candidate[c_cid] = True
+    nw_reason = np.where(
+        held_cust[sel_cid],
+        REASON_HELD_OUT,
+        np.where(cust_has_candidate[sel_cid], REASON_CHANNEL_CAP, REASON_NOT_SELECTED),
+    ).astype(object)
+    out["treat"] = is_winner
+    winning_use_case = uc_all[sel].copy()
+    winning_use_case[~is_winner] = None
+    out[WINNING_USE_CASE_COLUMN] = winning_use_case
+    out[LOSING_ACTIONS_COLUMN] = losing_text[sel_cid]
+    out[PRIORITY_SCORE_COLUMN] = by_pos_score[sel]
+    out[PRIORITY_WEIGHT_COLUMN] = by_pos_weight[sel]
+    out[ARBITRATION_REASON_COLUMN] = np.where(is_winner, row_reason, nw_reason)
 
-    # Sort result deterministically by key columns
-    result_combined.sort_values(by=list(key_cols), inplace=True)
-    result_combined.reset_index(drop=True, inplace=True)
+    # An action not taken keeps no offer, channel or offer detail: they would read as a decision.
+    not_taken = ~is_winner & is_cand[sel]
+    for name in ("offer", "channel", *_OFFER_DETAIL_COLUMNS):
+        if name not in out.columns:
+            continue
+        if name in _FLOAT_COLUMNS:
+            out[name] = out[name].mask(not_taken)
+        else:
+            blanked = out[name].to_numpy(dtype=object, copy=True)
+            blanked[not_taken] = None
+            out[name] = blanked
 
-    # Build clean output DataFrame with correct columns
-    group_col = _SEGMENT_COLUMN if _SEGMENT_COLUMN in result_combined.columns else BAND_COLUMN
-    output_cols = [
+    # The use cases whose hold-out kept the customer back (each row's own `holdout` is its own list's).
+    holdout_text = np.full(n_cust, None, dtype=object)
+    held_at = np.flatnonzero(holdout_own)
+    if held_at.size:
+        by_cust = held_at[np.argsort(cid[held_at], kind="stable")]
+        distinct, joined = _join_by_group(cid[by_cust], pa.array(uc_all[by_cust], pa.large_string()))
+        holdout_text[distinct] = joined
+    out[HOLDOUT_USE_CASES_COLUMN] = holdout_text[sel_cid]
+
+    # ---- the summary -----------------------------------------------------------------------------------
+    lost_counts = (
+        np.bincount(uc_codes[s_pos[lost_at]], minlength=len(uc_names))
+        if lost_at.size
+        else np.zeros(len(uc_names), dtype=np.int64)
+    )
+    win_counts = (
+        np.bincount(uc_codes[win_pos], minlength=len(uc_names))
+        if win_pos.size
+        else np.zeros(len(uc_names), dtype=np.int64)
+    )
+    summary = ArbitrationSummary(
+        total_customers=n_cust,
+        customers_with_actions=int((cand_count > 0).sum()),
+        customers_with_conflicts=int((cand_count > 1).sum()),
+        treated_customers=int(has_winner.sum()),
+        dropped_actions_count=int(lost.sum()),
+        channel_capped_count=int(capped.sum()),
+        winning_by_use_case={str(uc_names[i]): int(c) for i, c in enumerate(win_counts) if c > 0},
+        dropped_by_use_case={str(uc_names[i]): int(c) for i, c in enumerate(lost_counts) if c > 0},
+        holdout_blocked_actions=holdout_blocked,
+        explore_kept_count=int((s_explore & final).sum()),
+        explore_dropped_count=int((s_explore & lost).sum()),
+        customers_decided_by_value=int((decided == _DECIDED_VALUE).sum()),
+        customers_decided_by_priority=int((decided == _DECIDED_PRIORITY).sum()),
+        customers_decided_by_request_order=int(
+            ((decided == _DECIDED_ORDER) | (decided == _DECIDED_EXPLORE_ORDER)).sum()
+        ),
+        customers_decided_by_explore=int((decided == _DECIDED_EXPLORE).sum()),
+        created_at=now,
+    )
+
+    columns = _output_columns(out, key_cols)
+    return out[columns], summary
+
+
+def _output_columns(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> list[str]:
+    """The columns of the arbitrated list: the treat list's own, in its order, then the arbitration's."""
+    treat_list_columns = [
         *key_cols,
         "use_case",
         "model_version",
-        group_col,
+        SEGMENT_COLUMN,
+        BAND_COLUMN,
         "treat",
         "holdout",
         "explore",
         "suppression_reason",
         "offer",
         "channel",
+        "contactable_channels",
         "net_value",
         EXPECTED_GROSS_VALUE_COLUMN,
+        "runner_up_offer",
+        "runner_up_net_value",
+        "offer_reason",
         *REASON_COLUMNS,
+    ]
+    own = [c for c in treat_list_columns if c in frame.columns]
+    return [
+        *own,
         WINNING_USE_CASE_COLUMN,
         LOSING_ACTIONS_COLUMN,
         PRIORITY_SCORE_COLUMN,
+        PRIORITY_WEIGHT_COLUMN,
+        ARBITRATION_REASON_COLUMN,
+        HOLDOUT_USE_CASES_COLUMN,
     ]
 
-    # Ensure all expected columns exist
-    for col in output_cols:
-        if col not in result_combined.columns:
-            result_combined[col] = None
 
-    result_df = result_combined[output_cols].copy()
+def winning_keys(arbitrated: pd.DataFrame, key_cols: tuple[str, ...], use_case: str) -> set[str]:
+    """The customer keys `use_case` won, spelled as the treat list spells them (`key_text`, joined by `KEY_SEPARATOR`).
 
-    # Build summary
-    treated_customers = int(result_df["treat"].sum())
-    dropped_actions_count = len(all_losers)
-
-    summary = ArbitrationSummary(
-        total_customers=total_unique_customers,
-        customers_with_actions=customers_with_actions,
-        customers_with_conflicts=customers_with_conflicts,
-        treated_customers=treated_customers,
-        dropped_actions_count=dropped_actions_count,
-        channel_capped_count=channel_capped_count,
-        winning_by_use_case=winning_by_uc,
-        dropped_by_use_case=dropped_by_uc,
-        created_at=now,
-    )
-
-    return result_df, summary
+    One campaign per use case measures exactly these rows (`engine.measurement.campaign.create_arbitrated_campaign`).
+    """
+    won = arbitrated[arbitrated["treat"].astype(bool) & (arbitrated[WINNING_USE_CASE_COLUMN] == use_case)]
+    if won.empty:
+        return set()
+    return set(_join_keys_vectorised(won, key_cols))
 
 
 def arbitrated_table(df: pd.DataFrame, key_cols: tuple[str, ...]) -> pa.Table:
-    """Build PyArrow Table from arbitrated treat list DataFrame."""
-    group_col = _SEGMENT_COLUMN if _SEGMENT_COLUMN in df.columns else BAND_COLUMN
-
-    fields = [pa.field(name, pa.string()) for name in key_cols]
-    fields += [
-        pa.field("use_case", pa.string()),
-        pa.field("model_version", pa.string()),
-        pa.field(group_col, pa.string()),
-        pa.field("treat", pa.bool_()),
-        pa.field("holdout", pa.bool_()),
-        pa.field("explore", pa.bool_()),
-        pa.field("suppression_reason", pa.string()),
-        pa.field("offer", pa.string()),
-        pa.field("channel", pa.string()),
-        pa.field("net_value", pa.float64()),
-        pa.field(EXPECTED_GROSS_VALUE_COLUMN, pa.float64()),
-        *[pa.field(name, pa.string()) for name in REASON_COLUMNS],
-        pa.field(WINNING_USE_CASE_COLUMN, pa.string()),
-        pa.field(LOSING_ACTIONS_COLUMN, pa.string()),
-        pa.field(PRIORITY_SCORE_COLUMN, pa.float64()),
-    ]
-    schema = pa.schema(fields)
-
-    arrays: list[pa.Array] = []
-    for f in schema:
-        name = f.name
+    """Build the PyArrow table of an arbitrated treat list: booleans (null where unknown), floats, strings."""
+    float_columns = {
+        "net_value",
+        EXPECTED_GROSS_VALUE_COLUMN,
+        "runner_up_net_value",
+        PRIORITY_SCORE_COLUMN,
+        PRIORITY_WEIGHT_COLUMN,
+    }
+    fields: list[pa.Field[Any]] = []
+    arrays: list[pa.Array[Any]] = []
+    for name in _output_columns(df, key_cols):
         col = df[name] if name in df.columns else pd.Series([None] * len(df), dtype="object")
-        if f.type.equals(pa.bool_()):
+        if name in _BOOL_COLUMNS:
+            fields.append(pa.field(name, pa.bool_()))
             arrays.append(pa.array(col.astype("boolean"), type=pa.bool_()))
-        elif f.type.equals(pa.float64()):
+        elif name in float_columns:
+            fields.append(pa.field(name, pa.float64()))
             arrays.append(pa.array(pd.to_numeric(col, errors="coerce"), type=pa.float64()))
         else:
+            fields.append(pa.field(name, pa.string()))
             arrays.append(pa.array(col.astype("string"), type=pa.string()))
-
-    return pa.Table.from_arrays(arrays, schema=schema)
+    return pa.Table.from_arrays(arrays, schema=pa.schema(fields))
 
 
 def parquet_bytes(table: pa.Table) -> bytes:
@@ -486,20 +712,5 @@ def parquet_bytes(table: pa.Table) -> bytes:
 
 
 def csv_bytes(table: pa.Table) -> bytes:
-    df = table.to_pandas()
-    buf = io.StringIO()
-    writer = csv.writer(buf, lineterminator="\n")
-    writer.writerow(table.schema.names)
-    for row in df.itertuples(index=False):
-        formatted: list[str] = []
-        for val in row:
-            if val is None or pd.isna(val):
-                formatted.append("")
-            elif isinstance(val, bool | np.bool_):
-                formatted.append("1" if val else "0")
-            elif isinstance(val, float | np.floating):
-                formatted.append(f"{val:.{_RUPEE_DECIMALS}f}".rstrip("0").rstrip("."))
-            else:
-                formatted.append(str(val))
-        writer.writerow(formatted)
-    return buf.getvalue().encode("utf-8")
+    """The CSV, written column-wise like the treat list's: flags `1` and `0`, null as empty."""
+    return table_csv_bytes(table)
