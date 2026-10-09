@@ -181,7 +181,7 @@ def test_a_number_in_a_sentence_that_no_figure_prints_is_refused(tmp_path: Path)
 def test_the_card_codes_are_defined_once_and_three_reuse_a_code_the_catalogue_has() -> None:
     from engine.decide.codes import PLAN_J_CODES
 
-    assert SUMMARY_CODES == {
+    assert {
         "CAMPAIGN_NO_CONTROL",
         "CAMPAIGN_EARLY_LOOK",
         "CONTROL_GROUP_CONTACTED",
@@ -189,7 +189,7 @@ def test_the_card_codes_are_defined_once_and_three_reuse_a_code_the_catalogue_ha
         "GROUP_BACKFIRED",
         "EFFECT_FADING",
         "SUMMARY_NOT_TRACEABLE",
-    }
+    } == SUMMARY_CODES
     assert CARD_CODES == {
         "no_control": "CAMPAIGN_NO_CONTROL",
         "early_look": "CAMPAIGN_EARLY_LOOK",

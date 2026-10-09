@@ -43,7 +43,6 @@ from engine.measurement.simulate import (
     OUTCOME_WINDOW_DAYS,
     multi_arm_campaign,
     population,
-    segment_outcomes,
 )
 from engine.pilot.plain import jargon_in
 from engine.registry import REGISTRY_FILENAME, LocalModelRegistry
@@ -100,7 +99,9 @@ def _create(client: TestClient, run_id: str, name: str) -> str:
     return str(created["campaign"]["campaign_id"])
 
 
-def _add_outcomes(client: TestClient, campaign_id: str, outcomes: pd.DataFrame, *, synthetic: bool = False) -> None:
+def _add_outcomes(
+    client: TestClient, campaign_id: str, outcomes: pd.DataFrame, *, synthetic: bool = False
+) -> None:
     payload = outcomes.to_csv(index=False, lineterminator="\n").encode()
     response = client.post(
         "/uploads",
@@ -155,7 +156,11 @@ def _audit(
     body: dict[str, Any] = {
         "name": name,
         "primary_key": "customer_id",
-        "assignment": {"upload_id": upload(client, frame, name="assignment.csv"), "arm_column": "group", **(arm or {})},
+        "assignment": {
+            "upload_id": upload(client, frame, name="assignment.csv"),
+            "arm_column": "group",
+            **(arm or {}),
+        },
         "outcomes": {
             "upload_id": upload(client, outcomes, name="outcomes.csv"),
             "outcome_column": "converted",
@@ -167,13 +172,18 @@ def _audit(
         "as_of": AS_OF.isoformat(),
     }
     if contacts is not None:
-        body["contact"] = {"upload_id": upload(client, contacts, name="contacts.csv"), "contacted_column": "contacted"}
+        body["contact"] = {
+            "upload_id": upload(client, contacts, name="contacts.csv"),
+            "contacted_column": "contacted",
+        }
     return str(ok(client.post("/campaigns/audit", json=body), 201)["campaign"]["campaign_id"])
 
 
 def _simulated_audit(client: TestClient, name: str, seed: int, *, contamination: float) -> str:
     """A verified-random audit (the file has unrelated details) with a contact file of known leakage."""
-    sim = population(8_000, 0.10, 0.04, seed=seed, control_share=0.2, compliance=1.0, contamination=contamination)
+    sim = population(
+        8_000, 0.10, 0.04, seed=seed, control_share=0.2, compliance=1.0, contamination=contamination
+    )
     rng = np.random.default_rng(seed)
     frame = pd.DataFrame(
         {
@@ -205,7 +215,10 @@ def world(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Iterat
         ids["banded"] = _scored(client, RUN_BANDED, "Banded win-back", banded_outcomes)
         ids["banded_again"] = _scored(client, RUN_BANDED, "Banded win-back again", banded_outcomes)
         ids["uplift"] = _scored(
-            client, RUN_UPLIFT, "Uplift win-back", uplift.outcomes.rename(columns={"reactivated_90d": "converted"})
+            client,
+            RUN_UPLIFT,
+            "Uplift win-back",
+            uplift.outcomes.rename(columns={"reactivated_90d": "converted"}),
         )
         ok(client.put(f"/pilot/roi/{RUN_UPLIFT}", json=VALUE_INPUTS))
         ids["under_final"] = _scored(
@@ -259,7 +272,9 @@ def _summary(world: World) -> dict[str, Any]:
 
 
 def _report(world: World, name: str) -> dict[str, Any]:
-    return dict(json.loads(world.storage.read_bytes(f"campaigns/{world.ids[name]}/incrementality_report.json")))
+    return dict(
+        json.loads(world.storage.read_bytes(f"campaigns/{world.ids[name]}/incrementality_report.json"))
+    )
 
 
 def _cards(summary: dict[str, Any], code: str) -> list[dict[str, Any]]:
@@ -323,7 +338,9 @@ def test_the_total_equals_the_sum_of_the_campaigns_lower_bounds(world: World) ->
     assert {line["campaign_id"] for line in outcomes["campaigns"]} == {world.ids[name] for name in PROVEN}
     for line in outcomes["campaigns"]:
         name = next(key for key, value in world.ids.items() if value == line["campaign_id"])
-        assert line["lower_bound"]["value"] == pytest.approx(_report(world, name)["incremental_conversions"]["ci_low"])
+        assert line["lower_bound"]["value"] == pytest.approx(
+            _report(world, name)["incremental_conversions"]["ci_low"]
+        )
     assert outcomes["total"]["text"] == f"{round(expected):,}"
 
 
@@ -405,7 +422,16 @@ def _free_strings(item: Any, key: str = "") -> Iterator[str]:
         if {"value", "text", "format", "sources"} <= set(item):
             return
         for name, value in item.items():
-            if name in {"campaign_id", "use_case_id", "artefacts", "read", "unit", "code", "kind", "built_at"}:
+            if name in {
+                "campaign_id",
+                "use_case_id",
+                "artefacts",
+                "read",
+                "unit",
+                "code",
+                "kind",
+                "built_at",
+            }:
                 continue
             yield from _free_strings(value, name)
     elif isinstance(item, list):
@@ -415,7 +441,9 @@ def _free_strings(item: Any, key: str = "") -> Iterator[str]:
         yield item
 
 
-def test_every_digit_in_the_summarys_words_is_printed_by_a_figure_and_the_words_are_plain(world: World) -> None:
+def test_every_digit_in_the_summarys_words_is_printed_by_a_figure_and_the_words_are_plain(
+    world: World,
+) -> None:
     summary = _summary(world)
     printed = {token for figure in _figures(summary) for token in TOKEN.findall(figure["text"])}
     for text in _free_strings(summary):
@@ -456,9 +484,9 @@ def test_early_look_appears_only_for_a_result_read_before_the_planned_date(world
 
 
 def test_an_underpowered_plan_warns_only_while_there_is_no_final_result(world: World) -> None:
-    assert _card_campaigns(world, "PLAN_UNDERPOWERED") == {"under"}, (
-        "the well-powered plan, and the small plan already read, have no card"
-    )
+    assert _card_campaigns(world, "PLAN_UNDERPOWERED") == {
+        "under"
+    }, "the well-powered plan, and the small plan already read, have no card"
     card = _cards(_summary(world), "PLAN_UNDERPOWERED")[0]
     assert card["read"] == [f"campaigns/{world.ids['under']}/test_plan.json"]
     assert {fact["value"]["format"] for fact in card["facts"]} == {"share"}
@@ -479,7 +507,12 @@ def test_backfire_appears_for_the_planted_group_and_not_for_the_neutral_one(worl
     harmed = by_campaign[world.ids["banded"]]
     assert harmed["facts"][0]["value"]["value"] == HARMED_BAND
     assert NEUTRAL_BAND not in json.dumps(cards), "the neutral band is not flagged"
-    others = {name for name in world.ids if world.ids[name] in by_campaign} - {"banded", "banded_again", "under_final", "stated"}
+    others = {name for name in world.ids if world.ids[name] in by_campaign} - {
+        "banded",
+        "banded_again",
+        "under_final",
+        "stated",
+    }
     assert others == set(), f"no other campaign backfired: {others}"
     stated = by_campaign[world.ids["stated"]]
     assert stated["title"].startswith("If the groups were random as you said"), "a statement is not proof"
@@ -499,7 +532,16 @@ def test_approving_the_suggestion_clears_its_card(world: World) -> None:
     assert target not in after and world.ids["banded"] in after, "only the approved group's card goes"
 
 
-FEATURES = ["age", "tenure_months", "visits_30d", "monthly_spend", "plan", "region", "support_tickets_90d", "noise_a"]
+FEATURES = [
+    "age",
+    "tenure_months",
+    "visits_30d",
+    "monthly_spend",
+    "plan",
+    "region",
+    "support_tickets_90d",
+    "noise_a",
+]
 
 
 def _stable_and_drifted() -> tuple[Any, Any]:
@@ -512,7 +554,9 @@ def _stable_and_drifted() -> tuple[Any, Any]:
     for column in FEATURES:
         if pd.api.types.is_numeric_dtype(moved[column]):
             moved[column] = moved[column] * 6.0 + 400.0
-    baseline = register.drift_baseline(base, config, run_id="r_20261010_10500090", model_version_id="m_summary_1")
+    baseline = register.drift_baseline(
+        base, config, run_id="r_20261010_10500090", model_version_id="m_summary_1"
+    )
     return (
         score.compute_drift(baseline, again, config, run_id=RUN_UPLIFT),
         score.compute_drift(baseline, moved, config, run_id=RUN_UPLIFT),
@@ -563,7 +607,9 @@ def _verdict(*, beats: bool) -> Any:
     )
     decision = decide_ranking(comparison, None)
     assert decision is not None
-    return ranking_choice(decision, run_id=RUN_UPLIFT, model_version_id="m_summary_1", contacts=80, now=utc_now())
+    return ranking_choice(
+        decision, run_id=RUN_UPLIFT, model_version_id="m_summary_1", contacts=80, now=utc_now()
+    )
 
 
 def test_not_beating_risk_appears_only_when_the_run_says_so(world: World) -> None:

@@ -34,7 +34,10 @@ def _cycle_effects(truth: list[float], base_seed: int, sim: int) -> list[CycleEf
     for effect, seed in zip(truth, cycle_seeds, strict=True):
         campaign = population(ROWS, 0.10, effect, seed=seed, control_share=0.2)
         report = measure_campaign(
-            campaign.scores, campaign.outcomes, intended_column="intended_treatment", **campaign.measure_kwargs
+            campaign.scores,
+            campaign.outcomes,
+            intended_column="intended_treatment",
+            **campaign.measure_kwargs,
         )
         lift = report.absolute_lift
         assert lift is not None and lift.ci_low is not None and lift.ci_high is not None

@@ -20,9 +20,9 @@ import pytest
 
 from engine.measurement.simulate import COVARIATE_COLUMN, REVENUE_COLUMN
 from tests.integration.measurement.support import ok, propensity_run
-from tests.integration.measurement.test_campaign_amounts import COVARIATE, RUN as REVENUE_RUN
+from tests.integration.measurement.test_campaign_amounts import COVARIATE, _campaign, _measure, _plan
+from tests.integration.measurement.test_campaign_amounts import RUN as REVENUE_RUN
 from tests.integration.measurement.test_campaign_amounts import World as AmountsWorld
-from tests.integration.measurement.test_campaign_amounts import _campaign, _measure, _plan
 from tests.integration.measurement.test_campaign_amounts import world as amounts_world
 from tests.integration.measurement.test_campaign_summary import _banded_outcomes, _scored
 from tests.integration.measurement.test_programme_readout import World as ProgrammeWorld
@@ -35,7 +35,9 @@ pytestmark = pytest.mark.integration
 AMOUNT_INPUTS = {"value_per_outcome": 0.3, "contact_cost": 0.25, "offer_cost": 1.5, "outcome_is_good": True}
 
 
-def test_an_amount_a_yes_no_campaign_and_rupees_are_three_totals_never_added(amounts_world: AmountsWorld) -> None:
+def test_an_amount_a_yes_no_campaign_and_rupees_are_three_totals_never_added(
+    amounts_world: AmountsWorld,
+) -> None:
     world = amounts_world
     revenue = _campaign(world, **COVARIATE)
     _plan(world, revenue, covariate_column=COVARIATE_COLUMN, expected_rho2=0.36)
@@ -81,7 +83,9 @@ def test_a_programme_readout_is_listed_apart_and_never_added(programme_world: Pr
         "campaign_id"
     ]
     view = ok(world.client.get("/pilot/proof/" + campaign_id, params={"format": "json"}))
-    assert view["claim"] == "proven", "a programme is engine-random, so it could be added; it covers the campaigns"
+    assert (
+        view["claim"] == "proven"
+    ), "a programme is engine-random, so it could be added; it covers the campaigns"
     summary = ok(world.client.get("/campaigns/summary"))
     assert summary["proven"]["totals"] == []
     apart = {line["campaign_id"]: line for line in summary["proven"]["apart"]}

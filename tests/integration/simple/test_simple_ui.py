@@ -206,6 +206,9 @@ def _proof_fixtures(out: Path, root: Path, config_root: Path) -> None:
     with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
         campaign_id = _measured_campaign(client, run.run_id, _banded_outcomes(run.scores, seed=21))
         _write(out, "proofs", _ok(client.get("/pilot/proof")))
+        # Plan J M105: the summary before the suggestion is approved, with the harmed group's card and the lower
+        # bound of the one campaign that is final.
+        _write(out, "campaign_summary", _ok(client.get("/campaigns/summary")))
         _write(out, "proof", _ok(client.get(f"/pilot/proof/{campaign_id}", params={"format": "json"})))
         _write(out, "proof_page", {"html": client.get(f"/pilot/proof/{campaign_id}").text})
         approval = {"dimension": "band", "segment": HARMED_BAND}
@@ -221,6 +224,8 @@ def _proof_fixtures(out: Path, root: Path, config_root: Path) -> None:
         refused = client.get(f"/pilot/proof/{waiting}", params={"format": "json"})
         assert refused.status_code == 409, refused.text
         _write(out, "proof_refused", refused.json())
+    with TestClient(create_app(config_root=config_root, data_dir=root / "empty_summary_data")) as client:
+        _write(out, "campaign_summary_empty", _ok(client.get("/campaigns/summary")))
 
 
 def test_the_fixtures_are_the_world_the_screens_are_tested_in(tmp_path: Path, config_root: Path) -> None:
@@ -249,6 +254,12 @@ def test_the_fixtures_are_the_world_the_screens_are_tested_in(tmp_path: Path, co
     assert [p["status"] for p in read("proof")["proposals"]] == ["proposed"]
     assert [p["status"] for p in read("proof_approved")["proposals"]] == ["approved"]
     assert read("proof_refused")["detail"]["code"] == "PROOF_NOT_MATURE"
+    # Plan J M105: a real summary with the harmed group's card and one total, and an empty one with neither
+    summary = read("campaign_summary")
+    assert [card["code"] for card in summary["cards"]] == ["GROUP_BACKFIRED"]
+    assert [total["unit"] for total in summary["proven"]["totals"]] == ["outcomes"]
+    assert read("campaign_summary_empty")["cards"] == []
+    assert read("campaign_summary_empty")["proven"]["totals"] == []
 
 
 def test_the_four_page_product_in_jsdom(tmp_path: Path, config_root: Path) -> None:

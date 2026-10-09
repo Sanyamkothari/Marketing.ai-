@@ -95,9 +95,7 @@ def propensity_run(
     config = load_use_case(USE_CASE)
     if control_fraction is not None:
         config = config.model_copy(
-            update={
-                "actions": config.actions.model_copy(update={"control_group_fraction": control_fraction})
-            }
+            update={"actions": config.actions.model_copy(update={"control_group_fraction": control_fraction})}
         )
     campaign, frame = _customers(rows, seed)
     frame[config.actions.score_field] = campaign.truth["p_treated"].to_numpy()

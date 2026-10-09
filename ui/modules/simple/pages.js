@@ -6,6 +6,8 @@
 // models wait for approval (`GET /approvals`), one calm notice says how many, with one way to them.
 // Plan J M104: the Value Proof Packs that are ready (`GET /pilot/proof`) follow, each with the server's own
 // sentence and a link to the pack.
+// Plan J M105: what needs attention and the value proven to date (`GET /campaigns/summary`) come first, drawn only
+// from the server's answer: a card appears only when the server sent it, and no number is made here.
 //
 // Settings is where everything a new user does not need went: the AI service, Privacy, Schedules,
 // Admin (only while sign-in is on) and, folded under "Advanced tools", the uplift workbench, the data
@@ -107,13 +109,95 @@ export function proofsCardHtml(proofs) {
 }
 
 /**
+ * Plan J M105: what needs attention and the value proven to date, from `GET /campaigns/summary` (`summary`).
+ * Every word and number is the server's (a figure's `text`); nothing is computed or filled in here, so with no
+ * answer (null: a role without it, or an API without the route) or an answer with nothing in it, nothing is drawn.
+ */
+export function summaryCardHtml(summary) {
+  if (!summary || typeof summary !== "object") return "";
+  const cards = Array.isArray(summary.cards) ? summary.cards : [];
+  const proven = summary.proven && typeof summary.proven === "object" ? summary.proven : null;
+  const totals = (proven && proven.totals) || [];
+  const apart = (proven && proven.apart) || [];
+  const excluded = (proven && proven.excluded) || [];
+  const text = (figure) => (figure && figure.text != null ? String(figure.text) : "");
+  const attention = cards.length
+    ? `<section class="card sp-summary" data-attention><h3>Needs your attention</h3><ul class="sp-list">${cards
+        .map((card) => {
+          const who = text(card.campaign_name);
+          const facts = (card.facts || [])
+            .filter((fact) => text(fact.value))
+            .map((fact) => `<li>${esc(fact.label)}: <strong>${esc(text(fact.value))}</strong></li>`)
+            .join("");
+          const pack =
+            card.kind === "backfire" && card.campaign_id
+              ? ` <a href="#/pilot/proof/${esc(encodeURIComponent(card.campaign_id))}" data-card-pack>Open the Value Proof Pack</a>`
+              : "";
+          return `<li class="sp-entry sp-card ${esc(card.severity || "info")}" data-card="${esc(card.code)}"${
+            card.campaign_id ? ` data-card-campaign="${esc(card.campaign_id)}"` : ""
+          }><span class="sp-label">${esc(card.title)}</span>${who ? `<span class="sp-text">${esc(who)}</span>` : ""}<span class="sp-text">${esc(
+            card.text,
+          )}</span>${facts ? `<ul class="sp-facts">${facts}</ul>` : ""}<span class="sp-text"><em>${esc(card.next_step)}</em>${pack}</span></li>`;
+        })
+        .join("")}</ul></section>`
+    : "";
+  const line = (item) => `<li data-line="${esc(item.campaign_id)}">${esc(text(item.campaign_name))}: ${esc(text(item.lower_bound))}</li>`;
+  const sums = totals
+    .map(
+      (total) =>
+        `<li class="sp-entry" data-total="${esc(total.unit)}"><span class="sp-label">${esc(total.label)}</span><ul class="sp-facts">${(
+          total.campaigns || []
+        )
+          .map(line)
+          .join("")}</ul></li>`,
+    )
+    .join("");
+  const aside = apart
+    .map(
+      (item) =>
+        `<li class="sp-entry" data-apart="${esc(item.campaign_id)}"><span class="sp-label">${esc(text(item.campaign_name))}</span><span class="sp-text">${esc(
+          item.claim_label,
+        )}. ${esc(item.reason)}</span>${
+          (item.lower_bounds || []).length ? `<ul class="sp-facts">${item.lower_bounds.map(line).join("")}</ul>` : ""
+        }</li>`,
+    )
+    .join("");
+  const left = excluded
+    .map(
+      (item) =>
+        `<li class="sp-entry" data-excluded="${esc(item.campaign_id)}"><span class="sp-label">${esc(text(item.campaign_name))}</span><span class="sp-text">${esc(
+          item.reason,
+        )}${item.results_available_on ? ` ${esc(text(item.results_available_on))}.` : ""}</span></li>`,
+    )
+    .join("");
+  const value =
+    sums || aside || left
+      ? `<section class="card sp-summary" data-proven><h3>Value proven to date</h3>${
+          proven && proven.rule ? `<p class="sp-note">${esc(proven.rule)}</p>` : ""
+        }<ul class="sp-list">${sums}</ul>${
+          aside ? `<h4 class="sp-sub">Listed apart, never added</h4><ul class="sp-list" data-apart-list>${aside}</ul>` : ""
+        }${left ? `<h4 class="sp-sub">Not counted</h4><ul class="sp-list" data-excluded-list>${left}</ul>` : ""}</section>`
+      : "";
+  return `${attention}${value}`;
+}
+
+/**
  * The Results page. `runs` is `GET /runs`'s list (null while loading), `error` its failure,
  * `waiting` how many models wait for approval (null or 0: no notice). `lists` are the drawn results
  * lists other modules register beside the runs (Plan J M94: campaigns; `registerResultsList`).
  * `auditHref` (Plan J M103) is where "Audit a campaign" goes, for a person who may audit one; null: no link.
  * `proofs` (Plan J M104) is `GET /pilot/proof`'s answer, or null: the ready Value Proof Packs.
+ * `summary` (Plan J M105) is `GET /campaigns/summary`'s answer, or null: what needs attention and the value proven.
  */
-export function resultsHtml({ runs = null, error = null, waiting = null, lists = [], auditHref = null, proofs = null } = {}) {
+export function resultsHtml({
+  runs = null,
+  error = null,
+  waiting = null,
+  lists = [],
+  auditHref = null,
+  proofs = null,
+  summary = null,
+} = {}) {
   const head = pageHead(
     `${crumbs([{ label: "Results" }])}<h1 class="h1">Results</h1><p class="desc">Every run, newest first. Open one to see its scores, reasons and next steps.</p>${headActions(
       {
@@ -166,7 +250,7 @@ export function resultsHtml({ runs = null, error = null, waiting = null, lists =
     })}${more}</section>`;
   }
   const beside = [].concat(lists || []).filter(Boolean).join("");
-  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${body}${beside}${proofsCardHtml(proofs)}</main>`;
+  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${summaryCardHtml(summary)}${body}${beside}${proofsCardHtml(proofs)}</main>`;
 }
 
 // --- Settings ------------------------------------------------------------------------------------
@@ -252,6 +336,10 @@ const CSS = `
 .sp .sp-text{font-size:13px;color:var(--muted);line-height:1.45}
 .sp details.adv>summary{padding:16px 20px;font-size:14px;font-weight:600;color:var(--ink);cursor:pointer}
 .sp details.adv[open]>summary{border-bottom:1px solid var(--line)}
+.sp .sp-sub{margin:0;padding:12px 20px 0;font-size:13px;font-weight:600;color:var(--ink2)}
+.sp .sp-summary .sp-note{margin:0;padding:12px 20px 0}
+.sp .sp-facts{list-style:none;margin:4px 0 0;padding:0;font-size:13px;color:var(--ink2)}
+.sp .sp-card.warning{border-left:3px solid var(--bad,#b3261e)}
 .sp .sp-about{padding:12px 20px;font-size:13px;color:var(--ink2);line-height:1.5}
 .sp .sp-about p{margin:0 0 4px}
 .sp .sp-runs a{color:var(--brand-blue);font-weight:600}
