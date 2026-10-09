@@ -581,8 +581,8 @@ reports recorded on the commit before M102).
   {covariate_column, covariate_date_column}`), with the date each value was measured up to. The dates are compared
   by day, since a value dated a day includes that whole day: a value dated on or after the day of the customer's
   treatment (their own date, or the campaign's start, even when that start is later in the day), or a covariate with
-  no date column, is refused with `422 COVARIATE_NOT_BEFORE_CAMPAIGN`, and nothing is stored: such a value could contain the campaign's
-  own effect. A value with no date on its row is treated as unknown.
+  no date column, is refused with `422 COVARIATE_NOT_BEFORE_CAMPAIGN`, and nothing is stored: such a value could
+  contain the campaign's own effect. A value with no date on its row is treated as unknown.
 * **Skewed revenue.** Most customers spend nothing and a few spend a hundred times the median. The interval rests on
   the average being close to normal, which a long tail delays; Kohavi, Deng, Longbotham and Xu (2014, rule 7) give
   the size that suffices: more than `355 g²` customers per arm, `g` the arm's skewness. Below it the report keeps its
@@ -602,8 +602,9 @@ reports recorded on the commit before M102).
   values nothing is put in rupees and `value_note` says what to enter. Outcomes ingested as amounts
   (`incrementality_input.json`) keep only the two averages, so the view says no range can be given and prices
   nothing, instead of "No outcomes have been recorded".
-* **Several offers.** `measure_campaign(arm_column=...)` (M100) stays yes/no only: an amount or a covariate there is
-  refused with a plain `ValueError`, because no nightly check covers per-offer amounts yet.
+* **Several offers.** `measure_campaign(arm_column=...)` (M100) stays yes/no only: an amount there is refused with a
+  plain `ValueError`, because no nightly check covers per-offer amounts or their adjustment yet; a covariate named
+  on a yes/no several-offer campaign is ignored, as before M102.
 * **Learning.** An uplift model learns from a yes/no outcome, so step 4 does not offer "Learn who to contact next
   time" on a campaign measured on an amount, and says why.
 
