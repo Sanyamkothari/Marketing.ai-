@@ -54,6 +54,7 @@ retention:
   row_level_campaign_artefacts:
     - assignment.parquet
     - outcomes.parquet
+    - contact.parquet                   # Plan J M103: key and whether the customer was actually contacted
   # Aggregate reports that nevertheless carry a handful of example rows. They are kept, and the
   # listed fields are emptied instead: a list becomes empty, anything else becomes null. A path is
   # dotted; `*` stands for every element of a list.

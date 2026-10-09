@@ -6,6 +6,7 @@
 // Every builder is pure: what it draws comes from its arguments (the API's own answers).
 
 import { crumbs, dataTable, EM_DASH, esc, fmtDate, fmtInt, fmtMoney, pageHead, RESULTS_CRUMB, sortNote } from "../../dom.js";
+import { auditCardHtml, contactsCardHtml, programmeCardHtml } from "./audit.js";
 import { planCardHtml } from "./plan.js";
 
 /** A campaign's own page. */
@@ -97,7 +98,9 @@ export function campaignPageHtml({
     previewIndex,
   });
   const result = resultCard({ ...view, plan }, { canMeasure: can("POST", "/campaigns/{campaign_id}/measure"), busy, error: measureError });
-  return `<main class="screen dc" data-module="decide" data-campaign-page="${esc(campaign.campaign_id)}">${head}<div class="dc-stack">${result}${card}</div></main>`;
+  // Plan J M103: what an audited campaign's numbers can claim, the programme's holdout, who was contacted.
+  const claims = `${auditCardHtml(view.audit)}${programmeCardHtml(view.programme)}${contactsCardHtml(view.contacts)}`;
+  return `<main class="screen dc" data-module="decide" data-campaign-page="${esc(campaign.campaign_id)}">${head}<div class="dc-stack">${result}${claims}${card}</div></main>`;
 }
 
 /**
@@ -242,6 +245,10 @@ const CSS = `
 .dc .dc-form{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-top:8px}
 .dc .dc-form label{display:flex;flex-direction:column;gap:4px;font-size:13px;color:var(--ink2)}
 .dc .dc-actions{display:flex;gap:8px;margin-top:8px}
+.dc .dc-check{flex-direction:row;align-items:center;gap:8px}
+.dc fieldset.dc-basis{border:1px solid var(--line);border-radius:8px;margin:12px 20px 0;padding:8px 12px}
+.dc fieldset.dc-basis legend{font-size:13px;font-weight:600;color:var(--ink)}
+.dc .dc-headline .dc-text{font-weight:400}
 .dc .dc-preview{margin-top:12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 .dc .dc-preview input[type=range]{width:100%;margin:8px 0}
 .dc .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}

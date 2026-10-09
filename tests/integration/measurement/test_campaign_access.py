@@ -37,6 +37,10 @@ ROUTES: dict[tuple[str, str], Role] = {
     ("POST", "/campaigns/{campaign_id}/plan"): Role.ANALYST,
     ("POST", "/campaigns/{campaign_id}/plan/amendments"): Role.ANALYST,
     ("GET", "/campaigns/{campaign_id}/plan-preview"): Role.VIEWER,  # computed at M94's integration
+    # Plan J M103 (DEC-1313): audit another tool's campaign, the programme readout, who was contacted.
+    ("POST", "/campaigns/audit"): Role.ANALYST,
+    ("POST", "/campaigns/programme"): Role.ANALYST,
+    ("POST", "/campaigns/{campaign_id}/contacts"): Role.ANALYST,
 }
 WRITES = [key for key, role in ROUTES.items() if key[0] in MUTATING_METHODS]
 READS = [key for key in ROUTES if key[0] not in MUTATING_METHODS]

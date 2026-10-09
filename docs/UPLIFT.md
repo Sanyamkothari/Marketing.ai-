@@ -585,6 +585,12 @@ Such a run still trains, but:
 * the model is **never promoted** to champion (section 12);
 * it may be used for exploration, never as proof that a campaign works.
 
+**A campaign another tool ran (Plan J M103).** The same words apply to a past campaign uploaded for audit
+(`POST /campaigns/audit`, `docs/DECIDE.md` section 17). The numbers are **Causal** only when the engine verified
+the groups random - it applies the check above (`treatment_predictability`, the same limit) to the customer details
+in the assignment file; **Random by your statement, not verified** when the person said so and the file cannot test
+it; and **Descriptive only** otherwise, with `causal: false` on the stored report and no verdict.
+
 ---
 
 ## 12. The champion rule for uplift

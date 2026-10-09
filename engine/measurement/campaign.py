@@ -9,7 +9,9 @@ to it.
 
 **Kinds.** `scored`: built from one of our own finished scoring runs, whose scores say who was
 treated, who was held back at random and who was suppressed. `external`: a campaign another tool ran
-and the user uploads (M103); declared here so the record never changes shape.
+and the user uploads for audit (M103, `engine.measurement.audit`), with no run record behind it (`run_ids`
+is empty and its report's `run_id` is the campaign id). `programme`: everything done over a period, against
+the universal holdout (M103, `engine.measurement.programme`).
 
 **Where it lives.** The record is a row of the platform database (`campaign`, alembic `0006`), the
 same database as the audit trail, through `CampaignStore`; a test or a laptop without one uses
@@ -27,11 +29,16 @@ same database as the audit trail, through `CampaignStore`; a test or a laptop wi
                                 date - copied from the outcomes upload, nothing else
 `incrementality_report.json`    the measured report (`engine.measurement.measure.measure_campaign`)
 `test_plan.json`                the registered test plan in force; `test_plan_v<n>.json` keeps every version
+`contact.parquet`               Plan J M103: who was actually contacted - the key column(s) and `contacted`
+                                (true, false or unknown), from an uploaded contact file
+`contact_readout.json`          M103: contact rate, contamination and the complier-adjusted effect (counts only)
+`audit.json`                    M103: for an `external` campaign, how it was read and what it can claim
+`programme.json`                M103: for a `programme` campaign, the period and the universal holdout used
 ==============================  ==========================================================================
 
-`assignment.parquet` and `outcomes.parquet` hold one row per customer: they are registered as
-row-level artefacts in `configs/privacy.yaml` and `engine.privacy.layout`, so erasure rewrites them on
-their key columns and retention deletes them with the campaign (DEC-1304 (j)).
+`assignment.parquet`, `outcomes.parquet` and `contact.parquet` hold one row per customer: they are
+registered as row-level artefacts in `configs/privacy.yaml` and `engine.privacy.layout`, so erasure
+rewrites them on their key columns and retention deletes them with the campaign (DEC-1304 (j), DEC-1313).
 
 **Like with like (DEC-1304 (b)).** `intended` marks the customers the campaign is measured on, and
 both arms are compared inside it: for an uplift run, the rows its policy intended to treat
@@ -84,6 +91,8 @@ __all__ = [
     "CAMPAIGN_NOT_MATURED",
     "CAMPAIGN_OUTCOMES_MISSING",
     "CAMPAIGN_TABLE",
+    "CONTACT_FILENAME",
+    "CONTACT_READOUT_FILENAME",
     "INTENDED_COLUMN",
     "OUTCOMES_FILENAME",
     "REPORT_FILENAME",
@@ -133,7 +142,11 @@ OUTCOMES_FILENAME: Final[str] = "outcomes.parquet"
 REPORT_FILENAME: Final[str] = "incrementality_report.json"
 """The same name as a run's report (`engine.uplift.contracts.INCREMENTALITY_FILENAME`): one contract."""
 TEST_PLAN_FILENAME: Final[str] = "test_plan.json"
-ROW_LEVEL_CAMPAIGN_FILES: Final[tuple[str, ...]] = (ASSIGNMENT_FILENAME, OUTCOMES_FILENAME)
+CONTACT_FILENAME: Final[str] = "contact.parquet"
+"""Plan J M103: who was actually contacted (key column(s) and `contacted`), one row per customer listed."""
+CONTACT_READOUT_FILENAME: Final[str] = "contact_readout.json"
+"""Plan J M103: the contact rate, contamination and complier-adjusted effect. Counts only: no customer id."""
+ROW_LEVEL_CAMPAIGN_FILES: Final[tuple[str, ...]] = (ASSIGNMENT_FILENAME, OUTCOMES_FILENAME, CONTACT_FILENAME)
 """The campaign files holding one row per customer (mirrored by `retention.row_level_campaign_artefacts`)."""
 
 CAMPAIGN_TABLE: Final[str] = "campaign"
@@ -178,6 +191,8 @@ class CampaignKind(StrEnum):
     """From one of our own finished scoring runs."""
     EXTERNAL = "external"
     """Run by another tool and uploaded for audit (M103)."""
+    PROGRAMME = "programme"
+    """Every customer not held back, against the universal holdout, over a period (M103)."""
 
 
 class CampaignStatus(StrEnum):
@@ -238,14 +253,16 @@ class Campaign(Artefact):
     """One campaign: what went out, to whom, when, and how it is measured."""
 
     campaign_id: str = Field(description="`c_<yyyymmdd>_<8 hex>`.")
-    kind: CampaignKind = Field(description="`scored` (from our scoring run) or `external` (M103).")
+    kind: CampaignKind = Field(
+        description="`scored` (from our scoring run), `external` (another tool's campaign, audited: M103) or `programme` (the whole programme against the universal holdout: M103)."
+    )
     name: str = Field(description="A short name for the Results list.")
     use_case_id: str | None = Field(default=None, description="The use case whose list it sent.")
     run_ids: tuple[str, ...] = Field(default=(), description="The scoring run(s) the assignment came from.")
     primary_key: PrimaryKey = Field(description="The key column(s) of the assignment and outcomes files.")
     treatment_start: AwareDatetime = Field(description="When the campaign actually went out (UTC).")
-    treatment_start_source: Literal["entered", "run_finished"] = Field(
-        description="`entered` when the person gave the date; `run_finished` for the scoring run's finish time."
+    treatment_start_source: Literal["entered", "run_finished", "file"] = Field(
+        description="`entered` when the person gave the date; `run_finished` for the scoring run's finish time; `file` when it is the earliest date in the uploaded file (M103)."
     )
     outcome_window_days: int | None = Field(
         default=None, description="Days after treatment the outcome is counted over; null: every row mature."

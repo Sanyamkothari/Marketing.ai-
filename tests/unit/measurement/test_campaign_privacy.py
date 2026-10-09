@@ -21,6 +21,7 @@ from engine.access.roles import LOCAL_OPERATOR
 from engine.measurement.campaign import (
     ASSIGNMENT_FILENAME,
     CAMPAIGN_FILENAME,
+    CONTACT_FILENAME,
     INTENDED_COLUMN,
     OUTCOMES_FILENAME,
     ROW_LEVEL_CAMPAIGN_FILES,
@@ -68,6 +69,11 @@ def plant(root: Path) -> LocalStorage:
         {"customer_id": keys, "reactivated_90d": [index % 3 == 0 for index in range(len(keys))]}
     )
     write_frame(storage, campaign_key(CAMPAIGN_ID, OUTCOMES_FILENAME), outcomes)
+    # Plan J M103: who was actually contacted is one more file with a row per customer
+    contacts = pd.DataFrame(
+        {"customer_id": keys, "contacted": [index % 2 == 0 for index in range(len(keys))]}
+    )
+    write_frame(storage, campaign_key(CAMPAIGN_ID, CONTACT_FILENAME), contacts)
     campaign = Campaign(
         campaign_id=CAMPAIGN_ID,
         kind=CampaignKind.SCORED,
@@ -103,7 +109,7 @@ def test_erasure_removes_the_principal_from_campaigns(tmp_path: Path, config_roo
 
     findings = find_principal(storage, SENTINEL)
     found = {location.key: location for location in findings.locations}
-    for name in (ASSIGNMENT_FILENAME, OUTCOMES_FILENAME):
+    for name in (ASSIGNMENT_FILENAME, OUTCOMES_FILENAME, CONTACT_FILENAME):
         location = found[campaign_key(CAMPAIGN_ID, name)]
         assert (location.store, location.rows, location.key_columns) == (Store.CAMPAIGNS, 1, ("customer_id",))
     assert campaign_key(CAMPAIGN_ID, CAMPAIGN_FILENAME) not in found, "the record holds no customer id"
@@ -128,6 +134,8 @@ def test_erasure_removes_the_principal_from_campaigns(tmp_path: Path, config_roo
     assignment = read_frame(storage, campaign_key(CAMPAIGN_ID, ASSIGNMENT_FILENAME))
     outcomes = read_frame(storage, campaign_key(CAMPAIGN_ID, OUTCOMES_FILENAME))
     assert len(assignment.index) == 40 and len(outcomes.index) == 40
+    contacts = read_frame(storage, campaign_key(CAMPAIGN_ID, CONTACT_FILENAME))
+    assert len(contacts.index) == 40 and list(contacts.columns) == ["customer_id", "contacted"]
     report = measure_campaign(
         assignment,
         outcomes,

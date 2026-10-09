@@ -33,7 +33,7 @@ the user downloads (the treat list).
 | 14 | Choosing the offer (multi-treatment uplift) | M100 | written (below) |
 | 15 | One action per customer across use cases | M101 | written (below) |
 | 16 | Revenue outcomes and CUPED | M102 | written (below) |
-| 17 | Auditing a campaign another tool ran; the programme readout | M103 | not yet written |
+| 17 | Auditing a campaign another tool ran; the programme readout | M103 | written (below) |
 | 18 | The Value Proof Pack | M104 | not yet written |
 | 19 | Warnings and proven value to date | M105 | not yet written |
 | 20 | Learning from the last cycle | M106 | not yet written |
@@ -632,3 +632,90 @@ difference in means. The fast tests (`tests/unit/measurement/test_continuous.py`
 Welch's interval and Student's t against `scipy`, the 0.36 at `rho = 0.6` on 40,000 customers, the leakage refusal,
 the plan gate through the API, the value view, and that 200,000 customers take about ten times as long as 20,000
 (1,000,000 in about 9 s, marked `slow`).
+
+## 17. Auditing a campaign another tool ran; the programme readout (M103, DEC-1313)
+
+**Why.** The fastest route to "net value proven against a control" is measuring a campaign that already happened. A
+prospect's past randomised campaign needs no integration: they upload **who was in which group** and **what
+happened**, map the columns, and get a readout within days. The same machinery measures the whole programme against
+the universal holdout, and says who was actually contacted. Nothing is written into a client's systems (J1).
+
+**Audit a campaign (`POST /campaigns/audit`, Analyst, audited).** Two uploads made through the ordinary `POST
+/uploads`, and the mappings:
+
+* *The assignment file*: one row per customer with the id, a group column and, optionally, the date each customer was
+  contacted (`sent_date_column`), whether the customer was meant to be contacted at all (`intended_column`; everyone
+  when absent, which is intent to treat) and any other columns, which are the customer details used to test the
+  claim and are never stored. The group column is read from the usual words (`1/0`, `yes/no`, `treated/control`) or
+  named (`control_value`, `treated_values`); with more than one treated value each is an **offer** measured against
+  the shared control (M100). A customer with no group is in neither (counted, never guessed); a customer listed
+  twice is refused.
+* *The outcomes file*: the id, the outcome (yes/no, or an amount with `outcome_kind: continuous`) and optionally the
+  date. The date of contact comes from one file or the other, never both, or from `treatment_start`.
+* *`assignment_basis`* (`random` or `not_random`) is **required**: what the person knows about how the groups were
+  chosen is never assumed.
+
+The route writes an **external** campaign (`kind: external`, no run record: `run_ids` is empty and the report's
+`run_id` is the campaign id) with the files a scored campaign has (`assignment.parquet`, `outcomes.parquet`,
+`incrementality_report.json`) and calls `measure_campaign` **unchanged** on them. An assignment made from a
+propensity scoring run's own groups reproduces that run's report field for field (except `run_id`, `campaign_id`
+and `computed_at`): `tests/integration/measurement/test_campaign_audit.py`. Results not yet in are `409
+CAMPAIGN_NOT_MATURED` with the day to come back, and nothing is stored. An audit never uses the adjusted estimate
+(CUPED): it needs a covariate registered before the outcomes are read.
+
+**What the numbers may claim.** A difference between contacted and held-back customers is the campaign's effect only
+if the groups were chosen at random.
+
+| Label | When | `causal` |
+|---|---|---|
+| **Causal** | The person said the groups were random **and** the engine could not tell them apart: it tried to predict who was contacted from the customer details in the file, with the check an uplift run applies to its own training file (`engine.uplift.checks.treatment_predictability`, threshold `uplift.randomness_auc_max`, 0.60), inside the population measured and once per offer against the shared control | true |
+| **Random by your statement, not verified** | The person said random, and the file has no customer details to test with or too few customers (30 in each group) | false |
+| **Descriptive only** | The person said the groups were not random, or said they were and the test says they were not | false |
+
+The label is on the campaign (`causal`, `causal_basis`: `verified_random`, `declared_random`, `not_random`) and in
+`audit.json` with its reason, the test's score and the columns that gave the groups away. The stored report carries
+`causal: false` unless verified; a descriptive-only report's sentence describes how the groups differ and says it does
+not show what the campaign changed, and **no verdict** ("the campaign added N") is ever drawn from it; a campaign random
+by statement alone gets a conditional verdict, which never says the campaign "added", "prevented" or "caused" anything
+("Random by your statement, not verified: about N more conversions among contacted customers"; its summary starts "If the
+groups were chosen at random as you said"). Measuring the campaign again later keeps the
+label and the offers. Every sentence is checked with `jargon_in`.
+
+**Who was actually contacted (`POST /campaigns/{id}/contacts`, or `contact` beside an audit).** A contact file (the id
+and whether the customer was contacted) gives any campaign, ours or audited: the **contact rate** among the customers
+meant to be contacted and the **contamination** of the held-back group, as exact counts and fractions of the customers
+the file lists; a customer it does not list is *unknown* and left out (or, said by the person for a send log that lists
+only the customers it sent to, not contacted); a rate over nobody is null with its reason. The **effect on the contacted**
+is the main difference divided by the difference in contact rates (the Wald ratio, an instrumental-variable estimate),
+given Fieller's interval and **labelled secondary**: it rests on one more assumption than the main result, and it is
+withheld, with the reason, when the contact rates differ by no more than chance (the interval would be unbounded and any
+number invented). It is computed on the rows `measure_incrementality` measured, rebuilt and checked against the report's
+counts, and is unadjusted; with several offers it is the first offer's customers against the held-back ones and names that offer. `contact.parquet` (one row per customer) is registered in `configs/privacy.yaml` and
+`engine/privacy/layout.py` like the other campaign files; `contact_readout.json` holds counts only.
+`tests/statistical/test_complier_coverage.py` (nightly) checks the interval's 95% coverage.
+
+**The programme (`POST /campaigns/programme`, Analyst, audited).** `{period: {start, end}, outcome: {upload_id, ...}}`
+and one outcomes file of **every customer** over the period. Members of the universal holdout are found by the salted
+rule every scoring run used (`member_flags`, at the fraction and epoch the ledger recorded), and everyone else is
+compared with them: **intent to treat**, the effect of running the programme, diluted by everyone it did not reach
+(`kind: programme`, causal basis `engine_random`, holdout scope `universal` with its epoch, so a redrawn holdout is
+refused as for any campaign). The period is the outcome window, so the result is final the day after it ends. The split
+is the period's only if the current epoch **began before the period**: a universal holdout started or redrawn after the
+period began is `409 CAMPAIGN_EPOCH_MISMATCH` (the customers held back at the time cannot be found). An amount is read as a plain difference in means: the adjusted estimate (§16) needs a plan
+registered before the outcomes are read, and a programme exists only after its period has ended, so a `plan` or an
+earlier-amount column is refused (`409 TEST_PLAN_INVALID`). The universal holdout only keeps its members out of the use
+cases configured with `actions.holdout.scope: universal`, so the explanation says "every list scored with it", the notes
+count the scoring runs of the period that did not use it (their lists may have reached held-back customers) and point to
+the contact file as the way to measure that contamination; a share of held-back customers in the file far from the
+rule's fraction (p < 0.001) is noted as a possible partial file. Without a universal holdout in use (or with a salt that
+is not the one it was drawn with) nothing is computed: `409 PROGRAMME_NO_HOLDOUT` / `HOLDOUT_SALT_CHANGED`.
+
+**Screens.** `#/audit` (`ui/modules/decide/audit.js`; "Audit a campaign" on Results for an Analyst) has the two forms; a
+campaign's page shows the label and why, who was contacted, and the programme's holdout. Every number and sentence is the
+server's (`tests/unit/measurement/audit_view.test.mjs`).
+
+**How we know it is honest.** The fast tests: `tests/unit/measurement/{test_audit,test_reconcile,test_programme}.py` (the
+groups, the labels table, Fieller's set against a brute-force scan, the rows against the report),
+`tests/integration/measurement/{test_campaign_audit,test_campaign_contacts,test_programme_readout,test_audit_trail}.py`
+(the acceptance list on data from the real scoring stages and the engine's simulators), and
+`tests/unit/measurement/test_audit_scaling.py` (a million customers take about four times what 250,000 do).
