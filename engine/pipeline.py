@@ -1951,4 +1951,23 @@ install_gross_value(_ScoreFlow)
 from engine.decide.contactability import install_contactability  # noqa: E402
 
 install_contactability(_ScoreFlow)
+
+# Plan J M100 part B (DEC-1310 (q) on): a scoring run of a model of several offers chooses the offer per
+# customer after the actions stage, once contactability and the catalogue stamp are written (installed
+# after them, so it wraps them). A run of one offer is returned untouched, byte for byte.
+from engine.decide.offer_run import install_offer_choice  # noqa: E402
+
+install_offer_choice(_ScoreFlow)
+
+# Plan J M100 part B (DEC-1310): a training run whose use case configures channels leaves the channels'
+# consent and contactable columns out of the model inputs. Off by default: the configuration is unchanged.
+from engine.decide.channel_columns import install_channel_column_reservation  # noqa: E402
+
+install_channel_column_reservation(_TrainFlow)
+
+# Plan J M100 part B (DEC-1310): a scoring run whose use case configures channels refuses a model trained
+# with one of their consent or contactable columns as an input (CHANNEL_COLUMN_MODEL_INPUT).
+from engine.decide.channel_columns import install_channel_column_guard  # noqa: E402
+
+install_channel_column_guard(_ScoreFlow)
 # ---- END PLAN-J ----

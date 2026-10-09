@@ -97,11 +97,16 @@ from engine.contracts import (
     RunStatus,
     ValidationReport,
 )
-from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME  # Plan J M99 (DEC-1309)
+from engine.decide.catalogue import (
+    CATALOGUE_STAMP_FILENAME,  # Plan J M99 (DEC-1309)
+    stamp_checked_catalogue,  # Plan J M100 part B (DEC-1310)
+    stamped_at_creation,  # Plan J M100 part B (DEC-1310)
+)
 from engine.decide.contactability import (  # Plan J M99 (DEC-1309)
     CHANNEL_CONTACTABILITY_FILENAME,
     CHANNEL_CONTACTABILITY_SUMMARY_FILENAME,
 )
+from engine.decide.offer_run import OFFER_CHOICE_FILENAME  # Plan J M100 part B (DEC-1310)
 from engine.decide.treat_list import (  # Plan J M98 (DEC-1308)
     TREAT_LIST_CSV,
     TREAT_LIST_PARQUET,
@@ -488,6 +493,10 @@ def create_run_endpoint(
     )
     if upload is not None:
         attach_recipe_to_run(storage, upload.upload_id, record.run_id)  # Plan G (DEC-1006)
+    if stamped_at_creation(config, scoring=body.mode is RunMode.SCORE):
+        # Plan J M100 part B (DEC-1310): the catalogue the use case's action ids were just checked against
+        # (this root), stamped before the job starts, so the run is stamped and priced from the same file.
+        stamp_checked_catalogue(storage, record.run_id, config, root=root, created_at=record.created_at)
     spec = job_spec_for(record, upload=source, client_id=settings.client_id)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
@@ -602,6 +611,9 @@ def read_artefact(run_id: str, name: str, storage: StorageDep, request: Request)
         CHANNEL_CONTACTABILITY_SUMMARY_FILENAME,
         CATALOGUE_STAMP_FILENAME,
     )
+    # The offer chosen per customer of a run of several offers (Plan J M100 part B, DEC-1310): row-level
+    # (Analyst, `ROW_LEVEL_ARTEFACTS`); its summary, `offer_choice.json`, is in `UPLIFT_ARTEFACTS`.
+    known = known or name == OFFER_CHOICE_FILENAME
     if not ARTEFACT_NAME.fullmatch(name) or not known:
         raise http_error(404, "ARTEFACT_UNKNOWN", f"There is no artefact called {name!r}.")
     require_row_level_role(request, name)

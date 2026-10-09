@@ -155,6 +155,7 @@ if TYPE_CHECKING:
     from engine.storage import Storage
     from engine.uplift.champion import UpliftChampionDecision
     from engine.uplift.contracts import (
+        ArmOfferCost,
         ConfidenceValue,
         FoldAuuc,
         PolicyRecommendation,
@@ -1087,6 +1088,7 @@ class UpliftTrainFlow(_TrainFlow):
             causal=self._causal,
             now=utc_now(),
         )
+        value = value.model_copy(update={"offer_costs": self._offer_costs(levels, value_costs)})
         self._write(ARM_POLICY_VALUE_FILENAME, value)
         note = (
             " · the best offer per customer beats the first offer alone"
@@ -1098,6 +1100,39 @@ class UpliftTrainFlow(_TrainFlow):
             segments_report.model_copy(update={"arms": tuple(segmented)}),
             recommendation.model_copy(update={"arms": tuple(recommended)}),
             f" · {len(levels) - 1} offers{note}",
+        )
+
+    def _offer_costs(
+        self, levels: tuple[str, ...], value_costs: ValueCosts | None
+    ) -> tuple[ArmOfferCost, ...]:
+        """Each offer's costs as a scoring run's choice of offer prices them (Plan J M100 part B).
+
+        A catalogue action's costs come from the catalogue the use case was checked against: the stamp
+        the training route wrote into the run (`stamp_checked_catalogue`), else the run's own config root.
+        """
+        from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME, CatalogueStamp, catalogue_stamp
+        from engine.decide.offer_run import plan_arms
+        from engine.uplift.contracts import ArmOfferCost
+
+        ctx = self._ctx
+        policy = ctx.config.uplift.policy
+        key = run_key(ctx.run_id, CATALOGUE_STAMP_FILENAME)
+        stamp: CatalogueStamp | None = None
+        if self._storage.exists(key):
+            stamp = self._storage.read_model(key, CatalogueStamp)
+            self._artefacts[CATALOGUE_STAMP_FILENAME] = key
+        elif policy.arm_action_ids:
+            stamp = catalogue_stamp(ctx.config, run_id=ctx.run_id, created_at=utc_now())
+        arms, _notes = plan_arms(levels, policy, stamp=stamp, configured_channels=(), value_costs=value_costs)
+        return tuple(
+            ArmOfferCost(
+                level=arm.level,
+                action_id=arm.action_id,
+                offer_cost=arm.costs.offer_cost,
+                contact_cost=arm.contact_cost,
+                cost_source=arm.cost_source,
+            )
+            for arm in arms
         )
 
     # -- Plan J M96: does the model earn its place? ----------------------------------------------
@@ -1872,6 +1907,9 @@ class UpliftScoreFlow(_ScoreFlow):
         # A list ranked by the propensity model is not the hold-out's top uplift share, so the
         # hold-out's measured uplift does not describe it: expected conversions stay null.
         value_costs = self._value_costs(scored)
+        # Plan J M100 part B: kept, so the choice of offer after this stage prices with the same costs
+        # rather than reading `configs/pilot/value.yaml` a second time.
+        self._run_value_costs = value_costs
         share, value, holdout_note = (
             (None, None, None) if risk is not None else self._training_holdout(scored, value_costs)
         )

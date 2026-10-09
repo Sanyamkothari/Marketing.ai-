@@ -29,6 +29,7 @@ import {
   esc,
   fmtDate,
   fmtInt,
+  fmtMoney,
   fmtNum,
   fmtSize,
   fmtStamp,
@@ -79,7 +80,12 @@ export const MODEL_ARTEFACTS = [
   "ope_report.json",
   "arm_policy_value.json", // Plan J M100: written only by a model of several offers
 ];
-export const OUTPUT_ARTEFACTS = ["uplift_validation.json", "segments.json", "policy_recommendation.json"];
+export const OUTPUT_ARTEFACTS = [
+  "uplift_validation.json",
+  "segments.json",
+  "policy_recommendation.json",
+  "offer_choice.json", // Plan J M100 part B: written only by a scoring run of a model of several offers
+];
 
 /** The share of customers a "What if…" estimate starts from, and the one the verdicts quote. */
 export const DEFAULT_TOP_SHARE_PCT = 10;
@@ -978,6 +984,65 @@ export function armsCard(evaluation, value) {
   )}</p></section>${choice}<div class="row uarm-row">${cards}</div>`;
 }
 
+/** Why a customer who could be contacted got no offer, as `offer_choice.json`'s `reasons` count them. */
+const NO_OFFER_REASON = {
+  no_eligible_offer: "Cannot be reached on a channel of any offer",
+  sleeping_dog: "Every offer would make them less likely to respond",
+  below_cost: "No offer earns more than it costs",
+  over_budget: "The budget ran out",
+};
+
+/**
+ * Plan J M100 part B: which offer each customer got on a scoring run of several offers, counted per
+ * offer, with what each costs and what the offers given are worth. Every number is the server's own
+ * (`offer_choice.json`); a run of one offer has no such file and shows nothing here.
+ */
+export function offerChoiceCard(choice) {
+  if (!choice) return "";
+  if (!choice.chosen) {
+    return `<section class="card uoffers" data-offer-choice><h3>Which offer each customer gets</h3><p class="caption">${esc(
+      choice.note || "No offer was chosen per customer for this run.",
+    )}</p></section>`;
+  }
+  const arms = choice.arms || [];
+  const money = (v) => (present(v) ? fmtMoney(v) : EM_DASH);
+  const rows = arms.map((a) =>
+    [
+      a.label,
+      fmtInt(a.offered_rows),
+      (a.channels || []).join(", ") || EM_DASH,
+      money(a.net_value_total),
+      money(a.offer_cost),
+      money(a.contact_cost),
+    ].map(esc),
+  );
+  rows.push(["No offer", fmtInt(choice.no_offer_rows), EM_DASH, EM_DASH, EM_DASH, EM_DASH].map(esc));
+  const reasons = Object.entries(choice.reasons || {})
+    .filter(([code]) => code !== "offer")
+    .map(([code, n]) => [NO_OFFER_REASON[code] || humanise(code), fmtInt(n)]);
+  const budget = present(choice.budget)
+    ? [
+        ["Budget", fmtMoney(choice.budget)],
+        ["Spent", fmtMoney(choice.spent)],
+      ]
+    : [["Spent", fmtMoney(choice.spent)]];
+  return `<section class="card uoffers" data-offer-choice><h3>Which offer each customer gets</h3><p class="caption">${esc(
+    "Each customer gets the offer worth the most to them after its cost, on a channel they can be reached on, or no offer. Customers held back to measure the campaign get none.",
+  )}</p>${dataTable(
+    [
+      { label: "Offer" },
+      { label: "Customers", num: true },
+      { label: "Channels" },
+      { label: "Net value of those given it", num: true },
+      { label: "Offer cost", num: true, more: true },
+      { label: "Contact cost", num: true, more: true },
+    ],
+    rows,
+  )}${kvs([...budget, ["Net value of the offers given", fmtMoney(choice.net_value_total)]])}${
+    reasons.length ? detailsKv("Why some customers get no offer", reasons) : ""
+  }${choice.note ? `<p class="caption">${esc(choice.note)}</p>` : ""}</section>`;
+}
+
 /** `#/uplift/<use case>/model/<run>`: the finding first, the Qini curve and deciles, metrics behind Details. */
 export function modelPageHtml(uc, run, art, ope) {
   const validation = art["uplift_validation.json"];
@@ -1454,6 +1519,7 @@ export function outputPageHtml(uc, run, art, extra = {}) {
       <section class="card"><h3>Four groups of customers</h3>${segmentChart(segments)}${segmentRows}</section>
       <section class="card"><h3>Targeting recommendation</h3>${policyRows}</section>
     </div>
+    ${offerChoiceCard(art["offer_choice.json"] || null)}
     ${profitCard(extra.profit, policy)}
     ${listCard}
     ${extra.panelsHtml || ""}
