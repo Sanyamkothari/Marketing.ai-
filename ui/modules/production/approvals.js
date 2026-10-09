@@ -20,6 +20,10 @@
 // person may read it, else "another user"); the deciding measure first, by its `help.yaml` name, the
 // rest behind "Show all measures"; 3 decimals and Better / Worse; ids under Details. The count of
 // models this person may decide is offered to the top bar's "Waiting for approval" badge.
+//
+// Plan J M106: a model learned from the last campaign also carries `live_calibration`: how the model
+// that chose that campaign's list did, predicted against measured change per tenth of its ranking,
+// with the server's 95% ranges and sentence. It is advice beside the decision, like the M96 checks.
 
 import { EM_DASH, RESULTS_CRUMB, RUN_FINISHED_EVENT, errorBox, esc, fmtDate, fmtInt, fmtMetric, glossaryMetric, techDetails } from "../../dom.js";
 import { refreshTopBar, registerNavSlot } from "../router.js";
@@ -254,6 +258,62 @@ function checksList(checks) {
   return `<div class="pb-checks" role="note"><p class="pb-meta">Checks for the Approver (advice only: they do not change the decision rule)</p><ul class="pb-stack pb-checklist">${rows}</ul></div>`;
 }
 
+// --- predicted against measured on the last campaign (Plan J M106) --------------------------------
+
+/** A share as signed points ("+21.9 points"); the value is the server's, only its unit changes. */
+const points = (value) =>
+  value === null || value === undefined ? EM_DASH : `${value > 0 ? "+" : ""}${(Number(value) * 100).toFixed(1)} points`;
+
+const INSIDE_PILL = {
+  true: ["ok", "Holds the prediction"],
+  false: ["warn", "Does not hold it"],
+  null: ["pb-pill-none", "Not measured"],
+};
+
+/**
+ * `item.live_calibration` from `GET /approvals` (`engine.measurement.learn`): for a model learned from
+ * a campaign, how the model that chose that campaign's list did, tenth by tenth. Every number and the
+ * sentence are the server's; nothing is computed here but the unit. Absent for any other model.
+ */
+function liveCalibration(block) {
+  if (!block) return "";
+  const rows = (block.deciles || []).map((d) => {
+    const m = d.measured;
+    const range =
+      m && m.ci_low !== null && m.ci_low !== undefined && m.ci_high !== null && m.ci_high !== undefined
+        ? `${points(m.ci_low)} to ${points(m.ci_high)}`
+        : EM_DASH;
+    const verdict = d.inside_range === true || d.inside_range === false ? String(d.inside_range) : "null";
+    const [cls, label] = INSIDE_PILL[verdict];
+    return {
+      attrs: `data-decile="${esc(d.decile)}" data-inside="${esc(verdict)}"`,
+      cells: [
+        esc(d.decile),
+        esc(fmtInt(d.rows)),
+        esc(points(d.predicted)),
+        esc(m ? points(m.value) : EM_DASH),
+        esc(range),
+        `<span class="pill ${cls}">${esc(label)}</span>`,
+      ],
+    };
+  });
+  const cols = [
+    { label: "Tenth" },
+    { label: "Customers", num: true },
+    { label: "Predicted change", num: true },
+    { label: "Measured change", num: true },
+    { label: "95% range" },
+    { label: "Prediction inside the range" },
+  ];
+  const verdict =
+    block.matches === true || block.matches === false ? String(block.matches) : "null";
+  return `<div class="pb-live" data-live="${esc(block.source_run_id)}" data-matches="${esc(verdict)}" role="note">
+    <p class="pb-meta">How the model in use did on the last campaign (predicted against measured, by tenth of its ranking)</p>
+    <p class="pb-small">${esc(block.summary)}</p>
+    <details class="pb-measures"><summary>Show the ten tenths</summary>${rowsTable(cols, rows, { cls: "pb-live-table" })}</details>
+  </div>`;
+}
+
 function decisionsList(decisions) {
   if (!decisions || !decisions.length) return "";
   const verb = { approve: "Approved", reject: "Rejected" };
@@ -310,6 +370,7 @@ function itemCard(item) {
     <p class="pb-meta">${esc(trainedBy(item))}</p>
     ${headToHead(item.head_to_head || { metrics: [] })}
     ${checksList(item.checks)}
+    ${liveCalibration(item.live_calibration)}
     ${decisionsList(item.decisions)}
     ${decisionForm(item)}
     ${techDetails([
@@ -319,6 +380,12 @@ function itemCard(item) {
       ["Trained by (id)", item.trained_by],
       ["Compared with", (item.head_to_head || {}).measured_against_champion_id],
       ["Customers compared on", (item.head_to_head || {}).rows_evaluated],
+      ...(item.live_calibration
+        ? [
+            ["Learned from run", item.live_calibration.source_run_id],
+            ["List chosen by model", item.live_calibration.model_id],
+          ]
+        : []),
     ])}
   </div></section>`;
 }

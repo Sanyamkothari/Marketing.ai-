@@ -36,7 +36,7 @@ the user downloads (the treat list).
 | 17 | Auditing a campaign another tool ran; the programme readout | M103 | written (below) |
 | 18 | The Value Proof Pack | M104 | written (below) |
 | 19 | Warnings and proven value to date | M105 | not yet written |
-| 20 | Learning from the last cycle | M106 | not yet written |
+| 20 | Learning from the last cycle | M106 | written (below) |
 | 21 | The monthly loop (read-only) | M107 | not yet written |
 | 22 | Cost before each run | M108 | not yet written |
 | 23 | Validation on real public randomised data | M110 | not yet written |
@@ -786,3 +786,57 @@ as a text figure read from that file, never replaced by a sentence of the pack's
 **On screen.** Results lists the ready packs with their sentence (`ui/modules/simple/pages.js`); Reports lists every
 recent campaign's pack or the server's reason; `#/pilot/proof/<campaign>` shows the server's page, its suggestions with
 an Approve button for an Analyst, and a value form when the pack has no value inputs (`ui/modules/pilot/screen.js`).
+
+## 20. Learning from the last cycle (M106, DEC-1316)
+
+**Why.** The next model should learn from what the last campaign actually did. Before M106 step 4's "Learn who
+to contact next time" compared every eligible customer who was not held back with the ones who were: the list as a
+whole against its control group. That is a fair experiment of the *list*, but on a propensity run the lowest band
+was never contacted and still sat in the contacted arm, and nothing outside an uplift run's intended customers was
+ever contacted at random, so a model learned there could only guess what a contact does for them.
+
+**Which rows enter, and why** (`engine/measurement/learn.py::build_randomised_frame`). Only for a scoring run that
+engaged the holdout service (a persistent control group or an explore share, M92: it wrote
+`holdout_assignment.json`). A scored customer enters when the record gives their contact a chance strictly between
+0 and 1 (`treatment_probability`):
+
+| Group | Who | Chance of contact | Contacted when |
+|---|---|---|---|
+| on the list | selected before the hold-back (`selection_masks`: an uplift run's intended customers, a propensity run's bands but the lowest) | `1 − h` | the control group did not draw them |
+| outside the list | eligible, not selected, not a predicted sleeping dog | `(1 − h) × explore_fraction` | the explore share drew them |
+
+The treatment is `treated`, the logged contact: who the campaign **meant** to contact. Left out, and counted by
+reason in `learned_from.json` `left_out` (each scored customer exactly once): customers who could not be contacted at
+all (suppressed), predicted sleeping dogs (the rule never contacts them), customers with no chance of contact, and
+customers with no outcome in the file. **Balanced in each group:** the smaller side (contacted or not) enters whole,
+and the larger side is cut to the same number by the smallest `sha256("learn:<run seed>:<key>")` draws, which depend
+on neither the customer's data nor their outcome. Pooling the groups uncut would make contact predictable from the
+customers' own data (nine in ten on the list, a few in a hundred outside it) and the uplift checks would refuse
+it as `TREATMENT_NOT_RANDOM`; cut, the chance of contact is one half for every row, so the frame is a randomised
+experiment and the learners need no weights. `tests/integration/measurement/test_learn_from_cycle.py` shows both.
+
+**A contact file is reported, never learned from.** When one of the run's campaigns has a contact readout (M103),
+its contact rate and contamination are written into the record (`delivery`) and the notes. Who was actually reached
+is not random (a wrong number, a full inbox), so replacing the meant contact with it would let that decide the
+comparison.
+
+**When there is nothing to learn from: `LEARN_NO_OVERLAP`** (409, `POST /runs/{id}/measure/learn`; the same
+sentence is step 4's `learn.reason`). The cycle had no explore share and left eligible customers outside its list
+who are not predicted sleeping dogs (`holdout_assignment.json` `explore_candidates`). It is allowed when there are
+none: the control group then randomised everyone the list could contact, so the cycle is already randomised. A file
+from a randomised campaign is trained on directly with `POST /uplift/runs` (an upload, or since M106 a built dataset,
+`dataset_id`), where `TREATMENT_NOT_RANDOM` checks it.
+
+**Predicted against measured, for the Approver.** The scores of an uplift run carry the change the model in use
+predicted per customer (`uplift`). On the frame's rows, scored before the campaign and so out of sample for that
+model, the predicted change is set against the measured one per tenth, with M96's `calibration_by_decile` (the
+training run's own resampling: `uplift.bootstrap_samples` resamples, seeded from the scoring run). It is stored in
+`learned_from.json` `calibration` and shown on the Approver's screen beside the challenger learned from the cycle
+(`ApprovalItem.live_calibration`, `ui/modules/production/approvals.js`): the sentence, and per tenth the predicted
+and measured change, its 95% range and whether the range holds the prediction, all the server's. A propensity-ranked
+list predicts no change, so the block is null with that reason (`calibration_reason`).
+
+**Where it is shown.** `GET /runs/{id}/measure` carries the record as `learned` once a model was learned from the
+run (absent otherwise); `GET /approvals` carries `live_calibration` (absent for any other model). A scoring run that
+did not engage the service learns exactly as before (`tests/integration/uplift/test_measure_campaign.py`, unchanged),
+writes no record and draws no block.

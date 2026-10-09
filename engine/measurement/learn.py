@@ -27,7 +27,7 @@ not random (a wrong number, an opted-out device), and swapping it in would let t
 comparison.
 
 **Balanced within each group.** The two groups were randomised with very different chances (nine in
-ten on the list, about one in a hundred outside it), so pooling them as they are would make "who was
+ten on the list, a few in a hundred outside it), so pooling them as they are would make "who was
 contacted" predictable from the customers' own data, which is exactly what the uplift checks'
 randomness test refuses (`TREATMENT_NOT_RANDOM`), and would mislead every learner that assumes one
 chance of treatment. So in each group the smaller side (contacted or not) enters whole, and the
