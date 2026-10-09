@@ -1706,19 +1706,29 @@ M95 (DEC-1305) shows that the measurement is honest and keeps planted data out o
 **Phase 2 (M96–M101), against its exit gate** ([`docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md`](docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md)):
 the gate asks for M96–M101 merged, `make test-all` green, and one journey end to end on fixtures: approve with
 checks → value-ranked, offer-chosen, channel-aware treat list → arbitration across three use cases → campaigns
-created and measured. **Not yet met in full.**
+created and measured. **The gate is met except for one known gap:** the multi-offer campaign is measured within the
+first offer's `intended_treatment`, so about 1 in 5 of the customers it contacts are in neither arm (below).
 
-- M96–M101 are merged on `main` and all read **done** above; `make lint` and the fast suite are green at M101's
-  integration (2026-10-09: 11,175 passed, 51 skipped and 11 xfailed under four workers, plus the 53 tests of two onboarding files that the run's own `-p no:warnings` flag kept from being collected, which pass on their own; no failure). `make test-all` (the slow, training tests) was not re-run in full at this
-  integration, so that part of the gate is not shown.
-- Each step of the journey is tested on fixtures, but separately: the evidence behind the advisory approval
-  checks and the fallback to risk ranking (M96, `tests/unit/decide/test_model_gates.py`,
-  `tests/integration/decide/test_uplift_ranking_flow.py`), the net-value ranking (M97,
-  `tests/integration/uplift/test_net_value_flow.py`), the offer chosen per customer on a real scoring run, on a
-  channel the customer can be reached on, and written to the treat list (M99 and M100,
-  `tests/integration/decide/test_channel_consent_real_run.py`, `tests/integration/decide/test_offer_choice_run.py`),
-  and arbitration across three use cases through `POST /decide/arbitrate`, with one campaign created per use case
-  and its arms checked (M101, `tests/integration/decide/test_arbitration_review.py`).
-- Not shown: no single test chains these steps from one approval to the measured campaigns, and no test measures
-  an arbitrated campaign against outcomes (campaigns made by `POST /campaigns` are measured, M94).
+- M96–M101 are merged on `main` and all read **done** above. `make test-all` (every test except the `bedrock` and
+  `aws` ones) is green at 2e27bd1 (M101's integration) on 2026-10-09: 11,404 passed, 62 skipped, 11 xfailed and 0
+  failed in 30.5 minutes under three workers (`-n 3`). The journey module below merged after that run; it passed
+  on its own on `main` after the merge (27 passed, run serially).
+- The Phase 2 journey test (`tests/integration/decide/test_phase2_journey.py`, DEC-1311 (z)–(ae)) chains, through
+  the API on fixtures, three use cases trained; the M96 checks shown to an Approver (one fails and the approval
+  still goes ahead); the multi-offer model refused as champion and scored by naming its version; value-ranked,
+  offer-chosen, consent-aware treat lists; arbitration with one action per customer, the universal hold-out and the
+  risk model's own hold-out enforced (customers one use case holds back get no action from any); and one campaign
+  per use case measured against a planted truth, each campaign's two arms checked exactly against the cut of
+  DEC-1311 (n). The module is marked `slow`, so `make test` does not run it; it builds its journey once (about
+  60 s, 27 tests in about 70 s); run it with `--dist loadgroup` under xdist.
+- Not yet shown, and asserted as a known gap: the multi-offer campaign is measured within the first offer's
+  `intended_treatment`, not within the offer-choice treat list, so about 1 in 5 of the customers that use case
+  contacts are in neither arm (413 of 1,945 in the journey run). The one-offer and risk campaigns have no such gap.
+  The fix is recorded for the owner of `engine/measurement/` in `docs/CROSS_BRANCH_REQUESTS.md` (2026-10-09).
+- Each step is also tested on its own: the advisory approval checks and the fallback to risk ranking (M96,
+  `tests/unit/decide/test_model_gates.py`, `tests/integration/decide/test_uplift_ranking_flow.py`), the net-value
+  ranking (M97, `tests/integration/uplift/test_net_value_flow.py`), the offer chosen per customer on a channel the
+  customer can be reached on (M99 and M100, `tests/integration/decide/test_channel_consent_real_run.py`,
+  `tests/integration/decide/test_offer_choice_run.py`), and arbitration across three use cases with one campaign
+  per use case (M101, `tests/integration/decide/test_arbitration_review.py`).
 <!-- ---- END PLAN-J ---- -->

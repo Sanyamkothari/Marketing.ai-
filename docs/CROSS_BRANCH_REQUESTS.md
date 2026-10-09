@@ -968,6 +968,32 @@ words. `tests/unit/pilot/test_help.py` is unchanged and green.
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-09 — plan-j Phase 2 gate (on main) → owner of `engine/measurement/` and `engine/decide/` (M102 to M105): a multi-offer campaign leaves about 21% of its contacted customers out of both arms (request)
+
+**What is needed.** An arbitrated campaign of a use case with several offers takes its population from the first
+offer's `intended_treatment` (DEC-668 (3)), not from the offer-choice treat flag that built the list. In the Phase 2
+journey run, 413 of the 1,945 customers that use case wins and contacts (about 21%) have `intended_treatment =
+False`: they are sleeping dogs or sure things for the first offer, yet another offer has a positive net value for
+them. They are in neither arm, so the campaign says nothing about them. It could be fixed by passing the offer-choice
+policy-intended flag as the campaign's `intended` for a run of several offers. Until then DEC-1311 (n)'s "compares
+like with like" holds only for the customers inside the first-offer set. The one-offer and risk campaigns have no
+such gap.
+
+**What I did meanwhile.** No product change. `tests/integration/decide/test_phase2_journey.py`
+(`test_the_multi_offer_campaign_is_cut_by_the_first_offers_rule_so_some_contacted_customers_are_in_neither_arm`)
+asserts the gap as it is, so a fix makes that test fail and it should then assert equality (DEC-1311 (ab)). The gap
+is listed in `docs/handoff/M101.md` section 7 and in the README's Phase 2 gate section.
+
+### 2026-10-09 — plan-j Phase 2 gate (on main) → owner of `engine/decide/arbitrate.py`: held-back multi-offer rows are decided by request order in `comparable_keys` (record)
+
+**What is needed.** Nothing required; a decision if the behaviour should change. In the counterfactual re-arbitration
+(`comparable_keys`, DEC-1311 (n)) a held-back row of a use case with several offers carries no offer and so no net
+value. A customer held back and intended by both that use case and a one-offer use case is therefore decided by the
+request order, not by value (all 66 such customers went to the multi-offer use case in the journey run).
+
+**What I did meanwhile.** No product change. The journey test asserts only that such a customer is in exactly one of
+the two hold-out arms, and records the request-order behaviour as an observation, not a requirement (DEC-1311 (aa)).
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
