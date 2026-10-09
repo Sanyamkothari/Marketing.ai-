@@ -10,6 +10,8 @@ from __future__ import annotations
 
 from typing import Final
 
+from engine.decide.channel_columns import CHANNEL_COLUMN_CODES
+from engine.decide.offer_run import OFFER_CHOICE_CODES
 from engine.measurement.arms import MULTI_ARM_CODES
 from engine.measurement.codes import MEASUREMENT_CHECK_CODES
 from engine.model_gates import UPLIFT_GATE_CODES
@@ -74,6 +76,10 @@ PLAN_J_CODES: Final[frozenset[str]] = (
     # UPLIFT_MISCALIBRATED, the advisory approval checks (`engine.model_gates`)
     | MULTI_ARM_CODES  # M100 (DEC-1310 (h)): MULTI_ARM_PROMOTION_REFUSED, a model of several offers is never
     # champion, by its training run or by `POST /models/{id}/promote` (`engine.measurement.arms`)
+    | OFFER_CHOICE_CODES  # M100 part B (DEC-1310 (r)): OFFER_CHOICE_NOT_MADE, recorded in offer_choice.json
+    # when a run of several offers has no value to choose by (`engine.decide.offer_run`)
+    | CHANNEL_COLUMN_CODES  # M100 part B (DEC-1310 (y)): CHANNEL_COLUMN_MODEL_INPUT, a scoring run refuses a
+    # model trained with a channel's consent or contactable column as an input (`engine.decide.channel_columns`)
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
@@ -81,4 +87,6 @@ M93's two readiness warnings are defined once, in `engine.measurement.codes.MEAS
 and joined here, so `engine.contracts.ValidationCheck`'s PLAN-J hook and this set read the same
 definition (the one-registry rule, DEC-950). M96's three advisory approval checks are joined the same
 way from `engine.model_gates.UPLIFT_GATE_CODES` (DEC-1306 (f)), and M100's promotion refusal from
-`engine.measurement.arms.MULTI_ARM_CODES` (DEC-1310 (h))."""
+`engine.measurement.arms.MULTI_ARM_CODES` (DEC-1310 (h)). M100 part B's two codes are joined from
+`engine.decide.offer_run.OFFER_CHOICE_CODES` and `engine.decide.channel_columns.CHANNEL_COLUMN_CODES`
+(DEC-1310 (r), (y))."""
