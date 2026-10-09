@@ -498,6 +498,10 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/decide/conflicts",
         "/decide/arbitrated-treat-list.csv",
         "/decide/arbitrated-treat-list.parquet",
+        # Plan J M103: audit a campaign another tool ran, the contact file, and the programme readout (DEC-1313)
+        "/campaigns/audit",
+        "/campaigns/programme",
+        "/campaigns/{campaign_id}/contacts",
     }
 
 

@@ -382,6 +382,21 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/measurement/test_m102_binary_identity.py",
         "tests/integration/measurement/test_campaign_amounts.py",
     ),
+    # M103 (DEC-1313). The nightly coverage test (tests/statistical/test_complier_coverage.py, DEC-1300 (e)) is
+    # left out, as for M95, M96, M100 and M102. The node test (audit_view.test.mjs) runs through
+    # test_audit_view.py. test_audit_scaling.py keeps a fast test beside its `slow` one, so it stays mapped.
+    # test_campaign_privacy.py and test_campaign_access.py predate M103 (M94) and are not evidence for it.
+    "M103": (
+        "tests/unit/measurement/test_audit.py",
+        "tests/unit/measurement/test_reconcile.py",
+        "tests/unit/measurement/test_programme.py",
+        "tests/unit/measurement/test_audit_scaling.py",
+        "tests/unit/measurement/test_audit_view.py",
+        "tests/integration/measurement/test_campaign_audit.py",
+        "tests/integration/measurement/test_campaign_contacts.py",
+        "tests/integration/measurement/test_programme_readout.py",
+        "tests/integration/measurement/test_audit_trail.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

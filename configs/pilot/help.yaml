@@ -356,8 +356,8 @@ codes:
     fix: "Register the test plan first. Once it exists, amend it if needed."
   TEST_PLAN_INVALID:
     title: "The test plan cannot be accepted"
-    meaning: "The plan cannot be used as given. Its analysis date may fall before every customer's response is in, the outcome may be an amount (only yes-or-no outcomes can be measured today), the amendment may change nothing, or the result may already have been read, so a plan made now would not be fixed in advance."
-    fix: "Correct the item the message names. A plan must be registered, and amended, before the final result is read."
+    meaning: "The plan cannot be used as given. Its analysis date may fall before every customer's response is in, the amendment may change nothing, or the result may already have been read, so a plan made now would not be fixed in advance. A whole-programme readout never takes a plan or an earlier amount to adjust by: it is read only after its period has ended, so such a plan could not have been fixed in advance."
+    fix: "Correct the item the message names. A plan must be registered, and amended, before the final result is read. For a whole-programme readout, send it again without the plan and the earlier amount; the plain difference is given."
   PLAN_UNDERPOWERED:
     title: "The test may be too small to see the effect you expect"
     meaning: "With this many customers contacted and kept back, an effect of the size you entered would often be missed and read as 'no clear effect'. This is a warning, not a block."
@@ -365,7 +365,7 @@ codes:
   CAMPAIGN_EPOCH_MISMATCH:
     title: "The campaign's control group was redrawn"
     meaning: "This campaign kept a fixed control group of customers out. That group was redrawn (a new period started, at a lower share or with a new salt) before every customer's response was in, or the campaign's lists come from different periods or no longer match the period recorded with it. Customers in the control group may since have been contacted, so comparing the two groups would no longer show what the campaign changed, and no result is given."
-    fix: "Measure campaigns whose lists come from one period of the control group. Before starting a new period, wait until the responses of the campaigns still running are in."
+    fix: "Measure campaigns whose lists come from one period of the control group. Before starting a new period, wait until the responses of the campaigns still running are in. A whole-programme readout is refused the same way when the shared control group was first used, or redrawn, after the period began: read a period that begins on or after the date the message gives."
   # --- Plan J M96: advisory checks on an uplift model's approval (DEC-1306 (f)) ------------------------
   UPLIFT_NOT_BETTER_THAN_RISK:
     title: "The campaign-effect model does not beat ranking by risk"
@@ -451,6 +451,19 @@ codes:
     title: "A few very large amounts make the range less reliable"
     meaning: "Most customers spent little or nothing and a few spent far more, so with this many customers the range around the result may be too narrow. The numbers are kept and nothing was capped."
     fix: "Wait for more customers, or read the range as approximate."
+  # --- Plan J M103: auditing a past campaign, the contact file and the programme readout (DEC-1313 (a), (f), (i))
+  AUDIT_ARM_UNREADABLE:
+    title: "The group column could not be read as contacted against held back"
+    meaning: "The column that says who was contacted and who was held back has values that cannot be sorted into two groups, or some values are neither a held-back value nor a contacted one. Nothing was measured or stored. The message says which values."
+    fix: "Name the value that means held back with control_value (and, for several offers, list the contacted values with treated_values), or use 1/0, yes/no or treated/control in the file."
+  CONTACT_FILE_UNREADABLE:
+    title: "The contact file could not be read"
+    meaning: "The file that says who was actually contacted lists a customer twice, has no readable contact column, or has values that cannot be read as contacted or not. No contact rate was worked out and nothing was stored. The message names the problem."
+    fix: "List each customer once, pick the column that says whether each customer was contacted, and name the value that means contacted if it is not 1, yes or true."
+  PROGRAMME_NO_HOLDOUT:
+    title: "No shared control group to read the whole programme against"
+    meaning: "The whole programme is compared with the customers that one control group shared by every use case (the universal control group) keeps back. None has been used yet, or this deployment has no control group secret salt set (MARKETING_AI_HOLDOUT_SALT), so nothing was measured or stored."
+    fix: "Set each use case's control group scope to universal, ask your administrator to set the salt, and score once. Then read a period that begins on or after that day."
 
 settings:
   actions.bands[*].min_score:

@@ -1049,6 +1049,92 @@ was edited:
 `net_value` and keeps `control_group` before `net_value` too. A reader of arbitration summaries should ignore fields
 it does not know.
 
+### 2026-10-09 — plan-j M103 (on main) → branches reading campaigns (M104, M105, Plan H, Phase 3b): audited and programme campaigns (announcement)
+
+**What changed** (DEC-1313 (a), (e), (f), (g), (i), (m); Plan J's own paths, recorded because other branches read
+them):
+
+* `engine/measurement/campaign.py`: `Campaign.treatment_start_source` gains the value `"file"` (a start date taken
+  from the earliest date in an uploaded file; it was `entered` or `run_finished`), and `CampaignKind` now has
+  `external` (an audited campaign another tool ran) and `programme` (the whole programme against the universal
+  holdout) beside `scored`. Both are additive `Literal`/enum values. `CampaignView` gains `audit`, `programme` and
+  `contacts`, left out of the answer while unset, so a scored campaign's answer is unchanged.
+* `engine/measurement/reconcile.py`: `ComplierEffect.offer` (optional, null for one offer) names the offer the
+  secondary effect on the contacted is for.
+* `api/routes/campaigns.py`: `POST /campaigns/{id}/measure` now takes the outcome kind from the body, then the plan,
+  then the stored `audit.json`, then `programme.json`, then yes/no.
+* A programme readout (`POST /campaigns/programme`) for a period that began before the universal holdout was first
+  used or last redrawn is 409 `CAMPAIGN_EPOCH_MISMATCH`, and a programme request carrying a plan or an earlier
+  amount is 409 `TEST_PLAN_INVALID`.
+* `contact.parquet` is a new row-level campaign file, registered in `configs/privacy.yaml`,
+  `engine.measurement.campaign.ROW_LEVEL_CAMPAIGN_FILES` and `engine/privacy/layout.py`.
+
+**What is needed.** A branch that switches on `treatment_start_source` or `kind` exhaustively must accept the new
+values; readers of `ContactReadout.complier` should show `offer` when it is set. A branch that adds another stored
+readout carrying an outcome kind should join the fallback in `measure_campaign_results`. A test that records the
+universal holdout and then reads a programme must record it before the period starts (the M103 tests use
+2025-12-15 against a 2026 Q1 period). A branch that adds a campaign file follows the same three places as
+`contact.parquet`. A branch that shows a plan form on every campaign (the campaign page, the plan slider) should
+hide it for kind `programme`, which cannot carry a plan.
+
+### 2026-10-09 — plan-j M103 (on main) → Phase 4b (owner of `configs/privacy.yaml` and `engine/privacy/layout.py`): one more row-level campaign file (record of in-place edits)
+
+**What changed** (DEC-1313 (f), (n); required of every new row-level file by the Plan J plan, §3.2):
+`contact.parquet` (the key and whether the customer was actually contacted) joins
+`retention.row_level_campaign_artefacts` in `configs/privacy.yaml` beside `assignment.parquet` and
+`outcomes.parquet`, and the `campaigns/<id>/*` row of `engine/privacy/layout.py`'s docstring table names the three
+row-level campaign files. No file is served, so `api/access_policy.py` `ROW_LEVEL_ARTEFACTS` is unchanged. The
+erasure test (`tests/unit/measurement/test_campaign_privacy.py`) covers the new file.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M103 (on main) → Phase 3b (owner of `docs/UPLIFT.md`): the three audit labels (record of an in-place edit)
+
+**What changed** (DEC-1313 (b), (n)): section 11 of `docs/UPLIFT.md` gains one paragraph after the list of what an
+unverified-random run may not do. It says that a past campaign uploaded for audit uses the same randomness check
+(`treatment_predictability`, the same limit) on the customer details in its assignment file, and is labelled
+Causal, Random by your statement, not verified, or Descriptive only. `engine/uplift/` is not changed; the check is
+reused as it is.
+
+**What is needed.** Nothing; this is a record.
+
+### 2026-10-09 — plan-j M103 (on main) → trunk (owner of `docs/DATA_CONTRACT.md` and `tests/integration/test_api_config.py`): the audit files and three new routes (record of in-place edits)
+
+**What changed** (DEC-1313 (n)):
+
+* `docs/DATA_CONTRACT.md` gains section 13, "Files for auditing a campaign another tool ran": the assignment, the
+  outcomes and the optional contact file, what the person says, and the programme's one outcomes file. Nothing
+  above it changed.
+* `tests/integration/test_api_config.py`'s exact-set OpenAPI path pin gains `/campaigns/audit`,
+  `/campaigns/programme` and `/campaigns/{campaign_id}/contacts` under one Plan J M103 comment (added at
+  integration: the branch did not run this test). Nothing was removed or loosened. The routes live in M94's campaign
+  router, already mounted in `api/main.py`'s PLAN-J block, each with a `RoutePolicy` (Analyst, audited).
+  `docs/API.md` regenerated.
+
+**What is needed.** Ratification of the test edit. Nothing else.
+
+### 2026-10-09 — plan-j M103 (on main) → Plan H (owner of `ui/modules/simple/`): "Audit a campaign" on Results (record of in-place edits)
+
+**What changed** (DEC-1313 (n); `ui/modules/simple/pages.js` is named in the plan's M103 scope):
+`resultsHtml` takes an optional `auditHref` (default null: no link, so the page is unchanged for anyone else) and,
+when set, shows a secondary "Audit a campaign" action beside "All reports"; `renderResults` in
+`ui/modules/simple/index.js` sets it to `#/audit` only when `canAccess("POST", "/campaigns/audit")`. The `#/audit`
+page itself lives in `ui/modules/decide/`.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M103 (on main) → Plan E (owner of `configs/pilot/help.yaml`): three new codes and two updated entries (announcement)
+
+**What changed** (DEC-1313 (o)): `AUDIT_ARM_UNREADABLE`, `CONTACT_FILE_UNREADABLE` and `PROGRAMME_NO_HOLDOUT`
+(`engine.measurement.audit.AUDIT_CODES`, `engine.measurement.reconcile.CONTACT_RECONCILE_CODES`,
+`engine.measurement.programme.PROGRAMME_CODES`) join `engine.decide.codes.PLAN_J_CODES` by import (one
+definition) and get `configs/pilot/help.yaml` entries under a Plan J M103 comment, in plain words. The existing
+Plan J entries `TEST_PLAN_INVALID` and `CAMPAIGN_EPOCH_MISMATCH` now say how the programme readout raises them;
+`TEST_PLAN_INVALID` also drops "only yes-or-no outcomes can be measured today", which DEC-1312 made untrue.
+`tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
