@@ -1964,4 +1964,10 @@ install_offer_choice(_ScoreFlow)
 from engine.decide.channel_columns import install_channel_column_reservation  # noqa: E402
 
 install_channel_column_reservation(_TrainFlow)
+
+# Plan J M100 part B (DEC-1310): a scoring run whose use case configures channels refuses a model trained
+# with one of their consent or contactable columns as an input (CHANNEL_COLUMN_MODEL_INPUT).
+from engine.decide.channel_columns import install_channel_column_guard  # noqa: E402
+
+install_channel_column_guard(_ScoreFlow)
 # ---- END PLAN-J ----

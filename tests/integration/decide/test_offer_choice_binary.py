@@ -35,11 +35,20 @@ def test_a_run_of_one_offer_is_byte_identical_and_chooses_nothing(config_root: P
     assert summary.offer_counts is None and summary.channel_rows is None
     text = storage.read_bytes(run_key(SCORE_RUN, TREAT_LIST_CSV)).decode("utf-8")
     out = pd.read_csv(io.StringIO(text), dtype=str, keep_default_na=False)
+    # Between contactable_channels and net_value: every earlier column keeps its position from the start,
+    # and net_value, expected_gross_value and the three reasons theirs from the end (M98 pins those).
     after = list(out.columns).index("contactable_channels")
     assert list(out.columns[after + 1 : after + 4]) == [
         "runner_up_offer",
         "runner_up_net_value",
         "offer_reason",
+    ]
+    assert list(out.columns[-5:]) == [
+        "net_value",
+        "expected_gross_value",
+        "reason_1",
+        "reason_2",
+        "reason_3",
     ]
     assert (out[["runner_up_offer", "runner_up_net_value", "offer_reason"]] == "").all().all()
     saved = json.loads(storage.read_text(run_key(SCORE_RUN, "treat_list_summary.json")))

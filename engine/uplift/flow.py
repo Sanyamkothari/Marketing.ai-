@@ -1907,6 +1907,9 @@ class UpliftScoreFlow(_ScoreFlow):
         # A list ranked by the propensity model is not the hold-out's top uplift share, so the
         # hold-out's measured uplift does not describe it: expected conversions stay null.
         value_costs = self._value_costs(scored)
+        # Plan J M100 part B: kept, so the choice of offer after this stage prices with the same costs
+        # rather than reading `configs/pilot/value.yaml` a second time.
+        self._run_value_costs = value_costs
         share, value, holdout_note = (
             (None, None, None) if risk is not None else self._training_holdout(scored, value_costs)
         )

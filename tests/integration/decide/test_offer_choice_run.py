@@ -4,8 +4,9 @@ Everything here goes through the product's own API, as a user's files would (the
 uplift train flow and score flow, and the treat list route); nothing writes a run artefact by hand. The
 config root is a copy of `configs/` with:
 
-* an action catalogue (`decide/catalogue.yaml`) of two actions: offer A sent only by SMS (cheap) and
-  offer B sent only by email (an expensive offer);
+* an action catalogue (`decide/catalogue.yaml`) of three actions: offer A sent only by SMS (cheap),
+  offer B sent only by email (an expensive offer), and the same offer B sent only by push - a channel
+  the use case does not configure, which one run maps offer B to;
 * `win-back-campaign` as a campaign-effect use case of three levels (`none`, `offer_a`, `offer_b`), each
   offer mapped to its catalogue action by `uplift.policy.arm_action_ids`, a value per response, and
   per-channel consent columns (`actions.suppression.channels`: `sms_opt_in`, `email_opt_in`).
@@ -19,6 +20,10 @@ offer; a sleeping dog never gets an offer it is a sleeping dog for, and one for 
 nobody gets an offer on a channel they are not contactable on, and a customer opted out of offer A's
 only channel gets offer B when B pays, else no offer; the runner-up's value is the other offer's net
 value; a total budget holds. Every test here fails on 91cc0b4, where the run chooses no offer.
+
+The last run is gated by a consent ledger in which half the customers consented on SMS alone: none of
+them is ever sent offer B on push, a channel the use case does not configure (the second review's
+blocker); it fails on 53af5d5, where a planned channel without a flag was open to everyone.
 """
 
 from __future__ import annotations
@@ -29,6 +34,7 @@ import json
 import shutil
 from collections.abc import Iterator
 from dataclasses import dataclass
+from datetime import timedelta
 from pathlib import Path
 from typing import Any, Final
 
@@ -40,8 +46,14 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from engine.contracts import RunRecord
+from engine.decide.offer_run import OFFER_REASON_TEXT
+from engine.platform_db import PLATFORM_DB_FILENAME, sqlite_engine
+from engine.privacy.config import load_privacy_config, privacy_salt
+from engine.privacy.consent import ConsentLedger
+from engine.settings import load_settings
 from engine.uplift.contracts import UpliftModelCard
 from engine.uplift.flow import model_card_key
+from engine.utils.time import utc_now
 from tests.fixtures.decide.offer_population import LEVELS, OfferPopulation, offer_population
 from tests.integration.uplift.test_uplift_api import (
     FAST_OVERRIDES,
@@ -74,6 +86,11 @@ actions:
     channels: [email]
     offer_cost: 300.0
     contact_cost: 0.25
+  - action_id: offer_b_push
+    label: Offer B by push
+    channels: [push]
+    offer_cost: 300.0
+    contact_cost: 0.25
 """
 COSTS: Final[dict[int, tuple[float, float]]] = {1: (0.5, 10.0), 2: (0.25, 300.0)}
 """Per offer position: (contact cost, offer cost), as the catalogue above gives them."""
@@ -81,9 +98,17 @@ LABELS: Final[dict[int, str]] = {1: "Offer A by SMS", 2: "Offer B by email"}
 CHANNEL: Final[dict[int, str]] = {1: "sms", 2: "email"}
 
 
-@pytest.fixture(scope="module")
-def root(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
-    target = tmp_path_factory.mktemp("offer-choice-root") / "configs"
+ARM_ACTIONS: Final[dict[str, str]] = {"offer_a": "offer_a_sms", "offer_b": "offer_b_email"}
+
+
+def make_root(
+    config_root: Path,
+    target: Path,
+    *,
+    explore_fraction: float = 0.0,
+    arm_actions: dict[str, str] = ARM_ACTIONS,
+) -> Path:
+    """A copy of `configs/` with the catalogue and the use case described in the module docstring."""
     shutil.copytree(config_root, target)
     assert not (target / "decide" / "catalogue.yaml").exists(), "the repository ships no catalogue"
     (target / "decide" / "catalogue.yaml").write_text(CATALOGUE, encoding="utf-8")
@@ -96,15 +121,22 @@ def root(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
     uplift.setdefault("policy", {}).update(
         {
             "value_per_conversion": VALUE,
-            "arm_action_ids": {"offer_a": "offer_a_sms", "offer_b": "offer_b_email"},
+            "arm_action_ids": dict(arm_actions),
         }
     )
     document.setdefault("actions", {}).setdefault("suppression", {})["channels"] = {
         "sms": {"consent_column": "sms_opt_in"},
         "email": {"consent_column": "email_opt_in"},
     }
+    if explore_fraction:
+        document["actions"]["explore_fraction"] = explore_fraction
     path.write_text(yaml.safe_dump(document, sort_keys=False), encoding="utf-8")
     return target
+
+
+@pytest.fixture(scope="module")
+def root(config_root: Path, tmp_path_factory: pytest.TempPathFactory) -> Path:
+    return make_root(config_root, tmp_path_factory.mktemp("offer-choice-root") / "configs")
 
 
 @pytest.fixture(scope="module")
@@ -163,8 +195,9 @@ def _score(app: App, campaign: OfferPopulation, train: RunRecord, run_id: str, *
     )
 
 
-@pytest.fixture(scope="module")
-def runs(app: App) -> Runs:
+def score_twice(app: App, prefix: str) -> Runs:
+    """Train the model of three levels, then score the campaign without a budget and with 40% of what
+    that run spent. `prefix` names the runs (`r_20261008_<prefix>01` to `03`)."""
     planted = offer_population(TRAIN_ROWS, seed=51)
     overrides = {key: dict(value) for key, value in FAST_OVERRIDES.items()}
     overrides["uplift"] = {**overrides["uplift"], "bootstrap_samples": 100}
@@ -176,16 +209,21 @@ def runs(app: App) -> Runs:
         "treatment_column": TREATMENT,
         "overrides": overrides,
     }
-    train = finish(app, start_uplift(app, body, run_id="r_20261008_0e100001"))
+    train = finish(app, start_uplift(app, body, run_id=f"r_20261008_{prefix}01"))
     version = app.registry.get(train.model_version_id or "")
     card = app.storage.read_model(model_card_key(version.predictor_key), UpliftModelCard)
     campaign = offer_population(SCORE_ROWS, seed=52)
-    opened = _score(app, campaign, train, "r_20261008_0e100002")
+    opened = _score(app, campaign, train, f"r_20261008_{prefix}02")
     budget = round(0.4 * float(opened.summary["spent"]), 2)
     budgeted = _score(
-        app, campaign, train, "r_20261008_0e100003", uplift={"policy": {"total_budget": budget}}
+        app, campaign, train, f"r_20261008_{prefix}03", uplift={"policy": {"total_budget": budget}}
     )
     return Runs(train, card, campaign, opened, budgeted, budget)
+
+
+@pytest.fixture(scope="module")
+def runs(app: App) -> Runs:
+    return score_twice(app, "0e1000")
 
 
 # ---------------------------------------------------------------------------
@@ -377,3 +415,88 @@ def test_a_total_budget_holds_and_never_switches_an_offer(runs: Runs) -> None:
 def test_a_run_without_a_budget_spends_what_the_offers_cost(runs: Runs) -> None:
     assert runs.open.summary["budget"] is None
     assert runs.open.summary["spent"] > runs.budget
+
+
+# ---------------------------------------------------------------------------
+# Consent on one channel alone never opens a channel the use case does not configure
+# ---------------------------------------------------------------------------
+GATED_CLIENT: Final[str] = "gamma"
+GATED_RUN: Final[str] = "r_20261008_0e100004"
+PURPOSE: Final[str] = "marketing_communication"
+PUSH_LABELS: Final[dict[str, int]] = {LABELS[1]: 1, "Offer B by push": 2}
+
+
+@dataclass(frozen=True)
+class Gated:
+    scored: Scored
+    sms_only: pd.Series
+    """True for a customer whose only consent record is an SMS grant; False for an all-channel grant."""
+    contactability: pd.DataFrame
+    """`channel_contactability.parquet`, indexed by customer."""
+
+
+@pytest.fixture(scope="module")
+def gated(
+    app: App, runs: Runs, config_root: Path, tmp_path_factory: pytest.TempPathFactory
+) -> Iterator[Gated]:
+    """The same model scored, for a client whose consent ledger holds an SMS-only grant for every other
+    customer and an all-channel grant for the rest, by an API whose use case maps offer B to the push
+    action (`arm_action_ids` is a use-case setting, so this is a second root over the same data)."""
+    pushed = make_root(
+        config_root,
+        tmp_path_factory.mktemp("offer-choice-push") / "configs",
+        arm_actions={"offer_a": "offer_a_sms", "offer_b": "offer_b_push"},
+    )
+    customers = [str(key) for key in runs.campaign.frame["customer_id"]]
+    sms_only = pd.Series([index % 2 == 0 for index in range(len(customers))], index=customers)
+    granted_at = (utc_now() - timedelta(days=30)).date().isoformat()
+    lines = ["principal_id,purpose,status,recorded_at,channel"]
+    lines += [
+        f"{key},{PURPOSE},granted,{granted_at},{'sms' if only else ''}" for key, only in sms_only.items()
+    ]
+    engine = sqlite_engine(app.data_dir / PLATFORM_DB_FILENAME)
+    ledger = ConsentLedger(engine, salt=privacy_salt(load_settings(), engine=engine))
+    report = ledger.import_csv("\n".join(lines) + "\n", client_id=GATED_CLIENT, privacy=load_privacy_config())
+    assert report.imported and not report.errors, report.errors
+    with pytest.MonkeyPatch.context() as patch:
+        patch.delenv("MARKETING_AI_CONFIG_DIR", raising=False)
+        patch.setenv("MARKETING_AI_CLIENT_ID", GATED_CLIENT)
+        with TestClient(create_app(config_root=pushed, data_dir=app.data_dir)) as client:
+            second = App(client=client, data_dir=app.data_dir)
+            scored = _score(second, runs.campaign, runs.train, GATED_RUN)
+            data = run_artefact(second, GATED_RUN, "channel_contactability.parquet")
+    table = pd.read_parquet(io.BytesIO(data))
+    yield Gated(
+        scored, sms_only.loc[scored.treat.index], table.astype({"customer_id": str}).set_index("customer_id")
+    )
+
+
+def test_a_customer_who_consented_on_sms_alone_is_never_sent_an_offer_on_push(gated: Gated) -> None:
+    scored = gated.scored
+    offered = scored.treat["offer"].where(scored.treat["treat"] == "1", "")
+    arm = offered.map(lambda label: PUSH_LABELS.get(label, 0)).astype(int)
+    assert scored.summary["chosen"] is True
+    # The ledger let them through on their SMS grant; push is not a channel they agreed to.
+    assert gated.sms_only.any() and (scored.scores["suppressed_reason"].isna() | ~gated.sms_only).all()
+    assert not ((arm == 2) & gated.sms_only).any()
+    assert not (scored.treat.loc[gated.sms_only & (scored.treat["treat"] == "1"), "channel"] == "push").any()
+    # A customer whose consent covers every channel can still be sent offer B on push.
+    assert ((arm == 2) & ~gated.sms_only).sum() > 100
+    assert (scored.treat.loc[arm == 2, "channel"] == "push").all()
+    # The run records, per customer, whose consent covers every channel.
+    assert (
+        gated.contactability["all_channel_consent"] == ~gated.sms_only.reindex(gated.contactability.index)
+    ).all()
+
+
+def test_sms_alone_and_opted_out_of_sms_in_the_file_means_no_eligible_offer(gated: Gated, runs: Runs) -> None:
+    scored = gated.scored
+    sms, _ = _opted_in(scored, runs.campaign)
+    open_ = ~scored.scores["control_group"].astype(bool) & scored.scores["suppressed_reason"].isna()
+    stuck = gated.sms_only & ~sms & open_
+    assert stuck.sum() > 200
+    assert (scored.treat.loc[stuck, "treat"] == "0").all()
+    assert (scored.treat.loc[stuck, "offer_reason"] == OFFER_REASON_TEXT["no_eligible_offer"]).all()
+    # Offer B on push is open to the same customers with an all-channel grant.
+    others = ~gated.sms_only & ~sms & open_
+    assert (scored.treat.loc[others, "offer_reason"] != OFFER_REASON_TEXT["no_eligible_offer"]).all()

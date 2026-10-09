@@ -218,3 +218,97 @@ def test_every_training_run_reads_the_reserved_configuration(tmp_path: Path) -> 
     flow = _TrainFlow(Pipeline(storage, registry, NullJobRunner()), ctx)
     flow._bodies()
     assert set(flow._ctx.config.prepare.exclude_columns) >= RESERVED
+
+
+# ---------------------------------------------------------------------------
+# A model trained before this with a channel column as an input does not score
+# ---------------------------------------------------------------------------
+def test_a_model_with_a_channel_column_among_its_inputs_is_refused() -> None:
+    """The first review: training leaves the channel columns out only from now on, so a model trained
+    under M99 with `sms_opt_in` as an input must not rank customers by it."""
+    from engine.decide.channel_columns import CHANNEL_COLUMN_MODEL_INPUT, check_model_inputs
+    from engine.errors import EngineError
+
+    config = _with_channels(load_use_case("win-back-campaign"), TRAIN_CHANNELS)
+    with pytest.raises(EngineError) as caught:
+        check_model_inputs(config, ["months_since_churn", "sms_opt_in", "push_reachable"], model="m_x_1")
+    assert caught.value.code == CHANNEL_COLUMN_MODEL_INPUT
+    assert "sms_opt_in, push_reachable" in caught.value.message and "m_x_1" in caught.value.message
+    assert "Train the model again" in caught.value.suggestion
+    # Nothing to refuse: no channel column is an input, or the use case configures no channels.
+    check_model_inputs(config, ["months_since_churn"], model="m_x_1")
+    check_model_inputs(load_use_case("win-back-campaign"), ["sms_opt_in"], model="m_x_1")
+
+
+def test_a_scoring_run_checks_its_model_s_inputs_before_it_predicts(tmp_path: Path) -> None:
+    """The seam: installed on the score flow's stage table, it reads the model's `schema.json` (the
+    columns it was fitted on) before the predict stage; with no channels configured it is not there."""
+    from types import SimpleNamespace
+
+    from engine.contracts import FeatureSchema, FeatureSchemaColumn, StageKey
+    from engine.decide.channel_columns import CHANNEL_COLUMN_MODEL_INPUT, install_channel_column_guard
+    from engine.errors import EngineError
+    from engine.pipeline import _ScoreFlow
+    from engine.storage import LocalStorage
+
+    assert getattr(_ScoreFlow, "_channel_columns_guarded", False)
+    storage = LocalStorage(tmp_path)
+    schema = FeatureSchema(
+        use_case_id="win-back-campaign",
+        model_version_id="m_win-back-campaign_1",
+        primary_key="customer_id",
+        target="reactivated_90d",
+        problem_type="binary_classification",
+        columns=tuple(
+            FeatureSchemaColumn(name=name, inferred_type="float") for name in ("tenure", "sms_opt_in")
+        ),
+        row_count_at_fit=10,
+        created_at=NOW,
+    )
+    storage.write_model("models/m1/schema.json", schema)
+    predicted: list[bool] = []
+
+    class Flow:
+        def __init__(self, config: UseCaseConfig) -> None:
+            self._ctx = SimpleNamespace(config=config)
+            self._storage = storage
+            self._version = SimpleNamespace(
+                schema_key="models/m1/schema.json", model_id="m_win-back-campaign_1"
+            )
+
+        def _bodies(self) -> tuple[tuple[StageKey, Any], ...]:
+            return ((StageKey.PREDICT, lambda: predicted.append(True)),)
+
+    install_channel_column_guard(Flow)
+    plain = load_use_case("win-back-campaign")
+    for _, body in Flow(plain)._bodies():
+        body()
+    assert predicted == [True], "no channels configured: unchanged"
+    with pytest.raises(EngineError) as caught:
+        for _, body in Flow(_with_channels(plain, TRAIN_CHANNELS))._bodies():
+            body()
+    assert caught.value.code == CHANNEL_COLUMN_MODEL_INPUT
+    assert predicted == [True], "refused before the model predicts"
+
+
+# ---------------------------------------------------------------------------
+# Who consented on one channel alone
+# ---------------------------------------------------------------------------
+def test_consent_scope_marks_who_passed_on_a_channel_grant_alone() -> None:
+    import numpy as np
+
+    from engine.decide.contactability import consent_scope
+
+    banded = pd.DataFrame({"customer_id": ["a", "b", "c", "d"], "entity": ["e1", "e1", "e2", "e3"]})
+    by_channel = {
+        "sms": np.array([True, False, True, False]),
+        "email": np.array([False, False, False, False]),
+    }
+    every = np.array([True, False, False, False])
+    scope, only = consent_scope(by_channel, every, banded, None)
+    assert scope.tolist() == [True, False, False, False]
+    assert only.tolist() == [False, False, True, False], "d has no consent at all: not channel-only"
+    # Per entity: e1 holds all-channel consent on one snapshot only, so not on every one.
+    scope, only = consent_scope(by_channel, every, banded, "entity")
+    assert scope.tolist() == [False, False, False, False]
+    assert only.tolist() == [True, True, True, False]

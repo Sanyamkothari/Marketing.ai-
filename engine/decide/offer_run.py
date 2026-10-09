@@ -7,9 +7,13 @@ stamp (`catalogue_stamp.json`) exist - and writes what it chose where the treat 
 
 * `offer_choice.parquet` - one row per scored row, joined to the scores on every key column: the offer
   given (`offer_arm`, 1..K, 0 for none; its level, catalogue action, label and channel), its net value
-  and cost in rupees, the runner-up's offer, channel and net value, and `offer_reason` (one of
-  `engine.decide.offer_choice.OFFER_REASONS`). Row-level: registered in `configs/privacy.yaml`,
-  `engine/privacy/layout.py` and `ROW_LEVEL_ARTEFACTS`.
+  (`offer_net_value`) and its total expected cost (`offer_total_cost`: contact cost + offer cost x
+  `p_treated`, in rupees - not the catalogue's offer cost alone), the runner-up's offer, channel and net
+  value, `offer_reason` (one of `engine.decide.offer_choice.OFFER_REASONS`), and the best offer the
+  customer could be given at all (`explore_arm`, its label, channel, net value and total cost: the
+  preferred offer before the budget, else the best eligible offer that is not a sleeping dog for them,
+  whatever its value), which the treat list gives a customer M92 explores. Row-level: registered in
+  `configs/privacy.yaml`, `engine/privacy/layout.py` and `ROW_LEVEL_ARTEFACTS`.
 * `offer_choice.json` (:class:`OfferChoiceSummary`) - counts and money only: per offer its costs and
   where they came from, how many customers could get it, were sleeping dogs for it and got it; the
   budget and what was spent. Served with the uplift reports (`UPLIFT_ARTEFACTS`).
@@ -29,7 +33,9 @@ seam returns its stage table untouched), so every binary artefact is byte for by
   contactable on at least one of the offer's planned channels (the catalogue action's, else the
   configured channels), from `channel_contactability.parquet` joined on every key column; a customer
   the file does not cover, and every customer of a run that configures no channels, is contactable as
-  before;
+  before. A planned channel the use case does not configure has no flag: it is open only to a customer
+  whose consent covers every channel (the file's `all_channel_consent`, written when the consent ledger
+  let someone through on a channel grant alone), else to everyone, as in M99;
 * **sleeping dog** - the offer's predicted effect at or below the model's sleeping-dog cut: never that
   offer, whatever its value.
 
@@ -198,6 +204,15 @@ class OfferRows:
     """The channel of the offer given; None for no offer."""
     runner_up_channel: ObjectArray
     """The first channel of the runner-up the customer is reachable on; None when there is none."""
+    explore_arm: npt.NDArray[np.int_]
+    """The best offer the customer could be given at all: the preferred offer before the budget, else
+    the runner-up (the best eligible offer that is not a sleeping dog, whatever its value); 0 for none."""
+    explore_channel: ObjectArray
+    """Its channel; None when there is none."""
+    explore_net_value: npt.NDArray[np.float64]
+    """Its net value in rupees; NaN when there is none."""
+    explore_cost: npt.NDArray[np.float64]
+    """Its total expected cost in rupees (contact + offer x p_treated); 0 when there is none."""
 
 
 def plan_arms(
@@ -273,18 +288,22 @@ def plan_arms(
 
 
 def _first_open(
-    channels: tuple[str, ...], contactable: Mapping[str, BoolArray] | None, rows: int
+    channels: tuple[str, ...],
+    contactable: Mapping[str, BoolArray] | None,
+    rows: int,
+    unlisted: BoolArray | None = None,
 ) -> tuple[BoolArray, ObjectArray]:
     """Per row: reachable on one of `channels`, and the first of them it is reachable on (None if none).
 
-    A channel the run has no flag for (none configured, or not among the configured) restricts nobody."""
+    A channel the run has no flag for (none configured, or not among the configured) is open to the
+    rows `unlisted` marks (those whose consent covers every channel), and to everyone without it."""
     import numpy as np
 
     if not channels:
         return np.ones(rows, dtype=np.bool_), np.full(rows, None, dtype=object)
     first = np.full(rows, None, dtype=object)
     any_open = np.zeros(rows, dtype=np.bool_)
-    everyone = np.ones(rows, dtype=np.bool_)
+    everyone = np.ones(rows, dtype=np.bool_) if unlisted is None else np.asarray(unlisted, dtype=np.bool_)
     for channel in reversed(channels):
         open_ = everyone if contactable is None else contactable.get(channel, everyone)
         first = np.where(open_, channel, first)
@@ -303,10 +322,13 @@ def decide_offers(
     sleeping_dog_max: float,
     contactable: Mapping[str, BoolArray] | None = None,
     values: npt.ArrayLike | None = None,
+    unlisted: BoolArray | None = None,
 ) -> OfferRows:
     """The offer per customer from the run's arrays (see the module docstring). Pure; linear in rows.
 
-    `ValueError` when no value is configured (no value per response and no value column with values)."""
+    `unlisted` marks the rows that may be contacted on a planned channel `contactable` has no flag for
+    (None: every row may). `ValueError` when no value is configured (no value per response and no value
+    column with values)."""
     import numpy as np
 
     from engine.decide.offer_choice import NO_OFFER, ArmMoney, arm_net_values, choose_offers
@@ -331,7 +353,7 @@ def decide_offers(
         )
         net[:, index] = money.net_value[:, 0]
         cost[:, index] = money.cost[:, 0]
-        reachable, first = _first_open(arm.channels, contactable, rows)
+        reachable, first = _first_open(arm.channels, contactable, rows, unlisted)
         eligible[:, index] = ~held & reachable
         firsts.append(first)
     dogs = np.asarray(lift <= sleeping_dog_max, dtype=np.bool_)
@@ -344,13 +366,24 @@ def decide_offers(
         min_roi=0.0 if policy.min_roi is None else float(policy.min_roi),
         max_offers=policy.budget_contacts,
     )
+    # The best offer the customer could be given at all: the preferred one before the budget, else the
+    # runner-up (with no preferred offer it is the best eligible offer that is not a sleeping dog).
+    explore = np.where(choice.preferred_arm != NO_OFFER, choice.preferred_arm, choice.runner_up_arm)
+    rows_index = np.arange(rows)
+    column = np.maximum(explore - 1, 0)
+    has_explore = explore != NO_OFFER
+    explore_value = np.where(has_explore, net[rows_index, column], np.nan)
+    explore_cost = np.where(has_explore, cost[rows_index, column], 0.0)
     channel = np.full(rows, None, dtype=object)
     runner_channel = np.full(rows, None, dtype=object)
+    explore_channel = np.full(rows, None, dtype=object)
     for index, first in enumerate(firsts):
         mine = choice.arm == index + 1
         channel[mine] = first[mine]
         runner = choice.runner_up_arm == index + 1
         runner_channel[runner] = first[runner]
+        best = explore == index + 1
+        explore_channel[best] = first[best]
     channel[choice.arm == NO_OFFER] = None
     return OfferRows(
         choice=choice,
@@ -359,6 +392,10 @@ def decide_offers(
         sleeping_dog=dogs,
         channel=channel,
         runner_up_channel=runner_channel,
+        explore_arm=np.asarray(explore, dtype=np.int_),
+        explore_channel=explore_channel,
+        explore_net_value=np.asarray(explore_value, dtype=np.float64),
+        explore_cost=np.asarray(explore_cost, dtype=np.float64),
     )
 
 
@@ -415,15 +452,21 @@ def _row_text(frame: pd.DataFrame, primary_key: Any) -> pd.Series:
     return joined.reset_index(drop=True)
 
 
-def _contactable(flow: Any, keys: pd.DataFrame) -> dict[str, BoolArray] | None:
-    """Per configured channel, the run's flag per scored row, joined on every key column.
+def _contactable(flow: Any, keys: pd.DataFrame) -> tuple[dict[str, BoolArray] | None, BoolArray | None]:
+    """Per configured channel, the run's flag per scored row, joined on every key column; and the rows
+    that may be contacted on a channel the use case does not configure (the file's `all_channel_consent`,
+    None when it has none: every row may).
 
-    None when the run wrote no per-channel contactability (no channels configured). A row the file does
-    not cover is contactable, as before M99."""
+    `(None, None)` when the run wrote no per-channel contactability (no channels configured). A row the
+    file does not cover is contactable, as before M99."""
     import numpy as np
     import pandas as pd
 
-    from engine.decide.contactability import CHANNEL_CONTACTABILITY_FILENAME, contactable_column
+    from engine.decide.contactability import (
+        ALL_CHANNEL_CONSENT_COLUMN,
+        CHANNEL_CONTACTABILITY_FILENAME,
+        contactable_column,
+    )
     from engine.storage import StorageError, run_key
 
     ctx = flow._ctx
@@ -431,7 +474,7 @@ def _contactable(flow: Any, keys: pd.DataFrame) -> dict[str, BoolArray] | None:
     try:
         data = flow._storage.read_bytes(run_key(ctx.run_id, CHANNEL_CONTACTABILITY_FILENAME))
     except StorageError:
-        return None
+        return None, None
     table = pd.read_parquet(io.BytesIO(data))
     index = pd.Index(_row_text(table, ctx.key))
     if not index.is_unique:  # pragma: no cover - the run writes one row per scored row
@@ -445,7 +488,11 @@ def _contactable(flow: Any, keys: pd.DataFrame) -> dict[str, BoolArray] | None:
             continue
         values = table[name].to_numpy(dtype=bool)[np.where(covered, positions, 0)]
         flags[channel] = np.where(covered, values, True)
-    return flags
+    unlisted: BoolArray | None = None
+    if ALL_CHANNEL_CONSENT_COLUMN in table.columns:
+        every = table[ALL_CHANNEL_CONSENT_COLUMN].to_numpy(dtype=bool)[np.where(covered, positions, 0)]
+        unlisted = np.where(covered, every, True)
+    return flags, unlisted
 
 
 def _stamp(flow: Any) -> CatalogueStamp | None:
@@ -481,7 +528,9 @@ def _choose(flow: Any) -> None:
     levels = tuple(card.treatment_levels or ())
     policy = ctx.config.uplift.policy
     stamp = _stamp(flow)
-    value_costs = flow._value_costs(scored)
+    # The costs the run's actions stage read from `configs/pilot/value.yaml` (read ONCE per run, M97), so
+    # an edit during the run cannot price the choice differently from the first offer's list.
+    value_costs = flow._run_value_costs if hasattr(flow, "_run_value_costs") else flow._value_costs(scored)
     arms, notes = plan_arms(
         levels,
         policy,
@@ -510,6 +559,7 @@ def _choose(flow: Any) -> None:
         "catalogue_sha256": None if stamp is None else stamp.catalogue_sha256,
         "created_at": utc_now(),
     }
+    contactable, unlisted = _contactable(flow, keys)
     try:
         decided = decide_offers(
             predicted.uplift,
@@ -519,8 +569,9 @@ def _choose(flow: Any) -> None:
             suppressed=suppressed,
             control=control,
             sleeping_dog_max=card.segment_thresholds.sleeping_dog_max_uplift,
-            contactable=_contactable(flow, keys),
+            contactable=contactable,
             values=values,
+            unlisted=unlisted,
         )
     except ValueError as exc:
         _LOGGER.warning("offer choice: not made: %s", exc)
@@ -557,12 +608,17 @@ def _choose(flow: Any) -> None:
     table["offer_label"] = labelled(choice.arm, "label")
     table["offer_channel"] = decided.channel
     table["offer_net_value"] = choice.net_value
-    table["offer_cost"] = choice.cost
+    table["offer_total_cost"] = choice.cost
     table["runner_up_arm"] = choice.runner_up_arm.astype(np.int64)
     table["runner_up_label"] = labelled(choice.runner_up_arm, "label")
     table["runner_up_channel"] = decided.runner_up_channel
     table["runner_up_net_value"] = choice.runner_up_net_value
     table["offer_reason"] = np.asarray(OFFER_REASONS, dtype=object)[choice.reason_code]
+    table["explore_arm"] = decided.explore_arm.astype(np.int64)
+    table["explore_label"] = labelled(decided.explore_arm, "label")
+    table["explore_channel"] = decided.explore_channel
+    table["explore_net_value"] = decided.explore_net_value
+    table["explore_total_cost"] = decided.explore_cost
     buffer = io.BytesIO()
     table.to_parquet(buffer, engine="pyarrow", index=False)
     parquet_key = run_key(ctx.run_id, OFFER_CHOICE_FILENAME)

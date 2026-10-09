@@ -1043,25 +1043,33 @@ uplift:
   cost, read from the run's `catalogue_stamp.json` - the catalogue the use case was checked against. The
   catalogue's contact cost wins over `uplift.policy.cost_per_contact` for that offer. An offer with no
   action is priced as M97 prices the first offer's list (`configs/pilot/value.yaml` on the value path,
-  else `cost_per_contact`).
+  else `cost_per_contact`), with the costs the run's actions stage read from that file - read once per
+  run, so an edit during the run cannot price the choice differently from the first offer's list.
 * **Eligibility per offer.** Not suppressed, not held back as control (the persistent holdout included),
   and contactable on at least one of the offer's planned channels (the action's, else the configured
   channels), from `channel_contactability.parquet` joined on every key column. A customer the file does
-  not cover, and every customer of a run with no channels configured, is eligible as before.
+  not cover, and every customer of a run with no channels configured, is eligible as before. A planned
+  channel the use case does not configure is open only to a customer whose consent covers every channel
+  (`all_channel_consent`, `docs/DECIDE.md` section 14): one who consented on SMS alone never gets an offer
+  on push.
 * **Sleeping dogs per offer.** An offer whose predicted effect is at or below the model's sleeping-dog cut
   is never given to that customer; a customer who is a sleeping dog for every offer gets none.
 * **Budget.** `total_budget` (rupees) and `budget_contacts` (a count) both hold; customers are taken by net
   value per rupee, and an offer is never switched to a cheaper one to fit.
 * **What it writes.** `offer_choice.parquet` (row-level, Analyst-only: the offer given, its channel - the
-  first planned channel of that offer the customer is contactable on - its net value and cost, the
-  runner-up and its net value, and the reason) and `offer_choice.json` (counts and rupees per offer, the
+  first planned channel of that offer the customer is contactable on - its net value and its total
+  expected cost `offer_total_cost` (contact + offer cost x `p_treated`, rupees), the runner-up and its net
+  value, the reason, and the offer an explored customer would be given, `explore_*`) and `offer_choice.json` (counts and rupees per offer, the
   budget and the spend; served with the uplift reports and shown on the Output page). `scores.csv` and
   `scores.parquet` are unchanged; a run of one offer writes neither file.
 * **The treat list** reads the choice: `offer` is the offer's catalogue label (else its level), `channel`
   its channel, `net_value` its net value; `runner_up_offer` and `runner_up_net_value` the next-best offer
   the customer could be given; a customer who could be contacted but got no offer has `treat = 0` and a
-  plain `offer_reason`. An explored customer (M92) left without an offer is given the runner-up, outside
-  the budget, as the explore slice is outside the policy. With no value set the run says so
+  plain `offer_reason`. An explored customer (M92) left without an offer is given the best offer they
+  could be given - the one the choice preferred when the budget dropped them, else the best eligible
+  offer that is not a sleeping dog for them - outside the budget, as the explore slice is outside the
+  policy; the treat list summary counts and prices those offers apart (`explore_offer_counts`,
+  `explore_cost`, `explore_note`). With no value set the run says so
   (`offer_choice.json` `chosen: false`, `OFFER_CHOICE_NOT_MADE`) and the treat list stays the first
   offer's.
 

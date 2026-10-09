@@ -44,6 +44,7 @@ from engine.config import ResolvedConfig, RunMode, UseCaseConfig
 from engine.contracts import Artefact, RunRecord, RunState
 from engine.decide.catalogue import CATALOGUE_STAMP_FILENAME, CatalogueStamp, catalogue_sha256
 from engine.decide.contactability import (
+    ALL_CHANNEL_CONSENT_COLUMN,
     CHANNEL_CONTACTABILITY_FILENAME,
     CHANNEL_CONTACTABILITY_SUMMARY_FILENAME,
     ChannelContactability,
@@ -112,6 +113,11 @@ RUNNER_UP_VALUE_COLUMN: Final[str] = "runner_up_net_value"
 OFFER_REASON_COLUMN: Final[str] = "offer_reason"
 """Why a customer who could be treated got no offer, in plain words; empty otherwise."""
 
+_EXPLORE_NOTE: Final[str] = (
+    "Customers picked at random to learn from (the explore slice) are given an offer although the choice "
+    "left them without one. Their offers are outside the campaign budget (uplift.policy.total_budget): "
+    "explore_cost is what they are expected to cost, on top of what the choice spent."
+)
 _NOT_SCORED: Final[str] = "RUN_NOT_SCORED"
 _SEGMENT_COLUMN: Final[str] = "segment"
 _REQUIRED_SCORE_COLUMNS: Final[tuple[str, ...]] = (
@@ -226,9 +232,31 @@ class TreatListSummary(Artefact):
     offer_counts: dict[str, int] | None = Field(
         default=None,
         description=(
-            "Plan J M100 part B: treat = 1 rows per offer (its label), on a run that chose the offer per "
-            "customer. Absent otherwise."
+            "Plan J M100 part B: treat = 1 rows per offer (its label) the run chose, on a run that chose the "
+            "offer per customer - `offered_rows` of `offer_choice.json`. Explored customers are counted in "
+            "`explore_offer_counts`, not here. Absent otherwise."
         ),
+        exclude_if=lambda value: value is None,
+    )
+    explore_offer_counts: dict[str, int] | None = Field(
+        default=None,
+        description=(
+            "Plan J M100 part B: treat = 1 rows per offer given to customers M92 explored although the "
+            "choice left them without one. Absent when there are none."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    explore_cost: float | None = Field(
+        default=None,
+        description=(
+            "Plan J M100 part B: the expected cost of those explored customers' offers, in rupees (contact "
+            "+ offer cost x p_treated). Outside uplift.policy.total_budget. Absent when there are none."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    explore_note: str | None = Field(
+        default=None,
+        description="Plan J M100 part B: says the explored offers are outside the budget, when there are any.",
         exclude_if=lambda value: value is None,
     )
     channel_rows: dict[str, int] | None = Field(
@@ -341,6 +369,8 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
     runner_up_value = pd.Series(np.full(n_rows, np.nan), dtype="float64")
     offer_reason = pd.Series(np.full(n_rows, None, dtype=object), dtype="object")
     offer_counts: dict[str, int] | None = None
+    explore_offer_counts: dict[str, int] | None = None
+    explore_cost: float | None = None
     offer_choice = _read_offer_choice(storage, run_id, primary_key, row_keys)
     if offer_choice is not None:
         applied = _apply_offer_choice(
@@ -362,6 +392,7 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         )
         offer_reason, uncontactable_rows = applied.offer_reason, applied.uncontactable_rows
         offer_counts = applied.offer_counts
+        explore_offer_counts, explore_cost = applied.explore_offer_counts, applied.explore_cost
         if net_value.notna().any():
             net_value_note, net_value_unit = None, "rupees"
 
@@ -412,6 +443,9 @@ def build_treat_list(storage: Storage, run_id: str, *, config_root: Path | None 
         uncontactable_rows=uncontactable_rows,
         offer_counts=offer_counts,
         channel_rows=_channel_rows(channel, treat),
+        explore_offer_counts=explore_offer_counts,
+        explore_cost=explore_cost,
+        explore_note=None if explore_cost is None else _EXPLORE_NOTE,
     )
     storage.write_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), summary)
     _LOGGER.info(
@@ -682,18 +716,22 @@ class _Channels(NamedTuple):
 
 def _read_contactability(
     storage: Storage, run_id: str, primary_key: Any, row_keys: pd.Series[Any], channels: tuple[str, ...]
-) -> tuple[dict[str, np.ndarray], np.ndarray | None, dict[str, int] | None]:
+) -> tuple[dict[str, np.ndarray], np.ndarray | None, dict[str, int] | None, np.ndarray]:
     """Join `channel_contactability.parquet` to the scores on every key column (Plan J M99).
 
     Returns, per configured channel, whether each row may be contacted on it (True for a row the file
     does not cover: nothing restricts it), which rows the file covers (None when the run wrote no file:
-    its use case configures no channels), and the run's `channel_counts`.
+    its use case configures no channels), the run's `channel_counts`, and (Plan J M100 part B) whether
+    each row may be contacted on a channel the use case does not configure: the file's
+    `all_channel_consent` where it has one (a customer who consented on one channel alone may not), else
+    True for every row, as in M99.
     """
     n = len(row_keys.index)
+    everyone = np.ones(n, dtype=bool)
     try:
         data = storage.read_bytes(run_key(run_id, CHANNEL_CONTACTABILITY_FILENAME))
     except StorageError:
-        return {}, None, None
+        return {}, None, None, everyone
     table = pd.read_parquet(io.BytesIO(data))
     key_cols = key_columns(primary_key)
     wanted = [contactable_column(channel) for channel in channels]
@@ -701,17 +739,21 @@ def _read_contactability(
         _LOGGER.warning(
             "treat list %s: %s lacks the key or channel columns", run_id, CHANNEL_CONTACTABILITY_FILENAME
         )
-        return {}, np.zeros(n, dtype=bool), None
+        return {}, np.zeros(n, dtype=bool), None, everyone
     index = pd.Index(_join_keys(table, primary_key))
     if not index.is_unique:
         _LOGGER.warning("treat list %s: %s repeats a customer key", run_id, CHANNEL_CONTACTABILITY_FILENAME)
-        return {}, np.zeros(n, dtype=bool), None
+        return {}, np.zeros(n, dtype=bool), None, everyone
     positions = index.get_indexer(pd.Index(row_keys))
     covered = positions >= 0
+    at = np.where(covered, positions, 0)
     flags = {
-        channel: np.where(covered, table[name].to_numpy(dtype=bool)[np.where(covered, positions, 0)], True)
+        channel: np.where(covered, table[name].to_numpy(dtype=bool)[at], True)
         for channel, name in zip(channels, wanted, strict=True)
     }
+    unlisted = everyone
+    if ALL_CHANNEL_CONSENT_COLUMN in table.columns:
+        unlisted = np.where(covered, table[ALL_CHANNEL_CONSENT_COLUMN].to_numpy(dtype=bool)[at], True)
     counts: dict[str, int] | None = None
     try:
         counts = dict(
@@ -723,7 +765,7 @@ def _read_contactability(
         _LOGGER.warning(
             "treat list %s: %s could not be read", run_id, CHANNEL_CONTACTABILITY_SUMMARY_FILENAME
         )
-    return flags, covered, counts
+    return flags, covered, counts, unlisted
 
 
 def _channel_labels(
@@ -806,10 +848,16 @@ def _resolve_channels(
     not treated - and not suppressed: `suppression_reason` and `scores.csv` are untouched. A customer the
     file does not cover (and every customer of a run that wrote none) is treated as before, on the first
     planned channel, with a null `contactable_channels`.
+
+    A planned channel the use case does not configure has no flag of its own: it is open only to a
+    customer whose consent covers every channel (Plan J M100 part B: the file's `all_channel_consent`,
+    written when the consent ledger let someone through on a channel grant alone), else to everyone.
     """
     n = len(scores.index)
     configured = tuple(config.actions.suppression.channels)
-    flags, covered, counts = _read_contactability(storage, run_id, primary_key, row_keys, configured)
+    flags, covered, counts, unlisted = _read_contactability(
+        storage, run_id, primary_key, row_keys, configured
+    )
 
     def planned(action_id: str | None) -> tuple[str, ...]:
         if action_id is not None and action_id in planned_by_action:
@@ -832,7 +880,7 @@ def _resolve_channels(
         first_open = np.full(n, None, dtype=object)
         any_open = np.zeros(n, dtype=bool)
         for channel in reversed(channels):
-            open_ = flags.get(channel, everyone)
+            open_ = flags.get(channel, unlisted)
             first_open = np.where(open_, channel, first_open)
             any_open |= open_
         treat_out[rows & ~any_open] = False
@@ -865,6 +913,11 @@ class _OfferChoice(NamedTuple):
     runner_up_channel: np.ndarray
     runner_up_value: np.ndarray
     reason: np.ndarray
+    explore_arm: np.ndarray
+    explore_label: np.ndarray
+    explore_channel: np.ndarray
+    explore_value: np.ndarray
+    explore_cost: np.ndarray
 
 
 def _read_offer_choice(
@@ -888,6 +941,8 @@ def _read_offer_choice(
     at = np.where(covered, positions, 0)
 
     def take(name: str, missing: Any) -> np.ndarray:
+        if name not in table.columns:  # an older file: nothing to read, as for a row it does not cover
+            return np.full(len(covered), missing, dtype=object)
         values = table[name].to_numpy()[at]
         return np.where(covered, values, missing)
 
@@ -902,6 +957,11 @@ def _read_offer_choice(
         runner_up_channel=take("runner_up_channel", None).astype(object),
         runner_up_value=take("runner_up_net_value", np.nan).astype(np.float64),
         reason=take("offer_reason", None).astype(object),
+        explore_arm=take("explore_arm", 0).astype(np.int64),
+        explore_label=take("explore_label", None).astype(object),
+        explore_channel=take("explore_channel", None).astype(object),
+        explore_value=take("explore_net_value", np.nan).astype(np.float64),
+        explore_cost=take("explore_total_cost", 0.0).astype(np.float64),
     )
 
 
@@ -915,6 +975,8 @@ class _Applied(NamedTuple):
     offer_reason: pd.Series[Any]
     uncontactable_rows: int | None
     offer_counts: dict[str, int]
+    explore_offer_counts: dict[str, int] | None
+    explore_cost: float | None
 
 
 def _apply_offer_choice(
@@ -933,27 +995,32 @@ def _apply_offer_choice(
 
     A customer is treated with the offer the run chose (never suppressed, held out, or given an offer
     they are a sleeping dog for or cannot be reached on: the run's choice already says so). An explored
-    customer (M92) the choice left without an offer is given the best offer they could be given (the
-    choice's runner-up), outside the budget, as M92 treats them outside the policy; one with no such
-    offer is not treated. A customer the file does not cover keeps what the list said before.
+    customer (M92) the choice left without an offer is given the best offer they could be given at all
+    (`explore_arm`: the offer they would have had before the budget, else the best eligible offer that is
+    not a sleeping dog for them), outside the budget, as M92 treats them outside the policy; its cost is
+    reported apart (`explore_cost`). One with no such offer is not treated. A customer the file does not
+    cover keeps what the list said before.
     """
     from engine.decide.offer_run import OFFER_REASON_TEXT
 
     covered = chosen.covered
     open_ = ~suppressed & ~held_out
     offered = covered & (chosen.arm > 0) & open_
-    explored = covered & ~offered & open_ & explore & (chosen.runner_up_arm > 0)
+    explored = covered & ~offered & open_ & explore & (chosen.explore_arm > 0)
     treat = np.where(covered, offered | explored, fallback_treat)
 
     nothing = np.full(len(covered), None, dtype=object)
-    label = np.where(offered, chosen.label, np.where(explored, chosen.runner_up_label, nothing))
-    channel = np.where(offered, chosen.channel, np.where(explored, chosen.runner_up_channel, nothing))
-    value = np.where(offered, chosen.net_value, np.where(explored, chosen.runner_up_value, np.nan))
+    label = np.where(offered, chosen.label, np.where(explored, chosen.explore_label, nothing))
+    channel = np.where(offered, chosen.channel, np.where(explored, chosen.explore_channel, nothing))
+    value = np.where(offered, chosen.net_value, np.where(explored, chosen.explore_value, np.nan))
     offer = fallback_offer.mask(pd.Series(covered), pd.Series(label, dtype="object"))
     channel_out = fallback_channel.mask(pd.Series(covered), pd.Series(channel, dtype="object"))
     net = fallback_net_value.mask(pd.Series(covered), pd.Series(np.round(value, _RUPEE_DECIMALS)))
 
-    has_runner = covered & (chosen.runner_up_arm > 0) & ~explored
+    # The runner-up is shown unless it is the offer the explored customer was given.
+    has_runner = (
+        covered & (chosen.runner_up_arm > 0) & ~(explored & (chosen.explore_arm == chosen.runner_up_arm))
+    )
     runner_offer = pd.Series(np.where(has_runner, chosen.runner_up_label, nothing), dtype="object")
     runner_value = pd.Series(
         np.round(np.where(has_runner, chosen.runner_up_value, np.nan), _RUPEE_DECIMALS), dtype="float64"
@@ -962,7 +1029,9 @@ def _apply_offer_choice(
     texts = np.array([OFFER_REASON_TEXT.get(str(code)) for code in chosen.reason], dtype=object)
     reason = pd.Series(np.where(told, texts, nothing), dtype="object")
     unreachable = int((told & (chosen.reason == "no_eligible_offer")).sum())
-    labels, counts = np.unique(label[treat & covered].astype(str), return_counts=True)
+    labels, counts = np.unique(label[offered].astype(str), return_counts=True)
+    explore_labels, explore_counts = np.unique(label[explored].astype(str), return_counts=True)
+    any_explored = bool(explored.any())
     return _Applied(
         treat=np.asarray(treat, dtype=bool),
         offer=offer,
@@ -973,6 +1042,14 @@ def _apply_offer_choice(
         offer_reason=reason,
         uncontactable_rows=unreachable if contactability_written else None,
         offer_counts={str(name): int(count) for name, count in zip(labels, counts, strict=True)},
+        explore_offer_counts=(
+            {str(name): int(count) for name, count in zip(explore_labels, explore_counts, strict=True)}
+            if any_explored
+            else None
+        ),
+        explore_cost=(
+            round(float(chosen.explore_cost[explored].sum()), _RUPEE_DECIMALS) if any_explored else None
+        ),
     )
 
 
@@ -1019,7 +1096,10 @@ def _assemble(
     data["offer"] = offer.astype("object")
     data["channel"] = channel.astype("object")
     data["contactable_channels"] = contactable_channels.astype("object")
-    # Plan J M100 part B: the next-best offer and its net value, and why a customer got no offer.
+    # Plan J M100 part B: the next-best offer and its net value, and why a customer got no offer. Placed
+    # after contactable_channels and before net_value, so every earlier column keeps its position from
+    # the start and net_value, expected_gross_value and reason_1..3 keep theirs from the end (the reasons
+    # stay the last three columns, as M98 pins them).
     data[RUNNER_UP_OFFER_COLUMN] = runner_up_offer.astype("object")
     data[RUNNER_UP_VALUE_COLUMN] = runner_up_value
     data[OFFER_REASON_COLUMN] = offer_reason.astype("object")

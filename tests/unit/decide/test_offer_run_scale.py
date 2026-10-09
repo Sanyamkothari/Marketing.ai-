@@ -52,6 +52,7 @@ def _choose(rows: int, seed: int) -> float:
         }
     )
     arms, _ = plan_arms(LEVELS, policy, stamp=STAMP, configured_channels=("sms", "email"), value_costs=None)
+    explore = rng.random(rows) < 0.05
     started = time.perf_counter()
     decided = decide_offers(
         uplift,
@@ -76,10 +77,15 @@ def _choose(rows: int, seed: int) -> float:
             runner_up_channel=decided.runner_up_channel,
             runner_up_value=choice.runner_up_net_value,
             reason=np.array(choice.reason, dtype=object),
+            explore_arm=decided.explore_arm,
+            explore_label=np.array([None, "A", "B"], dtype=object)[decided.explore_arm],
+            explore_channel=decided.explore_channel,
+            explore_value=decided.explore_net_value,
+            explore_cost=decided.explore_cost,
         ),
         suppressed=np.zeros(rows, dtype=bool),
         held_out=np.zeros(rows, dtype=bool),
-        explore=np.zeros(rows, dtype=bool),
+        explore=explore,
         fallback_treat=np.zeros(rows, dtype=bool),
         fallback_offer=pd.Series([None] * rows, dtype="object"),
         fallback_channel=pd.Series([None] * rows, dtype="object"),
@@ -88,7 +94,9 @@ def _choose(rows: int, seed: int) -> float:
     )
     elapsed = time.perf_counter() - started
     assert choice.spent <= rows * 4.0 and (choice.arm != NO_OFFER).any()
-    assert int(applied.treat.sum()) == int((choice.arm != NO_OFFER).sum())
+    extra = explore & (choice.arm == NO_OFFER) & (decided.explore_arm != NO_OFFER)
+    assert int(applied.treat.sum()) == int((choice.arm != NO_OFFER).sum()) + int(extra.sum())
+    assert extra.any() and applied.explore_cost is not None and applied.explore_cost > 0
     given = choice.arm == 1
     assert contactable["sms"][given].all(), "offer A is sent only by SMS"
     return elapsed

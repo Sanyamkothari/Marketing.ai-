@@ -32,6 +32,14 @@ per entity (DEC-083).
 * `channel_contactability.parquet` - one row per scored row: the key column(s), as `scores.*` writes
   them, then one boolean `contactable_<channel>` per configured channel, in configuration order. A
   row-level artefact (`configs/privacy.yaml`, `engine/privacy/layout.py`, `ROW_LEVEL_ARTEFACTS`).
+  Plan J M100 part B (DEC-1310): when the ledger gates the run and lets at least one customer through
+  on a channel grant alone (`engine.privacy.consent.apply_consent_gate`), a last boolean column
+  `all_channel_consent` says, per row, whether the customer's consent covers every channel (a valid
+  all-channel record). A channel the use case does not configure - one a catalogue action plans but
+  `actions.suppression.channels` does not name - has no flag of its own, and is open only to a customer
+  whose consent covers every channel: a customer who consented to SMS alone is never sent anything on
+  push. Without that column (no ledger, or every customer's consent covers every channel) such a
+  channel restricts nobody, as in M99.
 * `channel_contactability.json` (:class:`ChannelContactability`) - counts only, including
   `channel_counts`: per channel, the rows **eligible to be treated** (neither suppressed nor held out
   as control) that are not contactable on it.
@@ -69,12 +77,14 @@ if TYPE_CHECKING:
     from engine.config import UseCaseConfig
 
 __all__ = [
+    "ALL_CHANNEL_CONSENT_COLUMN",
     "CHANNEL_CONTACTABILITY_FILENAME",
     "CHANNEL_CONTACTABILITY_SUMMARY_FILENAME",
     "CHANNEL_COUNTS_ATTR",
     "CONTACTABLE_PREFIX",
     "ChannelContactability",
     "ChannelSource",
+    "consent_scope",
     "contactability_masks",
     "contactable_column",
     "install_contactability",
@@ -87,6 +97,8 @@ CHANNEL_CONTACTABILITY_FILENAME: Final[str] = "channel_contactability.parquet"
 CHANNEL_CONTACTABILITY_SUMMARY_FILENAME: Final[str] = "channel_contactability.json"
 CONTACTABLE_PREFIX: Final[str] = "contactable_"
 CHANNEL_COUNTS_ATTR: Final[str] = "plan_j_channel_counts"
+ALL_CHANNEL_CONSENT_COLUMN: Final[str] = "all_channel_consent"
+"""Plan J M100 part B: the parquet column saying whether a row's consent covers every channel (see above)."""
 """`frame.attrs` key: `{channel: rows}` for `engine.stages.export._suppression_counts`."""
 _INSTALLED: Final[str] = "_contactability_installed"
 
@@ -133,6 +145,15 @@ class ChannelContactability(Artefact):
         description="Per channel: eligible rows not contactable on it (not suppressed; only not treated on it)."
     )
     by_channel: tuple[ChannelSource, ...] = Field(description="What decided each channel, in order.")
+    channel_only_consent_rows: int | None = Field(
+        default=None,
+        description=(
+            "Plan J M100 part B: rows the consent ledger let through on a channel grant alone (no valid "
+            "all-channel record). They are sent only on a configured channel they are contactable on, never "
+            "on a channel the use case does not configure. Absent when there are none."
+        ),
+        exclude_if=lambda value: value is None,
+    )
     note: str = Field(default=CONTACTABILITY_NOTE, description="What the counts are, and what they are not.")
     created_at: datetime = Field(description="UTC time the file was written.")
 
@@ -313,8 +334,9 @@ def _write_catalogue_stamp(flow: Any) -> None:
 
 def _ledger_verdicts(
     flow: Any, banded: pd.DataFrame, channels: tuple[str, ...]
-) -> tuple[dict[str, Any], str] | None:
-    """Per channel, the ledger's valid-consent flag per row, when a ledger gates this run."""
+) -> tuple[dict[str, Any], str, np.ndarray] | None:
+    """Per channel, the ledger's valid-consent flag per row, when a ledger gates this run; then the
+    purpose, and per row whether the customer holds a valid all-channel record (Plan J M100 part B)."""
     import pandas as pd
 
     from engine import keys
@@ -335,7 +357,38 @@ def _ledger_verdicts(
     for channel in channels:
         verdict = gate.ledger.classify(gate.client_id, gate.purpose, principals.tolist(), at, channel=channel)
         verdicts[channel] = principals.isin(verdict.valid).to_numpy(dtype=bool)
-    return verdicts, gate.purpose
+    every = gate.ledger.classify(gate.client_id, gate.purpose, principals.tolist(), at)
+    return verdicts, gate.purpose, principals.isin(every.valid).to_numpy(dtype=bool)
+
+
+def consent_scope(
+    by_channel: Mapping[str, np.ndarray],
+    all_channels: np.ndarray,
+    banded: pd.DataFrame,
+    entity_key: str | None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Per row: whether the ledger holds a valid all-channel record, and whether it gives valid consent on
+    a configured channel without one - the customers `apply_consent_gate` lets through on a channel grant
+    alone (Plan J M100 part B).
+
+    With an entity key, both are decided per entity (DEC-083): a customer holds all-channel consent only
+    when every one of their snapshots does."""
+    import numpy as np
+    import pandas as pd
+
+    from engine.keys import key_text
+
+    rows = len(banded.index)
+    granted = np.zeros(rows, dtype=bool)
+    for valid in by_channel.values():
+        granted |= np.asarray(valid, dtype=bool)
+    every: np.ndarray = np.asarray(all_channels, dtype=bool)
+    if entity_key is not None and entity_key in banded.columns:
+        groups = key_text(banded[entity_key]).to_numpy()
+        every = pd.Series(every).groupby(groups, sort=False).transform("min").to_numpy(dtype=bool)
+        granted = pd.Series(granted).groupby(groups, sort=False).transform("max").to_numpy(dtype=bool)
+    only: np.ndarray = granted & ~every
+    return every, only
 
 
 def _write_contactability(flow: Any) -> None:
@@ -371,6 +424,13 @@ def _write_contactability(flow: Any) -> None:
     data: dict[str, pd.Series] = dict(_key_output(banded, ctx.key, key_source=flow._frame))
     for channel in channels:
         data[contactable_column(channel)] = pd.Series(masks[channel], index=banded.index, dtype=bool)
+    channel_only = None
+    if ledger is not None:
+        every, channel_only = consent_scope(ledger[0], ledger[2], banded, ctx.entity_key)
+        if channel_only.any():
+            # Plan J M100 part B (DEC-1310): someone passed the gate on a channel grant alone, so a channel
+            # the use case does not configure must not be read as open to them (see the module docstring).
+            data[ALL_CHANNEL_CONSENT_COLUMN] = pd.Series(every, index=banded.index, dtype=bool)
     table = pd.DataFrame(data).reset_index(drop=True)
     buffer = io.BytesIO()
     table.to_parquet(buffer, engine="pyarrow", index=False)
@@ -406,6 +466,9 @@ def _write_contactability(flow: Any) -> None:
                     not_contactable_eligible_rows=counts[channel],
                 )
                 for channel in channels
+            ),
+            channel_only_consent_rows=(
+                int(channel_only.sum()) if channel_only is not None and channel_only.any() else None
             ),
             created_at=utc_now(),
         ),

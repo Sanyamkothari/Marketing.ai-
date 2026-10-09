@@ -100,6 +100,7 @@ from engine.contracts import (
 from engine.decide.catalogue import (
     CATALOGUE_STAMP_FILENAME,  # Plan J M99 (DEC-1309)
     stamp_checked_catalogue,  # Plan J M100 part B (DEC-1310)
+    stamped_at_creation,  # Plan J M100 part B (DEC-1310)
 )
 from engine.decide.contactability import (  # Plan J M99 (DEC-1309)
     CHANNEL_CONTACTABILITY_FILENAME,
@@ -492,7 +493,7 @@ def create_run_endpoint(
     )
     if upload is not None:
         attach_recipe_to_run(storage, upload.upload_id, record.run_id)  # Plan G (DEC-1006)
-    if body.mode is RunMode.SCORE:
+    if stamped_at_creation(config, scoring=body.mode is RunMode.SCORE):
         # Plan J M100 part B (DEC-1310): the catalogue the use case's action ids were just checked against
         # (this root), stamped before the job starts, so the run is stamped and priced from the same file.
         stamp_checked_catalogue(storage, record.run_id, config, root=root, created_at=record.created_at)

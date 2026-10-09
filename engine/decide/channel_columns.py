@@ -18,24 +18,46 @@ is not a feature already, and excluding it would drop it before the rule that ne
 `run_config.json` is written by the API before the run and is not changed: the exclusion follows from
 the channels it records. With no channels configured the configuration is returned as it is (the same
 object) and the stage table is untouched, so a default run is byte for byte what it was.
+
+**Models trained before this.** A model trained when the use case already configured channels (M99) may
+hold a channel column among its inputs. A scoring run checks, before it predicts, the model's feature
+schema (`schema.json`, the columns it was fitted on) against the channel columns the run's use case names
+(:func:`install_channel_column_guard`): when any is a model input the run stops with
+`CHANNEL_COLUMN_MODEL_INPUT` and says to retrain, rather than rank customers by whether they agreed to
+be contacted. A run whose use case configures no channels does not check, and is unchanged.
 """
 
 from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any, Final
 
+from engine.errors import EngineError
 from engine.utils.logging import get_logger
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Callable, Iterable
 
     from engine.config import UseCaseConfig
 
-__all__ = ["channel_columns", "install_channel_column_reservation", "reserve_channel_columns"]
+__all__ = [
+    "CHANNEL_COLUMN_CODES",
+    "CHANNEL_COLUMN_MODEL_INPUT",
+    "channel_columns",
+    "check_model_inputs",
+    "install_channel_column_guard",
+    "install_channel_column_reservation",
+    "reserve_channel_columns",
+]
 
 _LOGGER = get_logger(__name__)
 
 _INSTALLED: Final[str] = "_channel_columns_reserved"
+_GUARDED: Final[str] = "_channel_columns_guarded"
+
+CHANNEL_COLUMN_MODEL_INPUT: Final[str] = "CHANNEL_COLUMN_MODEL_INPUT"
+"""A scoring run's model uses a channel's consent or contactable column as an input."""
+CHANNEL_COLUMN_CODES: Final[frozenset[str]] = frozenset({CHANNEL_COLUMN_MODEL_INPUT})
+"""The code this module defines, for `engine.decide.codes.PLAN_J_CODES` (joined at integration)."""
 
 
 def channel_columns(config: UseCaseConfig) -> tuple[str, ...]:
@@ -85,3 +107,77 @@ def install_channel_column_reservation(train_flow: type[Any]) -> None:
 
     train_flow._bodies = _bodies
     setattr(train_flow, _INSTALLED, True)
+
+
+def check_model_inputs(config: UseCaseConfig, features: Iterable[str], *, model: str) -> None:
+    """Refuse a model one of whose inputs is a channel column of `config` (`CHANNEL_COLUMN_MODEL_INPUT`).
+
+    `features` are the columns the model was fitted on (its `schema.json`); `model` names it in the
+    message. Does nothing when the use case configures no channels or no channel column is an input."""
+    names = channel_columns(config)
+    if not names:
+        return
+    fitted = set(features)
+    used = [name for name in names if name in fitted]
+    if not used:
+        return
+    listed = ", ".join(used)
+    raise EngineError(
+        CHANNEL_COLUMN_MODEL_INPUT,
+        f"Model {model} was trained with {listed} as an input, and this use case uses "
+        f"{'that column' if len(used) == 1 else 'those columns'} to record whether a customer agreed to be "
+        "contacted on a channel. Whether someone agreed to be contacted must not decide how they are "
+        "ranked, so this model cannot score for it.",
+        suggestion=(
+            "Train the model again: training now leaves channel consent and contactable columns out of "
+            "the model inputs. Then score with the new version."
+        ),
+    )
+
+
+def install_channel_column_guard(score_flow: type[Any]) -> None:
+    """Wrap `score_flow._bodies` so a scoring run with channels checks its model's inputs before predicting.
+
+    Idempotent. The propensity and the uplift score flows share the stage table. A run whose use case
+    configures no channels gets its stage table back untouched."""
+    if getattr(score_flow, _GUARDED, False):
+        return
+    original: Callable[[Any], tuple[tuple[Any, Callable[[], Any]], ...]] = score_flow._bodies
+
+    def _bodies(self: Any) -> tuple[tuple[Any, Callable[[], Any]], ...]:
+        bodies = original(self)
+        config = getattr(getattr(self, "_ctx", None), "config", None)
+        if config is None or not channel_columns(config):
+            return bodies
+        return tuple((key, _checked(self, key, body)) for key, body in bodies)
+
+    score_flow._bodies = _bodies
+    setattr(score_flow, _GUARDED, True)
+
+
+def _checked(flow: Any, key: Any, body: Callable[[], Any]) -> Callable[[], Any]:
+    from functools import wraps
+
+    from engine.contracts import StageKey
+
+    if key is not StageKey.PREDICT:
+        return body
+
+    @wraps(body)
+    def predict() -> Any:
+        from engine.contracts import FeatureSchema
+        from engine.storage import StorageError
+
+        version = getattr(flow, "_version", None)
+        if version is not None:
+            try:
+                schema = flow._storage.read_model(version.schema_key, FeatureSchema)
+            except (StorageError, ValueError):  # the schema check before this stage read it; not ours
+                _LOGGER.warning("channel columns: the model's schema could not be read")
+            else:
+                check_model_inputs(
+                    flow._ctx.config, (column.name for column in schema.columns), model=version.model_id
+                )
+        return body()
+
+    return predict

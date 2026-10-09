@@ -48,6 +48,7 @@ __all__ = [
     "load_catalogue",
     "referenced_action_ids",
     "stamp_checked_catalogue",
+    "stamped_at_creation",
     "validate_action_ids",
 ]
 
@@ -378,9 +379,10 @@ def stamp_checked_catalogue(
 ) -> CatalogueStamp | None:
     """Write `catalogue_stamp.json` for a run from the config root its use case was checked against.
 
-    Called by the routes that create a run, beside `run_config.json`, with the root the API resolved
-    the configuration from (`create_app(config_root=...)`, else `MARKETING_AI_CONFIG_DIR`, else
-    `configs/`). The run keeps a stamp it finds instead of stamping again from its own root, so the
+    Called by everything that creates a run (the routes, beside `run_config.json`, and a scheduled
+    firing; :func:`stamped_at_creation` says which runs), with the root the configuration was resolved
+    from (`create_app(config_root=...)`, else `MARKETING_AI_CONFIG_DIR`, else `configs/`; a firing's
+    `FiringServices.config_root`). The run keeps a stamp it finds instead of stamping again from its own root, so the
     catalogue a run is stamped and priced with is the one its action ids were checked against, even
     when the API was given a root the run's process does not know (the M99 gap, DEC-1309). Nothing is
     written when that root has no catalogue.
@@ -391,6 +393,20 @@ def stamp_checked_catalogue(
     if stamp is not None:
         storage.write_model(run_key(run_id, CATALOGUE_STAMP_FILENAME), stamp)
     return stamp
+
+
+def stamped_at_creation(config: UseCaseConfig, *, scoring: bool) -> bool:
+    """Whether whoever creates a run stamps its catalogue (:func:`stamp_checked_catalogue`) before it starts.
+
+    Every scoring run (its actions stage plans channels and, with several offers, prices them from the
+    stamp), and a training run whose offers are mapped to catalogue actions (`arm_policy_value.json`
+    records their costs). The routes that create runs (`POST /runs`, `POST /uplift/runs`) and a
+    scheduled firing (`engine.scheduling.firing.start_dataset_run`) ask the same question, so no creator
+    of a run leaves the run to stamp from a root other than the one its use case was checked against.
+    """
+    if scoring:
+        return True
+    return config.uplift is not None and bool(config.uplift.policy.arm_action_ids)
 
 
 def clear_catalogue_cache() -> None:

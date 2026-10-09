@@ -82,6 +82,7 @@ from engine.contracts import (
     RunRecord,
     RunState,
 )
+from engine.decide.catalogue import stamp_checked_catalogue, stamped_at_creation  # Plan J M100 B
 from engine.jobs import CancelToken, JobRunner, ReconcilingJobRunner
 from engine.onboarding.datasets import (
     DATASET_FRAME_FILENAME,
@@ -303,6 +304,7 @@ def start_dataset_run(
     client_tag: str | None,
     now: datetime | None = None,
     requested_by: str | None = None,
+    config_root: Path | None = None,
 ) -> RunRecord:
     """Validate a built dataset, write the run directory and its job spec, and submit the job.
 
@@ -310,6 +312,10 @@ def start_dataset_run(
     is the resolved scoring model (pinned on `run.json`, as the route pins it) and `None` for a
     training run. A blocking validation error is `FiringError(VALIDATION_FAILED)`; the report is not
     written anywhere, exactly as the route writes a dataset's report nowhere but its `409`.
+
+    `config_root` is the root `resolved` was resolved from (`FiringServices.config_root`); like the
+    route, the run's `catalogue_stamp.json` is written from it before the job starts (Plan J M100 part
+    B, DEC-1310), so the run is stamped and priced with the catalogue its use case was checked against.
     """
     config = resolved.config
     dataset_id = manifest.dataset_id
@@ -396,6 +402,11 @@ def start_dataset_run(
         requested_by=requested_by,
         synthetic=is_demo_client(storage, manifest.client_id),  # Plan J M95: planted data stays flagged
     )
+    if stamped_at_creation(config, scoring=mode is RunMode.SCORE):
+        # Plan J M100 part B (DEC-1310): as `POST /runs` does, from the root the use case was resolved from.
+        stamp_checked_catalogue(
+            storage, record.run_id, config, root=config_root, created_at=record.created_at
+        )
     spec = job_spec_for(record, upload=source, client_id=client_tag)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
@@ -1088,6 +1099,7 @@ class ScheduleFirer:
             client_tag=services.job_client_tag,
             now=services.clock(),
             requested_by=services.principal.user_id,  # Plan D, DEC-862
+            config_root=services.config_root,  # Plan J M100 part B (DEC-1310)
         )
 
     def _dataset(self, schedule: Schedule, config: UseCaseConfig, *, mode: RunMode) -> DatasetManifest:
