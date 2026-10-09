@@ -2,7 +2,8 @@
 
 The default configuration has no cap, and a run on a laptop (the thread pool) is billed by nobody. These
 tests start runs through `POST /runs` and read them through `GET /runs/{id}` with the cost code made to
-fail loudly if it is reached, and pin what the new setting adds to a run's own record: one null key.
+fail loudly if it is reached, and pin what the new setting adds to a run's own record: nothing at all
+while the cap is null (the key is left out of the dump).
 """
 
 from __future__ import annotations
@@ -85,19 +86,15 @@ def test_the_run_directory_holds_the_same_files_as_before(client: TestClient, da
     assert not [key for key in keys if "cost" in key], "the cap writes no artefact of its own"
 
 
-def test_the_only_thing_the_setting_adds_to_a_runs_own_configuration_is_one_null(
+def test_the_setting_adds_nothing_to_a_runs_own_configuration_while_it_is_null(
     client: TestClient, data_dir: Path
 ) -> None:
     run_id = client.post("/runs", json=run_body(upload(client))).json()["run_id"]
     client.app.state.jobs.wait(run_id, 10.0)
     document = json.loads(LocalStorage(data_dir).read_bytes(run_key(run_id, "run_config.json")))
     governance = document["config"]["governance"]
-    assert governance == {
-        "retention_days": 90,
-        "consent_column": None,
-        "approval_required": True,
-        "max_run_cost_usd": None,
-    }
+    # Left out while null (not written as `null`), so the bytes are what they were before M108.
+    assert governance == {"retention_days": 90, "consent_column": None, "approval_required": True}
 
 
 def test_a_cap_changes_no_recipe(config_root: Path) -> None:
@@ -124,3 +121,15 @@ def test_a_run_is_not_refused_for_an_unrecognised_confirmation_field_missing(cli
     assert "confirm_cost" not in body
     assert client.post("/runs", json=body).status_code == 202
     assert client.post("/runs", json={**run_body(upload(client)), "confirm_cost": "maybe"}).status_code == 422
+
+
+def test_a_cap_that_is_set_is_written_to_the_runs_own_configuration(config_root: Path) -> None:
+    """The stop reads the cap from the run's `run_config.json`, so a set cap must round-trip through it."""
+    from engine.config import GovernanceConfig
+
+    capped = GovernanceConfig(max_run_cost_usd=3.0)
+    assert capped.model_dump()["max_run_cost_usd"] == 3.0
+    assert GovernanceConfig.model_validate_json(capped.model_dump_json()).max_run_cost_usd == 3.0
+    assert "max_run_cost_usd" not in GovernanceConfig().model_dump()
+    assert "max_run_cost_usd" not in GovernanceConfig().model_dump_json()
+    assert GovernanceConfig.model_validate({}).max_run_cost_usd is None

@@ -5,7 +5,8 @@ Admin (`PUT /cost/fx-rate`, audited) with the source it was read from and the da
 the only thing that makes a rupee figure exist: there is no default rate, no built-in table and no
 call to a currency service. Delete it and every rupee figure disappears.
 
-**The monthly spend** adds up what the runs of each calendar month cost, from the cost figure each
+**The monthly spend** adds up what the runs of each calendar month cost (a run belongs to the month it was
+created in, the one date the scan filters and files by), from the cost figure each
 run recorded when it ended (`run_manifest.json`'s `cost_estimate`, AWS's billable seconds at the list
 price, and the AI text spend when it was priced). It is a list-price estimate, not a bill, and the
 view says how many runs of the month had no figure at all (a run on this machine, or one the price
@@ -121,7 +122,7 @@ class FxStore:
 
 
 class SpendMonth(StrictBase):
-    """One calendar month (UTC) of finished runs."""
+    """One calendar month (UTC) of finished runs, filed by the month each was created in."""
 
     month: str = Field(description="YYYY-MM.")
     runs: int = Field(description="Finished runs that month.")
@@ -160,7 +161,7 @@ def _run_cost(storage: Storage, run_id: str) -> float | None:
 
 
 def monthly_spend(storage: Storage, *, months: int, fx: FxRate | None, now: datetime) -> SpendView:
-    """The last `months` calendar months of finished runs and what they recorded costing."""
+    """The last `months` calendar months of finished runs (by creation month) and what they recorded costing."""
     wanted = [_month_back(now.astimezone(UTC), back) for back in range(months)]
     oldest = min(wanted)
     totals: dict[tuple[int, int], list[float | None]] = {key: [] for key in wanted}
@@ -171,12 +172,14 @@ def monthly_spend(storage: Storage, *, months: int, fx: FxRate | None, now: date
             record = storage.read_model(key, RunRecord)
         except (StorageError, ValueError):
             continue
-        if (record.created_at.year, record.created_at.month) < oldest:
+        created = record.created_at.astimezone(UTC)
+        if (created.year, created.month) < oldest:
             break  # run ids sort by creation: nothing older can fall in the window
         if record.state not in _FINISHED:
             continue
-        ended = (record.finished_at or record.created_at).astimezone(UTC)
-        bucket = totals.get((ended.year, ended.month))
+        # Filed by the month the run was created in - the same date the scan above stops on - so a run
+        # that started before the window and ended inside it is never half in, half out.
+        bucket = totals.get((created.year, created.month))
         if bucket is not None:
             bucket.append(_run_cost(storage, record.run_id))
     rows: list[SpendMonth] = []

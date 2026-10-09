@@ -56,13 +56,20 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from engine.access.roles import SYSTEM_SCHEDULER, Principal
 from engine.agent.contracts import DATA_RECIPE_FILENAME
 from engine.audit.events import AuditEvent, AuditLog
+from engine.aws.run_cost import (  # Plan J M108 (DEC-1318): the same cost gate as POST /runs
+    RUN_COST_NEEDS_CONFIRMATION,
+    cached_price_table,
+    confirmation_message,
+    estimate_run_cost,
+    start_cost_watch,
+)
 from engine.clients import ClientStore, ClientStoreError
 from engine.config import (
     Catalog,
@@ -83,6 +90,8 @@ from engine.contracts import (
     RunState,
 )
 from engine.decide.catalogue import stamp_checked_catalogue, stamped_at_creation  # Plan J M100 B
+from engine.generative.budget import PriceTable as LlmPriceTable  # Plan J M108 (DEC-1318)
+from engine.generative.budget import load_prices
 from engine.jobs import CancelToken, JobRunner, ReconcilingJobRunner
 from engine.onboarding.datasets import (
     DATASET_FRAME_FILENAME,
@@ -125,6 +134,9 @@ from engine.stages import ingest, validate
 from engine.storage import Storage, StorageError, run_key
 from engine.utils.logging import get_logger, log_failure
 from engine.utils.time import utc_now
+
+if TYPE_CHECKING:
+    from engine.settings import Settings
 
 __all__ = [
     "ABANDONED_AFTER",
@@ -200,6 +212,9 @@ class FiringServices:
     principal: Principal = SYSTEM_SCHEDULER
     """Who the firing acts as: a run's `requested_by` and the engine's audit actor. The scheduler for a
     firing nobody started; the caller for the API's "fire now" (DEC-889)."""
+    settings: Settings | None = None
+    """The deployment's settings (Plan J M108, DEC-1318), for the run cost gate. `None` (a test, an embedder)
+    skips the gate; the API and the CLI pass theirs, and the gate acts only when a cost cap is set."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -305,6 +320,7 @@ def start_dataset_run(
     now: datetime | None = None,
     requested_by: str | None = None,
     config_root: Path | None = None,
+    settings: Settings | None = None,
 ) -> RunRecord:
     """Validate a built dataset, write the run directory and its job spec, and submit the job.
 
@@ -316,6 +332,11 @@ def start_dataset_run(
     `config_root` is the root `resolved` was resolved from (`FiringServices.config_root`); like the
     route, the run's `catalogue_stamp.json` is written from it before the job starts (Plan J M100 part
     B, DEC-1310), so the run is stamped and priced with the catalogue its use case was checked against.
+
+    `settings` is the deployment's (Plan J M108, DEC-1318). With a cost cap set on the use case and a
+    deployment whose jobs the cloud bills, the run passes the gate `POST /runs` has - a run that needs the
+    person's confirmation is refused, because nobody is here to give it - and a run that starts is watched
+    so it is stopped when its running cost passes the cap. With no cap, or no `settings`, nothing changes.
     """
     config = resolved.config
     dataset_id = manifest.dataset_id
@@ -382,6 +403,27 @@ def start_dataset_run(
             dataset_id=dataset_id,
         )
     source = _DatasetUpload(upload_id=dataset_id, file_name=f"{dataset_id} (built)", source_key=frame_key)
+    capped_cloud_run = (
+        settings is not None
+        and settings.job_backend == "sagemaker"
+        and config.governance.max_run_cost_usd is not None
+    )
+    if capped_cloud_run and settings is not None:
+        cost = estimate_run_cost(
+            config,
+            mode,
+            settings=settings,
+            table=cached_price_table(config_root) if config_root is not None else None,
+            llm_prices=load_prices(config_root) if config_root is not None else LlmPriceTable(),
+            fx=None,
+        )
+        if cost.needs_confirmation:
+            raise FiringError(
+                RUN_COST_NEEDS_CONFIRMATION,
+                confirmation_message(cost)
+                + " A scheduled run cannot be confirmed by a person, so it was not started.",
+                dataset_id=dataset_id,
+            )
     record = create_run(
         storage,
         Pipeline(storage, registry, jobs),
@@ -410,6 +452,15 @@ def start_dataset_run(
     spec = job_spec_for(record, upload=source, client_id=client_tag)
     write_job_spec(storage, spec)
     jobs.submit(spec.job_id, build_job_fn(spec, storage=storage, registry=registry))
+    if capped_cloud_run and settings is not None:
+        # Plan J M108 (DEC-1318): nobody polls a scheduled run, so its cost is watched from here.
+        start_cost_watch(
+            storage,
+            jobs,
+            record.run_id,
+            settings=settings,
+            table_for=lambda: cached_price_table(config_root) if config_root is not None else None,
+        )
     _LOGGER.info(
         "schedule.run_started run_id=%s mode=%s dataset_id=%s", record.run_id, mode.value, dataset_id
     )
@@ -1100,6 +1151,7 @@ class ScheduleFirer:
             now=services.clock(),
             requested_by=services.principal.user_id,  # Plan D, DEC-862
             config_root=services.config_root,  # Plan J M100 part B (DEC-1310)
+            settings=services.settings,  # Plan J M108 (DEC-1318)
         )
 
     def _dataset(self, schedule: Schedule, config: UseCaseConfig, *, mode: RunMode) -> DatasetManifest:

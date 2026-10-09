@@ -9,10 +9,15 @@ run.
 the time it takes, which is not known until it ends, but the most it can take is: the deployment's
 time limit for a job (`sagemaker_max_runtime_seconds`). So the figure is
 `time limit x instances x the AWS published hourly rate`, the same arithmetic as the after-the-run
-figure (`engine.aws.prices.price_compute_time` serves both, and the running cost below), plus the most
-the AI text service may charge a run when the use case uses one (`generative.budget.max_cost_usd_per_run`
-- a ceiling someone configured, counted only when every model it calls has a price). A list price is
+figure (`engine.aws.prices.price_compute_time` serves both, and the running cost below). A list price is
 not a bill: it ignores discounts, free allowances and tax, and `basis` says so in every response.
+
+**AI text is shown, not counted.** A run started by `POST /runs`, a schedule or the uplift route never
+calls the AI text service (the predictive stages do not read the `generative` block, DEC-200; text jobs
+are their own requests under their own budget, `generative.budget.max_cost_usd_per_run`). So that
+ceiling is listed as an informational line (`in_total=False`) when the use case has a billed text
+service, and is neither added to the estimate nor counted against the cap: the cap stops only what it
+can see and stop, the compute time of a cloud job (DEC-1318 (j)).
 
 **Nothing is made up.** No price list, an instance type the list does not carry, no time limit, or a
 text model without a price: the amount is `None`, with a sentence saying which, and the total is
@@ -100,7 +105,11 @@ RUN_COST_NEEDS_CONFIRMATION: Final[str] = "RUN_COST_NEEDS_CONFIRMATION"
 RUN_COST_CAP_REACHED: Final[str] = "RUN_COST_CAP_REACHED"
 """`RunRecord.error.code` of a run that was stopped because its running cost passed the cap."""
 RUN_COST_CODES: Final[frozenset[str]] = frozenset({RUN_COST_NEEDS_CONFIRMATION, RUN_COST_CAP_REACHED})
-"""M108's user-facing codes; `engine.decide.codes.PLAN_J_CODES` joins this set (one definition)."""
+"""M108's user-facing codes. `engine.decide.codes.PLAN_J_CODES` is to import this set (one definition).
+
+That line and the two `configs/pilot/help.yaml` entries belong to the integrator (DEC-1300 (d)); the
+text is given in M108's result.
+"""
 
 COST_WATCH_INTERVAL_S: Final[float] = 30.0
 """How often a started run's cost is looked at. Read at each wait, so a test can change it."""
@@ -154,6 +163,12 @@ def format_usd(amount: float) -> str:
 
 def format_inr(amount: float) -> str:
     return f"INR {amount:,.2f}"
+
+
+def _lower_first(sentence: str | None) -> str:
+    """The sentence without its full stop and with only its first letter lower-cased ("AWS" stays "AWS")."""
+    text = (sentence or "").rstrip(".")
+    return text[:1].lower() + text[1:]
 
 
 def _duration(seconds: int) -> str:
@@ -315,11 +330,15 @@ def _compute_line(
 
 
 def _text_line(config: UseCaseConfig, prices: LlmPriceTable) -> CostLine | None:
-    """The AI text ceiling, when the use case calls a billed text service; `None` when it does not."""
+    """The AI text ceiling as an informational line, when the use case calls a billed text service.
+
+    Never counted: a run does not call the text service (see the module docstring), so adding the ceiling
+    would charge a run for money it cannot spend, and the cap could not stop it.
+    """
     generative = config.generative
     if not generative.enabled or generative.llm.backend is not LlmBackend.BEDROCK:
         return None
-    label = "AI-written text (the most it may cost)"
+    label = "AI-written text is started separately and is not part of this run"
     models = [
         model
         for model in (
@@ -332,10 +351,13 @@ def _text_line(config: UseCaseConfig, prices: LlmPriceTable) -> CostLine | None:
     unpriced = [model for model in models if prices.get(model) is None]
     if unpriced:
         reason = NO_AI_PRICE.format(models=", ".join(unpriced))
-        return CostLine(kind="ai_text", label=label, usd=None, detail="", reason=reason, in_total=True)
+        return CostLine(kind="ai_text", label=label, usd=None, detail="", reason=reason, in_total=False)
     ceiling = generative.budget.max_cost_usd_per_run
-    detail = f"The ceiling set for AI text on one run, with every model it calls priced (USD {ceiling:g})."
-    return CostLine(kind="ai_text", label=label, usd=round(ceiling, 4), detail=detail, in_total=True)
+    detail = (
+        f"Each AI text job may cost up to {format_usd(ceiling)}, the ceiling set for it. "
+        "It is not added to this run's estimate or counted against its limit."
+    )
+    return CostLine(kind="ai_text", label=label, usd=round(ceiling, 4), detail=detail, in_total=False)
 
 
 def estimate_run_cost(
@@ -388,7 +410,7 @@ def estimate_run_cost(
         elif total is None:
             needs = True
             why = (
-                f"The most this run could cost cannot be worked out ({(reason or '').rstrip('.').lower()}), "
+                f"The most this run could cost cannot be worked out ({_lower_first(reason)}), "
                 f"so it cannot be checked against the {format_usd(cap)} limit set for a single run. "
                 "A run that cannot be priced cannot be stopped for its cost; confirm only if you accept that."
             )
@@ -489,7 +511,12 @@ def enforce_cost_cap(
         return None
     if latest.state not in (RunState.PENDING, RunState.RUNNING):
         return None
-    jobs.cancel(run_id)
+    if not jobs.cancel(run_id):
+        # The stop was not delivered (throttled, a missing permission, an unknown job): the job is still
+        # billing, so the record must not say it was stopped. The next look tries again; a job that has
+        # already ended reaches its terminal state through reconcile.
+        _LOGGER.warning("runs.cost_cap_stop_failed run=%s", run_id)
+        return None
     stopped = cancel_run(storage, run_id, now=moment, error=_stop_error(spent, cap))
     _LOGGER.warning("runs.cost_cap_stop run=%s", run_id)
     return stopped

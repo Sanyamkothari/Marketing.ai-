@@ -312,6 +312,7 @@ def _services(request: Request, *, audited: bool) -> FiringServices:
         retrain_flags=privacy_retrain_flags(engine),
         clock=scheduling_clock(request),
         job_client_tag=settings.client_id,
+        settings=settings,  # Plan J M108 (DEC-1318): the run cost gate
     )
 
 

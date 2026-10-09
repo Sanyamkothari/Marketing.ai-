@@ -78,6 +78,19 @@ def set_cap(root: Path, cap: float) -> None:
     path.write_text(text.replace("max_run_cost_usd: null", f"max_run_cost_usd: {cap}", 1), encoding="utf-8")
 
 
+def add_text_service(root: Path, ceiling: float) -> None:
+    """Give the demo use case a billed AI text service (Bedrock models, a per-job ceiling)."""
+    path = root / "use_cases" / "targeted_advertisement.yaml"
+    text = path.read_text(encoding="utf-8")
+    assert "\ngenerative:" not in text and "\nai_type:" not in text, "the demo is a plain predictive use case"
+    block = (
+        "\nai_type: hybrid\ngenerative:\n  kind: campaign_copy\n  llm:\n    backend: bedrock\n"
+        "    generation_model_id: gen-model\n    judge_model_id: judge-model\n"
+        f"    embedding_model_id: embed-model\n  budget:\n    max_cost_usd_per_run: {ceiling}\n"
+    )
+    path.write_text(text.rstrip("\n") + "\n" + block, encoding="utf-8")
+
+
 @pytest.fixture
 def table(config_root: Path) -> PriceTable:
     loaded = load_price_table(config_root / PRICES_FILENAME)
@@ -109,9 +122,12 @@ class RecordingRunner(ThreadJobRunner):
     def __init__(self) -> None:
         super().__init__(max_workers=2)
         self.cancelled: list[str] = []
+        self.refuse_cancel = False
 
     def cancel(self, job_id: str) -> bool:
         self.cancelled.append(job_id)
+        if self.refuse_cancel:
+            return False  # a stop the cloud did not accept (throttled, missing permission)
         return super().cancel(job_id)
 
 
@@ -128,6 +144,7 @@ def make_client(
     def build(
         *,
         cap: float | None = None,
+        text_ceiling: float | None = None,
         prices: bool = True,
         deployment: Any = None,
         blocking: bool = True,
@@ -140,6 +157,8 @@ def make_client(
         shutil.copytree(config_root, root)
         if cap is not None:
             set_cap(root, cap)
+        if text_ceiling is not None:
+            add_text_service(root, text_ceiling)
         if not prices:
             (root / PRICES_FILENAME).unlink()
         if blocking:
@@ -544,3 +563,114 @@ def test_an_unreadable_exchange_rate_leaves_the_estimate_in_dollars(
     assert response.status_code == 200
     body = response.json()
     assert body["estimated_usd"] == pytest.approx(ceiling_usd(table), abs=1e-4) and body["inr"] is None
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (DEC-1318): AI text is shown but not counted; a failed stop is not recorded as a stop
+# ---------------------------------------------------------------------------
+def local_deployment() -> Any:
+    from tests.fixtures.settings import local_settings
+
+    return local_settings()
+
+
+def test_a_deployment_nothing_bills_never_asks_for_confirmation_even_with_a_text_service(
+    make_client: AppFactory, storage: LocalStorage
+) -> None:
+    """The AI text ceiling above the cap must not make a laptop answer 409: runs never call the text service."""
+    client = make_client(cap=0.01, text_ceiling=5.0, deployment=local_deployment())
+    response = client.get(f"/use-cases/{DEMO_ID}/cost-estimate")
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["backend"] == "local"
+    assert body["estimated_usd"] is None and body["needs_confirmation"] is False
+    text = next(line for line in body["lines"] if line["kind"] == "ai_text")
+    assert text["in_total"] is False
+    started = start(client)
+    assert started.status_code == 202, started.text
+
+
+def test_the_ai_text_ceiling_is_listed_but_does_not_move_the_total_or_the_cap(
+    make_client: AppFactory, table: PriceTable
+) -> None:
+    plain = (
+        make_client(cap=round(ceiling_usd(table) * 2, 4)).get(f"/use-cases/{DEMO_ID}/cost-estimate").json()
+    )
+    with_text = make_client(cap=round(ceiling_usd(table) * 2, 4), text_ceiling=1000.0)
+    body = with_text.get(f"/use-cases/{DEMO_ID}/cost-estimate").json()
+    assert body["estimated_usd"] == plain["estimated_usd"]
+    assert body["over_cap"] is False and body["needs_confirmation"] is False
+    assert any(line["kind"] == "ai_text" and line["in_total"] is False for line in body["lines"])
+    assert start(with_text).status_code == 202, "a text ceiling above the cap is not a reason to refuse a run"
+
+
+def test_a_stop_the_cloud_did_not_accept_is_not_recorded_as_a_stop(
+    make_client: AppFactory, table: PriceTable, storage: LocalStorage, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    cap = round(ceiling_usd(table) / 2, 4)
+    client = make_client(cap=cap)
+    run_id, started = started_run(client, storage)
+    jobs = client.app.state.jobs
+    clock_at(monkeypatch, started + timedelta(hours=3))
+
+    jobs.refuse_cancel = True
+    detail = client.get(f"/runs/{run_id}").json()
+    assert detail["run"]["state"] == "running", "the job is still billing, so the record must not say stopped"
+    assert detail["run"]["error"] is None
+    assert run_id in jobs.cancelled
+
+    jobs.refuse_cancel = False
+    detail = client.get(f"/runs/{run_id}").json()
+    assert detail["run"]["state"] == "cancelled"
+    assert detail["run"]["error"]["code"] == "RUN_COST_CAP_REACHED"
+
+
+# ---------------------------------------------------------------------------
+# Who may confirm, what a person cannot move, who may save the exchange rate
+# ---------------------------------------------------------------------------
+def test_a_person_starting_a_run_cannot_raise_the_cap(make_client: AppFactory, table: PriceTable) -> None:
+    client = make_client(cap=round(ceiling_usd(table) / 2, 4))
+    response = start(client, overrides={"governance.max_run_cost_usd": 1_000_000_000.0}, confirm_cost=True)
+    assert response.status_code == 422, response.text
+
+
+def test_confirming_a_capped_run_takes_the_right_to_start_a_run() -> None:
+    """Analyst and above start runs, and so confirm them; the confirmation is part of the same request."""
+    assert policy_for("POST", "/runs").role is Role.ANALYST
+
+
+def test_a_viewer_cannot_start_or_confirm_a_run(tmp_path: Path) -> None:
+    from tests.integration.production.access_support import bearer, local_app, make_user
+
+    app = local_app(tmp_path)
+    viewer = bearer(app, make_user(app, "viewer", [Role.VIEWER]))
+    with TestClient(app) as client:
+        response = client.post("/runs", json={"use_case": DEMO_ID, "confirm_cost": True}, headers=viewer)
+    assert response.status_code == 403, response.text
+    assert response.json()["detail"]["code"] == "ROLE_REQUIRED"
+
+
+@pytest.mark.parametrize("role", [Role.VIEWER, Role.ANALYST, Role.APPROVER])
+def test_only_an_admin_saves_or_clears_the_exchange_rate(tmp_path: Path, role: Role) -> None:
+    from tests.integration.production.access_support import bearer, local_app, make_user
+
+    app = local_app(tmp_path)
+    headers = bearer(app, make_user(app, role.value.lower(), [role]))
+    with TestClient(app) as client:
+        saved = client.put("/cost/fx-rate", json=FX_BODY, headers=headers)
+        cleared = client.delete("/cost/fx-rate", headers=headers)
+    assert saved.status_code == 403 and cleared.status_code == 403
+    assert saved.json()["detail"]["code"] == "ROLE_REQUIRED"
+
+
+def test_an_admin_saving_the_exchange_rate_is_audited(tmp_path: Path) -> None:
+    from engine.audit.events import AuditQuery
+    from tests.integration.production.access_support import audit_log_at, bearer, local_app, make_user
+
+    app = local_app(tmp_path)
+    admin = bearer(app, make_user(app, "admin", [Role.ADMIN]))
+    with TestClient(app) as client:
+        assert client.put("/cost/fx-rate", json=FX_BODY, headers=admin).status_code == 200
+        assert client.delete("/cost/fx-rate", headers=admin).status_code == 200
+    actions = [event.action for event in audit_log_at(tmp_path).query(AuditQuery())]
+    assert "cost.fx_update" in actions and "cost.fx_clear" in actions

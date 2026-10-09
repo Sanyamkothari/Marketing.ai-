@@ -871,8 +871,12 @@ class GovernanceConfig(_Base):
     approval_required: bool = True
     # Plan J M108 (DEC-1318): the most a single run may cost, in US dollars at the AWS list price. Null
     # (the default) is no cap and today's behaviour exactly. Above it a run needs confirming, and a
-    # confirmed run is stopped when its running cost reaches it. Config-only, never per run.
-    max_run_cost_usd: Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None = None
+    # confirmed run is stopped when its running cost reaches it. Config-only, never per run. Left out of
+    # every dump while it is null, so a run's `run_config.json` (and each digest of it) is byte for byte
+    # what it was before the setting existed.
+    max_run_cost_usd: Annotated[float, Field(gt=0.0, allow_inf_nan=False)] | None = Field(
+        default=None, exclude_if=lambda value: value is None
+    )
 
 
 _IDENTIFIER: Final[re.Pattern[str]] = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")

@@ -217,41 +217,63 @@ def test_an_exchange_rate_must_say_where_it_came_from() -> None:
 
 
 # ---------------------------------------------------------------------------
-# The AI text ceiling
+# The AI text ceiling: shown, never counted (a run does not call the text service)
 # ---------------------------------------------------------------------------
-def test_the_ai_text_ceiling_is_counted_when_the_text_service_is_billed_and_priced(
+PRICED_TEXT = LlmPriceTable(
+    prices={
+        "gen-model": ModelPrice(1.0, 2.0),
+        "judge-model": ModelPrice(1.0, 2.0),
+        "embed-model": ModelPrice(0.1, 0.0),
+    },
+    as_of="2026-10-01",
+    source="provider price page",
+)
+
+
+def test_the_ai_text_ceiling_is_listed_but_not_counted_in_the_estimate(
     config: UseCaseConfig, table: PriceTable
 ) -> None:
-    prices = LlmPriceTable(
-        prices={
-            "gen-model": ModelPrice(1.0, 2.0),
-            "judge-model": ModelPrice(1.0, 2.0),
-            "embed-model": ModelPrice(0.1, 0.0),
-        },
-        as_of="2026-10-01",
-        source="provider price page",
-    )
     base = estimate(config, table).estimated_usd
-    result = estimate(with_text_service(config, 1.25), table, llm_prices=prices)
+    result = estimate(with_text_service(config, 1.25), table, llm_prices=PRICED_TEXT)
     text = next(line for line in result.lines if line.kind == "ai_text")
-    assert text.usd == 1.25 and text.in_total is True
-    assert result.estimated_usd == pytest.approx(base + 1.25, abs=1e-4)
+    assert text.usd == 1.25 and text.in_total is False
+    assert "not part of this run" in text.label.lower() and "not added" in text.detail.lower()
+    assert result.estimated_usd == pytest.approx(base, abs=1e-4)
 
 
-def test_the_ai_text_ceiling_is_unknown_when_the_models_have_no_price(
-    config: UseCaseConfig, table: PriceTable
-) -> None:
+def test_an_unpriced_text_model_does_not_blank_the_total(config: UseCaseConfig, table: PriceTable) -> None:
     result = estimate(with_text_service(config, 1.25), table, llm_prices=LlmPriceTable())
     text = next(line for line in result.lines if line.kind == "ai_text")
-    assert text.usd is None and text.reason is not None
-    assert result.estimated_usd is None, "a total that leaves a cost out would understate it"
-    assert result.known_usd is not None, "what is known is still shown"
+    assert text.usd is None and text.reason is not None and text.in_total is False
+    assert result.estimated_usd == pytest.approx(estimate(config, table).estimated_usd, abs=1e-4)
+    assert result.reason is None
 
 
 def test_a_use_case_with_no_text_service_has_no_ai_text_line(
     config: UseCaseConfig, table: PriceTable
 ) -> None:
     assert all(line.kind != "ai_text" for line in estimate(config, table).lines)
+
+
+def test_a_text_ceiling_above_the_cap_does_not_ask_for_confirmation(
+    config: UseCaseConfig, table: PriceTable
+) -> None:
+    ceiling = estimate(config, table).estimated_usd
+    capped = with_cap(with_text_service(config, ceiling * 10), ceiling * 2)
+    result = estimate(capped, table, llm_prices=PRICED_TEXT)
+    assert result.over_cap is False and result.needs_confirmation is False
+
+
+def test_a_local_deployment_with_a_billed_text_service_and_a_cap_has_nothing_to_confirm(
+    config: UseCaseConfig, table: PriceTable
+) -> None:
+    capped = with_cap(with_text_service(config, 50.0), 0.01)
+    result = estimate(capped, table, settings=local_settings(), llm_prices=PRICED_TEXT)
+    assert result.backend == "local"
+    assert result.needs_confirmation is False and result.over_cap is None
+    assert result.estimated_usd is None and result.reason is not None and "own machine" in result.reason
+    unpriced = estimate(capped, table, settings=local_settings(), llm_prices=LlmPriceTable())
+    assert unpriced.needs_confirmation is False
 
 
 # ---------------------------------------------------------------------------
@@ -297,14 +319,11 @@ def test_a_cap_on_a_deployment_nothing_bills_never_asks(config: UseCaseConfig, t
     assert result.needs_confirmation is False
 
 
-def test_a_known_part_already_over_the_cap_needs_confirmation_even_when_another_part_is_unknown(
-    config: UseCaseConfig, table: PriceTable
-) -> None:
-    ceiling = estimate(config, table).estimated_usd
-    capped = with_cap(with_text_service(config, 1.0), ceiling / 2)
-    result = estimate(capped, table, llm_prices=LlmPriceTable())
-    assert result.estimated_usd is None
-    assert result.over_cap is True and result.needs_confirmation is True
+def test_the_confirmation_sentence_keeps_the_capitals_of_acronyms(config: UseCaseConfig) -> None:
+    result = estimate(with_cap(config, 5.0), None)
+    assert result.confirmation_reason is not None
+    assert "(no AWS price list is installed" in result.confirmation_reason
+    assert "aws" not in result.confirmation_reason.replace("AWS", "")
 
 
 @pytest.mark.parametrize("bad", [0.0, -3.0])
@@ -347,6 +366,7 @@ def test_every_sentence_in_an_estimate_is_plain_words(config: UseCaseConfig, tab
         estimate(config, table, settings=local_settings()),
         estimate(config, table, settings=deployment(sagemaker_max_runtime_seconds=None)),
         estimate(with_cap(with_text_service(config, 1.0), ceiling / 2), table, llm_prices=LlmPriceTable()),
+        estimate(with_text_service(config, 1.0), table, llm_prices=PRICED_TEXT),
         estimate(with_cap(config, 5.0), None),
     ]
     sentences: list[str] = []
@@ -421,3 +441,32 @@ def test_the_monthly_spend_is_linear_in_the_number_of_runs(tmp_path: Path) -> No
     assert september.runs == 800 and september.estimated_usd == pytest.approx(400.0)
     # Four times the runs must not cost sixteen times the time; allow generous noise on a shared machine.
     assert t_large < max(t_small * 10, 2.0)
+
+
+def make_record_at(run_id: str, *, created: Any, finished: Any) -> Any:
+    from tests.unit.test_run_index import make_record
+
+    return make_record(run_id, minutes=0).model_copy(update={"created_at": created, "finished_at": finished})
+
+
+def test_a_run_created_before_the_window_that_finished_inside_it_is_filed_by_its_creation_month(
+    tmp_path: Path,
+) -> None:
+    """Review fix: the scan stopped on the creation date but filed by the finish date, so a run could drop out."""
+    from datetime import UTC, datetime
+
+    from engine.aws.spend import monthly_spend
+    from engine.storage import run_key
+
+    storage = _spend_storage(tmp_path, 0)
+    record = make_record_at(
+        "r_20260930_00000001",
+        created=datetime(2026, 9, 30, 23, 0, tzinfo=UTC),
+        finished=datetime(2026, 10, 1, 1, 0, tzinfo=UTC),
+    )
+    storage.write_model(run_key(record.run_id, "run.json"), record)
+    now = datetime(2026, 10, 1, 12, 0, tzinfo=UTC)
+    narrow = monthly_spend(storage, months=1, fx=None, now=now)
+    assert [row.runs for row in narrow.months] == [0], "filed under September, outside a one-month window"
+    wide = {row.month: row for row in monthly_spend(storage, months=2, fx=None, now=now).months}
+    assert wide["2026-09"].runs == 1 and wide["2026-10"].runs == 0
