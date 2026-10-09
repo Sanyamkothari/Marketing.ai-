@@ -1216,7 +1216,7 @@ function outcome(uc, s, run) {
       lines: [
         `<p class="vsub">This run was stopped before it finished. Nothing it started was saved as a model or a list.</p>`,
         // Plan J M108: a run the cost limit stopped says so, in the server's words.
-        run.error && run.error.message ? `<p class="vsub muted" data-stop-reason>${esc(run.error.message)}</p>` : "",
+        run.error && run.error.code === "RUN_COST_CAP_REACHED" ? `<p class="vsub muted" data-stop-reason>${esc(run.error.message)}</p>` : "",
       ],
       actions: `<button type="button" class="btn primary" id="f-again">Back to Setup</button>`,
     };
