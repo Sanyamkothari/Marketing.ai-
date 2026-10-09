@@ -502,6 +502,11 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/campaigns/audit",
         "/campaigns/programme",
         "/campaigns/{campaign_id}/contacts",
+        # Plan J M104: the Value Proof Pack, its list, a campaign's value inputs and approved suggestions (DEC-1314)
+        "/pilot/proof",
+        "/pilot/proof/{campaign_id}",
+        "/pilot/proof/{campaign_id}/value",
+        "/pilot/proof/{campaign_id}/suppressions",
     }
 
 

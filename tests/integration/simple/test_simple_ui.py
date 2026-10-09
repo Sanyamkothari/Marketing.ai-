@@ -187,7 +187,40 @@ def write_fixtures(root: Path, config_root: Path) -> Path:
     _write(out, "models_champion", _champion())
     _write(out, "roi_not_measured", _roi("not_measured"))
     _write(out, "roi_measured", _roi("measured"))
+    _proof_fixtures(out, root, config_root)
     return out
+
+
+def _proof_fixtures(out: Path, root: Path, config_root: Path) -> None:
+    """Plan J M104: a real campaign's Value Proof Pack - the list, the pack as JSON and as a page, the approval
+    of its one suggestion and the pack after it - and the refusal of a campaign not measured yet. The campaign
+    is a real Phase 1 scoring run's list with a planted harmful band (`tests/integration/pilot/test_proof_pack.py`),
+    in a data directory of its own, so the other fixtures still describe an empty installation."""
+    from engine.storage import LocalStorage
+    from tests.integration.measurement.support import propensity_run
+    from tests.integration.pilot.test_proof_pack import HARMED_BAND, _banded_outcomes, _measured_campaign
+
+    data_dir = root / "proof_data"
+    data_dir.mkdir()
+    run = propensity_run(LocalStorage(data_dir), "r_20261009_31000009", rows=12_000)
+    with TestClient(create_app(config_root=config_root, data_dir=data_dir)) as client:
+        campaign_id = _measured_campaign(client, run.run_id, _banded_outcomes(run.scores, seed=21))
+        _write(out, "proofs", _ok(client.get("/pilot/proof")))
+        _write(out, "proof", _ok(client.get(f"/pilot/proof/{campaign_id}", params={"format": "json"})))
+        _write(out, "proof_page", {"html": client.get(f"/pilot/proof/{campaign_id}").text})
+        approval = {"dimension": "band", "segment": HARMED_BAND}
+        _write(
+            out,
+            "proof_approval",
+            _ok(client.post(f"/pilot/proof/{campaign_id}/suppressions", json=approval), 201),
+        )
+        _write(
+            out, "proof_approved", _ok(client.get(f"/pilot/proof/{campaign_id}", params={"format": "json"}))
+        )
+        waiting = _ok(client.post("/campaigns", json={"run_id": run.run_id}), 201)["campaign"]["campaign_id"]
+        refused = client.get(f"/pilot/proof/{waiting}", params={"format": "json"})
+        assert refused.status_code == 409, refused.text
+        _write(out, "proof_refused", refused.json())
 
 
 def test_the_fixtures_are_the_world_the_screens_are_tested_in(tmp_path: Path, config_root: Path) -> None:
@@ -211,6 +244,11 @@ def test_the_fixtures_are_the_world_the_screens_are_tested_in(tmp_path: Path, co
     assert read("data_request")["tables"], "the data request names the tables to ask for"
     assert [v["is_champion"] for v in read("models_champion")["versions"]] == [True]
     assert [read(f"roi_{s}")["status"] for s in ("not_measured", "measured")] == ["not_measured", "measured"]
+    # Plan J M104: a real pack with one suggestion, approved once, and a refusal with its day
+    assert [entry["status"] for entry in read("proofs")["proofs"]] == ["ready"]
+    assert [p["status"] for p in read("proof")["proposals"]] == ["proposed"]
+    assert [p["status"] for p in read("proof_approved")["proposals"]] == ["approved"]
+    assert read("proof_refused")["detail"]["code"] == "PROOF_NOT_MATURE"
 
 
 def test_the_four_page_product_in_jsdom(tmp_path: Path, config_root: Path) -> None:

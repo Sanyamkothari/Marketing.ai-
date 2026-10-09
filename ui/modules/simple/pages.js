@@ -4,6 +4,8 @@
 // (trained a model or scored a file), how it ended, its key outcome and a link to the run itself,
 // where the campaign results, the report, Model health and the Schedule are one click away. When
 // models wait for approval (`GET /approvals`), one calm notice says how many, with one way to them.
+// Plan J M104: the Value Proof Packs that are ready (`GET /pilot/proof`) follow, each with the server's own
+// sentence and a link to the pack.
 //
 // Settings is where everything a new user does not need went: the AI service, Privacy, Schedules,
 // Admin (only while sign-in is on) and, folded under "Advanced tools", the uplift workbench, the data
@@ -85,12 +87,33 @@ function approvalsNotice(waiting) {
 }
 
 /**
+ * Plan J M104: the Value Proof Packs that are ready, from `GET /pilot/proof` (`proofs`): each campaign's
+ * name, the pack's one-sentence result and what its numbers can claim, all in the server's words, with a
+ * link to the pack. Nothing is drawn when no pack is ready or the list could not be read.
+ */
+export function proofsCardHtml(proofs) {
+  const ready = ((proofs && proofs.proofs) || []).filter((entry) => entry.status === "ready");
+  if (!ready.length) return "";
+  const rows = ready.map((entry) => [
+    `<a href="#/pilot/proof/${esc(encodeURIComponent(entry.campaign_id))}" data-proof="${esc(entry.campaign_id)}">${esc(entry.name)}</a>`,
+    esc(entry.headline || EM_DASH),
+    esc(entry.claim_label || EM_DASH),
+  ]);
+  return `<section class="card" data-proofs><h3>Value Proof Packs${sortNote("newest first")}</h3>${dataTable(
+    [{ label: "Campaign" }, { label: "What it shows" }, { label: "What it can claim" }],
+    rows,
+    { cls: "sp-runs" },
+  )}</section>`;
+}
+
+/**
  * The Results page. `runs` is `GET /runs`'s list (null while loading), `error` its failure,
  * `waiting` how many models wait for approval (null or 0: no notice). `lists` are the drawn results
  * lists other modules register beside the runs (Plan J M94: campaigns; `registerResultsList`).
  * `auditHref` (Plan J M103) is where "Audit a campaign" goes, for a person who may audit one; null: no link.
+ * `proofs` (Plan J M104) is `GET /pilot/proof`'s answer, or null: the ready Value Proof Packs.
  */
-export function resultsHtml({ runs = null, error = null, waiting = null, lists = [], auditHref = null } = {}) {
+export function resultsHtml({ runs = null, error = null, waiting = null, lists = [], auditHref = null, proofs = null } = {}) {
   const head = pageHead(
     `${crumbs([{ label: "Results" }])}<h1 class="h1">Results</h1><p class="desc">Every run, newest first. Open one to see its scores, reasons and next steps.</p>${headActions(
       {
@@ -143,7 +166,7 @@ export function resultsHtml({ runs = null, error = null, waiting = null, lists =
     })}${more}</section>`;
   }
   const beside = [].concat(lists || []).filter(Boolean).join("");
-  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${body}${beside}</main>`;
+  return `<main class="screen sp" data-module="simple">${head}${approvalsNotice(waiting)}${body}${beside}${proofsCardHtml(proofs)}</main>`;
 }
 
 // --- Settings ------------------------------------------------------------------------------------

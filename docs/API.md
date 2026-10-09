@@ -101,6 +101,10 @@ Contract schema version: 1.
 | POST | `/pilot/feedback` | Record feedback on a screen (stored with the platform's data; contact details masked) | PilotFeedbackResponse |
 | GET | `/pilot/feedback/export` | Export every feedback entry for the pilot team (pilot_feedback.csv or .jsonl) | - |
 | GET | `/pilot/help` | The plain-language help: every warning code, every setting, the glossary | HelpCatalogue |
+| GET | `/pilot/proof` | The Value Proof Packs of the newest campaigns: each one's headline, or why none is drawn | ProofList |
+| GET | `/pilot/proof/{campaign_id}` | A campaign's Value Proof Pack: every number traced to a measured record, no customer row | - |
+| POST | `/pilot/proof/{campaign_id}/suppressions` | Approve leaving a backfiring group out of the next cycle (recorded; the engine applies nothing) | SuppressionApproval |
+| PUT | `/pilot/proof/{campaign_id}/value` | Save a campaign's own value inputs (what an extra outcome is worth, offer and contact costs) | RoiInputs |
 | GET | `/pilot/readiness/{dataset_id}` | The data readiness report of one dataset build: verdict, coverage, history, problems and fixes | - |
 | GET | `/pilot/results` | The business results report of a use case's champion, or of one model | - |
 | GET | `/pilot/roi/{run_id}` | A campaign's measured effect and its value in rupees, as a range | - |

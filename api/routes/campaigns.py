@@ -70,6 +70,11 @@ audited, on uploads that went through `POST /uploads`:
   contamination of the held-back group and, labelled secondary, the effect on the contacted
   (`engine.measurement.reconcile`). Optional on the two routes above.
 
+**Each group's effect (M104, DEC-1314).** Every route here that stores a campaign report (`measure`, `audit`,
+`programme`) stores `campaigns/<id>/segment_effects.json` beside it (`engine.measurement.measure
+.measure_campaign_segments`): the measured effect and interval per band, predicted segment and offer, with the
+false-alarm guard the Value Proof Pack's backfire check reads (`GET /pilot/proof/{campaign_id}`). Counts only.
+
 Customer ids are never in a URL or an audit record: every route names a campaign, a run or an upload.
 """
 
@@ -150,7 +155,7 @@ from engine.measurement.campaign import (
     write_frame,
 )
 from engine.measurement.continuous import COVARIATE_NOT_BEFORE_CAMPAIGN, CovariateNotBeforeCampaignError
-from engine.measurement.measure import campaign_verdict_for, measure_campaign
+from engine.measurement.measure import campaign_verdict_for, measure_campaign, measure_campaign_segments
 from engine.measurement.plan import (
     TEST_PLAN_CHANGED,
     TEST_PLAN_EXISTS,
@@ -189,6 +194,7 @@ from engine.measurement.reconcile import (
     normalise_contacts,
     reconcile_contacts,
 )
+from engine.measurement.segments import SEGMENT_EFFECTS_FILENAME, SegmentEffects, policy_offers
 from engine.pilot.roi import outcome_is_good_by_default
 from engine.stages import export
 from engine.storage import Storage, StorageError, run_key
@@ -972,7 +978,17 @@ def measure_campaign_results(
         return refusal_response
     if audit is not None:  # an outside campaign keeps the claim its numbers support (M103)
         report = label_report(report, audit.causal_basis)
+    segments = _segment_effects(
+        storage,
+        assignment,
+        outcomes,
+        report,
+        campaign=campaign,
+        outcome=campaign.outcomes,
+        control_level=audit.control_level if audit is not None else None,
+    )
     storage.write_model(campaign_key(campaign_id, REPORT_FILENAME), report)
+    storage.write_model(campaign_key(campaign_id, SEGMENT_EFFECTS_FILENAME), segments)
     updated = campaign.model_copy(
         update={
             "status": CampaignStatus.LIVE if report.early_look else CampaignStatus.MEASURED,
@@ -989,6 +1005,41 @@ def measure_campaign_results(
         report.early_look,
     )
     return _view(storage, updated, root)
+
+
+def _segment_effects(
+    storage: Storage,
+    assignment: Any,
+    outcomes: Any,
+    report: IncrementalityReport,
+    *,
+    campaign: Campaign,
+    outcome: CampaignOutcomes,
+    control_level: str | None = None,
+) -> SegmentEffects:
+    """`segment_effects.json` of a measured campaign (Plan J M104, DEC-1314): each band, segment and offer.
+
+    The offers are the audited file's (each treated customer's offer, against the shared control), else, for
+    a run that chose the offer per customer, the offer its policy gave every customer (DEC-1311 (af)).
+    """
+    offers = None
+    if "offer" in assignment.columns:
+        offers = assignment["offer"]
+    elif campaign.intended_source == "offer_choice" and campaign.run_ids:
+        offers = policy_offers(storage, campaign.run_ids[0], assignment, campaign.primary_key)
+    return measure_campaign_segments(
+        assignment,
+        outcomes,
+        report,
+        primary_key=campaign.primary_key,
+        outcome_column=outcome.outcome_column,
+        positive_label=outcome.positive_label,
+        intended_column=INTENDED_COLUMN,
+        treatment_time=campaign.treatment_start,
+        treatment_date_column=outcome.treatment_date_column,
+        offers=offers,
+        control_level=control_level,
+    )
 
 
 def _not_matured(request: Request, report: IncrementalityReport) -> JSONResponse | None:
@@ -1400,11 +1451,16 @@ def _contact_readout(
     unlisted: UnlistedRule,
     offers: tuple[str, ...] | None,
     now: datetime,
+    source: tuple[str | None, bool] = (None, False),
 ) -> ContactReadout:
-    """The contact readout of `campaign` from its frames; the effect on the contacted only with a report."""
+    """The contact readout of `campaign` from its frames; the effect on the contacted only with a report.
+
+    `source` is the contact file's upload id and whether it was generated (DEC-1314): recorded on the readout
+    so a Value Proof Pack never presents a generated contact file to finance.
+    """
     held = campaign.outcomes
     measured = report is not None and held is not None and outcomes is not None
-    return reconcile_contacts(
+    readout = reconcile_contacts(
         assignment,
         outcomes if measured else None,
         contacts,
@@ -1427,6 +1483,13 @@ def _contact_readout(
         first_offer=offers[0] if offers else None,
         computed_at=now,
     )
+    upload_id, synthetic = source
+    return readout.model_copy(update={"contact_upload_id": upload_id, "synthetic": synthetic})
+
+
+def _contact_source(upload: Any) -> tuple[str | None, bool]:
+    """`(upload id, generated?)` of a contact file's upload record."""
+    return str(upload.upload_id), bool(upload.synthetic)
 
 
 def _refresh_contacts(
@@ -1452,6 +1515,7 @@ def _refresh_contacts(
         unlisted=previous.unlisted_customers if previous is not None else "unknown",
         offers=audit.offers if audit is not None else None,
         now=utc_now(),
+        source=(previous.contact_upload_id, previous.synthetic) if previous is not None else (None, False),
     )
     storage.write_model(readout_key, readout)
 
@@ -1688,8 +1752,18 @@ def audit_campaign(
     )
     frames: dict[str, Any] = {ASSIGNMENT_FILENAME: assignment, OUTCOMES_FILENAME: outcomes}
     models: dict[str, Any] = {REPORT_FILENAME: report, AUDIT_FILENAME: readout}
+    assert campaign.outcomes is not None  # set just above
+    models[SEGMENT_EFFECTS_FILENAME] = _segment_effects(
+        storage,
+        assignment,
+        outcomes,
+        report,
+        campaign=campaign,
+        outcome=campaign.outcomes,
+        control_level=built.control_level,
+    )
     if body.contact is not None:
-        _, contacts = _contact_frame(storage, body.contact, body.primary_key)
+        contact_upload, contacts = _contact_frame(storage, body.contact, body.primary_key)
         frames[CONTACT_FILENAME] = contacts
         models[CONTACT_READOUT_FILENAME] = _contact_readout(
             assignment,
@@ -1700,6 +1774,7 @@ def audit_campaign(
             unlisted=body.contact.unlisted_customers,
             offers=built.offers or None,
             now=now,
+            source=_contact_source(contact_upload),
         )
     _persist_new(request, storage, campaign, frames=frames, models=models)
     # The audit trail's detail keys are a closed list (DEC-705): the campaign record names both uploads.
@@ -1992,8 +2067,12 @@ def programme_readout(
     )
     frames: dict[str, Any] = {ASSIGNMENT_FILENAME: assignment, OUTCOMES_FILENAME: outcomes}
     models: dict[str, Any] = {REPORT_FILENAME: report, PROGRAMME_FILENAME: readout}
+    assert updated.outcomes is not None  # set when the record was made above
+    models[SEGMENT_EFFECTS_FILENAME] = _segment_effects(
+        storage, assignment, outcomes, report, campaign=updated, outcome=updated.outcomes
+    )
     if body.contact is not None:
-        _, contacts = _contact_frame(storage, body.contact, body.primary_key)
+        contact_upload, contacts = _contact_frame(storage, body.contact, body.primary_key)
         frames[CONTACT_FILENAME] = contacts
         models[CONTACT_READOUT_FILENAME] = _contact_readout(
             assignment,
@@ -2004,6 +2083,7 @@ def programme_readout(
             unlisted=body.contact.unlisted_customers,
             offers=None,
             now=now,
+            source=_contact_source(contact_upload),
         )
     _persist_new(request, storage, updated, frames=frames, models=models)
     # The audit trail's detail keys are a closed list (DEC-705): the record names the upload and the epoch.
@@ -2032,7 +2112,7 @@ def add_campaign_contacts(
     """Store a contact file and recompute the readout; the effect on the contacted needs a measured campaign."""
     store = get_campaign_store(request)
     campaign = _load(store, campaign_id)
-    _, contacts = _contact_frame(storage, body, campaign.primary_key)
+    contact_upload, contacts = _contact_frame(storage, body, campaign.primary_key)
     report = _stored(storage, campaign_key(campaign_id, REPORT_FILENAME), IncrementalityReport)
     audit = _stored(storage, campaign_key(campaign_id, AUDIT_FILENAME), AuditReadout)
     assignment = read_frame(storage, campaign_key(campaign_id, ASSIGNMENT_FILENAME))
@@ -2051,6 +2131,7 @@ def add_campaign_contacts(
             unlisted=body.unlisted_customers,
             offers=audit.offers if audit is not None else None,
             now=utc_now(),
+            source=_contact_source(contact_upload),
         )
         write_frame(storage, campaign_key(campaign_id, CONTACT_FILENAME), contacts)
     except (ValueError, TypeError) as exc:

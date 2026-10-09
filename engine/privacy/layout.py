@@ -25,6 +25,10 @@ Key                                     Written by                             D
 `campaigns/<id>/*`                      `api/routes/campaigns.py` (Plan J      `campaign.json` created_at
                                         M94, M103: `assignment`, `outcomes`     and primary_key
                                         and `contact` `.parquet`)
+`campaigns/<id>/segment_effects.json`,  `api/routes/campaigns.py`,             aggregate: no customer id,
+`.../suppression_proposals.json`,       `api/routes/pilot.py` (Plan J M104;    kept with the report; the
+`.../pilot_roi_inputs.json`             the value inputs: `engine.pilot.       value inputs name who
+                                        proof.save_campaign_value_inputs`)     entered them
 ======================================  =====================================  =========================
 
 Root-level files (`registry.db`, `clients.db`, `platform.db` and their journals) are databases, not

@@ -140,7 +140,8 @@ class ReportDocument(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     schema_version: int = 1
-    kind: Literal["preflight", "readiness", "results", "roi"]
+    kind: Literal["preflight", "readiness", "results", "roi", "proof"]
+    """`proof`: the Value Proof Pack of one campaign (Plan J M104, `engine.pilot.proof`)."""
     title: str
     subtitle: str = ""
     client_name: str = ""

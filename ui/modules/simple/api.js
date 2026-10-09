@@ -43,6 +43,18 @@ export async function waitingForApproval() {
   }
 }
 
+/**
+ * Plan J M104: the newest campaigns' Value Proof Packs (`GET /pilot/proof`), or null when they cannot be
+ * read (a role without them, or an API without the route): Results then shows no card, never an error.
+ */
+export async function getProofs() {
+  try {
+    return await request("/pilot/proof");
+  } catch {
+    return null;
+  }
+}
+
 /** The engine version this API serves (`GET /healthz`), or null. */
 export async function engineVersion() {
   try {

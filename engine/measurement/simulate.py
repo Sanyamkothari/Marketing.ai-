@@ -48,8 +48,10 @@ comparison of `engine.measurement.compare`); M100 adds several arms (`multi_arm_
 several offers against one shared control, and `multi_arm_population`, an uplift training file where
 different segments answer different offers and some are put off by both); M102 adds amounts
 (`revenue_campaign`: revenue per customer with a known difference in means, normal or zero-inflated
-lognormal, and an amount from before the campaign correlated with it, for the adjusted estimate); they
-extend this module.
+lognormal, and an amount from before the campaign correlated with it, for the adjusted estimate); M104 adds
+effects that differ by group of customers (`segmented_campaign`, and `segment_outcomes` for the outcomes of
+a real scoring run's list), so the Value Proof Pack's backfire check can be shown to flag a planted harmful
+group and leave a neutral one alone; they extend this module.
 
 Pure and deterministic: no storage, no network, no clock. `pandas` is imported inside the function so
 `import engine` stays fast.
@@ -79,17 +81,21 @@ __all__ = [
     "OUTCOME_COLUMN",
     "OUTCOME_WINDOW_DAYS",
     "REVENUE_COLUMN",
+    "SEGMENT_COLUMN",
     "TREATMENT_DATE_COLUMN",
     "UPLIFT_FEATURES",
     "SimulatedCampaign",
     "SimulatedMultiArmCampaign",
     "SimulatedMultiArmPopulation",
     "SimulatedRevenueCampaign",
+    "SimulatedSegmentedCampaign",
     "SimulatedUpliftPopulation",
     "multi_arm_campaign",
     "multi_arm_population",
     "population",
     "revenue_campaign",
+    "segment_outcomes",
+    "segmented_campaign",
     "uplift_population",
 ]
 
@@ -672,4 +678,127 @@ def revenue_campaign(
     )
     return SimulatedRevenueCampaign(
         scores=scores, outcomes=outcomes, true_effect=float(effect), shape=shape, rho=float(rho)
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan J M104: an effect that differs by group of customers (the Value Proof Pack's backfire check)
+# ---------------------------------------------------------------------------
+SEGMENT_COLUMN: Final[str] = "band"
+"""The column naming each simulated customer's group: `band`, as a scoring run's scores name it."""
+
+
+@dataclass(frozen=True)
+class SimulatedSegmentedCampaign:
+    """A campaign whose effect differs by group (`band`), with the true effect of each group."""
+
+    scores: pd.DataFrame
+    """`customer_id`, `control_group`, `suppressed_reason` (empty), `intended_treatment` (True) and `band`."""
+    outcomes: pd.DataFrame
+    """`customer_id`, `converted` (0/1) and `treatment_date` (ISO date): every outcome mature on `AS_OF`."""
+    base_rate: float
+    effects: dict[str, float]
+    """The true effect of the campaign in each group (absolute change in the conversion rate)."""
+
+    @property
+    def measure_kwargs(self) -> dict[str, Any]:
+        """The arguments of `measure_incrementality` / `measure_campaign` that read these frames."""
+        return {
+            "run_id": "simulated",
+            "primary_key": KEY_COLUMN,
+            "outcome_column": OUTCOME_COLUMN,
+            "treatment_date_column": TREATMENT_DATE_COLUMN,
+            "outcome_window_days": OUTCOME_WINDOW_DAYS,
+            "treatment_time": AS_OF - timedelta(days=OUTCOME_WINDOW_DAYS),
+            "as_of": AS_OF,
+        }
+
+
+def segment_outcomes(
+    keys: Any,
+    groups: Any,
+    contacted: Any,
+    *,
+    base_rate: float,
+    effects: dict[str, float],
+    seed: int,
+    treated_on: str | None = None,
+) -> pd.DataFrame:
+    """The outcomes file of a list whose effect differs by group (Plan J M104), for real or simulated scores.
+
+    Each customer converts with probability `base_rate`, plus `effects[group]` when `contacted`; a group the
+    mapping does not name has no effect. `keys`, `groups` and `contacted` are aligned arrays (one entry per
+    customer, as a scoring run's scores list them). Every customer was treated on `treated_on` (an ISO date,
+    default 31 days before `AS_OF`, so the 30-day window has closed). Returns `customer_id`, `converted` (0/1)
+    and `treatment_date`. Raises `ValueError` when a group's rate leaves [0, 1]. Deterministic for a seed.
+    """
+    import pandas as pd
+
+    _check_share("base_rate", base_rate)
+    for group, effect in effects.items():
+        if not 0.0 <= base_rate + effect <= 1.0:
+            raise ValueError(
+                f"base_rate + the effect of {group!r} must be in [0, 1], not {base_rate + effect}."
+            )
+    group_text = np.asarray(pd.Series(groups).astype("string").fillna("").to_numpy(), dtype=object)
+    lift = np.zeros(len(group_text), dtype=np.float64)
+    for group, effect in effects.items():
+        lift[group_text == group] = effect
+    treated = np.asarray(contacted, dtype=bool)
+    rng = np.random.default_rng(seed)
+    converts = rng.random(len(group_text)) < base_rate + np.where(treated, lift, 0.0)
+    day = treated_on or (AS_OF - timedelta(days=OUTCOME_WINDOW_DAYS + 1)).date().isoformat()
+    return pd.DataFrame(
+        {
+            KEY_COLUMN: np.asarray(keys),
+            OUTCOME_COLUMN: converts.astype(np.int64),
+            TREATMENT_DATE_COLUMN: np.full(len(group_text), day, dtype=object),
+        }
+    )
+
+
+def segmented_campaign(
+    n: int,
+    base_rate: float,
+    effects: dict[str, float],
+    *,
+    seed: int,
+    control_share: float = 0.2,
+) -> SimulatedSegmentedCampaign:
+    """`n` customers in the groups of `effects` (equal shares, at random), with a known effect per group.
+
+    Complete randomisation as :func:`population`: `round(control_share * n)` customers held back at random,
+    independently of their group, so each group's two arms are comparable. Every outcome is mature on
+    `AS_OF`. Raises `ValueError` for a value out of range or no group. Deterministic for a seed.
+    """
+    import pandas as pd
+
+    if not effects:
+        raise ValueError("Name at least one group.")
+    if n < 2 * len(effects):
+        raise ValueError(f"n must be at least two per group, not {n}.")
+    _check_share("control_share", control_share, below_one=True)
+    n_control = round(control_share * n)
+    if not 1 <= n_control <= n - 1:
+        raise ValueError("control_share leaves one of the two arms empty.")
+    rng = np.random.default_rng(seed)
+    names = list(effects)
+    group = np.asarray(names, dtype=object)[rng.integers(0, len(names), size=n)]
+    control = np.zeros(n, dtype=bool)
+    control[rng.choice(n, size=n_control, replace=False)] = True
+    keys = np.char.add("S", np.char.zfill(np.arange(n).astype(str), 7))
+    scores = pd.DataFrame(
+        {
+            KEY_COLUMN: keys,
+            "control_group": control,
+            "suppressed_reason": np.full(n, "", dtype=object),
+            "intended_treatment": np.ones(n, dtype=bool),
+            SEGMENT_COLUMN: group,
+        }
+    )
+    outcomes = segment_outcomes(
+        keys, group, ~control, base_rate=base_rate, effects=effects, seed=int(rng.integers(0, 2**31 - 1))
+    )
+    return SimulatedSegmentedCampaign(
+        scores=scores, outcomes=outcomes, base_rate=base_rate, effects=dict(effects)
     )

@@ -5,9 +5,10 @@ the engine already wrote - a dataset's build report, a run's evaluation, a campa
 incrementality - and turns them into something a client's analyst or marketing head can read:
 the data request kit (`data_request`), the pre-flight checker (`preflight`), the data readiness
 report (`readiness`), the business results report (`results`), the value and ROI view (`roi`),
-the demo environment (`demo`) and the feedback loop (`feedback`). `help` is the one plain-language
-catalogue every report and every tooltip reads, and `document` is the one page model every report
-is drawn from, as HTML and as PDF.
+the demo environment (`demo`), the feedback loop (`feedback`) and, since Plan J M104, the Value Proof
+Pack of a measured campaign (`proof`: every number traced to the artefact it was read from). `help` is
+the one plain-language catalogue every report and every tooltip reads, and `document` is the one page
+model every report is drawn from, as HTML and as PDF.
 
 Heavy libraries are imported inside function bodies only: `import engine` stays fast, and the
 pre-flight checker runs on a client laptop with pandas and nothing of AutoGluon's.
