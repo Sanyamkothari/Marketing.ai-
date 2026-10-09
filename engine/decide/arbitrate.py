@@ -23,7 +23,14 @@ summary (`customers_decided_by_*`).
 **Caps (DEC-1311 (b)).** `contact_cap_per_customer` limits the actions per customer; `channel_caps` limit
 the actions per channel over the whole cycle. Capacity goes to explore rows first, then to rows with an
 incremental value, then to rows with an expected gross value, then to rows without a value; inside each group
-by `priority x value` (priority alone for rows without a value), then by request order.
+by `priority x value` (priority alone for rows without a value), then by request order. The explore rows are
+the exception: they keep their places in a fixed pseudo-random order that ignores their value (`_draw`), so a
+binding cap leaves a random sample of them.
+
+**Measuring an arbitrated cycle (DEC-1311 (n)).** `comparable_keys` says, for each use case, which customers
+its campaign compares: the arbitration run again as if no hold-out held anyone back, a held-back customer the
+use case's policy intended to contact competing like a treated one. Both arms of the campaign are cut with that
+one set, so they stay comparable.
 
 **No config, no surprises.** With no `configs/decide/arbitration.yaml` every use case has priority 1, the
 cap is one action per customer, and there are no channel caps. The repository ships only
@@ -37,6 +44,7 @@ from __future__ import annotations
 
 import io
 from collections.abc import Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Final
 
@@ -46,7 +54,7 @@ import pyarrow as pa
 import pyarrow.compute as _pc
 import pyarrow.parquet as pq
 import yaml
-from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, field_validator
+from pydantic import AwareDatetime, BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from engine.contracts import Artefact
 from engine.decide.treat_list import (
@@ -64,6 +72,7 @@ __all__ = [
     "ARBITRATED_TREAT_LIST_CSV",
     "ARBITRATED_TREAT_LIST_PARQUET",
     "ARBITRATION_CONFIG_FILE",
+    "ARBITRATION_CONFIG_INVALID",
     "ARBITRATION_REASON_COLUMN",
     "ARBITRATION_SUMMARY_FILENAME",
     "HOLDOUT_USE_CASES_COLUMN",
@@ -77,6 +86,7 @@ __all__ = [
     "UseCasePriorityConfig",
     "arbitrate_treat_lists",
     "arbitrated_table",
+    "comparable_keys",
     "csv_bytes",
     "load_arbitration_config",
     "parquet_bytes",
@@ -92,6 +102,8 @@ ARBITRATED_TREAT_LIST_CSV: Final[str] = "arbitrated_treat_list.csv"
 ARBITRATED_TREAT_LIST_PARQUET: Final[str] = "arbitrated_treat_list.parquet"
 ARBITRATION_SUMMARY_FILENAME: Final[str] = "arbitration_summary.json"
 ARBITRATION_CONFIG_FILE: Final[str] = "decide/arbitration.yaml"
+ARBITRATION_CONFIG_INVALID: Final[str] = "ARBITRATION_CONFIG_INVALID"
+"""The client's `decide/arbitration.yaml` cannot be read; the request is refused (422), never run on defaults."""
 
 WINNING_USE_CASE_COLUMN: Final[str] = "winning_use_case"
 LOSING_ACTIONS_COLUMN: Final[str] = "losing_actions"
@@ -225,18 +237,39 @@ class ArbitrationSummary(Artefact):
     )
     customers_decided_by_value: int = Field(
         default=0,
-        description="Customers whose action was chosen by priority times value, every candidate carrying the same kind of value.",
+        description=(
+            "Customers who end with an action chosen by priority times value among several candidates, "
+            "every candidate carrying the same kind of value."
+        ),
     )
     customers_decided_by_priority: int = Field(
         default=0,
-        description="Customers chosen by priority alone because a candidate had no value or the values were of different kinds.",
+        description=(
+            "Customers who end with an action chosen by priority alone, because a candidate had no value "
+            "or the values were of different kinds."
+        ),
     )
     customers_decided_by_request_order: int = Field(
         default=0,
-        description="Customers whose candidates tied, decided by the order of the use cases requested.",
+        description=(
+            "Customers who end with an action whose candidates tied, decided by the order of the use "
+            "cases requested."
+        ),
     )
     customers_decided_by_explore: int = Field(
-        default=0, description="Customers whose action was kept because it was treated at random (explore)."
+        default=0,
+        description="Customers who end with an action kept because it was treated at random (explore).",
+    )
+    contested_customers_channel_capped: int = Field(
+        default=0,
+        description=(
+            "Customers more than one use case wanted whose chosen action a channel cap then removed, so "
+            "they end with no action; they are in none of the `customers_decided_by_*` counts."
+        ),
+    )
+    run_ids: list[str] = Field(
+        default_factory=list,
+        description="The scoring runs arbitrated, in the order of the request (the use case order).",
     )
     created_at: AwareDatetime = Field(description="UTC timestamp of arbitration completion.")
 
@@ -245,18 +278,35 @@ def load_arbitration_config(config_root: Path | None = None) -> ArbitrationConfi
     """Load and validate `decide/arbitration.yaml` under the config root, or return the defaults.
 
     The defaults (no file) are priority 1 for every use case, one action per customer and no channel caps.
+    A file that is there but cannot be read (not YAML, an unknown key, a cap that is not allowed) raises
+    `ArbitrationError(ARBITRATION_CONFIG_INVALID)`: running on the defaults would drop the caps and
+    priorities a client wrote without telling them.
     """
     path = config_root / ARBITRATION_CONFIG_FILE if config_root is not None else _DEFAULT_CONFIG_PATH
 
     if not path.is_file():
         return ArbitrationConfig()
 
+    refusal = "The arbitration settings file could not be read; fix it or remove it to use the defaults."
     try:
         raw = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
+    except (yaml.YAMLError, UnicodeDecodeError, OSError) as exc:
+        _LOGGER.warning("Could not read arbitration config %s: %s", path, exc)
+        raise ArbitrationError(ARBITRATION_CONFIG_INVALID, f"{refusal} It is not a valid YAML file.") from exc
+    if not isinstance(raw, dict):
+        raise ArbitrationError(
+            ARBITRATION_CONFIG_INVALID, f"{refusal} It must list settings by name, such as channel_caps."
+        )
+    try:
         return ArbitrationConfig.model_validate(raw)
-    except Exception as exc:
-        _LOGGER.warning("Could not load arbitration config from %s: %s", path, exc)
-        return ArbitrationConfig()
+    except ValidationError as exc:
+        problems = "; ".join(
+            f"{'.'.join(str(part) for part in error['loc']) or 'the file'}: "
+            f"{str(error['msg']).removeprefix('Value error, ')}"
+            for error in exc.errors()
+        )
+        _LOGGER.warning("Invalid arbitration config %s: %s", path, problems)
+        raise ArbitrationError(ARBITRATION_CONFIG_INVALID, f"{refusal} {problems}") from exc
 
 
 def _join_keys_vectorised(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> pd.Series[Any]:
@@ -337,36 +387,45 @@ def _empty_object(n: int) -> np.ndarray:
     return np.full(n, None, dtype=object)
 
 
-def arbitrate_treat_lists(
-    treat_lists: Sequence[pd.DataFrame],
-    config: ArbitrationConfig | None = None,
-    key_cols: tuple[str, ...] = ("customer_id",),
-) -> tuple[pd.DataFrame, ArbitrationSummary]:
-    """Arbitrate across treat lists to assign at most `contact_cap_per_customer` actions per customer.
+@dataclass(frozen=True)
+class _Stack:
+    """All the treat lists stacked into one frame, with what the ranking needs worked out once."""
 
-    The order of `treat_lists` is the request's use case order: it breaks ties. Pure function. Rows come
-    back in the order each customer is first met (the first list's order for one list, so one list gives
-    back its own rows); a customer with a winning action has one row per winning action, any other has one
-    row, with `treat = False`.
-    """
+    n: int
+    src: np.ndarray
+    cid: np.ndarray
+    keys: np.ndarray
+    uniques: np.ndarray
+    n_cust: int
+    combined: pd.DataFrame
+    source_dtypes: dict[str, set[str]]
+    treat_flag: np.ndarray
+    holdout_own: np.ndarray
+    explore_own: np.ndarray
+    uc_codes: np.ndarray
+    uc_names: pd.Index[Any]
+    weight: np.ndarray
+    kind: np.ndarray
+    value: np.ndarray
+
+
+def _stack_lists(
+    treat_lists: Sequence[pd.DataFrame], cfg: ArbitrationConfig, key_cols: tuple[str, ...]
+) -> _Stack:
+    """Stack the lists in one frame, one dtype per column, and work out each row's weight and kind of value."""
     if not treat_lists:
         raise ValueError("At least one treat list must be provided.")
-
-    cfg = config or ArbitrationConfig()
-    now = utc_now()
     frames = [tl.reset_index(drop=True) for tl in treat_lists]
     for idx, tl in enumerate(frames):
         missing = [c for c in (*key_cols, *_REQUIRED_COLUMNS) if c not in tl.columns]
         if missing:
             raise KeyError(f"Treat list {idx} missing column(s): {', '.join(repr(c) for c in missing)}")
 
-    # ---- stack the lists into one frame, one dtype per column -----------------------------------------
     sizes = [len(f.index) for f in frames]
     n = int(sum(sizes))
     src = np.repeat(np.arange(len(frames), dtype=np.int64), sizes)
     keys = pd.concat([_join_keys_vectorised(f, key_cols) for f in frames], ignore_index=True)
     cid, uniques = pd.factorize(keys)  # customer ids in order of first appearance
-    n_cust = len(uniques)
     stacked: dict[str, pd.Series[Any]] = {}
     for name in key_cols:
         stacked[name] = pd.concat([f[name].astype("object") for f in frames], ignore_index=True)
@@ -389,12 +448,12 @@ def arbitrate_treat_lists(
         combined["explore"].fillna(False).to_numpy(dtype=bool) if "explore" in combined else np.zeros(n, bool)
     )
 
-    # ---- priority weights, one config lookup per distinct use case ------------------------------------
+    # Priority weights, one config lookup per distinct use case.
     uc_codes, uc_names = pd.factorize(combined["use_case"].astype(str))
     uc_weight = np.array([cfg.priority_for(str(u)) for u in uc_names], dtype=float)
     weight = uc_weight[uc_codes] if n else np.empty(0)
 
-    # ---- the kind of value each row carries: incremental, gross, or none ------------------------------
+    # The kind of value each row carries: incremental, gross, or none.
     net = combined["net_value"].to_numpy(dtype=float) if "net_value" in combined else np.full(n, np.nan)
     gross = (
         combined[EXPECTED_GROSS_VALUE_COLUMN].to_numpy(dtype=float)
@@ -405,21 +464,68 @@ def arbitrate_treat_lists(
     gross_ok = np.isfinite(gross) & ~net_ok
     kind = np.where(net_ok, _KIND_NET, np.where(gross_ok, _KIND_GROSS, _KIND_NONE))
     value = np.where(net_ok, net, np.where(gross_ok, gross, 0.0))
+    return _Stack(
+        n=n,
+        src=src,
+        cid=cid,
+        keys=keys.to_numpy(dtype=object),
+        uniques=np.asarray(uniques, dtype=object),
+        n_cust=len(uniques),
+        combined=combined,
+        source_dtypes=source_dtypes,
+        treat_flag=treat_flag,
+        holdout_own=holdout_own,
+        explore_own=explore_own,
+        uc_codes=uc_codes,
+        uc_names=uc_names,
+        weight=weight,
+        kind=kind,
+        value=value,
+    )
 
-    # ---- hold-out protection ---------------------------------------------------------------------------
-    held_cust = np.zeros(n_cust, dtype=bool)
-    held_cust[cid[holdout_own]] = True
-    is_cand = treat_flag & ~held_cust[cid]
-    holdout_blocked = int((treat_flag & held_cust[cid]).sum())
 
-    # ---- rank the candidates of each customer ---------------------------------------------------------
+@dataclass(frozen=True)
+class _Ranking:
+    """The candidates of every customer ranked: the order, who is kept under the contact cap, and how."""
+
+    ci: np.ndarray
+    c_cid: np.ndarray
+    c_kind: np.ndarray
+    c_weight: np.ndarray
+    c_value: np.ndarray
+    c_src: np.ndarray
+    cand_count: np.ndarray
+    by_value_cust: np.ndarray
+    cust_kind: np.ndarray
+    order: np.ndarray
+    s_pos: np.ndarray
+    s_cid: np.ndarray
+    s_explore: np.ndarray
+    s_score: np.ndarray
+    s_value_row: np.ndarray
+    s_weight: np.ndarray
+    m: int
+    group_start: np.ndarray
+    group_id: np.ndarray
+    rank: np.ndarray
+    group_size: np.ndarray
+    keep: np.ndarray
+
+
+def _rank(stack: _Stack, is_cand: np.ndarray, cap: int) -> _Ranking:
+    """Rank the candidates (`is_cand`, per stacked row) of each customer and keep the first `cap`.
+
+    Explore rows first, then by priority x value when every candidate of the customer carries the same
+    kind of value (priority alone otherwise), then by the order of the lists.
+    """
+    n_cust = stack.n_cust
     ci = np.flatnonzero(is_cand)
-    c_cid = cid[ci]
-    c_kind = kind[ci]
-    c_weight = weight[ci]
-    c_value = value[ci]
-    c_explore = explore_own[ci]
-    c_src = src[ci]
+    c_cid = stack.cid[ci]
+    c_kind = stack.kind[ci]
+    c_weight = stack.weight[ci]
+    c_value = stack.value[ci]
+    c_explore = stack.explore_own[ci]
+    c_src = stack.src[ci]
     cand_count = np.bincount(c_cid, minlength=n_cust)
     kind_counts = np.bincount(c_cid * 3 + c_kind, minlength=n_cust * 3).reshape(n_cust, 3)
     uniform_kind = (kind_counts > 0).sum(axis=1) == 1
@@ -429,13 +535,7 @@ def arbitrate_treat_lists(
     score = np.where(row_by_value, c_weight * c_value, c_weight)
     rank_key = np.where(c_explore, 0.0, -score)
     order = np.lexsort((ci, c_src, rank_key, ~c_explore, c_cid))
-    s_pos = ci[order]
     s_cid = c_cid[order]
-    s_explore = c_explore[order]
-    s_score = score[order]
-    s_value_row = row_by_value[order]
-    s_weight = c_weight[order]
-    cap = cfg.contact_cap_per_customer
     m = len(order)
     if m:
         first_of_group = np.r_[True, s_cid[1:] != s_cid[:-1]]
@@ -448,7 +548,102 @@ def arbitrate_treat_lists(
         group_id = np.empty(0, dtype=np.int64)
         rank = np.empty(0, dtype=np.int64)
         group_size = np.empty(0, dtype=np.int64)
-    keep = rank < cap
+    return _Ranking(
+        ci=ci,
+        c_cid=c_cid,
+        c_kind=c_kind,
+        c_weight=c_weight,
+        c_value=c_value,
+        c_src=c_src,
+        cand_count=cand_count,
+        by_value_cust=by_value_cust,
+        cust_kind=cust_kind,
+        order=order,
+        s_pos=ci[order],
+        s_cid=s_cid,
+        s_explore=c_explore[order],
+        s_score=score[order],
+        s_value_row=row_by_value[order],
+        s_weight=c_weight[order],
+        m=m,
+        group_start=group_start,
+        group_id=group_id,
+        rank=rank,
+        group_size=group_size,
+        keep=rank < cap,
+    )
+
+
+def _draw(use_case: np.ndarray, key: np.ndarray) -> np.ndarray:
+    """A fixed pseudo-random number in [0, 1) per (use case, customer): the same on every machine and run.
+
+    It orders rows for which nothing else may matter, such as who keeps a channel's last places among
+    the rows M92 treated at random: their value must not decide that.
+    """
+    joined = pc.binary_join_element_wise(
+        pa.array(use_case, pa.large_string()),
+        pa.array(key, pa.large_string()),
+        pa.scalar("\x1f", pa.large_string()),
+    )
+    hashed = pd.util.hash_array(np.asarray(joined.to_numpy(zero_copy_only=False), dtype=object))
+    return (hashed >> np.uint64(11)).astype(np.float64) / float(1 << 53)
+
+
+def arbitrate_treat_lists(
+    treat_lists: Sequence[pd.DataFrame],
+    config: ArbitrationConfig | None = None,
+    key_cols: tuple[str, ...] = ("customer_id",),
+) -> tuple[pd.DataFrame, ArbitrationSummary]:
+    """Arbitrate across treat lists to assign at most `contact_cap_per_customer` actions per customer.
+
+    The order of `treat_lists` is the request's use case order: it breaks ties. Pure function. Rows come
+    back in the order each customer is first met (the first list's order for one list, so one list gives
+    back its own rows); a customer with a winning action has one row per winning action, any other has one
+    row, with `treat = False`.
+    """
+    cfg = config or ArbitrationConfig()
+    now = utc_now()
+    stack = _stack_lists(treat_lists, cfg, key_cols)
+    n = stack.n
+    n_cust = stack.n_cust
+    cid = stack.cid
+    src = stack.src
+    combined = stack.combined
+    treat_flag = stack.treat_flag
+    holdout_own = stack.holdout_own
+    uc_codes = stack.uc_codes
+    uc_names = stack.uc_names
+
+    # ---- hold-out protection ---------------------------------------------------------------------------
+    held_cust = np.zeros(n_cust, dtype=bool)
+    held_cust[cid[holdout_own]] = True
+    is_cand = treat_flag & ~held_cust[cid]
+    holdout_blocked = int((treat_flag & held_cust[cid]).sum())
+
+    # ---- rank the candidates of each customer ---------------------------------------------------------
+    cap = cfg.contact_cap_per_customer
+    ranking = _rank(stack, is_cand, cap)
+    c_cid = ranking.c_cid
+    c_kind = ranking.c_kind
+    c_weight = ranking.c_weight
+    c_value = ranking.c_value
+    c_src = ranking.c_src
+    cand_count = ranking.cand_count
+    by_value_cust = ranking.by_value_cust
+    cust_kind = ranking.cust_kind
+    order = ranking.order
+    s_pos = ranking.s_pos
+    s_cid = ranking.s_cid
+    s_explore = ranking.s_explore
+    s_score = ranking.s_score
+    s_value_row = ranking.s_value_row
+    s_weight = ranking.s_weight
+    m = ranking.m
+    group_start = ranking.group_start
+    group_id = ranking.group_id
+    rank = ranking.rank
+    group_size = ranking.group_size
+    keep = ranking.keep
 
     # How each customer who lost a candidate was decided: at the boundary between the last kept and the
     # first dropped candidate.
@@ -472,20 +667,20 @@ def arbitrate_treat_lists(
         )
     s_decided = decided[group_id] if m else decided
 
-    # ---- channel capacity, given to explore rows first, then by kind of value, then priority x value ----
+    # ---- channel capacity: explore rows first (in a fixed order that ignores their value, so the random
+    # sample stays random), then by kind of value, then priority x value ---------------------------------
     capped = np.zeros(m, dtype=bool)
     if cfg.channel_caps and m:
         own_score = np.where(c_kind != _KIND_NONE, c_weight * c_value, c_weight)[order]
         kept_at = np.flatnonzero(keep)
-        alloc = np.lexsort(
-            (
-                s_pos[kept_at],
-                c_src[order][kept_at],
-                -own_score[kept_at],
-                c_kind[order][kept_at],
-                ~s_explore[kept_at],
-            )
-        )
+        k_explore = s_explore[kept_at]
+        k_kind = np.where(k_explore, 0, c_kind[order][kept_at])
+        k_rank = -own_score[kept_at]
+        if k_explore.any():
+            explored_pos = s_pos[kept_at[k_explore]]
+            use_case_text = combined["use_case"].astype(str).to_numpy(dtype=object)
+            k_rank[k_explore] = _draw(use_case_text[explored_pos], stack.keys[explored_pos])
+        alloc = np.lexsort((s_pos[kept_at], c_src[order][kept_at], k_rank, k_kind, ~k_explore))
         ordered = kept_at[alloc]
         channel_of = (
             combined["channel"].to_numpy(dtype=object)[s_pos[ordered]] if "channel" in combined else None
@@ -551,7 +746,7 @@ def arbitrate_treat_lists(
 
     out = combined.iloc[sel].reset_index(drop=True)
     for name in out.columns:
-        out[name] = _restore_dtype(out[name], source_dtypes.get(str(name), set()))
+        out[name] = _restore_dtype(out[name], stack.source_dtypes.get(str(name), set()))
 
     # Per-row columns of the winners, aligned to `sel`.
     by_pos_reason = np.full(n, None, dtype=object)
@@ -610,6 +805,10 @@ def arbitrate_treat_lists(
         if win_pos.size
         else np.zeros(len(uc_names), dtype=np.int64)
     )
+    # How a customer was decided counts only customers who end with an action: one whose chosen action a
+    # channel cap then removed is counted apart, so the counts match the reasons on the treated rows.
+    group_won = has_winner[s_cid[group_start]] if m else np.empty(0, dtype=bool)
+    decided_won = np.where(group_won, decided, _DECIDED_NONE)
     summary = ArbitrationSummary(
         total_customers=n_cust,
         customers_with_actions=int((cand_count > 0).sum()),
@@ -622,17 +821,57 @@ def arbitrate_treat_lists(
         holdout_blocked_actions=holdout_blocked,
         explore_kept_count=int((s_explore & final).sum()),
         explore_dropped_count=int((s_explore & lost).sum()),
-        customers_decided_by_value=int((decided == _DECIDED_VALUE).sum()),
-        customers_decided_by_priority=int((decided == _DECIDED_PRIORITY).sum()),
+        customers_decided_by_value=int((decided_won == _DECIDED_VALUE).sum()),
+        customers_decided_by_priority=int((decided_won == _DECIDED_PRIORITY).sum()),
         customers_decided_by_request_order=int(
-            ((decided == _DECIDED_ORDER) | (decided == _DECIDED_EXPLORE_ORDER)).sum()
+            ((decided_won == _DECIDED_ORDER) | (decided_won == _DECIDED_EXPLORE_ORDER)).sum()
         ),
-        customers_decided_by_explore=int((decided == _DECIDED_EXPLORE).sum()),
+        customers_decided_by_explore=int((decided_won == _DECIDED_EXPLORE).sum()),
+        contested_customers_channel_capped=int(((decided != _DECIDED_NONE) & ~group_won).sum()),
         created_at=now,
     )
 
     columns = _output_columns(out, key_cols)
     return out[columns], summary
+
+
+def comparable_keys(
+    treat_lists: Sequence[pd.DataFrame],
+    intended: Sequence[pd.Series[Any] | None],
+    config: ArbitrationConfig | None = None,
+    key_cols: tuple[str, ...] = ("customer_id",),
+) -> list[pd.Index[Any]]:
+    """The customers each use case's campaign compares, one `Index` of customer key text per list.
+
+    A campaign compares the customers it contacted with those it held back (DEC-1304). Arbitration takes
+    some customers from a use case (another use case wins them), but only among those who were not held
+    back, so measuring only the use case's winners would leave the held-back arm with every customer.
+    Both arms are therefore cut with one rule that does not look at the hold-out: the arbitration is run
+    again as if no one were held back, a held-back customer the use case's policy intended to contact
+    (`intended`, one `Series` per list, indexed by customer key text, or None for a list that has none)
+    competing like a treated one. A customer is compared in a use case when it would win him then.
+
+    What is left out of both arms is therefore the same kind of customer: those another use case beats,
+    and the customers a rival's random (explore) action took. A customer the hold-out of another use case
+    or a channel cap kept from being contacted stays in both arms (intent to treat): nothing in them
+    depends on the customer's own random draw.
+    """
+    cfg = config or ArbitrationConfig()
+    if len(intended) != len(treat_lists):
+        raise ValueError("`intended` needs one entry (a Series or None) per treat list.")
+    stack = _stack_lists(treat_lists, cfg, key_cols)
+    would = np.zeros(stack.n, dtype=bool)
+    offset = 0
+    for frame, flags in zip(treat_lists, intended, strict=True):
+        size = len(frame.index)
+        if flags is not None and size:
+            aligned = flags.reindex(stack.keys[offset : offset + size]).fillna(False)
+            would[offset : offset + size] = aligned.to_numpy(dtype=bool)
+        offset += size
+    ranking = _rank(stack, stack.treat_flag | (stack.holdout_own & would), cfg.contact_cap_per_customer)
+    won = np.zeros(stack.n, dtype=bool)
+    won[ranking.s_pos[ranking.keep]] = True
+    return [pd.Index(stack.keys[won & (stack.src == i)]) for i in range(len(treat_lists))]
 
 
 def _output_columns(frame: pd.DataFrame, key_cols: tuple[str, ...]) -> list[str]:

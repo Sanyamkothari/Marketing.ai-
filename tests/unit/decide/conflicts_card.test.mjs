@@ -72,3 +72,9 @@ test("says how conflicts were settled, only for the ways that happened", () => {
   assert.doesNotMatch(none, /Settled by/);
   assert.doesNotMatch(none, /hold-out/);
 });
+
+test("names the contested customers a channel cap left with no action, only when there are some", () => {
+  const plain = text(conflictsCardHtml({ ...summary, contested_customers_channel_capped: 6 }));
+  assert.match(plain, /Wanted by several use cases, left with no action by a channel cap 6/);
+  assert.doesNotMatch(text(conflictsCardHtml(summary)), /left with no action/);
+});

@@ -215,6 +215,7 @@ export function conflictsCardHtml(summary) {
       ${summary.customers_decided_by_priority ? row("Settled by priority alone (value missing or of a different kind)", count(summary.customers_decided_by_priority)) : ""}
       ${summary.customers_decided_by_request_order ? row("Settled by use case order (a tie)", count(summary.customers_decided_by_request_order)) : ""}
       ${summary.customers_decided_by_explore ? row("Kept because chosen at random (explore)", count(summary.customers_decided_by_explore)) : ""}
+      ${summary.contested_customers_channel_capped ? row("Wanted by several use cases, left with no action by a channel cap", count(summary.contested_customers_channel_capped)) : ""}
       ${summary.holdout_blocked_actions ? row("Actions blocked by a hold-out", count(summary.holdout_blocked_actions)) : ""}
     </div>
     ${ucTable}

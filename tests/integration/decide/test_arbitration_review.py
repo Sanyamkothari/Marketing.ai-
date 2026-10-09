@@ -26,7 +26,7 @@ from engine.measurement.campaign import (
     campaign_key,
     read_frame,
 )
-from engine.storage import LocalStorage
+from engine.storage import LocalStorage, run_key
 from tests.fixtures.decide.arbitration_runs import run_for_use_case
 from tests.integration.production.access_support import bearer, local_app, make_user
 
@@ -55,16 +55,21 @@ def _arbitrate(
     response = client.post("/decide/arbitrate", json=body, headers=bearer(app, analyst))
     assert response.status_code == 200, response.text
     storage = LocalStorage(tmp_path)
-    arbitrated = pd.read_parquet(io.BytesIO(storage.read_bytes(f"decide/{ARBITRATED_TREAT_LIST_PARQUET}")))
-    return response.json(), arbitrated
+    answer = response.json()
+    first_run = answer["summary"]["run_ids"][0]
+    arbitrated = pd.read_parquet(
+        io.BytesIO(storage.read_bytes(run_key(first_run, ARBITRATED_TREAT_LIST_PARQUET)))
+    )
+    return answer, arbitrated
 
 
 @pytest.mark.parametrize("composite", [False, True], ids=["one-column-key", "composite-key"])
-def test_each_campaign_measures_exactly_the_rows_its_use_case_won(tmp_path: Path, composite: bool) -> None:
-    """The treated arm of a use case's campaign is its winning rows, with a one-column and a composite key.
+def test_each_campaign_compares_the_rows_its_use_case_won(tmp_path: Path, composite: bool) -> None:
+    """A use case's campaign compares the customers it won with a one-column and a composite key.
 
     Fails on 98b2959 for a composite key: the route named the winners by the first key column only, so no
-    row of the scores matched and every campaign measured nobody.
+    row of the scores matched and every campaign measured nobody. A customer a rival use case won is in
+    neither arm; one the hold-out of another use case kept from being contacted stays in both.
     """
     options: dict[str, Any] = {"kind": "propensity", "rows": 60, "composite": composite, "value": True}
     # The composite-key fixture is a propensity run; a one-column key also gets an uplift run.
@@ -82,23 +87,38 @@ def test_each_campaign_measures_exactly_the_rows_its_use_case_won(tmp_path: Path
     body, arbitrated = _arbitrate(app, client, {"use_cases": ["uc-first", "uc-second", "uc-third"]}, tmp_path)
     key = ["customer_id", "snapshot_date"] if composite else ["customer_id"]
 
+    def keys_of(frame: pd.DataFrame) -> set[tuple[str, ...]]:
+        return set(map(tuple, frame[key].astype(str).to_numpy()))
+
     winners = arbitrated[arbitrated["treat"]]
     assert not winners.duplicated(subset=key).any(), "no customer has two actions"
     assert winners["winning_use_case"].nunique() >= (1 if composite else 2)
+    held_by_others = arbitrated[arbitrated["holdout_use_cases"].notna()]
     storage = LocalStorage(tmp_path)
-    for campaign_id in body["campaign_ids"]:
-        campaign = store.get(campaign_id)
+    created = [c for c in body["campaigns"] if c["outcome"] == "created"]
+    assert len(created) >= 2
+    for entry in created:
+        campaign = store.get(entry["campaign_id"])
         assert campaign is not None
-        assignment = read_frame(storage, campaign_key(campaign_id, ASSIGNMENT_FILENAME))
-        measured = assignment[assignment["arm"] == "treated"]
-        won = winners[winners["winning_use_case"] == campaign.use_case_id]
-        assert set(map(tuple, measured[key].astype(str).to_numpy())) == set(
-            map(tuple, won[key].astype(str).to_numpy())
-        ), campaign.use_case_id
-        # Customers that lost are in neither arm, and none of them is counted as intended.
-        lost = assignment[(assignment["arm"] == "suppressed") & assignment["intended"]]
-        assert lost.empty
-        assert campaign.counts.intended_treated <= len(won)
+        assignment = read_frame(storage, campaign_key(campaign.campaign_id, ASSIGNMENT_FILENAME))
+        compared = assignment[(assignment["arm"] == "treated") & assignment["intended"]]
+        own_list = pd.read_parquet(
+            io.BytesIO(storage.read_bytes(run_key(entry["run_id"], "treat_list.parquet")))
+        )
+        won = winners[
+            (winners["winning_use_case"] == campaign.use_case_id)
+            & ~winners["explore"].astype("boolean").fillna(False).astype(bool)
+        ]
+        lost_to_a_rival = own_list[
+            own_list["treat"] & ~own_list["explore"].astype("boolean").fillna(False).astype(bool)
+        ]
+        lost_keys = keys_of(lost_to_a_rival) - keys_of(won) - keys_of(held_by_others)
+        # What the use case won is compared; what a rival won is in neither arm.
+        assert keys_of(won) <= keys_of(compared), campaign.use_case_id
+        assert not (lost_keys & keys_of(assignment[assignment["intended"]])), campaign.use_case_id
+        # Only customers the use case won, or that another use case's hold-out kept from being contacted.
+        assert keys_of(compared) <= keys_of(won) | keys_of(held_by_others), campaign.use_case_id
+        assert campaign.counts.intended_treated == len(compared)
 
 
 def test_without_a_config_file_every_use_case_has_priority_one_and_a_customer_one_action(

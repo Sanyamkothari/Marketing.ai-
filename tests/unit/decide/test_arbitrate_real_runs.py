@@ -411,6 +411,9 @@ def test_with_one_use_case_selected_the_output_is_its_treat_list(
     out, summary = arbitrate_treat_lists([original], _config(), KEY)
 
     assert list(out["customer_id"]) == list(original["customer_id"])
+    # The columns come in the treat list's own order (M100's runner-up and offer reason columns included),
+    # then the arbitration's: the CSV of one use case reads like that use case's list.
+    assert list(out.columns)[: len(original.columns)] == list(original.columns)
     for column in original.columns:
         left = out[column].astype("object").where(out[column].notna(), None)
         right = original[column].astype("object").where(original[column].notna(), None)

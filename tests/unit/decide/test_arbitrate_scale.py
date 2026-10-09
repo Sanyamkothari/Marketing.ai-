@@ -1,6 +1,11 @@
 """The review's paths at scale (Plan J M101, DEC-1311): two kinds of value, explore rows, hold-outs and a
-channel cap, over 200,000 customers. The same 3 second budget as `test_arbitrate.py`'s plain test; there is
-no Python loop over the rows, so one million customers take about five times as long."""
+channel cap, over 200,000 customers.
+
+There is no Python loop over the rows, so one million customers take about five times as long. Two tests:
+the fast one measures how the time grows (200,000 rows against 50,000 in the same process, so a busy
+machine slows both), and the `slow` one holds the 200,000-row run to a wall-clock budget, which only means
+something on a machine that is not shared.
+"""
 
 from __future__ import annotations
 
@@ -8,11 +13,15 @@ import time
 
 import numpy as np
 import pandas as pd
+import pytest
 
 from engine.decide.arbitrate import ArbitrationConfig, arbitrate_treat_lists
 
 N = 200_000
+SMALL = 50_000
 BUDGET_SECONDS = 3.0
+GROWTH_LIMIT = 6.0
+"""Four times the rows may take at most this many times as long (linear is 4; the sorts add a little)."""
 
 
 def _frame(
@@ -41,14 +50,42 @@ def _frame(
     )
 
 
-def test_arbitrate_200k_rows_with_mixed_values_explore_and_caps() -> None:
-    rng = np.random.default_rng(7)
-    ids = [f"C-{i:07d}" for i in range(N)]
-    lists = [
-        _frame(ids[:150_000], rng, "uc-1", "email", gross=False),
-        _frame(ids[50_000:], rng, "uc-2", "sms", gross=True),
-        _frame(ids[100_000:], rng, "uc-3", "sms", gross=False),
+def _lists(n: int, seed: int) -> list[pd.DataFrame]:
+    """Three overlapping lists over `n` customers: two kinds of value, explore rows and hold-outs."""
+    rng = np.random.default_rng(seed)
+    ids = [f"C-{i:07d}" for i in range(n)]
+    a, b, c = (n * 3) // 4, n // 4, n // 2
+    return [
+        _frame(ids[:a], rng, "uc-1", "email", gross=False),
+        _frame(ids[b:], rng, "uc-2", "push", gross=True),
+        _frame(ids[c:], rng, "uc-3", "sms", gross=False),
     ]
+
+
+def _timed(n: int, config: ArbitrationConfig) -> float:
+    """The best of two runs (the lists are built once): a busy machine slows a run, rarely every run."""
+    lists = _lists(n, seed=7)
+    best = float("inf")
+    for _ in range(2):
+        start = time.perf_counter()
+        arbitrate_treat_lists(lists, config=config)
+        best = min(best, time.perf_counter() - start)
+    return best
+
+
+def test_arbitration_time_grows_linearly_with_the_rows() -> None:
+    config = ArbitrationConfig(use_cases={"uc-2": {"priority": 2.0}}, channel_caps={"sms": 5_000})
+    small = _timed(SMALL, config)
+    large = _timed(N, config)
+    assert large < GROWTH_LIMIT * small, (
+        f"{N} rows took {large:.2f}s and {SMALL} rows took {small:.2f}s: "
+        f"{large / small:.1f} times as long for 4 times the rows (limit {GROWTH_LIMIT})"
+    )
+
+
+@pytest.mark.slow
+def test_arbitrate_200k_rows_with_mixed_values_explore_and_caps() -> None:
+    lists = _lists(N, seed=7)
     config = ArbitrationConfig(use_cases={"uc-2": {"priority": 2.0}}, channel_caps={"sms": 20_000})
 
     start = time.perf_counter()

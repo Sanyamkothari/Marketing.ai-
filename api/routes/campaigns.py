@@ -131,6 +131,7 @@ __all__ = [
     "CampaignPlanPreview",
     "CampaignView",
     "TestPlanView",
+    "default_outcome_window",
     "get_campaign_store",
     "router",
 ]
@@ -360,7 +361,9 @@ def create_campaign(
     holdout_scope, holdout_key, holdout_epoch = holdout_identity(run_holdout_spec(storage, record.run_id))
     uplift_run = "intended_treatment" in scores.columns
     start = body.treatment_start or finished_at
-    window = body.outcome_window_days if body.outcome_window_days is not None else _default_window(config)
+    window = (
+        body.outcome_window_days if body.outcome_window_days is not None else default_outcome_window(config)
+    )
     now = utc_now()
     campaign = Campaign(
         campaign_id=new_campaign_id(now),
@@ -413,7 +416,7 @@ def _discard(storage: Storage, *keys: str) -> None:
             continue
 
 
-def _default_window(config: UseCaseConfig) -> int | None:
+def default_outcome_window(config: UseCaseConfig) -> int | None:
     """The use case's outcome window, as step 4 reads it (`api.routes.measure`)."""
     return config.uplift.outcome_window_days or (
         config.label.horizon_days if config.label is not None else None

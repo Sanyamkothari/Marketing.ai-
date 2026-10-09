@@ -302,6 +302,7 @@ def test_with_one_use_case_selected_output_equals_treat_list() -> None:
     assert c1["priority_score"] == pytest.approx(45.0)
 
 
+@pytest.mark.slow
 def test_arbitrate_scale_200k_rows() -> None:
     # Scale test: 200,000 customers across 3 use cases
     # Acceptance check: linear time at 1M rows (< 3s on 200k rows)

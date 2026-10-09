@@ -86,12 +86,19 @@ def test_arbitrate_api_and_campaign_creation(tmp_path: Path) -> None:
     assert "campaign_ids" in body
     assert len(body["campaign_ids"]) == 2
 
-    # 4. Verify arbitrated files were written
-    assert storage.exists(f"decide/{ARBITRATED_TREAT_LIST_CSV}")
-    assert storage.exists(f"decide/{ARBITRATED_TREAT_LIST_PARQUET}")
+    # 4. Verify arbitrated files were written into the runs (where retention finds them), not at the store root
+    assert body["summary"]["run_ids"] == [r1.run_id, r2.run_id]
+    for run_id in (r1.run_id, r2.run_id):
+        assert storage.exists(run_key(run_id, ARBITRATED_TREAT_LIST_CSV))
+        assert storage.exists(run_key(run_id, ARBITRATED_TREAT_LIST_PARQUET))
+        assert storage.exists(run_key(run_id, ARBITRATION_SUMMARY_FILENAME))
     assert storage.exists(f"decide/{ARBITRATION_SUMMARY_FILENAME}")
+    assert not storage.exists(f"decide/{ARBITRATED_TREAT_LIST_CSV}")
+    assert not storage.exists(f"decide/{ARBITRATED_TREAT_LIST_PARQUET}")
 
-    arb_df = pd.read_parquet(io.BytesIO(storage.read_bytes(f"decide/{ARBITRATED_TREAT_LIST_PARQUET}")))
+    arb_df = pd.read_parquet(
+        io.BytesIO(storage.read_bytes(run_key(r1.run_id, ARBITRATED_TREAT_LIST_PARQUET)))
+    )
     assert len(arb_df) == 50
     # No customer has more than one treat action
     treated = arb_df[arb_df["treat"]]

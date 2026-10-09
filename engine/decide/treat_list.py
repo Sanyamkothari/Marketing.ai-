@@ -89,6 +89,7 @@ __all__ = [
     "TreatListSummary",
     "build_treat_list",
     "ensure_treat_list",
+    "policy_intended",
     "table_csv_bytes",
 ]
 
@@ -283,6 +284,24 @@ def ensure_treat_list(storage: Storage, run_id: str, *, config_root: Path | None
         return storage.read_model(run_key(run_id, TREAT_LIST_SUMMARY_FILENAME), TreatListSummary)
     except StorageError:
         return build_treat_list(storage, run_id, config_root=config_root)
+
+
+def policy_intended(storage: Storage, run_id: str) -> pd.Series[Any]:
+    """Per customer of the run (indexed by key text, as the treat list spells it): did the policy intend to contact them?
+
+    True for a customer the run's policy selected (`engine.holdout.assign.selection_masks`, the one
+    definition M92 and the treat list use), who is not a predicted sleeping dog and was not suppressed,
+    whether or not a hold-out then kept them back. `treat` is 0 for a held-back customer, so this is what
+    lets arbitration (M101) ask whom a use case would have contacted had it not held them back.
+    """
+    record = _read_record(storage, run_id)
+    config = _read_config(storage, run_id)
+    scores = _read_scores(storage, run_id, key_columns(record.primary_key))
+    selected, sleeping = selection_masks(scores, config)
+    suppression = scores[SUPPRESSED_REASON_COLUMN].astype("object")
+    suppressed = (suppression.notna() & (suppression != "")).to_numpy(dtype=bool)
+    intended = pd.Series(selected & ~sleeping & ~suppressed, index=_join_keys(scores, record.primary_key))
+    return intended[~intended.index.duplicated(keep="first")]
 
 
 class _Flags(NamedTuple):
