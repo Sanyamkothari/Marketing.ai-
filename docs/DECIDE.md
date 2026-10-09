@@ -35,7 +35,7 @@ the user downloads (the treat list).
 | 16 | Revenue outcomes and CUPED | M102 | written (below) |
 | 17 | Auditing a campaign another tool ran; the programme readout | M103 | written (below) |
 | 18 | The Value Proof Pack | M104 | written (below) |
-| 19 | Warnings and proven value to date | M105 | not yet written |
+| 19 | Warnings and proven value to date | M105 | written (below) |
 | 20 | Learning from the last cycle | M106 | not yet written |
 | 21 | The monthly loop (read-only) | M107 | not yet written |
 | 22 | Cost before each run | M108 | not yet written |
@@ -786,3 +786,73 @@ as a text figure read from that file, never replaced by a sentence of the pack's
 **On screen.** Results lists the ready packs with their sentence (`ui/modules/simple/pages.js`); Reports lists every
 recent campaign's pack or the server's reason; `#/pilot/proof/<campaign>` shows the server's page, its suggestions with
 an Approve button for an Analyst, and a value form when the pack has no value inputs (`ui/modules/pilot/screen.js`).
+
+## 19. Warnings and the value proven to date (M105, DEC-1315)
+
+Two things the Results page now says before the list of runs: what wants attention, and how much value is proven so
+far. `GET /campaigns/summary` (Viewer; declared before `/campaigns/{campaign_id}`, so "summary" is never read as an id)
+answers both from `engine/measurement/summary.py::build_summary`. It computes nothing new: it reads artefacts that exist
+(`campaign.json`, `incrementality_report.json`, `test_plan.json`, `contact_readout.json`, the scoring run's `drift.json`,
+`uplift_drift.json` and `ranking_choice.json`, the Value Proof Pack's own view, and the model registry) and holds no
+customer row.
+
+**The cards.** Each appears only while its condition holds, names the artefacts it read (`read`) and carries only
+figures read from them (the same `Figure` as the Value Proof Pack):
+
+| Card (code) | Shown when | Read from |
+|---|---|---|
+| No customers held back (`CAMPAIGN_NO_CONTROL`) | the campaign recorded nobody held back (a programme readout is never this); it is also the campaign's reason under "Not counted" | `campaign.json` |
+| Read early (`CAMPAIGN_EARLY_LOOK`) | the stored result was read before the plan's analysis date | `incrementality_report.json`, `test_plan.json` |
+| Too small a test (`PLAN_UNDERPOWERED`) | the plan carries the warning and there is no final result yet | `test_plan.json` |
+| Held-back customers contacted (`CONTROL_GROUP_CONTACTED`) | the contact file shows at least 5% of them contacted | `contact_readout.json` |
+| Customers look different (`DRIFT_DRIFTED`) | the campaign's scoring run says drifted | `drift.json`, `uplift_drift.json` |
+| A new model is waiting (`CHALLENGER_READY`) | the registry has a version waiting for approval, per use case | the model registry |
+| A group did worse (`GROUP_BACKFIRED`) | the Value Proof Pack proposes leaving a group out and nobody has approved it yet: exactly M104's rule | `segment_effects.json`, `incrementality_report.json` |
+| Does not beat risk ranking (`UPLIFT_NOT_BETTER_THAN_RISK`) | the run's `ranking_choice.json` says so (M96) | `ranking_choice.json` |
+| Effect falling (`EFFECT_FADING`) | the rule below | the cycles' `incrementality_report.json` |
+
+A campaign on generated data raises no card; its only line is the reason it is not counted.
+
+**The fading rule.** A use case's cycles are its campaigns that are final, drawn at random by the engine or verified,
+and not a programme, in the order they went out (the latest six). Each cycle's effect is read with its own noise,
+`se = (ci_high - ci_low) / (2 z)` from its stored range, in the outcome's own base (a rate in points, an amount adjusted
+when the plan registered it). The trend is the inverse-variance weighted least-squares slope of the effect on the cycle
+number. The cycles are fading when at least three are usable, the slope is negative, its whole 95% range is below zero
+and the latest effect is below the first. That is one tail, so when the true effect never moves the chance of an alarm is
+2.5%, and two cycles, however steep, are never enough (`tests/unit/measurement/test_summary.py`,
+`tests/statistical/test_fading_false_alarm.py`, nightly).
+
+**Value proven to date.** The sum of the measured **lower bounds**, labelled exactly so: "at least ..., the sum of each
+campaign's lower bound". A lower bound is the low end of the 95% range of what the campaign changed, read from the pack's
+own figures, so a campaign that may have done harm adds a negative number. Only campaigns the pack accepts and whose
+causal basis is `engine_random` or `verified_random` (M103, M104) are added. There is one total per unit and units are never
+mixed: yes/no outcomes and amounts each have a total **per outcome column** (`outcomes:<column>` "extra <column>
+outcomes", `prevented:<column>` "<column> outcomes prevented" when the aim is fewer, `amount:<column>`), so a win-back's
+reactivations and a bank's deposits are never summed, and rupees (the pack's net value after contacts and offers; a
+campaign with no value inputs is counted in its outcomes, listed as not priced and shown so on Results).
+**Customers are counted once.** Campaigns that measure the same customers (the same scoring runs, or the same assignment
+file of an audit) measure the same effect again, so only the latest measured (by the report's day, then creation) is
+added, to the totals and to the fading rule; the others are listed apart as `same_customers` with the campaign that is
+counted in their place. Listed apart and never added: those, campaigns random only by the person's statement,
+descriptive ones, and programme readouts (which cover the customers of the campaigns), each lower bound with its unit in
+words. Excluded with their reason: generated data, results that are not final yet (with the day when it is known as a
+labelled figure, "Day the final result can be read"), and a campaign with nobody held back, whose reason is its own
+(`CAMPAIGN_NO_CONTROL`: it can never be measured, so "no final result yet" would promise a count that cannot come).
+**Every campaign is read**, not the newest page the list shows: a total "to date" must not fall because newer campaigns
+were made (`CampaignStore.list(limit=None)`). A run-level card (drifted, does not beat risk) is drawn once per run, on
+the newest campaign that uses it.
+
+**Traced.** The total is a `Figure` whose sources name every lower bound added. `build_summary` re-reads every source and
+every digit of its own words with `engine.pilot.proof.check_figures` (the check the pack uses, now shared) and refuses to
+answer (`500 SUMMARY_NOT_TRACEABLE`) when one does not resolve.
+
+**On screen.** `ui/modules/simple/pages.js::summaryCardHtml` draws the cards and the totals from the server's answer
+only; with no answer, an empty one or a role that may not read it, nothing is drawn and nothing is invented
+(`tests/integration/production/ui/simple/summary.test.mjs`, against the real app's captured answer).
+
+**How we know it is honest.** `tests/integration/measurement/test_campaign_summary*.py` build campaigns through the real
+scoring stages, the API and the engine's simulators (a planted harmful band, a leaking audit, a stated-random and a
+descriptive audit, generated data, a run with nobody held back) and check the total against the sum of each report's lower
+bound, each card in both directions, that stated-random, descriptive and generated campaigns are never added, that three
+campaigns on one run add one lower bound, that a repeated cycle cannot turn a series that does not fall into one that does,
+that two yes/no columns give two totals, and that a proven campaign beyond the newest hundred is still in the total.

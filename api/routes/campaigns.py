@@ -75,6 +75,14 @@ audited, on uploads that went through `POST /uploads`:
 .measure_campaign_segments`): the measured effect and interval per band, predicted segment and offer, with the
 false-alarm guard the Value Proof Pack's backfire check reads (`GET /pilot/proof/{campaign_id}`). Counts only.
 
+**What needs attention, and the value proven to date (M105, DEC-1315).** `GET /campaigns/summary` (Viewer) is computed
+from artefacts that already exist and holds no customer row (`engine.measurement.summary`): cards for a campaign
+with no control group, an early look, an underpowered plan, contamination, drift, a challenger waiting, a backfiring
+group, a model that does not beat risk ranking and an effect that is fading, each naming the artefact it read; and
+the sum of every campaign's measured lower bound, one total per unit, with the campaigns that cannot be added
+listed apart and the ones excluded with their reason. It is declared before `/campaigns/{campaign_id}` so
+"summary" is not read as an id.
+
 Customer ids are never in a URL or an audit record: every route names a campaign, a run or an upload.
 """
 
@@ -90,7 +98,7 @@ from pydantic import AwareDatetime, Field, ValidationError
 
 from api.access import get_platform_engine, set_audit_context
 from api.access_policy import RoutePolicy, register
-from api.deps import ConfigRootDep, SettingsDep, StorageDep
+from api.deps import ConfigRootDep, RegistryDep, SettingsDep, StorageDep
 from api.routes.measure import MEASURE_NOT_OFFERED
 from api.routes.runs import load_run, requested_by
 from api.routes.uplift import RUN_NOT_SCORED, _finished_scoring_run, _read_all
@@ -195,6 +203,12 @@ from engine.measurement.reconcile import (
     reconcile_contacts,
 )
 from engine.measurement.segments import SEGMENT_EFFECTS_FILENAME, SegmentEffects, policy_offers
+from engine.measurement.summary import (
+    SUMMARY_NOT_TRACEABLE,
+    CampaignSummary,
+    SummaryTraceError,
+    build_summary,
+)
 from engine.pilot.roi import outcome_is_good_by_default
 from engine.stages import export
 from engine.storage import Storage, StorageError, run_key
@@ -243,6 +257,12 @@ register(
         ),
         ("GET", "/campaigns"): RoutePolicy(
             role=Role.VIEWER, action="campaigns.list", purpose="see campaigns"
+        ),
+        # Plan J M105 (DEC-1315): what wants attention and the value proven to date. It holds no customer row.
+        ("GET", "/campaigns/summary"): RoutePolicy(
+            role=Role.VIEWER,
+            action="campaigns.summary",
+            purpose="see what needs attention and the value proven",
         ),
         ("GET", "/campaigns/{campaign_id}"): _on_campaign(Role.VIEWER, "campaigns.read", "see a campaign"),
         ("POST", "/campaigns/{campaign_id}/outcomes"): _on_campaign(
@@ -731,6 +751,32 @@ def list_campaigns(
     return CampaignListResponse(
         campaigns=store.list(run_id=run_id, use_case_id=use_case, limit=CAMPAIGNS_SHOWN)
     )
+
+
+@router.get(
+    "/campaigns/summary",
+    response_model=CampaignSummary,
+    responses={500: {"model": ErrorResponse}},
+    summary="What needs attention across the campaigns, and the value proven to date",
+)
+def campaigns_summary(
+    request: Request, root: ConfigRootDep, storage: StorageDep, registry: RegistryDep
+) -> CampaignSummary:
+    """Declared before `/campaigns/{campaign_id}`, so "summary" is never read as a campaign id (DEC-1315 (a)).
+
+    Reads every campaign, not the newest page the list shows: a total "to date" that dropped older proven
+    campaigns would fall from one day to the next without saying so."""
+    campaigns = get_campaign_store(request).list(limit=None)
+    try:
+        return build_summary(storage, campaigns, registry=registry, root=root)
+    except SummaryTraceError as exc:
+        _LOGGER.error("campaigns summary: %d figure(s) did not trace", len(exc.failures))
+        raise http_error(
+            500,
+            SUMMARY_NOT_TRACEABLE,
+            "A number of the campaigns' summary could not be traced back to the record it comes from, so the "
+            "summary is not shown.",
+        ) from exc
 
 
 @router.get(

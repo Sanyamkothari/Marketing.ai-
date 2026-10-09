@@ -41,6 +41,8 @@ ROUTES: dict[tuple[str, str], Role] = {
     ("POST", "/campaigns/audit"): Role.ANALYST,
     ("POST", "/campaigns/programme"): Role.ANALYST,
     ("POST", "/campaigns/{campaign_id}/contacts"): Role.ANALYST,
+    # Plan J M105 (DEC-1315): what needs attention and the value proven to date, no customer row.
+    ("GET", "/campaigns/summary"): Role.VIEWER,
 }
 WRITES = [key for key, role in ROUTES.items() if key[0] in MUTATING_METHODS]
 READS = [key for key in ROUTES if key[0] not in MUTATING_METHODS]

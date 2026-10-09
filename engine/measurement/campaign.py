@@ -539,7 +539,7 @@ class CampaignStore(Protocol):
     def get(self, campaign_id: str) -> Campaign | None: ...
 
     def list(
-        self, *, run_id: str | None = None, use_case_id: str | None = None, limit: int = 100
+        self, *, run_id: str | None = None, use_case_id: str | None = None, limit: int | None = 100
     ) -> tuple[Campaign, ...]: ...
 
 
@@ -577,7 +577,7 @@ class SqlCampaignStore:
             return None if row is None else Campaign.model_validate_json(row.record_json)
 
     def list(
-        self, *, run_id: str | None = None, use_case_id: str | None = None, limit: int = 100
+        self, *, run_id: str | None = None, use_case_id: str | None = None, limit: int | None = 100
     ) -> tuple[Campaign, ...]:
         statement = select(CampaignRow)
         if run_id is not None:
@@ -587,8 +587,10 @@ class SqlCampaignStore:
         statement = statement.order_by(
             col(CampaignRow.created_at).desc(), col(CampaignRow.campaign_id).desc()
         )
+        if limit is not None:  # None: every campaign (the summary of value proven to date reads them all)
+            statement = statement.limit(limit)
         with Session(self._engine) as session:
-            rows = session.exec(statement.limit(limit)).all()
+            rows = session.exec(statement).all()
             return tuple(Campaign.model_validate_json(row.record_json) for row in rows)
 
 
@@ -631,7 +633,7 @@ class InMemoryCampaignStore:
             return self._campaigns.get(campaign_id)
 
     def list(
-        self, *, run_id: str | None = None, use_case_id: str | None = None, limit: int = 100
+        self, *, run_id: str | None = None, use_case_id: str | None = None, limit: int | None = 100
     ) -> tuple[Campaign, ...]:
         with self._lock:
             found = [
