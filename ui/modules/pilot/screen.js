@@ -7,6 +7,8 @@
 //   #/pilot/view/readiness/<dataset>   a data readiness report, shown in place, with its PDF
 //   #/pilot/view/results/<use case>    the results report of that use case's approved model
 //   #/pilot/value/<run>                a campaign's value in rupees: the verdict, the report, the estimates
+//   #/pilot/proof/<campaign>           a campaign's Value Proof Pack (Plan J M104): the server's page, its
+//                                      suggestions to approve, and its value inputs when it has none
 //
 // Every list is built from what the API returns - datasets, approved models, scoring runs - and each
 // card fills as its own request settles, after a skeleton painted at once. Every report is the
@@ -37,17 +39,22 @@ import {
   techDetails,
 } from "../../dom.js";
 import {
+  approveSuppression,
   dataRequestUrl,
   demoRawUrl,
   feedbackExportUrl,
   getDataRequest,
+  getProof,
   getReportDoc,
   getReportHtml,
   getRoi,
   listDatasets,
   listModels,
+  listProofs,
   listScoringRuns,
   mayCall,
+  proofUrl,
+  putProofValue,
   putRoi,
   readinessUrl,
   resultsUrl,
@@ -186,6 +193,7 @@ async function renderReports(app, demo) {
     <div class="stack" data-pe-reports>
       ${card("results", `Model results${sortNote("newest first")}`)}
       ${card("value", `Campaign value${sortNote("newest first")}`)}
+      ${card("proof", `Value Proof Packs${sortNote("newest first")}`)}
     </div><p class="pe-foot" data-pe-export></p></main>`,
   );
   document.title = "Reports · Marketing AI";
@@ -288,7 +296,13 @@ async function renderReports(app, demo) {
     );
   })();
 
-  await Promise.all([results, value]);
+  // Plan J M104: each measured campaign's Value Proof Pack, or the server's reason there is none yet.
+  const proofs = settle(listProofs()).then((answer) => {
+    if (!live()) return;
+    fill(main, "proof", answer.error ? unavailable : proofsBody(answer.value));
+  });
+
+  await Promise.all([results, value, proofs]);
   if (!live()) return;
   await considerMeasured(scoredRuns, latest, consider);
   if (!live()) return;
@@ -304,6 +318,27 @@ async function renderReports(app, demo) {
       )}" data-pe-feedback-export>Export all feedback</a>`;
     }
   }
+}
+
+/** `GET /pilot/proof`'s list as the hub's card: ready packs open, refused ones say why (server words only). */
+function proofsBody(list) {
+  const proofs = (list && list.proofs) || [];
+  if (!proofs.length) {
+    return emptyState({
+      title: "No campaign has been recorded yet",
+      text: "Once a campaign's results are measured, its Value Proof Pack appears here: what it changed, what it cost and what finance can rely on.",
+    });
+  }
+  const rows = proofs.map((entry) => {
+    const href = `#/pilot/proof/${encodeURIComponent(entry.campaign_id)}`;
+    const ready = entry.status === "ready";
+    return [
+      `<span class="pe-name">${esc(entry.name)}</span>`,
+      ready ? cell(entry.headline) : cell(entry.message),
+      ready ? reportActions(href, "Open", proofUrl(entry.campaign_id, "pdf")) : "—",
+    ];
+  });
+  return dataTable([{ label: "Campaign" }, { label: "What it shows" }, { label: "Pack", num: true }], rows);
 }
 
 /** How many of the newest scored campaigns the hub asks `GET /pilot/roi` about. */
@@ -818,6 +853,22 @@ async function renderValue(app, runId, rerender, demo) {
   element.addEventListener("input", () => {
     dirtyRun = runId;
   });
+  wireEstimates(
+    element,
+    (payload) => putRoi(runId, payload),
+    () => {
+      dirtyRun = null;
+      openEstimates.add(runId);
+      rerender();
+    },
+  );
+}
+
+/**
+ * The estimates form's save: client checks first, then `save(payload)`; a 422 puts the server's words
+ * next to its field. `saved()` runs once the server has the figures (the screen draws itself again).
+ */
+function wireEstimates(element, save, saved) {
   element.addEventListener("submit", async (event) => {
     event.preventDefault();
     const status = element.querySelector("[data-pe-roi-status]");
@@ -838,11 +889,9 @@ async function renderValue(app, runId, rerender, demo) {
     }
     status.textContent = "Saving…";
     try {
-      await putRoi(runId, payload);
-      dirtyRun = null;
-      openEstimates.add(runId);
+      await save(payload);
       announceStatus("Saved. The value was recalculated.");
-      rerender();
+      saved();
     } catch (error) {
       const fields = serverFieldErrors(error);
       if (fields) {
@@ -855,6 +904,110 @@ async function renderValue(app, runId, rerender, demo) {
   });
 }
 
+// --- a campaign's Value Proof Pack (#/pilot/proof/<campaign>) -----------------------------------------
+
+/** What a refusal says, by the server's code; the server's own message is shown under it. */
+const PROOF_REFUSED_TITLE = {
+  PROOF_SYNTHETIC_DATA: "No Value Proof Pack for generated data",
+  PROOF_NOT_MATURE: "The Value Proof Pack appears once the campaign's final result is in",
+  PROOF_NOT_TRACEABLE: "This Value Proof Pack cannot be shown",
+};
+
+/** The suggestions the pack makes, each with its state and, for an Analyst, the way to approve it. */
+function proposalsCard(view, canApprove) {
+  const proposals = view.proposals || [];
+  if (!proposals.length) return "";
+  const items = proposals
+    .map((p, i) => {
+      const approved = p.status === "approved";
+      const by = approved && p.approved_by && p.approved_at ? ` Approved by ${esc(p.approved_by.text)} on ${esc(p.approved_at.text)}.` : "";
+      const button =
+        !approved && canApprove
+          ? `<button type="button" class="btn secondary sm" data-pe-approve="${i}">Approve leaving it out</button>`
+          : "";
+      return `<li class="pe-proposal" data-pe-proposal="${esc(p.dimension)}"><p><strong>${esc(
+        p.segment.text,
+      )}</strong>: even the least harmful end of its range is ${esc(p.worst_case.text)}.${by}</p>${button}</li>`;
+    })
+    .join("");
+  return `<section class="card" data-pe-proposals><h3>Suggestions for the next cycle</h3><div class="pe-body">
+    <p class="pe-help">These groups did worse when contacted. Approving a suggestion records it for the next cycle's settings; nothing in any list changes until someone applies it there.</p>
+    <ul class="pe-tables">${items}</ul><p class="pe-status" data-pe-proposal-status role="status"></p></div></section>`;
+}
+
+async function renderProof(app, campaignId, rerender) {
+  const crumbsFor = (title) => [RESULTS_CRUMB, { label: "Reports", href: "#/pilot" }, { label: title }];
+  const screen = mount(
+    app,
+    `<main class="screen">${head(crumbsFor("Value Proof Pack"), "Value Proof Pack", null)}<div data-pe-body>${loadingRows}</div></main>`,
+  );
+  document.title = "Value Proof Pack · Marketing AI";
+  const { main, live } = screen;
+  const [proof, page] = await Promise.all([settle(getProof(campaignId)), settle(getReportHtml(proofUrl(campaignId, "html")))]);
+  if (!live()) return;
+  const error = proof.error || page.error;
+  if (error) {
+    const detail = (error.body && error.body.detail) || {};
+    const title = PROOF_REFUSED_TITLE[detail.code];
+    const when = error.body && error.body.results_available_on;
+    const notice =
+      error.status === 409 && title
+        ? noticeCard({
+            title,
+            text: `${detail.message}${present(when) ? ` It can be read from ${fmtDate(when)}.` : ""}`,
+            action: { label: "Back to Reports", href: "#/pilot" },
+          })
+        : error.status === 404
+          ? noticeCard({
+              title: "We could not find this campaign",
+              text: "It may have been deleted, or the link is incomplete.",
+              action: { label: "Back to Reports", href: "#/pilot" },
+            })
+          : errorBox(error, { retry: true });
+    main.innerHTML = `${head(crumbsFor("Value Proof Pack"), "Value Proof Pack", null)}${notice}`;
+    screen.commit();
+    return;
+  }
+  const view = proof.value;
+  const name = view.campaign_name.text;
+  const canApprove = await mayCall("POST", "/pilot/proof/{campaign_id}/suppressions");
+  const canValue = await mayCall("PUT", "/pilot/proof/{campaign_id}/value");
+  if (!live()) return;
+  const net = (view.sections || []).find((s) => s.key === "net_value");
+  const needsInputs = canValue && view.claim !== "descriptive" && net && net.status === "not_measured";
+  const estimates = needsInputs
+    ? `<section class="card"><div class="pe-body"><details class="adv" data-pe-estimates open><summary>Value inputs for this campaign</summary>${estimatesForm(
+        { value: { inputs: {}, outcome_is_good: view.outcome_is_good } },
+      )}</details></div></section>`
+    : "";
+  main.innerHTML = `${pageHead(
+    `${crumbs(crumbsFor(name))}<h1 class="h1">Value Proof Pack</h1><p class="sub">${esc(name)} · ${esc(view.claim_label)}</p>${headActions({
+      primary: { label: "Download PDF", href: proofUrl(campaignId, "pdf"), attrs: "download" },
+    })}`,
+  )}<div class="stack">${proposalsCard(view, canApprove)}${estimates}${frame(page.value, `Value Proof Pack · ${name}`)}</div>`;
+  document.title = `Value Proof Pack · ${name} · Marketing AI`;
+  wireFrames(main);
+  screen.commit();
+
+  for (const button of main.querySelectorAll("[data-pe-approve]")) {
+    button.addEventListener("click", async () => {
+      const proposal = view.proposals[Number(button.dataset.peApprove)];
+      const status = main.querySelector("[data-pe-proposal-status]");
+      button.disabled = true;
+      try {
+        await approveSuppression(campaignId, { dimension: proposal.dimension, segment: proposal.segment.value });
+        announceStatus("Approved. It is recorded for the next cycle.");
+        rerender();
+      } catch (failure) {
+        button.disabled = false;
+        if (status) status.innerHTML = errorBox(failure);
+      }
+    });
+  }
+  const form = main.querySelector("[data-pe-roi]");
+  if (form) wireEstimates(form, (payload) => putProofValue(campaignId, payload), rerender);
+}
+
 // --- the route ---------------------------------------------------------------------------------------
 
 export async function renderPilot(app, parts, demo) {
@@ -864,6 +1017,8 @@ export async function renderPilot(app, parts, demo) {
       await renderReport(app, third, fourth);
     } else if (second === "value" && third) {
       await renderValue(app, third, () => renderPilot(app, parts, demo), demo);
+    } else if (second === "proof" && third) {
+      await renderProof(app, third, () => renderPilot(app, parts, demo));
     } else if (second === "kit") {
       await renderKit(app, demo);
     } else {

@@ -23,13 +23,18 @@ before the plan's analysis date an **early look** - numbers, but no final verdic
 (`campaign_verdict_for` returns none for it, and its summary states the rates so far without the
 conclusion `measure_incrementality`'s sentence ends with).
 
+**Each group's effect (Plan J M104, DEC-1314).** `measure_campaign_segments` reads the same campaign once per
+band, predicted segment and offer, with the false-alarm guard of the Value Proof Pack's backfire check
+(`engine.measurement.segments`); every route that stores a campaign report stores its
+`segment_effects.json` beside it.
+
 **`as_of` always comes from the caller.** `utc_now()` lives in the route, never here, so the same
 inputs give the same report on any day.
 """
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from engine.measurement.campaign import as_scores_frame
 from engine.measurement.plan import (
@@ -49,6 +54,7 @@ if TYPE_CHECKING:
     from engine.config import PrimaryKey
     from engine.measurement.continuous import OutcomeKind
     from engine.measurement.plan import TestPlan
+    from engine.measurement.segments import SegmentEffects
     from engine.uplift.contracts import ConfidenceValue, IncrementalityReport
     from engine.uplift.measure import CampaignVerdict
 
@@ -59,6 +65,7 @@ __all__ = [
     "early_look_summary",
     "headline_estimate",
     "measure_campaign",
+    "measure_campaign_segments",
 ]
 
 EARLY_LOOK_PREFIX = "Early look"
@@ -192,6 +199,47 @@ def measure_campaign(
     if early:
         update["summary"] = early_look_summary(report, plan, as_of)
     return report.model_copy(update=update)
+
+
+def measure_campaign_segments(
+    assignment: pd.DataFrame,
+    outcomes: pd.DataFrame,
+    report: IncrementalityReport,
+    *,
+    primary_key: PrimaryKey,
+    outcome_column: str,
+    positive_label: str | None = None,
+    intended_column: str | None = None,
+    treatment_time: datetime,
+    treatment_date_column: str | None = None,
+    offers: pd.Series[Any] | None = None,
+    control_level: str | None = None,
+) -> SegmentEffects:
+    """Each group's effect beside `report`, measured as `measure_campaign` measured the campaign (Plan J M104).
+
+    `campaigns/<id>/segment_effects.json` (`engine.measurement.segments`): the same population, maturity and
+    interval rules on each band, predicted segment and offer, with the false-alarm guard of the Value Proof
+    Pack's backfire check. `report` is the one `measure_campaign` just returned on the same `assignment` and
+    `outcomes`; its window and `as_of` are used, so the groups are read exactly as the whole was. Every route
+    that stores a campaign report stores this file beside it (DEC-1314).
+    """
+    from engine.measurement.segments import measure_segment_effects
+
+    return measure_segment_effects(
+        assignment,
+        outcomes,
+        report,
+        primary_key=primary_key,
+        outcome_column=outcome_column,
+        positive_label=positive_label,
+        intended_column=intended_column,
+        treatment_time=treatment_time,
+        treatment_date_column=treatment_date_column,
+        outcome_window_days=report.outcome_window_days,
+        as_of=report.as_of,
+        offers=offers,
+        control_level=control_level,
+    )
 
 
 def early_look_summary(report: IncrementalityReport, plan: TestPlan, as_of: datetime) -> str:

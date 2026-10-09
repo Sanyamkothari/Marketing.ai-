@@ -55,6 +55,24 @@ export async function installWholePage({ hash = "#/", world }) {
     if (method === "GET" && p === "/approvals") {
       return world.waiting ? ok(world.waiting) : { status: 403, body: { detail: { code: "ROLE_REQUIRED", message: "No." } } };
     }
+    // Plan J M104: the Value Proof Packs. `world.proofs` is the list; `world.packs` maps a campaign id to
+    // `{json, html, after, refused}` (the real app's answers, captured by test_simple_ui.py).
+    if (method === "GET" && p === "/pilot/proof") return ok(world.proofs || { proofs: [] });
+    if (p.startsWith("/pilot/proof/")) {
+      const [id, action] = p.slice("/pilot/proof/".length).split("/").map(decodeURIComponent);
+      const pack = (world.packs || {})[id];
+      if (!pack) return { status: 404, body: { detail: { code: "CAMPAIGN_NOT_FOUND", message: "No campaign." } } };
+      if (method === "POST" && action === "suppressions") {
+        world.approved = (world.approved || []).concat([request.body]);
+        pack.approved = true;
+        return { status: 201, body: fixture("proof_approval") };
+      }
+      if (method === "GET" && !action) {
+        if (pack.refused) return { status: 409, body: pack.refused };
+        if (query.format === "json") return ok(pack.approved ? pack.after : pack.json);
+        return { status: 200, body: pack.html };
+      }
+    }
     return null;
   };
   const page = installPage(server, { hash });

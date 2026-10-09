@@ -72,12 +72,13 @@ STRING_LITERAL: Final[re.Pattern[str]] = re.compile(r"`([^`]*)`|\"([^\"\n]*)\"|'
 QUERY_HELPER: Final[re.Pattern[str]] = re.compile(r"\$\{q\(\{([^}]*)\}\)\}")
 INTERPOLATION: Final[re.Pattern[str]] = re.compile(r"\$\{[^}]*\}")
 REPORT_CALL: Final[re.Pattern[str]] = re.compile(
-    r"\b(readinessUrl|resultsUrl|roiUrl)\([^()]*?,\s*\"(\w+)\"\)"
+    r"\b(readinessUrl|resultsUrl|roiUrl|proofUrl)\([^()]*?,\s*\"(\w+)\"\)"
 )
 REPORT_ROUTE: Final[dict[str, str]] = {
     "readinessUrl": "/pilot/readiness/{dataset_id}",
     "resultsUrl": "/pilot/results",
     "roiUrl": "/pilot/roi/{run_id}",
+    "proofUrl": "/pilot/proof/{campaign_id}",  # Plan J M104 (DEC-1314)
 }
 
 PLAN_E_START: Final[str] = "<!-- ---- PLAN-E (pilot) — append only below this line ---- -->"
@@ -263,6 +264,106 @@ FIELD_READS: Final[tuple[tuple[str, str, str, str, str, Path_], ...]] = (
         ("client_name",),
     ),
     ("screen.js", "report.client_name", "GET", "/pilot/results", "response", ("client_name",)),
+    # Plan J M104 (DEC-1314): the Value Proof Packs on the hub, and one pack's viewer
+    ("screen.js", "list.proofs", "GET", "/pilot/proof", "response", ("proofs",)),
+    ("screen.js", "entry.campaign_id", "GET", "/pilot/proof", "response", ("proofs", "[]", "campaign_id")),
+    ("screen.js", "entry.name", "GET", "/pilot/proof", "response", ("proofs", "[]", "name")),
+    ("screen.js", "entry.status", "GET", "/pilot/proof", "response", ("proofs", "[]", "status")),
+    ("screen.js", "entry.headline", "GET", "/pilot/proof", "response", ("proofs", "[]", "headline")),
+    ("screen.js", "entry.message", "GET", "/pilot/proof", "response", ("proofs", "[]", "message")),
+    (
+        "screen.js",
+        "view.campaign_name.text",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("campaign_name", "text"),
+    ),
+    ("screen.js", "view.claim_label", "GET", "/pilot/proof/{campaign_id}", "response", ("claim_label",)),
+    ("screen.js", "view.claim !==", "GET", "/pilot/proof/{campaign_id}", "response", ("claim",)),
+    (
+        "screen.js",
+        "view.outcome_is_good",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("outcome_is_good",),
+    ),
+    ("screen.js", "s.key ===", "GET", "/pilot/proof/{campaign_id}", "response", ("sections", "[]", "key")),
+    (
+        "screen.js",
+        "net.status",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("sections", "[]", "status"),
+    ),
+    ("screen.js", "view.proposals", "GET", "/pilot/proof/{campaign_id}", "response", ("proposals",)),
+    ("screen.js", "p.status", "GET", "/pilot/proof/{campaign_id}", "response", ("proposals", "[]", "status")),
+    (
+        "screen.js",
+        "p.dimension",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("proposals", "[]", "dimension"),
+    ),
+    (
+        "screen.js",
+        "p.segment.text",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("proposals", "[]", "segment", "text"),
+    ),
+    (
+        "screen.js",
+        "p.worst_case.text",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("proposals", "[]", "worst_case", "text"),
+    ),
+    (
+        "screen.js",
+        "p.approved_by.text",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("proposals", "[]", "approved_by", "text"),
+    ),
+    (
+        "screen.js",
+        "p.approved_at.text",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("proposals", "[]", "approved_at", "text"),
+    ),
+    (
+        "screen.js",
+        "proposal.segment.value",
+        "GET",
+        "/pilot/proof/{campaign_id}",
+        "response",
+        ("proposals", "[]", "segment", "value"),
+    ),
+    (
+        "screen.js",
+        "dimension: proposal.dimension",
+        "POST",
+        "/pilot/proof/{campaign_id}/suppressions",
+        "body",
+        ("dimension",),
+    ),
+    (
+        "screen.js",
+        "segment: proposal.segment.value",
+        "POST",
+        "/pilot/proof/{campaign_id}/suppressions",
+        "body",
+        ("segment",),
+    ),
     ("api.js", "me.permissions", "GET", "/auth/me", "response", ("permissions",)),
     ("api.js", "p.method", "GET", "/auth/me", "response", ("permissions", "[]", "method")),
     ("api.js", "p.path", "GET", "/auth/me", "response", ("permissions", "[]", "path")),

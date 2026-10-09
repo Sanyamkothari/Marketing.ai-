@@ -11,6 +11,13 @@
   client's value inputs, stored with the run.
 * `GET /pilot/demo`, `GET /pilot/demo/raw/{variant}` - demo mode and the demo's raw tables.
 * `POST /pilot/feedback`, `GET /pilot/feedback/export` - the feedback loop.
+* `GET /pilot/proof/{campaign_id}` (Plan J M104, DEC-1314) - the Value Proof Pack of a measured campaign:
+  every number traced to a measured artefact, no customer row; `409 PROOF_SYNTHETIC_DATA` for generated
+  data, `409 PROOF_NOT_MATURE` (with `results_available_on`) before a final result. `GET /pilot/proof` lists
+  the newest campaigns' packs (or why each is refused); `PUT /pilot/proof/{campaign_id}/value` stores a
+  campaign's own value inputs (an audited or programme campaign has no run to hold them); `POST
+  /pilot/proof/{campaign_id}/suppressions` records an Analyst's approval of a "leave this group out next
+  cycle" suggestion - recorded and audited, never applied by the engine.
 
 A report comes as `format=html` (the default: one self-contained page), `pdf` (the same page as a
 file, rendered on the server) or `json` (the laid-out document). Storage is the Phase 4a interface,
@@ -22,23 +29,39 @@ from __future__ import annotations
 import io
 import re
 import zipfile
+from datetime import date
 from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Query, Request
-from fastapi.responses import HTMLResponse, PlainTextResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, Response
+from pydantic import Field
 
 from api.access import PrincipalDep, set_audit_context
 from api.access_policy import RoutePolicy, register
 from api.deps import ConfigRootDep, RegistryDep, SettingsDep, StorageDep
 from api.routes.clients import get_client_store
 from api.routes.uploads import http_error
-from api.schemas import ErrorResponse, PilotDemoResponse, PilotFeedbackRequest, PilotFeedbackResponse
+from api.schemas import (
+    ErrorBody,
+    ErrorResponse,
+    PilotDemoResponse,
+    PilotFeedbackRequest,
+    PilotFeedbackResponse,
+)
 from engine.access.roles import Role
 from engine.audit.events import content_hash
-from engine.config import ConfigError, list_use_case_ids
+from engine.config import ConfigError, StrictBase, list_use_case_ids
 from engine.pilot.demo import DEMO_RAW_PREFIX, load_demo
 from engine.pilot.document import ReportDocument, render_html, render_pdf
 from engine.pilot.help import HelpCatalogue, load_help
+from engine.pilot.proof import (
+    PROOF_NOT_TRACEABLE,
+    ProofNotFoundError,
+    ProofRefusedError,
+    ProofView,
+    ProvenanceError,
+    SuppressionApproval,
+)
 from engine.pilot.roi import RoiInputs, RoiView
 from engine.utils.time import utc_now
 
@@ -91,6 +114,32 @@ POLICIES: dict[tuple[str, str], RoutePolicy] = {
     ),
     ("GET", "/pilot/feedback/export"): RoutePolicy(
         role=_AD, action="pilot.feedback_export", audit_reads=True, purpose="export the pilot feedback"
+    ),
+    # Plan J M104 (DEC-1314): the Value Proof Pack. Reading one is Viewer (it holds no customer row);
+    # entering a campaign's value inputs and approving a "leave out next cycle" suggestion are Analyst, audited.
+    ("GET", "/pilot/proof"): RoutePolicy(
+        role=_V, action="pilot.proof_list", purpose="see the campaigns' Value Proof Packs"
+    ),
+    ("GET", "/pilot/proof/{campaign_id}"): RoutePolicy(
+        role=_V,
+        action="pilot.proof_read",
+        object_type="campaign",
+        object_param="campaign_id",
+        purpose="see a campaign's Value Proof Pack",
+    ),
+    ("PUT", "/pilot/proof/{campaign_id}/value"): RoutePolicy(
+        role=_AN,
+        action="pilot.proof_value_save",
+        object_type="campaign",
+        object_param="campaign_id",
+        purpose="enter a campaign's value inputs",
+    ),
+    ("POST", "/pilot/proof/{campaign_id}/suppressions"): RoutePolicy(
+        role=_AN,
+        action="pilot.proof_suppression_approve",
+        object_type="campaign",
+        object_param="campaign_id",
+        purpose="approve leaving a group out of the next cycle",
     ),
 }
 """This router's rows of the access table (DEC-704): reading a report is Viewer, entering value
@@ -475,3 +524,217 @@ def export_feedback(
         media_type="text/csv; charset=utf-8",
         headers={"Content-Disposition": 'attachment; filename="pilot_feedback.csv"'},
     )
+
+
+# ---------------------------------------------------------------------------
+# Plan J M104: the Value Proof Pack (DEC-1314)
+# ---------------------------------------------------------------------------
+PROOFS_LISTED: Final[int] = 20
+"""How many of the newest campaigns `GET /pilot/proof` reads a pack for."""
+
+
+class ProofRefusal(StrictBase):
+    """The 409 of the Value Proof Pack: why no pack is drawn, and when one can be, if that is known."""
+
+    detail: ErrorBody
+    results_available_on: date | None = Field(
+        default=None, description="The day the campaign can be read as final, when known."
+    )
+
+
+class ProofSummary(StrictBase):
+    """One campaign's pack in a list: ready with its headline, or refused with the reason."""
+
+    campaign_id: str
+    name: str = Field(description="The campaign's name, as recorded.")
+    kind: str = Field(description="`scored`, `external` (audited) or `programme`.")
+    status: Literal["ready", "refused"]
+    code: str | None = Field(default=None, description="Why it is refused: a catalogue code.")
+    message: str | None = Field(default=None, description="The refusal in plain words.")
+    claim_label: str | None = Field(default=None, description="What the pack's numbers can claim.")
+    headline: str | None = Field(default=None, description="The pack's one-sentence result.")
+    results_available_on: date | None = None
+
+
+class ProofList(StrictBase):
+    """`GET /pilot/proof`: the newest campaigns, newest first."""
+
+    proofs: tuple[ProofSummary, ...]
+
+
+class SuppressionRequest(StrictBase):
+    """Body of `POST /pilot/proof/{campaign_id}/suppressions`: the flagged group the Analyst approves leaving out."""
+
+    dimension: Literal["band", "segment", "offer"] = Field(
+        description="The kind of group, as the pack names it."
+    )
+    segment: str = Field(min_length=1, max_length=200, description="The group's name, as the pack prints it.")
+
+
+_PROOF_RESPONSES: dict[int | str, dict[str, object]] = {
+    **_REPORT_RESPONSES,
+    200: {**_REPORT_RESPONSES[200], "model": ProofView},
+    409: {"model": ProofRefusal},
+    500: {"model": ErrorResponse},
+}
+
+
+def _refusal(exc: ProofRefusedError) -> JSONResponse:
+    body = ProofRefusal(
+        detail=ErrorBody(code=exc.code, message=exc.message), results_available_on=exc.results_available_on
+    )
+    return JSONResponse(status_code=409, content=body.model_dump(mode="json"))
+
+
+def _proof(storage: StorageDep, campaign_id: str, root: ConfigRootDep) -> ProofView | JSONResponse:
+    from engine.measurement.campaign import CAMPAIGN_NOT_FOUND
+    from engine.pilot.proof import build_proof
+
+    try:
+        return build_proof(storage, campaign_id, root=root)
+    except ProofNotFoundError as exc:
+        raise http_error(404, CAMPAIGN_NOT_FOUND, f"No campaign with id {campaign_id!r}.") from exc
+    except ProofRefusedError as exc:
+        return _refusal(exc)
+    except ProvenanceError as exc:
+        raise http_error(
+            500,
+            PROOF_NOT_TRACEABLE,
+            "A number of this campaign's Value Proof Pack could not be traced back to the record it comes from, "
+            "so the pack is not shown.",
+        ) from exc
+
+
+@router.get(
+    "/pilot/proof",
+    response_model=ProofList,
+    responses=_ERRORS,
+    summary="The Value Proof Packs of the newest campaigns: each one's headline, or why none is drawn",
+)
+def list_proofs(request: Request, storage: StorageDep, root: ConfigRootDep) -> ProofList:
+    from api.routes.campaigns import get_campaign_store
+    from engine.pilot.proof import build_proof
+
+    summaries: list[ProofSummary] = []
+    for campaign in get_campaign_store(request).list(limit=PROOFS_LISTED):
+        summary = ProofSummary(
+            campaign_id=campaign.campaign_id, name=campaign.name, kind=campaign.kind.value, status="refused"
+        )
+        try:
+            view = build_proof(storage, campaign.campaign_id, root=root)
+        except ProofRefusedError as exc:
+            update: dict[str, object] = {
+                "code": exc.code,
+                "message": exc.message,
+                "results_available_on": exc.results_available_on,
+            }
+        except ProofNotFoundError:  # a record whose files are gone (retention): nothing to read
+            continue
+        except ProvenanceError:
+            update = {
+                "code": PROOF_NOT_TRACEABLE,
+                "message": "A number of this pack could not be traced back to its record, so it is not shown.",
+            }
+        else:
+            update = {"status": "ready", "claim_label": view.claim_label, "headline": view.headline}
+        summaries.append(ProofSummary.model_validate({**summary.model_dump(), **update}))
+    return ProofList(proofs=tuple(summaries))
+
+
+@router.get(
+    "/pilot/proof/{campaign_id}",
+    responses=_PROOF_RESPONSES,
+    summary="A campaign's Value Proof Pack: every number traced to a measured record, no customer row",
+)
+def read_proof(
+    campaign_id: str,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    fmt: FormatQuery = "html",
+) -> Response:
+    from engine.pilot.proof import proof_document
+
+    view = _proof(storage, campaign_id, root)
+    if isinstance(view, JSONResponse):
+        return view
+    if fmt == "json":
+        return Response(view.model_dump_json(), media_type="application/json")
+    return _report(proof_document(view), fmt, f"value_proof_{campaign_id}")
+
+
+@router.put(
+    "/pilot/proof/{campaign_id}/value",
+    response_model=RoiInputs,
+    responses=_ERRORS,
+    summary="Save a campaign's own value inputs (what an extra outcome is worth, offer and contact costs)",
+)
+def save_proof_value(
+    campaign_id: str,
+    body: RoiInputs,
+    request: Request,
+    storage: StorageDep,
+    principal: PrincipalDep,
+) -> RoiInputs:
+    from engine.measurement.campaign import CAMPAIGN_FILENAME, CAMPAIGN_NOT_FOUND, campaign_key
+    from engine.pilot.proof import save_campaign_value_inputs
+    from engine.storage import StorageError
+
+    try:
+        found = storage.exists(campaign_key(campaign_id, CAMPAIGN_FILENAME))
+    except StorageError:  # an id that is not a key names no campaign
+        found = False
+    if not found:
+        raise http_error(404, CAMPAIGN_NOT_FOUND, f"No campaign with id {campaign_id!r}.")
+    stamped = body.model_copy(update={"entered_by": principal.username, "entered_at": utc_now()})
+    saved = save_campaign_value_inputs(storage, campaign_id, stamped)
+    set_audit_context(request, object_id=campaign_id, object_type="campaign", after_hash=content_hash(saved))
+    return saved
+
+
+@router.post(
+    "/pilot/proof/{campaign_id}/suppressions",
+    response_model=SuppressionApproval,
+    status_code=201,
+    responses={**_ERRORS, 409: {"model": ProofRefusal}},
+    summary="Approve leaving a backfiring group out of the next cycle (recorded; the engine applies nothing)",
+)
+def approve_proof_suppression(
+    campaign_id: str,
+    body: SuppressionRequest,
+    request: Request,
+    storage: StorageDep,
+    root: ConfigRootDep,
+    principal: PrincipalDep,
+) -> SuppressionApproval | JSONResponse:
+    from engine.measurement.campaign import CAMPAIGN_NOT_FOUND
+    from engine.pilot.proof import approve_suppression
+
+    try:
+        approval = approve_suppression(
+            storage,
+            campaign_id,
+            dimension=body.dimension,
+            segment=body.segment,
+            approved_by=principal.username,
+            now=utc_now(),
+            root=root,
+        )
+    except ProofNotFoundError as exc:
+        raise http_error(404, CAMPAIGN_NOT_FOUND, f"No campaign with id {campaign_id!r}.") from exc
+    except ProofRefusedError as exc:
+        set_audit_context(request, details={"reason_code": exc.code})
+        return _refusal(exc)
+    except ProvenanceError as exc:
+        raise http_error(
+            500,
+            PROOF_NOT_TRACEABLE,
+            "The campaign's Value Proof Pack could not be traced, so nothing was approved.",
+        ) from exc
+    set_audit_context(
+        request,
+        object_id=campaign_id,
+        object_type="campaign",
+        after_hash=content_hash(approval),
+        details={"outcome": f"leave_out_{body.dimension}"},
+    )
+    return approval

@@ -82,6 +82,17 @@ export const getReportDoc = (href) => request(href);
 export const getRoi = (runId) => orNull(request(`/pilot/roi/${encodeURIComponent(runId)}`));
 export const putRoi = (runId, inputs) => request(`/pilot/roi/${encodeURIComponent(runId)}`, send("PUT", inputs));
 
+// Plan J M104: the Value Proof Pack of a measured campaign. Every figure comes from the server; a pack the
+// server refuses (409: generated data, or no final result yet) is thrown with its reason and day.
+export const proofUrl = (campaignId, format) => url(`/pilot/proof/${encodeURIComponent(campaignId)}${q({ format })}`);
+/** The newest campaigns' packs (`GET /pilot/proof`); null when this API has no such list. */
+export const listProofs = () => orNull(request("/pilot/proof"));
+export const getProof = (campaignId) => request(`/pilot/proof/${encodeURIComponent(campaignId)}?format=json`);
+export const putProofValue = (campaignId, inputs) =>
+  request(`/pilot/proof/${encodeURIComponent(campaignId)}/value`, send("PUT", inputs));
+export const approveSuppression = (campaignId, payload) =>
+  request(`/pilot/proof/${encodeURIComponent(campaignId)}/suppressions`, send("POST", payload));
+
 export const listDatasets = () => request("/datasets");
 export const listScoringRuns = () => request(`/runs${q({ mode: "score", limit: 50 })}`);
 export const listModels = () => request("/models");

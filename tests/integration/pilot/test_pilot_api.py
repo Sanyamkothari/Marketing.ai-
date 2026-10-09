@@ -105,8 +105,11 @@ def test_feedback_names_a_route_never_page_content(client: TestClient) -> None:
 
 def test_every_pilot_route_has_a_role_and_writes_are_not_open_to_everyone() -> None:
     policies = {key: policy for key, policy in all_policies().items() if key[1].startswith("/pilot/")}
-    assert len(policies) == 11
+    assert len(policies) == 15  # Plan J M104 (DEC-1314) added the four Value Proof Pack routes
     assert policies[("PUT", "/pilot/roi/{run_id}")].role.value == "analyst"
+    assert policies[("GET", "/pilot/proof/{campaign_id}")].role.value == "viewer"
+    assert policies[("PUT", "/pilot/proof/{campaign_id}/value")].role.value == "analyst"
+    assert policies[("POST", "/pilot/proof/{campaign_id}/suppressions")].role.value == "analyst"
     assert policies[("GET", "/pilot/feedback/export")].audit_reads
     assert all(policy.role is not None for policy in policies.values())
 

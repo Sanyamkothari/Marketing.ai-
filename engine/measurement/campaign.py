@@ -34,6 +34,10 @@ same database as the audit trail, through `CampaignStore`; a test or a laptop wi
 `contact_readout.json`          M103: contact rate, contamination and the complier-adjusted effect (counts only)
 `audit.json`                    M103: for an `external` campaign, how it was read and what it can claim
 `programme.json`                M103: for a `programme` campaign, the period and the universal holdout used
+`segment_effects.json`          M104: the measured effect per band, segment and offer, beside the report
+                                (`engine.measurement.segments`; counts only)
+`suppression_proposals.json`    M104: the backfiring groups an Analyst approved leaving out next cycle
+                                (`engine.pilot.proof`; recorded, never applied by the engine)
 ==============================  ==========================================================================
 
 `assignment.parquet`, `outcomes.parquet` and `contact.parquet` hold one row per customer: they are

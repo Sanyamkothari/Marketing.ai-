@@ -34,7 +34,7 @@ the user downloads (the treat list).
 | 15 | One action per customer across use cases | M101 | written (below) |
 | 16 | Revenue outcomes and CUPED | M102 | written (below) |
 | 17 | Auditing a campaign another tool ran; the programme readout | M103 | written (below) |
-| 18 | The Value Proof Pack | M104 | not yet written |
+| 18 | The Value Proof Pack | M104 | written (below) |
 | 19 | Warnings and proven value to date | M105 | not yet written |
 | 20 | Learning from the last cycle | M106 | not yet written |
 | 21 | The monthly loop (read-only) | M107 | not yet written |
@@ -719,3 +719,59 @@ groups, the labels table, Fieller's set against a brute-force scan, the rows aga
 `tests/integration/measurement/{test_campaign_audit,test_campaign_contacts,test_programme_readout,test_audit_trail}.py`
 (the acceptance list on data from the real scoring stages and the engine's simulators), and
 `tests/unit/measurement/test_audit_scaling.py` (a million customers take about four times what 250,000 do).
+
+## 18. The Value Proof Pack (M104, DEC-1314)
+
+A finance head asks four things of a campaign: what did it really change, what would have happened anyway, what did it
+cost, and can we trust the answer. `GET /pilot/proof/{campaign_id}?format=html|pdf|json` (Viewer) answers them for one
+measured campaign (`engine/pilot/proof.py::build_proof`), in ten sections read only from the campaign's own aggregate
+artefacts: the plan as registered against what ran; whether the list went out (the contact file, M103); the incremental
+outcomes with 95% ranges (per offer when there are several); gross against incremental; naive credit (every outcome among
+the contacted customers, as a tool that credits every response would count it) against measured credit; offer money
+spent on sure things and sleeping dogs (lists chosen by the campaign-effect model); what the control group and the explore
+slice cost; groups where the campaign backfired, with a suggestion to leave them out next cycle; net value in rupees as a
+range; and method and limits. The HTML and the PDF are drawn from one `ReportDocument` (`kind: proof`), as every pilot
+report is (`engine/pilot/document.py`, fpdf2 with matplotlib's DejaVu font: no new dependency).
+
+**Every number is traced.** A number in `ProofView` is a `Figure`: its value, the text printed, the artefact and field it
+was read from and, for arithmetic, a formula over those fields (`s0*s1 - s2`: names and `+ - * /` only, no constant).
+`verify_provenance` reads every source again, recomputes every value and every printed text, and the build is refused
+(`500 PROOF_NOT_TRACEABLE`) if one does not resolve. Text read from an artefact that may hold digits (the campaign's
+name, a group's name, the outcome column) is a figure too, so every digit on the page comes from a figure.
+`tests/integration/pilot/test_proof_pack.py` resolves every number with its own resolver and checks that every digit
+on the page is a figure's text. A missing artefact is "not measured" with its reason, never a default or a zero.
+
+**What the numbers may claim.** A campaign the engine held back at random (`engine_random`), or whose random assignment
+the audit verified (`verified_random`), is proven. One random only by the person's statement (`declared_random`) is
+shown under that condition ("If the groups were random as you said") and never as proven. A descriptive-only one shows
+its counts and rates and credits nothing: no measured credit, no net value, no backfire.
+
+**Each group's effect: `campaigns/<id>/segment_effects.json`.** Every route that stores a campaign report stores this file
+beside it (`engine.measurement.measure.measure_campaign_segments`, `engine/measurement/segments.py`): per band, predicted
+segment and offer, the campaign's own measurement (`measure_incrementality`) on that group's rows. Audited offers are
+each compared with the shared control (as the report's `arms`); a scored run that chose the offer per customer compares
+each offer within the customers its policy gave that offer, held back or not (`policy_offer_label`). A programme has no
+groups and says so. The rows of every group are found in one pass, so the work is linear in the campaign's size
+(`tests/unit/pilot/test_proof.py` builds a million-customer pack, marked slow).
+
+**The backfire rule (multiple comparisons).** A group is judged only with at least 50 measured customers in each arm;
+every judged group gets a second interval at the Bonferroni level `1 - 0.05/m` (`m` judged groups; exact Newcombe for a
+rate, a conservatively widened Welch interval for an amount). A group is flagged only when that interval lies wholly on
+the harmful side of zero, so a campaign that harmed nobody is flagged at most one time in twenty
+(`tests/statistical/test_backfire_false_alarm.py`, nightly). The suggestion "leave it out of the next cycle" is approved
+by an Analyst (`POST /pilot/proof/{campaign_id}/suppressions`, audited) and recorded in
+`campaigns/<id>/suppression_proposals.json`; the engine never applies it.
+
+**Refusals.** `409 PROOF_SYNTHETIC_DATA` for a campaign on generated data (a run, an upload, an audit or a programme
+marked synthetic); `409 PROOF_NOT_MATURE`, with `results_available_on` when known, for a campaign not measured yet,
+measured before every outcome was in, or read as an early look.
+
+**Money.** Value per outcome and the costs come from the value inputs entered for the campaign
+(`PUT /pilot/proof/{campaign_id}/value`, Analyst, for an audit or a programme that has no run), else its run's
+(`PUT /pilot/roi/{run_id}`). Without them the costs of sections 6 and 7 fall back to those the run ranked its list with
+(M97's `policy_recommendation.json`), and the net value is not measured. An amount is valued from the adjusted estimate
+when the plan registered it (M102).
+
+**On screen.** Results lists the ready packs with their sentence (`ui/modules/simple/pages.js`); Reports lists every
+recent campaign's pack or the server's reason; `#/pilot/proof/<campaign>` shows the server's page, its suggestions with
+an Approve button for an Analyst, and a value form when the pack has no value inputs (`ui/modules/pilot/screen.js`).
