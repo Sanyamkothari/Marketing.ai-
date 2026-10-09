@@ -1084,7 +1084,20 @@ whether choosing per customer does better than the first offer alone; every numb
   14, Plan J M100) reports every offer and writes each offer's predicted uplift, but the contact list
   is still the first offer's, the offer chosen per customer reaches the treat list only with M100's
   second part, and such a model is never champion. Offer costs per arm wait for M99's catalogue.
-* **Binary outcome only.** Converted or not. Revenue or other continuous outcomes are not modelled.
+* **Binary outcome only for the model.** Converted or not. Revenue or other continuous outcomes are not
+  modelled: an uplift model learns from a yes/no outcome, and step 4 does not offer "Learn who to contact
+  next time" on a campaign measured on an amount.
+* **Amounts are measured, not modelled (Plan J M102, DEC-1312).** A campaign's result can be measured on an
+  amount such as revenue (`outcome_kind: continuous`): the difference in the two groups' averages with a
+  **Welch** interval (unequal variances, Student's t), and - when the registered test plan named an amount
+  from before the campaign - the **CUPED** adjusted difference, `adjusted_lift` / `adjusted_interval`, with the
+  `variance_reduction` it bought (about rho²). The covariate must be dated before each customer's treatment
+  date (`COVARIATE_NOT_BEFORE_CAMPAIGN` otherwise) and registered in advance (`TEST_PLAN_CHANGED` otherwise).
+  Long-tailed revenue is never capped; below Kohavi et al.'s size (355 g² customers per arm) the report
+  carries `OUTCOME_SKEWED`: the range may be too narrow. Both intervals' coverage is tested nightly, on
+  normal and on zero-inflated lognormal revenue. On a yes/no outcome nothing changes: every M102 field is
+  absent. Several offers are still measured on a yes/no outcome only. Details: [`docs/DECIDE.md`](DECIDE.md)
+  section 16.
 * **Two-column keys: uploads train, datasets score.** Since M53 `POST /uplift/runs` takes a
   two-column key (customer + snapshot date) on an uploaded file, and uplift scoring and campaign
   results read both columns. Phase 1's `POST /runs` still takes a composite key only with a built

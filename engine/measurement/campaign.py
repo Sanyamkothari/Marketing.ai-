@@ -220,6 +220,18 @@ class CampaignOutcomes(StrictBase):
     )
     rows: int = Field(description="Rows copied into `outcomes.parquet`.")
     added_at: AwareDatetime = Field(description="When it was added.")
+    # Plan J M102 (DEC-1312): an amount from before the campaign, copied for the adjusted estimate. Left
+    # out of the record while unset, so a campaign without one is stored exactly as before.
+    covariate_column: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The amount from before the campaign copied with the outcomes, for the adjusted estimate.",
+    )
+    covariate_date_column: str | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description="The date each covariate value was measured up to; it must fall before the treatment date.",
+    )
 
 
 class Campaign(Artefact):

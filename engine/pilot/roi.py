@@ -23,6 +23,17 @@ sources read, as before.
 When neither exists, the run's outcome window (`engine.scheduling.outcomes.outcome_window`) says
 when outcomes can first be measured, and the view shows that date instead of a number.
 
+**Amounts (Plan J M102, DEC-1312).** A report measured on an amount (revenue: `outcome_kind` is
+`continuous`) is priced from its per-customer difference times the contacted customers: the adjusted
+estimate when the registered plan named a covariate, else Welch's difference
+(`engine.measurement.measure.headline_estimate`). `value_per_outcome` is then what one unit of the amount
+is worth in rupees (1 when the amount already is revenue in rupees; a margin share to count profit), and
+the offer cost is counted for every contacted customer whose amount is above zero, as it is counted for
+every converter of a yes/no outcome. Outcomes ingested as amounts (`incrementality_input.json` with
+`outcome_kind: continuous`) keep only the two averages, not how much customers vary, so no range can be
+given: the view says so in a plain sentence and prices nothing, rather than "No outcomes have been
+recorded".
+
 The rupee figures multiply that interval by values the *client* enters - what one extra retained or
 won-back customer is worth, what an offer costs when taken, what a contact costs - stored with the
 run (`pilot_roi_inputs.json`) and printed on the report, which says that the value depends on them.
@@ -55,6 +66,7 @@ from engine.pilot.document import (
 if TYPE_CHECKING:
     from engine.clients import ClientStore
     from engine.storage import Storage
+    from engine.uplift.contracts import IncrementalityReport
 
 __all__ = [
     "ROI_INPUTS_FILENAME",
@@ -153,6 +165,17 @@ class RoiView(_Strict):
     summary: str
     synthetic: bool = False
     """The run read generated data (`RunRecord.synthetic`): the report then says the effect is planted."""
+    # Plan J M102 (DEC-1312): an amount's view. Absent from a yes/no view's JSON, which is unchanged.
+    outcome_kind: Literal["continuous"] | None = Field(default=None, exclude_if=lambda value: value is None)
+    """`continuous` when the outcome is an amount; absent for a yes/no outcome."""
+    treated_mean: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    """Average amount of the contacted customers."""
+    control_mean: float | None = Field(default=None, exclude_if=lambda value: value is None)
+    """Average amount of the control group."""
+    adjusted: bool | None = Field(default=None, exclude_if=lambda value: value is None)
+    """True when the amount was priced from the adjusted (pre-registered covariate) estimate."""
+    value_note: str | None = Field(default=None, exclude_if=lambda value: value is None)
+    """What the rupee figures of an amount rest on, or why they are missing, in one plain paragraph."""
 
 
 VALUE_CONFIG: Final[str] = "pilot/value.yaml"
@@ -415,6 +438,12 @@ def compute_roi(
         "inputs": chosen,
         "synthetic": record.synthetic or _outcomes_upload_synthetic(storage, run_id, measured_campaign),
     }
+    if (
+        isinstance(report, IncrementalityReport)
+        and report.outcome_kind == "continuous"
+        and report.status is IncrementalityStatus.MATURE
+    ):
+        return _priced_amount(base, report, inputs=chosen, root=root)
     # A measurement wins over one still waiting: an immature report stays on disk after outcomes were
     # ingested for the same run, and the ingested counts are then the newer, usable measurement.
     mature = isinstance(report, IncrementalityReport) and (
@@ -455,6 +484,25 @@ def compute_roi(
                 inputs=chosen,
                 root=root,
             )
+    if isinstance(ingested, IncrementalityInput) and ingested.outcome_kind == "continuous" and report is None:
+        return RoiView(
+            **base,
+            status="not_measured",
+            source="outcome_ingestion",
+            results_available_on=None,
+            causal=False,
+            outcome_name=ingested.outcome_name,
+            outcome_kind="continuous",
+            treated_rows=ingested.treated.rows,
+            control_rows=ingested.control.rows,
+            treated_mean=ingested.treated.outcome_mean,
+            control_mean=ingested.control.outcome_mean,
+            summary=(
+                f"Outcomes were recorded as amounts ({ingested.outcome_name}), but only each group's average "
+                f"was kept, not how much customers vary, so no range can be given and nothing is put in "
+                f"rupees. Measure the campaign from its outcomes file to see the range."
+            ),
+        )
     if isinstance(report, IncrementalityReport):
         available = report.results_available_on
         return RoiView(
@@ -492,6 +540,82 @@ def compute_roi(
             "No outcomes have been recorded for this campaign yet."
             + (f" They can be measured from {matures}." if matures is not None else "")
         ),
+    )
+
+
+def _priced_amount(
+    base: _Common, report: IncrementalityReport, *, inputs: RoiInputs | None, root: Path | None
+) -> RoiView:
+    """The value view of a campaign measured on an amount (Plan J M102); see the module docstring."""
+    from engine.measurement.measure import headline_estimate
+
+    estimate, adjusted = headline_estimate(report)
+    rows = report.treated_rows
+    amounts: dict[str, object] = {
+        "outcome_kind": "continuous",
+        "treated_mean": report.treated_mean,
+        "control_mean": report.control_mean,
+    }
+    if estimate is None:
+        return RoiView(
+            **base,
+            status="measured",
+            source="incrementality_report",
+            results_available_on=None,
+            causal=report.causal,
+            outcome_name=report.outcome_column,
+            treated_rows=rows,
+            treated_outcomes=report.treated_conversions,
+            control_rows=report.control_rows,
+            control_outcomes=report.control_conversions,
+            summary=(
+                "An average needs at least two contacted and two held-back customers with an amount, so the "
+                "difference and its value cannot be worked out."
+            ),
+            value_note="No difference was measured, so there is nothing to put in rupees.",
+            outcome_kind="continuous",
+            treated_mean=report.treated_mean,
+            control_mean=report.control_mean,
+        )
+    view = _priced(
+        base,
+        source="incrementality_report",
+        causal=report.causal,
+        outcome_name=report.outcome_column,
+        treated=(rows, report.treated_conversions, None),
+        control=(report.control_rows, report.control_conversions, None),
+        incremental=Money(
+            value=estimate.value * rows,
+            low=None if estimate.ci_low is None else estimate.ci_low * rows,
+            high=None if estimate.ci_high is None else estimate.ci_high * rows,
+        ),
+        confidence_level=estimate.confidence_level,
+        inputs=inputs,
+        root=root,
+    )
+    unit = (
+        f"The difference in {report.outcome_column} is measured in its own unit and multiplied by the value of "
+        f"one unit you entered (1 when it already is revenue in rupees). The offer cost is counted for every "
+        f"contacted customer whose amount is above zero."
+    )
+    if adjusted:
+        unit += (
+            f" The difference is the adjusted one, which takes account of each customer's "
+            f"{report.covariate_column!r} before the campaign, as the test plan registered."
+        )
+    if inputs is None:
+        unit = "Enter what one unit of the amount is worth in rupees to see the value. " + unit
+    return view.model_copy(
+        update={
+            **amounts,
+            "adjusted": adjusted,
+            "value_note": unit,
+            "benefit_label": (
+                f"Extra {report.outcome_column} because of the campaign"
+                if view.outcome_is_good
+                else f"{report.outcome_column} the campaign prevented"
+            ),
+        }
     )
 
 
@@ -633,6 +757,43 @@ def _times(value: float) -> str:
     return f"{value:.1f}x"
 
 
+def _amount_measured(view: RoiView, level: str) -> list[AnyBlock]:
+    """ "What was measured" for an amount (Plan J M102): averages instead of rates."""
+
+    def average(value: float | None) -> str:
+        return f"{value:,.2f}" if value is not None else ""
+
+    return [
+        Heading(text="What was measured"),
+        Table(
+            columns=("Group", "Customers", "With an amount above zero", "Average amount"),
+            rows=(
+                (
+                    "Contacted",
+                    f"{view.treated_rows:,}",
+                    f"{view.treated_outcomes:,}",
+                    average(view.treated_mean),
+                ),
+                (
+                    "Control group (not contacted)",
+                    f"{view.control_rows:,}",
+                    f"{view.control_outcomes:,}",
+                    average(view.control_mean),
+                ),
+            ),
+            caption=(
+                "The control group was chosen at random and not contacted, so the difference between the "
+                "two averages is what the campaign caused."
+                if view.causal
+                else "The groups were not chosen at random, so the difference is descriptive only."
+            ),
+        ),
+        KeyValues(
+            rows=((view.benefit_label, f"{_range(view.benefit, _count)}, {level} confidence interval"),)
+        ),
+    ]
+
+
 def roi_document(
     view: RoiView,
     *,
@@ -653,7 +814,11 @@ def roi_document(
                 title=(
                     "Results are not ready yet"
                     if view.results_available_on is not None
-                    else "No results recorded yet"
+                    else (
+                        "No range can be given yet"
+                        if view.outcome_kind == "continuous"
+                        else "No results recorded yet"
+                    )
                 ),
                 text=view.summary,
             )
@@ -677,40 +842,43 @@ def roi_document(
                 text=view.summary + net_text,
             )
         )
-        blocks += [
-            Heading(text="What was measured"),
-            Table(
-                columns=("Group", "Customers", "With the outcome", "Rate"),
-                rows=(
-                    (
-                        "Contacted",
-                        f"{view.treated_rows:,}",
-                        f"{view.treated_outcomes:,}",
-                        f"{view.treated_rate:.1%}" if view.treated_rate is not None else "",
+        if view.outcome_kind == "continuous":
+            blocks += _amount_measured(view, level)
+        else:
+            blocks += [
+                Heading(text="What was measured"),
+                Table(
+                    columns=("Group", "Customers", "With the outcome", "Rate"),
+                    rows=(
+                        (
+                            "Contacted",
+                            f"{view.treated_rows:,}",
+                            f"{view.treated_outcomes:,}",
+                            f"{view.treated_rate:.1%}" if view.treated_rate is not None else "",
+                        ),
+                        (
+                            "Control group (not contacted)",
+                            f"{view.control_rows:,}",
+                            f"{view.control_outcomes:,}",
+                            f"{view.control_rate:.1%}" if view.control_rate is not None else "",
+                        ),
                     ),
-                    (
-                        "Control group (not contacted)",
-                        f"{view.control_rows:,}",
-                        f"{view.control_outcomes:,}",
-                        f"{view.control_rate:.1%}" if view.control_rate is not None else "",
+                    caption=(
+                        "The control group was chosen at random and not contacted, so the difference between the "
+                        "two rates is what the campaign caused."
+                        if view.causal
+                        else "The groups were not chosen at random, so the difference is descriptive only."
                     ),
                 ),
-                caption=(
-                    "The control group was chosen at random and not contacted, so the difference between the "
-                    "two rates is what the campaign caused."
-                    if view.causal
-                    else "The groups were not chosen at random, so the difference is descriptive only."
+                KeyValues(
+                    rows=(
+                        (
+                            view.benefit_label,
+                            f"{_range(view.benefit, _count)}, {level} confidence interval",
+                        ),
+                    )
                 ),
-            ),
-            KeyValues(
-                rows=(
-                    (
-                        view.benefit_label,
-                        f"{_range(view.benefit, _count)}, {level} confidence interval",
-                    ),
-                )
-            ),
-        ]
+            ]
         blocks.append(Heading(text="Value in rupees"))
         if view.inputs is None:
             blocks.append(
@@ -736,7 +904,17 @@ def roi_document(
                 Heading(text="Your inputs", level=3),
                 KeyValues(
                     rows=(
-                        ("Value of one extra customer", format_inr(inputs.value_per_outcome)),
+                        (
+                            (
+                                "Value of one unit of the amount"
+                                if view.outcome_kind == "continuous"
+                                else "Value of one extra customer"
+                            ),
+                            format_inr(
+                                inputs.value_per_outcome,
+                                decimals=2 if view.outcome_kind == "continuous" else 0,
+                            ),
+                        ),
                         (
                             "The outcome measured is",
                             (
@@ -769,6 +947,8 @@ def roi_document(
             ]
             if inputs.note:
                 blocks.append(Paragraph(text=f"Note: {inputs.note}", muted=True))
+    if view.value_note:
+        blocks.append(Callout(title="How the amount is valued", text=view.value_note, tone="info"))
     if simulated_note:
         blocks.append(Callout(title="Demo data", text=simulated_note, tone="warning"))
     blocks.append(

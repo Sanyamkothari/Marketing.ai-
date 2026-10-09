@@ -1275,6 +1275,12 @@ class CampaignResultsRequest(StrictBase):
         description="Bands to measure within, for a Phase 1 run; an uplift run uses its intended set.",
     )
     campaign_id: str | None = Field(default=None, description="Campaign the report is about, if known.")
+    # Plan J M102 (DEC-1312): one defaulted declaration in place; the values are
+    # `engine.measurement.continuous.OutcomeKind`'s, spelled out so this shared file imports nothing new.
+    outcome_kind: Literal["binary", "continuous"] | None = Field(
+        default=None,
+        description="`binary` (a yes/no outcome, a rate) or `continuous` (an amount such as revenue); binary when null.",
+    )
 
 
 class OpeRequest(StrictBase):

@@ -25,7 +25,7 @@ step reopens where it was left.
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any, Final
+from typing import Any, Final, Literal
 
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
@@ -56,6 +56,7 @@ from api.schemas import (
 from engine.access.roles import Role
 from engine.config import RunMode, StrictBase, UseCaseConfig, resolve_config
 from engine.contracts import RunRecord, RunState, ScoringSummary
+from engine.measurement.measure import campaign_verdict_for
 from engine.pilot.roi import outcome_is_good_by_default
 from engine.runs import job_spec_key, read_job_spec
 from engine.stages import export, ingest
@@ -67,7 +68,6 @@ from engine.uplift.measure import (
     CampaignVerdict,
     LearnReadiness,
     build_experiment_frame,
-    campaign_verdict,
     detect_outcome_column,
     learn_readiness,
     measure_offered,
@@ -139,6 +139,13 @@ class MeasureRequest(StrictBase):
         default=None, ge=0, description="Days the outcome is counted over; the use case's own when null."
     )
     as_of: datetime | None = Field(default=None, description="Reference time for the window; now when null.")
+    outcome_kind: Literal["binary", "continuous"] | None = Field(
+        default=None,
+        description=(
+            "`continuous` to measure an amount such as revenue (a difference in averages); a yes/no outcome "
+            "when null (Plan J M102)."
+        ),
+    )
 
 
 class LearnRequest(StrictBase):
@@ -237,6 +244,7 @@ def create_measure(
         positive_label=body.positive_label,
         outcome_window_days=window,
         as_of=body.as_of,
+        outcome_kind=body.outcome_kind,
     )
     create_campaign_results(run_id, request, storage)
     storage.write_model(
@@ -284,7 +292,7 @@ def create_learn(
     if measured is None or report is None:
         raise http_error(409, MEASURE_NOT_READY, "Measure the campaign first: upload its outcomes.")
     resolved = resolve_config(config.id, body.overrides, root=root).config
-    readiness = learn_readiness(report, resolved.uplift)
+    readiness = _learn_readiness(report, resolved.uplift)
     if not readiness.ready:
         raise http_error(409, MEASURE_NOT_READY, readiness.reason)
 
@@ -419,10 +427,27 @@ def _view(storage: Storage, record: RunRecord, config: UseCaseConfig) -> Measure
         outcome_label=label,
         outcomes=measured,
         report=report,
-        verdict=campaign_verdict(report, outcome_is_good=good, outcome_label=label) if report else None,
-        learn=learn_readiness(report, config.uplift),
+        verdict=campaign_verdict_for(report, outcome_is_good=good, outcome_label=label) if report else None,
+        learn=_learn_readiness(report, config.uplift),
         uplift_run=uplift_run,
     )
+
+
+def _learn_readiness(report: IncrementalityReport | None, uplift: Any) -> LearnReadiness:
+    """`learn_readiness`, except that a campaign measured on an amount cannot teach a campaign-effect model,
+    which learns from a yes/no outcome (Plan J M102): it says so instead of counting responders."""
+    readiness = learn_readiness(report, uplift)
+    if report is not None and report.outcome_kind == "continuous":
+        return readiness.model_copy(
+            update={
+                "ready": False,
+                "reason": (
+                    "This campaign was measured on an amount. Learning who to contact next time needs a yes/no "
+                    "outcome: measure it again on one, such as whether the customer bought."
+                ),
+            }
+        )
+    return readiness
 
 
 def _write_upload(

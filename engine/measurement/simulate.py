@@ -46,8 +46,10 @@ both keyed by `customer_id`. :attr:`SimulatedCampaign.measure_kwargs` holds the 
 `measure_incrementality`. M96 adds `uplift_population` (a known per-customer effect, for the equal-budget
 comparison of `engine.measurement.compare`); M100 adds several arms (`multi_arm_campaign`, a campaign of
 several offers against one shared control, and `multi_arm_population`, an uplift training file where
-different segments answer different offers and some are put off by both); M102 adds continuous
-outcomes; they extend this module.
+different segments answer different offers and some are put off by both); M102 adds amounts
+(`revenue_campaign`: revenue per customer with a known difference in means, normal or zero-inflated
+lognormal, and an amount from before the campaign correlated with it, for the adjusted estimate); they
+extend this module.
 
 Pure and deterministic: no storage, no network, no clock. `pandas` is imported inside the function so
 `import engine` stays fast.
@@ -69,20 +71,25 @@ __all__ = [
     "ARM_COLUMN",
     "AS_OF",
     "CONTROL_SHARE",
+    "COVARIATE_COLUMN",
+    "COVARIATE_DATE_COLUMN",
     "KEY_COLUMN",
     "MULTI_ARM_LEVELS",
     "MULTI_ARM_SEGMENTS",
     "OUTCOME_COLUMN",
     "OUTCOME_WINDOW_DAYS",
+    "REVENUE_COLUMN",
     "TREATMENT_DATE_COLUMN",
     "UPLIFT_FEATURES",
     "SimulatedCampaign",
     "SimulatedMultiArmCampaign",
     "SimulatedMultiArmPopulation",
+    "SimulatedRevenueCampaign",
     "SimulatedUpliftPopulation",
     "multi_arm_campaign",
     "multi_arm_population",
     "population",
+    "revenue_campaign",
     "uplift_population",
 ]
 
@@ -518,4 +525,151 @@ def multi_arm_population(
     )
     return SimulatedMultiArmPopulation(
         frame=frame, levels=tuple(levels), segment=segment, base=base, tau=tau, arm=arm
+    )
+
+
+# ---------------------------------------------------------------------------
+# Plan J M102: amounts (revenue), and an amount from before the campaign
+# ---------------------------------------------------------------------------
+REVENUE_COLUMN: Final[str] = "revenue"
+"""The amount each customer spent in the outcome window."""
+COVARIATE_COLUMN: Final[str] = "pre_revenue"
+"""The amount each customer spent before the campaign: the covariate of the adjusted estimate."""
+COVARIATE_DATE_COLUMN: Final[str] = "pre_revenue_until"
+"""The day `pre_revenue` was measured up to: the day before the customer's treatment date."""
+
+RevenueShape = Literal["normal", "zero_inflated_lognormal"]
+
+_NORMAL_MEAN: Final[float] = 100.0
+_NORMAL_SD: Final[float] = 40.0
+_SPEND_MEDIAN: Final[float] = 500.0
+"""The median spend of a paying customer in the zero-inflated shape (rupees)."""
+
+
+@dataclass(frozen=True)
+class SimulatedRevenueCampaign:
+    """One simulated campaign measured on an amount, with the true difference in means it should recover."""
+
+    scores: pd.DataFrame
+    """`customer_id`, `control_group`, `suppressed_reason` (empty) and `intended_treatment` (True)."""
+    outcomes: pd.DataFrame
+    """`customer_id`, `revenue`, `treatment_date` (ISO date), `pre_revenue` and `pre_revenue_until`."""
+    true_effect: float
+    """The expected difference between the arms' mean revenue: what the interval has to cover."""
+    shape: RevenueShape
+    rho: float
+    """The correlation planted between `pre_revenue` and `revenue` (of the latent normals, for the
+    zero-inflated shape, where the amounts' own correlation is lower)."""
+
+    @property
+    def measure_kwargs(self) -> dict[str, Any]:
+        """The arguments of `measure_incrementality` / `measure_campaign` that read these frames unadjusted."""
+        return {
+            "run_id": "simulated",
+            "primary_key": KEY_COLUMN,
+            "outcome_column": REVENUE_COLUMN,
+            "outcome_kind": "continuous",
+            "treatment_date_column": TREATMENT_DATE_COLUMN,
+            "outcome_window_days": OUTCOME_WINDOW_DAYS,
+            "treatment_time": AS_OF - timedelta(days=OUTCOME_WINDOW_DAYS),
+            "as_of": AS_OF,
+        }
+
+    @property
+    def adjusted_kwargs(self) -> dict[str, Any]:
+        """`measure_kwargs` plus the covariate and its date: the adjusted (CUPED) measurement."""
+        return {
+            **self.measure_kwargs,
+            "covariate_column": COVARIATE_COLUMN,
+            "covariate_date_column": COVARIATE_DATE_COLUMN,
+        }
+
+
+def revenue_campaign(
+    n: int,
+    effect: float,
+    *,
+    seed: int,
+    shape: RevenueShape = "normal",
+    rho: float = 0.0,
+    control_share: float = CONTROL_SHARE,
+    payer_share: float = 0.2,
+    sigma: float = 0.75,
+) -> SimulatedRevenueCampaign:
+    """`n` customers' revenue with a known difference in means `effect` (rupees per customer), Plan J M102.
+
+    Complete randomisation, as :func:`population`: `round(control_share * n)` customers held back, every
+    outcome mature on `AS_OF`.
+
+    * `shape="normal"`: `pre_revenue = 100 + 40 z1`, `revenue = 100 + 40 (rho z1 + sqrt(1 - rho²) z2)`
+      plus `effect` when contacted. The two amounts are correlated `rho` in each arm, so the adjusted
+      estimate should remove about `rho²` of the variance.
+    * `shape="zero_inflated_lognormal"`: a customer pays with probability `payer_share` (80% spend
+      nothing by default) and a payer spends `500 exp(sigma e)` - a long right tail. The campaign
+      raises the share who pay by `effect / E[spend]`, so the difference in means is exactly `effect`.
+      `pre_revenue` follows the same model with latent normals correlated `rho` with the outcome's.
+
+    `pre_revenue_until` is the day before each customer's treatment date: measured before the campaign.
+    Deterministic for a seed. Raises `ValueError` for a value out of range.
+    """
+    from statistics import NormalDist
+
+    import pandas as pd
+
+    if n < 4:
+        raise ValueError(f"n must be at least 4, not {n}.")
+    if not -1.0 < rho < 1.0:
+        raise ValueError(f"rho must be between -1 and 1, not {rho}.")
+    _check_share("control_share", control_share, below_one=True)
+    n_control = round(control_share * n)
+    if not 2 <= n_control <= n - 2:
+        raise ValueError("control_share leaves fewer than two customers in an arm.")
+    rng = np.random.default_rng(seed)
+    control = np.zeros(n, dtype=bool)
+    control[rng.choice(n, size=n_control, replace=False)] = True
+    treated = ~control
+    latent_before = rng.standard_normal(n)
+    latent_after = rho * latent_before + np.sqrt(1.0 - rho * rho) * rng.standard_normal(n)
+    if shape == "normal":
+        before = _NORMAL_MEAN + _NORMAL_SD * latent_before
+        revenue = _NORMAL_MEAN + _NORMAL_SD * latent_after + np.where(treated, effect, 0.0)
+    elif shape == "zero_inflated_lognormal":
+        _check_share("payer_share", payer_share)
+        if sigma <= 0.0:
+            raise ValueError(f"sigma must be above 0, not {sigma}.")
+        mean_spend = _SPEND_MEDIAN * float(np.exp(sigma * sigma / 2.0))
+        raised = payer_share + effect / mean_spend
+        if not 0.0 < raised < 1.0:
+            raise ValueError("payer_share plus the effect's share of a mean spend must stay inside (0, 1).")
+        cut = NormalDist()
+        spend_before = rng.standard_normal(n)
+        spend_after = rho * spend_before + np.sqrt(1.0 - rho * rho) * rng.standard_normal(n)
+        pays_before = latent_before < cut.inv_cdf(payer_share)
+        pays_after = latent_after < np.where(treated, cut.inv_cdf(raised), cut.inv_cdf(payer_share))
+        before = np.where(pays_before, _SPEND_MEDIAN * np.exp(sigma * spend_before), 0.0)
+        revenue = np.where(pays_after, _SPEND_MEDIAN * np.exp(sigma * spend_after), 0.0)
+    else:  # pragma: no cover - the Literal says which
+        raise ValueError(f"Unknown shape {shape!r}.")
+    age_days = rng.integers(OUTCOME_WINDOW_DAYS + 1, OUTCOME_WINDOW_DAYS + _MATURE_SPREAD_DAYS + 1, size=n)
+    keys = np.char.add("R", np.char.zfill(np.arange(n).astype(str), 7))
+    treated_on = np.datetime64(AS_OF.date()) - age_days.astype("timedelta64[D]")
+    scores = pd.DataFrame(
+        {
+            KEY_COLUMN: keys,
+            "control_group": control,
+            "suppressed_reason": np.full(n, "", dtype=object),
+            "intended_treatment": np.ones(n, dtype=bool),
+        }
+    )
+    outcomes = pd.DataFrame(
+        {
+            KEY_COLUMN: keys,
+            REVENUE_COLUMN: np.round(revenue, 2),
+            TREATMENT_DATE_COLUMN: treated_on.astype(str),
+            COVARIATE_COLUMN: np.round(before, 2),
+            COVARIATE_DATE_COLUMN: (treated_on - np.timedelta64(1, "D")).astype(str),
+        }
+    )
+    return SimulatedRevenueCampaign(
+        scores=scores, outcomes=outcomes, true_effect=float(effect), shape=shape, rho=float(rho)
     )

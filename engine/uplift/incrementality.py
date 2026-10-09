@@ -55,7 +55,7 @@ import math
 import time
 from datetime import UTC, datetime
 from statistics import NormalDist
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Literal
 
 from engine.config import PrimaryKey, key_columns
 from engine.uplift.contracts import ConfidenceValue, IncrementalityReport, IncrementalityStatus
@@ -65,7 +65,9 @@ if TYPE_CHECKING:
     from collections.abc import Sequence
     from datetime import date
 
+    import numpy as np
     import pandas as pd
+    from numpy.typing import NDArray
 
 __all__ = [
     "CONFIDENCE_LEVEL",
@@ -162,6 +164,9 @@ def measure_incrementality(
     outcome_window_days: int | None = None,
     as_of: datetime,
     campaign_id: str | None = None,
+    outcome_kind: Literal["binary", "continuous"] = "binary",
+    covariate_column: str | None = None,
+    covariate_date_column: str | None = None,
 ) -> IncrementalityReport:
     """Measure a scoring run's campaign: treated rate − control rate on the mature rows.
 
@@ -171,10 +176,24 @@ def measure_incrementality(
 
     `primary_key` may name several columns (customer + snapshot date, DEC-083): the two files are
     then joined on all of them, each read as text the way `scores.csv` writes it (M53).
+
+    **Amounts (Plan J M102, DEC-1312).** `outcome_kind="continuous"` reads the outcome as a number
+    (revenue) and reports the difference in means with Welch's interval (`engine.measurement.amounts`);
+    the population, join and maturity rules are the same. `covariate_column` then names an amount from
+    before the campaign in the outcomes file, dated by `covariate_date_column`, for the adjusted
+    (CUPED) estimate: a covariate dated on or after a customer's treatment date, or not dated at all,
+    is refused (`CovariateNotBeforeCampaignError`). Only `measure_campaign` decides whether a covariate
+    may be used (the registered plan); a yes/no outcome ignores it, so its report is unchanged.
     """
     import pandas as pd
 
     started = time.perf_counter()
+    if outcome_kind not in ("binary", "continuous"):
+        raise ValueError(f"outcome_kind must be 'binary' or 'continuous', not {outcome_kind!r}.")
+    continuous = outcome_kind == "continuous"
+    if continuous and positive_label is not None:
+        raise ValueError("positive_label names the converted value of a yes/no outcome; an amount has none.")
+    adjust = continuous and covariate_column is not None
     columns = key_columns(primary_key)
     _require_columns(scores, (*columns, _CONTROL_COLUMN), what="The run's scores")
     _require_columns(outcomes, (*columns, outcome_column), what="The outcomes file")
@@ -186,6 +205,16 @@ def measure_incrementality(
         _require_columns(outcomes, (treatment_date_column,), what="The outcomes file")
     if outcome_window_days is not None and outcome_window_days < 0:
         raise ValueError("outcome_window_days cannot be negative.")
+    if adjust:
+        from engine.measurement.continuous import CovariateNotBeforeCampaignError
+
+        _require_columns(outcomes, (str(covariate_column),), what="The outcomes file")
+        if covariate_date_column is None:
+            raise CovariateNotBeforeCampaignError(
+                f"{covariate_column!r} has no date column, so it cannot be shown to come from before the "
+                f"campaign. Name the column holding the date each value was measured up to."
+            )
+        _require_columns(outcomes, (covariate_date_column,), what="The outcomes file")
     as_of_utc = _aware(as_of)
     treatment_utc = _aware(treatment_time)
 
@@ -211,10 +240,17 @@ def measure_incrementality(
     has_control_group = bool((held_out & eligible.to_numpy(dtype=bool)).any())
 
     # --- join the outcomes ---------------------------------------------------------------------
-    converted = _coerce_outcome(outcomes[outcome_column], positive_label)
+    converted = (
+        _coerce_amount(outcomes[outcome_column], what="outcome")
+        if continuous
+        else _coerce_outcome(outcomes[outcome_column], positive_label)
+    )
     by_key = pd.DataFrame({"converted": converted.to_numpy()}, index=pd.Index(outcome_keys.to_numpy()))
     if treatment_date_column is not None:
         by_key["date"] = _parse_dates(outcomes[treatment_date_column]).to_numpy()
+    if adjust:
+        by_key["covariate"] = _coerce_amount(outcomes[str(covariate_column)], what="covariate").to_numpy()
+        by_key["covariate_date"] = _parse_dates(outcomes[str(covariate_date_column)]).to_numpy()
     members = pd.DataFrame({"key": score_keys[population].to_numpy(), "treated": treated[population]})
     matched = members["key"].isin(by_key.index).to_numpy(dtype=bool)
     joined = by_key.reindex(members["key"].to_numpy())
@@ -242,6 +278,29 @@ def measure_incrementality(
         results_available_on = ready_at[immature].max().date()
 
     arm = members["treated"].to_numpy(dtype=bool)
+    if continuous:
+        return _amount_report(
+            joined,
+            dates=dates,
+            matched_dated=matched & date_ok,
+            usable=usable,
+            arm=arm,
+            mature_any=bool(mature.any()),
+            run_id=run_id,
+            campaign_id=campaign_id,
+            outcome_column=outcome_column,
+            outcome_window_days=outcome_window_days,
+            as_of=as_of_utc,
+            results_available_on=results_available_on,
+            members=len(members),
+            covariate_column=covariate_column if adjust else None,
+            rows_immature=rows_immature,
+            rows_without_outcome=rows_without_outcome,
+            rows_outside=rows_outside,
+            has_control_group=has_control_group,
+            rows=len(scores),
+            started=started,
+        )
     values = joined["converted"].to_numpy()
     treated_rows = int((usable & arm).sum())
     control_rows = int((usable & ~arm).sum())
@@ -458,6 +517,129 @@ def _coerce_outcome(values: pd.Series, positive_label: str | None) -> pd.Series:
         converted = text.isin(_OUTCOME_TRUE)
     result: pd.Series = converted.astype("boolean").mask(~present.astype(bool))
     return result.reset_index(drop=True)
+
+
+def _coerce_amount(values: pd.Series, *, what: str) -> pd.Series:
+    """An amount column as float64 (null stays NaN); raises when a present value is not a finite number.
+
+    Plan J M102: an outcome or covariate that is an amount. Text such as "1,200" is not read as a
+    number: a value the file does not spell as one is refused with a count, never guessed.
+    """
+    import numpy as np
+    import pandas as pd
+
+    if pd.api.types.is_bool_dtype(values.dtype):
+        raise ValueError(f"The {what} column holds yes/no values; an amount must be a number.")
+    if pd.api.types.is_numeric_dtype(values.dtype):  # a number column: nothing to read, only to check
+        numeric = values.astype("float64")
+        unreadable = 0
+    else:
+        numeric = pd.to_numeric(values, errors="coerce").astype("float64")
+        text = values.astype("string").str.strip()
+        present = text.notna() & (text != "")
+        unreadable = int((present & numeric.isna()).sum())
+    if unreadable:
+        raise ValueError(
+            f"{unreadable} {what} value(s) are not numbers; an amount must be written as a number, such as 1250.50."
+        )
+    if not np.isfinite(numeric[numeric.notna()].to_numpy()).all():
+        raise ValueError(f"Some {what} values are infinite; an amount must be a finite number.")
+    return numeric.reset_index(drop=True)
+
+
+def _amount_report(
+    joined: pd.DataFrame,
+    *,
+    dates: pd.Series,
+    matched_dated: NDArray[np.bool_],
+    usable: NDArray[np.bool_],
+    arm: NDArray[np.bool_],
+    mature_any: bool,
+    run_id: str,
+    campaign_id: str | None,
+    outcome_column: str,
+    outcome_window_days: int | None,
+    as_of: datetime,
+    results_available_on: date | None,
+    members: int,
+    covariate_column: str | None,
+    rows_immature: int,
+    rows_without_outcome: int,
+    rows_outside: int,
+    has_control_group: bool,
+    rows: int,
+    started: float,
+) -> IncrementalityReport:
+    """The amount branch of `measure_incrementality` (Plan J M102): the covariate's point-in-time rule,
+    then `engine.measurement.amounts.amount_report` on the usable amounts of each arm."""
+    import numpy as np
+    import pandas as pd
+
+    from engine.measurement.amounts import amount_report
+    from engine.measurement.continuous import CovariateNotBeforeCampaignError
+
+    in_both = np.asarray(matched_dated, dtype=bool)
+    counted = np.asarray(usable, dtype=bool)
+    treated_arm = np.asarray(arm, dtype=bool)
+    amounts = joined["converted"].to_numpy(dtype=np.float64)
+    treated_covariate = control_covariate = None
+    missing: int | None = None
+    if covariate_column is not None:
+        value = joined["covariate"].to_numpy(dtype=np.float64)
+        # Both already UTC timestamps (`_parse_dates`), compared as columns: never through Python objects.
+        measured_on = pd.to_datetime(joined["covariate_date"], utc=True).reset_index(drop=True)
+        treated_on = pd.to_datetime(dates, utc=True).reset_index(drop=True)
+        dated = measured_on.notna().to_numpy() & ~np.isnan(value)
+        too_late = dated & in_both & (measured_on >= treated_on).fillna(value=False).to_numpy(dtype=bool)
+        late = int(too_late.sum())
+        if late:
+            raise CovariateNotBeforeCampaignError(
+                f"{late:,} customers' {covariate_column!r} is dated on or after the day they were contacted, "
+                f"so it could include the campaign's own effect. Use an amount measured before the campaign "
+                f"went out."
+            )
+        known = dated & counted
+        missing = int((counted & ~known).sum())
+        if known.any():
+            filled = np.where(known, value, float(value[known].mean()))
+            treated_covariate = filled[counted & treated_arm]
+            control_covariate = filled[counted & ~treated_arm]
+    status = (
+        IncrementalityStatus.IMMATURE if rows_immature and not mature_any else IncrementalityStatus.MATURE
+    )
+    report = amount_report(
+        run_id=run_id,
+        campaign_id=campaign_id,
+        outcome_column=outcome_column,
+        outcome_window_days=outcome_window_days,
+        as_of=as_of,
+        status=status,
+        results_available_on=results_available_on,
+        members=members,
+        treated=amounts[counted & treated_arm],
+        control=amounts[counted & ~treated_arm],
+        covariate_column=covariate_column,
+        treated_covariate=treated_covariate,
+        control_covariate=control_covariate,
+        rows_covariate_missing=missing,
+        rows_immature=rows_immature,
+        rows_without_outcome=rows_without_outcome,
+        rows_outside=rows_outside,
+        has_control_group=has_control_group,
+    )
+    _LOGGER.info(
+        "incrementality kind=continuous status=%s treated_rows=%d control_rows=%d rows_immature=%d "
+        "rows_without_outcome=%d rows_outside=%d adjusted=%s",
+        status.value,
+        report.treated_rows,
+        report.control_rows,
+        rows_immature,
+        rows_without_outcome,
+        rows_outside,
+        report.adjusted_interval is not None,
+    )
+    log_stage(_LOGGER, "incrementality", rows=rows, seconds=time.perf_counter() - started)
+    return report
 
 
 def _points(rate: float) -> str:
