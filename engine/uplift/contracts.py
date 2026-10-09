@@ -943,6 +943,66 @@ class IncrementalityReport(Artefact):
         exclude_if=_absent,
         description="Each treatment level's measured lift against the shared control; absent with one treatment.",
     )
+    # Plan J M102 (DEC-1312, pre-approved additive fields; computed by `engine.measurement.continuous`
+    # through `measure_incrementality(outcome_kind="continuous", covariate_column=...)`). Every one is
+    # absent from a binary report's JSON, so a yes/no measurement is byte for byte what it was. On an
+    # amount the rate fields above are null, `treated_conversions` / `control_conversions` count the
+    # customers whose amount is above zero, `relative_lift` is `mean_difference / control_mean` and
+    # `p_value` is Welch's.
+    outcome_kind: Literal["binary", "continuous"] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="`continuous` when the outcome is an amount (revenue); absent on a yes/no outcome.",
+    )
+    treated_mean: float | None = Field(
+        default=None, exclude_if=_absent, description="Average amount of the contacted customers measured."
+    )
+    control_mean: float | None = Field(
+        default=None, exclude_if=_absent, description="Average amount of the held-back customers measured."
+    )
+    mean_difference: float | None = Field(
+        default=None, exclude_if=_absent, description="treated_mean − control_mean, per customer."
+    )
+    mean_difference_ci: ConfidenceValue | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="mean_difference with its Welch 95% interval (unequal variances, t quantile).",
+    )
+    covariate_column: str | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="The amount from before the campaign the adjusted estimate used (pre-registered).",
+    )
+    adjusted_lift: float | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="mean_difference adjusted by the covariate (CUPED); absent without a covariate.",
+    )
+    adjusted_interval: ConfidenceValue | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="adjusted_lift with its Welch 95% interval on the adjusted amounts.",
+    )
+    variance_reduction: float | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="1 − (adjusted variance ÷ unadjusted variance) of the difference; about rho² for a covariate correlated rho.",
+    )
+    rows_covariate_missing: int | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Measured customers with no amount from before; set to the mean of the known ones.",
+    )
+    adjustment_note: str | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Why the adjusted estimate is not given although a covariate was named, in one sentence.",
+    )
+    outcome_warnings: tuple[str, ...] | None = Field(
+        default=None,
+        exclude_if=_absent,
+        description="Codes worth knowing about the amounts, never blocking: OUTCOME_SKEWED.",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -50,6 +50,21 @@ brought them: `n_holdout × extra conversions per contact × value per conversio
 the offer for those who take it: from `n × contact cost` (nobody takes it) to
 `n × (contact cost + offer cost)` (everybody does) (:func:`cost_of_explore`).
 
+**Amounts (Plan J M102, DEC-1312).** A campaign measured on revenue is compared by the difference in
+means (Welch, `engine.measurement.continuous`). With `sd` the spread of the amount per customer and an
+expected `rho2` - the share of that spread an amount from before the campaign explains, which the
+adjusted estimate removes (0 without one) - the difference has the spread
+
+    se = sd · sqrt(1 − rho2) · sqrt(1/n_t + 1/n_c)
+
+so a test of these groups sees a change of `(z_a + z_b) · se` with `power` (:func:`mde_continuous`,
+the far tail ignored as above), and seeing a change `d` with equal groups needs
+`n = (z_a + z_b)² · sd² · (1 − rho2) · 2 / d²` per group (:func:`n_for_mde_continuous`). A covariate
+with `rho2 = 0.36` therefore needs 36% fewer customers for the same change: the reason to register one.
+These are the normal approximations of the test the report runs; with the hundreds of customers per
+group a campaign has, Welch's t is the normal to two decimals. A spread that is unknown is a plain
+reason, never a guess.
+
 Every sentence this module writes is plain language (`engine.pilot.plain.jargon_in` finds nothing in
 it; a test runs every reason through it).
 """
@@ -68,6 +83,7 @@ __all__ = [
     "DEFAULT_POWER",
     "MAX_HOLDOUT_SHARE",
     "ArmSizes",
+    "ContinuousMde",
     "CostEstimate",
     "Direction",
     "HoldoutPlan",
@@ -78,12 +94,16 @@ __all__ = [
     "PowerPreviewPoint",
     "PowerPreviewRequest",
     "achieved_power",
+    "achieved_power_continuous",
     "arm_sizes",
+    "continuous_power_preview",
     "cost_of_explore",
     "cost_of_holdout",
     "holdout_for_mde",
+    "mde_continuous",
     "mde_two_proportions",
     "n_for_mde",
+    "n_for_mde_continuous",
     "power_preview",
 ]
 
@@ -511,6 +531,15 @@ class PowerPreviewPoint(BaseModel):
     mde_pp: float | None = Field(
         description="Smallest change in the request's direction (up, down, or the larger of the two) the test is sure to see, in percentage points; null when it cannot be said."
     )
+    mde_amount: float | None = Field(
+        default=None,
+        exclude_if=lambda value: value is None,
+        description=(
+            "Plan J M102: on a campaign planned on an amount, the smallest change in the average amount per "
+            "customer the test is sure to see, in the amount's own unit (`mde_pp` is then null); absent on a "
+            "yes/no outcome."
+        ),
+    )
     cost_of_holdout: MoneyRange | None = Field(
         description="What holding the control group back costs if the campaign changes the outcome by exactly `mde_pp`; null when a value is missing."
     )
@@ -549,6 +578,57 @@ def _basis(request: PowerPreviewRequest) -> str:
     )
 
 
+def continuous_power_preview(
+    request: PowerPreviewRequest, sd: float | None, *, rho2: float = 0.0
+) -> PowerPreview:
+    """`power_preview` for a campaign planned on an amount (Plan J M102, DEC-1312).
+
+    Each point's `mde_amount` is `mde_continuous` at that share, with the plan's spread `sd` and the
+    share `rho2` its registered covariate is expected to remove, so the slider shows the change the
+    measurement (Welch's interval, adjusted when the plan names a covariate) can see. `base_rate` and
+    `direction` are not used: an amount's change is the same size either way. `value_per_conversion`
+    is read as the value of one unit of the amount for the cost of holding customers back.
+    """
+    contacted_at_random = math.floor(request.eligible * request.explore_share + 0.5)
+    explore = cost_of_explore(contacted_at_random, request.contact_cost, request.offer_cost)
+    points: list[PowerPreviewPoint] = []
+    for share in request.holdout_shares:
+        n_treat, n_control = arm_sizes(request.eligible, share)
+        mde = mde_continuous(n_treat, n_control, sd, request.alpha, request.power, rho2=rho2)
+        holdout = cost_of_holdout(n_control, mde.absolute, request.value_per_conversion)
+        reasons = [mde.reason, holdout.reason if mde.reason is None else None, explore.reason]
+        points.append(
+            PowerPreviewPoint(
+                holdout_share=share,
+                n_treat=n_treat,
+                n_control=n_control,
+                mde_pp=None,
+                mde_amount=None if mde.absolute is None else round(mde.absolute, 4),
+                cost_of_holdout=holdout.amount,
+                cost_of_explore=explore.amount,
+                reason=" ".join(reason for reason in reasons if reason) or None,
+            )
+        )
+    confidence = round((1.0 - request.alpha) * 100.0, 2)
+    chance = round(request.power * 100.0, 2)
+    adjusted = (
+        f" The test plan's earlier amount is expected to explain {round(rho2 * 100.0, 2):g}% of the spread, "
+        "and the adjusted comparison removes that much of it."
+        if rho2 > 0.0
+        else ""
+    )
+    basis = (
+        f"A two-sided comparison of the average amount of the contacted and the held-back customers at "
+        f"{confidence:g}% confidence, and a chance of {chance:g}% of seeing a change of the size shown, up "
+        f"or down. The spread of the amount is the one in the test plan.{adjusted} The cost of holding "
+        "customers back assumes the campaign changes each customer's amount by exactly the size shown, "
+        "valued at what one unit is worth; contacting customers outside the selection costs every contact, "
+        "plus the offer for those who take it. Every number is worked out from the counts entered; no "
+        "customer data is used."
+    )
+    return PowerPreview(points=tuple(points), basis=basis)
+
+
 def power_preview(request: PowerPreviewRequest) -> PowerPreview:
     """The planner at each control-group share of `request` (pure; the route only wraps it)."""
     contacted_at_random = math.floor(request.eligible * request.explore_share + 0.5)
@@ -573,3 +653,124 @@ def power_preview(request: PowerPreviewRequest) -> PowerPreview:
             )
         )
     return PowerPreview(points=tuple(points), basis=_basis(request))
+
+
+# ---------------------------------------------------------------------------
+# Plan J M102: amounts (revenue), with the expected share an earlier amount explains
+# ---------------------------------------------------------------------------
+REASON_SPREAD_UNKNOWN: Final[str] = (
+    "How much the amount varies from customer to customer is not known, so the smallest change the test "
+    "can see cannot be worked out. Enter its spread, for example from last quarter's revenue."
+)
+
+
+@dataclass(frozen=True, slots=True)
+class ContinuousMde:
+    """The smallest change in the average amount a test of these groups can reliably see."""
+
+    absolute: float | None
+    """In the amount's own unit (rupees for revenue). None when it cannot be said."""
+    n_treat: int
+    n_control: int
+    rho2: float
+    """The share of the spread the adjustment was expected to remove (0 without one)."""
+    reason: str | None = None
+
+
+def _check_rho2(rho2: float) -> None:
+    if not (math.isfinite(rho2) and 0.0 <= rho2 < 1.0):
+        raise ValueError(
+            "The expected share explained by the earlier amount (rho2) must be from 0 to below 1."
+        )
+
+
+def _spread_reason(sd: float | None) -> str | None:
+    if sd is None:
+        return REASON_SPREAD_UNKNOWN
+    if not math.isfinite(sd) or sd <= 0.0:
+        raise ValueError("The spread of the amount must be a number above 0.")
+    return None
+
+
+def _continuous_se(n_treat: int, n_control: int, sd: float, rho2: float) -> float:
+    return sd * math.sqrt(1.0 - rho2) * math.sqrt(1.0 / n_treat + 1.0 / n_control)
+
+
+def mde_continuous(
+    n_treat: int,
+    n_control: int,
+    sd: float | None,
+    alpha: float = DEFAULT_ALPHA,
+    power: float = DEFAULT_POWER,
+    *,
+    rho2: float = 0.0,
+) -> ContinuousMde:
+    """The smallest change in the mean amount these groups see with `power`: `(z_a + z_b) · se`.
+
+    Symmetric: a rise and a fall of the same size are equally easy to see on an amount. None with a
+    reason when the spread is unknown or a group is empty.
+    """
+    _check_alpha_power(alpha, power)
+    _check_count("n_treat", n_treat)
+    _check_count("n_control", n_control)
+    _check_rho2(rho2)
+    reason = _spread_reason(sd)
+    if reason is not None or sd is None:
+        return ContinuousMde(None, n_treat, n_control, rho2, reason or REASON_SPREAD_UNKNOWN)
+    if n_treat == 0 or n_control == 0:
+        return ContinuousMde(None, n_treat, n_control, rho2, REASON_EMPTY_GROUP)
+    z = _z_alpha(alpha) + _NORMAL.inv_cdf(power)
+    return ContinuousMde(z * _continuous_se(n_treat, n_control, sd, rho2), n_treat, n_control, rho2)
+
+
+def n_for_mde_continuous(
+    sd: float | None,
+    mde: float,
+    alpha: float = DEFAULT_ALPHA,
+    power: float = DEFAULT_POWER,
+    *,
+    rho2: float = 0.0,
+    control_ratio: float = 1.0,
+) -> ArmSizes:
+    """Customers each group needs to see a change of `mde` in the mean amount with `power`.
+
+    `n_t = (z_a + z_b)² · sd² · (1 − rho2) · (1 + 1/k) / mde²`, rounded up, and `n_c = k · n_t`, where
+    `k = control_ratio` is control customers per contacted customer.
+    """
+    _check_alpha_power(alpha, power)
+    _check_rho2(rho2)
+    if not (math.isfinite(control_ratio) and control_ratio > 0.0):
+        raise ValueError("control_ratio must be greater than 0.")
+    reason = _spread_reason(sd)
+    if reason is not None or sd is None:
+        return ArmSizes(None, None, reason or REASON_SPREAD_UNKNOWN)
+    if not math.isfinite(mde) or mde == 0.0:
+        return ArmSizes(None, None, REASON_NO_EFFECT)
+    z = _z_alpha(alpha) + _NORMAL.inv_cdf(power)
+    n_treat = math.ceil((z * sd / mde) ** 2 * (1.0 - rho2) * (1.0 + 1.0 / control_ratio) - 1e-9)
+    return ArmSizes(n_treat=n_treat, n_control=math.ceil(control_ratio * n_treat - 1e-9))
+
+
+def achieved_power_continuous(
+    n_treat: int,
+    n_control: int,
+    sd: float | None,
+    effect: float,
+    alpha: float = DEFAULT_ALPHA,
+    *,
+    rho2: float = 0.0,
+) -> PowerEstimate:
+    """The chance a test with these groups sees a true change of `effect` in the mean amount: `Φ(|d|/se − z_a)`."""
+    _check_alpha_power(alpha)
+    _check_count("n_treat", n_treat)
+    _check_count("n_control", n_control)
+    _check_rho2(rho2)
+    reason = _spread_reason(sd)
+    if reason is not None or sd is None:
+        return PowerEstimate(power=None, reason=reason or REASON_SPREAD_UNKNOWN)
+    if n_treat == 0 or n_control == 0:
+        return PowerEstimate(power=None, reason=REASON_EMPTY_GROUP)
+    if not math.isfinite(effect) or effect == 0.0:
+        return PowerEstimate(power=None, reason=REASON_NO_EFFECT)
+    se = _continuous_se(n_treat, n_control, sd, rho2)
+    return PowerEstimate(power=_NORMAL.cdf(abs(effect) / se - _z_alpha(alpha)))

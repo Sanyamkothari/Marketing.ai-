@@ -32,7 +32,7 @@ the user downloads (the treat list).
 | 13 | The offer and channel catalogue; channel-aware consent | M99 | written (below) |
 | 14 | Choosing the offer (multi-treatment uplift) | M100 | written (below) |
 | 15 | One action per customer across use cases | M101 | written (below) |
-| 16 | Revenue outcomes and CUPED | M102 | not yet written |
+| 16 | Revenue outcomes and CUPED | M102 | written (below) |
 | 17 | Auditing a campaign another tool ran; the programme readout | M103 | not yet written |
 | 18 | The Value Proof Pack | M104 | not yet written |
 | 19 | Warnings and proven value to date | M105 | not yet written |
@@ -545,3 +545,77 @@ says nothing about which is later.
   200,000 rows with 50,000 in one process, so machine load slows both; the wall-clock budget tests
   (`test_arbitrate_200k_rows_with_mixed_values_explore_and_caps`, `test_arbitrate.py::test_arbitrate_scale_200k_rows`)
   are marked `slow`, because a 3 second budget fails on a shared machine under load.
+
+## 16. Revenue outcomes and CUPED (M102, DEC-1312)
+
+**A campaign can be judged on an amount.** Campaign owners are judged on revenue, and a binary effect of one to
+three points is hard to see. A campaign (or a run's own measurement) can now be measured on an amount per customer:
+`outcome_kind: continuous` on the registered test plan, on `POST /campaigns/{id}/measure` (the plan's kind when the
+body names none; a different one is `409 TEST_PLAN_CHANGED`), on `POST /runs/{id}/measure` and on
+`POST /runs/{id}/campaign-results`. Without it everything is measured as a yes/no outcome, exactly as before: a
+binary report's JSON is byte for byte what it was (`tests/unit/measurement/test_m102_binary_identity.py`, against
+reports recorded on the commit before M102).
+
+* **What is reported (`engine/measurement/amounts.py`, `engine/measurement/continuous.py`).** The population, the
+  join, the maturity rule and the rows left out are `measure_incrementality`'s, unchanged. On the usable amounts:
+  `treated_mean`, `control_mean`, `mean_difference` and `mean_difference_ci`, the **Welch** interval (unequal
+  variances, Welch-Satterthwaite degrees of freedom, Student's t computed in the module through the regularised
+  incomplete beta function, so no statistics library is needed); `p_value` is Welch's; `relative_lift` is the
+  difference over the held-back mean. Rates mean nothing on an amount, so `treated_rate`, `absolute_lift` and
+  `incremental_conversions` are null and `treated_conversions` / `control_conversions` count the customers whose
+  amount is above zero. An amount is read as a number; a value written otherwise ("1,200") is refused with a count,
+  never guessed, and a missing one is left out and counted, as a missing yes/no outcome is.
+* **The adjusted estimate (CUPED).** With a covariate - an amount each customer had *before* the campaign, such as
+  last quarter's revenue - the report adds `adjusted_lift`, `adjusted_interval` (Welch's on `y - theta (x - x̄)`,
+  `theta` the within-arm slope) and `variance_reduction` (`1 - adjusted variance / unadjusted variance` of the
+  difference, about `rho²`: 0.36 at `rho = 0.6`). A customer with no earlier amount keeps their row with the mean of
+  the known ones (`rows_covariate_missing`); a covariate that does not vary gives `adjustment_note`, never a number.
+  A yes/no outcome never uses a covariate.
+* **Only a covariate registered in advance.** `measure_campaign` uses a covariate only when the test plan in force
+  names it: a different one, or a covariate on an amount with no plan registered, is `409 TEST_PLAN_CHANGED`,
+  because choosing the adjustment after seeing the outcomes is one more way to move the goalposts. On a yes/no
+  outcome a covariate is never used, so one named with no plan is ignored, as before M102. When it was registered, the
+  verdict (`engine.measurement.measure.amount_verdict`) and the value view read the adjusted estimate: it is the
+  planned analysis. The unadjusted one is always reported beside it.
+* **Point in time, no leakage.** The covariate comes with the outcomes file (`POST /campaigns/{id}/outcomes
+  {covariate_column, covariate_date_column}`), with the date each value was measured up to. The dates are compared
+  by day, since a value dated a day includes that whole day: a value dated on or after the day of the customer's
+  treatment (their own date, or the campaign's start, even when that start is later in the day), or a covariate with
+  no date column, is refused with `422 COVARIATE_NOT_BEFORE_CAMPAIGN`, and nothing is stored: such a value could
+  contain the campaign's own effect. A value with no date on its row is treated as unknown.
+* **Skewed revenue.** Most customers spend nothing and a few spend a hundred times the median. The interval rests on
+  the average being close to normal, which a long tail delays; Kohavi, Deng, Longbotham and Xu (2014, rule 7) give
+  the size that suffices: more than `355 g²` customers per arm, `g` the arm's skewness. Below it the report keeps its
+  numbers and carries `outcome_warnings: [OUTCOME_SKEWED]` with a plain sentence that the range may be too narrow.
+  Amounts are never capped or trimmed: that would change what is measured.
+* **Planning (`engine/measurement/planner.py`).** `mde_continuous(n_t, n_c, sd, rho2=)`, `n_for_mde_continuous` and
+  `achieved_power_continuous` use `se = sd · sqrt(1 - rho2) · sqrt(1/n_t + 1/n_c)`: a covariate expected to explain
+  36% of the spread needs 36% fewer customers for the same change. A test plan of an amount takes `mde_value` (in the
+  amount's unit), `outcome_sd` and `expected_rho2` (which needs the covariate), and its `achieved_power` and
+  `PLAN_UNDERPOWERED` come from them; it never mixes them with `mde_pp` / `base_rate`. A plan that does not use them
+  stores and hashes as before. On a plan of an amount the "Plan the test" card (`GET /campaigns/{id}/plan-preview`)
+  gives each point's `mde_amount` (`mde_continuous` with the plan's `outcome_sd` and `expected_rho2`; `mde_pp` is
+  null), or, with no `outcome_sd`, no points and a plain reason; a yes/no plan's points are unchanged.
+* **Money (`engine/pilot/roi.py`).** A report on an amount is priced from its per-customer difference (adjusted when
+  registered) times the contacted customers; `value_per_outcome` is what one unit is worth in rupees (1 when it is
+  revenue in rupees), and the offer cost is counted for every contacted customer whose amount is above zero. Without
+  values nothing is put in rupees and `value_note` says what to enter. Outcomes ingested as amounts
+  (`incrementality_input.json`) keep only the two averages, so the view says no range can be given and prices
+  nothing, instead of "No outcomes have been recorded".
+* **Several offers.** `measure_campaign(arm_column=...)` (M100) stays yes/no only: an amount there is refused with a
+  plain `ValueError`, because no nightly check covers per-offer amounts or their adjustment yet; a covariate named
+  on a yes/no several-offer campaign is ignored, as before M102.
+* **Learning.** An uplift model learns from a yes/no outcome, so step 4 does not offer "Learn who to contact next
+  time" on a campaign measured on an amount, and says why.
+
+**How we know it is honest.** `tests/statistical/test_continuous_coverage.py` (nightly, 2,000 simulations a case,
+the M95 band of four Monte Carlo standard errors) checks the coverage of both intervals on roughly normal revenue with
+a covariate correlated 0.6 (and that the mean `variance_reduction` is within 0.03 of 0.36) and with an uncorrelated
+one (the adjustment then changes nothing), on zero-inflated lognormal revenue (80% spend nothing) at the size the
+skew rule asks for, that smaller long-tailed campaigns carry `OUTCOME_SKEWED`, and that the planner's n with
+`rho2 = 0.36` has its 80% power. `engine.measurement.simulate.revenue_campaign` draws the campaigns with a known
+difference in means. The fast tests (`tests/unit/measurement/test_continuous.py`, `test_planner_continuous.py`,
+`test_roi_amount.py`, `test_amounts_scale.py`, `tests/integration/measurement/test_campaign_amounts.py`) check
+Welch's interval and Student's t against `scipy`, the 0.36 at `rho = 0.6` on 40,000 customers, the leakage refusal,
+the plan gate through the API, the value view, and that 200,000 customers take about ten times as long as 20,000
+(1,000,000 in about 9 s, marked `slow`).

@@ -834,6 +834,7 @@ def create_campaign_results(
             outcome_window_days=body.outcome_window_days,
             as_of=body.as_of or utc_now(),
             campaign_id=body.campaign_id,
+            outcome_kind=body.outcome_kind or "binary",  # Plan J M102: an amount, when asked for
         )
     except ValueError as exc:
         raise http_error(422, CAMPAIGN_RESULTS_INVALID, str(exc)) from exc

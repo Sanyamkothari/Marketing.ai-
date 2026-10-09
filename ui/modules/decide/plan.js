@@ -70,7 +70,10 @@ export function previewReadoutHtml(preview, index) {
   const point = preview && preview.points ? preview.points[index] : null;
   if (!point) return "";
   const own = index === preview.current_index ? ` <span class="dc-note">(this campaign's split)</span>` : "";
-  const change = present(point.mde_pp) ? `${esc(fmtNum(point.mde_pp, 1))} points` : EM_DASH;
+  // Plan J M102: a plan on an amount gives the change in the average amount per customer instead.
+  const change = present(point.mde_pp)
+    ? `${esc(fmtNum(point.mde_pp, 1))} points`
+    : present(point.mde_amount) ? `${esc(fmtNum(point.mde_amount, 2))} per customer` : EM_DASH;
   const holding = money(point.cost_of_holdout);
   return [
     row("Held back", `${esc(fmtPct(point.holdout_share, 1))}${own}`, "data-preview-share"),

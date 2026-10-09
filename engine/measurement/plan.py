@@ -90,6 +90,11 @@ HOLDOUT_TOLERANCE: Final[float] = 0.005
 """How far the held-back share may move (0.5 percentage points) before it counts as a change."""
 
 
+def _unset(value: object) -> bool:
+    """`exclude_if` of M102's fields: a plan that does not use them stores and hashes as before."""
+    return value is None
+
+
 class TestPlanInput(StrictBase):
     """What the person decides when registering a test plan (`POST /campaigns/{id}/plan`)."""
 
@@ -103,7 +108,8 @@ class TestPlanInput(StrictBase):
     )
     positive_label: str | None = Field(default=None, description="The value that counts as a conversion.")
     outcome_kind: Literal["binary", "continuous"] = Field(
-        default="binary", description="`binary` today; `continuous` (revenue) arrives with M102."
+        default="binary",
+        description="`binary` (a yes/no outcome, a rate) or `continuous` (an amount such as revenue, a mean).",
     )
     covariate_column: str | None = Field(
         default=None, description="A pre-campaign column for the adjusted estimate (M102), registered now."
@@ -134,6 +140,27 @@ class TestPlanInput(StrictBase):
     expectation: str = Field(
         default="", max_length=500, description="The sponsor's written expectation, in their words."
     )
+    # Plan J M102 (DEC-1312): planning an amount. Left out of the stored plan and its hash while unset,
+    # so every plan registered before M102 keeps its `plan_hash`.
+    mde_value: float | None = Field(
+        default=None,
+        gt=0.0,
+        exclude_if=_unset,
+        description="For an amount: the smallest change in the average per customer worth detecting, in its unit.",
+    )
+    outcome_sd: float | None = Field(
+        default=None,
+        gt=0.0,
+        exclude_if=_unset,
+        description="For an amount: how much it varies from customer to customer (its standard deviation).",
+    )
+    expected_rho2: float | None = Field(
+        default=None,
+        ge=0.0,
+        lt=1.0,
+        exclude_if=_unset,
+        description="The share of that variation the covariate is expected to explain (0 to below 1).",
+    )
 
     @model_validator(mode="after")
     def _dates_in_order(self) -> TestPlanInput:
@@ -141,6 +168,19 @@ class TestPlanInput(StrictBase):
             raise ValueError("Each secondary analysis date must be after the analysis date.")
         if len(set(self.secondary_analysis_dates)) != len(self.secondary_analysis_dates):
             raise ValueError("A secondary analysis date is repeated.")
+        amount = (self.mde_value, self.outcome_sd, self.expected_rho2)
+        if self.outcome_kind == "binary" and any(value is not None for value in amount):
+            raise ValueError(
+                "mde_value, outcome_sd and expected_rho2 plan an amount; a yes/no outcome is planned with "
+                "mde_pp and base_rate."
+            )
+        if self.outcome_kind == "continuous" and (self.mde_pp is not None or self.base_rate is not None):
+            raise ValueError(
+                "An amount is planned with mde_value and outcome_sd, in its own unit; mde_pp and base_rate "
+                "are for a yes/no outcome."
+            )
+        if self.expected_rho2 is not None and self.covariate_column is None:
+            raise ValueError("expected_rho2 is the share a covariate explains: name the covariate_column.")
         return self
 
 
@@ -222,6 +262,15 @@ class TestPlan(Artefact):
         default=(), description="Codes worth knowing, never blocking: PLAN_UNDERPOWERED."
     )
     expectation: str = Field(default="", description="The sponsor's written expectation.")
+    mde_value: float | None = Field(
+        default=None, exclude_if=_unset, description="For an amount: the change planned for, in its unit."
+    )
+    outcome_sd: float | None = Field(
+        default=None, exclude_if=_unset, description="For an amount: its expected spread per customer."
+    )
+    expected_rho2: float | None = Field(
+        default=None, exclude_if=_unset, description="The share of the spread the covariate should explain."
+    )
     amends: str | None = Field(default=None, description="`plan_hash` of the version this one replaces.")
     amendment_reason: str | None = Field(default=None, description="Why it was amended.")
     registered_at: AwareDatetime = Field(description="When this version was registered.")
@@ -242,9 +291,15 @@ class TestPlanChangedError(ValueError):
 
     __test__ = False
 
-    def __init__(self, differences: Sequence[PlanDifference]) -> None:
+    def __init__(self, differences: Sequence[PlanDifference], *, unplanned: bool = False) -> None:
         self.differences = tuple(differences)
         listed = "; ".join(f"{d.field}: planned {d.planned}, now {d.realised}" for d in self.differences)
+        if unplanned:  # Plan J M102: an adjustment nobody registered in advance
+            super().__init__(
+                f"No test plan is registered, so this adjustment was not decided before the outcomes were "
+                f"seen ({listed}). Register a test plan that names it first, or measure without it."
+            )
+            return
         super().__init__(
             f"This measurement differs from the registered test plan ({listed}). Measure as planned, or "
             f"amend the plan with a reason first."
@@ -283,7 +338,9 @@ def freeze_plan(
 
     achieved: float | None = None
     note: str | None = None
-    if decided.mde_pp is None or decided.base_rate is None:
+    if decided.outcome_kind == "continuous":
+        achieved, note = _amount_power(decided, realised)
+    elif decided.mde_pp is None or decided.base_rate is None:
         note = "Give the smallest effect worth detecting and the expected rate to see the power of this test."
     elif realised.n_treat <= 0 or realised.n_holdout <= 0:
         note = "One of the two groups is empty, so this test cannot detect any effect."
@@ -320,6 +377,28 @@ def freeze_plan(
     }
     draft = TestPlan.model_validate({**content, "plan_hash": "0" * 64})
     return draft.model_copy(update={"plan_hash": plan_hash(draft.model_dump(mode="json"))})
+
+
+def _amount_power(decided: TestPlanInput, realised: RealisedPopulation) -> tuple[float | None, str | None]:
+    """The power of an amount's plan (Plan J M102): `achieved_power_continuous` with the expected rho2."""
+    from engine.measurement.planner import achieved_power_continuous
+
+    if decided.mde_value is None or decided.outcome_sd is None:
+        return None, (
+            "Give the smallest change in the average worth detecting and how much the amount varies to see "
+            "the power of this test."
+        )
+    if realised.n_treat <= 0 or realised.n_holdout <= 0:
+        return 0.0, "One of the two groups is empty, so this test cannot detect any effect."
+    estimate = achieved_power_continuous(
+        realised.n_treat,
+        realised.n_holdout,
+        decided.outcome_sd,
+        decided.mde_value,
+        alpha=decided.alpha,
+        rho2=decided.expected_rho2 or 0.0,
+    )
+    return estimate.power, estimate.reason
 
 
 # ---------------------------------------------------------------------------

@@ -33,6 +33,18 @@ fix how it will be judged before it is (`engine.measurement.plan`):
   the campaign's own measured population, beside its realised counts. Nothing is stored, nothing is
   interpolated: the slider steps through these points only (DEC-1204).
 
+**Amounts and the adjusted estimate (M102, DEC-1312).** A plan may register `outcome_kind: continuous`
+(revenue) with `mde_value`, `outcome_sd` and an `expected_rho2` for its covariate. `POST
+/campaigns/{id}/outcomes` then copies the covariate and the date it was measured up to
+(`covariate_column`, `covariate_date_column`; a covariate without its date is **422
+`COVARIATE_NOT_BEFORE_CAMPAIGN`**), and the measurement reads the amount with Welch's interval and, with
+the registered covariate, the CUPED adjusted estimate. A covariate dated on or after a customer's
+treatment date (compared by day: a covariate dated the day of contact is too late) is **422
+`COVARIATE_NOT_BEFORE_CAMPAIGN`** and nothing is stored; a covariate or outcome kind the plan did not
+register is **409 `TEST_PLAN_CHANGED`**, and so is a covariate on an amount with no plan (a yes/no
+outcome never uses one, so it is ignored as before). The plan preview's points of a plan on an amount
+carry `mde_amount` (`mde_continuous` with the plan's `outcome_sd` and `expected_rho2`) and no `mde_pp`.
+
 **Holdout epochs (M92).** `POST /campaigns` records the scoring run's holdout (scope, key and epoch,
 from `holdout_assignment.json`; a run that wrote none drew per run). `POST /campaigns/{id}/measure`
 refuses **409 `CAMPAIGN_EPOCH_MISMATCH`** when the runs behind the assignment span two epochs, when
@@ -94,6 +106,7 @@ from engine.measurement.campaign import (
     test_plan_version_filename,
     write_frame,
 )
+from engine.measurement.continuous import COVARIATE_NOT_BEFORE_CAMPAIGN, CovariateNotBeforeCampaignError
 from engine.measurement.measure import campaign_verdict_for, measure_campaign
 from engine.measurement.plan import (
     TEST_PLAN_CHANGED,
@@ -112,6 +125,7 @@ from engine.measurement.planner import (
     MAX_HOLDOUT_SHARE,
     PowerPreviewPoint,
     PowerPreviewRequest,
+    continuous_power_preview,
     cost_of_explore,
     power_preview,
 )
@@ -227,6 +241,14 @@ class CampaignOutcomesRequest(StrictBase):
         default=None,
         description="Per-row treatment date in the file; the campaign's treatment start when null.",
     )
+    covariate_column: str | None = Field(
+        default=None,
+        description="An amount from before the campaign to copy for the adjusted estimate (Plan J M102).",
+    )
+    covariate_date_column: str | None = Field(
+        default=None,
+        description="The date each covariate value was measured up to; required with covariate_column.",
+    )
 
 
 class CampaignMeasureRequest(StrictBase):
@@ -241,6 +263,13 @@ class CampaignMeasureRequest(StrictBase):
     covariate_column: str | None = Field(
         default=None,
         description="The covariate to adjust with (M102); the test plan's when null, checked against it now.",
+    )
+    outcome_kind: Literal["binary", "continuous"] | None = Field(
+        default=None,
+        description=(
+            "`binary` (a rate) or `continuous` (an amount such as revenue, a mean); the test plan's when null, "
+            "else binary (Plan J M102)."
+        ),
     )
 
 
@@ -543,6 +572,16 @@ def add_campaign_outcomes(
     wanted = [*key_columns(campaign.primary_key), outcome]
     if body.treatment_date_column is not None:
         wanted.append(body.treatment_date_column)
+    if body.covariate_column is not None:  # Plan J M102: the adjustment needs to know when it was measured
+        if body.covariate_date_column is None:
+            raise http_error(
+                422,
+                COVARIATE_NOT_BEFORE_CAMPAIGN,
+                f"Name the column holding the date each {body.covariate_column!r} value was measured up to: "
+                f"without it the value cannot be shown to come from before the campaign.",
+                path="covariate_date_column",
+            )
+        wanted += [body.covariate_column, body.covariate_date_column]
     missing = [name for name in wanted if name not in columns]
     if missing:
         raise http_error(
@@ -566,6 +605,10 @@ def add_campaign_outcomes(
                 treatment_date_column=body.treatment_date_column,
                 rows=len(kept.index),
                 added_at=utc_now(),
+                covariate_column=body.covariate_column,
+                covariate_date_column=(
+                    body.covariate_date_column if body.covariate_column is not None else None
+                ),
             )
         }
     )
@@ -623,6 +666,9 @@ def measure_campaign_results(
     covariate = body.covariate_column
     if covariate is None and plan is not None:
         covariate = plan.covariate_column
+    # Plan J M102: the outcome is read as the plan registered it (a different kind named in the body is a
+    # change of plan, refused by `measure_campaign`), else as the body says, else as yes/no.
+    kind = body.outcome_kind or (plan.outcome_kind if plan is not None else "binary")
     try:
         report = measure_campaign(
             assignment,
@@ -639,10 +685,15 @@ def measure_campaign_results(
             campaign_id=campaign_id,
             plan=plan,
             covariate_column=covariate,
+            outcome_kind=kind,
+            covariate_date_column=_covariate_date_column(campaign.outcomes, covariate),
         )
     except TestPlanChangedError as exc:
         set_audit_context(request, details={"reason_code": TEST_PLAN_CHANGED})
         raise http_error(409, TEST_PLAN_CHANGED, str(exc)) from exc
+    except CovariateNotBeforeCampaignError as exc:
+        set_audit_context(request, details={"reason_code": COVARIATE_NOT_BEFORE_CAMPAIGN})
+        raise http_error(422, COVARIATE_NOT_BEFORE_CAMPAIGN, str(exc)) from exc
     except ValueError as exc:
         raise http_error(422, CAMPAIGN_INVALID, str(exc)) from exc
     if report.status is IncrementalityStatus.IMMATURE or report.rows_immature:
@@ -673,6 +724,13 @@ def measure_campaign_results(
         report.early_look,
     )
     return _view(storage, updated, root)
+
+
+def _covariate_date_column(outcomes: CampaignOutcomes, covariate: str | None) -> str | None:
+    """The date column copied with `covariate`, when the outcomes were given that covariate (Plan J M102)."""
+    if covariate is None or outcomes.covariate_column != covariate:
+        return None
+    return outcomes.covariate_date_column
 
 
 def _epoch_mismatch(
@@ -760,7 +818,10 @@ def preview_plan(
     campaign = _load(get_campaign_store(request), campaign_id)
     realised = _realised(storage, campaign_id)
     plan = _current_plan(storage, campaign_id)
-    rate, source = (base_rate, "request") if base_rate is not None else (None, None)
+    amount = (
+        plan is not None and plan.outcome_kind == "continuous"
+    )  # Plan J M102: points in the amount's unit
+    rate, source = (base_rate, "request") if base_rate is not None and not amount else (None, None)
     if rate is None and plan is not None and plan.base_rate is not None:
         rate, source = plan.base_rate, "plan"
     good, _ = _direction(campaign, root)
@@ -810,7 +871,21 @@ def preview_plan(
             "Each control-group share must be more than 0 and at most 0.5, and at most 20 may be asked for.",
             path="holdout",
         ) from exc
-    preview = power_preview(preview_request)
+    if plan is not None and amount:
+        if plan.outcome_sd is None:
+            return CampaignPlanPreview(
+                **answer,
+                points=(),
+                current_index=None,
+                basis=None,
+                reason=(
+                    "The test plan measures an amount but gives no spread for it, so the smallest change "
+                    "the test can see cannot be worked out. Amend the plan with the amount's spread."
+                ),
+            )
+        preview = continuous_power_preview(preview_request, plan.outcome_sd, rho2=plan.expected_rho2 or 0.0)
+    else:
+        preview = power_preview(preview_request)
     # The explore cost is the campaign's own explore slice, counted, not a share of it rounded back
     # (the request caps the share at 10% of the measured population, which an explore slice drawn
     # outside a narrow selection can exceed).
@@ -924,14 +999,9 @@ def _resolved(campaign: Campaign, body: TestPlanInput) -> TestPlanInput:
     window = (
         body.outcome_window_days if body.outcome_window_days is not None else campaign.outcome_window_days
     )
+    # Plan J M102 (DEC-1312): an amount (`outcome_kind: continuous`) can be planned and measured now; the
+    # refusal M94 put here ("amounts such as revenue come later") is lifted.
     decided = body.model_copy(update={"outcome_window_days": window})
-    if decided.outcome_kind != "binary":
-        raise http_error(
-            422,
-            TEST_PLAN_INVALID,
-            "Only yes-or-no outcomes can be measured today; amounts such as revenue come later.",
-            path="outcome_kind",
-        )
     if window is not None:
         from datetime import timedelta
 
