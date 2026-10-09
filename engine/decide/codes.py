@@ -69,6 +69,14 @@ PLAN_J_CODES: Final[frozenset[str]] = (
             # (`engine.privacy.consent`, a per-row `ConsentImportError`). The other CONSENT_* row codes predate
             # Plan J and are not in the catalogue; this one is joined because it is new and user-facing.
             "CONSENT_CHANNEL_INVALID",
+            # M101 (DEC-1311 (l), (p), (r), (v)): `POST /decide/arbitrate` and the arbitration downloads
+            # (`api.routes.decide`, `engine.decide.arbitrate`). Route codes, joined here so the catalogue
+            # explains them as it does M94's campaign route errors.
+            "NO_RUNS_TO_ARBITRATE",  # 400: no finished scoring run of the use cases named
+            "PRIMARY_KEY_MISMATCH",  # 422: the runs identify customers by different key columns
+            "ARBITRATION_USE_CASE_REPEATED",  # 422: two runs of one use case
+            "ARBITRATION_NOT_FOUND",  # 404: no arbitration yet, or no participating run keeps the list
+            "ARBITRATION_CONFIG_INVALID",  # 422: decide/arbitration.yaml exists and cannot be read
         }
     )
     | MEASUREMENT_CHECK_CODES  # M93 (DEC-1303 (h)): LABEL_RATE_UNSTABLE, TREATMENT_HISTORY_NOT_RANDOM
@@ -89,4 +97,4 @@ definition (the one-registry rule, DEC-950). M96's three advisory approval check
 way from `engine.model_gates.UPLIFT_GATE_CODES` (DEC-1306 (f)), and M100's promotion refusal from
 `engine.measurement.arms.MULTI_ARM_CODES` (DEC-1310 (h)). M100 part B's two codes are joined from
 `engine.decide.offer_run.OFFER_CHOICE_CODES` and `engine.decide.channel_columns.CHANNEL_COLUMN_CODES`
-(DEC-1310 (r), (y))."""
+(DEC-1310 (r), (y)). M101's five arbitration route codes are listed above (DEC-1311)."""

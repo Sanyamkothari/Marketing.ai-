@@ -356,6 +356,19 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/decide/test_offer_choice_binary.py",
         "tests/integration/decide/test_channel_gate_real_run.py",
     ),
+    # M101 (DEC-1311). The node test (conflicts_card.test.mjs) runs through test_conflicts_card_js.py; the
+    # 200,000-row timing tests in test_arbitrate.py and test_arbitrate_scale.py are `slow`, and each file
+    # keeps fast tests, so both stay mapped.
+    "M101": (
+        "tests/unit/decide/test_arbitrate.py",
+        "tests/unit/decide/test_arbitrate_real_runs.py",
+        "tests/unit/decide/test_arbitrate_scale.py",
+        "tests/unit/decide/test_arbitrate_second_review.py",
+        "tests/unit/decide/test_conflicts_card_js.py",
+        "tests/integration/decide/test_arbitration_flow.py",
+        "tests/integration/decide/test_arbitration_review.py",
+        "tests/integration/decide/test_arbitration_second_review.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

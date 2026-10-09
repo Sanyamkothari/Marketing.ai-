@@ -906,6 +906,68 @@ Plan J M100 part B comment, in plain words. `tests/unit/pilot/test_help.py` is u
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-09 — plan-j M101 (on main) → trunk (owner of `api/main.py` and `tests/integration/test_api_config.py`): the arbitration router (record)
+
+**What changed** (DEC-1311 (o), (p), (x)): `api/main.py` mounts `api.routes.decide.router` (`decide_router`) inside
+its PLAN-J block, after M94's campaign router; nothing above the block moved. The router serves `POST
+/decide/arbitrate` (Analyst), `GET /decide/conflicts` and `GET /decide/arbitrated-treat-list.csv` / `.parquet`
+(row-level, Analyst-only, audited), each with a `RoutePolicy`. `tests/integration/test_api_config.py`'s exact-set
+OpenAPI path pin gains the four paths under one Plan J M101 comment; nothing was removed or loosened.
+`docs/API.md` regenerated.
+
+**What is needed.** Ratification of the test edit. Nothing else.
+
+### 2026-10-09 — plan-j M101 (on main) → trunk / Plan H (owners of `api/routes/runs.py`): the arbitrated files are served as run artefacts (record of in-place edits)
+
+**What changed** (DEC-1311 (e), (p); not named in the plan, additive): `read_artefact` whitelists
+`arbitrated_treat_list.csv`, `arbitrated_treat_list.parquet` (row-level, through `ROW_LEVEL_ARTEFACTS`, so
+Analyst-only and audited) and the aggregate `arbitration_summary.json`, which the arbitration writes into every run
+that took part. The names are imported from `engine.decide.arbitrate`. It sits beside M100 part B's
+`offer_choice.parquet` line; both are kept. A run that took part in no arbitration answers 404 for these names, as
+for any file it does not have.
+
+**What is needed.** Ratification of the edit. Nothing else.
+
+### 2026-10-09 — plan-j M101 (on main) → Phase 4b (owner of `api/access_policy.py`, `engine/privacy/layout.py` and `configs/privacy.yaml`): two more row-level run files (announcement and record of in-place edits)
+
+**What changed** (DEC-1311 (e), (p); not named in the plan, additive): `arbitrated_treat_list.csv` and
+`arbitrated_treat_list.parquet` are registered in `configs/privacy.yaml` (`row_level_run_artefacts`),
+`engine/privacy/layout.py` (`Store.SCORES`, keyed like `scores.*` by the run's own key) and `api/access_policy.py`
+`ROW_LEVEL_ARTEFACTS`, beside M100 part B's `offer_choice.parquet`. They are written only under `runs/<id>/` of the
+runs that took part, so retention and erasure find them; nothing customer-level is written under `decide/` (only
+the aggregate `decide/arbitration_summary.json`, which holds no customer id).
+`tests/integration/decide/test_arbitration_second_review.py` checks that no customer id is kept outside the runs
+and campaigns and that retention plans the files' deletion; `tests/integration/decide/test_row_level_downloads.py`
+passes unchanged.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M101 (on main) → branches reading campaigns (M102 to M105, Plan H): arbitrated campaigns (announcement)
+
+**What changed** (DEC-1311 (d), (n), (o); Plan J's own paths, recorded because other branches read them):
+
+* `engine/measurement/campaign.py`: `Campaign.arbitration_id` (optional, default null, so a campaign record written
+  before it reads as before); `build_assignment(..., scope_keys=...)` replaces the partner's `treated_keys` and
+  cuts both arms by the same rule; `create_arbitrated_campaign(storage, store, run_id, scope_keys, *,
+  arbitration_id, treatment_start, outcome_window_days, ...)` replaces the partner's signature (the caller passes
+  the run's finish time and the use case's window). A campaign made without arbitration is built exactly as before.
+* `api/routes/campaigns.py`: `_default_window` is now public as `default_outcome_window`, so the arbitration
+  resolves a campaign's window exactly as `POST /campaigns` does. Its behaviour is unchanged.
+* `engine/decide/treat_list.py`: `policy_intended` (whom a use case's policy intended to contact, from M92's
+  selection masks) is new; the treat list itself is unchanged.
+
+**What is needed.** Nothing; this is an announcement. A reader of campaigns should ignore an `arbitration_id` it
+does not know.
+
+### 2026-10-09 — plan-j M101 (on main) → Plan E (owner of `configs/pilot/help.yaml`): five new codes (announcement)
+
+**What changed** (DEC-1311 (w)): `NO_RUNS_TO_ARBITRATE`, `PRIMARY_KEY_MISMATCH`, `ARBITRATION_USE_CASE_REPEATED`,
+`ARBITRATION_NOT_FOUND` and `ARBITRATION_CONFIG_INVALID` (route codes of `api/routes/decide.py`) join
+`engine.decide.codes.PLAN_J_CODES` and get `configs/pilot/help.yaml` entries under a Plan J M101 comment, in plain
+words. `tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

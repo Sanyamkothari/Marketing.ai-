@@ -421,6 +421,27 @@ codes:
     title: "The model uses a channel's consent column as an input"
     meaning: "The model chosen for this scoring run was trained with a column that this use case uses to record whether a customer agreed to be contacted on a channel, or can be reached on it (actions.suppression.channels), as one of its inputs. The message names the columns. Whether someone agreed to be contacted must not decide how they are ranked, so this model cannot score for this use case. The run stops before it scores anyone."
     fix: "Train the model again. Training now leaves each channel's consent and contactable columns out of the model's inputs. Then score with the new version."
+  # --- Plan J M101: one action per customer across use cases (DEC-1311) ------------------------------------
+  NO_RUNS_TO_ARBITRATE:
+    title: "No finished scoring runs to arbitrate"
+    meaning: "There is no finished scoring run to arbitrate across: no use case was named and no use case has a scoring run that has finished. (A use case named in the request that has no finished scoring run is reported by name instead.)"
+    fix: "Score at least one use case, wait for the run to finish, then arbitrate again."
+  PRIMARY_KEY_MISMATCH:
+    title: "The use cases do not share a customer key"
+    meaning: "The runs identify customers by different columns, so one customer cannot be matched across them and nobody can be given one action across the use cases. The message names the columns of each."
+    fix: "Arbitrate runs that identify customers by the same customer id column (and the same date column, if the runs use one)."
+  ARBITRATION_USE_CASE_REPEATED:
+    title: "One use case was named twice"
+    meaning: "Two of the chosen runs are for the same use case, so its customers would be counted twice."
+    fix: "Choose one run per use case, then arbitrate again."
+  ARBITRATION_NOT_FOUND:
+    title: "No arbitration to show"
+    meaning: "No arbitration has been run yet, or its customer list has been removed under the retention rules from every run that took part."
+    fix: "Run the arbitration again to make a new list."
+  ARBITRATION_CONFIG_INVALID:
+    title: "The arbitration settings file could not be read"
+    meaning: "The arbitration settings file (decide/arbitration.yaml) is there but could not be read. The message names the setting to correct: for example a negative channel cap, a contact cap below 1, a misspelt setting, or a file that is not valid YAML. The arbitration does not run until the file is fixed, so the caps and priorities you wrote are never silently dropped."
+    fix: "Correct the setting the message names, or remove the file to use the defaults (every use case equal, one action per customer, no channel caps). The file configs/decide/arbitration.example.yaml shows every setting."
 
 settings:
   actions.bands[*].min_score:
