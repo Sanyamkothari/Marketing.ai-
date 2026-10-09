@@ -45,6 +45,7 @@ from engine.contracts import (
     RunState,
 )
 from engine.jobs import CancelToken, ThreadJobRunner
+from engine.pilot.plain import jargon_in
 from engine.storage import LocalStorage, run_key
 from engine.utils.time import utc_now
 from tests.fixtures.make_run import RunSpec, write_run
@@ -311,6 +312,7 @@ def test_a_capped_run_is_refused_unless_it_is_confirmed(
     detail = refused.json()["detail"]
     assert detail["code"] == "RUN_COST_NEEDS_CONFIRMATION"
     assert "USD" in detail["message"] and "list price" in detail["message"].lower()
+    assert jargon_in(detail["message"]) == ()
     assert storage.list_keys("runs/") == (), "a refused run must leave no run behind"
 
     accepted = start(client, confirm_cost=True)
@@ -389,6 +391,7 @@ def test_a_confirmed_run_past_the_cap_is_stopped(
     assert detail["run"]["error"]["code"] == "RUN_COST_CAP_REACHED"
     message = detail["run"]["error"]["message"]
     assert "stopped" in message and "USD" in message and "list price" in message.lower()
+    assert jargon_in(message) == ()
     assert run_id in client.app.state.jobs.cancelled, "the runner is asked to stop the job itself"
 
 

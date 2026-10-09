@@ -786,3 +786,48 @@ as a text figure read from that file, never replaced by a sentence of the pack's
 **On screen.** Results lists the ready packs with their sentence (`ui/modules/simple/pages.js`); Reports lists every
 recent campaign's pack or the server's reason; `#/pilot/proof/<campaign>` shows the server's page, its suggestions with
 an Approve button for an Analyst, and a value form when the pack has no value inputs (`ui/modules/pilot/screen.js`).
+
+## 22. Cost before each run, with a cap (M108, DEC-1318)
+
+We run on the client's cloud bill, so the number comes **before** the run, beside the Run button, and an
+Admin can put a ceiling on any one run. Everything is opt-in: with no cap (the default) starting, polling and
+cancelling a run are exactly as before, and a deployment that runs on its own machine has nothing to price.
+
+**The estimate** (`GET /use-cases/{use_case_id}/cost-estimate?mode=train|score`, Viewer; `engine/aws/run_cost.py`):
+the most one run could cost, at AWS's published **list price**, in US dollars: the deployment's time limit for a
+job (`MARKETING_AI_SAGEMAKER_MAX_RUNTIME_SECONDS`) x the instances x the hourly rate in `configs/aws_prices.yaml`
+for the machine the run uses (training for a train run, processing for a score run), plus the most the AI text
+service may charge a run when the use case uses one (`generative.budget.max_cost_usd_per_run`, counted only when
+every model it calls has a price in `configs/llm_prices.yaml`). A train run also lists what scoring new data with
+the model would cost later, marked "not counted here": it is a separate run with its own estimate. It is a ceiling
+and not a bill, and `basis` says so in every answer. Nothing calls AWS: the price list is a file.
+
+**Nothing is made up.** No price list, a machine the list does not carry, no time limit, or an unpriced text model:
+`estimated_usd` is `null` with `reason` saying which, `known_usd` carries what is known, and the total is never the
+sum of part of it. A deployment on its own machine is not billed, so it has no estimate (also `null`, with the
+reason), never zero. **Rupees** (`inr`) exist only beside an Admin-saved exchange rate: `PUT /cost/fx-rate` (Admin,
+audited) saves `inr_per_usd`, its `source` and the day it was read (`as_of`); `DELETE` removes it; every rupee figure
+carries all three. There is no default rate.
+
+**The cap** is `governance.max_run_cost_usd` (a number above zero, or null for none; use-case file or
+`configs/engine.yaml` defaults, never per run, so a person starting a run cannot raise it). When a run's estimate
+is above the cap, or cannot be worked out on a deployment that bills (nothing can then say it is under), `POST /runs`
+answers **409 `RUN_COST_NEEDS_CONFIRMATION`** with the numbers in plain words and starts nothing (no run directory is
+written) until the request carries `confirm_cost: true`. A run, confirmed or not, is **stopped through `cancel_run`**
+when its running cost passes the cap: the time since it started x the instances x the same rate (the estimate's own
+arithmetic, `price_compute_time`). Two things check, whichever sees it first: a small thread started with the run, and
+the Running screen's own poll (`GET /runs/{id}`). The stopped run is `cancelled`, its `error` is `RUN_COST_CAP_REACHED`
+with the cost so far, and the runner is asked to stop the job itself. A run that cannot be priced cannot be stopped for
+its cost, and the confirmation says so. After a restart of the API the poll still enforces the cap, and SageMaker's own
+time limit bounds the job either way. Scheduled runs (`engine/scheduling/firing.py`) do not pass through `POST /runs`
+and are not yet covered (open question in DEC-1318).
+
+**What runs have cost** (`GET /cost/spend?months=6`, Viewer): the finished runs of each calendar month added up from
+the cost figure each recorded when it ended (`run_manifest.json`), as list-price estimates, with how many runs had no
+figure. A month where none had one has no amount, not zero. Rupees only with a saved rate.
+
+**On screen.** The Setup form shows the server's estimate beside Run (nothing on a deployment that bills nobody), and a
+"Start it anyway" / "Do not start" box with the server's sentence when a capped run is refused (`ui/cost.js`,
+`ui/usecase.js`). A run the cap stopped says why on its results. `#/cost` shows the monthly spend and the exchange
+rate (an Admin gets the form; `ui/modules/decide/cost.js`). The link to it from the Settings page is added with that page's own
+entries at integration; until then it is reached by its address.

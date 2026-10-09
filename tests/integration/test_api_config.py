@@ -507,6 +507,10 @@ def test_openapi_builds_and_documents_every_route(client: TestClient) -> None:
         "/pilot/proof/{campaign_id}",
         "/pilot/proof/{campaign_id}/value",
         "/pilot/proof/{campaign_id}/suppressions",
+        # Plan J M108: the cost of a run before it starts, the exchange rate and the monthly spend (DEC-1318)
+        "/use-cases/{use_case_id}/cost-estimate",
+        "/cost/fx-rate",
+        "/cost/spend",
     }
 
 

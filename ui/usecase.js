@@ -24,6 +24,7 @@
 import {
   cancelRun,
   getArtefact,
+  getCostEstimate,
   getModels,
   getRun,
   getRuns,
@@ -75,6 +76,7 @@ import {
   uploadSources,
 } from "./modules/router.js";
 import * as seams from "./modules/router.js";
+import { COST_NEEDS_CONFIRMATION, costConfirmHtml, costLineHtml } from "./cost.js"; // Plan J M108 (DEC-1318)
 
 const AUTOML = "__automl__";
 const FILE = "file";
@@ -138,6 +140,12 @@ export function useCaseState(uc) {
       extraOverrides: {},
       submitError: null,
       submitting: false,
+      // Plan J M108 (DEC-1318): the cost estimate beside Run (`{ mode, estimate }`, the server's), the
+      // server's sentence when a capped run needs confirming, and whether the person said yes.
+      cost: null,
+      costLoading: false,
+      costConfirm: null,
+      costConfirmed: false,
       cancelAsk: false,
       runGated: false,
       runs: [],
@@ -157,6 +165,10 @@ export function useCaseState(uc) {
   }
   return STATE.get(uc.id);
 }
+
+/** Plan J M108: what a run could cost (when the server said) and, after a refusal, the way to confirm it. */
+const costHtml = (s) =>
+  `${costLineHtml(s.cost && s.cost.mode === s.mode ? s.cost.estimate : null)}${costConfirmHtml(s.costConfirm)}`;
 
 // --- words -----------------------------------------------------------------------------------------
 
@@ -820,6 +832,7 @@ function setupForm(uc, s) {
         ${steps.join("")}${advanced}
         ${validationHtml(uc, s)}
         ${s.submitError ? errorBox(s.submitError) : ""}
+        ${costHtml(s)}
         <div class="actions"><button type="submit" class="btn primary run" id="f-run"${
           why || s.submitting ? " disabled" : ""
         }>${esc(s.submitting ? "Starting…" : copy.run_button)}</button><span class="reason">${esc(why)}</span></div>
@@ -868,6 +881,7 @@ function modeForm(uc, s) {
     ? `<form id="f-setup" novalidate class="f-setup">
         ${validationHtml(uc, s)}
         ${s.submitError ? errorBox(s.submitError) : ""}
+        ${costHtml(s)}
         <div class="actions"><button type="submit" class="btn primary run" id="f-run"${
           why || s.submitting ? " disabled" : ""
         }>${esc(s.submitting ? "Starting…" : copy.run_button)}</button><span class="reason">${esc(why)}</span></div>
@@ -1199,7 +1213,11 @@ function outcome(uc, s, run) {
   if (run.state === "cancelled") {
     return {
       head: `<span class="muted">Run cancelled</span>`,
-      lines: [`<p class="vsub">This run was stopped before it finished. Nothing it started was saved as a model or a list.</p>`],
+      lines: [
+        `<p class="vsub">This run was stopped before it finished. Nothing it started was saved as a model or a list.</p>`,
+        // Plan J M108: a run the cost limit stopped says so, in the server's words.
+        run.error && run.error.message ? `<p class="vsub muted" data-stop-reason>${esc(run.error.message)}</p>` : "",
+      ],
       actions: `<button type="button" class="btn primary" id="f-again">Back to Setup</button>`,
     };
   }
@@ -1431,6 +1449,21 @@ export function createController(uc, rerender) {
     }
   }
 
+  /** Plan J M108: what one run of this mode could cost, as the server worked it out; `null` when it did not say. */
+  async function loadCost() {
+    const mode = s.mode;
+    s.costLoading = true;
+    let estimate = null;
+    try {
+      estimate = await getCostEstimate(uc.id, mode);
+    } catch {
+      // Any failed answer leaves the line out: a cost the server did not state is never drawn or guessed.
+    }
+    s.costLoading = false;
+    s.cost = { mode, estimate };
+    if (s.view === "setup" && estimate && s.mode === mode) rerender();
+  }
+
   /** The Output block's KPI line, read from the run's own scoring summary or left out. */
   async function loadKpi(run) {
     s.kpiDisplay = null;
@@ -1510,6 +1543,10 @@ export function createController(uc, rerender) {
     } else {
       body.model_version_id = s.modelVersionId;
     }
+    // Plan J M108: only after the person said yes to the server's cost warning for this very run.
+    if (s.costConfirmed) body.confirm_cost = true;
+    s.costConfirmed = false;
+    s.costConfirm = null;
     try {
       const created = await postRun(body);
       if (s.mode === "train") {
@@ -1531,6 +1568,8 @@ export function createController(uc, rerender) {
       s.submitting = false;
       if (error instanceof ApiError && error.status === 409 && error.body && error.body.validation) {
         s.validation = error.body.validation;
+      } else if (error instanceof ApiError && error.code === COST_NEEDS_CONFIRMATION) {
+        s.costConfirm = error.message; // the server's own sentence, with a way to say yes
       } else {
         s.submitError = error;
       }
@@ -1963,6 +2002,14 @@ export function createController(uc, rerender) {
       if (blocker(uc, s) || s.submitting) return;
       submit();
     });
+    on("f-cost-confirm", "click", () => {
+      s.costConfirmed = true;
+      submit();
+    });
+    on("f-cost-decline", "click", () => {
+      s.costConfirm = null;
+      rerender();
+    });
     on("f-again", "click", () => backToSetup());
     on("f-score-with", "click", () => {
       const run = s.detail && s.detail.run;
@@ -2009,6 +2056,10 @@ export function createController(uc, rerender) {
     root.querySelectorAll(".stage-d[data-stage]").forEach((details) => {
       if (s.openStages.includes(details.dataset.stage)) details.open = true;
     });
+
+    // Plan J M108: ask for the cost estimate once per mode (a failed or empty answer is remembered
+    // too, so this never loops) and draw it beside Run when it arrives.
+    if (s.view === "setup" && (!s.cost || s.cost.mode !== s.mode) && !s.costLoading) loadCost();
 
     // Last, so none of the queries above reaches into the panel: it binds its own events.
     if (s.view === "setup") mountSource(root);

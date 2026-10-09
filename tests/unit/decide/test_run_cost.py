@@ -365,3 +365,59 @@ def test_every_sentence_in_an_estimate_is_plain_words(config: UseCaseConfig, tab
 
 def test_the_new_codes_are_the_two_a_person_can_meet() -> None:
     assert frozenset({"RUN_COST_NEEDS_CONFIRMATION", "RUN_COST_CAP_REACHED"}) == RUN_COST_CODES
+
+
+# ---------------------------------------------------------------------------
+# The monthly spend reads each run once: time grows with the runs, not with their square
+# ---------------------------------------------------------------------------
+def _spend_storage(root: Path, runs: int) -> Any:
+    from datetime import UTC, datetime
+
+    from engine.contracts import ComputeBackend, ComputeInfo, CostEstimate, DatasetFingerprint, RunManifest
+    from engine.storage import LocalStorage, run_key
+    from tests.unit.test_run_index import make_record
+
+    storage = LocalStorage(root)
+    for index in range(runs):
+        run_id = f"r_20261001_{index:08d}"
+        record = make_record(run_id, minutes=index)
+        storage.write_model(run_key(run_id, "run.json"), record)
+        storage.write_model(
+            run_key(run_id, "run_manifest.json"),
+            RunManifest(
+                run_id=run_id,
+                primary_key="customer_id",
+                dataset_fingerprint=DatasetFingerprint(
+                    hash="0" * 64, algorithm="sha256", n_rows=10, columns=("customer_id", "churned")
+                ),
+                seed=1,
+                duration_s=1.0,
+                cost_estimate=CostEstimate(compute_seconds=1.0, estimated_usd=0.5, basis="list price"),
+                compute=ComputeInfo(backend=ComputeBackend.LOCAL, duration_s=1.0),
+                created_at=datetime(2026, 9, 22, 12, 1, 0, tzinfo=UTC),
+            ),
+        )
+    return storage
+
+
+def test_the_monthly_spend_is_linear_in_the_number_of_runs(tmp_path: Path) -> None:
+    import time
+    from datetime import UTC, datetime
+
+    from engine.aws.spend import monthly_spend
+
+    now = datetime(2026, 10, 9, tzinfo=UTC)
+    small = _spend_storage(tmp_path / "small", 200)
+    large = _spend_storage(tmp_path / "large", 800)
+    started = time.perf_counter()
+    first = monthly_spend(small, months=3, fx=None, now=now)
+    t_small = time.perf_counter() - started
+    started = time.perf_counter()
+    second = monthly_spend(large, months=3, fx=None, now=now)
+    t_large = time.perf_counter() - started
+    september = {row.month: row for row in first.months}["2026-09"]
+    assert september.runs == 200 and september.estimated_usd == pytest.approx(100.0)
+    september = {row.month: row for row in second.months}["2026-09"]
+    assert september.runs == 800 and september.estimated_usd == pytest.approx(400.0)
+    # Four times the runs must not cost sixteen times the time; allow generous noise on a shared machine.
+    assert t_large < max(t_small * 10, 2.0)

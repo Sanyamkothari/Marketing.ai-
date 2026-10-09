@@ -350,7 +350,7 @@ def estimate_run_cost(
     """The most one run of `config` in `mode` could cost at list price, and what the cap says about it."""
     billed = settings.job_backend == "sagemaker"
     lines: list[CostLine] = []
-    own = "training" if mode is RunMode.TRAIN else "scoring"
+    own: Literal["training", "scoring"] = "training" if mode is RunMode.TRAIN else "scoring"
     if billed:
         lines.append(_compute_line(own, mode, settings, table, in_total=True))
         if mode is RunMode.TRAIN:
