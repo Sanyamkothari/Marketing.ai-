@@ -43,6 +43,15 @@ Then `choose_offers` with `uplift.policy.min_roi`, the total budget `uplift.poli
 (rupees) and `uplift.policy.budget_contacts` (a count), greedy by net value per rupee. A customer's
 channel is the first planned channel of their offer they are contactable on.
 
+**The policy's offer without the hold-out (DEC-1311 (af)-(ak)).** For every customer, held back or not, the
+file also says which offer the policy would choose if nobody were held back (`policy_offer_arm`, with its label
+and net value, and `policy_intended`). Eligibility ignores only the hold-out (suppression, channel
+contactability, sleeping dogs and `min_roi` still count); the budget walk is replayed over every customer and a
+customer is intended when the walk, as run, had room for their offer at their place
+(`engine.decide.offer_choice.policy_offers`), so the customers not held back who are intended are exactly the
+ones the list contacted. A campaign of the run is measured within
+`policy_intended`, not within the first offer's `intended_treatment`. Existing columns are unchanged.
+
 **When it cannot choose.** With neither `value_per_conversion` nor a value column there is no money to
 choose by: `offer_choice.json` says so (`chosen: false`, `code` `OFFER_CHOICE_NOT_MADE`, a plain note),
 no row file is written, and the treat list stays part A's (the first offer's list).
@@ -83,6 +92,10 @@ __all__ = [
     "OFFER_CHOICE_NOT_MADE",
     "OFFER_CHOICE_SUMMARY_FILENAME",
     "OFFER_REASON_TEXT",
+    "POLICY_ARM_COLUMN",
+    "POLICY_INTENDED_COLUMN",
+    "POLICY_NOTE",
+    "POLICY_VALUE_COLUMN",
     "ArmPlan",
     "OfferArmSummary",
     "OfferChoiceSummary",
@@ -112,6 +125,17 @@ OFFER_REASON_TEXT: Final[dict[str, str]] = {
 }
 """Why a customer who could be treated got no offer, in plain words (the treat list's `offer_reason`)."""
 
+POLICY_ARM_COLUMN: Final[str] = "policy_offer_arm"
+POLICY_VALUE_COLUMN: Final[str] = "policy_offer_net_value"
+POLICY_INTENDED_COLUMN: Final[str] = "policy_intended"
+"""The columns of `offer_choice.parquet` added by DEC-1311 (af): the offer the policy would choose per customer
+if the hold-out did not exist, its net value, and whether the policy meant to contact the customer."""
+POLICY_NOTE: Final[str] = (
+    "policy_intended marks the customers the policy meant to contact, whether or not the hold-out kept them "
+    "back. The budget was spent on customers who were not held back; a held-back customer counts as intended "
+    "when the budget, walked in its own order, had room for their offer at their place, so the customers who "
+    "were not held back and are intended are exactly the ones the list contacted."
+)
 _NOT_MADE_NOTE: Final[str] = (
     "No offer was chosen per customer: set a value per response (uplift.policy.value_per_conversion) or a "
     "value column, so each offer's net value can be worked out. The treat list is the first offer's."
@@ -173,6 +197,24 @@ class OfferChoiceSummary(Artefact):
     value_column: str | None = Field(description="The value column the choice used, if any.")
     catalogue_sha256: str | None = Field(description="The catalogue the costs came from, or null.")
     created_at: datetime = Field(description="UTC time the choice was made.")
+    policy_intended_rows: int | None = Field(
+        default=None,
+        description=(
+            "DEC-1311 (af): customers the policy meant to contact, held back or not "
+            "(`policy_intended` in offer_choice.parquet). Absent from a run made before it."
+        ),
+        exclude_if=lambda value: value is None,
+    )
+    policy_intended_held_back_rows: int | None = Field(
+        default=None,
+        description="Of them, the customers the hold-out kept back (the campaign's hold-out arm).",
+        exclude_if=lambda value: value is None,
+    )
+    policy_note: str | None = Field(
+        default=None,
+        description="How the budget was treated for the customers held back.",
+        exclude_if=lambda value: value is None,
+    )
 
 
 @dataclass(frozen=True)
@@ -213,6 +255,11 @@ class OfferRows:
     """Its net value in rupees; NaN when there is none."""
     explore_cost: npt.NDArray[np.float64]
     """Its total expected cost in rupees (contact + offer x p_treated); 0 when there is none."""
+    policy_arm: npt.NDArray[np.int_]
+    """The offer the policy would choose if the hold-out did not exist (DEC-1311 (af)); 0 for none or beyond
+    the cut of the budget. Equal to `choice.arm` for every customer who was given an offer."""
+    policy_net_value: npt.NDArray[np.float64]
+    """Its net value in rupees; NaN where `policy_arm` is 0."""
 
 
 def plan_arms(
@@ -331,7 +378,7 @@ def decide_offers(
     column with values)."""
     import numpy as np
 
-    from engine.decide.offer_choice import NO_OFFER, ArmMoney, arm_net_values, choose_offers
+    from engine.decide.offer_choice import NO_OFFER, ArmMoney, arm_net_values, choose_offers, policy_offers
 
     lift = np.asarray(uplift, dtype=np.float64)
     taken = np.asarray(p_treated, dtype=np.float64)
@@ -343,6 +390,7 @@ def decide_offers(
     cost = np.empty((rows, count), dtype=np.float64)
     eligible = np.empty((rows, count), dtype=np.bool_)
     firsts: list[ObjectArray] = []
+    reachable_by_arm = np.empty((rows, count), dtype=np.bool_)
     for index, arm in enumerate(arms):
         # A catalogue offer's contact cost is the catalogue's; the run's cost per contact prices the rest.
         own = (
@@ -355,6 +403,7 @@ def decide_offers(
         cost[:, index] = money.cost[:, 0]
         reachable, first = _first_open(arm.channels, contactable, rows, unlisted)
         eligible[:, index] = ~held & reachable
+        reachable_by_arm[:, index] = reachable
         firsts.append(first)
     dogs = np.asarray(lift <= sleeping_dog_max, dtype=np.bool_)
     choice = choose_offers(
@@ -362,6 +411,19 @@ def decide_offers(
         cost,
         sleeping_dog=dogs,
         eligible=eligible,
+        budget=policy.total_budget,
+        min_roi=0.0 if policy.min_roi is None else float(policy.min_roi),
+        max_offers=policy.budget_contacts,
+    )
+    # The offer the policy would choose if nobody were held back: suppression and contactability still
+    # count, the hold-out does not; the budget walk is replayed with its own fit test (DEC-1311 (af), (ag)).
+    not_suppressed = ~np.asarray(suppressed, dtype=np.bool_)
+    would = policy_offers(
+        net,
+        cost,
+        sleeping_dog=dogs,
+        eligible=not_suppressed[:, None] & reachable_by_arm,
+        offered=choice.arm != NO_OFFER,
         budget=policy.total_budget,
         min_roi=0.0 if policy.min_roi is None else float(policy.min_roi),
         max_offers=policy.budget_contacts,
@@ -396,6 +458,8 @@ def decide_offers(
         explore_channel=explore_channel,
         explore_net_value=np.asarray(explore_value, dtype=np.float64),
         explore_cost=np.asarray(explore_cost, dtype=np.float64),
+        policy_arm=would.arm,
+        policy_net_value=would.net_value,
     )
 
 
@@ -614,6 +678,12 @@ def _choose(flow: Any) -> None:
     table["runner_up_channel"] = decided.runner_up_channel
     table["runner_up_net_value"] = choice.runner_up_net_value
     table["offer_reason"] = np.asarray(OFFER_REASONS, dtype=object)[choice.reason_code]
+    # Added by DEC-1311 (af): the offer the policy would choose if nobody were held back, for every customer. They
+    # sit before the explore_* columns, which stay the last five (every earlier column keeps its place from the start).
+    table[POLICY_ARM_COLUMN] = decided.policy_arm.astype(np.int64)
+    table["policy_offer_label"] = labelled(decided.policy_arm, "label")
+    table[POLICY_VALUE_COLUMN] = decided.policy_net_value
+    table[POLICY_INTENDED_COLUMN] = decided.policy_arm > 0
     table["explore_arm"] = decided.explore_arm.astype(np.int64)
     table["explore_label"] = labelled(decided.explore_arm, "label")
     table["explore_channel"] = decided.explore_channel
@@ -637,6 +707,9 @@ def _choose(flow: Any) -> None:
         reasons={str(name): int(count) for name, count in zip(names, counts, strict=True)},
         spent=round(float(choice.spent), 2),
         net_value_total=round(float(np.nansum(choice.net_value)), 2),
+        policy_intended_rows=int((decided.policy_arm > 0).sum()),
+        policy_intended_held_back_rows=int(((decided.policy_arm > 0) & control & ~suppressed).sum()),
+        policy_note=POLICY_NOTE,
     )
     flow._write(OFFER_CHOICE_SUMMARY_FILENAME, summary)
     _LOGGER.info(

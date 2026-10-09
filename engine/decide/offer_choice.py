@@ -26,6 +26,12 @@ the eligibility mask is the customer's contactability per offer (M99's channel c
    further down can still fit. A customer left out gets no offer, reason `over_budget`. A zero-cost
    offer is taken first, at no cost.
 
+5. **The policy's offer without the hold-out** (:func:`policy_offers`, DEC-1311 (af)-(ak)). For measuring a
+   campaign the rule is asked once more about every customer, held back or not: which offer would the
+   policy choose if nobody were held back? Eligibility then ignores only the hold-out; the budget is
+   replayed with the walk's own fit test at each customer's place (see the function), so treated and
+   held-back customers are cut by one rule and the treated arm is exactly the contacted list.
+
 Net value per offer is M97's (DEC-1307): `uplift x value x margin x horizon - offer cost x p_treated -
 contact cost`, from :func:`arm_net_values`, which takes each offer's costs from the caller
 (`engine.pilot.roi.ValueCosts` per offer; M99's catalogue supplies them in Part B). Everything is
@@ -58,8 +64,10 @@ __all__ = [
     "ArmMoney",
     "OfferChoice",
     "OfferReason",
+    "PolicyOffer",
     "arm_net_values",
     "choose_offers",
+    "policy_offers",
 ]
 
 NO_OFFER: Final[int] = 0
@@ -114,6 +122,24 @@ class OfferChoice:
 
     def offered(self) -> BoolArray:
         """Customers given an offer."""
+        import numpy as np
+
+        mask: BoolArray = np.asarray(self.arm != NO_OFFER, dtype=np.bool_)
+        return mask
+
+
+@dataclass(frozen=True)
+class PolicyOffer:
+    """The offer the policy would choose if the hold-out did not exist (see :func:`policy_offers`)."""
+
+    arm: IntArray
+    """The offer: 1..K, or :data:`NO_OFFER` when the customer has no offer or the budget walk had no room."""
+    net_value: FloatArray
+    """Its net value; NaN where there is no offer."""
+
+    @property
+    def intended(self) -> BoolArray:
+        """Customers the policy means to contact: `arm` is an offer."""
         import numpy as np
 
         mask: BoolArray = np.asarray(self.arm != NO_OFFER, dtype=np.bool_)
@@ -296,6 +322,101 @@ def choose_offers(
     )
 
 
+def policy_offers(
+    net_value: npt.ArrayLike,
+    cost: npt.ArrayLike,
+    *,
+    sleeping_dog: npt.ArrayLike,
+    eligible: npt.ArrayLike,
+    offered: npt.ArrayLike,
+    budget: float | None = None,
+    min_roi: float = 0.0,
+    max_offers: int | None = None,
+) -> PolicyOffer:
+    """The offer the policy would choose per customer if the hold-out did not exist (DEC-1311 (af)-(ak)).
+
+    A campaign compares the customers a list contacted with those it held back, and the two must be cut by
+    one rule (DEC-1304 (b)). `choose_offers` cannot say who a held-back customer would have been given: it
+    never saw them. This asks the same rule about every customer.
+
+    `eligible` is the eligibility the run used **except the hold-out**: suppression and channel
+    contactability still count, so a suppressed customer, or one reachable on no channel of an offer, has no
+    offer. Sleeping dogs and `min_roi` count as in `choose_offers`. `offered` marks the customers the run
+    actually gave an offer (`OfferChoice.arm`).
+
+    **The budget.** The run spent `budget` (and `max_offers`) on customers who were not held back, walking
+    them in the order of :func:`_walk_order` and skipping an offer that did not fit. The hold-out is on top
+    of the budget, so nothing the run did can be undone for the held-back customers. This replays the same
+    walk over *every* customer with a preferred offer, in the same order: `spent` and the count move only
+    when a customer the run actually gave an offer is reached, and at each customer's place the walk's own
+    fit test (`spent + price <= budget`, `count < max_offers`) decides whether the walk as run had room for
+    their offer. A customer is *intended* when it did. For a customer who was not held back that is exactly
+    "the run gave them the offer" (a held-back customer consumes no budget, so the subsequence of customers
+    who were not held back sees the same `spent` as in the run), so the treated arm of a campaign is exactly
+    the contacted list; a held-back customer is intended when the walk had room for their offer at their
+    place, whatever their own draw. A customer the walk skipped because their offer did not fit is not
+    intended, in neither arm, as a held-back customer whose offer would not have fit. With no budget and no
+    `max_offers` nobody is cut; a budget that does not bind behaves like no budget.
+
+    Ties are broken by row order, as the walk breaks them, which does not depend on who is held back.
+    """
+    import numpy as np
+
+    net = _matrix(net_value, "net_value")
+    rows, arms = net.shape
+    costs = _matrix(cost, "cost", rows, arms)
+    dogs = _mask(sleeping_dog, "sleeping_dog", (rows, arms), default=False)
+    allowed = _mask(eligible, "eligible", (rows, arms), default=True)
+    given = np.asarray(offered, dtype=np.bool_)
+    if given.shape != (rows,):
+        raise ValueError(f"offered must have one entry per row ({rows}), not {given.shape}.")
+    preferred = choose_offers(
+        net, costs, sleeping_dog=dogs, eligible=allowed, budget=None, min_roi=min_roi
+    ).preferred_arm
+    has_offer = preferred != NO_OFFER
+    rows_index = np.arange(rows)
+    column = np.maximum(preferred - 1, 0)
+    value = np.where(has_offer, net[rows_index, column], np.nan)
+    price = np.where(has_offer, costs[rows_index, column], 0.0)
+    if budget is None and max_offers is None:
+        intended = has_offer
+    else:
+        intended = np.zeros(rows, dtype=np.bool_)
+        spent = 0.0
+        count = 0
+        for position in _walk_order(value, price, has_offer).tolist():
+            each = float(price[position])
+            fits = (budget is None or spent + each <= budget + 1e-9) and (
+                max_offers is None or count < max_offers
+            )
+            intended[position] = fits
+            if given[position]:
+                spent += each
+                count += 1
+        if bool((given & has_offer & ~intended).any()):  # pragma: no cover - the replay is the run's own walk
+            raise ValueError("offered names a customer the budget walk would not have given an offer.")
+    arm = np.where(intended, preferred, NO_OFFER).astype(np.int_)
+    return PolicyOffer(arm=arm, net_value=np.where(intended, value, np.nan))
+
+
+def _walk_order(value: FloatArray, cost: FloatArray, offered: BoolArray) -> IntArray:
+    """The rows of `offered` in the budget walk's order: net value per rupee, then net value, then row order.
+
+    A zero-cost offer comes first. `np.lexsort` sorts by the last key first: ratio (descending), then value
+    (descending), then row order (ascending). One definition, used by the walk and by :func:`policy_offers`.
+    """
+    import numpy as np
+
+    candidates = np.flatnonzero(offered)
+    per_rupee = np.where(
+        cost[candidates] > 0.0,
+        value[candidates] / np.where(cost[candidates] > 0.0, cost[candidates], 1.0),
+        np.inf,
+    )
+    ordered: IntArray = candidates[np.lexsort((candidates, -value[candidates], -per_rupee))]
+    return ordered
+
+
 def _within_budget(
     value: FloatArray,
     cost: FloatArray,
@@ -308,14 +429,7 @@ def _within_budget(
     Without a `budget` only `max_offers` limits it: the first `max_offers` customers in that order."""
     import numpy as np
 
-    candidates = np.flatnonzero(offered)
-    per_rupee = np.where(
-        cost[candidates] > 0.0,
-        value[candidates] / np.where(cost[candidates] > 0.0, cost[candidates], 1.0),
-        np.inf,
-    )
-    # np.lexsort sorts by the last key first: ratio (desc), then value (desc), then row order (asc).
-    order = candidates[np.lexsort((candidates, -value[candidates], -per_rupee))]
+    order = _walk_order(value, cost, offered)
     taken = np.zeros(len(value), dtype=np.bool_)
     if budget is None:
         taken[order[: max_offers if max_offers is not None else len(order)]] = True

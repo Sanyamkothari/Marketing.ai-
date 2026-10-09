@@ -64,8 +64,10 @@ lives in the platform database (`campaign`, alembic `0006`) and its files under 
 | `incrementality_report.json` | the measured report | aggregate |
 | `test_plan.json`, `test_plan_v<n>.json` | the plan in force, and every version | aggregate |
 
-`intended` is the population both arms are compared inside: an uplift run's `intended_treatment`, a
-propensity run's treat bands, or every eligible customer (intent to treat). The **treatment start** is
+`intended` is the population both arms are compared inside: an uplift run's `intended_treatment` (for a run
+that chose the offer per customer, the customers its policy would give some offer to if nobody were held back,
+`Campaign.intended_source = "offer_choice"`, section 14), a propensity run's treat bands, or every eligible
+customer (intent to treat). The **treatment start** is
 the day the campaign went out, entered by the person (never before the run finished), else the run's
 finish time; maturity dates count from it.
 
@@ -394,6 +396,28 @@ choice inside the scoring run and puts it on the treat list:
   of one offer), and its summary
   `offer_counts` (a run that chose offers: the choice's own offers, `offered_rows` of `offer_choice.json`)
   and `channel_rows` (any run whose treated rows have a channel).
+* **The policy's offer without the hold-out (DEC-1311 (af)-(ak)).** The choice is made after the hold-out has set
+  customers aside, so a held-back customer has no offer in the list, and a campaign cut by the first offer's
+  `intended_treatment` leaves out a customer whose best offer is another one (about one in five of the contacted
+  customers in the Phase 2 journey). `offer_choice.parquet` therefore also says, for **every** customer,
+  `policy_offer_arm` (with `policy_offer_label` and `policy_offer_net_value`) and `policy_intended`: the offer the
+  same rule would choose if nobody were held back. Only the hold-out is ignored: suppression, channel
+  contactability, sleeping dogs and `min_roi` still count. **The budget** (`total_budget`, `budget_contacts`) was
+  spent in the run on customers who were not held back, in the order of the greedy walk (net value per rupee, then
+  net value, then row order), skipping an offer that did not fit. The policy replays that same walk over **every**
+  customer with a preferred offer, in the same order: what has been spent (and how many offers given) moves only when
+  a customer the run actually contacted is reached, and at each customer's place the walk's own fit test decides
+  whether the walk, as run, had room for their offer. A customer is intended when it did. For a customer who was not
+  held back that is exactly "the run contacted them", so the treated arm of a campaign is the contacted list and a
+  customer the walk skipped is in neither arm; a held-back customer is intended when the walk had room for their
+  offer at their place, whatever their own draw (as `intended_treatment` is, DEC-606). A budget that does not bind
+  behaves like no budget. The hold-out is on top of the budget. The new
+  columns sit between `offer_reason` and `explore_arm`: every earlier column keeps its place from the start and the explore columns stay the last five. A file written before this has none of them, and its campaign keeps the first offer's population.
+  On the treat list a held-back row the policy meant to contact carries that offer's net value in `net_value`,
+  as a held-back row of a one-offer run carries its own, so arbitration can compare it by value; its `offer` and
+  `channel` stay empty, `treat_list_summary.json` counts such rows (`held_back_value_rows`) and says the value is
+  the policy's intended offer and not an action taken (`held_back_value_note`). The list's totals count treated
+  rows only. `policy_intended()` (what `comparable_keys` is given) reads the same column.
 * **The explore slice (M92).** An explored customer the choice left without an offer is given the best
   offer they could be given (`explore_arm` of `offer_choice.parquet`: the offer the choice preferred for
   them when the budget dropped them, else the best eligible offer that is not a sleeping dog for them),
@@ -487,7 +511,9 @@ says nothing about which is later.
 * **One campaign per use case, comparing like with like.** `create_arbitrated_campaign`
   (`engine/measurement/campaign.py`) builds a campaign from a run's scores. The population is the use case's own
   policy (an uplift run's `intended_treatment`, a propensity run's treat bands), never every eligible customer, and
-  **both arms are cut by one rule that does not look at the hold-out**: `comparable_keys` runs the arbitration again
+  **both arms are cut by one rule that does not look at the hold-out**: for a use case that chose the offer per
+  customer the population is the customers whose policy offer exists (`policy_intended` of
+  `offer_choice.parquet`, DEC-1311 (ai)), not the first offer's `intended_treatment`; `comparable_keys` runs the arbitration again
   as if no one were held back, a held-back customer the policy intended to contact (`policy_intended`, M92's
   one definition of "selected") competing like a treated one, and a customer is compared in a use case when it wins
   him in that run. A customer another use case wins, or one a rival's random (explore) action took, is in neither
