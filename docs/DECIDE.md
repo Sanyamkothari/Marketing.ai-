@@ -762,15 +762,26 @@ the harmful side of zero, so a campaign that harmed nobody is flagged at most on
 by an Analyst (`POST /pilot/proof/{campaign_id}/suppressions`, audited) and recorded in
 `campaigns/<id>/suppression_proposals.json`; the engine never applies it.
 
-**Refusals.** `409 PROOF_SYNTHETIC_DATA` for a campaign on generated data (a run, an upload, an audit or a programme
-marked synthetic); `409 PROOF_NOT_MATURE`, with `results_available_on` when known, for a campaign not measured yet,
+**Refusals.** `409 PROOF_SYNTHETIC_DATA` for a campaign on generated data (a run, an upload, an audit, a programme or a
+contact file marked synthetic: `contact_readout.json` now records its `contact_upload_id` and `synthetic`); `409 PROOF_NOT_MATURE`, with `results_available_on` when known, for a campaign not measured yet,
 measured before every outcome was in, or read as an early look.
 
 **Money.** Value per outcome and the costs come from the value inputs entered for the campaign
-(`PUT /pilot/proof/{campaign_id}/value`, Analyst, for an audit or a programme that has no run), else its run's
-(`PUT /pilot/roi/{run_id}`). Without them the costs of sections 6 and 7 fall back to those the run ranked its list with
-(M97's `policy_recommendation.json`), and the net value is not measured. An amount is valued from the adjusted estimate
-when the plan registered it (M102).
+(`PUT /pilot/proof/{campaign_id}/value`, Analyst, for an audit or a programme that has no run; stored as
+`campaigns/<id>/pilot_roi_inputs.json`, aggregate, naming who entered them), else its run's
+(`PUT /pilot/roi/{run_id}`); the pack says which. Without them the costs of sections 6 and 7 fall back to those the run
+ranked its list with (M97's `policy_recommendation.json`), and the net value is not measured. Contacts are costed for
+every customer meant to be contacted (`campaign.json` `counts.intended_treated`), including any left out of the
+measurement for having no outcome; offers for the measured contacted customers who took them. A value or a cost per
+unit prints with its paise (₹0.30, never ₹0). An amount is valued from the adjusted estimate when the plan registered it
+(M102), per unit of the amount. A programme readout records nobody as contacted or as taking an offer (everyone outside
+the universal control group is its treated side), so its lines speak of "customers outside the control group" and its
+costs and net value are not measured; what it changed is still valued in the credit section.
+
+**Words carry no numbers of their own.** `verify_provenance` also reads every label, note, reason and the headline:
+a digit there that no figure prints fails the pack (`PROOF_NOT_TRACEABLE`). A reason the measurement recorded
+(`segment_effects.json` `not_measured`, such as a kind of group with too many values to read one by one) is printed
+as a text figure read from that file, never replaced by a sentence of the pack's own.
 
 **On screen.** Results lists the ready packs with their sentence (`ui/modules/simple/pages.js`); Reports lists every
 recent campaign's pack or the server's reason; `#/pilot/proof/<campaign>` shows the server's page, its suggestions with

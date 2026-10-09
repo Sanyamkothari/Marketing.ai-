@@ -281,6 +281,8 @@ FIELD_READS: Final[tuple[tuple[str, str, str, str, str, Path_], ...]] = (
     ),
     ("screen.js", "view.claim_label", "GET", "/pilot/proof/{campaign_id}", "response", ("claim_label",)),
     ("screen.js", "view.claim !==", "GET", "/pilot/proof/{campaign_id}", "response", ("claim",)),
+    ("screen.js", "view.claim ===", "GET", "/pilot/proof/{campaign_id}", "response", ("claim",)),
+    ("screen.js", "view.artefacts", "GET", "/pilot/proof/{campaign_id}", "response", ("artefacts",)),
     (
         "screen.js",
         "view.outcome_is_good",

@@ -1451,11 +1451,16 @@ def _contact_readout(
     unlisted: UnlistedRule,
     offers: tuple[str, ...] | None,
     now: datetime,
+    source: tuple[str | None, bool] = (None, False),
 ) -> ContactReadout:
-    """The contact readout of `campaign` from its frames; the effect on the contacted only with a report."""
+    """The contact readout of `campaign` from its frames; the effect on the contacted only with a report.
+
+    `source` is the contact file's upload id and whether it was generated (DEC-1314): recorded on the readout
+    so a Value Proof Pack never presents a generated contact file to finance.
+    """
     held = campaign.outcomes
     measured = report is not None and held is not None and outcomes is not None
-    return reconcile_contacts(
+    readout = reconcile_contacts(
         assignment,
         outcomes if measured else None,
         contacts,
@@ -1478,6 +1483,13 @@ def _contact_readout(
         first_offer=offers[0] if offers else None,
         computed_at=now,
     )
+    upload_id, synthetic = source
+    return readout.model_copy(update={"contact_upload_id": upload_id, "synthetic": synthetic})
+
+
+def _contact_source(upload: Any) -> tuple[str | None, bool]:
+    """`(upload id, generated?)` of a contact file's upload record."""
+    return str(upload.upload_id), bool(upload.synthetic)
 
 
 def _refresh_contacts(
@@ -1503,6 +1515,7 @@ def _refresh_contacts(
         unlisted=previous.unlisted_customers if previous is not None else "unknown",
         offers=audit.offers if audit is not None else None,
         now=utc_now(),
+        source=(previous.contact_upload_id, previous.synthetic) if previous is not None else (None, False),
     )
     storage.write_model(readout_key, readout)
 
@@ -1750,7 +1763,7 @@ def audit_campaign(
         control_level=built.control_level,
     )
     if body.contact is not None:
-        _, contacts = _contact_frame(storage, body.contact, body.primary_key)
+        contact_upload, contacts = _contact_frame(storage, body.contact, body.primary_key)
         frames[CONTACT_FILENAME] = contacts
         models[CONTACT_READOUT_FILENAME] = _contact_readout(
             assignment,
@@ -1761,6 +1774,7 @@ def audit_campaign(
             unlisted=body.contact.unlisted_customers,
             offers=built.offers or None,
             now=now,
+            source=_contact_source(contact_upload),
         )
     _persist_new(request, storage, campaign, frames=frames, models=models)
     # The audit trail's detail keys are a closed list (DEC-705): the campaign record names both uploads.
@@ -2058,7 +2072,7 @@ def programme_readout(
         storage, assignment, outcomes, report, campaign=updated, outcome=updated.outcomes
     )
     if body.contact is not None:
-        _, contacts = _contact_frame(storage, body.contact, body.primary_key)
+        contact_upload, contacts = _contact_frame(storage, body.contact, body.primary_key)
         frames[CONTACT_FILENAME] = contacts
         models[CONTACT_READOUT_FILENAME] = _contact_readout(
             assignment,
@@ -2069,6 +2083,7 @@ def programme_readout(
             unlisted=body.contact.unlisted_customers,
             offers=None,
             now=now,
+            source=_contact_source(contact_upload),
         )
     _persist_new(request, storage, updated, frames=frames, models=models)
     # The audit trail's detail keys are a closed list (DEC-705): the record names the upload and the epoch.
@@ -2097,7 +2112,7 @@ def add_campaign_contacts(
     """Store a contact file and recompute the readout; the effect on the contacted needs a measured campaign."""
     store = get_campaign_store(request)
     campaign = _load(store, campaign_id)
-    _, contacts = _contact_frame(storage, body, campaign.primary_key)
+    contact_upload, contacts = _contact_frame(storage, body, campaign.primary_key)
     report = _stored(storage, campaign_key(campaign_id, REPORT_FILENAME), IncrementalityReport)
     audit = _stored(storage, campaign_key(campaign_id, AUDIT_FILENAME), AuditReadout)
     assignment = read_frame(storage, campaign_key(campaign_id, ASSIGNMENT_FILENAME))
@@ -2116,6 +2131,7 @@ def add_campaign_contacts(
             unlisted=body.unlisted_customers,
             offers=audit.offers if audit is not None else None,
             now=utc_now(),
+            source=_contact_source(contact_upload),
         )
         write_frame(storage, campaign_key(campaign_id, CONTACT_FILENAME), contacts)
     except (ValueError, TypeError) as exc:

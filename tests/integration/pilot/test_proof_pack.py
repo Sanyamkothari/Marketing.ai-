@@ -209,6 +209,30 @@ def pdf_text(pdf: bytes) -> str:
     )
 
 
+def pdf_body(pdf: bytes) -> str:
+    """The PDF's words without its generated-at footer (the one line that is not the pack's)."""
+    text = pdf_text(pdf)
+    cut = text.rfind("Generated ")
+    return text[:cut] if cut >= 0 else text
+
+
+def assert_no_stray_digits(client: TestClient, campaign_id: str, view: dict[str, Any]) -> None:
+    """Every number printed on the HTML page and in the PDF is the text of one of the view's figures, and
+    neither holds a word of jargon."""
+    import html as html_lib
+
+    allowed = {token for figure in _figures(view) for token in TOKEN.findall(figure["text"])}
+    page = html_lib.unescape(page_text(client.get(f"/pilot/proof/{campaign_id}").text))
+    stray = sorted(set(TOKEN.findall(page)) - allowed)
+    assert not stray, f"digits on the page that no figure printed: {stray}"
+    pdf = client.get(f"/pilot/proof/{campaign_id}", params={"format": "pdf"})
+    assert pdf.status_code == 200
+    printed = pdf_body(pdf.content)
+    stray = sorted(set(TOKEN.findall(printed)) - allowed)
+    assert not stray, f"digits in the PDF that no figure printed: {stray}"
+    assert jargon_in(page) == () and jargon_in(printed) == (), "the pack is in plain words"
+
+
 # --- provenance ------------------------------------------------------------------------------------------
 @pytest.mark.parametrize("which", ["banded", "uplift"])
 def test_every_number_of_the_pack_resolves_to_a_measured_artefact_field(world: World, which: str) -> None:
@@ -218,15 +242,9 @@ def test_every_number_of_the_pack_resolves_to_a_measured_artefact_field(world: W
 
 
 @pytest.mark.parametrize("which", ["banded", "uplift"])
-def test_every_digit_on_the_page_is_a_traced_figure(world: World, which: str) -> None:
-    import html as html_lib
-
+def test_every_digit_on_the_page_and_in_the_pdf_is_a_traced_figure(world: World, which: str) -> None:
     campaign_id = getattr(world, which)
-    view = _proof(world, campaign_id)
-    allowed = {token for figure in _figures(view) for token in TOKEN.findall(figure["text"])}
-    page = html_lib.unescape(page_text(world.client.get(f"/pilot/proof/{campaign_id}").text))
-    stray = sorted(set(TOKEN.findall(page)) - allowed)
-    assert not stray, f"digits on the page that no figure printed: {stray}"
+    assert_no_stray_digits(world.client, campaign_id, _proof(world, campaign_id))
 
 
 def test_a_changed_artefact_makes_the_build_fail_rather_than_show_an_untraced_number(world: World) -> None:
@@ -342,12 +360,25 @@ def test_the_net_value_is_a_range_from_the_measured_interval_and_the_value_input
     assert net["status"] == "measured"
     line = next(line for line in net["lines"] if line["label"] == "Net value")
     report = json.loads(world.storage.read_bytes(f"campaigns/{world.uplift}/incrementality_report.json"))
-    spent = report["treated_rows"] * 1.5 + report["treated_conversions"] * 150.0
+    campaign = json.loads(world.storage.read_bytes(f"campaigns/{world.uplift}/campaign.json"))
+    # Every customer meant to be contacted was paid for, whether or not the outcomes file had them.
+    paid = campaign["counts"]["intended_treated"]
+    assert paid >= report["treated_rows"]
+    spent = paid * 1.5 + report["treated_conversions"] * 150.0
     interval = report["incremental_conversions"]
     assert line["low"]["value"] == pytest.approx(interval["ci_low"] * 2000.0 - spent)
     assert line["high"]["value"] == pytest.approx(interval["ci_high"] * 2000.0 - spent)
     assert line["low"]["value"] < line["value"]["value"] < line["high"]["value"]
     assert view["headline"].endswith(f"Net value {line['low']['text']} to {line['high']['text']}.")
+    entered = {
+        line["label"]: line["value"]["text"] for line in net["lines"] if line["label"].endswith("entered")
+    }
+    assert entered == {
+        "Value of one extra outcome, as entered": "₹2,000",
+        "Cost of one contact, as entered": "₹1.50",
+        "Cost of one offer taken, as entered": "₹150",
+    }, "a value per unit keeps its paise: ₹1.50 never prints as ₹2"
+    assert any("entered for the scoring run" in note for note in net["notes"]), "the inputs are the run's"
 
 
 def test_offer_money_on_sure_things_and_sleeping_dogs_reads_the_predicted_groups(world: World) -> None:
@@ -408,6 +439,46 @@ def test_a_campaign_on_generated_data_is_refused(world: World) -> None:
         response = world.client.get(f"/pilot/proof/{campaign_id}", params={"format": fmt})
         assert response.status_code == 409, fmt
         assert response.json()["detail"]["code"] == "PROOF_SYNTHETIC_DATA"
+
+
+def test_a_generated_contact_file_is_refused_too(world: World) -> None:
+    frame, outcomes = _random_file(47, details=True)
+    campaign_id = _audit(world, frame=frame, outcomes=outcomes, basis="random")
+    contacts = pd.DataFrame({"customer_id": frame["customer_id"], "contacted": frame["group"]})
+    payload = contacts.to_csv(index=False, lineterminator="\n").encode()
+
+    def add(synthetic: bool) -> str:
+        response = world.client.post(
+            "/uploads",
+            files={"file": ("contacts.csv", payload, "text/csv")},
+            data={
+                "use_case": "win-back-campaign",
+                "mode": "score",
+                **({"synthetic": "true"} if synthetic else {}),
+            },
+        )
+        upload_id = str(ok(response, 201)["upload_id"])
+        body = {"upload_id": upload_id, "contacted_column": "contacted"}
+        ok(world.client.post(f"/campaigns/{campaign_id}/contacts", json=body))
+        return upload_id
+
+    client_file = add(synthetic=False)
+    view = _proof(world, campaign_id)
+    assert _section(view, "delivery")["status"] == "measured", "a client's own contact file is read"
+    readout = json.loads(world.storage.read_bytes(f"campaigns/{campaign_id}/contact_readout.json"))
+    assert readout["contact_upload_id"] == client_file and readout["synthetic"] is False
+    generated = add(synthetic=True)
+    readout = json.loads(world.storage.read_bytes(f"campaigns/{campaign_id}/contact_readout.json"))
+    assert readout["contact_upload_id"] == generated and readout["synthetic"] is True
+    for fmt in ("json", "html", "pdf"):
+        response = world.client.get(f"/pilot/proof/{campaign_id}", params={"format": fmt})
+        assert response.status_code == 409, fmt
+        assert response.json()["detail"]["code"] == "PROOF_SYNTHETIC_DATA"
+    # A readout that only names its upload (the flag lost) is refused all the same, from the upload's record.
+    readout["synthetic"] = False
+    world.storage.write_bytes(f"campaigns/{campaign_id}/contact_readout.json", json.dumps(readout).encode())
+    response = world.client.get(f"/pilot/proof/{campaign_id}", params={"format": "json"})
+    assert response.status_code == 409 and response.json()["detail"]["code"] == "PROOF_SYNTHETIC_DATA"
 
 
 def test_a_campaign_without_a_final_result_is_refused_with_the_day_it_can_be_read(world: World) -> None:
@@ -483,49 +554,8 @@ def _random_file(seed: int, *, details: bool) -> tuple[pd.DataFrame, pd.DataFram
     return frame, campaign.outcomes
 
 
-def test_a_campaign_random_only_by_statement_is_never_shown_as_proven(world: World) -> None:
-    frame, outcomes = _random_file(41, details=False)
-    campaign_id = _audit(world, frame=frame, outcomes=outcomes, basis="random")
-    view = _proof(world, campaign_id)
-    assert view["claim"] == "stated_random"
-    assert view["claim_label"] == "Random by your statement, not verified"
-    assert view["headline"].startswith("If the groups were random as you said")
-    page = page_text(world.client.get(f"/pilot/proof/{campaign_id}").text)
-    assert "proven" not in page.replace("not as proven value", "").replace("are proven:", "")
-    assert "Causal:" not in page
-    for key in ("incremental", "credit", "net_value"):
-        for line in _section(view, key)["lines"]:
-            if line["label"].startswith(("Measured credit", "Extra outcomes", "Net value", "Value of what")):
-                assert line["label"].startswith("If the groups were random"), line["label"]
-    assert_traced(world.data_dir, view)
-
-
-def test_a_descriptive_only_campaign_credits_nothing_to_the_campaign(world: World) -> None:
-    frame, outcomes = _random_file(43, details=True)
-    campaign_id = _audit(world, frame=frame, outcomes=outcomes, basis="not_random")
-    ok(world.client.put(f"/pilot/proof/{campaign_id}/value", json=VALUE_INPUTS))
-    view = _proof(world, campaign_id)
-    assert view["claim"] == "descriptive"
-    assert view["headline"].startswith("Descriptive only")
-    assert _section(view, "net_value")["status"] == "not_measured"
-    assert _section(view, "backfire")["status"] == "not_measured"
-    credit = _section(view, "credit")
-    assert [line["missing"] is not None for line in credit["lines"]][1] is True, "no measured credit"
-    assert_traced(world.data_dir, view)
-
-
-def test_an_audited_campaign_of_several_offers_shows_each_offer_and_reads_each_against_the_shared_control(
-    world: World,
-) -> None:
-    sim = multi_arm_campaign(9_000, 0.10, (0.03, 0.06), seed=104)
-    rng = np.random.default_rng(104)
-    frame = pd.DataFrame(
-        {
-            "customer_id": sim.scores["customer_id"],
-            "group": np.where(sim.scores["control_group"], sim.levels[0], sim.scores["offer"]),
-            "age": rng.integers(18, 80, len(sim.scores)),
-        }
-    )
+def _offers_audit(world: World, sim: Any, frame: pd.DataFrame, *, basis: str = "random") -> str:
+    """`POST /campaigns/audit` of a campaign of several offers against one shared control group."""
     who = upload(world.client, frame, name="assignment.csv")
     what = upload(world.client, sim.outcomes, name="outcomes.csv")
     body = {
@@ -541,12 +571,77 @@ def test_an_audited_campaign_of_several_offers_shows_each_offer_and_reads_each_a
             "outcome_column": "converted",
             "treatment_date_column": "treatment_date",
         },
-        "assignment_basis": "random",
+        "assignment_basis": basis,
         "treatment_start": "2026-04-01T00:00:00Z",
         "outcome_window_days": OUTCOME_WINDOW_DAYS,
         "as_of": AS_OF.isoformat(),
     }
-    campaign_id = ok(world.client.post("/campaigns/audit", json=body), 201)["campaign"]["campaign_id"]
+    return str(ok(world.client.post("/campaigns/audit", json=body), 201)["campaign"]["campaign_id"])
+
+
+def test_a_campaign_random_only_by_statement_is_never_shown_as_proven(world: World) -> None:
+    # Two offers, the second planted to harm (twelve in a hundred come back untouched, five when given it);
+    # the file has no customer details, so the random assignment is the person's statement only.
+    sim = multi_arm_campaign(9_000, 0.12, (0.04, -0.07), seed=4104)
+    frame = pd.DataFrame(
+        {
+            "customer_id": sim.scores["customer_id"],
+            "group": np.where(sim.scores["control_group"], sim.levels[0], sim.scores["offer"]),
+        }
+    )
+    campaign_id = _offers_audit(world, sim, frame)
+    harmful = sim.levels[2]
+    view = _proof(world, campaign_id)
+    assert view["claim"] == "stated_random"
+    assert view["claim_label"] == "Random by your statement, not verified"
+    assert view["headline"].startswith("If the groups were random as you said")
+    page = page_text(world.client.get(f"/pilot/proof/{campaign_id}").text)
+    assert "proven" not in page.replace("not as proven value", "").replace("are proven:", "")
+    assert "Causal:" not in page
+    for key in ("incremental", "credit", "net_value"):
+        for line in _section(view, key)["lines"]:
+            if line["label"].startswith(("Measured credit", "Extra outcomes", "Net value", "Value of what")):
+                assert line["label"].startswith("If the groups were random"), line["label"]
+    # The planted harm is found, but shown under the statement it rests on, never as proven harm.
+    backfire = _section(view, "backfire")
+    verdicts = {row[1]["value"]: row[-1] for row in backfire["table"]["rows"] if row[0] == "Offer"}
+    assert verdicts[harmful] == "If the groups were random as you said: backfired"
+    assert "backfired" not in verdicts.values()
+    assert [(p["dimension"], p["segment"]["value"]) for p in view["proposals"]] == [("offer", harmful)]
+    assert f"If the groups were random as you said, leave {harmful} out of the next cycle" in page
+    assert f"Leave {harmful} out" not in page
+    assert_traced(world.data_dir, view)
+    assert_no_stray_digits(world.client, campaign_id, view)
+
+
+def test_a_descriptive_only_campaign_credits_nothing_to_the_campaign(world: World) -> None:
+    frame, outcomes = _random_file(43, details=True)
+    campaign_id = _audit(world, frame=frame, outcomes=outcomes, basis="not_random")
+    ok(world.client.put(f"/pilot/proof/{campaign_id}/value", json=VALUE_INPUTS))
+    view = _proof(world, campaign_id)
+    assert view["claim"] == "descriptive"
+    assert view["headline"].startswith("Descriptive only")
+    assert _section(view, "net_value")["status"] == "not_measured"
+    assert _section(view, "backfire")["status"] == "not_measured"
+    credit = _section(view, "credit")
+    assert [line["missing"] is not None for line in credit["lines"]][1] is True, "no measured credit"
+    assert_traced(world.data_dir, view)
+    assert_no_stray_digits(world.client, campaign_id, view)
+
+
+def test_an_audited_campaign_of_several_offers_shows_each_offer_and_reads_each_against_the_shared_control(
+    world: World,
+) -> None:
+    sim = multi_arm_campaign(9_000, 0.10, (0.03, 0.06), seed=104)
+    rng = np.random.default_rng(104)
+    frame = pd.DataFrame(
+        {
+            "customer_id": sim.scores["customer_id"],
+            "group": np.where(sim.scores["control_group"], sim.levels[0], sim.scores["offer"]),
+            "age": rng.integers(18, 80, len(sim.scores)),
+        }
+    )
+    campaign_id = _offers_audit(world, sim, frame)
     view = _proof(world, campaign_id)
     offers = _section(view, "incremental")["table"]
     assert offers is not None and [row[0]["value"] for row in offers["rows"]] == list(sim.levels[1:])
@@ -558,6 +653,7 @@ def test_an_audited_campaign_of_several_offers_shows_each_offer_and_reads_each_a
         assert by_offer[arm["arm"]]["effect"] == arm["effect"]
     assert _section(view, "backfire")["status"] == "measured", "the offers are the groups judged"
     assert_traced(world.data_dir, view)
+    assert_no_stray_digits(world.client, campaign_id, view)
 
 
 def test_a_verified_random_audit_is_proven_and_its_value_inputs_are_its_own(world: World) -> None:
@@ -569,5 +665,12 @@ def test_a_verified_random_audit_is_proven_and_its_value_inputs_are_its_own(worl
     assert _section(view, "net_value")["status"] == "measured"
     assert any(key.endswith(f"campaigns/{campaign_id}/pilot_roi_inputs.json") for key in view["artefacts"])
     backfire = _section(view, "backfire")
-    assert backfire["status"] == "not_measured" and "no band" in backfire["reason"]
+    assert backfire["status"] == "not_measured" and "No group" in backfire["reason"]
+    # The reason for each kind of group is the one the measurement recorded, read from its file, never made up.
+    recorded = json.loads(world.storage.read_bytes(f"campaigns/{campaign_id}/segment_effects.json"))
+    assert [line["value"]["value"] for line in backfire["lines"]] == [
+        note["reason"] for note in recorded["not_measured"]
+    ]
+    assert any("has a band" in line["value"]["value"] for line in backfire["lines"])
     assert_traced(world.data_dir, view)
+    assert_no_stray_digits(world.client, campaign_id, view)

@@ -159,6 +159,15 @@ class ContactReadout(Artefact):
     )
     notes: tuple[str, ...] = Field(default=(), description="Plain sentences worth reading beside the rates.")
     computed_at: AwareDatetime = Field(description="When the readout was computed.")
+    # Plan J M104 (DEC-1314): added, defaulted fields, so every readout written before them still reads.
+    contact_upload_id: str | None = Field(
+        default=None,
+        description="The upload the contact file came from; null for a readout written before M104.",
+    )
+    synthetic: bool = Field(
+        default=False,
+        description="True when that upload was generated rather than a client's (the Value Proof Pack refuses it).",
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -20,7 +20,7 @@ import pytest
 
 from tests.integration.decide.test_offer_choice_run import App, Runs, app, make_root, score_twice
 from tests.integration.measurement.support import ok, upload
-from tests.integration.pilot.test_proof_pack import _section, assert_traced
+from tests.integration.pilot.test_proof_pack import _section, assert_no_stray_digits, assert_traced
 from tests.integration.uplift.test_uplift_api import run_artefact
 
 pytestmark = pytest.mark.integration
@@ -75,3 +75,4 @@ def test_each_offer_is_read_within_its_own_customers_and_every_number_is_traced(
     table = _section(view, "incremental")["table"]
     assert table is not None and len(table["rows"]) == 2
     assert_traced(app.data_dir, view)
+    assert_no_stray_digits(client, campaign_id, view)

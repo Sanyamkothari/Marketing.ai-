@@ -38,6 +38,9 @@ same database as the audit trail, through `CampaignStore`; a test or a laptop wi
                                 (`engine.measurement.segments`; counts only)
 `suppression_proposals.json`    M104: the backfiring groups an Analyst approved leaving out next cycle
                                 (`engine.pilot.proof`; recorded, never applied by the engine)
+`pilot_roi_inputs.json`         M104: the campaign's own value inputs, written by `api/routes/pilot.py`
+                                (`engine.pilot.proof.save_campaign_value_inputs`; aggregate, no customer id;
+                                names who entered them)
 ==============================  ==========================================================================
 
 `assignment.parquet`, `outcomes.parquet` and `contact.parquet` hold one row per customer: they are

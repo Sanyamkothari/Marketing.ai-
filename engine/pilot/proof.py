@@ -16,7 +16,8 @@ ten sections, read only from the campaign's own measured artefacts:
 7. what the control group and the explore slice cost;
 8. backfire: groups whose range lies wholly on the harmful side, with a "leave them out next cycle"
    suggestion an Analyst approves (:func:`approve_suppression`; nothing is ever applied automatically);
-9. net value in rupees, as a range (the client's value inputs, the measured interval and the costs);
+9. net value in rupees, as a range (the client's value inputs, the measured interval and the costs; not
+   measured for a programme readout, which records nobody as contacted or as taking an offer);
 10. method and limits, including what the numbers may claim.
 
 **Every number is traced.** A number in a :class:`ProofView` is a :class:`Figure`: its value, the text the
@@ -35,8 +36,8 @@ shows its counts and rates and credits nothing to the campaign: no measured cred
 backfire.
 
 **Refusals.** A campaign whose data was generated (`RunRecord.synthetic`, a synthetic outcomes upload, an
-audit or programme marked synthetic) is refused with `PROOF_SYNTHETIC_DATA`: a planted effect is never
-presented to finance as value. A campaign not yet measured, measured before its outcomes were all in, or read
+audit, programme or contact file marked synthetic) is refused with `PROOF_SYNTHETIC_DATA`: a planted effect
+is never presented to finance as value. A campaign not yet measured, measured before its outcomes were all in, or read
 as an early look is refused with `PROOF_NOT_MATURE` and the day it can be read.
 
 **No customer rows.** The pack reads only aggregate files (the report, the plan, the readouts, the group
@@ -162,6 +163,7 @@ FigureFormat = Literal[
     "amount",
     "signed_amount",
     "inr",
+    "inr_unit",
     "date",
     "days",
     "times",
@@ -331,6 +333,16 @@ def _percent(value: float) -> str:
     return f"{share:.0f}%" if share == int(share) else f"{share:.1f}%"
 
 
+def _unit_inr(value: float) -> str:
+    """A rupee amount per unit (a value or a cost as entered): paise kept, so ₹0.30 never prints as ₹0."""
+    if float(value).is_integer():
+        return format_inr(value)
+    decimals = 2
+    while decimals < 6 and abs(value) < 10.0 ** (1 - decimals):
+        decimals += 1
+    return format_inr(value, decimals=decimals)
+
+
 def format_value(fmt: FigureFormat, value: int | float | str) -> str:
     """The text the pack prints for `value` in format `fmt`."""
     if fmt == "text":
@@ -354,6 +366,8 @@ def format_value(fmt: FigureFormat, value: int | float | str) -> str:
         return _signed(_plain(number, 2))
     if fmt == "inr":
         return format_inr(number)
+    if fmt == "inr_unit":
+        return _unit_inr(number)
     if fmt == "days":
         return f"{_plain(number, 0)} days"
     return f"{_plain(number, 1)}x"  # times
@@ -504,10 +518,42 @@ def figures_of(item: Any) -> Iterator[Figure]:
             yield from figures_of(element)
 
 
+_DIGITS: Final[re.Pattern[str]] = re.compile(r"\d(?:[\d,]*\d)?(?:\.\d+)?")
+"""A number as the pack prints it (`1,234`, `2.6`): the unit the free-text check compares."""
+
+_UNPRINTED: Final[frozenset[str]] = frozenset({"campaign_id", "use_case_id", "artefacts", "schema_version"})
+"""Fields of the view that are identifiers, never printed as a number of the pack."""
+
+
+def _free_text(item: Any) -> Iterator[str]:
+    """Every string of the view outside a figure: labels, notes, reasons, the headline, string table cells."""
+    if isinstance(item, Figure):
+        return
+    if isinstance(item, str):
+        yield item
+    elif isinstance(item, BaseModel):
+        for name in type(item).model_fields:
+            if isinstance(item, ProofView) and name in _UNPRINTED:
+                continue
+            yield from _free_text(getattr(item, name))
+    elif isinstance(item, tuple | list):
+        for element in item:
+            yield from _free_text(element)
+
+
 def verify_provenance(view: ProofView, storage: Storage) -> None:
-    """Read every figure's sources again and recompute its value and text; raise `ProvenanceError` if any differ."""
+    """Read every figure's sources again and recompute its value and text; raise `ProvenanceError` if any differ.
+
+    Every digit in the view's own words (a label, a note, a reason, the headline) must also be one a figure
+    prints, so a number written into a sentence cannot reach the page untraced.
+    """
     reader = _Reader(storage)
     failures: list[str] = []
+    printed = {token for figure in figures_of(view) for token in _DIGITS.findall(figure.text)}
+    for text in _free_text(view):
+        stray = sorted(set(_DIGITS.findall(text)) - printed)
+        if stray:
+            failures.append(f"the words {text!r} print {', '.join(stray)}, which no figure holds")
     for figure in figures_of(view):
         where = ", ".join(f"{s.artefact}:{s.field}" for s in figure.sources)
         try:
@@ -596,7 +642,8 @@ def build_proof(
     kind: Literal["scored", "external", "programme"] = _KINDS.get(str(campaign.get("kind")), "scored")
     audit = reader.doc(f"campaigns/{campaign_id}/{_AUDIT}") if kind == "external" else None
     programme = reader.doc(f"campaigns/{campaign_id}/{_PROGRAMME}") if kind == "programme" else None
-    _refuse_synthetic(reader, campaign, audit, programme)
+    contacts = reader.doc(f"campaigns/{campaign_id}/{_CONTACTS}")
+    _refuse_synthetic(reader, campaign, audit, programme, contacts)
     report_key = f"campaigns/{campaign_id}/{_REPORT}"
     report = reader.doc(report_key)
     plan_key = f"campaigns/{campaign_id}/{_PLAN}"
@@ -677,14 +724,19 @@ def _upload_synthetic(reader: _Reader, campaign: dict[str, Any]) -> bool:
     return reader.get(f"uploads/{upload_id}/upload.json", "synthetic") is True
 
 
-def _refuse_synthetic(reader: _Reader, campaign: dict[str, Any], audit: Any, programme: Any) -> None:
+def _refuse_synthetic(
+    reader: _Reader, campaign: dict[str, Any], audit: Any, programme: Any, contacts: Any
+) -> None:
     synthetic = _upload_synthetic(reader, campaign)
     for run_id in campaign.get("run_ids") or ():
         if _safe(run_id) and reader.get(f"runs/{run_id}/run.json", "synthetic") is True:
             synthetic = True
-    for readout in (audit, programme):
+    for readout in (audit, programme, contacts):
         if isinstance(readout, dict) and readout.get("synthetic") is True:
             synthetic = True
+    contact_upload = contacts.get("contact_upload_id") if isinstance(contacts, dict) else None
+    if _safe(contact_upload) and reader.get(f"uploads/{contact_upload}/upload.json", "synthetic") is True:
+        synthetic = True
     if synthetic:
         raise ProofRefusedError(
             PROOF_SYNTHETIC_DATA,
@@ -793,10 +845,17 @@ def _outcome_is_good(
     return outcome_is_good_by_default(use_case_id, column, root)
 
 
+def _inputs_source(inputs_key: str) -> str:
+    """Whose value inputs these are, in words: the campaign's own or its scoring run's."""
+    if inputs_key.startswith("runs/"):
+        return "the value inputs entered for the scoring run"
+    return "the value inputs entered for this campaign"
+
+
 def _costs(reader: _Reader, campaign: dict[str, Any], inputs_key: str | None) -> tuple[str | None, str]:
     """Where the contact and offer costs come from: the value inputs, else the costs the run recorded (M97)."""
     if inputs_key is not None:
-        return inputs_key, "the value inputs entered for this campaign"
+        return inputs_key, _inputs_source(inputs_key)
     for run_id in (campaign.get("run_ids") or ())[:1]:
         key = f"runs/{run_id}/{_RECOMMENDATION}"
         if (
@@ -900,6 +959,23 @@ def _benefit_label(context: _Context) -> str:
     return "Extra outcomes because of the campaign" if context.good else "Outcomes prevented by the campaign"
 
 
+def _treated_words(context: _Context) -> str:
+    """Who the treated arm is: for a programme everyone outside the control group, contacted or not."""
+    return "customers outside the control group" if context.kind == "programme" else "contacted customers"
+
+
+def _held_words(context: _Context) -> str:
+    return "customers in the control group" if context.kind == "programme" else "held-back customers"
+
+
+def _cap(text: str) -> str:
+    return text[0].upper() + text[1:]
+
+
+def _one_treated(context: _Context) -> str:
+    return "customer outside the control group" if context.kind == "programme" else "contacted customer"
+
+
 def _conditional(context: _Context, label: str) -> str:
     return (
         f"If the groups were random as you said: {label[0].lower()}{label[1:]}"
@@ -919,8 +995,8 @@ def _value_inputs(context: _Context) -> tuple[Figure | None, str]:
             "No value inputs were entered for this campaign. Enter what one extra outcome is worth, and what "
             "contacts and offers cost, to see it in rupees."
         )
-    figure = context.reader.fig(context.inputs_key, "value_per_outcome", "inr")
-    return figure, "The value inputs could not be read."
+    figure = context.reader.fig(context.inputs_key, "value_per_outcome", "inr_unit")
+    return figure, "The value inputs could not be read, so nothing is shown in rupees."
 
 
 def _cost(context: _Context, name: Literal["contact_cost", "offer_cost"]) -> Figure | None:
@@ -1058,24 +1134,29 @@ def _incremental(context: _Context) -> ProofSection:
     lines: list[ProofLine] = [
         _line("Confidence of each range below", level, missing="Not measured: no range could be computed.")
     ]
+    treated, held = _treated_words(context), _held_words(context)
     if context.continuous:
         lines += [
             _line(
-                "Average among contacted customers",
+                f"Average among {treated}",
                 context.r("treated_mean", "amount"),
-                missing="Not measured.",
+                missing=f"Not measured: the result has no average for the {treated}.",
             ),
             _line(
-                "Average among held-back customers",
+                f"Average among {held}",
                 context.r("control_mean", "amount"),
-                missing="Not measured.",
+                missing=f"Not measured: the result has no average for the {held}.",
             ),
         ]
         base = _estimate_base(context)
         if base is not None:
             lines.append(
                 _line(
-                    "Difference per contacted customer"
+                    (
+                        "Difference per customer outside the control group"
+                        if context.kind == "programme"
+                        else "Difference per contacted customer"
+                    )
                     + (
                         " (adjusted for the earlier amount registered in the plan)"
                         if base == "adjusted_interval"
@@ -1084,20 +1165,20 @@ def _incremental(context: _Context) -> ProofSection:
                     context.r(f"{base}.value", "signed_amount"),
                     context.r(f"{base}.ci_low", "signed_amount"),
                     context.r(f"{base}.ci_high", "signed_amount"),
-                    missing="Not measured.",
+                    missing="Not measured: the result has no difference between the two groups' averages.",
                 )
             )
     else:
         lines += [
             _line(
-                "Contacted customers with the outcome",
+                f"{_cap(treated)} with the outcome",
                 context.r("treated_rate", "share"),
-                missing="Not measured.",
+                missing=f"Not measured: the result has no rate for the {treated}.",
             ),
             _line(
-                "Held-back customers with the outcome",
+                f"{_cap(held)} with the outcome",
                 context.r("control_rate", "share"),
-                missing="Not measured.",
+                missing=f"Not measured: the result has no rate for the {held}.",
             ),
             _line(
                 "Difference",
@@ -1196,8 +1277,8 @@ def _gross(context: _Context) -> ProofSection:
                 derived([context.r(f"{base}.{n}", "amount"), rows], "s0*s1", "signed_amount")
                 for n in ("value", "ci_low", "ci_high")
             )
-        gross_label = "Total amount of the contacted customers (gross)"
-        expected_label = "What the held-back customers' average says they would have had anyway"
+        gross_label = f"Total amount of the {_treated_words(context)} (gross)"
+        expected_label = f"What the average of the {_held_words(context)} says they would have had anyway"
     else:
         gross = context.r("treated_conversions", "count")
         expected = derived(
@@ -1208,11 +1289,19 @@ def _gross(context: _Context) -> ProofSection:
             context.r("incremental_conversions.ci_low", "signed_count"),
             context.r("incremental_conversions.ci_high", "signed_count"),
         )
-        gross_label = "Contacted customers with the outcome (gross)"
-        expected_label = "How many would have had it anyway, at the held-back customers' rate"
+        gross_label = f"{_cap(_treated_words(context))} with the outcome (gross)"
+        expected_label = f"How many would have had it anyway, at the rate of the {_held_words(context)}"
     lines = [
-        _line(gross_label, gross, missing="Not measured."),
-        _line(expected_label, expected, missing="Not measured: no held-back customer was measured."),
+        _line(
+            gross_label,
+            gross,
+            missing=f"Not measured: the result does not say what the {_treated_words(context)} had in all.",
+        ),
+        _line(
+            expected_label,
+            expected,
+            missing=f"Not measured: none of the {_held_words(context)} was measured.",
+        ),
     ]
     if context.claim == "descriptive":
         lines.append(ProofLine(label="The difference: incremental", missing=_DESCRIPTIVE))
@@ -1241,8 +1330,15 @@ def _gross(context: _Context) -> ProofSection:
         status="measured",
         lines=tuple(lines),
         notes=(
-            "Gross counts everything the contacted customers did. Incremental is only what they did beyond the "
-            "held-back customers, chosen the same way and not contacted: the part the campaign caused.",
+            (
+                "Gross counts everything the customers outside the control group did, whether or not they were "
+                "contacted. Incremental is only what they did beyond the control group's members, chosen at random "
+                "and kept out of the programme: the part the programme caused."
+                if context.kind == "programme"
+                else "Gross counts everything the contacted customers did. Incremental is only what they did "
+                "beyond the held-back customers, chosen the same way and not contacted: the part the campaign "
+                "caused."
+            ),
         ),
     )
 
@@ -1262,18 +1358,24 @@ def _credit(context: _Context) -> ProofSection:
         rows = context.r("treated_rows", "count")
         naive = derived([context.r("treated_mean", "amount"), rows], "s0*s1", "amount")
         naive_money = derived([context.r("treated_mean", "amount"), rows, value], "s0*s1*s2", "inr")
-        naive_label = "Naive credit: the whole amount of every contacted customer"
+        naive_label = f"Naive credit: the whole amount of every {_one_treated(context)}"
     elif context.good:
         naive = context.r("treated_conversions", "count")
         naive_money = derived([naive, value], "s0*s1", "inr")
-        naive_label = "Naive credit: every contacted customer who had the outcome"
+        naive_label = f"Naive credit: every {_one_treated(context)} who had the outcome"
     else:
         rows = context.r("treated_rows", "count")
         outcomes = context.r("treated_conversions", "count")
         naive = derived([rows, outcomes], "s0-s1", "count")
         naive_money = derived([rows, outcomes, value], "(s0-s1)*s2", "inr")
-        naive_label = "Naive credit: every contacted customer who did not have the outcome"
-    lines = [_line(naive_label, naive, missing="Not measured.")]
+        naive_label = f"Naive credit: every {_one_treated(context)} who did not have the outcome"
+    lines = [
+        _line(
+            naive_label,
+            naive,
+            missing=f"Not measured: the result does not say what the {_treated_words(context)} had in all.",
+        )
+    ]
     if context.claim == "descriptive":
         lines.append(ProofLine(label="Measured credit", missing=_DESCRIPTIVE))
     else:
@@ -1295,7 +1397,13 @@ def _credit(context: _Context) -> ProofSection:
     if value is None:
         lines.append(ProofLine(label="In rupees", missing=value_reason))
     else:
-        lines.append(_line("Naive credit in rupees", naive_money, missing="Not measured."))
+        lines.append(
+            _line(
+                "Naive credit in rupees",
+                naive_money,
+                missing=f"Not measured: the result does not say what the {_treated_words(context)} had in all.",
+            )
+        )
         if context.claim != "descriptive":
             money = _benefit(context, extra=(value,), fmt="inr")
             lines.append(
@@ -1312,9 +1420,36 @@ def _credit(context: _Context) -> ProofSection:
         lines=tuple(lines),
         notes=(
             "Naive credit is what a tool that credits every response to the campaign would report: every outcome "
-            "among the customers it contacted, including the ones who would have had it anyway.",
+            f"among the {_treated_words(context)}, including the ones who would have had it anyway.",
         ),
     )
+
+
+_NO_SEGMENT_FILE: Final[str] = "This campaign has no results kept for each group of customers."
+
+_NOT_READ: Final[dict[str, str]] = {
+    "band": "Not read band by band",
+    "segment": "Not read predicted group by predicted group",
+    "offer": "Not read offer by offer",
+}
+
+
+def _dimension_notes(
+    context: _Context, dimensions: tuple[str, ...] = ("band", "segment", "offer")
+) -> list[ProofLine]:
+    """Why a kind of group was not split, as `segment_effects.json` recorded it (a text figure: it may hold digits)."""
+    key = context.segments_key
+    if key is None:
+        return []
+    lines: list[ProofLine] = []
+    for index, note in enumerate(context.reader.get(key, "not_measured") or ()):
+        dimension = str(note.get("dimension")) if isinstance(note, dict) else ""
+        if dimension not in dimensions:
+            continue
+        reason = context.reader.fig(key, f"not_measured.{index}.reason", "text")
+        if reason is not None:
+            lines.append(ProofLine(label=_NOT_READ.get(dimension, "Not read group by group"), value=reason))
+    return lines
 
 
 # --- section 6: offer money on sure things and sleeping dogs -------------------------------------------
@@ -1331,14 +1466,28 @@ def _offer_money(context: _Context) -> ProofSection:
     if context.claim == "descriptive":
         return _not_measured("offer_money", title, _DESCRIPTIVE)
     if context.segments_key is None:
-        return _not_measured("offer_money", title, context.segments_reason or "Not measured.")
+        return _not_measured("offer_money", title, context.segments_reason or _NO_SEGMENT_FILE)
     cells = _cells(context, "segment")
     if not cells:
+        skipped = _dimension_notes(context, ("segment",))
+        if skipped:
+            return ProofSection(
+                key="offer_money",
+                title=title,
+                status="not_measured",
+                reason="The customers could not be read by predicted group; the line below says why.",
+                lines=tuple(skipped),
+            )
         return _not_measured(
             "offer_money",
             title,
-            "This list was not chosen by the campaign-effect model, so its customers were not sorted into "
-            "persuadables, sure things, lost causes and sleeping dogs.",
+            (
+                "A programme readout compares everyone with the universal control group; its customers were not "
+                "sorted into persuadables, sure things, lost causes and sleeping dogs."
+                if context.kind == "programme"
+                else "This list was not chosen by the campaign-effect model, so its customers were not sorted "
+                "into persuadables, sure things, lost causes and sleeping dogs."
+            ),
         )
     reader, key = context.reader, context.segments_key
     offer_cost = _cost(context, "offer_cost")
@@ -1397,7 +1546,7 @@ def _offer_money(context: _Context) -> ProofSection:
             _line(
                 "Offer money spent on sure things and sleeping dogs",
                 derived([*wasted_parts, offer_cost], formula, "inr"),
-                missing="Not measured.",
+                missing="Not measured: a count in the table for those groups could not be read.",
             )
         )
     return ProofSection(
@@ -1420,6 +1569,13 @@ def _offer_money(context: _Context) -> ProofSection:
             "Sleeping dogs react badly to being contacted. The offer cost is "
             + (context.costs_source or "not entered")
             + ".",
+            *(
+                (
+                    "Each group's measured difference holds only if the groups were chosen at random as you said.",
+                )
+                if context.claim == "stated_random"
+                else ()
+            ),
         ),
     )
 
@@ -1430,7 +1586,13 @@ def _test_cost(context: _Context) -> ProofSection:
     reader = context.reader
     campaign_key = context.key(_CAMPAIGN)
     held = context.r("control_rows", "count")
-    lines: list[ProofLine] = [_line("Customers held back and measured", held, missing="Not measured.")]
+    lines: list[ProofLine] = [
+        _line(
+            f"{_cap(_held_words(context))} measured",
+            held,
+            missing=f"Not measured: the result does not say how many {_held_words(context)} it rests on.",
+        )
+    ]
     if context.claim == "descriptive":
         lines.append(ProofLine(label="What holding them back cost", missing=_DESCRIPTIVE))
     else:
@@ -1445,7 +1607,14 @@ def _test_cost(context: _Context) -> ProofSection:
             forgone = _oriented(context, "absolute_lift", multipliers=(held,), fmt="signed_count")
         lines.append(
             _line(
-                _conditional(context, "What they would have added had they been contacted"),
+                _conditional(
+                    context,
+                    (
+                        "What they would have added had they been in the programme"
+                        if context.kind == "programme"
+                        else "What they would have added had they been contacted"
+                    ),
+                ),
                 *forgone,
                 missing="Not measured: one of the two groups is too small to compare.",
             )
@@ -1464,15 +1633,23 @@ def _test_cost(context: _Context) -> ProofSection:
                 _line(
                     _conditional(context, "What that is worth in rupees, before costs"),
                     *money,
-                    missing="Not measured.",
+                    missing="Not measured: one of the two groups is too small to compare.",
                 )
             )
+    if context.kind == "programme":  # a programme has no list, so no explore slice beside one
+        return ProofSection(
+            key="test_cost",
+            title="What the control group costs",
+            status="measured",
+            lines=tuple(lines),
+            notes=("The control group is the price of knowing: without it nothing above could be measured.",),
+        )
     explore = reader.fig(campaign_key, "counts.explore", "count")
     lines.append(
         _line(
             "Customers contacted at random outside the list (the explore slice)",
             explore,
-            missing="Not recorded.",
+            missing="Not recorded: the campaign record has no count of an explore slice.",
         )
     )
     if explore is not None and float(explore.value) > 0:
@@ -1480,7 +1657,8 @@ def _test_cost(context: _Context) -> ProofSection:
         if contact is None or offer is None:
             lines.append(
                 ProofLine(
-                    label="What the explore slice cost", missing="No contact or offer cost was entered."
+                    label="What the explore slice cost",
+                    missing="Not measured: no contact or offer cost was entered.",
                 )
             )
         else:
@@ -1513,19 +1691,26 @@ def _backfire(context: _Context) -> tuple[ProofSection, tuple[SuppressionProposa
     if context.claim == "descriptive":
         return _not_measured("backfire", title, _DESCRIPTIVE), ()
     if context.segments_key is None:
-        return _not_measured("backfire", title, context.segments_reason or "Not measured."), ()
+        return _not_measured("backfire", title, context.segments_reason or _NO_SEGMENT_FILE), ()
     reader, key = context.reader, context.segments_key
     cells = [
         (index, cell) for index, cell in enumerate(reader.get(key, "cells") or ()) if isinstance(cell, dict)
     ]
+    skipped = _dimension_notes(context)
     if not cells:
-        reason = (
-            "A programme readout compares everyone with the universal control group; it has no groups of "
-            "customers to read one by one."
-            if context.kind == "programme"
-            else "The campaign's customers carry no band, predicted group or offer to read one by one."
+        if context.kind == "programme":
+            reason = (
+                "A programme readout compares everyone with the universal control group; it has no groups of "
+                "customers to read one by one."
+            )
+        elif skipped:
+            reason = "No group of the campaign's customers could be read one by one; the lines below say why."
+        else:
+            reason = "The campaign's customers carry no band, predicted group or offer to read one by one."
+        section = ProofSection(
+            key="backfire", title=title, status="not_measured", reason=reason, lines=tuple(skipped)
         )
-        return _not_measured("backfire", title, reason), ()
+        return section, ()
     fmt: FigureFormat = "signed_amount" if context.continuous else "points"
     sign = "" if context.good else "-"
     ends = ("ci_low", "ci_high") if context.good else ("ci_high", "ci_low")
@@ -1555,7 +1740,7 @@ def _backfire(context: _Context) -> tuple[ProofSection, tuple[SuppressionProposa
         if not judged:
             verdict = "too few customers to judge"
         elif flagged:
-            verdict = "backfired"
+            verdict = _conditional(context, "backfired")
         else:
             verdict = "no backfire shown"
         rows.append(
@@ -1582,7 +1767,11 @@ def _backfire(context: _Context) -> tuple[ProofSection, tuple[SuppressionProposa
             flagged_any = True
             proposals.append(_proposal(context, dimension, str(cell.get("segment")), name, family_high))
     lines = (
-        _line("Groups judged", reader.fig(key, "family_size", "count"), missing="None."),
+        _line(
+            "Groups judged",
+            reader.fig(key, "family_size", "count"),
+            missing="Not recorded: the group results do not say how many groups were judged.",
+        ),
         _line(
             "Confidence of each judged range, allowing for that many checks",
             reader.fig(key, "family_confidence", "share"),
@@ -1591,8 +1780,9 @@ def _backfire(context: _Context) -> tuple[ProofSection, tuple[SuppressionProposa
         _line(
             "Smallest number of customers a judged group has, contacted and held back alike",
             reader.fig(key, "min_rows_per_arm", "count"),
-            missing="Not recorded.",
+            missing="Not recorded: the group results do not say how small a judged group may be.",
         ),
+        *skipped,
     )
     notes = [
         "A group is flagged only when its whole range, widened to allow for the number of groups checked, lies "
@@ -1652,17 +1842,50 @@ _NET_LINE: Final[int] = 3
 """The position of the net value's line in its section (the headline quotes it)."""
 
 
+def _contacts_paid(context: _Context) -> tuple[Figure | None, str, str | None]:
+    """How many contacts were paid for, its line's label and, when only the measured ones are costed, why.
+
+    Every customer meant to be contacted in the measured population was paid for, including those later left
+    out of the measurement for having no outcome in the file: the campaign record's `counts.intended_treated`.
+    A record without that count falls back to the measured contacted customers, and the pack says so.
+    """
+    paid = context.reader.fig(context.key(_CAMPAIGN), "counts.intended_treated", "count")
+    if paid is not None:
+        return paid, "Cost of contacts, for every customer meant to be contacted", None
+    return (
+        context.r("treated_rows", "count"),
+        "Cost of contacts, for the contacted customers measured",
+        "The campaign record does not say how many customers were meant to be contacted, so only the "
+        "contacted customers measured are costed; any left out for having no outcome are not, and the cost "
+        "is that much too low.",
+    )
+
+
 def _net_value(context: _Context) -> ProofSection:
     title = "Net value in rupees, as a range"
     if context.claim == "descriptive":
         return _not_measured("net_value", title, _DESCRIPTIVE)
     value, reason = _value_inputs(context)
+    if context.kind == "programme":
+        return _not_measured(
+            "net_value",
+            title,
+            "A programme readout does not record who outside the control group was contacted or who took an "
+            "offer, so what the programme cost, and its net value, are not measured. "
+            + (
+                "What it changed, valued at the inputs entered, is in the credit section."
+                if value is not None
+                else "Enter what one extra outcome is worth to see what it changed in rupees, in the credit "
+                "section."
+            ),
+        )
     if value is None:
         return _not_measured("net_value", title, reason)
     contact, offer = _cost(context, "contact_cost"), _cost(context, "offer_cost")
     rows = context.r("treated_rows", "count")
+    paid, contacts_label, contacts_note = _contacts_paid(context)
     base = _estimate_base(context)
-    if base is None or contact is None or offer is None or rows is None:
+    if base is None or contact is None or offer is None or rows is None or paid is None:
         return _not_measured(
             "net_value",
             title,
@@ -1678,44 +1901,66 @@ def _net_value(context: _Context) -> ProofSection:
         gain_parts: list[Figure | None] = [estimate, *((rows,) if context.continuous else ()), value]
         gain = sign + "*".join(f"s{i}" for i in range(len(gain_parts)))
         gains.append(derived(gain_parts, gain, "inr"))
-        parts = [*gain_parts, rows, contact, *take_parts, offer]
+        parts = [*gain_parts, paid, contact, *take_parts, offer]
         at = len(gain_parts)
         takers = take_term.format(*(f"s{at + 2 + i}" for i in range(len(take_parts))))
         formula = f"{gain} - s{at}*s{at + 1} - {takers}*s{at + 2 + len(take_parts)}"
         nets.append(derived(parts, formula, "inr"))
-    contacts_total = derived([rows, contact], "s0*s1", "inr")
+    contacts_total = derived([paid, contact], "s0*s1", "inr")
     offer_parts = [*take_parts, offer]
     offers_total = derived(
         offer_parts,
         take_term.format(*(f"s{i}" for i in range(len(take_parts)))) + f"*s{len(take_parts)}",
         "inr",
     )
+    unreadable = "Not measured: a count or a cost it is computed from could not be read."
     lines = (
         _line(
             _conditional(context, "Value of what the campaign changed"),
             gains[0],
             gains[1],
             gains[2],
-            missing="Not measured.",
+            missing="Not measured: one of the two groups is too small to compare.",
         ),
-        _line("Cost of contacts", contacts_total, missing="Not measured."),
-        _line("Cost of offers taken", offers_total, missing="Not measured."),
+        _line(contacts_label, contacts_total, missing=unreadable),
         _line(
-            _conditional(context, "Net value"), nets[0], nets[1], nets[2], missing="Not measured."
-        ),  # _NET_LINE
-        _line("Value of one extra outcome, as entered", value, missing="Not entered."),
+            (
+                "Cost of offers taken, by the contacted customers measured with an amount above zero"
+                if context.continuous
+                else "Cost of offers taken, by the contacted customers measured"
+            ),
+            offers_total,
+            missing=unreadable,
+        ),
+        _line(_conditional(context, "Net value"), nets[0], nets[1], nets[2], missing=unreadable),  # _NET_LINE
+        _line(
+            (
+                "Value of one unit of the amount, as entered"
+                if context.continuous
+                else "Value of one extra outcome, as entered"
+            ),
+            value,
+            missing="Not entered.",
+        ),
+        _line("Cost of one contact, as entered", _as(contact, "inr_unit"), missing="Not entered."),
+        _line("Cost of one offer taken, as entered", _as(offer, "inr_unit"), missing="Not entered."),
     )
+    notes = [
+        "The range comes from the measured range of what the campaign changed; the rupee values per outcome "
+        "and the costs are "
+        + (context.costs_source or "the value inputs")
+        + ", estimates that move the rupees but not the measured count.",
+        "Offers are costed for the contacted customers measured; an offer taken by a customer with no outcome "
+        "in the file is not known, so it is not counted.",
+    ]
+    if contacts_note is not None:
+        notes.append(contacts_note)
     return ProofSection(
         key="net_value",
         title=title,
         status="measured",
         lines=lines,
-        notes=(
-            "The range comes from the measured range of what the campaign changed; the rupee values per outcome "
-            "and the costs are "
-            + (context.costs_source or "the value inputs")
-            + ", estimates that move the rupees but not the measured count.",
-        ),
+        notes=tuple(notes),
     )
 
 
@@ -1737,7 +1982,7 @@ _BASIS_TEXT: Final[dict[str, str]] = {
 def _method(context: _Context) -> ProofSection:
     basis = str(context.campaign.get("causal_basis") or "not_random")
     lines: list[ProofLine] = [
-        _line("Result read on", context.r("as_of", "date"), missing="Not recorded."),
+        _line("Result read on", context.r("as_of", "date"), missing="Not recorded: the result has no date."),
         _line(
             "Outcome counted over",
             context.r("outcome_window_days", "days"),
@@ -1746,7 +1991,7 @@ def _method(context: _Context) -> ProofSection:
         _line(
             "Customers left out for having no outcome in the file",
             context.r("rows_without_outcome", "count"),
-            missing="Not recorded.",
+            missing="Not recorded: the result does not say how many customers had no outcome.",
         ),
     ]
     if _estimate_base(context) == "adjusted_interval":
@@ -1754,12 +1999,12 @@ def _method(context: _Context) -> ProofSection:
             _line(
                 "Adjusted for each customer's earlier amount in",
                 context.r("covariate_column", "text"),
-                missing="Not recorded.",
+                missing="Not recorded: the result does not name the earlier amount.",
             ),
             _line(
                 "Share of the noise the adjustment removed",
                 context.r("variance_reduction", "share"),
-                missing="Not recorded.",
+                missing="Not recorded: the result does not say how much noise the adjustment removed.",
             ),
         ]
     notes = [
@@ -1771,8 +2016,12 @@ def _method(context: _Context) -> ProofSection:
         }[context.claim],
         "Outcomes are counted for everyone the campaign was meant to reach, whether or not the message arrived, "
         "so the result is the effect of running the campaign.",
-        "Rupee values use the inputs entered for the campaign; they are estimates, and the pack says where each "
-        "comes from.",
+        (
+            f"Rupee values use {_inputs_source(context.inputs_key)}; they are estimates, and the pack says where "
+            "each comes from."
+            if context.inputs_key is not None
+            else "No value inputs were entered, so no value is shown in rupees."
+        ),
         "Results for each group are read without any adjustment by an earlier amount, and judged by the rule in "
         "the backfire section.",
     ]
@@ -1924,6 +2173,8 @@ def proof_document(view: ProofView, *, client_name: str = "") -> ReportDocument:
         blocks.append(Heading(text=section.title))
         if section.status == "not_measured":
             blocks.append(Callout(title="Not measured", text=section.reason or "", tone="info"))
+            if section.lines:
+                blocks.append(KeyValues(rows=tuple((line.label, _line_text(line)) for line in section.lines)))
             continue
         if section.lines:
             blocks.append(KeyValues(rows=tuple((line.label, _line_text(line)) for line in section.lines)))
@@ -1949,6 +2200,12 @@ def proof_document(view: ProofView, *, client_name: str = "") -> ReportDocument:
                         f"range is {proposal.worst_case.text}. An Analyst approves this suggestion; nothing "
                         f"changes until then."
                     )
+                    if view.claim == "stated_random":
+                        text = (
+                            "If the groups were random as you said, l"
+                            + text[1:]
+                            + " If they were not, this group's result may not be the campaign's doing."
+                        )
                     blocks.append(Callout(title="Suggestion for the next cycle", text=text, tone="warning"))
         if section.notes:
             blocks.append(Bullets(items=section.notes))

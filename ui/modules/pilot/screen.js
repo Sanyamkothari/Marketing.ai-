@@ -931,7 +931,9 @@ function proposalsCard(view, canApprove) {
     })
     .join("");
   return `<section class="card" data-pe-proposals><h3>Suggestions for the next cycle</h3><div class="pe-body">
-    <p class="pe-help">These groups did worse when contacted. Approving a suggestion records it for the next cycle's settings; nothing in any list changes until someone applies it there.</p>
+    <p class="pe-help">${
+      view.claim === "stated_random" ? "If the groups were random as you said, these groups did worse when contacted." : "These groups did worse when contacted."
+    } Approving a suggestion records it for the next cycle's settings; nothing in any list changes until someone applies it there.</p>
     <ul class="pe-tables">${items}</ul><p class="pe-status" data-pe-proposal-status role="status"></p></div></section>`;
 }
 
@@ -974,7 +976,9 @@ async function renderProof(app, campaignId, rerender) {
   const canValue = await mayCall("PUT", "/pilot/proof/{campaign_id}/value");
   if (!live()) return;
   const net = (view.sections || []).find((s) => s.key === "net_value");
-  const needsInputs = canValue && view.claim !== "descriptive" && net && net.status === "not_measured";
+  // The form is offered only while the pack read no value inputs (a programme's net value stays unmeasured with them).
+  const valued = (view.artefacts || []).some((key) => key.endsWith("/pilot_roi_inputs.json"));
+  const needsInputs = canValue && view.claim !== "descriptive" && net && net.status === "not_measured" && !valued;
   const estimates = needsInputs
     ? `<section class="card"><div class="pe-body"><details class="adv" data-pe-estimates open><summary>Value inputs for this campaign</summary>${estimatesForm(
         { value: { inputs: {}, outcome_is_good: view.outcome_is_good } },
