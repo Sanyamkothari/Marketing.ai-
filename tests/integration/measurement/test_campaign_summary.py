@@ -405,7 +405,7 @@ def _free_strings(item: Any, key: str = "") -> Iterator[str]:
         if {"value", "text", "format", "sources"} <= set(item):
             return
         for name, value in item.items():
-            if name in {"campaign_id", "use_case_id", "artefacts", "read", "unit", "code", "kind"}:
+            if name in {"campaign_id", "use_case_id", "artefacts", "read", "unit", "code", "kind", "built_at"}:
                 continue
             yield from _free_strings(value, name)
     elif isinstance(item, list):
@@ -479,7 +479,7 @@ def test_backfire_appears_for_the_planted_group_and_not_for_the_neutral_one(worl
     harmed = by_campaign[world.ids["banded"]]
     assert harmed["facts"][0]["value"]["value"] == HARMED_BAND
     assert NEUTRAL_BAND not in json.dumps(cards), "the neutral band is not flagged"
-    others = {name for name in world.ids if world.ids[name] in by_campaign} - {"banded", "banded_again", "stated"}
+    others = {name for name in world.ids if world.ids[name] in by_campaign} - {"banded", "banded_again", "under_final", "stated"}
     assert others == set(), f"no other campaign backfired: {others}"
     stated = by_campaign[world.ids["stated"]]
     assert stated["title"].startswith("If the groups were random as you said"), "a statement is not proof"

@@ -50,7 +50,6 @@ import math
 import re
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
-from datetime import date
 from statistics import NormalDist
 from typing import TYPE_CHECKING, Any, Final, Literal
 
@@ -232,7 +231,9 @@ class CampaignNote(StrictBase):
     campaign_name: Figure
     code: str | None = Field(default=None, description="The catalogue code of the reason, when it has one.")
     reason: str
-    results_available_on: date | None = Field(default=None, description="The day it can be read as final.")
+    results_available_on: Figure | None = Field(
+        default=None, description="The day it can be read as final, when an artefact records it."
+    )
 
 
 class ApartCampaign(StrictBase):
@@ -558,11 +559,19 @@ class _Builder:
             self._backfire(campaign, name, view)
             self._count(campaign, name, view)
         elif refusal is not None:
-            self._exclude(cid, name, refusal.code, refusal.results_available_on)
+            self._exclude(cid, name, refusal.code, self._available(campaign))
         elif not traced:
             self._exclude(cid, name, PROOF_NOT_TRACEABLE, None)
 
-    def _exclude(self, cid: str, name: Figure, code: str, available: date | None) -> None:
+    def _available(self, campaign: Campaign) -> Figure | None:
+        """The day the final result can be read, as a figure, from the artefact that records it."""
+        cid = campaign.campaign_id
+        report = f"campaigns/{cid}/incrementality_report.json"
+        if self.reader.get(report, "early_look") is True:
+            return self.reader.fig(f"campaigns/{cid}/test_plan.json", "analysis_date", "date")
+        return self.reader.fig(report, "results_available_on", "date")
+
+    def _exclude(self, cid: str, name: Figure, code: str, available: Figure | None) -> None:
         self.excluded.append(
             CampaignNote(
                 campaign_id=cid,
