@@ -464,6 +464,23 @@ codes:
     title: "No shared control group to read the whole programme against"
     meaning: "The whole programme is compared with the customers that one control group shared by every use case (the universal control group) keeps back. None has been used yet, or this deployment has no control group secret salt set (MARKETING_AI_HOLDOUT_SALT), so nothing was measured or stored."
     fix: "Set each use case's control group scope to universal, ask your administrator to set the salt, and score once. Then read a period that begins on or after that day."
+  # --- Plan J M104: the Value Proof Pack (DEC-1314 (b), (f), (i)) ------------------------------------------------
+  PROOF_SYNTHETIC_DATA:
+    title: "No Value Proof Pack for generated data"
+    meaning: "This campaign was measured on generated data (a scoring run, an outcomes file, an audit, a programme readout or a contact file marked as generated), where the effect was planted. A Value Proof Pack is drawn only from a client's own data, so none is made for it."
+    fix: "Measure the campaign on the client's own files: upload them without the generated mark, add them to the campaign and measure it again."
+  PROOF_NOT_MATURE:
+    title: "The Value Proof Pack appears once the campaign's final result is in"
+    meaning: "The campaign has not been measured yet, some customers' outcome period had not ended when it was measured, or the stored result is an early look read before the date its test plan fixed."
+    fix: "Measure the campaign on or after the day shown, once every customer's outcome period has ended (and on or after the plan's reading date when it has one). The pack appears as soon as that final result is stored."
+  PROOF_NOT_TRACEABLE:
+    title: "This Value Proof Pack cannot be shown"
+    meaning: "A number in the pack, or a digit in its words, could not be traced back to the measured record it was read from. So nothing is shown rather than a number nobody can check."
+    fix: "Measure the campaign again so its records are written together. If it happens again, tell your administrator: a stored record may have been changed by hand."
+  PROOF_SUPPRESSION_INVALID:
+    title: "That group is not flagged as backfiring"
+    meaning: "The group named for leaving out of the next cycle is not one this campaign's Value Proof Pack flags as backfiring in its latest measurement, so there is no suggestion to approve for it."
+    fix: "Open the campaign's Value Proof Pack and approve one of the suggestions it lists. If the campaign was measured again, the suggestions are the new measurement's."
 
 settings:
   actions.bands[*].min_score:

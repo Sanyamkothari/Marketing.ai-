@@ -397,6 +397,18 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/measurement/test_programme_readout.py",
         "tests/integration/measurement/test_audit_trail.py",
     ),
+    # M104 (DEC-1314). The nightly false-alarm test (tests/statistical/test_backfire_false_alarm.py, DEC-1300 (e))
+    # is left out, as for M102 and M103. The node test (proof.test.mjs) runs through
+    # tests/integration/simple/test_simple_ui.py, which predates M104 (Plan H) and is not evidence for it, as
+    # test_pilot_ui.py is not. test_proof.py keeps fast tests beside its `slow` one-million-customer test.
+    "M104": (
+        "tests/unit/pilot/test_proof.py",
+        "tests/unit/measurement/test_segments.py",
+        "tests/integration/pilot/test_proof_pack.py",
+        "tests/integration/pilot/test_proof_pack_programme.py",
+        "tests/integration/pilot/test_proof_pack_offers.py",
+        "tests/integration/pilot/test_proof_pack_amounts.py",
+    ),
 }
 """Milestone id -> the test files (or directories, with a trailing `/`) that prove it is built.
 

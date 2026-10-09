@@ -19,6 +19,7 @@ from engine.measurement.continuous import CONTINUOUS_CODES
 from engine.measurement.programme import PROGRAMME_CODES
 from engine.measurement.reconcile import CONTACT_RECONCILE_CODES
 from engine.model_gates import UPLIFT_GATE_CODES
+from engine.pilot.proof import PROOF_CODES
 
 __all__ = ["PLAN_J_CODES"]
 
@@ -100,6 +101,9 @@ PLAN_J_CODES: Final[frozenset[str]] = (
     # read: a repeated customer, a missing column, an unreadable value (`engine.measurement.reconcile`)
     | PROGRAMME_CODES  # M103 (DEC-1313 (i)): PROGRAMME_NO_HOLDOUT, 409 from POST /campaigns/programme with no
     # universal holdout in use or no salt set (`engine.measurement.programme`)
+    | PROOF_CODES  # M104 (DEC-1314 (b), (f), (i)): PROOF_SYNTHETIC_DATA and PROOF_NOT_MATURE (409, no pack for
+    # generated data or an unfinished result), PROOF_NOT_TRACEABLE (500, a number that does not trace back) and
+    # PROOF_SUPPRESSION_INVALID (409, approving a group the pack does not flag) (`engine.pilot.proof`)
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
@@ -113,4 +117,5 @@ way from `engine.model_gates.UPLIFT_GATE_CODES` (DEC-1306 (f)), and M100's promo
 joined from `engine.measurement.continuous.CONTINUOUS_CODES` (DEC-1312 (m)). M103's three are joined from
 `engine.measurement.audit.AUDIT_CODES`, `engine.measurement.reconcile.CONTACT_RECONCILE_CODES` and
 `engine.measurement.programme.PROGRAMME_CODES` (DEC-1313); its programme route also raises the existing
-CAMPAIGN_EPOCH_MISMATCH and TEST_PLAN_INVALID."""
+CAMPAIGN_EPOCH_MISMATCH and TEST_PLAN_INVALID. M104's four are joined from `engine.pilot.proof.PROOF_CODES`
+(DEC-1314)."""

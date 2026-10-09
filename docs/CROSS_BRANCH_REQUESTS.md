@@ -1135,6 +1135,79 @@ Plan J entries `TEST_PLAN_INVALID` and `CAMPAIGN_EPOCH_MISMATCH` now say how the
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-09 — plan-j M104 (on main) → Phase 4b (owner of `configs/privacy.yaml` and `engine/privacy/layout.py`; retention and erasure): three aggregate campaign files, two naming staff (request and record of in-place edits)
+
+**What changed** (DEC-1314 (g), (i), (j), (p)): three new aggregate campaign files, none holding a customer id.
+`campaigns/<id>/segment_effects.json` (counts, rates and ranges per band, segment and offer; written by
+`api/routes/campaigns.py` beside every stored report), `campaigns/<id>/suppression_proposals.json` (approved
+suggestions with the `approved_by` username and time; `api/routes/pilot.py`) and `campaigns/<id>/pilot_roi_inputs.json`
+(a campaign's own value inputs with the `entered_by` username; `api/routes/pilot.py` via
+`engine.pilot.proof.save_campaign_value_inputs`). They are named in a comment under
+`retention.row_level_campaign_artefacts` in `configs/privacy.yaml` (not added to the row-level list), in a new row of
+`engine/privacy/layout.py`'s docstring table and in the `engine/measurement/campaign.py` file table. No file is served
+as a row-level download, so `api/access_policy.py` `ROW_LEVEL_ARTEFACTS` is unchanged.
+
+**What is needed.** Ratification of the edits. The usernames in `suppression_proposals.json` and
+`pilot_roi_inputs.json` are personal data of staff: include them in any staff-erasure or retention rule that covers
+audit-like records.
+
+### 2026-10-09 — plan-j M104 (on main) → branches reading campaigns (M105, Plan H, Phase 3b): `contact_readout.json` gains two fields and `segment_effects.json` is written beside every report (announcement)
+
+**What changed** (DEC-1314 (f), (g)):
+
+* `contact_readout.json` (`engine.measurement.reconcile.ContactReadout`) gains two additive, defaulted fields:
+  `contact_upload_id` (`str | None`) and `synthetic` (`bool`, default false). Every route that reads a contact file
+  sets them (`POST /campaigns/{id}/contacts`, the audit and programme routes), and re-measurement carries them over.
+  A readout written before M104 still reads.
+* `segment_effects.json` is written beside every stored campaign report (measure, audit, programme) by
+  `engine.measurement.segments.measure_campaign_segments`. `measure_campaign` itself is unchanged. A campaign measured
+  before M104 shows its groups as "not measured" in its pack until it is measured again.
+
+**What is needed.** Nothing; this is an announcement. A reader that builds a `ContactReadout` by hand should pass the
+two fields through, and a branch that adds a stored campaign readout should write `segment_effects.json` beside it the
+same way.
+
+### 2026-10-09 — plan-j M104 (on main) → Plan E (owner of `engine/pilot/`, `api/routes/pilot.py`, `ui/modules/pilot/` and `configs/pilot/help.yaml`): the Value Proof Pack and four codes (record of in-place edits and announcement)
+
+**What changed** (DEC-1314 (a), (n), (p), (q)):
+
+* `engine/pilot/proof.py` is new (pre-approved in the plan's M104 scope). `engine/pilot/__init__.py`'s docstring names
+  it; `engine/pilot/document.py` `ReportDocument.kind` gains the value `proof` (additive `Literal`).
+* `api/routes/pilot.py` gains `GET /pilot/proof`, `GET /pilot/proof/{campaign_id}` (Viewer),
+  `PUT /pilot/proof/{campaign_id}/value` and `POST /pilot/proof/{campaign_id}/suppressions` (Analyst, audited), each
+  with a `RoutePolicy`. `tests/integration/pilot/test_pilot_api.py`'s route count goes from 11 to 15 and pins the three
+  new roles; nothing was loosened.
+* `ui/modules/pilot/api.js` and `screen.js`: `#/pilot/proof/<id>` shows the server's page, its suggestions with
+  Approve for an Analyst, and a value form only while the pack read no value inputs; the Reports hub and Results link
+  to it. Field reads are pinned in `tests/unit/pilot/test_pilot_ui.py`.
+* `PROOF_SYNTHETIC_DATA`, `PROOF_NOT_MATURE`, `PROOF_NOT_TRACEABLE` and `PROOF_SUPPRESSION_INVALID`
+  (`engine.pilot.proof.PROOF_CODES`) join `engine.decide.codes.PLAN_J_CODES` by import (one definition) and get
+  `configs/pilot/help.yaml` entries under a Plan J M104 comment, in plain words. `tests/unit/pilot/test_help.py` is
+  unchanged and green.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M104 (on main) → Plan H (owner of `ui/modules/simple/` and its tests): Value Proof Packs on Results (record of in-place edits)
+
+**What changed** (DEC-1314 (n), (p); `ui/modules/simple/pages.js` is named in the plan's M104 scope):
+`ui/modules/simple/api.js` gains `getProofs()` (`GET /pilot/proof`, null when it cannot be read);
+`renderResults` in `ui/modules/simple/index.js` fetches it beside the runs; `resultsHtml` takes an optional `proofs`
+(default null) and appends `proofsCardHtml`, a "Value Proof Packs" card listing the ready packs in the server's own
+words with a link to each, and nothing when none is ready. `tests/integration/production/ui/simple/fake.mjs` answers
+the proof routes from captured fixtures, `proof.test.mjs` is new, and `tests/integration/simple/test_simple_ui.py`
+captures the proof fixtures from a real measured campaign in a data directory of its own (the other fixtures are
+unchanged).
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-09 — plan-j M104 (on main) → trunk (owner of `tests/integration/test_api_config.py`): four routes join the OpenAPI path set (record of an in-place edit)
+
+**What changed** (DEC-1314 (p)): the exact-set OpenAPI path pin gains `/pilot/proof`, `/pilot/proof/{campaign_id}`,
+`/pilot/proof/{campaign_id}/value` and `/pilot/proof/{campaign_id}/suppressions` under one Plan J M104 comment.
+Nothing was removed or loosened. `docs/API.md` regenerated (`gen_api_docs --check` clean).
+
+**What is needed.** Ratification of the test edit. Nothing else.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with
