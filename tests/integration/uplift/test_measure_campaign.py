@@ -264,6 +264,9 @@ def _upload_without_target(world: World) -> str:
 
 
 def test_too_small_a_campaign_says_how_much_more_it_needs(world: World) -> None:
+    # Self-contained, like the two learn tests below (ef4bd2a): under pytest -n this test can run on a
+    # worker where no other test measured the campaign, and was then told to measure first instead.
+    _measure(world, as_of=LATER.isoformat())
     response = world.client.post(
         f"/runs/{RUN_ID}/measure/learn", json={"overrides": {"uplift": {"min_arm_rows": 50_000}}}
     )
