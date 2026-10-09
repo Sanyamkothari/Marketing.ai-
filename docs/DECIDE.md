@@ -404,12 +404,14 @@ choice inside the scoring run and puts it on the treat list:
   same rule would choose if nobody were held back. Only the hold-out is ignored: suppression, channel
   contactability, sleeping dogs and `min_roi` still count. **The budget** (`total_budget`, `budget_contacts`) was
   spent in the run on customers who were not held back, in the order of the greedy walk (net value per rupee, then
-  net value, then row order). That order is a ranking, and a ranking cut at a point is a threshold: the cut is the
-  last customer the run gave an offer to, and every customer with a preferred offer, held back or not, who stands at
-  or before that point in the same order is intended. Treated and held-back customers are therefore cut at one
-  place in one ranking (as `intended_treatment` is, DEC-606), every customer the list contacts is intended, and a
-  customer the walk skipped before the cut because their offer did not fit is intended and not contacted (intent to
-  treat, like the held-back customers beside them). The hold-out is on top of the budget. The new
+  net value, then row order), skipping an offer that did not fit. The policy replays that same walk over **every**
+  customer with a preferred offer, in the same order: what has been spent (and how many offers given) moves only when
+  a customer the run actually contacted is reached, and at each customer's place the walk's own fit test decides
+  whether the walk, as run, had room for their offer. A customer is intended when it did. For a customer who was not
+  held back that is exactly "the run contacted them", so the treated arm of a campaign is the contacted list and a
+  customer the walk skipped is in neither arm; a held-back customer is intended when the walk had room for their
+  offer at their place, whatever their own draw (as `intended_treatment` is, DEC-606). A budget that does not bind
+  behaves like no budget. The hold-out is on top of the budget. The new
   columns sit between `offer_reason` and `explore_arm`: every earlier column keeps its place from the start and the explore columns stay the last five. A file written before this has none of them, and its campaign keeps the first offer's population.
   On the treat list a held-back row the policy meant to contact carries that offer's net value in `net_value`,
   as a held-back row of a one-offer run carries its own, so arbitration can compare it by value; its `offer` and

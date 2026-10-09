@@ -11,7 +11,8 @@ independent computation from its scores:
 * `offer_choice.parquet` says, for every customer, the offer the policy would choose if nobody were held back,
   with its net value, and its existing columns are untouched;
 * without a budget that is the rule's answer for everyone; under a budget the customers the run contacted are
-  all intended, and the cut is the last of them in the budget walk's own order, for held-back customers too;
+  all intended, those not held back are intended exactly when contacted (a customer the walk skipped is in neither
+  arm), and a held-back customer is intended when the walk, as run, had room for their offer at their place;
 * the treat list gives such a held-back row the offer's net value and leaves its offer and channel empty;
 * a campaign made on the single run (`POST /campaigns`, no arbitration) has the customers the policy meant to
   contact in its arms: every contacted customer in the treated arm, every held-back one the policy meant to
@@ -107,6 +108,8 @@ class Policy:
     """Each offer's net value per customer, from the scores."""
     ratio: pd.Series
     """The net value per rupee of the wanted offer (the budget walk's key)."""
+    cost: pd.Series
+    """The price of the wanted offer (0 where there is none)."""
 
 
 def _policy(app: App, runs: Runs, scored: Scored) -> Policy:
@@ -140,7 +143,10 @@ def _policy(app: App, runs: Runs, scored: Scored) -> Policy:
         ),
         index=money.index,
     )
-    return Policy(scored, rows, held, suppressed, wanted, money, ratio)
+    cost = pd.Series(
+        np.where(wanted > 0, price.to_numpy()[np.arange(len(money)), pick], 0.0), index=money.index
+    )
+    return Policy(scored, rows, held, suppressed, wanted, money, ratio, cost)
 
 
 def _contacted(policy: Policy) -> pd.Series:
@@ -214,27 +220,51 @@ def test_suppression_channel_consent_and_sleeping_dogs_still_count_for_a_held_ba
     assert nobody.sum() > 300 and not would[nobody].any()
 
 
-def test_under_a_budget_every_contacted_customer_is_intended_and_the_cut_is_one_place_in_one_ranking(
+def _walk_fits(policy: Policy, budget: float) -> pd.Series:
+    """Independent replay of the budget walk: for every customer with a wanted offer, did the walk, as the run
+    made it, have room for that offer at their place? What the run had spent on contacted customers before them,
+    in the walk's order (net value per rupee, net value, row order), decides."""
+    rows = policy.rows
+    wanted = policy.wanted > 0
+    given = _contacted(policy)
+    pick = np.maximum(policy.wanted.to_numpy() - 1, 0)
+    value = pd.Series(policy.money.to_numpy()[np.arange(len(rows)), pick], index=rows.index)
+    order = (
+        pd.DataFrame({"ratio": policy.ratio, "value": value, "pos": np.arange(len(rows))})
+        .loc[wanted]
+        .sort_values(["ratio", "value", "pos"], ascending=[False, False, True], kind="stable")
+    )
+    price = policy.cost.loc[order.index].to_numpy()
+    taken = given.loc[order.index].to_numpy()
+    before = np.cumsum(np.where(taken, price, 0.0)) - np.where(taken, price, 0.0)
+    return pd.Series(before + price <= budget + 1e-9, index=order.index)
+
+
+def test_under_a_budget_the_not_held_back_intended_are_exactly_the_contacted_and_the_rest_are_cut_by_the_walk(
     app: App, runs: Runs
 ) -> None:
     policy = _policy(app, runs, runs.budgeted)
     rows = policy.rows
     given = _contacted(policy)
     assert given.sum() > 1000 and runs.budgeted.summary["spent"] <= runs.budget + 1e-6
-    assert rows.loc[given, "policy_intended"].all()
     wanted = policy.wanted > 0
-    # The customers the budget turned away rank below every customer it took, held back or not.
-    cut = policy.ratio[given].min()
-    beyond = wanted & ~rows["policy_intended"]
-    assert beyond.sum() > 500
-    assert policy.ratio[beyond].max() <= cut + 1e-9
-    # And a customer who ranks above the cut is intended whether or not they were held back.
-    above = wanted & (policy.ratio > cut + 1e-9)
-    assert rows.loc[above, "policy_intended"].all()
-    assert (above & policy.held).sum() > 100, "held-back customers are cut at the same place"
-    assert not (rows["policy_intended"] & ~wanted).any()
+    intended = rows["policy_intended"]
+    # A customer who was not held back is intended exactly when the run contacted them: the treated arm of a
+    # campaign is the contacted list, and a customer the walk skipped is in neither arm.
+    free = ~policy.held & ~policy.suppressed
+    assert (intended & free).sum() == (given & free).sum()
+    assert ((intended & free) == (given & free)).all()
+    skipped = wanted & free & ~given
+    assert skipped.sum() > 50, "the budget skips customers whose offer does not fit"
+    assert not intended[skipped].any()
+    # A held-back customer is intended when the budget walk, as it ran, had room for their offer at their place
+    # (independent replay: what the run had spent before them in the walk's order decides).
+    fits = _walk_fits(policy, runs.budget)
+    assert (intended.loc[fits.index] == fits).all()
+    assert (policy.held & wanted & intended).sum() > 100 and (policy.held & wanted & ~intended).sum() > 100
+    assert not (intended & ~wanted).any()
     # A run without a budget has more customers intended than the budgeted one (the budget cut is real).
-    assert rows["policy_intended"].sum() < _policy(app, runs, runs.open).rows["policy_intended"].sum()
+    assert intended.sum() < _policy(app, runs, runs.open).rows["policy_intended"].sum()
 
 
 def test_the_hold_out_is_a_random_sample_of_the_customers_the_policy_meant_to_contact(
@@ -357,9 +387,71 @@ def test_a_campaign_on_the_single_run_is_measured_within_the_customers_the_polic
         counts = campaign["counts"]
         assert counts["intended_holdout"] == int(would.sum())
         assert counts["intended_treated"] == int((intended & (assignment["arm"] == "treated")).sum())
+        # The treated arm is exactly the contacted list (explore rows are outside the policy), the hold-out arm
+        # exactly the held-back customers the policy meant to contact: nobody the budget skipped is in either.
+        explored = scored.treat.loc[policy.rows.index, "explore"] == "1"
+        treated_arm = intended & (assignment["arm"] == "treated")
+        assert (treated_arm & ~explored == (policy.rows["offer_arm"] > 0)).all()
+        assert ((intended & (assignment["arm"] == "holdout")) == would).all()
         # Before the fix some of the contacted customers were in neither arm.
         first_offer = scored.scores.loc[policy.rows.index, "intended_treatment"].astype(bool)
         assert (contacted & ~first_offer).sum() > 100
+
+
+def test_bands_do_not_apply_to_a_run_that_chose_the_offer_per_customer(app: App, runs: Runs) -> None:
+    """As for every uplift run (it is measured within its policy): `bands` are refused, not silently ignored."""
+    response = app.client.post("/campaigns", json={"run_id": runs.open.run_id, "bands": ["A"]})
+    assert response.status_code == 422, response.text
+    assert "CAMPAIGN_INVALID" in response.text and "bands" in response.text
+
+
+def test_an_arbitrated_campaign_on_a_budgeted_run_has_the_contacted_list_and_its_held_back_twins(
+    app: App, runs: Runs
+) -> None:
+    """The arbitrated path (`comparable_keys` then `create_arbitrated_campaign`) on the run whose budget skips
+    customers: both arms are cut by one rule, so the treated arm is exactly the contacted customers and the hold-out
+    arm exactly the held-back customers the policy meant to contact."""
+    from types import SimpleNamespace
+
+    from api.routes.campaigns import get_campaign_store
+    from engine.decide.arbitrate import ArbitrationConfig, comparable_keys
+    from engine.measurement.campaign import create_arbitrated_campaign
+    from engine.storage import run_key
+
+    scored = runs.budgeted
+    policy = _policy(app, runs, scored)
+    listed = pd.read_parquet(io.BytesIO(app.storage.read_bytes(run_key(scored.run_id, "treat_list.parquet"))))
+    listed = listed.astype({"customer_id": str})
+    # This run's hold-out is Phase 1's per-run control group, so the arbitration is told who was held back.
+    held = policy.held.reindex(listed["customer_id"]).to_numpy(dtype=bool)
+    multi = listed.assign(
+        holdout=held, explore=listed["explore"].astype("boolean").fillna(False).astype(bool)
+    )
+    flags = policy_intended(app.storage, scored.run_id)
+    (scope,) = comparable_keys([multi], [flags], ArbitrationConfig(), ("customer_id",))
+    store = get_campaign_store(SimpleNamespace(app=app.client.app))  # type: ignore[arg-type]
+    campaign = create_arbitrated_campaign(
+        storage=app.storage,
+        store=store,
+        run_id=scored.run_id,
+        scope_keys=scope,
+        arbitration_id="budgeted-probe",
+    )
+    assignment = read_frame(app.storage, campaign_key(campaign.campaign_id, ASSIGNMENT_FILENAME))
+    assignment = assignment.astype({"customer_id": str}).set_index("customer_id").loc[policy.rows.index]
+    intended = assignment["intended"]
+    explored = scored.treat.loc[policy.rows.index, "explore"] == "1"
+    treated_arm = intended & (assignment["arm"] == "treated")
+    contacted = policy.rows["offer_arm"] > 0
+    assert contacted.sum() > 1000
+    assert (treated_arm & ~explored == contacted).all()
+    would = policy.held & ~policy.suppressed & policy.rows["policy_intended"] & ~explored
+    assert would.sum() > 100
+    # ...and the replay of the walk says the same, customer by customer, for those the budget had room for.
+    room = _walk_fits(policy, runs.budget).reindex(policy.rows.index, fill_value=False)
+    assert ((policy.held & (policy.wanted > 0) & ~explored & room) == would).all()
+    got = intended & (assignment["arm"] == "holdout")
+    assert (got == would).all()
 
 
 def test_a_campaign_record_made_without_the_offer_choice_leaves_the_new_field_out() -> None:

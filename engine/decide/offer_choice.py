@@ -29,8 +29,8 @@ the eligibility mask is the customer's contactability per offer (M99's channel c
 5. **The policy's offer without the hold-out** (:func:`policy_offers`, DEC-1311 (af)-(ak)). For measuring a
    campaign the rule is asked once more about every customer, held back or not: which offer would the
    policy choose if nobody were held back? Eligibility then ignores only the hold-out; the budget is
-   applied as a cut in the walk's own order (see the function), so treated and held-back customers are cut
-   by one rule.
+   replayed with the walk's own fit test at each customer's place (see the function), so treated and
+   held-back customers are cut by one rule and the treated arm is exactly the contacted list.
 
 Net value per offer is M97's (DEC-1307): `uplift x value x margin x horizon - offer cost x p_treated -
 contact cost`, from :func:`arm_net_values`, which takes each offer's costs from the caller
@@ -133,7 +133,7 @@ class PolicyOffer:
     """The offer the policy would choose if the hold-out did not exist (see :func:`policy_offers`)."""
 
     arm: IntArray
-    """The offer: 1..K, or :data:`NO_OFFER` when the customer has no offer or is beyond the budget's cut."""
+    """The offer: 1..K, or :data:`NO_OFFER` when the customer has no offer or the budget walk had no room."""
     net_value: FloatArray
     """Its net value; NaN where there is no offer."""
 
@@ -346,18 +346,19 @@ def policy_offers(
 
     **The budget.** The run spent `budget` (and `max_offers`) on customers who were not held back, walking
     them in the order of :func:`_walk_order` and skipping an offer that did not fit. The hold-out is on top
-    of the budget, so nothing the run did can be undone for the held-back customers. The walk's order is a
-    ranking of offers by net value per rupee, and a ranking cut at a point is a threshold: the cut is the
-    last customer the run actually gave an offer to. Every customer with a preferred offer - held back or
-    not - who stands at or before that point in the same order is *intended*; the rest are not. Both arms
-    of a campaign are therefore cut at one place in one ranking (as `intended_treatment` is, DEC-606), and
-    every customer the run contacted is intended. A customer the walk skipped because their offer did not
-    fit, before the cut, is intended and was not contacted: they are in the campaign's treated arm and not
-    on the list (intent to treat), the same as the held-back customers beside them. With no budget and no
-    `max_offers` nobody is cut; if the run gave nobody an offer, nobody is intended.
+    of the budget, so nothing the run did can be undone for the held-back customers. This replays the same
+    walk over *every* customer with a preferred offer, in the same order: `spent` and the count move only
+    when a customer the run actually gave an offer is reached, and at each customer's place the walk's own
+    fit test (`spent + price <= budget`, `count < max_offers`) decides whether the walk as run had room for
+    their offer. A customer is *intended* when it did. For a customer who was not held back that is exactly
+    "the run gave them the offer" (a held-back customer consumes no budget, so the subsequence of customers
+    who were not held back sees the same `spent` as in the run), so the treated arm of a campaign is exactly
+    the contacted list; a held-back customer is intended when the walk had room for their offer at their
+    place, whatever their own draw. A customer the walk skipped because their offer did not fit is not
+    intended, in neither arm, as a held-back customer whose offer would not have fit. With no budget and no
+    `max_offers` nobody is cut; a budget that does not bind behaves like no budget.
 
-    Ties at the cut are broken by row order, as the walk breaks them, which does not depend on who is
-    held back.
+    Ties are broken by row order, as the walk breaks them, which does not depend on who is held back.
     """
     import numpy as np
 
@@ -380,12 +381,20 @@ def policy_offers(
     if budget is None and max_offers is None:
         intended = has_offer
     else:
-        order = _walk_order(value, price, has_offer)
-        place = np.full(rows, order.size, dtype=np.int64)
-        place[order] = np.arange(order.size)
-        contacted = given & has_offer
-        cut = int(place[contacted].max()) if bool(contacted.any()) else -1
-        intended = has_offer & (place <= cut)
+        intended = np.zeros(rows, dtype=np.bool_)
+        spent = 0.0
+        count = 0
+        for position in _walk_order(value, price, has_offer).tolist():
+            each = float(price[position])
+            fits = (budget is None or spent + each <= budget + 1e-9) and (
+                max_offers is None or count < max_offers
+            )
+            intended[position] = fits
+            if given[position]:
+                spent += each
+                count += 1
+        if bool((given & has_offer & ~intended).any()):  # pragma: no cover - the replay is the run's own walk
+            raise ValueError("offered names a customer the budget walk would not have given an offer.")
     arm = np.where(intended, preferred, NO_OFFER).astype(np.int_)
     return PolicyOffer(arm=arm, net_value=np.where(intended, value, np.nan))
 

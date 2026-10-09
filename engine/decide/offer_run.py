@@ -46,8 +46,10 @@ channel is the first planned channel of their offer they are contactable on.
 **The policy's offer without the hold-out (DEC-1311 (af)-(ak)).** For every customer, held back or not, the
 file also says which offer the policy would choose if nobody were held back (`policy_offer_arm`, with its label
 and net value, and `policy_intended`). Eligibility ignores only the hold-out (suppression, channel
-contactability, sleeping dogs and `min_roi` still count); the budget is a cut in the walk's own order at the last
-customer given an offer (`engine.decide.offer_choice.policy_offers`). A campaign of the run is measured within
+contactability, sleeping dogs and `min_roi` still count); the budget walk is replayed over every customer and a
+customer is intended when the walk, as run, had room for their offer at their place
+(`engine.decide.offer_choice.policy_offers`), so the customers not held back who are intended are exactly the
+ones the list contacted. A campaign of the run is measured within
 `policy_intended`, not within the first offer's `intended_treatment`. Existing columns are unchanged.
 
 **When it cannot choose.** With neither `value_per_conversion` nor a value column there is no money to
@@ -130,8 +132,9 @@ POLICY_INTENDED_COLUMN: Final[str] = "policy_intended"
 if the hold-out did not exist, its net value, and whether the policy meant to contact the customer."""
 POLICY_NOTE: Final[str] = (
     "policy_intended marks the customers the policy meant to contact, whether or not the hold-out kept them "
-    "back. The budget was spent on customers who were not held back; the cut is the last customer given an "
-    "offer, in the order the budget was walked, and held-back customers up to that point count as intended."
+    "back. The budget was spent on customers who were not held back; a held-back customer counts as intended "
+    "when the budget, walked in its own order, had room for their offer at their place, so the customers who "
+    "were not held back and are intended are exactly the ones the list contacted."
 )
 _NOT_MADE_NOTE: Final[str] = (
     "No offer was chosen per customer: set a value per response (uplift.policy.value_per_conversion) or a "
@@ -413,7 +416,7 @@ def decide_offers(
         max_offers=policy.budget_contacts,
     )
     # The offer the policy would choose if nobody were held back: suppression and contactability still
-    # count, the hold-out does not; the budget is a cut in the walk's own order (DEC-1311 (af), (ag)).
+    # count, the hold-out does not; the budget walk is replayed with its own fit test (DEC-1311 (af), (ag)).
     not_suppressed = ~np.asarray(suppressed, dtype=np.bool_)
     would = policy_offers(
         net,
