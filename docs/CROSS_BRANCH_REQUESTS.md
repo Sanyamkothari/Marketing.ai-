@@ -1023,6 +1023,32 @@ neighbours do. No assertion changed; the module passes alone, serially and under
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-09 — plan-j M101 follow-up (on main) → all branches reading the treat list or arbitration (M103 to M105, Plan H, Phase 3b): a per-run control group is protected in arbitration (announcement)
+
+**What changed** (DEC-1311 (al)-(aq)); every edit is inside Plan J's own paths (`engine/decide/`,
+`api/routes/decide.py`, `ui/modules/decide/`, `docs/DECIDE.md`, `tests/**/decide/`), so no other workstream's file
+was edited:
+
+* `engine/decide/treat_list.py`: every new `treat_list.csv` and `treat_list.parquet` gains an additive
+  `control_group` column (the run's own per-run control group, Phase 1's actions stage) between `offer_reason` and
+  `net_value` (bool in the parquet, `1`/`0`/empty in the CSV). Every column up to `offer_reason` keeps its position
+  from the start, and `net_value`, `expected_gross_value` and `reason_1..3` keep theirs from the end. `holdout` is
+  unchanged. The four treat-list goldens changed by that column only; the M100 binary golden is unchanged. A new
+  public `with_control_group(storage, run_id, frame)` adds the column in memory to a stored list written before it
+  existed; stored treat-list files are never rewritten.
+* `engine/decide/arbitrate.py`: a customer in the control group of any selected run is treated by no other use
+  case; the arbitrated table gains `control_use_cases` and `control_group`, `ArbitrationSummary` gains
+  `control_blocked_actions`, and `comparable_keys` cuts a control customer's campaign arms like a hold-out member's
+  (DEC-1311 (n)). `engine/measurement/` is untouched; M102 reads `comparable_keys` output only.
+* `tests/fixtures/decide/arbitration_runs.py`: `run_for_use_case` takes run ids from a process-wide counter and the
+  per-run control draw is seeded from the run id, so a test that depends on who is in a control group pins
+  `arbitration_runs._COUNTER["n"]` with `monkeypatch` (as `test_control_group_arbitration.py`,
+  `test_arbitrate_control_group.py` and `test_arbitration_review.py` now do).
+
+**What is needed.** Read treat-list columns by name; a branch that adds treat-list columns keeps them before
+`net_value` and keeps `control_group` before `net_value` too. A reader of arbitration summaries should ignore fields
+it does not know.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

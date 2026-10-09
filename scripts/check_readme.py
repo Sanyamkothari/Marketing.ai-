@@ -364,10 +364,12 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/unit/decide/test_arbitrate_real_runs.py",
         "tests/unit/decide/test_arbitrate_scale.py",
         "tests/unit/decide/test_arbitrate_second_review.py",
+        "tests/unit/decide/test_arbitrate_control_group.py",
         "tests/unit/decide/test_conflicts_card_js.py",
         "tests/integration/decide/test_arbitration_flow.py",
         "tests/integration/decide/test_arbitration_review.py",
         "tests/integration/decide/test_arbitration_second_review.py",
+        "tests/integration/decide/test_control_group_arbitration.py",
     ),
     # M102 (DEC-1312). The nightly coverage test (tests/statistical/test_continuous_coverage.py, DEC-1300 (e))
     # is left out, as for M95, M96 and M100; m102_binary_golden.py is the golden's helper, not a test module.
