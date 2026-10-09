@@ -51,7 +51,7 @@ import ast
 import json
 import math
 import re
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from pathlib import Path
@@ -83,6 +83,7 @@ __all__ = [
     "PROOF_SUPPRESSION_INVALID",
     "PROOF_SYNTHETIC_DATA",
     "SUPPRESSIONS_FILENAME",
+    "ArtefactReader",
     "Figure",
     "FigureRange",
     "ProofLine",
@@ -98,6 +99,8 @@ __all__ = [
     "SuppressionProposal",
     "approve_suppression",
     "build_proof",
+    "check_figures",
+    "derived",
     "figures_of",
     "format_value",
     "proof_document",
@@ -477,6 +480,10 @@ class _Reader:
         )
 
 
+ArtefactReader = _Reader
+"""The reader of JSON artefacts that makes figures; public so the campaigns' summary (Plan J M105) reads the same way."""
+
+
 def derived(parts: list[Figure | None], formula: str, fmt: FigureFormat) -> Figure | None:
     """A figure computed from direct figures (each read from one field) by `formula`; None when any part is."""
     present = [part for part in parts if part is not None]
@@ -541,20 +548,22 @@ def _free_text(item: Any) -> Iterator[str]:
             yield from _free_text(element)
 
 
-def verify_provenance(view: ProofView, storage: Storage) -> None:
-    """Read every figure's sources again and recompute its value and text; raise `ProvenanceError` if any differ.
+def check_figures(figures: Sequence[Figure], free_texts: Iterable[str], storage: Storage) -> list[str]:
+    """What fails to trace among `figures` and the words around them; empty when every figure resolves.
 
-    Every digit in the view's own words (a label, a note, a reason, the headline) must also be one a figure
-    prints, so a number written into a sentence cannot reach the page untraced.
+    Reads every figure's sources again from `storage` and recomputes its value and printed text. Every digit
+    in `free_texts` (a label, a note, a reason, a headline) must also be one that a figure prints, so a number
+    written into a sentence cannot reach a page untraced. The Value Proof Pack and the campaigns' summary
+    (Plan J M105) are both checked by this one function.
     """
     reader = _Reader(storage)
     failures: list[str] = []
-    printed = {token for figure in figures_of(view) for token in _DIGITS.findall(figure.text)}
-    for text in _free_text(view):
+    printed = {token for figure in figures for token in _DIGITS.findall(figure.text)}
+    for text in free_texts:
         stray = sorted(set(_DIGITS.findall(text)) - printed)
         if stray:
             failures.append(f"the words {text!r} print {', '.join(stray)}, which no figure holds")
-    for figure in figures_of(view):
+    for figure in figures:
         where = ", ".join(f"{s.artefact}:{s.field}" for s in figure.sources)
         try:
             values = [reader.raw(source.artefact, source.field) for source in figure.sources]
@@ -577,6 +586,16 @@ def verify_provenance(view: ProofView, storage: Storage) -> None:
             failures.append(f"{where}: {figure.value!r} is not {expected!r}")
         elif figure.text != format_value(figure.format, figure.value):
             failures.append(f"{where}: the text {figure.text!r} does not print {figure.value!r}")
+    return failures
+
+
+def verify_provenance(view: ProofView, storage: Storage) -> None:
+    """Read every figure's sources again and recompute its value and text; raise `ProvenanceError` if any differ.
+
+    Every digit in the view's own words (a label, a note, a reason, the headline) must also be one a figure
+    prints, so a number written into a sentence cannot reach the page untraced (:func:`check_figures`).
+    """
+    failures = check_figures(list(figures_of(view)), _free_text(view), storage)
     if failures:
         raise ProvenanceError(tuple(failures))
 

@@ -28,7 +28,7 @@ from engine.measurement.summary import (
     interval_se,
     sum_figures,
 )
-from engine.pilot.proof import Figure, Source, check_figures
+from engine.pilot.proof import Figure, Source, check_figures, format_value
 from engine.storage import LocalStorage
 from tests.statistical.bands import band
 
@@ -120,20 +120,26 @@ def test_a_total_names_every_lower_bound_it_adds_and_recomputes(tmp_path: Path) 
     _write(storage, "campaigns/c/x.json", {"a": 10.0, "b": 4.0, "c": 1.5})
     first = Figure(
         value=12.0,
-        text="+12",
+        text=format_value("signed_count", 12.0),
         format="signed_count",
-        sources=(Source(artefact="campaigns/a/incrementality_report.json", field="incremental_conversions.ci_low"),),
+        sources=(
+            Source(artefact="campaigns/a/incrementality_report.json", field="incremental_conversions.ci_low"),
+        ),
     )
     turned = Figure(  # a fall in a bad outcome: the lower bound is minus the report's upper end
         value=3.0,
-        text="+3",
+        text=format_value("signed_count", 3.0),
         format="signed_count",
-        sources=(Source(artefact="campaigns/b/incrementality_report.json", field="incremental_conversions.ci_high"),),
+        sources=(
+            Source(
+                artefact="campaigns/b/incrementality_report.json", field="incremental_conversions.ci_high"
+            ),
+        ),
         formula="-s0",
     )
     net = Figure(  # a figure with several sources and an arithmetic formula of its own
         value=10.0 * 4.0 - 1.5,
-        text="₹39",
+        text=format_value("inr", 38.5),
         format="inr",
         sources=(
             Source(artefact="campaigns/c/x.json", field="a"),
@@ -147,7 +153,7 @@ def test_a_total_names_every_lower_bound_it_adds_and_recomputes(tmp_path: Path) 
     assert len(total.sources) == 5
     assert total.formula is not None
     assert check_figures([first, turned, net, total], [], storage) == []
-    assert total.text == "53"
+    assert total.text == format_value("count", 53.5)
 
 
 def test_a_total_that_is_not_the_sum_of_its_sources_fails_the_check(tmp_path: Path) -> None:
@@ -164,7 +170,9 @@ def test_a_total_that_is_not_the_sum_of_its_sources_fails_the_check(tmp_path: Pa
 def test_a_number_in_a_sentence_that_no_figure_prints_is_refused(tmp_path: Path) -> None:
     storage = LocalStorage(tmp_path)
     _write(storage, "campaigns/a/r.json", {"x": 12.0})
-    one = Figure(value=12.0, text="12", format="count", sources=(Source(artefact="campaigns/a/r.json", field="x"),))
+    one = Figure(
+        value=12.0, text="12", format="count", sources=(Source(artefact="campaigns/a/r.json", field="x"),)
+    )
     assert check_figures([one], ["at least 12 extra outcomes"], storage) == []
     assert check_figures([one], ["at least 13 extra outcomes"], storage), "13 is printed by no figure"
 
