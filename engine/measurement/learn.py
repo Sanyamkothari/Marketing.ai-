@@ -179,7 +179,10 @@ class LiveCalibration(Artefact):
     """Predicted against measured change by tenth, on the last campaign's randomised customers."""
 
     source_run_id: str = Field(description="The scoring run whose list went out.")
-    model_id: str | None = Field(description="The model that chose that list (whose predictions these are).")
+    model_id: str | None = Field(
+        description="The model that scored that run (whose predictions these are; it ranked the list unless "
+        "the run fell back to the risk model, M96)."
+    )
     rows: int = Field(description="Customers compared: the learn frame's rows.")
     deciles: tuple[LiveDecile, ...] = Field(description="Up to ten rows, highest predicted change first.")
     deciles_with_range: int = Field(description="Tenths whose measured change has a 95% range.")
@@ -199,7 +202,7 @@ class LearnRecord(Artefact):
 
     source_run_id: str = Field(description="The scoring run whose campaign was learned from.")
     uplift_run_id: str | None = Field(description="The training run started on the frame.")
-    model_id: str | None = Field(description="The model that chose the source run's list.")
+    model_id: str | None = Field(description="The model that scored the source run.")
     treatment_column: str = Field(
         description="The 0/1 column of the frame: 1 = the campaign meant to contact them."
     )
