@@ -297,6 +297,10 @@ PHASE_ROUTERS.append(campaigns_router)
 from api.routes.decide import router as decide_router  # noqa: E402
 
 PHASE_ROUTERS.append(decide_router)
+# Plan J M109 (DEC-1319): events noted against a scoring run's drift report (GET Viewer, POST and DELETE Analyst).
+from api.routes.drift_events import router as drift_events_router  # noqa: E402
+
+PHASE_ROUTERS.append(drift_events_router)
 # ---- END PLAN-J ----
 
 app: FastAPI = create_app()
