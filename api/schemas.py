@@ -1111,7 +1111,12 @@ class ScheduleCreateRequest(StrictBase):
     """Body of `POST /schedules`: one recurring piece of work for one client and one use case."""
 
     use_case_id: str = Field(min_length=1, max_length=128, description="Use case the work is for.")
-    kind: ScheduleKind = Field(description="`score`, `drift_check` or `retrain`.")
+    kind: ScheduleKind = Field(
+        description=(
+            "`score`, `drift_check`, `retrain`, `treat_list`, `measure` or `learn` (the last three are the "
+            "monthly loop, Plan J M107; `measure` needs `parameters.outcomes`)."
+        )
+    )
     cadence: str = Field(min_length=1, max_length=120, description=_CADENCE_DESCRIPTION)
     client_id: str | None = Field(
         default=None,
