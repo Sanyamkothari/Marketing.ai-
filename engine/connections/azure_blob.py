@@ -246,6 +246,25 @@ class AzureBlobConnector:
             truncated=len(items) > MAX_BROWSE_ITEMS,
         )
 
+    def newest(
+        self, config: Mapping[str, ConfigValue], secrets: Mapping[str, str], prefix: str
+    ) -> str | None:
+        """The newest importable blob under `prefix` by last-modified time, or None (Plan J M107, DEC-1317)."""
+        _inside_root(prefix, text_value(config, "prefix"))
+        container = self._container(config, secrets)
+        best: tuple[float, str] | None = None
+        try:
+            for blob in container.list_blobs(name_starts_with=prefix or None):
+                name = str(blob.name)
+                if name.endswith("/") or not importable(name):
+                    continue
+                candidate = (_timestamp(getattr(blob, "last_modified", None)), name)
+                if best is None or candidate > best:
+                    best = candidate
+        except Exception as exc:
+            raise _read_error(exc) from None
+        return None if best is None else best[1]
+
     def file_format(self, selection: Selection) -> FileFormat:
         return file_format_of(_key(selection))
 
@@ -359,3 +378,9 @@ def _read_error(exc: BaseException) -> ConnectorError:
         "Test the connection to see what is wrong.",
         status=502,
     )
+
+
+def _timestamp(moment: Any) -> float:
+    """A listing's last-modified time as seconds, for ordering; a listing without one sorts first."""
+    stamp = getattr(moment, "timestamp", None)
+    return float(stamp()) if callable(stamp) else float("-inf")

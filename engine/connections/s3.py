@@ -8,6 +8,9 @@ interoperability (HMAC) keys, Cloudflare R2, MinIO and the like.
 Only these calls are ever made: `HeadBucket`, `ListObjectsV2`, `HeadObject`, `GetObject` (a byte range
 for a preview), and - to tell whether the keys could write - `sts:GetCallerIdentity`,
 `iam:SimulatePrincipalPolicy` and `GetBucketAcl`, all of which read. Nothing is ever written.
+
+`newest` (Plan J M107, DEC-1317) answers "the newest CSV or Parquet file under this folder" from
+`ListObjectsV2` alone: the latest `LastModified`, the greatest key among files modified in the same second.
 """
 
 from __future__ import annotations
@@ -532,6 +535,36 @@ class S3Connector:
             path=prefix, parent=parent, items=tuple(items[:MAX_BROWSE_ITEMS]), truncated=truncated
         )
 
+    def newest(
+        self, config: Mapping[str, ConfigValue], secrets: Mapping[str, str], prefix: str
+    ) -> str | None:
+        """The key of the newest importable file anywhere under `prefix`, or None when there is none.
+
+        Plan J M107 (DEC-1317): what a source bound to "the newest file in this folder" reads at each
+        scheduled build. Inside the connection's own folder only, like every other read.
+        """
+        from botocore.exceptions import BotoCoreError, ClientError
+
+        bucket = text_value(config, "bucket")
+        self._inside_root(prefix, text_value(config, "prefix"))
+        client = self._client(config, secrets)
+        best: tuple[float, str] | None = None
+        try:
+            paginator = client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(
+                Bucket=bucket, Prefix=prefix, PaginationConfig={"PageSize": _LIST_PAGE}
+            ):
+                for obj in page.get("Contents", []):
+                    key = str(obj["Key"])
+                    if key.endswith("/") or not importable(key):
+                        continue
+                    candidate = (_timestamp(obj.get("LastModified")), key)
+                    if best is None or candidate > best:
+                        best = candidate
+        except (ClientError, BotoCoreError) as exc:
+            raise _read_error(exc, bucket) from None
+        return None if best is None else best[1]
+
     def file_format(self, selection: Selection) -> FileFormat:
         return file_format_of(self._key(selection))
 
@@ -667,3 +700,9 @@ def _read_error(exc: Any, bucket: str, key: str | None = None) -> ConnectorError
         "Test the connection to see what is wrong.",
         status=502,
     )
+
+
+def _timestamp(moment: Any) -> float:
+    """A listing's last-modified time as seconds, for ordering; a listing without one sorts first."""
+    stamp = getattr(moment, "timestamp", None)
+    return float(stamp()) if callable(stamp) else float("-inf")

@@ -68,7 +68,9 @@ def _objects(s3: Any) -> dict[str, str]:
 class Bound:
     """A world whose recipe reads two tables bound to an S3 connection."""
 
-    def __init__(self, world: World, connections: ConnectionStore, connection_id: str, spec: OnboardingSpec) -> None:
+    def __init__(
+        self, world: World, connections: ConnectionStore, connection_id: str, spec: OnboardingSpec
+    ) -> None:
         self.world = world
         self.connections = connections
         self.connection_id = connection_id
@@ -113,7 +115,10 @@ def bound(tmp_path: Path, config_root: Path, s3: Any) -> Bound:
     mappings = [
         world.client_store.save_mapping(
             suggested_mapping_spec(
-                reader.profile(source), config, role=source.role or "", use_case=USE_CASE,
+                reader.profile(source),
+                config,
+                role=source.role or "",
+                use_case=USE_CASE,
                 mapping_id=f"m_bound_{source.role}",
             ).with_hash()
         )
@@ -140,7 +145,9 @@ def _training_frame(bound: Bound) -> pd.DataFrame:
         client_store=bound.world.client_store,
         storage=bound.world.storage,
     )
-    return pd.read_parquet(bound.world.storage.local_path(dataset_key(manifest.dataset_id, "dataset.parquet")))
+    return pd.read_parquet(
+        bound.world.storage.local_path(dataset_key(manifest.dataset_id, "dataset.parquet"))
+    )
 
 
 def _manifest(world: World, dataset_id: str | None) -> DatasetManifest:
@@ -163,7 +170,9 @@ def test_a_source_from_a_connection_is_bound_and_no_upload_is_made(bound: Bound,
     assert uploaded.binding is None and "binding" not in uploaded.model_dump_json()
 
 
-def test_the_newest_object_under_the_prefix_is_read_by_the_next_scheduled_build(bound: Bound, s3: Any) -> None:
+def test_the_newest_object_under_the_prefix_is_read_by_the_next_scheduled_build(
+    bound: Bound, s3: Any
+) -> None:
     world = bound.world
     register_champion(world, _training_frame(bound))
     later = tables(seed=7, end=datetime(2026, 7, 1, tzinfo=UTC).date())["activity"]
@@ -178,7 +187,8 @@ def test_the_newest_object_under_the_prefix_is_read_by_the_next_scheduled_build(
     assert firing.status is FiringStatus.RUNNING, firing.error_code
     manifest = _manifest(world, firing.dataset_id)
     newest = [
-        s for s in world.client_store.list_sources(world.client_id)
+        s
+        for s in world.client_store.list_sources(world.client_id)
         if s.binding is not None and s.binding.object_path == "exports/activity/2026-07.csv"
     ]
     assert len(newest) == 1 and newest[0].role == "activity"
@@ -196,7 +206,9 @@ def test_the_newest_object_under_the_prefix_is_read_by_the_next_scheduled_build(
     assert newest[0].source_id in _manifest(world, again.dataset_id).source_fingerprints
 
 
-def test_without_the_connections_service_a_firing_reads_the_saved_tables_as_before(bound: Bound, s3: Any) -> None:
+def test_without_the_connections_service_a_firing_reads_the_saved_tables_as_before(
+    bound: Bound, s3: Any
+) -> None:
     world = bound.world
     register_champion(world, _training_frame(bound))
     s3.put_object(Bucket=BUCKET, Key="exports/activity/2026-07.csv", Body=_csv(tables(seed=7)["activity"]))
@@ -263,7 +275,11 @@ def test_post_from_connection_adds_a_bound_source_with_its_profile(client: TestC
     connection_id = _api_connection(client)
     response = client.post(
         f"/clients/{client_id}/sources/from-connection",
-        json={"connection_id": connection_id, "selection": {"prefix": "exports/customers/"}, "role": "entity"},
+        json={
+            "connection_id": connection_id,
+            "selection": {"prefix": "exports/customers/"},
+            "role": "entity",
+        },
     )
     assert response.status_code == 201, response.text
     body = response.json()

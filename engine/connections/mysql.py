@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Mapping
+from datetime import date
 from typing import Any, Final
 
 from engine.connections.base import (
@@ -23,9 +24,9 @@ from engine.connections.base import (
     load_sdk,
     text_value,
 )
-from engine.connections.sql import SqlConnector, database_fields
+from engine.connections.sql import SqlConnector, database_fields, date_literal
 
-__all__ = ["MySqlConnector", "mysql_select", "quote_identifier"]
+__all__ = ["MySqlConnector", "mysql_select", "mysql_window", "quote_identifier"]
 
 _SYSTEM_SCHEMAS: Final[frozenset[str]] = frozenset(
     {"information_schema", "mysql", "performance_schema", "sys"}
@@ -55,6 +56,15 @@ def quote_identifier(name: str) -> str:
 def mysql_select(schema: str, table: str, limit: int) -> str:
     """`SELECT * FROM `schema`.`table` LIMIT n` with both names quoted and `n` an integer."""
     return f"SELECT * FROM {quote_identifier(schema)}.{quote_identifier(table)} LIMIT {int(limit)}"
+
+
+def mysql_window(schema: str, table: str, column: str, start: date, end: date, limit: int) -> str:
+    """Plan J M107 (DEC-1317): `mysql_select` with one `WHERE` - a date window on a back-ticked column."""
+    name = quote_identifier(column)
+    return (
+        f"SELECT * FROM {quote_identifier(schema)}.{quote_identifier(table)} "
+        f"WHERE {name} >= {date_literal(start)} AND {name} < {date_literal(end)} LIMIT {int(limit)}"
+    )
 
 
 class MySqlConnector(SqlConnector):
@@ -147,6 +157,9 @@ class MySqlConnector(SqlConnector):
 
     def select_sql(self, schema: str, table: str, limit: int) -> Any:
         return mysql_select(schema, table, limit)
+
+    def window_sql(self, schema: str, table: str, column: str, start: date, end: date, limit: int) -> Any:
+        return mysql_window(schema, table, column, start, end, limit)
 
     def write_privileges(self, connection: Any) -> int | None:
         with connection.cursor() as cursor:

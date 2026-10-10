@@ -4,12 +4,14 @@ The session is made read-only twice over: psycopg opens every transaction `READ 
 (`connection.read_only = True`), and `SET default_transaction_read_only = on` makes the server
 refuse a write even from a transaction someone forgot to mark. The only query built from a name is
 `SELECT * FROM {schema}.{table} LIMIT {n}` composed with `psycopg.sql.Identifier` and
-`psycopg.sql.Literal` - never by pasting strings.
+`psycopg.sql.Literal` - never by pasting strings. A date-window pull (Plan J M107, DEC-1317) adds one
+`WHERE` on a column quoted the same way, its two dates passed as `sql.Literal` of their ISO text.
 """
 
 from __future__ import annotations
 
 from collections.abc import Mapping
+from datetime import date
 from typing import Any, Final
 
 from engine.connections.base import (
@@ -23,9 +25,9 @@ from engine.connections.base import (
     load_sdk,
     text_value,
 )
-from engine.connections.sql import SqlConnector, database_fields
+from engine.connections.sql import SqlConnector, database_fields, date_literal
 
-__all__ = ["PostgresConnector", "postgres_select"]
+__all__ = ["PostgresConnector", "postgres_select", "postgres_window"]
 
 _SYSTEM_SCHEMAS: Final[frozenset[str]] = frozenset({"information_schema", "pg_catalog", "pg_toast"})
 _SSL_MODES: Final[tuple[str, ...]] = ("prefer", "require", "verify-full", "disable")
@@ -47,6 +49,27 @@ def postgres_select(schema: str, table: str, limit: int) -> Any:
 
     return sql.SQL("SELECT * FROM {}.{} LIMIT {}").format(
         sql.Identifier(schema), sql.Identifier(table), sql.Literal(int(limit))
+    )
+
+
+def postgres_window(schema: str, table: str, column: str, start: date, end: date, limit: int) -> Any:
+    """`SELECT * FROM "<schema>"."<table>" WHERE "<column>" >= '<start>' AND "<column>" < '<end>' LIMIT n`.
+
+    Plan J M107 (DEC-1317): names as `sql.Identifier`, the dates as `sql.Literal` of their ISO text (a
+    `datetime.date` only: `date_literal` refuses anything else), the limit as an integer literal.
+    """
+    from psycopg import sql
+
+    for day in (start, end):
+        date_literal(day)
+    return sql.SQL("SELECT * FROM {}.{} WHERE {} >= {} AND {} < {} LIMIT {}").format(
+        sql.Identifier(schema),
+        sql.Identifier(table),
+        sql.Identifier(column),
+        sql.Literal(start.isoformat()),
+        sql.Identifier(column),
+        sql.Literal(end.isoformat()),
+        sql.Literal(int(limit)),
     )
 
 
@@ -140,6 +163,9 @@ class PostgresConnector(SqlConnector):
 
     def select_sql(self, schema: str, table: str, limit: int) -> Any:
         return postgres_select(schema, table, limit)
+
+    def window_sql(self, schema: str, table: str, column: str, start: date, end: date, limit: int) -> Any:
+        return postgres_window(schema, table, column, start, end, limit)
 
     def write_privileges(self, connection: Any) -> int | None:
         with connection.cursor() as cursor:

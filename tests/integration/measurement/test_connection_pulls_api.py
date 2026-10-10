@@ -125,14 +125,12 @@ def test_outcomes_pulled_for_the_window_are_measured_like_an_uploaded_file(
     assert source["window"] == {"column": "recorded_on", "date_from": "2026-05-01", "date_to": "2026-07-30"}
     assert source["rows"] == ROWS and "s3cret-pw" not in json.dumps(source)
     assert ok(client.get(f"/uploads/{outcomes['upload_id']}/profile"))["row_count"] == ROWS
-    window = [sql for sql in server.executed if " WHERE " in sql]
+    window = [sql for sql in server.executed if sql.startswith("SELECT * FROM") and " WHERE " in sql]
     assert window == [
         'SELECT * FROM "crm"."outcomes" WHERE "recorded_on" >= \'2026-05-01\' '
         "AND \"recorded_on\" < '2026-07-31' LIMIT 50000000"
     ]
-    measured = ok(
-        client.post(f"/campaigns/{campaign_id}/measure", json={"as_of": MATURE.isoformat()})
-    )
+    measured = ok(client.post(f"/campaigns/{campaign_id}/measure", json={"as_of": MATURE.isoformat()}))
     assert measured["report"]["treated_rows"] + measured["report"]["control_rows"] > 0
 
 
@@ -176,7 +174,7 @@ def test_an_outcomes_request_names_one_source(client: TestClient, data_dir: Path
     backwards = _pull_body(connection_id, date_from="2026-08-01", date_to="2026-05-01")
     assert client.post(f"/campaigns/{campaign_id}/outcomes", json=backwards).status_code == 422
     assert ok(client.get(f"/campaigns/{campaign_id}"))["campaign"]["outcomes"] is None
-    assert not any(" WHERE " in sql for sql in server.executed)
+    assert not any(sql.startswith("SELECT * FROM") and " WHERE " in sql for sql in server.executed)
 
 
 def test_free_sql_or_an_injected_name_is_refused_before_any_row_is_read(
@@ -199,7 +197,7 @@ def test_free_sql_or_an_injected_name_is_refused_before_any_row_is_read(
         json=_pull_body(connection_id, selection={"schema_name": "crm", "table": "outcomes; DROP TABLE x"}),
     )
     assert table.status_code == 404 and table.json()["detail"]["code"] == "CONNECTION_OBJECT_NOT_FOUND"
-    assert not any(" WHERE " in sql for sql in server.executed)
+    assert not any(sql.startswith("SELECT * FROM") and " WHERE " in sql for sql in server.executed)
 
 
 # --- consent ---------------------------------------------------------------------------------------------
@@ -236,7 +234,10 @@ def test_a_consent_table_is_imported_from_a_connection(client: TestClient, serve
 
 
 def test_a_consent_table_with_a_bad_row_imports_nothing(client: TestClient, server: FakeServer) -> None:
-    rows = [*_consent_rows(5), ("C-99999", "marketing_communication", "maybe", "2026-05-01T09:00:00+00:00", "crm")]
+    rows = [
+        *_consent_rows(5),
+        ("C-99999", "marketing_communication", "maybe", "2026-05-01T09:00:00+00:00", "crm"),
+    ]
     server.db.execute(f'CREATE TABLE "crm"."consent" ({", ".join(CONSENT_COLUMNS)})')
     server.db.executemany('INSERT INTO "crm"."consent" VALUES (?, ?, ?, ?, ?)', rows)
     refused = client.post(

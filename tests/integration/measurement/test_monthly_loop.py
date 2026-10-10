@@ -149,7 +149,9 @@ class Loop:
 
     def scheduler(self) -> LocalScheduler:
         request = app_request(self.app)
-        return LocalScheduler(get_schedule_store(request), get_firer(request), clock=self.clock, tick_seconds=60)
+        return LocalScheduler(
+            get_schedule_store(request), get_firer(request), clock=self.clock, tick_seconds=60
+        )
 
     def at(self, day: date, hour: int) -> tuple[ScheduleFiring, ...]:
         """Tick at every schedule hour from where the clock is up to `hour`:01 UTC on `day`.
@@ -296,7 +298,10 @@ def _set_up(
     mappings = [
         client_store.save_mapping(
             suggested_mapping_spec(
-                reader.profile(source), config, role=source.role or "", use_case=USE_CASE,
+                reader.profile(source),
+                config,
+                role=source.role or "",
+                use_case=USE_CASE,
                 mapping_id=f"m_loop_{source.role}",
             ).with_hash()
         )
@@ -433,8 +438,12 @@ def _the_crm_records_outcomes(loop: Loop, run_id: str, treatment_start: datetime
     record = loop.storage.read_model(run_key(run_id, "run.json"), RunRecord)
     from engine.runs import job_spec_key, read_job_spec
 
-    scored_input = pd.read_parquet(loop.storage.local_path(read_job_spec(loop.storage, job_spec_key(run_id)).upload_key))
-    assignment = pd.read_parquet(io.BytesIO(loop.storage.read_bytes(run_key(run_id, "holdout_assignment.parquet"))))
+    scored_input = pd.read_parquet(
+        loop.storage.local_path(read_job_spec(loop.storage, job_spec_key(run_id)).upload_key)
+    )
+    assignment = pd.read_parquet(
+        io.BytesIO(loop.storage.read_bytes(run_key(run_id, "holdout_assignment.parquet")))
+    )
     treated = (
         scored_input[[record.primary_key]]
         .merge(assignment[[record.primary_key, "treated"]], on=record.primary_key, how="left")["treated"]
@@ -445,16 +454,20 @@ def _the_crm_records_outcomes(loop: Loop, run_id: str, treatment_start: datetime
     inside = (treatment_start + timedelta(days=10)).date().isoformat()
     before = (treatment_start - timedelta(days=20)).date().isoformat()
     rows = [
-        (str(key), int(value), inside) for key, value in zip(scored_input[record.primary_key], stayed, strict=True)
+        (str(key), int(value), inside)
+        for key, value in zip(scored_input[record.primary_key], stayed, strict=True)
     ]
     rows += [
-        (str(key), 1 - int(value), before) for key, value in zip(scored_input[record.primary_key], stayed, strict=True)
+        (str(key), 1 - int(value), before)
+        for key, value in zip(scored_input[record.primary_key], stayed, strict=True)
     ]
     loop.server.db.executemany('INSERT INTO "crm"."retention" VALUES (?, ?, ?)', rows)
     return len(scored_input.index)
 
 
-def test_a_month_runs_score_treat_list_measure_learn_with_only_the_approval_left_to_a_person(loop: Loop) -> None:
+def test_a_month_runs_score_treat_list_measure_learn_with_only_the_approval_left_to_a_person(
+    loop: Loop,
+) -> None:
     bucket_before = {o["Key"]: o["ETag"] for o in loop.s3.list_objects_v2(Bucket=BUCKET)["Contents"]}
     # The new month's activity lands in the bucket; nobody uploads anything.
     later = tables(seed=20261101, entities=ENTITIES, end=date(2026, 7, 1))["activity"]
@@ -466,13 +479,16 @@ def test_a_month_runs_score_treat_list_measure_learn_with_only_the_approval_left
     # 1. Scoring, at 02:00 on its day of the month.
     month = loop.score_day
     (scored,) = [f for f in loop.at(month, 2) if f.schedule_id == loop.schedules["score"]]
-    assert scored.status is FiringStatus.RUNNING and scored.trigger is FiringTrigger.SCHEDULED, scored.error_code
+    assert (
+        scored.status is FiringStatus.RUNNING and scored.trigger is FiringTrigger.SCHEDULED
+    ), scored.error_code
     run_id = scored.run_id or pytest.fail("no scoring run")
     run = loop.storage.read_model(run_key(run_id, "run.json"), RunRecord)
     assert run.state is RunState.DONE and run.model_version_id == loop.champion_id
     assert run.requested_by == SYSTEM_SCHEDULER.user_id
     newest = [
-        s for s in loop.client_store.list_sources(loop.client_id)
+        s
+        for s in loop.client_store.list_sources(loop.client_id)
         if s.binding is not None and s.binding.object_path == "exports/activity/2026-07.csv"
     ]
     assert len(newest) == 1, "the newest object under the folder was fetched, with no upload"

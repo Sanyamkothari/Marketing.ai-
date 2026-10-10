@@ -49,7 +49,7 @@ DAYS = 90
 ROWS = [(f"C{i:03d}", i % 2, (date(2026, 1, 1) + timedelta(days=i)).isoformat()) for i in range(DAYS)]
 """One row a day from 1 January to 31 March 2026: customer, converted, the day it was recorded."""
 ODD_COLUMN = 'recorded" on'
-HOSTILE = 'recorded_on" >= \'1900-01-01\' OR 1=1 --'
+HOSTILE = "recorded_on\" >= '1900-01-01' OR 1=1 --"
 FEBRUARY = DateWindow(column="recorded_on", date_from=date(2026, 2, 1), date_to=date(2026, 2, 28))
 
 
@@ -85,7 +85,8 @@ def _database(store: ConnectionStore, kind: str = "postgres") -> str:
 
 
 def _window_statements(server: FakeServer) -> list[str]:
-    return [sql for sql in server.executed if " WHERE " in sql.upper()]
+    """Statements that read rows with a condition (the catalogue's own listings are not row reads)."""
+    return [sql for sql in server.executed if sql.startswith("SELECT * FROM") and " WHERE " in sql.upper()]
 
 
 # --- a database: one quoted WHERE, on a read-only session ----------------------------------------------
@@ -120,7 +121,9 @@ def test_a_window_pull_returns_only_the_rows_inside_the_window_on_a_read_only_se
     assert (record.schema_name, record.table, record.kind) == ("crm", "outcomes", "postgres")
 
 
-def test_mysql_quotes_the_declared_column_with_its_own_rule(server: FakeServer, store: ConnectionStore) -> None:
+def test_mysql_quotes_the_declared_column_with_its_own_rule(
+    server: FakeServer, store: ConnectionStore
+) -> None:
     frame, _record = pull_frame(
         store,
         _database(store, "mysql"),
@@ -150,7 +153,7 @@ def test_a_column_name_with_a_quote_in_it_is_quoted_and_still_reads_its_window(
     assert len(frame) == 31
     assert _window_statements(server) == [
         'SELECT * FROM "crm"."odd" WHERE "recorded"" on" >= \'2026-03-01\' '
-        "AND \"recorded\"\" on\" < '2026-04-01' LIMIT 50000000"
+        'AND "recorded"" on" < \'2026-04-01\' LIMIT 50000000'
     ]
 
 
@@ -196,7 +199,9 @@ def test_a_window_takes_dates_only_never_text() -> None:
         )
 
 
-def test_a_database_has_no_folders_and_a_table_needs_both_names(store: ConnectionStore, server: FakeServer) -> None:
+def test_a_database_has_no_folders_and_a_table_needs_both_names(
+    store: ConnectionStore, server: FakeServer
+) -> None:
     connection = _database(store)
     for selection in (
         PullSelection(prefix="exports/"),
@@ -254,7 +259,9 @@ def s3(monkeypatch: pytest.MonkeyPatch) -> Iterator[Any]:
 
 
 def _csv(rows: list[tuple[str, int, str]]) -> bytes:
-    return pd.DataFrame(rows, columns=["customer_id", "converted", "recorded_on"]).to_csv(index=False).encode()
+    return (
+        pd.DataFrame(rows, columns=["customer_id", "converted", "recorded_on"]).to_csv(index=False).encode()
+    )
 
 
 def _bucket(store: ConnectionStore) -> str:
@@ -296,7 +303,9 @@ def test_the_newest_file_under_a_folder_is_the_one_read(s3: Any, store: Connecti
 def test_an_empty_folder_says_so(s3: Any, store: ConnectionStore) -> None:
     s3.put_object(Bucket=BUCKET, Key="outcomes/readme.pdf", Body=b"%PDF")
     with pytest.raises(ConnectorError) as caught:
-        pull_frame(store, _bucket(store), PullSelection(prefix="outcomes/"), window=None, limit_bytes=LIMIT, now=NOW)
+        pull_frame(
+            store, _bucket(store), PullSelection(prefix="outcomes/"), window=None, limit_bytes=LIMIT, now=NOW
+        )
     assert caught.value.code == PULL_NOTHING_FOUND and caught.value.status == 404
 
 
@@ -304,7 +313,12 @@ def test_rows_whose_day_cannot_be_read_are_left_out_and_counted(s3: Any, store: 
     rows = [*ROWS[31:40], ("X001", 1, "not a day"), ("X002", 0, "")]
     s3.put_object(Bucket=BUCKET, Key="outcomes/feb.csv", Body=_csv(rows))
     frame, record = pull_frame(
-        store, _bucket(store), PullSelection(path="outcomes/feb.csv"), window=FEBRUARY, limit_bytes=LIMIT, now=NOW
+        store,
+        _bucket(store),
+        PullSelection(path="outcomes/feb.csv"),
+        window=FEBRUARY,
+        limit_bytes=LIMIT,
+        now=NOW,
     )
     assert len(frame) == 9 and record.unreadable_dates == 2
 
@@ -333,7 +347,12 @@ def test_a_store_folder_outside_the_connection_root_is_refused(s3: Any, store: C
     s3.put_object(Bucket=BUCKET, Key="private/q1.csv", Body=_csv(ROWS))
     with pytest.raises(ConnectorError) as caught:
         pull_frame(
-            store, record.connection_id, PullSelection(prefix="private/"), window=None, limit_bytes=LIMIT, now=NOW
+            store,
+            record.connection_id,
+            PullSelection(prefix="private/"),
+            window=None,
+            limit_bytes=LIMIT,
+            now=NOW,
         )
     assert caught.value.code == "CONNECTION_OUTSIDE_FOLDER"
 
@@ -352,6 +371,11 @@ def test_a_pull_is_bounded_by_the_size_limit(s3: Any, store: ConnectionStore) ->
     s3.put_object(Bucket=BUCKET, Key="outcomes/q1.csv", Body=_csv(ROWS))
     with pytest.raises(ConnectorError) as caught:
         pull_frame(
-            store, _bucket(store), PullSelection(path="outcomes/q1.csv"), window=None, limit_bytes=100, now=NOW
+            store,
+            _bucket(store),
+            PullSelection(path="outcomes/q1.csv"),
+            window=None,
+            limit_bytes=100,
+            now=NOW,
         )
     assert caught.value.code == "CONNECTION_TOO_LARGE"
