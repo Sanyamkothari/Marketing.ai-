@@ -542,6 +542,23 @@ codes:
     title: "This run already holds the most noted events"
     meaning: "A run holds at most 50 noted events, so this one was not added."
     fix: "Remove one that no longer matters before adding another."
+  # --- Plan J M107: the monthly loop, read-only (DEC-1317 (a), (b), (e), (g)) --------------------------------------------
+  PULL_INVALID:
+    title: "That selection does not fit the connection"
+    meaning: "The table, file, folder or date window you named cannot be read from this connection. Each request names exactly one table, file or folder. A date column must be one of the table's own columns, and both dates must be real dates. Nothing was read."
+    fix: "Pick from what the connection lists and try again."
+  PULL_NOTHING_FOUND:
+    title: "Nothing to read there"
+    meaning: "The folder you named holds no CSV or Parquet file, or the file you named is gone."
+    fix: "Check that this month's export has landed in the folder the connection reads, then try again or wait for the next scheduled run."
+  CYCLE_SERVICES_MISSING:
+    title: "This deployment cannot run the monthly loop"
+    meaning: "The treat list, measure and learn schedules need the campaign records, and for measuring the saved connections. This deployment does not give them to its scheduler, so nothing was done."
+    fix: "Ask whoever runs the platform to start the scheduler with the API's services."
+  LEARN_NOT_READY:
+    title: "This campaign cannot teach a model yet"
+    meaning: "To learn who to contact next time, the measured campaign needs a final result rather than an early look. It needs a yes/no outcome and enough customers who responded in both the contacted and the held-back groups. It also needs the file the scoring run read to still be stored. The message says which of these is missing."
+    fix: "Supply what the message names and measure the campaign again; the next scheduled learn then tries again."
 
 settings:
   actions.bands[*].min_score:

@@ -430,6 +430,16 @@ MILESTONE_TESTS: Final[Mapping[str, tuple[str, ...]]] = {
         "tests/integration/uplift/test_uplift_dataset_run.py",
         "tests/integration/decide/test_uplift_run_cost.py",
     ),
+    # M107 (DEC-1317). test_monthly_loop.py is marked slow (the scheduled cycle on fakes, the Phase 4 gate's evidence).
+    # test_api_config.py (trunk) gained two paths and test_scheduled_run_cost.py is M108's; neither is evidence for it.
+    "M107": (
+        "tests/unit/measurement/test_cycle_schedules.py",
+        "tests/unit/measurement/test_cycle_upload.py",
+        "tests/unit/measurement/test_outcome_pull.py",
+        "tests/integration/measurement/test_bound_sources.py",
+        "tests/integration/measurement/test_connection_pulls_api.py",
+        "tests/integration/measurement/test_monthly_loop.py",
+    ),
     # M108 (DEC-1318). The node test (cost_card.test.mjs) runs through test_cost_card_js.py.
     # test_api_config.py and test_ui.py (trunk) gained one line each and are not evidence for it.
     "M108": (

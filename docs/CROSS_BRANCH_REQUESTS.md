@@ -1438,6 +1438,84 @@ unchanged and green.
 
 **What is needed.** Nothing; this is an announcement.
 
+### 2026-10-10 — plan-j M107 (on main) → Plan H (owner of `engine/connections/` and `docs/CONNECTIONS.md`): one date-window `WHERE`, amending DEC-1105, and the newest object under a folder (record of in-place edits)
+
+**What changed** (DEC-1317 (a)): PostgreSQL/Redshift, MySQL and Snowflake (`engine/connections/{sql,postgres,mysql,
+snowflake}.py`) accept one date-window `WHERE` on a declared column: `SELECT * FROM <schema>.<table> [WHERE <col> >=
+'d1' AND <col> < 'd2+1'] LIMIT n`. The table is checked against the database's own listing and the column against
+the table's own columns (a `LIMIT 0` read); both are quoted by each dialect's identifier rule, and the dates are
+written only from `datetime.date` values (`engine.connections.sql.date_literal`). There is still no free SQL and the
+session is still made read-only before the first row is read. BigQuery and store files are read whole and filtered
+afterwards. The store connectors (`s3.py`, `azure_blob.py`) gain `newest(prefix)`: the latest last-modified time,
+ties broken by the greatest key, within the connection's own folder. `docs/CONNECTIONS.md` describes both. Existing
+reads (no window) issue exactly the statements they did.
+
+**What is needed.** Ratification of the DEC-1105 amendment and the edits. Nothing else.
+
+### 2026-10-10 — plan-j M107 (on main) → Phase 2 (owner of `engine/onboarding/specs.py`, `engine/onboarding/sources.py`, `api/routes/sources.py` and `docs/ONBOARDING.md`): sources bound to a saved connection (record of in-place edits)
+
+**What changed** (DEC-1317 (b)–(d)): `SourceSpec.binding` is a new optional field, absent from the stored document
+while unset, so a file source is stored byte-identically. `engine/onboarding/sources.py` gains
+`add_connection_source` and `refresh_bound_sources`: before a scheduled build given the loop's services, the table
+`latest_recipe_inputs` would read for each role is read again by its binding only when it came from a connection, and
+then meets `onboarding.limits.max_source_rows` (`SOURCE_TOO_LARGE`); a recipe of uploaded files reads no connection.
+Refresh copies record `binding.refreshes` and never count in `working_sources`. `api/routes/sources.py` gains the
+sibling route `POST /clients/{id}/sources/from-connection` (Analyst, with its `RoutePolicy`); the multipart
+`POST /clients/{id}/sources` is unchanged. `docs/ONBOARDING.md` describes the binding.
+
+**What is needed.** Ratification of the edits. Nothing else.
+
+### 2026-10-10 — plan-j M107 (on main) → Phase 4b (owner of `engine/scheduling/`, `api/routes/schedules.py`, `scripts/fire_schedule.py`, `ui/modules/production/alerts.js`, `api/routes/privacy.py` and the PHASE-4B block of `api/schemas.py`): the loop's schedule kinds and alerts, and consent read from a connection (record of in-place edits)
+
+**What changed** (DEC-1317 (b), (e)–(h)), each additive:
+
+* `engine/scheduling/schedules.py`: `ScheduleKind` gains `treat_list`, `measure` and `learn`; `ScheduleParameters`
+  gains `outcomes` (absent while unset, so stored schedules are byte-identical). A loop schedule needs a use case
+  that contacts customers and holds some back.
+* `engine/scheduling/alerts.py`: `AlertKind` gains `treat_list_ready`, `campaign_measured` and `challenger_waiting`,
+  all `info`; the `SEVERITY_FOR` docstring names them. `ui/modules/production/alerts.js` labels them in the filter.
+* `engine/scheduling/firing.py`: `FiringServices` gains the optional loop services (`cycle`); the three kinds run
+  `engine.measurement.cycle`'s steps; a scheduled build given those services refreshes bound sources first; a learn
+  run settled `MODEL_NOT_REGISTERED` raises `scheduled_job_failed` (a retrain does not, as before); the learning run
+  passes M108's cost gate only once a run is about to start. `engine/scheduling/service.py`, `api/routes/schedules.py`
+  and `scripts/fire_schedule.py` pass the loop's services. Without them a loop firing fails with
+  `CYCLE_SERVICES_MISSING`; the existing kinds are unchanged.
+* `api/routes/privacy.py`: the sibling route `POST /privacy/consent/imports/from-connection` (Admin, with its
+  `RoutePolicy`), with the file route's rules and its 64 MB limit on the CSV text given to the ledger (413
+  `CONSENT_FILE_TOO_LARGE`, a Parquet file refused before it is expanded). The multipart route is unchanged.
+* `api/schemas.py` `ScheduleCreateRequest.kind` (at integration, in place in the PHASE-4B block): the description
+  names the six kinds and says `measure` needs `parameters.outcomes`. `docs/API.md` shows no drift.
+
+**What is needed.** Ratification of the edits. The schedules screen (`ui/modules/production/schedules.js`) shows the
+new kinds by their ids and does not offer them in its form; whoever owns it may add them with no server change.
+
+### 2026-10-10 — plan-j M107 (on main) → trunk (owner of `tests/integration/test_api_config.py`): two routes join the OpenAPI path set (record of an in-place edit)
+
+**What changed** (DEC-1317 (b), (k)): the exact-set OpenAPI path pin gains `/clients/{client_id}/sources/from-connection`
+and `/privacy/consent/imports/from-connection` under a Plan J M107 comment, beside M109's two drift-events paths (the
+merge conflict was resolved keeping both). Nothing was removed or loosened. Both routes are on routers already
+mounted, so `api/main.py` needed no seam; `docs/API.md` was regenerated on the branch (`gen_api_docs --check` clean).
+
+**What is needed.** Ratification of the test edit. Nothing else.
+
+### 2026-10-10 — plan-j M107 (on main) → Plan E (owner of `configs/pilot/help.yaml`): four new codes (announcement)
+
+**What changed** (DEC-1317 (l)): `PULL_INVALID` (422) and `PULL_NOTHING_FOUND` (404) (`engine.measurement.pull.PULL_CODES`),
+and `CYCLE_SERVICES_MISSING` and `LEARN_NOT_READY` (a loop firing's failure; `engine.measurement.cycle.CYCLE_CODES`),
+join `engine.decide.codes.PLAN_J_CODES` by import and get `configs/pilot/help.yaml` entries under a Plan J M107
+comment, in plain words. `tests/unit/pilot/test_help.py` is unchanged and green.
+
+**What is needed.** Nothing; this is an announcement.
+
+### 2026-10-10 — plan-j M107 (on main) → owner of the Plan J plan text (`docs/plans/MARKETING_AI_PLAN_J_PRODUCT.md` M107 scope, `docs/plans/MARKETING_AI_PLAN_J_LAYER.md` M107 section): sibling from-connection routes (request)
+
+**Why.** The plan says `POST /clients/{id}/sources` and `POST /privacy/consent/imports` accept
+`{connection_id, selection}`. M107 adds sibling `/from-connection` routes instead, so the multipart forms keep their
+contract and OpenAPI request body; `POST /campaigns/{id}/outcomes` is extended in place. The deviation is approved
+and recorded in DEC-1317 (b), which supersedes the plan text on this point.
+
+**What is needed.** Amend the two plan sections to name the sibling routes. Nothing depends on it.
+
 ### 2026-09-23 — plan-e-pilot (on main) → all branches: every change Plan E made outside its own files and blocks
 
 **What is needed.** Nothing from anybody; this is the announcement §3 asks for. Measured with

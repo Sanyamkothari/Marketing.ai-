@@ -18,8 +18,10 @@ from engine.measurement.arms import MULTI_ARM_CODES
 from engine.measurement.audit import AUDIT_CODES
 from engine.measurement.codes import MEASUREMENT_CHECK_CODES
 from engine.measurement.continuous import CONTINUOUS_CODES
+from engine.measurement.cycle import CYCLE_CODES
 from engine.measurement.learn import LEARN_CODES
 from engine.measurement.programme import PROGRAMME_CODES
+from engine.measurement.pull import PULL_CODES
 from engine.measurement.reconcile import CONTACT_RECONCILE_CODES
 from engine.measurement.summary import SUMMARY_CODES
 from engine.model_gates import UPLIFT_GATE_CODES
@@ -122,6 +124,13 @@ PLAN_J_CODES: Final[frozenset[str]] = (
     # refuses a note), DRIFT_ANNOTATION_INVALID (422, an empty note or one naming a measure the report did not
     # compare), DRIFT_ANNOTATION_NOT_FOUND (404) and DRIFT_ANNOTATION_LIMIT (409, 50 notes per run), from
     # /runs/{id}/drift-events (`engine.decide.drift_annotations`)
+    | PULL_CODES  # M107 (DEC-1317 (a), (b)): PULL_INVALID (422, a table, file, folder or date window that does not
+    # fit the connection) and PULL_NOTHING_FOUND (404, a folder with no CSV or Parquet file, or a file that is
+    # gone), from the from-connection routes, POST /campaigns/{id}/outcomes and a measure firing
+    # (`engine.measurement.pull`)
+    | CYCLE_CODES  # M107 (DEC-1317 (e), (g)): CYCLE_SERVICES_MISSING (a deployment whose scheduler has no campaign
+    # store or connections) and LEARN_NOT_READY (the measured campaign cannot teach a model yet), a loop firing's
+    # failure (`engine.measurement.cycle`)
 )
 """Empty at M90; each Plan J milestone from M91 on adds the codes it raises.
 
@@ -140,4 +149,7 @@ CAMPAIGN_EPOCH_MISMATCH and TEST_PLAN_INVALID. M104's four are joined from `engi
 carry PLAN_UNDERPOWERED, DRIFT_DRIFTED and UPLIFT_NOT_BETTER_THAN_RISK, which the catalogue already explains.
 M108's two are joined from `engine.aws.run_cost.RUN_COST_CODES` (DEC-1318). M106's one is joined from
 `engine.measurement.learn.LEARN_CODES` (DEC-1316). M109's four are joined from
-`engine.decide.drift_annotations.DRIFT_ANNOTATION_CODES` (DEC-1319)."""
+`engine.decide.drift_annotations.DRIFT_ANNOTATION_CODES` (DEC-1319). M107's four are joined from
+`engine.measurement.pull.PULL_CODES` and `engine.measurement.cycle.CYCLE_CODES` (DEC-1317); a loop firing's
+result codes (TREAT_LIST_READY, NOTHING_TO_LEARN, LEARN_REFUSED and the like) are outcomes, not refusals, and
+are not catalogued, like the existing firings' MODEL_NOT_REGISTERED."""
