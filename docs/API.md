@@ -183,6 +183,7 @@ Contract schema version: 1.
 | POST | `/uploads/{upload_id}/agent-session/messages` | Ask the helper something; its reply is checked before it is kept | AgentSessionResponse |
 | POST | `/uploads/{upload_id}/agent-session/preview` | The first rows before and after the accepted steps, and what each step did | PreviewResponse |
 | POST | `/uploads/{upload_id}/agent-session/rows` | A page of the file being set up, for editing by hand (personal data hidden) | RowsResponse |
+| POST | `/uploads/{upload_id}/agent-session/same-treatment` | Use the same treatment as last time: tick the remembered steps, still to be checked and approved | AgentSessionResponse |
 | DELETE | `/uploads/{upload_id}/ask` | Start a new Ask-your-data chat on an upload; the old one is deleted | AskResponse |
 | GET | `/uploads/{upload_id}/ask` | Ask your data: an upload's read-only chat with the data helper, and its charts | AskResponse |
 | POST | `/uploads/{upload_id}/ask/messages` | Ask the data helper a question about an upload; it looks things up and cannot change anything | AskResponse |

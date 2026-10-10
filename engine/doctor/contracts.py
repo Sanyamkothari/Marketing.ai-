@@ -14,6 +14,7 @@ from pydantic import Field
 
 from engine.config import StrictBase
 from engine.doctor.outcomes import OutcomeOffer
+from engine.doctor.sufficiency import NextSteps
 
 __all__ = [
     "ColumnDrift",
@@ -78,6 +79,15 @@ class UseCaseReadiness(StrictBase):
     outcome_offer: OutcomeOffer | None = Field(
         default=None,
         description="The outcome an event file can define, as a sentence to agree; null when none.",
+    )
+
+    # Plan L M158 (DEC-1580): an added, defaulted field - what to do when the data is not enough.
+    next_steps: NextSteps | None = Field(
+        default=None,
+        description=(
+            "When the use case is not ready: what is short and by how much, what can be done now and what "
+            "to collect from whom (`engine.doctor.sufficiency`). Null when it is ready."
+        ),
     )
 
 

@@ -47,6 +47,7 @@ import {
   postMessage,
   postPreview,
   postRows,
+  postSameTreatment,
   startSession,
 } from "./api.js";
 import { PAGE_ROWS, cellTarget, editRequest, editorHtml, freshEditor } from "./edit.js";
@@ -85,7 +86,8 @@ function fresh() {
     session: null,
     chat: null,
     ticks: {},
-    busy: "", // "" | answer | preview | approve | chat | fill
+    busy: "", // "" | answer | preview | approve | chat | fill | same
+    treatment: null, // Plan L M159: the treatment of a file of the same shape, offered by the API
     actionError: null,
     report: null,
     preview: null,
@@ -127,6 +129,7 @@ function adopt(g, response) {
   const before = new Map(((g.session && g.session.proposals) || []).map((p) => [p.proposal_id, p.state]));
   g.session = response.session;
   if (response.chat) g.chat = response.chat;
+  g.treatment = response.treatment || null; // Plan L M159: the treatment of a file of the same shape
   const now = new Set();
   for (const proposal of g.session.proposals || []) {
     now.add(proposal.proposal_id);
@@ -281,7 +284,21 @@ function checklistHtml(g, closed) {
       cap ? `<p class="ag-cap">${esc(cap)}</p>` : ""
     }${items.map((p) => itemHtml(g, p, closed || g.busy === "approve")).join("")}</section>`;
   }).join("");
-  return `${asked}${groups}`;
+  return `${treatmentHtml(g, closed)}${asked}${groups}`;
+}
+
+// Plan L M159 (DEC-1594): "This looks like last month's export. Use the same treatment?" The steps come
+// back ticked in the checklist below, still to be checked, previewed and approved.
+function treatmentHtml(g, closed) {
+  const offer = g.treatment;
+  if (!offer) return "";
+  const button =
+    offer.can_apply && !closed
+      ? `<div class="btn-row"><button type="button" class="btn secondary sm" data-ag-same="${esc(offer.recipe_id)}"${
+          g.busy ? " disabled" : ""
+        }>Use the same treatment</button></div>`
+      : "";
+  return `<section class="ag-group" data-ag-memory><h4>Seen before</h4><p class="ag-cap">${esc(offer.sentence)}</p>${button}</section>`;
 }
 
 function stopHtml(entry, n) {
@@ -687,6 +704,25 @@ async function approve(entry) {
   await fill(entry);
 }
 
+async function useSameTreatment(entry, recipeId) {
+  const g = entry.state;
+  if (g.busy) return;
+  g.busy = "same";
+  g.actionError = null;
+  draw(entry);
+  try {
+    await syncDecisions(entry);
+    adopt(g, await postSameTreatment(g.upload.upload_id, recipeId));
+    g.preview = null;
+    g.report = null;
+    announceStatus("The steps used last time are ticked: check them, then approve");
+  } catch (error) {
+    g.actionError = error;
+  }
+  g.busy = "";
+  draw(entry);
+}
+
 async function ask(entry) {
   const g = entry.state;
   const text = g.draft.trim();
@@ -845,6 +881,8 @@ function bind(entry) {
       await ask(entry);
     }),
   );
+  const same = main.querySelector("[data-ag-same]");
+  if (same) same.addEventListener("click", () => useSameTreatment(entry, same.dataset.agSame));
   const stopForm = main.querySelector("#ag-stop-ask");
   if (stopForm) {
     stopForm.addEventListener("submit", async (event) => {
