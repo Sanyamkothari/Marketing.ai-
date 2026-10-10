@@ -116,6 +116,13 @@ data it describes. A multi-snapshot version of this file would set `split.type: 
 **1,463 rows is small.** It is above the engine's 1,000-row floor, but only just, and the test
 split is about 220 shoppers. Treat the numbers in `run_report.md` accordingly.
 
+## Why a different setting cannot make it beat the baseline
+
+Plan J M109 asked. Cross-validation over seven model families and five extra columns, and one look at 293
+shoppers put aside beforehand, all say the same thing: nothing beats the logistic-regression baseline, and a
+single 219-shopper test set cannot tell the two apart. The method and numbers are in
+[`run_report.md`](run_report.md) and the scripts in [`investigation/`](investigation/).
+
 ## Personal data
 
 None survives. `Description` — free-text product copy, the only column that could carry stray
