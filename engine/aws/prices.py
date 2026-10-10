@@ -58,9 +58,11 @@ __all__ = [
     "UNREPORTED_REGION",
     "InstanceRate",
     "PriceTable",
+    "PricedTime",
     "cost_estimate",
     "load_price_table",
     "local_cost_estimate",
+    "price_compute_time",
     "price_table_path",
 ]
 
@@ -309,3 +311,49 @@ def _seconds(compute: ComputeInfo, measured: float | None) -> float:
     if measured is not None:
         return measured
     return compute.duration_s
+
+
+# ---------------------------------------------------------------------------
+# Time at a list price, before and during a run (Plan J M108, DEC-1318)
+# ---------------------------------------------------------------------------
+@dataclass(frozen=True, slots=True)
+class PricedTime:
+    """Some seconds of one instance type at the list price, or the one thing that was missing.
+
+    `missing` is `None` when `usd` is a number and otherwise says what could not be looked up:
+    `table` (there is no price list), `instance` (the lookup key is incomplete) or `rate` (the list
+    has no price for that instance type in that region). It is a name, not a sentence, because the
+    sentence belongs to whoever shows it (`engine.aws.run_cost`).
+    """
+
+    usd: float | None
+    missing: str | None
+    rate: InstanceRate | None
+
+
+def price_compute_time(
+    *,
+    component: str,
+    instance_type: str | None,
+    instance_count: int,
+    region: str | None,
+    seconds: float,
+    table: PriceTable | None,
+) -> PricedTime:
+    """`seconds` x `instance_count` x the published hourly rate / 3600, or `None` and what was missing.
+
+    The same multiplication as `cost_estimate` above, which applies it to the seconds AWS billed;
+    this applies it to seconds a run is *allowed* (the estimate shown before it starts) or has *used so
+    far* (the cap that stops it), so the three can never disagree about what an hour of an instance
+    costs. Nothing is rounded here: a figure shown to a person is rounded once, where it is shown.
+    """
+    if table is None:
+        return PricedTime(usd=None, missing="table", rate=None)
+    if instance_type is None or region is None:
+        return PricedTime(usd=None, missing="instance", rate=None)
+    rate = table.rate(component=component, instance_type=instance_type, region=region)
+    if rate is None:
+        return PricedTime(usd=None, missing="rate", rate=None)
+    return PricedTime(
+        usd=seconds * max(instance_count, 1) * rate.usd_per_hour / SECONDS_PER_HOUR, missing=None, rate=rate
+    )

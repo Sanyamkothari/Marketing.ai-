@@ -38,7 +38,7 @@ the user downloads (the treat list).
 | 19 | Warnings and proven value to date | M105 | written (below) |
 | 20 | Learning from the last cycle | M106 | not yet written |
 | 21 | The monthly loop (read-only) | M107 | not yet written |
-| 22 | Cost before each run | M108 | not yet written |
+| 22 | Cost before each run | M108 | written (below) |
 | 23 | Validation on real public randomised data | M110 | not yet written |
 | 24 | The manager demo | M111 | not yet written |
 
@@ -856,3 +856,55 @@ descriptive audit, generated data, a run with nobody held back) and check the to
 bound, each card in both directions, that stated-random, descriptive and generated campaigns are never added, that three
 campaigns on one run add one lower bound, that a repeated cycle cannot turn a series that does not fall into one that does,
 that two yes/no columns give two totals, and that a proven campaign beyond the newest hundred is still in the total.
+
+## 22. Cost before each run, with a cap (M108, DEC-1318)
+
+We run on the client's cloud bill, so the number comes **before** the run, beside the Run button, and an
+Admin can put a ceiling on any one run. Everything is opt-in: with no cap (the default) starting, polling and
+cancelling a run are exactly as before, and a deployment that runs on its own machine has nothing to price.
+
+**The estimate** (`GET /use-cases/{use_case_id}/cost-estimate?mode=train|score`, Viewer; `engine/aws/run_cost.py`):
+the most one run could cost, at AWS's published **list price**, in US dollars: the deployment's time limit for a
+job (`MARKETING_AI_SAGEMAKER_MAX_RUNTIME_SECONDS`) x the instances x the hourly rate in `configs/aws_prices.yaml`
+for the machine the run uses (training for a train run, processing for a score run). A train run also lists what
+scoring new data with the model would cost later, marked "not counted here": it is a separate run with its own
+estimate. When the use case has a billed AI text service, the ceiling for one AI text job
+(`generative.budget.max_cost_usd_per_run`) is listed too, also "not counted here": a run never calls the text
+service (DEC-200), text jobs are their own requests under their own budget, and the cap could not stop that spend.
+It is a ceiling and not a bill, and `basis` says so in every answer. Nothing calls AWS: the price list is a file.
+
+**Nothing is made up.** No price list, a machine the list does not carry, no time limit, or an unpriced text model:
+`estimated_usd` is `null` with `reason` saying which, `known_usd` carries what is known, and the total is never the
+sum of part of it. An unpriced text model only blanks that line's own figure; it never blanks the total. A deployment on its own machine is not billed, so it has no estimate (also `null`, with the
+reason), never zero. **Rupees** (`inr`) exist only beside an Admin-saved exchange rate: `PUT /cost/fx-rate` (Admin,
+audited) saves `inr_per_usd`, its `source` and the day it was read (`as_of`); `DELETE` removes it; every rupee figure
+carries all three. There is no default rate.
+
+**The cap** is `governance.max_run_cost_usd` (a number above zero, or null for none; use-case file or
+`configs/engine.yaml` defaults, never per run, so a person starting a run cannot raise it). When a run's estimate
+is above the cap, or cannot be worked out on a deployment that bills (nothing can then say it is under), `POST /runs`
+answers **409 `RUN_COST_NEEDS_CONFIRMATION`** with the numbers in plain words and starts nothing (no run directory is
+written) until the request carries `confirm_cost: true`. A run, confirmed or not, is **stopped through `cancel_run`**
+when its running cost passes the cap: the time since it started x the instances x the same rate (the estimate's own
+arithmetic, `price_compute_time`). Two things check, whichever sees it first: a small thread started with the run, and
+the Running screen's own poll (`GET /runs/{id}`). The stopped run is `cancelled`, its `error` is `RUN_COST_CAP_REACHED`
+with the cost so far, and the runner is asked to stop the job itself; if the runner could not deliver the stop, the run
+stays `running` and the next check tries again (the record never says "stopped" for a job still billing). A run that
+cannot be priced cannot be stopped for its cost, and the confirmation says so. After a restart of the API the poll
+still enforces the cap, and SageMaker's own time limit bounds the job either way. Anyone who may start a run
+(Analyst and above) may confirm one; a Viewer cannot. **A schedule's firing** (`engine/scheduling/firing.py`
+`start_dataset_run`, given the deployment's settings) passes the same gate: nobody is there to confirm, so a firing
+whose run needs confirmation fails with `RUN_COST_NEEDS_CONFIRMATION` (the firing's own failure, with the alert any
+failed firing raises), and one that starts gets the same watcher. **Still open (DEC-1318):** an uplift run started
+by `api/routes/uplift.py` (M106's file) passes neither the gate nor the watcher; only the `GET /runs/{id}` poll
+enforces the cap for it, until that route calls `estimate_run_cost`, `confirmation_message` and the watcher.
+
+**What runs have cost** (`GET /cost/spend?months=6`, Viewer): the finished runs of each calendar month (a run belongs to the month it was created in) added up from
+the cost figure each recorded when it ended (`run_manifest.json`), as list-price estimates, with how many runs had no
+figure. A month where none had one has no amount, not zero. Rupees only with a saved rate.
+
+**On screen.** The Setup form shows the server's estimate beside Run (nothing on a deployment that bills nobody), and a
+"Start it anyway" / "Do not start" box with the server's sentence when a capped run is refused (`ui/cost.js`,
+`ui/usecase.js`). A run the cap stopped says why on its results. `#/cost` shows the monthly spend and the exchange
+rate (an Admin gets the form; `ui/modules/decide/cost.js`). The link to it from the Settings page is added with that page's own
+entries at integration; until then it is reached by its address.

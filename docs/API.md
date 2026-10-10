@@ -62,6 +62,10 @@ Contract schema version: 1.
 | POST | `/connections/{connection_id}/import` | Import a table or file as an ordinary upload (a snapshot), exactly like POST /uploads | UploadResponse |
 | POST | `/connections/{connection_id}/preview` | The first 20 rows of a table or file, personal data masked | Preview |
 | POST | `/connections/{connection_id}/test` | Test a connection step by step: reach, sign in, list, read a sample, read-only check | ConnectionTestResponse |
+| DELETE | `/cost/fx-rate` | Forget the exchange rate; rupee figures disappear (Admin) | FxRateView |
+| GET | `/cost/fx-rate` | The saved exchange rate | FxRateView |
+| PUT | `/cost/fx-rate` | Save the exchange rate rupee figures are worked out with (Admin) | FxRateView |
+| GET | `/cost/spend` | What finished runs cost each month, at list price | SpendView |
 | GET | `/datasets` | Dataset manifests, newest first | DatasetListResponse |
 | POST | `/datasets` | Validate a recipe and, when it passes, start building a dataset from it | DatasetCreatedResponse |
 | GET | `/datasets/{dataset_id}` | One dataset: its manifest, once built, and the status the Build screen polls | DatasetGetResponse |
@@ -176,6 +180,7 @@ Contract schema version: 1.
 | GET | `/uploads/{upload_id}/profile` | The stored dataset profile of one upload | DatasetProfile |
 | GET | `/uploads/{upload_id}/treatment-candidates` | The 0/1 columns of an upload that could record who was treated | TreatmentCandidatesResponse |
 | GET | `/use-cases/{use_case_id}` | One merged use-case configuration, its Setup copy and its advanced-settings schema | UseCaseResponse |
+| GET | `/use-cases/{use_case_id}/cost-estimate` | What one run of this use case could cost at list price, and the cap on it (Plan J M108) | RunCostEstimate |
 | GET | `/use-cases/{use_case_id}/indexes` | Every index this use case has built or graded, newest first | IndexListResponse |
 | POST | `/use-cases/{use_case_id}/indexes` | Start a knowledge-index build, and grade it when a reference set is given | IndexJobStartedResponse |
 | POST | `/use-cases/{use_case_id}/reference-sets` | Profile an uploaded reference-question file | ReferenceSetResponse |
@@ -458,6 +463,7 @@ A fully merged, validated use case. This is what the whole engine consumes.
 | `retention_days` | integer | no |  |
 | `consent_column` | string \| null | no |  |
 | `approval_required` | boolean | no |  |
+| `max_run_cost_usd` | number \| null | no |  |
 
 #### GenerativeConfig
 
@@ -1959,6 +1965,7 @@ Keys of the default document that no advanced-settings field renders, with their
 | `actions.explore_fraction` | float 0..0.10; share of eligible customers outside the target treated anyway (config-only) |
 | `monitoring` | [UI 7] Monitoring & retraining |
 | `governance` | [UI 8] Governance & privacy |
+| `governance.max_run_cost_usd` | float > 0 \| null; Plan J M108: a run above this (USD, list price) needs confirming and is stopped at it (config-only) |
 | `output` | non-UI (plan §5) |
 | `output.kpi.label` | str; headline KPI tile on the Output page |
 | `output.kpi.formula` | str; mini-grammar, §4.6 (DEC-007) |
