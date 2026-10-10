@@ -152,8 +152,8 @@ def _pack_finding(results: dict[str, Any]) -> str:
             f"not in the headline or the net value, while the cost of contacts ({cost}) is for all {_int(emailed)} "
             "e-mails sent. The net value therefore credits one offer and charges both. Every figure is traced to a "
             "measured record, so provenance passes; it is the scope of the headline that is partial (M100 keeps the "
-            "first offer in the single-offer fields, DEC-668 (3), and the Pack reads those fields). Raised for M104 "
-            "(DEC-1314); no engine code was changed."
+            "first offer in the single-offer fields, DEC-668 (3), and the Pack reads those fields). To be raised for "
+            "M104 (DEC-1314) in docs/CROSS_BRANCH_REQUESTS.md at integration; no engine code was changed."
         )
     return "\n\n".join(out)
 
@@ -258,14 +258,18 @@ def render_audit(results: dict[str, Any], *, results_path: str, command: str) ->
         _binary_table(add, case)
         verdict = case.get("verdict")
         if verdict:
-            first_offer = (
-                " (the single-offer fields of the report, and so this sentence, are the first offer's; the table is the per-offer reading)"
-                if len(case["report"].get("arms") or []) > 1
-                else ""
-            )
-            add(
-                f"The engine's verdict for the campaign as a whole: {verdict.get('headline')}. {verdict.get('detail')}{first_offer}."
-            )
+            arms = case["report"].get("arms") or []
+            if len(arms) > 1:
+                verdict_detail = str(verdict.get("detail") or "").rstrip(".")
+                add(
+                    f"The engine's verdict sentence reads the first offer only ({arms[0]['arm']}): "
+                    f"{verdict.get('headline')}. {verdict_detail}. The per-offer table above is the reading "
+                    "for each e-mail."
+                )
+            else:
+                add(
+                    f"The engine's verdict for the campaign as a whole: {verdict.get('headline')}. {verdict.get('detail')}."
+                )
         else:
             add('The engine draws no "the campaign added N" verdict from this audit.')
         add("")
@@ -302,11 +306,23 @@ def render_audit(results: dict[str, Any], *, results_path: str, command: str) ->
     # -- the packs ------------------------------------------------------------------------------------------
     add("### 8.4 Value Proof Packs (M104)")
     add("")
-    add(
-        f"A Pack was built for each campaign, named \"... - {results['label']}\" in the campaign name the Pack prints, "
-        "and its provenance re-verified (`engine.pilot.proof.verify_provenance`: every figure resolves to a measured "
-        "record)."
-    )
+    unbuilt = [
+        c["key"] for c in done if c["proof"]["status"] != 200 or not c["proof"].get("provenance_verified")
+    ]
+    if unbuilt:
+        add(
+            f"A Pack was asked for each campaign, named \"... - {results['label']}\" in the campaign name the Pack "
+            "prints. Not every Pack was built and verified (see the table: "
+            + ", ".join(f"`{k}`" for k in unbuilt)
+            + "). For the others, provenance was re-verified (`engine.pilot.proof.verify_provenance`: every "
+            "figure resolves to a measured record)."
+        )
+    else:
+        add(
+            f"A Pack was built for each campaign, named \"... - {results['label']}\" in the campaign name the Pack "
+            "prints, and its provenance re-verified (`engine.pilot.proof.verify_provenance`: every figure resolves "
+            "to a measured record)."
+        )
     add("")
     add("| Pack | Built | Claim | Headline |")
     add("|---|---|---|---|")
@@ -337,7 +353,7 @@ def render_audit(results: dict[str, Any], *, results_path: str, command: str) ->
 
     # -- the programme ------------------------------------------------------------------------------------------
     programme = results["programme"]
-    add("### 8.5 The programme readout does not apply")
+    add("### 8.5 The programme readout" + ("" if programme["applies"] else " does not apply"))
     add("")
     if programme["applies"]:
         add("The programme route accepted the request; its readout is not part of this report.")

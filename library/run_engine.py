@@ -453,7 +453,8 @@ def audit_main(argv: list[str]) -> int:
     args = parser.parse_args(argv)
     spec = AUDITS[args.dataset]
     library = Path(__file__).resolve().parent
-    csv_path = (args.csv or library / spec.dataset / "data" / "prepared.csv").resolve()
+    default_csv = (library / spec.dataset / "data" / "prepared.csv").resolve()
+    csv_path = (args.csv or default_csv).resolve()
     if not csv_path.is_file():
         print(f"{csv_path} is missing: run python library/{spec.dataset}/fetch.py first", file=sys.stderr)
         return 2
@@ -464,25 +465,33 @@ def audit_main(argv: list[str]) -> int:
     results_file = outcome.directory / AUDIT_RESULTS_NAME
     results_file.write_text(json.dumps(results, indent=2, default=str), encoding="utf-8")
     print(f"results  {results_file}")
-    if args.runs_dir.resolve() == RUNS_DIR.resolve():
-        committed = committed_results_path(spec.dataset, AUDIT_RESULTS_NAME)
-        committed.write_text(results_file.read_text(encoding="utf-8"), encoding="utf-8")
-        print(f"results  {committed}")
-        journey = args.journey_results or committed_results_path(spec.dataset, "journey.results.json")
-        if not journey.is_file():
-            journey = RUNS_DIR / spec.dataset / "journey" / "journey.results.json"
-        if not journey.is_file():
-            print(
-                f"no journey results yet: run python -m library.run_engine journey --dataset {spec.dataset} "
-                "to write run_report.md with this audit",
-                file=sys.stderr,
-            )
-            return 0
-        report_path = library / spec.dataset / "run_report.md"
-        report_path.write_text(
-            journey_report_text(json.loads(journey.read_text(encoding="utf-8"))), encoding="utf-8"
+    if args.runs_dir.resolve() != RUNS_DIR.resolve():
+        return 0
+    if csv_path != default_csv:  # the committed results and report describe the dataset's whole prepared file
+        print(
+            f"not committed: {csv_path} is not the dataset's prepared file, so the committed audit results and "
+            "run_report.md are left as they are",
+            file=sys.stderr,
         )
-        print(f"report   {report_path}  (journey results: {journey})")
+        return 0
+    committed = committed_results_path(spec.dataset, AUDIT_RESULTS_NAME)
+    committed.write_text(results_file.read_text(encoding="utf-8"), encoding="utf-8")
+    print(f"results  {committed}")
+    journey = args.journey_results or committed_results_path(spec.dataset, "journey.results.json")
+    if not journey.is_file():
+        journey = RUNS_DIR / spec.dataset / "journey" / "journey.results.json"
+    if not journey.is_file():
+        print(
+            f"no journey results yet: run python -m library.run_engine journey --dataset {spec.dataset} "
+            "to write run_report.md with this audit",
+            file=sys.stderr,
+        )
+        return 0
+    report_path = library / spec.dataset / "run_report.md"
+    report_path.write_text(
+        journey_report_text(json.loads(journey.read_text(encoding="utf-8"))), encoding="utf-8"
+    )
+    print(f"report   {report_path}  (journey results: {journey})")
     return 0
 
 

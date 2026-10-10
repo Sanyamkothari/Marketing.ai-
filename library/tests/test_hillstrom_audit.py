@@ -309,6 +309,42 @@ def test_the_audit_section_says_what_a_failed_check_means_and_does_not_hide_a_re
     assert "- `conversion`: **Descriptive only**. The groups differ." in text
     assert "refused: `PROOF_NOT_MATURE`" in text
     assert "includes zero" in text and "draws no" in text
+    assert "### 8.5 The programme readout does not apply" in text
+    assert "Not every Pack was built and verified (see the table: `conversion`)" in text
+    assert "A Pack was built for each campaign" not in text
+
+    # the other branches: every Pack built and verified, and a programme route that accepted
+    case["proof"] = {
+        "status": 200,
+        "provenance_verified": True,
+        "html_status": 200,
+        "pdf_status": 200,
+        "view": {"claim_label": "c", "headline": "h"},
+    }
+    results["programme"] = {"applies": True, "status": 200, "code": None, "message": None}
+    text = render_audit(results, results_path="a.json", command="cmd")
+    assert "A Pack was built for each campaign" in text and "Not every Pack" not in text
+    assert "### 8.5 The programme readout\n" in text and "does not apply" not in text
+    case["proof"]["provenance_verified"] = False
+    assert "Not every Pack was built and verified (see the table: `conversion`)" in render_audit(
+        results, results_path="a.json", command="cmd"
+    )
+
+
+def test_a_verdict_over_several_offers_is_said_to_be_the_first_offers_only() -> None:
+    """The single-offer verdict sentence must not read as the whole campaign's effect when there are two e-mails."""
+    from library.audit_report import render_audit
+
+    audit = json.loads(AUDIT_RESULTS.read_text(encoding="utf-8"))
+    case = audit["cases"]["conversion"]
+    first = case["report"]["arms"][0]["arm"]
+    text = render_audit(audit, results_path="a.json", command="cmd")
+    assert f"The engine's verdict sentence reads the first offer only ({first})" in text
+    assert "for the campaign as a whole" not in text
+    case["report"]["arms"] = case["report"]["arms"][:1]
+    single = render_audit(audit, results_path="a.json", command="cmd")
+    assert "The engine's verdict for the campaign as a whole: " in single
+    assert "reads the first offer only" not in single
 
 
 # ---------------------------------------------------------------------------
@@ -374,3 +410,78 @@ def test_a_fresh_audit_of_the_full_file_reproduces_the_committed_numbers(tmp_pat
         return json.loads(json.dumps(numbers, default=str))
 
     assert same_shape(_numbers(fresh.results)) == same_shape(_numbers(committed))
+
+
+# ---------------------------------------------------------------------------
+# docs/LIBRARY.md quotes the committed results; nothing may drift from them
+# ---------------------------------------------------------------------------
+def _library_section_8() -> str:
+    text = (LIBRARY.parent / "docs" / "LIBRARY.md").read_text(encoding="utf-8")
+    start = text.index("## 8. Plan J: the audit readout")
+    end = text.find("\n## ", start + 1)
+    return text[start : end if end != -1 else len(text)]
+
+
+def test_the_figures_in_docs_library_are_the_committed_results() -> None:
+    """No download: every key number hand-copied into LIBRARY.md section 8 is read back from `audit.results.json`."""
+    results = json.loads(AUDIT_RESULTS.read_text(encoding="utf-8"))
+    section = _library_section_8()
+    cases = results["cases"]
+
+    def pts(interval: dict[str, Any]) -> list[str]:
+        return [f"{interval[k] * 100:+.2f}" for k in ("value", "ci_low", "ci_high")]
+
+    def usd(value: float) -> str:
+        return f"{'+' if value >= 0 else '-'}${abs(value):.2f}"
+
+    expected: list[str] = []
+    for arm in cases["conversion"]["report"]["arms"]:
+        value, low, high = pts(arm["effect"])
+        expected += [f"**{value} pts** ({low} to {high})"]
+        extra = arm["incremental_conversions"]
+        expected += [f"{extra['value']:.0f} extra", f"({extra['ci_low']:.0f} to {extra['ci_high']:.0f})"]
+    for key in ("conversion", "spend_any", "spend_mens", "spend_womens"):
+        expected.append(f"{cases[key]['audit']['randomness']['auc']:.3f}")
+    worst = max(
+        cases[k]["audit"]["randomness"]["auc"]
+        for k in ("conversion", "spend_any", "spend_mens", "spend_womens")
+    )
+    expected.append(f"guessing score {worst:.3f} at worst")
+    for key in ("spend_any", "spend_mens", "spend_womens"):
+        ci = cases[key]["report"]["mean_difference_ci"]
+        boot = cases[key]["bootstrap"]
+        expected.append(f"**{usd(ci['value'])}**")
+        expected.append(f"({usd(ci['ci_low'])} to {usd(ci['ci_high'])})")
+        expected.append(f"bootstrap {usd(boot['ci_low'])} to {usd(boot['ci_high'])}")
+    expected.append(f"{sum(a['treated_rows'] for a in cases['conversion']['report']['arms']):,} e-mails")
+    expected.append(results["programme"]["code"])
+    expected.append(str(cases["spend_offers"]["refusal"]["detail"]["code"]))
+    missing = [e for e in expected if e not in section]
+    assert not missing, f"docs/LIBRARY.md section 8 no longer matches audit.results.json: {missing}"
+
+
+# ---------------------------------------------------------------------------
+# The committed results are only ever written from the dataset's own prepared file
+# ---------------------------------------------------------------------------
+def test_an_audit_of_another_file_does_not_overwrite_the_committed_results(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`audit --csv sample.csv` runs, but leaves the committed full-file results and report alone."""
+    import library.audit as audit_module
+    import library.run_engine as engine
+
+    class Outcome:
+        def __init__(self) -> None:
+            self.results: dict[str, Any] = {"csv": "x", "label": "stub"}
+            self.directory = tmp_path
+
+    def stub(*_args: Any, **_kwargs: Any) -> Outcome:
+        return Outcome()
+
+    monkeypatch.setattr(audit_module, "run_audit", stub)
+    before = (AUDIT_RESULTS.read_bytes(), REPORT.read_bytes())
+    code = engine.audit_main(["--dataset", "hillstrom-email", "--csv", str(SAMPLE)])
+    assert code == 0
+    assert (AUDIT_RESULTS.read_bytes(), REPORT.read_bytes()) == before
+    assert "not committed" in capsys.readouterr().err
+    assert json.loads((tmp_path / "audit.results.json").read_text(encoding="utf-8"))["label"] == "stub"
