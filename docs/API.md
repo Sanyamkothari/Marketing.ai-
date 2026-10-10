@@ -140,6 +140,9 @@ Contract schema version: 1.
 | POST | `/runs/{run_id}/campaign-results` | Measure a scoring run's campaign from an uploaded outcomes file | IncrementalityReport |
 | POST | `/runs/{run_id}/cancel` | Ask a pending or running run to stop | RunCancelResponse |
 | GET | `/runs/{run_id}/copy_messages.csv` | The rendered campaign-copy messages of a run, one row per scored entity | - |
+| GET | `/runs/{run_id}/drift-events` | Events noted against a scoring run's change report | DriftEventsView |
+| POST | `/runs/{run_id}/drift-events` | Note an event that may explain a change in the customers | DriftEventsView |
+| DELETE | `/runs/{run_id}/drift-events/{annotation_id}` | Remove a noted event | DriftEventsView |
 | GET | `/runs/{run_id}/incrementality-input` | The treated-versus-control outcomes Plan B's incrementality report reads | IncrementalityInput |
 | GET | `/runs/{run_id}/measure` | Step 4 of a scoring run: its measured campaign, the plain verdict and what can be learned | MeasureView |
 | POST | `/runs/{run_id}/measure` | Measure a scoring run's campaign from an outcomes file of customer id and outcome | MeasureView |

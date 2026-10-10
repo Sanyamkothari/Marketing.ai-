@@ -31,6 +31,8 @@ import {
 } from "../../dom.js";
 import { backendBadge, confidencePill, costAndChecks, evidenceChip, gTypeChip, guardrailCounts, progressList } from "./gdom.js";
 import { postRootCause } from "./api.js";
+import { getDriftEvents } from "../decide/api.js";
+import { driftEventsCardHtml } from "../decide/drift_events.js";
 import { readPath } from "../../settings.js";
 
 const POLL_MS = 2000;
@@ -46,7 +48,7 @@ const ARTEFACTS = [
 
 function stateFor(runId) {
   if (!STATE.has(runId)) {
-    STATE.set(runId, { runId, run: null, art: {}, generating: false, generateError: null });
+    STATE.set(runId, { runId, run: null, art: {}, drift: null, generating: false, generateError: null });
   }
   return STATE.get(runId);
 }
@@ -161,6 +163,7 @@ export function rcaHtml(uc, s) {
     ${backendBadge(llm)}
     <div class="stack">
       ${rootCausesCard(s)}
+      ${driftEventsCardHtml(s.drift ? { ...s.drift, can_edit: false } : null)}
       ${techDetails([
         ["Run", run.run_id],
         ["Run created", fmtStamp(run.created_at)],
@@ -183,6 +186,13 @@ export function createRcaController(uc, runId, rerender) {
     const [detail, art] = await Promise.all([getRun(runId), getArtefacts(runId, ARTEFACTS)]);
     s.run = detail.run;
     s.art = art;
+    // Read-only here (M109, DEC-1319): the notes are added and removed on the run's Output page. A run
+    // with no measured change, or one the server cannot read the notes of, simply shows no card.
+    try {
+      s.drift = await getDriftEvents(runId);
+    } catch {
+      s.drift = null;
+    }
     const status = art["root_cause_status.json"];
     if (status && (status.state === "pending" || status.state === "running")) poll();
   }

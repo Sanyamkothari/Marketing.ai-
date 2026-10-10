@@ -50,7 +50,13 @@ from engine.agent.contracts import (
 from engine.agent.formats import merge_from_pairs
 from engine.agent.placeholders import PLACEHOLDER_KIND, number_text
 from engine.agent.recipe import STEP_PHASE, RecipeError, run_recipe
-from engine.agent.recommend import DataFacts, recommend_settings, suggest_reason_phrases
+from engine.agent.recommend import (
+    DataFacts,
+    holdout_advice,
+    holdout_notes,
+    recommend_settings,
+    suggest_reason_phrases,
+)
 from engine.agent.reshape import choose_dates, plan_combine
 from engine.agent.tools import AgentContext, AgentToolError, call_tool
 from engine.agent.untrusted import MAX_NAME_CHARS, clean_text, display_name, quoted
@@ -1113,7 +1119,8 @@ def _settings(
     schema = advanced_settings_schema(
         config, columns=tuple(str(c) for c in prepared.frame.columns), primary_key=key, target=target
     )
-    for rec in recommend_settings(config, facts, schema, config_root=prepared.config_root):
+    holdout = holdout_advice(config, facts)  # worked out once; the rules and the notes read the same answer
+    for rec in recommend_settings(config, facts, schema, config_root=prepared.config_root, holdout=holdout):
         builder.propose(
             kind=ProposalKind.SETTING,
             title=rec.title,
@@ -1132,6 +1139,7 @@ def _settings(
         builder.assumptions.append(
             f"Only {facts.positive_rate:.1%} of rows are 'yes'; the model search gives them extra weight automatically."
         )
+    builder.assumptions.extend(holdout_notes(holdout))
     _reason_wording(builder, prepared, key, target, exclude)
 
 

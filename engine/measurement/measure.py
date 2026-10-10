@@ -331,7 +331,8 @@ def amount_verdict(
             headline="No clear effect yet",
             detail=(
                 "Contacted and held-back customers had about the same amount, so the difference could be "
-                "chance. A bigger campaign or a longer wait may show one."
+                "chance. The test can only show a change at or above its detectable effect, the smallest "
+                "change a group of this size can see. A bigger group or a longer wait lowers it."
             ),
         )
     rows = report.treated_rows

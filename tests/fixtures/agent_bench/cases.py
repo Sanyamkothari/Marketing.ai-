@@ -61,6 +61,9 @@ def _real_ninety_nine() -> pd.DataFrame:
 CASES: Final[dict[str, Callable[[], pd.DataFrame]]] = {
     "messy": messy_frame,
     "clean": _variant("clean"),
+    # M109 (DEC-1319): a list big enough for the planner to size the share held back, but not big enough
+    # for the default 10% to see a 2-point effect; its digest holds the new `actions.control_group_fraction`.
+    "mid_size_file": _variant("clean", rows=20_000),
     "renamed_target": _renamed_target,
     "ambiguous_dates": _ambiguous_dates,
     "unreadable_numbers": _unreadable_numbers,

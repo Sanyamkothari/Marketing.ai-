@@ -150,7 +150,18 @@ to look for. Text columns treat `""` as an empty cell in every text type (`objec
 
 `engine/agent/advisor.advise` calls the tools above (so every number it uses is evidence) and
 applies fixed rules (DEC-1015). The same file always gets the same advice;
-`tests/fixtures/agent_bench/expected.json` pins it for twenty-one files.
+`tests/fixtures/agent_bench/expected.json` pins it for twenty-two files.
+
+**How many customers to hold back (Plan J M109, DEC-1319).** For a use case that contacts customers
+(`actions.contacts_customers`), `engine/agent/recommend.holdout_advice` asks the test planner
+(`engine/measurement/planner.py`) how many customers a test of this file's size needs held back to see a
+2-point change either way, at 80% power and 95% confidence. When the use case's current share is too small
+and half the customers would be enough, the advisor proposes `actions.control_group_fraction` (the smallest
+whole percent, a **check** suggestion). When even half is not enough, or the holdout is a persistent one the
+administrator fixed, or an explore share would reach the uplift floor (`uplift.min_arm_rows`), the advisor
+writes a plain assumption instead: `actions.explore_fraction` and a persistent holdout are deployment
+settings that no run overrides, so no proposal would change anything. The benchmark's `mid_size_file` case
+(20,000 rows) pins the proposal; the other twenty-one digests are unchanged.
 
 **Roles.**
 - The ID: the first primary-key candidate, `sure` when its name is one of the use case's
@@ -637,7 +648,7 @@ After a change run `make test` (config validation) and the benchmark (§9.4) if 
 
 ### 9.4 Update the benchmark golden file
 
-`tests/fixtures/agent_bench/cases.py` builds nineteen files (the messy generator
+`tests/fixtures/agent_bench/cases.py` builds twenty-two files (the messy generator
 `make_messy.py`, the broken fixtures, ambiguous dates, unreadable numbers, the multi-row order logs
 of `make_multirow.py` …) and `expected.json`
 holds a digest of the advice for each. After a deliberate rule change:

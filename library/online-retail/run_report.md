@@ -1,7 +1,8 @@
 # UCI Online Retail → win-back — run report
 
-Every number below came out of one real training run. **This is the one that does not work**, and
-that is reported as plainly as the four that do.
+Every number in the run sections below came out of one real training run (2026-09-22); the M109 section
+below came out of the scripts in `investigation/`. **This is the one that does not work**, and that is
+reported as plainly as the four that do.
 
 ```
 use case      retail-win-back      (configs/use_cases/retail_win_back.yaml)
@@ -12,6 +13,105 @@ target        reactivated_90d, positive label 1
 run           r_20260922_2242a2cc
 wall clock    910.4 s   (of the 30-minute default budget), 106 models
 ```
+
+## Plan J M109 follow-up: could a different setting beat the baseline? No, and here is why
+
+The question was whether the use-case configuration (label, window, features, model search) could be
+changed to beat the logistic-regression baseline. **It cannot, on this data, and no setting was changed.**
+All four were examined: model families (section 1), more columns (2), the label and window that `fetch.py`
+fixes (3), and the sealed look (4).
+Nothing below was chosen by looking at a test set: 20% of the 1,463 shoppers (293) were put aside before
+any experiment (`investigation/seal.py`, stratified, seed 1319) and read once, at the end. The engine's own
+splits are seeded from the run id, so each run draws a different test set from the same shoppers; picking a
+setting by comparing several runs' test scores would have been tuning on the test set.
+
+**1. No model family beats the baseline in cross-validation** (`investigation/dev_cv.py`; the other 1,170
+shoppers, 5-fold, repeated 5 times, so 25 held-out folds of about 234 shoppers each):
+
+| Model | PR-AUC | ROC-AUC | PR-AUC minus baseline | Folds ahead of the baseline |
+|---|---|---|---|---|
+| Always the base rate (no model) | 0.413 | 0.500 | -0.149 | 0 of 25 |
+| **Baseline (logistic regression)** | **0.562** | **0.626** | | |
+| Logistic regression, stronger shrinkage | 0.563 | 0.631 | +0.002 | 16 of 25 |
+| Logistic regression on logged columns | 0.559 | 0.629 | -0.003 | 11 of 25 |
+| Extra trees | 0.562 | 0.624 | +0.001 | 11 of 25 |
+| Gradient boosting | 0.558 | 0.617 | -0.004 | 10 of 25 |
+| Random forest | 0.556 | 0.612 | -0.005 | 11 of 25 |
+
+The columns do carry signal: every model is 0.15 PR-AUC above the base rate. But that signal is almost entirely
+linear and a plain logistic regression already takes it. The engine's search tries the same four families
+plus an ensemble of them, so there is nothing more for a different `candidates`, `strategy`, `ensemble` or
+`time_limit_minutes` setting to find.
+
+**2. More columns do not help either** (`investigation/feat_cv.py`; same 1,170 shoppers, 4 repeats). Five
+columns computed from the raw invoice log up to the snapshot were tried: orders in December 2010 (the log
+starts on 1 December 2010, so this is the only look at the gift retailer's holiday peak), orders and spend in
+the last 180 days, days with an invoice, and how overdue the shopper is for an order (recency divided by the
+usual gap). Logistic regression went from PR-AUC 0.560 to 0.557 and gradient boosting from 0.558 to 0.559,
+inside the noise. The December 2010 count has a correlation of 0.01 with coming back. The honest reading is
+that a shopper's seasonal habits cannot be seen from nine months of history that begin in December.
+Because the committed sample and the library test pin 13 features and 16 columns, none of these columns was
+added to `fetch.py`.
+
+**3. A different label or window does not help either** (`investigation/label_cv.py`; the sealed 293 left
+out, 5-fold repeated 3 times). `fetch.py` fixes three settings: the snapshot (10 September 2011), the lapse rule
+(no purchase for 90 days) and the outcome window (back within 90 days). The table rebuilds the win-back table
+with other values, using `fetch.build_rows` itself, and compares the baseline (logistic regression) with gradient
+boosting on the same folds. The label changes with each row, so the PR-AUC of different rows cannot be compared
+with each other (each has its own base rate); what is read is the last two columns. A longer outcome window needs an
+earlier snapshot, because the log ends on 9 December 2011, and an earlier snapshot also means less history behind
+every column; the two cannot be separated in this file.
+
+| Setting | Shoppers | Came back | Baseline PR-AUC | Gradient boosting minus baseline | Folds ahead |
+|---|---|---|---|---|---|
+| As built: snapshot 10 Sep, lapse 90, outcome 90 | 1,170 | 41.3% | 0.561 | +0.003 | 9 of 15 |
+| Lapse after 60 days | 1,578 | 45.0% | 0.616 | -0.014 | 5 of 15 |
+| Lapse after 120 days | 899 | 36.6% | 0.455 | -0.003 | 6 of 15 |
+| Outcome window 60 days | 1,170 | 30.3% | 0.451 | -0.006 | 7 of 15 |
+| Outcome window 30 days | 1,170 | 18.2% | 0.344 | -0.043 | 3 of 15 |
+| Snapshot 11 Aug, outcome 90 | 1,039 | 36.0% | 0.488 | +0.010 | 9 of 15 |
+| Snapshot 11 Aug, outcome 120 | 1,039 | 45.1% | 0.563 | -0.003 | 6 of 15 |
+| Snapshot 11 Jul, outcome 150 | 905 | 51.3% | 0.622 | -0.014 | 7 of 15 |
+
+In none of the eight is the model ahead of the baseline in more than 9 of 15 folds (a coin flip gives 7.5), and the differences
+(-0.043 to +0.010) are inside the noise of a 15-fold average over about 1,000 shoppers. A different label moves
+the base rate and the baseline's own PR-AUC, not the gap between the two. What this does not show: only one
+alternative family (gradient boosting) was tried on each label, the shoppers in a row are the dev shoppers plus
+any shopper the 1,463-row sample never held (different lapse rules make different sets), and the baseline here
+is 0.561 where section 1 has 0.562 because three repeats draw different folds than five. The as-built row is
+the check that this script reproduces the table the rest of the report is built on.
+
+**4. The look at the sealed shoppers** (`investigation/sealed_eval.py`; every model fitted on the 1,170,
+scored on the 293; nothing was chosen from it). The interval is a paired bootstrap of the difference
+from the baseline's PR-AUC. **This is two looks, not one:** the first listed the baseline and three other
+families; review then asked why logistic regression with stronger shrinkage, the only candidate ahead of the
+baseline in most dev folds (16 of 25, by 0.002), was missing, and it was added to the same run. The other rows
+are unchanged (same seed, same fits). The extra-column variants of section 2 are not in it: they need the raw
+invoice log and were not ahead of the baseline on dev.
+
+| Model | PR-AUC | ROC-AUC | PR-AUC minus baseline | 95% interval |
+|---|---|---|---|---|
+| **Baseline (logistic regression)** | **0.551** | **0.646** | | |
+| Logistic regression, stronger shrinkage | 0.559 | 0.651 | +0.008 | -0.006 to +0.023 |
+| Random forest | 0.560 | 0.669 | +0.009 | -0.046 to +0.060 |
+| Extra trees | 0.556 | 0.656 | +0.005 | -0.035 to +0.040 |
+| Gradient boosting | 0.538 | 0.657 | -0.013 | -0.062 to +0.041 |
+
+Every interval includes zero. None of these is a model that "beats the baseline", and none loses to it
+reliably.
+
+**5. Why the earlier verdict flips from run to run.** On a test set of 219 shoppers the standard deviation of
+the model-minus-baseline PR-AUC difference is 0.022 to 0.031 (resampling the sealed shoppers 219 at a time).
+The earlier report's -0.0010, the margins of -0.048 to +0.037 in `library/tests/test_online_retail.py` and the
+differences above are all well inside that. A verdict of "beats" or "does not beat" read off one test set of
+this size is a coin toss that the data does not decide.
+
+**What this means for the use case.** `configs/use_cases/retail_win_back.yaml` is left as it is: a setting
+that happened to win on one run would be a number tuned until it stopped failing (DEC-410). The use case
+works as a ranking (ROC-AUC about 0.63, 0.15 PR-AUC above the base rate) and the engine's baseline is as good
+as any model it can build here. Whoever uses it should expect the logistic regression's answer and should
+not expect more from a larger search. What would change that is what the "What would make this work" section
+below already says: campaign history, contact log and offer data, and more than nine months of history.
 
 ## Validation
 

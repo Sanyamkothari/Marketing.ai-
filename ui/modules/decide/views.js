@@ -252,6 +252,9 @@ const CSS = `
 .dc .dc-preview{margin-top:12px;padding-bottom:8px;border-bottom:1px solid var(--line)}
 .dc .dc-preview input[type=range]{width:100%;margin:8px 0}
 .dc .mono{font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.dc .de-list{list-style:none;margin:8px 0 0;padding:0 20px}
+.dc .de-item{padding:8px 0;border-top:1px solid var(--line);font-size:13px}
+.dc .de-item:first-child{border-top:0}
 `;
 
 export function injectStyles(doc = document) {

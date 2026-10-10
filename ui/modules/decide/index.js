@@ -12,17 +12,21 @@ import { canAccess, registerModule, registerPagePanel, registerResultsList, setA
 import { errorBox, skeleton } from "../../dom.js";
 import { getIndustries, postUpload, treatListUrl } from "../../api.js";
 import {
+  deleteDriftEvent,
   getArbitrationConflicts,
   getCampaign,
   getCampaigns,
+  getDriftEvents,
   getPlan,
   getPlanPreview,
   getTreatListSummary,
   postAudit,
+  postDriftEvent,
   postMeasure,
   postPlan,
   postProgramme,
 } from "./api.js";
+import { driftEventsCardHtml } from "./drift_events.js";
 import { AUDIT_ROUTE, auditBody, auditPageHtml, fileOf, programmeBody } from "./audit.js";
 import { planBody, previewHtml, previewReadoutHtml } from "./plan.js";
 import { campaignPageHtml, campaignsListHtml, conflictsCardHtml, injectStyles, treatListCardHtml } from "./views.js";
@@ -217,6 +221,87 @@ registerPagePanel({
   name: "treat_list",
   applies: (kind, uc, run) => kind === "output" && !!run && run.mode === "score",
   html: treatListPanelHtml,
+});
+
+// --- Events behind the change: a scoring run's Output page (Plan J M109, DEC-1319) ----------------
+// The server reads the notes beside the run's drift report (`GET /runs/{id}/drift-events`); the card draws
+// that answer and offers the add and remove actions only to a person whose role may do them.
+const driftStates = new Map();
+
+const driftCanEdit = (runId) => canAccess("POST", `/runs/${encodeURIComponent(runId)}/drift-events`);
+
+function driftCard(runId) {
+  const st = driftStates.get(runId);
+  if (!st || st.loading) return "";
+  return driftEventsCardHtml(st.view ? { ...st.view, can_edit: driftCanEdit(runId) } : null, { error: st.error });
+}
+
+function repaintDriftPanel(runId) {
+  if (typeof document === "undefined") return;
+  const el = document.querySelector(`[data-drift-panel="${encodeURIComponent(runId)}"]`);
+  if (el) el.innerHTML = driftCard(runId);
+}
+
+async function loadDriftEvents(runId) {
+  if (driftStates.has(runId)) return;
+  const st = { view: null, loading: true, error: null };
+  driftStates.set(runId, st);
+  try {
+    st.view = await getDriftEvents(runId);
+  } catch {
+    st.view = null; // no card is better than a card that says nothing; the notice above still stands
+  }
+  st.loading = false;
+  repaintDriftPanel(runId);
+}
+
+function driftPanelHtml(kind, uc, run) {
+  if (!run || !run.run_id) return "";
+  injectStyles();
+  loadDriftEvents(run.run_id);
+  return `<div data-drift-panel="${encodeURIComponent(run.run_id)}">${driftCard(run.run_id)}</div>`;
+}
+
+registerPagePanel({
+  name: "drift_events",
+  applies: (kind, uc, run) => kind === "output" && !!run && run.mode === "score" && run.problem_type !== "uplift",
+  html: driftPanelHtml,
+});
+
+async function driftAct(panel, call) {
+  const runId = decodeURIComponent(panel.getAttribute("data-drift-panel"));
+  const st = driftStates.get(runId);
+  if (!st) return;
+  try {
+    st.view = await call(runId);
+    st.error = null;
+  } catch (error) {
+    st.error = error;
+  }
+  repaintDriftPanel(runId);
+}
+
+document.addEventListener("submit", (event) => {
+  const form = event.target && event.target.closest ? event.target.closest("[data-drift-event-form]") : null;
+  const panel = form && form.closest("[data-drift-panel]");
+  if (!panel) return;
+  event.preventDefault();
+  const data = new FormData(form);
+  driftAct(panel, (runId) =>
+    postDriftEvent(runId, {
+      event_date: data.get("event_date"),
+      kind: data.get("kind"),
+      note: data.get("note"),
+      measures: data.getAll("measures"),
+    }),
+  );
+});
+
+document.addEventListener("click", (event) => {
+  const button = event.target && event.target.closest ? event.target.closest("[data-drift-event-remove]") : null;
+  const panel = button && button.closest("[data-drift-panel]");
+  if (!panel) return;
+  driftAct(panel, (runId) => deleteDriftEvent(runId, button.getAttribute("data-drift-event-remove")));
 });
 
 // --- Audit a campaign, and the programme readout (Plan J M103, DEC-1313) ------------------------------

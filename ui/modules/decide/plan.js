@@ -51,7 +51,7 @@ function planRows(plan) {
       )} customers)</span>`,
       "data-plan-holdout",
     ),
-    row("Smallest effect worth finding", present(plan.mde_pp) ? `${esc(fmtNum(plan.mde_pp, 1))} points` : EM_DASH),
+    row("Detectable effect planned for", present(plan.mde_pp) ? `${esc(fmtNum(plan.mde_pp, 1))} points` : EM_DASH),
     row("Rate expected without the campaign", present(plan.base_rate) ? esc(fmtPct(plan.base_rate, 1)) : EM_DASH),
     row("Chance of finding that effect", power, "data-plan-power"),
     row(
@@ -78,7 +78,7 @@ export function previewReadoutHtml(preview, index) {
   return [
     row("Held back", `${esc(fmtPct(point.holdout_share, 1))}${own}`, "data-preview-share"),
     row("Customers contacted / held back", `${esc(fmtInt(point.n_treat))} / ${esc(fmtInt(point.n_control))}`, "data-preview-arms"),
-    row("Smallest change the test is sure to see", change, "data-preview-mde"),
+    row("Detectable effect at this split", change, "data-preview-mde"),
     row("Cost of holding them back", holding ? esc(holding) : EM_DASH, "data-preview-cost"),
     point.reason ? `<p class="dc-note" data-preview-reason>${esc(point.reason)}</p>` : "",
   ].join("");
@@ -107,7 +107,7 @@ function planForm(campaign) {
     <label>What is measured<input name="metric" type="text" required maxlength="200" placeholder="for example: came back within 90 days"></label>
     <label>Outcome column<input name="outcome_column" type="text" required maxlength="200" value="${esc(outcome)}"></label>
     <label>Analysis date<input name="analysis_date" type="date" required></label>
-    <label>Smallest effect worth finding, in points<input name="mde_pp" type="number" min="0.1" max="100" step="0.1"></label>
+    <label>Detectable effect to plan for, in points<input name="mde_pp" type="number" min="0.1" max="100" step="0.1"></label>
     <label>Rate expected without the campaign, in %<input name="base_rate_pct" type="number" min="0" max="100" step="0.1"></label>
     <label>Expectation, in your words<input name="expectation" type="text" maxlength="500"></label>
     <div class="dc-actions"><button type="submit" class="btn primary" data-plan-submit>Fix the plan</button></div>
