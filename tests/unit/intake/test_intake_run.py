@@ -204,6 +204,47 @@ def test_the_largest_visible_table_is_read_and_the_others_listed(storage: LocalS
     assert len(read_upload(storage, "u/source.csv").frame) == 10
 
 
+def undimensioned_book(sizes: tuple[int, ...]) -> Workbook:
+    """A workbook written as pandas and many exporters write one: no `<dimension>`, so no row count."""
+    book = Workbook(write_only=True)
+    for index, size in enumerate(sizes):
+        sheet = book.create_sheet(f"Region {index}")
+        sheet.append(["Region report"])
+        sheet.append(["id", "spend"])
+        for row in range(size):
+            sheet.append([f"C{row}", row])
+    return book
+
+
+def test_without_a_row_count_the_biggest_sheet_is_still_read(storage: LocalStorage) -> None:
+    report = book_intake(storage, undimensioned_book((30, 300, 120))).report
+    assert [sheet.rows for sheet in report.sheets] == [None, None, None]
+    assert report.sheet == "Region 1"
+    assert report.rows_written == 300
+
+
+def test_opening_a_workbook_without_a_row_count_does_not_read_its_rows() -> None:
+    from engine.intake.excel import open_workbook
+
+    buffer = io.BytesIO()
+    undimensioned_book((500, 500)).save(buffer)
+    damaged = io.BytesIO()
+    with zipfile.ZipFile(buffer) as source, zipfile.ZipFile(damaged, "w") as target:
+        for member in source.infolist():
+            data = source.read(member)
+            if member.filename.startswith("xl/worksheets/sheet"):
+                # The end of every sheet is broken: only a reader that parses every row can notice.
+                data = data.replace(b"</sheetData>", b"<row><broken></sheetData>")
+            target.writestr(member, data)
+    book = open_workbook(io.BytesIO(damaged.getvalue()))
+    assert [sheet.max_row for sheet in book.worksheets] == [None, None]
+
+
+def test_a_declared_row_count_is_still_read(storage: LocalStorage) -> None:
+    report = book_intake(storage, three_sheet_book()).report
+    assert [sheet.rows for sheet in report.sheets] == [1, 11, 2, 51]
+
+
 def test_a_named_sheet_is_read_hidden_or_not_and_case_is_forgiven(storage: LocalStorage) -> None:
     assert book_intake(storage, three_sheet_book(), sheet="summary").report.sheet == "Summary"
     assert book_intake(storage, three_sheet_book(), sheet="Everything").report.sheet == "Everything"

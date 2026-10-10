@@ -33,6 +33,7 @@ __all__ = [
     "cell_text",
     "check_workbook",
     "open_workbook",
+    "sheet_bytes",
     "sheet_rows",
 ]
 
@@ -78,10 +79,53 @@ def check_workbook(path: Path | BinaryIO, config: IntakeConfig) -> None:
         )
 
 
+def _sheet_size(self: Any) -> None:
+    """`ReadOnlyWorksheet._get_size` that stops where the sheet's data starts.
+
+    openpyxl's own looks for the `<dimension>` element on *end* events, so when a writer leaves it out
+    (pandas, many exporters) it parses the whole sheet before it gives up: every sheet of a workbook read
+    in full just to open it (a 200,000-row sheet took 30 seconds). Start events see the element, with
+    its attributes, before any row; the result is the same, the dimension or nothing.
+    """
+    from openpyxl.worksheet._reader import DATA_TAG, DIMENSION_TAG  # type: ignore[import-untyped]
+    from openpyxl.worksheet.dimensions import SheetDimension  # type: ignore[import-untyped]
+    from openpyxl.xml.functions import iterparse  # type: ignore[import-untyped]
+
+    # openpyxl's own parser (defusedxml's when that is installed), as the rest of the sheet is read with
+
+    source = self._get_source()
+    try:
+        for _event, element in iterparse(source, events=("start",)):
+            if element.tag == DIMENSION_TAG:
+                boundaries = SheetDimension.from_tree(element).boundaries
+                self._min_column, self._min_row, self._max_column, self._max_row = boundaries
+                return
+            if element.tag == DATA_TAG:
+                return
+    finally:
+        source.close()
+
+
+def _read_dimensions_quickly() -> None:
+    from openpyxl.worksheet._read_only import ReadOnlyWorksheet  # type: ignore[import-untyped]
+
+    if getattr(ReadOnlyWorksheet, "_get_size", None) is not _sheet_size:
+        ReadOnlyWorksheet._get_size = _sheet_size
+
+
+def sheet_bytes(book: Any, sheet: Any) -> int | None:
+    """How many bytes the sheet's XML unpacks to: its size when the workbook does not say how many rows."""
+    try:
+        return int(book._archive.getinfo(sheet._worksheet_path).file_size)
+    except (AttributeError, KeyError, TypeError, ValueError):
+        return None
+
+
 def open_workbook(path: Path | BinaryIO) -> Any:
     """The workbook in read-only mode with cached formula values (`openpyxl` ships no type stubs)."""
     from openpyxl import load_workbook  # type: ignore[import-untyped]
 
+    _read_dimensions_quickly()
     try:
         return load_workbook(path, read_only=True, data_only=True)
     except Exception as exc:  # openpyxl raises a dozen unrelated types for a damaged file

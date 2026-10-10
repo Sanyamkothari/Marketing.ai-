@@ -39,6 +39,7 @@ from engine.intake.excel import (
     check_workbook,
     looks_like_data,
     open_workbook,
+    sheet_bytes,
     sheet_rows,
 )
 from engine.intake.grid import (
@@ -597,7 +598,9 @@ def _choose_sheet(book: Any, wanted: str | None, config: IntakeConfig) -> tuple[
         )
     tables = [(index, info) for index, info in enumerate(infos) if info.looks_like_data and not info.hidden]
     if tables:
-        _index, info = min(tables, key=lambda pair: (-(pair[1].rows or 0), pair[0]))
+        # The biggest by what the sheet holds: the row count a workbook declares can be missing, or "A1".
+        sizes = [sheet_bytes(book, worksheet) for worksheet in worksheets]
+        _index, info = min(tables, key=lambda pair: (-(sizes[pair[0]] or pair[1].rows or 0), pair[0]))
         return infos, info.name
     for info, worksheet in zip(infos, worksheets, strict=True):
         if not info.hidden and any(nonempty(row) for row in sheet_rows(worksheet, max_rows=SHEET_SCAN_ROWS)):
